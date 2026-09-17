@@ -20,9 +20,8 @@ This document is the single source of truth for how the Kovanica public domains 
 | **wallet.kovanica.online**        | Web wallet                                   | Shared (pre-mainnet) |
 | **docs.kovanica.online**          | Specifications, RFCs, KVP standards          | Canonical docs |
 | **status.kovanica.online**        | Network health / monitoring                  | Height, supply, uptime |
-| **seed.kovanica.online**          | Primary P2P seed (TCP 9000)                  | DNS-only (grey cloud) |
-| **seed2.kovanica.online**         | Secondary seed                               | DNS-only |
-| **seed3.kovanica.online**         | Tertiary seed                                | DNS-only |
+| **seed.kovanica.online**            | Primary P2P seed (TCP 9000)                | DNS-only (grey cloud); Hostinger VPS `srv1745734` |
+| **seed2.kovanica.online**           | Secondary seed (TCP 9000)                  | DNS-only; AWS EC2 (re-keyed from `seed3`, 2026-09-17) |
 | **kovi.kovanica.online**          | Reserved / brand short link                  | Kept |
 | **monitor / pool / opencode**     | Internal / experimental                      | — |
 
@@ -85,7 +84,7 @@ These rules protect old bookmarks and external links during the migration.
   `explorer.` and `wallet.` are currently shared. They will become network-aware closer to mainnet launch if needed.
 
 - **Seeds stay grey-cloud**  
-  P2P seeds (`seed`, `seed2`, `seed3`) must never be proxied through Cloudflare.
+  P2P seeds (`seed`, `seed2`) must never be proxied through Cloudflare.
 
 ---
 
