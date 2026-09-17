@@ -11,12 +11,13 @@
 ```
 kovanica-brain-vault/
 ├── .agent/                    # Agent directives & invariants
-├── 00-Meta/                   # Project overview, governance, environment
-├── 01-Consensus-DAG/          # GHOSTDAG consensus, RFCs, tokenomics
+├── 00-Meta/                   # Project overview, governance, environment, Notes/
+├── 01-Consensus-DAG/          # GHOSTDAG consensus, RFCs, tokenomics, plans/
 ├── 02-State-UTXO/             # UTXO ledger, state, developer skills
-├── 03-Node-P2P/               # Node ops, P2P mesh, networking
-├── 04-Clients-LightNodes/     # Light clients, FFI, mobile
-└── 05-Agentic-Operations/     # Agent workflows, skills, operations
+├── 03-Node-P2P/               # Node ops, P2P mesh, networking, testnet scripts
+├── 04-Clients-LightNodes/     # Light clients, FFI, mobile, web, Guides/
+├── 05-Agentic-Operations/     # Agent workflows, skills, operations, kovanica-agent/
+└── 06-Business/               # MiCA compliance & business docs
 ```
 
 ---
@@ -139,10 +140,12 @@ cargo run -p kovanica-node           # REPL (try `help`)
 ## Maintenance
 
 ### Updating the Vault
-1. Source of truth: `kovanica-protocol/` repository
+1. Source of truth: `kovanica-protocol/` repository (protocol, RFCs, AGENTS.md)
 2. RFCs: `kovanica-protocol/docs/RFC-*.md`
 3. AGENTS.md: `kovanica-protocol/AGENTS.md`
 4. Sync periodically with `rsync` or manual copy
+5. Monorepo guide + project DAG: `00-Meta/MONOREPO-AGENTS.md`, `00-Meta/Obsidian-Vault-DAG.md` (synced from Obsidian Vault `KovanicaDAG/`)
+6. Business/MiCA: `06-Business/` (synced from Obsidian Vault `Poslovno/`)
 
 ### Cleanup Rules
 - Keep only `.md` files in vault directories
@@ -153,7 +156,7 @@ cargo run -p kovanica-node           # REPL (try `help`)
 ---
 
 ## Version
-- **Vault version**: 1.0
+- **Vault version**: 1.1
 - **Protocol**: kovanica-protocol (BlockDAG + GHOSTDAG)
-- **Last sync**: 2026-09-13
+- **Last sync**: 2026-09-16 (Obsidian Vault merge: 00-Meta docs+docs/, Notes/, plans/, 03 testnet+VPS, 04 web/wallet/mobile, 05 agent, 06-Business)
 - **Source commit**: kovanica-protocol HEAD
