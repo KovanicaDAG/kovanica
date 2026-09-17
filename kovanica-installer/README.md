@@ -1,145 +1,173 @@
-# kovanica-installer
+# Kovanica Protocol — 30+ Ways to Install & Run a Node
+#
+# This directory contains install scripts, deployment configs, and
+# platform-specific guides for running a Kovanica BlockDAG node.
 
-This repository contains the Kovanica Protocol installer scripts for easy deployment on Ubuntu/Debian systems.
+## Quick Links
 
-## Overview
+| Method | Time to Run | Requirements |
+|--------|-------------|--------------|
+| [Universal Installer](install.sh) | 2 min | Linux/macOS, curl |
+| [Windows](windows/install.ps1) | 2 min | Windows 10/11 |
+| [Docker](docker/) | 1 min | Docker |
+| [WSL2](wsl2/) | 2 min | Windows + WSL2 |
+| [Termux/Android](termux/) | 2 min | Android + Termux |
+| [Raspberry Pi](raspberry-pi/) | 5 min | RPi 3/4/5 |
 
-The `kovanica-installer` provides a one-command solution to install and configure a full Kovanica stack, including:
-- Node.js runtime
-- PostgreSQL database
-- nginx web server (as reverse proxy)
-- PM2 process manager
-- Kovanica web application
-- SSL certificates (via Let's Encrypt)
-- Firewall configuration (ufw)
+## All Installation Methods
 
-## Main Install Script
+### Desktop / Laptop
 
-### `install-kovanica.sh`
+1. **Universal installer** (`install.sh`) — Auto-detects OS, downloads binary or builds from source
+2. **Windows PowerShell** (`windows/install.ps1`) — Native Windows, WSL2, or MSYS2 modes
+3. **Windows batch** (`windows/install.bat`) — Double-click installer
+4. **macOS Homebrew** (`macos/install.sh --homebrew`) — Via Homebrew tap
+5. **macOS direct** (`macos/install.sh`) — Pre-built binary for Apple Silicon / Intel
+6. **Ubuntu/Debian** (`linux/ubuntu/install.sh`) — apt-based, systemd service
+7. **Fedora/RHEL/CentOS** (`linux/fedora/install.sh`) — dnf/yum-based
+8. **Arch Linux** (`linux/arch/install.sh`) — pacman, AUR-compatible
+9. **Alpine Linux** (`linux/alpine/install.sh`) — Musl, tiny containers
+10. **Gentoo** (`linux/gentoo/install.sh`) — From source with ebuild
+11. **Void Linux** (`linux/void/install.sh`) — xbps package manager
 
-The primary installation script that orchestrates the entire setup process.
+### Single-Board Computers
 
-#### Features
-- Interactive and automated modes
-- Comprehensive logging to `/var/log/kovanica-installer.log`
-- Support for Ubuntu 22.04/24.04 and Debian 12
-- Dry-run mode to preview changes
-- Force reinstall option
-- Complete uninstall capability
-- Modular design (though currently all logic resides in the main script)
+12. **Raspberry Pi** (`raspberry-pi/install.sh`) — RPi 3/4/5, ARM, swap setup, GPU optimization
+13. **BeagleBone** — Use the ARM Linux script (`linux/ubuntu/install.sh`)
+14. **Pine64** — Use the ARM Linux script
+15. **ODROID** — Use the ARM Linux script
+16. **ESP32** (`esp32/flash.sh`) — Light/SPV node only (headers + filters, BLE wallet)
 
-#### Usage
+### Containers & Virtualization
 
-```bash
-# Download and run (recommended)
-curl -fsSL https://raw.githubusercontent.com/KovanicaDAG/kovanica-installer/main/install-kovanica.sh | sudo bash
+17. **Docker** (`docker/Dockerfile`) — Multi-stage build, health checks
+18. **Docker Compose** (`docker/docker-compose.yml`) — Node + Prometheus + Grafana
+19. **Kubernetes** (`kubernetes/deploy.sh`) — StatefulSet + Service + Ingress
+20. **Nix/NixOS** (`nix/flake.nix`) — Flake with NixOS module for declarative config
+21. **NixOS module** — `services.kovanica-node.enable = true;` in configuration.nix
+22. **LXC/LXD** — Use Ubuntu container template + `linux/ubuntu/install.sh`
+23. **Proxmox** — LXC container or VM + `linux/ubuntu/install.sh`
+24. **Vagrant** — `vagrant init ubuntu/jammy64 && vagrant up` + install script
 
-# Or run locally after cloning
-sudo ./install-kovanica.sh [options]
+### Cloud Providers
+
+25. **AWS EC2** (`cloud/aws/deploy.sh`) — Auto-detects ARM Graviton, user-data bootstrap
+26. **AWS Lambda** — Not applicable (long-running process needed)
+27. **GCP Compute Engine** (`cloud/gcp/deploy.sh`) — Debian-based, startup script
+28. **Azure VM** (`cloud/azure/deploy.sh`) — Ubuntu, ARM/x86
+29. **DigitalOcean** (`cloud/digitalocean/deploy.sh`) — Droplet with user-data
+30. **Fly.io** (`cloud/flyio/deploy.sh`) — Container-based, free tier available
+31. **Railway** — Push Docker image, auto-deploy
+32. **Render** — Blueprint from Docker image
+33. **Hetzner Cloud** — Use `cloud/digitalocean/deploy.sh` (similar API)
+34. **Oracle Cloud Free Tier** — ARM Ampere instances, use `linux/ubuntu/install.sh`
+
+### Plug-and-Play / Dedicated
+
+35. **USB stick** (`usb-play/usb-builder.sh --target portable`) — Copy to any USB drive
+36. **Raspberry Pi SD card** (`usb-play/usb-builder.sh --target pi`) — Boot-and-go image
+37. **Pre-built SD image** — Flash RPi OS, run one install command
+
+### Mobile
+
+38. **Android (Termux)** (`termux/install.sh`) — Full node on your phone
+39. **Android (Light node app)** — Built-in, via FFI (`android-light-node/`)
+40. **iOS (Swift app)** — Via FFI bindings (`kovanica-ffi/build-apple.sh`)
+
+### Enterprise / Ops
+
+41. **Ansible** (`ansible/deploy.yml`) — Multi-server playbook with inventory
+42. **Terraform** — Use provider-specific scripts + cloud-init
+43. **Puppet/Chef/Salt** — Use the systemd service template
+
+### Embedded / IoT
+
+44. **ESP32** (`esp32/flash.sh`) — SPV light client with BLE wallet
+45. **ESP32-S3** — Same as above, more RAM for larger filter cache
+46. **Arduino Nano 33 IoT** — Would need significant porting effort (not yet supported)
+
+### Experimental / Fun
+
+47. **Live CD/USB boot** — Build a custom Linux ISO with kovanica-node auto-start
+48. **PXE network boot** — Network-boot a headless kovanica node
+49. **Retro computing** — Port the SPV client to DOS/Amiga (extreme porting project)
+50. **Satellite relay** — Iridium/Satellite link to seed node (theoretical)
+
+## Choosing a Method
+
+```
+                    ┌─────────────────┐
+                    │  What's your    │
+                    │  platform?      │
+                    └────────┬────────┘
+              ┌──────────────┼──────────────┐
+              │              │              │
+        ┌─────▼─────┐ ┌─────▼─────┐ ┌─────▼─────┐
+        │  Desktop   │ │  Server   │ │  Mobile   │
+        │  / Laptop  │ │  / VPS    │ │  / IoT    │
+        └─────┬─────┘ └─────┬─────┘ └─────┬─────┘
+              │              │              │
+     ┌────────┼────────┐     │       ┌──────┼──────┐
+     │        │        │     │       │      │      │
+  Windows  macOS   Linux  Cloud    Android  iOS  ESP32
+  install  install  install deploy  Termux  FFI  SPV
+  .ps1     .sh      .sh    .sh     install .sh  flash
 ```
 
-#### Options
+## System Requirements
 
-| Option | Description |
-|--------|-------------|
-| `--domain DOMAIN` | Domain name for SSL (e.g., kovanica.example.com) |
-| `--email EMAIL` | Email for Let's Encrypt expiration notices |
-| `--app-port PORT` | Backend API port (default: 5000) |
-| `--frontend-port PORT` | Frontend development port (default: 3000, loopback only) |
-| `--skip-node` | Skip Node.js installation |
-| `--skip-postgres` | Skip PostgreSQL installation |
-| `--skip-nginx` | Skip nginx installation/configuration |
-| `--skip-pm2` | Skip PM2 installation/configuration |
-| `--skip-app` | Skip Kovanica application clone/build |
-| `--skip-ssl` | Skip SSL certificate setup |
-| `--skip-firewall` | Skip firewall configuration |
-| `--force` | Force reinstall (overwrite existing installation) |
-| `--uninstall` | Uninstall Kovanica completely |
-| `--dry-run` | Show what would be done without executing changes |
-| `-h, --help` | Show help message |
-| `-v, --version` | Show script version |
+### Full Node
+- **CPU**: 2+ cores (ARM or x86_64)
+- **RAM**: 1GB minimum, 2GB+ recommended
+- **Disk**: 10GB+ (grows with chain)
+- **Network**: 1Mbps+ (P2P + block gossip)
+- **OS**: Linux (any), macOS, Windows (WSL2)
 
-#### Examples
+### Light / SPV Node
+- **CPU**: 1 core
+- **RAM**: 256MB
+- **Disk**: 100MB (headers + filters only)
+- **Network**: 100kbps
+- **OS**: ESP32, Android, iOS, any
 
-**Interactive installation:**
+### Raspberry Pi
+- **Model**: RPi 3B+ / 4 / 5
+- **RAM**: 2GB+ (4GB recommended)
+- **SD card**: 16GB+ (Class 10 / A2)
+- **Power**: Official USB-C adapter (3A for RPi 4)
+- **Case**: With heatsink or active cooling recommended
+
+## Configuration Reference
+
+All scripts respect these environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KOVANICA_DATA` | `~/.kovanica-data` | Chain data directory |
+| `KOVANICA_P2P_PORT` | `9000` | P2P listen port |
+| `KOVANICA_HTTP_PORT` | `8080` | HTTP API port |
+| `KOVANICA_PEERS` | `seed.kovanica.online:9000,...` | Bootstrap peers |
+| `KOVANICA_MINE` | `0` | Enable auto-mining |
+| `KOVANICA_MINE_SECS` | `60` | Block interval (seconds) |
+| `KOVANICA_EXPLORER` | `0` | Enable web explorer |
+
+## Quick Start (Universal)
+
 ```bash
-sudo ./install-kovanica.sh
+# One-liner install
+curl -fsSL https://raw.githubusercontent.com/KovanicaDAG/kovanica-protocol/main/kovanica-install/install.sh | bash
+
+# Or build from source
+curl -fsSL https://raw.githubusercontent.com/KovanicaDAG/kovanica-protocol/main/kovanica-install/install.sh | bash -s -- --build
+
+# Run
+kovanica-node demo    # Test it works
+kovanica-node serve   # Start the node
 ```
 
-**Automated with SSL:**
-```bash
-sudo ./install-kovanica.sh --domain kovanica.example.com --email admin@example.com
-```
+## Links
 
-**Minimal install (assumes dependencies already installed):**
-```bash
-sudo ./install-kovanica.sh --skip-node --skip-postgres --skip-nginx --skip-ssl
-```
-
-**Dry run to preview changes:**
-```bash
-./install-kovanica.sh --dry-run
-```
-
-**Complete uninstall:**
-```bash
-sudo ./install-kovanica.sh --uninstall
-```
-
-#### Directories Used
-
-- `/opt/kovanica` - Base installation directory
-- `/opt/kovanica/app` - Kovanica application code
-- `/opt/kovanica/data` - Application data (database uploads, etc.)
-- `/opt/kovanica/backups` - Automatic backups
-- `/var/log/kovanica-installer.log` - Installation log
-
-#### Services Configured
-
-- `kovanica-backend` (managed by PM2) - Node.js API server
-- `nginx` - Reverse proxy serving the application
-- `postgresql` - Database service
-- `ufw` - Firewall (if not skipped)
-
-#### Environment Configuration
-
-The installer creates a `.env.production` file in the app directory containing:
-- Database connection strings
-- JWT secrets
-- Backup passphrase (critical for restoring backups!)
-- Other application settings
-
-**⚠️ IMPORTANT:** The backup passphrase must be stored securely. Without it, encrypted backups cannot be restored.
-
-## Modules (Reference)
-
-The installer is designed with a modular structure, though the current version keeps all logic in the main script for simplicity. The `scripts/modules/` directory is intended for future separation of concerns:
-
-- `01-system-prep.sh` - System updates, packages, user creation
-- `02-nodejs.sh` - Node.js installation and configuration
-- `03-postgresql.sh` - PostgreSQL setup and database creation
-- `04-nginx.sh` - nginx installation, configuration, and site setup
-- `05-pm2.sh` - PM2 installation and process configuration
-- `06-kovanica-app.sh` - Application cloning, building, and environment setup
-- `07-ssl.sh` - Let's Encrypt SSL certificate acquisition and renewal
-- `08-firewall.sh` - Firewall (ufw) configuration
-- `09-finalize.sh` - Final steps, service starts, and summary
-
-## Requirements
-
-- **Operating System:** Ubuntu 22.04/24.04 or Debian 12
-- **Access:** Root or sudo privileges
-- **Resources:** Minimum 2GB RAM, 20GB disk space
-- **Network:** Ports 80, 443, and the chosen app port must be available
-- **Dependencies:** Internet connection for package downloads
-
-## Contributing
-
-Feel free to submit issues or pull requests to improve the installer. Please ensure:
-- Backward compatibility is maintained
-- Changes are tested on supported OS versions
-- Documentation is updated accordingly
-
-## License
-
-See the main Kovanica Protocol license for details.
+- **Repository**: https://github.com/KovanicaDAG/kovanica-protocol
+- **Testnet explorer**: https://explorer.kovanica.online
+- **Seed nodes**: seed.kovanica.online:9000, seed3.kovanica.online:9000
+- **Docs**: https://github.com/KovanicaDAG/kovanica-protocol#readme
