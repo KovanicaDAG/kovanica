@@ -1,7 +1,16 @@
 # kovanica
 
 Meta-directory — Kovanica DAG protocol ecosystem. 
-**Not a git repository itself.** Each subdirectory is an independent git repo.
+**Not a git repository itself (tracked files only).** Each subdirectory is an independent git repo. `./dev.sh` clones, pulls, provisions toolchains and installs deps on whatever device you're on.
+
+## Quick start on a new device
+
+```sh
+git clone https://github.com/KovanicaDAG/kovanica.git
+cd kovanica
+./dev.sh              # clone/pull all repos, toolchains, deps, doctor report
+./dev.sh --status     # sync + report only, no installs
+```
 
 ## Repositories
 
@@ -13,7 +22,8 @@ Meta-directory — Kovanica DAG protocol ecosystem.
 |||| kovanica-web        | Web app + deploy                             | https://github.com/KovanicaDAG/kovanica-web        ||
 |||| kovanica-mobile     | Light-node mobile clients                    | https://github.com/KovanicaDAG/kovanica-mobile     ||
 |||| kovanica-agent      | RAG agent service (Python)                   | https://github.com/KovanicaDAG/kovanica-agent      ||
-|||| kovanica-installer  | Installer scripts                            | https://github.com/KovanicaDAG/kovanica-installer  ||
+|||| kovanica-installer  | Installer scripts (30+ platforms)            | https://github.com/KovanicaDAG/kovanica-installer  ||
+|||| kovanica-brain-vault| Canonical knowledge base (Obsidian, layers 00-06) | https://github.com/KovanicaDAG/kovanica-brain-vault ||
 |||| kovanica-data       | Runtime data (not versioned)                 | —                               ||
 
 ## Getting Started

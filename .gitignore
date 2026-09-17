@@ -1,0 +1,15 @@
+# Each subdirectory is an independent git repo, managed by ./dev.sh.
+# Never let `git add -A` re-record them as gitlinks or plain trees.
+/kovanica-agent/
+/kovanica-brain-vault/
+/kovanica-data/
+/kovanica-installer/
+/kovanica-mobile/
+/kovanica-node/
+/kovanica-protocol/
+/kovanica-wallet/
+/kovanica-web/
+
+# Local logs
+*.log
+.dev.log
