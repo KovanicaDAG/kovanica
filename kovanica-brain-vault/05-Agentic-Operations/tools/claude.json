@@ -1,0 +1,59 @@
+{
+  "$schema": "https://claude.ai/config.json",
+  "default_agent": "vault-sync",
+  "agents": {
+    "vault-sync": {
+      "file": "agents/subagents/vault-sync.md"
+    },
+    "protocol-dev": {
+      "file": "agents/subagents/protocol-dev.md"
+    },
+    "doc-writer": {
+      "file": "agents/subagents/doc-writer.md"
+    },
+    "code-reviewer": {
+      "file": "agents/subagents/code-reviewer.md"
+    },
+    "test-engineer": {
+      "file": "agents/subagents/test-engineer.md"
+    },
+    "release-engineer": {
+      "file": "agents/subagents/release-engineer.md"
+    },
+    "performance-engineer": {
+      "file": "agents/subagents/performance-engineer.md"
+    },
+    "security-auditor": {
+      "file": "agents/subagents/security-auditor.md"
+    },
+    "devops-engineer": {
+      "file": "agents/subagents/devops-engineer.md"
+    },
+    "api-designer": {
+      "file": "agents/subagents/api-designer.md"
+    },
+    "migration-engineer": {
+      "file": "agents/subagents/migration-engineer.md"
+    }
+  },
+  "skills": {
+    "paths": [
+      "skills"
+    ]
+  },
+  "commands": {
+    "paths": [
+      "commands"
+    ]
+  },
+  "references": {
+    "kovanica-protocol": {
+      "path": "/root/kovanica-protocol",
+      "description": "Authoritative source for protocol code, tests, and design"
+    },
+    "vault-agents": {
+      "path": "agents",
+      "description": "Centralized agent configs, skills, plugins, commands"
+    }
+  }
+}

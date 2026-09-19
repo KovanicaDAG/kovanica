@@ -1,0 +1,98 @@
+# Agent guide — Obsidian-Vault
+
+Guidance for AI assistants working in this repository. Read this before
+touching anything.
+
+> Keep this file in sync with reality: if something here is wrong, fix the
+> wrongness in the same change that touches it.
+
+## 1. What this repo is
+
+An **Obsidian vault + documentation hub** for the **kovanica-protocol**
+project (a DAG-based distributed ledger following GHOSTDAG consensus).
+Notes only — no application code lives here.
+
+- Remote: `origin` → `https://github.com/KovanicaDAG/O
+- bsidian-Vault.git` — **private**, branch `main`.
+- Single-user repo (KovanicaDAG); pushes go straight to `main`.
+
+## 2. Map — what lives where
+
+```
+README.md                        Repo intro
+AGENTS.md                        This file
+NAVIGATION.md                    Vault navigation index
+agents/                          Agent registry (single source of truth)
+  INDEX.md                       Registry overview + sync workflow
+  WORKFLOWS.md                   Multi-agent pipeline compositions
+  subagents/ skills/ commands/   Agent definitions (markdown + frontmatter)
+  plugins/ templates/ tools/     Plugins, scaffolding, per-tool configs
+opencode.json                    OpenCode config (synced from agents/tools/)
+scripts/
+  sync-agents.sh                 Validate + distribute registry to all tools
+  sync-vault.sh                  Refresh KovanicaDAG/ snapshots (--check to verify only)
+KovanicaDAG/
+  myObsidianVaultDAG.md          THE project overview note (start here)
+  CODE_INDEX.md                  Docs topics → source files (file:// links)
+  FACTS.md                       Atomic quick reference (facts + sources)
+  DECISIONS.md                   Decision log (append-only; never delete rows)
+  SESSIONS.md                    Session-log convention + index
+  ROADMAP.md                     Stage tracking with checklists
+  AGENTS.md OPERATIONS.md TESTNET.md README.md REINDEX_BENCHMARKING.md TODO.md
+                                 Snapshots from the kovanica-protocol root
+  kovanica-node/                 Node docs snapshot (README, JOIN, TESTNET)
+  testnet/                       Snapshot: protocol scripts/testnet/
+  alerting_rules.yml             Snapshot: Prometheus rules
+  Cargo*/ package.json tsconfig.json vite.config.ts eslint.config.mjs
+  ecosystem.config.cjs startup.sh   Config snapshots from web//deploy (context)
+.obsidian/                       Obsidian settings (ignored by git)
+```
+
+**Agent registry rule:** edit agent/skill/command definitions only under
+`agents/` — never in `~/.claude/*` or tool config dirs (those are symlinks
+or synced copies). After editing, run `./scripts/sync-agents.sh`.
+
+## 3. Authority map — where truth actually lives
+
+This vault contains **copies**. Before answering questions about code,
+consult the authoritative source, not a snapshot:
+
+| Topic | Authoritative source |
+|---|---|
+| Protocol/code design, build, test | `/root/kovanica-protocol` — read its `AGENTS.md` first |
+| Deployed testnet ops | `KovanicaDAG/TESTNET.md`, `OPERATIONS.md`, `kovanica-node/` (snapshot; verify against kovanica-protocol) |
+| Project overview as presented in Obsidian | `KovanicaDAG/myObsidianVaultDAG.md` |
+
+When the code changes and you are asked to update docs: pull facts from
+`/root/kovanica-protocol` (source, module docs, its
+roadmap), then update the relevant snapshot here.
+
+## 4. Recipe — update notes & push ("vault sync")
+
+1. Make the requested edits under `KovanicaDAG/`.
+2. `git add -A && git commit -m "docs: <what changed>"`
+3. If push rejected: `git pull --rebase origin main`, resolve if needed.
+4. `git push origin main`
+
+Commit subjects: imperative, prefixed `docs:` (e.g. `docs: sync vault
+snapshot (project config files)`).
+
+## 5. Never commit / never touch as git content
+
+- `.obsidian/`, `.claudian/`, `.trash/` — ignored (app state, session data).
+- `KovanicaDAG/KovanicaDAG/` — **embedded stale copies of the real project
+  repos** (they contain their own `.git`). Ignored on purpose; committing
+  them creates broken phantom submodules. Do not un-ignore, do not clean up
+  without asking.
+- Never convert the `kovanica-*` doc folders into submodules — history shows
+  submodule attempts failed and were deliberately removed.
+
+## 6. Working notes for assistants
+
+- **Do not invent** APIs, paths, commands, or roadmap items. If a fact isn't
+  verifiable in kovanica-protocol or these docs, say so.
+- Snapshots under `KovanicaDAG/` (and `kovanica-node/`) are refreshed by
+  `scripts/sync-vault.sh` from `/root/kovanica-protocol`; `myObsidianVaultDAG.md`
+  is the vault-specific overview. Prefer `myObsidianVaultDAG.md` and the
+  protocol repo itself when snapshots disagree with reality.
+- Verify before claiming: run commands, don't assume output.

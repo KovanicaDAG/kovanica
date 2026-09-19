@@ -1,0 +1,44 @@
+{
+  "connector": "mcp",
+  "docs": "https://modelcontextprotocol.io",
+  "description": "MCP servers available to all agents. Reference by name in agent prompts.",
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/root/Obsidian-Vault", "/root/kovanica-protocol"],
+      "used_by": ["vault-sync", "doc-writer", "protocol-dev"],
+      "description": "Read/write access to vault and protocol repo"
+    },
+    "git": {
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "/root/Obsidian-Vault"],
+      "used_by": ["vault-sync", "release-engineer"],
+      "description": "Git status, diff, log, commit operations"
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" },
+      "used_by": ["code-reviewer", "release-engineer", "devops-engineer"],
+      "description": "PRs, issues, reviews, CI status"
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "used_by": ["api-designer", "security-auditor", "doc-writer"],
+      "description": "Fetch web content for docs/API research"
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "used_by": ["vault-sync"],
+      "description": "Persistent knowledge graph across sessions"
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "used_by": ["security-auditor", "migration-engineer", "performance-engineer"],
+      "description": "Structured reasoning for audits and migration planning"
+    }
+  }
+}
