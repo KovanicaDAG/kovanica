@@ -1,7 +1,7 @@
 # Kovanica Network & Domain Architecture
 
-> Last updated: 2026-09-14  
-> Status: Pre-Mainnet (RFC-006 activated on testnet)
+> Last updated: 2026-09-17  
+> Status: Pre-Mainnet (RFC-006 activated on testnet — tokenomics live; operator/founder wallet genesis reset pending)
 
 This document is the single source of truth for how the Kovanica public domains and networks are organised.
 
@@ -38,6 +38,12 @@ This document is the single source of truth for how the Kovanica public domains 
 | Consensus             | GHOSTDAG k=3                 | GHOSTDAG k=3                 |
 | Token                 | KVNC (test)                  | KVNC                         |
 | Current phase         | Live (RFC-006 activated)     | Not yet open                 |
+| Tokenomics            | RFC-006 (smooth emission, MAX_SUPPLY cap, coinbase maturity 100, 75% fee burn) | RFC-006 (same) |
+| Genesis hash          | `256c87faf1803ad75c855de95b7cee317f52c1f3fa311ca5479083174e56c31b` | TBD |
+| Genesis subsidy       | 10 KVNC/block                | 10 KVNC/block                |
+| Founder premine       | 0.2M KVNC                    | 0.2M KVNC                    |
+| Treasury              | 10×1M KVNC vaults (placeholder keys) | 10×1M KVNC vaults (ceremony keys) |
+| Bootstrap endpoint    | `GET /api/bootstrap` → {network, genesis, tip, subsidy, native_minted, total, circulating, burned, max_supply, light_config} | Same |
 
 ### Detection logic (client-side)
 
