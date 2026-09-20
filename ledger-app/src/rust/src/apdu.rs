@@ -1,10 +1,4 @@
-use super::{
-    ins, sw, ApduRequest, ApduResponse, AppError, Bip44Path, Result, CLA, MAX_APDU_SIZE,
-    MAX_PATH_LEN,
-};
-use crate::bip32::{derive_bip44_path, slip10_master_from_seed};
-use crate::ed25519::{sign, sign_transaction, PublicKey};
-use crate::tx::parse_transaction;
+use super::{ins, sw, ApduRequest, ApduResponse, AppError, Result, CLA};
 
 /// Handle APDU request
 pub fn handle_apdu<'a>(req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>) -> Result<u16> {
@@ -26,7 +20,6 @@ pub fn handle_apdu<'a>(req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>) -> Re
 /// INS 0x01: Get version
 /// Returns: version (1 byte) || app_name (null-terminated) || flags (1 byte)
 fn handle_get_version<'a>(_req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>) -> Result<u16> {
-    let version = env!("CARGO_PKG_VERSION");
     let mut buf = [0u8; 64];
     let mut len = 0;
 
@@ -61,16 +54,14 @@ fn handle_get_public_key<'a>(req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>)
 
     // Parse BIP-44 path
     let mut path_components = [0u32; 5];
-    for i in 0..5 {
+    for (i, component) in path_components.iter_mut().enumerate() {
         let start = i * 4;
         let end = start + 4;
         let bytes: [u8; 4] = req.data[start..end]
             .try_into()
             .map_err(|_| AppError::BadPath)?;
-        path_components[i] = u32::from_be_bytes(bytes);
+        *component = u32::from_be_bytes(bytes);
     }
-
-    let path = Bip44Path::new(&path_components)?;
 
     // Validate path format: m/44'/11111'/account'/change/index
     if path_components[0] & 0x80000000 == 0 || path_components[0] & 0x7FFFFFFF != 44 {
@@ -135,7 +126,7 @@ fn handle_sign_transaction<'a>(req: &ApduRequest<'a>, resp: &mut ApduResponse<'a
             return Err(AppError::WrongDataLen);
         }
         let sighash_start = tx_data.len() - 32;
-        let sighash: [u8; 32] = tx_data[sighash_start..]
+        let _sighash: [u8; 32] = tx_data[sighash_start..]
             .try_into()
             .map_err(|_| AppError::InvalidTransaction)?;
 
@@ -189,7 +180,7 @@ fn handle_get_config<'a>(_req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>) ->
 fn handle_sign_message<'a>(req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>) -> Result<u16> {
     let message = req.data;
 
-    if message.len() == 0 || message.len() > 255 {
+    if message.is_empty() || message.len() > 255 {
         return Err(AppError::WrongDataLen);
     }
 
