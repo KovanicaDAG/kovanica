@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 // 1 KVNC = 10^8 atoms (mirrors profile.rs ATOM).
 const ATOM = 100_000_000
@@ -34,6 +35,14 @@ const toInput = document.getElementById('to-input')
 const amountInput = document.getElementById('amount-input')
 const sendBtn = document.getElementById('send-btn')
 const sendResult = document.getElementById('send-result')
+
+// DOM elements — operations
+const snapshotBtn = document.getElementById('snapshot-btn')
+const checkpointBtn = document.getElementById('checkpoint-btn')
+const shutdownBtn = document.getElementById('shutdown-btn')
+const snapshotStatus = document.getElementById('snapshot-status')
+const checkpointStatus = document.getElementById('checkpoint-status')
+const shutdownStatus = document.getElementById('shutdown-status')
 
 let nodeReady = false
 let walletUnlocked = false
@@ -247,6 +256,58 @@ async function send() {
   }
 }
 
+async function saveSnapshot() {
+  snapshotBtn.disabled = true
+  snapshotBtn.textContent = 'Saving...'
+  try {
+    const path = await invoke('save_snapshot')
+    snapshotStatus.textContent = 'written: ' + path
+    snapshotStatus.className = 'value sm ok'
+  } catch (e) {
+    snapshotStatus.textContent = String(e)
+    snapshotStatus.className = 'value sm err'
+    addEvent('Error', { message: 'Snapshot failed: ' + e })
+  } finally {
+    snapshotBtn.disabled = false
+    snapshotBtn.textContent = 'Save Snapshot'
+  }
+}
+
+async function saveCheckpoint() {
+  checkpointBtn.disabled = true
+  checkpointBtn.textContent = 'Saving...'
+  try {
+    const path = await invoke('save_checkpoint')
+    checkpointStatus.textContent = 'written: ' + path
+    checkpointStatus.className = 'value sm ok'
+  } catch (e) {
+    checkpointStatus.textContent = String(e)
+    checkpointStatus.className = 'value sm err'
+    addEvent('Error', { message: 'Checkpoint failed: ' + e })
+  } finally {
+    checkpointBtn.disabled = false
+    checkpointBtn.textContent = 'Save Checkpoint'
+  }
+}
+
+async function shutdown() {
+  if (!window.confirm('Shut down the embedded node and exit the app?')) return
+  shutdownBtn.disabled = true
+  shutdownBtn.textContent = 'Shutting down...'
+  try {
+    await invoke('shutdown_node')
+    shutdownStatus.textContent = 'worker stopped'
+    shutdownStatus.className = 'value sm ok'
+    addEvent('Shutdown', {})
+    await getCurrentWindow().close()
+  } catch (e) {
+    shutdownStatus.textContent = String(e)
+    shutdownStatus.className = 'value sm err'
+    shutdownBtn.disabled = false
+    shutdownBtn.textContent = 'Shutdown'
+  }
+}
+
 async function init() {
   setStatus('Starting node…', 'warn')
 
@@ -260,6 +321,9 @@ async function init() {
       nodeReady = true
       produceBtn.disabled = false
       statusBtn.disabled = false
+      snapshotBtn.disabled = false
+      checkpointBtn.disabled = false
+      shutdownBtn.disabled = false
       setWalletUnlocked(walletUnlocked)
       await refreshStatus()
     } else if (type === 'TipChanged' || type === 'BlockProduced' || type === 'BlockReceived') {
@@ -279,5 +343,8 @@ addressesBtn.addEventListener('click', refreshAddresses)
 balanceBtn.addEventListener('click', loadBalance)
 historyBtn.addEventListener('click', loadHistory)
 sendBtn.addEventListener('click', send)
+snapshotBtn.addEventListener('click', saveSnapshot)
+checkpointBtn.addEventListener('click', saveCheckpoint)
+shutdownBtn.addEventListener('click', shutdown)
 
 init()

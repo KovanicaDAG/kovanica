@@ -99,18 +99,20 @@ async fn submit_tx(handle: tauri::State<'_, NodeHandle>, tx_hex: String) -> Resu
 }
 
 #[tauri::command]
-async fn save_snapshot(handle: tauri::State<'_, NodeHandle>) -> Result<(), String> {
+async fn save_snapshot(handle: tauri::State<'_, NodeHandle>) -> Result<String, String> {
     match handle.send(crate::WorkerCmd::SaveSnapshot).await {
-        Ok(crate::WorkerResp::Ok) => Ok(()),
+        Ok(crate::WorkerResp::SaveState(Ok(path))) => Ok(path),
+        Ok(crate::WorkerResp::SaveState(Err(e))) => Err(e),
         Ok(_) => Err("unexpected response".into()),
         Err(e) => Err(e.to_string()),
     }
 }
 
 #[tauri::command]
-async fn save_checkpoint(handle: tauri::State<'_, NodeHandle>) -> Result<(), String> {
+async fn save_checkpoint(handle: tauri::State<'_, NodeHandle>) -> Result<String, String> {
     match handle.send(crate::WorkerCmd::SaveCheckpoint).await {
-        Ok(crate::WorkerResp::Ok) => Ok(()),
+        Ok(crate::WorkerResp::SaveState(Ok(path))) => Ok(path),
+        Ok(crate::WorkerResp::SaveState(Err(e))) => Err(e),
         Ok(_) => Err("unexpected response".into()),
         Err(e) => Err(e.to_string()),
     }

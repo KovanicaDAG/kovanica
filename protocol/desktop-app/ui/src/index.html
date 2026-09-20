@@ -163,6 +163,33 @@
       </div>
 
       <div class="card">
+        <h3>Operations</h3>
+        <div class="wallet-grid">
+          <div class="wallet-col">
+            <label>Whole-file snapshot</label>
+            <div class="actions sm">
+              <button id="snapshot-btn" class="btn btn-secondary" disabled>Save Snapshot</button>
+            </div>
+            <div class="value sm" id="snapshot-status">—</div>
+          </div>
+          <div class="wallet-col">
+            <label>Finality checkpoint</label>
+            <div class="actions sm">
+              <button id="checkpoint-btn" class="btn btn-secondary" disabled>Save Checkpoint</button>
+            </div>
+            <div class="value sm" id="checkpoint-status">—</div>
+          </div>
+          <div class="wallet-col">
+            <label>Lifecycle</label>
+            <div class="actions sm">
+              <button id="shutdown-btn" class="btn btn-secondary" disabled>Shutdown</button>
+            </div>
+            <div class="value sm" id="shutdown-status">stops the worker and exits the app</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>Event Stream</h3>
         <div id="events" class="events">
           <div class="loading">Connecting to node worker...</div>

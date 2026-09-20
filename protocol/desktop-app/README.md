@@ -32,8 +32,10 @@ This crate is the **Rust core**; a Tauri shell (UI) is added in later slices.
       with block/tip/mempool/peer counters and a live event stream; Tauri
       `invoke` handlers for status, block production, tx submission,
       snapshot/checkpoint, shutdown, wallet create/unlock/lock/addresses/
-      send/balance/history, and P2P start/stop; wallet panel wire<->create/
-      unlock/lock/addresses/balance/history/send via the handlers).
+      send/balance/history, and P2P start/stop; wallet panel wired
+      create/unlock/lock/addresses/balance/history/send via the handlers;
+      operations panel driving whole-file snapshots (`Node::save`), finality
+      checkpoints and a graceful worker shutdown with app exit).
 - [x] Slice B: node lifecycle (worker thread with an mpsc command channel and
       broadcast event stream, data dir + network markers,
       snapshot/checkpoint persistence, tip/block-change events).

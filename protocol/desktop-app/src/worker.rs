@@ -165,6 +165,8 @@ pub enum WorkerResp {
     SendResult(Result<TxId, String>),
     Balance(u64),
     History(Vec<WalletEvent>),
+    /// SaveState(Ok(path)) after a snapshot or checkpoint landed on disk.
+    SaveState(Result<String, String>),
     Ok,
 }
 
@@ -354,14 +356,14 @@ impl NodeHandle {
                 }
                 Err(e) => WorkerResp::SubmitTx(Err(e)),
             },
-            WorkerCmd::SaveSnapshot => {
-                let _ = Self::save_snapshot(node, datadir, events);
-                WorkerResp::Ok
-            }
-            WorkerCmd::SaveCheckpoint => {
-                let _ = Self::save_checkpoint(node, datadir, events);
-                WorkerResp::Ok
-            }
+            WorkerCmd::SaveSnapshot => match Self::save_snapshot(node, datadir, events) {
+                Ok(path) => WorkerResp::SaveState(Ok(path)),
+                Err(e) => WorkerResp::SaveState(Err(e.to_string())),
+            },
+            WorkerCmd::SaveCheckpoint => match Self::save_checkpoint(node, datadir, events) {
+                Ok(path) => WorkerResp::SaveState(Ok(path)),
+                Err(e) => WorkerResp::SaveState(Err(e.to_string())),
+            },
             WorkerCmd::GetStatus => {
                 let genesis = node.genesis_id().map(|b| b.to_string()).unwrap_or_default();
                 let tip = node
@@ -516,29 +518,30 @@ impl NodeHandle {
         node: &mut Node,
         datadir: &DataDir,
         events: &broadcast::Sender<NodeEvent>,
-    ) -> Result<(), NodeError> {
-        // TODO: Node does not expose a snapshot-write API yet; emit the event so
-        // the UI reflects the request without blocking the worker loop.
+    ) -> Result<String, NodeError> {
+        let path = datadir.snapshot_path();
+        node.save(path.to_string_lossy().as_ref())?;
         let count = node.block_count().unwrap_or(0);
         let _ = events.send(NodeEvent::SnapshotSaved {
-            path: datadir.snapshot_path().display().to_string(),
+            path: path.display().to_string(),
             block_count: count as u64,
         });
-        Ok(())
+        Ok(path.display().to_string())
     }
 
     fn save_checkpoint(
         node: &mut Node,
         datadir: &DataDir,
         events: &broadcast::Sender<NodeEvent>,
-    ) -> Result<(), NodeError> {
-        node.save_checkpoint(datadir.checkpoint_path().to_string_lossy().as_ref())?;
+    ) -> Result<String, NodeError> {
+        let path = datadir.checkpoint_path();
+        node.save_checkpoint(path.to_string_lossy().as_ref())?;
         let count = node.block_count().unwrap_or(0);
         let _ = events.send(NodeEvent::CheckpointSaved {
-            path: datadir.checkpoint_path().display().to_string(),
+            path: path.display().to_string(),
             block_count: count as u64,
         });
-        Ok(())
+        Ok(path.display().to_string())
     }
 }
 
