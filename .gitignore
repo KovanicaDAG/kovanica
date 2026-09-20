@@ -6,3 +6,8 @@
 # Runtime data (unversioned content inside data/ handled by data/.gitignore)
 *.log
 .dev.log
+
+# Local environment / secrets (never commit)
+.env
+.env.*
+!.env.example
