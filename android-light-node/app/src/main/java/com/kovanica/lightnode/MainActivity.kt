@@ -4,26 +4,35 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.Column
-import androidx.compose.material3.ProgressIndicator
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Modifier
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.BottomNavigation
+import androidx.compose.material3.BottomNavigationItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.fillMaxSize
-import androidx.compose.ui.layout.fillMaxWidth
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import com.kovanica.lightnode.data.LightNodeRepository
+import com.kovanica.lightnode.ui.HomeScreen
+import com.kovanica.lightnode.ui.OnboardingScreen
+import com.kovanica.lightnode.ui.ReceiveScreen
+import com.kovanica.lightnode.ui.SendScreen
+import com.kovanica.lightnode.ui.HistoryScreen
+import com.kovanica.lightnode.ui.SettingsScreen
 import com.kovanica.lightnode.ui.WalletViewModel
 import kotlinx.coroutines.launch
 
@@ -59,15 +68,84 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(viewModel: WalletViewModel) {
     val nodeState by viewModel.nodeState.observeAsState()
-    
+    var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
+    var seedHex by remember { mutableStateOf("") }
+
     when {
         nodeState == null || !nodeState.isInitialized -> {
             GenesisGateScreen(onVerified = { viewModel.sync() })
         }
         else -> {
-            WalletScreen(viewModel = viewModel)
+            // Check if seed is set (onboarding complete)
+            if (seedHex.isEmpty()) {
+                OnboardingScreen(
+                    onComplete = { seed ->
+                        seedHex = seed
+                        // TODO: Store seed securely in Keystore
+                    },
+                    viewModel = viewModel
+                )
+            } else {
+                ScaffoldWithNav(currentScreen = currentScreen, onScreenChange = { currentScreen = it }, seedHex = seedHex)
+            }
         }
     }
+}
+
+enum class Screen {
+    Home(Icons.Filled.Home),
+    Send(Icons.Filled.Send),
+    Receive(Icons.Filled.Download),
+    History(Icons.Filled.History),
+    Settings(Icons.Filled.Settings);
+
+    private val icon: androidx.compose.ui.graphics.vector.ImageVector
+    constructor(icon: androidx.compose.ui.graphics.vector.ImageVector) {
+        this.icon = icon
+    }
+}
+
+@Composable
+fun ScaffoldWithNav(
+    currentScreen: Screen,
+    onScreenChange: (Screen) -> Unit,
+    seedHex: String,
+    viewModel: WalletViewModel
+) {
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Main content
+            when (currentScreen) {
+                Screen.Home -> HomeScreen(viewModel, seedHex)
+                Screen.Send -> SendScreen(viewModel = viewModel, onBack = { onScreenChange(Screen.Home) })
+                Screen.Receive -> ReceiveScreen(onBack = { onScreenChange(Screen.Home) })
+                Screen.History -> HistoryScreen(onBack = { onScreenChange(Screen.Home) })
+                Screen.Settings -> SettingsScreen(onBack = { onScreenChange(Screen.Home) })
+            }
+
+            // Bottom navigation
+            BottomNavigation(
+                backgroundColor = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Screen.values().forEach { screen ->
+                    BottomNavigationItem(
+                        icon = { Icon(imageVector = screen.icon, contentDescription = screen.name) },
+                        label = { Text(screen.name) },
+                        selected = currentScreen == screen,
+                        onClick = { onScreenChange(screen) },
+                        selectedContentColor = MaterialTheme.colorScheme.primary,
+                        unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HomeScreen(viewModel: WalletViewModel, seedHex: String) {
+    HomeScreen(viewModel = viewModel, lightNodeRepository = (viewModel as WalletViewModel).lightNodeRepository, walletRepository = (viewModel as WalletViewModel).walletRepository)
 }
 
 @Composable
@@ -123,176 +201,23 @@ fun GenesisGateScreen(onVerified: () -> Unit) {
     }
 }
 
+// Re-export screens from other files
 @Composable
-fun WalletScreen(viewModel: WalletViewModel) {
-    val nodeState by viewModel.nodeState.observeAsState()
-    
-    androidx.compose.material3.Scaffold(
-        topBar = {
-            androidx.compose.material3.TopAppBar(
-                title = { androidx.compose.material3.Text("Kovanica Light Node") },
-                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                    containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainer
-                )
-            )
-        }
-    ) { padding ->
-        androidx.compose.material3.Box(
-            modifier = androidx.compose.ui.Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            androidx.compose.material3.Column(
-                modifier = androidx.compose.ui.Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)
-            ) {
-                // Status card
-                StatusCard(state = nodeState)
-                
-                // Balance card
-                BalanceCard()
-                
-                // Action buttons
-                ActionButtons(viewModel = viewModel)
-                
-                // Staking section
-                StakingSection(viewModel = viewModel)
-            }
-        }
-    }
+fun SendScreen(viewModel: WalletViewModel, onBack: () -> Unit) {
+    com.kovanica.lightnode.ui.SendScreen(viewModel, onBack)
 }
 
 @Composable
-fun StatusCard(state: com.kovanica.lightnode.data.LightNodeRepository.NodeState?) {
-    androidx.compose.material3.Card(
-        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-        colors = androidx.compose.material3.CardDefaults.cardColors(
-            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerHigh
-        )
-    ) {
-        androidx.compose.material3.Column(
-            modifier = androidx.compose.ui.Modifier.padding(16.dp),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
-        ) {
-            androidx.compose.material3.Row(
-                modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
-            ) {
-                androidx.compose.material3.Text("Node Status", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                androidx.compose.material3.Text(
-                    if (state?.isSyncing == true) "Syncing..." else "Ready",
-                    color = if (state?.isSyncing == true) Color.Orange else Color.Green
-                )
-            }
-            state?.let { s ->
-                androidx.compose.material3.Row(
-                    modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
-                ) {
-                    androidx.compose.material3.Text("Height: ${s.blockHeight}")
-                    androidx.compose.material3.Text("Peers: ${s.peerCount}")
-                }
-            }
-        }
-    }
+fun ReceiveScreen(onBack: () -> Unit) {
+    com.kovanica.lightnode.ui.ReceiveScreen(onBack)
 }
 
 @Composable
-fun BalanceCard() {
-    androidx.compose.material3.Card(
-        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-        colors = androidx.compose.material3.CardDefaults.cardColors(
-            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer
-        )
-    ) {
-        androidx.compose.material3.Column(
-            modifier = androidx.compose.ui.Modifier.padding(16.dp),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
-        ) {
-            androidx.compose.material3.Text("Balance", fontSize = 16.sp, color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant)
-            androidx.compose.material3.Text("0.00000000 KVNC", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-            androidx.compose.material3.Text("Tap to refresh", fontSize = 12.sp, color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+fun HistoryScreen(onBack: () -> Unit) {
+    com.kovanica.lightnode.ui.HistoryScreen(onBack)
 }
 
 @Composable
-fun ActionButtons(viewModel: WalletViewModel) {
-    androidx.compose.material3.Row(
-        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
-    ) {
-        androidx.compose.material3.Button(
-            modifier = androidx.compose.ui.Modifier.weight(1f),
-            onClick = { viewModel.sync() }
-        ) {
-            androidx.compose.material3.Icon(
-                imageVector = androidx.compose.material.icons.Icons.Filled.Sync,
-                contentDescription = "Sync"
-            )
-            androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.padding(end = 8.dp))
-            androidx.compose.material3.Text("Sync")
-        }
-        androidx.compose.material3.OutlinedButton(
-            modifier = androidx.compose.ui.Modifier.weight(1f),
-            onClick = { /* faucet */ }
-        ) {
-            androidx.compose.material3.Text("Faucet")
-        }
-        androidx.compose.material3.OutlinedButton(
-            modifier = androidx.compose.ui.Modifier.weight(1f),
-            onClick = { /* send */ }
-        ) {
-            androidx.compose.material3.Text("Send")
-        }
-    }
-}
-
-@Composable
-fun StakingSection(viewModel: WalletViewModel) {
-    val stakingState by viewModel.stakingState.observeAsState()
-    
-    androidx.compose.material3.Card(
-        modifier = androidx.compose.ui.Modifier.fillMaxWidth()
-    ) {
-        androidx.compose.material3.Column(
-            modifier = androidx.compose.ui.Modifier.padding(16.dp),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
-        ) {
-            androidx.compose.material3.Text("Staking", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            
-            stakingState?.let { s ->
-                androidx.compose.material3.Row(
-                    modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
-                ) {
-                    androidx.compose.material3.Text(
-                        if (s.isValidator) "Validator: ACTIVE" else "Validator: INACTIVE",
-                        color = if (s.isValidator) Color.Green else Color.Red
-                    )
-                    androidx.compose.material3.Text("Stake: ${Format.atomsToKvnc(s.myStake)} KVNC")
-                }
-            }
-            
-            androidx.compose.material3.Row(
-                modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
-            ) {
-                androidx.compose.material3.Button(
-                    modifier = androidx.compose.ui.Modifier.weight(1f),
-                    onClick = { viewModel.enableValidator("") }
-                ) {
-                    androidx.compose.material3.Text("Enable Validator")
-                }
-                androidx.compose.material3.OutlinedButton(
-                    modifier = androidx.compose.ui.Modifier.weight(1f),
-                    onClick = { viewModel.produceBlock() }
-                ) {
-                    androidx.compose.material3.Text("Produce Block")
-                }
-            }
-        }
-    }
+fun SettingsScreen(onBack: () -> Unit) {
+    com.kovanica.lightnode.ui.SettingsScreen(onBack)
 }
