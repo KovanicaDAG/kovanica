@@ -2,8 +2,9 @@
 
 Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 
-> **Status**: Active development. Multiple repos, shared tooling.
-> **Primary repos**: `kovanica-protocol` (core), `kovanica-node` (node binary), `kovanica-web` (explorer/wallet), `kovanica-wallet` (mobile/FFI), `kovanica-mobile` (Android app).
+> **Status**: Active development. Monorepo layout (migration in progress on `chore/monorepo-migration`).
+> **Component repos**: `protocol` (core), `node` (node binary), `web` (explorer/wallet), `wallet` (mobile/FFI), `mobile` (Android app).
+> **Separate repos** (NOT in the workspace): `kovanica-agent` → `~/kovanica-agent`, `kovanica-brain-vault` → `~/kovanica-brain-vault`.
 
 ---
 
@@ -11,19 +12,20 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 
 ```
 /root/kovanica/
-├── kovanica-protocol/     # Core consensus + ledger (Rust workspace)
+├── protocol/              # Core consensus + ledger (Rust workspace)
 │   ├── crates/kovanica-dag/       # BlockDAG + GHOSTDAG + VRF
 │   ├── crates/kovanica-state/     # UTXO ledger, stake registry, hybrid PoW/VRF
 │   └── docs/                      # RFCs, KVP specs, LEGIT-BOARD.md
-├── kovanica-node/         # Runnable node binary + explorer HTTP API
+├── node/                  # Runnable node binary + explorer HTTP API
 │   ├── crates/kovanica-node/      # Node, mempool, RPC, P2P, explorer
 │   └── crates/kovanica-ffi/       # UniFFI bindings for mobile
-├── kovanica-web/          # Explorer + wallet frontend (TanStack Router, Vite, Nitro)
-├── kovanica-wallet/       # Mobile wallet (UniFFI + Kotlin/Swift)
-├── kovanica-mobile/       # Android app (Jetpack Compose, light node)
-├── kovanica-agent/        # AI agent tooling
-├── kovanica-brain-vault/  # Knowledge base / docs
-├── kovanica-installer/    # Install scripts
+├── web/                   # Explorer + wallet frontend (TanStack Router, Vite, Nitro)
+├── wallet/                # Mobile wallet (UniFFI + Kotlin/Swift)
+├── mobile/                # Android app (Jetpack Compose, light node)
+├── cli/                   # Rust CLI (was kovanica-cli)
+├── installer/             # Install scripts (was kovanica-installer)
+├── ledger-app/            # Hardware wallet app (was kovanica-ledger-app, local-only, unversioned)
+├── data/                  # Runtime data (NOT versioned; placeholder in git)
 └── NETWORK.md             # Testnet seed info, ports, genesis
 ```
 
@@ -31,7 +33,7 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 
 ## 2. Key Conventions
 
-### Rust Workspace (`kovanica-protocol/`, `kovanica-node/`)
+### Rust Workspace (`protocol/`, `node/`)
 - **Edition**: 2021, `rust-version` 1.75+
 - **Forbidden**: `unsafe_code` (`#![forbid(unsafe_code)]`)
 - **Linting**: `cargo clippy --all-targets` (warning-clean)
@@ -39,14 +41,14 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 - **Tests**: `cargo test` (unit + integration + doctests)
 - **Determinism**: Critical — consensus must be pure function of DAG
 
-### Web (`kovanica-web/`)
+### Web (`web/`)
 - **Framework**: TanStack Router, Vite, Nitro (SSR)
 - **Styling**: Tailwind CSS, custom design system
 - **State**: Zustand stores, TanStack Query
 - **Build**: `npm run build:vps` (NITRO_PRESET=node-server)
 - **Deploy**: PM2 on VPS, Cloudflare in front
 
-### Mobile/FFI (`kovanica-wallet/`, `kovanica-node/crates/kovanica-ffi/`)
+### Mobile/FFI (`wallet/`, `node/crates/kovanica-ffi/`)
 - **UniFFI**: Generates Kotlin/Swift bindings
 - **Bindings committed**: `crates/kovanica-ffi/bindings/{kotlin,swift}/`
 - **Drift guard**: CI regenerates and fails on diff (`.github/workflows/bindings.yml`)
@@ -57,10 +59,10 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 
 | Repo | Build | Test | Lint/Format |
 |------|-------|------|-------------|
-| `kovanica-protocol/` | `cargo build` | `cargo test` | `cargo fmt --check && cargo clippy --all-targets` |
-| `kovanica-node/` | `cargo build --workspace` | `cargo test --workspace` | Same as protocol |
-| `kovanica-web/` | `npm run build:vps` | `npm run test` | `npm run lint && npm run format:check` |
-| `kovanica-wallet/` | `./gradlew assembleDebug` | `./gradlew test` | `ktlint` |
+| `protocol/` | `cargo build` | `cargo test` | `cargo fmt --check && cargo clippy --all-targets` |
+| `node/` | `cargo build --workspace` | `cargo test --workspace` | Same as protocol |
+| `web/` | `npm run build:vps` | `npm run test` | `npm run lint && npm run format:check` |
+| `wallet/` | `./gradlew assembleDebug` | `./gradlew test` | `ktlint` |
 
 ---
 
@@ -166,14 +168,14 @@ echo "✅ Git hooks installed."
 
 ### VPS Deploy (kovanica-web)
 ```bash
-cd /root/kovanica/kovanica-web/site
+cd /root/kovanica/web/site
 npm run build:vps    # NITRO_PRESET=node-server
 pm2 restart kovanica-web
 ```
 
 ### VPS Deploy (kovanica-node)
 ```bash
-cd /root/kovanica/kovanica-node
+cd /root/kovanica/node
 cargo build --release --workspace
 systemctl restart kovanica-node
 ```
@@ -214,34 +216,34 @@ systemctl restart kovanica-node
 
 | File | Purpose |
 |------|---------|
-| `kovanica-protocol/docs/LEGIT-BOARD.md` | P0/P1/P2 roadmap checklist |
-| `kovanica-protocol/docs/AUDIT-PLAN.md` | Audit scope, firms, timeline |
-| `kovanica-protocol/docs/REPRODUCIBLE-BUILDS.md` | Toolchain pinning, CI verification |
-| `kovanica-protocol/docs/BUG-BOUNTY.md` | Severity tiers, payouts, safe harbor |
-| `kovanica-protocol/docs/MAINNET-CRITERIA.md` | Exit checklist for mainnet launch |
-| `kovanica-protocol/docs/TESTNET-SOAK.md` | 30-day soak plan, metrics |
-| `kovanica-protocol/docs/ENTITY-LEGAL.md` | Maintainer identity, disclaimers |
-| `kovanica-protocol/docs/COMMUNITY-DISCORD.md` | Server structure, moderation |
-| `kovanica-protocol/docs/OPS-HARDENING.md` | Backups, alerts, seed hardening |
-| `kovanica-protocol/docs/PRODUCT-POLISH.md` | Hardware wallet, deep-links, fee est |
+| `protocol/docs/LEGIT-BOARD.md` | P0/P1/P2 roadmap checklist |
+| `protocol/docs/AUDIT-PLAN.md` | Audit scope, firms, timeline |
+| `protocol/docs/REPRODUCIBLE-BUILDS.md` | Toolchain pinning, CI verification |
+| `protocol/docs/BUG-BOUNTY.md` | Severity tiers, payouts, safe harbor |
+| `protocol/docs/MAINNET-CRITERIA.md` | Exit checklist for mainnet launch |
+| `protocol/docs/TESTNET-SOAK.md` | 30-day soak plan, metrics |
+| `protocol/docs/ENTITY-LEGAL.md` | Maintainer identity, disclaimers |
+| `protocol/docs/COMMUNITY-DISCORD.md` | Server structure, moderation |
+| `protocol/docs/OPS-HARDENING.md` | Backups, alerts, seed hardening |
+| `protocol/docs/PRODUCT-POLISH.md` | Hardware wallet, deep-links, fee est |
 | `NETWORK.md` | Seed peers, ports, genesis params |
-| `kovanica-protocol/crates/kovanica-state/src/stake.rs` | Multi-asset stake registry |
+| `protocol/crates/kovanica-state/src/stake.rs` | Multi-asset stake registry |
 
 ---
 
 ## 7. Common Tasks
 
 ### Add Consensus Feature
-1. Write RFC in `kovanica-protocol/docs/RFC-XXX-*.md`
+1. Write RFC in `protocol/docs/RFC-XXX-*.md`
 2. Implement in `kovanica-dag` or `kovanica-state`
 2. Add adversarial tests (`tests/consensus.rs`, `tests/*_consensus.rs`)
 3. Update activation score constant + `Ledger::set_*_activation_score`
 4. Update `LEGIT-BOARD.md` status
 
 ### Web Feature
-1. Routes in `kovanica-web/site/src/routes/`
-2. Components in `kovanica-web/site/src/components/`
-3. API in `kovanica-web/site/src/lib/api/`
+1. Routes in `web/site/src/routes/`
+2. Components in `web/site/src/components/`
+3. API in `web/site/src/lib/api/`
 4. Deploy: `npm run build:vps && pm2 restart kovanica-web`
 
 ### FFI Addition
@@ -267,11 +269,11 @@ systemctl restart kovanica-node
 | Issue | Where to Look |
 |-------|---------------|
 | Consensus fork | `kovanica-dag/tests/consensus.rs` — `adversarial_wide_fork` |
-| Mempool eviction | `kovanica-node/crates/kovanica-node/src/mempool_v2.rs` |
-| P2P not connecting | `kovanica-node/crates/kovanica-node/src/p2p_hardening.rs` |
-| Fee estimation | `kovanica-node/crates/kovanica-node/src/mempool_v2.rs:fee_estimate` |
-| Wallet balance wrong | `kovanica-web/site/src/components/wallet/wallet-view.tsx` |
-| Map black on mobile | `kovanica-web/site/src/components/map/dashboard.tsx` (h-[46vh] min-h-[300px]) |
+| Mempool eviction | `node/crates/kovanica-node/src/mempool_v2.rs` |
+| P2P not connecting | `node/crates/kovanica-node/src/p2p_hardening.rs` |
+| Fee estimation | `node/crates/kovanica-node/src/mempool_v2.rs:fee_estimate` |
+| Wallet balance wrong | `web/site/src/components/wallet/wallet-view.tsx` |
+| Map black on mobile | `web/site/src/components/map/dashboard.tsx` (h-[46vh] min-h-[300px]) |
 
 ---
 
@@ -279,7 +281,7 @@ systemctl restart kovanica-node
 
 - **No secrets in repo** — VPS keys, `.env`, private workflows stay private
 - **Security reports**: GitHub Security Advisories or `security@kovanica.online`
-- **Bug bounty**: See `kovanica-protocol/docs/BUG-BOUNTY.md`
+- **Bug bounty**: See `protocol/docs/BUG-BOUNTY.md`
 - **Audit**: Target Q1 2027, scope = dag + state + RPC
 
 ---
@@ -288,13 +290,13 @@ systemctl restart kovanica-node
 
 ```bash
 # Full test suite (protocol)
-cd /root/kovanica/kovanica-protocol && cargo test
+cd /root/kovanica/protocol && cargo test
 
 # Full test suite (node)
-cd /root/kovanica/kovanica-node && cargo test --workspace
+cd /root/kovanica/node && cargo test --workspace
 
 # Web build + deploy
-cd /root/kovanica/kovanica-web/site && npm run build:vps && pm2 restart kovanica-web
+cd /root/kovanica/web/site && npm run build:vps && pm2 restart kovanica-web
 
 # Check all hosts healthy
 for h in explorer.kovanica.online testnet.kovanica.online kovanica.online mainnet.kovanica.online api.kovanica.online docs.kovanica.online faucet.kovanica.online; do echo "=== $h ==="; curl -s -4 -o /dev/null -w "%{http_code}" "https://$h/" && echo; done

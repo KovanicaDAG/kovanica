@@ -47,16 +47,19 @@ headline() { printf '\n== %s ==\n' "$*"; }
 
 repo_list() {
     cat <<EOF
-kovanica-protocol	https://github.com/KovanicaDAG/kovanica-protocol.git
-kovanica-node	https://github.com/KovanicaDAG/kovanica-node.git
-kovanica-web	https://github.com/KovanicaDAG/kovanica-web.git
-kovanica-wallet	https://github.com/KovanicaDAG/kovanica-wallet.git
-kovanica-mobile	https://github.com/KovanicaDAG/kovanica-mobile.git
-kovanica-agent	https://github.com/KovanicaDAG/kovanica-agent.git
-kovanica-installer	https://github.com/KovanicaDAG/kovanica-installer.git
-kovanica-brain-vault	${KOVANICA_BRAIN_VAULT_URL:-https://github.com/KovanicaDAG/kovanica-brain-vault.git}
+protocol	https://github.com/KovanicaDAG/kovanica-protocol.git
+node	https://github.com/KovanicaDAG/kovanica-node.git
+web	https://github.com/KovanicaDAG/kovanica-web.git
+wallet	https://github.com/KovanicaDAG/kovanica-wallet.git
+mobile	https://github.com/KovanicaDAG/kovanica-mobile.git
+installer	https://github.com/KovanicaDAG/kovanica-installer.git
+cli	https://github.com/KovanicaDAG/kovanica-cli.git
 EOF
 }
+
+# agent + brain-vault live OUTSIDE the workspace (separate repos):
+#   ~/kovanica-agent        (git repo, origin/main)
+#   ~/kovanica-brain-vault  (docs vault, not versioned here)
 
 # ---------------------------------------------------------------- reconcile
 
@@ -126,12 +129,12 @@ sync_repo() {
 }
 
 ensure_data() {
-    if [ ! -d kovanica-data ]; then
-        mkdir -p kovanica-data
-        printf '%s\n' "# kovanica-data" "" "Runtime data for the Kovanica ecosystem (not versioned)." >kovanica-data/README.md
-        note "kovanica-data: created (runtime data, unversioned)"
-    elif [ ! -f kovanica-data/README.md ]; then
-        printf '%s\n' "# kovanica-data" "" "Runtime data for the Kovanica ecosystem (not versioned)." >kovanica-data/README.md
+    if [ ! -d data ]; then
+        mkdir -p data
+        printf '%s\n' "# data" "" "Runtime data for the Kovanica ecosystem (not versioned)." >data/README.md
+        note "data: created (runtime data, unversioned)"
+    elif [ ! -f data/README.md ]; then
+        printf '%s\n' "# data" "" "Runtime data for the Kovanica ecosystem (not versioned)." >data/README.md
     fi
 }
 
@@ -154,8 +157,8 @@ ensure_rust() {
         fi
         if command -v rustup >/dev/null 2>&1; then
             pin=
-            if [ -f "$ROOT/kovanica-protocol/rust-toolchain.toml" ]; then
-                pin="$(sed -n 's/^channel = "\(.*\)"/\1/p' "$ROOT/kovanica-protocol/rust-toolchain.toml")"
+            if [ -f "$ROOT/protocol/rust-toolchain.toml" ]; then
+                pin="$(sed -n 's/^channel = "\(.*\)"/\1/p' "$ROOT/protocol/rust-toolchain.toml")"
             fi
             if [ -n "$pin" ] && ! rustup toolchain list | grep -q "^$pin"; then
                 note "rust: installing pinned toolchain $pin (rustfmt, clippy)"
@@ -179,7 +182,7 @@ ensure_node() {
             note "node: $(node -v) ($(command -v node))"
             return 0
         fi
-        warn "node: v$(node -v) too old (>=20 required for kovanica-web)"
+        warn "node: v$(node -v) too old (>=20 required for web)"
     fi
 
     nvm_sh="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
@@ -262,7 +265,7 @@ npm_deps() {
 
 setup_agent() {
     if [ "$DO_DEPS" -eq 0 ]; then return 0; fi
-    d="$ROOT/kovanica-agent"
+    d="$HOME/kovanica-agent"
     [ -d "$d" ] || { warn "kovanica-agent missing"; return 0; }
 
     if [ "$PYTHON_OK" = yes ] && [ ! -d "$d/venv" ]; then
@@ -311,7 +314,7 @@ setup_agent() {
 gradle_warm() {
     if [ "$DO_DEPS" -eq 0 ]; then return 0; fi
     if [ "$JAVA_OK" != yes ]; then return 0; fi
-    for d in "$ROOT/kovanica-wallet/android" "$ROOT/kovanica-mobile/android"; do
+    for d in "$ROOT/wallet/android" "$ROOT/mobile/android"; do
         if [ -x "$d/gradlew" ]; then
             (cd "$d" && ./gradlew --version >/dev/null 2>&1) \
                 && note "gradle: warmed $d" \
@@ -321,8 +324,8 @@ gradle_warm() {
 }
 
 check_vault_drift() {
-    a="$ROOT/kovanica-brain-vault"
-    b="$ROOT/kovanica-agent/kovanica-brain-vault"
+    a="$HOME/kovanica-brain-vault"
+    b="$HOME/kovanica-agent/kovanica-brain-vault"
     if [ -d "$a" ] && [ -d "$b" ]; then
         diffs="$(diff -rq "$a" "$b" 2>/dev/null | wc -l | tr -d ' ')"
         if [ -n "${diffs:-}" ] && [ "$diffs" -gt 0 ]; then
@@ -352,7 +355,7 @@ doctor() {
                 "$name" "$br" "$state" "${ahead:-0}" "${behind:-0}" "${head:--}"
         done <"$WORK/repos.txt"
     fi
-    if [ -d kovanica-data ]; then printf '  %-22s (runtime data, unversioned)\n' kovanica-data; fi
+    if [ -d data ]; then printf '  %-22s (runtime data, unversioned)\n' data; fi
 
     headline "Toolchain"
     probe() {
@@ -386,30 +389,30 @@ doctor() {
     printf '  %-12s %s\n' android "$a"
 
     headline "Deps"
-    if [ -d kovanica-protocol/target ]; then
-        printf '  %-22s target/ built\n' kovanica-protocol
+    if [ -d protocol/target ]; then
+        printf '  %-22s target/ built\n' protocol
     else
-        printf '  %-22s target/ not built (first cargo check builds it)\n' kovanica-protocol
+        printf '  %-22s target/ not built (first cargo check builds it)\n' protocol
     fi
-    [ -d kovanica-node/target ] && printf '  %-22s target/ built\n' kovanica-node || \
-        printf '  %-22s target/ not built\n' kovanica-node
-    [ -d kovanica-web/site/node_modules ] && printf '  %-22s node_modules/\n' kovanica-web/site || \
-        printf '  %-22s not installed (npm ci)\n' kovanica-web/site
-    [ -d kovanica-wallet/extension/node_modules ] && printf '  %-22s node_modules/\n' kovanica-wallet/extension || \
-        printf '  %-22s not installed (npm ci)\n' kovanica-wallet/extension
-    [ -x kovanica-agent/venv/bin/python ] && printf '  %-22s venv/\n' kovanica-agent || \
-        printf '  %-22s no venv yet\n' kovanica-agent
+    [ -d node/target ] && printf '  %-22s target/ built\n' node || \
+        printf '  %-22s target/ not built\n' node
+    [ -d web/site/node_modules ] && printf '  %-22s node_modules/\n' web/site || \
+        printf '  %-22s not installed (npm ci)\n' web/site
+    [ -d wallet/extension/node_modules ] && printf '  %-22s node_modules/\n' wallet/extension || \
+        printf '  %-22s not installed (npm ci)\n' wallet/extension
+    [ -x "$HOME/kovanica-agent/venv/bin/python" ] && printf '  %-22s venv/\n' agent || \
+        printf '  %-22s no venv yet\n' agent
 
     headline "Run"
     cat <<RUN
-  web dev (all interfaces):   cd kovanica-web/site && npm run dev          -> http://localhost:8080
+  web dev (all interfaces):   cd web/site && npm run dev          -> http://localhost:8080
   web dev (local only):       npx vite dev --host 127.0.0.1 --port 8080
-  node (solo, cargo):         cd kovanica-node && KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_DATA=\$PWD/data \\
+  node (solo, cargo):         cd node && KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_DATA=\$PWD/data \\
                               cargo run --release -p kovanica-node -- explorer 127.0.0.1:8080
-  node (public testnet):      see kovanica-node/README.md (KOVANICA_PEERS=seed.kovanica.online:9000)
-  agent REPL:                 (cd kovanica-agent && ./kovanica.local repl)   # portable launcher written by this script
-  agent stack (needs docker): docker compose -f kovanica-agent/docker-compose.yml up -d qdrant vllm sandbox-runner agent-api
-  wallet extension:           cd kovanica-wallet/extension && npm run dev
+  node (public testnet):      see node/README.md (KOVANICA_PEERS=seed.kovanica.online:9000)
+  agent REPL:                 (cd ~/kovanica-agent && ./kovanica.local repl)   # portable launcher written by this script
+  agent stack (needs docker): docker compose -f ~/kovanica-agent/docker-compose.yml up -d qdrant vllm sandbox-runner agent-api
+  wallet extension:           cd wallet/extension && npm run dev
 RUN
 }
 
@@ -430,10 +433,10 @@ gradle_warm
 check_vault_drift
 
 if [ "$DO_DEPS" -eq 1 ]; then
-    cargo_check kovanica-protocol --workspace
-    cargo_check kovanica-node -p kovanica-node
-    npm_deps kovanica-web site
-    npm_deps kovanica-wallet extension
+    cargo_check protocol --workspace
+    cargo_check node -p kovanica-node
+    npm_deps web site
+    npm_deps wallet extension
     setup_agent
 else
     note "deps step skipped (--status)"
