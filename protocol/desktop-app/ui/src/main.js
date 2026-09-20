@@ -28,13 +28,32 @@ const addressListEl = document.getElementById('address-list')
 const addressesBtn = document.getElementById('addresses-btn')
 const addrInput = document.getElementById('addr-input')
 const balanceBtn = document.getElementById('balance-btn')
+const assetsBtn = document.getElementById('assets-btn')
 const historyBtn = document.getElementById('history-btn')
 const walletBalance = document.getElementById('wallet-balance')
+const walletAssets = document.getElementById('wallet-assets')
 const walletHistory = document.getElementById('wallet-history')
 const toInput = document.getElementById('to-input')
 const amountInput = document.getElementById('amount-input')
 const sendBtn = document.getElementById('send-btn')
 const sendResult = document.getElementById('send-result')
+
+// DOM elements — network / P2P / SPV
+const p2pListenInput = document.getElementById('p2p-listen-input')
+const p2pPeersInput = document.getElementById('p2p-peers-input')
+const p2pStartBtn = document.getElementById('p2p-start-btn')
+const p2pStopBtn = document.getElementById('p2p-stop-btn')
+const p2pStatus = document.getElementById('p2p-status')
+const spvUrlInput = document.getElementById('spv-url-input')
+const spvSyncBtn = document.getElementById('spv-sync-btn')
+const spvSyncStatus = document.getElementById('spv-sync-status')
+const spvAddrInput = document.getElementById('spv-addr-input')
+const spvMatchBtn = document.getElementById('spv-match-btn')
+const spvMatchList = document.getElementById('spv-match-list')
+const spvBlockInput = document.getElementById('spv-block-input')
+const spvTxInput = document.getElementById('spv-tx-input')
+const spvVerifyBtn = document.getElementById('spv-verify-btn')
+const spvVerifyStatus = document.getElementById('spv-verify-status')
 
 // DOM elements — operations
 const snapshotBtn = document.getElementById('snapshot-btn')
@@ -118,10 +137,35 @@ function renderHistory(events) {
     ? events.map((e) => {
         const dir = e.type || Object.keys(e)[0] || '?'
         const cls = dir === 'Received' ? 'dir-received' : dir === 'Sent' ? 'dir-sent' : ''
-        const body = e.tx_id ? `${fmtHash(e.tx_id)} · ${fmtKvnc(e.amount)}` : JSON.stringify(e)
+        const asset = e.asset_id ? ' · ' + e.asset_id.slice(0, 8) + '…' : ''
+        const amount = e.amount != null ? fmtKvnc(e.amount) + asset : ''
+        const body = e.tx_id ? `${fmtHash(e.tx_id)}${amount ? ' · ' + amount : ''}` : JSON.stringify(e)
         return `<div class="list-item"><span class="${cls}">${dir}</span> ${body}</div>`
       }).join('')
     : '<div class="list-item">no history</div>'
+}
+
+function renderAssets(balances) {
+  walletAssets.innerHTML = balances.length
+    ? balances.map((b) => {
+        const asset = b.asset === 'KVNC' ? 'KVNC' : b.asset.slice(0, 8) + '…'
+        const kind = b.kind === 'NonFungible' ? ' [NFT]' : ''
+        return `<div class="list-item">${asset}${kind} · ${(Number(b.amount) / ATOM).toLocaleString(undefined, { maximumFractionDigits: 8 })}</div>`
+      }).join('')
+    : ''
+}
+
+async function loadAssets() {
+  if (!addrInput.value.trim()) return
+  try {
+    const balances = await invoke('get_asset_balances', { address: addrInput.value.trim() })
+    renderAssets(balances)
+    if (!balances.length) {
+      walletAssets.innerHTML = '<div class="list-item">no assets</div>'
+    }
+  } catch (e) {
+    walletError(e)
+  }
 }
 
 async function refreshStatus() {
@@ -290,6 +334,105 @@ async function saveCheckpoint() {
   }
 }
 
+async function startP2P() {
+  p2pStartBtn.disabled = true
+  p2pStartBtn.textContent = 'Starting...'
+  try {
+    const peers = p2pPeersInput.value
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length)
+    const status = await invoke('start_p2p', {
+      listenAddr: p2pListenInput.value.trim() || '0.0.0.0:9000',
+      bootstrapPeers: peers,
+    })
+    p2pStatus.textContent = status
+    p2pStatus.className = 'value sm ok'
+    p2pStopBtn.disabled = false
+    p2pStartBtn.textContent = 'Start P2P'
+    await refreshStatus()
+  } catch (e) {
+    p2pStatus.textContent = String(e)
+    p2pStatus.className = 'value sm err'
+    p2pStartBtn.disabled = false
+    p2pStartBtn.textContent = 'Start P2P'
+  }
+}
+
+async function stopP2P() {
+  p2pStopBtn.disabled = true
+  try {
+    const status = await invoke('stop_p2p')
+    p2pStatus.textContent = status
+    p2pStatus.className = 'value sm'
+    p2pStartBtn.disabled = false
+    await refreshStatus()
+  } catch (e) {
+    p2pStatus.textContent = String(e)
+    p2pStatus.className = 'value sm err'
+    p2pStopBtn.disabled = false
+  }
+}
+
+async function spvSync() {
+  const url = spvUrlInput.value.trim()
+  if (!url) return
+  spvSyncBtn.disabled = true
+  spvSyncBtn.textContent = 'Syncing...'
+  try {
+    const info = await invoke('spv_sync', { url })
+    spvSyncStatus.textContent = `verified ${info.verified.toLocaleString()} headers · tip #${info.tip_height} ${fmtHash(info.tip_id)}`
+    spvSyncStatus.className = 'value sm ok'
+    spvMatchBtn.disabled = false
+    spvVerifyBtn.disabled = false
+    addEvent('SpvSynced', info)
+  } catch (e) {
+    spvSyncStatus.textContent = String(e)
+    spvSyncStatus.className = 'value sm err'
+    addEvent('Error', { message: 'SPV sync: ' + e })
+  } finally {
+    spvSyncBtn.disabled = false
+    spvSyncBtn.textContent = 'Light Sync'
+  }
+}
+
+async function spvMatch() {
+  const address = spvAddrInput.value.trim()
+  if (!address) return
+  try {
+    const hits = await invoke('spv_matches', { address })
+    spvMatchList.innerHTML = hits.length
+      ? hits.map((h) => `<div class="list-item">${fmtHash(h)}</div>`).join('')
+      : '<div class="list-item">no matching blocks</div>'
+    addEvent('SpvMatches', { address, count: hits.length })
+  } catch (e) {
+    spvMatchList.innerHTML = '<div class="list-item">error</div>'
+    walletError(e)
+  }
+}
+
+async function spvVerify() {
+  const blockId = spvBlockInput.value.trim()
+  const txId = spvTxInput.value.trim()
+  if (!blockId || !txId) {
+    spvVerifyStatus.textContent = 'block id and tx id required'
+    spvVerifyStatus.className = 'value sm err'
+    return
+  }
+  spvVerifyBtn.disabled = true
+  try {
+    const ok = await invoke('spv_verify', { blockId, txId })
+    spvVerifyStatus.textContent = ok ? 'proof verified ✓' : 'proof NOT verified'
+    spvVerifyStatus.className = ok ? 'value sm ok' : 'value sm err'
+    addEvent('SpvVerify', { blockId, txId, ok })
+  } catch (e) {
+    spvVerifyStatus.textContent = String(e)
+    spvVerifyStatus.className = 'value sm err'
+  } finally {
+    spvVerifyBtn.disabled = false
+  }
+}
+
 async function shutdown() {
   if (!window.confirm('Shut down the embedded node and exit the app?')) return
   shutdownBtn.disabled = true
@@ -324,9 +467,13 @@ async function init() {
       snapshotBtn.disabled = false
       checkpointBtn.disabled = false
       shutdownBtn.disabled = false
+      p2pStartBtn.disabled = false
+      spvSyncBtn.disabled = false
       setWalletUnlocked(walletUnlocked)
       await refreshStatus()
     } else if (type === 'TipChanged' || type === 'BlockProduced' || type === 'BlockReceived') {
+      await refreshStatus()
+    } else if (type === 'PeerConnected' || type === 'PeerDisconnected') {
       await refreshStatus()
     }
   })
@@ -341,10 +488,16 @@ unlockWalletBtn.addEventListener('click', unlockWallet)
 lockWalletBtn.addEventListener('click', lockWallet)
 addressesBtn.addEventListener('click', refreshAddresses)
 balanceBtn.addEventListener('click', loadBalance)
+assetsBtn.addEventListener('click', loadAssets)
 historyBtn.addEventListener('click', loadHistory)
 sendBtn.addEventListener('click', send)
 snapshotBtn.addEventListener('click', saveSnapshot)
 checkpointBtn.addEventListener('click', saveCheckpoint)
+p2pStartBtn.addEventListener('click', startP2P)
+p2pStopBtn.addEventListener('click', stopP2P)
+spvSyncBtn.addEventListener('click', spvSync)
+spvMatchBtn.addEventListener('click', spvMatch)
+spvVerifyBtn.addEventListener('click', spvVerify)
 shutdownBtn.addEventListener('click', shutdown)
 
 init()

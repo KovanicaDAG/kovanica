@@ -5,12 +5,17 @@
 //! UI (Tauri shell) holds a `NodeHandle` clone and never touches the
 //! `Node` directly — preserving the "zero consensus in UI" invariant.
 
+use std::collections::BTreeMap;
+use std::io::Read;
+use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
 use kovanica_dag::BlockId;
+use kovanica_node::net;
+use kovanica_node::spv::{BlockFilter, BlockHeader, MerkleProof, SpvClient};
 use kovanica_node::{Node, NodeError};
-use kovanica_state::{Address, KeyPair, Transaction, TxId};
+use kovanica_state::{Address, AssetKind, KeyPair, Transaction, TxId};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -105,6 +110,51 @@ impl MnemonicSeed {
     }
 }
 
+/// How often the worker attempts an outbound P2P sync round.
+const P2P_TICK_SECS: u64 = 4;
+/// Per-peer timeout for a single P2P sync round (headers-first, then dump).
+const P2P_SYNC_TIMEOUT: Duration = Duration::from_millis(400);
+/// HTTP timeout for SPV light-sync fetch + proof requests.
+const SPV_HTTP_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Live P2P state held by the worker loop.
+#[derive(Default)]
+struct P2pState {
+    enabled: bool,
+    peers: Vec<String>,
+    /// Peers that answered the most recent sync round.
+    live: Vec<String>,
+    /// Non-blocking inbound listeners, one per requested address.
+    listeners: Vec<TcpListener>,
+}
+
+/// Light-synced (headers + Golomb-Rice filters) store, from the last
+/// successful `SPVSync`. Used to answer filter-matches and proof checks
+/// without ever touching full block bodies.
+#[derive(Default)]
+struct SpvStore {
+    /// Base URL the blob was fetched from (for incremental proof pulls).
+    base: String,
+    /// `(header, filter)` pairs in chain order, verified by `SpvClient`.
+    headers: Vec<(BlockHeader, BlockFilter)>,
+}
+
+impl SpvStore {
+    /// Block ids whose filter MIGHT contain `owner` (probabilistic hits).
+    fn matches(&self, owner: &[u8; 32]) -> Vec<String> {
+        self.headers
+            .iter()
+            .filter_map(|(h, f)| {
+                if f.contains(owner) {
+                    Some(h.id.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
 /// Commands the UI can send to the node worker.
 #[derive(Debug)]
 pub enum WorkerCmd {
@@ -142,6 +192,14 @@ pub enum WorkerCmd {
     GetBalance { address: String },
     /// Get wallet transaction history.
     GetHistory { address: String, max_blocks: usize },
+    /// List all per-asset spendable balances for an address.
+    GetAssetBalances { address: String },
+    /// Fetch + verify a KVLS light-sync blob (headers + filters) from a node.
+    SPVSync { url: String },
+    /// Which light-synced blocks MIGHT contain activity for an address.
+    SPVMatches { address: String },
+    /// Verify a Merkle inclusion proof for a tx against a light-synced header.
+    SPVVerify { block_id: String, tx_id: String },
     /// Graceful shutdown.
     Shutdown,
 }
@@ -167,7 +225,39 @@ pub enum WorkerResp {
     History(Vec<WalletEvent>),
     /// SaveState(Ok(path)) after a snapshot or checkpoint landed on disk.
     SaveState(Result<String, String>),
+    /// Per-asset spendable balances for one address.
+    AssetBalances(Result<Vec<AssetBalance>, String>),
+    /// Light-sync result (fetch + chain verification) or error.
+    SpvSync(Result<SpvSyncInfo, String>),
+    /// Block ids whose filters MIGHT contain the queried address.
+    SpvMatches(Vec<String>),
+    /// Whether a Merkle inclusion proof verified against a synced header.
+    SpvVerified(bool),
     Ok,
+}
+
+/// One asset balance for an address (native KVNC or a registered token).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct AssetBalance {
+    /// `"KVNC"` for the native asset, otherwise the 64-hex asset id.
+    pub asset: String,
+    /// Balance in atoms (native unit).
+    pub amount: u128,
+    /// `"Fungible"` or `"NonFungible"`.
+    pub kind: String,
+}
+
+/// Result of a light-sync fetch + verification.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SpvSyncInfo {
+    /// Number of headers verified (including the checkpoint/anchor header).
+    pub verified: u64,
+    /// Height of the highest verified header.
+    pub tip_height: u64,
+    /// Id of the highest verified header.
+    pub tip_id: String,
+    /// The node the blob was fetched from.
+    pub from_url: String,
 }
 
 /// Snapshot of node state for UI status screens.
@@ -247,14 +337,18 @@ impl NodeHandle {
         let join = tokio::spawn(async move {
             let mut node = node;
             let mut wallet = WalletState::new();
+            let mut p2p = P2pState::default();
+            let mut spv_store: Option<SpvStore> = None;
             let mut last_tip: Option<BlockId> = node.selected_tip().ok();
             let mut last_block_count = node.block_count().unwrap_or(0);
             let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(300)); // 5 min
             let mut snapshot_interval = tokio::time::interval(Duration::from_secs(3600)); // 1 hour
+            let mut p2p_interval = tokio::time::interval(Duration::from_secs(P2P_TICK_SECS));
 
             // Ensure intervals don't fire immediately.
             checkpoint_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             snapshot_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            p2p_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             loop {
                 tokio::select! {
@@ -264,9 +358,12 @@ impl NodeHandle {
                     _ = snapshot_interval.tick() => {
                         let _ = Self::save_snapshot(&mut node, &datadir_clone, &event_tx_clone);
                     }
+                    _ = p2p_interval.tick() => {
+                        p2p_tick(&mut node, &mut p2p, &event_tx_clone);
+                    }
                     cmd = cmd_rx.recv() => {
                         let Some((cmd, resp_tx)): Option<(WorkerCmd, oneshot::Sender<WorkerResp>)> = cmd else { break; };
-                        let result = Self::handle_cmd(cmd, &mut node, &mut wallet, &datadir_clone, &event_tx_clone).await;
+                        let result = Self::handle_cmd(cmd, &mut node, &mut wallet, &datadir_clone, &event_tx_clone, &mut p2p, &mut spv_store).await;
                         let _ = resp_tx.send(result);
                     }
                     _ = shutdown_rx.recv() => {
@@ -330,6 +427,8 @@ impl NodeHandle {
         wallet: &mut WalletState,
         datadir: &DataDir,
         events: &broadcast::Sender<NodeEvent>,
+        p2p: &mut P2pState,
+        spv: &mut Option<SpvStore>,
     ) -> WorkerResp {
         match cmd {
             WorkerCmd::ProduceBlock => {
@@ -377,7 +476,7 @@ impl NodeHandle {
                     tip,
                     block_count,
                     mempool_size,
-                    peers: 0, // P2P not yet integrated
+                    peers: p2p.live.len(),
                     sync_progress: None,
                 })
             }
@@ -385,14 +484,30 @@ impl NodeHandle {
                 listen_addr,
                 bootstrap_peers,
             } => {
-                // P2P integration would go here - for now return status
+                p2p.peers = bootstrap_peers;
+                p2p.enabled = true;
+                p2p.listeners = bind_p2p_listeners(&listen_addr);
+                let detail = if p2p.listeners.is_empty() {
+                    format!("inbound unavailable on {listen_addr}")
+                } else {
+                    format!("listening on {listen_addr}")
+                };
                 WorkerResp::P2PStatus(format!(
-                    "P2P start requested: listen={}, peers={}",
-                    listen_addr,
-                    bootstrap_peers.len()
+                    "P2P started: {detail}, {} configured peers",
+                    p2p.peers.len()
                 ))
             }
-            WorkerCmd::StopP2P => WorkerResp::P2PStatus("P2P stop requested".into()),
+            WorkerCmd::StopP2P => {
+                p2p.enabled = false;
+                p2p.listeners.clear();
+                let live = std::mem::take(&mut p2p.live);
+                for peer in &live {
+                    let _ = events.send(NodeEvent::PeerDisconnected {
+                        peer_id: peer.clone(),
+                    });
+                }
+                WorkerResp::P2PStatus("P2P stopped".into())
+            }
             WorkerCmd::CreateWallet { passphrase } => {
                 use bip39::{Language, Mnemonic};
                 use rand::RngCore;
@@ -510,6 +625,75 @@ impl NodeHandle {
                     .collect();
                 WorkerResp::History(wallet_events)
             }
+            WorkerCmd::GetAssetBalances { address } => {
+                let addr = match Address::parse(&address) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        return WorkerResp::AssetBalances(Err(format!("invalid address: {e}")))
+                    }
+                };
+                // Kind lookup from the asset registry (native is always fungible).
+                let known = match node.asset_registry() {
+                    Ok(reg) => reg
+                        .iter()
+                        .map(|(id, entry)| (id.to_hex(), entry.kind))
+                        .collect::<BTreeMap<String, AssetKind>>(),
+                    Err(_) => BTreeMap::new(),
+                };
+                match node.balances_map_of(&addr) {
+                    Ok(map) => {
+                        let mut out = Vec::with_capacity(map.len());
+                        for (asset, amount) in map {
+                            let kind = if asset == "KVNC" {
+                                "Fungible".to_string()
+                            } else {
+                                match known.get(&asset) {
+                                    Some(AssetKind::NonFungible) => "NonFungible".into(),
+                                    _ => "Fungible".into(),
+                                }
+                            };
+                            out.push(AssetBalance {
+                                asset,
+                                amount,
+                                kind,
+                            });
+                        }
+                        WorkerResp::AssetBalances(Ok(out))
+                    }
+                    Err(e) => WorkerResp::AssetBalances(Err(e.to_string())),
+                }
+            }
+            WorkerCmd::SPVSync { url } => match spv_fetch_verify(&url) {
+                Ok((info, store)) => {
+                    *spv = Some(store);
+                    WorkerResp::SpvSync(Ok(info))
+                }
+                Err(e) => WorkerResp::SpvSync(Err(e)),
+            },
+            WorkerCmd::SPVMatches { address } => {
+                let addr = match Address::parse(&address) {
+                    Ok(a) => a,
+                    Err(_) => return WorkerResp::SpvMatches(vec![]),
+                };
+                let hits = spv
+                    .as_ref()
+                    .map(|s| s.matches(addr.payload()))
+                    .unwrap_or_default();
+                WorkerResp::SpvMatches(hits)
+            }
+            WorkerCmd::SPVVerify { block_id, tx_id } => {
+                let verified = match spv.as_ref().map(|s| spv_verify(s, &block_id, &tx_id)) {
+                    Some(Ok(v)) => v,
+                    Some(Err(e)) => {
+                        let _ = events.send(NodeEvent::Error {
+                            message: format!("spv verify: {e}"),
+                        });
+                        false
+                    }
+                    None => false,
+                };
+                WorkerResp::SpvVerified(verified)
+            }
             WorkerCmd::Shutdown => WorkerResp::Ok,
         }
     }
@@ -545,8 +729,400 @@ impl NodeHandle {
     }
 }
 
+/// Bind non-blocking inbound listeners, one per requested address. Addresses
+/// that fail to bind (e.g. port already taken) are skipped; an empty result
+/// means inbound is disabled but outbound sync still works.
+fn bind_p2p_listeners(addrs: &str) -> Vec<TcpListener> {
+    addrs
+        .split(',')
+        .map(|a| a.trim())
+        .filter(|a| !a.is_empty())
+        .filter_map(|addr| match std::net::TcpListener::bind(addr) {
+            Ok(l) => {
+                let _ = l.set_nonblocking(true);
+                Some(l)
+            }
+            Err(_) => None,
+        })
+        .collect()
+}
+
+/// One P2P round: serve any inbound connections, then sync from each
+/// configured peer. Mirrors the explorer's `tick_p2p`/`sync_peers` pattern —
+/// headers-first sync with a full-dump fallback per peer. Live peers are the
+/// ones that answered this round; changes surface as `NodeEvent`s.
+fn p2p_tick(node: &mut Node, p2p: &mut P2pState, events: &broadcast::Sender<NodeEvent>) {
+    if !p2p.enabled {
+        return;
+    }
+    // Inbound: headers-first serve, falling back to the legacy full-dump
+    // exchange for old peers that don't speak the headers protocol.
+    for listener in &p2p.listeners {
+        let mut incoming = Vec::new();
+        while let Ok((stream, _peer)) = listener.accept() {
+            incoming.push(stream);
+        }
+        for mut stream in incoming {
+            if net::serve_headers_first(&mut stream, node, P2P_SYNC_TIMEOUT).is_err() {
+                let _ = stream.set_nonblocking(false);
+                let _ = net::serve_exchange(&mut stream, node, P2P_SYNC_TIMEOUT);
+            }
+        }
+    }
+    // Outbound: sync round against configured peers.
+    let mut live = Vec::new();
+    for addr in &p2p.peers {
+        let answered = match net::sync_headers_first(addr, node, P2P_SYNC_TIMEOUT) {
+            Ok(_) => true,
+            Err(_) => net::pull_blocks_timeout(addr, node, P2P_SYNC_TIMEOUT).is_ok(),
+        };
+        if answered {
+            live.push(addr.clone());
+        }
+    }
+    for addr in &p2p.live {
+        if !live.contains(addr) {
+            let _ = events.send(NodeEvent::PeerDisconnected {
+                peer_id: addr.clone(),
+            });
+        }
+    }
+    for addr in &live {
+        if !p2p.live.contains(addr) {
+            let _ = events.send(NodeEvent::PeerConnected {
+                peer_id: addr.clone(),
+                address: addr.clone(),
+            });
+        }
+    }
+    p2p.live = live;
+}
+
+/// Fetch a KVLS light-sync blob from `{url}/api/light_sync`, parse it, and
+/// verify the whole header chain through a `SpvClient` anchored at the blob's
+/// first header (the network genesis). On success the verified
+/// `(header, filter)` pairs are stored for filter-matching and proof checks.
+fn spv_fetch_verify(url: &str) -> Result<(SpvSyncInfo, SpvStore), String> {
+    let base = url.trim_end_matches('/');
+    let resp = ureq::get(&format!("{base}/api/light_sync"))
+        .timeout(SPV_HTTP_TIMEOUT)
+        .call()
+        .map_err(|e| format!("fetch {base}/api/light_sync: {e}"))?;
+    let mut blob = Vec::new();
+    resp.into_reader()
+        .take(64 * 1024 * 1024)
+        .read_to_end(&mut blob)
+        .map_err(|e| format!("read light-sync blob: {e}"))?;
+    let parsed = parse_light_sync(&blob)?;
+    if parsed.is_empty() {
+        return Err("light-sync blob is empty".into());
+    }
+    let mut client = SpvClient::new(parsed[0].0.clone(), false, None);
+    let mut verified = 1u64;
+    for (h, _) in &parsed[1..] {
+        client
+            .add_header(h.clone())
+            .map_err(|e| format!("header rejected at height {}: {e}", h.height))?;
+        verified += 1;
+    }
+    let tip = client.tip().ok_or_else(|| "no verified tip".to_string())?;
+    let info = SpvSyncInfo {
+        verified,
+        tip_height: tip.height,
+        tip_id: tip.id.to_string(),
+        from_url: base.to_string(),
+    };
+    Ok((
+        info,
+        SpvStore {
+            base: base.into(),
+            headers: parsed,
+        },
+    ))
+}
+
+/// Verify a Merkle inclusion proof fetched from `{store.base}/api/light_proof`
+/// against the light-synced header for `block_id`: the proof must verify
+/// internally AND its root must equal the header's root (mirrors the FFI's
+/// `verify_tx_proof`). Unknown block → error.
+fn spv_verify(store: &SpvStore, block_id: &str, tx_id: &str) -> Result<bool, String> {
+    let id = parse_block_id(block_id)?;
+    if tx_id.trim().len() != 64 {
+        return Err("tx id must be 32 bytes hex".into());
+    }
+    let header = store
+        .headers
+        .iter()
+        .find(|(h, _)| h.id == id)
+        .map(|(h, _)| h)
+        .ok_or_else(|| "block not in light-synced history".to_string())?;
+    let url = format!(
+        "{}/api/light_proof?block={}&tx={}",
+        store.base, block_id, tx_id
+    );
+    let resp = ureq::get(&url)
+        .timeout(SPV_HTTP_TIMEOUT)
+        .call()
+        .map_err(|e| format!("fetch proof: {e}"))?;
+    let mut blob = Vec::new();
+    resp.into_reader()
+        .take(1024 * 1024)
+        .read_to_end(&mut blob)
+        .map_err(|e| format!("read proof blob: {e}"))?;
+    let proof = parse_merkle_proof(&blob)?;
+    if proof.merkle_root != header.merkle_root {
+        return Ok(false);
+    }
+    Ok(proof.verify())
+}
+
+/// Parse a 32-byte block-id hex string.
+fn parse_block_id(s: &str) -> Result<BlockId, String> {
+    let raw = hex::decode(s.trim()).map_err(|e| format!("bad block id: {e}"))?;
+    let arr: [u8; 32] = raw
+        .as_slice()
+        .try_into()
+        .map_err(|_| "block id must be 32 bytes hex".to_string())?;
+    Ok(BlockId::from_bytes(arr))
+}
+
+/// KVLS v1 wire format (owned by the FFI layer): magic `KVLS` + version 1 +
+/// count, then per entry a 160-byte big-endian header + a Golomb-Rice filter
+/// (`k` u8, `n` u64 BE, `len` u32 BE, `data`). Byte-compatible with
+/// `kovanica-ffi`'s `parse_light_sync` and the explorer's `/api/light_sync`.
+fn parse_light_sync(blob: &[u8]) -> Result<Vec<(BlockHeader, BlockFilter)>, String> {
+    let err = || "undecodable light-sync blob".to_string();
+    if blob.len() < 9 || &blob[..4] != b"KVLS" || blob[4] != 1 {
+        return Err(err());
+    }
+    let count = u32::from_be_bytes(blob[5..9].try_into().map_err(|_| err())?) as usize;
+    let mut off = 9usize;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let end = off.checked_add(160).ok_or_else(err)?;
+        let h = blob.get(off..end).ok_or_else(err)?;
+        off = end;
+        let arr32 = |o: usize| -> Result<[u8; 32], String> {
+            h.get(o..o + 32)
+                .and_then(|s| s.try_into().ok())
+                .ok_or_else(err)
+        };
+        let header = BlockHeader {
+            id: BlockId::from_bytes(arr32(0)?),
+            prev_hash: BlockId::from_bytes(arr32(32)?),
+            merkle_root: arr32(64)?,
+            work: u128::from_be_bytes(
+                h.get(96..112)
+                    .and_then(|s| s.try_into().ok())
+                    .ok_or_else(err)?,
+            ),
+            timestamp_ms: u64::from_be_bytes(
+                h.get(112..120)
+                    .and_then(|s| s.try_into().ok())
+                    .ok_or_else(err)?,
+            ),
+            nonce: u64::from_be_bytes(
+                h.get(120..128)
+                    .and_then(|s| s.try_into().ok())
+                    .ok_or_else(err)?,
+            ),
+            blue_score: u64::from_be_bytes(
+                h.get(128..136)
+                    .and_then(|s| s.try_into().ok())
+                    .ok_or_else(err)?,
+            ),
+            chain_blue_work: u128::from_be_bytes(
+                h.get(136..152)
+                    .and_then(|s| s.try_into().ok())
+                    .ok_or_else(err)?,
+            ),
+            height: u64::from_be_bytes(
+                h.get(152..160)
+                    .and_then(|s| s.try_into().ok())
+                    .ok_or_else(err)?,
+            ),
+        };
+        let fend = off.checked_add(13).ok_or_else(err)?;
+        let f = blob.get(off..fend).ok_or_else(err)?;
+        let k = f[0];
+        let n = u64::from_be_bytes(
+            f.get(1..9)
+                .and_then(|s| s.try_into().ok())
+                .ok_or_else(err)?,
+        );
+        let len = u32::from_be_bytes(
+            f.get(9..13)
+                .and_then(|s| s.try_into().ok())
+                .ok_or_else(err)?,
+        ) as usize;
+        off = fend;
+        let dend = off.checked_add(len).ok_or_else(err)?;
+        let data = blob.get(off..dend).ok_or_else(err)?;
+        let filter = BlockFilter {
+            k,
+            n,
+            data: data.to_vec(),
+        };
+        off = dend;
+        out.push((header, filter));
+    }
+    Ok(out)
+}
+
+/// Explorer `/api/light_proof` proof blob (mirrors `encode_merkle_proof`):
+/// `tx_id` (32) + `merkle_root` (32) + `path_len` u32 + path + `index` u64 +
+/// `tx_count` u64.
+fn parse_merkle_proof(blob: &[u8]) -> Result<MerkleProof, String> {
+    if blob.len() < 72 {
+        return Err("undecodable proof blob".into());
+    }
+    let take32 = |b: &[u8]| -> [u8; 32] { <[u8; 32]>::try_from(b).expect("sliced 32") };
+    let path_len = u32::from_be_bytes(blob[64..68].try_into().map_err(|_| "bad blob")?) as usize;
+    let mut off = 68usize;
+    let mut path = Vec::with_capacity(path_len);
+    for _ in 0..path_len {
+        let end = off
+            .checked_add(32)
+            .filter(|&e| e <= blob.len())
+            .ok_or("undecodable proof blob")?;
+        path.push(take32(&blob[off..end]));
+        off = end;
+    }
+    if blob.len() < off + 16 {
+        return Err("undecodable proof blob".into());
+    }
+    let index = u64::from_be_bytes(blob[off..off + 8].try_into().expect("sliced 8")) as usize;
+    let tx_count =
+        u64::from_be_bytes(blob[off + 8..off + 16].try_into().expect("sliced 8")) as usize;
+    Ok(MerkleProof {
+        tx_id: take32(&blob[0..32]),
+        merkle_root: take32(&blob[32..64]),
+        path,
+        index,
+        tx_count,
+    })
+}
+
 /// Master key fingerprint: first byte of the BLAKE3 hash of the public key.
 fn master_fingerprint(keypair: &KeyPair) -> String {
     let pk = keypair.address().to_hex();
     format!("{:02x}", blake3::hash(pk.as_bytes()).as_bytes()[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Encode one KVLS header in the FFI wire format (160 bytes, BE).
+    fn encode_header_for_test(h: &BlockHeader) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(h.id.as_bytes());
+        out.extend_from_slice(h.prev_hash.as_bytes());
+        out.extend_from_slice(&h.merkle_root);
+        out.extend_from_slice(&h.work.to_be_bytes());
+        out.extend_from_slice(&h.timestamp_ms.to_be_bytes());
+        out.extend_from_slice(&h.nonce.to_be_bytes());
+        out.extend_from_slice(&h.blue_score.to_be_bytes());
+        out.extend_from_slice(&h.chain_blue_work.to_be_bytes());
+        out.extend_from_slice(&h.height.to_be_bytes());
+        out
+    }
+
+    fn encode_filter_for_test(f: &BlockFilter) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(f.k);
+        out.extend_from_slice(&f.n.to_be_bytes());
+        out.extend_from_slice(&(f.data.len() as u32).to_be_bytes());
+        out.extend_from_slice(&f.data);
+        out
+    }
+
+    fn test_header(id: u8, prev: &[u8; 32], height: u64) -> BlockHeader {
+        let mut bytes = [0u8; 32];
+        bytes[0] = id;
+        BlockHeader {
+            id: BlockId::from_bytes(bytes),
+            prev_hash: BlockId::from_bytes(*prev),
+            merkle_root: [1u8; 32],
+            work: 42,
+            timestamp_ms: 1000,
+            nonce: 7,
+            blue_score: height,
+            chain_blue_work: height as u128,
+            height,
+        }
+    }
+
+    #[test]
+    fn parses_a_kvls_blob_and_verifies_the_chain() {
+        let h0 = test_header(0xaa, &[0u8; 32], 0);
+        let h1 = test_header(0xbb, h0.id.as_bytes(), 1);
+        let f = BlockFilter {
+            k: 8,
+            n: 1,
+            data: Vec::new(),
+        };
+
+        let mut blob = Vec::new();
+        blob.extend_from_slice(b"KVLS");
+        blob.push(1);
+        blob.extend_from_slice(&2u32.to_be_bytes());
+        blob.extend_from_slice(&encode_header_for_test(&h0));
+        blob.extend_from_slice(&encode_filter_for_test(&f));
+        blob.extend_from_slice(&encode_header_for_test(&h1));
+        blob.extend_from_slice(&encode_filter_for_test(&f));
+
+        let parsed = parse_light_sync(&blob).expect("parses");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].0.height, 0);
+        assert_eq!(parsed[1].0.height, 1);
+        assert_eq!(parsed[1].0.prev_hash, parsed[0].0.id);
+        assert_eq!(parsed[0].1.data, Vec::<u8>::new());
+
+        // The whole chain verifies through SpvClient (require_pow = false).
+        let mut client = SpvClient::new(parsed[0].0.clone(), false, None);
+        assert!(client.add_header(parsed[1].0.clone()).expect("verified"));
+        assert_eq!(client.tip().map(|t| t.height), Some(1));
+        // A broken prev-hash link is rejected.
+        let mut bad = h1.clone();
+        bad.prev_hash = BlockId::from_bytes([9u8; 32]);
+        let mut client = SpvClient::new(parsed[0].0.clone(), false, None);
+        assert!(client.add_header(bad).is_err());
+    }
+
+    #[test]
+    fn rejects_undecodable_kvls_blobs() {
+        assert!(parse_light_sync(b"garbage").is_err());
+        let mut blob = b"KVLS".to_vec();
+        blob.push(1);
+        blob.extend_from_slice(&5u32.to_be_bytes()); // count 5 but no entries
+        assert!(parse_light_sync(&blob).is_err());
+    }
+
+    #[test]
+    fn parses_an_inclusion_proof_blob() {
+        // Single-tx leaf proof: empty path, tx_count 1 (84-byte blob).
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&[3u8; 32]); // tx_id
+        blob.extend_from_slice(&[3u8; 32]); // merkle_root
+        blob.extend_from_slice(&0u32.to_be_bytes()); // path_len
+        blob.extend_from_slice(&0u64.to_be_bytes()); // index
+        blob.extend_from_slice(&1u64.to_be_bytes()); // tx_count
+
+        let proof = parse_merkle_proof(&blob).expect("parses");
+        assert!(proof.path.is_empty());
+        assert_eq!(proof.index, 0);
+        assert_eq!(proof.tx_count, 1);
+        assert!(proof.verify(), "leaf proves its own root");
+        assert!(parse_merkle_proof(b"").is_err());
+        assert!(parse_merkle_proof(&blob[..40]).is_err());
+    }
+
+    #[test]
+    fn binds_listener_addresses_and_drops_duplicates() {
+        let listeners = bind_p2p_listeners("127.0.0.1:0, 127.0.0.1:0");
+        assert!(listeners.len() >= 1);
+        // A garbage address simply yields no bound listener.
+        assert!(bind_p2p_listeners("").is_empty());
+    }
 }
