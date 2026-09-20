@@ -58,8 +58,12 @@ pub fn run() {
             send_from_wallet,
             get_balance,
             get_history,
+            get_asset_balances,
             start_p2p,
-            stop_p2p
+            stop_p2p,
+            spv_sync,
+            spv_matches,
+            spv_verify
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -232,6 +236,22 @@ async fn get_history(
 }
 
 #[tauri::command]
+async fn get_asset_balances(
+    handle: tauri::State<'_, NodeHandle>,
+    address: String,
+) -> Result<Vec<crate::AssetBalance>, String> {
+    match handle
+        .send(crate::WorkerCmd::GetAssetBalances { address })
+        .await
+    {
+        Ok(crate::WorkerResp::AssetBalances(Ok(balances))) => Ok(balances),
+        Ok(crate::WorkerResp::AssetBalances(Err(e))) => Err(e),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
 async fn start_p2p(
     handle: tauri::State<'_, NodeHandle>,
     listen_addr: Option<String>,
@@ -254,6 +274,47 @@ async fn start_p2p(
 async fn stop_p2p(handle: tauri::State<'_, NodeHandle>) -> Result<String, String> {
     match handle.send(crate::WorkerCmd::StopP2P).await {
         Ok(crate::WorkerResp::P2PStatus(s)) => Ok(s),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn spv_sync(
+    handle: tauri::State<'_, NodeHandle>,
+    url: String,
+) -> Result<crate::SpvSyncInfo, String> {
+    match handle.send(crate::WorkerCmd::SPVSync { url }).await {
+        Ok(crate::WorkerResp::SpvSync(Ok(info))) => Ok(info),
+        Ok(crate::WorkerResp::SpvSync(Err(e))) => Err(e),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn spv_matches(
+    handle: tauri::State<'_, NodeHandle>,
+    address: String,
+) -> Result<Vec<String>, String> {
+    match handle.send(crate::WorkerCmd::SPVMatches { address }).await {
+        Ok(crate::WorkerResp::SpvMatches(hits)) => Ok(hits),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn spv_verify(
+    handle: tauri::State<'_, NodeHandle>,
+    block_id: String,
+    tx_id: String,
+) -> Result<bool, String> {
+    match handle
+        .send(crate::WorkerCmd::SPVVerify { block_id, tx_id })
+        .await
+    {
+        Ok(crate::WorkerResp::SpvVerified(v)) => Ok(v),
         Ok(_) => Err("unexpected response".into()),
         Err(e) => Err(e.to_string()),
     }

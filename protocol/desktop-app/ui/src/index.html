@@ -142,9 +142,11 @@
             <input id="addr-input" placeholder="kvnc…dag or hex" />
             <div class="actions sm">
               <button id="balance-btn" class="btn btn-secondary">Balance</button>
+              <button id="assets-btn" class="btn btn-secondary">Assets</button>
               <button id="history-btn" class="btn btn-secondary">History</button>
             </div>
             <div class="value sm" id="wallet-balance">—</div>
+            <div id="wallet-assets" class="list" style="margin-top:8px;max-height:140px;"></div>
             <div id="wallet-history" class="list" style="margin-top:8px;">
               <div class="list-item">—</div>
             </div>
@@ -158,6 +160,51 @@
               <button id="send-btn" class="btn" disabled>Send</button>
             </div>
             <div class="value sm" id="send-result">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Network</h3>
+        <div class="wallet-grid">
+          <div class="wallet-col">
+            <label>Listen address</label>
+            <input id="p2p-listen-input" value="0.0.0.0:9000" />
+            <label>Bootstrap peers (comma separated)</label>
+            <input id="p2p-peers-input" value="seed.kovanica.online:9000" />
+            <div class="actions sm">
+              <button id="p2p-start-btn" class="btn btn-secondary" disabled>Start P2P</button>
+              <button id="p2p-stop-btn" class="btn btn-secondary" disabled>Stop P2P</button>
+            </div>
+            <div class="value sm" id="p2p-status">real TCP sync (headers-first + full-dump) against configured peers</div>
+          </div>
+          <div class="wallet-col">
+            <label>SPV relay URL</label>
+            <input id="spv-url-input" value="https://explorer.kovanica.online" />
+            <div class="actions sm">
+              <button id="spv-sync-btn" class="btn btn-secondary" disabled>Light Sync</button>
+            </div>
+            <div class="value sm" id="spv-sync-status">—</div>
+          </div>
+          <div class="wallet-col">
+            <label>Watch address</label>
+            <input id="spv-addr-input" placeholder="kvnc…dag or hex" />
+            <div class="actions sm">
+              <button id="spv-match-btn" class="btn btn-secondary" disabled>Find Matching Blocks</button>
+            </div>
+            <div id="spv-match-list" class="list" style="margin-top:8px;">
+              <div class="list-item">—</div>
+            </div>
+          </div>
+          <div class="wallet-col">
+            <label>Block id (hex)</label>
+            <input id="spv-block-input" placeholder="32-byte hex" />
+            <label>Tx id (hex)</label>
+            <input id="spv-tx-input" placeholder="32-byte hex" />
+            <div class="actions sm">
+              <button id="spv-verify-btn" class="btn btn-secondary" disabled>Verify Inclusion Proof</button>
+            </div>
+            <div class="value sm" id="spv-verify-status">—</div>
           </div>
         </div>
       </div>

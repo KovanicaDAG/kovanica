@@ -39,6 +39,26 @@ This crate is the **Rust core**; a Tauri shell (UI) is added in later slices.
 - [x] Slice B: node lifecycle (worker thread with an mpsc command channel and
       broadcast event stream, data dir + network markers,
       snapshot/checkpoint persistence, tip/block-change events).
+- [x] Slice B extension — network, assets and SPV in the worker:
+  - **P2P integration**: `start_p2p`/`stop_p2p` now drive real TCP sync
+    (mirrors the explorer's `tick_p2p`/`sync_peers`): non-blocking inbound
+    listeners serving headers-first (with legacy full-dump fallback) and a
+    per-tick outbound headers-first sync round per configured peer; the status
+    Peers counter reflects this round's live peers and peer joins/drops surface
+    as `PeerConnected`/`PeerDisconnected` events. Defaults: listen
+    `0.0.0.0:9000`, bootstrap `seed.kovanica.online:9000`.
+  - **Native-token balances**: `get_asset_balances` lists every asset an
+    address holds (`balances_map_of` + the asset registry), each with its
+    `Fungible`/`NonFungible` kind; the wallet query column shows the per-asset
+    breakdown and wallet history now surfaces non-native `asset_id`s.
+  - **SPV light mode**: `spv_sync` fetches the KVLS v1 light-sync blob from any
+    node's `/api/light_sync` and verifies the whole header chain through a
+    `SpvClient` (`require_pow = false`, checkpoint = the blob's first header);
+    `spv_matches` answers which light-synced blocks' Golomb-Rice filters MIGHT
+    contain a watch address; `spv_verify` pulls `/api/light_proof` and checks
+    the Merkle proof against the synced header. Verified end-to-end against the
+    live explorer blob (4,953/4,953 headers). KVLS/proof parsing is byte-compatible
+    with `kovanica-ffi`, guarded by unit tests.
 
 ## Run the gates
 

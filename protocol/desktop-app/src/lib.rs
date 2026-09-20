@@ -33,4 +33,6 @@ pub use datadir::{DataDir, DataDirError};
 pub use events::{NodeEvent, WalletEvent};
 pub use profile::{NetworkProfile, NETWORK_MAINNET, NETWORK_TESTNET};
 pub use service::{BootError, NodeService, ParityError};
-pub use worker::{NodeHandle, NodeStatus, WorkerCmd, WorkerError, WorkerResp};
+pub use worker::{
+    AssetBalance, NodeHandle, NodeStatus, SpvSyncInfo, WorkerCmd, WorkerError, WorkerResp,
+};
