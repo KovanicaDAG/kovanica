@@ -1,11 +1,8 @@
 //! Kovanica Desktop Node App — Tauri entry point.
 
 #[cfg(feature = "tauri")]
-mod tauri_main;
-
-#[cfg(feature = "tauri")]
 fn main() {
-    tauri_main::run();
+    kovanica_desktop::tauri_main::run();
 }
 
 #[cfg(not(feature = "tauri"))]

@@ -1,6 +1,6 @@
 //! Tauri application entry point for the Kovanica Desktop Node App.
 
-use kovanica_desktop::{NetworkProfile, NodeHandle};
+use crate::{NetworkProfile, NodeHandle};
 use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -59,9 +59,9 @@ pub fn run() {
 #[tauri::command]
 async fn get_status(
     handle: tauri::State<'_, NodeHandle>,
-) -> Result<kovanica_desktop::NodeStatus, String> {
-    match handle.send(kovanica_desktop::WorkerCmd::GetStatus).await {
-        Ok(kovanica_desktop::WorkerResp::Status(s)) => Ok(s),
+) -> Result<crate::NodeStatus, String> {
+    match handle.send(crate::WorkerCmd::GetStatus).await {
+        Ok(crate::WorkerResp::Status(s)) => Ok(s),
         Ok(_) => Err("unexpected response".into()),
         Err(e) => Err(e.to_string()),
     }
@@ -69,9 +69,9 @@ async fn get_status(
 
 #[tauri::command]
 async fn produce_block(handle: tauri::State<'_, NodeHandle>) -> Result<Option<String>, String> {
-    match handle.send(kovanica_desktop::WorkerCmd::ProduceBlock).await {
-        Ok(kovanica_desktop::WorkerResp::ProduceBlock(r)) => {
-            r.map(|b| b.to_string()).map_err(|e| e.to_string())
+    match handle.send(crate::WorkerCmd::ProduceBlock).await {
+        Ok(crate::WorkerResp::ProduceBlock(r)) => {
+            r.map(|b| b.map(|id| id.to_string())).map_err(|e| e.to_string())
         }
         Ok(_) => Err("unexpected response".into()),
         Err(e) => Err(e.to_string()),
@@ -79,7 +79,7 @@ async fn produce_block(handle: tauri::State<'_, NodeHandle>) -> Result<Option<St
 }
 
 #[tauri::command]
-async fn submit_tx(handle: tauri::State<'_, NodeHandle>, tx_hex: String) -> Result<String, String> {
+async fn submit_tx(_handle: tauri::State<'_, NodeHandle>, _tx_hex: String) -> Result<String, String> {
     // Parse hex transaction (placeholder - real impl would decode)
     // For now just return not implemented
     Err("submit_tx not yet implemented".into())
@@ -87,8 +87,8 @@ async fn submit_tx(handle: tauri::State<'_, NodeHandle>, tx_hex: String) -> Resu
 
 #[tauri::command]
 async fn save_snapshot(handle: tauri::State<'_, NodeHandle>) -> Result<(), String> {
-    match handle.send(kovanica_desktop::WorkerCmd::SaveSnapshot).await {
-        Ok(kovanica_desktop::WorkerResp::Ok) => Ok(()),
+    match handle.send(crate::WorkerCmd::SaveSnapshot).await {
+        Ok(crate::WorkerResp::Ok) => Ok(()),
         Ok(_) => Err("unexpected response".into()),
         Err(e) => Err(e.to_string()),
     }
@@ -97,10 +97,10 @@ async fn save_snapshot(handle: tauri::State<'_, NodeHandle>) -> Result<(), Strin
 #[tauri::command]
 async fn save_checkpoint(handle: tauri::State<'_, NodeHandle>) -> Result<(), String> {
     match handle
-        .send(kovanica_desktop::WorkerCmd::SaveCheckpoint)
+        .send(crate::WorkerCmd::SaveCheckpoint)
         .await
     {
-        Ok(kovanica_desktop::WorkerResp::Ok) => Ok(()),
+        Ok(crate::WorkerResp::Ok) => Ok(()),
         Ok(_) => Err("unexpected response".into()),
         Err(e) => Err(e.to_string()),
     }

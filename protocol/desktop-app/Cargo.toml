@@ -9,13 +9,16 @@ description = "Kovanica Desktop Node App — embedded node core (Slice A: genesi
 
 [features]
 default = []
-tauri = ["dep-tauri", "dep-tauri-plugin-shell", "dep-tauri-plugin-dialog", "dep-tauri-plugin-fs", "dep-tauri-plugin-opener"]
+tauri = ["dep:tauri", "dep:tauri-plugin-shell", "dep:tauri-plugin-dialog", "dep:tauri-plugin-fs", "dep:tauri-plugin-opener"]
 
 # Standalone crate, deliberately NOT a member of the root workspace
 # (same precedent as android-light-node/ being its own build tree): the
 # Tauri shell and its system-webview dependencies join this project in later
 # slices without disturbing the protocol workspace gates.
 [workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 kovanica-dag = { path = "../crates/kovanica-dag" }
@@ -28,11 +31,12 @@ serde = { version = "1", features = ["derive"] }
 directories = "5"
 thiserror = "1"
 
-dep-tauri = { version = "2", package = "tauri", optional = true }
-dep-tauri-plugin-shell = { version = "2", package = "tauri-plugin-shell", optional = true }
-dep-tauri-plugin-dialog = { version = "2", package = "tauri-plugin-dialog", optional = true }
-dep-tauri-plugin-fs = { version = "2", package = "tauri-plugin-fs", optional = true }
-dep-tauri-plugin-opener = { version = "2", package = "tauri-plugin-opener", optional = true }
+tauri = { version = "2", optional = true }
+tauri-plugin-shell = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-fs = { version = "2", optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
 bip39 = "2"
 keyring = "1"
-rand = { version = "0.8", features = ["std"] }
+rand = { version = "0.9", features = ["std"] }
+blake3 = "1"
