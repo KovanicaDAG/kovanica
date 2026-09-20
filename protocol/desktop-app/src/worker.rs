@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use kovanica_dag::BlockId;
 use kovanica_node::{Node, NodeError};
-use kovanica_state::{KeyPair, Transaction, TxId, Address};
+use kovanica_state::{Address, KeyPair, Transaction, TxId};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -71,7 +71,8 @@ impl WalletState {
     }
 
     fn derive_address(&self, index: usize) -> Option<String> {
-        self.derive_keypair(index).map(|kp| kp.address().to_string())
+        self.derive_keypair(index)
+            .map(|kp| kp.address().to_string())
     }
 
     /// Re-seed the wallet from a mnemonic + passphrase (BIP39).
@@ -118,13 +119,19 @@ pub enum WorkerCmd {
     /// Request current node status.
     GetStatus,
     /// Start P2P networking (Mesh + gossip).
-    StartP2P { listen_addr: String, bootstrap_peers: Vec<String> },
+    StartP2P {
+        listen_addr: String,
+        bootstrap_peers: Vec<String>,
+    },
     /// Stop P2P networking.
     StopP2P,
     /// Create a new wallet (BIP39 mnemonic).
     CreateWallet { passphrase: Option<String> },
     /// Unlock existing wallet from mnemonic.
-    UnlockWallet { mnemonic: String, passphrase: Option<String> },
+    UnlockWallet {
+        mnemonic: String,
+        passphrase: Option<String>,
+    },
     /// Lock the current wallet (clear keys from memory).
     LockWallet,
     /// Get wallet addresses (derived from BIP44).
@@ -146,8 +153,13 @@ pub enum WorkerResp {
     SubmitTx(Result<TxId, NodeError>),
     Status(NodeStatus),
     P2PStatus(String),
-    WalletCreated { mnemonic: String, master_fingerprint: String },
-    WalletUnlocked { fingerprint: String },
+    WalletCreated {
+        mnemonic: String,
+        master_fingerprint: String,
+    },
+    WalletUnlocked {
+        fingerprint: String,
+    },
     WalletLocked,
     Addresses(Vec<String>),
     SendResult(Result<TxId, String>),
@@ -367,13 +379,18 @@ impl NodeHandle {
                     sync_progress: None,
                 })
             }
-            WorkerCmd::StartP2P { listen_addr, bootstrap_peers } => {
+            WorkerCmd::StartP2P {
+                listen_addr,
+                bootstrap_peers,
+            } => {
                 // P2P integration would go here - for now return status
-                WorkerResp::P2PStatus(format!("P2P start requested: listen={}, peers={}", listen_addr, bootstrap_peers.len()))
+                WorkerResp::P2PStatus(format!(
+                    "P2P start requested: listen={}, peers={}",
+                    listen_addr,
+                    bootstrap_peers.len()
+                ))
             }
-            WorkerCmd::StopP2P => {
-                WorkerResp::P2PStatus("P2P stop requested".into())
-            }
+            WorkerCmd::StopP2P => WorkerResp::P2PStatus("P2P stop requested".into()),
             WorkerCmd::CreateWallet { passphrase } => {
                 use bip39::{Language, Mnemonic};
                 use rand::RngCore;
@@ -396,7 +413,10 @@ impl NodeHandle {
                     master_fingerprint: fingerprint,
                 }
             }
-            WorkerCmd::UnlockWallet { mnemonic, passphrase } => {
+            WorkerCmd::UnlockWallet {
+                mnemonic,
+                passphrase,
+            } => {
                 use bip39::{Language, Mnemonic};
                 if Mnemonic::parse_in(Language::English, &mnemonic).is_err() {
                     return WorkerResp::SendResult(Err("Invalid mnemonic".into()));
@@ -451,7 +471,10 @@ impl NodeHandle {
                 let balance = node.balance(&addr).unwrap_or(0) as u64;
                 WorkerResp::Balance(balance)
             }
-            WorkerCmd::GetHistory { address, max_blocks } => {
+            WorkerCmd::GetHistory {
+                address,
+                max_blocks,
+            } => {
                 let addr = match Address::parse(&address) {
                     Ok(a) => a,
                     Err(_) => return WorkerResp::History(vec![]),

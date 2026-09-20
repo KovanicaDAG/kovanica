@@ -84,7 +84,7 @@ async function init() {
   setStatus('Starting node…', 'warn')
 
   // Listen for node events from the Rust side
-  await listen('node-event', (event) => {
+  await listen('node-event', async (event) => {
     const { type, data } = event.payload
     addEvent(type, data)
 

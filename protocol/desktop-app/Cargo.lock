@@ -2683,6 +2683,7 @@ dependencies = [
  "bip39",
  "blake3",
  "directories",
+ "hex",
  "keyring",
  "kovanica-dag",
  "kovanica-node",
