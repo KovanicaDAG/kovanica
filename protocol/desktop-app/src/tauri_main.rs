@@ -63,7 +63,14 @@ pub fn run() {
             stop_p2p,
             spv_sync,
             spv_matches,
-            spv_verify
+            spv_verify,
+            set_validator_seed,
+            enable_hybrid,
+            get_staking,
+            bond_stake,
+            unbond_stake,
+            start_mining,
+            stop_mining
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -315,6 +322,96 @@ async fn spv_verify(
         .await
     {
         Ok(crate::WorkerResp::SpvVerified(v)) => Ok(v),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn set_validator_seed(
+    handle: tauri::State<'_, NodeHandle>,
+    seed_hex: String,
+) -> Result<String, String> {
+    match handle
+        .send(crate::WorkerCmd::SetValidatorSeed { seed_hex })
+        .await
+    {
+        Ok(crate::WorkerResp::ValidatorSeed(Ok(pk))) => Ok(pk),
+        Ok(crate::WorkerResp::ValidatorSeed(Err(e))) => Err(e),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn enable_hybrid(
+    handle: tauri::State<'_, NodeHandle>,
+    rate_num: u64,
+    rate_den: u64,
+    retarget: bool,
+) -> Result<String, String> {
+    match handle
+        .send(crate::WorkerCmd::EnableHybrid {
+            rate_num,
+            rate_den,
+            retarget,
+        })
+        .await
+    {
+        Ok(crate::WorkerResp::HybridStatus(s)) => Ok(s),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn get_staking(handle: tauri::State<'_, NodeHandle>) -> Result<crate::StakingInfo, String> {
+    match handle.send(crate::WorkerCmd::GetStaking).await {
+        Ok(crate::WorkerResp::Staking(info)) => Ok(info),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn bond_stake(handle: tauri::State<'_, NodeHandle>, amount: u64) -> Result<String, String> {
+    match handle.send(crate::WorkerCmd::BondStake { amount }).await {
+        Ok(crate::WorkerResp::StakingTx(Ok(tx_id))) => Ok(tx_id),
+        Ok(crate::WorkerResp::StakingTx(Err(e))) => Err(e),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn unbond_stake(handle: tauri::State<'_, NodeHandle>, amount: u64) -> Result<String, String> {
+    match handle.send(crate::WorkerCmd::UnbondStake { amount }).await {
+        Ok(crate::WorkerResp::StakingTx(Ok(tx_id))) => Ok(tx_id),
+        Ok(crate::WorkerResp::StakingTx(Err(e))) => Err(e),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn start_mining(
+    handle: tauri::State<'_, NodeHandle>,
+    interval_secs: u64,
+) -> Result<String, String> {
+    match handle
+        .send(crate::WorkerCmd::StartMining { interval_secs })
+        .await
+    {
+        Ok(crate::WorkerResp::MiningStatus(s)) => Ok(s),
+        Ok(_) => Err("unexpected response".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn stop_mining(handle: tauri::State<'_, NodeHandle>) -> Result<String, String> {
+    match handle.send(crate::WorkerCmd::StopMining).await {
+        Ok(crate::WorkerResp::MiningStatus(s)) => Ok(s),
         Ok(_) => Err("unexpected response".into()),
         Err(e) => Err(e.to_string()),
     }
