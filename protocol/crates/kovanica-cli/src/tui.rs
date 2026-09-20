@@ -213,16 +213,44 @@ fn ui(f: &mut Frame, app: &App) {
         .wrap(Wrap { trim: true });
     f.render_widget(output, chunks[1]);
 
+    let footer_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(2),
+            Constraint::Length(1),
+        ])
+        .split(Rect {
+            x: f.area().x,
+            y: f.area().y + f.area().height - 4,
+            width: f.area().width,
+            height: 4,
+        });
+
     let help = Paragraph::new("↑/↓: Navigate | Enter: Execute | Q: Quit")
         .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
-    let help_area = Rect {
-        x: f.area().x,
-        y: f.area().y + f.area().height - 1,
-        width: f.area().width,
-        height: 1,
-    };
-    f.render_widget(help, help_area);
+    f.render_widget(help, footer_chunks[0]);
+
+    let contact = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Contact: ", Style::default().fg(Color::Cyan)),
+            Span::styled("dev@kovanica.online", Style::default().fg(Color::White)),
+            Span::styled("  |  ", Style::default().fg(Color::Gray)),
+            Span::styled("security@kovanica.online", Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("by: ", Style::default().fg(Color::Cyan)),
+            Span::styled("github.com/BetterCallDzuks", Style::default().fg(Color::White).add_modifier(Modifier::UNDERLINED)),
+        ]),
+    ])
+    .alignment(Alignment::Center);
+    f.render_widget(contact, footer_chunks[1]);
+
+    let version = Paragraph::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(version, footer_chunks[2]);
 }
 
 pub fn run(client: Client) -> Result<()> {
