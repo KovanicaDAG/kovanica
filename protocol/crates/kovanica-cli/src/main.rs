@@ -5,6 +5,7 @@
 //! the node's own crate, so the CLI stays byte-compatible with the ledger.
 
 mod api;
+mod tui;
 mod wallet;
 
 use std::path::PathBuf;
@@ -92,6 +93,11 @@ enum Command {
     /// RWA (Real World Asset) operations (KVP-106).
     #[command(subcommand)]
     Rwa(RwaCommand),
+    /// NFT (Non-Fungible Token) operations (KVP-106).
+    #[command(subcommand)]
+    Nft(NftCommand),
+    /// Launch interactive TUI.
+    Tui,
 }
 
 #[derive(Subcommand)]
@@ -258,6 +264,22 @@ enum RwaCommand {
         asset_id: String,
     },
 }
+/// NFT (Non-Fungible Token) operations (KVP-106).
+#[derive(Subcommand)]
+enum NftCommand {
+    /// Inspect an NFT asset (requires node with asset registry).
+    Info {
+        /// Asset ID to inspect (32-byte hex).
+        #[arg(long)]
+        asset_id: String,
+    },
+    /// List NFTs in a collection.
+    Collection {
+        /// Collection ID (32-byte hex).
+        #[arg(long)]
+        collection_id: String,
+    },
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -288,6 +310,8 @@ fn main() -> Result<()> {
         Command::Htlc(htlc_cmd) => htlc(&client, htlc_cmd)?,
         Command::Offer(offer_cmd) => offer(&client, offer_cmd)?,
         Command::Rwa(rwa_cmd) => rwa(&client, rwa_cmd)?,
+        Command::Nft(nft_cmd) => nft(&client, nft_cmd)?,
+        Command::Tui => crate::tui::run(client)?,
     }
     Ok(())
 }
@@ -626,6 +650,22 @@ fn rwa(client: &Client, cmd: RwaCommand) -> Result<()> {
                 bail!("asset_id must be 32 bytes (64 hex chars)");
             }
             bail!("Info command not yet fully implemented - requires node API support for asset registry queries");
+        }
+    }
+}
+
+/// NFT (KVP-106) command implementations.
+fn nft(client: &Client, cmd: NftCommand) -> Result<()> {
+    match cmd {
+        NftCommand::Info { asset_id } => {
+            let result = client.nft_detail(&asset_id)?;
+            print_json(&result)?;
+            Ok(())
+        }
+        NftCommand::Collection { collection_id } => {
+            let result = client.collection_detail(&collection_id)?;
+            print_json(&result)?;
+            Ok(())
         }
     }
 }

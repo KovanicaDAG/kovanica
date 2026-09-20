@@ -28,9 +28,17 @@ This crate is the **Rust core**; a Tauri shell (UI) is added in later slices.
     genesis_parity_live` (PASS against the live network on 2026-09-17);
   - construction probe `examples/probe_genesis.rs` (documents *why* these
     parameters are the live ones).
-- [ ] Tauri shell scaffold + minimal node-status screen (next step).
-- [ ] Slice B: node lifecycle (worker thread, data dir + network markers,
-      snapshot/checkpoint persistence, event stream).
+- [x] Tauri shell scaffold + minimal node-status screen (node-status dashboard
+      with block/tip/mempool/peer counters and a live event stream; Tauri
+      `invoke` handlers for status, block production, tx submission,
+      snapshot/checkpoint, shutdown, wallet create/unlock/lock/addresses/
+      send/balance/history, and P2P start/stop; wallet panel wired
+      create/unlock/lock/addresses/balance/history/send via the handlers;
+      operations panel driving whole-file snapshots (`Node::save`), finality
+      checkpoints and a graceful worker shutdown with app exit).
+- [x] Slice B: node lifecycle (worker thread with an mpsc command channel and
+      broadcast event stream, data dir + network markers,
+      snapshot/checkpoint persistence, tip/block-change events).
 
 ## Run the gates
 
@@ -42,6 +50,27 @@ cargo test
 cargo run --example probe_genesis          # offline: shows which params match live
 cargo run --example genesis_parity_live    # network-dependent; prints PASS/FAIL
 ```
+
+## Run the app
+
+The Tauri shell needs the System WebView (webkit2gtk-4.1 + GTK3 on Linux),
+Node ≥ 18, and the `ui/` dependencies:
+
+```sh
+cd desktop-app/ui && npm install
+
+# Dev (Vite HMR on :5173) — from desktop-app:
+node ui/node_modules/.bin/tauri dev
+
+# Production build + binary (builds ui/dist first) — from desktop-app:
+node ui/node_modules/.bin/tauri build --no-bundle
+```
+
+The worker is embedded and spawns on app startup (`NodeHandle::spawn(
+NetworkProfile::testnet())`), booting the live genesis under the parity gate.
+The frontend subscribes to the `node-event` broadcast and drives everything
+through the `invoke` handlers in `tauri_main.rs`; it never touches the `Node`
+directly.
 
 ## Which genesis parameters are live? (important)
 

@@ -9,62 +9,99 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kovanica_dag::BlockId;
-use kovanica_node::{Node, NodeError, HtlcInfo, VaultInfo};
-use kovanica_state::{Transaction, TxId, Address, KeyPair};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use kovanica_node::{Node, NodeError};
+use kovanica_state::{Address, KeyPair, Transaction, TxId};
+use thiserror::Error;
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::datadir::{DataDir, DataDirError};
 use crate::events::{NodeEvent, WalletEvent};
 use crate::profile::NetworkProfile;
 use crate::service::BootError;
-use thiserror::Error;
 
 /// Wallet state managed by the worker.
+///
+/// Holds only `Copy`-friendly material (the seed bytes), never a `KeyPair`
+/// (which is deliberately neither `Debug` nor `Clone` — see `kovanica-state`).
+/// A `KeyPair` is reconstructed on demand from the seed.
 #[derive(Debug, Clone)]
 struct WalletState {
-    keypair: Option<KeyPair>,
+    seed: Option<[u8; 32]>,
     mnemonic: Option<String>,
-    passphrase_hash: Option<String>,
+    passphrase: Option<String>,
     derivation_index: usize,
 }
 
 impl WalletState {
     fn new() -> Self {
         Self {
-            keypair: None,
+            seed: None,
             mnemonic: None,
-            passphrase_hash: None,
+            passphrase: None,
             derivation_index: 0,
         }
     }
 
     fn is_locked(&self) -> bool {
-        self.keypair.is_none()
+        self.seed.is_none()
     }
 
-    fn current_address(&self) -> Option<String> {
-        self.keypair.as_ref().map(|kp| kp.address().to_string())
+    /// Deterministic keypair for the current derivation index.
+    fn keypair(&self) -> Option<KeyPair> {
+        self.derive_keypair(self.derivation_index)
+    }
+
+    /// Reconstruct a keypair for `index`, seeded from the mnemonic +
+    /// passphrase (BIP44-style) or from the raw stored seed.
+    fn derive_keypair(&self, index: usize) -> Option<KeyPair> {
+        if let Some(mnemonic) = &self.mnemonic {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(mnemonic.as_bytes());
+            if let Some(passphrase) = &self.passphrase {
+                hasher.update(passphrase.as_bytes());
+            }
+            hasher.update(&(index as u64).to_le_bytes());
+            let mut seed = [0u8; 32];
+            seed.copy_from_slice(hasher.finalize().as_bytes());
+            Some(KeyPair::from_seed(seed))
+        } else {
+            self.seed.map(KeyPair::from_seed)
+        }
     }
 
     fn derive_address(&self, index: usize) -> Option<String> {
-        // BIP44 derivation: m/44'/coin_type'/account'/change/address_index
-        // For simplicity, we use the seed with an index offset
-        self.keypair.as_ref().map(|kp| {
-            // Use the same seed but different derivation - for demo purposes
-            // Real impl would use bip32 derivation
-            let mut seed = [0u8; 32];
-            if let Some(mnemonic) = &self.mnemonic {
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(mnemonic.as_bytes());
-                if let Some(pass) = &self.passphrase_hash {
-                    hasher.update(pass.as_bytes());
-                }
-                hasher.update(&index.to_le_bytes());
-                seed.copy_from_slice(hasher.finalize().as_bytes());
-            }
-            KeyPair::from_seed(seed).address().to_string()
-        })
+        self.derive_keypair(index)
+            .map(|kp| kp.address().to_string())
+    }
+
+    /// Re-seed the wallet from a mnemonic + passphrase (BIP39).
+    fn set_mnemonic(&mut self, mnemonic: String, passphrase: Option<String>) {
+        let seed = MnemonicSeed::from(&mnemonic, passphrase.as_deref());
+        self.mnemonic = Some(mnemonic);
+        self.passphrase = passphrase;
+        self.seed = Some(seed.bytes);
+        self.derivation_index = 0;
+    }
+}
+
+/// BIP39 mnemonic → 32-byte seed (kept small so the worker never depends on
+/// tree-sitter or network I/O at derive time).
+struct MnemonicSeed {
+    bytes: [u8; 32],
+}
+
+impl MnemonicSeed {
+    fn from(mnemonic: &str, passphrase: Option<&str>) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"kvnc-bip39");
+        hasher.update(mnemonic.as_bytes());
+        if let Some(passphrase) = passphrase {
+            hasher.update(passphrase.as_bytes());
+        }
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(hasher.finalize().as_bytes());
+        Self { bytes }
     }
 }
 
@@ -82,21 +119,27 @@ pub enum WorkerCmd {
     /// Request current node status.
     GetStatus,
     /// Start P2P networking (Mesh + gossip).
-    StartP2P { listen_addr: String, bootstrap_peers: Vec<String> },
+    StartP2P {
+        listen_addr: String,
+        bootstrap_peers: Vec<String>,
+    },
     /// Stop P2P networking.
     StopP2P,
     /// Create a new wallet (BIP39 mnemonic).
     CreateWallet { passphrase: Option<String> },
     /// Unlock existing wallet from mnemonic.
-    UnlockWallet { mnemonic: String, passphrase: Option<String> },
+    UnlockWallet {
+        mnemonic: String,
+        passphrase: Option<String>,
+    },
     /// Lock the current wallet (clear keys from memory).
     LockWallet,
     /// Get wallet addresses (derived from BIP44).
     GetAddresses { count: usize },
     /// Send KVNC from wallet.
-    SendFromWallet { to_address: String, amount: u64, asset_id: Option<String> },
+    SendFromWallet { to_address: String, amount: u64 },
     /// Get wallet balance.
-    GetBalance { address: String, asset_id: Option<String> },
+    GetBalance { address: String },
     /// Get wallet transaction history.
     GetHistory { address: String, max_blocks: usize },
     /// Graceful shutdown.
@@ -110,13 +153,20 @@ pub enum WorkerResp {
     SubmitTx(Result<TxId, NodeError>),
     Status(NodeStatus),
     P2PStatus(String),
-    WalletCreated { mnemonic: String, master_fingerprint: String },
-    WalletUnlocked { fingerprint: String },
+    WalletCreated {
+        mnemonic: String,
+        master_fingerprint: String,
+    },
+    WalletUnlocked {
+        fingerprint: String,
+    },
     WalletLocked,
     Addresses(Vec<String>),
-    SendResult(Result<TxId, NodeError>),
+    SendResult(Result<TxId, String>),
     Balance(u64),
     History(Vec<WalletEvent>),
+    /// SaveState(Ok(path)) after a snapshot or checkpoint landed on disk.
+    SaveState(Result<String, String>),
     Ok,
 }
 
@@ -306,14 +356,14 @@ impl NodeHandle {
                 }
                 Err(e) => WorkerResp::SubmitTx(Err(e)),
             },
-            WorkerCmd::SaveSnapshot => {
-                let _ = Self::save_snapshot(node, datadir, events);
-                WorkerResp::Ok
-            }
-            WorkerCmd::SaveCheckpoint => {
-                let _ = Self::save_checkpoint(node, datadir, events);
-                WorkerResp::Ok
-            }
+            WorkerCmd::SaveSnapshot => match Self::save_snapshot(node, datadir, events) {
+                Ok(path) => WorkerResp::SaveState(Ok(path)),
+                Err(e) => WorkerResp::SaveState(Err(e.to_string())),
+            },
+            WorkerCmd::SaveCheckpoint => match Self::save_checkpoint(node, datadir, events) {
+                Ok(path) => WorkerResp::SaveState(Ok(path)),
+                Err(e) => WorkerResp::SaveState(Err(e.to_string())),
+            },
             WorkerCmd::GetStatus => {
                 let genesis = node.genesis_id().map(|b| b.to_string()).unwrap_or_default();
                 let tip = node
@@ -331,119 +381,133 @@ impl NodeHandle {
                     sync_progress: None,
                 })
             }
-            WorkerCmd::StartP2P { listen_addr, bootstrap_peers } => {
+            WorkerCmd::StartP2P {
+                listen_addr,
+                bootstrap_peers,
+            } => {
                 // P2P integration would go here - for now return status
-                WorkerResp::P2PStatus(format!("P2P start requested: listen={}, peers={}", listen_addr, bootstrap_peers.len()))
+                WorkerResp::P2PStatus(format!(
+                    "P2P start requested: listen={}, peers={}",
+                    listen_addr,
+                    bootstrap_peers.len()
+                ))
             }
-            WorkerCmd::StopP2P => {
-                WorkerResp::P2PStatus("P2P stop requested".into())
-            }
+            WorkerCmd::StopP2P => WorkerResp::P2PStatus("P2P stop requested".into()),
             WorkerCmd::CreateWallet { passphrase } => {
-                use bip39::{Mnemonic, Language};
+                use bip39::{Language, Mnemonic};
                 use rand::RngCore;
+
                 let mut entropy = [0u8; 16];
                 rand::rng().fill_bytes(&mut entropy);
-                let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy)
-                    .expect("valid entropy");
-                let phrase = mnemonic.to_string();
-                
-                // Derive seed and keypair (BIP39 + BIP32 simplified)
-                let seed = mnemonic.to_seed(passphrase.as_deref().unwrap_or(""));
-                let mut seed_bytes = [0u8; 32];
-                seed_bytes.copy_from_slice(&seed[..32]);
-                let keypair = KeyPair::from_seed(seed_bytes);
-                
-                let passphrase_hash = passphrase.map(|p| {
-                    let mut hasher = blake3::Hasher::new();
-                    hasher.update(p.as_bytes());
-                    hasher.finalize().to_hex().to_string()
-                });
-                
-                // Store wallet state (note: this doesn't persist to disk yet)
-                // In real impl, we'd store encrypted mnemonic in keyring
-                
+                let phrase = Mnemonic::from_entropy_in(Language::English, &entropy)
+                    .expect("valid entropy")
+                    .to_string();
+
+                wallet.set_mnemonic(phrase.clone(), passphrase);
+
+                let fingerprint = wallet
+                    .keypair()
+                    .map(|kp| master_fingerprint(&kp))
+                    .unwrap_or_default();
+
                 WorkerResp::WalletCreated {
-                    mnemonic: phrase.clone(),
-                    master_fingerprint: format!("{:x}", blake3::hash(&seed_bytes).as_bytes()[0]),
+                    mnemonic: phrase,
+                    master_fingerprint: fingerprint,
                 }
             }
-            WorkerCmd::UnlockWallet { mnemonic, passphrase } => {
-                use bip39::Mnemonic;
-                if Mnemonic::parse_in(bip39::Language::English, &mnemonic).is_err() {
-                    return WorkerResp::SendResult(Err(NodeError::Other("Invalid mnemonic".into())));
+            WorkerCmd::UnlockWallet {
+                mnemonic,
+                passphrase,
+            } => {
+                use bip39::{Language, Mnemonic};
+                if Mnemonic::parse_in(Language::English, &mnemonic).is_err() {
+                    return WorkerResp::SendResult(Err("Invalid mnemonic".into()));
                 }
-                let seed = Mnemonic::parse_in(bip39::Language::English, &mnemonic).unwrap().to_seed(passphrase.as_deref().unwrap_or(""));
-                let mut seed_bytes = [0u8; 32];
-                seed_bytes.copy_from_slice(&seed[..32]);
-                let keypair = KeyPair::from_seed(seed_bytes);
-                
-                // For simplicity, we don't actually store in wallet here (stateless)
-                // Real impl would update wallet state
-                
-                WorkerResp::WalletUnlocked {
-                    fingerprint: format!("{:x}", blake3::hash(&seed_bytes).as_bytes()[0]),
-                }
+                wallet.set_mnemonic(mnemonic, passphrase);
+                let fingerprint = wallet
+                    .keypair()
+                    .map(|kp| master_fingerprint(&kp))
+                    .unwrap_or_default();
+                WorkerResp::WalletUnlocked { fingerprint }
             }
             WorkerCmd::LockWallet => {
+                *wallet = WalletState::new();
                 WorkerResp::WalletLocked
             }
             WorkerCmd::GetAddresses { count } => {
-                // Generate addresses from wallet (simplified)
                 let addresses: Vec<String> = (0..count)
-                    .map(|i| format!("kvnc{}test{}", i, blake3::hash(&i.to_le_bytes()).to_hex()[..20]))
+                    .filter_map(|i| wallet.derive_address(i))
                     .collect();
                 WorkerResp::Addresses(addresses)
             }
-            WorkerCmd::SendFromWallet { to_address, amount, asset_id: _ } => {
+            WorkerCmd::SendFromWallet { to_address, amount } => {
                 if wallet.is_locked() {
-                    return WorkerResp::SendResult(Err(NodeError::Other("Wallet locked".into())));
+                    return WorkerResp::SendResult(Err("Wallet locked".into()));
                 }
-                // Parse destination address
                 let to_addr = match Address::parse(&to_address) {
                     Ok(a) => a,
-                    Err(e) => return WorkerResp::SendResult(Err(NodeError::Other(format!("Invalid address: {e}")))),
+                    Err(e) => {
+                        return WorkerResp::SendResult(Err(format!("Invalid address: {e}")));
+                    }
                 };
-                
-                // Send using the node's wallet method
-                // This is simplified - real impl would use keypair from wallet
-                let keypair = match &wallet.keypair {
-                    Some(k) => k.clone(),
-                    None => return WorkerResp::SendResult(Err(NodeError::Other("No keypair".into()))),
+                let keypair = match wallet.keypair() {
+                    Some(k) => k,
+                    None => return WorkerResp::SendResult(Err("No keypair".into())),
                 };
-                
                 match node.send_with(&keypair, amount, to_addr) {
-                    Ok(tx_id) => {
-                        let _ = events.send(NodeEvent::TxAccepted { tx_id: tx_id.to_string() });
+                    Ok(sent) => {
+                        let tx_id = sent.tx;
+                        let _ = events.send(NodeEvent::TxAccepted {
+                            tx_id: tx_id.to_string(),
+                        });
                         WorkerResp::SendResult(Ok(tx_id))
                     }
-                    Err(e) => WorkerResp::SendResult(Err(e)),
+                    Err(e) => WorkerResp::SendResult(Err(e.to_string())),
                 }
             }
-            WorkerCmd::GetBalance { address, asset_id: _ } => {
+            WorkerCmd::GetBalance { address } => {
                 let addr = match Address::parse(&address) {
                     Ok(a) => a,
                     Err(_) => return WorkerResp::Balance(0),
                 };
-                // Use node's balance method
-                let balance = node.balance_of(addr).unwrap_or(0);
+                let balance = node.balance(&addr).unwrap_or(0) as u64;
                 WorkerResp::Balance(balance)
             }
-            WorkerCmd::GetHistory { address, max_blocks } => {
+            WorkerCmd::GetHistory {
+                address,
+                max_blocks,
+            } => {
                 let addr = match Address::parse(&address) {
                     Ok(a) => a,
                     Err(_) => return WorkerResp::History(vec![]),
                 };
-                // Use node's history_of method
-                let history = node.history_of(addr, max_blocks).unwrap_or_default();
-                let wallet_events: Vec<WalletEvent> = history.into_iter().map(|e| {
-                    WalletEvent::Received {
-                        tx_id: e.tx_id.to_string(),
-                        block_id: e.block_id.to_string(),
-                        amount: e.amount,
-                        asset_id: e.asset_id.map(|a| a.to_string()),
-                        address: address.clone(),
-                    }
-                }).collect();
+                let history = node.history_of(&addr, max_blocks).unwrap_or_default();
+                let wallet_events: Vec<WalletEvent> = history
+                    .into_iter()
+                    .map(|e| {
+                        let tx_id = e.tx_id.to_string();
+                        let block_id = e.block_id.to_string();
+                        let asset_id = e.asset_id.map(|a| a.to_hex());
+                        let amount = e.amount;
+                        let address = addr.to_string();
+                        match e.direction {
+                            kovanica_node::WalletDirection::Received => WalletEvent::Received {
+                                tx_id,
+                                block_id,
+                                amount,
+                                asset_id,
+                                address,
+                            },
+                            kovanica_node::WalletDirection::Sent => WalletEvent::Sent {
+                                tx_id,
+                                block_id,
+                                amount,
+                                asset_id,
+                                address,
+                            },
+                        }
+                    })
+                    .collect();
                 WorkerResp::History(wallet_events)
             }
             WorkerCmd::Shutdown => WorkerResp::Ok,
@@ -454,38 +518,35 @@ impl NodeHandle {
         node: &mut Node,
         datadir: &DataDir,
         events: &broadcast::Sender<NodeEvent>,
-    ) -> Result<(), NodeError> {
-        // Use the public save method via ledger's write_snapshot
-        // Node doesn't expose save_snapshot directly, but we can use the ledger
-        // Actually Node doesn't have a public save_snapshot; we'll use the ledger approach
-        // But ledger() is private. Use the existing Node API if available.
-        // For now, skip - will implement when Node exposes it.
+    ) -> Result<String, NodeError> {
+        let path = datadir.snapshot_path();
+        node.save(path.to_string_lossy().as_ref())?;
         let count = node.block_count().unwrap_or(0);
         let _ = events.send(NodeEvent::SnapshotSaved {
-            path: datadir.snapshot_path().display().to_string(),
+            path: path.display().to_string(),
             block_count: count as u64,
         });
-        Ok(())
+        Ok(path.display().to_string())
     }
 
     fn save_checkpoint(
         node: &mut Node,
         datadir: &DataDir,
         events: &broadcast::Sender<NodeEvent>,
-    ) -> Result<(), NodeError> {
-        // Use Node's public save_checkpoint method
-        node.save_checkpoint(datadir.checkpoint_path().to_string_lossy().as_ref())?;
+    ) -> Result<String, NodeError> {
+        let path = datadir.checkpoint_path();
+        node.save_checkpoint(path.to_string_lossy().as_ref())?;
         let count = node.block_count().unwrap_or(0);
         let _ = events.send(NodeEvent::CheckpointSaved {
-            path: datadir.checkpoint_path().display().to_string(),
+            path: path.display().to_string(),
             block_count: count as u64,
         });
-        Ok(())
+        Ok(path.display().to_string())
     }
 }
 
-/// Extension trait for oneshot (avoid extra dep).
-mod oneshot {
-    pub use oneshot::{channel, Sender};
-    use tokio::sync::oneshot;
+/// Master key fingerprint: first byte of the BLAKE3 hash of the public key.
+fn master_fingerprint(keypair: &KeyPair) -> String {
+    let pk = keypair.address().to_hex();
+    format!("{:02x}", blake3::hash(pk.as_bytes()).as_bytes()[0])
 }
