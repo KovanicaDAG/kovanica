@@ -33,6 +33,18 @@ KVP-102 is **not** an EVM token interface. There is no per-asset contract and no
 
 ---
 
+## 1.1 Issuance Policy (Public)
+
+| Rule | Description |
+|------|-------------|
+| **Coinbase-only mint** | New KVP-102 assets may **only** be created in coinbase outputs (block rewards). Regular transactions cannot mint new assets. |
+| **No `approve` / `mint` ABI** | There is no contract interface for minting. Minting is a consensus-level property of coinbase transactions. |
+| **Policy-bound mint (future)** | Tag-convention mint authority (e.g. `KVM1‖policy_hash`) is planned — see RFC-002 §8, KVP-102 §8. Not yet implemented. |
+| **Fees always in KVNC** | All transaction fees are paid in native KVNC (asset_id = None). KVP-102 assets cannot pay fees. |
+| **Burn allowed** | Assets may be destroyed (output sum < input sum for that asset). Burned amount is not a fee. |
+
+This policy is enforced by consensus in `kovanica-state` (see `Ledger::apply_block`, `TxStructureValidator`).
+
 ## 2. AssetId
 
 ```

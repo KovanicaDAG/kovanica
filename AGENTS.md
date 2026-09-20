@@ -19,6 +19,18 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 ├── node/                  # Runnable node binary + explorer HTTP API
 │   ├── crates/kovanica-node/      # Node, mempool, RPC, P2P, explorer
 │   └── crates/kovanica-ffi/       # UniFFI bindings for mobile
+```
+
+> **Crate-tree note (2026-09-20):** both `node/crates/` and `protocol/crates/`
+> contain a full 5-member workspace (`kovanica-dag`, `kovanica-state`,
+> `kovanica-node`, `kovanica-cli`, `kovanica-ffi`) — a legacy duplication from
+> the repo consolidation. **`node/crates/` is canonical** (newer: carries
+> `operator_seed` and post-re-key additions; also the path the VPS deploy
+> builds from: `cd /root/kovanica/node && cargo build --release --workspace`).
+> `protocol/crates/` is an older mirror kept buildable; consensus logic (`dag`,
+> `state`) is authored in `protocol/crates/` where it differs. Keep peer/seed
+> defaults in sync across both (`P2P_BOOTSTRAP`, `DEFAULT_PEERS`,
+> `dns_seed.rs`). A full de-dup of the mirror tree is a separate refactor.
 ├── web/                   # Explorer + wallet frontend (TanStack Router, Vite, Nitro)
 ├── wallet/                # Mobile wallet (UniFFI + Kotlin/Swift)
 ├── mobile/                # Android app (Jetpack Compose, light node)
@@ -161,7 +173,7 @@ echo "✅ Git hooks installed."
 
 ### Testnet (Current)
 - **Seed** (primary): `seed.kovanica.online:9000` (Hostinger VPS; live systemd unit `kovanica-explorer`, HTTP `127.0.0.1:8080`)
-- **Seed2** (secondary): `seed2.kovanica.online:9000` (AWS EC2 `76.13.250.65`, re-keyed from `seed3` 2026-09-17)
+- **Seed2** (secondary): `seed2.kovanica.online:9000` (Hostinger KVM2 VPS `76.13.250.65`, `srv1991525`)
 - **VPS seed units**: `kovanica-seed1` (P2P `:9002`, HTTP `127.0.0.1:28080`) + `kovanica-seed2` (P2P `:9001`, HTTP `127.0.0.1:18080`, nginx `/api` backend)
 - **Explorer**: `https://explorer.kovanica.online` (PM2 web on `:3000` + nginx → `:18080` for API)
 - **Faucet**: `https://faucet.kovanica.online` (1 tKVNC, rate-limited)

@@ -14,7 +14,7 @@
 | **seed** (primary, VPS) | systemd `kovanica-explorer` — P2P `0.0.0.0:9000`, HTTP loopback `127.0.0.1:8080`, metrics `0.0.0.0:9090`, data `/root/kovanica-data` | the real primary seed: serves `seed.kovanica.online:9000`; auto-mines 1 block/min (`KOVANICA_MINE=1 MINE_SECS=60`); faucet + operator on; `KOVANICA_PEERS=seed2.kovanica.online:9000`; ⚠️ unit is active but `is-enabled=disabled` (survives only until reboot) |
 | **seed1** (VPS) | systemd `kovanica-seed1` — P2P `0.0.0.0:9002`, HTTP loopback `127.0.0.1:28080`, data `/var/lib/kovanica-seed1` | extra local seed (my 2026-09-20 fix); `MINE=1 MINE_SECS=60`, faucet off; peers `seed.kovanica.online:9000,seed2.kovanica.online:9000,seed3.kovanica.online:9000` |
 | **seed2** (VPS) | systemd `kovanica-seed2` — P2P `0.0.0.0:9001`, HTTP loopback `127.0.0.1:18080`, data `/var/lib/kovanica-seed2` | nginx `/api/*` backend; `MINE=0`; peers `seed.kovanica.online:9000,seed3.kovanica.online:9000` |
-| **seed2** (secondary, AWS EC2) | systemd `kovanica-seed2` on the AWS host (re-keyed from `kovanica-seed3`), P2P `:9000`, HTTP loopback `:18080` | off-box redundancy; formerly `seed3` (re-keyed 2026-09-17); DNS `seed2.kovanica.online` → `76.13.250.65`; c7i.large |
+| **seed2** (secondary, Hostinger KVM2 VPS) | systemd `kovanica-seed2` on the Hostinger VPS (`srv1991525`), P2P `:9000`, HTTP loopback `:18080` | off-box redundancy; DNS `seed2.kovanica.online` → `76.13.250.65`; creds `/root/seeds/seed2` |
 | **web** (kovanica.online + wallet + map + explorer pages) | pm2 `kovanica-web`, `127.0.0.1:3000` | built via `npm run build:vps`, deployed to `/root/kovanica-web/.output` |
 | nginx | `/etc/nginx/sites-enabled/explorer.kovanica.online` | `/api/*`→`127.0.0.1:18080`, pages→`127.0.0.1:3000`, `/download/*`→`/var/www/kovanica-dist/` |
 | Node binaries (public) | `/var/www/kovanica-dist/{kovanica-node-linux-x64,-arm64,install.sh}` | served at `https://explorer.kovanica.online/download/…` |
@@ -51,8 +51,8 @@ inside a directory that got deleted while the old process held it.
   for Kovanica node processes after a pm2-vs-systemd port fight; it remains only
   for unrelated apps on the VPS (including `kovanica-web`). Three node units are
   live on the VPS (`kovanica-explorer` = primary seed; `kovanica-seed1`;
-  `kovanica-seed2`), plus the AWS secondary (`kovanica-seed2`, re-keyed from
-  `kovanica-seed3` on 2026-09-17).
+  `kovanica-seed2`), plus the Hostinger KVM2 secondary (`kovanica-seed2`,
+  `srv1991525`, `76.13.250.65`).
 
 ### Web app — manual for now
 ```
@@ -79,8 +79,8 @@ verifies genesis match against the primary seed.
 | --- | --- | --- | --- |
 | `seed.kovanica.online` | A | `145.223.116.178` | DNS only |
 | `seed.kovanica.online` | AAAA | `2a02:4780:41:1f43::1` | DNS only |
-| `seed2.kovanica.online` | A | `76.13.250.65` | DNS only (re-keyed from `seed3`, 2026-09-17) |
-| `seed1.kovanica.online` | CNAME → `seed2.kovanica.online` | AWS secondary | DNS only (legacy alias) |
+| `seed2.kovanica.online` | A | `76.13.250.65` | DNS only (Hostinger KVM2 VPS) |
+| `seed1.kovanica.online` | CNAME → `seed2.kovanica.online` | Hostinger KVM2 secondary | DNS only (legacy alias) |
 | `seed3.kovanica.online` | A | `15.228.170.29` | DNS only — **retired** 2026-09-17 (resolves but no node serves it) |
 | `explorer/www/app/wallet/trader/bot/dash/kovi` | A | `145.223.116.178` | proxied |
 | `opencode` | A | `145.223.116.178` | DNS only |
@@ -115,16 +115,15 @@ verifies genesis match against the primary seed.
 
 - Prometheus 2.45 runs as systemd `prometheus`, UI on `127.0.0.1:19080`
   (node metrics listener owns :9090). TSDB retention 30d.
-- Targets: `seed.kovanica.online` = local node `127.0.0.1:9090` (direct);
-  the AWS seed2 metrics were scraped via SSH tunnel
-  `kovanica-tunnel-seed3` (`127.0.0.1:19090` → seed3 `:9090`). ⚠️ **2026-09-20
-  status: the unit still exists and is still named `kovanica-tunnel-seed3`**
-  (the rename to `kovanica-tunnel-seed2` described here never landed), it still
-  points at the retired `15.228.170.29:9090`, and it is in a failing
-  `activating (auto-restart)` loop (exit 255). Metrics ports stay firewalled.
-  Action: repoint the unit's host to `76.13.250.65` (seed2) and rename the unit,
-  or the seed2 metrics target stays down. (Not done during 2026-09-20 doc
-  reconciliation — infra change, reported to Toni.)
+- Targets (all `${job}`s currently `up`): `kovanica-explorer`
+  = `127.0.0.1:8080/metrics` (web metrics); `seed.kovanica.online` = local node
+  `127.0.0.1:9090` (direct); `seed2.kovanica.online` = `76.13.250.65:9090`
+  (**direct scrape** — port open, no tunnel needed). Metrics ports stay
+  firewalled.
+- The old SSH tunnel unit `kovanica-tunnel-seed3` (`127.0.0.1:19090` → retired
+  seed3 `15.228.170.29:9090`) was **disabled 2026-09-20** (failing
+  `activating (auto-restart)` loop, exit 255) — obsolete because seed2 is
+  scraped directly. Not renamed; not re-enabled.
 - Rules: `/etc/prometheus/alerting_rules.yml` (repo copy is source of truth;
   keep `humanizeBytes`-style non-existent template functions out — promtool
   rejects them and the whole file fails to load). 15 alerts + 9 recording rules.
@@ -279,13 +278,14 @@ KOVANICA_PEERS=seed.kovanica.online:9000 /usr/local/bin/kovanica-node explorer 1
 
 Cloudflare Tunnel is NOT suitable for seeds (no raw public TCP without client agents).
 
-Roadmap naming: the off-box node shipped 2026-08-24 as AWS EC2 `t3.micro` in
-eu-north-1 (Amazon Linux 2023, systemd `kovanica-seed3`, mining on). On
-2026-09-17 it was re-keyed to **seed2**: DNS `A seed2.kovanica.online`
-(grey-cloud) points at the AWS instance's Elastic IP, the spotlight
-unit is `kovanica-seed2`, and `seed3.kovanica.online` is retired. The
-instance moved to `c7i.large`; attaching an Elastic IP stops the
-address drift that repeatedly broke this box.
+Roadmap naming: the off-box node shipped 2026-08-24 was **seed3** — AWS EC2
+`t3.micro` in eu-north-1 (Amazon Linux 2023, systemd `kovanica-seed3`,
+mining on; later tried Elastic IP + `c7i.large`). The secondary seed in the
+**live set** is **seed2** — a separate **Hostinger KVM2 VPS** (`srv1991525`),
+DNS `A seed2.kovanica.online` (grey-cloud) → `76.13.250.65`, systemd
+`kovanica-seed2` (P2P :9000). Seed3 (AWS `15.228.170.29`) is **retired**:
+its PEM is no longer authorized, and metrics scraping bypasses it entirely
+(seed2 is scraped directly).
 
 ## 8. Seed backup & restore (A8)
 

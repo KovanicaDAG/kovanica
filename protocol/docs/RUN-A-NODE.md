@@ -250,7 +250,7 @@ server {
 | Seed | Address | Notes |
 |------|---------|-------|
 | seed1 | `seed.kovanica.online:9000` | Primary (Hostinger VPS) |
-| seed2 | `seed2.kovanica.online:9000` | Secondary (AWS eu-north-1) |
+| seed2 | `seed2.kovanica.online:9000` | Secondary (Hostinger KVM2 VPS) |
 | seed3 | `seed3.kovanica.online:9000` | Tertiary (retired) |
 
 ### 6.2 Connectivity Verification

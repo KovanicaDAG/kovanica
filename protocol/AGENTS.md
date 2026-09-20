@@ -1079,7 +1079,7 @@ teaches us it needs.
    `dht.rs` Kademlia (XOR metric, k-buckets) with relay tags 0x20–0x23,
    Mesh integration, and `tests/dht_discovery.rs` Tiers 1–5 green.
    The live DNS-seed hostnames are `seed` (primary, Hostinger VPS) and `seed2`
-   (AWS, re-keyed from `seed3` on 2026-09-17; `seed3` is retired but still
+   (Hostinger KVM2 VPS `srv1991525`; `seed3`/AWS is retired but still
    resolves); `deploy-seed.sh` defaults new seeds to
    `KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000`.
    Remaining wiring: the node binary's default `KOVANICA_PEERS` still names only
@@ -1112,10 +1112,10 @@ teaches us it needs.
 
 4. **Testnet soak & parameter tuning** — run for weeks: **◀ ACTIVE NEXT**
    - 24/7 testnet with multiple independent seed operators
-     (seed = Hostinger VPS, unit `kovanica-explorer`; **seed2 = AWS eu-north-1
-     `76.13.250.65`**, re-keyed from `seed3` on 2026-09-17 — live since
-     2026-08-24 as `kovanica-seed3`, mining on, genesis verified,
-     DNS `seed2.kovanica.online`; `seed3.kovanica.online` retired)
+     (seed = Hostinger VPS, unit `kovanica-explorer`; **seed2 = Hostinger KVM2
+     VPS `76.13.250.65`** (`srv1991525`) — live since 2026-08-24, mining on,
+     genesis verified, DNS `seed2.kovanica.online`; `seed3.kovanica.online`
+     (AWS) retired)
    - Measure: orphan rate, propagation latency, fork rate, disk growth
      (both seeds expose `/metrics`; `alerting_rules.yml` ready to arm)
    - Tune: `k`, finality depth, payload pruning depth, difficulty window
