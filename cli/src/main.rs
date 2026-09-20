@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use kovanica_state::Address;
+use kovanica_state::{Address, AssetId, derive_rwa_asset_id};
 
 use crate::api::{print_json, Client};
 use crate::wallet::Wallet;
@@ -83,6 +83,55 @@ enum Command {
         #[arg(long)]
         amount: u64,
     },
+    /// RWA (Real World Asset) operations (KVP-106).
+    #[command(subcommand)]
+    Rwa(RwaCommand),
+    /// NFT (Non-Fungible Token) operations (KVP-106).
+    #[command(subcommand)]
+    Nft(NftCommand),
+}
+
+/// RWA (Real World Asset) operations (KVP-106).
+#[derive(Subcommand)]
+enum RwaCommand {
+    /// Derive an RWA asset_id from issuer key and parameters.
+    Derive {
+        /// Issuer Ed25519 public key (32-byte hex).
+        #[arg(long)]
+        issuer: String,
+        /// Asset class (e.g., RE, BOND, INVOICE).
+        #[arg(long)]
+        class: String,
+        /// Issuer-defined unique identifier.
+        #[arg(long)]
+        id: String,
+        /// Version (default: 1).
+        #[arg(long, default_value = "1")]
+        version: u8,
+    },
+    /// Inspect an RWA asset (requires node with asset registry).
+    Info {
+        /// Asset ID to inspect (32-byte hex).
+        #[arg(long)]
+        asset_id: String,
+    },
+}
+
+/// NFT (Non-Fungible Token) operations (KVP-106).
+#[derive(Subcommand)]
+enum NftCommand {
+    /// Inspect an NFT asset (requires node with asset registry).
+    Info {
+        /// Asset ID to inspect (32-byte hex).
+        #[arg(long)]
+        asset_id: String,
+    },
+    /// List NFTs in a collection.
+    Collection {
+        /// Collection ID (32-byte hex).
+        #[arg(long)]
+        collection_id: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -111,6 +160,8 @@ fn main() -> Result<()> {
             print_address(&wallet.address());
         }
         Command::Send { key, to, amount } => send(&client, &key, &to, amount)?,
+        Command::Rwa(rwa_cmd) => rwa(&client, rwa_cmd)?,
+        Command::Nft(nft_cmd) => nft(&client, nft_cmd)?,
     }
     Ok(())
 }
@@ -161,6 +212,44 @@ fn send(client: &Client, key: &std::path::Path, to: &str, amount: u64) -> Result
     Ok(())
 }
 
+/// RWA (KVP-106) command implementations.
+fn rwa(client: &Client, cmd: RwaCommand) -> Result<()> {
+    match cmd {
+        RwaCommand::Derive { issuer, class, id, version } => {
+            let issuer_bytes = hex::decode(&issuer).context("issuer must be 32-byte hex")?;
+            if issuer_bytes.len() != 32 {
+                bail!("issuer must be 32 bytes (64 hex chars)");
+            }
+            let issuer: [u8; 32] = issuer_bytes.try_into().map_err(|_| anyhow::anyhow!("issuer must be 32 bytes"))?;
+            let asset_id = derive_rwa_asset_id(&issuer, &class, &id, version);
+            println!("Asset ID (hex): {}", asset_id.to_hex());
+            println!("Asset ID (kvnc): {}", format!("kvnc{}dag", asset_id.to_hex()));
+            Ok(())
+        }
+        RwaCommand::Info { asset_id } => {
+            let result = client.rwa_detail(&asset_id)?;
+            print_json(&result)?;
+            Ok(())
+        }
+    }
+}
+
+/// NFT (KVP-106) command implementations.
+fn nft(client: &Client, cmd: NftCommand) -> Result<()> {
+    match cmd {
+        NftCommand::Info { asset_id } => {
+            let result = client.nft_detail(&asset_id)?;
+            print_json(&result)?;
+            Ok(())
+        }
+        NftCommand::Collection { collection_id } => {
+            let result = client.collection_detail(&collection_id)?;
+            print_json(&result)?;
+            Ok(())
+        }
+    }
+}
+
 /// Render an atom amount as a fixed-point KVNC string (8 decimals).
 fn format_kvnc(atoms: u64) -> String {
     format!("{}.{:08}", atoms / ATOM, atoms % ATOM)
@@ -172,11 +261,11 @@ mod tests {
 
     #[test]
     fn zero_address_kvnc_is_a_known_vector() {
-        // base58 of 32 zero bytes is 32 leading-zero markers ('1'), so the
-        // human address is `kvnc` + 32×'1' + `dag`. Derived from keys.rs's
+        // base58 of 33 zero bytes (version 0x00 + 32-byte payload) is 33 leading-zero markers ('1'),
+        // so the human address is `kvnc` + 33×'1' + `dag`. Derived from keys.rs's
         // b58_encode: all-zero input yields one '1' per leading zero byte.
         let addr = Address::from_bytes([0u8; 32]);
-        assert_eq!(addr.to_kvnc(), format!("kvnc{}dag", "1".repeat(32)));
+        assert_eq!(addr.to_kvnc(), format!("kvnc{}dag", "1".repeat(33)));
     }
 
     #[test]

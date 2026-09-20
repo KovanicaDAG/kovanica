@@ -13,6 +13,7 @@
 //! command reads the `node.dag` array out of `/api/state` instead.
 
 use anyhow::{anyhow, bail, Result};
+use kovanica_state::AssetId;
 use serde_json::Value;
 
 /// A client bound to one explorer base URL (no trailing slash).
@@ -52,6 +53,16 @@ impl Client {
 
     fn post(&self, path: &str) -> Result<Value> {
         Self::call(ureq::post(&self.url(path)))
+    }
+
+    fn post_json(&self, path: &str, body: &serde_json::Value) -> Result<Value> {
+        let body_str = serde_json::to_string(body)?;
+        let resp = ureq::post(&self.url(path))
+            .set("Content-Type", "application/json")
+            .send_string(&body_str)?;
+        let text = resp.into_string()?;
+        serde_json::from_str(&text)
+            .map_err(|e| anyhow!("response was not valid JSON: {e}\n{text}"))
     }
 
     pub fn head(&self) -> Result<Value> {
@@ -94,6 +105,65 @@ impl Client {
         self.post(&format!(
             "/api/submit?from={from}&to={to}&amount={amount}&sig={sig}"
         ))
+    }
+
+    /// Ask the node to build an asset transfer and return its signature hash.
+    pub fn prepare_transfer_asset(
+        &self,
+        from: &str,
+        amount: u64,
+        to: &str,
+        asset_id: Option<kovanica_state::AssetId>,
+    ) -> Result<Value> {
+        let mut query = format!("/api/prepare?from={from}&to={to}&amount={amount}");
+        if let Some(asset) = asset_id {
+            query.push_str(&format!("&asset_id={}", hex::encode(asset.as_bytes())));
+        }
+        self.post(&query)
+    }
+
+    /// Broadcast a signed asset transfer. `sig` is 128 lowercase hex chars.
+    pub fn submit_transfer_asset(
+        &self,
+        from: &str,
+        to: &str,
+        amount: u64,
+        asset_id: Option<kovanica_state::AssetId>,
+        sig: &str,
+    ) -> Result<Value> {
+        let mut query = format!(
+            "/api/submit?from={from}&to={to}&amount={amount}&sig={sig}"
+        );
+        if let Some(asset) = asset_id {
+            query.push_str(&format!("&asset_id={}", hex::encode(asset.as_bytes())));
+        }
+        self.post(&query)
+    }
+
+    /// Derive RWA asset_id from issuer key and parameters.
+    pub fn rwa_derive(&self, issuer: &str, class: &str, id: &str, version: u8) -> Result<Value> {
+        let body = serde_json::json!({
+            "issuer": issuer,
+            "class": class,
+            "id": id,
+            "version": version,
+        });
+        self.post_json("/api/rwa/derive", &body)
+    }
+
+    /// Get RWA detail by asset ID.
+    pub fn rwa_detail(&self, asset_id: &str) -> Result<Value> {
+        self.get(&format!("/api/rwa/{asset_id}"))
+    }
+
+    /// Get NFT detail by asset ID.
+    pub fn nft_detail(&self, asset_id: &str) -> Result<Value> {
+        self.get(&format!("/api/nft/{asset_id}"))
+    }
+
+    /// Get collection detail by collection ID.
+    pub fn collection_detail(&self, collection_id: &str) -> Result<Value> {
+        self.get(&format!("/api/collection/{collection_id}"))
     }
 }
 
