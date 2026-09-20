@@ -5,6 +5,7 @@
 //! the node's own crate, so the CLI stays byte-compatible with the ledger.
 
 mod api;
+mod tui;
 mod wallet;
 
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ const ATOM: u64 = 100_000_000;
 
 #[derive(Parser)]
 #[command(
-    name = "kovanica",
+    name = "kovanicagent",
     version,
     about = "Command-line client for the Kovanica (KVNC) testnet BlockDAG"
 )]
@@ -95,6 +96,8 @@ enum Command {
     /// NFT (Non-Fungible Token) operations (KVP-106).
     #[command(subcommand)]
     Nft(NftCommand),
+    /// Launch interactive TUI.
+    Tui,
 }
 
 #[derive(Subcommand)]
@@ -308,6 +311,7 @@ fn main() -> Result<()> {
         Command::Offer(offer_cmd) => offer(&client, offer_cmd)?,
         Command::Rwa(rwa_cmd) => rwa(&client, rwa_cmd)?,
         Command::Nft(nft_cmd) => nft(&client, nft_cmd)?,
+        Command::Tui => crate::tui::run(client)?,
     }
     Ok(())
 }

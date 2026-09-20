@@ -12,7 +12,7 @@ name = "kovanica_cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "kovanica"
+name = "kovanicagent"
 path = "src/main.rs"
 
 [dependencies]
@@ -24,6 +24,9 @@ getrandom.workspace = true
 anyhow.workspace = true
 kovanica-state = { path = "../kovanica-state" }
 bip39 = { workspace = true, features = ["rand", "std"] }
+ratatui = "0.29.0"
+crossterm = "0.29.0"
+tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread"] }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -8,7 +8,7 @@ description = "Command-line client for the Kovanica (KVNC) testnet BlockDAG"
 repository = "https://github.com/KovanicaDAG/kovanica-cli"
 
 [[bin]]
-name = "kovanica"
+name = "kovanicagent"
 path = "src/main.rs"
 
 [dependencies]
@@ -21,4 +21,4 @@ anyhow = "1"
 # Reuse the node's own address + key logic so the CLI can never drift from the
 # ledger. `kovanica-state` is a workspace member of the node repo; cargo builds
 # just that package (and its `kovanica-dag` path dep) from the git checkout.
-kovanica-state = { git = "https://github.com/KovanicaDAG/kovanica-node" }
+kovanica-state = { path = "/root/kovanica/protocol/crates/kovanica-state" }

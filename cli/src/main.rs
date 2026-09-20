@@ -21,7 +21,7 @@ const ATOM: u64 = 100_000_000;
 
 #[derive(Parser)]
 #[command(
-    name = "kovanica",
+    name = "kovanicagent",
     version,
     about = "Command-line client for the Kovanica (KVNC) testnet BlockDAG"
 )]
