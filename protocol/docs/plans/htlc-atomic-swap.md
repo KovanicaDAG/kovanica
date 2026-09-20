@@ -323,4 +323,4 @@ Reference protocols named in the suite header: **BIP-199**, **Tier Nolan atomic 
 - Recommended `T_A − T_B` margin for the testnet (proposal: 100 blocks at 1 BPS, tunable).
 - Explorer/SPV need no surface change (addresses render generically; SPV filters use the 33-byte owner) — verify with one test each.
 
-Demo (M1.6) runbook: [`kovanica-node/ATOMIC-SWAP-DEMO.md`](../../../kovanica-node/ATOMIC-SWAP-DEMO.md) — testnet staging plan, browser claim/refund walkthrough, and the exact/`curl`-verifiable HTTP sequence.
+Demo (M1.6) runbook: [`kovanica-node/ATOMIC-SWAP-DEMO.md`](../../../node/ATOMIC-SWAP-DEMO.md) — testnet staging plan, browser claim/refund walkthrough, and the exact/`curl`-verifiable HTTP sequence.

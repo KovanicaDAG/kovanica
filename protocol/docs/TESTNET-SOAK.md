@@ -160,4 +160,4 @@
 
 ---
 
-*Related: [OPS-HARDENING.md](./OPS-HARDENING.md) · [MAINNET-CRITERIA.md](./MAINNET-CRITERIA.md) · [alerting_rules.yml](../kovanica-node/alerting_rules.yml)*
+*Related: [OPS-HARDENING.md](./OPS-HARDENING.md) · [MAINNET-CRITERIA.md](./MAINNET-CRITERIA.md) · [alerting_rules.yml](../alerting_rules.yml)*
