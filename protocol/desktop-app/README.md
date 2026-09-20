@@ -6,8 +6,9 @@ wallet, transfer, mining, staking (hybrid PoW + VRF), multisig, native tokens,
 stealth, script v2, HTLC/atomic swap, vault, DAG explorer, SPV light mode.
 
 The master plan lives in the [meta repo plans](../../../plans/desktop-node-app.md)
-and, once implementation is underway, its own `docs/plans/desktop-node-app.md`.
-This crate is the **Rust core**; a Tauri shell (UI) is added in later slices.
+and its own working plan [docs/plans/desktop-node-app.md](../../docs/plans/desktop-node-app.md).
+This crate is the **Rust core**; the Tauri shell (UI) is built up in later slices.
+Slices 1–4 are landed; **Slice 5 (staking & mining cadence) is in progress**.
 
 ## Status — Slice A (gate verified ✅)
 
@@ -59,6 +60,32 @@ This crate is the **Rust core**; a Tauri shell (UI) is added in later slices.
     the Merkle proof against the synced header. Verified end-to-end against the
     live explorer blob (4,953/4,953 headers). KVLS/proof parsing is byte-compatible
     with `kovanica-ffi`, guarded by unit tests.
+- [ ] **Slice 5 — staking & mining cadence (worker, Tauri handlers and UI)**:
+  - **Validator identity**: `set_validator_seed` parses 32-byte seeds and sets
+    the node's VRF validator key (`ValidatorReady` event + surfaced pk).
+  - **Hybrid sortition**: `enable_hybrid` mirrors the FFI's
+    `HybridConfig { rate_num, rate_den, stake_nominal_work: 1,
+    use_epoch_beacon: true, retarget }` (zero rates rejected), so the worker
+    can win slots by stake-weighted VRF draw instead of PoW.
+  - **Bonding**: `bond_stake` mirrors the FFI's two-step bond — auto-splits an
+    oversized unfrozen coin via a mined block, then bonds the requested amount
+    via a `KVB1||vrf_pk`-tagged tx (mined/`produce_block`-sealed), freezing it
+    into the stake registry with a `ValidatorReady`-class lifecycle.
+  - **Unbonding**: `unbond_stake` delegates to `Node::unbond_with` (FIFO over
+    matured frozen coins, release auto-sealed in its own block) and surfaces
+    `InsufficientStake` before maturity.
+  - **Mining cadence**: `start_mining`/`stop_mining` run a live
+    `MissedTickBehavior::Skip` interval that produces a block every N seconds
+    (staked draw first, PoW fallback); the status Peers/counters clean up.
+  - **`get_staking`** reports validator pk, hybrid config, total/my stake,
+    chain height, era issuance, pending-unbond height and mining state for the
+    Staking/Mining panel.
+  - **Staking/Mining UI panel**: validator seed + hybrid controls, bond/unbond
+    (KVNC), mining cadence, and a live staking-state readout, all through the
+    new `tauri_main.rs` handlers; bonding requires an unlocked wallet.
+  - Unit tests: seed parsing, FFI-parity hybrid config, bond-source
+    selection (exact coin → split → shortfall), and a full
+    bond → maturity → unbond lifecycle on an embedded node (10 lib tests).
 
 ## Run the gates
 

@@ -210,6 +210,59 @@
       </div>
 
       <div class="card">
+        <h3>Staking / Mining</h3>
+        <div class="wallet-grid">
+          <div class="wallet-col">
+            <label>Validator seed (32 bytes hex)</label>
+            <input id="validator-seed-input" placeholder="64 hex chars (or leave blank to keep current)" />
+            <div class="actions sm">
+              <button id="validator-seed-btn" class="btn btn-secondary" disabled>Set Validator</button>
+            </div>
+            <div class="value sm" id="validator-status">no validator identity set</div>
+            <label>Hybrid sortition rate</label>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <input id="hybrid-rate-num" type="number" min="1" value="1" style="width:64px;" />
+              <span style="color:#8b949e;">/</span>
+              <input id="hybrid-rate-den" type="number" min="1" value="1" style="width:64px;" />
+              <label style="margin:0 6px 0 12px; text-transform:none;">retarget</label>
+              <input id="hybrid-retarget" type="checkbox" />
+            </div>
+            <div class="actions sm">
+              <button id="hybrid-btn" class="btn btn-secondary" disabled>Enable Hybrid</button>
+            </div>
+            <div class="value sm" id="hybrid-status">—</div>
+          </div>
+          <div class="wallet-col">
+            <label>Bond amount (KVNC)</label>
+            <input id="bond-amount-input" type="number" min="0" step="0.00000001" placeholder="100" />
+            <div class="actions sm">
+              <button id="bond-btn" class="btn btn-secondary" disabled>Bond Stake</button>
+              <button id="unbond-btn" class="btn btn-secondary" disabled>Unbond</button>
+            </div>
+            <div class="value sm" id="bond-result">requires an unlocked wallet + validator seed</div>
+          </div>
+          <div class="wallet-col">
+            <label>Mining cadence</label>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <input id="mining-interval-input" type="number" min="1" value="5" style="width:64px;" />
+              <span style="color:#8b949e;">s</span>
+            </div>
+            <div class="actions sm">
+              <button id="mining-start-btn" class="btn btn-secondary" disabled>Start Mining</button>
+              <button id="mining-stop-btn" class="btn btn-secondary" disabled>Stop Mining</button>
+            </div>
+            <div class="value sm" id="mining-status">—</div>
+          </div>
+          <div class="wallet-col">
+            <label>Staking state</label>
+            <div class="list" style="max-height:220px;" id="staking-view">
+              <div class="list-item">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>Operations</h3>
         <div class="wallet-grid">
           <div class="wallet-col">

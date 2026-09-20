@@ -63,6 +63,25 @@ const snapshotStatus = document.getElementById('snapshot-status')
 const checkpointStatus = document.getElementById('checkpoint-status')
 const shutdownStatus = document.getElementById('shutdown-status')
 
+// DOM elements — staking / mining
+const validatorSeedInput = document.getElementById('validator-seed-input')
+const validatorSeedBtn = document.getElementById('validator-seed-btn')
+const validatorStatus = document.getElementById('validator-status')
+const hybridRateNum = document.getElementById('hybrid-rate-num')
+const hybridRateDen = document.getElementById('hybrid-rate-den')
+const hybridRetarget = document.getElementById('hybrid-retarget')
+const hybridBtn = document.getElementById('hybrid-btn')
+const hybridStatus = document.getElementById('hybrid-status')
+const bondAmountInput = document.getElementById('bond-amount-input')
+const bondBtn = document.getElementById('bond-btn')
+const unbondBtn = document.getElementById('unbond-btn')
+const bondResult = document.getElementById('bond-result')
+const miningIntervalInput = document.getElementById('mining-interval-input')
+const miningStartBtn = document.getElementById('mining-start-btn')
+const miningStopBtn = document.getElementById('mining-stop-btn')
+const miningStatus = document.getElementById('mining-status')
+const stakingView = document.getElementById('staking-view')
+
 let nodeReady = false
 let walletUnlocked = false
 
@@ -116,6 +135,8 @@ function setWalletUnlocked(unlocked) {
   walletUnlocked = unlocked
   sendBtn.disabled = !(unlocked && nodeReady)
   addressesBtn.disabled = !unlocked
+  bondBtn.disabled = !(unlocked && nodeReady)
+  unbondBtn.disabled = !(unlocked && nodeReady)
 }
 
 function setAddressDefaults(addresses) {
@@ -433,6 +454,181 @@ async function spvVerify() {
   }
 }
 
+function renderStaking(s) {
+  const pk = s.validator_pk ? fmtHash(s.validator_pk) : '(none)'
+  const hybrid = s.hybrid_enabled ? `${s.rate_num}/${s.rate_den}` + (s.retarget ? ' · retarget on' : '') : 'off'
+  const mine = s.mining ? `every ${s.mining_interval_secs}s` : 'off'
+  const pending = s.pending_unbond_height != null
+    ? `#${s.pending_unbond_height.toLocaleString()}`
+    : '—'
+  stakingView.innerHTML = [
+    ['validator', pk],
+    ['hybrid', hybrid],
+    ['total stake', fmtKvnc(s.total_stake)],
+    ['my stake', fmtKvnc(s.my_stake)],
+    ['chain height', s.chain_height.toLocaleString()],
+    ['issuance @tip', fmtKvnc(s.issuance_at_height)],
+    ['unbond matures', pending],
+    ['mining', mine],
+  ]
+    .map(([k, v]) => `<div class="list-item">${k}: <span class="value ok">${v}</span></div>`)
+    .join('')
+}
+
+async function refreshStaking() {
+  try {
+    const info = await invoke('get_staking')
+    renderStaking(info)
+    validatorStatus.textContent = info.validator_pk
+      ? 'validator set · ' + fmtHash(info.validator_pk)
+      : 'no validator identity set'
+    validatorStatus.className = 'value sm ' + (info.validator_pk ? 'ok' : '')
+    hybridStatus.textContent = info.hybrid_enabled ? 'hybrid on · ' + info.rate_num + '/' + info.rate_den : 'hybrid off'
+    hybridStatus.className = 'value sm ' + (info.hybrid_enabled ? 'ok' : '')
+    miningStatus.textContent = info.mining ? `mining every ${info.mining_interval_secs}s` : 'mining off (manual Produce Block available)'
+    miningStatus.className = 'value sm ' + (info.mining ? 'ok' : '')
+    miningStartBtn.disabled = info.mining || !nodeReady
+    miningStopBtn.disabled = !info.mining || !nodeReady
+  } catch (e) {
+    addEvent('Error', { message: 'get_staking: ' + e })
+  }
+}
+
+async function setValidator() {
+  const seed = validatorSeedInput.value.trim().toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(seed)) {
+    validatorStatus.textContent = 'validator seed must be 32 bytes (64 hex chars)'
+    validatorStatus.className = 'value sm err'
+    return
+  }
+  validatorSeedBtn.disabled = true
+  try {
+    const pk = await invoke('set_validator_seed', { seedHex: seed })
+    validatorStatus.textContent = 'validator set · ' + pk
+    validatorStatus.className = 'value sm ok'
+    addEvent('ValidatorReady', { pk })
+    await refreshStaking()
+  } catch (e) {
+    validatorStatus.textContent = String(e)
+    validatorStatus.className = 'value sm err'
+    walletError(e)
+  } finally {
+    validatorSeedBtn.disabled = false
+  }
+}
+
+async function enableHybrid() {
+  const rateNum = Number(hybridRateNum.value)
+  const rateDen = Number(hybridRateDen.value)
+  if (!rateNum || !rateDen) {
+    hybridStatus.textContent = 'rate must be positive integers'
+    hybridStatus.className = 'value sm err'
+    return
+  }
+  hybridBtn.disabled = true
+  hybridBtn.textContent = 'Enabling...'
+  try {
+    const msg = await invoke('enable_hybrid', { rateNum, rateDen, retarget: hybridRetarget.checked })
+    hybridStatus.textContent = msg
+    hybridStatus.className = 'value sm ok'
+    addEvent('HybridEnabled', { rateNum, rateDen, retarget: hybridRetarget.checked })
+    await refreshStaking()
+  } catch (e) {
+    hybridStatus.textContent = String(e)
+    hybridStatus.className = 'value sm err'
+    walletError(e)
+  } finally {
+    hybridBtn.disabled = false
+    hybridBtn.textContent = 'Enable Hybrid'
+  }
+}
+
+async function bond() {
+  const amount = Number(bondAmountInput.value)
+  if (!amount || amount <= 0) {
+    bondResult.textContent = 'enter a positive KVNC amount'
+    bondResult.className = 'value sm err'
+    return
+  }
+  bondBtn.disabled = true
+  bondBtn.textContent = 'Bonding...'
+  try {
+    const txId = await invoke('bond_stake', { amount: Math.floor(amount * ATOM) })
+    bondResult.textContent = 'bonded · tx ' + txId
+    bondResult.className = 'value sm ok'
+    addEvent('Bonded', { txId })
+    await refreshStaking()
+  } catch (e) {
+    bondResult.textContent = String(e)
+    bondResult.className = 'value sm err'
+    walletError(e)
+  } finally {
+    bondBtn.disabled = !walletUnlocked
+    bondBtn.textContent = 'Bond Stake'
+  }
+}
+
+async function unbond() {
+  const amount = Number(bondAmountInput.value)
+  if (!amount || amount <= 0) {
+    bondResult.textContent = 'enter a positive KVNC amount'
+    bondResult.className = 'value sm err'
+    return
+  }
+  unbondBtn.disabled = true
+  unbondBtn.textContent = 'Unbonding...'
+  try {
+    const txId = await invoke('unbond_stake', { amount: Math.floor(amount * ATOM) })
+    bondResult.textContent = 'unbonded · tx ' + txId
+    bondResult.className = 'value sm ok'
+    addEvent('Unbonded', { txId })
+    await refreshStaking()
+  } catch (e) {
+    bondResult.textContent = String(e)
+    bondResult.className = 'value sm err'
+    walletError(e)
+  } finally {
+    unbondBtn.disabled = !walletUnlocked
+    unbondBtn.textContent = 'Unbond'
+  }
+}
+
+async function startMining() {
+  const seconds = Math.floor(Number(miningIntervalInput.value))
+  if (!seconds || seconds <= 0) {
+    miningStatus.textContent = 'interval must be a positive integer of seconds'
+    miningStatus.className = 'value sm err'
+    return
+  }
+  miningStartBtn.disabled = true
+  try {
+    const msg = await invoke('start_mining', { intervalSecs: seconds })
+    miningStatus.textContent = msg
+    miningStatus.className = 'value sm ok'
+    addEvent('MiningStarted', { intervalSecs: seconds })
+    await refreshStaking()
+  } catch (e) {
+    miningStatus.textContent = String(e)
+    miningStatus.className = 'value sm err'
+    walletError(e)
+  }
+}
+
+async function stopMining() {
+  miningStopBtn.disabled = true
+  try {
+    const msg = await invoke('stop_mining')
+    miningStatus.textContent = msg
+    miningStatus.className = 'value sm'
+    addEvent('MiningStopped', {})
+    await refreshStaking()
+  } catch (e) {
+    miningStatus.textContent = String(e)
+    miningStatus.className = 'value sm err'
+    walletError(e)
+  }
+}
+
 async function shutdown() {
   if (!window.confirm('Shut down the embedded node and exit the app?')) return
   shutdownBtn.disabled = true
@@ -469,12 +665,18 @@ async function init() {
       shutdownBtn.disabled = false
       p2pStartBtn.disabled = false
       spvSyncBtn.disabled = false
+      validatorSeedBtn.disabled = false
+      hybridBtn.disabled = false
+      miningStartBtn.disabled = false
       setWalletUnlocked(walletUnlocked)
       await refreshStatus()
+      await refreshStaking()
     } else if (type === 'TipChanged' || type === 'BlockProduced' || type === 'BlockReceived') {
       await refreshStatus()
     } else if (type === 'PeerConnected' || type === 'PeerDisconnected') {
       await refreshStatus()
+    } else if (type === 'ValidatorReady' || type === 'HybridEnabled' || type === 'Bonded' || type === 'Unbonded') {
+      await refreshStaking()
     }
   })
 
@@ -499,5 +701,11 @@ spvSyncBtn.addEventListener('click', spvSync)
 spvMatchBtn.addEventListener('click', spvMatch)
 spvVerifyBtn.addEventListener('click', spvVerify)
 shutdownBtn.addEventListener('click', shutdown)
+validatorSeedBtn.addEventListener('click', setValidator)
+hybridBtn.addEventListener('click', enableHybrid)
+bondBtn.addEventListener('click', bond)
+unbondBtn.addEventListener('click', unbond)
+miningStartBtn.addEventListener('click', startMining)
+miningStopBtn.addEventListener('click', stopMining)
 
 init()

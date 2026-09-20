@@ -34,5 +34,6 @@ pub use events::{NodeEvent, WalletEvent};
 pub use profile::{NetworkProfile, NETWORK_MAINNET, NETWORK_TESTNET};
 pub use service::{BootError, NodeService, ParityError};
 pub use worker::{
-    AssetBalance, NodeHandle, NodeStatus, SpvSyncInfo, WorkerCmd, WorkerError, WorkerResp,
+    AssetBalance, NodeHandle, NodeStatus, SpvSyncInfo, StakingInfo, WorkerCmd, WorkerError,
+    WorkerResp,
 };

@@ -11,11 +11,11 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
-use kovanica_dag::BlockId;
+use kovanica_dag::{BlockId, Retarget};
 use kovanica_node::net;
 use kovanica_node::spv::{BlockFilter, BlockHeader, MerkleProof, SpvClient};
 use kovanica_node::{Node, NodeError};
-use kovanica_state::{Address, AssetKind, KeyPair, Transaction, TxId};
+use kovanica_state::{Address, AssetKind, KeyPair, OutPoint, Sig, Transaction, TxId, TxOutput};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -117,6 +117,14 @@ const P2P_SYNC_TIMEOUT: Duration = Duration::from_millis(400);
 /// HTTP timeout for SPV light-sync fetch + proof requests.
 const SPV_HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Continuous mining cadence state held by the worker loop. Separate from
+/// P2P because a node can produce blocks while thoroughly disconnected.
+#[derive(Default)]
+struct MiningState {
+    enabled: bool,
+    interval_secs: u64,
+}
+
 /// Live P2P state held by the worker loop.
 #[derive(Default)]
 struct P2pState {
@@ -200,6 +208,28 @@ pub enum WorkerCmd {
     SPVMatches { address: String },
     /// Verify a Merkle inclusion proof for a tx against a light-synced header.
     SPVVerify { block_id: String, tx_id: String },
+    /// Set the validator identity seed (32 bytes hex). The derived VRF public
+    /// key must exist before any bond/stake work can be signed for it.
+    SetValidatorSeed { seed_hex: String },
+    /// Enable hybrid staked+PoW admission with a sortition rate (1/1 = every
+    /// slot is the validator's to win, 1/10 = ten times rarer).
+    EnableHybrid {
+        rate_num: u64,
+        rate_den: u64,
+        retarget: bool,
+    },
+    /// Snapshot of the staking/mining state for the panel.
+    GetStaking,
+    /// Bond `amount` atoms of the unlocked wallet's KVNC to the node's
+    /// validator identity.
+    BondStake { amount: u64 },
+    /// Unbond `amount` atoms of this validator's matured stake back to the
+    /// wallet address (sealed in a mined block).
+    UnbondStake { amount: u64 },
+    /// Keep producing blocks every `interval_secs` until stopped.
+    StartMining { interval_secs: u64 },
+    /// Stop the continuous cadence; manual `ProduceBlock` still works.
+    StopMining,
     /// Graceful shutdown.
     Shutdown,
 }
@@ -233,6 +263,16 @@ pub enum WorkerResp {
     SpvMatches(Vec<String>),
     /// Whether a Merkle inclusion proof verified against a synced header.
     SpvVerified(bool),
+    /// Result of `SetValidatorSeed` (the derived VRF public key hex).
+    ValidatorSeed(Result<String, String>),
+    /// Result of `EnableHybrid` as a human-friendly status line.
+    HybridStatus(String),
+    /// Staking/mining snapshot (errors are folded to zero/None fields).
+    Staking(StakingInfo),
+    /// Result of a bond/unbond (`tx` id hex on success).
+    StakingTx(Result<String, String>),
+    /// Result of a mining cadence toggle as a status line.
+    MiningStatus(String),
     Ok,
 }
 
@@ -269,6 +309,43 @@ pub struct NodeStatus {
     pub mempool_size: usize,
     pub peers: usize,
     pub sync_progress: Option<(u64, u64)>, // (synced, total)
+}
+
+/// Snapshot of the staking/mining state for the panel.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct StakingInfo {
+    /// The node's validator identity (VRF public key hex), if a seed is set.
+    pub validator_pk: Option<String>,
+    /// Whether hybrid staked+PoW admission is enabled.
+    pub hybrid_enabled: bool,
+    /// Sortition rate (num/den); zero/zero when hybrid is off.
+    pub rate_num: u64,
+    pub rate_den: u64,
+    /// Whether PoW difficulty retargeting is pinned on for the PoW fallback.
+    pub retarget: bool,
+    /// Total bonded stake across all validators (tip view), in atoms.
+    pub total_stake: u64,
+    /// This validator's bonded stake (tip view), in atoms.
+    pub my_stake: u64,
+    /// Height (selected-parent chain) at which the oldest pending unbond can
+    /// mature, when one is in flight.
+    pub pending_unbond_height: Option<u64>,
+    /// Current selected-parent chain height.
+    pub chain_height: u64,
+    /// Subsidy (atoms) issued at the current height under the profile cap.
+    pub issuance_at_height: u64,
+    /// Whether the continuous mining cadence is running.
+    pub mining: bool,
+    /// Configured cadence interval, when mining.
+    pub mining_interval_secs: Option<u64>,
+}
+
+/// Where a bond's source value comes from: an exact-size coin, or a freshly
+/// split oversized coin (whose remainder stays at the wallet address).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BondSource {
+    Exact(OutPoint),
+    Split { fund: OutPoint, value: u64 },
 }
 
 /// Errors from the worker handle.
@@ -344,6 +421,8 @@ impl NodeHandle {
             let mut checkpoint_interval = tokio::time::interval(Duration::from_secs(300)); // 5 min
             let mut snapshot_interval = tokio::time::interval(Duration::from_secs(3600)); // 1 hour
             let mut p2p_interval = tokio::time::interval(Duration::from_secs(P2P_TICK_SECS));
+            let mut mining = MiningState::default();
+            let mut mine_interval: Option<tokio::time::Interval> = None;
 
             // Ensure intervals don't fire immediately.
             checkpoint_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -361,9 +440,28 @@ impl NodeHandle {
                     _ = p2p_interval.tick() => {
                         p2p_tick(&mut node, &mut p2p, &event_tx_clone);
                     }
+                    _ = mine_tick(&mut mine_interval) => {
+                        mine_for_cadence(&mut node, &event_tx_clone);
+                    }
                     cmd = cmd_rx.recv() => {
                         let Some((cmd, resp_tx)): Option<(WorkerCmd, oneshot::Sender<WorkerResp>)> = cmd else { break; };
-                        let result = Self::handle_cmd(cmd, &mut node, &mut wallet, &datadir_clone, &event_tx_clone, &mut p2p, &mut spv_store).await;
+                        // Apply cadence toggles up front so GetStaking sees them.
+                        match &cmd {
+                            WorkerCmd::StartMining { interval_secs } if *interval_secs > 0 => {
+                                mining.enabled = true;
+                                mining.interval_secs = *interval_secs;
+                                let mut iv =
+                                    tokio::time::interval(Duration::from_secs(*interval_secs));
+                                iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                                mine_interval = Some(iv);
+                            }
+                            WorkerCmd::StopMining => {
+                                mining.enabled = false;
+                                mine_interval = None;
+                            }
+                            _ => {}
+                        }
+                        let result = Self::handle_cmd(cmd, &mut node, &mut wallet, &datadir_clone, &event_tx_clone, &mut p2p, &mut spv_store, &mining).await;
                         let _ = resp_tx.send(result);
                     }
                     _ = shutdown_rx.recv() => {
@@ -421,6 +519,7 @@ impl NodeHandle {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_cmd(
         cmd: WorkerCmd,
         node: &mut Node,
@@ -429,23 +528,14 @@ impl NodeHandle {
         events: &broadcast::Sender<NodeEvent>,
         p2p: &mut P2pState,
         spv: &mut Option<SpvStore>,
+        mining: &MiningState,
     ) -> WorkerResp {
         match cmd {
-            WorkerCmd::ProduceBlock => {
-                match node.produce_block() {
-                    Ok(Some(block_id)) => {
-                        let count = node.block_count().unwrap_or(0);
-                        let _ = events.send(NodeEvent::BlockProduced {
-                            block_id: block_id.to_string(),
-                            height: count as u64,
-                            tx_count: 0, // TODO: extract from block
-                        });
-                        WorkerResp::ProduceBlock(Ok(Some(block_id)))
-                    }
-                    Ok(None) => WorkerResp::ProduceBlock(Ok(None)),
-                    Err(e) => WorkerResp::ProduceBlock(Err(e)),
-                }
-            }
+            WorkerCmd::ProduceBlock => match produce_block_sealed(node, events) {
+                Ok(Some(block_id)) => WorkerResp::ProduceBlock(Ok(Some(block_id))),
+                Ok(None) => WorkerResp::ProduceBlock(Ok(None)),
+                Err(e) => WorkerResp::ProduceBlock(Err(e)),
+            },
             WorkerCmd::SubmitTx(tx) => match node.submit_tx(tx) {
                 Ok(tx_id) => {
                     let _ = events.send(NodeEvent::TxAccepted {
@@ -694,6 +784,111 @@ impl NodeHandle {
                 };
                 WorkerResp::SpvVerified(verified)
             }
+            WorkerCmd::SetValidatorSeed { seed_hex } => {
+                let seed = match parse_validator_seed(&seed_hex) {
+                    Ok(s) => s,
+                    Err(e) => return WorkerResp::ValidatorSeed(Err(e)),
+                };
+                node.set_validator_seed(seed);
+                match node.validator_public_key() {
+                    Some(pk) => {
+                        let pk_hex = hex::encode(*pk.as_bytes());
+                        let _ = events.send(NodeEvent::ValidatorReady { pk: pk_hex.clone() });
+                        WorkerResp::ValidatorSeed(Ok(pk_hex))
+                    }
+                    None => WorkerResp::ValidatorSeed(Err("validator identity not derived".into())),
+                }
+            }
+            WorkerCmd::EnableHybrid {
+                rate_num,
+                rate_den,
+                retarget,
+            } => match hybrid_config_for(rate_num, rate_den, retarget) {
+                Ok(cfg) => match node.enable_hybrid(cfg) {
+                    Ok(_) => {
+                        let retarget = if retarget { "on" } else { "off" };
+                        WorkerResp::HybridStatus(format!(
+                                "hybrid enabled: staked slot rate {rate_num}/{rate_den}, difficulty retarget {retarget}"
+                            ))
+                    }
+                    Err(e) => WorkerResp::HybridStatus(format!("hybrid enable failed: {e}")),
+                },
+                Err(e) => WorkerResp::HybridStatus(e),
+            },
+            WorkerCmd::GetStaking => {
+                let validator_pk = node
+                    .validator_public_key()
+                    .map(|pk| hex::encode(*pk.as_bytes()));
+                let (hybrid_enabled, rate_num, rate_den, retarget) = match node.hybrid_config() {
+                    Some(cfg) => (true, cfg.rate_num, cfg.rate_den, cfg.retarget.is_some()),
+                    None => (false, 0, 0, false),
+                };
+                let chain_height = node.chain_height().unwrap_or(0);
+                let my_stake = validator_pk
+                    .as_ref()
+                    .and_then(|_| node.validator_public_key())
+                    .map(|pk| node.stake_of(pk.as_bytes()).unwrap_or(0))
+                    .unwrap_or(0);
+                let pending_unbond_height = validator_pk
+                    .as_ref()
+                    .and_then(|_| node.validator_public_key())
+                    .map(|pk| node.pending_unbond_height(pk.as_bytes()).unwrap_or(None))
+                    .unwrap_or(None);
+                let mining_interval_secs = mining.enabled.then_some(mining.interval_secs);
+                WorkerResp::Staking(StakingInfo {
+                    validator_pk,
+                    hybrid_enabled,
+                    rate_num,
+                    rate_den,
+                    retarget,
+                    total_stake: node.total_stake().unwrap_or(0),
+                    my_stake,
+                    pending_unbond_height,
+                    chain_height,
+                    issuance_at_height: Node::issuance_at(
+                        datadir.profile.genesis_subsidy,
+                        chain_height,
+                    ),
+                    mining: mining.enabled,
+                    mining_interval_secs,
+                })
+            }
+            WorkerCmd::BondStake { amount } => {
+                if wallet.is_locked() {
+                    return WorkerResp::StakingTx(Err("wallet locked — unlock to bond".into()));
+                }
+                let kp = match wallet.keypair() {
+                    Some(k) => k,
+                    None => return WorkerResp::StakingTx(Err("no wallet keypair".into())),
+                };
+                match bond_stake(node, &kp, amount, events) {
+                    Ok(tx_id) => WorkerResp::StakingTx(Ok(tx_id.to_string())),
+                    Err(e) => WorkerResp::StakingTx(Err(e)),
+                }
+            }
+            WorkerCmd::UnbondStake { amount } => {
+                if wallet.is_locked() {
+                    return WorkerResp::StakingTx(Err("wallet locked — unlock to unbond".into()));
+                }
+                let kp = match wallet.keypair() {
+                    Some(k) => k,
+                    None => return WorkerResp::StakingTx(Err("no wallet keypair".into())),
+                };
+                match unbond_stake(node, &kp, amount, events) {
+                    Ok(tx_id) => WorkerResp::StakingTx(Ok(tx_id.to_string())),
+                    Err(e) => WorkerResp::StakingTx(Err(e)),
+                }
+            }
+            WorkerCmd::StartMining { interval_secs } => {
+                if interval_secs == 0 {
+                    WorkerResp::MiningStatus("mining interval must be > 0".into())
+                } else {
+                    WorkerResp::MiningStatus(format!("mining every {interval_secs}s"))
+                }
+            }
+            WorkerCmd::StopMining => {
+                WorkerResp::MiningStatus("mining stopped (manual Produce Block still works)".into())
+            }
             WorkerCmd::Shutdown => WorkerResp::Ok,
         }
     }
@@ -745,6 +940,190 @@ fn bind_p2p_listeners(addrs: &str) -> Vec<TcpListener> {
             Err(_) => None,
         })
         .collect()
+}
+
+/// Produce a block (staked draw first, PoW fallback) and emit the standard
+/// `BlockProduced` event. `Ok(None)` means the node chose not to produce.
+fn produce_block_sealed(
+    node: &mut Node,
+    events: &broadcast::Sender<NodeEvent>,
+) -> Result<Option<BlockId>, NodeError> {
+    match node.produce_block()? {
+        Some(block_id) => {
+            let count = node.block_count().unwrap_or(0);
+            let _ = events.send(NodeEvent::BlockProduced {
+                block_id: block_id.to_string(),
+                height: count as u64,
+                tx_count: 0, // TODO: extract from block
+            });
+            Ok(Some(block_id))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Future that resolves on the mining cadence — or never, when mining is off.
+/// A pending `None` keeps the select arm dormant so a disabled cadence costs
+/// nothing and never busy-fires.
+async fn mine_tick(interval: &mut Option<tokio::time::Interval>) -> Option<()> {
+    match interval {
+        Some(iv) => {
+            iv.tick().await;
+            Some(())
+        }
+        None => std::future::pending().await,
+    }
+}
+
+/// One cadence step: try to produce; non-fatal errors surface as events so
+/// the panel sees the reason (e.g. unset validator on a constrained chain).
+fn mine_for_cadence(node: &mut Node, events: &broadcast::Sender<NodeEvent>) {
+    match produce_block_sealed(node, events) {
+        Ok(Some(_)) => {}
+        Ok(None) => {}
+        Err(e) => {
+            let _ = events.send(NodeEvent::Error {
+                message: format!("cadence mine: {e}"),
+            });
+        }
+    }
+}
+
+/// Parse a 32-byte hex validator seed.
+fn parse_validator_seed(s: &str) -> Result<[u8; 32], String> {
+    let raw = hex::decode(s.trim()).map_err(|e| format!("validator seed: {e}"))?;
+    let arr: [u8; 32] = raw
+        .as_slice()
+        .try_into()
+        .map_err(|_| "validator seed must be 32 bytes (64 hex chars)".to_string())?;
+    Ok(arr)
+}
+
+/// Build the hybrid config exactly like `kovanica-ffi::enable_hybrid`:
+/// nominal stake work pinned to 1, epoch-beacon VRF input, optional
+/// difficulty retarget. Zero rates are rejected (a `0/0` config would be
+/// ambiguous, and the FFI construction would divide by zero).
+fn hybrid_config_for(
+    rate_num: u64,
+    rate_den: u64,
+    retarget: bool,
+) -> Result<kovanica_state::HybridConfig, String> {
+    if rate_num == 0 || rate_den == 0 {
+        return Err("rate_num and rate_den must be positive".into());
+    }
+    Ok(kovanica_state::HybridConfig {
+        rate_num,
+        rate_den,
+        stake_nominal_work: 1,
+        use_epoch_beacon: true,
+        retarget: retarget.then(Retarget::default),
+    })
+}
+
+/// Choose the source coin for a bond: an exact-size unfrozen spendable coin,
+/// or a one-block split of the largest oversized coin (holding `value` intact
+/// until the split tx is mined — the change then lands back at the wallet).
+fn select_bond_source(candidates: &[(OutPoint, u64)], amount: u64) -> Result<BondSource, String> {
+    if amount == 0 {
+        return Err("bond amount must be positive".into());
+    }
+    if let Some((op, _)) = candidates.iter().find(|(_, v)| *v == amount) {
+        return Ok(BondSource::Exact(*op));
+    }
+    let (fund, value) = candidates
+        .iter()
+        .filter(|(_, v)| *v > amount)
+        .max_by_key(|(_, v)| *v)
+        .copied()
+        .ok_or_else(|| format!("insufficient funds: needed {amount} atoms"))?;
+    Ok(BondSource::Split { fund, value })
+}
+
+/// Bond `amount` atoms of `kp`'s native KVNC to the node's validator
+/// identity. Mirrors `kovanica-ffi::bond_stake`: the source coin is an
+/// unfrozen, spendable (mature) coin chosen over unfrozen spendable coins
+/// only; an oversized coin is auto-split via a mined block; then the `KVB1`
+/// tagged bond is submitted and sealed in a mined block.
+fn bond_stake(
+    node: &mut Node,
+    kp: &KeyPair,
+    amount: u64,
+    events: &broadcast::Sender<NodeEvent>,
+) -> Result<TxId, String> {
+    let addr = kp.address();
+    let vrf_pk = node
+        .validator_public_key()
+        .map(|pk| *pk.as_bytes())
+        .ok_or_else(|| "set validator seed before bonding".to_string())?;
+
+    // Spendable coins only: `spendable_utxos_of` respects coinbase maturity,
+    // so a freshly-mined subsidy coinbase is never picked over a mature coin.
+    let candidates: Vec<(OutPoint, u64)> = node
+        .spendable_utxos_of(&addr)
+        .map_err(|e| format!("spendable utxos: {e}"))?
+        .into_iter()
+        .filter(|(op, _)| !node.outpoint_is_frozen(op).unwrap_or(true))
+        .collect();
+
+    let source_op = match select_bond_source(&candidates, amount)? {
+        BondSource::Exact(op) => op,
+        BondSource::Split { fund, value } => {
+            let fee = node.min_fee();
+            let rest = value - amount;
+            let mut outputs = vec![TxOutput::native(amount, addr)];
+            if rest > fee {
+                outputs.push(TxOutput::native(rest - fee, addr));
+            }
+            let mut split = Transaction::unsigned(std::slice::from_ref(&fund), outputs, Vec::new());
+            split.attach_signature(0, Sig::from_bytes(kp.sign(&split.sighash())));
+            let split_id = split.id();
+            node.submit_tx(split)
+                .map_err(|e| format!("submit split: {e}"))?;
+            produce_block_sealed(node, events)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "mempool empty after split submit".to_string())?;
+            OutPoint::new(split_id, 0)
+        }
+    };
+
+    let bond = Transaction::signed(
+        &[(source_op, kp)],
+        vec![TxOutput::native(amount, addr)],
+        kovanica_state::bond_tag(kovanica_state::NATIVE_ASSET_ID, &vrf_pk),
+    );
+    let bond_id = bond.id();
+    node.submit_tx(bond)
+        .map_err(|e| format!("submit bond: {e}"))?;
+    produce_block_sealed(node, events)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "mempool empty after bond submit".to_string())?;
+    Ok(bond_id)
+}
+
+/// Unbond `amount` atoms of this validator's matured stake back to `kp`'s
+/// address. `Node::unbond_with` (FIFO over matured owned coins) builds and
+/// mines its own block, so the release is sealed immediately — matching the
+/// FFI `unbond` surface.
+fn unbond_stake(
+    node: &mut Node,
+    kp: &KeyPair,
+    amount: u64,
+    events: &broadcast::Sender<NodeEvent>,
+) -> Result<TxId, String> {
+    let addr = kp.address();
+    let vrf_pk = node
+        .validator_public_key()
+        .map(|pk| *pk.as_bytes())
+        .ok_or_else(|| "set validator seed before unbonding".to_string())?;
+    let sent = node
+        .unbond_with(kp, &vrf_pk, amount, addr)
+        .map_err(|e| format!("unbond: {e}"))?;
+    let _ = events.send(NodeEvent::BlockProduced {
+        block_id: sent.block.to_string(),
+        height: node.block_count().unwrap_or(0) as u64,
+        tx_count: 1,
+    });
+    Ok(sent.tx)
 }
 
 /// One P2P round: serve any inbound connections, then sync from each
@@ -1121,8 +1500,143 @@ mod tests {
     #[test]
     fn binds_listener_addresses_and_drops_duplicates() {
         let listeners = bind_p2p_listeners("127.0.0.1:0, 127.0.0.1:0");
-        assert!(listeners.len() >= 1);
+        assert!(!listeners.is_empty());
         // A garbage address simply yields no bound listener.
         assert!(bind_p2p_listeners("").is_empty());
+    }
+
+    #[test]
+    fn parses_validator_seed_hex_and_rejects_bad_length() {
+        assert_eq!(parse_validator_seed(&"ab".repeat(32)).unwrap(), [0xab; 32]);
+        assert!(parse_validator_seed("zz").is_err(), "garbage rejected");
+        assert!(
+            parse_validator_seed(&"ab".repeat(31)).is_err(),
+            "31 bytes rejected"
+        );
+    }
+
+    #[test]
+    fn hybrid_config_matches_ffi_field_values() {
+        // The FFI pins stake_nominal_work=1, epoch beacon on, optional retarget.
+        let off = hybrid_config_for(1, 1, false).unwrap();
+        assert_eq!(off.rate_num, 1);
+        assert_eq!(off.rate_den, 1);
+        assert_eq!(off.stake_nominal_work, 1);
+        assert!(off.use_epoch_beacon);
+        assert!(off.retarget.is_none());
+
+        let on = hybrid_config_for(3, 10, true).unwrap();
+        assert!(on.retarget.is_some());
+
+        assert!(hybrid_config_for(0, 1, false).is_err());
+        assert!(hybrid_config_for(1, 0, false).is_err());
+    }
+
+    #[test]
+    fn selects_source_coin_exact_then_split_then_shortfall() {
+        let op1 = OutPoint::new(TxId::from_bytes([1u8; 32]), 0);
+        let op2 = OutPoint::new(TxId::from_bytes([2u8; 32]), 1);
+        let candidates = vec![(op1, 100), (op2, 200)];
+
+        // Exact-size coin wins outright.
+        assert_eq!(
+            select_bond_source(&candidates, 200).unwrap(),
+            BondSource::Exact(op2)
+        );
+        // No exact match → the largest oversized coin is split.
+        assert_eq!(
+            select_bond_source(&candidates, 150).unwrap(),
+            BondSource::Split {
+                fund: op2,
+                value: 200
+            }
+        );
+        // Nothing large enough → shortfall.
+        assert!(select_bond_source(&candidates, 300).is_err());
+        // Zero amount is rejected up front.
+        assert!(select_bond_source(&candidates, 0).is_err());
+    }
+
+    #[test]
+    fn bond_then_unbond_lifecycle_on_an_embedded_node() {
+        use kovanica_state::ledger::COINBASE_MATURITY;
+
+        let profile = NetworkProfile::testnet();
+        let (events, _rx) = broadcast::channel(64);
+        let founder = KeyPair::from_u64(1);
+
+        let mut node = Node::new();
+        node.genesis_with_finality(
+            profile.genesis_k,
+            profile.genesis_subsidy,
+            profile.genesis_premine,
+            1,
+            None,
+            profile.finality_depth,
+            profile.payload_pruning_depth,
+        )
+        .expect("genesis boots");
+
+        // Coinbase-mature the founder's premine before any bond. `produce_block`
+        // returns `Ok(None)` on an empty mempool, so use `produce_empty` to
+        // advance the chain (mints the subsidy coinbase to the founder).
+        for _ in 0..=COINBASE_MATURITY {
+            node.produce_empty().expect("mine maturing block");
+        }
+        assert!(
+            !node
+                .spendable_utxos_of(&founder.address())
+                .unwrap()
+                .is_empty(),
+            "founder has spendable coins after maturity"
+        );
+
+        // Set a validator and enable hybrid 1/1 (every slot is the validator's).
+        node.set_validator_seed([0xab; 32]);
+        assert!(node.validator_public_key().is_some());
+        let cfg = hybrid_config_for(1, 1, false).unwrap();
+        node.enable_hybrid(cfg).expect("hybrid enabled");
+
+        // Bond a modest amount from the founder wallet (oversized-coin split).
+        let bond_amount = 1_000_000u64;
+        let bond_id = bond_stake(&mut node, &founder, bond_amount, &events).expect("bond seals");
+        assert_eq!(node.total_stake().unwrap(), bond_amount);
+        assert_eq!(
+            node.stake_of(node.validator_public_key().unwrap().as_bytes())
+                .unwrap(),
+            bond_amount
+        );
+
+        // The gate is that an unbond before UNBOND_MATURITY is rejected.
+        let pre_release = 400_000u64;
+        assert!(
+            node.unbond_with(
+                &founder,
+                node.validator_public_key().unwrap().as_bytes(),
+                pre_release,
+                founder.address()
+            )
+            .is_err(),
+            "unbond before maturity is rejected"
+        );
+
+        // Let the bond mature, then release part of it. An unbond spends ALL
+        // matured frozen outpoints — the unreleased remainder returns as
+        // unfrozen change — so a fully-matured 1,000,000 bond unbonds to 0.
+        for _ in 0..(COINBASE_MATURITY + 5) {
+            node.produce_empty().expect("mine maturity block");
+        }
+        let unbond_id =
+            unbond_stake(&mut node, &founder, pre_release, &events).expect("unbond seals");
+        assert_eq!(node.total_stake().unwrap(), 0);
+        assert_eq!(
+            node.stake_of(node.validator_public_key().unwrap().as_bytes())
+                .unwrap(),
+            0
+        );
+        assert!(
+            bond_id != unbond_id,
+            "bond and unbond are distinct transactions"
+        );
     }
 }

@@ -65,6 +65,9 @@ pub enum NodeEvent {
     /// A peer disconnected.
     PeerDisconnected { peer_id: String },
 
+    /// The node's validator identity (VRF public key) was set from a seed.
+    ValidatorReady { pk: String },
+
     /// An error occurred in the worker (non-fatal).
     Error { message: String },
 
