@@ -30,11 +30,11 @@ cd kovanica
 
 For users and developers looking to interact with the Kovanica Protocol, we provide detailed how-to guides:
 
-- [How to Mine KVNC](kovanica-protocol/HOWTO_MINE.md) - CPU mining instructions for testnet and mainnet preparation
-- [How to Run a Light Node](kovanica-protocol/HOWTO_LIGHT_NODE.md) - Run a resource-efficient node for wallet usage and network participation
-- [How to Get KVNC Tokens](kovanica-protocol/HOWTO_GET_KVNC.md) - Acquire testnet KVNC via faucet, mining, or peer-to-peer transfer
+- [How to Mine KVNC](protocol/HOWTO_MINE.md) - CPU mining instructions for testnet and mainnet preparation
+- [How to Run a Light Node](protocol/HOWTO_LIGHT_NODE.md) - Run a resource-efficient node for wallet usage and network participation
+- [How to Get KVNC Tokens](protocol/HOWTO_GET_KVNC.md) - Acquire testnet KVNC via faucet, mining, or peer-to-peer transfer
 
-These guides are located in the `kovanica-protocol` repository and cover:
+These guides are located in the `protocol/` directory (component repos consolidated in the monorepo) and cover:
 - Testnet operations (faucet, mining, transactions)
 - Node operation (full node, light node, mining setup)
 - Wallet usage and address management
@@ -42,11 +42,11 @@ These guides are located in the `kovanica-protocol` repository and cover:
 
 ## Release Flow
 
-`kovanica-node` is periodically synced from `kovanica-protocol` crates when a new public version is tagged. 
+`node` is periodically synced from `protocol` crates when a new public version is tagged. 
 **Not auto-synced** — always diff before push.
 
 ## Contributing
 
-Each repository maintains its own contribution guidelines. Please check the respective README files in each repository for specific instructions on contributing to that component.
+Each component maintains its own contribution guidelines. Please check the respective README files in each component for specific instructions on contributing to that component.
 
-For protocol-level changes, refer to the `kovanica-protocol` repository and its `AGENTS.md` file for development conventions and workflow.
+For protocol-level changes, refer to `protocol/` and its `AGENTS.md` file for development conventions and workflow.

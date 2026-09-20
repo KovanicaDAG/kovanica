@@ -3,7 +3,7 @@
 > **Purpose:** single merged note for all upgrade / plan / todo lists in the monorepo.
 > Built 2026-09-17 from every source listed under [Sources](#-sources). Duplicate plan
 > docs are collapsed into one row each; the authoritative copy lives in
-> `kovanica-protocol/docs/` and is mirrored byte-identical into the Obsidian vault.
+> `protocol/docs/` and is mirrored byte-identical into the Obsidian vault.
 >
 > **Grouping scheme:** `A` protocol & consensus · `B` public visibility · `C` public
 > testnet maturity · `D` mainnet track · `E` clients & UI · `F` process & infra.
@@ -40,7 +40,7 @@
 
 ## B — Public visibility (was LEGIT-BOARD P0)
 
-*Source: `kovanica-protocol/docs/LEGIT-BOARD.md` §P0, `kovanica-protocol/TODO.md`*
+*Source: `protocol/docs/LEGIT-BOARD.md` §P0, `protocol/TODO.md`*
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
@@ -61,12 +61,12 @@
 ### 1. Define the fix scope
 - [x] **A13.1** Root cause / motivation: No main node wallet address — node operator has no dedicated wallet to receive mining rewards; currently defaults to founder (seed=1) address
 - [x] **A13.2** Files to change (list paths):
-    - `kovanica-node/src/node.rs` — Added `operator_wallet`, `founder_wallet` fields; `genesis_with_finality()` generates/saves both
-    - `kovanica-protocol/crates/kovanica-cli/src/wallet.rs` — BIP39 mnemonic wallet support (complete rewrite)
-    - `kovanica-protocol/crates/kovanica-cli/Cargo.toml` — Added `bip39` dep, lib+bin structure
-    - `kovanica-node/Cargo.toml` — Added `kovanica-cli` dependency
-    - `kovanica-protocol/Cargo.toml` — Added `bip39` workspace dependency
-    - `kovanica-node/src/explorer.rs` — Added `operator_wallet_address` to `/api/bootstrap` response
+    - `node/src/node.rs` — Added `operator_wallet`, `founder_wallet` fields; `genesis_with_finality()` generates/saves both
+    - `protocol/crates/kovanica-cli/src/wallet.rs` — BIP39 mnemonic wallet support (complete rewrite)
+    - `protocol/crates/kovanica-cli/Cargo.toml` — Added `bip39` dep, lib+bin structure
+    - `node/Cargo.toml` — Added `kovanica-cli` dependency
+    - `protocol/Cargo.toml` — Added `bip39` workspace dependency
+    - `node/src/explorer.rs` — Added `operator_wallet_address` to `/api/bootstrap` response
 - [x] **A13.3** Type of change:
     - [ ] Wire format bump (block/tx encoding)
     - [x] Consensus logic (validation, ordering, fork rule)
@@ -75,17 +75,17 @@
     - [ ] Other: _______________
 
 ### 2. Code changes
-- [x] **A13.4** Implement fix in `kovanica-protocol/` (core crates)
+- [x] **A13.4** Implement fix in `protocol/` (core crates)
     - [x] Reuse `Wallet` struct from `kovanica-cli` for BIP39 mnemonic generation
     - [x] Add `operator_wallet_path` config to `Node` / `LightConfig`
-- [x] **A13.5** Update `kovanica-node/` (explorer, RPC, miner)
+- [x] **A13.5** Update `node/` (explorer, RPC, miner)
     - [x] `node.rs`: Add `operator_wallet: Option<Wallet>` field; on `genesis()`, generate/load wallet, set `self.miner = Some(operator_wallet.address())`
     - [x] `main.rs` (binary): On first run (`serve`/`explorer`), create wallet if missing, save to `$KOVANICA_DATA/operator-wallet.key` (BIP39 mnemonic + hex seed)
     - [x] `explorer.rs`: Persist/load operator wallet alongside node state (log/snapshot)
     - [x] CLI: Add `--operator-wallet-path` flag, `--generate-operator-wallet` flag
     - [x] **Founder wallet**: On `genesis()`, generate founder wallet with BIP39 mnemonic, set as coinbase recipient for 200K KVNC premine, save to `$KOVANICA_DATA/founder-wallet.key`
-- [ ] **A13.6** Update `kovanica-web/` (address format, API types) if needed — *not needed: operator wallet is genesis-only, address exposed via /api/bootstrap*
-- [ ] **A13.7** Update `kovanica-wallet/` / `kovanica-mobile/` (FFI bindings) if needed — *not needed: no FFI surface change; operator wallet is node-internal*
+- [ ] **A13.6** Update `web/` (address format, API types) if needed — *not needed: operator wallet is genesis-only, address exposed via /api/bootstrap*
+- [ ] **A13.7** Update `wallet/` / `mobile/` (FFI bindings) if needed — *not needed: no FFI surface change; operator wallet is node-internal*
 - [x] **A13.8** Run `cargo test` (all green) + `cargo fmt --check` + `cargo clippy --all-targets`
 
 ### 3. Genesis / activation
@@ -160,9 +160,9 @@
 
 ## E — Clients & UI
 
-*Sources: `brain-vault/04-Clients-LightNodes/kovanica-web/site/UI-PARITY-CHECKLIST.md`,
+*Sources: `brain-vault/04-Clients-LightNodes/web/site/UI-PARITY-CHECKLIST.md`,
 `docs/plans/mobile-light-node.md`, `docs/plans/android-light-node-app.md`,
-`00-Meta/Notes/ROADMAP.md`, `kovanica-mobile/README.md`*
+`00-Meta/Notes/ROADMAP.md`, `mobile/README.md`*
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
@@ -184,7 +184,7 @@
 |----|------|--------|-------|
 | F1 | **Project-planning playbook** | ✅ | `skills/project-planning`: layered decomposition (consensus-safe / ledger-safe / client-only), phase sequencing (0 stability → 0.5 RFC-006 → 1 API/tooling → 2 wallet/UX → 3 advanced), risk register |
 | F2 | **Skill-pack split** | ✅ | 2026-09-12: monolithic SKILL.md (1374 lines) → 19 per-skill dirs + `scripts/`; vault structure (`markdown-vault/`) created; original kept as pointer |
-| F3 | **Vault snapshots & dedup** | ✅ | `brain-vault-sync-obsidian` branch active; 7 P2 docs + 5 plans + soak-snapshot verified **byte-identical** between `kovanica-protocol/docs/` and `brain-vault/…`; `protocol-evolution-6-points.md` unique to vault; `upgrade-progress-2026-09-12.md` archived point-in-time (agent tooling) |
+| F3 | **Vault snapshots & dedup** | ✅ | `brain-vault-sync-obsidian` branch active; 7 P2 docs + 5 plans + soak-snapshot verified **byte-identical** between `protocol/docs/` and `brain-vault/…`; `protocol-evolution-6-points.md` unique to vault; `upgrade-progress-2026-09-12.md` archived point-in-time (agent tooling) |
 | F4 | **Observability & reliability** | ✅ | metrics 0.22 unified recorder, `/metrics` (explorer + standalone 9090), `alerting_rules.yml` (15 alerts + 9 recording rules loaded on seeds), structured JSON tracing, fuzz targets + proptest |
 | F5 | **Multi-seed discovery (DHT + DNS)** | ✅ | `dns_seed.rs` + `dht.rs` Kademlia + relay tags 0x20–0x23 + Tier 1–5 tests green; default DNS list = the three live hosts |
 | F6 | **Release pinning** | ✅ | Rolling release `v0.1.0` replaced-in-place, sha256 per asset, publish skips on any build failure; Windows target added |
@@ -206,18 +206,18 @@
 
 All read/verified 2026-09-17 unless noted:
 
-- `kovanica-protocol/docs/LEGIT-BOARD.md` — P0/P1/P2 grouping and horizons
-- `kovanica-protocol/docs/RFC-00{1..5}*.md` + `docs/KVP*.md` — RFC/KVP statuses
-- `kovanica-protocol/docs/{MAINNET-CRITERIA,TESTNET-SOAK,AUDIT-PLAN,BUG-BOUNTY,REPRODUCIBLE-BUILDS,PRODUCT-POLISH,OPS-HARDENING,ENTITY-LEGAL,COMMUNITY-DISCORD,WHAT-IS-KOVANICA,TOKENOMICS}.md`
-- `kovanica-protocol/docs/plans/{mobile-light-node,android-light-node-app,htlc-atomic-swap,stealth-script-v2-rfc-003,vault-time-lock}.md` (mirrored in `brain-vault/01-Consensus-DAG/plans/`)
-- `kovanica-brain-vault/01-Consensus-DAG/plans/protocol-evolution-6-points.md` (unique; Serbian, order 3→6→5, DeFi without VM)
-- `kovanica-protocol/TODO.md`, `kovanica-protocol/TODO/seed2-deploy.md`
+- `protocol/docs/LEGIT-BOARD.md` — P0/P1/P2 grouping and horizons
+- `protocol/docs/RFC-00{1..5}*.md` + `docs/KVP*.md` — RFC/KVP statuses
+- `protocol/docs/{MAINNET-CRITERIA,TESTNET-SOAK,AUDIT-PLAN,BUG-BOUNTY,REPRODUCIBLE-BUILDS,PRODUCT-POLISH,OPS-HARDENING,ENTITY-LEGAL,COMMUNITY-DISCORD,WHAT-IS-KOVANICA,TOKENOMICS}.md`
+- `protocol/docs/plans/{mobile-light-node,android-light-node-app,htlc-atomic-swap,stealth-script-v2-rfc-003,vault-time-lock}.md` (mirrored in `brain-vault/01-Consensus-DAG/plans/`)
+- `brain-vault/01-Consensus-DAG/plans/protocol-evolution-6-points.md` (unique; Serbian, order 3→6→5, DeFi without VM)
+- `protocol/TODO.md`, `protocol/TODO/seed2-deploy.md`
 - `brain-vault/00-Meta/Notes/{ROADMAP,MASTER-STATUS}.md`, `brain-vault/00-Meta/Notes/UPGRADE-PHASES.md`
 - `brain-vault/02-State-UTXO/{skills-mainnet-checklist,skills-project-planning,current-branch-state}.md`
 - `brain-vault/03-Node-P2P/TESTNET-RFC006.md` + `upgrade-progress-2026-09-12.md` (archived snapshot)
-- `brain-vault/04-Clients-LightNodes/kovanica-web/site/UI-PARITY-CHECKLIST.md`
+- `brain-vault/04-Clients-LightNodes/web/site/UI-PARITY-CHECKLIST.md`
 - `brain-vault/06-Business/Compliance/MiCA/MASTER_PLAN.md` (business track)
-- `kovanica-mobile/README.md` (iOS planned)
+- `mobile/README.md` (iOS planned)
 - root `AGENTS.md` §5 (network), §4 (git/multi-agent safety)
 
 *This file is the merged view. Sources above remain authoritative per-item; update them and here in the same PR.*
