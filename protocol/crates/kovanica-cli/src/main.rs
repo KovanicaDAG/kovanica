@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use kovanica_state::{Address, AssetId, derive_rwa_asset_id};
+use kovanica_state::{derive_rwa_asset_id, Address, AssetId};
 
 use crate::api::{print_json, Client};
 use crate::wallet::Wallet;
@@ -204,7 +204,7 @@ enum OfferCommand {
         /// Offer JSON file path or inline JSON.
         #[arg(long)]
         offer: String,
-},
+    },
 }
 /// RWA (Real World Asset) operations (KVP-106).
 #[derive(Subcommand)]
@@ -383,12 +383,14 @@ fn htlc(client: &Client, cmd: HtlcCommand) -> Result<()> {
             }
             let wallet = Wallet::load(&key)?;
             let from = wallet.address().to_hex();
-            let recipient_pk_bytes = hex::decode(&recipient_pk).context("recipient_pk must be 32-byte hex")?;
+            let recipient_pk_bytes =
+                hex::decode(&recipient_pk).context("recipient_pk must be 32-byte hex")?;
             let recipient_pk: [u8; 32] = recipient_pk_bytes
                 .as_slice()
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("recipient_pk must be 32 bytes"))?;
-            let preimage_hash_bytes = hex::decode(&preimage_hash).context("preimage_hash must be 32-byte hex")?;
+            let preimage_hash_bytes =
+                hex::decode(&preimage_hash).context("preimage_hash must be 32-byte hex")?;
             let preimage_hash: [u8; 32] = preimage_hash_bytes
                 .as_slice()
                 .try_into()
@@ -406,7 +408,14 @@ fn htlc(client: &Client, cmd: HtlcCommand) -> Result<()> {
                 None
             };
 
-            let prepared = client.prepare_htlc(&from, amount, &recipient_pk, &preimage_hash, timeout, asset_id)?;
+            let prepared = client.prepare_htlc(
+                &from,
+                amount,
+                &recipient_pk,
+                &preimage_hash,
+                timeout,
+                asset_id,
+            )?;
             let sighash_hex = prepared
                 .get("sighash")
                 .and_then(|v| v.as_str())
@@ -431,9 +440,13 @@ fn htlc(client: &Client, cmd: HtlcCommand) -> Result<()> {
         } => {
             let wallet = Wallet::load(&key)?;
             let from = wallet.address().to_hex();
-            let outpoint_tx_bytes = hex::decode(&outpoint_tx).context("outpoint_tx must be 32-byte hex")?;
+            let outpoint_tx_bytes =
+                hex::decode(&outpoint_tx).context("outpoint_tx must be 32-byte hex")?;
             let txid = kovanica_state::TxId::from_bytes(
-                outpoint_tx_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("outpoint_tx must be 32 bytes"))?,
+                outpoint_tx_bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("outpoint_tx must be 32 bytes"))?,
             );
             let outpoint = kovanica_state::OutPoint::new(txid, outpoint_index);
             let script_bytes = hex::decode(&script).context("script must be 100-byte hex")?;
@@ -446,7 +459,9 @@ fn htlc(client: &Client, cmd: HtlcCommand) -> Result<()> {
             if preimage_bytes.len() != 32 {
                 bail!("preimage must be 32 bytes");
             }
-            let preimage: [u8; 32] = preimage_bytes.try_into().map_err(|_| anyhow::anyhow!("preimage must be 32 bytes"))?;
+            let preimage: [u8; 32] = preimage_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("preimage must be 32 bytes"))?;
             let to_addr = parse_address(&to)?;
 
             let wallet = Wallet::load(&key)?;
@@ -464,9 +479,13 @@ fn htlc(client: &Client, cmd: HtlcCommand) -> Result<()> {
         } => {
             let wallet = Wallet::load(&key)?;
             let from = wallet.address().to_hex();
-            let outpoint_tx_bytes = hex::decode(&outpoint_tx).context("outpoint_tx must be 32-byte hex")?;
+            let outpoint_tx_bytes =
+                hex::decode(&outpoint_tx).context("outpoint_tx must be 32-byte hex")?;
             let txid = kovanica_state::TxId::from_bytes(
-                outpoint_tx_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("outpoint_tx must be 32 bytes"))?,
+                outpoint_tx_bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("outpoint_tx must be 32 bytes"))?,
             );
             let outpoint = kovanica_state::OutPoint::new(txid, outpoint_index);
             let script_bytes = hex::decode(&script).context("script must be 100-byte hex")?;
@@ -520,7 +539,8 @@ fn offer(client: &Client, cmd: OfferCommand) -> Result<()> {
                     bail!("give_asset must be 32 bytes");
                 }
                 Some(kovanica_state::AssetId::from_bytes(
-                    raw.try_into().map_err(|_| anyhow::anyhow!("give_asset must be 32 bytes"))?,
+                    raw.try_into()
+                        .map_err(|_| anyhow::anyhow!("give_asset must be 32 bytes"))?,
                 ))
             };
 
@@ -532,15 +552,19 @@ fn offer(client: &Client, cmd: OfferCommand) -> Result<()> {
                     bail!("take_asset must be 32 bytes");
                 }
                 Some(kovanica_state::AssetId::from_bytes(
-                    raw.try_into().map_err(|_| anyhow::anyhow!("take_asset must be 32 bytes"))?,
+                    raw.try_into()
+                        .map_err(|_| anyhow::anyhow!("take_asset must be 32 bytes"))?,
                 ))
             };
 
-            let preimage_hash_bytes = hex::decode(&preimage_hash).context("preimage_hash must be 32-byte hex")?;
+            let preimage_hash_bytes =
+                hex::decode(&preimage_hash).context("preimage_hash must be 32-byte hex")?;
             if preimage_hash_bytes.len() != 32 {
                 bail!("preimage_hash must be 32 bytes");
             }
-            let preimage_hash: [u8; 32] = preimage_hash_bytes.try_into().map_err(|_| anyhow::anyhow!("preimage_hash must be 32 bytes"))?;
+            let preimage_hash: [u8; 32] = preimage_hash_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("preimage_hash must be 32 bytes"))?;
 
             let offer = serde_json::json!({
                 "version": 1,
@@ -580,18 +604,35 @@ fn offer(client: &Client, cmd: OfferCommand) -> Result<()> {
 /// RWA (KVP-106) command implementations.
 fn rwa(client: &Client, cmd: RwaCommand) -> Result<()> {
     match cmd {
-        RwaCommand::Derive { issuer, class, id, version } => {
+        RwaCommand::Derive {
+            issuer,
+            class,
+            id,
+            version,
+        } => {
             let issuer_bytes = hex::decode(&issuer).context("issuer must be 32-byte hex")?;
             if issuer_bytes.len() != 32 {
                 bail!("issuer must be 32 bytes (64 hex chars)");
             }
-            let issuer: [u8; 32] = issuer_bytes.try_into().map_err(|_| anyhow::anyhow!("issuer must be 32 bytes"))?;
+            let issuer: [u8; 32] = issuer_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("issuer must be 32 bytes"))?;
             let asset_id = derive_rwa_asset_id(&issuer, &class, &id, version);
             println!("Asset ID (hex): {}", asset_id.to_hex());
-            println!("Asset ID (kvnc): {}", format!("kvnc{}dag", asset_id.to_hex()));
+            println!(
+                "Asset ID (kvnc): {}",
+                format!("kvnc{}dag", asset_id.to_hex())
+            );
             Ok(())
         }
-        RwaCommand::Issue { key, asset_id, amount, metadata: _metadata, collection_id, to } => {
+        RwaCommand::Issue {
+            key,
+            asset_id,
+            amount,
+            metadata: _metadata,
+            collection_id,
+            to,
+        } => {
             if amount == 0 {
                 bail!("amount must be greater than zero");
             }
@@ -602,19 +643,27 @@ fn rwa(client: &Client, cmd: RwaCommand) -> Result<()> {
             if asset_id_bytes.len() != 32 {
                 bail!("asset_id must be 32 bytes (64 hex chars)");
             }
-            let asset_id: AssetId = AssetId::from_bytes(asset_id_bytes.try_into().map_err(|_| anyhow::anyhow!("asset_id must be 32 bytes"))?);
+            let asset_id: AssetId = AssetId::from_bytes(
+                asset_id_bytes
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("asset_id must be 32 bytes"))?,
+            );
             let collection_id = if let Some(c) = collection_id {
                 let bytes = hex::decode(&c).context("collection_id must be 32-byte hex")?;
                 if bytes.len() != 32 {
                     bail!("collection_id must be 32 bytes");
                 }
-                Some(<[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| anyhow::anyhow!("collection_id must be 32 bytes"))?)
+                Some(
+                    <[u8; 32]>::try_from(bytes.as_slice())
+                        .map_err(|_| anyhow::anyhow!("collection_id must be 32 bytes"))?,
+                )
             } else {
                 None
             };
             // For now, we'll use the prepare endpoint with asset_id
             // The metadata handling would need API support
-            let prepared = client.prepare_transfer_asset(&from, amount, &to_addr.to_hex(), Some(asset_id))?;
+            let prepared =
+                client.prepare_transfer_asset(&from, amount, &to_addr.to_hex(), Some(asset_id))?;
             let sighash_hex = prepared
                 .get("sighash")
                 .and_then(|v| v.as_str())
@@ -622,7 +671,13 @@ fn rwa(client: &Client, cmd: RwaCommand) -> Result<()> {
             let sighash = hex::decode(sighash_hex.trim()).context("sighash is not valid hex")?;
             let sig = wallet.keypair().sign(&sighash);
             let sig_hex = hex::encode(sig);
-            let result = client.submit_transfer_asset(&from, &to_addr.to_hex(), amount, Some(asset_id), &sig_hex)?;
+            let result = client.submit_transfer_asset(
+                &from,
+                &to_addr.to_hex(),
+                amount,
+                Some(asset_id),
+                &sig_hex,
+            )?;
             println!("Issued RWA asset {}", asset_id.to_hex());
             println!("Amount: {} atoms", amount);
             if let Some(cid) = collection_id {
@@ -631,7 +686,11 @@ fn rwa(client: &Client, cmd: RwaCommand) -> Result<()> {
             print_json(&result)?;
             Ok(())
         }
-        RwaCommand::Burn { key, asset_id, amount } => {
+        RwaCommand::Burn {
+            key,
+            asset_id,
+            amount,
+        } => {
             if amount == 0 {
                 bail!("amount must be greater than zero");
             }
@@ -641,7 +700,11 @@ fn rwa(client: &Client, cmd: RwaCommand) -> Result<()> {
             if asset_id_bytes.len() != 32 {
                 bail!("asset_id must be 32 bytes (64 hex chars)");
             }
-            let _asset_id: AssetId = AssetId::from_bytes(asset_id_bytes.try_into().map_err(|_| anyhow::anyhow!("asset_id must be 32 bytes"))?);
+            let _asset_id: AssetId = AssetId::from_bytes(
+                asset_id_bytes
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("asset_id must be 32 bytes"))?,
+            );
             bail!("Burn command not yet fully implemented - requires node API support for burning assets");
         }
         RwaCommand::Info { asset_id } => {
@@ -697,19 +760,19 @@ mod tests {
     fn atomic_swap_offer_creation_and_verification() {
         // Test the offer creation and verification flow
         use crate::wallet::Wallet;
-        
+
         // This test verifies the offer JSON schema is correct
         let alice = Wallet::generate().expect("Alice wallet generation");
         let bob = Wallet::generate().expect("Bob wallet generation");
-        
+
         let maker_addr = alice.address().to_hex();
         let _bob_addr = bob.address().to_hex();
-        
+
         // Create offer JSON (simulating the offer create command)
         let give_asset_id: Option<kovanica_state::AssetId> = None; // native KVNC
         let take_asset_id: Option<kovanica_state::AssetId> = None; // native KVNC
         let preimage_hash = [0xAAu8; 32];
-        
+
         let offer = serde_json::json!({
             "version": 1,
             "maker": maker_addr,
@@ -725,12 +788,13 @@ mod tests {
             "timeout_height": 100u64,
             "expires_at": "2026-12-31T23:59:59Z",
         });
-        
+
         let offer_json = serde_json::to_string_pretty(&offer).unwrap();
         println!("Offer JSON:\n{}", offer_json);
-        
+
         // Verify the offer can be parsed back
-        let parsed: serde_json::Value = serde_json::from_str(&serde_json::to_string(&offer).unwrap()).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&offer).unwrap()).unwrap();
         assert_eq!(parsed["version"], 1);
         assert_eq!(parsed["maker"], maker_addr);
         assert_eq!(parsed["give"]["amount"], (10 * ATOM).to_string());

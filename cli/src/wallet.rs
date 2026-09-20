@@ -26,7 +26,10 @@ impl Wallet {
         let mut seed = [0u8; 32];
         getrandom::getrandom(&mut seed)
             .map_err(|e| anyhow::anyhow!("failed to read OS randomness for key generation: {e}"))?;
-        Ok(Self { seed, mnemonic: None })
+        Ok(Self {
+            seed,
+            mnemonic: None,
+        })
     }
 
     /// Generate a fresh wallet with a BIP39 mnemonic (24 words, 256 bits entropy).
@@ -41,7 +44,10 @@ impl Wallet {
 
     /// Reconstruct a wallet from a stored 32-byte seed.
     pub fn from_seed(seed: [u8; 32]) -> Self {
-        Self { seed, mnemonic: None }
+        Self {
+            seed,
+            mnemonic: None,
+        }
     }
 
     /// Reconstruct a wallet from a BIP39 mnemonic phrase.
@@ -225,7 +231,8 @@ mod tests {
         let addr = wallet.address();
         let mnemonic = wallet.mnemonic().unwrap().to_string();
 
-        let path = std::env::temp_dir().join(format!("kvnc-mnemonic-test-{}.key", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("kvnc-mnemonic-test-{}.key", std::process::id()));
         wallet.save(&path, true).unwrap();
 
         let loaded = Wallet::load(&path).unwrap();

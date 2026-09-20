@@ -817,5 +817,8 @@ fn prepared_bond_block_records_stake_under_hybrid() {
     let txs = kovanica_state::decode_block_payload(block.payload()).unwrap();
     consumer.insert_prepared_block(block, &txs).unwrap();
     let native = kovanica_state::NATIVE_ASSET_ID;
-    assert_eq!(consumer.stake_state(&bond).unwrap().total_stake(native), 500);
+    assert_eq!(
+        consumer.stake_state(&bond).unwrap().total_stake(native),
+        500
+    );
 }

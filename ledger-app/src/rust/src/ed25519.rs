@@ -1,4 +1,4 @@
-use super::{Result, AppError, ed25519_consts};
+use super::{ed25519_consts, AppError, Result};
 use zeroize::Zeroize;
 
 /// Ed25519 signing using curve25519-dalek (std) or ed25519 crate (no_std)
@@ -63,7 +63,7 @@ pub fn sign(_private_key: &PrivateKey, _message: &[u8]) -> Signature {
 /// Verify a signature
 #[cfg(feature = "std")]
 pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> bool {
-    use ed25519_dalek::{Verifier, VerifyingKey, Signature as DalekSig};
+    use ed25519_dalek::{Signature as DalekSig, Verifier, VerifyingKey};
     let verifying_key = match VerifyingKey::from_bytes(public_key) {
         Ok(vk) => vk,
         Err(_) => return false,
@@ -78,7 +78,7 @@ pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> 
 /// Verify signature (no_std version)
 #[cfg(all(not(feature = "std"), feature = "no_std"))]
 pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> bool {
-    use ed25519::{Verifier, VerifyingKey, Signature as DalekSig};
+    use ed25519::{Signature as DalekSig, Verifier, VerifyingKey};
     let verifying_key = match VerifyingKey::from_bytes(public_key) {
         Ok(vk) => vk,
         Err(_) => return false,
@@ -113,7 +113,10 @@ pub fn public_from_private(private_key: &PrivateKey) -> PublicKey {
 
 /// Sign transaction sighash
 /// This is the main signing function used by the Ledger app
-pub fn sign_transaction(private_key: &PrivateKey, sighash: &[u8; 32]) -> core::result::Result<Signature, super::AppError> {
+pub fn sign_transaction(
+    private_key: &PrivateKey,
+    sighash: &[u8; 32],
+) -> core::result::Result<Signature, super::AppError> {
     if sighash.len() != 32 {
         return Err(super::AppError::InvalidTransaction);
     }

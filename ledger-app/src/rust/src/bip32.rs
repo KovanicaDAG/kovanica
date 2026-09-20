@@ -1,7 +1,7 @@
-use super::{Result, AppError, KOVANICA_COIN_TYPE, Bip44Path, MAX_PATH_LEN};
+use super::{AppError, Bip44Path, Result, KOVANICA_COIN_TYPE, MAX_PATH_LEN};
 use core::convert::TryInto;
-use sha2::{Sha512, Digest};
 use hmac::{Hmac, Mac};
+use sha2::{Digest, Sha512};
 
 /// HMAC-SHA512 implementation using external crates
 fn hmac_sha512(key: &[u8], data: &[u8]) -> [u8; 64] {
@@ -13,7 +13,11 @@ fn hmac_sha512(key: &[u8], data: &[u8]) -> [u8; 64] {
 
 /// SLIP-0010 Ed25519 derivation
 /// Returns (private_key[32], chain_code[32])
-pub fn slip10_derive(parent_key: &[u8; 32], parent_chain: &[u8; 32], index: u32) -> ([u8; 32], [u8; 32]) {
+pub fn slip10_derive(
+    parent_key: &[u8; 32],
+    parent_chain: &[u8; 32],
+    index: u32,
+) -> ([u8; 32], [u8; 32]) {
     let mut data = [0u8; 37];
     // First byte: 0x00 for private derivation (hardened)
     data[0] = 0x00;
