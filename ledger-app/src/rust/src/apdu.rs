@@ -1,6 +1,9 @@
-use super::{Result, AppError, ApduRequest, ApduResponse, CLA, ins, sw, Bip44Path, MAX_APDU_SIZE, MAX_PATH_LEN};
+use super::{
+    ins, sw, ApduRequest, ApduResponse, AppError, Bip44Path, Result, CLA, MAX_APDU_SIZE,
+    MAX_PATH_LEN,
+};
 use crate::bip32::{derive_bip44_path, slip10_master_from_seed};
-use crate::ed25519::{PublicKey, sign_transaction, sign};
+use crate::ed25519::{sign, sign_transaction, PublicKey};
 use crate::tx::parse_transaction;
 
 /// Handle APDU request
@@ -61,7 +64,8 @@ fn handle_get_public_key<'a>(req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>)
     for i in 0..5 {
         let start = i * 4;
         let end = start + 4;
-        let bytes: [u8; 4] = req.data[start..end].try_into()
+        let bytes: [u8; 4] = req.data[start..end]
+            .try_into()
             .map_err(|_| AppError::BadPath)?;
         path_components[i] = u32::from_be_bytes(bytes);
     }
@@ -131,7 +135,8 @@ fn handle_sign_transaction<'a>(req: &ApduRequest<'a>, resp: &mut ApduResponse<'a
             return Err(AppError::WrongDataLen);
         }
         let sighash_start = tx_data.len() - 32;
-        let sighash: [u8; 32] = tx_data[sighash_start..].try_into()
+        let sighash: [u8; 32] = tx_data[sighash_start..]
+            .try_into()
             .map_err(|_| AppError::InvalidTransaction)?;
 
         // In production: derive private key from device seed + BIP-44 path
@@ -159,7 +164,7 @@ fn handle_get_config<'a>(_req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>) ->
     let mut len = 0;
 
     // Coin type (4 bytes, big-endian)
-    buf[len..len+4].copy_from_slice(&11111u32.to_be_bytes());
+    buf[len..len + 4].copy_from_slice(&11111u32.to_be_bytes());
     len += 4;
 
     // Version (1 byte)
@@ -171,7 +176,7 @@ fn handle_get_config<'a>(_req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>) ->
     len += 1;
 
     // Max transaction size (2 bytes)
-    buf[len..len+2].copy_from_slice(&1024u16.to_be_bytes());
+    buf[len..len + 2].copy_from_slice(&1024u16.to_be_bytes());
     len += 2;
 
     resp.write(&buf[..len])?;
@@ -215,7 +220,11 @@ impl ApduHandler {
         Self {}
     }
 
-    pub fn handle<'a>(&mut self, req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>) -> Result<u16> {
+    pub fn handle<'a>(
+        &mut self,
+        req: &ApduRequest<'a>,
+        resp: &mut ApduResponse<'a>,
+    ) -> Result<u16> {
         handle_apdu(req, resp)
     }
 }

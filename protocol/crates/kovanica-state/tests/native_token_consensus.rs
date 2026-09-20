@@ -13,8 +13,7 @@ use kovanica_dag::{Block, Dag};
 use kovanica_state::{
     apply_block, apply_dag, encode_block_payload, AssetId, AssetKind, AssetRegistryEntry,
     HalvingSchedule, KeyPair, Ledger, LedgerError, LedgerInsertError, OutPoint, Transaction,
-    TxInput, TxOutput, UtxoSet,
-    DEFAULT_HALVING_ERA, NATIVE_TOKEN_ACTIVATION_SCORE,
+    TxInput, TxOutput, UtxoSet, DEFAULT_HALVING_ERA, NATIVE_TOKEN_ACTIVATION_SCORE,
 };
 
 const K: u16 = 3;
@@ -1163,7 +1162,9 @@ fn test_nft_double_mint_rejected() {
         vec![TxOutput::new(1, Some(nft_asset), alice.address())],
         b"nft_mint_1".to_vec(),
     );
-    ledger.insert(vec![ledger.dag().selected_tip()], 1, 0, 0, &[coinbase1]).unwrap();
+    ledger
+        .insert(vec![ledger.dag().selected_tip()], 1, 0, 0, &[coinbase1])
+        .unwrap();
 
     // Second mint of same asset_id (should fail)
     let coinbase2 = Transaction::coinbase(
@@ -1171,8 +1172,13 @@ fn test_nft_double_mint_rejected() {
         b"nft_mint_2".to_vec(),
     );
 
-    let err = ledger.insert(vec![ledger.dag().selected_tip()], 1, 0, 0, &[coinbase2]).unwrap_err();
-    assert!(matches!(err, LedgerInsertError::State(LedgerError::AssetNotConserved { .. })));
+    let err = ledger
+        .insert(vec![ledger.dag().selected_tip()], 1, 0, 0, &[coinbase2])
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        LedgerInsertError::State(LedgerError::AssetNotConserved { .. })
+    ));
 }
 
 #[test]
@@ -1209,7 +1215,10 @@ fn test_nft_mint_then_transfer_then_receive() {
         b"bob_to_charlie".to_vec(),
     );
     apply_block(&mut utxo, &[spend2], 0).unwrap();
-    assert_eq!(utxo.balance_of_asset(&charlie.address(), Some(nft_asset)), 1);
+    assert_eq!(
+        utxo.balance_of_asset(&charlie.address(), Some(nft_asset)),
+        1
+    );
     assert_eq!(utxo.balance_of_asset(&bob.address(), Some(nft_asset)), 0);
 }
 
@@ -1218,7 +1227,12 @@ fn test_nft_asset_kind_registry() {
     use kovanica_state::{AssetKind, AssetRegistryEntry};
 
     let asset_id = make_asset_id(200);
-    let entry = AssetRegistryEntry::new_nft(asset_id, Some([0x11u8; 32]), Some([0x22u8; 32]), Some([0x33u8; 32]));
+    let entry = AssetRegistryEntry::new_nft(
+        asset_id,
+        Some([0x11u8; 32]),
+        Some([0x22u8; 32]),
+        Some([0x33u8; 32]),
+    );
 
     assert_eq!(entry.kind, AssetKind::NonFungible);
     assert_eq!(entry.max_supply, 1);

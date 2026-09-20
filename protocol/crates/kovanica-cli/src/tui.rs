@@ -136,7 +136,8 @@ impl App {
             MenuItem::Balance => {
                 self.output = "Enter address (kvnc...dag or hex): ".to_string();
                 // In a real app, you'd show an input dialog here
-                self.output.push_str("\n[Not fully implemented in TUI yet - use CLI]");
+                self.output
+                    .push_str("\n[Not fully implemented in TUI yet - use CLI]");
             }
             MenuItem::Keygen => {
                 self.output = "Keygen - use CLI for now".to_string();
@@ -200,9 +201,7 @@ fn ui(f: &mut Frame, app: &App) {
 
     f.render_stateful_widget(menu, chunks[0], &mut app.menu_state.clone());
 
-    let output_block = Block::default()
-        .borders(Borders::ALL)
-        .title("Output");
+    let output_block = Block::default().borders(Borders::ALL).title("Output");
     let output_text = if app.show_output {
         Text::from(app.output.clone())
     } else {
@@ -237,11 +236,19 @@ fn ui(f: &mut Frame, app: &App) {
             Span::styled("Contact: ", Style::default().fg(Color::Cyan)),
             Span::styled("dev@kovanica.online", Style::default().fg(Color::White)),
             Span::styled("  |  ", Style::default().fg(Color::Gray)),
-            Span::styled("security@kovanica.online", Style::default().fg(Color::White)),
+            Span::styled(
+                "security@kovanica.online",
+                Style::default().fg(Color::White),
+            ),
         ]),
         Line::from(vec![
             Span::styled("by: ", Style::default().fg(Color::Cyan)),
-            Span::styled("github.com/BetterCallDzuks", Style::default().fg(Color::White).add_modifier(Modifier::UNDERLINED)),
+            Span::styled(
+                "github.com/BetterCallDzuks",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
         ]),
     ])
     .alignment(Alignment::Center);
@@ -275,7 +282,10 @@ pub fn run(client: Client) -> Result<()> {
     result
 }
 
-async fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
+async fn run_app<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+) -> Result<()> {
     loop {
         terminal.draw(|f| ui(f, app))?;
 

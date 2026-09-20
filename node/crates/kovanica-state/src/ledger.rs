@@ -77,8 +77,8 @@ use crate::script_v2::ScriptV2;
 
 // Re-export stake types and functions for internal use and downstream crates
 pub use crate::stake::{
-    bond_tag, parse_bond_tag, is_unbond_tag, Freeze, StakeError, StakeState, UNBOND_MATURITY, NATIVE_ASSET_ID,
-    BOND_PREFIX, UNBOND_PREFIX,
+    bond_tag, is_unbond_tag, parse_bond_tag, Freeze, StakeError, StakeState, BOND_PREFIX,
+    NATIVE_ASSET_ID, UNBOND_MATURITY, UNBOND_PREFIX,
 };
 use crate::vault::VaultScript;
 
@@ -264,8 +264,8 @@ impl Default for HybridConfig {
     }
 }
 use crate::tx::{
-    decode_block_payload, encode_block_payload, AssetId, AssetKind, AssetRegistryEntry, DecodeError,
-    OutPoint, Transaction, TxId, TxOutput,
+    decode_block_payload, encode_block_payload, AssetId, AssetKind, AssetRegistryEntry,
+    DecodeError, OutPoint, Transaction, TxId, TxOutput,
 };
 use crate::utxo::{UtxoEntry, UtxoSet};
 use crate::validation::TxStructureValidator;
@@ -3495,7 +3495,8 @@ impl Ledger {
             if bytes.len() < pos + 8 {
                 return Err(LedgerCheckpointError::UnexpectedEof);
             }
-            let asset_reg_len = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap()) as usize;
+            let asset_reg_len =
+                u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap()) as usize;
             pos += 8;
             if bytes.len() < pos + asset_reg_len {
                 return Err(LedgerCheckpointError::UnexpectedEof);
@@ -3528,15 +3529,18 @@ impl Ledger {
                 } else {
                     None
                 };
-                registry.insert(asset_id, AssetRegistryEntry {
+                registry.insert(
                     asset_id,
-                    kind,
-                    max_supply,
-                    minted,
-                    metadata_hash,
-                    collection_id,
-                    creator,
-                });
+                    AssetRegistryEntry {
+                        asset_id,
+                        kind,
+                        max_supply,
+                        minted,
+                        metadata_hash,
+                        collection_id,
+                        creator,
+                    },
+                );
             }
             pos += asset_reg_len;
             Some(registry)
@@ -3971,7 +3975,10 @@ impl Ledger {
     }
 
     /// Decode the asset registry from checkpoint bytes.
-    fn decode_asset_registry(&mut self, reader: &mut CheckpointReader) -> Result<(), LedgerCheckpointError> {
+    fn decode_asset_registry(
+        &mut self,
+        reader: &mut CheckpointReader,
+    ) -> Result<(), LedgerCheckpointError> {
         let count = reader.read_u64()? as usize;
         for _ in 0..count {
             let asset_id = AssetId::from_bytes(reader.read_array::<32>()?);
@@ -3998,15 +4005,18 @@ impl Ledger {
             } else {
                 None
             };
-            self.asset_registry.insert(asset_id, AssetRegistryEntry {
+            self.asset_registry.insert(
                 asset_id,
-                kind,
-                max_supply,
-                minted,
-                metadata_hash,
-                collection_id,
-                creator,
-            });
+                AssetRegistryEntry {
+                    asset_id,
+                    kind,
+                    max_supply,
+                    minted,
+                    metadata_hash,
+                    collection_id,
+                    creator,
+                },
+            );
         }
         Ok(())
     }
@@ -4356,7 +4366,7 @@ mod tests {
             vec![TxOutput::native(90, alice.address())],
             vec![],
         );
-// height 51 < 51+100 → immature
+        // height 51 < 51+100 → immature
         let err = apply_block_inner(
             &mut utxo.clone(),
             &HashMap::new(),
@@ -4525,7 +4535,10 @@ mod tests {
         assert_eq!(ledger.stake_state(&b1).unwrap().stake_of(native, &pk), 400);
         // Genesis's view still shows zero (per-block states are independent).
         assert_eq!(
-            ledger.stake_state(&ledger.genesis()).unwrap().total_stake(native),
+            ledger
+                .stake_state(&ledger.genesis())
+                .unwrap()
+                .total_stake(native),
             0
         );
 
@@ -4553,7 +4566,10 @@ mod tests {
             .insert(vec![tip], 1, 300, 0, &[unbond])
             .expect("matured unbond applies");
         let native = NATIVE_ASSET_ID;
-        assert_eq!(ledger.stake_state(&b_unbond).unwrap().stake_of(native, &pk), 0);
+        assert_eq!(
+            ledger.stake_state(&b_unbond).unwrap().stake_of(native, &pk),
+            0
+        );
         // The unbonded output is freely spendable in a later block.
         let freed = OutPoint::new(unbond_id, 0);
         let spend = Transaction::signed(

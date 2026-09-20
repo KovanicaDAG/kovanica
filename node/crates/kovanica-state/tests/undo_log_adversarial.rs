@@ -469,11 +469,17 @@ fn stake_delta_folding_across_finality_boundary() {
     // Main's bond block still reconstructs with the frozen output.
     let native = kovanica_state::NATIVE_ASSET_ID;
     assert_eq!(
-        ledger.stake_state(&bond_block).unwrap().stake_of(native, &pk),
+        ledger
+            .stake_state(&bond_block)
+            .unwrap()
+            .stake_of(native, &pk),
         1_000
     );
     // Side blocks never saw the bond.
-    assert_eq!(ledger.stake_state(&side_tip).unwrap().stake_of(native, &pk), 0);
+    assert_eq!(
+        ledger.stake_state(&side_tip).unwrap().stake_of(native, &pk),
+        0
+    );
 
     for id in ledger.dag().linearize() {
         if ledger.state(&id).is_some() {

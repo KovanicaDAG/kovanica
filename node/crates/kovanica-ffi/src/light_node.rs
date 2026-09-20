@@ -17,7 +17,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use kovanica_dag::BlockId;
 use kovanica_node::{net, Node, TreasuryGenesis};
-use kovanica_state::stake::{UNBOND_MATURITY, NATIVE_ASSET_ID};
+use kovanica_state::stake::{NATIVE_ASSET_ID, UNBOND_MATURITY};
 use kovanica_state::{
     KeyPair, OutPoint, Sig, StealthAddress, Transaction, TxOutput, RFC006_PREMINE,
 };
@@ -1355,12 +1355,15 @@ impl LightNode {
             .map(|p| {
                 let from = kovanica_state::Address::parse(&p.from)
                     .map_err(|e| invalid(format!("bad address: {e}")))?;
-                let outputs = p.outputs
+                let outputs = p
+                    .outputs
                     .into_iter()
                     .map(|o| {
                         let to = kovanica_state::Address::parse(&o.to)
                             .map_err(|e| invalid(format!("bad address: {e}")))?;
-                        let amount = o.amount.parse::<u64>()
+                        let amount = o
+                            .amount
+                            .parse::<u64>()
                             .map_err(|_| invalid("amount must be a decimal string"))?;
                         let asset_id = match o.asset_id_hex {
                             Some(hex) => {
@@ -1407,7 +1410,11 @@ impl LightNode {
         // Sighashes (all inputs share the same transaction sighash)
         let sighashes_hex = prepared.sighashes.iter().map(|s| hex::encode(s)).collect();
         // Outpoints
-        let outpoints_hex = prepared.outpoints.iter().map(|op| format!("{}:{}", op.tx.to_hex(), op.index)).collect();
+        let outpoints_hex = prepared
+            .outpoints
+            .iter()
+            .map(|op| format!("{}:{}", op.tx.to_hex(), op.index))
+            .collect();
         // Values as decimal strings
         let values = prepared.values.iter().map(|v| v.to_string()).collect();
 
@@ -1493,9 +1500,8 @@ impl LightNode {
         owner_pk_hex: String,
     ) -> Result<String, LightNodeError> {
         let owner_pk = decode_32(&owner_pk_hex, "owner public key")?;
-        let script =
-            kovanica_state::vault::VaultScript::new(unlock_height, csv, owner_pk)
-                .map_err(|e| invalid(format!("invalid Vault template: {e}")))?;
+        let script = kovanica_state::vault::VaultScript::new(unlock_height, csv, owner_pk)
+            .map_err(|e| invalid(format!("invalid Vault template: {e}")))?;
         Ok(hex::encode(script.bytes()))
     }
 
@@ -1539,7 +1545,9 @@ impl LightNode {
                 <[u8; 32]>::try_from(decode_hex(parts[0], "txid")?.as_slice())
                     .map_err(|_| invalid("txid must be 32 bytes hex"))?,
             );
-            let index = parts[1].parse::<u32>().map_err(|_| invalid("bad outpoint index"))?;
+            let index = parts[1]
+                .parse::<u32>()
+                .map_err(|_| invalid("bad outpoint index"))?;
             let op = kovanica_state::OutPoint::new(txid, index);
 
             let owner = state.get_entry(&op).map(|e| e.output.owner);
@@ -1547,9 +1555,12 @@ impl LightNode {
                 return Err(invalid("outpoint not found in UTXO set"));
             };
             // All inputs share the same sighash
-            let sighash = hex::decode(&prepared.sighashes_hex[0])
-                .map_err(|_| invalid("bad sighash hex"))?;
-            let sighash: [u8; 32] = sighash.as_slice().try_into().map_err(|_| invalid("bad sighash length"))?;
+            let sighash =
+                hex::decode(&prepared.sighashes_hex[0]).map_err(|_| invalid("bad sighash hex"))?;
+            let sighash: [u8; 32] = sighash
+                .as_slice()
+                .try_into()
+                .map_err(|_| invalid("bad sighash length"))?;
             if !kovanica_state::verify(&owner, &sighash, &signatures[i]) {
                 return Err(invalid("signature verification failed"));
             }
@@ -1818,7 +1829,9 @@ fn parse_htlc_script(script_hex: &str) -> Result<kovanica_state::htlc::HtlcScrip
 }
 
 /// Parse a Vault template from its 40-byte hex form.
-fn parse_vault_script(script_hex: &str) -> Result<kovanica_state::vault::VaultScript, LightNodeError> {
+fn parse_vault_script(
+    script_hex: &str,
+) -> Result<kovanica_state::vault::VaultScript, LightNodeError> {
     let raw = decode_hex(script_hex, "Vault script")?;
     kovanica_state::vault::VaultScript::parse(&raw)
         .map_err(|e| invalid(format!("invalid Vault script: {e}")))

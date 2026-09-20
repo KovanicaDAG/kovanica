@@ -38,7 +38,7 @@
 use core::fmt;
 
 use crate::keys::{Address, KeyPair};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 /// 32-byte BLAKE3 digest identifying a transaction.
 ///

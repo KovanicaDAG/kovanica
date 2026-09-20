@@ -76,9 +76,7 @@ pub fn parse_bond_tag(tag: &[u8]) -> Option<(AssetId, [u8; 32])> {
     let asset_bytes: [u8; 32] = tag[BOND_PREFIX.len()..BOND_PREFIX.len() + 32]
         .try_into()
         .expect("32 bytes");
-    let vrf_pk: [u8; 32] = tag[BOND_PREFIX.len() + 32..]
-        .try_into()
-        .expect("32 bytes");
+    let vrf_pk: [u8; 32] = tag[BOND_PREFIX.len() + 32..].try_into().expect("32 bytes");
     Some((AssetId::from_bytes(asset_bytes), vrf_pk))
 }
 
@@ -214,7 +212,14 @@ impl StakeState {
     /// becomes frozen backing `vrf_pk` for `asset_id` from `height`.
     ///
     /// Internal to the ledger rules; exposed for tests and tooling.
-    pub fn freeze(&mut self, outpoint: OutPoint, asset_id: AssetId, vrf_pk: [u8; 32], value: u64, height: u64) {
+    pub fn freeze(
+        &mut self,
+        outpoint: OutPoint,
+        asset_id: AssetId,
+        vrf_pk: [u8; 32],
+        value: u64,
+        height: u64,
+    ) {
         let entry = self.frozen.entry(outpoint).or_insert(Freeze {
             asset_id,
             vrf_pk,

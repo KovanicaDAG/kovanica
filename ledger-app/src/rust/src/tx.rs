@@ -1,4 +1,4 @@
-use super::{Result, AppError, MAX_APDU_SIZE};
+use super::{AppError, Result, MAX_APDU_SIZE};
 use hex;
 
 /// Kovanica transaction structure for Ledger signing
@@ -101,12 +101,14 @@ pub fn parse_transaction(data: &[u8]) -> Result<ParsedTransaction> {
         let witness_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap());
         offset += 2;
 
-        inputs.push(TxInput {
-            prev_txid,
-            output_index,
-            sequence,
-            witness_len,
-        }).map_err(|_| AppError::BufferOverflow)?;
+        inputs
+            .push(TxInput {
+                prev_txid,
+                output_index,
+                sequence,
+                witness_len,
+            })
+            .map_err(|_| AppError::BufferOverflow)?;
     }
 
     // Number of outputs
@@ -136,11 +138,13 @@ pub fn parse_transaction(data: &[u8]) -> Result<ParsedTransaction> {
         let script_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap());
         offset += 2;
 
-        outputs.push(TxOutput {
-            value,
-            asset_id,
-            script_len,
-        }).map_err(|_| AppError::BufferOverflow)?;
+        outputs
+            .push(TxOutput {
+                value,
+                asset_id,
+                script_len,
+            })
+            .map_err(|_| AppError::BufferOverflow)?;
     }
 
     // Lock time (4 bytes)
@@ -197,7 +201,7 @@ pub fn format_address(addr: &[u8]) -> heapless::String<20> {
     let mut s = heapless::String::new();
     if addr.len() >= 20 {
         let prefix = hex::encode(&addr[..5]);
-        let suffix = hex::encode(&addr[addr.len()-3..]);
+        let suffix = hex::encode(&addr[addr.len() - 3..]);
         let _ = core::fmt::write(&mut s, format_args!("{}...{}", prefix, suffix));
     } else {
         let _ = core::fmt::write(&mut s, format_args!("{}", hex::encode(addr)));

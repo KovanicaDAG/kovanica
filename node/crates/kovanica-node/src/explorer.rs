@@ -28,7 +28,10 @@ use crate::net::{
     decode_records, encode_records, pull_blocks_timeout, serve_exchange, serve_headers_first,
     sync_headers_first,
 };
-use crate::node::{BlockRecord, Node, CoinJoinParticipant, CoinJoinPrepared, TreasuryGenesis, WalletDirection, HALVING_ERA};
+use crate::node::{
+    BlockRecord, CoinJoinParticipant, CoinJoinPrepared, Node, TreasuryGenesis, WalletDirection,
+    HALVING_ERA,
+};
 use crate::p2p::Mesh;
 
 const UI: &str = include_str!("explorer.html");
@@ -94,10 +97,11 @@ impl NetworkProfile {
             genesis_subsidy: GENESIS_SUBSIDY,
             genesis_premine: GENESIS_PREMINE,
             founder_seed: FOUNDER_SEED,
-            operator_seed: [0x4f, 0x50, 0x45, 0x52, 0x41, 0x54, 0x4f, 0x52,
-                            0x5f, 0x54, 0x45, 0x53, 0x54, 0x4e, 0x45, 0x54,
-                            0x5f, 0x53, 0x45, 0x45, 0x44, 0x5f, 0x32, 0x30,
-                            0x32, 0x36, 0x5f, 0x30, 0x39, 0x5f, 0x31, 0x37],
+            operator_seed: [
+                0x4f, 0x50, 0x45, 0x52, 0x41, 0x54, 0x4f, 0x52, 0x5f, 0x54, 0x45, 0x53, 0x54, 0x4e,
+                0x45, 0x54, 0x5f, 0x53, 0x45, 0x45, 0x44, 0x5f, 0x32, 0x30, 0x32, 0x36, 0x5f, 0x30,
+                0x39, 0x5f, 0x31, 0x37,
+            ],
             finality_depth: TESTNET_FINALITY_DEPTH,
             payload_pruning_depth: TESTNET_PAYLOAD_PRUNING_DEPTH,
             dormant: false,
@@ -2311,7 +2315,8 @@ fn parse_partial_sigs(body: &serde_json::Value) -> Result<Vec<[u8; 64]>, String>
 
 /// Parse CoinJoin participants from JSON body.
 fn parse_coinjoin_participants(body_str: &str) -> Result<Vec<CoinJoinParticipant>, String> {
-    let json = serde_json::from_str::<serde_json::Value>(body_str).map_err(|e| format!("invalid json: {e}"))?;
+    let json = serde_json::from_str::<serde_json::Value>(body_str)
+        .map_err(|e| format!("invalid json: {e}"))?;
     let arr = json
         .get("participants")
         .and_then(|v| v.as_array())
@@ -2337,8 +2342,12 @@ fn parse_coinjoin_participants(body_str: &str) -> Result<Vec<CoinJoinParticipant
             .and_then(|v| v.as_str())
             .map(|s| {
                 let raw = hex::decode(s.trim()).ok()?;
-                if raw.len() != 32 { return None; }
-                Some(AssetId::from_bytes(<[u8; 32]>::try_from(raw.as_slice()).ok()?))
+                if raw.len() != 32 {
+                    return None;
+                }
+                Some(AssetId::from_bytes(
+                    <[u8; 32]>::try_from(raw.as_slice()).ok()?,
+                ))
             })
             .flatten();
         out.push(CoinJoinParticipant {
@@ -2352,8 +2361,12 @@ fn parse_coinjoin_participants(body_str: &str) -> Result<Vec<CoinJoinParticipant
 
 /// Parse CoinJoinPrepared from JSON body.
 fn parse_coinjoin_prepared(body_str: &str) -> Result<CoinJoinPrepared, String> {
-    let json = serde_json::from_str::<serde_json::Value>(body_str).map_err(|e| format!("invalid json: {e}"))?;
-    let tx_hex = json.get("tx_hex").and_then(|v| v.as_str()).ok_or("tx_hex required")?;
+    let json = serde_json::from_str::<serde_json::Value>(body_str)
+        .map_err(|e| format!("invalid json: {e}"))?;
+    let tx_hex = json
+        .get("tx_hex")
+        .and_then(|v| v.as_str())
+        .ok_or("tx_hex required")?;
     let sighashes_hex: Vec<String> = json
         .get("sighashes_hex")
         .and_then(|v| v.as_array())
@@ -2375,25 +2388,47 @@ fn parse_coinjoin_prepared(body_str: &str) -> Result<CoinJoinPrepared, String> {
         .iter()
         .map(|v| v.as_str().unwrap_or("").to_string())
         .collect();
-    let fee = json.get("fee").and_then(|v| v.as_str()).ok_or("fee required")?.to_string();
+    let fee = json
+        .get("fee")
+        .and_then(|v| v.as_str())
+        .ok_or("fee required")?
+        .to_string();
     Ok(CoinJoinPrepared {
         tx: Transaction::decode(&hex::decode(tx_hex).map_err(|e| format!("tx_hex not hex: {e}"))?)
             .map_err(|e| format!("tx decode: {e:?}"))?,
-        sighashes: sighashes_hex.iter().map(|s| {
-            let raw = hex::decode(s).map_err(|e| format!("sighash not hex: {e}"))?;
-            <[u8; 32]>::try_from(raw.as_slice()).map_err(|_| "sighash must be 32 bytes".to_string())
-        }).collect::<Result<Vec<[u8; 32]>, _>>()?,
-        outpoints: outpoints_hex.iter().map(|s| {
-            let parts: Vec<&str> = s.split(':').collect();
-            if parts.len() != 2 { return Err("outpoint must be txid:index".to_string()); }
-            let txid = TxId::from_bytes(
-                <[u8; 32]>::try_from(hex::decode(parts[0]).map_err(|e| format!("txid not hex: {e}"))?.as_slice())
-                    .map_err(|_| "txid must be 32 bytes".to_string())?
-            );
-            let index = parts[1].parse::<u32>().map_err(|_| "index not u32".to_string())?;
-            Ok(OutPoint::new(txid, index))
-        }).collect::<Result<Vec<_>, _>>()?,
-        values: values.iter().map(|s| s.parse::<u64>().map_err(|_| "value not u64".to_string())).collect::<Result<Vec<_>, _>>()?,
+        sighashes: sighashes_hex
+            .iter()
+            .map(|s| {
+                let raw = hex::decode(s).map_err(|e| format!("sighash not hex: {e}"))?;
+                <[u8; 32]>::try_from(raw.as_slice())
+                    .map_err(|_| "sighash must be 32 bytes".to_string())
+            })
+            .collect::<Result<Vec<[u8; 32]>, _>>()?,
+        outpoints: outpoints_hex
+            .iter()
+            .map(|s| {
+                let parts: Vec<&str> = s.split(':').collect();
+                if parts.len() != 2 {
+                    return Err("outpoint must be txid:index".to_string());
+                }
+                let txid = TxId::from_bytes(
+                    <[u8; 32]>::try_from(
+                        hex::decode(parts[0])
+                            .map_err(|e| format!("txid not hex: {e}"))?
+                            .as_slice(),
+                    )
+                    .map_err(|_| "txid must be 32 bytes".to_string())?,
+                );
+                let index = parts[1]
+                    .parse::<u32>()
+                    .map_err(|_| "index not u32".to_string())?;
+                Ok(OutPoint::new(txid, index))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        values: values
+            .iter()
+            .map(|s| s.parse::<u64>().map_err(|_| "value not u64".to_string()))
+            .collect::<Result<Vec<_>, _>>()?,
         fee: fee.parse::<u64>().map_err(|_| "fee not u64".to_string())?,
     })
 }
@@ -2401,7 +2436,11 @@ fn parse_coinjoin_prepared(body_str: &str) -> Result<CoinJoinPrepared, String> {
 /// Serialize CoinJoinPrepared to JSON string.
 fn serialize_coinjoin_prepared(prepared: &CoinJoinPrepared) -> String {
     let sighashes_hex: Vec<String> = prepared.sighashes.iter().map(|s| hex::encode(s)).collect();
-    let outpoints_hex: Vec<String> = prepared.outpoints.iter().map(|op| format!("{}:{}", op.tx.to_hex(), op.index)).collect();
+    let outpoints_hex: Vec<String> = prepared
+        .outpoints
+        .iter()
+        .map(|op| format!("{}:{}", op.tx.to_hex(), op.index))
+        .collect();
     let values: Vec<String> = prepared.values.iter().map(|v| v.to_string()).collect();
     format!(
         "{{\"tx_hex\":\"{}\",\"sighashes_hex\":{},\"outpoints_hex\":{},\"values\":{},\"fee\":\"{}\"}}",
@@ -2415,14 +2454,21 @@ fn serialize_coinjoin_prepared(prepared: &CoinJoinPrepared) -> String {
 
 /// Parse signatures from a JSON array string.
 fn parse_signatures(sigs_str: &str) -> Result<Vec<[u8; 64]>, String> {
-    let json = serde_json::from_str::<serde_json::Value>(sigs_str).map_err(|e| format!("invalid json: {e}"))?;
+    let json = serde_json::from_str::<serde_json::Value>(sigs_str)
+        .map_err(|e| format!("invalid json: {e}"))?;
     let arr = json.as_array().ok_or("signatures must be an array")?;
     let mut out = Vec::with_capacity(arr.len());
     for (i, sig) in arr.iter().enumerate() {
-        let s = sig.as_str().ok_or_else(|| format!("signatures[{i}] not string"))?;
+        let s = sig
+            .as_str()
+            .ok_or_else(|| format!("signatures[{i}] not string"))?;
         let raw = hex::decode(s.trim()).map_err(|_| format!("signatures[{i}] not hex"))?;
-        if raw.len() != 64 { return Err(format!("signatures[{i}] must be 64 bytes")); }
-        out.push(<[u8; 64]>::try_from(raw.as_slice()).map_err(|_| format!("signatures[{i}] invalid"))?);
+        if raw.len() != 64 {
+            return Err(format!("signatures[{i}] must be 64 bytes"));
+        }
+        out.push(
+            <[u8; 64]>::try_from(raw.as_slice()).map_err(|_| format!("signatures[{i}] invalid"))?,
+        );
     }
     Ok(out)
 }
@@ -2715,15 +2761,19 @@ fn dispatch(
             // body format: {"participants":[{"address":"...","amount":"...","recipient":"...","asset_id":null}]}
             let participants: Vec<CoinJoinParticipant> = parse_coinjoin_participants(body)?;
             let n = app.mesh.node(&node).ok_or("unknown node")?;
-            let prepared = n.coinjoin_prepare(participants).map_err(|e| e.to_string())?;
+            let prepared = n
+                .coinjoin_prepare(participants)
+                .map_err(|e| e.to_string())?;
             return Ok(serialize_coinjoin_prepared(&prepared));
         }
         "coinjoin_submit" => {
             let body = q.get("body").ok_or("missing body")?;
             let prepared: CoinJoinPrepared = parse_coinjoin_prepared(body)?;
-            let signatures: Vec<[u8; 64]> = parse_signatures(q.get("signatures").ok_or("missing signatures")?)?;
+            let signatures: Vec<[u8; 64]> =
+                parse_signatures(q.get("signatures").ok_or("missing signatures")?)?;
             let n = app.mesh.node_mut(&node).ok_or("unknown node")?;
-            n.coinjoin_submit(prepared, signatures).map_err(|e| e.to_string())?;
+            n.coinjoin_submit(prepared, signatures)
+                .map_err(|e| e.to_string())?;
             return Ok("{\"ok\":true}".into());
         }
         other => return Err(format!("unknown action {other}")),
@@ -2808,13 +2858,23 @@ fn history_json(
                 kovanica_state::AssetKind::Fungible => "fungible",
                 kovanica_state::AssetKind::NonFungible => "nft",
             });
-            let metadata_hash = row_asset.and_then(|id| asset_registry.get(&id).and_then(|e| e.metadata_hash));
+            let metadata_hash =
+                row_asset.and_then(|id| asset_registry.get(&id).and_then(|e| e.metadata_hash));
             let meta_hash = metadata_hash.map(|h| hex::encode(h));
-            let collection_id = row_asset.and_then(|id| asset_registry.get(&id).and_then(|e| e.collection_id));
+            let collection_id =
+                row_asset.and_then(|id| asset_registry.get(&id).and_then(|e| e.collection_id));
             let coll_id = collection_id.map(|c| hex::encode(c));
-            let asset_kind_json = kind_str.map(|s| jstr(s)).unwrap_or_else(|| "null".to_string());
-            let metadata_hash_json = meta_hash.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
-            let collection_id_json = coll_id.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
+            let asset_kind_json = kind_str
+                .map(|s| jstr(s))
+                .unwrap_or_else(|| "null".to_string());
+            let metadata_hash_json = meta_hash
+                .as_deref()
+                .map(jstr)
+                .unwrap_or_else(|| "null".to_string());
+            let collection_id_json = coll_id
+                .as_deref()
+                .map(jstr)
+                .unwrap_or_else(|| "null".to_string());
             items.push(format!(
                 "{{\"block\":{},\"tx\":{},\"kind\":{},\"delta\":{},\"asset_id\":{},\"asset_kind\":{},\"metadata_hash\":{},\"collection_id\":{}}}",
                 jstr(&id.to_string()),
@@ -2915,7 +2975,8 @@ fn nft_detail_json(
     let asset_registry = ledger.asset_registry();
 
     // Parse asset_id from hex
-    let asset_id_bytes = hex::decode(asset_id_str.trim()).map_err(|_| "asset_id is not hex".to_string())?;
+    let asset_id_bytes =
+        hex::decode(asset_id_str.trim()).map_err(|_| "asset_id is not hex".to_string())?;
     if asset_id_bytes.len() != 32 {
         return Err("asset_id must be 32 bytes (64 hex chars)".to_string());
     }
@@ -2947,12 +3008,27 @@ fn nft_detail_json(
     let meta_hash = entry.metadata_hash.map(|h| hex::encode(h));
     let coll_id = entry.collection_id.map(|c| hex::encode(c));
     let creator = entry.creator.map(|c| hex::encode(c));
-    let meta_hash_json = meta_hash.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
-    let coll_id_json = coll_id.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
-    let creator_json = creator.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
-    let owner_json = owner_address.map(|a| jstr(&a.to_kvnc())).unwrap_or_else(|| "null".to_string());
-    let owner_tx_json = owner_tx.map(|t| jstr(&t.to_string())).unwrap_or_else(|| "null".to_string());
-    let owner_index_json = owner_index.map(|i| i.to_string()).unwrap_or_else(|| "null".to_string());
+    let meta_hash_json = meta_hash
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let coll_id_json = coll_id
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let creator_json = creator
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let owner_json = owner_address
+        .map(|a| jstr(&a.to_kvnc()))
+        .unwrap_or_else(|| "null".to_string());
+    let owner_tx_json = owner_tx
+        .map(|t| jstr(&t.to_string()))
+        .unwrap_or_else(|| "null".to_string());
+    let owner_index_json = owner_index
+        .map(|i| i.to_string())
+        .unwrap_or_else(|| "null".to_string());
 
     Ok(format!(
         "{{\"asset_id\":{},\"kind\":{},\"max_supply\":{},\"minted\":{},\"metadata_hash\":{},\"collection_id\":{},\"creator\":{},\"owner\":{},\"owner_tx\":{},\"owner_index\":{}}}",
@@ -2984,7 +3060,8 @@ fn collection_detail_json(
     let asset_registry = ledger.asset_registry();
 
     // Parse collection_id from hex
-    let coll_id_bytes = hex::decode(collection_id_str.trim()).map_err(|_| "collection_id is not hex".to_string())?;
+    let coll_id_bytes = hex::decode(collection_id_str.trim())
+        .map_err(|_| "collection_id is not hex".to_string())?;
     if coll_id_bytes.len() != 32 {
         return Err("collection_id must be 32 bytes (64 hex chars)".to_string());
     }
@@ -3006,8 +3083,13 @@ fn collection_detail_json(
                 }
             }
             let meta_hash = entry.metadata_hash.map(|h| hex::encode(h));
-            let meta_hash_json = meta_hash.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
-            let owner_json = owner_address.map(|a| jstr(&a.to_kvnc())).unwrap_or_else(|| "null".to_string());
+            let meta_hash_json = meta_hash
+                .as_deref()
+                .map(jstr)
+                .unwrap_or_else(|| "null".to_string());
+            let owner_json = owner_address
+                .map(|a| jstr(&a.to_kvnc()))
+                .unwrap_or_else(|| "null".to_string());
             assets.push(format!(
                 "{{\"asset_id\":{},\"metadata_hash\":{},\"owner_address\":{}}}",
                 jstr(&asset_id.to_hex()),
@@ -3037,7 +3119,10 @@ fn rwa_derive_json(
     let issuer = q.get("issuer").ok_or("issuer required")?;
     let asset_class = q.get("class").ok_or("class required")?;
     let unique_id = q.get("id").ok_or("id required")?;
-    let version = q.get("version").and_then(|v| v.parse::<u8>().ok()).unwrap_or(1);
+    let version = q
+        .get("version")
+        .and_then(|v| v.parse::<u8>().ok())
+        .unwrap_or(1);
 
     // Parse issuer from hex
     let issuer_bytes = hex::decode(issuer.trim()).map_err(|_| "issuer is not hex".to_string())?;
@@ -3048,7 +3133,7 @@ fn rwa_derive_json(
     issuer_arr.copy_from_slice(&issuer_bytes);
 
     // Derive asset_id using the same algorithm as the CLI
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(b"KVP106-RWA");
     hasher.update(issuer_arr);
@@ -3086,7 +3171,8 @@ fn rwa_detail_json(
     let asset_registry = ledger.asset_registry();
 
     // Parse asset_id from hex
-    let asset_id_bytes = hex::decode(asset_id_str.trim()).map_err(|_| "asset_id is not hex".to_string())?;
+    let asset_id_bytes =
+        hex::decode(asset_id_str.trim()).map_err(|_| "asset_id is not hex".to_string())?;
     if asset_id_bytes.len() != 32 {
         return Err("asset_id must be 32 bytes (64 hex chars)".to_string());
     }
@@ -3119,12 +3205,27 @@ fn rwa_detail_json(
     let meta_hash = entry.metadata_hash.map(|h| hex::encode(h));
     let coll_id = entry.collection_id.map(|c| hex::encode(c));
     let creator = entry.creator.map(|c| hex::encode(c));
-    let meta_hash_json = meta_hash.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
-    let coll_id_json = coll_id.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
-    let creator_json = creator.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
-    let owner_json = owner_address.map(|a| jstr(&a.to_kvnc())).unwrap_or_else(|| "null".to_string());
-    let owner_tx_json = owner_tx.map(|t| jstr(&t.to_string())).unwrap_or_else(|| "null".to_string());
-    let owner_index_json = owner_index.map(|i| i.to_string()).unwrap_or_else(|| "null".to_string());
+    let meta_hash_json = meta_hash
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let coll_id_json = coll_id
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let creator_json = creator
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let owner_json = owner_address
+        .map(|a| jstr(&a.to_kvnc()))
+        .unwrap_or_else(|| "null".to_string());
+    let owner_tx_json = owner_tx
+        .map(|t| jstr(&t.to_string()))
+        .unwrap_or_else(|| "null".to_string());
+    let owner_index_json = owner_index
+        .map(|i| i.to_string())
+        .unwrap_or_else(|| "null".to_string());
 
     Ok(format!(
         "{{\"asset_id\":{},\"kind\":{},\"max_supply\":{},\"minted\":{},\"metadata_hash\":{},\"collection_id\":{},\"creator\":{},\"owner\":{},\"owner_tx\":{},\"owner_index\":{}}}",

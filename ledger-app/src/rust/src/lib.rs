@@ -19,10 +19,10 @@ extern crate alloc;
 use core::fmt;
 
 // Re-export modules
+pub mod apdu;
 pub mod bip32;
 pub mod ed25519;
 pub mod tx;
-pub mod apdu;
 
 // Panic handler
 #[cfg(not(feature = "std"))]

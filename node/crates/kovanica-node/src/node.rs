@@ -793,7 +793,7 @@ impl Node {
         )
     }
 
-/// Like [`Node::genesis`], but with configurable finality depth and payload
+    /// Like [`Node::genesis`], but with configurable finality depth and payload
     /// pruning depth for the ledger.
     ///
     /// - `finality_depth`: blocks more than this many blue score below the selected
@@ -834,7 +834,9 @@ impl Node {
             seed_bytes[..8].copy_from_slice(&founder_seed.to_le_bytes());
             let wallet = Wallet::from_seed(seed_bytes);
             let wallet_path = data_dir.join("founder-wallet.key");
-            wallet.save(&wallet_path, true).expect("failed to save founder wallet");
+            wallet
+                .save(&wallet_path, true)
+                .expect("failed to save founder wallet");
             eprintln!("Generated founder wallet: {}", wallet.address().to_kvnc());
             eprintln!("Founder wallet saved to: {}", wallet_path.display());
             wallet
@@ -848,7 +850,9 @@ impl Node {
                 Wallet::generate_with_mnemonic().expect("failed to generate operator wallet")
             };
             let wallet_path = data_dir.join("operator-wallet.key");
-            wallet.save(&wallet_path, true).expect("failed to save operator wallet");
+            wallet
+                .save(&wallet_path, true)
+                .expect("failed to save operator wallet");
             eprintln!("Generated operator wallet: {}", wallet.address().to_kvnc());
             eprintln!("Operator wallet saved to: {}", wallet_path.display());
             wallet
@@ -1033,7 +1037,10 @@ impl Node {
     }
 
     /// Borrow the asset registry (KVP-106 NFT metadata).
-    pub fn asset_registry(&self) -> Result<&HashMap<kovanica_state::AssetId, kovanica_state::AssetRegistryEntry>, NodeError> {
+    pub fn asset_registry(
+        &self,
+    ) -> Result<&HashMap<kovanica_state::AssetId, kovanica_state::AssetRegistryEntry>, NodeError>
+    {
         Ok(self.ledger()?.asset_registry())
     }
 
@@ -1420,17 +1427,23 @@ impl Node {
             .map(|(op, out)| (*op, out.value))
             .collect();
         owned.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        
+
         // KVP-106 NFT: if this is an NFT, we must select exactly one UTXO with value=1
         // and cannot create change (no splitting)
-        let is_nft = asset_id.map(|aid| {
-            if let Ok(ledger) = self.ledger() {
-                ledger.asset_registry().get(&aid).map(|e| e.is_nft()).unwrap_or(false)
-            } else {
-                false
-            }
-        }).unwrap_or(false);
-        
+        let is_nft = asset_id
+            .map(|aid| {
+                if let Ok(ledger) = self.ledger() {
+                    ledger
+                        .asset_registry()
+                        .get(&aid)
+                        .map(|e| e.is_nft())
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+
         let mut selected: Vec<(OutPoint, u64)> = Vec::new();
         let mut total: u64 = 0;
         for (op, value) in owned {
@@ -1443,7 +1456,7 @@ impl Node {
         if total < need {
             return Err(NodeError::InsufficientFunds);
         }
-        
+
         // NFT validation: cannot split NFT UTXO, must spend exactly one UTXO of value=1
         if is_nft {
             if selected.len() != 1 {
@@ -1457,7 +1470,7 @@ impl Node {
                 return Err(NodeError::ZeroAmount);
             }
         }
-        
+
         let mut outputs = vec![TxOutput::new(amount, asset_id, to)];
         let change = total - need;
         if change > 0 && !is_nft {
@@ -1524,13 +1537,18 @@ impl Node {
             let participant_outputs = participant.outputs.clone();
 
             // Select covering UTXOs for this participant
-            let need = participant_outputs.iter().map(|o| o.value).sum::<u64>()
+            let need = participant_outputs
+                .iter()
+                .map(|o| o.value)
+                .sum::<u64>()
                 .checked_add(fee)
                 .ok_or(NodeError::InsufficientFunds)?;
 
             let mut owned: Vec<(OutPoint, u64)> = state
                 .iter()
-                .filter(|(_, out)| &out.owner == &participant_addr && out.asset_id == participant.asset_id)
+                .filter(|(_, out)| {
+                    &out.owner == &participant_addr && out.asset_id == participant.asset_id
+                })
                 .filter(|(op, _)| match state.get_entry(op) {
                     Some(entry) => entry
                         .is_coinbase
@@ -1563,7 +1581,11 @@ impl Node {
             // Add change output if needed
             let change = total - need;
             if change > 0 {
-                all_outputs.push(TxOutput::new(change, participant.asset_id, participant_addr));
+                all_outputs.push(TxOutput::new(
+                    change,
+                    participant.asset_id,
+                    participant_addr,
+                ));
             }
         }
 
@@ -1670,10 +1692,23 @@ impl Node {
         let asset_registry = ledger.asset_registry();
         let mut rows = Vec::new();
         for (op, o) in state.iter().filter(|(_, o)| &o.owner == owner) {
-            let asset_kind = o.asset_id.and_then(|id| asset_registry.get(&id).map(|e| e.kind));
-            let metadata_hash = o.asset_id.and_then(|id| asset_registry.get(&id).and_then(|e| e.metadata_hash));
-            let collection_id = o.asset_id.and_then(|id| asset_registry.get(&id).and_then(|e| e.collection_id));
-            rows.push((*op, o.value, o.asset_id, asset_kind, metadata_hash, collection_id));
+            let asset_kind = o
+                .asset_id
+                .and_then(|id| asset_registry.get(&id).map(|e| e.kind));
+            let metadata_hash = o
+                .asset_id
+                .and_then(|id| asset_registry.get(&id).and_then(|e| e.metadata_hash));
+            let collection_id = o
+                .asset_id
+                .and_then(|id| asset_registry.get(&id).and_then(|e| e.collection_id));
+            rows.push((
+                *op,
+                o.value,
+                o.asset_id,
+                asset_kind,
+                metadata_hash,
+                collection_id,
+            ));
         }
         rows.sort_by_key(|row| row.0);
         Ok(rows)

@@ -34,8 +34,7 @@ impl Client {
 
     fn call(resp: ureq::Response) -> Result<Value> {
         let text = resp.into_string()?;
-        serde_json::from_str(&text)
-            .map_err(|e| anyhow!("response was not valid JSON: {e}\n{text}"))
+        serde_json::from_str(&text).map_err(|e| anyhow!("response was not valid JSON: {e}\n{text}"))
     }
 
     fn get(&self, path: &str) -> Result<Value> {
@@ -193,7 +192,7 @@ impl Client {
         self.post_form(&query)
     }
 
-/// Broadcast a signed asset transfer. `sig` is 128 lowercase hex chars.
+    /// Broadcast a signed asset transfer. `sig` is 128 lowercase hex chars.
     pub fn submit_transfer_asset(
         &self,
         from: &str,
@@ -202,9 +201,7 @@ impl Client {
         asset_id: Option<kovanica_state::AssetId>,
         sig: &str,
     ) -> Result<Value> {
-        let mut query = format!(
-            "/api/submit?from={from}&to={to}&amount={amount}&sig={sig}"
-        );
+        let mut query = format!("/api/submit?from={from}&to={to}&amount={amount}&sig={sig}");
         if let Some(asset) = asset_id {
             query.push_str(&format!("&asset_id={}", hex::encode(asset.as_bytes())));
         }
