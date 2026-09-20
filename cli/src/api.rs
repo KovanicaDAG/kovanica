@@ -32,27 +32,15 @@ impl Client {
         format!("{}{}", self.base, path)
     }
 
-    fn call(builder: ureq::Request) -> Result<Value> {
-        match builder.call() {
-            Ok(resp) => {
-                let text = resp.into_string()?;
-                serde_json::from_str(&text)
-                    .map_err(|e| anyhow!("response was not valid JSON: {e}\n{text}"))
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                bail!("HTTP {code}: {}", body.trim())
-            }
-            Err(e) => Err(anyhow!("request failed: {e}")),
-        }
+    fn call(resp: ureq::Response) -> Result<Value> {
+        let text = resp.into_string()?;
+        serde_json::from_str(&text)
+            .map_err(|e| anyhow!("response was not valid JSON: {e}\n{text}"))
     }
 
     fn get(&self, path: &str) -> Result<Value> {
-        Self::call(ureq::get(&self.url(path)))
-    }
-
-    fn post(&self, path: &str) -> Result<Value> {
-        Self::call(ureq::post(&self.url(path)))
+        let resp = ureq::get(&self.url(path)).call()?;
+        Self::call(resp)
     }
 
     fn post_json(&self, path: &str, body: &serde_json::Value) -> Result<Value> {
@@ -60,9 +48,12 @@ impl Client {
         let resp = ureq::post(&self.url(path))
             .set("Content-Type", "application/json")
             .send_string(&body_str)?;
-        let text = resp.into_string()?;
-        serde_json::from_str(&text)
-            .map_err(|e| anyhow!("response was not valid JSON: {e}\n{text}"))
+        Self::call(resp)
+    }
+
+    fn post_form(&self, path: &str) -> Result<Value> {
+        let resp = ureq::post(&self.url(path)).call()?;
+        Self::call(resp)
     }
 
     pub fn head(&self) -> Result<Value> {
@@ -97,14 +88,94 @@ impl Client {
 
     /// Ask the node to build a transfer and return its signature hash.
     pub fn prepare(&self, from: &str, to: &str, amount: u64) -> Result<Value> {
-        self.post(&format!("/api/prepare?from={from}&to={to}&amount={amount}"))
+        self.post_form(&format!("/api/prepare?from={from}&to={to}&amount={amount}"))
     }
 
     /// Broadcast a signed transfer. `sig` is 128 lowercase hex chars.
     pub fn submit(&self, from: &str, to: &str, amount: u64, sig: &str) -> Result<Value> {
-        self.post(&format!(
+        self.post_form(&format!(
             "/api/submit?from={from}&to={to}&amount={amount}&sig={sig}"
         ))
+    }
+
+    /// Ask the node to build an HTLC and return its signature hash.
+    pub fn prepare_htlc(
+        &self,
+        from: &str,
+        amount: u64,
+        recipient_pk: &[u8; 32],
+        preimage_hash: &[u8; 32],
+        timeout: u32,
+        asset_id: Option<kovanica_state::AssetId>,
+    ) -> Result<Value> {
+        let mut body = serde_json::json!({
+            "from": from,
+            "amount": amount,
+            "recipient_pk": hex::encode(recipient_pk),
+            "preimage_hash": hex::encode(preimage_hash),
+            "timeout": timeout,
+        });
+        if let Some(asset) = asset_id {
+            body["asset_id"] = serde_json::Value::String(hex::encode(asset.as_bytes()));
+        }
+        self.post_json("/api/htlc/prepare", &body)
+    }
+
+    /// Submit a signed HTLC creation transaction.
+    pub fn submit_htlc(&self, from: &str, sighash: &str, sig: &str) -> Result<Value> {
+        let body = serde_json::json!({
+            "from": from,
+            "sighash": sighash,
+            "sig": sig,
+        });
+        self.post_json("/api/htlc/submit", &body)
+    }
+
+    /// Redeem (claim) an HTLC by revealing the preimage.
+    pub fn redeem_htlc(
+        &self,
+        from: &str,
+        outpoint: kovanica_state::OutPoint,
+        script: kovanica_state::htlc::HtlcScript,
+        preimage: [u8; 32],
+        to: &str,
+    ) -> Result<Value> {
+        let body = serde_json::json!({
+            "from": from,
+            "outpoint_tx": outpoint.tx.to_hex(),
+            "outpoint_index": outpoint.index,
+            "script": hex::encode(script.bytes()),
+            "preimage": hex::encode(preimage),
+            "to": to,
+        });
+        self.post_json("/api/htlc/redeem", &body)
+    }
+
+    /// Refund an expired HTLC.
+    pub fn refund_htlc(
+        &self,
+        from: &str,
+        outpoint: kovanica_state::OutPoint,
+        script: kovanica_state::htlc::HtlcScript,
+        to: &str,
+    ) -> Result<Value> {
+        let body = serde_json::json!({
+            "from": from,
+            "outpoint_tx": outpoint.tx.to_hex(),
+            "outpoint_index": outpoint.index,
+            "script": hex::encode(script.bytes()),
+            "to": to,
+        });
+        self.post_json("/api/htlc/refund", &body)
+    }
+
+    /// Query the balance of an HTLC script.
+    pub fn htlc_balance(&self, script: &kovanica_state::htlc::HtlcScript) -> Result<u64> {
+        let script_hex = hex::encode(script.bytes());
+        let val = self.get(&format!("/api/htlc/balance?script={script_hex}"))?;
+        val.get("balance")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| anyhow!("no balance in response"))
     }
 
     /// Ask the node to build an asset transfer and return its signature hash.
@@ -119,10 +190,10 @@ impl Client {
         if let Some(asset) = asset_id {
             query.push_str(&format!("&asset_id={}", hex::encode(asset.as_bytes())));
         }
-        self.post(&query)
+        self.post_form(&query)
     }
 
-    /// Broadcast a signed asset transfer. `sig` is 128 lowercase hex chars.
+/// Broadcast a signed asset transfer. `sig` is 128 lowercase hex chars.
     pub fn submit_transfer_asset(
         &self,
         from: &str,
@@ -137,23 +208,7 @@ impl Client {
         if let Some(asset) = asset_id {
             query.push_str(&format!("&asset_id={}", hex::encode(asset.as_bytes())));
         }
-        self.post(&query)
-    }
-
-    /// Derive RWA asset_id from issuer key and parameters.
-    pub fn rwa_derive(&self, issuer: &str, class: &str, id: &str, version: u8) -> Result<Value> {
-        let body = serde_json::json!({
-            "issuer": issuer,
-            "class": class,
-            "id": id,
-            "version": version,
-        });
-        self.post_json("/api/rwa/derive", &body)
-    }
-
-    /// Get RWA detail by asset ID.
-    pub fn rwa_detail(&self, asset_id: &str) -> Result<Value> {
-        self.get(&format!("/api/rwa/{asset_id}"))
+        self.post_form(&query)
     }
 
     /// Get NFT detail by asset ID.

@@ -479,7 +479,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "kovanica-cli"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -492,22 +492,27 @@ dependencies = [
 
 [[package]]
 name = "kovanica-dag"
-version = "0.1.0"
-source = "git+https://github.com/KovanicaDAG/kovanica-node#42ddbd6b8a4bc3a16cd5ed9647a76b76b83d39e9"
+version = "0.3.0"
 dependencies = [
  "blake3",
+ "curve25519-dalek",
+ "ed25519-dalek",
  "hex",
+ "rand_core",
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]
 name = "kovanica-state"
-version = "0.1.0"
-source = "git+https://github.com/KovanicaDAG/kovanica-node#42ddbd6b8a4bc3a16cd5ed9647a76b76b83d39e9"
+version = "0.3.0"
 dependencies = [
  "blake3",
+ "curve25519-dalek",
  "ed25519-dalek",
  "hex",
  "kovanica-dag",
+ "sha2",
 ]
 
 [[package]]
@@ -811,6 +816,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
