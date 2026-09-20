@@ -1,14 +1,19 @@
-# Each subdirectory is an independent git repo, managed by ./dev.sh.
-# Never let `git add -A` re-record them as gitlinks or plain trees.
-/kovanica-agent/
-/kovanica-brain-vault/
-/kovanica-data/
-/kovanica-installer/
-/kovanica-mobile/
-/kovanica-node/
-/kovanica-protocol/
-/kovanica-wallet/
-/kovanica-web/
+# Migration state: component dirs are independent git repos (or plain dirs)
+# until the monorepo consolidation (chore/monorepo-migration) is confirmed.
+# The monorepo branch tracks these dirs; master keeps ignoring during transition.
+# agent + brain-vault moved OUT to ~/kovanica-agent and ~/kovanica-brain-vault (separate).
+/agent/
+/brain-vault/
+/cli/
+/data/
+/installer/
+/ledger-app/
+/mobile/
+/node/
+/protocol/
+/wallet/
+/web/
+/trezor-coin-def/
 
 # Local logs
 *.log
