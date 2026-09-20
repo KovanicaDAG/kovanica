@@ -3,7 +3,9 @@
 > **Purpose:** Single coordinated reset for both operator/founder wallet genesis (A13) and RFC-006 tokenomics activation (A6).
 > Both require: new genesis hash, checkpoint v7, blue_score 0 activation.
 > 
-> **Expected new genesis hash:** `256c87faf1803ad75c855de95b7cee317f52c1f3fa311ca5479083174e56c31b`
+> **Expected new genesis hash:** `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97`
+> **Note:** this is the network genesis (= explorer `genesis_node()`, treasury-included).
+> The RPC `serve` genesis command is treasury-less by design and yields `256c87fa…` — do not use it as the network expectation.
 > **CHECKPOINT_VERSION:** 7
 > **TOKENOMICS_ACTIVATION_SCORE:** 0 (active at genesis)
 > **All RFC-001 through RFC-005:** Active at blue_score 0
@@ -15,7 +17,7 @@
 - [ ] Build release binary: `cargo build --release -p kovanica-node`
 - [ ] Verify binary: `file target/release/kovanica-node` → ELF 64-bit LSB executable
 - [ ] Test genesis locally: `echo "genesis 3 1000000000 20000000000000 1" | ./target/release/kovanica-node serve`
-- [ ] Confirm genesis hash matches: `256c87faf1803ad75c855de95b7cee317f52c1f3fa311ca5479083174e56c31b`
+- [ ] Confirm genesis hash matches: `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97` — *use the treasury-included network genesis; the RPC `genesis` command alone prints the treasury-less `256c87fa…`, which is NOT the network genesis*
 - [ ] Verify all tests pass: `cargo test -p kovanica-node --lib`
 - [ ] Push changes to GitHub: `git push origin main`
 - [ ] Notify seed operators of reset window
@@ -66,7 +68,7 @@
 ### 1. Genesis Match
 ```bash
 curl -s https://explorer.kovanica.online/api/head | jq -r .genesis
-# Must equal: 256c87faf1803ad75c855de95b7cee317f52c1f3fa311ca5479083174e56c31b
+# Must equal: 9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97
 ```
 
 ### 2. Peer Connectivity

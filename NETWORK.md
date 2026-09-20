@@ -39,7 +39,7 @@ This document is the single source of truth for how the Kovanica public domains 
 | Token                 | KVNC (test)                  | KVNC                         |
 | Current phase         | Live (RFC-006 activated)     | Not yet open                 |
 | Tokenomics            | RFC-006 (smooth emission, MAX_SUPPLY cap, coinbase maturity 100, 75% fee burn) | RFC-006 (same) |
-| Genesis hash          | `256c87faf1803ad75c855de95b7cee317f52c1f3fa311ca5479083174e56c31b` | TBD |
+| Genesis hash          | `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97` | TBD |
 | Genesis subsidy       | 10 KVNC/block                | 10 KVNC/block                |
 | Founder premine       | 0.2M KVNC                    | 0.2M KVNC                    |
 | Treasury              | 10×1M KVNC vaults (placeholder keys) | 10×1M KVNC vaults (ceremony keys) |

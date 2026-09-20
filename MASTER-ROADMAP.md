@@ -89,7 +89,7 @@
 - [x] **A13.8** Run `cargo test` (all green) + `cargo fmt --check` + `cargo clippy --all-targets`
 
 ### 3. Genesis / activation
-- [x] **A13.9** New genesis hash (compute: `cargo run -p kovanica-node -- genesis --dry-run` with new operator wallet) → `256c87faf1803ad75c855de95b7cee317f52c1f3fa311ca5479083174e56c31b`
+- [x] **A13.9** New genesis hash (compute: `cargo run -p kovanica-node -- genesis --dry-run` with new operator wallet) → `256c87faf1803ad75c855de95b7cee317f52c1f3fa311ca5479083174e56c31b` — ⚠️ *CORRECTION: `256c87fa…` is the treasury-LESS genesis (RPC `genesis` path); the live network's treasury-included genesis (explorer `genesis_node()`) is `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97`*
 - [x] **A13.10** Update `NETWORK.md` (genesis hash, seeds, params, operator wallet note)
 - [x] **A13.11** Update `/api/bootstrap` response (genesis, subsidy, premine, founder_seed, operator_wallet_address)
 - [x] **A13.12** If RFC activation: set activation score, bump `CHECKPOINT_VERSION` (v7 for RFC-006 + operator wallet) — already 0 (active at genesis) + v7
