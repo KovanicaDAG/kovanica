@@ -1,15 +1,18 @@
 package com.kovanica.lightnode.ui
 
+import androidx.compose.material3.ActionButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Column
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ProgressIndicator
 import androidx.compose.material3.Row
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -18,8 +21,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kovanica.lightnode.data.Format
 import com.kovanica.lightnode.data.LightNodeRepository
 import com.kovanica.lightnode.data.WalletRepository
+import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -32,14 +37,14 @@ fun HomeScreen(
 
     val seedHex by remember { mutableStateOf("") } // TODO: Get from secure storage
 
-    androidx.compose.material3.Column(
-        modifier = androidx.compose.ui.Modifier.fillMaxSize(),
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Balance Card
         BalanceCard(
             balance = "0.00000000",
-            onRefresh = { viewModel.lightNodeRepository.sync() }
+            onRefresh = { viewModel.sync() }
         )
 
         // Staking Card
@@ -47,7 +52,8 @@ fun HomeScreen(
             isValidator = stakingState?.isValidator ?: false,
             myStake = stakingState?.myStake ?: 0,
             totalStake = stakingState?.totalStake ?: 0,
-            onEnable = { viewModel.enableValidator(seedHex) },
+            onEnable = { viewModel.enableValidator("") },
+            onDisable = { viewModel.disableValidator() },
             onProduce = { viewModel.produceBlock() },
             onRefresh = { viewModel.refreshStakingInfo() }
         )
@@ -73,7 +79,7 @@ fun BalanceCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer
+            containerColor = MaterialTheme.colorScheme.primaryContainer
         )
     ) {
         Column(
@@ -106,6 +112,7 @@ fun StakingCard(
     myStake: Long,
     totalStake: Long,
     onEnable: () -> Unit,
+    onDisable: () -> Unit,
     onProduce: () -> Unit,
     onRefresh: () -> Unit
 ) {
@@ -128,7 +135,7 @@ fun StakingCard(
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }
                 }
-            )
+            }
             if (isValidator) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -152,8 +159,11 @@ fun StakingCard(
                     Button(modifier = Modifier.weight(1f), onClick = onProduce) {
                         Text("Produce Block")
                     }
+                    OutlinedButton(modifier = Modifier.weight(1f), onClick = onDisable) {
+                        Text("Disable Validator")
+                    }
                 } else {
-                    OutlinedButton(modifier = Modifier.weight(1f), onClick = onEnable) {
+                    Button(modifier = Modifier.weight(1f), onClick = onEnable) {
                         Text("Enable Validator")
                     }
                 }
@@ -189,11 +199,17 @@ fun ActionButton(
     onClick: () -> Unit
 ) {
     Button(
-        modifier = Modifier.weight(1f).fillMaxWidth(),
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .padding(8.dp),
         onClick = onClick,
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(24.dp))
             Text(label, fontSize = 12.sp)
         }
@@ -220,30 +236,6 @@ fun StatusCard(state: LightNodeRepository.NodeState?) {
                     Text("Peers: ${s.peerCount}")
                 }
             }
-        }
-    }
-}
-
-@Composable
-fun ActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit
-) {
-    Button(
-        modifier = Modifier
-            .weight(1f)
-            .fillMaxWidth()
-            .padding(8.dp),
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(24.dp))
-            Text(label, fontSize = 12.sp)
         }
     }
 }
