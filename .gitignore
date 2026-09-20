@@ -1,20 +1,8 @@
-# Migration state: component dirs are independent git repos (or plain dirs)
-# until the monorepo consolidation (chore/monorepo-migration) is confirmed.
-# The monorepo branch tracks these dirs; master keeps ignoring during transition.
-# agent + brain-vault moved OUT to ~/kovanica-agent and ~/kovanica-brain-vault (separate).
-/agent/
-/brain-vault/
-/cli/
-/data/
-/installer/
-/ledger-app/
-/mobile/
-/node/
-/protocol/
-/wallet/
-/web/
+# Monorepo layout: component dirs are tracked in this branch.
+# Only runtime/unversioned content is ignored. agent + brain-vault
+# remain separate repos at ~/kovanica-agent and ~/kovanica-brain-vault.
 /trezor-coin-def/
 
-# Local logs
+# Runtime data (unversioned content inside data/ handled by data/.gitignore)
 *.log
 .dev.log

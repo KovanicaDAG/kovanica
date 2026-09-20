@@ -1,0 +1,14 @@
+android/.gradle/
+android/build/
+android/*/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/captures/
+android/.cxx/
+android/.kotlin/
+ios/build/
+ios/DerivedData/
+ios/Pods/
+.DS_Store
+*.log
