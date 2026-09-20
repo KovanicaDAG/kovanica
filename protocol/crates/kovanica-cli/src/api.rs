@@ -193,7 +193,7 @@ impl Client {
         self.post_form(&query)
     }
 
-    /// Broadcast a signed asset transfer. `sig` is 128 lowercase hex chars.
+/// Broadcast a signed asset transfer. `sig` is 128 lowercase hex chars.
     pub fn submit_transfer_asset(
         &self,
         from: &str,
@@ -201,7 +201,7 @@ impl Client {
         amount: u64,
         asset_id: Option<kovanica_state::AssetId>,
         sig: &str,
-) -> Result<Value> {
+    ) -> Result<Value> {
         let mut query = format!(
             "/api/submit?from={from}&to={to}&amount={amount}&sig={sig}"
         );
@@ -209,6 +209,16 @@ impl Client {
             query.push_str(&format!("&asset_id={}", hex::encode(asset.as_bytes())));
         }
         self.post_form(&query)
+    }
+
+    /// Get NFT detail by asset ID.
+    pub fn nft_detail(&self, asset_id: &str) -> Result<Value> {
+        self.get(&format!("/api/nft/{asset_id}"))
+    }
+
+    /// Get collection detail by collection ID.
+    pub fn collection_detail(&self, collection_id: &str) -> Result<Value> {
+        self.get(&format!("/api/collection/{collection_id}"))
     }
 }
 
