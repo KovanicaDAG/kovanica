@@ -1,6 +1,6 @@
 #![no_std]
 #![forbid(unsafe_code)]
-#![cfg_attr(not(feature = "std"), no_main)]
+#![cfg_attr(all(not(feature = "std"), not(test)), no_main)]
 
 //! Kovanica Ledger App - Core Logic
 //!
@@ -16,16 +16,15 @@
 
 extern crate alloc;
 
-use core::fmt;
-
 // Re-export modules
 pub mod apdu;
 pub mod bip32;
 pub mod ed25519;
 pub mod tx;
 
-// Panic handler
-#[cfg(not(feature = "std"))]
+// Panic handler. Excluded from test builds: the libtest harness supplies its
+// own panic_impl, and defining ours there is a duplicate-lang-item error.
+#[cfg(all(not(feature = "std"), not(test)))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
@@ -112,7 +111,7 @@ pub struct Bip44Path {
 impl Bip44Path {
     /// Create new path from components
     pub fn new(components: &[u32]) -> Result<Self> {
-        if components.len() > MAX_PATH_LEN || components.len() == 0 {
+        if components.is_empty() || components.len() > MAX_PATH_LEN {
             return Err(AppError::InvalidPath);
         }
         let mut path = Self {

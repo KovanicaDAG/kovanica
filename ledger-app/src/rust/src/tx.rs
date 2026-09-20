@@ -1,11 +1,10 @@
-use super::{AppError, Result, MAX_APDU_SIZE};
+use super::{AppError, Result};
 use hex;
 
 /// Kovanica transaction structure for Ledger signing
 ///
 /// The app receives the sighash (32 bytes) and signs it.
 /// Optionally, it can receive the full transaction for display verification.
-
 /// Maximum transaction size for Ledger
 pub const MAX_TX_SIZE: usize = 1024;
 
@@ -159,7 +158,6 @@ pub fn parse_transaction(data: &[u8]) -> Result<ParsedTransaction> {
         return Err(AppError::InvalidTransaction);
     }
     let expiry = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-    offset += 4;
 
     Ok(ParsedTransaction {
         version,

@@ -1,11 +1,9 @@
-use super::{ed25519_consts, AppError, Result};
-use zeroize::Zeroize;
+use super::ed25519_consts;
 
 /// Ed25519 signing using curve25519-dalek (std) or ed25519 crate (no_std)
 ///
 /// For Ledger (no_std), we use the pure Rust `ed25519` crate which is no_std compatible.
 /// For std builds, we use ed25519-dalek.
-
 /// Private key (32 bytes)
 pub type PrivateKey = [u8; ed25519_consts::PRIVATE_KEY_LEN];
 
@@ -107,6 +105,7 @@ pub fn public_from_private(private_key: &PrivateKey) -> PublicKey {
     #[cfg(not(any(feature = "std", all(not(feature = "std"), feature = "no_std"))))]
     {
         // Fallback for other configurations
+        let _ = private_key;
         [0u8; 32]
     }
 }
@@ -126,12 +125,14 @@ pub fn sign_transaction(
     }
     #[cfg(not(any(feature = "std", all(not(feature = "std"), feature = "no_std"))))]
     {
+        let _ = private_key;
         Err(super::AppError::CryptoError)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "std", feature = "no_std"))]
     use super::*;
 
     #[cfg(feature = "std")]

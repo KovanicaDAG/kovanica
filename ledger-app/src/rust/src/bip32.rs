@@ -1,14 +1,12 @@
-use super::{AppError, Bip44Path, Result, KOVANICA_COIN_TYPE, MAX_PATH_LEN};
-use core::convert::TryInto;
+use super::Result;
 use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha512};
+use sha2::Sha512;
 
 /// HMAC-SHA512 implementation using external crates
 fn hmac_sha512(key: &[u8], data: &[u8]) -> [u8; 64] {
-    type HmacSha512 = Hmac<Sha512>;
     let mut mac = Hmac::<Sha512>::new_from_slice(key).expect("HMAC key");
     mac.update(data);
-    mac.finalize().into_bytes().try_into().unwrap()
+    mac.finalize().into_bytes().into()
 }
 
 /// SLIP-0010 Ed25519 derivation
@@ -48,18 +46,16 @@ pub fn slip10_master_from_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
 
 /// BIP-39 seed from mnemonic (with passphrase)
 /// Uses PBKDF2-HMAC-SHA512 with 2048 iterations
-pub fn bip39_seed(mnemonic: &str, passphrase: &str) -> [u8; 64] {
+pub fn bip39_seed(_mnemonic: &str, _passphrase: &str) -> [u8; 64] {
     // In production, use pbkdf2 crate
     // This is a placeholder
-    let mut seed = [0u8; 64];
-    // Actual implementation would use pbkdf2
-    seed
+    [0u8; 64]
 }
 
 /// Derive BIP-44 path from seed
 /// Path format: m / 44' / coin_type' / account' / change / index
 pub fn derive_bip44_path(seed: &[u8], path: &[u32]) -> Result<([u8; 32], [u8; 32])> {
-    if path.len() == 0 || path.len() > 10 {
+    if path.is_empty() || path.len() > 10 {
         return Err(super::AppError::InvalidPath);
     }
 
@@ -83,23 +79,21 @@ pub fn derive_bip44_path(seed: &[u8], path: &[u32]) -> Result<([u8; 32], [u8; 32
 }
 
 /// Get public key from private key (Ed25519)
-pub fn ed25519_public_key(private_key: &[u8; 32]) -> [u8; 32] {
+pub fn ed25519_public_key(_private_key: &[u8; 32]) -> [u8; 32] {
     // Use ed25519-dalek or similar
     // Placeholder
-    let mut pk = [0u8; 32];
-    pk
+    [0u8; 32]
 }
 
 /// Sign message with Ed25519 private key
-pub fn ed25519_sign(private_key: &[u8; 32], message: &[u8]) -> [u8; 64] {
+pub fn ed25519_sign(_private_key: &[u8; 32], _message: &[u8]) -> [u8; 64] {
     // Use ed25519-dalek or similar
     // Placeholder
-    let mut sig = [0u8; 64];
-    sig
+    [0u8; 64]
 }
 
 /// Verify Ed25519 signature
-pub fn ed25519_verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
+pub fn ed25519_verify(_public_key: &[u8; 32], _message: &[u8], _signature: &[u8; 64]) -> bool {
     // Use ed25519-dalek or similar
     // Placeholder
     false
