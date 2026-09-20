@@ -1,15 +1,17 @@
 # seed2 Deployment — Testnet Soak
 
-**Status**: ✅ **Done — superseded** (2026-09-17). "seed2" was brought up by
-**re-keying the existing AWS seed3** (`kovanica-seed3` → `kovanica-seed2`,
-DNS `seed2.kovanica.online` → `76.13.250.65`, retired `seed3.kovanica.online`).
-The old plan below (dedicated VPS on a third provider) is **cancelled** — seed2
-lives on AWS, not a new VPS.
+**Status**: ✅ **Done — superseded** (2026-09-20). "seed2" is the **Hostinger
+KVM2 VPS `srv1991525`** (`76.13.250.65`; `kovanica-seed2` unit; DNS
+`seed2.kovanica.online`). The separate AWS box `seed3` (`15.228.170.29`,
+`kovanica-seed3` unit) is **retired** (creds kept at `/root/seeds/seed3`).
+The old plan below (dedicated VPS on a third provider) is **cancelled** —
+seed2 is VPS #2, not a new third-provider box; a true third provider remains
+an open future item.
 
 ---
 
-## Target (as deployed 2026-09-17)
-- **Name**: seed2 (unit `kovanica-seed2` on AWS eu-north-1)
+## Target (as deployed)
+- **Name**: seed2 (unit `kovanica-seed2` on Hostinger KVM2 VPS `srv1991525`)
 - **Hostname**: `seed2.kovanica.online` → `76.13.250.65` (grey cloud)
 - **P2P Port**: 9000
 - **Explorer**: 8080 (loopback)
@@ -22,9 +24,9 @@ lives on AWS, not a new VPS.
 ---
 
 ## Requirements
-- **Provider**: ~~Different from seed1 (Hostinger) and seed3 (AWS eu-north-1)~~ — **cancelled**: seed2 reused seed3's AWS box (org-distinct from Hostinger).
-- **Region**: Different continent/ASN preferred — ⏳ still open (AWS eu-north-1 = EU, same region family as Hostinger's EU VPS; a true third-provider seed is a separate future item)
-- **Specs**: 2 vCPU, 4GB RAM, 100GB SSD (AWS box is `c7i.large`)
+- **Provider**: Hostinger KVM2 VPS (`srv1991525`, org-distinct VPS #2; seed3 = AWS, retired, creds `/root/seeds/seed3`).
+- **Region**: Different continent/ASN preferred — ⏳ still open (both Hostinger VPSs are EU; a true third-provider seed is a separate future item)
+- **Specs**: 2 vCPU, 4GB RAM, 100GB SSD
 - **OS**: Ubuntu 22.04+ or Debian 12+ (AWS: Amazon Linux 2023, systemd unit)
 - **IP**: Static IPv4 (+ IPv6 if available)
 
@@ -69,10 +71,11 @@ Per `kovanica-protocol/docs/TESTNET-SOAK.md`:
 
 ## Notes
 - seed1 (primary): Hostinger VPS (`kovanica-explorer` unit, P2P :9000)
-- seed2: AWS eu-north-1 (re-keyed from seed3, 2026-09-17) — `76.13.250.65`
-- ~~seed2 target: Different provider/region~~ → superseded; a dedicated
+- seed2: Hostinger KVM2 VPS (`srv1991525`) — `76.13.250.65`
+- seed3 (AWS): retired — creds kept at `/root/seeds/seed3`
+- ~~seed2 target: Different provider/region~~ → a dedicated
   third-provider seed remains an open future item (DR/geo diversity)
 
 ---
 
-**Done**: seed2 deployed via AWS re-key on 2026-09-17 (see `OPERATIONS.md` §7).
+**Done**: seed2 live on Hostinger KVM2 VPS `srv1991525` (see `OPERATIONS.md` §1).

@@ -72,7 +72,7 @@
 | Hostname | IP | Notes |
 |----------|----|-------|
 | `seed.kovanica.online` | 145.223.116.178 (Hostinger VPS) | Primary, mines 1 block/60s |
-| `seed2.kovanica.online` | AWS eu-north-1 | Secondary, re-keyed from seed3 |
+| `seed2.kovanica.online` | 76.13.250.65 (Hostinger KVM2 VPS) | Secondary |
 | `seed3.kovanica.online` | (retired) | — |
 
 - **P2P port:** 9000 (TCP, **grey-cloud** only — Cloudflare proxy breaks raw TCP)
@@ -143,7 +143,8 @@ Total supply converges to ≈ 90.2M KVNC.
 
 ## 8. Security Contacts
 
-- **Vulnerability disclosure:** GitHub Security Advisories or `security@kovanica.online`
+- **Vulnerability disclosure:** GitHub Security Advisories (preferred) or `security@kovanica.online`
+- **Public security discussions:** GitHub Issues using the [Security template](https://github.com/KovanicaDAG/kovanica/issues/new?template=security.yml)
 - **Bug bounty (planned):** `BUG-BOUNTY.md` — severity tiers, safe harbor
 - **Maintainer:** Toni (see `ENTITY-LEGAL.md`)
 

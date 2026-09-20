@@ -1,9 +1,17 @@
 # Kovanica Testnet Soak Plan
 
-**Status**: Draft (Post-Stage 3 #4)  
+**Status**: 🔴 **ACTIVE** (Day 0 started 2026-09-20) — Post-Stage 3 #4  
 **Goal**: Run 24/7 testnet with multiple independent seeds for ≥30 days, collect operational metrics, validate mainnet readiness.
 
----
+### Current Status (2026-09-20)
+- ✅ **seed1** (primary): Hostinger VPS `145.223.116.178`, `kovanica-explorer` unit, mining 1 block/60s, 191 blocks
+- ✅ **seed2** (secondary): Hostinger KVM2 VPS `76.13.250.65` (`srv1991525`), `kovanica-seed2` unit, mining 1 block/60s, 1782 blocks
+- 🔴 **seed3**: AWS `15.228.170.29` — **Retired** (SSH key no longer authorized)
+- 🔄 **P2P connectivity**: Verified — both seeds list each other in `/api/p2p` peers
+- 🔄 **Block production**: Active on both seeds (~1 block/60s each)
+- 🔄 **Prometheus scrape**: Active — seed1 (local :9090), seed2 (direct 76.13.250.65:9090), explorer (local :8080)
+- ⚠️ **Known issues**: `kovanica_peer_count` metric reports 0 (bug — mesh peers exist but metric not updated); DHT/reorg/sync/validation rejection metrics not yet emitted (features not active)
+- 📊 **Metrics baseline**: Block rate ~1/min/seed, peer connectivity via `/api/p2p` confirmed, block height ~191 (seed1) / ~1782 (seed2 — note: seed2 has different chain height due to different genesis? investigating)
 
 ## 1. Seed Operator Requirements
 
@@ -11,8 +19,8 @@
 | Seed | Host | Operator | Status |
 |------|------|----------|--------|
 | `seed.kovanica.online` | Hostinger VPS | Core team | ✅ Live |
-| `seed2.kovanica.online` | AWS eu-north-1 | Core team | ✅ Live (re-keyed from `seed3` 2026-09-17, IP `76.13.250.65`) |
-| `seed3.kovanica.online` | AWS eu-north-1 | Core team | 🔴 Retired (re-keyed → seed2, 2026-09-17) |
+| `seed2.kovanica.online` | Hostinger KVM2 VPS | Core team | ✅ Live (IP `76.13.250.65`, `srv1991525`) |
+| `seed3.kovanica.online` | AWS `15.228.170.29` | Core team | 🔴 Retired (SSH key no longer authorized) |
 
 ### Target: ≥3 Independent Operators
 - **Geographic diversity**: ≥2 continents (currently EU only)
@@ -151,12 +159,14 @@
 
 ## 7. Next Steps
 
-1. [ ] Recruit seed2 operator (target: different continent/org)
-2. [ ] Deploy seed2 with full monitoring
-3. [ ] Verify all 3 seeds peering, metrics flowing
-4. [ ] Start Day 1 clock
-5. [ ] Weekly ops reviews in Discord
-6. [ ] Day 30: compile report, Go/No-Go
+1. [ ] **Recruit seed3 operator** (target: different continent/org/ASN — e.g., Vultr, Hetzner, DigitalOcean in NA/APAC)
+2. [ ] Deploy seed3 with full monitoring (Prometheus + Alertmanager + Discord webhook)
+3. [ ] Verify all 3 seeds peering, metrics flowing, `peer_count` metric fixed
+4. [ ] Fix `kovanica_peer_count` metric (currently 0 despite mesh peers)
+5. [ ] Enable DHT/reorg/sync/validation metrics emission
+6. [ ] Start Day 1 clock (all 3 seeds running, metrics flowing)
+7. [ ] Weekly ops reviews in Discord ops channel
+8. [ ] Day 30: compile report, Go/No-Go
 
 ---
 
