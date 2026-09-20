@@ -103,7 +103,7 @@
 
             peers = lib.mkOption {
               type = lib.types.str;
-              default = "seed.kovanica.online:9000,seed3.kovanica.online:9000";
+              default = "seed.kovanica.online:9000,seed2.kovanica.online:9000";
               description = "Bootstrap peers (comma-separated)";
             };
 

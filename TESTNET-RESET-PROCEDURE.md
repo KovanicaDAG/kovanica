@@ -28,9 +28,14 @@
 
 | Seed | Host | Operator | Mining | Deploy Script |
 |------|------|----------|--------|---------------|
-| **seed1** (primary) | seed.kovanica.online (Hostinger) | Hostinger VPS | Yes (60s) | `deploy-seed-prebuilt.sh` |
-| **seed3** (secondary) | seed3.kovanica.online (AWS eu-north-1) | AWS | Yes (60s) | `deploy-seed-prebuilt.sh` |
-| **seed2** (tertiary) | seed2.kovanica.online (TBD) | TBD | No | `deploy-seed-prebuilt.sh` |
+| **seed1** (primary) | seed.kovanica.online (Hostinger VPS; live systemd unit `kovanica-explorer`, HTTP `127.0.0.1:8080`) | Hostinger VPS | Yes (60s) | `deploy-seed-prebuilt.sh` |
+| **seed2** (secondary) | seed2.kovanica.online (AWS eu-north-1; re-keyed from `seed3` on 2026-09-17) | AWS | Yes (60s) | `deploy-seed-prebuilt.sh` |
+
+> **Naming note:** docs call the primary *seed1*, but its live systemd unit on the
+> VPS is `kovanica-explorer` (P2P `:9000`, HTTP `127.0.0.1:8080`). The VPS
+> additionally runs `kovanica-seed1` (`:9002`/`:28080`) and `kovanica-seed2`
+> (`:9001`/`:18080`) units. `seed3` is **retired** (re-keyed to seed2,
+> 2026-09-17) — never deploy to `seed3.kovanica.online`.
 
 **Deploy simultaneously** to minimize fork window.
 
@@ -41,23 +46,18 @@
 ```bash
 # From kovanica-protocol root on operator machine:
 
-# Seed1 (primary, mines)
+# Seed1 (primary, mines) — Hostinger VPS
 ./scripts/deploy-seed-prebuilt.sh ubuntu@seed.kovanica.online \
-  --name seed1 \
+  --name explorer \
   --mine \
   --mine-secs 60 \
   --binary ./target/release/kovanica-node
 
-# Seed3 (secondary, mines)  
-./scripts/deploy-seed-prebuilt.sh ubuntu@seed3.kovanica.online \
-  --name seed3 \
-  --mine \
-  --mine-secs 60 \
-  --binary ./target/release/kovanica-node
-
-# Seed2 (tertiary, no mining)
+# Seed2 (secondary, mines) — AWS eu-north-1 (re-keyed from seed3 on 2026-09-17)
 ./scripts/deploy-seed-prebuilt.sh ubuntu@seed2.kovanica.online \
   --name seed2 \
+  --mine \
+  --mine-secs 60 \
   --binary ./target/release/kovanica-node
 ```
 
@@ -74,7 +74,7 @@ curl -s https://explorer.kovanica.online/api/head | jq -r .genesis
 ### 2. Peer Connectivity
 ```bash
 curl -s https://explorer.kovanica.online/api/head | jq .peers
-# Should show 2+ peers (other seeds)
+# Should show 1+ peers (other seeds)
 ```
 
 ### 3. Block Production (within 2 min)
@@ -100,15 +100,15 @@ curl -s https://explorer.kovanica.online/api/bootstrap | jq .founder_seed
 ## Cross-Seed Connectivity Test
 
 ```bash
-# From seed1, check it sees seed3 and seed2
+# From seed1 (primary, kovanica-explorer unit), check it sees seed2
 ssh ubuntu@seed.kovanica.online \
   "curl -s http://127.0.0.1:8080/api/head | jq '.peers[]'"
 
-# From seed3, check it sees seed1 and seed2  
-ssh ubuntu@seed3.kovanica.online \
-  "curl -s http://127.0.0.1:8080/api/head | jq '.peers[]'"
+# From seed2, check it sees seed1 (primary)
+ssh ubuntu@seed2.kovanica.online \
+  "curl -s http://127.0.0.1:18080/api/head | jq '.peers[]'"
 
-# All should show 3 peers total (including self)
+# All should show 2 peers total (including self)
 ```
 
 ---
@@ -150,7 +150,7 @@ Monitor for 24h on all seeds:
 | Block propagation | < 2s p95 | > 10s |
 | Fork rate | 0 | > 0 |
 | Disk growth | ~50 MB/day | > 200 MB/day |
-| Peer count | 2-3 | < 2 |
+| Peer count | 1-2 (seed1 ↔ seed2) | < 1 |
 | Block interval | ~60s | > 120s |
 
 Grafana dashboards: `https://monitor.kovanica.online/d/kovanica-seed`
@@ -159,7 +159,7 @@ Grafana dashboards: `https://monitor.kovanica.online/d/kovanica-seed`
 
 ## Rollback Procedure (If Critical Failure)
 
-1. Stop new seeds: `systemctl stop kovanica-seed1 kovanica-seed3`
+1. Stop new seeds: `systemctl stop kovanica-explorer kovanica-seed2`
 2. Restore previous data dirs from backup (if available)
 3. Deploy previous binary version
 4. Restart with old genesis
@@ -171,8 +171,8 @@ Grafana dashboards: `https://monitor.kovanica.online/d/kovanica-seed`
 
 ## Success Criteria
 
-- [ ] All 3 seeds show matching genesis hash
-- [ ] All 3 seeds have 2+ peers
+- [ ] All seeds (seed1 primary + seed2) show matching genesis hash
+- [ ] All seeds have 2+ peers
 - [ ] Block production stable at ~60s interval
 - [ ] Smoke tests pass (faucet, transfer, multisig, HTLC, vault)
 - [ ] Light-node sync works on Android
@@ -186,10 +186,10 @@ Grafana dashboards: `https://monitor.kovanica.online/d/kovanica-seed`
 | Role | Contact |
 |------|---------|
 | Primary operator | Toni (seed.kovanica.online) |
-| Seed3 operator | AWS eu-north-1 team |
+| Seed2 operator | AWS eu-north-1 team (re-keyed from seed3, 2026-09-17) |
 | Mobile/Android | @kovanica-mobile team |
 | Explorer/Web | @kovanica-web team |
 
 ---
 
-*Document version: 1.0 | Generated: 2026-09-17*
+*Document version: 1.1 | Updated: 2026-09-20 (seed3 → seed2 re-key reflected)*

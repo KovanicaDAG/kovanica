@@ -121,7 +121,7 @@
 |----|------|--------|-------|
 | C1 | **HTLC on testnet** (was P1.1) | ✅ | Done 2026-09-08; KVP-104 → Shipped |
 | C2 | **Node HTTP `asset_id`** (was P1.2) | 🔒 | `/api/utxos|history|prepare` asset fields; web AssetPicker + wallet + explorer wiring done ✅; live multi-asset on testnet blocked on node API |
-| C3 | **Multiple public seeds** (was P1.3) | 🟡 | seed (Hostinger) ✅ + seed3 (AWS eu-north-1, live 2026-08-24) ✅ — org-distinct; **seed2 ⏳ pending dedicated VPS** (`TODO/seed2-deploy.md`; DNS A `145.223.116.178` resolves, sysops baseline in TESTNET-SOAK); bootstrap list 🟡 |
+| C3 | **Multiple public seeds** (was P1.3) | 🟡 | seed (Hostinger VPS, `kovanica-explorer`) ✅ + seed2 (AWS eu-north-1, re-keyed from seed3 2026-09-17, `76.13.250.65`) ✅ — org-distinct; seed3 retired; bootstrap list 🟡 (third-provider/geo-diverse seed still open) |
 | C4 | **Run-a-node guide** (was P1.4) | 🟡 | `install.sh` prebuilt-first + `OPERATIONS.md` runbook; single operator guide + “tip == explorer” smoke ⏳ |
 | C5 | **Public status surface** (was P1.5) | 🟡 | `/network` page shipped (PR #89) ✅; uptime history ❌ |
 | C6 | **Security notes / threat model** (was P1.6) | ❌ | `docs/SECURITY.md` (PoW+GHOSTDAG guarantees, key handling, finality/reorg expectations) not written |
@@ -193,9 +193,9 @@
 
 ## Sequenced next actions (top-N, cross-group)
 
-1. **C12**: Execute testnet reset (A13 + A6 combined) — run A13.13–A13.24 checklist + TESTNET-RESET-PROCEDURE.md; deploy to seed1/seed3/seed2; verify genesis match, peer connectivity, block production, smoke tests, light-node sync.
+1. **C12**: Execute testnet reset (A13 + A6 combined) — run A13.13–A13.24 checklist + TESTNET-RESET-PROCEDURE.md; deploy to seed1 (primary) + seed2; verify genesis match, peer connectivity, block production, smoke tests, light-node sync.
 2. **C9**: VPS Prometheus scrape (orphan rate, propagation, fork/reorg, disk) and post-~2-week tuning review (k, finality, pruning, difficulty). **Dormant: no mainnet.**
-3. **C3**: provision seed2 on a third provider/continent/ASN, run `deploy-seed2.sh`, post-deploy checks (DNS, grey-cloud :9000, `/api/head`, `NETWORK.md` bootstrap list).
+3. **C3**: seed2 live on AWS (re-keyed from seed3, 2026-09-17); follow-up: provision a third-provider/continent/ASN seed for geo diversity, e.g. `deploy-seed.sh`, post-deploy checks (DNS, grey-cloud :9000, `/api/head`, bootstrap list).
 4. **E3**: finish Android 9e (WorkManager periodic sync) + 9f; add subsidy/premine/seed to `/api/bootstrap`.
 5. **C4 / C6 / C7 / C8**: run-a-node operator guide, `SECURITY.md`, issue templates + security contact, spec index — the "legit v1" bundle (all B + C1/C2/C3/C4/C7).
 6. **B4 / D7**: freeze final tokenomics numbers on web after RFC-006; publish KVP-102 issuance policy wording.

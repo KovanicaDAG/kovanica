@@ -40,7 +40,7 @@ data:
   KOVANICA_DATA: "/var/lib/kovanica"
   KOVANICA_P2P_PORT: "9000"
   KOVANICA_HTTP_PORT: "8080"
-  KOVANICA_PEERS: "seed.kovanica.online:9000,seed3.kovanica.online:9000"
+  KOVANICA_PEERS: "seed.kovanica.online:9000,seed2.kovanica.online:9000"
   KOVANICA_MINE: "0"
   KOVANICA_MINE_SECS: "60"
 ---

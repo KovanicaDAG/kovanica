@@ -125,7 +125,7 @@ RestartSec=5
 Environment=KOVANICA_DATA=/var/lib/kovanica
 Environment=KOVANICA_P2P_PORT=9000
 Environment=KOVANICA_HTTP_PORT=8080
-Environment=KOVANICA_PEERS=seed.kovanica.online:9000,seed3.kovanica.online:9000
+Environment=KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000
 [Install]
 WantedBy=multi-user.target
 EOF

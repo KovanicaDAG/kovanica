@@ -40,7 +40,7 @@ toolchain or base-image versions.
 - [ ] Confirm the Rust node deploy workflow reaches the VPS and the seed
       restarts cleanly (`systemctl status kovanica-explorer`).
 - [ ] Confirm the web deploy workflow runs and the app is reachable behind
-      nginx on the configured loopback port (default `127.0.0.1:3010`). **Do
+      nginx on the configured loopback port (default `127.0.0.1:3000`). **Do
       not expose port 3000 publicly.**
 - [ ] Verify seed backups are still created successfully:
       `./scripts/backup-node.sh --dry-run`.

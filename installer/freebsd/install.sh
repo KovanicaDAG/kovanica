@@ -86,7 +86,7 @@ pidfile="/var/run/${name}.pid"
 export KOVANICA_DATA="/var/lib/kovanica"
 export KOVANICA_P2P_PORT="9000"
 export KOVANICA_HTTP_PORT="8080"
-export KOVANICA_PEERS="seed.kovanica.online:9000,seed3.kovanica.online:9000"
+export KOVANICA_PEERS="seed.kovanica.online:9000,seed2.kovanica.online:9000"
 
 load_rc_config $name
 run_rc_command "$1"

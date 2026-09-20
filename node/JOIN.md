@@ -37,7 +37,7 @@ The installer:
 Override install location or peers:
 
 ```sh
-KOVANICA_HOME=~/my-node KOVANICA_PEERS=seed.kovanica.online:9000,seed3.kovanica.online:9000 \
+KOVANICA_HOME=~/my-node KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 \
   bash <(curl -sSfL https://raw.githubusercontent.com/KovanicaDAG/kovanica-node/main/scripts/install.sh)
 ```
 

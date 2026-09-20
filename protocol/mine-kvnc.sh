@@ -24,6 +24,6 @@ exec env \
     KOVANICA_MINE=1 \
     KOVANICA_MINE_SECS="$MINE_SECS" \
     KOVANICA_MINER_ADDRESS="$ADDR" \
-    KOVANICA_PEERS='seed2.kovanica.online:9001' \
+    KOVANICA_PEERS='seed.kovanica.online:9000,seed2.kovanica.online:9000' \
     KOVANICA_DATA="${KOVANICA_DATA:-$HOME/.kovanica/data}" \
     "$BIN" explorer 127.0.0.1:8080

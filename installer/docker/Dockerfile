@@ -31,7 +31,7 @@ WORKDIR /var/lib/kovanica
 ENV KOVANICA_DATA=/var/lib/kovanica
 ENV KOVANICA_P2P_PORT=9000
 ENV KOVANICA_HTTP_PORT=8080
-ENV KOVANICA_PEERS=seed.kovanica.online:9000,seed3.kovanica.online:9000
+ENV KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000
 
 EXPOSE 9000 8080
 

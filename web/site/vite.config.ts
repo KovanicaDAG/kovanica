@@ -167,7 +167,7 @@ export default defineConfig(({ command, isPreview }) => ({
       ? [
           nitro({
             // App Builder / Vercel stays the default. VPS: NITRO_PRESET=node-server
-            // writes .output/server/index.mjs for pm2 on 127.0.0.1:3010.
+            // writes .output/server/index.mjs for pm2 on 127.0.0.1:3000.
             preset: process.env.NITRO_PRESET === "node-server" ? "node-server" : "vercel",
             // Auto-registers server/middleware/*. Kept (empty) so Nitro scans
             // any future server middleware; the grok PWA installer was removed.

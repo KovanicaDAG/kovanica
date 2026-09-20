@@ -25,7 +25,7 @@ param(
     [string]$DataDir = "$env:USERPROFILE\.kovanica-data",
     [int]$P2PPort = 9000,
     [int]$HTTPPort = 8080,
-    [string]$Peers = "seed.kovanica.online:9000,seed3.kovanica.online:9000",
+    [string]$Peers = "seed.kovanica.online:9000,seed2.kovanica.online:9000",
     [switch]$Mine,
     [int]$MineSecs = 60,
     [switch]$Explorer,

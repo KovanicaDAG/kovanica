@@ -160,9 +160,10 @@ echo "✅ Git hooks installed."
 ## 5. Network & Deployment
 
 ### Testnet (Current)
-- **Seed**: `seed.kovanica.online:9000` (Hostinger VPS)
-- **Seed3**: `seed3.kovanica.online:9000` (AWS eu-north-1)
-- **Explorer**: `https://explorer.kovanica.online` (PM2 on VPS, Cloudflare)
+- **Seed** (primary): `seed.kovanica.online:9000` (Hostinger VPS; live systemd unit `kovanica-explorer`, HTTP `127.0.0.1:8080`)
+- **Seed2** (secondary): `seed2.kovanica.online:9000` (AWS EC2 `76.13.250.65`, re-keyed from `seed3` 2026-09-17)
+- **VPS seed units**: `kovanica-seed1` (P2P `:9002`, HTTP `127.0.0.1:28080`) + `kovanica-seed2` (P2P `:9001`, HTTP `127.0.0.1:18080`, nginx `/api` backend)
+- **Explorer**: `https://explorer.kovanica.online` (PM2 web on `:3000` + nginx → `:18080` for API)
 - **Faucet**: `https://faucet.kovanica.online` (1 tKVNC, rate-limited)
 - **Genesis**: `kovanica-testnet` (k=3, subsidy 200*ATOM, founder seed=1)
 
@@ -177,7 +178,7 @@ pm2 restart kovanica-web
 ```bash
 cd /root/kovanica/node
 cargo build --release --workspace
-systemctl restart kovanica-node
+systemctl restart kovanica-explorer kovanica-seed1 kovanica-seed2
 ```
 
 ---

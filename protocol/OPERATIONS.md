@@ -5,16 +5,18 @@
 > (The vault copy was archived to `Obsidian-Vault/KovanicaDAG/_archive/` on
 > 2026-09-05 — this file is the only live copy.)
 
-*Updated: 2026-09-17*
+*Updated: 2026-09-20 (reconciled with live systemd units; see §1)*
 
-## 1. Topology (all on VPS `srv1745734`, 145.223.116.178)
+## 1. Topology (all on VPS `srv1745734`, 145.223.116.178, unless noted)
 
 | Component | Where | Notes |
 | --- | --- | --- |
-| **seed** (primary, VPS) | systemd `kovanica-seed2` (unit name kept), HTTP loopback `:18080`, P2P `0.0.0.0:9000` | single live node since 2026-09-17 (`kovanica-explorer` stopped+disabled); auto-mines 1 block/min (`KOVANICA_MINE=1 MINE_SECS=60`); `MemoryMax=10G` drop-in, faucet on |
-| **seed2** (secondary, AWS EC2) | systemd `kovanica-seed2` on the AWS host (re-keyed from `kovanica-seed3`), P2P `:9000`, HTTP loopback `:18080` | off-box redundancy; formerly `seed3` (re-keyed 2026-09-17); c7i.large |
-| **web** (kovanica.online + wallet + map + explorer pages) | pm2 `kovanica-web`, `127.0.0.1:3010` | built via `npm run build:vps`, deployed to `/root/kovanica-web/.output` |
-| nginx | `/etc/nginx/sites-enabled/explorer.kovanica.online` | `/api/*`→`:18080`, pages→`:3010`, `/download/*`→`/var/www/kovanica-dist/` |
+| **seed** (primary, VPS) | systemd `kovanica-explorer` — P2P `0.0.0.0:9000`, HTTP loopback `127.0.0.1:8080`, metrics `0.0.0.0:9090`, data `/root/kovanica-data` | the real primary seed: serves `seed.kovanica.online:9000`; auto-mines 1 block/min (`KOVANICA_MINE=1 MINE_SECS=60`); faucet + operator on; `KOVANICA_PEERS=seed2.kovanica.online:9000`; ⚠️ unit is active but `is-enabled=disabled` (survives only until reboot) |
+| **seed1** (VPS) | systemd `kovanica-seed1` — P2P `0.0.0.0:9002`, HTTP loopback `127.0.0.1:28080`, data `/var/lib/kovanica-seed1` | extra local seed (my 2026-09-20 fix); `MINE=1 MINE_SECS=60`, faucet off; peers `seed.kovanica.online:9000,seed2.kovanica.online:9000,seed3.kovanica.online:9000` |
+| **seed2** (VPS) | systemd `kovanica-seed2` — P2P `0.0.0.0:9001`, HTTP loopback `127.0.0.1:18080`, data `/var/lib/kovanica-seed2` | nginx `/api/*` backend; `MINE=0`; peers `seed.kovanica.online:9000,seed3.kovanica.online:9000` |
+| **seed2** (secondary, AWS EC2) | systemd `kovanica-seed2` on the AWS host (re-keyed from `kovanica-seed3`), P2P `:9000`, HTTP loopback `:18080` | off-box redundancy; formerly `seed3` (re-keyed 2026-09-17); DNS `seed2.kovanica.online` → `76.13.250.65`; c7i.large |
+| **web** (kovanica.online + wallet + map + explorer pages) | pm2 `kovanica-web`, `127.0.0.1:3000` | built via `npm run build:vps`, deployed to `/root/kovanica-web/.output` |
+| nginx | `/etc/nginx/sites-enabled/explorer.kovanica.online` | `/api/*`→`127.0.0.1:18080`, pages→`127.0.0.1:3000`, `/download/*`→`/var/www/kovanica-dist/` |
 | Node binaries (public) | `/var/www/kovanica-dist/{kovanica-node-linux-x64,-arm64,install.sh}` | served at `https://explorer.kovanica.online/download/…` |
 | Chain data (seed, VPS) | `/root/kovanica-data` (`KOVANICA_DATA`) | **outside the git tree** so runtime writes never dirty it |
 | Soak logs | `/root/kovanica-data/soak/` | `testnet-measure.py`, 24h runs |
@@ -35,12 +37,22 @@ inside a directory that got deleted while the old process held it.
 
 ## 2. Deploy pipelines
 
-### Rust node (explorer/seeds) — GitHub Actions `.github/workflows/deploy.yml`
-- Trigger: push to `main`; gated by `DEPLOY_ENABLED=true` repo variable (set).
-- Secrets: `VPS_HOST=145.223.116.178`, `VPS_USERNAME=root`, `VPS_PRIVATE_KEY` (= local `~/.ssh/github_actions`, authorized in `~/.ssh/authorized_keys`).
-- **SSH port is 2222, not 22** — upstream filtering (Hostinger-level) times out GitHub runner connections on :22 after repeated logins. sshd listens on both.
-- Steps: cargo test/clippy/fmt gate → release build artifact → scp to `/root/bin/kovanica-node` → atomic `install`+`mv` to `/usr/local/bin/kovanica-node` (in-place cp hits ETXTBSY — the running node executes the same path) → `systemctl restart kovanica-seed2` (primary seed). The retired `kovanica-explorer` unit must not be restarted by the pipeline.
-- **Process manager: systemd everywhere (decision 2026-08-24).** pm2 was retired for Kovanica node processes after a pm2-vs-systemd port fight; it remains only for unrelated apps on the VPS. Two node units are live now (`kovanica-seed2` on the VPS = primary seed; `kovanica-seed2` on AWS = secondary, re-keyed from `kovanica-seed3`); `kovanica-explorer` was stopped + disabled on 2026-09-17.
+### Rust node (explorer/seeds) — manual for now (no `.github/workflows` in the monorepo)
+- ⚠️ The `.github/workflows/deploy.yml` auto-deploy pipeline does **not exist in
+  this monorepo checkout** (no `.github/` directory at all — it lived in the old
+  per-component repos before consolidation). Shipment is manual: build → scp →
+  install → restart (see §6).
+- SSH: port **2222, not 22** — upstream filtering (Hostinger-level) times out
+  GitHub runner connections on :22 after repeated logins. sshd listens on both.
+- Restart targets: **all live VPS node units** — `kovanica-explorer` (primary),
+  `kovanica-seed1`, `kovanica-seed2`. There is no longer any retired node unit:
+  all three are active.
+- **Process manager: systemd everywhere (decision 2026-08-24).** pm2 was retired
+  for Kovanica node processes after a pm2-vs-systemd port fight; it remains only
+  for unrelated apps on the VPS (including `kovanica-web`). Three node units are
+  live on the VPS (`kovanica-explorer` = primary seed; `kovanica-seed1`;
+  `kovanica-seed2`), plus the AWS secondary (`kovanica-seed2`, re-keyed from
+  `kovanica-seed3` on 2026-09-17).
 
 ### Web app — manual for now
 ```
@@ -67,7 +79,9 @@ verifies genesis match against the primary seed.
 | --- | --- | --- | --- |
 | `seed.kovanica.online` | A | `145.223.116.178` | DNS only |
 | `seed.kovanica.online` | AAAA | `2a02:4780:41:1f43::1` | DNS only |
-| `seed2.kovanica.online` | A | `<AWS_EC2_IP>` | DNS only (re-keyed from `seed3`, 2026-09-17) |
+| `seed2.kovanica.online` | A | `76.13.250.65` | DNS only (re-keyed from `seed3`, 2026-09-17) |
+| `seed1.kovanica.online` | CNAME → `seed2.kovanica.online` | AWS secondary | DNS only (legacy alias) |
+| `seed3.kovanica.online` | A | `15.228.170.29` | DNS only — **retired** 2026-09-17 (resolves but no node serves it) |
 | `explorer/www/app/wallet/trader/bot/dash/kovi` | A | `145.223.116.178` | proxied |
 | `opencode` | A | `145.223.116.178` | DNS only |
 
@@ -102,9 +116,15 @@ verifies genesis match against the primary seed.
 - Prometheus 2.45 runs as systemd `prometheus`, UI on `127.0.0.1:19080`
   (node metrics listener owns :9090). TSDB retention 30d.
 - Targets: `seed.kovanica.online` = local node `127.0.0.1:9090` (direct);
-  `seed2.kovanica.online` via SSH tunnel unit `kovanica-tunnel-seed2`
-  (renamed from `kovanica-tunnel-seed3` during the 2026-09-17 re-key:
-  `127.0.0.1:19090` → seed2 `:9090`; metrics ports stay firewalled).
+  the AWS seed2 metrics were scraped via SSH tunnel
+  `kovanica-tunnel-seed3` (`127.0.0.1:19090` → seed3 `:9090`). ⚠️ **2026-09-20
+  status: the unit still exists and is still named `kovanica-tunnel-seed3`**
+  (the rename to `kovanica-tunnel-seed2` described here never landed), it still
+  points at the retired `15.228.170.29:9090`, and it is in a failing
+  `activating (auto-restart)` loop (exit 255). Metrics ports stay firewalled.
+  Action: repoint the unit's host to `76.13.250.65` (seed2) and rename the unit,
+  or the seed2 metrics target stays down. (Not done during 2026-09-20 doc
+  reconciliation — infra change, reported to Toni.)
 - Rules: `/etc/prometheus/alerting_rules.yml` (repo copy is source of truth;
   keep `humanizeBytes`-style non-existent template functions out — promtool
   rejects them and the whole file fails to load). 15 alerts + 9 recording rules.
@@ -224,15 +244,17 @@ verifies genesis match against the primary seed.
 
 ```sh
 # Health
-curl -s http://127.0.0.1:8080/api/head          # seed1 head
-systemctl status kovanica-seed2                  # seed2
+curl -s http://127.0.0.1:8080/api/head          # primary (kovanica-explorer)
+curl -s http://127.0.0.1:28080/api/head         # kovanica-seed1 (VPS)
+curl -s http://127.0.0.1:18080/api/head         # kovanica-seed2 (VPS, nginx /api backend)
+systemctl status kovanica-explorer kovanica-seed1 kovanica-seed2
 curl -s http://127.0.0.1:19080/api/v1/targets    # Prometheus targets (jq .data)
-curl -s http://127.0.0.1:9090/metrics | head     # seed1 Prometheus series
+curl -s http://127.0.0.1:9090/metrics | head     # primary Prometheus series
 
-# Restart after binary swap (auto-deploy does this; manual equivalent)
+# Restart after binary swap (manual equivalent of the old auto-deploy)
 sudo install -m755 ~/bin/kovanica-node /usr/local/bin/kovanica-node.new \
   && sudo mv -f /usr/local/bin/kovanica-node{.new,}
-sudo systemctl restart kovanica-explorer kovanica-seed2
+sudo systemctl restart kovanica-explorer kovanica-seed1 kovanica-seed2
 
 # Watch sync/mining logs
 journalctl -u kovanica-seed2 -f

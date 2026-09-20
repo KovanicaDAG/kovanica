@@ -115,7 +115,7 @@ All config via environment variables:
 | `KOVANICA_DATA` | `./data` | Data directory (chain state, wallets) |
 | `KOVANICA_NETWORK` | `kovanica-testnet` | Network profile |
 | `KOVANICA_LISTEN` | `0.0.0.0:9000` | P2P listen address |
-| `KOVANICA_PEERS` | `seed.kovanica.online:9000,seed3.kovanica.online:9000` | Bootstrap peers |
+| `KOVANICA_PEERS` | `seed.kovanica.online:9000,seed2.kovanica.online:9000` | Bootstrap peers |
 | `KOVANICA_POW` | `1` (testnet) | Enable proof-of-work mining |
 | `KOVANICA_MINE` | `1` (explorer profile) | Auto-mine empty blocks |
 | `KOVANICA_MINE_SECS` | `60` | Target block interval when mining |
@@ -237,7 +237,7 @@ server {
     location /ws { proxy_pass http://127.0.0.1:8080; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }
     
     # Static pages
-    location / { proxy_pass http://127.0.0.1:3010; }  # kovanica-web on :3010
+    location / { proxy_pass http://127.0.0.1:3000; }  # kovanica-web on :3000
 }
 ```
 

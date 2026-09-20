@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ansible-playbook -i inventory.ini deploy.yml
-#   ansible-playbook -i inventory.ini deploy.yml --extra-vars "mine=true peers=seed3.kovanica.online:9000"
+#   ansible-playbook -i inventory.ini deploy.yml --extra-vars "mine=true peers=seed2.kovanica.online:9000"
 #
 # Inventory example (inventory.ini):
 #   [seeds]
@@ -25,7 +25,7 @@
     kovanica_data: /var/lib/kovanica
     kovanica_p2p_port: 9000
     kovanica_http_port: 8080
-    kovanica_peers: "seed.kovanica.online:9000,seed3.kovanica.online:9000"
+    kovanica_peers: "seed.kovanica.online:9000,seed2.kovanica.online:9000"
     kovanica_mine: false
     kovanica_mine_secs: 60
     kovanica_user: kovanica

@@ -169,5 +169,5 @@ kovanica-node serve   # Start the node
 
 - **Repository**: https://github.com/KovanicaDAG/kovanica-protocol
 - **Testnet explorer**: https://explorer.kovanica.online
-- **Seed nodes**: seed.kovanica.online:9000, seed3.kovanica.online:9000
+- **Seed nodes**: seed.kovanica.online:9000, seed2.kovanica.online:9000
 - **Docs**: https://github.com/KovanicaDAG/kovanica-protocol#readme

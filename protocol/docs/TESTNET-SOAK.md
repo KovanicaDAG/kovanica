@@ -11,8 +11,8 @@
 | Seed | Host | Operator | Status |
 |------|------|----------|--------|
 | `seed.kovanica.online` | Hostinger VPS | Core team | ✅ Live |
-| `seed2.kovanica.online` | TBD | TBD | 🔄 Needed |
-| `seed3.kovanica.online` | AWS eu-north-1 | Core team | ✅ Live (since 2026-08-24) |
+| `seed2.kovanica.online` | AWS eu-north-1 | Core team | ✅ Live (re-keyed from `seed3` 2026-09-17, IP `76.13.250.65`) |
+| `seed3.kovanica.online` | AWS eu-north-1 | Core team | 🔴 Retired (re-keyed → seed2, 2026-09-17) |
 
 ### Target: ≥3 Independent Operators
 - **Geographic diversity**: ≥2 continents (currently EU only)

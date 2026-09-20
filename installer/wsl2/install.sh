@@ -79,7 +79,7 @@ if ! grep -q "cargo/bin" "${HOME}/.bashrc" 2>/dev/null; then
 
 # Kovanica Node (WSL2)
 export KOVANICA_DATA="${HOME}/.kovanica-data"
-export KOVANICA_PEERS="seed.kovanica.online:9000,seed3.kovanica.online:9000"
+export KOVANICA_PEERS="seed.kovanica.online:9000,seed2.kovanica.online:9000"
 RC
 fi
 

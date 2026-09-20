@@ -76,7 +76,7 @@
 | `seed3.kovanica.online` | (retired) | — |
 
 - **P2P port:** 9000 (TCP, **grey-cloud** only — Cloudflare proxy breaks raw TCP)
-- **DNS seeds:** `seed.kovanica.online`, `seed2.kovanica.online`, `seed3.kovanica.online`
+- **DNS seeds:** `seed.kovanica.online`, `seed2.kovanica.online` (`seed3` retired 2026-09-17)
 - **DHT:** Kademlia XOR metric, k-buckets, relay tags 0x20–0x23
 
 ### Peer Scoring (Hardening)

@@ -1078,12 +1078,13 @@ teaches us it needs.
    Shipped: `dns_seed.rs` (injectable `DnsResolver`, dedup + fallback),
    `dht.rs` Kademlia (XOR metric, k-buckets) with relay tags 0x20–0x23,
    Mesh integration, and `tests/dht_discovery.rs` Tiers 1–5 green.
-   All three DNS-seed hostnames resolve (`seed`/`seed2`/`seed3.kovanica.online`)
-   and are the `DnsSeedConfig::default()` list; `deploy-seed.sh` defaults new
-   seeds to `KOVANICA_PEERS=seed.kovanica.online:9000,seed3.kovanica.online:9000`.
+   The live DNS-seed hostnames are `seed` (primary, Hostinger VPS) and `seed2`
+   (AWS, re-keyed from `seed3` on 2026-09-17; `seed3` is retired but still
+   resolves); `deploy-seed.sh` defaults new seeds to
+   `KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000`.
    Remaining wiring: the node binary's default `KOVANICA_PEERS` still names only
-   `seed.kovanica.online:9000`, and rolling seed3 into the public `install.sh`
-   default is tracked in TODO.md.
+   `seed.kovanica.online:9000`; new-install defaults now use seed+seed2
+   (installer updated 2026-09-20).
 
 4. ~~**Mobile light-node slices 4–8**:~~ ✅ landed 2026-08-25 (workspace v0.2.0)
    - Full plan with per-slice implementation notes: `docs/plans/mobile-light-node.md`
@@ -1111,9 +1112,10 @@ teaches us it needs.
 
 4. **Testnet soak & parameter tuning** — run for weeks: **◀ ACTIVE NEXT**
    - 24/7 testnet with multiple independent seed operators
-     (seed = Hostinger VPS; **seed3 = AWS eu-north-1**, live since
-     2026-08-24 — systemd `kovanica-seed3`, mining on, genesis verified,
-     DNS `seed3.kovanica.online`)
+     (seed = Hostinger VPS, unit `kovanica-explorer`; **seed2 = AWS eu-north-1
+     `76.13.250.65`**, re-keyed from `seed3` on 2026-09-17 — live since
+     2026-08-24 as `kovanica-seed3`, mining on, genesis verified,
+     DNS `seed2.kovanica.online`; `seed3.kovanica.online` retired)
    - Measure: orphan rate, propagation latency, fork rate, disk growth
      (both seeds expose `/metrics`; `alerting_rules.yml` ready to arm)
    - Tune: `k`, finality depth, payload pruning depth, difficulty window

@@ -87,7 +87,7 @@ cat > "${BOOT_DIR}/kovanica-node.sh" <<'BOOT'
 termux-wake-lock
 export PATH="$HOME/.cargo/bin:$PATH"
 export KOVANICA_DATA="$HOME/.kovanica-data"
-export KOVANICA_PEERS="seed.kovanica.online:9000,seed3.kovanica.online:9000"
+export KOVANICA_PEERS="seed.kovanica.online:9000,seed2.kovanica.online:9000"
 kovanica-node serve
 BOOT
 chmod +x "${BOOT_DIR}/kovanica-node.sh"

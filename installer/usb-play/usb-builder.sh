@@ -31,7 +31,7 @@ TARGET=""
 DEVICE=""
 WIFI_SSID=""
 WIFI_PASS=""
-PEERS="seed.kovanica.online:9000,seed3.kovanica.online:9000"
+PEERS="seed.kovanica.online:9000,seed2.kovanica.online:9000"
 MINE=0
 MINE_SECS=60
 
@@ -244,7 +244,7 @@ build_portable() {
 #!/bin/bash
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export KOVANICA_DATA="${DIR}/data"
-export KOVANICA_PEERS="seed.kovanica.online:9000,seed3.kovanica.online:9000"
+export KOVANICA_PEERS="seed.kovanica.online:9000,seed2.kovanica.online:9000"
 exec "${DIR}/bin/kovanica-node" serve
 LAUNCH
     chmod +x "${outdir}/start.sh"

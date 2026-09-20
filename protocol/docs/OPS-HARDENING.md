@@ -326,8 +326,7 @@ jobs:
 
 - [ ] `curl -f https://explorer.kovanica.online/api/head` → 200
 - [ ] `curl -f https://seed.kovanica.online:9090/metrics` → 200
-- [ ] `curl -f https://seed2.kovanica.online:9090/metrics` → 200
-- [ ] `curl -f https://seed3.kovanica.online:9090/metrics` → 200
+- [ ] `curl -f https://seed2.kovanica.online:9090/metrics` → 200 (via tunnel)
 - [ ] Peer count ≥ 2 on all seeds
 - [ ] Block rate > 0 on all seeds
 - [ ] No critical alerts firing in Alertmanager
