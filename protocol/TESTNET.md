@@ -19,7 +19,7 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 | PoW | on (`KOVANICA_POW=1`) |
 | P2P | **TCP only** `KOVANICA_LISTEN` (default `0.0.0.0:9000`) |
 | Bootstrap | DNS-only `seed.kovanica.online:9000` (not the Cloudflare hostname) |
-| Seeds | `seed.kovanica.online:9000` (primary) · `seed2.kovanica.online:9000` (secondary, AWS; re-keyed from `seed3` 2026-09-17) · `seed3` retired |
+| Seeds | `seed.kovanica.online:9000` (primary) · `seed2.kovanica.online:9000` (secondary, Hostinger KVM2 VPS) · `seed3` retired |
 
 Live genesis and tip: `GET https://explorer.kovanica.online/api/head`  
 P2P status on a running node: `GET /api/p2p`  

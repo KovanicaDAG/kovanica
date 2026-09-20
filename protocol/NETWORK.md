@@ -21,7 +21,7 @@ This document is the single source of truth for how the Kovanica public domains 
 | **docs.kovanica.online**          | Specifications, RFCs, KVP standards          | Canonical docs |
 | **status.kovanica.online**        | Network health / monitoring                  | Height, supply, uptime |
 | **seed.kovanica.online**            | Primary P2P seed (TCP 9000)                | DNS-only (grey cloud); Hostinger VPS `srv1745734` |
-| **seed2.kovanica.online**           | Secondary seed (TCP 9000)                  | DNS-only; AWS EC2 (re-keyed from `seed3`, 2026-09-17) |
+| **seed2.kovanica.online**           | Secondary seed (TCP 9000)                  | DNS-only; Hostinger KVM2 VPS `76.13.250.65` (`srv1991525`) |
 | **kovi.kovanica.online**          | Reserved / brand short link                  | Kept |
 | **monitor / pool / opencode**     | Internal / experimental                      | — |
 

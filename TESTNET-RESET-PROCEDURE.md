@@ -29,12 +29,12 @@
 | Seed | Host | Operator | Mining | Deploy Script |
 |------|------|----------|--------|---------------|
 | **seed1** (primary) | seed.kovanica.online (Hostinger VPS; live systemd unit `kovanica-explorer`, HTTP `127.0.0.1:8080`) | Hostinger VPS | Yes (60s) | `deploy-seed-prebuilt.sh` |
-| **seed2** (secondary) | seed2.kovanica.online (AWS eu-north-1; re-keyed from `seed3` on 2026-09-17) | AWS | Yes (60s) | `deploy-seed-prebuilt.sh` |
+| **seed2** (secondary) | seed2.kovanica.online (Hostinger KVM2 VPS `srv1991525`, `76.13.250.65`) | Hostinger KVM2 | Yes (60s) | `deploy-seed-prebuilt.sh` |
 
 > **Naming note:** docs call the primary *seed1*, but its live systemd unit on the
 > VPS is `kovanica-explorer` (P2P `:9000`, HTTP `127.0.0.1:8080`). The VPS
 > additionally runs `kovanica-seed1` (`:9002`/`:28080`) and `kovanica-seed2`
-> (`:9001`/`:18080`) units. `seed3` is **retired** (re-keyed to seed2,
+> (`:9001`/`:18080`) units. `seed3` is **retired** (AWS `15.228.170.29`,
 > 2026-09-17) — never deploy to `seed3.kovanica.online`.
 
 **Deploy simultaneously** to minimize fork window.
@@ -53,7 +53,7 @@
   --mine-secs 60 \
   --binary ./target/release/kovanica-node
 
-# Seed2 (secondary, mines) — AWS eu-north-1 (re-keyed from seed3 on 2026-09-17)
+# Seed2 (secondary, mines) — Hostinger KVM2 VPS `srv1991525` (`76.13.250.65`)
 ./scripts/deploy-seed-prebuilt.sh ubuntu@seed2.kovanica.online \
   --name seed2 \
   --mine \
@@ -186,10 +186,10 @@ Grafana dashboards: `https://monitor.kovanica.online/d/kovanica-seed`
 | Role | Contact |
 |------|---------|
 | Primary operator | Toni (seed.kovanica.online) |
-| Seed2 operator | AWS eu-north-1 team (re-keyed from seed3, 2026-09-17) |
+| Seed2 operator | Hostinger KVM2 VPS (`srv1991525`, creds `/root/seeds/seed2`) |
 | Mobile/Android | @kovanica-mobile team |
 | Explorer/Web | @kovanica-web team |
 
 ---
 
-*Document version: 1.1 | Updated: 2026-09-20 (seed3 → seed2 re-key reflected)*
+*Document version: 1.1 | Updated: 2026-09-20 (seed2 = Hostinger KVM2 VPS; seed3 retired)*
