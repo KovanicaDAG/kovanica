@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kovanica Node</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #0d1117;
+        color: #e6edf3;
+        min-height: 100vh;
+      }
+      #app { padding: 24px; max-width: 1200px; margin: 0 auto; }
+      header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #30363d; }
+      h1 { font-size: 1.5rem; font-weight: 600; }
+      .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+      .card {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 16px;
+      }
+      .card h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; margin-bottom: 8px; }
+      .value { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.875rem; word-break: break-all; }
+      .value.ok { color: #3fb950; }
+      .value.warn { color: #d29922; }
+      .value.err { color: #f85149; }
+      .btn {
+        background: #238636;
+        border: none;
+        border-radius: 6px;
+        color: white;
+        padding: 10px 20px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .btn:hover { background: #2ea043; }
+      .btn:disabled { background: #30363d; color: #8b949e; cursor: not-allowed; }
+      .actions { display: flex; gap: 12px; margin-bottom: 24px; }
+      .events { background: #161b22; border: 1px solid #30363d; border-radius: 8px; max-height: 400px; overflow-y: auto; }
+      .event { padding: 8px 16px; border-bottom: 1px solid #21262d; font-family: 'SF Mono', monospace; font-size: 0.75rem; }
+      .event:last-child { border-bottom: none; }
+      .event-type { color: #79c0ff; font-weight: 500; }
+      .event-time { color: #8b949e; }
+      .event-data { color: #e6edf3; margin-left: 8px; }
+      .loading { text-align: center; color: #8b949e; padding: 48px; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>Kovanica Node</h1>
+        <span id="network-badge" class="value warn">Initializing...</span>
+      </header>
+
+      <div class="actions">
+        <button id="produce-btn" class="btn" disabled>Produce Block</button>
+        <button id="status-btn" class="btn" disabled>Refresh Status</button>
+      </div>
+
+      <div class="status-grid">
+        <div class="card">
+          <h3>Genesis</h3>
+          <div id="genesis" class="value">—</div>
+        </div>
+        <div class="card">
+          <h3>Tip</h3>
+          <div id="tip" class="value">—</div>
+        </div>
+        <div class="card">
+          <h3>Blocks</h3>
+          <div id="blocks" class="value">0</div>
+        </div>
+        <div class="card">
+          <h3>Mempool</h3>
+          <div id="mempool" class="value">0</div>
+        </div>
+        <div class="card">
+          <h3>Peers</h3>
+          <div id="peers" class="value">0</div>
+        </div>
+        <div class="card">
+          <h3>Sync</h3>
+          <div id="sync" class="value">—</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Event Stream</h3>
+        <div id="events" class="events">
+          <div class="loading">Connecting to node worker...</div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
