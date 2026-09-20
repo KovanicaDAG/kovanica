@@ -21,12 +21,14 @@
         border: 1px solid #30363d;
         border-radius: 8px;
         padding: 16px;
+        margin-bottom: 24px;
       }
-      .card h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; margin-bottom: 8px; }
+      .card h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; margin-bottom: 12px; }
       .value { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.875rem; word-break: break-all; }
       .value.ok { color: #3fb950; }
       .value.warn { color: #d29922; }
       .value.err { color: #f85149; }
+      .value.sm { margin-top: 8px; font-size: 0.75rem; color: #8b949e; }
       .btn {
         background: #238636;
         border: none;
@@ -40,7 +42,10 @@
       }
       .btn:hover { background: #2ea043; }
       .btn:disabled { background: #30363d; color: #8b949e; cursor: not-allowed; }
+      .btn-secondary { background: #21262d; color: #e6edf3; }
+      .btn-secondary:hover { background: #30363d; }
       .actions { display: flex; gap: 12px; margin-bottom: 24px; }
+      .actions.sm { gap: 8px; margin: 8px 0; }
       .events { background: #161b22; border: 1px solid #30363d; border-radius: 8px; max-height: 400px; overflow-y: auto; }
       .event { padding: 8px 16px; border-bottom: 1px solid #21262d; font-family: 'SF Mono', monospace; font-size: 0.75rem; }
       .event:last-child { border-bottom: none; }
@@ -48,6 +53,25 @@
       .event-time { color: #8b949e; }
       .event-data { color: #e6edf3; margin-left: 8px; }
       .loading { text-align: center; color: #8b949e; padding: 48px; }
+      .wallet-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; }
+      .wallet-col label { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; margin: 8px 0 4px; }
+      .wallet-col input, .wallet-col textarea {
+        width: 100%;
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        color: #e6edf3;
+        padding: 8px 10px;
+        font-family: 'SF Mono', 'Fira Code', monospace;
+        font-size: 0.8rem;
+        resize: vertical;
+      }
+      .wallet-col input:focus, .wallet-col textarea:focus { outline: none; border-color: #58a6ff; }
+      .list { max-height: 180px; overflow-y: auto; font-family: 'SF Mono', monospace; font-size: 0.75rem; }
+      .list-item { padding: 6px 8px; border-bottom: 1px solid #21262d; word-break: break-all; color: #e6edf3; }
+      .list-item:last-child { border-bottom: none; }
+      .dir-received { color: #3fb950; }
+      .dir-sent { color: #d29922; }
     </style>
   </head>
   <body>
@@ -86,6 +110,55 @@
         <div class="card">
           <h3>Sync</h3>
           <div id="sync" class="value">—</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Wallet</h3>
+        <div class="wallet-grid">
+          <div class="wallet-col">
+            <label>Mnemonic / BIP39 phrase</label>
+            <textarea id="mnemonic-input" rows="3" placeholder="12-word seed phrase…"></textarea>
+            <label>Passphrase (optional)</label>
+            <input id="passphrase-input" type="password" placeholder="BIP39 passphrase" />
+            <div class="actions sm">
+              <button id="create-wallet-btn" class="btn btn-secondary">Create</button>
+              <button id="unlock-wallet-btn" class="btn btn-secondary">Unlock</button>
+              <button id="lock-wallet-btn" class="btn btn-secondary">Lock</button>
+            </div>
+            <div class="value sm" id="wallet-fingerprint">no unlocked wallet</div>
+          </div>
+          <div class="wallet-col">
+            <label>Derived addresses</label>
+            <div id="address-list" class="list">
+              <div class="list-item">—</div>
+            </div>
+            <div class="actions sm">
+              <button id="addresses-btn" class="btn btn-secondary" disabled>Load addresses</button>
+            </div>
+          </div>
+          <div class="wallet-col">
+            <label>Query address</label>
+            <input id="addr-input" placeholder="kvnc…dag or hex" />
+            <div class="actions sm">
+              <button id="balance-btn" class="btn btn-secondary">Balance</button>
+              <button id="history-btn" class="btn btn-secondary">History</button>
+            </div>
+            <div class="value sm" id="wallet-balance">—</div>
+            <div id="wallet-history" class="list" style="margin-top:8px;">
+              <div class="list-item">—</div>
+            </div>
+          </div>
+          <div class="wallet-col">
+            <label>Recipient address</label>
+            <input id="to-input" placeholder="kvnc…dag or hex" />
+            <label>Amount (KVNC)</label>
+            <input id="amount-input" type="number" min="0" step="0.00000001" placeholder="0.1" />
+            <div class="actions sm">
+              <button id="send-btn" class="btn" disabled>Send</button>
+            </div>
+            <div class="value sm" id="send-result">—</div>
+          </div>
         </div>
       </div>
 
