@@ -45,16 +45,10 @@ note() { log "$*"; if [ "$QUIET" -eq 0 ]; then printf '  %s\n' "$*"; fi; }
 warn() { log "WARN: $*"; printf '  WARN: %s\n' "$*" >&2; }
 headline() { printf '\n== %s ==\n' "$*"; }
 
-repo_list() {
-    cat <<EOF
-protocol	https://github.com/KovanicaDAG/kovanica-protocol.git
-node	https://github.com/KovanicaDAG/kovanica-node.git
-web	https://github.com/KovanicaDAG/kovanica-web.git
-wallet	https://github.com/KovanicaDAG/kovanica-wallet.git
-mobile	https://github.com/KovanicaDAG/kovanica-mobile.git
-installer	https://github.com/KovanicaDAG/kovanica-installer.git
-cli	https://github.com/KovanicaDAG/kovanica-cli.git
-EOF
+# Component dirs are tracked by the monorepo itself (old separate repos
+# were consolidated and deleted). No per-component git sync anymore.
+component_dirs() {
+    printf '%s\n' protocol node web wallet mobile cli installer ledger-app data
 }
 
 # agent + brain-vault live OUTSIDE the workspace (separate repos):
@@ -63,68 +57,35 @@ EOF
 
 # ---------------------------------------------------------------- reconcile
 
-sync_repo() {
+# Components are tracked by the monorepo working tree — there is nothing
+# to pull per-directory. We only report their state relative to HEAD.
+sync_component() {
     name="$1"
-    url="$2"
 
     if [ -d "$name/.git" ]; then
-        cur="$(git -C "$name" remote get-url origin 2>/dev/null || true)"
-        if [ -z "$cur" ]; then
-            git -C "$name" remote add origin "$url"
-            note "$name: added origin"
-        elif [ "$cur" != "$url" ] && [ "$cur" != "${url%.git}" ]; then
-            warn "$name: origin differs ($cur) — leaving as-is"
-        fi
+        warn "$name: stale embedded git repo — remove $name/.git to track via monorepo"
+        echo "$name	-	embedded	-	-	-" >>"$WORK/repos.txt"
+        return 0
+    fi
 
-        br="$(git -C "$name" rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
-        if [ "$br" != "main" ]; then
-            note "$name: on '$br' -> checking out main"
-            git -C "$name" checkout -B main 2>/dev/null || git -C "$name" checkout main
-        fi
+    if [ ! -d "$name" ]; then
+        warn "$name: missing from workspace"
+        echo "$name	-	miss	-	-	-" >>"$WORK/repos.txt"
+        return 0
+    fi
 
-        if ! git -C "$name" fetch --prune origin >/dev/null 2>&1; then
-            warn "$name: fetch failed (offline? auth?)"
-            head="$(git -C "$name" rev-parse --short HEAD 2>/dev/null || echo -)"
-            echo "$name	$br	unknown	0	0	$head" >>"$WORK/repos.txt"
-            return 0
-        fi
-
-        if git -C "$name" merge --ff-only origin/main >/dev/null 2>&1; then
-            dirty=clean
+    if git ls-files --error-unmatch "$name" >/dev/null 2>&1; then
+        changed="$(git status --porcelain -- "$name" 2>/dev/null | wc -l | tr -d ' ')"
+        if [ "${changed:-0}" -eq 0 ]; then
+            note "$name: clean (tracked by monorepo @ $(git rev-parse --short HEAD))"
+            echo "$name	monorepo	clean	-	-	$(git rev-parse --short HEAD)" >>"$WORK/repos.txt"
         else
-            changed="$(git -C "$name" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-            warn "$name: local tree has $changed changed file(s) — not stashed, not reset"
-            dirty=dirty
+            warn "$name: $changed changed file(s) vs monorepo index"
+            echo "$name	monorepo	dirty	-	-	$(git rev-parse --short HEAD)" >>"$WORK/repos.txt"
         fi
-
-        ab="$(git -C "$name" rev-list --left-right --count origin/main...HEAD 2>/dev/null || echo '0 0')"
-        behind="$(printf '%s' "$ab" | awk '{print $1}')"
-        ahead="$(printf '%s' "$ab" | awk '{print $2}')"
-        head="$(git -C "$name" rev-parse --short HEAD 2>/dev/null || echo -)"
-        note "$name: $dirty (${behind:-0} behind, ${ahead:-0} ahead)"
-        echo "$name	$br	$dirty	$ahead	$behind	$head" >>"$WORK/repos.txt"
-
-    elif [ -d "$name" ]; then
-        warn "$name: plain dir (no .git) — initializing from origin"
-        if git init -q -b main "$name" \
-            && git -C "$name" remote add origin "$url" \
-            && git -C "$name" fetch -q origin \
-            && git -C "$name" checkout -q -B main origin/main; then
-            note "$name: initialized from origin"
-            echo "$name	main	clean	0	0	$(git -C "$name" rev-parse --short HEAD)" >>"$WORK/repos.txt"
-        else
-            warn "$name: could not init from origin — left untouched"
-            echo "$name	-	dirty	-	-	-" >>"$WORK/repos.txt"
-        fi
-
     else
-        if git clone -q --branch main --single-branch "$url" "$name"; then
-            note "$name: cloned"
-            echo "$name	main	clean	0	0	$(git -C "$name" rev-parse --short HEAD)" >>"$WORK/repos.txt"
-        else
-            warn "$name: clone failed (private repo / offline?) — git clone $url $name"
-            echo "$name	-	miss	-	-	-" >>"$WORK/repos.txt"
-        fi
+        note "$name: untracked plain dir (runtime/unversioned)"
+        echo "$name	-	plain	-	-	-" >>"$WORK/repos.txt"
     fi
 }
 
@@ -335,12 +296,13 @@ check_vault_drift() {
 }
 
 meta_hygiene() {
-    tracked="$(git ls-files 2>/dev/null | grep '/' || true)"
-    if [ -n "$tracked" ]; then
-        warn "meta repo tracks subdirectory files (beyond README/NETWORK/.gitignore) — run: git rm --cached -r <subdir>"
-    fi
+    for name in $(component_dirs); do
+        if [ -d "$name/.git" ]; then
+            warn "$name: stale embedded git repo (see Reconcile above)"
+        fi
+    done
     if git ls-files -s 2>/dev/null | grep -q ':160000'; then
-        warn "meta repo still records gitlinks — run: git rm --cached -r <subrepo>"
+        warn "monorepo records gitlinks (mode 160000) instead of tracked trees — run: git rm --cached -r <subrepo>"
     fi
 }
 
@@ -419,8 +381,8 @@ RUN
 # ------------------------------------------------------------------- main
 
 headline "Reconcile"
-repo_list | while IFS='	' read -r name url; do
-    sync_repo "$name" "$url"
+for name in $(component_dirs); do
+    sync_component "$name"
 done
 ensure_data
 
