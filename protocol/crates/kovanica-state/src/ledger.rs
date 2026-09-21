@@ -100,10 +100,14 @@ pub const HTLC_ACTIVATION_SCORE: u64 = 0;
 /// Default blue-score threshold for RFC-005 vault activation.
 pub const VAULT_ACTIVATION_SCORE: u64 = 0;
 
-/// Default blue-score threshold for RFC-006 tokenomics activation.
-/// When blue_score > TOKENOMICS_ACTIVATION_SCORE, RFC-006 rules apply:
-/// smooth emission curve, MAX_SUPPLY cap, coinbase maturity (COINBASE_MATURITY),
-/// fee burn (75% destroyed, 25% to producer).
+/// RFC-006 is active from genesis (blue score 0) on `kovanica-testnet`: the
+/// smooth emission curve, the [`MAX_SUPPLY`] cap, the 100-block coinbase
+/// maturity, and the 75%/25% fee burn are **unconditional** hard rules — they
+/// are deliberately not gated by a blue-score activation knob.
+///
+/// Retained only as the documented activation marker. There is no pre-activation
+/// economics to fall back to (the ledger holds a single emission schedule), so do
+/// **not** branch on it.
 pub const TOKENOMICS_ACTIVATION_SCORE: u64 = 0;
 
 /// RFC-006 emission schedule for block subsidy.
@@ -677,7 +681,6 @@ pub fn apply_block(
         SCRIPT_V2_ACTIVATION_SCORE,
         HTLC_ACTIVATION_SCORE,
         VAULT_ACTIVATION_SCORE,
-        TOKENOMICS_ACTIVATION_SCORE,
     )
 }
 
@@ -715,7 +718,6 @@ pub fn apply_block_with_stake(
         SCRIPT_V2_ACTIVATION_SCORE,
         HTLC_ACTIVATION_SCORE,
         VAULT_ACTIVATION_SCORE,
-        TOKENOMICS_ACTIVATION_SCORE,
     )
 }
 
@@ -738,7 +740,6 @@ fn apply_block_inner(
     script_v2_activation_score: u64,
     htlc_activation_score: u64,
     vault_activation_score: u64,
-    tokenomics_activation_score: u64,
 ) -> Result<BlockSummary, LedgerError> {
     // Stage all changes on a copy; only commit if the whole block validates, so
     // a rejected block has no effect (atomicity).
@@ -1762,7 +1763,6 @@ pub fn apply_dag(dag: &Dag, subsidy: u64) -> LedgerRun {
                 SCRIPT_V2_ACTIVATION_SCORE,
                 HTLC_ACTIVATION_SCORE,
                 VAULT_ACTIVATION_SCORE,
-                TOKENOMICS_ACTIVATION_SCORE,
             ) {
                 Ok(summary) => {
                     cumulative_minted = cumulative_minted.saturating_add(summary.minted);
@@ -2154,10 +2154,6 @@ pub struct Ledger {
     htlc_activation_score: u64,
     /// Blue score activation threshold for RFC-005 vault transactions.
     vault_activation_score: u64,
-    /// Blue score activation threshold for RFC-006 tokenomics rules.
-    /// When blue_score > TOKENOMICS_ACTIVATION_SCORE: smooth emission curve,
-    /// MAX_SUPPLY cap, coinbase maturity (COINBASE_MATURITY), fee burn (75%/25%).
-    tokenomics_activation_score: u64,
     /// RFC-006: cumulative native KVNC atoms minted on the selected chain.
     native_minted: u64,
     /// RFC-006: cumulative fee atoms burned (75% of selected-chain fees).
@@ -2236,7 +2232,6 @@ impl Ledger {
             script_v2_activation_score: SCRIPT_V2_ACTIVATION_SCORE,
             htlc_activation_score: HTLC_ACTIVATION_SCORE,
             vault_activation_score: VAULT_ACTIVATION_SCORE,
-            tokenomics_activation_score: TOKENOMICS_ACTIVATION_SCORE,
             native_minted: summary.minted,
             fees_burned: burned,
             block_minted,
@@ -2302,18 +2297,6 @@ impl Ledger {
     /// The blue-score activation threshold for RFC-005 vault transactions.
     pub fn vault_activation_score(&self) -> u64 {
         self.vault_activation_score
-    }
-
-    /// Set the blue-score activation threshold for RFC-006 tokenomics rules.
-    /// When blue_score > TOKENOMICS_ACTIVATION_SCORE: smooth emission curve,
-    /// MAX_SUPPLY cap, coinbase maturity (COINBASE_MATURITY), fee burn (75%/25%).
-    pub fn set_tokenomics_activation_score(&mut self, score: u64) {
-        self.tokenomics_activation_score = score;
-    }
-
-    /// The blue-score activation threshold for RFC-006 tokenomics rules.
-    pub fn tokenomics_activation_score(&self) -> u64 {
-        self.tokenomics_activation_score
     }
 
     /// Like [`Ledger::new`], but with a finite finality depth: blocks more than
@@ -2918,7 +2901,6 @@ impl Ledger {
                     self.script_v2_activation_score,
                     self.htlc_activation_score,
                     self.vault_activation_score,
-                    self.tokenomics_activation_score,
                 ) {
                     view_minted = view_minted.saturating_add(merged_summary.minted);
                     // A2: each block contributes its OWN burn (fees - fees/4);
@@ -2948,7 +2930,6 @@ impl Ledger {
             self.script_v2_activation_score,
             self.htlc_activation_score,
             self.vault_activation_score,
-            self.tokenomics_activation_score,
         )?;
         view_minted = view_minted.saturating_add(summary.minted);
         view_fees = view_fees.saturating_add(summary.fees - summary.fees / FEE_PRODUCER_DEN);
@@ -3212,7 +3193,6 @@ impl Ledger {
                     self.script_v2_activation_score,
                     self.htlc_activation_score,
                     self.vault_activation_score,
-                    self.tokenomics_activation_score,
                 );
             }
         }
@@ -3638,7 +3618,6 @@ impl Ledger {
             script_v2_activation_score: SCRIPT_V2_ACTIVATION_SCORE,
             htlc_activation_score: HTLC_ACTIVATION_SCORE,
             vault_activation_score: VAULT_ACTIVATION_SCORE,
-            tokenomics_activation_score: TOKENOMICS_ACTIVATION_SCORE,
             native_minted: stored_minted.unwrap_or(0),
             fees_burned: stored_burned.unwrap_or(0),
             block_minted: HashMap::new(),
@@ -4382,7 +4361,6 @@ mod tests {
             0, // script_v2_activation_score
             0, // htlc_activation_score
             VAULT_ACTIVATION_SCORE,
-            TOKENOMICS_ACTIVATION_SCORE,
         )
         .unwrap_err();
         assert!(matches!(err, LedgerError::CoinbaseImmature { .. }));
@@ -4403,7 +4381,6 @@ mod tests {
             0, // script_v2_activation_score
             0, // htlc_activation_score
             VAULT_ACTIVATION_SCORE,
-            TOKENOMICS_ACTIVATION_SCORE,
         )
         .unwrap();
         assert!(!utxo.contains(&op));
