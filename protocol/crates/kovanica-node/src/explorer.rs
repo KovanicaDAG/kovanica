@@ -2331,7 +2331,7 @@ fn parse_coinjoin_participants(body_str: &str) -> Result<Vec<CoinJoinParticipant
         let asset_id = p
             .get("asset_id")
             .and_then(|v| v.as_str())
-            .map(|s| {
+            .and_then(|s| {
                 let raw = hex::decode(s.trim()).ok()?;
                 if raw.len() != 32 {
                     return None;
@@ -2339,8 +2339,7 @@ fn parse_coinjoin_participants(body_str: &str) -> Result<Vec<CoinJoinParticipant
                 Some(AssetId::from_bytes(
                     <[u8; 32]>::try_from(raw.as_slice()).ok()?,
                 ))
-            })
-            .flatten();
+            });
         out.push(CoinJoinParticipant {
             from: parse_addr(address)?,
             outputs: vec![TxOutput::new(amount, asset_id, parse_addr(recipient)?)],
@@ -2426,7 +2425,7 @@ fn parse_coinjoin_prepared(body_str: &str) -> Result<CoinJoinPrepared, String> {
 
 /// Serialize CoinJoinPrepared to JSON string.
 fn serialize_coinjoin_prepared(prepared: &CoinJoinPrepared) -> String {
-    let sighashes_hex: Vec<String> = prepared.sighashes.iter().map(|s| hex::encode(s)).collect();
+    let sighashes_hex: Vec<String> = prepared.sighashes.iter().map(hex::encode).collect();
     let outpoints_hex: Vec<String> = prepared
         .outpoints
         .iter()
@@ -2851,12 +2850,12 @@ fn history_json(
             });
             let metadata_hash =
                 row_asset.and_then(|id| asset_registry.get(&id).and_then(|e| e.metadata_hash));
-            let meta_hash = metadata_hash.map(|h| hex::encode(h));
+            let meta_hash = metadata_hash.map(hex::encode);
             let collection_id =
                 row_asset.and_then(|id| asset_registry.get(&id).and_then(|e| e.collection_id));
-            let coll_id = collection_id.map(|c| hex::encode(c));
+            let coll_id = collection_id.map(hex::encode);
             let asset_kind_json = kind_str
-                .map(|s| jstr(s))
+                .map(jstr)
                 .unwrap_or_else(|| "null".to_string());
             let metadata_hash_json = meta_hash
                 .as_deref()
@@ -2924,9 +2923,9 @@ fn utxos_json(
                 kovanica_state::AssetKind::Fungible => "fungible",
                 kovanica_state::AssetKind::NonFungible => "nft",
             });
-            let meta_hash = metadata_hash.map(|h| hex::encode(h));
-            let coll_id = collection_id.map(|c| hex::encode(c));
-            let asset_kind_json = kind_str.map(|s| jstr(s)).unwrap_or_else(|| "null".to_string());
+            let meta_hash = metadata_hash.map(hex::encode);
+            let coll_id = collection_id.map(hex::encode);
+            let asset_kind_json = kind_str.map(jstr).unwrap_or_else(|| "null".to_string());
             let metadata_hash_json = meta_hash.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
             let collection_id_json = coll_id.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
             format!(
@@ -2996,9 +2995,9 @@ fn nft_detail_json(
     }
 
     let kind_str = "nft";
-    let meta_hash = entry.metadata_hash.map(|h| hex::encode(h));
-    let coll_id = entry.collection_id.map(|c| hex::encode(c));
-    let creator = entry.creator.map(|c| hex::encode(c));
+    let meta_hash = entry.metadata_hash.map(hex::encode);
+    let coll_id = entry.collection_id.map(hex::encode);
+    let creator = entry.creator.map(hex::encode);
     let meta_hash_json = meta_hash
         .as_deref()
         .map(jstr)
@@ -3073,7 +3072,7 @@ fn collection_detail_json(
                     break;
                 }
             }
-            let meta_hash = entry.metadata_hash.map(|h| hex::encode(h));
+            let meta_hash = entry.metadata_hash.map(hex::encode);
             let meta_hash_json = meta_hash
                 .as_deref()
                 .map(jstr)
@@ -3104,7 +3103,7 @@ fn collection_detail_json(
 /// Derive RWA asset_id from issuer key and parameters (KVP-106).
 /// POST /api/rwa/derive
 fn rwa_derive_json(
-    app: &Explorer,
+    _app: &Explorer,
     q: &std::collections::HashMap<String, String>,
 ) -> Result<String, String> {
     let issuer = q.get("issuer").ok_or("issuer required")?;
@@ -3130,7 +3129,7 @@ fn rwa_derive_json(
     hasher.update(issuer_arr);
     hasher.update(asset_class.as_bytes());
     hasher.update(unique_id.as_bytes());
-    hasher.update(&[version]);
+    hasher.update([version]);
     let result = hasher.finalize();
     let mut asset_id_arr = [0u8; 32];
     asset_id_arr.copy_from_slice(&result);
@@ -3192,10 +3191,10 @@ fn rwa_detail_json(
         }
     }
 
-    let kind_str = "rwa";
-    let meta_hash = entry.metadata_hash.map(|h| hex::encode(h));
-    let coll_id = entry.collection_id.map(|c| hex::encode(c));
-    let creator = entry.creator.map(|c| hex::encode(c));
+    let _kind_str = "rwa";
+    let meta_hash = entry.metadata_hash.map(hex::encode);
+    let coll_id = entry.collection_id.map(hex::encode);
+    let creator = entry.creator.map(hex::encode);
     let meta_hash_json = meta_hash
         .as_deref()
         .map(jstr)

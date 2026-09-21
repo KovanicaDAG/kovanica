@@ -11,7 +11,7 @@
 
 use kovanica_dag::{Block, Dag};
 use kovanica_state::{
-    apply_block, apply_dag, encode_block_payload, AssetId, AssetKind, AssetRegistryEntry,
+    apply_block, apply_dag, encode_block_payload, AssetId,
     HalvingSchedule, KeyPair, Ledger, LedgerError, LedgerInsertError, OutPoint, Transaction,
     TxInput, TxOutput, UtxoSet, DEFAULT_HALVING_ERA, NATIVE_TOKEN_ACTIVATION_SCORE,
 };
@@ -1040,7 +1040,7 @@ fn test_native_token_txoutput_new_constructor() {
 fn test_nft_mint_via_coinbase() {
     let alice = generate_key(50);
     let nft_asset = make_asset_id(100);
-    let metadata_hash = [0xAAu8; 32];
+    let _metadata_hash = [0xAAu8; 32];
 
     let mut utxo = UtxoSet::new();
 

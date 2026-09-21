@@ -738,7 +738,7 @@ fn apply_block_inner(
     script_v2_activation_score: u64,
     htlc_activation_score: u64,
     vault_activation_score: u64,
-    tokenomics_activation_score: u64,
+    _tokenomics_activation_score: u64,
 ) -> Result<BlockSummary, LedgerError> {
     // Stage all changes on a copy; only commit if the whole block validates, so
     // a rejected block has no effect (atomicity).
