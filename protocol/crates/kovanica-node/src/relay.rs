@@ -39,6 +39,11 @@ pub const MAX_HEADERS: usize = 10_000;
 pub const MAX_LOCATOR_IDS: usize = 1_000;
 pub const MAX_MERKLE_PATH: usize = 64;
 
+/// Smallest possible wire size of one `DhtNodes` entry: node id (32) + address
+/// length (2) + `last_seen_ms` (8) + `failed_queries` (4). Used to reject an
+/// impossible entry count *before* allocating.
+const MIN_DHT_NODE_BYTES: usize = 32 + 2 + 8 + 4;
+
 /// One message on a [`RelaySession`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RelayMsg {
@@ -445,11 +450,14 @@ pub fn decode_msg(bytes: &[u8]) -> Result<RelayMsg, NetError> {
         }
         TAG_BLOCK => Ok(RelayMsg::Block(decode_one_record(rest)?)),
         TAG_TX => {
-            if rest.len() < 4 {
-                return Err(NetError::Decode("tx truncated".into()));
-            }
-            let n = u32::from_le_bytes(rest[..4].try_into().expect("4")) as usize;
-            if rest.len() != 4 + n {
+            let mut r = Cursor { buf: rest, pos: 0 };
+            let n = u32::from_le_bytes(r.read_array::<4>()?) as usize;
+            // `n` is attacker-controlled (u32): use checked arithmetic so a
+            // hostile length can never wrap and slip past the equality check.
+            let expected = n
+                .checked_add(4)
+                .ok_or_else(|| NetError::Decode("tx length overflow".into()))?;
+            if rest.len() != expected {
                 return Err(NetError::Decode("tx length mismatch".into()));
             }
             let mut txs =
@@ -616,28 +624,22 @@ pub fn decode_msg(bytes: &[u8]) -> Result<RelayMsg, NetError> {
             })
         }
         TAG_DHT_PING => {
-            if rest.len() < 40 {
-                return Err(NetError::Decode("dht ping truncated".into()));
-            }
-            let sender = NodeId::from_bytes(rest[..32].try_into().unwrap());
-            let nonce = u64::from_le_bytes(rest[32..40].try_into().unwrap());
+            let mut r = Cursor { buf: rest, pos: 0 };
+            let sender = NodeId::from_bytes(r.read_array::<32>()?);
+            let nonce = u64::from_le_bytes(r.read_array::<8>()?);
             Ok(RelayMsg::DhtPing { sender, nonce })
         }
         TAG_DHT_PONG => {
-            if rest.len() < 40 {
-                return Err(NetError::Decode("dht pong truncated".into()));
-            }
-            let sender = NodeId::from_bytes(rest[..32].try_into().unwrap());
-            let nonce = u64::from_le_bytes(rest[32..40].try_into().unwrap());
+            let mut r = Cursor { buf: rest, pos: 0 };
+            let sender = NodeId::from_bytes(r.read_array::<32>()?);
+            let nonce = u64::from_le_bytes(r.read_array::<8>()?);
             Ok(RelayMsg::DhtPong { sender, nonce })
         }
         TAG_DHT_FIND_NODE => {
-            if rest.len() < 72 {
-                return Err(NetError::Decode("dht find_node truncated".into()));
-            }
-            let sender = NodeId::from_bytes(rest[..32].try_into().unwrap());
-            let target = NodeId::from_bytes(rest[32..64].try_into().unwrap());
-            let nonce = u64::from_le_bytes(rest[64..72].try_into().unwrap());
+            let mut r = Cursor { buf: rest, pos: 0 };
+            let sender = NodeId::from_bytes(r.read_array::<32>()?);
+            let target = NodeId::from_bytes(r.read_array::<32>()?);
+            let nonce = u64::from_le_bytes(r.read_array::<8>()?);
             Ok(RelayMsg::DhtFindNode {
                 sender,
                 target,
@@ -645,43 +647,25 @@ pub fn decode_msg(bytes: &[u8]) -> Result<RelayMsg, NetError> {
             })
         }
         TAG_DHT_NODES => {
-            if rest.len() < 72 {
-                return Err(NetError::Decode("dht nodes truncated".into()));
+            let mut r = Cursor { buf: rest, pos: 0 };
+            let sender = NodeId::from_bytes(r.read_array::<32>()?);
+            let target = NodeId::from_bytes(r.read_array::<32>()?);
+            let nonce = u64::from_le_bytes(r.read_array::<8>()?);
+            let count = u16::from_le_bytes(r.read_array::<2>()?) as usize;
+            // Reject an impossible count before allocating: every entry needs at
+            // least `MIN_DHT_NODE_BYTES` of payload, so a tiny hostile frame can
+            // never ask for a huge `Vec`.
+            if count > r.remaining() / MIN_DHT_NODE_BYTES {
+                return Err(NetError::Decode("dht nodes count too large".into()));
             }
-            let sender = NodeId::from_bytes(rest[..32].try_into().unwrap());
-            let target = NodeId::from_bytes(rest[32..64].try_into().unwrap());
-            let nonce = u64::from_le_bytes(rest[64..72].try_into().unwrap());
-            let mut pos = 72;
-            if pos + 2 > rest.len() {
-                return Err(NetError::Decode("dht nodes count truncated".into()));
-            }
-            let count = u16::from_le_bytes(rest[pos..pos + 2].try_into().unwrap()) as usize;
-            pos += 2;
             let mut nodes = Vec::with_capacity(count);
             for _ in 0..count {
-                if pos + 32 > rest.len() {
-                    return Err(NetError::Decode("dht node id truncated".into()));
-                }
-                let node_id = NodeId::from_bytes(rest[pos..pos + 32].try_into().unwrap());
-                pos += 32;
-                if pos + 2 > rest.len() {
-                    return Err(NetError::Decode("dht addr len truncated".into()));
-                }
-                let addr_len = u16::from_le_bytes(rest[pos..pos + 2].try_into().unwrap()) as usize;
-                pos += 2;
-                if pos + addr_len > rest.len() {
-                    return Err(NetError::Decode("dht addr truncated".into()));
-                }
-                let addr = String::from_utf8(rest[pos..pos + addr_len].to_vec())
+                let node_id = NodeId::from_bytes(r.read_array::<32>()?);
+                let addr_len = u16::from_le_bytes(r.read_array::<2>()?) as usize;
+                let addr = String::from_utf8(r.read_slice(addr_len)?.to_vec())
                     .map_err(|_| NetError::Decode("dht addr not utf-8".into()))?;
-                pos += addr_len;
-                if pos + 12 > rest.len() {
-                    return Err(NetError::Decode("dht timestamp/failed truncated".into()));
-                }
-                let last_seen_ms = u64::from_le_bytes(rest[pos..pos + 8].try_into().unwrap());
-                pos += 8;
-                let failed_queries = u32::from_le_bytes(rest[pos..pos + 4].try_into().unwrap());
-                pos += 4;
+                let last_seen_ms = u64::from_le_bytes(r.read_array::<8>()?);
+                let failed_queries = u32::from_le_bytes(r.read_array::<4>()?);
                 nodes.push(PeerContact {
                     node_id,
                     addr,
@@ -689,7 +673,7 @@ pub fn decode_msg(bytes: &[u8]) -> Result<RelayMsg, NetError> {
                     failed_queries,
                 });
             }
-            if pos != rest.len() {
+            if r.remaining() != 0 {
                 return Err(NetError::Decode("trailing bytes in dht nodes".into()));
             }
             Ok(RelayMsg::DhtNodes {
@@ -1042,6 +1026,39 @@ mod tests {
             assert!(nodes.is_empty());
         } else {
             panic!("expected DhtNodes response");
+        }
+    }
+
+    #[test]
+    fn test_dht_nodes_hostile_count_is_rejected() {
+        // Header (sender + target + nonce) claims u16::MAX entries with no
+        // payload behind it. Must be a clean Err, never a huge allocation.
+        let mut buf = vec![TAG_DHT_NODES];
+        buf.extend_from_slice(&[7u8; 32]); // sender
+        buf.extend_from_slice(&[8u8; 32]); // target
+        buf.extend_from_slice(&0u64.to_le_bytes()); // nonce
+        buf.extend_from_slice(&u16::MAX.to_le_bytes()); // count
+        let err = decode_msg(&buf).unwrap_err();
+        assert!(matches!(err, NetError::Decode(_)));
+    }
+
+    #[test]
+    fn test_dht_frames_never_panic_on_truncation() {
+        let msg = RelayMsg::DhtNodes {
+            sender: NodeId::from_bytes([1u8; 32]),
+            target: NodeId::from_bytes([2u8; 32]),
+            nonce: 99,
+            nodes: vec![
+                PeerContact::new(NodeId::from_bytes([3u8; 32]), "127.0.0.1:9000".to_string()),
+                PeerContact::new(NodeId::from_bytes([4u8; 32]), String::new()),
+            ],
+        };
+        let encoded = encode_msg(&msg);
+        for cut in 1..encoded.len() {
+            assert!(
+                decode_msg(&encoded[..cut]).is_err(),
+                "truncation at {cut} must be rejected, not panic"
+            );
         }
     }
 }
