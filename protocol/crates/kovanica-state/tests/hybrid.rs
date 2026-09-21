@@ -9,7 +9,7 @@
 use kovanica_dag::{
     pow, vrf_keypair_from_seed, vrf_prove, Block, BlockId, Dag, Retarget, VrfOutput, VrfProof,
 };
-use kovanica_state::stake::{bond_tag, StakeState};
+use kovanica_state::stake::StakeState;
 use kovanica_state::{
     encode_block_payload, HalvingSchedule, HybridConfig, KeyPair, Ledger, LedgerInsertError,
     OutPoint, StakedVrf, Transaction, TxOutput, DEFAULT_HALVING_ERA,

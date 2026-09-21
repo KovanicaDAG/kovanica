@@ -6,7 +6,6 @@
 use kovanica_dag::vrf_keypair_from_seed;
 use kovanica_node::net::gossip;
 use kovanica_node::Node;
-use kovanica_state::stake::bond_tag;
 use kovanica_state::{HybridConfig, KeyPair, Transaction, TxOutput};
 
 /// Hybrid policy for the test: every slot winnable (one validator holds all

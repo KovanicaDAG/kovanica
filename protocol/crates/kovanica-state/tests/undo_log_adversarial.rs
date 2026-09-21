@@ -13,7 +13,7 @@
 //! hardening. These tests still cover the core delta-folding invariants.
 
 use kovanica_dag::BlockId;
-use kovanica_state::stake::{bond_tag, StakeState, UNBOND_MATURITY};
+use kovanica_state::stake::{StakeState, UNBOND_MATURITY};
 use kovanica_state::{
     decode_block_payload, ledger::apply_block_with_stake, Address, HalvingSchedule, KeyPair,
     Ledger, OutPoint, Transaction, TxOutput, UtxoSet, DEFAULT_HALVING_ERA,

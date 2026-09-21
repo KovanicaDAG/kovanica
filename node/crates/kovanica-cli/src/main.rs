@@ -5,7 +5,6 @@
 //! the node's own crate, so the CLI stays byte-compatible with the ledger.
 
 mod api;
-mod wallet;
 
 use std::path::PathBuf;
 
@@ -14,7 +13,7 @@ use clap::{Parser, Subcommand};
 use kovanica_state::Address;
 
 use crate::api::{print_json, Client};
-use crate::wallet::Wallet;
+use kovanica_cli::Wallet;
 
 /// 1 KVNC = 10^8 atoms.
 const ATOM: u64 = 100_000_000;
