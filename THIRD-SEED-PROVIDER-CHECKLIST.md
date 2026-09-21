@@ -1,5 +1,13 @@
 # Third Seed Provider Checklist (C3 Follow-up)
 
+> ⛔ **SUPERSEDED / CLOSED 2026-09-21 — do not provision from this doc.**
+> The third seed (`seed3.kovanica.online`, AWS `15.228.170.29`) was provisioned
+> from this checklist and has since been **fully decommissioned**: the instance
+> was stopped and the **DNS record deleted** (NXDOMAIN). Geo/ASN diversity is
+> still an open goal, but any new third seed must start from a fresh plan
+> (provider diversity across EU/NA/APAC is unresolved, and seed1+seed2 remain
+> co-located on Hostinger AS47583). Kept for historical reference only.
+
 > **Goal**: Provision a third seed on a **different provider / continent / ASN** from existing seeds for geo/organizational diversity.
 > **Current seeds**: seed1 (Hostinger VPS, EU, AS47583) + seed2 (Hostinger KVM2 VPS, EU, AS47583) — **same provider/ASN!**
 > **Target**: 3rd provider in NA or APAC, different ASN.

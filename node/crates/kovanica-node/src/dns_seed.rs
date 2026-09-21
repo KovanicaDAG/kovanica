@@ -348,7 +348,15 @@ mod tests {
     #[test]
     fn test_dns_seed_config_default() {
         let config = DnsSeedConfig::default();
-        assert_eq!(config.seeds.len(), 3);
+        // `seed3` was retired 2026-09-17; the default policy is `seed` + `seed2`
+        // (see OPERATIONS.md). Assert the exact seeds so silent drift is caught.
+        assert_eq!(
+            config.seeds,
+            vec![
+                "seed.kovanica.online".to_string(),
+                "seed2.kovanica.online".to_string()
+            ]
+        );
         assert_eq!(config.default_port, 9000);
         assert_eq!(config.fallbacks.len(), 2);
         assert_eq!(config.max_addrs, 50);

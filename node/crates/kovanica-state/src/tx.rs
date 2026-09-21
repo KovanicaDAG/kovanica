@@ -171,18 +171,13 @@ impl TxInput {
 
 /// The kind of an asset: fungible (divisible, supply > 1) or non-fungible
 /// (indivisible, max_supply = 1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AssetKind {
     /// Fungible asset (standard KVP-102 token).
+    #[default]
     Fungible,
     /// Non-fungible asset (NFT, KVP-106): exactly one unit, value = 1.
     NonFungible,
-}
-
-impl Default for AssetKind {
-    fn default() -> Self {
-        AssetKind::Fungible
-    }
 }
 
 /// Registry entry for an asset, tracking supply and metadata.
@@ -315,7 +310,7 @@ pub fn derive_rwa_asset_id(
     hasher.update(issuer);
     hasher.update(asset_class.as_bytes());
     hasher.update(unique_id.as_bytes());
-    hasher.update(&[version]);
+    hasher.update([version]);
     let result = hasher.finalize();
     let mut id = [0u8; 32];
     id.copy_from_slice(&result);

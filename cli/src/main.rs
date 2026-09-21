@@ -311,7 +311,7 @@ fn main() -> Result<()> {
         Command::Offer(offer_cmd) => offer(&client, offer_cmd)?,
         Command::Rwa(rwa_cmd) => rwa(&client, rwa_cmd)?,
         Command::Nft(nft_cmd) => nft(&client, nft_cmd)?,
-        Command::Tui => crate::tui::run(client)?,
+        Command::Tui => crate::tui::run(client, cli.api.clone())?,
     }
     Ok(())
 }
@@ -426,7 +426,7 @@ fn htlc(client: &Client, cmd: HtlcCommand) -> Result<()> {
             let sig = wallet.keypair().sign(&sighash);
             let sig_hex = hex::encode(sig);
 
-            let result = client.submit_htlc(&from, &sighash_hex, &sig_hex)?;
+            let result = client.submit_htlc(&from, sighash_hex, &sig_hex)?;
             print_json(&result)?;
             Ok(())
         }
@@ -464,7 +464,7 @@ fn htlc(client: &Client, cmd: HtlcCommand) -> Result<()> {
                 .map_err(|_| anyhow::anyhow!("preimage must be 32 bytes"))?;
             let to_addr = parse_address(&to)?;
 
-            let wallet = Wallet::load(&key)?;
+            let _wallet = Wallet::load(&key)?;
             let sent = client.redeem_htlc(&from, outpoint, script, preimage, &to_addr.to_hex())?;
             println!("Redeemed HTLC");
             print_json(&sent)?;
@@ -496,7 +496,7 @@ fn htlc(client: &Client, cmd: HtlcCommand) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("invalid script: {e:?}"))?;
             let to_addr = parse_address(&to)?;
 
-            let wallet = Wallet::load(&key)?;
+            let _wallet = Wallet::load(&key)?;
             let sent = client.refund_htlc(&from, outpoint, script, &to_addr.to_hex())?;
             println!("Refunded HTLC");
             print_json(&sent)?;
@@ -517,7 +517,7 @@ fn htlc(client: &Client, cmd: HtlcCommand) -> Result<()> {
 }
 
 /// Offer command implementations.
-fn offer(client: &Client, cmd: OfferCommand) -> Result<()> {
+fn offer(_client: &Client, cmd: OfferCommand) -> Result<()> {
     match cmd {
         OfferCommand::Create {
             maker,
@@ -619,10 +619,7 @@ fn rwa(client: &Client, cmd: RwaCommand) -> Result<()> {
                 .map_err(|_| anyhow::anyhow!("issuer must be 32 bytes"))?;
             let asset_id = derive_rwa_asset_id(&issuer, &class, &id, version);
             println!("Asset ID (hex): {}", asset_id.to_hex());
-            println!(
-                "Asset ID (kvnc): {}",
-                format!("kvnc{}dag", asset_id.to_hex())
-            );
+            println!("Asset ID (kvnc): kvnc{}dag", asset_id.to_hex());
             Ok(())
         }
         RwaCommand::Issue {
@@ -694,8 +691,8 @@ fn rwa(client: &Client, cmd: RwaCommand) -> Result<()> {
             if amount == 0 {
                 bail!("amount must be greater than zero");
             }
-            let wallet = Wallet::load(&key)?;
-            let from = wallet.address().to_hex();
+            let _wallet = Wallet::load(&key)?;
+            let _from = _wallet.address().to_hex();
             let asset_id_bytes = hex::decode(&asset_id).context("asset_id must be 32-byte hex")?;
             if asset_id_bytes.len() != 32 {
                 bail!("asset_id must be 32 bytes (64 hex chars)");

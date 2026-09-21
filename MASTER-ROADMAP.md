@@ -121,7 +121,7 @@
 |----|------|--------|-------|
 | C1 | **HTLC on testnet** (was P1.1) | ✅ | Done 2026-09-08; KVP-104 → Shipped |
 | C2 | **Node HTTP `asset_id`** (was P1.2) | 🔒 | `/api/utxos|history|prepare` asset fields; web AssetPicker + wallet + explorer wiring done ✅; live multi-asset on testnet blocked on node API |
-| C3 | **Multiple public seeds** (was P1.3) | ✅ | seed (Hostinger VPS, `kovanica-explorer`) ✅ + seed2 (Hostinger KVM2 VPS `76.13.250.65`, `srv1991525`) ✅ — org-distinct; seed3 (AWS) retired; bootstrap list 🟡 (third-provider/geo-diverse seed still open) |
+| C3 | **Multiple public seeds** (was P1.3) | ✅ | seed (Hostinger VPS, `kovanica-explorer`) ✅ + seed2 (Hostinger KVM2 VPS `76.13.250.65`, `srv1991525`) ✅ — org-distinct; seed3 (AWS) **fully decommissioned 2026-09-21** (instance stopped + DNS deleted, NXDOMAIN); `/api/bootstrap` peer leak fixed (commit `7bd9aab`), both VPSes deploy fixed binary with clean `KOVANICA_PEERS` |
 | C4 | **Run-a-node guide** (was P1.4) | 🟡 | `install.sh` prebuilt-first + `OPERATIONS.md` runbook; single operator guide + “tip == explorer” smoke ⏳ |
 | C5 | **Public status surface** (was P1.5) | 🟡 | `/network` page shipped (PR #89) ✅; uptime history ❌ |
 | C6 | **Security notes / threat model** (was P1.6) | ❌ | `docs/SECURITY.md` (PoW+GHOSTDAG guarantees, key handling, finality/reorg expectations) not written |
@@ -195,10 +195,22 @@
 
 1. **C12**: Execute testnet reset (A13 + A6 combined) — run A13.13–A13.24 checklist + TESTNET-RESET-PROCEDURE.md; deploy to seed1 (primary) + seed2; verify genesis match, peer connectivity, block production, smoke tests, light-node sync.
 2. **C9**: VPS Prometheus scrape (orphan rate, propagation, fork/reorg, disk) and post-~2-week tuning review (k, finality, pruning, difficulty). **Dormant: no mainnet.**
-3. **C3 follow-up**: provision a third-provider/continent/ASN seed for geo diversity (seed2 = Hostinger KVM2 VPS ✅, seed3 = AWS retired); e.g. `deploy-seed.sh`, post-deploy checks (DNS, grey-cloud :9000, `/api/head`, bootstrap list).
+3. **C3 follow-up**: provision a third-provider/continent/ASN seed for geo diversity (seed2 = Hostinger KVM2 VPS ✅, **seed3 = AWS fully decommissioned 2026-09-21**); e.g. `deploy-seed.sh`, post-deploy checks (DNS, grey-cloud :9000, `/api/head`, bootstrap list). `/api/bootstrap` peer leak fixed on both VPSes (2026-09-21).
 4. **E3**: finish Android 9e (WorkManager periodic sync) + 9f; add subsidy/premine/seed to `/api/bootstrap`.
 5. **C4 / C6 / C7 / C8**: run-a-node operator guide, `SECURITY.md`, issue templates + security contact, spec index — the "legit v1" bundle (all B + C1/C2/C3/C4/C7).
 6. **B4 / D7**: freeze final tokenomics numbers on web after RFC-006; publish KVP-102 issuance policy wording.
+
+## ✅ Completed this session (2026-09-21)
+
+| Item | Commit | Notes |
+|------|--------|-------|
+| Git remote PAT security | `d6e6173` | PAT moved to `~/.config/kovanica/git-credentials` (0600); remote URL clean |
+| W-3 relay decoder hardening | `d84a991` | Structurally panic-free (bounds-checked `Cursor`, checked arithmetic, hostile-count guards); 2 regression tests |
+| `/api/bootstrap` peer leak + seed3 cleanup | `7bd9aab` + deploy | Code fix in repo; deployed to **both VPSes** (seed1 `145.223.116.178` + seed2 `76.13.250.65`); `KOVANICA_PEERS` cleaned; public API verified clean |
+| Tokenomics activation gate removal | `106e476` | Vestigial `tokenomics_activation_score` dropped from `ledger.rs` (both trees); 117 state tests pass |
+
+**Public API now**: `"peers":["seed.kovanica.online:9000"]` — no seed3, no listen leak.
+**Roadmap updated**: C3 status reflects seed3 fully decommissioned + bootstrap fix deployed.
 
 ---
 

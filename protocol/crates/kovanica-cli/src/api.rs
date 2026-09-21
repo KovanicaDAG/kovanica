@@ -12,8 +12,7 @@
 //! Note: `/api/blocks` returns a binary record export, not JSON, so the `blocks`
 //! command reads the `node.dag` array out of `/api/state` instead.
 
-use anyhow::{anyhow, bail, Result};
-use kovanica_state::AssetId;
+use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 /// A client bound to one explorer base URL (no trailing slash).

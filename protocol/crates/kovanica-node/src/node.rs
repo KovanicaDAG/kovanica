@@ -582,6 +582,17 @@ impl Default for Node {
     }
 }
 
+/// Detailed UTXO row returned by [`Node::utxos_detailed_of`]:
+/// `(outpoint, value, asset_id, asset_kind, metadata_hash, collection_id)`.
+pub type DetailedUtxo = (
+    OutPoint,
+    u64,
+    Option<AssetId>,
+    Option<kovanica_state::AssetKind>,
+    Option<[u8; 32]>,
+    Option<[u8; 32]>,
+);
+
 impl Node {
     /// A fresh node with no ledger yet.
     pub fn new() -> Self {
@@ -805,6 +816,7 @@ impl Node {
     /// Typically `payload_pruning_depth >= finality_depth` so that a node can
     /// serve block bodies for blocks that are final but no longer needed for
     /// validation.
+    #[allow(clippy::too_many_arguments)] // genesis wiring takes every chain parameter explicitly
     pub fn genesis_with_finality(
         &mut self,
         k: u16,
@@ -1312,10 +1324,7 @@ impl Node {
                 // We approximate: if creation_height is 0 (legacy), allow.
                 // For the maturity check we need the UtxoEntry; use get_entry.
                 match state.get_entry(op) {
-                    Some(entry) => entry
-                        .is_coinbase
-                        .then(|| entry.creation_height <= mature_before)
-                        .unwrap_or(true),
+                    Some(entry) => !entry.is_coinbase || entry.creation_height <= mature_before,
                     None => true,
                 }
             })
@@ -1381,11 +1390,10 @@ impl Node {
             if !aid.is_native() {
                 if let Ok(ledger) = self.ledger() {
                     if let Some(entry) = ledger.asset_registry().get(&aid) {
-                        if entry.is_nft() {
-                            if amount != 1 {
+                        if entry.is_nft()
+                            && amount != 1 {
                                 return Err(NodeError::ZeroAmount); // Reuse for "invalid amount for NFT"
                             }
-                        }
                     }
                 }
             }
@@ -1410,10 +1418,7 @@ impl Node {
             .iter()
             .filter(|(_, out)| out.owner == from && out.asset_id == asset_id)
             .filter(|(op, _)| match state.get_entry(op) {
-                Some(entry) => entry
-                    .is_coinbase
-                    .then(|| entry.creation_height <= mature_before)
-                    .unwrap_or(true),
+                Some(entry) => !entry.is_coinbase || entry.creation_height <= mature_before,
                 None => true,
             })
             .map(|(op, out)| (*op, out.value))
@@ -1539,13 +1544,10 @@ impl Node {
             let mut owned: Vec<(OutPoint, u64)> = state
                 .iter()
                 .filter(|(_, out)| {
-                    &out.owner == &participant_addr && out.asset_id == participant.asset_id
+                    out.owner == participant_addr && out.asset_id == participant.asset_id
                 })
                 .filter(|(op, _)| match state.get_entry(op) {
-                    Some(entry) => entry
-                        .is_coinbase
-                        .then(|| entry.creation_height <= mature_before)
-                        .unwrap_or(true),
+                    Some(entry) => !entry.is_coinbase || entry.creation_height <= mature_before,
                     None => true,
                 })
                 .map(|(op, out)| (*op, out.value))
@@ -1584,7 +1586,7 @@ impl Node {
         // Build the batched transaction
         let outpoints: Vec<OutPoint> = all_inputs.iter().map(|(op, _, _)| *op).collect();
         let values: Vec<u64> = all_inputs.iter().map(|(_, value, _)| *value).collect();
-        let owners: Vec<Address> = all_inputs.iter().map(|(_, _, owner)| *owner).collect();
+        let _owners: Vec<Address> = all_inputs.iter().map(|(_, _, owner)| *owner).collect();
 
         let tx = Transaction::unsigned(&outpoints, all_outputs, Vec::new());
         // All inputs in a CoinJoin share the same transaction sighash
@@ -1619,7 +1621,7 @@ impl Node {
         }
         // Verify all signatures against their respective owners
         let state = self.ledger()?.ledger_state();
-        for (i, (op, sig_bytes)) in prepared.outpoints.iter().zip(signatures.iter()).enumerate() {
+        for (op, sig_bytes) in prepared.outpoints.iter().zip(signatures.iter()) {
             let owner = state.get_entry(op).map(|e| e.output.owner);
             let Some(owner) = owner else {
                 return Err(NodeError::BadSignature);
@@ -1668,17 +1670,7 @@ impl Node {
     pub fn utxos_detailed_of(
         &self,
         owner: &Address,
-    ) -> Result<
-        Vec<(
-            OutPoint,
-            u64,
-            Option<AssetId>,
-            Option<kovanica_state::AssetKind>,
-            Option<[u8; 32]>,
-            Option<[u8; 32]>,
-        )>,
-        NodeError,
-    > {
+    ) -> Result<Vec<DetailedUtxo>, NodeError> {
         let ledger = self.ledger()?;
         let state = ledger.ledger_state();
         let asset_registry = ledger.asset_registry();
@@ -2454,7 +2446,7 @@ impl Node {
             }
         }
 
-        let dag = self.ledger.as_ref().expect("checked above").dag();
+        let _dag = self.ledger.as_ref().expect("checked above").dag();
         let work = self.work_target_for_parents(&parents);
         let nonce = self.mine_nonce(&parents, work, timestamp, &block_txs);
         let ledger = self.ledger.as_mut().expect("checked above");
@@ -2549,7 +2541,7 @@ impl Node {
             }
         }
 
-        let dag = self.ledger()?.dag();
+        let _dag = self.ledger()?.dag();
         let work = self.work_target_for_parents(&parents);
         eprintln!("DEBUG produce_empty: work = {}", work);
         let txs = self.issuance_txs(timestamp, 0);
@@ -2602,7 +2594,7 @@ impl Node {
         let parents = ledger.dag().tips();
         let timestamp_ms = self.next_timestamp(ledger.dag(), &parents);
         let work = self.work_target_for_parents(&parents);
-        let dag = ledger.dag();
+        let _dag = ledger.dag();
 
         let mut block_txs = self.issuance_txs_for(miner, timestamp_ms, fees);
         block_txs.extend(selected);

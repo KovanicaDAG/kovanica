@@ -5,15 +5,15 @@
 > (The vault copy was archived to `Obsidian-Vault/KovanicaDAG/_archive/` on
 > 2026-09-05 — this file is the only live copy.)
 
-*Updated: 2026-09-20 (reconciled with live systemd units; see §1)*
+*Updated: 2026-09-21 (seed3 decommissioned incl. DNS; see §1/§3)*
 
 ## 1. Topology (all on VPS `srv1745734`, 145.223.116.178, unless noted)
 
 | Component | Where | Notes |
 | --- | --- | --- |
 | **seed** (primary, VPS) | systemd `kovanica-explorer` — P2P `0.0.0.0:9000`, HTTP loopback `127.0.0.1:8080`, metrics `0.0.0.0:9090`, data `/root/kovanica-data` | the real primary seed: serves `seed.kovanica.online:9000`; auto-mines 1 block/min (`KOVANICA_MINE=1 MINE_SECS=60`); faucet + operator on; `KOVANICA_PEERS=seed2.kovanica.online:9000`; ⚠️ unit is active but `is-enabled=disabled` (survives only until reboot) |
-| **seed1** (VPS) | systemd `kovanica-seed1` — P2P `0.0.0.0:9002`, HTTP loopback `127.0.0.1:28080`, data `/var/lib/kovanica-seed1` | extra local seed (my 2026-09-20 fix); `MINE=1 MINE_SECS=60`, faucet off; peers `seed.kovanica.online:9000,seed2.kovanica.online:9000,seed3.kovanica.online:9000` |
-| **seed2** (VPS) | systemd `kovanica-seed2` — P2P `0.0.0.0:9001`, HTTP loopback `127.0.0.1:18080`, data `/var/lib/kovanica-seed2` | nginx `/api/*` backend; `MINE=0`; peers `seed.kovanica.online:9000,seed3.kovanica.online:9000` |
+| **seed1** (VPS) | systemd `kovanica-seed1` — P2P `0.0.0.0:9002`, HTTP loopback `127.0.0.1:28080`, data `/var/lib/kovanica-seed1` | extra local seed (my 2026-09-20 fix); `MINE=1 MINE_SECS=60`, faucet off; peers `seed.kovanica.online:9000,seed2.kovanica.online:9000` ⚠️ live unit may still list the decommissioned `seed3.kovanica.online:9000` — remove it |
+| **seed2** (VPS) | systemd `kovanica-seed2` — P2P `0.0.0.0:9001`, HTTP loopback `127.0.0.1:18080`, data `/var/lib/kovanica-seed2` | nginx `/api/*` backend; `MINE=0`; peers `seed.kovanica.online:9000` ⚠️ live unit may still list `seed3.kovanica.online:9000` (DNS now deleted) — see `TODO/public-api-bootstrap-peers.md` |
 | **seed2** (secondary, Hostinger KVM2 VPS) | systemd `kovanica-seed2` on the Hostinger VPS (`srv1991525`), P2P `:9000`, HTTP loopback `:18080` | off-box redundancy; DNS `seed2.kovanica.online` → `76.13.250.65`; creds `/root/seeds/seed2` |
 | **web** (kovanica.online + wallet + map + explorer pages) | pm2 `kovanica-web`, `127.0.0.1:3000` | built via `npm run build:vps`, deployed to `/root/kovanica-web/.output` |
 | nginx | `/etc/nginx/sites-enabled/explorer.kovanica.online` | `/api/*`→`127.0.0.1:18080`, pages→`127.0.0.1:3000`, `/download/*`→`/var/www/kovanica-dist/` |
@@ -81,7 +81,7 @@ verifies genesis match against the primary seed.
 | `seed.kovanica.online` | AAAA | `2a02:4780:41:1f43::1` | DNS only |
 | `seed2.kovanica.online` | A | `76.13.250.65` | DNS only (Hostinger KVM2 VPS) |
 | `seed1.kovanica.online` | CNAME → `seed2.kovanica.online` | Hostinger KVM2 secondary | DNS only (legacy alias) |
-| `seed3.kovanica.online` | A | `15.228.170.29` | DNS only — **retired** 2026-09-17 (resolves but no node serves it) |
+| ~~`seed3.kovanica.online`~~ | — | — | **DECOMMISSIONED 2026-09-21**: instance stopped (was AWS `15.228.170.29`, retired 2026-09-17) **and the DNS record deleted** — now NXDOMAIN. Any `KOVANICA_PEERS` entry still naming it is a dead dial; drop it. |
 | `explorer/www/app/wallet/trader/bot/dash/kovi` | A | `145.223.116.178` | proxied |
 | `opencode` | A | `145.223.116.178` | DNS only |
 

@@ -17,7 +17,6 @@ use std::sync::{Mutex, MutexGuard};
 
 use kovanica_dag::BlockId;
 use kovanica_node::{net, Node, TreasuryGenesis};
-use kovanica_state::stake::{NATIVE_ASSET_ID, UNBOND_MATURITY};
 use kovanica_state::{
     KeyPair, OutPoint, Sig, StealthAddress, Transaction, TxOutput, RFC006_PREMINE,
 };
@@ -1386,13 +1385,13 @@ impl LightNode {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut node = self.lock();
+        let node = self.lock();
         let prepared = node.coinjoin_prepare(node_participants)?;
 
         // Encode transaction
         let tx_hex = hex::encode(prepared.tx.encode());
         // Sighashes (all inputs share the same transaction sighash)
-        let sighashes_hex = prepared.sighashes.iter().map(|s| hex::encode(s)).collect();
+        let sighashes_hex = prepared.sighashes.iter().map(hex::encode).collect();
         // Outpoints
         let outpoints_hex = prepared
             .outpoints
