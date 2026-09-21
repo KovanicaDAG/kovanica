@@ -121,30 +121,26 @@ directly.
 
 ## Which genesis parameters are live? (important)
 
-The deployed testnet is a **pre-RFC-006-era chain** running under RFC-006-era
-code. The parity gate proved (2026-09-17) that the live genesis
-`3beecbeb…b74056e` is reproduced **only** by:
+**RFC-006 is LIVE on testnet** (activated 2026-09-20 as a consensus fork that
+wiped all pre-RFC-006 balances). The live genesis is now:
 
-| Parameter | Live value |
+| Parameter | Live value (RFC-006) |
 |---|---|
 | `k` | 3 |
-| genesis subsidy | `200 * ATOM` (200 KVNC/block) |
-| founder premine | `200 * ATOM` (200 KVNC) |
+| genesis subsidy | `10 * ATOM` (10 KVNC/block) |
+| founder premine | `200_000 * ATOM` (200,000 KVNC = 0.2M KVNC) |
+| treasury | 10 × 1M KVNC vaults (placeholder keys) |
 | founder seed | 1 |
-| treasury | **none** |
 | finality / payload pruning depth | 100 / 1000 |
+| max supply | 90.2M KVNC |
+| coinbase maturity | 100 blocks |
+| fee split | 75% burned / 25% to producer |
 
-The RFC-006-era values the protocol `main` describes (10 KVNC/block, 200,000
-KVNC premine, treasury vaults) produce a **different** genesis (`9565fc20…`) and
-are **not** live on the network. This matches `AGENTS.md` (Slice 9a), which
-already pins `LightConfig { k:3, subsidy:200*ATOM, founder_amount:200*ATOM,
-founder_seed:1 }` as the byte-for-byte live reproducer.
+The live genesis hash is **`9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97`**
+(per `NETWORK.md` and `/api/bootstrap`).
 
-⚠️ **Do not "upgrade" `NetworkProfile::testnet()` to `RFC006_*` constants** —
-`live_subsidy_and_premine_are_the_old_era_values` guards this. When the network
-is deliberately reset to RFC-006-era parameters, update
-`NetworkProfile::testnet()`, `tests/genesis_parity.rs`, and
-`examples/probe_genesis.rs` **together**.
+The old pre-RFC-006 genesis (`3beecbeb…`) is **no longer valid** — the activation
+fork reset the chain. `NetworkProfile::testnet()` now uses RFC-006 constants.
 
 ## Refreshing the parity fixture
 
@@ -156,21 +152,17 @@ protocol reset. Refresh procedure:
    `tests/genesis_parity.rs`, plus `NetworkProfile::testnet()`.
 3. Re-run `examples/probe_genesis.rs` and confirm exactly one candidate prints
    `MATCH` for the new genesis id.
-4. Confirm the profile still matches the deployed chain's running subsidy from
-   `/api/head → subsidy` (the chain, not `/api/bootstrap → light_config`).
+4. Confirm the profile matches the deployed chain's running subsidy from
+   `/api/head → subsidy` (should be 10 KVNC at genesis, decaying geometrically).
 
-## Operational findings (2026-09-17)
+## Operational findings (2026-09-21)
 
-- The live testnet genesis is **`3beecbebb6103ee24d1617fd87e920c949d613febbbcf6ca1453f3a4bf74056e`**.
-  The `9565fc20…` hash in the protocol repo's `OPERATIONS.md` is the
-  **RFC-006-era-with-treasury** genesis, not the live chain's — the deployed
-  seed was **not** reset to RFC-006-era parameters.
-- The deployed seed exposes an internal inconsistency: `/api/bootstrap →
-  light_config` reports RFC-006-era numbers (`subsidy: 10 KVNC`, `premine:
-  200,000 KVNC`), while `/api/head → subsidy` reports the **running schedule**
-  (`200 KVNC`) and the chain has minted ~`blocks × 200 KVNC`. The seed is
-  RFC-006-era code serving a pre-reset (old-era) chain. This is why the
-  protocol repo's `RFC006_*` constants cannot be used as the parity fixture.
-- `/api/head` also returns extra fields (`native_minted`, `total`,
-  `circulating`, `burned`, `max_supply`) not produced by this checkout's
-  `explorer.rs` handler.
+- RFC-006 activation fork (2026-09-20) wiped all pre-RFC-006 balances and
+  reset the chain to the new genesis `9565fc20…` with subsidy 10 KVNC/block,
+  founder premine 0.2M KVNC, treasury 10M KVNC in vaults, max supply 90.2M KVNC.
+- The old genesis `3beecbeb…` (subsidy 200 KVNC, founder 200 KVNC) is obsolete.
+- `/api/bootstrap` now correctly reports RFC-006-era numbers including
+  `subsidy`, `founder_amount`, `founder_seed`, `max_supply`, `native_minted`,
+  `total`, `circulating`, `burned`.
+- `/api/head` returns `subsidy` (current, decaying), `native_minted`, `total`,
+  `circulating`, `burned`, `max_supply` — all matching RFC-006 tokenomics.

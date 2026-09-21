@@ -34,8 +34,8 @@ private const val FILTER_PREFIX_SIZE = 13
  */
 private fun defaultConfig() = LightConfig(
     k = 3u.toUShort(),
-    subsidy = 200uL * ATOM,
-    founderAmount = 200uL * ATOM,
+    subsidy = 10uL * ATOM,
+    founderAmount = 200_000uL * ATOM,
     founderSeed = 1u.toULong(),
     finalityDepth = ULong.MAX_VALUE,
     payloadPruningDepth = ULong.MAX_VALUE,

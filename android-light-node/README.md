@@ -75,12 +75,12 @@ It mirrors the `build-web` pattern:
 
 The app **must** reproduce the live network genesis before any UI work.
 
-**Live parameters (hard requirement):**
+**Live parameters (hard requirement, RFC-006):**
 ```kotlin
 LightConfig(
     k = 3,
-    subsidy = 20_000_000_000L,      // 200 KVNC in atoms
-    founderAmount = 20_000_000_000L,
+    subsidy = 1_000_000_000L,      // 10 KVNC in atoms
+    founderAmount = 20_000_000_000_000L, // 200,000 KVNC (0.2M) in atoms
     founderSeed = 1,
     finalityDepth = Long.MAX_VALUE,
     payloadPruningDepth = Long.MAX_VALUE
@@ -88,12 +88,12 @@ LightConfig(
 ```
 
 Derived from `crates/kovanica-node/src/explorer.rs` `genesis_node()` +
-`GENESIS_SUBSIDY` / `GENESIS_PREMINE` constants.
+RFC-006 constants (subsidy 10 KVNC, founder premine 0.2M KVNC).
 
 **Gate test** (already landed in Rust layer):
 - `LightConfig::default()` (subsidy 1000) → **diverges** from live genesis
-- Live params above → **exact match** to live genesis `596874ea…`
-- `receiveBlocks(live blob)` → 10 blocks applied, tip matches live `4927b982…`
+- Live params above → **exact match** to live genesis `9565fc20…`
+- `receiveBlocks(live blob)` → blocks applied, tip matches live
 
 **v0.1 testnet pins these params as app constants**; a node slice should add them to `/api/bootstrap` before mainnet.
 

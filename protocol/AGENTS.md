@@ -995,7 +995,7 @@ deterministic + adversarial tests per the conventions above.
     + `tests/fixtures/live-alpha-blocks.bin` (captured `GET /api/blocks` from
     seed1). Proof a phone `LightNode` boots to the live genesis and imports the
     live chain: default `LightConfig` diverges; live params are `LightConfig {
-    k:3, subsidy:200*ATOM, founder_amount:200*ATOM, founder_seed:1, pruning
+    k:3, subsidy:10*ATOM, founder_amount:200_000*ATOM, founder_seed:1, pruning
     MAX }` (ATOM=100_000_000, explorer `genesis_node()`), which reproduces the
     network genesis byte-for-byte; then `receive_blocks` converges to the live
     tip. v0.1 pins these params as app constants (`/api/bootstrap` doesn't

@@ -1,4 +1,11 @@
-# Soak Snapshot — 2026-09-03
+# Soak Snapshot — 2026-09-03 (PRE-RFC-006 HISTORICAL)
+
+> **Note:** This snapshot captures the **pre-RFC-006 chain** (genesis `596874eac2…`,
+> subsidy 200 KVNC/block, premine 200 KVNC). RFC-006 activated 2026-09-20 as a
+> consensus fork that wiped all pre-RFC-006 balances and reset the chain to
+> genesis `9565fc20…` with subsidy 10 KVNC/block, premine 200,000 KVNC (0.2M),
+> treasury 10M KVNC, max supply 90.2M KVNC. This document is kept for historical
+> soak analysis only.
 
 - **Captured:** 2026-09-03 (~01:30 local / 2026-09-02 23:30 UTC)
 - **Method:** public explorer API (Part A) + VPS Prometheus scrape over SSH (Part B)
@@ -9,7 +16,7 @@
   - `ssh -p 2222 root@145.223.116.178 "curl -s http://127.0.0.1:9090/metrics"` (seed node)
   - `ssh -p 2222 root@145.223.116.178 "curl -s http://127.0.0.1:19080/api/v1/label/__name__/values"` (Prometheus catalog)
 
-## Live values
+## Live values (pre-RFC-006 chain)
 
 | Field | Value |
 | --- | --- |

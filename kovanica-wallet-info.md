@@ -39,7 +39,7 @@ file snack upgrade pulse mesh stage cabbage reflect gym panic defense carry
 - **Testnet:** `kovanica-testnet`
 - **Explorer:** https://explorer.kovanica.online
 - **Faucet:** `curl -X POST https://explorer.kovanica.online/api/faucet -H "Content-Type: application/json" -d '{"address": "kvnc1A4XLkrefPBsXLwRH7kcRutGm3pgzrC7zJvAf8uiLLHqgdag"}'`
-- **Genesis hash:** `3beecbebb6103ee24d1617fd87e920c949d613febbbcf6ca1453f3a4bf74056e`
+- **Genesis hash:** `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97`
 
 ---
 

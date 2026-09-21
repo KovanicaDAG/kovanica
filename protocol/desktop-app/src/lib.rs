@@ -5,8 +5,9 @@
 //! Slice A ships the foundation the rest of the app is built on:
 //!
 //! - [`profile::NetworkProfile`] — the **verified live** consensus genesis parameters
-//!   (pre-RFC-006-era for testnet: 200 KVNC subsidy/premine, no treasury; dormant
-//!   RFC-006-era mainnet placeholder), kept in sync with `kovanica_state` constants;
+//!   (RFC-006-era for testnet: 10 KVNC subsidy, 200,000 KVNC premine, 10×1M KVNC
+//!   treasury vaults; dormant RFC-006-era mainnet placeholder), kept in sync with
+//!   `kovanica_state` constants;
 //! - [`service::NodeService`] — an embedded `kovanica-node::Node` booted with the
 //!   same genesis path as the explorer, plus the **genesis-parity gate**
 //!   ([`service::NodeService::verify_genesis_parity`]) that proves the local

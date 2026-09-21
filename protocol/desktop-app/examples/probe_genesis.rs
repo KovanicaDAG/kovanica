@@ -1,14 +1,16 @@
 //! Throwaway probe: reproduce the live testnet genesis id from candidate
 //! construction paths. Network-independent.
 //!
-//! Hypotheses being tested (AGENTS.md Slice 9a documented the old-era
-//! reproducer `LightConfig { k:3, subsidy:200*ATOM, founder_amount:200*ATOM,
-//! founder_seed:1 }`):
-//!   A) old-era, treasury=None, subsidy=200*ATOM, premine=200*ATOM
-//!   B) RFC-006-era, treasury=None,  subsidy=10*ATOM, premine=200_000*ATOM
-//!   C) RFC-006-era, treasury placeholder, 10*ATOM / 200_000*ATOM
+//! **RFC-006 is LIVE on testnet** (activated 2026-09-20). The live chain
+//! runs the RFC-006-era parameters with treasury vaults:
+//! `k:3`, subsidy `10*ATOM`, premine `200_000*ATOM`, founder_seed=1,
+//! treasury = 10 × 1M KVNC placeholder vaults.
+//!
+//! The old pre-RFC-006-era chain (genesis `3beecbeb…`, subsidy 200 KVNC,
+//! premine 200 KVNC, no treasury) is **obsolete** — the activation fork
+//! reset the chain.
 
-const LIVE_GENESIS: &str = "3beecbebb6103ee24d1617fd87e920c949d613febbbcf6ca1453f3a4bf74056e";
+const LIVE_GENESIS: &str = "9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97";
 const ATOM: u64 = 100_000_000;
 
 fn boot(
@@ -28,26 +30,26 @@ fn boot(
 
 fn main() {
     println!("target  {}", LIVE_GENESIS);
-    println!("A) old-era, no treasury, 200 KVNC sub + 200 KVNC premine");
-    let a = boot(3, 200 * ATOM, 200 * ATOM, 1, None);
-    println!(
-        "   => {a}  {}",
-        if a == LIVE_GENESIS { "MATCH" } else { "no" }
-    );
-    println!("B) RFC006-era, no treasury, 10 KVNC sub + 200,000 KVNC premine");
-    let b = boot(3, 10 * ATOM, 200_000 * ATOM, 1, None);
-    println!(
-        "   => {b}  {}",
-        if b == LIVE_GENESIS { "MATCH" } else { "no" }
-    );
-    println!("C) RFC006-era with placeholder treasury");
-    let c = boot(
+    println!("A) RFC-006-era with placeholder treasury (LIVE)");
+    let a = boot(
         3,
         10 * ATOM,
         200_000 * ATOM,
         1,
         Some(kovanica_node::TreasuryGenesis::placeholder()),
     );
+    println!(
+        "   => {a}  {}",
+        if a == LIVE_GENESIS { "MATCH" } else { "no" }
+    );
+    println!("B) RFC-006-era, no treasury (differs from live)");
+    let b = boot(3, 10 * ATOM, 200_000 * ATOM, 1, None);
+    println!(
+        "   => {b}  {}",
+        if b == LIVE_GENESIS { "MATCH" } else { "no" }
+    );
+    println!("C) Old pre-RFC-006-era (OBSOLETE — does not match live)");
+    let c = boot(3, 200 * ATOM, 200 * ATOM, 1, None);
     println!(
         "   => {c}  {}",
         if c == LIVE_GENESIS { "MATCH" } else { "no" }

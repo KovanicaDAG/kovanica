@@ -42,9 +42,9 @@ on the landed FFI foundation. Rules that carry into every slice:
   - `GET /api/mine/template` + `POST /api/mine/submit` — JSON block uplink
     (`parents: [hex]`, `work`, `timestamp_ms`, …). **Whether it accepts a
     staked (VRF) block is UNVERIFIED — slice 9d spike.**
-- **Network identity**: live network is `kovanica-testnet` (renamed from
-  `-1`); `/api/state` reports `network`, `k=3`; subsidy 200 KVNC/block, halving
-  every 500k blocks.
+- **Network identity**: live network is `kovanica-testnet` (RFC-006 activated);
+  `/api/state` reports `network`, `k=3`; subsidy 10 KVNC/block (geometric decay
+  ×¾ every 2M blocks), founder premine 0.2M KVNC, max supply 90.2M KVNC.
 - **Genesis divergence risk (highest)**: `LightNode::new(config)` boots a fresh
   node with an *in-process* genesis (`genesis_with_finality`) whose hash depends
   on `LightConfig {k, subsidy, founder_amount, founder_seed, …}`. If the phone's
@@ -52,7 +52,7 @@ on the landed FFI foundation. Rules that carry into every slice:
   /api/bootstrap → genesis` and `receive_blocks` may reject. **Slice 9a must
   prove genesis equality against the live network before any UI work.**
 - **FFI needs k/subsidy to match the network, not `LightConfig::default()`**
-  (default subsidy is 1000; live is 200). The app must derive `LightConfig`
+  (default subsidy is 1000; live is 10 KVNC = 1_000_000_000 atoms). The app must derive `LightConfig`
   from live `/api/state` + `/api/bootstrap` content.
 - **Stable Android stack (mid-2026, verified)**: AGP 8.13.2 / Gradle 8.13 /
   Kotlin 2.2.20–2.3.x; **targetSdk 36 is mandatory for Play by Aug 31 2026**;
@@ -216,22 +216,20 @@ at the Rust layer — the exact flow the Android app will run:
    (subsidy 1000) does NOT reproduce the live network genesis (divergence risk
    was real).
 2. `live_params_reproduce_testnet_genesis` — with `LightConfig { k:3,
-   subsidy: 200*ATOM, founder_amount: 200*ATOM, founder_seed:1,
+   subsidy: 10*ATOM, founder_amount: 200_000*ATOM, founder_seed:1,
    finality_depth: MAX, payload_pruning_depth: MAX }` (ATOM=100_000_000) the
-   node boots to the exact live genesis `596874ea…`, founder balance
-   `20000000000` atoms (200 KVNC).
+   node boots to the exact live genesis `9565fc20…`, founder balance
+   `20000000000000` atoms (200,000 KVNC = 0.2M KVNC).
 3. `light_node_imports_live_testnet_chain` — `receive_blocks(live blob)` → 10
-   blocks applied/known, `selected_tip` == live tip `4927b982…`, tip block
-   present.
+   blocks applied/known, `selected_tip` == live tip, tip block present.
 
-**Live genesis parameters (hard requirement for the app):** `k=3`,
-`subsidy=200*ATOM`, `founder_amount=200*ATOM`, `founder_seed=1`, pruning MAX.
-Derived from `crates/kovanica-node/src/explorer.rs` `genesis_node()` +
-`GENESIS_SUBSIDY/GENESIS_PREMINE` constants. `GET /api/bootstrap` exposes `k`,
-`atom`, `pow` but **not** subsidy/premine/seed — so v0.1 testnet pins these
-params as app constants; a node slice should add them to `/api/bootstrap`
-before mainnet. Genesis is deterministic (no wall-clock), so param-equality
-⇒ genesis-equality, proven above.
+**Live genesis parameters (hard requirement for the app, RFC-006):** `k=3`,
+`subsidy=10*ATOM` (10 KVNC/block), `founder_amount=200_000*ATOM` (0.2M KVNC),
+`founder_seed=1`, pruning MAX. Derived from `crates/kovanica-node/src/explorer.rs`
+`genesis_node()` + RFC-006 constants. `GET /api/bootstrap` exposes `k`,
+`atom`, `pow`, `subsidy`, `founder_amount`, `founder_seed` — v0.1 testnet pins
+these params as app constants. Genesis is deterministic (no wall-clock), so
+param-equality ⇒ genesis-equality, proven above.
 
 **Self-healing of the fixture:** if the network boots a new chain the fixture
 becomes stale; re-capture `GET /api/blocks` and update the `LIVE_*` constants.
