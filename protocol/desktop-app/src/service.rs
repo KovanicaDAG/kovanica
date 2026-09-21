@@ -10,14 +10,13 @@
 //! - no consensus logic is re-implemented — every call maps 1:1 to the node
 //!   crate API;
 //! - genesis parameters come from [`NetworkProfile`], never invented locally;
-//! - treasury inclusion is **explicit** (`treasury: None` here) — the live
-//!   testnet is a pre-RFC-006-era chain with no treasury, and only that
-//!   construction reproduces the live genesis (proven by
-//!   `examples/probe_genesis.rs`). When the RFC-006-era chain activates,
-//!   booting must switch to `Some(TreasuryGenesis::…)` in the same change
-//!   that updates `NetworkProfile::testnet()`.
+//! - treasury inclusion is **explicit**: the live testnet runs the RFC-006-era
+//!   chain with the deterministic placeholder treasury (10×1M KVNC vaults),
+//!   and only that construction reproduces the live genesis `9565fc20…`
+//!   (proven by `examples/probe_genesis.rs` and the node crate's own
+//!   `genesis_with_placeholder_treasury_matches_live_testnet_genesis` test).
 
-use kovanica_node::{Node, NodeError};
+use kovanica_node::{Node, NodeError, TreasuryGenesis};
 
 use crate::profile::NetworkProfile;
 
@@ -92,11 +91,12 @@ impl NodeService {
     /// Refuses to boot dormant profiles (mainnet), mirroring the explorer's
     /// `KOVANICA_MAINNET_OVERRIDE` fail-fast guard.
     ///
-    /// `treasury: None` is deliberate and load-bearing: the live testnet's
-    /// genesis coinbase has a single founder output (no RFC-006 treasury
-    /// tranches). Passing a treasury changes the coinbase and therefore the
-    /// genesis id (`9565fc20…` instead of the live `3beecbeb…`), so the
-    /// genesis-parity gate would fail.
+    /// Treasury inclusion is **explicit** — the node crate never infers it
+    /// from the premine amount. The live testnet's genesis coinbase includes
+    /// the RFC-006 treasury tranches (10×1M KVNC vaults with placeholder
+    /// keys), so we pass `Some(TreasuryGenesis::placeholder())` — the same
+    /// construction the explorer's `genesis_node()` uses to reproduce the
+    /// live genesis `9565fc20…`.
     pub fn boot(&mut self) -> Result<(String, String), BootError> {
         if self.profile.dormant {
             return Err(BootError::DormantNetwork(self.profile.id));
@@ -108,7 +108,7 @@ impl NodeService {
                 self.profile.genesis_subsidy,
                 self.profile.genesis_premine,
                 self.profile.founder_seed,
-                None,
+                Some(TreasuryGenesis::placeholder()),
                 self.profile.finality_depth,
                 self.profile.payload_pruning_depth,
             )

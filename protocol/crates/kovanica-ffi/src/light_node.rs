@@ -309,7 +309,7 @@ impl LightNode {
             config.founder_amount,
             config.founder_seed,
             // RFC-006 genesis gate: the live light-node config uses
-            // founder_amount = RFC006_PREMINE (200 KVNC), so the genesis
+            // founder_amount = RFC006_PREMINE (200_000 KVNC = 0.2M KVNC), so the genesis
             // coinbase must include the 10x1M treasury vaults with the
             // placeholder keys to reproduce the live network genesis
             // (9565fc20…). Non-standard premines stay treasury-less.

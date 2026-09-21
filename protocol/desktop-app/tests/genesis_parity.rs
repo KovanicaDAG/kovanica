@@ -1,20 +1,22 @@
 //! Offline genesis-parity regression suite (Slice A gate).
 //!
-//! Fixtures captured from the **live network on 2026-09-17**:
+//! Fixtures captured from the **live network on 2026-09-21** (post-RFC-006 activation):
 //! - `GET https://explorer.kovanica.online/api/bootstrap` → genesis, network
 //! - `GET https://explorer.kovanica.online/api/head` → genesis, blocks
 //!
-//! The live chain is a **pre-RFC-006-era** chain: `k:3`, `200 * ATOM` subsidy
-//! and premine, founder seed 1, no treasury. These are the only values that
-//! reproduce the live genesis `3beecbeb…b74056e` (verified by
-//! `examples/probe_genesis.rs`). The deployed binary's
-//! `/api/bootstrap → light_config` reports RFC-006-era numbers (`subsidy:
-//! 10 KVNC`, `premine: 200_000 KVNC`) that do **not** reproduce the live
-//! genesis — it is RFC-006-era code serving a pre-reset chain. Do not use
-//! those fields as the parity fixture.
+//! **RFC-006 is LIVE on testnet** (activated 2026-09-20 as a consensus fork
+//! that wiped all pre-RFC-006 balances). The live chain now runs the
+//! RFC-006-era parameters: `k:3`, subsidy `10 * ATOM` (10 KVNC/block), premine
+//! `200_000 * ATOM` (200,000 KVNC = 0.2M KVNC), founder seed 1, treasury
+//! `10 × 1M KVNC` vaults, `finality_depth 100`, `payload_pruning_depth 1000`.
+//! This reproduces the live genesis `9565fc20…` byte-for-byte (verified by
+//! `examples/probe_genesis.rs`).
 //!
-//! Refresh this fixture only on a deliberate network reset (e.g. the RFC-006
-//! activation the protocol repo describes), together with
+//! The old pre-RFC-006-era chain (genesis `3beecbeb…`, subsidy 200 KVNC,
+//! premine 200 KVNC, no treasury) is **obsolete** — the activation fork reset
+//! the chain.
+//!
+//! Refresh this fixture only on a deliberate network reset, together with
 //! `NetworkProfile::testnet()` and `examples/probe_genesis.rs`. See
 //! `examples/genesis_parity_live.rs` for the live, network-dependent check.
 
@@ -25,14 +27,14 @@ use kovanica_desktop::profile::{
 use kovanica_desktop::service::NodeService;
 
 /// Live testnet genesis id, reported by `/api/bootstrap` + `/api/head`
-/// (captured 2026-09-17). The embedded node must reproduce this exactly.
-const LIVE_GENESIS: &str = "3beecbebb6103ee24d1617fd87e920c949d613febbbcf6ca1453f3a4bf74056e";
+/// (captured 2026-09-21, post-RFC-006 activation). The embedded node must reproduce this exactly.
+const LIVE_GENESIS: &str = "9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97";
 
-/// Live chain facts used by the gate (captured 2026-09-17).
+/// Live chain facts used by the gate (captured 2026-09-21, post-RFC-006 activation).
 const LIVE_NETWORK: &str = NETWORK_TESTNET;
 const LIVE_K: u16 = 3;
-const LIVE_SUBSIDY_ATOMS: u64 = 200 * ATOM; // 200 KVNC/block — live /api/head
-const LIVE_PREMINE_ATOMS: u64 = 200 * ATOM; // 200 KVNC — old-era genesis coinbase
+const LIVE_SUBSIDY_ATOMS: u64 = 10 * ATOM; // 10 KVNC/block — live /api/head (RFC-006)
+const LIVE_PREMINE_ATOMS: u64 = 200_000 * ATOM; // 200,000 KVNC — RFC-006 genesis coinbase
 const LIVE_FOUNDER_SEED: u64 = 1;
 const LIVE_FINALITY_DEPTH: u64 = TESTNET_FINALITY_DEPTH;
 const LIVE_PAYLOAD_PRUNING_DEPTH: u64 = TESTNET_PAYLOAD_PRUNING_DEPTH;
@@ -49,8 +51,8 @@ fn local_genesis_matches_live_network() {
 #[test]
 fn testnet_profile_matches_the_verified_live_chain() {
     // The construction `examples/probe_genesis.rs` proved reproduces the live
-    // genesis byte-for-byte. Keep it pinned; the RFC-006-era schedule is a
-    // future reset, not the live network.
+    // genesis byte-for-byte. Keep it pinned; the old pre-RFC-006-era schedule is
+    // obsolete — the activation fork reset the chain.
     let live = NetworkProfile {
         id: LIVE_NETWORK,
         genesis_k: LIVE_K,
@@ -69,16 +71,16 @@ fn testnet_profile_matches_the_verified_live_chain() {
 }
 
 #[test]
-fn live_subsidy_and_premine_are_the_old_era_values() {
-    // Guards against a well-meaning "upgrade" to the RFC-006-era constants
-    // (10 KVNC / 200,000 KVNC), which the probe shows does NOT reproduce the
-    // live genesis. If this fails, the network was reset to RFC-006-era
-    // parameters: update `NetworkProfile::testnet()`, this fixture and
+fn live_subsidy_and_premine_are_the_rfc006_values() {
+    // Guards against a well-meaning "downgrade" to the old pre-RFC-006-era constants
+    // (200 KVNC / 200 KVNC), which the probe shows does NOT reproduce the live
+    // genesis. If this fails, the network was reset to old-era parameters:
+    // update `NetworkProfile::testnet()`, this fixture and
     // `examples/probe_genesis.rs` together — never one alone.
-    assert_eq!(TESTNET_LIVE_SUBSIDY, 200 * ATOM);
-    assert_eq!(TESTNET_LIVE_PREMINE, 200 * ATOM);
-    assert_ne!(NetworkProfile::testnet().genesis_subsidy, 10 * ATOM);
-    assert_ne!(NetworkProfile::testnet().genesis_premine, 200_000 * ATOM);
+    assert_eq!(TESTNET_LIVE_SUBSIDY, 10 * ATOM);
+    assert_eq!(TESTNET_LIVE_PREMINE, 200_000 * ATOM);
+    assert_ne!(NetworkProfile::testnet().genesis_subsidy, 200 * ATOM);
+    assert_ne!(NetworkProfile::testnet().genesis_premine, 200 * ATOM);
 }
 
 #[test]

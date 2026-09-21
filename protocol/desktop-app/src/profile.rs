@@ -8,21 +8,17 @@
 //!
 //! ## Which parameters are live?
 //!
-//! As of 2026-09-17 the deployed testnet runs a **pre-RFC-006-era** chain:
-//! `k:3`, subsidy `200 * ATOM`, premine `200 * ATOM`, founder seed 1, **no
-//! treasury**, `finality_depth 100`, `payload_pruning_depth 1000`. This is the
-//! only construction that reproduces the live genesis
-//! `3beecbeb…b74056e` byte-for-byte (verified by
-//! `examples/probe_genesis.rs`): the RFC-006-era parameters move to the
-//! emission schedule that the protocol repo's `main` describes (10 KVNC/block,
-//! 200,000 KVNC premine, treasury), which is *not yet activated on the
-//! network* — the deployed seed runs RFC-006-era code over old-era chain data
-//! (its `/api/head` edge fields are RFC-006-era; its genesis and 200 KVNC
-//! subsidy are old-era).
+//! **RFC-006 is LIVE on testnet** (activated 2026-09-20 as a consensus fork
+//! that wiped all pre-RFC-006 balances). The live testnet now runs the
+//! RFC-006-era chain: `k:3`, subsidy `10 * ATOM` (10 KVNC/block), premine
+//! `200_000 * ATOM` (200,000 KVNC = 0.2M KVNC), founder seed 1, treasury
+//! `10 × 1M KVNC` vaults, `finality_depth 100`, `payload_pruning_depth 1000`.
+//! This reproduces the live genesis `9565fc20…` byte-for-byte (verified by
+//! `examples/probe_genesis.rs` and `tests/genesis_parity.rs`).
 //!
-//! Do **not** re-derive genesis constants here — pin the values this crate's
-//! genesis-parity gate proves (the live chain), and keep the RFC-006-era
-//! constants for the dormant mainnet placeholder / future activation.
+//! The old pre-RFC-006-era chain (genesis `3beecbeb…`, subsidy 200 KVNC,
+//! premine 200 KVNC, no treasury) is **obsolete** — the activation fork reset
+//! the chain. These old values are kept only for historical reference.
 
 use kovanica_state::{RFC006_GENESIS_SUBSIDY, RFC006_PREMINE};
 
@@ -39,17 +35,16 @@ pub const TESTNET_PAYLOAD_PRUNING_DEPTH: u64 = 1000;
 /// 1 KVNC = 10^8 atoms (same value as `explorer.rs::ATOM`).
 pub const ATOM: u64 = 100_000_000;
 
-/// Pre-RFC-006-era live testnet issuance: 200 KVNC/block (atoms).
+/// RFC-006 live testnet issuance: 10 KVNC/block (atoms).
 ///
 /// The genesis-parity gate verified this is the *only* value that reproduces
-/// the live genesis `3beecbeb…` (see the module docs and
-/// `examples/probe_genesis.rs`). The RFC-006-era constant
-/// `RFC006_GENESIS_SUBSIDY` (10 KVNC) is not live on the network yet.
-pub const TESTNET_LIVE_SUBSIDY: u64 = 200 * ATOM;
-/// Pre-RFC-006-era live founder premine: 200 KVNC (atoms).
+/// the live genesis `9565fc20…` (see the module docs and
+/// `examples/probe_genesis.rs`).
+pub const TESTNET_LIVE_SUBSIDY: u64 = 10 * ATOM;
+/// RFC-006 live founder premine: 200,000 KVNC (atoms).
 ///
-/// Matches `kovanica-node`'s explorer `GENESIS_PREMINE` (old-era).
-pub const TESTNET_LIVE_PREMINE: u64 = 200 * ATOM;
+/// Matches `kovanica-node`'s explorer `GENESIS_PREMINE` (RFC-006 era).
+pub const TESTNET_LIVE_PREMINE: u64 = 200_000 * ATOM;
 
 /// A network identity: id, genesis parameters, and data-dir isolation (slice B
 /// wires the data dir / `network` marker file enforcement).
@@ -79,12 +74,12 @@ pub struct NetworkProfile {
 impl NetworkProfile {
     /// The live testnet — the default profile.
     ///
-    /// Verified construction (2026-09-17): the live network runs a
-    /// **pre-RFC-006-era** chain — `k:3`, subsidy + premine both `200 * ATOM`,
-    /// founder seed 1, no treasury. Only these values reproduce the live
-    /// genesis `3beecbeb…b74056e` (see `examples/probe_genesis.rs` and Slice
-    /// 9a of `AGENTS.md`, which pins `LightConfig { k:3, subsidy:200*ATOM,
-    /// founder_amount:200*ATOM, founder_seed:1 }`).
+    /// Verified construction (2026-09-21, post-RFC-006 activation): the live
+    /// network runs the **RFC-006-era** chain — `k:3`, subsidy `10 * ATOM`,
+    /// premine `200_000 * ATOM`, founder seed 1, treasury `10 × 1M KVNC`
+    /// placeholder vaults, `finality_depth 100`, `payload_pruning_depth 1000`.
+    /// Only these values reproduce the live genesis `9565fc20…` (see
+    /// `examples/probe_genesis.rs` and `tests/genesis_parity.rs`).
     pub fn testnet() -> Self {
         Self {
             id: NETWORK_TESTNET,

@@ -50,7 +50,7 @@ live network, per `docs/plans/android-light-node-app.md` slice 9a:
 
 | Check | Expected |
 | --- | --- |
-| local genesis == `/api/bootstrap.genesis` | `596874eac2…` |
+| local genesis == `/api/bootstrap.genesis` | `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97` |
 | `/api/blocks` import converges | 10 blocks |
 | local tip == `/api/bootstrap.tip` | matches seed1 tip |
 

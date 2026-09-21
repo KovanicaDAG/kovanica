@@ -29,11 +29,11 @@ class KovanicaApplication : Application() {
         if (lightNode != null) return@withContext lightNode!!
         
         // Live network parameters (from /api/bootstrap + /api/state)
-        // k=3, subsidy=200*ATOM, founder_amount=200*ATOM, founder_seed=1, pruning MAX
+        // k=3, subsidy=10*ATOM, founder_amount=200_000*ATOM (0.2M KVNC), founder_seed=1, pruning MAX
         val config = LightConfig(
             k = 3,
-            subsidy = 20_000_000_000L, // 200 KVNC in atoms
-            founderAmount = 20_000_000_000L, // 200 KVNC in atoms
+            subsidy = 1_000_000_000L, // 10 KVNC in atoms
+            founderAmount = 20_000_000_000_000L, // 200,000 KVNC (0.2M) in atoms
             founderSeed = 1,
             finalityDepth = Long.MAX_VALUE, // MAX pruning
             payloadPruningDepth = Long.MAX_VALUE
