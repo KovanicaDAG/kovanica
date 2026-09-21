@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
+      - 'node/crates/kovanica-ffi/**'
       - 'protocol/crates/kovanica-ffi/**'
-      - 'protocol/scripts/build-android.sh'
       - '.github/workflows/build-android.yml'
   pull_request:
     branches: [main]
     paths:
+      - 'node/crates/kovanica-ffi/**'
       - 'protocol/crates/kovanica-ffi/**'
-      - 'protocol/scripts/build-android.sh'
       - '.github/workflows/build-android.yml'
   workflow_dispatch:
 
@@ -22,7 +22,8 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: protocol/crates/kovanica-ffi
+        working-directory: node/crates/kovanica-ffi
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,10 +33,10 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          target: aarch64-linux-android, x86_64-linux-android
+          targets: aarch64-linux-android, x86_64-linux-android
 
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk
+        run: cargo install cargo-ndk --locked
 
       - name: Setup Android NDK
         uses: android-actions/setup-android@v3
@@ -51,8 +52,8 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            protocol/crates/kovanica-ffi/target
-            protocol/crates/kovanica-ffi/android/src/main/jniLibs
+            node/crates/kovanica-ffi/target
+            node/crates/kovanica-ffi/android/src/main/jniLibs
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
@@ -68,72 +69,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kovanica-ffi-aar
-          path: protocol/crates/kovanica-ffi/android/
+          path: node/crates/kovanica-ffi/android/
+          if-no-files-found: error
           retention-days: 7
-
-  # Future: build-apk job (requires android-light-node/ module in repo)
-  # build-apk:
-  #   name: Build APK (android-light-node)
-  #   needs: build-aar
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 30
-  #   defaults:
-  #     run:
-  #       working-directory: android-light-node
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #       with:
-  #         submodules: recursive
-  #     - name: Download AAR
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: kovanica-ffi-aar
-  #         path: android/src/main/jniLibs
-  #     - name: Setup JDK
-  #       uses: actions/setup-java@v4
-  #       with:
-  #         distribution: temurin
-  #         java-version: 21
-  #     - name: Setup Android SDK
-  #       uses: android-actions/setup-android@v3
-  #       with:
-  #         api-level: 36
-  #         ndk-version: r27c
-  #         cache-key: ${{ runner.os }}-android-sdk-36
-  #     - name: Cache Gradle
-  #       uses: actions/cache@v4
-  #       with:
-  #         path: |
-  #           ~/.gradle/caches
-  #           ~/.gradle/wrapper
-  #         key: ${{ runner.os }}-gradle-${{ hashFiles('**/gradle/libs.versions.toml') }}
-  #         restore-keys: |
-  #           ${{ runner.os }}-gradle-
-  #     - name: Build APK (debug)
-  #       run: ./gradlew assembleDebug
-  #     - name: Upload APK artifact
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: kovanica-lightnode-apk-debug
-  #         path: app/build/outputs/apk/debug/*.apk
-  #         retention-days: 7
-
-  # Future: bindings drift guard (mirrors sync-public-node.yml pattern)
-  # bindings-check:
-  #   name: Check UniFFI bindings drift
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Regenerate bindings
-  #       run: |
-  #         cd protocol/crates/kovanica-ffi
-  #         cargo run --bin uniffi-bindgen generate --library target/release/libkovanica_ffi.so --language kotlin --out-dir bindings/kotlin
-  #         cargo run --bin uniffi-bindgen generate --library target/release/libkovanica_ffi.so --language swift --out-dir bindings/swift
-  #     - name: Check diff
-  #       run: |
-  #         if ! git diff --quiet protocol/crates/kovanica-ffi/bindings/; then
-  #           echo "❌ Bindings drifted! Commit the regenerated bindings."
-  #           git diff protocol/crates/kovanica-ffi/bindings/
-  #           exit 1
-  #         fi
