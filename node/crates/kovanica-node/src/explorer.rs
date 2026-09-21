@@ -1273,13 +1273,9 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             .unwrap_or_default();
         let pow = n.map(|n| n.proof_of_work()).unwrap_or(false);
         let min_fee = n.map(|n| n.min_fee()).unwrap_or(0);
-        let peers = jarr(
-            app.peers
-                .iter()
-                .cloned()
-                .chain(std::iter::once(app.listen_addr.clone()).filter(|s| !s.is_empty()))
-                .map(|s| jstr(&s)),
-        );
+        // Peers are dialable addresses only; the node's own listen spec is
+        // reported separately in the `listen` field and must not leak here.
+        let peers = jarr(app.peers.iter().map(|s| jstr(s)));
         let profile = network_profile();
 
         // RFC-006 supply metrics from the ledger
@@ -1312,7 +1308,7 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             circulating,
             burned,
             max_supply,
-            jstr(&app.mesh.node("alpha").and_then(|n| n.operator_wallet().map(|w| w.address().to_kvnc())).unwrap_or_else(|| "".to_string())),
+            jstr(&app.mesh.node("alpha").and_then(|n| n.operator_wallet().map(|w| w.address().to_kvnc())).unwrap_or_default()),
             profile.genesis_k,
             profile.genesis_subsidy,
             profile.genesis_premine,
@@ -2339,7 +2335,7 @@ fn parse_coinjoin_participants(body_str: &str) -> Result<Vec<CoinJoinParticipant
         let asset_id = p
             .get("asset_id")
             .and_then(|v| v.as_str())
-            .map(|s| {
+            .and_then(|s| {
                 let raw = hex::decode(s.trim()).ok()?;
                 if raw.len() != 32 {
                     return None;
@@ -2347,8 +2343,7 @@ fn parse_coinjoin_participants(body_str: &str) -> Result<Vec<CoinJoinParticipant
                 Some(AssetId::from_bytes(
                     <[u8; 32]>::try_from(raw.as_slice()).ok()?,
                 ))
-            })
-            .flatten();
+            });
         out.push(CoinJoinParticipant {
             from: parse_addr(address)?,
             outputs: vec![TxOutput::new(amount, asset_id, parse_addr(recipient)?)],
@@ -2434,7 +2429,7 @@ fn parse_coinjoin_prepared(body_str: &str) -> Result<CoinJoinPrepared, String> {
 
 /// Serialize CoinJoinPrepared to JSON string.
 fn serialize_coinjoin_prepared(prepared: &CoinJoinPrepared) -> String {
-    let sighashes_hex: Vec<String> = prepared.sighashes.iter().map(|s| hex::encode(s)).collect();
+    let sighashes_hex: Vec<String> = prepared.sighashes.iter().map(hex::encode).collect();
     let outpoints_hex: Vec<String> = prepared
         .outpoints
         .iter()
@@ -2859,12 +2854,12 @@ fn history_json(
             });
             let metadata_hash =
                 row_asset.and_then(|id| asset_registry.get(&id).and_then(|e| e.metadata_hash));
-            let meta_hash = metadata_hash.map(|h| hex::encode(h));
+            let meta_hash = metadata_hash.map(hex::encode);
             let collection_id =
                 row_asset.and_then(|id| asset_registry.get(&id).and_then(|e| e.collection_id));
-            let coll_id = collection_id.map(|c| hex::encode(c));
+            let coll_id = collection_id.map(hex::encode);
             let asset_kind_json = kind_str
-                .map(|s| jstr(s))
+                .map(jstr)
                 .unwrap_or_else(|| "null".to_string());
             let metadata_hash_json = meta_hash
                 .as_deref()
@@ -2932,9 +2927,9 @@ fn utxos_json(
                 kovanica_state::AssetKind::Fungible => "fungible",
                 kovanica_state::AssetKind::NonFungible => "nft",
             });
-            let meta_hash = metadata_hash.map(|h| hex::encode(h));
-            let coll_id = collection_id.map(|c| hex::encode(c));
-            let asset_kind_json = kind_str.map(|s| jstr(s)).unwrap_or_else(|| "null".to_string());
+            let meta_hash = metadata_hash.map(hex::encode);
+            let coll_id = collection_id.map(hex::encode);
+            let asset_kind_json = kind_str.map(jstr).unwrap_or_else(|| "null".to_string());
             let metadata_hash_json = meta_hash.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
             let collection_id_json = coll_id.as_deref().map(jstr).unwrap_or_else(|| "null".to_string());
             format!(
@@ -3004,9 +2999,9 @@ fn nft_detail_json(
     }
 
     let kind_str = "nft";
-    let meta_hash = entry.metadata_hash.map(|h| hex::encode(h));
-    let coll_id = entry.collection_id.map(|c| hex::encode(c));
-    let creator = entry.creator.map(|c| hex::encode(c));
+    let meta_hash = entry.metadata_hash.map(hex::encode);
+    let coll_id = entry.collection_id.map(hex::encode);
+    let creator = entry.creator.map(hex::encode);
     let meta_hash_json = meta_hash
         .as_deref()
         .map(jstr)
@@ -3081,7 +3076,7 @@ fn collection_detail_json(
                     break;
                 }
             }
-            let meta_hash = entry.metadata_hash.map(|h| hex::encode(h));
+            let meta_hash = entry.metadata_hash.map(hex::encode);
             let meta_hash_json = meta_hash
                 .as_deref()
                 .map(jstr)
@@ -3112,7 +3107,7 @@ fn collection_detail_json(
 /// Derive RWA asset_id from issuer key and parameters (KVP-106).
 /// POST /api/rwa/derive
 fn rwa_derive_json(
-    app: &Explorer,
+    _app: &Explorer,
     q: &std::collections::HashMap<String, String>,
 ) -> Result<String, String> {
     let issuer = q.get("issuer").ok_or("issuer required")?;
@@ -3138,7 +3133,7 @@ fn rwa_derive_json(
     hasher.update(issuer_arr);
     hasher.update(asset_class.as_bytes());
     hasher.update(unique_id.as_bytes());
-    hasher.update(&[version]);
+    hasher.update([version]);
     let result = hasher.finalize();
     let mut asset_id_arr = [0u8; 32];
     asset_id_arr.copy_from_slice(&result);
@@ -3200,10 +3195,10 @@ fn rwa_detail_json(
         }
     }
 
-    let kind_str = "rwa";
-    let meta_hash = entry.metadata_hash.map(|h| hex::encode(h));
-    let coll_id = entry.collection_id.map(|c| hex::encode(c));
-    let creator = entry.creator.map(|c| hex::encode(c));
+    let _kind_str = "rwa";
+    let meta_hash = entry.metadata_hash.map(hex::encode);
+    let coll_id = entry.collection_id.map(hex::encode);
+    let creator = entry.creator.map(hex::encode);
     let meta_hash_json = meta_hash
         .as_deref()
         .map(jstr)
@@ -3969,7 +3964,7 @@ mod tests {
         assert!(n.is_object());
         assert_eq!(n["token"].as_str().unwrap(), "KVNC");
         assert_eq!(n["ui"].as_str().unwrap(), "v5");
-        assert_eq!(n["pow"].as_bool().unwrap(), true);
+        assert!(n["pow"].as_bool().unwrap());
         // One genesis node: 200,000 KVNC premine + 10×1,000,000 KVNC treasury
         // = 10,200,000 KVNC = 1,020,000,000,000,000 atoms.
         assert_eq!(n["supply"].as_u64().unwrap(), 1_020_000_000_000_000);
@@ -4386,6 +4381,19 @@ mod tests {
         assert_eq!(status, 200);
         let json: serde_json::Value = serde_json::from_str(&body).expect("bootstrap JSON");
 
+        // Regression: /api/bootstrap must advertise dialable peers only. The
+        // node's own listen spec is reported in `listen`; leaking it into
+        // `peers` yields an undialable "0.0.0.0:9000,[::]:9000" entry.
+        let listen = json["listen"].as_str().unwrap_or("");
+        for peer in json["peers"].as_array().expect("peers array") {
+            let peer = peer.as_str().unwrap();
+            assert!(
+                !peer.contains("0.0.0.0") && !peer.contains("[::]"),
+                "peers must not contain the listen spec: {peer}"
+            );
+            assert_ne!(peer, listen, "peers must not include the node's own listen address");
+        }
+
         // Existing top-level fields remain for backward compatibility.
         assert_eq!(json["network"].as_str().unwrap(), profile.id);
         assert_eq!(json["k"].as_u64().unwrap(), u64::from(profile.genesis_k));
@@ -4441,7 +4449,6 @@ mod tests {
     #[test]
     fn test_http_mine_submit_accepts_staked_wire_block() {
         use kovanica_dag::vrf_keypair_from_seed;
-        use kovanica_state::stake::bond_tag;
         use kovanica_state::{KeyPair, Transaction, TxOutput};
 
         let mut app = Explorer::boot();
@@ -4538,7 +4545,6 @@ mod tests {
     #[test]
     fn test_http_mine_submit_wire_rejects_ineligible_staked_block() {
         use kovanica_dag::vrf_keypair_from_seed;
-        use kovanica_state::stake::bond_tag;
         use kovanica_state::{KeyPair, Transaction, TxOutput};
 
         let mut app = Explorer::boot();
@@ -4992,7 +4998,7 @@ mod tests {
         // one credit per block. Use three different send amounts so each tx
         // has a distinct id (pool() derives the tx from amount+fee+nonce).
         let addr = kovanica_state::KeyPair::from_u64(2).address().to_hex();
-        for amount in [1 * ATOM, 2 * ATOM, 3 * ATOM] {
+        for amount in [ATOM, 2 * ATOM, 3 * ATOM] {
             app.mesh.pool("alpha", 1, amount, 2).unwrap();
             app.mesh.produce("alpha").unwrap();
         }
