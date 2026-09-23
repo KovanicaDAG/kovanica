@@ -62,7 +62,7 @@ async function runVerification() {
 
     const kvncAddr = hexToKvnc(pubResult.address);
     assert.ok(kvncAddr.startsWith("kvnc") && kvncAddr.endsWith("dag"), `Formatted address ${kvncAddr} should start with kvnc and end with dag`);
-    assert.equal(parseAddr(kvncAddr), pubResult.address, "Parsed kvnc...dag address matches raw 64-hex");
+    assert.equal(parseAddr(kvncAddr), parseAddr(pubResult.address), "Parsed kvnc...dag address matches versioned 66-hex");
 
     keys.push({
       account: acc,

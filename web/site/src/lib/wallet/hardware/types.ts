@@ -16,7 +16,7 @@ export interface HardwareDeviceInfo {
 export interface HardwarePublicKeyResult {
   publicKey: string; // 32 bytes -> 64 lowercase hex characters
   address: string;   // 64 lowercase hex characters (matches Ed25519 pubkey)
-  path: string;      // BIP-44 path, e.g. "m/44'/999'/0'/0/0"
+  path: string;      // BIP-44 path, e.g. "m/44'/3007'/0'/0/0"
 }
 
 export interface HardwareSignResult {

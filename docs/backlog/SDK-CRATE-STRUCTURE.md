@@ -59,7 +59,7 @@ sdk/                                 # Cargo workspace root (monorepo)
 - Phrase parse + optional passphrase ("25th word")
 - `Keypair::from_seed` / `from_mnemonic` / `from_mnemonic_at(index)` — see the crate
 - `address()` — `kvnc` + base58(0x00 ‖ pubkey) + `dag`, matching the node
-- **Frozen derivation:** SLIP-0010 ed25519 `m/44'/917'/0'/0'/i'` (all hardened) — `DERIVATION.md`
+- **Frozen derivation:** SLIP-0010 ed25519 `m/44'/3007'/0'/0'/i'` (all hardened) — `DERIVATION.md`
 - `sign(message) → Signature`; `verify` (strict)
 - Known-answer vectors: `crates/kovanica-keys/tests/slip10_vectors.rs`
   (verified against the official SLIP-0010 test vectors)

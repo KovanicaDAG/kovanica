@@ -44,9 +44,9 @@ make delete
 ## BIP-44 Path
 
 ```
-m / 44' / 11111' / account' / change / address_index
+m / 44' / 3007' / account' / change / address_index
           ↑
-     Coin type (unregistered, 11111 = Kovanica)
+     Coin type (unregistered, 3007 = Kovanica)
 ```
 
 ## Transaction Format

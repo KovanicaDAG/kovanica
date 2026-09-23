@@ -238,13 +238,15 @@ export function localState(): ApiState {
 }
 
 function balanceOf(addr: string): number {
-  return store().utxos.filter((u) => u.owner === addr).reduce((n, u) => n + u.value, 0);
+  const normalized = parseAddr(addr) ?? addr;
+  return store().utxos.filter((u) => u.owner === normalized).reduce((n, u) => n + u.value, 0);
 }
 
 export function localUtxos(address: string): ApiUtxos | string {
   if (!isAddr(address)) return address ? "address must be 32 bytes" : "address required";
+  const normalized = parseAddr(address) ?? address.toLowerCase();
   const utxos = store()
-    .utxos.filter((u) => u.owner.toLowerCase() === address.toLowerCase())
+    .utxos.filter((u) => u.owner.toLowerCase() === normalized.toLowerCase())
     .map(({ tx, index, value }) => ({ tx, index, value }));
   const balance = utxos.reduce((n, u) => n + u.value, 0);
   return { address, balance, utxos };
@@ -253,7 +255,8 @@ export function localUtxos(address: string): ApiUtxos | string {
 export function localHistory(address: string): ApiHistory | string {
   if (!isAddr(address)) return address ? "address must be 32 bytes" : "address required";
   const s = store();
-  const txs = s.history.filter((h) => h.owner.toLowerCase() === address.toLowerCase()).map(({ owner: _o, ...rest }) => rest);
+  const normalized = parseAddr(address) ?? address.toLowerCase();
+  const txs = s.history.filter((h) => h.owner.toLowerCase() === normalized.toLowerCase()).map(({ owner: _o, ...rest }) => rest);
   return { address, balance: balanceOf(address), txs };
 }
 
@@ -363,23 +366,26 @@ export function localProduce(): { ok: true; block: string } | string {
   block.txs = block.txs.filter((t) => t.coinbase);
   const cb = block.txs[0];
   if (cb && miner) {
-    s.utxos.push({ tx: cb.id, index: 0, value: cb.amount, owner: miner });
-    s.history.push({ owner: miner, block: block.id, tx: cb.id, kind: "coinbase", delta: cb.amount });
+    const minerH = parseAddr(miner) ?? miner;
+    s.utxos.push({ tx: cb.id, index: 0, value: cb.amount, owner: minerH });
+    s.history.push({ owner: minerH, block: block.id, tx: cb.id, kind: "coinbase", delta: cb.amount });
   }
   const queued = s.pending.splice(0, s.pending.length);
   for (const p of queued) {
     const spent = spend(s, p.outpoint);
     if (!spent) continue;
+    const fromH = parseAddr(p.from) ?? p.from;
+    const toH = parseAddr(p.to) ?? p.to;
     s.history.push({
-      owner: p.from,
+      owner: fromH,
       block: block.id,
       tx: p.id,
       kind: "out",
       delta: -(p.amount + p.fee),
     });
-    const outs: { owner: string; value: number }[] = [{ owner: p.to, value: p.amount }];
+    const outs: { owner: string; value: number }[] = [{ owner: toH, value: p.amount }];
     const change = spent.value - p.amount - p.fee;
-    if (change > 0) outs.push({ owner: p.from, value: change });
+    if (change > 0) outs.push({ owner: fromH, value: change });
     const tx: Tx = { id: p.id, coinbase: false, from: p.from, to: p.to, amount: p.amount };
     addTx(block, tx, outs);
   }
@@ -392,8 +398,9 @@ export function localMine(): { ok: true; block: string } {
   const block = mineBlock(s.blocks, undefined, s.miner);
   const cb = block.txs[0];
   if (cb && s.miner) {
-    s.utxos.push({ tx: cb.id, index: 0, value: cb.amount, owner: s.miner });
-    s.history.push({ owner: s.miner, block: block.id, tx: cb.id, kind: "coinbase", delta: cb.amount });
+    const minerH = parseAddr(s.miner) ?? s.miner;
+    s.utxos.push({ tx: cb.id, index: 0, value: cb.amount, owner: minerH });
+    s.history.push({ owner: minerH, block: block.id, tx: cb.id, kind: "coinbase", delta: cb.amount });
   }
   s.blocks = recast([...s.blocks, block]);
   return { ok: true, block: block.id };
@@ -412,9 +419,9 @@ export function localFaucet(
   const block = mineBlock(s.blocks, [selectedTip(s.blocks)], s.miner);
   const id = hashHex(`faucet:${kind}:${to}:${amount}:${Date.now()}`);
   const tx: Tx = { id, coinbase: false, from: kind, to, amount };
-  addTx(block, tx, [{ owner: to, value: amount }]);
+  addTx(block, tx, [{ owner: parseAddr(to) ?? to, value: amount }]);
   s.history[s.history.length - 1] = {
-    owner: to,
+    owner: parseAddr(to) ?? to,
     block: block.id,
     tx: id,
     kind,
@@ -458,7 +465,7 @@ export function localMining(on: string | null): { ok: true; mining: boolean } {
 
 export function localMiner(addr: string | null): { ok: true; miner: string } | string {
   if (!isAddr(addr)) return "addr required";
-  store().miner = addr;
+  store().miner = parseAddr(addr) ?? addr;
   return { ok: true, miner: addr };
 }
 

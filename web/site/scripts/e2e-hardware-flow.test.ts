@@ -14,6 +14,7 @@ import {
   HardwareWalletError,
 } from "../src/lib/wallet/hardware/index.ts";
 import { hexToKvnc, parseAddr, isAddr } from "../src/lib/wallet/address.ts";
+import { MIN_FEE } from "../src/lib/networkConstants";
 import {
   localReset,
   localFaucet,
@@ -77,8 +78,8 @@ async function runE2EHardwareChallenge() {
   const acc0Kvnc = hexToKvnc(acc0.address);
   const acc1Kvnc = hexToKvnc(acc1.address);
   countAssert(() => assert.ok(acc0Kvnc.startsWith("kvnc") && acc0Kvnc.endsWith("dag"), "kvnc...dag format"));
-  countAssert(() => assert.equal(parseAddr(acc0Kvnc), acc0.address, "parseAddr(hexToKvnc(addr)) == addr"));
-  countAssert(() => assert.equal(parseAddr(acc0.address), acc0.address, "parseAddr(rawHex) == addr"));
+  countAssert(() => assert.equal(parseAddr(acc0Kvnc), parseAddr(acc0.address), "parseAddr(hexToKvnc(addr)) == parseAddr(addr)"));
+  countAssert(() => assert.equal(parseAddr(acc0.address), `00${acc0.address}`, "parseAddr(rawHex) == versioned 66-hex"));
   countAssert(() => assert.equal(isAddr(acc0.address), true, "isAddr(rawHex) == true"));
   countAssert(() => assert.equal(isAddr(acc0Kvnc), true, "isAddr(kvnc...dag) == true"));
 
@@ -99,7 +100,7 @@ async function runE2EHardwareChallenge() {
 
   const initialAmount = 100_000_000; // 1 KVNC
   const sendAmount = 40_000_000;     // 0.4 KVNC
-  const expectedFee = 10_000;
+  const expectedFee = MIN_FEE;       // RFC-006 fee floor: max(1, subsidy / 500_000)
 
   // Step 1: Fund Account 0
   const faucetRes = localFaucet(acc0.address, String(initialAmount));
@@ -114,7 +115,7 @@ async function runE2EHardwareChallenge() {
   if (typeof prep === "string") throw new Error(`localPrepare failed: ${prep}`);
 
   countAssert(() => assert.match(prep.sighash, /^[0-9a-f]{64}$/, "Sighash must be 64-hex string (32 bytes)"));
-  countAssert(() => assert.equal(prep.fee, expectedFee, "Fee must be MIN_FEE (10_000 atoms)"));
+  countAssert(() => assert.equal(prep.fee, expectedFee, `Fee must be MIN_FEE (${MIN_FEE} atoms)`));
   countAssert(() => assert.equal(prep.change, initialAmount - sendAmount - expectedFee, "Change calculation matches"));
   console.log(`  ✓ Transaction prepared: sighash = ${prep.sighash}`);
 
@@ -455,14 +456,14 @@ async function runE2EHardwareChallenge() {
 
   // Test parseAccountOrPath helper
   const parsed0 = parseAccountOrPath(0);
-  const parsedStr = parseAccountOrPath("m/44'/999'/7'/0/0");
-  const parsedBare = parseAccountOrPath("44'/999'/12'/0/0");
+  const parsedStr = parseAccountOrPath("m/44'/3007'/7'/0/0");
+  const parsedBare = parseAccountOrPath("44'/3007'/12'/0/0");
   countAssert(() => assert.equal(parsed0.accountIndex, 0));
-  countAssert(() => assert.equal(parsed0.path, "m/44'/999'/0'/0/0"));
+  countAssert(() => assert.equal(parsed0.path, "m/44'/3007'/0'/0/0"));
   countAssert(() => assert.equal(parsedStr.accountIndex, 7));
-  countAssert(() => assert.equal(parsedStr.path, "m/44'/999'/7'/0/0"));
+  countAssert(() => assert.equal(parsedStr.path, "m/44'/3007'/7'/0/0"));
   countAssert(() => assert.equal(parsedBare.accountIndex, 12));
-  countAssert(() => assert.equal(parsedBare.path, "m/44'/999'/12'/0/0"));
+  countAssert(() => assert.equal(parsedBare.path, "m/44'/3007'/12'/0/0"));
 
   console.log("  ✓ Suite 5 passed.\n");
   suitesPassed++;

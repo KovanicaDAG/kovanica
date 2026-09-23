@@ -229,7 +229,7 @@ import { build_signed_transfer } from '@kovanica/sdk-wasm';
 //    integer precision above 2^53, and Kovanica atoms reach ~9e15.
 const { tx_hex, sighash } = build_signed_transfer(
   phrase,            // the backup phrase (string)
-  0,                 // SLIP-0010 index, frozen path m/44'/917'/0'/0'/i'
+  0,                 // SLIP-0010 index, frozen path m/44'/3007'/0'/0'/i'
   'testnet',
   JSON.stringify(utxos),   // [{tx_hash, vout, amount_atoms, asset_hex}]
   JSON.stringify(outputs), // [{address, amount_atoms, asset_hex}]

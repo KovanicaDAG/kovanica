@@ -31,7 +31,7 @@ export async function connectLedger(): Promise<KovanicaApp> {
 **Requirements**:
 - [ ] Custom Ledger app (`kovanica-ledger-app`) — Rust + C, signed by Ledger
 - [ ] App supports: `getAddress`, `signTx`, `getPublicKey`
-- [ ] BIP-44 path: `m/44'/11111'/0'/0/0` (coin type 11111 = Kovanica, unregistered)
+- [ ] BIP-44 path: `m/44'/3007'/0'/0/0` (coin type 3007 = Kovanica, unregistered)
 - [ ] WebHID in browser (Chrome/Edge/Opera), WebUSB fallback
 
 #### Trezor (WebUSB)
