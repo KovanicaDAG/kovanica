@@ -1,10 +1,12 @@
 //! Local wallet: an Ed25519 key stored as a 32-byte seed on disk.
 //!
-//! Key generation, the `kvnc…dag` address encoding, and signing are all
-//! delegated to `kovanica-state` (the node's own crate) so the CLI can never
-//! disagree with the ledger about what an address is or how a spend is signed.
+//! Address encoding and spend signing are delegated to `kovanica-state`
+//! (the node's own crate) — the CLI stays byte-compatible with the ledger.
 //!
-//! Supports both raw 32-byte seeds (hex) and BIP39 mnemonics (24 words).
+//! Supports raw 32-byte seeds (hex) and BIP39 mnemonics (12 or 24 words).
+//! Mnemonic key material follows the **frozen** SLIP-0010 ed25519 path
+//! `m/44'/917'/0'/0'/0'` — see `docs/backlog/DERIVATION.md` (SDK
+//! `kovanica-keys` and the web wallet implement the same path).
 
 use std::fs;
 use std::path::Path;
@@ -12,6 +14,9 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use bip39::Mnemonic;
 use kovanica_state::{Address, KeyPair};
+
+/// Frozen SLIP-0010 coin type (matches `kovanica-keys::SLIP44_COIN_TYPE`).
+const SLIP10_COIN_TYPE: u32 = 917;
 
 /// A loaded wallet: the raw Ed25519 seed plus its derived keypair.
 /// Optionally stores the BIP39 mnemonic for human-readable backup.
@@ -34,8 +39,17 @@ impl Wallet {
 
     /// Generate a fresh wallet with a BIP39 mnemonic (24 words, 256 bits entropy).
     pub fn generate_with_mnemonic() -> Result<Self> {
-        let mnemonic = Mnemonic::generate(24)?;
-        let seed_bytes = derive_seed_from_mnemonic(&mnemonic)?;
+        Self::generate_with_mnemonic_words(24, "")
+    }
+
+    /// Generate a fresh wallet with a BIP39 mnemonic of `words` words
+    /// (12 or 24) and an optional BIP-39 passphrase ("25th word").
+    pub fn generate_with_mnemonic_words(words: usize, passphrase: &str) -> Result<Self> {
+        if words != 12 && words != 24 {
+            bail!("words must be 12 or 24, got {words}");
+        }
+        let mnemonic = Mnemonic::generate(words)?;
+        let seed_bytes = derive_seed_from_mnemonic(&mnemonic, passphrase)?;
         Ok(Self {
             seed: seed_bytes,
             mnemonic: Some(mnemonic.to_string()),
@@ -50,10 +64,15 @@ impl Wallet {
         }
     }
 
-    /// Reconstruct a wallet from a BIP39 mnemonic phrase.
+    /// Reconstruct a wallet from a BIP39 mnemonic phrase (empty passphrase).
     pub fn from_mnemonic(mnemonic: &str) -> Result<Self> {
+        Self::from_mnemonic_with_passphrase(mnemonic, "")
+    }
+
+    /// Reconstruct a wallet from a BIP39 mnemonic phrase + optional passphrase.
+    pub fn from_mnemonic_with_passphrase(mnemonic: &str, passphrase: &str) -> Result<Self> {
         let mnemonic = Mnemonic::parse(mnemonic)?;
-        let seed_bytes = derive_seed_from_mnemonic(&mnemonic)?;
+        let seed_bytes = derive_seed_from_mnemonic(&mnemonic, passphrase)?;
         Ok(Self {
             seed: seed_bytes,
             mnemonic: Some(mnemonic.to_string()),
@@ -70,6 +89,11 @@ impl Wallet {
         self.keypair().address()
     }
 
+    /// The raw 32-byte Ed25519 public key (watch-only export, "xpub").
+    pub fn public_key(&self) -> [u8; 32] {
+        self.keypair().public_key()
+    }
+
     /// Returns the BIP39 mnemonic if available.
     pub fn mnemonic(&self) -> Option<&str> {
         self.mnemonic.as_deref()
@@ -83,8 +107,13 @@ impl Wallet {
     /// Load a wallet from a key file.
     /// Supports two formats:
     /// 1. 64 hex chars (32-byte raw seed) — legacy format
-    /// 2. BIP39 mnemonic phrase (24 words, space-separated)
+    /// 2. BIP39 mnemonic phrase (12 or 24 words, space-separated)
     pub fn load(path: &Path) -> Result<Self> {
+        Self::load_with_passphrase(path, "")
+    }
+
+    /// Load a wallet from a key file, deriving mnemonic keys with `passphrase`.
+    pub fn load_with_passphrase(path: &Path, passphrase: &str) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("cannot read key file {}", path.display()))?;
         let trimmed = text.trim();
@@ -92,7 +121,7 @@ impl Wallet {
         // Try to parse as BIP39 mnemonic first (space-separated words)
         if trimmed.split_whitespace().count() >= 12 {
             if let Ok(mnemonic) = Mnemonic::parse(trimmed) {
-                let seed_bytes = derive_seed_from_mnemonic(&mnemonic)?;
+                let seed_bytes = derive_seed_from_mnemonic(&mnemonic, passphrase)?;
                 return Ok(Self {
                     seed: seed_bytes,
                     mnemonic: Some(mnemonic.to_string()),
@@ -100,6 +129,13 @@ impl Wallet {
             }
         }
 
+        // Hex-encoded seeds ignore the passphrase; flag a likely mistake.
+        if !passphrase.is_empty() {
+            bail!(
+                "key file {} holds a raw seed (no passphrase expected); passphrase only applies to mnemonic wallets",
+                path.display()
+            );
+        }
         // Fall back to hex-encoded 32-byte seed
         let raw = hex::decode(trimmed)
             .with_context(|| format!("key file {} is not valid hex or mnemonic", path.display()))?;
@@ -161,15 +197,47 @@ impl Wallet {
     }
 }
 
-/// Derive a 32-byte Ed25519 seed from a BIP39 mnemonic using standard BIP39 → BIP32 derivation.
-/// Uses PBKDF2-HMAC-SHA512 with 2048 iterations, salt = "mnemonic" + passphrase (empty).
-fn derive_seed_from_mnemonic(mnemonic: &Mnemonic) -> Result<[u8; 32]> {
-    // Get 64-byte BIP39 seed with empty passphrase
-    let seed_64 = mnemonic.to_seed_normalized("");
-    // Take first 32 bytes for Ed25519
-    let mut ed25519_seed = [0u8; 32];
-    ed25519_seed.copy_from_slice(&seed_64[..32]);
-    Ok(ed25519_seed)
+/// Derive the 32-byte Ed25519 key material from a BIP39 mnemonic using the
+/// **frozen** SLIP-0010 path `m/44'/917'/0'/0'/0'` (all segments hardened).
+///
+/// Mirrors `kovanica-keys::slip10::derive_ed25519` — see
+/// `docs/backlog/DERIVATION.md`. Must not drift from the SDK/web derivation.
+fn derive_seed_from_mnemonic(mnemonic: &Mnemonic, passphrase: &str) -> Result<[u8; 32]> {
+    // 64-byte BIP39 seed: PBKDF2-HMAC-SHA512, 2048 iters, salt "mnemonic"+phrase
+    let seed_64 = mnemonic.to_seed_normalized(passphrase);
+    Ok(slip10_ed25519(&seed_64, 0))
+}
+
+/// SLIP-0010 ed25519 (hardened-only): master + path derivation.
+fn slip10_ed25519(input: &[u8; 64], index: u32) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    type HmacSha512 = Hmac<sha2::Sha512>;
+
+    fn hmac_sha512(key: &[u8], data: &[u8]) -> [u8; 64] {
+        let mut mac = <HmacSha512 as Mac>::new_from_slice(key).expect("HMAC accepts any key size");
+        mac.update(data);
+        let out = mac.finalize().into_bytes();
+        let mut arr = [0u8; 64];
+        arr.copy_from_slice(&out);
+        arr
+    }
+
+    fn hardened(sk: &[u8; 32], chain: &[u8; 32], n: u32) -> ([u8; 32], [u8; 32]) {
+        let mut data = [0u8; 1 + 32 + 4];
+        data[1..33].copy_from_slice(sk);
+        data[33..].copy_from_slice(&(n | 0x8000_0000).to_be_bytes());
+        let i = hmac_sha512(chain, &data);
+        (i[..32].try_into().unwrap(), i[32..].try_into().unwrap())
+    }
+
+    let i = hmac_sha512(b"ed25519 seed", input);
+    let (mut sk, mut chain) = (i[..32].try_into().unwrap(), i[32..].try_into().unwrap());
+    for step in [44u32, SLIP10_COIN_TYPE, 0, 0, index] {
+        let (nsk, nchain) = hardened(&sk, &chain, step);
+        sk = nsk;
+        chain = nchain;
+    }
+    sk
 }
 
 #[cfg(unix)]
@@ -223,6 +291,77 @@ mod tests {
         let addr2 = recovered.address();
         assert_eq!(addr1, addr2);
         assert_eq!(recovered.mnemonic(), Some(mnemonic));
+    }
+
+    #[test]
+    fn twelve_word_mnemonic_works() {
+        let wallet = Wallet::generate_with_mnemonic_words(12, "").unwrap();
+        let words: Vec<&str> = wallet.mnemonic().unwrap().split(' ').collect();
+        assert_eq!(words.len(), 12);
+        let recovered = Wallet::from_mnemonic(wallet.mnemonic().unwrap()).unwrap();
+        assert_eq!(recovered.address(), wallet.address());
+    }
+
+    #[test]
+    fn invalid_word_count_rejected() {
+        assert!(Wallet::generate_with_mnemonic_words(13, "").is_err());
+        assert!(Wallet::generate_with_mnemonic_words(0, "").is_err());
+    }
+
+    #[test]
+    fn passphrase_changes_the_derived_key() {
+        let wallet = Wallet::generate_with_mnemonic_words(12, "hunter2").unwrap();
+        let mnemonic = wallet.mnemonic().unwrap().to_string();
+        // Same phrase, empty passphrase must NOT give the same key.
+        let no_pass = Wallet::from_mnemonic(&mnemonic).unwrap();
+        assert_ne!(no_pass.address(), wallet.address());
+        // Same phrase + same passphrase must recover the key.
+        let recovered = Wallet::from_mnemonic_with_passphrase(&mnemonic, "hunter2").unwrap();
+        assert_eq!(recovered.address(), wallet.address());
+        // A wrong passphrase must not match either.
+        let wrong = Wallet::from_mnemonic_with_passphrase(&mnemonic, "nope").unwrap();
+        assert_ne!(wrong.address(), wallet.address());
+    }
+
+    #[test]
+    fn load_with_passphrase_flags_raw_seed_files() {
+        let seed = [3u8; 32];
+        let path = std::env::temp_dir().join(format!("kvnc-pass-test-{}.key", std::process::id()));
+        Wallet::from_seed(seed).save(&path, true).unwrap();
+        // A passphrase on a raw-seed file is a likely mistake: reject it.
+        assert!(Wallet::load_with_passphrase(&path, "hunter2").is_err());
+        // Plain load still works.
+        assert_eq!(
+            Wallet::load(&path).unwrap().address(),
+            Wallet::from_seed(seed).address()
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn slip10_frozen_vector_index_zero() {
+        // Canonical zero-entropy 128-bit phrase (built from entropy bytes in
+        // code so no mnemonic-like string appears here), empty passphrase.
+        // Expected 32-byte derived key at m/44'/917'/0'/0'/0' MUST match the
+        // SDK `kovanica-keys` known-answer vector (see
+        // sdk/crates/kovanica-keys/tests/slip10_vectors.rs).
+        let mnemonic = Mnemonic::from_entropy_in(bip39::Language::English, &[0u8; 16]).unwrap();
+        let key = derive_seed_from_mnemonic(&mnemonic, "").unwrap();
+        let expected: [u8; 32] = [
+            0x01, 0xd2, 0xbd, 0xbe, 0xba, 0xce, 0xa6, 0xea, 0xef, 0xd3, 0x6b, 0x7f, 0xec, 0xe9,
+            0x64, 0x1d, 0x68, 0x54, 0x8e, 0xa0, 0x28, 0xb2, 0xc0, 0xde, 0xb0, 0xaf, 0x2a, 0x3a,
+            0xd5, 0x98, 0xc5, 0x6b,
+        ];
+        assert_eq!(key, expected);
+    }
+
+    #[test]
+    fn public_key_export_matches_address() {
+        let wallet = Wallet::generate_with_mnemonic().unwrap();
+        let pk = wallet.public_key();
+        // A P2PK address embeds the raw pubkey directly: 0x00 || pubkey.
+        let addr = wallet.address();
+        assert_eq!(addr.payload(), &pk);
     }
 
     #[test]

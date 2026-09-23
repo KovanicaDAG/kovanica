@@ -371,6 +371,11 @@ impl KeyPair {
         Address::p2pk(self.signing.verifying_key().to_bytes())
     }
 
+    /// The raw 32-byte Ed25519 public key (watch-only export for M-04).
+    pub fn public_key(&self) -> [u8; 32] {
+        self.signing.verifying_key().to_bytes()
+    }
+
     /// The raw 32-byte seed used to construct this keypair.
     ///
     /// Needed for stealth-address ECDH derivation: the recipient must recover the

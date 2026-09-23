@@ -24,6 +24,8 @@ getrandom = "0.2"
 anyhow = "1"
 kovanica-state = { path = "../protocol/crates/kovanica-state" }
 bip39 = { version = "2", features = ["rand", "std"] }
+hmac = "0.12"
+sha2 = "0.10"
 ratatui = "0.29.0"
 crossterm = "0.28.1"
 blake3 = "1"

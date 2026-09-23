@@ -3,7 +3,8 @@
 //! **Security rules**
 //! - Seeds and private keys are zeroized on drop.
 //! - Never log or transmit raw seeds.
-//! - Derivation path is frozen before mainnet; change only with a hard version bump.
+//! - Derivation path is **frozen** (SLIP-0010 ed25519, `m/44'/917'/0'/0'/i'`);
+//!   change only with a hard version bump. Canonical spec: `docs/backlog/DERIVATION.md`.
 //!
 //! **Address format** (node-canonical, NOT bech32):
 //! `kvnc` + base58(`[version] ‖ payload32`) + `dag`. The node also accepts
@@ -94,21 +95,80 @@ impl std::fmt::Debug for Mnemonic {
 pub struct Seed(pub [u8; 64]);
 
 impl Seed {
-    /// First 32 bytes — used as Ed25519 secret key material in this draft.
+    /// Derive the Ed25519 signing key at account index `index` using the
+    /// **frozen** SLIP-0010 ed25519 path `m/44'/917'/0'/0'/index'` (hardened).
     ///
-    /// **Note:** Final derivation path (BIP-32 / SLIP-0010 style) must be frozen
-    /// and documented before mainnet (M-07). This is a deliberate simple starting
-    /// point that matches the in-repo CLI wallet (`cli/src/wallet.rs`).
-    pub fn secret_key_bytes(&self) -> [u8; 32] {
-        let mut sk = [0u8; 32];
-        sk.copy_from_slice(&self.0[..32]);
-        sk
+    /// Canonical spec + cross-client vectors: `docs/backlog/DERIVATION.md`.
+    pub fn derive_ed25519_key(&self, index: u32) -> [u8; 32] {
+        slip10::derive_ed25519(&self.0, index)
     }
 }
 
 impl std::fmt::Debug for Seed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Seed([REDACTED])")
+    }
+}
+
+/// Frozen SLIP-0010 derivation path descriptor (ed25519, hardened-only).
+pub const DERIVATION_PATH: &str = "m/44'/917'/0'/0'/i'";
+/// SLIP-44-style coin type for Kovanica.
+pub const SLIP44_COIN_TYPE: u32 = 917;
+/// Account depth used by the frozen path.
+pub const DERIVATION_ACCOUNT: u32 = 0;
+
+/// SLIP-0010 (ed25519, hardened-only) primitives.
+///
+/// Port of the reference implementation; known-answer vectors live in
+/// `tests/slip10_vectors.rs` and match the TypeScript mirror in
+/// `web/site/src/lib/wallet/keys.ts` (WebCrypto).
+pub mod slip10 {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha512;
+
+    type HmacSha512 = Hmac<Sha512>;
+
+    /// HMAC-SHA512 (RFC 2104).
+    fn hmac_sha512(key: &[u8], data: &[u8]) -> [u8; 64] {
+        let mut mac = <HmacSha512 as Mac>::new_from_slice(key).expect("HMAC accepts any key size");
+        mac.update(data);
+        let out = mac.finalize().into_bytes();
+        let mut arr = [0u8; 64];
+        arr.copy_from_slice(&out);
+        arr
+    }
+
+    /// Master node: `I = HMAC-SHA512(key = "ed25519 seed", data = input)`.
+    fn master(input: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
+        let i = hmac_sha512(b"ed25519 seed", input);
+        (i[..32].try_into().unwrap(), i[32..].try_into().unwrap())
+    }
+
+    /// Hardened child (the only kind ed25519 supports in SLIP-0010):
+    /// `I = HMAC-SHA512(key = chain, data = 0x00 ‖ ser256(sk) ‖ ser32(index))`.
+    fn ckd_hardened(sk: &[u8; 32], chain: &[u8; 32], index: u32) -> ([u8; 32], [u8; 32]) {
+        let mut data = [0u8; 1 + 32 + 4];
+        data[1..33].copy_from_slice(sk);
+        data[33..].copy_from_slice(&(index | 0x8000_0000).to_be_bytes());
+        let i = hmac_sha512(chain, &data);
+        (i[..32].try_into().unwrap(), i[32..].try_into().unwrap())
+    }
+
+    /// Derive at `m/44'/917'/0'/0'/index'` (all hardened) from a 64-byte input.
+    pub fn derive_ed25519(input: &[u8; 64], index: u32) -> [u8; 32] {
+        let (mut sk, mut chain) = master(input);
+        for step in [
+            44u32,
+            crate::SLIP44_COIN_TYPE,
+            crate::DERIVATION_ACCOUNT,
+            0,
+            index,
+        ] {
+            let (nsk, nchain) = ckd_hardened(&sk, &chain, step);
+            sk = nsk;
+            chain = nchain;
+        }
+        sk
     }
 }
 
@@ -218,15 +278,22 @@ impl Keypair {
         Keypair { signing, verifying }
     }
 
-    /// From BIP-39 seed (uses first 32 bytes — see `Seed::secret_key_bytes`).
+    /// From a BIP-39 seed wallet — uses the **frozen** derivation path
+    /// `m/44'/917'/0'/0'/0'` (account index 0). See [`Seed::derive_ed25519_key`].
     pub fn from_seed(seed: &Seed) -> Self {
-        Self::from_secret_bytes(seed.secret_key_bytes())
+        Self::from_secret_bytes(seed.derive_ed25519_key(0))
     }
 
-    /// Convenience: mnemonic → seed → keypair.
+    /// Convenience: mnemonic → seed → keypair at account index 0.
     pub fn from_mnemonic(mnemonic: &Mnemonic, passphrase: &str) -> Self {
+        Self::from_mnemonic_at(mnemonic, passphrase, 0)
+    }
+
+    /// Mnemonic → seed → keypair at a specific account index using the frozen
+    /// SLIP-0010 path `m/44'/917'/0'/0'/index'`.
+    pub fn from_mnemonic_at(mnemonic: &Mnemonic, passphrase: &str, index: u32) -> Self {
         let seed = mnemonic.to_seed(passphrase);
-        Self::from_seed(&seed)
+        Self::from_secret_bytes(seed.derive_ed25519_key(index))
     }
 
     /// Public key.
