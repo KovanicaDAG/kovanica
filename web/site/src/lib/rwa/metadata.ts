@@ -18,8 +18,6 @@ export interface RwaMetadata {
   custody_uri?: string;
   /** Total supply as string (for large numbers) */
   total_supply?: string;
-  /** Human-readable description */
-  description?: string;
   /** Jurisdiction (ISO 3166-1 alpha-2) */
   jurisdiction?: string;
   /** Custom attributes */
@@ -53,8 +51,13 @@ export function validateRwaMetadata(metadata: unknown): { valid: boolean; errors
     errors.push("image is required and must be a non-empty string (URI)");
   }
 
-  if (!m.asset_class || !["RE", "BOND", "INVOICE", "COMMODITY", "FUND", "OTHER"].includes(m.asset_class)) {
-    errors.push("asset_class is required and must be one of: RE, BOND, INVOICE, COMMODITY, FUND, OTHER");
+  if (
+    !m.asset_class ||
+    !["RE", "BOND", "INVOICE", "COMMODITY", "FUND", "OTHER"].includes(m.asset_class)
+  ) {
+    errors.push(
+      "asset_class is required and must be one of: RE, BOND, INVOICE, COMMODITY, FUND, OTHER",
+    );
   }
 
   if (m.legal_uri && typeof m.legal_uri !== "string") {
@@ -80,13 +83,19 @@ export function validateRwaMetadata(metadata: unknown): { valid: boolean; errors
       if (!attr.trait_type || typeof attr.trait_type !== "string") {
         errors.push(`attributes[${i}].trait_type is required and must be a string`);
       }
-      if (attr.value === undefined || (typeof attr.value !== "string" && typeof attr.value !== "number")) {
+      if (
+        attr.value === undefined ||
+        (typeof attr.value !== "string" && typeof attr.value !== "number")
+      ) {
         errors.push(`attributes[${i}].value is required and must be a string or number`);
       }
     });
   }
 
-  if (m.collection && (typeof m.collection !== "object" || !m.collection.id || !m.collection.name)) {
+  if (
+    m.collection &&
+    (typeof m.collection !== "object" || !m.collection.id || !m.collection.name)
+  ) {
     errors.push("collection must be an object with id and name if provided");
   }
 
@@ -144,7 +153,7 @@ export async function computeMetadataHash(metadata: RwaMetadata): Promise<string
 /** Uploads metadata JSON to IPFS via a gateway */
 export async function uploadMetadataToIpfs(
   metadata: RwaMetadata,
-  gatewayUrl: string = "https://api.ipfs.io/api/v0/add"
+  gatewayUrl: string = "https://api.ipfs.io/api/v0/add",
 ): Promise<{ cid: string; url: string } | null> {
   try {
     const canonical = JSON.stringify(metadata, Object.keys(metadata).sort());
@@ -217,5 +226,3 @@ export function generateSampleRwaMetadata(): RwaMetadata {
     },
   });
 }
-
-export type { RwaMetadata };

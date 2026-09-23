@@ -1,11 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { Link, useLoaderData } from "@tanstack/react-router";
-import { ArrowLeft, Image, Sparkles, ExternalLink, Copy, AlertCircle, Loader2, Landmark, Tag } from "lucide-react";
-import { api, useApiSource, isPublic } from "@/lib/api/client";
-import { fmtKvnc, shortId } from "@/lib/ledger/hash";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { AlertCircle, ArrowLeft, Copy, ExternalLink, Landmark, Tag } from "lucide-react";
+import { api } from "@/lib/api/client";
+import { shortId } from "@/lib/ledger/hash";
 import { hexToKvnc } from "@/lib/wallet/address";
-import { isNativeAsset } from "@/lib/api/contract";
-import { cn } from "@/lib/utils";
 
 interface RwaDetailResponse {
   asset_id: string;
@@ -25,19 +22,6 @@ interface RwaDetailResponse {
   description: string | null;
   jurisdiction: string | null;
   created_at: string | null;
-}
-
-interface RwaMetadata {
-  name?: string;
-  description?: string;
-  image?: string;
-  external_url?: string;
-  attributes?: Array<{ trait_type: string; value: string | number }>;
-  asset_class?: string;
-  legal_uri?: string;
-  custody_uri?: string;
-  total_supply?: string;
-  jurisdiction?: string;
 }
 
 export const Route = createFileRoute("/explorer/rwa/$assetId")({
@@ -50,59 +34,11 @@ export const Route = createFileRoute("/explorer/rwa/$assetId")({
   component: RwaDetailPage,
 });
 
-interface RwaDetailResponse {
-  asset_id: string;
-  kind: string;
-  max_supply: number;
-  minted: number;
-  metadata_hash: string | null;
-  collection_id: string | null;
-  creator: string | null;
-  owner: string | null;
-  owner_tx: string | null;
-  owner_index: number | null;
-  asset_class: string | null;
-  legal_uri: string | null;
-  custody_uri: string | null;
-  total_supply: string | null;
-  description: string | null;
-  jurisdiction: string | null;
-  created_at: string | null;
-}
+function RwaDetailPage() {
+  const rwa = Route.useLoaderData();
 
-interface RwaMetadata {
-  name?: string;
-  description?: string;
-  image?: string;
-  external_url?: string;
-  attributes?: Array<{ trait_type: string; value: string | number }>;
-  asset_class?: string;
-  legal_uri?: string;
-  custody_uri?: string;
-  total_supply?: string;
-  jurisdiction?: string;
-}
-
-export default function RwaDetailPage() {
-  const rwa = useLoaderData<RwaDetailResponse>();
-  const source = useApiSource();
-  const live = isPublic(source);
-  const [metadata, setMetadata] = useState<RwaMetadata | null>(null);
-  const [loadingMetadata, setLoadingMetadata] = useState(false);
-
-  useEffect(() => {
-    if (rwa.metadata_hash) {
-      setLoadingMetadata(true);
-      // Try to fetch metadata from IPFS
-      // In a real implementation, we'd need the original URI
-      // For now, show unresolved state
-      setLoadingMetadata(false);
-    }
-  }, [rwa.metadata_hash]);
-
-  const copyToClipboard = (text: string, label: string) => {
+  const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    // Could add toast here
   };
 
   const formatAddress = (addr: string | null) => {
@@ -123,7 +59,7 @@ export default function RwaDetailPage() {
         <div>
           <p className="font-mono text-[10px] tracking-wide text-amber uppercase">KVP-106 RWA</p>
           <h1 className="font-display text-2xl tracking-tight text-fg">
-            {metadata?.name || `RWA ${shortId(rwa.asset_id)}`}
+            RWA {shortId(rwa.asset_id)}
           </h1>
         </div>
       </div>
@@ -131,25 +67,19 @@ export default function RwaDetailPage() {
       <div className="space-y-6">
         {/* RWA Visual */}
         <div className="relative aspect-square rounded-xl border border-border bg-surface overflow-hidden">
-          {metadata?.image ? (
-            <img
-              src={metadata.image.replace("ipfs://", "https://ipfs.io/ipfs/")}
-              alt={metadata.name || "RWA"}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center">
-              <Landmark className="size-16 text-amber/50" />
-            </div>
-          )}
+          <div className="flex h-full items-center justify-center">
+            <Landmark className="size-16 text-amber/50" />
+          </div>
           <div className="absolute top-3 right-3 flex gap-1">
             <span className="rounded-full bg-amber/90 px-2 py-0.5 font-mono text-[10px] text-white">
               RWA
             </span>
             {rwa.collection_id && (
               <Link
-                to={`/explorer/collection/${rwa.collection_id}`}
+                to="/wallet/collection/$collectionId"
+                params={{ collectionId: rwa.collection_id }}
                 className="rounded-full bg-surface/90 px-2 py-0.5 font-mono text-[10px] text-fg hover:bg-surface"
+                aria-label="View collection"
               >
                 <Tag className="size-3" />
               </Link>
@@ -158,38 +88,7 @@ export default function RwaDetailPage() {
         </div>
 
         {/* Metadata */}
-        {metadata && (
-          <div className="space-y-3">
-            {metadata.description && (
-              <p className="text-sm text-muted leading-relaxed">{metadata.description}</p>
-            )}
-            {metadata.attributes && metadata.attributes.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {metadata.attributes.map((attr, i) => (
-                  <span
-                    key={i}
-                    className="rounded-full border border-border bg-surface px-3 py-1 text-sm text-fg"
-                  >
-                    {attr.trait_type}: {attr.value}
-                  </span>
-                ))}
-              </div>
-            )}
-            {metadata.external_url && (
-              <a
-                href={metadata.external_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-sm text-amber hover:underline"
-              >
-                <ExternalLink className="size-3.5" />
-                View External
-              </a>
-            )}
-          </div>
-        )}
-
-        {!metadata && rwa.metadata_hash && (
+        {rwa.metadata_hash && (
           <div className="rounded-lg border border-border bg-surface p-4 text-center">
             <AlertCircle className="size-6 mx-auto text-amber" />
             <p className="mt-2 text-sm text-muted">Metadata unavailable</p>
@@ -209,7 +108,7 @@ export default function RwaDetailPage() {
             <div className="mt-1 flex items-center gap-2">
               <code className="break-all font-mono text-xs text-fg flex-1">{rwa.asset_id}</code>
               <button
-                onClick={() => copyToClipboard(rwa.asset_id, "Asset ID")}
+                onClick={() => copyToClipboard(rwa.asset_id)}
                 className="text-muted hover:text-fg"
                 aria-label="Copy asset ID"
               >
@@ -234,9 +133,12 @@ export default function RwaDetailPage() {
             <div className="rounded-xl border border-border bg-surface p-4">
               <p className="text-[10px] tracking-wide text-subtle uppercase">Collection</p>
               <div className="mt-1 flex items-center gap-2">
-                <code className="break-all font-mono text-xs text-fg flex-1">{rwa.collection_id}</code>
+                <code className="break-all font-mono text-xs text-fg flex-1">
+                  {rwa.collection_id}
+                </code>
                 <Link
-                  to={`/explorer/collection/${rwa.collection_id}`}
+                  to="/wallet/collection/$collectionId"
+                  params={{ collectionId: rwa.collection_id }}
                   className="text-amber hover:underline text-sm"
                 >
                   View Collection
@@ -312,9 +214,11 @@ export default function RwaDetailPage() {
             <div className="rounded-xl border border-border bg-surface p-4">
               <p className="text-[10px] tracking-wide text-subtle uppercase">Current Holder</p>
               <div className="mt-1 flex items-center gap-2">
-                <code className="break-all font-mono text-xs text-fg flex-1">{formatAddress(rwa.owner)}</code>
+                <code className="break-all font-mono text-xs text-fg flex-1">
+                  {formatAddress(rwa.owner)}
+                </code>
                 <button
-                  onClick={() => copyToClipboard(rwa.owner, "Owner address")}
+                  onClick={() => copyToClipboard(rwa.owner!)}
                   className="text-muted hover:text-fg"
                   aria-label="Copy owner address"
                 >
@@ -330,7 +234,7 @@ export default function RwaDetailPage() {
               <div className="mt-1 flex items-center gap-2">
                 <code className="break-all font-mono text-xs text-fg flex-1">{rwa.owner_tx}</code>
                 <button
-                  onClick={() => copyToClipboard(rwa.owner_tx, "Transaction ID")}
+                  onClick={() => copyToClipboard(rwa.owner_tx!)}
                   className="text-muted hover:text-fg"
                   aria-label="Copy transaction ID"
                 >
@@ -344,4 +248,3 @@ export default function RwaDetailPage() {
     </div>
   );
 }
-

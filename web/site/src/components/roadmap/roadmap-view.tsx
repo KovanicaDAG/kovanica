@@ -31,7 +31,8 @@ const PROTOCOL: Item[] = [
     id: "kvp-103",
     title: "KVP-103 · Stealth + script v2",
     status: "done",
-    blurb: "RFC-003 — one-time keys (ECDH), view tags, bounded script machine (CLTV/CSV/hash-lock).",
+    blurb:
+      "RFC-003 — one-time keys (ECDH), view tags, bounded script machine (CLTV/CSV/hash-lock).",
   },
   {
     id: "kvp-104",
@@ -43,7 +44,8 @@ const PROTOCOL: Item[] = [
     id: "kvp-105",
     title: "KVP-105 · Time-lock vault + CSV",
     status: "done",
-    blurb: "RFC-005 — check-lock-time-verify / check-sequence-verify vaults, escrow templates, node + FFI helpers.",
+    blurb:
+      "RFC-005 — check-lock-time-verify / check-sequence-verify vaults, escrow templates, node + FFI helpers.",
   },
 ];
 
@@ -74,18 +76,75 @@ const SURFACE: Item[] = [
   },
 ];
 
+const SDK: Item[] = [
+  {
+    id: "sdk-types",
+    title: "SDK · typed domain models + /api/block",
+    status: "done",
+    blurb:
+      "S-02 — Block/Tx/UTXO domain types, typed /api/block and /api/tx endpoints, sighash vectors pinned against kovanica-state.",
+  },
+  {
+    id: "sdk-multisig-rpc",
+    title: "SDK · multisig typed RPC",
+    status: "done",
+    blurb: "S-07 — /api/multisig/create|build|sign|combine|submit with node-parity validation.",
+  },
+  {
+    id: "sdk-wasm",
+    title: "SDK · WASM browser tx flow",
+    status: "done",
+    blurb: "S-09 — build_signed_transfer: prepare → sign → submit entirely in the browser.",
+  },
+  {
+    id: "sdk-mnemonic",
+    title: "SDK + CLI · SLIP-0010 mnemonic derivation",
+    status: "done",
+    blurb: "Frozen path m/44'/917'/0'/0'/i'; wallet new/restore/show; BIP-39 checksum validation.",
+  },
+  {
+    id: "sdk-publish",
+    title: "SDK · publish + cookbook",
+    status: "done",
+    blurb: "S-12/S-13 — crates.io/npm publish runbook, COOKBOOK.md recipes, release go/no-go gate.",
+  },
+];
+
 const NEXT: Item[] = [
+  {
+    id: "nft-kvp106",
+    title: "KVP-106 · NFT (RFC-007 draft)",
+    status: "next",
+    blurb:
+      "Non-fungible tokens: 1-unit assets, collections, IPFS metadata hashes. Detail + collection views ship in the web; standard is draft.",
+  },
+  {
+    id: "rwa",
+    title: "RWA issuance + explorer",
+    status: "done",
+    blurb:
+      "Issue flow (derive → IPFS metadata → mint) with asset classes; explorer detail view for issued assets.",
+  },
+  {
+    id: "staking-ui",
+    title: "Wallet staking UI",
+    status: "next",
+    blurb:
+      "Bond/unbond flows over tagged KVB1/KVU1 transactions, bonded-stake display, VRF key management.",
+  },
   {
     id: "token-staking",
     title: "Token staking & sortition",
     status: "next",
-    blurb: "Extend the stake registry to native-token assets (KVP-102) so bonds can be denominated in any issued token.",
+    blurb:
+      "Extend the stake registry to native-token assets (KVP-102) so bonds can be denominated in any issued token.",
   },
   {
     id: "asset-http",
     title: "Node HTTP asset_id (KVP-102)",
     status: "done",
-    blurb: "asset_id on /api/utxos, /api/history, /api/prepare; balances map + wire KVNC/hex helpers.",
+    blurb:
+      "asset_id on /api/utxos, /api/history, /api/prepare; balances map + wire KVNC/hex helpers.",
   },
   {
     id: "mainnet",
@@ -161,8 +220,8 @@ function Section({ title, items }: { title: string; items: Item[] }) {
 }
 
 export function RoadmapView() {
-  const done = [...PROTOCOL, ...SURFACE].filter((i) => i.status === "done").length;
-  const total = PROTOCOL.length + SURFACE.length + NEXT.length;
+  const done = [...PROTOCOL, ...SURFACE, ...SDK].filter((i) => i.status === "done").length;
+  const total = PROTOCOL.length + SURFACE.length + SDK.length + NEXT.length;
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-10 px-4 py-8 md:px-6 md:py-10">
@@ -170,25 +229,28 @@ export function RoadmapView() {
         <p className="font-mono text-[10px] tracking-brand text-subtle uppercase">Protocol</p>
         <h1 className="mt-1 font-display text-3xl tracking-tight text-fg md:text-4xl">Roadmap</h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
-          Public view of Kovanica Protocol standards (**KVP-101…105**), client surfaces, and what
-          lands next. Full legitimacy checklist:{" "}
+          Public view of Kovanica Protocol standards (**KVP-101…105**), client surfaces, the
+          kovanica-sdk, and what lands next. Full legitimacy checklist:{" "}
           <code className="text-fg/80">docs/LEGIT-BOARD.md</code> (P0–P2).
         </p>
         <p className="mt-3 font-mono text-xs text-subtle">
           {done} shipped ·{" "}
           {PROTOCOL.filter((i) => i.status === "active").length +
-            SURFACE.filter((i) => i.status === "active").length}{" "}
+            SURFACE.filter((i) => i.status === "active").length +
+            SDK.filter((i) => i.status === "active").length}{" "}
           in progress · {NEXT.length} queued · {total} tracked
         </p>
       </header>
 
       <Section title="KVP consensus standards" items={PROTOCOL} />
       <Section title="Clients & surface" items={SURFACE} />
+      <Section title="SDK" items={SDK} />
       <Section title="Next up" items={NEXT} />
 
       <p className="border-t border-border pt-6 text-xs leading-relaxed text-subtle">
         Token standard: <strong className="text-muted">KVP-102</strong> (native multi-asset; not
-        ERC-20). Specs: <code className="text-muted">docs/KVP*.md</code>,{" "}
+        ERC-20). NFT draft: <strong className="text-muted">KVP-106 / RFC-007</strong>. Specs:{" "}
+        <code className="text-muted">docs/KVP*.md</code>,{" "}
         <code className="text-muted">docs/WHAT-IS-KOVANICA.md</code>,{" "}
         <code className="text-muted">docs/TOKENOMICS.md</code>.{" "}
         <Link to="/docs" className="text-blue underline-offset-2 hover:underline">

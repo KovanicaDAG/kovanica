@@ -1,15 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
-import { Link, useLoaderData } from "@tanstack/react-router";
-import { ArrowLeft, FileText, Upload, Loader2, AlertCircle, Copy, Gem, Sparkles, Landmark } from "lucide-react";
-import { api, useApiSource, isPublic } from "@/lib/api/client";
-import { parseKvnc, fmtKvnc } from "@/lib/ledger/format";
-import { parseAddr, hexToKvnc } from "@/lib/wallet/address";
-import { useLedger } from "@/lib/ledger/store";
+import { useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { ArrowLeft, Upload, Loader2, Gem, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api/client";
+import { parseKvnc } from "@/lib/ledger/format";
+import { shortId } from "@/lib/ledger/hash";
+import { parseAddr } from "@/lib/wallet/address";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { IpfsMetadataUpload } from "@/components/wallet/ipfs-upload";
-import { createRwaMetadata, validateRwaMetadata, RwaMetadata } from "@/lib/rwa/metadata";
+import { createRwaMetadata } from "@/lib/rwa/metadata";
 
 const ASSET_CLASSES = [
   { value: "RE", label: "Real Estate (RE)" },
@@ -20,12 +21,7 @@ const ASSET_CLASSES = [
   { value: "OTHER", label: "Other (OTHER)" },
 ] as const;
 
-interface RwaDeriveResponse {
-  asset_id: string;
-  asset_id_kvnc: string;
-}
-
-export async function loader({ params }: { params: { issuer?: string } }) {
+export async function loader() {
   // No server-side data needed for this page
   return {};
 }
@@ -36,10 +32,6 @@ export const Route = createFileRoute("/wallet/rwa-issue")({
 });
 
 function RwaIssuePage() {
-  const { wallet, setWallet } = useLedger();
-  const source = useApiSource();
-  const live = isPublic(source);
-  const [busy, setBusy] = useState(false);
   const [step, setStep] = useState<"derive" | "mint" | "success">("derive");
 
   // Derive step state
@@ -53,16 +45,12 @@ function RwaIssuePage() {
   // Mint step state
   const [amount, setAmount] = useState("1");
   const [to, setTo] = useState("");
-  const [metadataJson, setMetadataJson] = useState("");
   const [collectionId, setCollectionId] = useState("");
   const [minting, setMinting] = useState(false);
   const [metadataCid, setMetadataCid] = useState<string | null>(null);
-  const [metadataUrl, setMetadataUrl] = useState<string | null>(null);
 
   // Success step state
-  const [successTxId, setSuccessTxId] = useState<string | null>(null);
-
-  const walletAddress = wallet?.address ? hexToKvnc(wallet.address) : "";
+  const [successTxId] = useState<string | null>(null);
 
   // Derive asset_id from issuer
   const handleDerive = async () => {
@@ -74,7 +62,7 @@ function RwaIssuePage() {
     try {
       const res = await api<{ asset_id: string; asset_id_kvnc: string }>(
         `/api/rwa/derive?issuer=${encodeURIComponent(issuer)}&class=${encodeURIComponent(assetClass)}&id=${encodeURIComponent(uniqueId)}&version=${encodeURIComponent(version)}`,
-        "POST"
+        "POST",
       );
       setDerivedAssetId(res.asset_id);
       setStep("mint");
@@ -84,25 +72,6 @@ function RwaIssuePage() {
     } finally {
       setDeriving(false);
     }
-  };
-
-  // Handle metadata file upload
-  const handleMetadataFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setMetadataFile(file);
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setMetadataJson(event.target?.result as string);
-      };
-      reader.readAsText(file);
-    }
-  };
-
-  // Handle metadata text change
-  const handleMetadataText = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setMetadataJson(e.target.value);
-    setMetadataFile(null);
   };
 
   // Mint the RWA asset
@@ -166,18 +135,54 @@ function RwaIssuePage() {
       <div className="space-y-6">
         {/* Progress indicator */}
         <div className="flex items-center justify-between">
-          <div className={cn("flex items-center gap-2", step === "derive" ? "text-purple" : "text-muted")}>
-            <span className={cn("w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium", step === "derive" ? "bg-purple text-white" : "bg-border text-muted")}>1</span>
+          <div
+            className={cn(
+              "flex items-center gap-2",
+              step === "derive" ? "text-purple" : "text-muted",
+            )}
+          >
+            <span
+              className={cn(
+                "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium",
+                step === "derive" ? "bg-purple text-white" : "bg-border text-muted",
+              )}
+            >
+              1
+            </span>
             <span className="font-mono text-xs text-subtle">Derive</span>
           </div>
           <div className="hidden md:block flex-1 h-px bg-border mx-2" />
-          <div className={cn("flex items-center gap-2", step === "mint" ? "text-purple" : "text-muted")}>
-            <span className={cn("w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium", step === "mint" ? "bg-purple text-white" : "bg-border text-muted")}>2</span>
+          <div
+            className={cn(
+              "flex items-center gap-2",
+              step === "mint" ? "text-purple" : "text-muted",
+            )}
+          >
+            <span
+              className={cn(
+                "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium",
+                step === "mint" ? "bg-purple text-white" : "bg-border text-muted",
+              )}
+            >
+              2
+            </span>
             <span className="font-mono text-xs text-subtle">Mint</span>
           </div>
           <div className="hidden md:block flex-1 h-px bg-border mx-2" />
-          <div className={cn("flex items-center gap-2", step === "success" ? "text-emerald" : "text-muted")}>
-            <span className={cn("w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium", step === "success" ? "bg-emerald text-white" : "bg-border text-muted")}>3</span>
+          <div
+            className={cn(
+              "flex items-center gap-2",
+              step === "success" ? "text-emerald" : "text-muted",
+            )}
+          >
+            <span
+              className={cn(
+                "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium",
+                step === "success" ? "bg-emerald text-white" : "bg-border text-muted",
+              )}
+            >
+              3
+            </span>
             <span className="font-mono text-xs text-subtle">Done</span>
           </div>
         </div>
@@ -190,8 +195,8 @@ function RwaIssuePage() {
               <h2 className="font-medium text-fg">Derive Asset ID</h2>
             </div>
             <p className="text-sm text-muted">
-              Enter the issuer public key and asset parameters to deterministically derive the RWA asset_id.
-              The same inputs will always produce the same asset_id (RFC-007).
+              Enter the issuer public key and asset parameters to deterministically derive the RWA
+              asset_id. The same inputs will always produce the same asset_id (RFC-007).
             </p>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -204,7 +209,9 @@ function RwaIssuePage() {
                   className="w-full h-11 rounded-md border border-border bg-bg px-3 font-mono text-sm text-fg outline-none"
                   maxLength={64}
                 />
-                <p className="mt-1 text-[10px] text-subtle">32-byte Ed25519 public key (64 hex chars)</p>
+                <p className="mt-1 text-[10px] text-subtle">
+                  32-byte Ed25519 public key (64 hex chars)
+                </p>
               </div>
 
               <div>
@@ -215,7 +222,9 @@ function RwaIssuePage() {
                   className="w-full h-11 rounded-md border border-border bg-bg px-3 font-mono text-sm text-fg outline-none"
                 >
                   {ASSET_CLASSES.map((c) => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -228,7 +237,9 @@ function RwaIssuePage() {
                   placeholder="e.g., tower-12a, bond-2026-001, invoice-456"
                   className="w-full h-11 rounded-md border border-border bg-bg px-3 font-mono text-sm text-fg outline-none"
                 />
-                <p className="mt-1 text-[10px] text-subtle">Issuer-defined unique identifier for this asset</p>
+                <p className="mt-1 text-[10px] text-subtle">
+                  Issuer-defined unique identifier for this asset
+                </p>
               </div>
 
               <div>
@@ -275,8 +286,12 @@ function RwaIssuePage() {
               <div className="flex items-center gap-2">
                 <Gem className="size-4 text-purple" />
                 <div>
-                  <p className="font-mono text-sm text-purple">Asset ID: {derivedAssetId.slice(0, 16)}…</p>
-                  <p className="text-[10px] text-subtle">Class: {assetClass} • ID: {uniqueId} • v{version}</p>
+                  <p className="font-mono text-sm text-purple">
+                    Asset ID: {derivedAssetId.slice(0, 16)}…
+                  </p>
+                  <p className="text-[10px] text-subtle">
+                    Class: {assetClass} • ID: {uniqueId} • v{version}
+                  </p>
                 </div>
               </div>
             </div>
@@ -323,7 +338,8 @@ function RwaIssuePage() {
                   name: `RWA ${assetClass} ${uniqueId}`,
                   description: `RWA asset: ${assetClass} - ${uniqueId}`,
                   image: "ipfs://placeholder",
-                  asset_class: assetClass as "RE" | "BOND" | "INVOICE" | "COMMODITY" | "FUND" | "OTHER",
+                  asset_class: assetClass as
+                    "RE" | "BOND" | "INVOICE" | "COMMODITY" | "FUND" | "OTHER",
                   legal_uri: "",
                   custody_uri: "",
                   total_supply: "100",
@@ -331,9 +347,8 @@ function RwaIssuePage() {
                   external_url: "",
                   attributes: [],
                 })}
-                onSuccess={(cid, url) => {
+                onSuccess={(cid) => {
                   setMetadataCid(cid);
-                  setMetadataUrl(url);
                   toast.success("Metadata uploaded to IPFS");
                 }}
                 onError={(err) => {
@@ -341,7 +356,8 @@ function RwaIssuePage() {
                 }}
               />
               <p className="text-[10px] text-subtle">
-                Upload metadata to IPFS. The CID will be hashed and stored on-chain as metadata_hash.
+                Upload metadata to IPFS. The CID will be hashed and stored on-chain as
+                metadata_hash.
               </p>
             </div>
 
@@ -381,9 +397,7 @@ function RwaIssuePage() {
               <Button variant="outline" onClick={() => setStep("derive")}>
                 Issue Another
               </Button>
-              <Button onClick={() => window.location.href = "/wallet"}>
-                Back to Wallet
-              </Button>
+              <Button onClick={() => (window.location.href = "/wallet")}>Back to Wallet</Button>
             </div>
           </div>
         )}
@@ -391,4 +405,3 @@ function RwaIssuePage() {
     </div>
   );
 }
-

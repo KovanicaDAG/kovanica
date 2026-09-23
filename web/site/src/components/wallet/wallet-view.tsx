@@ -613,7 +613,7 @@ export function WalletView() {
   const history = hist?.txs ?? [];
 
   return (
-    <div className="mx-auto flex w-full max-w-lg flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
       <header className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -654,153 +654,168 @@ export function WalletView() {
         </div>
       </header>
 
-      <div className="rounded-xl border border-border bg-surface p-4">
-        <p className="break-all font-mono text-xs text-fg">{hexToKvnc(wallet.address)}</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => void onCopy()}>
-            <Copy className="size-3.5" /> Copy
-          </Button>
-          <AddressQr value={hexToKvnc(wallet.address)} />
-          {!live && (
-            <Button type="button" variant="outline" size="sm" onClick={() => void onFaucet()}>
-              Faucet 1 KVNC
-            </Button>
-          )}
-        </div>
-        <div className="mt-3 flex gap-1">
-          {ACCOUNTS.map((i) => (
-            <Button
-              key={i}
-              type="button"
-              variant={wallet.index === i ? "default" : "ghost"}
-              size="sm"
-              disabled={busy}
-              onClick={() => void onAccount(i)}
-            >
-              Acct {i}
-            </Button>
-          ))}
-        </div>
-      </div>
-
-      <form
-        onSubmit={(e) => void onSend(e)}
-        className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-4"
-      >
-        <label className="text-xs text-muted">
-          To
-          <input
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            placeholder="kvnc…dag or 64-hex"
-            className="mt-1 h-11 w-full rounded-md border border-border bg-bg px-3 font-mono text-sm text-fg outline-none"
-          />
-        </label>
-
-        <AssetPicker options={assetOptions} value={assetId} onChange={setAssetId} disabled={busy} />
-
-        {isNftSelected && (
-          <div className="rounded-lg border border-purple/30 bg-purple/5 p-3 flex items-center gap-2">
-            <Gem className="size-4 text-purple" />
-            <div>
-              <p className="text-sm font-medium text-purple">NFT Transfer</p>
-              <p className="text-[11px] text-muted">
-                Entire token (1 unit) will be sent. Cannot be split.
-              </p>
+      {/* Desktop: send column + history column side by side. Mobile: stacked. */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="flex min-w-0 flex-col gap-6">
+          <div className="rounded-xl border border-border bg-surface p-4">
+            <p className="break-all font-mono text-xs text-fg">{hexToKvnc(wallet.address)}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void onCopy()}>
+                <Copy className="size-3.5" /> Copy
+              </Button>
+              <AddressQr value={hexToKvnc(wallet.address)} />
+              {!live && (
+                <Button type="button" variant="outline" size="sm" onClick={() => void onFaucet()}>
+                  Faucet 1 KVNC
+                </Button>
+              )}
+            </div>
+            <div className="mt-3 flex gap-1">
+              {ACCOUNTS.map((i) => (
+                <Button
+                  key={i}
+                  type="button"
+                  variant={wallet.index === i ? "default" : "ghost"}
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void onAccount(i)}
+                >
+                  Acct {i}
+                </Button>
+              ))}
             </div>
           </div>
-        )}
 
-        <label className="text-xs text-muted">
-          Amount (
-          {isNativeAsset(assetId) ? TOKEN : isNftSelected ? "NFT (fixed: 1)" : "asset units"})
-          <div className="mt-1 flex gap-2">
-            <input
-              value={amount}
-              onChange={(e) => {
-                if (!isNftSelected) setAmount(e.target.value);
-              }}
-              inputMode="decimal"
-              disabled={isNftSelected}
-              className="h-11 min-w-0 flex-1 rounded-md border border-border bg-bg px-3 font-mono text-sm text-fg outline-none disabled:bg-surface disabled:text-muted"
-              placeholder={isNftSelected ? "1 (fixed)" : ""}
+          <form
+            onSubmit={(e) => void onSend(e)}
+            className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-4"
+          >
+            <label className="text-xs text-muted">
+              To
+              <input
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                placeholder="kvnc…dag or 64-hex"
+                className="mt-1 h-11 w-full rounded-md border border-border bg-bg px-3 font-mono text-sm text-fg outline-none"
+              />
+            </label>
+
+            <AssetPicker
+              options={assetOptions}
+              value={assetId}
+              onChange={setAssetId}
+              disabled={busy}
             />
-            {!isNftSelected && (
-              <Button
-                type="button"
-                variant="outline"
-                className="h-11 px-3"
-                disabled={busy || !utxos}
-                onClick={() => {
-                  const feeDeduct = isNativeAsset(assetId) ? fee : 0;
-                  const v = Math.max(0, spendable - feeDeduct) / ATOM;
-                  setAmount(v.toFixed(8).replace(/\.?0+$/, "") || "0");
-                }}
-              >
-                Max
-              </Button>
+
+            {isNftSelected && (
+              <div className="rounded-lg border border-purple/30 bg-purple/5 p-3 flex items-center gap-2">
+                <Gem className="size-4 text-purple" />
+                <div>
+                  <p className="text-sm font-medium text-purple">NFT Transfer</p>
+                  <p className="text-[11px] text-muted">
+                    Entire token (1 unit) will be sent. Cannot be split.
+                  </p>
+                </div>
+              </div>
             )}
-          </div>
-        </label>
 
-        <div className="flex gap-2">
-          {(["slow", "normal", "fast"] as const).map((tier) => (
-            <Button
-              key={tier}
-              type="button"
-              variant={feeTier === tier ? "default" : "outline"}
-              size="sm"
-              onClick={() => setFeeTier(tier)}
-              className="flex-1 capitalize"
-            >
-              {tier}
-            </Button>
-          ))}
-        </div>
-        <p className="text-[11px] text-muted text-center">Fee ≈ {fmtKvnc(fee)}</p>
+            <label className="text-xs text-muted">
+              Amount (
+              {isNativeAsset(assetId) ? TOKEN : isNftSelected ? "NFT (fixed: 1)" : "asset units"})
+              <div className="mt-1 flex gap-2">
+                <input
+                  value={amount}
+                  onChange={(e) => {
+                    if (!isNftSelected) setAmount(e.target.value);
+                  }}
+                  inputMode="decimal"
+                  disabled={isNftSelected}
+                  className="h-11 min-w-0 flex-1 rounded-md border border-border bg-bg px-3 font-mono text-sm text-fg outline-none disabled:bg-surface disabled:text-muted"
+                  placeholder={isNftSelected ? "1 (fixed)" : ""}
+                />
+                {!isNftSelected && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 px-3"
+                    disabled={busy || !utxos}
+                    onClick={() => {
+                      const feeDeduct = isNativeAsset(assetId) ? fee : 0;
+                      const v = Math.max(0, spendable - feeDeduct) / ATOM;
+                      setAmount(v.toFixed(8).replace(/\.?0+$/, "") || "0");
+                    }}
+                  >
+                    Max
+                  </Button>
+                )}
+              </div>
+            </label>
 
-        <Button type="submit" className="h-12" disabled={busy}>
-          {busy
-            ? "Sending…"
-            : isHardware
-              ? `Confirm & send with ${wallet.deviceType}`
-              : live
-                ? "Sign & send on Testnet"
-                : "Send"}
-        </Button>
-      </form>
-
-      <section>
-        <p className="mb-2 text-[10px] tracking-wide text-subtle uppercase">History</p>
-        {history.length === 0 ? (
-          <p className="text-sm text-muted">
-            {live ? "No movements on Testnet yet." : "No movements yet. Use faucet or send."}
-          </p>
-        ) : (
-          <ul className="divide-y divide-border rounded-xl border border-border">
-            {history
-              .slice(-12)
-              .reverse()
-              .map((row) => (
-                <li key={row.tx} className="flex items-baseline justify-between gap-3 px-4 py-3">
-                  <span className="min-w-0">
-                    <span className="block text-sm capitalize text-fg">{row.kind}</span>
-                    <span className="font-mono text-[11px] text-subtle">{shortId(row.tx)}</span>
-                  </span>
-                  <span className="shrink-0 font-mono text-xs tabular-nums text-muted">
-                    {row.delta > 0 ? "+" : ""}
-                    {fmtKvnc(Math.abs(row.delta))}
-                    {!isNativeAsset(row.asset_id) ? (
-                      <span className="ml-1 text-[10px] text-subtle">
-                        {assetLabel(row.asset_id)}
-                      </span>
-                    ) : null}
-                  </span>
-                </li>
+            <div className="flex gap-2">
+              {(["slow", "normal", "fast"] as const).map((tier) => (
+                <Button
+                  key={tier}
+                  type="button"
+                  variant={feeTier === tier ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setFeeTier(tier)}
+                  className="flex-1 capitalize"
+                >
+                  {tier}
+                </Button>
               ))}
-          </ul>
-        )}
-      </section>
+            </div>
+            <p className="text-[11px] text-muted text-center">Fee ≈ {fmtKvnc(fee)}</p>
+
+            <Button type="submit" className="h-12" disabled={busy}>
+              {busy
+                ? "Sending…"
+                : isHardware
+                  ? `Confirm & send with ${wallet.deviceType}`
+                  : live
+                    ? "Sign & send on Testnet"
+                    : "Send"}
+            </Button>
+          </form>
+        </div>
+
+        <div className="flex min-w-0 flex-col gap-6">
+          <section>
+            <p className="mb-2 text-[10px] tracking-wide text-subtle uppercase">History</p>
+            {history.length === 0 ? (
+              <p className="text-sm text-muted">
+                {live ? "No movements on Testnet yet." : "No movements yet. Use faucet or send."}
+              </p>
+            ) : (
+              <ul className="divide-y divide-border rounded-xl border border-border">
+                {history
+                  .slice(-12)
+                  .reverse()
+                  .map((row) => (
+                    <li
+                      key={row.tx}
+                      className="flex items-baseline justify-between gap-3 px-4 py-3"
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-sm capitalize text-fg">{row.kind}</span>
+                        <span className="font-mono text-[11px] text-subtle">{shortId(row.tx)}</span>
+                      </span>
+                      <span className="shrink-0 font-mono text-xs tabular-nums text-muted">
+                        {row.delta > 0 ? "+" : ""}
+                        {fmtKvnc(Math.abs(row.delta))}
+                        {!isNativeAsset(row.asset_id) ? (
+                          <span className="ml-1 text-[10px] text-subtle">
+                            {assetLabel(row.asset_id)}
+                          </span>
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      </div>
 
       {isHardware && signModalState && (
         <HardwareSignModal

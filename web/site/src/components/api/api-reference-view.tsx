@@ -18,6 +18,7 @@ export function ApiReferenceView() {
     PLAYGROUND_ENDPOINTS[0],
   );
   const [address, setAddress] = useState("");
+  const [blockId, setBlockId] = useState("");
   const [response, setResponse] = useState<{
     ok: boolean;
     text: string;
@@ -50,10 +51,14 @@ export function ApiReferenceView() {
     if (running) return;
     setRunning(true);
     setResponse(null);
-    const params = selected.needsAddress && address.trim() ? `&address=${encodeURIComponent(address.trim())}` : "";
+    const params =
+      selected.needsAddress && address.trim()
+        ? `&address=${encodeURIComponent(address.trim())}`
+        : "";
+    const id = selected.needsId && blockId.trim() ? `/${encodeURIComponent(blockId.trim())}` : "";
     const started = performance.now();
     try {
-      const r = await fetch(`/api${selected.path}?source=testnet${params}`);
+      const r = await fetch(`/api${selected.path}${id}?source=testnet${params}`);
       const ms = Math.round(performance.now() - started);
       const text = await r.text();
       setResponse({ ok: r.ok, text, ms });
@@ -69,10 +74,7 @@ export function ApiReferenceView() {
     }
   }
 
-  const writeEndpoints = useMemo(
-    () => ENDPOINTS.filter((e) => !e.read),
-    [],
-  );
+  const writeEndpoints = useMemo(() => ENDPOINTS.filter((e) => !e.read), []);
 
   return (
     <div className="flex min-h-dvh flex-col bg-bg text-fg">
@@ -85,9 +87,9 @@ export function ApiReferenceView() {
             API reference
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted">
-            The HTTP contract the node speaks. Read endpoints are proxied live
-            against the public testnet node; write endpoints require browser-side
-            Ed25519 signing and belong in the wallet.
+            The HTTP contract the node speaks. Read endpoints are proxied live against the public
+            testnet node; write endpoints require browser-side Ed25519 signing and belong in the
+            wallet.
           </p>
         </header>
 
@@ -112,8 +114,7 @@ export function ApiReferenceView() {
                 </span>
               </div>
               <p className="mt-2 text-sm text-muted">
-                The mainnet node is not open yet. The reference serves testnet
-                until genesis.
+                The mainnet node is not open yet. The reference serves testnet until genesis.
               </p>
             </div>
           </div>
@@ -173,6 +174,15 @@ export function ApiReferenceView() {
             </div>
             <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center">
               <code className="font-mono text-xs text-blue">GET /api{selected.path}</code>
+              {selected.needsId && (
+                <input
+                  value={blockId}
+                  onChange={(e) => setBlockId(e.target.value)}
+                  placeholder="block id (hex)"
+                  spellCheck={false}
+                  className="h-9 flex-1 rounded-md border border-border bg-bg px-3 font-mono text-xs text-fg outline-none transition-colors placeholder:text-subtle focus:border-blue"
+                />
+              )}
               {selected.needsAddress && (
                 <input
                   value={address}
@@ -186,10 +196,18 @@ export function ApiReferenceView() {
                 type="button"
                 size="sm"
                 className="h-9 shrink-0"
-                disabled={running || (selected.needsAddress && !address.trim())}
+                disabled={
+                  running ||
+                  (selected.needsAddress && !address.trim()) ||
+                  (selected.needsId && !blockId.trim())
+                }
                 onClick={() => void run()}
               >
-                {running ? <RefreshCw className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+                {running ? (
+                  <RefreshCw className="size-3.5 animate-spin" />
+                ) : (
+                  <Play className="size-3.5" />
+                )}
                 Run
               </Button>
             </div>
@@ -220,8 +238,8 @@ export function ApiReferenceView() {
           <p className="mt-2 text-xs text-muted">
             Write endpoints (<code className="font-mono text-fg">prepare</code>,{" "}
             <code className="font-mono text-fg">submit</code>,{" "}
-            <code className="font-mono text-fg">faucet</code>, …) are reference-only:
-            signing happens in the browser wallet, so the seed never reaches the node.
+            <code className="font-mono text-fg">faucet</code>, …) are reference-only: signing
+            happens in the browser wallet, so the seed never reaches the node.
           </p>
         </section>
 
@@ -280,9 +298,7 @@ function StatusCard({
         <div className="mt-2">
           <p className="flex items-center gap-2 text-sm text-fg">
             <Server className="size-3.5 text-ok" />
-            <span className="font-mono">
-              {status.blocks.toLocaleString()} blocks
-            </span>
+            <span className="font-mono">{status.blocks.toLocaleString()} blocks</span>
             <span className="text-subtle">· {status.ms}ms</span>
           </p>
           <p className="mt-1 font-mono text-xs text-muted">{status.network}</p>

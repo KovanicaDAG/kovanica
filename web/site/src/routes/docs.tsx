@@ -4,14 +4,7 @@ import { Shell } from "@/components/layout/shell";
 import { SourceSwitch } from "@/components/layout/source-switch";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
-import {
-  ATOM,
-  HALVING_ERA,
-  K,
-  MIN_FEE,
-  SUBSIDY,
-  type ApiBootstrap,
-} from "@/lib/api/contract";
+import { ATOM, HALVING_ERA, K, MIN_FEE, SUBSIDY, type ApiBootstrap } from "@/lib/api/contract";
 import { ENDPOINTS } from "@/lib/api/endpoints";
 import { getCurrentSpecText, getNetworkId } from "@/lib/network";
 import { SURFACE } from "@/lib/surfaces";
@@ -21,6 +14,9 @@ export const Route = createFileRoute("/docs")({ component: DocsPage });
 const SECTIONS = [
   { id: "getting-started", label: "Getting started" },
   { id: "wallet", label: "Wallet" },
+  { id: "sdk", label: "SDK" },
+  { id: "tokens", label: "Tokens · NFT · RWA" },
+  { id: "staking", label: "Staking" },
   { id: "protocol", label: "Protocol" },
   { id: "node-ops", label: "Node operations" },
   { id: "api-reference", label: "API reference" },
@@ -95,8 +91,8 @@ function DocsBody() {
               Documentation
             </h1>
             <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted">
-              Getting started, wallet, protocol, node operations and the API
-              contract for the Kovanica BlockDAG.
+              Getting started, wallet, protocol, node operations and the API contract for the
+              Kovanica BlockDAG.
             </p>
           </div>
           <SourceSwitch />
@@ -121,18 +117,15 @@ function DocsBody() {
         <section id="getting-started" className="mt-10 scroll-mt-20">
           <h2 className="font-display text-2xl tracking-tight text-fg">Getting started</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            Kovanica is a BlockDAG Layer-1: blocks reference multiple parents,
-            GHOSTDAG (k=3) orders them, and the selected chain is the anchor of
-            truth. The native token is <strong className="text-fg">KVNC</strong>{" "}
-            (8 decimals). Testnet is live; mainnet is planned.
+            Kovanica is a BlockDAG Layer-1: blocks reference multiple parents, GHOSTDAG (k=3) orders
+            them, and the selected chain is the anchor of truth. The native token is{" "}
+            <strong className="text-fg">KVNC</strong> (8 decimals). Testnet is live; mainnet is
+            planned.
           </p>
           <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-muted">
             <li>
               Get testnet KVNC from the{" "}
-              <a
-                className="text-fg underline-offset-2 hover:underline"
-                href={SURFACE.faucet}
-              >
+              <a className="text-fg underline-offset-2 hover:underline" href={SURFACE.faucet}>
                 faucet
               </a>{" "}
               (5 KVNC lifetime cap per address).
@@ -148,8 +141,8 @@ function DocsBody() {
               .
             </li>
             <li>
-              Send your first transaction — the browser signs Ed25519 sighashes;
-              the node never sees the seed.
+              Send your first transaction — the browser signs Ed25519 sighashes; the node never sees
+              the seed.
             </li>
             <li>
               Watch the DAG grow on the{" "}
@@ -168,36 +161,166 @@ function DocsBody() {
         <section id="wallet" className="mt-10 scroll-mt-20">
           <h2 className="font-display text-2xl tracking-tight text-fg">Wallet</h2>
           <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-            <Fact
-              k="Addresses"
-              v="Ed25519 public key (64 hex) or kvnc…dag (versioned + base58)"
-            />
-            <Fact k="Derivation" v="BIP44 m/44'/999'/account'/change/index (coin type 999)" />
+            <Fact k="Addresses" v="Ed25519 public key (64 hex) or kvnc…dag (versioned + base58)" />
+            <Fact k="Derivation" v="SLIP-0010 m/44'/917'/0'/0'/i' (frozen, coin type 917)" />
             <Fact k="Signing" v="In the browser — submit never receives the mnemonic" />
             <Fact k="Hardware" v="Ledger (WebHID) + Trezor (WebUSB)" />
           </dl>
           <ul className="mt-4 space-y-1.5 text-sm text-muted">
             <li>
-              <strong className="text-fg">Multi-asset</strong> — native second-layer
-              assets in the same UTXO model (KVP-102).
+              <strong className="text-fg">Multi-asset</strong> — native second-layer assets in the
+              same UTXO model (KVP-102).
             </li>
             <li>
-              <strong className="text-fg">Stealth</strong> — one-time ECDH
-              addresses with view tags (KVP-103 / RFC-003).
+              <strong className="text-fg">Stealth</strong> — one-time ECDH addresses with view tags
+              (KVP-103 / RFC-003).
             </li>
             <li>
-              <strong className="text-fg">HTLC</strong> — hashed time-locked
-              contracts for atomic swaps (KVP-104).
+              <strong className="text-fg">HTLC</strong> — hashed time-locked contracts for atomic
+              swaps (KVP-104).
             </li>
             <li>
-              <strong className="text-fg">Vaults</strong> — CLTV/CSV time-lock
-              vaults and treasury vesting (KVP-105).
+              <strong className="text-fg">Vaults</strong> — CLTV/CSV time-lock vaults and treasury
+              vesting (KVP-105).
             </li>
             <li>
-              <strong className="text-fg">Multisig</strong> — M-of-N P2SH
-              addresses with partial signatures (RFC-001).
+              <strong className="text-fg">Multisig</strong> — M-of-N P2SH addresses with partial
+              signatures (RFC-001).
+            </li>
+            <li>
+              <strong className="text-fg">NFT / RWA</strong> — KVP-106 draft NFTs with collections,
+              and the RWA issuance flow (see below).
             </li>
           </ul>
+        </section>
+
+        {/* SDK */}
+        <section id="sdk" className="mt-10 scroll-mt-20">
+          <h2 className="font-display text-2xl tracking-tight text-fg">SDK</h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            <strong className="text-fg">kovanica-sdk</strong> is the official Rust (+ WASM) SDK for
+            the protocol — typed domain models, offline builders, and a node-parity RPC client. It
+            ships as six crates (<code className="font-mono text-fg">types</code>,{" "}
+            <code className="font-mono text-fg">keys</code>,{" "}
+            <code className="font-mono text-fg">tx</code>,{" "}
+            <code className="font-mono text-fg">rpc</code>,{" "}
+            <code className="font-mono text-fg">fee</code>,{" "}
+            <code className="font-mono text-fg">sdk</code>) plus a wasm-bindgen surface for
+            browsers.
+          </p>
+          <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+            <Fact
+              k="Derivation"
+              v="SLIP-0010 m/44'/917'/0'/0'/i' — frozen, shared test vectors with the node"
+            />
+            <Fact
+              k="Sighash"
+              v="BLAKE3 over witness-free encoding; byte-identical to kovanica-state"
+            />
+            <Fact k="Builders" v="TransferBuilder, HtlcBuilder, VaultBuilder, MultisigSigner" />
+            <Fact k="RPC" v="GET /api/utxos · GET /api/fee_estimate · POST /api/submit_tx" />
+          </dl>
+          <ul className="mt-4 space-y-1.5 text-sm text-muted">
+            <li>
+              <strong className="text-fg">Cookbook</strong> — practical recipes (build → estimate →
+              sign → submit, multi-asset, HTLC, vaults, multisig, live API, safety):{" "}
+              <a
+                className="text-fg underline-offset-2 hover:underline"
+                href="https://github.com/KovanicaDAG/kovanica-protocol/tree/main/sdk/COOKBOOK.md"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                sdk/COOKBOOK.md
+              </a>
+              .
+            </li>
+            <li>
+              <strong className="text-fg">WASM</strong> —{" "}
+              <code className="font-mono text-fg">build_signed_transfer</code> runs the whole
+              prepare→sign→submit flow in the browser; keys never leave the page.
+            </li>
+            <li>
+              <strong className="text-fg">Live testnet tests</strong> — read-only integration tests
+              against the public API, gated behind the{" "}
+              <code className="font-mono text-fg">live-testnet</code> feature.
+            </li>
+          </ul>
+        </section>
+
+        {/* Tokens · NFT · RWA */}
+        <section id="tokens" className="mt-10 scroll-mt-20">
+          <h2 className="font-display text-2xl tracking-tight text-fg">Tokens · NFT · RWA</h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            Everything non-native lives in the same UTXO ledger as KVNC (KVP-102). Fungible tokens,
+            NFTs and RWA all conserve per-asset and pay fees in KVNC only.
+          </p>
+          <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+            <Fact
+              k="Fungible (KVP-102)"
+              v="Native second-layer assets, per-asset conservation, coinbase mint"
+            />
+            <Fact
+              k="NFT (KVP-106)"
+              v="Draft — 1-unit assets, collections, IPFS metadata hash on-ledger"
+            />
+            <Fact
+              k="RWA"
+              v="Issue flow: derive asset id → IPFS metadata → mint; explorer detail view"
+            />
+            <Fact
+              k="Discovery"
+              v="Wallet asset picker lists every held token; NFT detail links to its collection"
+            />
+          </dl>
+          <ul className="mt-4 space-y-1.5 text-sm text-muted">
+            <li>
+              <strong className="text-fg">NFT detail</strong> —{" "}
+              <code className="font-mono text-fg">/wallet/nft/{"{assetId}"}</code> shows metadata,
+              collection and owner;{" "}
+              <code className="font-mono text-fg">/wallet/collection/{"{id}"}</code> lists a
+              collection's assets.
+            </li>
+            <li>
+              <strong className="text-fg">RWA issuance</strong> —{" "}
+              <a
+                className="text-fg underline-offset-2 hover:underline"
+                href={`${SURFACE.testnet}/wallet/rwa-issue`}
+              >
+                testnet.kovanica.online/wallet/rwa-issue
+              </a>{" "}
+              walks derive → mint → success with asset classes (RE, BOND, INVOICE, COMMODITY, FUND,
+              OTHER).
+            </li>
+            <li>
+              <strong className="text-fg">Node API</strong> —{" "}
+              <code className="font-mono text-fg">/api/nft/{"{id}"}</code>,{" "}
+              <code className="font-mono text-fg">/api/collection/{"{id}"}</code>,{" "}
+              <code className="font-mono text-fg">/api/rwa/{"{id}"}</code>.
+            </li>
+          </ul>
+        </section>
+
+        {/* Staking */}
+        <section id="staking" className="mt-10 scroll-mt-20">
+          <h2 className="font-display text-2xl tracking-tight text-fg">Staking</h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            Hybrid block production: proof-of-work secures the base, and any holder who{" "}
+            <strong className="text-fg">bonds</strong> coins can attempt VRF-based block production.
+            Sortition is proportional to bonded stake — the more you bond, the more slots you win.
+          </p>
+          <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+            <Fact k="Bond" v="Tagged tx KVB1 ‖ asset_id ‖ vrf_pk — freezes the outpoint" />
+            <Fact k="Unbond" v="Tagged tx KVU1 — unlocks after maturity" />
+            <Fact k="Multi-asset" v="Bonds can be denominated in any KVP-102 token" />
+            <Fact k="Maturity" v="Bonds must age before unbonding (mirrors coinbase maturity)" />
+          </dl>
+          <p className="mt-4 text-sm leading-relaxed text-muted">
+            A staked block carries a VRF bundle: the public key the stake is registered under, the
+            ECVRF proof over the slot input, and the output compared against a stake-proportional
+            threshold. Staked blocks arrive on{" "}
+            <code className="font-mono text-fg">POST /api/mine/submit</code>. A wallet staking UI is
+            on the roadmap — bonds and unbonds are ordinary tagged transactions today.
+          </p>
         </section>
 
         {/* Protocol */}
@@ -210,15 +333,14 @@ function DocsBody() {
               k="Subsidy"
               v={`${SUBSIDY / ATOM} KVNC, era / ${HALVING_ERA.toLocaleString()} blocks`}
             />
-            <Fact k="Min fee" v={`${MIN_FEE} atoms (burned)`} />
+            <Fact k="Min fee" v={`${MIN_FEE} atoms/byte floor (75% burned)`} />
             <Fact k="GHOSTDAG k" v={String(K)} />
             <Fact k="P2P" v="TCP :9000 · seed.kovanica.online:9000" />
           </dl>
           <p className="mt-4 text-sm leading-relaxed text-muted">
-            Block production is hybrid: proof-of-work secures the base while
-            VRF-staked producers earn the right to mint — a design that resists
-            nothing-at-stake without centralizing on a single leader. Finality
-            settles at 100 blue score; payloads prune at 1000.
+            Block production is hybrid: proof-of-work secures the base while VRF-staked producers
+            earn the right to mint — a design that resists nothing-at-stake without centralizing on
+            a single leader. Finality settles at 100 blue score; payloads prune at 1000.
           </p>
         </section>
 
@@ -229,19 +351,19 @@ function DocsBody() {
             <li>Reads already hit the public testnet node through this app.</li>
             <li>
               Sends need an Ed25519 signature (128 hex) over the{" "}
-              <code className="font-mono text-fg">sighash</code> bytes from
-              prepare. The wallet does this for you. All nodes verify 64-byte sigs.
+              <code className="font-mono text-fg">sighash</code> bytes from prepare. The wallet does
+              this for you. All nodes verify 64-byte sigs.
             </li>
             <li>Reset stays off on the public explorer.</li>
             <li>
               Seed node: listen on TCP 9000, set{" "}
-              <code className="font-mono text-fg">KOVANICA_PEERS=off</code> so it
-              does not dial itself. Clones must dial a{" "}
-              <strong className="text-fg">DNS-only</strong> hostname or the origin
-              IP — not <code className="font-mono text-fg">explorer.kovanica.online:9000</code>{" "}
-              (Cloudflare does not proxy 9000). Use{" "}
-              <code className="font-mono text-fg">seed.kovanica.online:9000</code>{" "}
-              once that A record exists (grey cloud).
+              <code className="font-mono text-fg">KOVANICA_PEERS=off</code> so it does not dial
+              itself. Clones must dial a <strong className="text-fg">DNS-only</strong> hostname or
+              the origin IP — not{" "}
+              <code className="font-mono text-fg">explorer.kovanica.online:9000</code> (Cloudflare
+              does not proxy 9000). Use{" "}
+              <code className="font-mono text-fg">seed.kovanica.online:9000</code> once that A
+              record exists (grey cloud).
             </li>
           </ol>
           <pre className="mt-4 overflow-x-auto rounded-xl border border-border bg-surface p-4 font-mono text-xs leading-relaxed text-muted whitespace-pre-wrap">
@@ -253,11 +375,17 @@ function DocsBody() {
               install.sh
             </a>{" "}
             ·{" "}
-            <a className="text-fg underline-offset-2 hover:underline" href="/download/kovanica-node-linux-x64">
+            <a
+              className="text-fg underline-offset-2 hover:underline"
+              href="/download/kovanica-node-linux-x64"
+            >
               linux-x64
             </a>{" "}
             ·{" "}
-            <a className="text-fg underline-offset-2 hover:underline" href="/download/kovanica-node-linux-arm64">
+            <a
+              className="text-fg underline-offset-2 hover:underline"
+              href="/download/kovanica-node-linux-arm64"
+            >
               linux-arm64
             </a>
           </p>
@@ -269,16 +397,13 @@ function DocsBody() {
             <div>
               <h2 className="font-display text-2xl tracking-tight text-fg">API reference</h2>
               <p className="mt-2 max-w-xl text-sm text-muted">
-                The full reference — upstream status, every endpoint, and a
-                read-only playground — lives on{" "}
-                <a
-                  className="text-fg underline-offset-2 hover:underline"
-                  href={SURFACE.api}
-                >
+                The full reference — upstream status, every endpoint, and a read-only playground —
+                lives on{" "}
+                <a className="text-fg underline-offset-2 hover:underline" href={SURFACE.api}>
                   api.kovanica.online
                 </a>
-                . The table below is the same contract, proxied server-side (CORS
-                is closed on the node).
+                . The table below is the same contract, proxied server-side (CORS is closed on the
+                node).
               </p>
             </div>
             <Button asChild size="sm">
@@ -324,8 +449,8 @@ function DocsBody() {
         <section id="roadmap" className="mt-10 scroll-mt-20">
           <h2 className="font-display text-2xl tracking-tight text-fg">Roadmap & RFCs</h2>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted">
-            RFC status, the KVP index (102 multi-asset, 103 stealth, 104 HTLC,
-            105 vaults) and what ships next on the protocol live on the roadmap.
+            RFC status, the KVP index (102 multi-asset, 103 stealth, 104 HTLC, 105 vaults, 106 NFT
+            draft) and what ships next on the protocol live on the roadmap.
           </p>
           <Button asChild variant="outline" size="sm" className="mt-4">
             <Link to="/roadmap">Open roadmap</Link>

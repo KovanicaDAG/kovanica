@@ -3,11 +3,15 @@ import { Link } from "@tanstack/react-router";
 import {
   Activity,
   Bot,
+  Braces,
   Coins,
   Compass,
   Droplets,
   FileText,
   Fingerprint,
+  Gem,
+  Landmark,
+  Lock,
   Map,
   Network,
   Route,
@@ -100,6 +104,30 @@ const SURFACES = [
     body: "Every endpoint, live upstream status, and a read-only playground against the public node.",
   },
   {
+    href: `${SURFACE.testnet}/wallet/rwa-issue`,
+    icon: Landmark,
+    title: "RWA issuance",
+    body: "Issue real-world asset tokens — real estate, bonds, invoices — with IPFS-backed metadata.",
+  },
+  {
+    href: `${SURFACE.docs}#nft`,
+    icon: Gem,
+    title: "NFT (KVP-106)",
+    body: "Non-fungible tokens with collections and on-ledger metadata hashes — draft standard.",
+  },
+  {
+    href: `${SURFACE.docs}#staking`,
+    icon: Lock,
+    title: "Staking",
+    body: "Bond KVNC (or any asset) to a VRF key for hybrid block production — bonds, unbonds, maturity.",
+  },
+  {
+    href: "https://github.com/KovanicaDAG/kovanica-protocol/tree/main/sdk",
+    icon: Braces,
+    title: "SDK",
+    body: "kovanica-sdk — typed Rust + WASM builders and RPC client, with a cookbook of live recipes.",
+  },
+  {
     href: SURFACE.kovi,
     icon: Bot,
     title: "Kovi",
@@ -130,9 +158,8 @@ export function HomeLanding() {
           The Directed Acyclic Chain.
         </p>
         <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-muted md:text-base">
-          A BlockDAG Layer-1 for programmable value — GHOSTDAG consensus,
-          hybrid PoW + VRF-staked block production, native multi-asset UTXOs,
-          and privacy primitives in the protocol itself.
+          A BlockDAG Layer-1 for programmable value — GHOSTDAG consensus, hybrid PoW + VRF-staked
+          block production, native multi-asset UTXOs, and privacy primitives in the protocol itself.
         </p>
         <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center">
           <Button asChild className="h-12 px-6">
@@ -413,8 +440,8 @@ function LandingFooter() {
             </span>
           </div>
           <p className="mt-3 max-w-xs text-xs leading-relaxed text-subtle">
-            A BlockDAG Layer-1 for programmable value. Native token KVNC, 8
-            decimals, 90.2M hard cap.
+            A BlockDAG Layer-1 for programmable value. Native token KVNC, 8 decimals, 90.2M hard
+            cap.
           </p>
         </div>
         <div>
@@ -442,13 +469,16 @@ function LandingFooter() {
               Subsidy <span className="text-fg">10 KVNC / block</span>
             </li>
             <li>
-              Halving <span className="text-fg">every 2,000,000 blocks</span>
+              Decay <span className="text-fg">×¾ every 2,000,000 blocks</span>
             </li>
             <li>
               Hard cap <span className="text-fg">90.2M KVNC</span>
             </li>
             <li>
-              Min fee <span className="text-fg">2,000 atoms · burned</span>
+              Fee floor <span className="text-fg">max(1, subsidy/500k) atoms/byte</span>
+            </li>
+            <li>
+              Fees <span className="text-fg">75% burned · 25% producer</span>
             </li>
             <li>
               Consensus <span className="text-fg">GHOSTDAG k=3</span>
@@ -458,9 +488,7 @@ function LandingFooter() {
       </div>
       <div className="mt-8 flex flex-col items-center justify-between gap-2 border-t border-border py-4 text-[11px] text-subtle md:flex-row">
         <span className="font-mono">© {new Date().getFullYear()} Kovanica Protocol</span>
-        <span className="font-mono">
-          KVNC · kovanica-testnet live · mainnet launching soon
-        </span>
+        <span className="font-mono">KVNC · kovanica-testnet live · mainnet launching soon</span>
       </div>
     </footer>
   );
