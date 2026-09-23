@@ -22,9 +22,7 @@ export type MultisigSpendProposal = {
 };
 
 function cleanPubkeys(pubkeys: string[]): string[] {
-  return pubkeys
-    .map((p) => p.trim().toLowerCase())
-    .filter((p) => /^[0-9a-f]{64}$/.test(p));
+  return pubkeys.map((p) => p.trim().toLowerCase()).filter((p) => /^[0-9a-f]{64}$/.test(p));
 }
 
 function validateMofN(threshold: number, pubkeys: string[]): void {
@@ -90,7 +88,7 @@ export async function signMultisigPartial(
   index: number,
   txBlobHex: string,
 ): Promise<string> {
-  const secretHex = bytesToHex(seedFromMnemonic(mnemonic, index));
+  const secretHex = bytesToHex(await seedFromMnemonic(mnemonic, index));
   const res = (await apiPostJson("/api/multisig/sign", {
     tx_blob_hex: txBlobHex,
     secret_hex: secretHex,
