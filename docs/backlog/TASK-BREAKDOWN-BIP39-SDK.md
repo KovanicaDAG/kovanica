@@ -37,8 +37,8 @@ All work ships on the **0.x** line. No breaking derivation or address format aft
 | M-02 | CLI: `wallet new --words 12\|24 [--passphrase]`           | 1d    | Core  | **Done**   |
 | M-03 | CLI: `wallet restore` (interactive + file + phrase flag)  | 1d    | Core  | **Done**   |
 | M-04 | CLI: show address / export public key (no key print by default)| 0.5d | Core | **Done** |
-| M-05 | Web: generate flow with 12/24 toggle + confirm screens    | 2d    | Web   | In progress (web branch) |
-| M-06 | Web: restore flow with paste / word-by-word + checksum UX | 1.5d  | Web   | In progress (web branch) |
+| M-05 | Web: generate flow with 12/24 toggle + confirm screens    | 2d    | Web   | **Done** — merged in PR #23 |
+| M-06 | Web: restore flow with paste / word-by-word + checksum UX | 1.5d  | Web   | **Done** — merged in PR #23 |
 | M-07 | Shared derivation path constants (document & freeze)      | 0.5d  | Core  | **Done** — `m/44'/917'/0'/0'/i'`, `DERIVATION.md` |
 | M-08 | Unit tests: known vectors + checksum failure cases        | 1d    | Core  | **Done** — `slip10_vectors.rs` |
 | M-09 | Property tests: round-trip generate → restore → same keys | 0.5d  | Core  | **Done** |
@@ -98,18 +98,18 @@ No blocking findings. Residual risk is end-user hygiene (terminal scrollback aft
 | ID    | Task                                                       | Est.  | Owner | Status      |
 |-------|------------------------------------------------------------|-------|-------|-------------|
 | S-01  | Cargo workspace layout + crate skeleton                    | 0.5d  | Core  | **Done**    |
-| S-02  | `kovanica-types`: Block, Tx, UTXO, AssetId, Address, Sig   | 2d    | Core  | Partial     |
+| S-02  | `kovanica-types`: Block, Tx, UTXO, AssetId, Address, Sig   | 2d    | Core  | Partial — Tx/UTXO/AssetId/Address/Sig done; `Block` not ported |
 | S-03  | `kovanica-keys`: backup → seed → Ed25519 + address         | 1.5d  | Core  | **Done**    |
-| S-03b | **Lock address codec to node** (`kvnc`+base58+`dag`)       | 1d    | Core  | **Done** (P2PK); stealth/HTLC/vault helpers pending |
-| S-03c | **Lock sighash to node** (BLAKE3 witness-free)             | 1d    | Core  | Partial     |
-| S-04  | `kovanica-tx`: native transfer + asset mint/transfer       | 2d    | Core  | Partial     |
-| S-05  | `kovanica-tx`: HTLC (KVP-104) + Multisig (KVP-101)         | 2d    | Core  | Todo        |
-| S-06  | `kovanica-tx`: Vault / CSV (KVP-105) builder               | 1d    | Core  | Todo        |
-| S-07  | `kovanica-rpc`: typed HTTP client for `/api/*`             | 2d    | Core  | Partial     |
+| S-03b | **Lock address codec to node** (`kvnc`+base58+`dag`)       | 1d    | Core  | **Done** — P2PK codec + stealth/HTLC/multisig/vault script helpers (`src/scripts/`) |
+| S-03c | **Lock sighash to node** (BLAKE3 witness-free)             | 1d    | Core  | **Done** — `encode_into` byte-identical port; shared vectors on both sides (`sighash_vector.rs`) |
+| S-04  | `kovanica-tx`: native transfer + asset mint/transfer       | 2d    | Core  | **Done** — `TransferBuilder` + `SignedTx::sign`, 10 unit tests |
+| S-05  | `kovanica-tx`: HTLC (KVP-104) + Multisig (KVP-101)         | 2d    | Core  | **Done** — `HtlcBuilder` + `MultisigSigner` |
+| S-06  | `kovanica-tx`: Vault / CSV (KVP-105) builder               | 1d    | Core  | **Done** — `VaultBuilder` |
+| S-07  | `kovanica-rpc`: typed HTTP client for `/api/*`             | 2d    | Core  | Partial — head/utxos/fee_estimate/submit_tx/bootstrap typed; multisig/htlc endpoints pending |
 | S-08  | `kovanica-fee`: size-based + subsidy-aware fee estimate    | 1d    | Core  | **Done** — `estimate_with_min` honors RFC-006 floor |
-| S-09  | WASM / TypeScript bindings                                 | 2.5d  | Core  | Partial (pkg regenerated) |
-| S-10  | Examples: transfer, create-asset, htlc-swap (testnet)      | 1.5d  | Core  | Todo        |
-| S-11  | Integration tests against live testnet (feature-gated)     | 1d    | Core  | Todo        |
+| S-09  | WASM / TypeScript bindings                                 | 2.5d  | Core  | Partial — generate/address/version only; tx build+broadcast pending (needs S-11 green first) |
+| S-10  | Examples: transfer, create-asset, htlc-swap (testnet)      | 1.5d  | Core  | **Done** — 4 examples compile (`cargo build --examples`) |
+| S-11  | Integration tests against live testnet (feature-gated)     | 1d    | Core  | Todo — file exists (`live_testnet.rs`), never run against live |
 | S-12  | crates.io + npm publish pipeline (0.x)                     | 1d    | Core  | Todo        |
 | S-13  | Cookbook pages on docs.kovanica.online                     | 1.5d  | Docs  | Todo        |
 
@@ -118,13 +118,14 @@ No blocking findings. Residual risk is end-user hygiene (terminal scrollback aft
 - **S-01 Done:** `sdk/` workspace exists (keys, fee, sdk facade, wasm binding, `generate_wallet` example).
 - **S-03 Done:** SLIP-0010 frozen derivation, `kvnc…dag` P2PK codec, known-answer vectors in `slip10_vectors.rs` (verified against the official SLIP-0010 test vectors).
 - **Partial:** stubs compile but advanced builders return "not yet implemented".
-- **S-03b / S-03c:** P2PK address encode/decode + BLAKE3 sighash algorithm in place. Still need byte-identical `encode_into` + node test vectors before production broadcast.
+- **S-03b / S-03c Done:** address codec and sighash are **locked to the node**. `kovanica-types::Transaction::encode_into` is a byte-identical port of `kovanica-state`; the shared `sighash_vector.rs` (both `sdk/` and `node/crates/kovanica-state/tests/`) fails loudly on drift. Script helpers (HTLC/multisig/vault) have their own vectors (`script_vectors.rs`).
+- **Verified 2026-09-23:** `cargo test --workspace` → 62 passed / 0 failed; `cargo build --examples` → OK. Statuses above are code-verified, not aspirational.
 
 ### 3.3 Acceptance Criteria
 
 - `cargo test --workspace` passes with no network by default
 - Optional `--features live-testnet` runs against public testnet
-- TypeScript package can build a signed tx and broadcast it (**requires S-03b + S-03c**)
+- TypeScript package can build a signed tx and broadcast it (S-03b + S-03c now unlocked — pending S-11 live verification)
 - Every public builder has at least one example in `/examples`
 - README shows a 5-minute "first transfer" path
 - Addresses round-trip with node (`kvnc…` encode/decode)
@@ -144,10 +145,10 @@ No blocking findings. Residual risk is end-user hygiene (terminal scrollback aft
 
 | Sprint   | Window     | Focus                                              |
 |----------|------------|----------------------------------------------------|
-| Sprint 0 | ASAP       | S-03b + S-03c (address + sighash lock to node)     |
+| Sprint 0 | ASAP       | S-03b + S-03c (address + sighash lock to node)     | — **Done** (vectors on both sides) |
 | Sprint 1 | Week 1–2   | M-01 → M-11 (backup support complete) — **Done**   |
-| Sprint 2 | Week 2–4   | S-02 → S-08 finish (Rust core against locked codec)|
-| Sprint 3 | Week 4–6   | S-09 → S-13 + Playground MVP kickoff               |
+| Sprint 2 | Week 2–4   | S-02 → S-08 finish (Rust core against locked codec)| — **Done** (S-02 `Block` + S-07 multisig/htlc endpoints excepted) |
+| Sprint 3 | Week 4–6   | S-09 → S-13 + Playground MVP kickoff               | — current: S-11 live run → S-09 tx flow → S-12/S-13 |
 
 **Total rough effort (one strong Rust engineer):** ~20–24 developer-days including address/sighash lock.
 
