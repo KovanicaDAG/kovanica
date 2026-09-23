@@ -37,6 +37,9 @@ bindings/
   kovanica-wasm/    # wasm-bindgen surface for browsers
 examples/
   generate_wallet.rs
+  htlc_swap.rs
+  create_asset.rs
+  transfer_asset.rs
 ```
 
 ## Quick start (Rust)
@@ -46,6 +49,40 @@ examples/
 cargo test --workspace
 cargo run -p kovanica-sdk --example generate_wallet
 ```
+
+## Examples
+
+All examples are offline (no keys leave the process) unless noted:
+
+| Example | Shows |
+|---|---|
+| `generate_wallet` | Mnemonic → keypair → address |
+| `htlc_swap` | RFC-004 atomic swap: lock / redeem / refund |
+| `transfer_asset` | KVP-102 multi-asset transfer with per-asset change + conservation checks |
+| `create_asset` | Client-side asset identity derivation; live per-asset balance listing when `KOVANICA_API` is set |
+
+```bash
+cargo run -p kovanica-sdk --example transfer_asset
+KOVANICA_API=https://api.kovanica.online cargo run -p kovanica-sdk --example create_asset
+```
+
+## Example: KVP-102 multi-asset transfer
+
+```rust
+use kovanica_sdk::prelude::*;
+
+let asset = AssetId(Hash32(*blake3::hash(b"my-token").as_bytes()));
+let tx = TransferBuilder::new()
+    .network(NetworkId::Testnet)
+    .add_input(asset_utxo)                 // Utxo { asset_id: asset, .. }
+    .add_output(bob, Amount::from_atoms(1200), asset)
+    .set_change(alice.address())
+    .build()?;                             // change returned in the same asset
+```
+
+Non-native assets must balance exactly (KVP-102 conservation); fees only ever
+apply to native KVNC. `UtxoItem::into_domain(&address)` converts a node
+`/api/utxos` row into a builder-ready `Utxo`.
 
 ```rust
 use kovanica_sdk::prelude::*;

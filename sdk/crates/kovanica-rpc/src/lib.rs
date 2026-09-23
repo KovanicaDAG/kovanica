@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use kovanica_tx::SignedTx;
-use kovanica_types::{Address, NetworkId, TxHash};
+use kovanica_types::{Address, Amount, AssetId, Hash32, NetworkId, TxHash, Utxo};
 use serde::{Deserialize, Serialize};
 
 /// Default public API endpoint.
@@ -95,6 +95,35 @@ pub struct UtxoItem {
     /// Optional collection id (hex).
     #[serde(default)]
     pub collection_id: Option<String>,
+}
+
+impl UtxoItem {
+    /// Convert a node `/api/utxos` row into a domain [`Utxo`] ready for the
+    /// transaction builder, binding the *query* address as the owner (the node
+    /// does not repeat it per row).
+    ///
+    /// Wire parity with `kovanica-node` `utxos_json` + `asset_id_to_wire`:
+    /// - `tx` is the lowercase 64-hex transaction id,
+    /// - `asset_id` is `"KVNC"` (native) or the lowercase 64-hex asset id.
+    pub fn into_domain(&self, owner: &Address) -> Result<Utxo, RpcError> {
+        let tx_hash =
+            TxHash::from_hex(&self.tx).map_err(|e| RpcError::Decode(format!("utxo tx: {e}")))?;
+        let asset_id = match self.asset_id.as_deref() {
+            None | Some("KVNC") => AssetId::NATIVE,
+            Some(hex) => {
+                let hash = Hash32::from_hex(hex)
+                    .map_err(|e| RpcError::Decode(format!("utxo asset_id: {e}")))?;
+                AssetId(hash)
+            }
+        };
+        Ok(Utxo {
+            tx_hash,
+            vout: self.index.min(u32::MAX as u64) as u32,
+            amount: Amount::from_atoms(self.value),
+            asset_id,
+            address: *owner,
+        })
+    }
 }
 
 /// Full `/api/utxos` response.

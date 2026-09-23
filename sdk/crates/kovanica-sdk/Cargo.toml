@@ -31,3 +31,11 @@ path = "../../examples/generate_wallet.rs"
 [[example]]
 name = "htlc_swap"
 path = "../../examples/htlc_swap.rs"
+
+[[example]]
+name = "create_asset"
+path = "../../examples/create_asset.rs"
+
+[[example]]
+name = "transfer_asset"
+path = "../../examples/transfer_asset.rs"
