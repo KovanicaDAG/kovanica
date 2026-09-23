@@ -34,9 +34,7 @@ import { cn } from "@/lib/utils";
 
 const ACCOUNTS = [0, 1, 2] as const;
 
-function isLocked(
-  w: WalletRec | null,
-): w is SoftwareWalletRec & {
+function isLocked(w: WalletRec | null): w is SoftwareWalletRec & {
   encryptedMnemonic: NonNullable<SoftwareWalletRec["encryptedMnemonic"]>;
 } {
   if (!w) return false;
