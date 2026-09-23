@@ -91,9 +91,9 @@ export KOVANICA_LISTEN="0.0.0.0:9000"
 alias knode='./target/release/kovanica-node'
 alias knode-dev='cargo run --release --bin kovanica-node --'
 
-alias kn-participant='KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 KOVANICA_OPERATOR=0 KOVANICA_LISTEN=0.0.0.0:9000 KOVANICA_PEERS=seed.kovanica.online:9000 KOVANICA_DATA=$KOVANICA_DATA knode explorer 127.0.0.1:8080'
-alias kn-explorer='KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 KOVANICA_OPERATOR=0 KOVANICA_LISTEN=0.0.0.0:9000 KOVANICA_PEERS=seed.kovanica.online:9000 KOVANICA_DATA=$KOVANICA_DATA knode explorer 0.0.0.0:8080'
-alias kn-miner='KOVANICA_POW=1 KOVANICA_MINE=1 KOVANICA_MINE_SECS=30 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 KOVANICA_OPERATOR=0 KOVANICA_LISTEN=0.0.0.0:9000 KOVANICA_PEERS=seed.kovanica.online:9000 KOVANICA_DATA=$KOVANICA_DATA knode explorer 127.0.0.1:8080'
+alias kn-participant='KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 KOVANICA_OPERATOR=0 KOVANICA_LISTEN=0.0.0.0:9000 KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 KOVANICA_DATA=$KOVANICA_DATA knode explorer 127.0.0.1:8080'
+alias kn-explorer='KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 KOVANICA_OPERATOR=0 KOVANICA_LISTEN=0.0.0.0:9000 KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 KOVANICA_DATA=$KOVANICA_DATA knode explorer 0.0.0.0:8080'
+alias kn-miner='KOVANICA_POW=1 KOVANICA_MINE=1 KOVANICA_MINE_SECS=30 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 KOVANICA_OPERATOR=0 KOVANICA_LISTEN=0.0.0.0:9000 KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 KOVANICA_DATA=$KOVANICA_DATA knode explorer 127.0.0.1:8080'
 
 # --- API helpers ---
 alias khead='curl -s https://api.kovanica.online/api/head | jq'
@@ -149,7 +149,7 @@ participant:
     export KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_FAUCET=0
     export KOVANICA_ALLOW_RESET=0 KOVANICA_OPERATOR=0
     export KOVANICA_LISTEN=0.0.0.0:9000
-    export KOVANICA_PEERS=seed.kovanica.online:9000
+    export KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000
     export KOVANICA_DATA=${KOVANICA_DATA:-$HOME/kovanica-data}
     ./target/release/kovanica-node explorer 127.0.0.1:8080
 
@@ -158,7 +158,7 @@ explorer:
     export KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_FAUCET=0
     export KOVANICA_ALLOW_RESET=0 KOVANICA_OPERATOR=0
     export KOVANICA_LISTEN=0.0.0.0:9000
-    export KOVANICA_PEERS=seed.kovanica.online:9000
+    export KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000
     export KOVANICA_DATA=${KOVANICA_DATA:-$HOME/kovanica-data}
     ./target/release/kovanica-node explorer 0.0.0.0:8080
 

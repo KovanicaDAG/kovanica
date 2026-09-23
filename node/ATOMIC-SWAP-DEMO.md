@@ -33,7 +33,7 @@ KOVANICA_DATA=/tmp/kovanica-demo \
 KOVANICA_MINE=1 \
 KOVANICA_MINE_SECS=10 \
 KOVANICA_FAUCET=1 \
-KOVANICA_PEERS=seed.kovanica.online:9000 \
+KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 \
 KOVANICA_LISTEN=0.0.0.0:9000 \
   ./target/release/kovanica-node explorer 0.0.0.0:8080
 ```

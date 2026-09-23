@@ -1,9 +1,9 @@
 # One-shot KovanicaDAG node install on Windows — no git clone.
-#   irm https://raw.githubusercontent.com/KovanicaDAG/kovanica-node/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/KovanicaDAG/kovanica/main/node/scripts/install.ps1 | iex
 # Or: powershell -ExecutionPolicy Bypass -File install.ps1
 $ErrorActionPreference = "Stop"
 $HomeDir = if ($env:KOVANICA_HOME) { $env:KOVANICA_HOME } else { Join-Path $env:USERPROFILE "kovanica-node" }
-$Seed = if ($env:KOVANICA_PEERS) { $env:KOVANICA_PEERS } else { "seed.kovanica.online:9000" }
+$Seed = if ($env:KOVANICA_PEERS) { $env:KOVANICA_PEERS } else { "seed.kovanica.online:9000,seed2.kovanica.online:9000" }
 
 function Need-Cmd($name) { Get-Command $name -ErrorAction SilentlyContinue }
 
@@ -17,7 +17,7 @@ if (-not (Need-Cmd cargo) -or -not (Need-Cmd rustc)) {
 
 $zip = Join-Path $env:TEMP "kovanica-node-main.zip"
 Write-Host "Downloading kovanica-node main (zip, no git)…"
-Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/KovanicaDAG/kovanica-node/archive/refs/heads/main.zip" -OutFile $zip
+Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/KovanicaDAG/kovanica/archive/refs/heads/main.zip" -OutFile $zip
 $extract = Join-Path $env:TEMP "kovanica-node-src"
 if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
 Expand-Archive -Path $zip -DestinationPath $extract
@@ -25,10 +25,10 @@ $src = Get-ChildItem $extract -Directory | Select-Object -First 1
 
 New-Item -ItemType Directory -Force -Path (Join-Path $HomeDir "bin") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $HomeDir "data") | Out-Null
-Push-Location $src.FullName
+Push-Location (Join-Path $src.FullName "node")
 cargo build --release -p kovanica-node
 Pop-Location
-$exe = Join-Path $src.FullName "target\release\kovanica-node.exe"
+$exe = Join-Path $src.FullName "node\target\release\kovanica-node.exe"
 Copy-Item $exe (Join-Path $HomeDir "bin\kovanica-node.exe") -Force
 
 $run = Join-Path $HomeDir "run.cmd"
