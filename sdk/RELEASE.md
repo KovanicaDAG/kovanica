@@ -102,29 +102,23 @@ Manual gate (human, before wave):
 ## 5. `kovanica-wasm` (npm side)
 
 The crate is publishable to crates.io too, but npm is the primary channel for
-browser/Node users. Current state: **no `package.json`** in
-`sdk/bindings/kovanica-wasm/` — this step is still work.
+browser/Node users. The npm manifest is **maintained in the repo** (PR #19):
+`sdk/bindings/kovanica-wasm/package.json` (`@kovanica/sdk-wasm`, lockstep
+version, ESM entry `kovanica_wasm.js`). `pkg/` is gitignored build output.
 
 ```bash
-cd sdk/bindings/kovanica-wasm
-wasm-pack build --target web --out-dir pkg        # generates pkg/*.js/.wasm/d.ts
-cat > pkg/package.json <<'EOF'
-{
-  "name": "@kovanica/sdk-wasm",
-  "version": "0.1.0-alpha.1",
-  "description": "WASM bindings for kovanica-sdk (browser & Node)",
-  "license": "MIT OR Apache-2.0",
-  "repository": { "type": "git", "url": "https://github.com/KovanicaDAG/kovanica" },
-  "files": ["*.js", "*.wasm", "*.d.ts"]
-}
-EOF
-npm pack --dry-run                                  # inspect tarball contents
+cd sdk
+wasm-pack build bindings/kovanica-wasm --target web --out-dir bindings/kovanica-wasm/pkg
+cd bindings/kovanica-wasm
+cp package.json pkg/package.json   # overlay the repo manifest over wasm-pack's
+npm pack pkg --dry-run              # inspect tarball: *.js, *.wasm, *.d.ts
 # real publish (human, token required):
-# npm publish --access public
+# npm publish --access public        # scoped package
 ```
 
-`wasm-pack` uses the crate name/version unless `--out-name`/package.json
-override it; keep the versions in lockstep with the workspace.
+The CI gate (`.github/workflows/sdk-wasm.yml`) runs the first four commands
+automatically on any `sdk/**` change — local wasm32/`wasm-pack` are not
+required for SDK-only PRs.
 
 ## 6. Post-publish smoke
 
