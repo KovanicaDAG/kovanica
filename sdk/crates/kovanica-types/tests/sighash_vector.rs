@@ -5,7 +5,7 @@
 //! suites fails loudly.
 
 use kovanica_types::{
-    Address, AssetId, Hash32, NetworkId, StealthExt, Transaction, TxInput, TxOutput,
+    Address, AssetId, DecodeError, Hash32, NetworkId, StealthExt, Transaction, TxInput, TxOutput,
     ADDR_VERSION_STEALTH,
 };
 
@@ -112,4 +112,57 @@ fn sdk_field_ordering_is_wire_frozen() {
     assert_eq!(&enc[76..80], &1u32.to_le_bytes());
     assert_eq!(&enc[80..88], &2u64.to_le_bytes());
     assert_eq!(&enc[88..96], &1_000_000_000u64.to_le_bytes());
+}
+
+#[test]
+fn sdk_decode_roundtrips_fixture() {
+    let tx = fixture();
+    let decoded = Transaction::decode(&tx.encode(), NetworkId::Testnet).unwrap();
+    // Network label is client-side; everything else must survive byte-for-byte.
+    assert_eq!(decoded.network, NetworkId::Testnet);
+    assert_eq!(decoded.inputs, tx.inputs);
+    assert_eq!(decoded.outputs, tx.outputs);
+    assert_eq!(decoded.tag, tx.tag);
+    assert_eq!(decoded.n_lock_time, tx.n_lock_time);
+    assert_eq!(decoded.sequence, tx.sequence);
+    // Re-encoding the decoded form must be byte-identical.
+    assert_eq!(decoded.encode(), tx.encode());
+    assert_eq!(decoded.sighash(), tx.sighash());
+}
+
+#[test]
+fn sdk_decode_roundtrips_stealth_fixture() {
+    let tx = fixture_stealth();
+    let decoded = Transaction::decode(&tx.encode(), NetworkId::Testnet).unwrap();
+    assert_eq!(decoded, tx);
+    assert_eq!(decoded.encode(), tx.encode());
+}
+
+#[test]
+fn sdk_decode_rejects_trailing_and_truncated() {
+    let tx = fixture();
+    let enc = tx.encode();
+    // Trailing garbage byte.
+    let mut with_trailing = enc.clone();
+    with_trailing.push(0x00);
+    assert_eq!(
+        Transaction::decode(&with_trailing, NetworkId::Testnet).unwrap_err(),
+        DecodeError::TrailingBytes
+    );
+    // Truncation anywhere must be UnexpectedEof, never a panic.
+    for cut in [0, 1, 8, 43, 44, 100, enc.len() - 1] {
+        let err = Transaction::decode(&enc[..cut], NetworkId::Testnet).unwrap_err();
+        assert_eq!(err, DecodeError::UnexpectedEof);
+    }
+}
+
+#[test]
+fn sdk_decode_rejects_giant_counts() {
+    // A count prefix claiming 2^40 inputs must be rejected without allocation.
+    let mut enc = 1_099_511_627_776u64.to_le_bytes().to_vec(); // 2^40 inputs
+    enc.extend_from_slice(&[0u8; 64]);
+    assert_eq!(
+        Transaction::decode(&enc, NetworkId::Testnet).unwrap_err(),
+        DecodeError::UnexpectedEof
+    );
 }

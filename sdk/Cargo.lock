@@ -625,6 +625,7 @@ name = "kovanica-keys"
 version = "0.1.0-alpha.1"
 dependencies = [
  "bip39",
+ "blake3",
  "bs58",
  "ed25519-dalek",
  "hex",
@@ -670,6 +671,7 @@ name = "kovanica-tx"
 version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
+ "ed25519-dalek",
  "hex",
  "kovanica-keys",
  "kovanica-types",

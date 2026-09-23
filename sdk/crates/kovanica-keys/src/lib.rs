@@ -20,6 +20,10 @@ use kovanica_types::{
 use rand::rngs::OsRng;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+/// Locking scripts and spend templates (multisig, HTLC, vault) — byte-format
+/// ports of `kovanica-state` `multisig.rs` / `htlc.rs` / `vault.rs`.
+pub mod scripts;
+
 /// Word count choices (BIP-39).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WordCount {

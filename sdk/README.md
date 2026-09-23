@@ -9,7 +9,16 @@ accepted on parse (node parity), legacy 64-hex + 32-byte `kvnc…dag` → P2PK.
 **Sighash / wire format:** BLAKE3 over witness-free encoding → 32 bytes; Ed25519
 signs that hash (`verify_strict`). `encode_into` is a **byte-identical port** of
 `kovanica-state::tx`, pinned by shared test vectors
-(`node/crates/kovanica-state/tests/sighash_vector.rs` ↔ `crates/kovanica-types/tests/sighash_vector.rs`).  
+(`node/crates/kovanica-state/tests/sighash_vector.rs` ↔ `crates/kovanica-types/tests/sighash_vector.rs`).
+`Transaction::decode` is the matching inverse (witness included, trailing-bytes /
+truncation safe).  
+**Scripts (RFC-001/004/005):** multisig (M-of-N P2SH), HTLC, vault templates are
+byte-format ports of `kovanica-state` (`multisig.rs`/`htlc.rs`/`vault.rs`) with
+matching validation rules; addresses pinned by
+`node/crates/kovanica-state/tests/script_vectors.rs` ↔
+`crates/kovanica-keys/tests/script_vectors.rs`.  
+**Builders:** `TransferBuilder`, `HtlcBuilder`, `VaultBuilder` (funding txs),
+`MultisigSigner` (offline M-of-N signature shares → spend witness), `SignedTx`.  
 **RPC:** routes match the node (`GET /api/utxos`, `GET /api/fee_estimate`,
 `POST /api/submit_tx` with `{"tx_hex": …}`).  
 See `../roadmap-pack/ADDRESS-AND-SIGHASH-SPEC.md` for the original draft.
@@ -20,7 +29,7 @@ See `../roadmap-pack/ADDRESS-AND-SIGHASH-SPEC.md` for the original draft.
 crates/
   kovanica-types/   # Amount, Address, UTXO, Transaction, …
   kovanica-keys/    # BIP-39 mnemonic (12/24), Ed25519 keypairs
-  kovanica-tx/      # TransferBuilder (+ HTLC/Multisig/Vault stubs)
+  kovanica-tx/      # TransferBuilder, HtlcBuilder, VaultBuilder, MultisigSigner
   kovanica-rpc/     # HTTP client for /api/*
   kovanica-fee/     # Tokenomics-aware fee estimation
   kovanica-sdk/     # Facade re-exports + prelude

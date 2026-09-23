@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 kovanica-types = { workspace = true }
+blake3 = { workspace = true }
 bip39 = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }

@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use kovanica_keys::scripts::{HtlcScript, MultisigScript, VaultScript};
 use kovanica_keys::Keypair;
 use kovanica_types::{Address, Amount, AssetId, NetworkId, Transaction, TxInput, TxOutput, Utxo};
 
@@ -34,6 +35,9 @@ pub enum TxError {
     /// Signing failed.
     #[error("signing failed: {0}")]
     Signing(String),
+    /// Script construction / witness assembly failed.
+    #[error("script error: {0}")]
+    Script(String),
 }
 
 /// Builder for a simple native (or single-asset) transfer.
@@ -194,6 +198,228 @@ impl SignedTx {
     }
 }
 
+/// Multi-party (M-of-N) signing flow for spenders of a Version 0x01 P2SH UTXO.
+///
+/// The transfer is built with [`TransferBuilder`] (unsigned). Each co-signer
+/// computes `sign_share` over the same sighash **offline**; one collector
+/// assembles the spend witness with `attach_witness` (redeem script first,
+/// then exactly M signatures — the ledger's `witness[0]` / `witness[1..=M]`
+/// layout per RFC-001).
+#[derive(Debug, Clone)]
+pub struct MultisigSigner {
+    /// The unsigned transaction being co-signed.
+    pub tx: Transaction,
+}
+
+impl MultisigSigner {
+    /// Wrap an unsigned transaction (e.g. from [`TransferBuilder::build`]).
+    pub fn new(tx: Transaction) -> Self {
+        MultisigSigner { tx }
+    }
+
+    /// This co-signer's detached signature over the 32-byte sighash.
+    ///
+    /// Pure offline operation: only the sighash leaves the device.
+    pub fn sign_share(&self, keypair: &Keypair) -> [u8; 64] {
+        keypair.sign(&self.tx.sighash()).0
+    }
+
+    /// Assemble `[redeem_script, sig_1, …, sig_M]` into every input's witness.
+    ///
+    /// `signatures` must contain exactly `M = script.m` valid entries; the
+    /// ledger verifies each against the script's public keys. This is a
+    /// **client-side** assembly step — the node never sees partial signatures.
+    pub fn attach_witness(
+        &mut self,
+        script: &MultisigScript,
+        signatures: &[[u8; 64]],
+    ) -> Result<(), TxError> {
+        let witness = script
+            .spend_witness(signatures)
+            .map_err(|e| TxError::Script(e.to_string()))?;
+        for input in &mut self.tx.inputs {
+            input.witness = witness.clone();
+        }
+        Ok(())
+    }
+
+    /// Canonical hex form for `POST /api/submit_tx` (`{"tx_hex": ...}`).
+    pub fn tx_hex(&self) -> String {
+        self.tx.encode_hex()
+    }
+}
+
+/// Builder for a transaction that locks funds to an HTLC template
+/// (version 0x04 address, RFC-004 / KVP-104).
+///
+/// Produces an unsigned transaction whose outputs are the HTLC output (native
+/// amount to `script.address()`) plus optional change. Redemption/refund
+/// witnesses are assembled from the script after receipt of the counterparty
+/// key material:
+/// - redeem: `script.redeem_witness(preimage, recipient_sig)`
+/// - refund: `script.refund_witness(sender_sig)` (after `timeout`)
+#[derive(Debug)]
+pub struct HtlcBuilder {
+    inner: TransferBuilder,
+    script: HtlcScript,
+    amount: Option<Amount>,
+}
+
+impl HtlcBuilder {
+    /// New builder that will lock `amount` to the HTLC template's address.
+    pub fn new(script: HtlcScript) -> Self {
+        HtlcBuilder {
+            inner: TransferBuilder::new(),
+            script,
+            amount: None,
+        }
+    }
+
+    /// Target network (client-side label; never serialised).
+    pub fn network(mut self, network: NetworkId) -> Self {
+        self.inner = self.inner.network(network);
+        self
+    }
+
+    /// Add a spendable UTXO (the funding source).
+    pub fn add_input(mut self, utxo: Utxo) -> Self {
+        self.inner = self.inner.add_input(utxo);
+        self
+    }
+
+    /// Native KVNC amount locked into the HTLC output.
+    pub fn amount(mut self, amount: Amount) -> Self {
+        self.amount = Some(amount);
+        self
+    }
+
+    /// Explicit fee (atoms). If omitted, caller should compute via `kovanica-fee`.
+    pub fn set_fee(mut self, fee: Amount) -> Self {
+        self.inner = self.inner.set_fee(fee);
+        self
+    }
+
+    /// Change address for leftover value after HTLC output + fee.
+    pub fn set_change(mut self, address: Address) -> Self {
+        self.inner = self.inner.set_change(address);
+        self
+    }
+
+    /// Extra committed bytes carried in the transaction tag (default: empty).
+    pub fn tag(mut self, tag: impl Into<Vec<u8>>) -> Self {
+        self.inner = self.inner.tag(tag);
+        self
+    }
+
+    /// Lock time (BIP-65 CLTV); bound into the sighash.
+    pub fn n_lock_time(mut self, value: u32) -> Self {
+        self.inner = self.inner.n_lock_time(value);
+        self
+    }
+
+    /// Sequence (BIP-112 CSV); bound into the sighash.
+    pub fn sequence(mut self, value: u32) -> Self {
+        self.inner = self.inner.sequence(value);
+        self
+    }
+
+    /// Build the unsigned funding transaction.
+    ///
+    /// The HTLC output (native, to `script.address()`) is appended first;
+    /// change (if any) is calculated from the remaining native value.
+    pub fn build(self) -> Result<Transaction, TxError> {
+        let amount = self
+            .amount
+            .ok_or(TxError::MissingField("amount (HTLC value)"))?;
+        let inner = self.inner.add_native_output(self.script.address(), amount);
+        inner.build()
+    }
+}
+
+/// Builder for a transaction that locks funds to a vault template
+/// (version 0x05 address, RFC-005 / KVP-105).
+///
+/// The vault output is spendable only after its absolute/relative lock
+/// conditions are met; the spend witness comes from
+/// `script.spend_witness(owner_sig)`.
+#[derive(Debug)]
+pub struct VaultBuilder {
+    inner: TransferBuilder,
+    script: VaultScript,
+    amount: Option<Amount>,
+}
+
+impl VaultBuilder {
+    /// New builder that will lock `amount` to the vault template's address.
+    pub fn new(script: VaultScript) -> Self {
+        VaultBuilder {
+            inner: TransferBuilder::new(),
+            script,
+            amount: None,
+        }
+    }
+
+    /// Target network (client-side label; never serialised).
+    pub fn network(mut self, network: NetworkId) -> Self {
+        self.inner = self.inner.network(network);
+        self
+    }
+
+    /// Add a spendable UTXO (the funding source).
+    pub fn add_input(mut self, utxo: Utxo) -> Self {
+        self.inner = self.inner.add_input(utxo);
+        self
+    }
+
+    /// Native KVNC amount locked into the vault output.
+    pub fn amount(mut self, amount: Amount) -> Self {
+        self.amount = Some(amount);
+        self
+    }
+
+    /// Explicit fee (atoms). If omitted, caller should compute via `kovanica-fee`.
+    pub fn set_fee(mut self, fee: Amount) -> Self {
+        self.inner = self.inner.set_fee(fee);
+        self
+    }
+
+    /// Change address for leftover value after vault output + fee.
+    pub fn set_change(mut self, address: Address) -> Self {
+        self.inner = self.inner.set_change(address);
+        self
+    }
+
+    /// Extra committed bytes carried in the transaction tag (default: empty).
+    pub fn tag(mut self, tag: impl Into<Vec<u8>>) -> Self {
+        self.inner = self.inner.tag(tag);
+        self
+    }
+
+    /// Lock time (BIP-65 CLTV); bound into the sighash.
+    pub fn n_lock_time(mut self, value: u32) -> Self {
+        self.inner = self.inner.n_lock_time(value);
+        self
+    }
+
+    /// Sequence (BIP-112 CSV); bound into the sighash.
+    pub fn sequence(mut self, value: u32) -> Self {
+        self.inner = self.inner.sequence(value);
+        self
+    }
+
+    /// Build the unsigned funding transaction.
+    ///
+    /// The vault output (native, to `script.address()`) is appended first;
+    /// change (if any) is calculated from the remaining native value.
+    pub fn build(self) -> Result<Transaction, TxError> {
+        let amount = self
+            .amount
+            .ok_or(TxError::MissingField("amount (vault value)"))?;
+        let inner = self.inner.add_native_output(self.script.address(), amount);
+        inner.build()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +498,138 @@ mod tests {
             .build()
             .unwrap_err();
         assert!(matches!(err, TxError::NoInputs));
+    }
+
+    fn valid_pk(k: u64) -> [u8; 32] {
+        use ed25519_dalek::SigningKey;
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&k.to_le_bytes());
+        SigningKey::from_bytes(&bytes).verifying_key().to_bytes()
+    }
+
+    #[test]
+    fn htlc_builder_locks_to_script_address() {
+        let script = HtlcScript::new(
+            *blake3::hash(b"preimage").as_bytes(),
+            valid_pk(1),
+            valid_pk(2),
+            1440,
+        )
+        .unwrap();
+        let tx = HtlcBuilder::new(script)
+            .network(NetworkId::Testnet)
+            .add_input(dummy_utxo(1_000_000_000))
+            .amount(Amount::from_atoms(400_000_000))
+            .set_fee(Amount::from_atoms(10_000))
+            .set_change(test_address(0xBB))
+            .build()
+            .unwrap();
+        // First output is the HTLC (version 0x04) output with the exact amount.
+        let htlc_out = &tx.outputs[0];
+        assert_eq!(htlc_out.value, 400_000_000);
+        assert_eq!(htlc_out.owner, script.address());
+        assert_eq!(htlc_out.owner.version(), kovanica_types::ADDR_VERSION_HTLC);
+        // Change is native and came after the HTLC output.
+        let change = tx.outputs.last().unwrap();
+        assert!(change.asset_id.is_none());
+        // Redeem witness assembles as [template, preimage, recipient_sig].
+        let sighash = SignedTx::sign(
+            tx.clone(),
+            &kovanica_keys::Keypair::from_secret_bytes([9u8; 32]),
+        )
+        .unwrap()
+        .tx
+        .sighash();
+        let recipient = kovanica_keys::Keypair::from_secret_bytes({
+            let mut b = [0u8; 32];
+            b[..8].copy_from_slice(&1u64.to_le_bytes());
+            b
+        });
+        let recipient_sig = recipient.sign(&sighash).0;
+        let witness = script.redeem_witness(b"preimage", recipient_sig);
+        assert_eq!(witness.len(), 3);
+        assert_eq!(witness[0], script.bytes().to_vec());
+    }
+
+    #[test]
+    fn vault_builder_locks_to_script_address() {
+        let script = VaultScript::new(1000, 144, valid_pk(1)).unwrap();
+        let tx = VaultBuilder::new(script)
+            .network(NetworkId::Testnet)
+            .add_input(dummy_utxo(1_000_000_000))
+            .amount(Amount::from_atoms(500_000_000))
+            .set_fee(Amount::from_atoms(10_000))
+            .set_change(test_address(0xBB))
+            .build()
+            .unwrap();
+        let vault_out = &tx.outputs[0];
+        assert_eq!(vault_out.value, 500_000_000);
+        assert_eq!(vault_out.owner, script.address());
+        assert_eq!(
+            vault_out.owner.version(),
+            kovanica_types::ADDR_VERSION_VAULT
+        );
+        // Spend witness: [template, owner_sig].
+        assert_eq!(script.spend_witness([0x33u8; 64]).len(), 2);
+    }
+
+    #[test]
+    fn multisig_sign_share_and_attach() {
+        let keys: Vec<[u8; 32]> = (1..=3).map(valid_pk).collect();
+        let script = MultisigScript::new(2, keys.clone()).unwrap();
+
+        // Build an unsigned P2SH spend via the normal transfer builder.
+        let tx = TransferBuilder::new()
+            .network(NetworkId::Testnet)
+            .add_input(dummy_utxo(1_000_000_000))
+            .add_native_output(test_address(0xAA), Amount::from_atoms(900_000_000))
+            .set_fee(Amount::from_atoms(10_000))
+            .set_change(test_address(0xBB))
+            .build()
+            .unwrap();
+        let mut signer = MultisigSigner::new(tx);
+
+        // Co-signers 1 and 2 sign the same sighash offline.
+        let kp1 = kovanica_keys::Keypair::from_secret_bytes({
+            let mut b = [0u8; 32];
+            b[..8].copy_from_slice(&1u64.to_le_bytes());
+            b
+        });
+        let kp2 = kovanica_keys::Keypair::from_secret_bytes({
+            let mut b = [0u8; 32];
+            b[..8].copy_from_slice(&2u64.to_le_bytes());
+            b
+        });
+        let share1 = signer.sign_share(&kp1);
+        let share2 = signer.sign_share(&kp2);
+        assert_eq!(
+            share1,
+            kp1.sign(&signer.tx.sighash()).0,
+            "share must be the Ed25519 sig of the 32-byte sighash"
+        );
+
+        signer.attach_witness(&script, &[share1, share2]).unwrap();
+        for input in &signer.tx.inputs {
+            assert_eq!(input.witness.len(), 3);
+            assert_eq!(input.witness[0], script.encode());
+            assert_eq!(input.witness[1].len(), 64);
+            assert_eq!(input.witness[2].len(), 64);
+            // Each signature verifies strictly against the shared sighash.
+            let s1 = kovanica_types::Signature(
+                input.witness[1].as_slice().try_into().expect("64 bytes"),
+            );
+            let s2 = kovanica_types::Signature(
+                input.witness[2].as_slice().try_into().expect("64 bytes"),
+            );
+            kp1.verify(&signer.tx.sighash(), &s1).unwrap();
+            kp2.verify(&signer.tx.sighash(), &s2).unwrap();
+        }
+        // Wrong signature count is rejected.
+        let mut signer2 = MultisigSigner::new(signer.tx.clone());
+        assert!(matches!(
+            signer2.attach_witness(&script, &[share1]),
+            Err(TxError::Script(_))
+        ));
+        assert!(signer.tx_hex().len() > 64);
     }
 }

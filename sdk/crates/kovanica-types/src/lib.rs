@@ -241,6 +241,42 @@ impl Address {
         Address(raw)
     }
 
+    /// Construct a P2SH (version 0x01) address from a 32-byte BLAKE3 script hash.
+    pub const fn p2sh(script_hash: [u8; 32]) -> Self {
+        let mut raw = [0u8; 33];
+        raw[0] = ADDR_VERSION_P2SH;
+        let mut i = 1;
+        while i < 33 {
+            raw[i] = script_hash[i - 1];
+            i += 1;
+        }
+        Address(raw)
+    }
+
+    /// Construct a HTLC (version 0x04) address from a 32-byte BLAKE3 template hash.
+    pub const fn htlc(script_hash: [u8; 32]) -> Self {
+        let mut raw = [0u8; 33];
+        raw[0] = ADDR_VERSION_HTLC;
+        let mut i = 1;
+        while i < 33 {
+            raw[i] = script_hash[i - 1];
+            i += 1;
+        }
+        Address(raw)
+    }
+
+    /// Construct a Vault (version 0x05) address from a 32-byte BLAKE3 template hash.
+    pub const fn vault(script_hash: [u8; 32]) -> Self {
+        let mut raw = [0u8; 33];
+        raw[0] = ADDR_VERSION_VAULT;
+        let mut i = 1;
+        while i < 33 {
+            raw[i] = script_hash[i - 1];
+            i += 1;
+        }
+        Address(raw)
+    }
+
     /// The version byte of this address.
     pub const fn version(&self) -> u8 {
         self.0[0]
@@ -551,6 +587,160 @@ impl Transaction {
         buf.extend_from_slice(&self.sequence.to_le_bytes());
         buf.extend_from_slice(&(self.tag.len() as u64).to_le_bytes());
         buf.extend_from_slice(&self.tag);
+    }
+
+    /// The inverse of [`Transaction::encode`]: parse one transaction from its
+    /// canonical bytes (including witness), mirroring `kovanica-state` `tx.rs`
+    /// `Transaction::decode` byte-for-byte.
+    ///
+    /// The node carries no `network` label (it is client-side only), so the
+    /// caller supplies it.
+    pub fn decode(bytes: &[u8], network: NetworkId) -> Result<Self, DecodeError> {
+        let mut reader = Reader::new(bytes);
+        let (inputs, outputs, tag, n_lock_time, sequence) = reader.read_transaction_fields()?;
+        if reader.remaining() != 0 {
+            return Err(DecodeError::TrailingBytes);
+        }
+        Ok(Transaction {
+            network,
+            inputs,
+            outputs,
+            tag,
+            n_lock_time,
+            sequence,
+        })
+    }
+}
+
+/// Errors from decoding a transaction from its canonical byte encoding.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DecodeError {
+    /// The input ended before a fully-formed value could be read.
+    #[error("unexpected end of payload")]
+    UnexpectedEof,
+    /// Bytes remained after decoding the transaction.
+    #[error("trailing bytes after payload")]
+    TrailingBytes,
+}
+
+/// A minimal, bounds-checked cursor over the payload bytes (port of the node
+/// `tx.rs` `Reader`).
+struct Reader<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+
+    fn remaining(&self) -> usize {
+        self.buf.len() - self.pos
+    }
+
+    fn read_array<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
+        if self.remaining() < N {
+            return Err(DecodeError::UnexpectedEof);
+        }
+        let mut out = [0u8; N];
+        out.copy_from_slice(&self.buf[self.pos..self.pos + N]);
+        self.pos += N;
+        Ok(out)
+    }
+
+    fn read_u32(&mut self) -> Result<u32, DecodeError> {
+        Ok(u32::from_le_bytes(self.read_array::<4>()?))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, DecodeError> {
+        Ok(u64::from_le_bytes(self.read_array::<8>()?))
+    }
+
+    /// Read a length prefix, rejecting counts that cannot fit even at
+    /// `min_element_bytes` each — so malformed input can't request a giant
+    /// allocation before the bytes run out.
+    fn read_count(&mut self, min_element_bytes: usize) -> Result<usize, DecodeError> {
+        let n = self.read_u64()? as usize;
+        if min_element_bytes > 0 && n > self.remaining() / min_element_bytes {
+            return Err(DecodeError::UnexpectedEof);
+        }
+        Ok(n)
+    }
+
+    fn read_array_dyn(&mut self, len: usize) -> Result<Vec<u8>, DecodeError> {
+        if self.remaining() < len {
+            return Err(DecodeError::UnexpectedEof);
+        }
+        let out = self.buf[self.pos..self.pos + len].to_vec();
+        self.pos += len;
+        Ok(out)
+    }
+
+    /// Reading is the inverse of `Transaction::encode_into(buf, true)`
+    /// (witness included). Minimum input size: 32 (tx) + 4 (index) + 8
+    /// (witness count) = 44 bytes.
+    #[allow(clippy::type_complexity)]
+    fn read_transaction_fields(
+        &mut self,
+    ) -> Result<(Vec<TxInput>, Vec<TxOutput>, Vec<u8>, u32, u32), DecodeError> {
+        let n_inputs = self.read_count(44)?;
+        let mut inputs = Vec::with_capacity(n_inputs);
+        for _ in 0..n_inputs {
+            let prev_tx = Hash32(self.read_array::<32>()?);
+            let prev_vout = self.read_u32()?;
+            // Minimum witness item size: 8 bytes length prefix.
+            let n_witness = self.read_count(8)?;
+            let mut witness = Vec::with_capacity(n_witness);
+            for _ in 0..n_witness {
+                let item_len = self.read_count(1)?;
+                let item = self.read_array_dyn(item_len)?;
+                witness.push(item);
+            }
+            inputs.push(TxInput {
+                prev_tx,
+                prev_vout,
+                witness,
+            });
+        }
+        // Minimum output size: 8 (value) + 1 (asset flag) + 1 (stealth flag)
+        // + 33 (owner) = 43 bytes for an ordinary native output.
+        // When stealth flag is 1, add 65 bytes for the stealth extension.
+        // When asset flag is 1, add 32 bytes for asset_id.
+        let n_outputs = self.read_count(43)?;
+        let mut outputs = Vec::with_capacity(n_outputs);
+        for _ in 0..n_outputs {
+            let value = self.read_u64()?;
+            let asset_flag = self.read_array::<1>()?[0];
+            let asset_id = if asset_flag == 0 {
+                None
+            } else {
+                Some(AssetId(Hash32(self.read_array::<32>()?)))
+            };
+            // stealth_flag: 1 byte (0 = ordinary, 1 = stealth)
+            let stealth_flag = self.read_array::<1>()?[0];
+            let stealth = if stealth_flag == 1 {
+                let r = self.read_array::<32>()?;
+                let view_tag = self.read_array::<1>()?[0];
+                let p = self.read_array::<32>()?;
+                Some(StealthExt { r, view_tag, p })
+            } else {
+                None
+            };
+            let owner = Address(self.read_array::<33>()?);
+            outputs.push(TxOutput {
+                value,
+                asset_id,
+                owner,
+                stealth,
+            });
+        }
+        // n_lock_time (4 bytes) + sequence (4 bytes)
+        let n_lock_time = self.read_u32()?;
+        let sequence = self.read_u32()?;
+        let tag_len = self.read_count(1)?;
+        let tag = self.read_array_dyn(tag_len)?;
+        Ok((inputs, outputs, tag, n_lock_time, sequence))
     }
 }
 

@@ -45,9 +45,10 @@ pub use kovanica_types as types;
 /// Convenient prelude for application code.
 pub mod prelude {
     pub use crate::fee::estimate;
+    pub use crate::keys::scripts::{HtlcScript, MultisigScript, VaultScript};
     pub use crate::keys::{Keypair, Mnemonic, Seed, WordCount};
     pub use crate::rpc::Client;
-    pub use crate::tx::{SignedTx, TransferBuilder};
+    pub use crate::tx::{HtlcBuilder, MultisigSigner, SignedTx, TransferBuilder, VaultBuilder};
     pub use crate::types::{
         Address, Amount, AssetId, NetworkId, Transaction, TxHash, Utxo, ATOMS_PER_KVNC,
     };
