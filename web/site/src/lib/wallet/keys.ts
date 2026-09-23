@@ -37,9 +37,10 @@ export async function entropyToMnemonic(entropy: Uint8Array, words: string[]): P
   return out.join(" ");
 }
 
-export async function createMnemonic(): Promise<string> {
+/** Generate a fresh recovery phrase. Default 24 words to match the Rust `Wallet::generate_with_mnemonic`. */
+export async function createMnemonic(wordCount: 12 | 24 = 24): Promise<string> {
   const words = await loadWordlist();
-  const entropy = crypto.getRandomValues(new Uint8Array(16));
+  const entropy = crypto.getRandomValues(new Uint8Array(wordCount === 24 ? 32 : 16));
   return entropyToMnemonic(entropy, words);
 }
 
