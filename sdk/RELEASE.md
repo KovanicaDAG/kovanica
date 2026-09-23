@@ -53,33 +53,75 @@ cargo package -p kovanica-types --allow-dirty --list
 After `kovanica-types` is live on crates.io, `kovanica-keys` packages; and so
 on. The order is exactly the dependency table above.
 
-## 3. Publish order + commands
+## 3. Publish path — CI (default)
 
-Never publish without running the full gate first (§4). Then, strictly in
-order — each step requires the previous one to be visible on crates.io:
+The default release path is **tag-driven CI**
+(`.github/workflows/publish-sdk.yml`):
+
+```bash
+# 1. bump the workspace version (sdk/Cargo.toml [workspace.package]) and the
+#    npm manifest (sdk/bindings/kovanica-wasm/package.json) — same value;
+# 2. merge the bump PR to main;
+# 3. tag the merge commit and push:
+git tag v0.1.0-alpha.2 origin/main
+git push origin v0.1.0-alpha.2
+```
+
+Workflow guards (each fails the run before anything is published):
+
+1. tag version == workspace version == npm manifest version (lockstep);
+2. the tagged commit is reachable from `main` (no release from feature
+   branches);
+3. `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` repo secrets are set;
+4. `cargo test --workspace` + clippy `-D warnings` pass and
+   `kovanica-types` packages in isolation.
+
+Then it publishes, strictly in order (each step requires the previous crate to
+be live on crates.io), followed by the npm package:
+
+```text
+kovanica-types → kovanica-keys → kovanica-tx → kovanica-rpc → kovanica-fee
+→ kovanica-sdk    (facade — do LAST)
+→ npm: @kovanica/sdk-wasm (wasm-pack build + manifest overlay + --access public)
+```
+
+`kovanica-wasm` is deliberately **not** published to crates.io (npm is its
+channel).
+
+### Manual fallback (only if CI is unavailable)
 
 ```bash
 cd sdk
-
+cargo login              # once: crates.io API token
 cargo publish -p kovanica-types   # seed: breaks the path-dep chain
 cargo publish -p kovanica-keys
 cargo publish -p kovanica-tx
 cargo publish -p kovanica-rpc
 cargo publish -p kovanica-fee
 cargo publish -p kovanica-sdk     # facade — do LAST
+cd bindings/kovanica-wasm
+wasm-pack build --target web --out-dir pkg
+cp package.json pkg/package.json
+cd pkg && npm publish --access public
 ```
 
-Per-crate dry run before the real one (no network upload):
+(If git reports a dirty tree locally — e.g. the untracked `plans/` pack — add
+`--allow-dirty` to each `cargo publish`, or commit everything first. CI
+checkouts are always clean.)
 
-```bash
-cargo publish -p kovanica-sdk --dry-run --allow-dirty
-```
+### Partial-write recovery
 
-> `--allow-dirty` is needed only while `plans/` or other untracked files sit in
-> the workspace; prefer committing everything first (linear history, PR review)
-> and publishing from a clean tree.
+crates.io and npm both forbid re-publishing the same version, and the wave is
+**not atomic**: if a step fails mid-wave, the crates already published are
+live. Do **not** re-run the same tag — bump the workspace + npm manifest
+version (lockstep) and release a new tag (e.g. `v0.1.0-alpha.3`). The shared
+single workspace version keeps this to one patch bump, not per-crate
+bookkeeping.
 
 ## 4. Go / no-go gate (run before every publish wave)
+
+> The CI publish workflow (§3) enforces items 1, 2 and 5 automatically on every
+> tag push, plus version lockstep. Items 3, 4, 6 and 7 stay human/manual checks.
 
 | # | Check | Command / evidence |
 |---|---|---|
