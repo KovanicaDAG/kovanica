@@ -77,7 +77,7 @@ impl fmt::Display for Amount {
 }
 
 /// 32-byte hash (block, tx, asset, …).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Hash32(pub [u8; 32]);
 
 impl Hash32 {
@@ -113,7 +113,7 @@ pub type TxHash = Hash32;
 pub type BlockHash = Hash32;
 
 /// Asset identifier (KVP-102). Native KVNC is the zero hash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AssetId(pub Hash32);
 
 impl AssetId {
@@ -297,6 +297,13 @@ impl Address {
     /// The canonical 33-byte versioned slice.
     pub const fn as_bytes(&self) -> &[u8; 33] {
         &self.0
+    }
+
+    /// Parse the node's hex address forms: 66-hex (versioned) or 64-hex
+    /// (legacy bare pubkey → P2PK). The `kvnc…dag` base58 form is handled by
+    /// `kovanica-keys`.
+    pub fn from_hex(s: &str) -> Result<Self, TypesError> {
+        parse_address_hex(s)
     }
 
     /// Lowercase 66-hex rendering of the 33-byte address.

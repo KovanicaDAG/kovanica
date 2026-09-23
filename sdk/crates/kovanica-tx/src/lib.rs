@@ -129,7 +129,7 @@ impl TransferBuilder {
         let mut outputs = self.outputs;
         let fee = self.fee.unwrap_or(Amount::ZERO);
 
-        // Best-effort change calculation for native asset only.
+        // --- Native (KVNC) — carries the fee; existing behaviour. ---
         let native_in: u64 = self
             .inputs
             .iter()
@@ -154,6 +154,57 @@ impl TransferBuilder {
                     inputs: native_in,
                     outputs: native_out,
                 });
+            }
+        }
+
+        // --- Non-native assets (KVP-102): per-asset conservation. ---
+        // Fees never apply to non-native assets, so each must balance exactly
+        // (in == out). A surplus is returned as change in the *same* asset when
+        // a change address is set; otherwise the caller must have added an
+        // explicit change output (or the tx would destroy asset units).
+        let mut asset_ids: std::collections::BTreeSet<AssetId> = self
+            .inputs
+            .iter()
+            .filter(|u| !u.asset_id.is_native())
+            .map(|u| u.asset_id)
+            .collect();
+        for o in &outputs {
+            if let Some(a) = o.asset_id.filter(|a| !a.is_native()) {
+                asset_ids.insert(a);
+            }
+        }
+        for asset in asset_ids {
+            let asset_in: u64 = self
+                .inputs
+                .iter()
+                .filter(|u| u.asset_id == asset)
+                .map(|u| u.amount.atoms())
+                .sum();
+            let asset_out: u64 = outputs
+                .iter()
+                .filter(|o| o.asset_id == Some(asset))
+                .map(|o| o.value)
+                .sum();
+            match asset_in.cmp(&asset_out) {
+                std::cmp::Ordering::Equal => {}
+                std::cmp::Ordering::Greater => {
+                    let Some(change_addr) = self.change_address else {
+                        return Err(TxError::ValueMismatch {
+                            inputs: asset_in,
+                            outputs: asset_out,
+                        });
+                    };
+                    let change = asset_in - asset_out;
+                    if change > 0 {
+                        outputs.push(TxOutput::new(change, Some(asset), change_addr));
+                    }
+                }
+                std::cmp::Ordering::Less => {
+                    return Err(TxError::ValueMismatch {
+                        inputs: asset_in,
+                        outputs: asset_out,
+                    });
+                }
             }
         }
 
@@ -498,6 +549,106 @@ mod tests {
             .build()
             .unwrap_err();
         assert!(matches!(err, TxError::NoInputs));
+    }
+
+    fn asset_id(byte: u8) -> AssetId {
+        AssetId(kovanica_types::Hash32([byte; 32]))
+    }
+
+    fn asset_utxo(atoms: u64, asset: AssetId, byte: u8) -> Utxo {
+        Utxo {
+            tx_hash: kovanica_types::TxHash::ZERO,
+            vout: 0,
+            amount: Amount::from_atoms(atoms),
+            asset_id: asset,
+            address: test_address(byte),
+        }
+    }
+
+    #[test]
+    fn asset_transfer_returns_change_in_same_asset() {
+        let asset = asset_id(0x42);
+        let tx = TransferBuilder::new()
+            .network(NetworkId::Testnet)
+            .add_input(asset_utxo(1_000, asset, 0x11))
+            .add_output(test_address(0xAA), Amount::from_atoms(400), asset)
+            .set_change(test_address(0xBB))
+            .build()
+            .unwrap();
+        // Two outputs: recipient + change, both in the same asset.
+        assert_eq!(tx.outputs.len(), 2);
+        let recipient = &tx.outputs[0];
+        assert_eq!(recipient.value, 400);
+        assert_eq!(recipient.asset_id, Some(asset));
+        let change = tx.outputs.last().unwrap();
+        assert_eq!(change.value, 600);
+        assert_eq!(change.asset_id, Some(asset));
+        // Native is untouched: no native inputs, no native outputs.
+        assert!(tx.outputs.iter().all(|o| !o.asset_id.is_none()));
+    }
+
+    #[test]
+    fn asset_transfer_underfunded_rejected() {
+        let asset = asset_id(0x42);
+        let err = TransferBuilder::new()
+            .network(NetworkId::Testnet)
+            .add_input(asset_utxo(300, asset, 0x11))
+            .add_output(test_address(0xAA), Amount::from_atoms(500), asset)
+            .set_change(test_address(0xBB))
+            .build()
+            .unwrap_err();
+        assert!(matches!(err, TxError::ValueMismatch { .. }));
+    }
+
+    #[test]
+    fn asset_transfer_needs_exact_balance_without_change_address() {
+        let asset = asset_id(0x42);
+        // No change address: in (1000) != out (400) destroys 600 units.
+        let err = TransferBuilder::new()
+            .network(NetworkId::Testnet)
+            .add_input(asset_utxo(1_000, asset, 0x11))
+            .add_output(test_address(0xAA), Amount::from_atoms(400), asset)
+            .build()
+            .unwrap_err();
+        assert!(matches!(err, TxError::ValueMismatch { .. }));
+        // Exact balance is accepted.
+        let ok = TransferBuilder::new()
+            .network(NetworkId::Testnet)
+            .add_input(asset_utxo(400, asset, 0x11))
+            .add_output(test_address(0xAA), Amount::from_atoms(400), asset)
+            .build()
+            .unwrap();
+        assert_eq!(ok.outputs.len(), 1);
+    }
+
+    #[test]
+    fn mixed_native_and_asset_transfer_balances_both() {
+        let asset = asset_id(0x42);
+        let tx = TransferBuilder::new()
+            .network(NetworkId::Testnet)
+            .add_input(dummy_utxo(1_000_000_000))
+            .add_input(asset_utxo(500, asset, 0x11))
+            .add_native_output(test_address(0xAA), Amount::from_kvnc(5))
+            .add_output(test_address(0xBB), Amount::from_atoms(200), asset)
+            .set_fee(Amount::from_atoms(10_000))
+            .set_change(test_address(0xCC))
+            .build()
+            .unwrap();
+        // Native: 10 - 5 - fee -> change; asset: 500 - 200 -> 300 change.
+        let native_sum: u64 = tx
+            .outputs
+            .iter()
+            .filter(|o| o.asset_id.is_none())
+            .map(|o| o.value)
+            .sum();
+        let asset_sum: u64 = tx
+            .outputs
+            .iter()
+            .filter(|o| o.asset_id == Some(asset))
+            .map(|o| o.value)
+            .sum();
+        assert_eq!(native_sum, 1_000_000_000 - 10_000);
+        assert_eq!(asset_sum, 500);
     }
 
     fn valid_pk(k: u64) -> [u8; 32] {

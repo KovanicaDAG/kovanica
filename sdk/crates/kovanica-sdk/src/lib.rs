@@ -50,7 +50,7 @@ pub mod prelude {
     pub use crate::rpc::Client;
     pub use crate::tx::{HtlcBuilder, MultisigSigner, SignedTx, TransferBuilder, VaultBuilder};
     pub use crate::types::{
-        Address, Amount, AssetId, NetworkId, Transaction, TxHash, Utxo, ATOMS_PER_KVNC,
+        Address, Amount, AssetId, Hash32, NetworkId, Transaction, TxHash, Utxo, ATOMS_PER_KVNC,
     };
 }
 
