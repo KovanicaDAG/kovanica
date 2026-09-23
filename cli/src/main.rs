@@ -403,7 +403,7 @@ fn print_address(addr: &Address) {
 /// `wallet new|restore|show` — mnemonic wallet commands (M-02/M-03/M-04).
 ///
 /// Derivation is the **frozen** SLIP-0010 ed25519 path
-/// `m/44'/917'/0'/0'/0'` (see `docs/backlog/DERIVATION.md`), matching the
+/// `m/44'/3007'/0'/0'/0'` (see `docs/backlog/DERIVATION.md`), matching the
 /// SDK `kovanica-keys` crate and the web wallet.
 fn wallet(cmd: &WalletCommand) -> Result<()> {
     match cmd {

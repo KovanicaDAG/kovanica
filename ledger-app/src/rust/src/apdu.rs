@@ -63,11 +63,11 @@ fn handle_get_public_key<'a>(req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>)
         *component = u32::from_be_bytes(bytes);
     }
 
-    // Validate path format: m/44'/11111'/account'/change/index
+    // Validate path format: m/44'/3007'/account'/change/index
     if path_components[0] & 0x80000000 == 0 || path_components[0] & 0x7FFFFFFF != 44 {
         return Err(AppError::BadPath);
     }
-    if path_components[1] & 0x80000000 == 0 || path_components[1] & 0x7FFFFFFF != 11111 {
+    if path_components[1] & 0x80000000 == 0 || path_components[1] & 0x7FFFFFFF != 3007 {
         return Err(AppError::BadPath);
     }
     if path_components[2] & 0x80000000 == 0 {
@@ -155,7 +155,7 @@ fn handle_get_config<'a>(_req: &ApduRequest<'a>, resp: &mut ApduResponse<'a>) ->
     let mut len = 0;
 
     // Coin type (4 bytes, big-endian)
-    buf[len..len + 4].copy_from_slice(&11111u32.to_be_bytes());
+    buf[len..len + 4].copy_from_slice(&3007u32.to_be_bytes());
     len += 4;
 
     // Version (1 byte)

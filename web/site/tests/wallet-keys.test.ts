@@ -84,29 +84,29 @@ test("createMnemonic: default is 24 words, accepts 12; both round-trip via impor
 });
 
 // ---------------------------------------------------------------------------
-// SLIP-0010 derivation addresses: m/44'/917'/0'/0'/i'. These are PUBLIC keys
+// SLIP-0010 derivation addresses: m/44'/3007'/0'/0'/i'. These are PUBLIC keys
 // (wallet addresses), not secret material. The constants were produced by an
 // independent node:crypto implementation and must match the Rust-side frozen
 // vectors in docs/backlog/DERIVATION.md once that branch lands.
 // ---------------------------------------------------------------------------
 const EXPECTED_ADDRESSES_12W = {
-  0: "a3de48fc8da9bbaaea5b34d08d4027019687241530ddbdddb8f8ec1541e19888",
-  1: "3ec915cec87958c216b4f0ef69e73a18b60f675ce25852ac42215725d299bb8d",
-  2: "86714ad9a71f44e369ae065956cd19da0d8b5777240b2912cdc7f61c5dce0f02",
+  0: "862f70cfafc9b581699f8d67598eac699cbc92bdfc940e95ed7ee1e8d8100e7e",
+  1: "c7add211265d1232a2bbc1dc7b01437d17d852f235eb7d09f6fe21b5f313f485",
+  2: "cbe43a9458cdc916f7c21daf20cde2847a22ce07d6f64cb4c50f97d81ea4ec72",
 } as const;
 
 const EXPECTED_ADDRESSES_24W = {
-  0: "90f71f92feb19675c9368194bb0aabfc5dc8e85b1be8827ab1fe0f4f99f6d0e8",
-  1: "2301a7a3892b93aa9660035794f4caac1c353c1e4cced3bc005f130e4faead40",
-  2: "4261b3b637bbd1264110c8f41c0f2a02cd7454205420a8ebcadf47993bb8c24e",
+  0: "56bfc981276ac7a3fb247b5e96bfc1ff9bb4e1b60a95c5df60e8b66a9984fd6f",
+  1: "035dc99f7c861f734a09aef949c801d1d12a5a44149ea0b1abb42b9fee449a5f",
+  2: "8c3fa2f9ab0d54b5d7bc60fa3184d9519d1b3a8c01663dbb3f84b2141deef719",
 } as const;
 
 for (const index of [0, 1, 2] as const) {
-  test(`SLIP-0010 m/44'/917'/0'/0'/${index}': 12-word phrase derives the frozen address`, async () => {
+  test(`SLIP-0010 m/44'/3007'/0'/0'/${index}': 12-word phrase derives the frozen address`, async () => {
     assert.equal(await addressFromMnemonic(M12, index), EXPECTED_ADDRESSES_12W[index]);
   });
 
-  test(`SLIP-0010 m/44'/917'/0'/0'/${index}': 24-word phrase derives the frozen address`, async () => {
+  test(`SLIP-0010 m/44'/3007'/0'/0'/${index}': 24-word phrase derives the frozen address`, async () => {
     assert.equal(await addressFromMnemonic(M24, index), EXPECTED_ADDRESSES_24W[index]);
   });
 }

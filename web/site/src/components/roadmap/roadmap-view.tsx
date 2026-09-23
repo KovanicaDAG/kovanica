@@ -100,7 +100,7 @@ const SDK: Item[] = [
     id: "sdk-mnemonic",
     title: "SDK + CLI · SLIP-0010 mnemonic derivation",
     status: "done",
-    blurb: "Frozen path m/44'/917'/0'/0'/i'; wallet new/restore/show; BIP-39 checksum validation.",
+    blurb: "Frozen path m/44'/3007'/0'/0'/i'; wallet new/restore/show; BIP-39 checksum validation.",
   },
   {
     id: "sdk-publish",

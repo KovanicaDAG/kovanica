@@ -20,7 +20,7 @@ This note records the inconsistencies found across the planning pack and
 | 5 | **Module naming** | Backlog wrote `kovanica_types` (underscore). Crates use `kovanica-types` (hyphen). | Docs use crate names with hyphens; Rust paths use underscores — both noted as normal. |
 | 6 | **Examples list** | Crate draft listed `transfer.rs`, `create_asset.rs`, `htlc_swap.rs`. Skeleton only ships `generate_wallet.rs`. | Documented: only `generate_wallet` exists; other examples are S-10. |
 | 7 | **Sighash** | Tx signing used a non-consensus placeholder sighash. Not called out in backlog tasks. | Added **S-03c**: implement the node-identical sighash before any broadcast. |
-| 8 | **Derivation path** | Skeleton + CLI each derived keys differently (first-32-bytes-of-BIP39-seed / sha256 stopgap). | **Frozen:** SLIP-0010 ed25519 `m/44'/917'/0'/0'/i'` (all hardened). Canon: `DERIVATION.md` + `sdk/crates/kovanica-keys/tests/slip10_vectors.rs`. CLI, SDK, and web now agree. |
+| 8 | **Derivation path** | Skeleton + CLI each derived keys differently (first-32-bytes-of-BIP39-seed / sha256 stopgap). | **Frozen:** SLIP-0010 ed25519 `m/44'/3007'/0'/0'/i'` (all hardened). Canon: `DERIVATION.md` + `sdk/crates/kovanica-keys/tests/slip10_vectors.rs`. CLI, SDK, and web now agree. |
 | 9 | **Fee floor** | Skeleton fee estimate ignored the RFC-006 minimum. | `kovanica-fee::estimate_with_min(size_bytes, subsidy, min)` = `max(size-based, fee_floor)`; fee floor = `max(1, subsidy/500_000)` atoms/byte. |
 | 10 | **Address HRP wording** | SDK crate-structure draft still said "bech32-style". | Corrected: the node format is **base58**, not bech32. Bech32 appears only as an unused transitive npm dependency in the web lockfile. |
 

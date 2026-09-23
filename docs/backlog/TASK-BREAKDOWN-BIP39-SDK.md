@@ -39,7 +39,7 @@ All work ships on the **0.x** line. No breaking derivation or address format aft
 | M-04 | CLI: show address / export public key (no key print by default)| 0.5d | Core | **Done** |
 | M-05 | Web: generate flow with 12/24 toggle + confirm screens    | 2d    | Web   | **Done** — merged in PR #23 |
 | M-06 | Web: restore flow with paste / word-by-word + checksum UX | 1.5d  | Web   | **Done** — merged in PR #23 |
-| M-07 | Shared derivation path constants (document & freeze)      | 0.5d  | Core  | **Done** — `m/44'/917'/0'/0'/i'`, `DERIVATION.md` |
+| M-07 | Shared derivation path constants (document & freeze)      | 0.5d  | Core  | **Done** — `m/44'/3007'/0'/0'/i'`, `DERIVATION.md` |
 | M-08 | Unit tests: known vectors + checksum failure cases        | 1d    | Core  | **Done** — `slip10_vectors.rs` |
 | M-09 | Property tests: round-trip generate → restore → same keys | 0.5d  | Core  | **Done** |
 | M-10 | Security review: no key material in logs, network, analytics | 0.5d | Core | **Done** — see review summary |
@@ -61,7 +61,7 @@ All work ships on the **0.x** line. No breaking derivation or address format aft
 
 - Crate: `bip39 = "2"` (RustCrypto) — pinned in SDK and CLI
 - Entropy: 16 bytes → 12 words, 32 bytes → 24 words
-- Derivation: SLIP-0010 ed25519 `m/44'/917'/0'/0'/i'` (all hardened), documented and **frozen** — `docs/backlog/DERIVATION.md`
+- Derivation: SLIP-0010 ed25519 `m/44'/3007'/0'/0'/i'` (all hardened), documented and **frozen** — `docs/backlog/DERIVATION.md`
 - Web: use `WebCrypto.getRandomValues`; never `Math.random`
 - Storage: prefer not to persist the backup at all; if needed, encrypt with user password
 - Prefer reusing `kovanica-keys` from the SDK rather than duplicating BIP-39 logic in the wallet

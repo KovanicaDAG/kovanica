@@ -118,7 +118,7 @@ async function deriveSlip10Ed25519(
 
 /**
  * Derive the per-account Ed25519 seed from a BIP-39 mnemonic using
- * SLIP-0010 hardened derivation at m/44'/917'/0'/0'/index'.
+ * SLIP-0010 hardened derivation at m/44'/3007'/0'/0'/index'.
  * All segments are hardened — ed25519 has no non-hardened children.
  */
 export async function seedFromMnemonic(mnemonic: string, index = 0): Promise<Uint8Array> {
@@ -126,7 +126,7 @@ export async function seedFromMnemonic(mnemonic: string, index = 0): Promise<Uin
     throw new Error("account index out of range");
   }
   const seed64 = await mnemonicToSeed(normalizeMnemonic(mnemonic));
-  return deriveSlip10Ed25519(seed64, [44, 917, 0, 0, index]);
+  return deriveSlip10Ed25519(seed64, [44, 3007, 0, 0, index]);
 }
 
 export async function addressFromMnemonic(mnemonic: string, index = 0): Promise<string> {

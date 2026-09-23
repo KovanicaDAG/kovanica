@@ -10,10 +10,10 @@ import {
   IHardwareProvider,
 } from "./types";
 
-export const KOVANICA_COIN_TYPE = 999;
+export const KOVANICA_COIN_TYPE = 3007;
 
 /**
- * Formats a standard Kovanica BIP-44 derivation path: m/44'/999'/${account}'/${change}/${index}
+ * Formats a standard Kovanica BIP-44 derivation path: m/44'/3007'/${account}'/${change}/${index}
  */
 export function formatDerivationPath(account = 0, change = 0, index = 0): string {
   const safeAccount = Math.max(0, Math.floor(Number(account) || 0));
@@ -23,7 +23,7 @@ export function formatDerivationPath(account = 0, change = 0, index = 0): string
 }
 
 /**
- * Parses either an account index (e.g. 0, 1, 2) or a full path string (e.g. "m/44'/999'/1'/0/0").
+ * Parses either an account index (e.g. 0, 1, 2) or a full path string (e.g. "m/44'/3007'/1'/0/0").
  * Returns normalized path and account index.
  */
 export function parseAccountOrPath(accountIndexOrPath?: number | string): {

@@ -37,7 +37,7 @@ pub fn generate_mnemonic(words: u32) -> Result<String, JsValue> {
     Ok(m.phrase())
 }
 
-/// Derive `kvnc…dag` from the frozen SLIP-0010 path `m/44'/917'/0'/0'/index'`.
+/// Derive `kvnc…dag` from the frozen SLIP-0010 path `m/44'/3007'/0'/0'/index'`.
 #[wasm_bindgen]
 pub fn address_from_mnemonic(phrase: &str, index: u32) -> Result<String, JsValue> {
     let m = Mnemonic::from_phrase(phrase).map_err(|e| JsValue::from_str(&e.to_string()))?;
