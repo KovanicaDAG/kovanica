@@ -130,6 +130,53 @@ pub struct FeeEstimate {
     pub bytes: u64,
 }
 
+/// `/api/bootstrap` response — node/consensus parameters the client needs to
+/// know (RFC-006 tokenomics, GHOSTDAG k, network identity).
+///
+/// Read-only mirror of the node's JSON; fields the node may omit stay `None`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapInfo {
+    /// Network name (e.g. "kovanica-testnet").
+    #[serde(default)]
+    pub network: Option<String>,
+    /// Genesis hash (hex).
+    #[serde(default)]
+    pub genesis: Option<String>,
+    /// GHOSTDAG k parameter (3 on testnet).
+    #[serde(default)]
+    pub k: Option<u32>,
+    /// Native token symbol.
+    #[serde(default)]
+    pub token: Option<String>,
+    /// Atom scale (should be 1e8 = atoms per KVNC).
+    #[serde(default)]
+    pub atom: Option<u64>,
+    /// Minimum fee (atoms/byte) the node advertises.
+    #[serde(default)]
+    pub min_fee: Option<u64>,
+    /// Current block subsidy in atoms (RFC-006).
+    #[serde(default)]
+    pub subsidy: Option<u64>,
+    /// RFC-006 hard cap in atoms (90.2M KVNC).
+    #[serde(default)]
+    pub max_supply: Option<u64>,
+    /// Native KVNC minted so far (atoms).
+    #[serde(default)]
+    pub native_minted: Option<u64>,
+    /// Total supply (atoms).
+    #[serde(default)]
+    pub total: Option<u64>,
+    /// Circulating supply (atoms).
+    #[serde(default)]
+    pub circulating: Option<u64>,
+    /// Burned fees (atoms).
+    #[serde(default)]
+    pub burned: Option<u64>,
+    /// Configured P2P peer list (DNS seed names / origin IPs).
+    #[serde(default)]
+    pub peers: Vec<String>,
+}
+
 /// HTTP client.
 #[derive(Clone)]
 pub struct Client {
@@ -227,6 +274,24 @@ impl Client {
             return Err(RpcError::Status(status));
         }
         resp.json::<FeeEstimate>()
+            .await
+            .map_err(|e| RpcError::Decode(e.to_string()))
+    }
+
+    /// GET /api/bootstrap — consensus + tokenomics parameters (RFC-006, k).
+    pub async fn get_bootstrap(&self) -> Result<BootstrapInfo, RpcError> {
+        let url = format!("{}/api/bootstrap", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| RpcError::Http(e.to_string()))?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(RpcError::Status(status));
+        }
+        resp.json::<BootstrapInfo>()
             .await
             .map_err(|e| RpcError::Decode(e.to_string()))
     }

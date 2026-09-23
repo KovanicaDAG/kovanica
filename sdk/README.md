@@ -61,9 +61,37 @@ println!("{}", keypair.address());
 
 ## Live testnet tests
 
+Read-only integration tests against the public API, gated behind the
+`live-testnet` feature (off by default — `cargo test --workspace` stays offline):
+
 ```bash
 cargo test -p kovanica-rpc --features live-testnet -- --nocapture
 ```
+
+What they verify (checked against a live `/api/head` + `/api/bootstrap` before
+being written):
+
+- `GET /api/head` — network identity, `atom = 1e8`, RFC-006 fee floor
+  (`min_fee = max(1, subsidy/500_000)` atoms/byte; 2000 in era 0).
+- `GET /api/bootstrap` — GHOSTDAG `k = 3`, `token = "KVNC"`,
+  `max_supply = 9_020_000_000_000_000` (90.2M KVNC at 1e8 atoms),
+  supply invariants (`native_minted ≤ max_supply`, `total == native_minted`,
+  `circulating ≤ total`), and P2P seed policy (DNS seed names on TCP 9000,
+  never an orange-cloud explorer host).
+- `GET /api/utxos` — fresh address returns an empty, zero-balance page.
+- `GET /api/fee_estimate` — shape and unit (`atoms/byte`).
+- `POST /api/submit_tx` — a deliberately empty transaction must be rejected.
+  No keys, no funded spends, no faucet usage.
+
+You can point the tests at any node/explorer (e.g. your local participant node
+on `127.0.0.1:8080`):
+
+```bash
+KOVANICA_API=http://127.0.0.1:8080 \
+  cargo test -p kovanica-rpc --features live-testnet -- --nocapture
+```
+
+`KOVANICA_API` defaults to `https://api.kovanica.online`.
 
 ## WASM
 
