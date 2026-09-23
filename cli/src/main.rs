@@ -71,6 +71,9 @@ enum Command {
         /// Path to the key file.
         #[arg(long, env = "KOVANICA_KEY", default_value = "kovanica.key")]
         key: PathBuf,
+        /// BIP39 passphrase (only if the wallet was created with one).
+        #[arg(long)]
+        passphrase: Option<String>,
     },
     /// Sign and broadcast a transfer from a saved key.
     Send {
@@ -83,7 +86,13 @@ enum Command {
         /// Amount to send, in atoms (1 KVNC = 100000000 atoms).
         #[arg(long)]
         amount: u64,
+        /// BIP39 passphrase (only if the wallet was created with one).
+        #[arg(long)]
+        passphrase: Option<String>,
     },
+    /// Mnemonic wallet operations (12/24-word BIP39, SLIP-0010 ed25519).
+    #[command(subcommand)]
+    Wallet(WalletCommand),
     /// HTLC (Hash Time-Locked Contract) operations for atomic swaps.
     #[command(subcommand)]
     Htlc(HtlcCommand),
@@ -98,6 +107,60 @@ enum Command {
     Nft(NftCommand),
     /// Launch interactive TUI.
     Tui,
+}
+
+#[derive(Subcommand)]
+enum WalletCommand {
+    /// Generate a new mnemonic wallet (12 or 24 words) and save it.
+    New {
+        /// Path to write the key file (0600).
+        #[arg(long, env = "KOVANICA_KEY", default_value = "kovanica.key")]
+        key: PathBuf,
+        /// Number of words: 12 (128-bit) or 24 (256-bit).
+        #[arg(long, default_value_t = 24)]
+        words: usize,
+        /// Optional BIP-39 passphrase ("25th word"). Not stored — you must
+        /// re-enter it every time you load this wallet.
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Overwrite an existing key file.
+        #[arg(long)]
+        force: bool,
+        /// Skip the write-it-down confirmation prompt (for scripts; unsafe).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Restore a wallet from a mnemonic phrase (interactive, or via flags).
+    Restore {
+        /// Path to write the key file (0600).
+        #[arg(long, env = "KOVANICA_KEY", default_value = "kovanica.key")]
+        key: PathBuf,
+        /// The mnemonic phrase inline (overrides interactive prompt).
+        #[arg(long)]
+        from_mnemonic: Option<String>,
+        /// Read the mnemonic phrase from a file.
+        #[arg(long)]
+        from_file: Option<PathBuf>,
+        /// BIP-39 passphrase used at creation time (same as `wallet new`).
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Overwrite an existing key file.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show the saved wallet's address and public key. Never prints the
+    /// mnemonic or seed unless `--show-seed` is explicitly given.
+    Show {
+        /// Path to the key file.
+        #[arg(long, env = "KOVANICA_KEY", default_value = "kovanica.key")]
+        key: PathBuf,
+        /// BIP-39 passphrase (only if the wallet was created with one).
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Also print the raw 32-byte seed (use with care).
+        #[arg(long)]
+        show_seed: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -302,11 +365,23 @@ fn main() -> Result<()> {
             println!("Wrote key to {} (keep it secret)", key.display());
             print_address(&addr);
         }
-        Command::Address { key } => {
-            let wallet = Wallet::load(&key)?;
+        Command::Address { key, passphrase } => {
+            let wallet = Wallet::load_with_passphrase(&key, passphrase.as_deref().unwrap_or(""))?;
             print_address(&wallet.address());
         }
-        Command::Send { key, to, amount } => send(&client, &key, &to, amount)?,
+        Command::Send {
+            key,
+            to,
+            amount,
+            passphrase,
+        } => send(
+            &client,
+            &key,
+            &to,
+            amount,
+            passphrase.as_deref().unwrap_or(""),
+        )?,
+        Command::Wallet(wallet_cmd) => wallet(&wallet_cmd)?,
         Command::Htlc(htlc_cmd) => htlc(&client, htlc_cmd)?,
         Command::Offer(offer_cmd) => offer(&client, offer_cmd)?,
         Command::Rwa(rwa_cmd) => rwa(&client, rwa_cmd)?,
@@ -325,17 +400,119 @@ fn print_address(addr: &Address) {
     println!("address (hex):  {}", addr.to_hex());
 }
 
+/// `wallet new|restore|show` — mnemonic wallet commands (M-02/M-03/M-04).
+///
+/// Derivation is the **frozen** SLIP-0010 ed25519 path
+/// `m/44'/917'/0'/0'/0'` (see `docs/backlog/DERIVATION.md`), matching the
+/// SDK `kovanica-keys` crate and the web wallet.
+fn wallet(cmd: &WalletCommand) -> Result<()> {
+    match cmd {
+        WalletCommand::New {
+            key,
+            words,
+            passphrase,
+            force,
+            yes,
+        } => {
+            let pass = passphrase.as_deref().unwrap_or("");
+            let wallet = Wallet::generate_with_mnemonic_words(*words, pass)?;
+            let mnemonic = wallet
+                .mnemonic()
+                .context("freshly generated wallet has no mnemonic")?;
+
+            // M-02 acceptance: the user must write the seed down. Print it
+            // once, up front, and require an explicit confirmation before we
+            // persist anything to disk (skippable for scripting with --yes).
+            println!("Your new {words}-word backup phrase — write it down, do not lose it:");
+            println!();
+            println!("  {mnemonic}");
+            println!();
+            if !yes {
+                print!("Type the FIRST word to confirm you wrote it down: ");
+                use std::io::Write;
+                std::io::stdout().flush()?;
+                let mut answer = String::new();
+                std::io::stdin()
+                    .read_line(&mut answer)
+                    .context("failed to read confirmation")?;
+                let first = mnemonic.split(' ').next().unwrap_or("");
+                if answer.trim() != first {
+                    bail!("confirmation word did not match; nothing was saved");
+                }
+            }
+            wallet.save(key, *force)?;
+            if !pass.is_empty() {
+                println!(
+                    "NOTE: passphrase used at creation is NOT stored — you must pass \
+                     `--passphrase` on every load of this wallet."
+                );
+            }
+            println!("Wrote wallet to {} (0600)", key.display());
+            print_address(&wallet.address());
+        }
+        WalletCommand::Restore {
+            key,
+            from_mnemonic,
+            from_file,
+            passphrase,
+            force,
+        } => {
+            let pass = passphrase.as_deref().unwrap_or("");
+            let wallet = if let Some(phrase) = from_mnemonic {
+                Wallet::from_mnemonic_with_passphrase(phrase.trim(), pass)?
+            } else if let Some(path) = from_file {
+                let phrase = std::fs::read_to_string(path)
+                    .with_context(|| format!("cannot read mnemonic file {}", path.display()))?;
+                Wallet::from_mnemonic_with_passphrase(phrase.trim(), pass)?
+            } else {
+                // Interactive: read the phrase from stdin (paste or type).
+                print!("Paste your mnemonic phrase and press Enter: ");
+                use std::io::Write;
+                std::io::stdout().flush()?;
+                let mut phrase = String::new();
+                std::io::stdin()
+                    .read_line(&mut phrase)
+                    .context("failed to read mnemonic")?;
+                Wallet::from_mnemonic_with_passphrase(phrase.trim(), pass)?
+            };
+            wallet.save(key, *force)?;
+            println!("Restored wallet to {} (0600)", key.display());
+            print_address(&wallet.address());
+        }
+        WalletCommand::Show {
+            key,
+            passphrase,
+            show_seed,
+        } => {
+            let wallet = Wallet::load_with_passphrase(key, passphrase.as_deref().unwrap_or(""))?;
+            print_address(&wallet.address());
+            println!("public key (hex): {}", hex::encode(wallet.public_key()));
+            if *show_seed {
+                // Explicit opt-in only; the mnemonic itself is never printed.
+                println!("seed (hex): {}", hex::encode(wallet.seed()));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Build, sign, and broadcast a transfer.
 ///
 /// Matches `kovanica-web`'s wallet flow and the node's own mempool test:
 /// `prepare` returns a `sighash`; we sign those exact bytes with Ed25519 and
 /// `submit` the 64-byte signature. The node recomputes and re-verifies the
 /// spend, so the sighash is never trusted from the client.
-fn send(client: &Client, key: &std::path::Path, to: &str, amount: u64) -> Result<()> {
+fn send(
+    client: &Client,
+    key: &std::path::Path,
+    to: &str,
+    amount: u64,
+    passphrase: &str,
+) -> Result<()> {
     if amount == 0 {
         bail!("amount must be greater than zero");
     }
-    let wallet = Wallet::load(key)?;
+    let wallet = Wallet::load_with_passphrase(key, passphrase)?;
     let from = wallet.address().to_hex();
     let to = parse_address(to)?.to_hex();
 
