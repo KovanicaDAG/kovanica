@@ -107,9 +107,9 @@ No blocking findings. Residual risk is end-user hygiene (terminal scrollback aft
 | S-06  | `kovanica-tx`: Vault / CSV (KVP-105) builder               | 1d    | Core  | **Done** — `VaultBuilder` |
 | S-07  | `kovanica-rpc`: typed HTTP client for `/api/*`             | 2d    | Core  | Partial — head/utxos/fee_estimate/submit_tx/bootstrap typed; multisig/htlc endpoints pending |
 | S-08  | `kovanica-fee`: size-based + subsidy-aware fee estimate    | 1d    | Core  | **Done** — `estimate_with_min` honors RFC-006 floor |
-| S-09  | WASM / TypeScript bindings                                 | 2.5d  | Core  | Partial — generate/address/version only; tx build+broadcast pending (needs S-11 green first) |
+| S-09  | WASM / TypeScript bindings                                 | 2.5d  | Core  | **Done** — `build_signed_transfer` (decimal-string amounts), host-tested 4/4, wasm-pack build verified 2026-09-23 |
 | S-10  | Examples: transfer, create-asset, htlc-swap (testnet)      | 1.5d  | Core  | **Done** — 4 examples compile (`cargo build --examples`) |
-| S-11  | Integration tests against live testnet (feature-gated)     | 1d    | Core  | Todo — file exists (`live_testnet.rs`), never run against live |
+| S-11  | Integration tests against live testnet (feature-gated)     | 1d    | Core  | **Done** — 5/5 vs `api.kovanica.online` (2026-09-23) |
 | S-12  | crates.io + npm publish pipeline (0.x)                     | 1d    | Core  | Todo        |
 | S-13  | Cookbook pages on docs.kovanica.online                     | 1.5d  | Docs  | Todo        |
 
@@ -125,7 +125,7 @@ No blocking findings. Residual risk is end-user hygiene (terminal scrollback aft
 
 - `cargo test --workspace` passes with no network by default
 - Optional `--features live-testnet` runs against public testnet
-- TypeScript package can build a signed tx and broadcast it (S-03b + S-03c now unlocked — pending S-11 live verification)
+- TypeScript package can build a signed tx and broadcast it (S-09 ✅ — build/sign in wasm; broadcast via web `apiPostJson` → `/api/submit_tx`, the flow M-10 already uses)
 - Every public builder has at least one example in `/examples`
 - README shows a 5-minute "first transfer" path
 - Addresses round-trip with node (`kvnc…` encode/decode)
@@ -148,7 +148,7 @@ No blocking findings. Residual risk is end-user hygiene (terminal scrollback aft
 | Sprint 0 | ASAP       | S-03b + S-03c (address + sighash lock to node)     | — **Done** (vectors on both sides) |
 | Sprint 1 | Week 1–2   | M-01 → M-11 (backup support complete) — **Done**   |
 | Sprint 2 | Week 2–4   | S-02 → S-08 finish (Rust core against locked codec)| — **Done** (S-02 `Block` + S-07 multisig/htlc endpoints excepted) |
-| Sprint 3 | Week 4–6   | S-09 → S-13 + Playground MVP kickoff               | — current: S-11 live run → S-09 tx flow → S-12/S-13 |
+| Sprint 3 | Week 4–6   | S-09 → S-13 + Playground MVP kickoff               | — current: S-11 ✅ S-09 ✅ → S-12/S-13 |
 
 **Total rough effort (one strong Rust engineer):** ~20–24 developer-days including address/sighash lock.
 
