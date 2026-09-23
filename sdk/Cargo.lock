@@ -657,6 +657,7 @@ dependencies = [
 name = "kovanica-sdk"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "blake3",
  "kovanica-fee",
  "kovanica-keys",
  "kovanica-rpc",
