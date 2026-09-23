@@ -1,0 +1,20 @@
+[package]
+name = "kovanica-wasm"
+description = "WASM / JS bindings for kovanica-sdk (browser & Node)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kovanica-sdk = { path = "../../crates/kovanica-sdk" }
+wasm-bindgen = "0.2"
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[features]
+default = ["console_error_panic_hook"]
