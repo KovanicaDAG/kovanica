@@ -36,7 +36,7 @@ cp package.json pkg/package.json
 cd sdk/bindings/kovanica-wasm
 npm pack --dry-run   # inspect tarball: *.js, *.wasm, *.d.ts, package.json
 # real publish:
-# npm publish --access public   # scoped @kovanica/* needs --access public
+# npm publish --access public --tag alpha   # scoped @kovanica/* needs --access public; pre-release → dist-tag alpha
 ```
 
 Keep the version in `package.json` in lockstep with the workspace

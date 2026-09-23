@@ -181,6 +181,10 @@ jobs:
       - name: Configure npm auth
         run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
 
-      - name: Publish (scoped package → --access public)
-        run: npm publish --access public
+      - name: Publish (scoped package → --access public, dist-tag alpha)
+        # 0.1.0-alpha.1 is a pre-release: publish under the "alpha" dist-tag,
+        # NOT "latest", so a bare `npm install @kovanica/sdk-wasm` never
+        # silently hands a consumer a pre-release. Consumers opt in with
+        # `npm install @kovanica/sdk-wasm@alpha`.
+        run: npm publish --access public --tag alpha
         working-directory: sdk/bindings/kovanica-wasm/pkg
