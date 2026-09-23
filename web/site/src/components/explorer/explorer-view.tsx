@@ -1,4 +1,3 @@
-// @ts-nocheck — pre-existing explorer wallet panel types; tracked separately
 import { useEffect, useMemo, useState } from "react";
 import { Pause, Play, RotateCcw, Hammer } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -296,7 +295,7 @@ function AnalyticsPanel({ node }: { node: ApiNode | undefined }) {
   );
 }
 
-function ConsolePanel({ node, events }: { node: ApiNode | undefined; events: { at?: string; kind?: string; from?: string; to?: string }[] }) {
+function ConsolePanel({ node, events }: { node: ApiNode | undefined; events: { at: number; from: string; to: string; kind: string }[] }) {
   return (
     <div className="overflow-auto rounded-lg border border-border bg-surface/50 p-4 max-h-[400px]">
       <p className="text-[10px] tracking-wide text-subtle uppercase">Mempool</p>

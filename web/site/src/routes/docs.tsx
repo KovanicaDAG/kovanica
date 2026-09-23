@@ -4,7 +4,7 @@ import { Shell } from "@/components/layout/shell";
 import { SourceSwitch } from "@/components/layout/source-switch";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
-import { ATOM, HALVING_ERA, K, MIN_FEE, SUBSIDY, type ApiBootstrap } from "@/lib/api/contract";
+import { ATOM, HALVING_ERA, K, MAX_SUPPLY, MIN_FEE, SUBSIDY, type ApiBootstrap } from "@/lib/api/contract";
 import { ENDPOINTS } from "@/lib/api/endpoints";
 import { getCurrentSpecText, getNetworkId } from "@/lib/network";
 import { SURFACE } from "@/lib/surfaces";
@@ -18,6 +18,7 @@ const SECTIONS = [
   { id: "tokens", label: "Tokens · NFT · RWA" },
   { id: "staking", label: "Staking" },
   { id: "protocol", label: "Protocol" },
+  { id: "tokenomics", label: "Tokenomics" },
   { id: "node-ops", label: "Node operations" },
   { id: "api-reference", label: "API reference" },
   { id: "roadmap", label: "Roadmap & RFCs" },
@@ -344,6 +345,39 @@ function DocsBody() {
           </p>
         </section>
 
+        {/* Tokenomics (RFC-006) */}
+        <section id="tokenomics" className="mt-10 scroll-mt-20">
+          <h2 className="font-display text-2xl tracking-tight text-fg">Tokenomics</h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            RFC-006 emission is live on testnet: a smooth geometric-decay curve under a hard cap,
+            with coinbase maturity and fee burning enforced as consensus rules.
+          </p>
+          <dl className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-3">
+            <Fact k="Hard cap" v={`${(MAX_SUPPLY / ATOM).toLocaleString()} KVNC (90.2M)`} />
+            <Fact k="Curve emission" v="80M KVNC · geometric decay" />
+            <Fact k="Founder premine" v="0.2M KVNC" />
+            <Fact k="Treasury" v="10M KVNC (10 × 1M vaults)" />
+            <Fact k="Subsidy s₀" v={`${SUBSIDY / ATOM} KVNC / block`} />
+            <Fact k="Era" v={`${HALVING_ERA.toLocaleString()} blocks · decay ×¾`} />
+            <Fact k="Coinbase maturity" v="100 blocks" />
+            <Fact k="Fee split" v="75% burned · 25% producer" />
+            <Fact k="Fee floor" v={`${MIN_FEE} atoms/byte (max(1, subsidy/500k))`} />
+          </dl>
+          <p className="mt-4 text-sm leading-relaxed text-muted">
+            Immature coinbases are skipped by the transaction builder; the 90.2M cap, 100-block
+            maturity, and fee-burn are hard consensus rules. Full spec:{" "}
+            <a
+              className="text-fg underline-offset-2 hover:underline"
+              href="https://github.com/KovanicaDAG/kovanica/blob/main/protocol/docs/TOKENOMICS.md"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              protocol/docs/TOKENOMICS.md
+            </a>
+            .
+          </p>
+        </section>
+
         {/* Node operations */}
         <section id="node-ops" className="mt-10 scroll-mt-20">
           <h2 className="font-display text-2xl tracking-tight text-fg">Node operations</h2>
@@ -387,6 +421,15 @@ function DocsBody() {
               href="/download/kovanica-node-linux-arm64"
             >
               linux-arm64
+            </a>{" "}
+            ·{" "}
+            <a
+              className="text-fg underline-offset-2 hover:underline"
+              href="https://github.com/KovanicaDAG/kovanica/blob/main/protocol/docs/RUN-A-NODE.md"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              full run-a-node guide
             </a>
           </p>
         </section>

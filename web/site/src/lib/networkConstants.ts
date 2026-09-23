@@ -139,7 +139,7 @@ export type ApiState = {
     now: number;
     queued: number;
     nodes: { name: string; blocks: number; tip: string; peers: string[]; mempool: number }[];
-    events: string[];
+    events: { at: number; from: string; to: string; kind: string }[];
   };
   node: ApiNode;
   wallets: { seed: number; address: string; balance: number }[];

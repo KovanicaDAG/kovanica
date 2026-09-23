@@ -25,6 +25,7 @@ import { Route as StealthRouteImport } from './routes/stealth'
 import { Route as VaultsRouteImport } from './routes/vaults'
 import { Route as WalletRouteImport } from './routes/wallet'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as DownloadSplatRouteImport } from './routes/download/$'
 import { Route as WalletAtomicSwapRouteImport } from './routes/wallet/atomic-swap'
 import { Route as WalletCoinjoinRouteImport } from './routes/wallet/coinjoin'
 import { Route as WalletRwaIssueRouteImport } from './routes/wallet/rwa-issue'
@@ -112,6 +113,11 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DownloadSplatRoute = DownloadSplatRouteImport.update({
+  id: '/download/$',
+  path: '/download/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WalletAtomicSwapRoute = WalletAtomicSwapRouteImport.update({
   id: '/atomic-swap',
   path: '/atomic-swap',
@@ -161,6 +167,7 @@ export interface FileRoutesByFullPath {
   '/vaults': typeof VaultsRoute
   '/wallet': typeof WalletRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/download/$': typeof DownloadSplatRoute
   '/wallet/atomic-swap': typeof WalletAtomicSwapRoute
   '/wallet/coinjoin': typeof WalletCoinjoinRoute
   '/wallet/rwa-issue': typeof WalletRwaIssueRoute
@@ -185,6 +192,7 @@ export interface FileRoutesByTo {
   '/vaults': typeof VaultsRoute
   '/wallet': typeof WalletRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/download/$': typeof DownloadSplatRoute
   '/wallet/atomic-swap': typeof WalletAtomicSwapRoute
   '/wallet/coinjoin': typeof WalletCoinjoinRoute
   '/wallet/rwa-issue': typeof WalletRwaIssueRoute
@@ -210,6 +218,7 @@ export interface FileRoutesById {
   '/vaults': typeof VaultsRoute
   '/wallet': typeof WalletRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/download/$': typeof DownloadSplatRoute
   '/wallet/atomic-swap': typeof WalletAtomicSwapRoute
   '/wallet/coinjoin': typeof WalletCoinjoinRoute
   '/wallet/rwa-issue': typeof WalletRwaIssueRoute
@@ -236,6 +245,7 @@ export interface FileRouteTypes {
     | '/vaults'
     | '/wallet'
     | '/api/$'
+    | '/download/$'
     | '/wallet/atomic-swap'
     | '/wallet/coinjoin'
     | '/wallet/rwa-issue'
@@ -260,6 +270,7 @@ export interface FileRouteTypes {
     | '/vaults'
     | '/wallet'
     | '/api/$'
+    | '/download/$'
     | '/wallet/atomic-swap'
     | '/wallet/coinjoin'
     | '/wallet/rwa-issue'
@@ -284,6 +295,7 @@ export interface FileRouteTypes {
     | '/vaults'
     | '/wallet'
     | '/api/$'
+    | '/download/$'
     | '/wallet/atomic-swap'
     | '/wallet/coinjoin'
     | '/wallet/rwa-issue'
@@ -309,6 +321,7 @@ export interface RootRouteChildren {
   VaultsRoute: typeof VaultsRoute
   WalletRoute: typeof WalletRouteWithChildren
   ApiSplatRoute: typeof ApiSplatRoute
+  DownloadSplatRoute: typeof DownloadSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -425,6 +438,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/download/$': {
+      id: '/download/$'
+      path: '/download/$'
+      fullPath: '/download/$'
+      preLoaderRoute: typeof DownloadSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/wallet/atomic-swap': {
       id: '/wallet/atomic-swap'
       path: '/atomic-swap'
@@ -518,6 +538,7 @@ const rootRouteChildren: RootRouteChildren = {
   VaultsRoute: VaultsRoute,
   WalletRoute: WalletRouteWithChildren,
   ApiSplatRoute: ApiSplatRoute,
+  DownloadSplatRoute: DownloadSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
