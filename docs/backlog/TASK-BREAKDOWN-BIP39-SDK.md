@@ -98,14 +98,14 @@ No blocking findings. Residual risk is end-user hygiene (terminal scrollback aft
 | ID    | Task                                                       | Est.  | Owner | Status      |
 |-------|------------------------------------------------------------|-------|-------|-------------|
 | S-01  | Cargo workspace layout + crate skeleton                    | 0.5d  | Core  | **Done**    |
-| S-02  | `kovanica-types`: Block, Tx, UTXO, AssetId, Address, Sig   | 2d    | Core  | Partial — Tx/UTXO/AssetId/Address/Sig done; `Block` not ported |
+| S-02  | `kovanica-types`: Block, Tx, UTXO, AssetId, Address, Sig   | 2d    | Core  | **Done** — `Block` + `BlockColour`/`BlockKind`/`ConfirmingStatus` enums; `Client::get_block` typed endpoint |
 | S-03  | `kovanica-keys`: backup → seed → Ed25519 + address         | 1.5d  | Core  | **Done**    |
 | S-03b | **Lock address codec to node** (`kvnc`+base58+`dag`)       | 1d    | Core  | **Done** — P2PK codec + stealth/HTLC/multisig/vault script helpers (`src/scripts/`) |
 | S-03c | **Lock sighash to node** (BLAKE3 witness-free)             | 1d    | Core  | **Done** — `encode_into` byte-identical port; shared vectors on both sides (`sighash_vector.rs`) |
 | S-04  | `kovanica-tx`: native transfer + asset mint/transfer       | 2d    | Core  | **Done** — `TransferBuilder` + `SignedTx::sign`, 10 unit tests |
 | S-05  | `kovanica-tx`: HTLC (KVP-104) + Multisig (KVP-101)         | 2d    | Core  | **Done** — `HtlcBuilder` + `MultisigSigner` |
 | S-06  | `kovanica-tx`: Vault / CSV (KVP-105) builder               | 1d    | Core  | **Done** — `VaultBuilder` |
-| S-07  | `kovanica-rpc`: typed HTTP client for `/api/*`             | 2d    | Core  | Partial — head/utxos/fee_estimate/submit_tx/bootstrap typed; multisig/htlc endpoints pending |
+| S-07  | `kovanica-rpc`: typed HTTP client for `/api/*`             | 2d    | Core  | **Done** — head/utxos/fee_estimate/bootstrap/block + multisig endpoints (create/build/sign/combine/submit); HTLC/vault pending node API |
 | S-08  | `kovanica-fee`: size-based + subsidy-aware fee estimate    | 1d    | Core  | **Done** — `estimate_with_min` honors RFC-006 floor |
 | S-09  | WASM / TypeScript bindings                                 | 2.5d  | Core  | **Done** — `build_signed_transfer` (decimal-string amounts), host-tested 4/4, wasm-pack build verified 2026-09-23 |
 | S-10  | Examples: transfer, create-asset, htlc-swap (testnet)      | 1.5d  | Core  | **Done** — 4 examples compile (`cargo build --examples`) |

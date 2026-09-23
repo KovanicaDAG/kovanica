@@ -5,6 +5,11 @@
 //! - `GET  /api/utxos?address=&limit=&offset=`
 //! - `GET  /api/fee_estimate`
 //! - `POST /api/submit_tx` with `{"tx_hex": "<hex>"}`
+//! - `POST /api/multisig/create` — create M-of-N address
+//! - `POST /api/multisig/build` — build unsigned multisig spend
+//! - `POST /api/multisig/sign` — sign with one cosigner key (client-side)
+//! - `POST /api/multisig/combine` — combine partial signatures
+//! - `POST /api/multisig/submit` — submit fully signed multisig tx
 //!
 //! Default base URL: `https://api.kovanica.online`.
 //! Tests that hit the network are gated behind the `live-testnet` feature.
@@ -301,6 +306,45 @@ pub struct BootstrapInfo {
     pub peers: Vec<String>,
 }
 
+/// `/api/multisig/create` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultisigCreateResponse {
+    /// P2SH address (kvnc…dag form).
+    pub address: String,
+    /// Redeem script (hex).
+    pub redeem_script_hex: String,
+}
+
+/// `/api/multisig/build` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultisigBuildResponse {
+    /// Unsigned transaction blob (hex).
+    pub tx_blob_hex: String,
+    /// Sighash of the unsigned transaction (64 hex).
+    pub sighash_hex: String,
+}
+
+/// `/api/multisig/sign` response — one cosigner's partial signature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultisigSignResponse {
+    /// Partial signature (64 bytes, hex).
+    pub partial_sig_hex: String,
+}
+
+/// `/api/multisig/combine` response — fully signed transaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultisigCombineResponse {
+    /// Signed transaction blob (hex), ready for submit.
+    pub signed_tx_blob_hex: String,
+}
+
+/// `/api/multisig/submit` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultisigSubmitResponse {
+    /// Accepted transaction id (hex).
+    pub tx_id_hex: String,
+}
+
 /// HTTP client.
 #[derive(Clone)]
 pub struct Client {
@@ -489,6 +533,171 @@ impl Client {
             .or(parsed.tx_hash)
             .ok_or_else(|| RpcError::Decode("missing tx id in response".into()))?;
         TxHash::from_hex(&hex).map_err(|e| RpcError::Decode(e.to_string()))
+    }
+
+    /// POST /api/multisig/create — create an M-of-N multisig address.
+    ///
+    /// `threshold` = required signatures (M), `pubkeys_hex` = list of N 32-byte
+    /// Ed25519 public keys (hex). Returns address (kvnc…dag) and redeem script.
+    pub async fn multisig_create(
+        &self,
+        threshold: u8,
+        pubkeys_hex: &[String],
+    ) -> Result<MultisigCreateResponse, RpcError> {
+        let url = format!("{}/api/multisig/create", self.base_url);
+        let body = serde_json::json!({
+            "threshold": threshold as u64,
+            "pubkeys_hex": pubkeys_hex,
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| RpcError::Http(e.to_string()))?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(RpcError::Api(format!("status {status}: {text}")));
+        }
+        resp.json::<MultisigCreateResponse>()
+            .await
+            .map_err(|e| RpcError::Decode(e.to_string()))
+    }
+
+    /// POST /api/multisig/build — build an unsigned multisig spend.
+    ///
+    /// `address` = the P2SH multisig address (kvnc…dag or 66-hex).
+    /// `outputs` = list of `{ "address": "...", "amount_atoms": N }`.
+    /// Returns the unsigned tx blob (hex) and its sighash (64 hex).
+    pub async fn multisig_build(
+        &self,
+        address: &str,
+        outputs: &[(Address, Amount)],
+    ) -> Result<MultisigBuildResponse, RpcError> {
+        let url = format!("{}/api/multisig/build", self.base_url);
+        let outputs_json: Vec<serde_json::Value> = outputs
+            .iter()
+            .map(|(addr, amt)| {
+                serde_json::json!({
+                    "address": addr.to_hex(),
+                    "amount_atoms": amt.atoms(),
+                })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "address": address,
+            "outputs": outputs_json,
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| RpcError::Http(e.to_string()))?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(RpcError::Api(format!("status {status}: {text}")));
+        }
+        resp.json::<MultisigBuildResponse>()
+            .await
+            .map_err(|e| RpcError::Decode(e.to_string()))
+    }
+
+    /// POST /api/multisig/sign — cosigner signs the multisig tx (offline style).
+    ///
+    /// The caller provides the unsigned `tx_blob_hex` (from `multisig_build`)
+    /// and their `secret_hex` (64-hex Ed25519 private key). Returns the
+    /// partial signature (64 bytes, hex).
+    ///
+    /// **Security note**: the private key never leaves the caller — this is an
+    /// RPC wrapper for the node's signing helper. For true offline signing, use
+    /// `kovanica-tx` `MultisigSigner` directly.
+    pub async fn multisig_sign(
+        &self,
+        tx_blob_hex: &str,
+        secret_hex: &str,
+    ) -> Result<MultisigSignResponse, RpcError> {
+        let url = format!("{}/api/multisig/sign", self.base_url);
+        let body = serde_json::json!({
+            "tx_blob_hex": tx_blob_hex,
+            "secret_hex": secret_hex,
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| RpcError::Http(e.to_string()))?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(RpcError::Api(format!("status {status}: {text}")));
+        }
+        resp.json::<MultisigSignResponse>()
+            .await
+            .map_err(|e| RpcError::Decode(e.to_string()))
+    }
+
+    /// POST /api/multisig/combine — combine partial signatures into a signed tx.
+    ///
+    /// `tx_blob_hex` = the original unsigned tx, `partial_sigs_hex` = list of
+    /// 64-byte partial signatures (hex). Returns the fully signed tx blob
+    /// ready for `multisig_submit`.
+    pub async fn multisig_combine(
+        &self,
+        tx_blob_hex: &str,
+        partial_sigs_hex: &[String],
+    ) -> Result<MultisigCombineResponse, RpcError> {
+        let url = format!("{}/api/multisig/combine", self.base_url);
+        let body = serde_json::json!({
+            "tx_blob_hex": tx_blob_hex,
+            "partial_sigs_hex": partial_sigs_hex,
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| RpcError::Http(e.to_string()))?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(RpcError::Api(format!("status {status}: {text}")));
+        }
+        resp.json::<MultisigCombineResponse>()
+            .await
+            .map_err(|e| RpcError::Decode(e.to_string()))
+    }
+
+    /// POST /api/multisig/submit — submit a fully signed multisig transaction.
+    ///
+    /// Returns the accepted transaction id (hex).
+    pub async fn multisig_submit(&self, signed_tx_blob_hex: &str) -> Result<TxHash, RpcError> {
+        let url = format!("{}/api/multisig/submit", self.base_url);
+        let body = serde_json::json!({ "signed_tx_blob_hex": signed_tx_blob_hex });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| RpcError::Http(e.to_string()))?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(RpcError::Api(format!("status {status}: {text}")));
+        }
+        let r: MultisigSubmitResponse = resp
+            .json()
+            .await
+            .map_err(|e| RpcError::Decode(e.to_string()))?;
+        TxHash::from_hex(&r.tx_id_hex).map_err(|e| RpcError::Decode(e.to_string()))
     }
 }
 
