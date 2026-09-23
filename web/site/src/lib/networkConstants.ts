@@ -338,7 +338,7 @@ POST /api/origin?iso3=HRV
 ## Wallet
 
 Address = Ed25519 public key (64 hex) or kvnc…dag (versioned + base58).
-BIP44 path: m/44'/999'/account'/change/index (coin type 999, unregistered).
+BIP44 path: m/44'/3007'/account'/change/index (coin type 3007, unregistered).
 Browser signs prepare's sighash; submit never receives the mnemonic.
 Faucet stays off on the public explorer. Hardware: Ledger (WebHID) + Trezor (WebUSB).
 

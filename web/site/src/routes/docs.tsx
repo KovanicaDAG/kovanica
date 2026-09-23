@@ -163,7 +163,7 @@ function DocsBody() {
           <h2 className="font-display text-2xl tracking-tight text-fg">Wallet</h2>
           <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
             <Fact k="Addresses" v="Ed25519 public key (64 hex) or kvnc…dag (versioned + base58)" />
-            <Fact k="Derivation" v="SLIP-0010 m/44'/917'/0'/0'/i' (frozen, coin type 917)" />
+            <Fact k="Derivation" v="SLIP-0010 m/44'/3007'/0'/0'/i' (frozen, coin type 3007)" />
             <Fact k="Signing" v="In the browser — submit never receives the mnemonic" />
             <Fact k="Hardware" v="Ledger (WebHID) + Trezor (WebUSB)" />
           </dl>
@@ -212,7 +212,7 @@ function DocsBody() {
           <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
             <Fact
               k="Derivation"
-              v="SLIP-0010 m/44'/917'/0'/0'/i' — frozen, shared test vectors with the node"
+              v="SLIP-0010 m/44'/3007'/0'/0'/i' — frozen, shared test vectors with the node"
             />
             <Fact
               k="Sighash"

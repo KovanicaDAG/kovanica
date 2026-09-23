@@ -5,7 +5,7 @@
 //!
 //! Supports raw 32-byte seeds (hex) and BIP39 mnemonics (12 or 24 words).
 //! Mnemonic key material follows the **frozen** SLIP-0010 ed25519 path
-//! `m/44'/917'/0'/0'/0'` — see `docs/backlog/DERIVATION.md` (SDK
+//! `m/44'/3007'/0'/0'/0'` — see `docs/backlog/DERIVATION.md` (SDK
 //! `kovanica-keys` and the web wallet implement the same path).
 
 use std::fs;
@@ -16,7 +16,7 @@ use bip39::Mnemonic;
 use kovanica_state::{Address, KeyPair};
 
 /// Frozen SLIP-0010 coin type (matches `kovanica-keys::SLIP44_COIN_TYPE`).
-const SLIP10_COIN_TYPE: u32 = 917;
+const SLIP10_COIN_TYPE: u32 = 3007;
 
 /// A loaded wallet: the raw Ed25519 seed plus its derived keypair.
 /// Optionally stores the BIP39 mnemonic for human-readable backup.
@@ -198,7 +198,7 @@ impl Wallet {
 }
 
 /// Derive the 32-byte Ed25519 key material from a BIP39 mnemonic using the
-/// **frozen** SLIP-0010 path `m/44'/917'/0'/0'/0'` (all segments hardened).
+/// **frozen** SLIP-0010 path `m/44'/3007'/0'/0'/0'` (all segments hardened).
 ///
 /// Mirrors `kovanica-keys::slip10::derive_ed25519` — see
 /// `docs/backlog/DERIVATION.md`. Must not drift from the SDK/web derivation.
@@ -342,15 +342,15 @@ mod tests {
     fn slip10_frozen_vector_index_zero() {
         // Canonical zero-entropy 128-bit phrase (built from entropy bytes in
         // code so no mnemonic-like string appears here), empty passphrase.
-        // Expected 32-byte derived key at m/44'/917'/0'/0'/0' MUST match the
+        // Expected 32-byte derived key at m/44'/3007'/0'/0'/0' MUST match the
         // SDK `kovanica-keys` known-answer vector (see
         // sdk/crates/kovanica-keys/tests/slip10_vectors.rs).
         let mnemonic = Mnemonic::from_entropy_in(bip39::Language::English, &[0u8; 16]).unwrap();
         let key = derive_seed_from_mnemonic(&mnemonic, "").unwrap();
         let expected: [u8; 32] = [
-            0x01, 0xd2, 0xbd, 0xbe, 0xba, 0xce, 0xa6, 0xea, 0xef, 0xd3, 0x6b, 0x7f, 0xec, 0xe9,
-            0x64, 0x1d, 0x68, 0x54, 0x8e, 0xa0, 0x28, 0xb2, 0xc0, 0xde, 0xb0, 0xaf, 0x2a, 0x3a,
-            0xd5, 0x98, 0xc5, 0x6b,
+            0x99, 0xd5, 0xe3, 0xa2, 0xa1, 0x67, 0xff, 0xae, 0x44, 0x07, 0xe9, 0x48, 0x51, 0x05,
+            0xf3, 0x01, 0xab, 0x88, 0xd4, 0x9e, 0xc9, 0x95, 0x1f, 0x00, 0x8e, 0xb7, 0x84, 0x0f,
+            0xfd, 0xed, 0x80, 0x4d,
         ];
         assert_eq!(key, expected);
     }

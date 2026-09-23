@@ -153,7 +153,7 @@
 | D6 | **Community home** (was P2.6) | 🟡 | `COMMUNITY-DISCORD.md` server structure/moderation ✅; live channel + link ⏳ |
 | D7 | **KVP-102 issuance policy** (was P2.7) | ❌ | Rule “coinbase mint only” is code + KVP-102 enforced; public policy wording on TOKENOMICS/landing ⏳ |
 | D8 | **Ops hardening (mainnet)** (was P2.8) | 🟡 | `OPS-HARDENING.md` draft ✅ (hourly 48h / daily 30d / weekly 90d off-site, systemd `kovanica-backup.service|timer`, RTO<4h, RPO<24h); restore drill run ⏳ |
-| D9 | **Product polish** (was P2.9) | 🟡 | `PRODUCT-POLISH.md` draft ✅ — Ledger (WebHID + custom `kovanica-ledger-app`, BIP-44 `m/44'/11111'/0'/0/0`) and Trezor (WebUSB, `KOVANICA_TESTNET/MAINNET`) planned High, Keystone/Coldcard later; fee estimation ✅ shipped; hardware verified on device ⏳; deep-links ⏳ |
+| D9 | **Product polish** (was P2.9) | 🟡 | `PRODUCT-POLISH.md` draft ✅ — Ledger (WebHID + custom `kovanica-ledger-app`, BIP-44 `m/44'/3007'/0'/0/0`) and Trezor (WebUSB, `KOVANICA_TESTNET/MAINNET`) planned High, Keystone/Coldcard later; fee estimation ✅ shipped; hardware verified on device ⏳; deep-links ⏳ |
 | D10 | **Business / compliance (MiCA CASP)** | ⏳ | `6-Business/Compliance/MiCA/MASTER_PLAN.md` — Kovanica Payments d.o.o. (Croatia, HANFA, €150k capital, 8 CASP services), policy inventory “Planned”. **Out of protocol-upgrade merge scope; tracked here as business-track reference only** |
 
 ---

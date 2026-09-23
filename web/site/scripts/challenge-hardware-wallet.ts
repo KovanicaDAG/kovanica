@@ -108,11 +108,11 @@ async function runAdversarialStressTests() {
     { input: -5, expectedAcc: 0, expectedPath: `m/44'/${KOVANICA_COIN_TYPE}'/0'/0/0` }, // Negative clamped
     { input: -1000, expectedAcc: 0, expectedPath: `m/44'/${KOVANICA_COIN_TYPE}'/0'/0/0` },
     { input: 2.7, expectedAcc: 2, expectedPath: `m/44'/${KOVANICA_COIN_TYPE}'/2'/0/0` }, // Float floored
-    { input: "m/44'/999'/5'/0/0", expectedAcc: 5, expectedPath: "m/44'/999'/5'/0/0" },
-    { input: "44'/999'/8'/0/0", expectedAcc: 8, expectedPath: "m/44'/999'/8'/0/0" },
-    { input: "m/44'/999'/3'/1/7", expectedAcc: 3, expectedPath: "m/44'/999'/3'/1/7" },
+{ input: "m/44'/3007'/5'/0/0", expectedAcc: 5, expectedPath: "m/44'/3007'/5'/0/0" },
+    { input: "44'/3007'/8'/0/0", expectedAcc: 8, expectedPath: "m/44'/3007'/8'/0/0" },
+    { input: "m/44'/3007'/3'/1/7", expectedAcc: 3, expectedPath: "m/44'/3007'/3'/1/7" },
     { input: "m/44'/60'/0'/0/0", expectedAcc: 0, expectedPath: "m/44'/60'/0'/0/0" },
-    { input: "m/44'/999'/99'/0/0/1", expectedAcc: 99, expectedPath: "m/44'/999'/99'/0/0/1" },
+    { input: "m/44'/3007'/99'/0/0/1", expectedAcc: 99, expectedPath: "m/44'/3007'/99'/0/0/1" },
   ];
 
   const derivedKeys = new Map<string, string>();
@@ -401,14 +401,14 @@ async function runAdversarialStressTests() {
   }
 
   // BIP-44 Path Serialization unit tests
-  const path1 = "m/44'/999'/0'/0/0";
+  const path1 = "m/44'/3007'/0'/0/0";
   const bytes1 = serializeBip44Path(path1);
   assert.equal(bytes1[0], 5, "Path has 5 segments");
   assert.equal(bytes1.length, 1 + 5 * 4, "Total buffer length is 21 bytes");
-  // Check hardened flag on first 3 elements (44', 999', 0')
+  // Check hardened flag on first 3 elements (44', 3007', 0')
   const view1 = new DataView(bytes1.buffer, bytes1.byteOffset, bytes1.byteLength);
   assert.equal(view1.getUint32(1, false), (44 | 0x80000000) >>> 0, "Segment 0 is 44'");
-  assert.equal(view1.getUint32(5, false), (999 | 0x80000000) >>> 0, "Segment 1 is 999'");
+  assert.equal(view1.getUint32(5, false), (3007 | 0x80000000) >>> 0, "Segment 1 is 3007'");
   assert.equal(view1.getUint32(9, false), (0 | 0x80000000) >>> 0, "Segment 2 is 0'");
   assert.equal(view1.getUint32(13, false), 0, "Segment 3 is 0 (non-hardened)");
   assert.equal(view1.getUint32(17, false), 0, "Segment 4 is 0 (non-hardened)");
@@ -457,8 +457,8 @@ async function runAdversarialStressTests() {
     { input: "", expectedPath: "m/", expectedAcc: 0 },
     { input: "   ", expectedPath: "m/", expectedAcc: 0 },
     { input: "gibberish", expectedPath: "m/gibberish", expectedAcc: 0 },
-    { input: null as any, expectedPath: "m/44'/999'/0'/0/0", expectedAcc: 0 },
-    { input: undefined as any, expectedPath: "m/44'/999'/0'/0/0", expectedAcc: 0 },
+    { input: null as any, expectedPath: "m/44'/3007'/0'/0/0", expectedAcc: 0 },
+    { input: undefined as any, expectedPath: "m/44'/3007'/0'/0/0", expectedAcc: 0 },
   ];
   for (const { input, expectedPath, expectedAcc } of fallbackCases) {
     const res = parseAccountOrPath(input);

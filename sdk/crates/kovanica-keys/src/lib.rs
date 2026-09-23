@@ -3,7 +3,7 @@
 //! **Security rules**
 //! - Seeds and private keys are zeroized on drop.
 //! - Never log or transmit raw seeds.
-//! - Derivation path is **frozen** (SLIP-0010 ed25519, `m/44'/917'/0'/0'/i'`);
+//! - Derivation path is **frozen** (SLIP-0010 ed25519, `m/44'/3007'/0'/0'/i'`);
 //!   change only with a hard version bump. Canonical spec: `docs/backlog/DERIVATION.md`.
 //!
 //! **Address format** (node-canonical, NOT bech32):
@@ -96,7 +96,7 @@ pub struct Seed(pub [u8; 64]);
 
 impl Seed {
     /// Derive the Ed25519 signing key at account index `index` using the
-    /// **frozen** SLIP-0010 ed25519 path `m/44'/917'/0'/0'/index'` (hardened).
+    /// **frozen** SLIP-0010 ed25519 path `m/44'/3007'/0'/0'/index'` (hardened).
     ///
     /// Canonical spec + cross-client vectors: `docs/backlog/DERIVATION.md`.
     pub fn derive_ed25519_key(&self, index: u32) -> [u8; 32] {
@@ -111,9 +111,9 @@ impl std::fmt::Debug for Seed {
 }
 
 /// Frozen SLIP-0010 derivation path descriptor (ed25519, hardened-only).
-pub const DERIVATION_PATH: &str = "m/44'/917'/0'/0'/i'";
+pub const DERIVATION_PATH: &str = "m/44'/3007'/0'/0'/i'";
 /// SLIP-44-style coin type for Kovanica.
-pub const SLIP44_COIN_TYPE: u32 = 917;
+pub const SLIP44_COIN_TYPE: u32 = 3007;
 /// Account depth used by the frozen path.
 pub const DERIVATION_ACCOUNT: u32 = 0;
 
@@ -154,7 +154,7 @@ pub mod slip10 {
         (i[..32].try_into().unwrap(), i[32..].try_into().unwrap())
     }
 
-    /// Derive at `m/44'/917'/0'/0'/index'` (all hardened) from a 64-byte input.
+    /// Derive at `m/44'/3007'/0'/0'/index'` (all hardened) from a 64-byte input.
     pub fn derive_ed25519(input: &[u8; 64], index: u32) -> [u8; 32] {
         let (mut sk, mut chain) = master(input);
         for step in [
@@ -279,7 +279,7 @@ impl Keypair {
     }
 
     /// From a BIP-39 seed wallet — uses the **frozen** derivation path
-    /// `m/44'/917'/0'/0'/0'` (account index 0). See [`Seed::derive_ed25519_key`].
+    /// `m/44'/3007'/0'/0'/0'` (account index 0). See [`Seed::derive_ed25519_key`].
     pub fn from_seed(seed: &Seed) -> Self {
         Self::from_secret_bytes(seed.derive_ed25519_key(0))
     }
@@ -290,7 +290,7 @@ impl Keypair {
     }
 
     /// Mnemonic → seed → keypair at a specific account index using the frozen
-    /// SLIP-0010 path `m/44'/917'/0'/0'/index'`.
+    /// SLIP-0010 path `m/44'/3007'/0'/0'/index'`.
     pub fn from_mnemonic_at(mnemonic: &Mnemonic, passphrase: &str, index: u32) -> Self {
         let seed = mnemonic.to_seed(passphrase);
         Self::from_secret_bytes(seed.derive_ed25519_key(index))

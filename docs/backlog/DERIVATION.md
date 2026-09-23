@@ -1,8 +1,10 @@
 # Kovanica Derivation — Frozen SLIP-0010 Spec
 
-**Status:** FROZEN (2026-09-23) · Client-side only · **Breaking change to
-pre-RFC-006 testnet addresses** — intentional, done pre-mainnet; RFC-006
-activation reset already wiped balances.
+**Status:** FROZEN (2026-09-23, coin type migrated 917 → 3007) · Client-side
+only · **Breaking change to pre-RFC-006 testnet addresses** — intentional,
+done pre-mainnet; RFC-006 activation reset already wiped balances. The
+2026-09-23 freeze used coin type `917`; the clean-number migration to `3007`
+(2026-09-23) changed every derived address and is the current canonical value.
 
 **Owners:** `kovanica-keys` (Rust) · `web/site/src/lib/wallet/keys.ts`
 (TypeScript/WebCrypto) · `kovanica-cli` (Rust) · `kovanica-wasm` (WASM glue).
@@ -22,17 +24,17 @@ reference only — it deliberately holds no hex constants.
 ## 1. The path
 
 ```
-m/44'/917'/0'/0'/i'
+m/44'/3007'/0'/0'/i'
 ```
 
 - Scheme: **SLIP-0010**, curve **ed25519** (hardened-only children).
-- Coin type: `917` (Kovanica; unregistered in SLIP-44 — frozen constant).
+- Coin type: `3007` (Kovanica; unregistered in SLIP-44 — frozen constant).
 - Account: `0`, change: `0`, address index: `i` (0, 1, 2, …).
 - All five segments are HARDENED (`| 0x80000000`).
 
 Constants (Rust, `kovanica-keys`):
-- `DERIVATION_PATH = "m/44'/917'/0'/0'/i'"`
-- `SLIP44_COIN_TYPE = 917`
+- `DERIVATION_PATH = "m/44'/3007'/0'/0'/i'"`
+- `SLIP44_COIN_TYPE = 3007`
 - `DERIVATION_ACCOUNT = 0`
 
 ## 2. Algorithm
@@ -47,7 +49,7 @@ Constants (Rust, `kovanica-keys`):
    `data = 0x00 ‖ sk(32) ‖ ser32(index | 0x80000000)`;
    `I = HMAC-SHA512(key = chain, data)` → new `sk = I[..32]`,
    new `chain = I[32..]`.
-4. Repeat for `44, 917, 0, 0, i` (in that order).
+4. Repeat for `44, 3007, 0, 0, i` (in that order).
 5. Final 32-byte `sk` → Ed25519 keypair (seed-style) → public key →
    `kvnc` + base58(`[0x00] ‖ pubkey`) + `dag` P2PK address.
 

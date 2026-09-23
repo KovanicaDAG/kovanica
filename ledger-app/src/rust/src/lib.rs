@@ -9,7 +9,7 @@
 //! processor.
 //!
 //! Features:
-//! - BIP-32/44 path derivation (m/44'/11111'/account'/change/index)
+//! - BIP-32/44 path derivation (m/44'/3007'/account'/change/index)
 //! - Ed25519 transaction signing (sighash = BLAKE3 of witness-free encoding)
 //! - Transaction parsing (Kovanica format)
 //! - APDU command handling
@@ -31,7 +31,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 }
 
 /// Kovanica coin type (unregistered, for BIP-44)
-pub const KOVANICA_COIN_TYPE: u32 = 11111;
+pub const KOVANICA_COIN_TYPE: u32 = 3007;
 
 /// APDU Class for Kovanica
 pub const CLA: u8 = 0xE0;
@@ -60,7 +60,7 @@ pub mod sw {
 /// Maximum APDU data size
 pub const MAX_APDU_SIZE: usize = 255;
 
-/// Maximum BIP-32 path length (5 components: 44'/11111'/account'/change/index)
+/// Maximum BIP-32 path length (5 components: 44'/3007'/account'/change/index)
 pub const MAX_PATH_LEN: usize = 5;
 
 /// Ed25519 constants
@@ -125,7 +125,7 @@ impl Bip44Path {
     }
 
     /// Create standard Kovanica BIP-44 path
-    /// m / 44' / 11111' / account' / change / index
+    /// m / 44' / 3007' / account' / change / index
     pub fn kovanica(account: u32, change: u32, index: u32) -> Result<Self> {
         // Hardened derivation indicated by 0x80000000 bit
         const HARDENED: u32 = 0x80000000;
@@ -208,7 +208,7 @@ mod tests {
         let path = Bip44Path::kovanica(0, 0, 0).unwrap();
         assert_eq!(path.len, 5);
         assert_eq!(path.components[0], 44 | 0x80000000);
-        assert_eq!(path.components[1], 11111 | 0x80000000);
+        assert_eq!(path.components[1], 3007 | 0x80000000);
     }
 
     #[test]
