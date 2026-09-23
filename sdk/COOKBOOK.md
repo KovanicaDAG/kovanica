@@ -5,8 +5,9 @@ Practical recipes for building Kovanica-aware applications on top of
 your process; the node only ever sees signed transactions and read-only API
 calls.
 
-Verified against SDK at commit `7ddbcd7` (PR #16 merged). Recipes marked
-"needs PR #17" use the multi-asset additions that are under review.
+Verified against SDK `0.1.0-alpha.1` (2026-09-23): `cargo test --workspace`
+→ 67 passed; live suite 5/5 vs `api.kovanica.online`. All multi-asset recipes
+below are merged and code-verified on this tree.
 
 ---
 
@@ -103,16 +104,11 @@ wire form is `"KVNC"` for native, lowercase 64-hex otherwise.
 Wire rows from `/api/utxos` convert straight into builder inputs:
 
 ```rust
-let owner = Address::from_hex(&page.address)?;   // 66-hex
+Let owner = Address::from_hex(&page.address)?;   // 66-hex
 let utxos: Vec<Utxo> = page.utxos.iter()
     .map(|row| row.into_domain(&owner))
     .collect::<Result<_, _>>()?;
 ```
-
-> `UtxoItem::into_domain` and `Address::from_hex` land with PR #17 (KVP-102 SDK
-> work). Until then, map the row by hand: `tx` → `Hash32::from_hex`, `index` →
-> `vout`, `value` → `Amount::from_atoms`, `asset_id` `"KVNC"` → `AssetId::NATIVE`
-> (else 64-hex), `address` = the query address.
 
 Per-asset conservation is enforced by the builder: every non-native asset must
 balance exactly; surplus comes back as change **in the same asset**; fees only
@@ -130,7 +126,7 @@ let tx = TransferBuilder::new()
 > On live networks the asset registry is genesis-seeded and issuance is
 > operator-only (no public mint endpoint). Unregistered ids cannot be spent
 > on-chain yet. Full runnable demos: `examples/transfer_asset.rs` and
-> `examples/create_asset.rs` (needs PR #17).
+> `examples/create_asset.rs`.
 
 ## 5. HTLC atomic swap (RFC-004 / KVP-104)
 
@@ -220,7 +216,39 @@ P2P seed policy: `seed.kovanica.online:9000` / `seed2.kovanica.online:9000`
 (TCP 9000 only). Never dial `explorer.kovanica.online:9000` — it is
 orange-cloud and proxies TCP.
 
-## 8. Safety checklist
+## 8. Browser (WASM) flow
+
+The wasm binding builds and signs transfers in-page; the key never leaves the
+caller.
+
+```js
+import { build_signed_transfer } from '@kovanica/sdk-wasm';
+
+// 1. UTXOs come from GET /api/utxos (typed rows in the Rust client).
+// 2. Build + sign locally. Amounts are decimal strings — JS numbers lose
+//    integer precision above 2^53, and Kovanica atoms reach ~9e15.
+const { tx_hex, sighash } = build_signed_transfer(
+  phrase,            // the backup phrase (string)
+  0,                 // SLIP-0010 index, frozen path m/44'/917'/0'/0'/i'
+  'testnet',
+  JSON.stringify(utxos),   // [{tx_hash, vout, amount_atoms, asset_hex}]
+  JSON.stringify(outputs), // [{address, amount_atoms, asset_hex}]
+  '2000',            // era-0 floor, atoms/byte; derive live from /api/bootstrap
+  changeAddress,     // kvnc…dag; empty string = no change output
+);
+// 3. Broadcast the signed hex; the node never sees the key.
+await fetch(`${api}/api/submit_tx`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ tx_hex }),
+});
+```
+
+`NULL` asset ids map to native KVNC; any other 64-hex id is a KVP-102 asset.
+The frozen path, address codec and sighash are byte-identical with the node —
+verified by shared vectors on both sides.
+
+## 9. Safety checklist
 
 - Keys/mnemonics stay client-side; `POST /api/submit_tx` only gets `tx_hex`.
 - Never reuse demo keys; zeroize key material on drop (SDK zeroizes on drop).

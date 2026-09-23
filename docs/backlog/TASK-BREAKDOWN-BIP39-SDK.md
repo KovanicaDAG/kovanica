@@ -110,8 +110,8 @@ No blocking findings. Residual risk is end-user hygiene (terminal scrollback aft
 | S-09  | WASM / TypeScript bindings                                 | 2.5d  | Core  | **Done** — `build_signed_transfer` (decimal-string amounts), host-tested 4/4, wasm-pack build verified 2026-09-23 |
 | S-10  | Examples: transfer, create-asset, htlc-swap (testnet)      | 1.5d  | Core  | **Done** — 4 examples compile (`cargo build --examples`) |
 | S-11  | Integration tests against live testnet (feature-gated)     | 1d    | Core  | **Done** — 5/5 vs `api.kovanica.online` (2026-09-23) |
-| S-12  | crates.io + npm publish pipeline (0.x)                     | 1d    | Core  | Todo        |
-| S-13  | Cookbook pages on docs.kovanica.online                     | 1.5d  | Docs  | Todo        |
+| S-12  | crates.io + npm publish pipeline (0.x)                     | 1d    | Core  | **Ready** — RELEASE.md runbook + `publish-sdk.yml` + `sdk-wasm.yml` + npm manifest; metadata uniform (homepage); execution = human tokens |
+| S-13  | Cookbook pages on docs.kovanica.online                     | 1.5d  | Docs  | Cookbook draft → **current** (67 tests, all PRs merged, WASM §8 added); live site publication pending docs team |
 
 **Notes on status**
 

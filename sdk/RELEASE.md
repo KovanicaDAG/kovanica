@@ -129,9 +129,9 @@ bookkeeping.
 
 | # | Check | Command / evidence |
 |---|---|---|
-| 1 | Workspace tests | `cargo test --workspace` (48 passed on plain `main`; 55 with PR #17 KVP-102 tests) |
+| 1 | Workspace tests | `cargo test --workspace` (67 passed, 2026-09-23; live suite is feature-gated offline) |
 | 2 | Strict clippy | `cargo clippy --workspace --all-targets -- -D warnings` |
-| 3 | Live suite | `cargo test -p kovanica-rpc --features live-testnet -- --nocapture` (6/6 vs api.kovanica.online) |
+| 3 | Live suite | `cargo test -p kovanica-rpc --features live-testnet -- --nocapture` (5/5 vs api.kovanica.online + 3 wire-codec tests, 2026-09-23) |
 | 4 | Parity locks | `sdk/crates/kovanica-types/tests/sighash_vector.rs` + `kovanica-keys/tests/script_vectors.rs` ↔ node mirrors |
 | 5 | `cargo package` dry | leaf crate at least once: `cargo package -p kovanica-types --allow-dirty` |
 | 6 | Version bump agreed | `0.1.0-alpha.1` → next semver AFTER first publish (crates.io forbids re-publishing the same version) |
