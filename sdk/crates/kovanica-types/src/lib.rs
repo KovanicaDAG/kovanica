@@ -752,6 +752,78 @@ impl<'a> Reader<'a> {
 }
 
 /// Errors produced by type parsing / construction.
+/// GHOSTDAG colour of a block, as the node renders it
+/// (`"genesis" | "chain" | "blue" | "red"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BlockColour {
+    /// The genesis DAG block.
+    Genesis,
+    /// On the selected (blue) chain.
+    Chain,
+    /// In the blue set (accepted, off-chain).
+    Blue,
+    /// Not in the blue set (pending/red).
+    Red,
+}
+
+/// Admission path of a block (hybrid PoW / staked-VRF).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BlockKind {
+    /// Proof-of-work admitted.
+    Pow,
+    /// Staked-VRF admitted (epoch beacon).
+    Staked,
+}
+
+/// Confirmation status relative to the current tip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ConfirmingStatus {
+    /// The block is the current tip.
+    Tip,
+    /// On the selected chain below the tip.
+    Confirmed,
+    /// In the blue set but off the selected chain.
+    Accepted,
+    /// Not yet in the blue set.
+    Pending,
+}
+
+/// Client view of one DAG block, mirroring `GET /api/block/<id>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Block {
+    /// Block id (32-byte hash, lowercase hex).
+    pub id: BlockHash,
+    /// Selected-parent hash (zero for the genesis block).
+    pub prev_hash: BlockHash,
+    /// Merkle root of the block's transaction ids.
+    pub merkle_root: BlockHash,
+    /// Selected-chain height: number of blocks between genesis and this one.
+    pub height: u64,
+    /// Producer timestamp, milliseconds since the Unix epoch.
+    pub timestamp_ms: u64,
+    /// Proof-of-work nonce, carried so peers reconstruct the exact id.
+    pub nonce: u64,
+    /// GHOSTDAG blue score.
+    pub blue_score: u64,
+    /// Cumulative blue work of the selected chain at this block.
+    pub chain_blue_work: u128,
+    /// The block's own work weight.
+    pub work: u128,
+    /// Parent block ids.
+    pub parents: Vec<BlockHash>,
+    /// Child block ids (empty at the tip).
+    pub children: Vec<BlockHash>,
+    /// Transaction ids contained in the block.
+    pub txs: Vec<TxHash>,
+    /// Admission path.
+    pub kind: BlockKind,
+    /// GHOSTDAG colour.
+    pub colour: BlockColour,
+    /// Status relative to the current tip.
+    pub confirming_status: ConfirmingStatus,
+}
+
+/// Error variants for kovanica-types conversions.
 #[derive(Debug, thiserror::Error)]
 pub enum TypesError {
     /// Invalid hex string.
@@ -774,6 +846,33 @@ mod tests {
         let a = Amount::from_kvnc(10);
         assert_eq!(a.atoms(), 1_000_000_000);
         assert!(a.to_string().starts_with("10."));
+    }
+
+    #[test]
+    fn block_serde_roundtrip() {
+        let b = Block {
+            id: Hash32([0xAA; 32]),
+            prev_hash: Hash32([0xBB; 32]),
+            merkle_root: Hash32([0xCC; 32]),
+            height: 26_210,
+            timestamp_ms: 1_752_000_000_000,
+            nonce: 7,
+            blue_score: 26_000,
+            chain_blue_work: 1_234_567_890_123_456_789,
+            work: 1_000_000,
+            parents: vec![Hash32([0x01; 32]), Hash32([0x02; 32])],
+            children: vec![Hash32([0x03; 32])],
+            txs: vec![Hash32([0x0D; 32])],
+            kind: BlockKind::Pow,
+            colour: BlockColour::Chain,
+            confirming_status: ConfirmingStatus::Confirmed,
+        };
+        let json = serde_json::to_string(&b).expect("serialize block");
+        let back: Block = serde_json::from_str(&json).expect("deserialize block");
+        assert_eq!(back, b);
+        assert_eq!(back.colour, BlockColour::Chain);
+        assert_eq!(back.confirming_status, ConfirmingStatus::Confirmed);
+        assert_eq!(back.txs.len(), 1);
     }
 
     #[test]

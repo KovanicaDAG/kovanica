@@ -13,7 +13,10 @@
 #![forbid(unsafe_code)]
 
 use kovanica_tx::SignedTx;
-use kovanica_types::{Address, Amount, AssetId, Hash32, NetworkId, TxHash, Utxo};
+use kovanica_types::{
+    Address, Amount, AssetId, Block, BlockColour, BlockHash, BlockKind, ConfirmingStatus, Hash32,
+    NetworkId, TxHash, Utxo,
+};
 use serde::{Deserialize, Serialize};
 
 /// Default public API endpoint.
@@ -157,6 +160,98 @@ pub struct FeeEstimate {
     pub mempool: u64,
     /// Total mempool bytes.
     pub bytes: u64,
+}
+
+/// One block row from `GET /api/block/<id>` (node `block_detail_json` shape).
+///
+/// Everything arrives as strings or numbers; [`Self::into_domain`] maps it to
+/// the rich [`Block`] view with typed enums.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockItem {
+    /// Block id (64 hex).
+    pub id: String,
+    /// Selected-parent hash (64 hex; zero for genesis).
+    pub prev_hash: String,
+    /// Merkle root of the block's transaction ids (64 hex).
+    pub merkle_root: String,
+    /// Selected-chain height.
+    pub height: u64,
+    /// Producer timestamp, milliseconds since the Unix epoch.
+    pub timestamp_ms: u64,
+    /// Proof-of-work nonce.
+    pub nonce: u64,
+    /// GHOSTDAG blue score.
+    pub blue_score: u64,
+    /// Cumulative blue work of the selected chain.
+    pub chain_blue_work: u128,
+    /// The block's own work weight.
+    pub work: u128,
+    /// Parent block ids (64 hex).
+    pub parents: Vec<String>,
+    /// Child block ids (64 hex).
+    pub children: Vec<String>,
+    /// Transaction ids (64 hex).
+    pub txs: Vec<String>,
+    /// `"pow"` or `"staked"`.
+    pub kind: String,
+    /// `"genesis" | "chain" | "blue" | "red"`.
+    pub colour: String,
+    /// `"tip" | "confirmed" | "accepted" | "pending"`.
+    pub confirming_status: String,
+}
+
+impl BlockItem {
+    /// Map a node block row into the typed domain view.
+    pub fn into_domain(&self) -> Result<Block, RpcError> {
+        let parse_hash = |s: &str, what: &str| {
+            Hash32::from_hex(s).map_err(|e| RpcError::Decode(format!("block {what}: {e}")))
+        };
+        let kind = match self.kind.as_str() {
+            "staked" => BlockKind::Staked,
+            _ => BlockKind::Pow,
+        };
+        let colour = match self.colour.as_str() {
+            "genesis" => BlockColour::Genesis,
+            "chain" => BlockColour::Chain,
+            "blue" => BlockColour::Blue,
+            _ => BlockColour::Red,
+        };
+        let status = match self.confirming_status.as_str() {
+            "tip" => ConfirmingStatus::Tip,
+            "confirmed" => ConfirmingStatus::Confirmed,
+            "accepted" => ConfirmingStatus::Accepted,
+            _ => ConfirmingStatus::Pending,
+        };
+        Ok(Block {
+            id: parse_hash(&self.id, "id")?,
+            prev_hash: parse_hash(&self.prev_hash, "prev_hash")?,
+            merkle_root: parse_hash(&self.merkle_root, "merkle_root")?,
+            height: self.height,
+            timestamp_ms: self.timestamp_ms,
+            nonce: self.nonce,
+            blue_score: self.blue_score,
+            chain_blue_work: self.chain_blue_work,
+            work: self.work,
+            parents: self
+                .parents
+                .iter()
+                .map(|p| parse_hash(p, "parent"))
+                .collect::<Result<_, _>>()?,
+            children: self
+                .children
+                .iter()
+                .map(|c| parse_hash(c, "child"))
+                .collect::<Result<_, _>>()?,
+            txs: self
+                .txs
+                .iter()
+                .map(|t| parse_hash(t, "tx"))
+                .collect::<Result<_, _>>()?,
+            kind,
+            colour,
+            confirming_status: status,
+        })
+    }
 }
 
 /// `/api/bootstrap` response — node/consensus parameters the client needs to
@@ -305,6 +400,31 @@ impl Client {
         resp.json::<FeeEstimate>()
             .await
             .map_err(|e| RpcError::Decode(e.to_string()))
+    }
+
+    /// GET /api/block/<id> — detail view of one DAG block, typed.
+    ///
+    /// `id` is the block hash; the node answers with parents, children, tx
+    /// ids, GHOSTDAG colour and confirmation status relative to the current
+    /// tip (see [`Block`]).
+    pub async fn get_block(&self, id: &BlockHash) -> Result<Block, RpcError> {
+        let url = format!("{}/api/block/{}", self.base_url, id.to_hex());
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| RpcError::Http(e.to_string()))?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(RpcError::Api(format!("status {status}: {text}")));
+        }
+        let item: BlockItem = resp
+            .json()
+            .await
+            .map_err(|e| RpcError::Decode(e.to_string()))?;
+        item.into_domain()
     }
 
     /// GET /api/bootstrap — consensus + tokenomics parameters (RFC-006, k).
