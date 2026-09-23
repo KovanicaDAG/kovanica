@@ -190,7 +190,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <span>·</span>
             <a href="/roadmap" className="underline hover:text-fg">Roadmap</a>
             <span>·</span>
-            <a href="https://github.com/KovanicaDAG/kovanica-protocol" target="_blank" rel="noopener noreferrer" className="underline hover:text-fg">Source</a>
+            <a href="https://github.com/KovanicaDAG/kovanica" target="_blank" rel="noopener noreferrer" className="underline hover:text-fg">Source</a>
           </p>
         </div>
       </footer>
