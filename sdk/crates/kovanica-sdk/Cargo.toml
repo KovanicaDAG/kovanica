@@ -1,0 +1,28 @@
+[package]
+name = "kovanica-sdk"
+description = "Official high-level SDK for the Kovanica protocol (facade over types, keys, tx, rpc, fee)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[dependencies]
+kovanica-types = { workspace = true }
+kovanica-keys = { workspace = true }
+kovanica-tx = { workspace = true }
+kovanica-rpc = { workspace = true }
+kovanica-fee = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
+
+[[example]]
+name = "generate_wallet"
+path = "../../examples/generate_wallet.rs"
