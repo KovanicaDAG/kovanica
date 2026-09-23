@@ -16,18 +16,25 @@ function asBufferSource(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return out;
 }
 
-function entropyToMnemonic(entropy: Uint8Array, words: string[]): string {
+/**
+ * BIP-39 mnemonic from entropy. The checksum is the first ENT/32 bits of
+ * SHA-256(entropy) — 4 bits for 128-bit entropy (12 words), 8 bits for
+ * 256-bit entropy (24 words) — NOT a byte-sum of the entropy.
+ */
+export async function entropyToMnemonic(entropy: Uint8Array, words: string[]): Promise<string> {
+  if (entropy.length !== 16 && entropy.length !== 32) {
+    throw new Error("entropy must be 16 or 32 bytes");
+  }
   const bits: number[] = [];
   for (const b of entropy) for (let i = 7; i >= 0; i -= 1) bits.push((b >> i) & 1);
-  const cs = (entropy.length * 8) / 32;
-  let sum = 0;
-  for (const b of entropy) sum = (sum + b) & 0xff;
-  for (let i = 7; i >= 8 - cs; i -= 1) bits.push((sum >> i) & 1);
+  const checksumBits = (entropy.length * 8) / 32;
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", asBufferSource(entropy)));
+  for (let i = 0; i < checksumBits; i += 1) bits.push((hash[i >> 3] >> (7 - (i & 7))) & 1);
   const out: string[] = [];
   for (let i = 0; i < bits.length; i += 11) {
     let v = 0;
     for (let j = 0; j < 11; j += 1) v = (v << 1) | (bits[i + j] ?? 0);
-    out.push(words[v % words.length]);
+    out.push(words[v]);
   }
   return out.join(" ");
 }
@@ -67,7 +74,11 @@ export async function addressFromMnemonic(mnemonic: string, index = 0): Promise<
   return bytesToHex(ed.getPublicKey(seedFromMnemonic(mnemonic, index)));
 }
 
-export async function signSighash(mnemonic: string, index: number, sighashHex: string): Promise<string> {
+export async function signSighash(
+  mnemonic: string,
+  index: number,
+  sighashHex: string,
+): Promise<string> {
   const hex = sighashHex.trim().toLowerCase();
   if (!/^[0-9a-f]+$/.test(hex) || hex.length % 2 !== 0) throw new Error("bad sighash");
   const sig = ed.sign(hexToBytes(hex), seedFromMnemonic(mnemonic, index));
@@ -84,12 +95,44 @@ export async function signSighashWithSeedHex(seedHex: string, sighashHex: string
   return bytesToHex(sig);
 }
 
+/**
+ * Validate and normalize an imported BIP-39 phrase: word count, wordlist
+ * membership, and — critically — the checksum (recomputed from the words'
+ * entropy via SHA-256). Rejects phrases the Rust `bip39` crate would reject.
+ */
 export async function importMnemonic(phrase: string): Promise<string> {
-  const words = phrase.trim().toLowerCase().split(/\s+/);
-  if (words.length !== 12 && words.length !== 24) throw new Error("Need 12 or 24 words");
+  const words = normalizeMnemonic(phrase).split(" ");
+  if (words.length !== 12 && words.length !== 24) {
+    throw new Error("Your recovery phrase needs 12 or 24 words.");
+  }
   const list = await loadWordlist();
+  const wordIndex = new Map(list.map((w, i) => [w, i] as const));
+  const indices: number[] = [];
   for (const w of words) {
-    if (!list.includes(w)) throw new Error(`Unknown word: ${w}`);
+    const i = wordIndex.get(w);
+    if (i === undefined) {
+      throw new Error(`"${w}" isn't a recovery word — check for a typo.`);
+    }
+    indices.push(i);
+  }
+  // words -> bitstream -> entropy + checksum bits
+  const totalBits = words.length * 11;
+  const entropyBits = (totalBits / 33) * 32; // 128 or 256
+  const checksumBits = totalBits - entropyBits; // 4 or 8
+  const bits: number[] = [];
+  for (const i of indices) for (let b = 10; b >= 0; b -= 1) bits.push((i >> b) & 1);
+  const entropy = new Uint8Array(entropyBits / 8);
+  for (let i = 0; i < entropyBits; i += 1) {
+    if (bits[i] === 1) entropy[i >> 3] |= 0x80 >> (i & 7);
+  }
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", asBufferSource(entropy)));
+  for (let i = 0; i < checksumBits; i += 1) {
+    const expected = (hash[i >> 3] >> (7 - (i & 7))) & 1;
+    if (bits[entropyBits + i] !== expected) {
+      throw new Error(
+        "That recovery phrase doesn't look valid — please check for a typo or a wrong word.",
+      );
+    }
   }
   return words.join(" ");
 }
@@ -112,7 +155,11 @@ export async function bip44Seed(
   );
 
   let chainCode = new Uint8Array(
-    await crypto.subtle.sign("HMAC", masterKey, asBufferSource(new Uint8Array([0, 0, 0, hardened(44) >>> 0]))),
+    await crypto.subtle.sign(
+      "HMAC",
+      masterKey,
+      asBufferSource(new Uint8Array([0, 0, 0, hardened(44) >>> 0])),
+    ),
   );
   // hardened path uses 4-byte BE; rebuild properly
   const pathStep = async (keyBytes: Uint8Array, indexVal: number): Promise<Uint8Array> => {
@@ -160,21 +207,9 @@ export async function keysFromSeed32(seed32: Uint8Array) {
     ["sign"],
   );
   const jwk = await crypto.subtle.exportKey("jwk", priv);
-  const rawPriv = await crypto.subtle.importKey(
-    "jwk",
-    jwk,
-    { name: "Ed25519" },
-    true,
-    ["sign"],
-  );
+  const rawPriv = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, true, ["sign"]);
   const pubJwk = { kty: "OKP", crv: "Ed25519", x: jwk.x };
-  const pub = await crypto.subtle.importKey(
-    "jwk",
-    pubJwk,
-    { name: "Ed25519" },
-    true,
-    ["verify"],
-  );
+  const pub = await crypto.subtle.importKey("jwk", pubJwk, { name: "Ed25519" }, true, ["verify"]);
   const pubRaw = new Uint8Array(await crypto.subtle.exportKey("raw", pub));
   return {
     jwk,
@@ -184,7 +219,9 @@ export async function keysFromSeed32(seed32: Uint8Array) {
 }
 
 function ed25519Pkcs8(seed32: Uint8Array): Uint8Array {
-  const p = [0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20];
+  const p = [
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+  ];
   const out = new Uint8Array(p.length + 32);
   out.set(p, 0);
   out.set(seed32, p.length);
