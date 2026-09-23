@@ -8,7 +8,7 @@ is `src/lib.rs`: `generate_mnemonic(words)`, `address_from_mnemonic(phrase)`,
 
 ```bash
 cd sdk
-wasm-pack build bindings/kovanica-wasm --target web --out-dir bindings/kovanica-wasm/pkg
+wasm-pack build bindings/kovanica-wasm --target web --out-dir pkg   # wasm-pack 0.15: --out-dir je relativan na crate dir
 ```
 
 `pkg/` is gitignored (build output). wasm-pack generates the JS glue as

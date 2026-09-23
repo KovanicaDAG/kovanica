@@ -19,6 +19,10 @@ on:
       - '.github/workflows/sdk-wasm.yml'
   workflow_dispatch:
 
+env:
+  # Pinned for reproducible gate builds; doubles as the cache key below.
+  WASM_PACK_VERSION: "0.15.0"
+
 jobs:
   wasm-gate:
     name: wasm-pack build + npm pack dry-run
@@ -37,13 +41,23 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --locked
+      - name: Cache wasm-pack ${{ env.WASM_PACK_VERSION }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
+
+      - name: Install wasm-pack ${{ env.WASM_PACK_VERSION }}
+        run: |
+          if command -v wasm-pack >/dev/null 2>&1; then wasm-pack --version
+          else cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked; fi
 
       - name: Build web target
+        # wasm-pack 0.15 resolves --out-dir relative to the *crate* dir, not
+        # the CWD — bare "pkg" lands at bindings/kovanica-wasm/pkg.
         run: >
           wasm-pack build bindings/kovanica-wasm --target web
-          --out-dir bindings/kovanica-wasm/pkg
+          --out-dir pkg
 
       - name: Overlay repo package.json (name / entry contract)
         run: cp bindings/kovanica-wasm/package.json bindings/kovanica-wasm/pkg/package.json
