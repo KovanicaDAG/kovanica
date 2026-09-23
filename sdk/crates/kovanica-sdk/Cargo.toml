@@ -22,7 +22,12 @@ kovanica-fee = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 serde_json = { workspace = true }
+blake3 = { workspace = true }
 
 [[example]]
 name = "generate_wallet"
 path = "../../examples/generate_wallet.rs"
+
+[[example]]
+name = "htlc_swap"
+path = "../../examples/htlc_swap.rs"
