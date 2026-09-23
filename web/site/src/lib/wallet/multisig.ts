@@ -1,6 +1,5 @@
-import { bytesToHex } from "@noble/hashes/utils.js";
 import { apiPostJson } from "@/lib/api/client";
-import { seedFromMnemonic } from "./keys";
+import { signSighash } from "./keys";
 
 export type MultisigOutput = {
   to: string;
@@ -80,20 +79,21 @@ export async function buildMultisigSpend(
 }
 
 /**
- * Create one partial Ed25519 signature for a multisig transaction blob using
- * a mnemonic-derived secret. Calls `POST /api/multisig/sign`.
+ * Create one partial Ed25519 signature for a multisig transaction.
+ *
+ * Client-side only: derives the key from the phrase via SLIP-0010 and signs the
+ * sighash locally with @noble/ed25519. The key material never leaves the
+ * browser — nothing is sent to the node (see `docs/backlog/ADDRESS-AND-SIGHASH-SPEC.md`).
+ *
+ * The sighash must come from `/api/multisig/build` (`sighash_hex`), which is
+ * byte-identical to what the node's combine step verifies (`tx.sighash()`).
  */
 export async function signMultisigPartial(
   mnemonic: string,
   index: number,
-  txBlobHex: string,
+  sighashHex: string,
 ): Promise<string> {
-  const secretHex = bytesToHex(await seedFromMnemonic(mnemonic, index));
-  const res = (await apiPostJson("/api/multisig/sign", {
-    tx_blob_hex: txBlobHex,
-    secret_hex: secretHex,
-  })) as { partial_sig_hex: string };
-  return res.partial_sig_hex;
+  return signSighash(mnemonic, index, sighashHex);
 }
 
 /**

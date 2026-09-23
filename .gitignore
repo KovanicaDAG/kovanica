@@ -11,3 +11,6 @@
 .env
 .env.*
 !.env.example
+
+# Packed planning source (docs in docs/ are canonical)
+/plans/*.zip
