@@ -11,7 +11,10 @@ name: Publish SDK (crates.io + npm)
 #   2. Tagged commit is reachable from origin/main (no release from feature
 #      branches).
 #   3. Required secrets are set (CARGO_REGISTRY_TOKEN, NPM_TOKEN).
-#   4. Full test/clippy gate passes; kovanica-types packages in isolation.
+#   4. Full test/clippy gate passes; kovanica-types packages in isolation;
+#      the wasm/npm artifact builds (wasm-pack + npm pack dry-run) — proven
+#      BEFORE any crate is published, so a wasm failure can never leave a
+#      partial release wave.
 #
 # Nothing here runs on pull requests. Publishing is a maintainer decision —
 # this workflow only executes it after the guards agree.
@@ -27,6 +30,10 @@ permissions:
 concurrency:
   group: publish-sdk
   cancel-in-progress: false
+
+env:
+  # Pinned for reproducible release builds; doubles as the cache key below.
+  WASM_PACK_VERSION: "0.15.0"
 
 jobs:
   preflight:
@@ -75,6 +82,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Test gate
         run: cargo test --workspace
@@ -84,6 +93,25 @@ jobs:
 
       - name: Package leaf crate in isolation
         run: cargo package -p kovanica-types
+
+      - name: Cache wasm-pack ${{ env.WASM_PACK_VERSION }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
+
+      - name: Install wasm-pack ${{ env.WASM_PACK_VERSION }}
+        run: |
+          if command -v wasm-pack >/dev/null 2>&1; then wasm-pack --version
+          else cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked; fi
+
+      - name: Prove wasm/npm artifact (before any publish)
+        # wasm-pack 0.15 resolves --out-dir relative to the crate dir, not
+        # the CWD — bare "pkg" lands at bindings/kovanica-wasm/pkg.
+        run: |
+          wasm-pack build bindings/kovanica-wasm --target web --out-dir pkg
+          cp bindings/kovanica-wasm/package.json bindings/kovanica-wasm/pkg/package.json
+          (cd bindings/kovanica-wasm/pkg && npm pack --dry-run)
 
   publish-crates:
     name: Publish crates.io (ordered)
@@ -129,13 +157,23 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --locked
+      - name: Cache wasm-pack ${{ env.WASM_PACK_VERSION }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
+
+      - name: Install wasm-pack ${{ env.WASM_PACK_VERSION }}
+        run: |
+          if command -v wasm-pack >/dev/null 2>&1; then wasm-pack --version
+          else cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked; fi
 
       - name: Build web target
+        # wasm-pack 0.15 resolves --out-dir relative to the *crate* dir, not
+        # the CWD — bare "pkg" lands at bindings/kovanica-wasm/pkg.
         run: >
           wasm-pack build bindings/kovanica-wasm --target web
-          --out-dir bindings/kovanica-wasm/pkg
+          --out-dir pkg
 
       - name: Overlay repo package.json (name / entry contract)
         run: cp bindings/kovanica-wasm/package.json bindings/kovanica-wasm/pkg/package.json
@@ -143,6 +181,10 @@ jobs:
       - name: Configure npm auth
         run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
 
-      - name: Publish (scoped package → --access public)
-        run: npm publish --access public
+      - name: Publish (scoped package → --access public, dist-tag alpha)
+        # 0.1.0-alpha.1 is a pre-release: publish under the "alpha" dist-tag,
+        # NOT "latest", so a bare `npm install @kovanica/sdk-wasm` never
+        # silently hands a consumer a pre-release. Consumers opt in with
+        # `npm install @kovanica/sdk-wasm@alpha`.
+        run: npm publish --access public --tag alpha
         working-directory: sdk/bindings/kovanica-wasm/pkg

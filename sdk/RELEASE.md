@@ -73,8 +73,11 @@ Workflow guards (each fails the run before anything is published):
 2. the tagged commit is reachable from `main` (no release from feature
    branches);
 3. `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` repo secrets are set;
-4. `cargo test --workspace` + clippy `-D warnings` pass and
-   `kovanica-types` packages in isolation.
+4. `cargo test --workspace` + clippy `-D warnings` pass,
+   `kovanica-types` packages in isolation, **and the wasm/npm artifact
+   builds** (pinned `wasm-pack` + `npm pack --dry-run`) — all proven
+   before a single crate is published, so a wasm failure can never leave
+   a partial release wave.
 
 Then it publishes, strictly in order (each step requires the previous crate to
 be live on crates.io), followed by the npm package:
@@ -82,7 +85,7 @@ be live on crates.io), followed by the npm package:
 ```text
 kovanica-types → kovanica-keys → kovanica-tx → kovanica-rpc → kovanica-fee
 → kovanica-sdk    (facade — do LAST)
-→ npm: @kovanica/sdk-wasm (wasm-pack build + manifest overlay + --access public)
+→ npm: @kovanica/sdk-wasm (wasm-pack build + manifest overlay + --access public, dist-tag `alpha`)
 ```
 
 `kovanica-wasm` is deliberately **not** published to crates.io (npm is its
@@ -102,7 +105,7 @@ cargo publish -p kovanica-sdk     # facade — do LAST
 cd bindings/kovanica-wasm
 wasm-pack build --target web --out-dir pkg
 cp package.json pkg/package.json
-cd pkg && npm publish --access public
+cd pkg && npm publish --access public --tag alpha   # pre-release → dist-tag alpha, ne latest
 ```
 
 (If git reports a dirty tree locally — e.g. the untracked `plans/` pack — add
@@ -120,8 +123,9 @@ bookkeeping.
 
 ## 4. Go / no-go gate (run before every publish wave)
 
-> The CI publish workflow (§3) enforces items 1, 2 and 5 automatically on every
-> tag push, plus version lockstep. Items 3, 4, 6 and 7 stay human/manual checks.
+> The CI publish workflow (§3) enforces items 1, 2, 5 and 8 automatically on
+> every tag push, plus version lockstep. Items 3, 4, 6 and 7 stay human/manual
+> checks.
 
 | # | Check | Command / evidence |
 |---|---|---|
@@ -132,6 +136,7 @@ bookkeeping.
 | 5 | `cargo package` dry | leaf crate at least once: `cargo package -p kovanica-types --allow-dirty` |
 | 6 | Version bump agreed | `0.1.0-alpha.1` → next semver AFTER first publish (crates.io forbids re-publishing the same version) |
 | 7 | README examples warning | publish prints `ignoring example ... not included` for `sdk/examples/*` — **intentional**: examples stay monorepo-only, docs link to them |
+| 8 | Wasm/npm artifact | CI: publish `preflight` + `sdk-wasm.yml` gate — pinned `wasm-pack build --target web`, repo manifest overlay, `npm pack pkg --dry-run` |
 
 Manual gate (human, before wave):
 
@@ -150,12 +155,12 @@ version, ESM entry `kovanica_wasm.js`). `pkg/` is gitignored build output.
 
 ```bash
 cd sdk
-wasm-pack build bindings/kovanica-wasm --target web --out-dir bindings/kovanica-wasm/pkg
+wasm-pack build bindings/kovanica-wasm --target web --out-dir pkg   # out-dir je relativan na crate dir!
 cd bindings/kovanica-wasm
 cp package.json pkg/package.json   # overlay the repo manifest over wasm-pack's
 npm pack pkg --dry-run              # inspect tarball: *.js, *.wasm, *.d.ts
 # real publish (human, token required):
-# npm publish --access public        # scoped package
+# npm publish --access public --tag alpha   # scoped package; 0.1.0-alpha.x je pre-release → NIKAD na latest
 ```
 
 The CI gate (`.github/workflows/sdk-wasm.yml`) runs the first four commands
@@ -181,7 +186,10 @@ cargo run
 ```
 
 [NPM] consume the wasm tarball from `npm pack` output in a vite app and check
-`window`-less Node import resolves.
+`window`-less Node import resolves. The published package installs via its
+pre-release dist-tag:
+`npm i @kovanica/sdk-wasm@alpha` — a bare `npm i @kovanica/sdk-wasm`
+resolves `latest`, which by design is NOT the pre-release.
 
 ## 7. Rollback policy (there is no true rollback)
 

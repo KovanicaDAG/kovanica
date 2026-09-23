@@ -8,7 +8,7 @@ is `src/lib.rs`: `generate_mnemonic(words)`, `address_from_mnemonic(phrase)`,
 
 ```bash
 cd sdk
-wasm-pack build bindings/kovanica-wasm --target web --out-dir bindings/kovanica-wasm/pkg
+wasm-pack build bindings/kovanica-wasm --target web --out-dir pkg   # wasm-pack 0.15: --out-dir je relativan na crate dir
 ```
 
 `pkg/` is gitignored (build output). wasm-pack generates the JS glue as
@@ -36,7 +36,7 @@ cp package.json pkg/package.json
 cd sdk/bindings/kovanica-wasm
 npm pack --dry-run   # inspect tarball: *.js, *.wasm, *.d.ts, package.json
 # real publish:
-# npm publish --access public   # scoped @kovanica/* needs --access public
+# npm publish --access public --tag alpha   # scoped @kovanica/* needs --access public; pre-release → dist-tag alpha
 ```
 
 Keep the version in `package.json` in lockstep with the workspace
