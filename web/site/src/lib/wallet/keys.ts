@@ -1,11 +1,9 @@
 import * as ed from "@noble/ed25519";
-import { sha256, sha512 } from "@noble/hashes/sha2.js";
+import { sha512 } from "@noble/hashes/sha2.js";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import { loadWordlist } from "./bip39";
 
 ed.hashes.sha512 = sha512;
-
-const DOMAIN = "kovanica-wallet-v2";
 
 export { loadWordlist } from "./bip39";
 
@@ -45,7 +43,7 @@ export async function createMnemonic(): Promise<string> {
   return entropyToMnemonic(entropy, words);
 }
 
-export async function mnemonicToSeed(mnemonic: string): Promise<Uint8Array> {
+export async function mnemonicToSeed(mnemonic: string, passphrase = ""): Promise<Uint8Array> {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
@@ -54,8 +52,14 @@ export async function mnemonicToSeed(mnemonic: string): Promise<Uint8Array> {
     false,
     ["deriveBits"],
   );
+  // BIP-39: salt is "mnemonic" + optional passphrase (empty by default).
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt: enc.encode("mnemonic"), iterations: 2048, hash: "SHA-512" },
+    {
+      name: "PBKDF2",
+      salt: enc.encode(`mnemonic${passphrase}`),
+      iterations: 2048,
+      hash: "SHA-512",
+    },
     key,
     512,
   );
@@ -66,12 +70,66 @@ export function normalizeMnemonic(phrase: string): string {
   return phrase.normalize("NFKD").trim().toLowerCase().split(/\s+/).join(" ");
 }
 
-export function seedFromMnemonic(mnemonic: string, index = 0): Uint8Array {
-  return sha256(utf8ToBytes(`${normalizeMnemonic(mnemonic)}|${index}|${DOMAIN}`));
+const SLIP10_MASTER_KEY = "ed25519 seed";
+const HARDENED = 0x80000000;
+
+async function hmacSha512(keyBytes: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    asBufferSource(keyBytes),
+    { name: "HMAC", hash: "SHA-512" },
+    false,
+    ["sign"],
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, asBufferSource(data)));
+}
+
+/**
+ * SLIP-0010 hardened ed25519 derivation.
+ * Master: I = HMAC-SHA512(key = "ed25519 seed", data = 64-byte seed) —
+ * here the seed is the 64-byte BIP-39 PBKDF2 seed. IL = master key,
+ * IR = chain code.
+ * Child (hardened i): data = 0x00 || key(32B) || ser32(i | 0x80000000);
+ * I = HMAC-SHA512(key = chain code, data); new key = IL, new chain code = IR.
+ */
+async function deriveSlip10Ed25519(
+  seed64: Uint8Array,
+  path: readonly number[],
+): Promise<Uint8Array> {
+  let I = await hmacSha512(utf8ToBytes(SLIP10_MASTER_KEY), seed64);
+  let key = I.subarray(0, 32);
+  let chainCode = I.subarray(32);
+  for (const segment of path) {
+    const index = (segment | HARDENED) >>> 0;
+    const data = new Uint8Array(37);
+    data[0] = 0x00;
+    data.set(key, 1);
+    data[33] = (index >>> 24) & 0xff;
+    data[34] = (index >>> 16) & 0xff;
+    data[35] = (index >>> 8) & 0xff;
+    data[36] = index & 0xff;
+    I = await hmacSha512(chainCode, data);
+    key = I.subarray(0, 32);
+    chainCode = I.subarray(32);
+  }
+  return new Uint8Array(key);
+}
+
+/**
+ * Derive the per-account Ed25519 seed from a BIP-39 mnemonic using
+ * SLIP-0010 hardened derivation at m/44'/917'/0'/0'/index'.
+ * All segments are hardened — ed25519 has no non-hardened children.
+ */
+export async function seedFromMnemonic(mnemonic: string, index = 0): Promise<Uint8Array> {
+  if (!Number.isInteger(index) || index < 0 || index >= HARDENED) {
+    throw new Error("account index out of range");
+  }
+  const seed64 = await mnemonicToSeed(normalizeMnemonic(mnemonic));
+  return deriveSlip10Ed25519(seed64, [44, 917, 0, 0, index]);
 }
 
 export async function addressFromMnemonic(mnemonic: string, index = 0): Promise<string> {
-  return bytesToHex(ed.getPublicKey(seedFromMnemonic(mnemonic, index)));
+  return bytesToHex(ed.getPublicKey(await seedFromMnemonic(mnemonic, index)));
 }
 
 export async function signSighash(
@@ -81,7 +139,7 @@ export async function signSighash(
 ): Promise<string> {
   const hex = sighashHex.trim().toLowerCase();
   if (!/^[0-9a-f]+$/.test(hex) || hex.length % 2 !== 0) throw new Error("bad sighash");
-  const sig = ed.sign(hexToBytes(hex), seedFromMnemonic(mnemonic, index));
+  const sig = ed.sign(hexToBytes(hex), await seedFromMnemonic(mnemonic, index));
   return bytesToHex(sig);
 }
 
@@ -135,66 +193,6 @@ export async function importMnemonic(phrase: string): Promise<string> {
     }
   }
   return words.join(" ");
-}
-
-export async function bip44Seed(
-  seed64: Uint8Array,
-  coinType: number,
-  account: number,
-  change: number,
-  index: number,
-): Promise<Uint8Array> {
-  const hardened = (i: number) => 0x80000000 | i;
-
-  const masterKey = await crypto.subtle.importKey(
-    "raw",
-    asBufferSource(seed64),
-    { name: "HMAC", hash: "SHA-512" },
-    false,
-    ["sign"],
-  );
-
-  let chainCode = new Uint8Array(
-    await crypto.subtle.sign(
-      "HMAC",
-      masterKey,
-      asBufferSource(new Uint8Array([0, 0, 0, hardened(44) >>> 0])),
-    ),
-  );
-  // hardened path uses 4-byte BE; rebuild properly
-  const pathStep = async (keyBytes: Uint8Array, indexVal: number): Promise<Uint8Array> => {
-    const data = new Uint8Array(5);
-    data[0] = 0;
-    const v = indexVal >>> 0;
-    data[1] = (v >>> 24) & 0xff;
-    data[2] = (v >>> 16) & 0xff;
-    data[3] = (v >>> 8) & 0xff;
-    data[4] = v & 0xff;
-    const k = await crypto.subtle.importKey(
-      "raw",
-      asBufferSource(keyBytes),
-      { name: "HMAC", hash: "SHA-512" },
-      false,
-      ["sign"],
-    );
-    return new Uint8Array(await crypto.subtle.sign("HMAC", k, asBufferSource(data)));
-  };
-
-  // BIP44-ish chain from 64-byte seed material (first 32 as key, rest as chain — simplified)
-  let privateKey = chainCode.slice(0, 32);
-  chainCode = chainCode.slice(32);
-
-  let hmac = await pathStep(privateKey, hardened(coinType));
-  privateKey = hmac.slice(0, 32);
-
-  hmac = await pathStep(privateKey, hardened(account));
-  privateKey = hmac.slice(0, 32);
-
-  hmac = await pathStep(privateKey, change);
-  privateKey = hmac.slice(0, 32);
-
-  hmac = await pathStep(privateKey, index);
-  return hmac.slice(0, 32);
 }
 
 export async function keysFromSeed32(seed32: Uint8Array) {
