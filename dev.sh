@@ -371,7 +371,7 @@ doctor() {
   web dev (local only):       npx vite dev --host 127.0.0.1 --port 8080
   node (solo, cargo):         cd node && KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_DATA=\$PWD/data \\
                               cargo run --release -p kovanica-node -- explorer 127.0.0.1:8080
-  node (public testnet):      see node/README.md (KOVANICA_PEERS=seed.kovanica.online:9000)
+  node (public testnet):      see node/README.md (KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000)
   agent REPL:                 (cd ~/kovanica-agent && ./kovanica.local repl)   # portable launcher written by this script
   agent stack (needs docker): docker compose -f ~/kovanica-agent/docker-compose.yml up -d qdrant vllm sandbox-runner agent-api
   wallet extension:           cd wallet/extension && npm run dev

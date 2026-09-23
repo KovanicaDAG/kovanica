@@ -344,7 +344,7 @@ KOV_BACKUP_PASSPHRASE="..." ./scripts/restore-node.sh \
   --data-dir /tmp/kov-restore-drill/data --force
 
 # Verify
-KOVANICA_DATA=/tmp/kov-restore-drill/data KOVANICA_PEERS=seed.kovanica.online:9000 \
+KOVANICA_DATA=/tmp/kov-restore-drill/data KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 \
   /usr/local/bin/kovanica-node explorer 127.0.0.1:18081 &
 curl -s http://127.0.0.1:18081/api/head | jq .genesis
 # Must match live genesis
@@ -408,7 +408,7 @@ journalctl -u kovanica-seed --since "1 hour ago" # recent logs
 
 # Cold bootstrap (pristine sync)
 KOVANICA_DATA=/tmp/cbt KOVANICA_LISTEN=127.0.0.1:19000 \
-KOVANICA_PEERS=seed.kovanica.online:9000 \
+KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 \
 /usr/local/bin/kovanica-node explorer 127.0.0.1:18081
 
 # RPC REPL

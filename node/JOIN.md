@@ -1,6 +1,6 @@
 # Join kovanica-testnet
 
-Public seed: **`seed.kovanica.online:9000`** (TCP only, grey-cloud DNS).  
+Public seeds: **`seed.kovanica.online:9000`**, **`seed2.kovanica.online:9000`** (TCP only, grey-cloud DNS).  
 HTTP explorer: https://explorer.kovanica.online  
 Wallet: https://wallet.kovanica.online
 
@@ -77,7 +77,7 @@ and restart the node.
 | Variable | Default |
 | --- | --- |
 | `KOVANICA_LISTEN` | `0.0.0.0:9000` (also tries `[::]:9000`) |
-| `KOVANICA_PEERS` | `seed.kovanica.online:9000` |
+| `KOVANICA_PEERS` | `seed.kovanica.online:9000,seed2.kovanica.online:9000` |
 | `KOVANICA_MINE` | `0` |
 | `KOVANICA_MINE_SECS` | `120` (only if mine is on) |
 | `KOVANICA_FAUCET` | `0` |

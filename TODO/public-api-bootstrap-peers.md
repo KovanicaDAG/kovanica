@@ -58,7 +58,7 @@ Fixed release binary (`kovanica-node` from commit `d84a991` + `cd51834`) copied 
 # Main VPS (145.223.116.178) as dzuks@:2222
 
 # 1. Fix kovanica-seed2 peers (nginx backend for public /api)
-sudo sed -i 's|^Environment=KOVANICA_PEERS=.*|Environment=KOVANICA_PEERS=seed.kovanica.online:9000|' /etc/systemd/system/kovanica-seed2.service
+sudo sed -i 's|^Environment=KOVANICA_PEERS=.*|Environment=KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000|' /etc/systemd/system/kovanica-seed2.service
 
 # 2. Fix kovanica-seed1 peers (mining seed)
 sudo sed -i 's|^Environment=KOVANICA_PEERS=.*|Environment=KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000|' /etc/systemd/system/kovanica-seed1.service

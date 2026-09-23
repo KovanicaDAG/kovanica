@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-shot KovanicaDAG node install — no git clone.
-#   curl -sSfL https://raw.githubusercontent.com/KovanicaDAG/kovanica-node/main/scripts/install.sh | bash
+#   curl -sSfL https://raw.githubusercontent.com/KovanicaDAG/kovanica/main/node/scripts/install.sh | bash
 # Optional: KOVANICA_HOME=~/kovanica-node  KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000
 #           bash scripts/install.sh --systemd
 #
@@ -42,7 +42,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 INSTALLED=0
 if [ -n "$ASSET" ]; then
-  URL="https://github.com/KovanicaDAG/kovanica-node/releases/latest/download/$ASSET.tar.gz"
+  URL="https://github.com/KovanicaDAG/kovanica/releases/latest/download/$ASSET.tar.gz"
   echo "downloading prebuilt binary ($ASSET)…"
   if curl -fsSL "$URL" -o "$TMP/$ASSET.tar.gz"; then
     tar -xzf "$TMP/$ASSET.tar.gz" -C "$HOME_DIR/bin"
@@ -70,13 +70,13 @@ if [ "$INSTALLED" != 1 ]; then
   source "$HOME/.cargo/env" 2>/dev/null || true
   export PATH="$HOME/.cargo/bin:$PATH"
 
-  echo "downloading kovanica-node main (tarball, no git)…"
-  curl -sSfL https://github.com/KovanicaDAG/kovanica-node/archive/refs/heads/main.tar.gz \
+  echo "downloading kovanica main (tarball, no git)…"
+  curl -sSfL https://github.com/KovanicaDAG/kovanica/archive/refs/heads/main.tar.gz \
     | tar -xz -C "$TMP"
-  SRC="$(find "$TMP" -maxdepth 1 -type d -name 'kovanica-node-*' | head -1)"
+  SRC="$(find "$TMP" -maxdepth 1 -type d -name 'kovanica-*' | head -1)"
   test -n "$SRC"
 
-  (cd "$SRC" && cargo build --release -p kovanica-node)
+  (cd "$SRC/node" && cargo build --release -p kovanica-node)
   install -m 755 "$SRC/target/release/kovanica-node" "$BIN"
 fi
 
