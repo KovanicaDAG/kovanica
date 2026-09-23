@@ -23,6 +23,11 @@ matching validation rules; addresses pinned by
 `POST /api/submit_tx` with `{"tx_hex": …}`).  
 See `../roadmap-pack/ADDRESS-AND-SIGHASH-SPEC.md` for the original draft.
 
+**Docs:** [`COOKBOOK.md`](COOKBOOK.md) — practical recipes (build → estimate →
+sign → submit, multi-asset, HTLC, vaults, multisig, live API, safety).
+[`RELEASE.md`](RELEASE.md) — crates.io/npm publish runbook (S-12),
+go/no-go gate, rollback policy.
+
 ## Workspace layout
 
 ```
