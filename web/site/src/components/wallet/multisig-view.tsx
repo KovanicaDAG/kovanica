@@ -464,21 +464,21 @@ function CombinePanel() {
   );
 }
 
-/** Helper for a cosigner who has this wallet unlocked to sign a sighash locally. */
+/** Sign a sighash locally with the unlocked wallet (cosigner tool). */
 function SignLocallyCard() {
-  const [txBlob, setTxBlob] = useState("");
+  const [sighash, setSighash] = useState("");
   const [mnemonic, setMnemonic] = useState("");
   const [sig, setSig] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function onSign() {
-    if (!txBlob || !mnemonic) {
-      toast.error("Enter transaction blob and seed");
+    if (!sighash || !mnemonic) {
+      toast.error("Enter the sighash and your backup phrase");
       return;
     }
     setBusy(true);
     try {
-      const s = await signMultisigPartial(mnemonic, 0, txBlob);
+      const s = await signMultisigPartial(mnemonic, 0, sighash);
       setSig(s);
       toast.success("Partial signature created");
     } catch (e) {
@@ -493,12 +493,12 @@ function SignLocallyCard() {
     <section className="rounded-xl border border-dashed border-border bg-surface/50 p-4">
       <p className="text-[10px] tracking-wide text-subtle uppercase">Cosigner tool: sign locally</p>
       <p className="mt-1 text-xs text-muted">
-        Paste a transaction blob and your seed to produce a partial signature. The seed stays in this
-        browser and is cleared after signing.
+        Paste the sighash (from the proposal builder) plus your backup phrase. Signing is local; the
+        phrase is cleared after signing.
       </p>
       <input
-        value={txBlob}
-        onChange={(e) => setTxBlob(e.target.value)}
+        value={sighash}
+        onChange={(e) => setSighash(e.target.value)}
         placeholder="Sighash (64 hex)"
         className="mt-3 h-11 w-full rounded-md border border-border bg-bg px-3 font-mono text-xs text-fg outline-none focus-visible:shadow-[var(--shadow-border-hover)]"
       />
