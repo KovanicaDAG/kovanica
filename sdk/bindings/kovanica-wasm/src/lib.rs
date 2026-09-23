@@ -255,8 +255,7 @@ mod tests {
         );
         // fee above input, with a change address on the same key ->
         // ValueMismatch (in 100M < out 90M + fee 20M).
-        let res =
-            build_signed_transfer_inner(&p, 0, "testnet", utxos, &outputs, "20000000", &addr);
+        let res = build_signed_transfer_inner(&p, 0, "testnet", utxos, &outputs, "20000000", &addr);
         assert!(res.is_err(), "fee exceeding inputs must fail");
     }
 }

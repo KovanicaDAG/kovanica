@@ -97,9 +97,9 @@ fn roundtrip_generate_restore_same_keys() {
     let passphrases = ["", "hunter2", "kova nica 25th word"];
 
     for (i, entropy) in entropies.iter().enumerate() {
-        for words in [WordCount::Words12, WordCount::Words24] {
+        for _wc in [WordCount::Words12, WordCount::Words24] {
             // Generate: fresh mnemonic from fixed entropy.
-            let raw = bip39::Mnemonic::from_entropy_in(bip39::Language::English, *entropy)
+            let raw = bip39::Mnemonic::from_entropy_in(bip39::Language::English, entropy)
                 .expect("valid entropy len");
             let mnemonic = Mnemonic::from_phrase(raw.to_string().as_str()).expect("parses");
             let phrase = mnemonic.phrase().to_string();
