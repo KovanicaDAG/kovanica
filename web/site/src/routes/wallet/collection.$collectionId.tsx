@@ -1,10 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { Link, useLoaderData } from "@tanstack/react-router";
-import { ArrowLeft as ArrowLeftIcon, Sparkles as SparklesIcon, ExternalLink, Loader2, AlertCircle } from "lucide-react";
-import { api, useApiSource, isPublic } from "@/lib/api/client";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { AlertCircle, ArrowLeft as ArrowLeftIcon, Sparkles as SparklesIcon } from "lucide-react";
+import { api } from "@/lib/api/client";
 import { shortId } from "@/lib/ledger/hash";
 import { hexToKvnc } from "@/lib/wallet/address";
-import { cn } from "@/lib/utils";
 
 interface CollectionDetailResponse {
   collection_id: string;
@@ -25,19 +23,8 @@ export const Route = createFileRoute("/wallet/collection/$collectionId")({
   component: CollectionDetailPage,
 });
 
-interface CollectionDetailResponse {
-  collection_id: string;
-  assets: Array<{
-    asset_id: string;
-    metadata_hash: string | null;
-    owner_address: string | null;
-  }>;
-}
-
-export default function CollectionDetailPage() {
-  const collection = useLoaderData<CollectionDetailResponse>();
-  const source = useApiSource();
-  const live = isPublic(source);
+function CollectionDetailPage() {
+  const collection = Route.useLoaderData();
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 md:px-6 md:py-8">
@@ -50,7 +37,9 @@ export default function CollectionDetailPage() {
           <ArrowLeftIcon className="size-5" />
         </Link>
         <div>
-          <p className="font-mono text-[10px] tracking-wide text-purple uppercase">KVP-106 Collection</p>
+          <p className="font-mono text-[10px] tracking-wide text-purple uppercase">
+            KVP-106 Collection
+          </p>
           <h1 className="font-display text-2xl tracking-tight text-fg">
             Collection {shortId(collection.collection_id)}
             <span className="ml-2 rounded-full bg-purple/20 px-2 py-0.5 font-mono text-[10px] text-purple">
@@ -70,7 +59,8 @@ export default function CollectionDetailPage() {
           {collection.assets.map((asset) => (
             <Link
               key={asset.asset_id}
-              to={`/wallet/nft/${asset.asset_id}`}
+              to="/wallet/nft/$assetId"
+              params={{ assetId: asset.asset_id }}
               className="group rounded-xl border border-border bg-surface overflow-hidden transition-all hover:border-purple/50 hover:shadow-lg"
             >
               <div className="aspect-square relative bg-surface overflow-hidden">
@@ -101,4 +91,3 @@ export default function CollectionDetailPage() {
     </div>
   );
 }
-

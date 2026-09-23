@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Upload, Loader2, CheckCircle, AlertCircle, Link2, Copy } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useLedger } from "@/lib/ledger/store";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -16,12 +17,7 @@ interface IpfsUploadProps {
   gatewayUrl?: string;
 }
 
-export function IpfsMetadataUpload({
-  metadata,
-  onSuccess,
-  onError,
-  gatewayUrl,
-}: IpfsUploadProps) {
+export function IpfsMetadataUpload({ metadata, onSuccess, onError, gatewayUrl }: IpfsUploadProps) {
   const [uploading, setUploading] = useState(false);
   const [cid, setCid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -77,8 +73,8 @@ export function IpfsMetadataUpload({
       </div>
 
       <p className="text-sm text-muted">
-        Uploads the metadata JSON to IPFS. The resulting CID will be hashed and stored on-chain
-        as the <code className="font-mono text-xs">metadata_hash</code>.
+        Uploads the metadata JSON to IPFS. The resulting CID will be hashed and stored on-chain as
+        the <code className="font-mono text-xs">metadata_hash</code>.
       </p>
 
       {error && (
@@ -118,11 +114,7 @@ export function IpfsMetadataUpload({
           </p>
         </div>
       ) : (
-        <Button
-          onClick={handleUpload}
-          disabled={uploading}
-          className="w-full h-11"
-        >
+        <Button onClick={handleUpload} disabled={uploading} className="w-full h-11">
           {uploading ? (
             <>
               <Loader2 className="size-4 mr-2 animate-spin" />

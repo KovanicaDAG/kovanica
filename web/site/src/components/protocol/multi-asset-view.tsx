@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Coins, Layers, ArrowRightLeft, History, Copy } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Coins, Layers, ArrowRightLeft, History, Copy, Gem, Landmark, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,10 +35,7 @@ export function MultiAssetView() {
   const [prepared, setPrepared] = useState<PrepareResult | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const picker = useMemo(
-    () => (balances ? assetPickerOptions(balances.balances) : []),
-    [balances],
-  );
+  const picker = useMemo(() => (balances ? assetPickerOptions(balances.balances) : []), [balances]);
 
   async function onLoadBalances() {
     if (!address.trim()) {
@@ -73,12 +71,13 @@ export function MultiAssetView() {
     try {
       const res = await fetchAddressHistory(address.trim());
       setHistory(res);
-      if (!balances) setBalances({
-        address: res.address,
-        balance: res.balance,
-        balances: res.balances,
-        utxos: [],
-      });
+      if (!balances)
+        setBalances({
+          address: res.address,
+          balance: res.balance,
+          balances: res.balances,
+          utxos: [],
+        });
       toast.success(`${res.txs.length} history entries`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "History failed");
@@ -117,18 +116,42 @@ export function MultiAssetView() {
 
   return (
     <main className="mx-auto w-full max-w-2xl flex-1 px-4 pb-12 pt-8 md:px-8">
-      <p className="font-mono text-[11px] tracking-brand text-blue uppercase">
-        KVP-102 · RFC-002
-      </p>
+      <p className="font-mono text-[11px] tracking-brand text-blue uppercase">KVP-102 · RFC-002</p>
       <h1 className="mt-1 font-display text-3xl tracking-tight text-fg italic md:text-4xl">
         Multi-asset
       </h1>
       <p className="mt-2 max-w-lg text-sm leading-relaxed text-muted">
-        Native multi-asset UTXOs with per-asset conservation. Balances are maps
-        keyed by <code className="text-fg">asset_id</code> (native is{" "}
-        <span className="font-mono text-fg">KVNC</span>). Fees are always paid
-        in KVNC. Coin selection never mixes assets.
+        Native multi-asset UTXOs with per-asset conservation. Balances are maps keyed by{" "}
+        <code className="text-fg">asset_id</code> (native is{" "}
+        <span className="font-mono text-fg">KVNC</span>). Fees are always paid in KVNC. Coin
+        selection never mixes assets.
       </p>
+
+      {/* Token tools — NFT, RWA, staking live on their own surfaces */}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Link
+          to="/wallet/rwa-issue"
+          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+        >
+          <Landmark className="size-3.5 text-gold" />
+          Issue RWA
+        </Link>
+        <Link
+          to="/docs"
+          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+        >
+          <Gem className="size-3.5 text-purple" />
+          NFT (KVP-106)
+        </Link>
+        <Link
+          to="/docs"
+          hash="staking"
+          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+        >
+          <Lock className="size-3.5 text-teal" />
+          Staking
+        </Link>
+      </div>
 
       <div className="mt-8 inline-flex rounded-md bg-surface-2 p-0.5">
         {(
@@ -221,9 +244,7 @@ export function MultiAssetView() {
                     <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto font-mono text-[11px] text-muted">
                       {balances.utxos.map((u) => (
                         <li key={`${u.tx}:${u.index}`} className="truncate">
-                          <span className="text-fg">
-                            {shortAssetLabel(u.assetId)}
-                          </span>{" "}
+                          <span className="text-fg">{shortAssetLabel(u.assetId)}</span>{" "}
                           {fmtKvnc(u.value)} · {u.tx.slice(0, 12)}…:{u.index}
                         </li>
                       ))}
@@ -243,8 +264,8 @@ export function MultiAssetView() {
           <div className="space-y-4">
             <p className="text-sm text-muted">
               Prepare is asset-scoped. Fees always in KVNC. Omitted{" "}
-              <code className="text-fg">asset_id</code> defaults to native on the
-              node; we always send it explicitly.
+              <code className="text-fg">asset_id</code> defaults to native on the node; we always
+              send it explicitly.
             </p>
             <div>
               <label className="block text-xs font-medium tracking-wide text-subtle uppercase">
@@ -300,9 +321,7 @@ export function MultiAssetView() {
                   Inputs {prepared.inputs.length} · Outputs {prepared.outputs.length}
                   {prepared.change ? ` · change ${fmtKvnc(prepared.change.value)}` : ""}
                 </p>
-                <p className="break-all text-muted">
-                  sighash {prepared.sighash.slice(0, 24)}…
-                </p>
+                <p className="break-all text-muted">sighash {prepared.sighash.slice(0, 24)}…</p>
                 <Button
                   type="button"
                   variant="outline"
@@ -340,14 +359,10 @@ export function MultiAssetView() {
                     className="flex items-center justify-between gap-2 rounded-md border border-border bg-bg px-2.5 py-1.5 font-mono text-[11px]"
                   >
                     <span className="min-w-0 truncate text-muted">
-                      <span className="text-fg">{shortAssetLabel(t.assetId)}</span>{" "}
-                      {t.kind ?? "tx"} · {t.tx.slice(0, 12)}…
+                      <span className="text-fg">{shortAssetLabel(t.assetId)}</span> {t.kind ?? "tx"}{" "}
+                      · {t.tx.slice(0, 12)}…
                     </span>
-                    <span
-                      className={
-                        t.delta >= 0 ? "shrink-0 text-ok" : "shrink-0 text-danger"
-                      }
-                    >
+                    <span className={t.delta >= 0 ? "shrink-0 text-ok" : "shrink-0 text-danger"}>
                       {t.delta >= 0 ? "+" : ""}
                       {fmtKvnc(t.delta)}
                     </span>
