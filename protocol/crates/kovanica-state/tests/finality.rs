@@ -110,6 +110,60 @@ fn unbounded_ledger_never_prunes() {
 }
 
 #[test]
+fn set_finality_depth_prunes_an_unbounded_ledger() {
+    // A ledger built without finality (the replay-log load path) keeps every
+    // block's state. Enabling finality afterwards must prune the now-final
+    // blocks and start rejecting blocks built on them — the policy a loaded
+    // node re-applies from its network profile.
+    let coinbase = Transaction::coinbase(
+        vec![TxOutput::native(500, KeyPair::from_u64(1).address())],
+        b"genesis".to_vec(),
+    );
+    let mut ledger = Ledger::new(K, SCHEDULE, &[coinbase]).unwrap();
+    let mut ids = vec![ledger.genesis()];
+    for _ in 0..10 {
+        let parent = *ids.last().unwrap();
+        ids.push(ledger.insert(vec![parent], 1, 0, 0, &[]).unwrap());
+    }
+    // Unbounded: nothing pruned, no finality score.
+    assert_eq!(ledger.finality_depth(), u64::MAX);
+    assert_eq!(ledger.finality_score(), 0);
+    for id in &ids {
+        assert!(ledger.state(id).is_some(), "nothing pruned before enabling");
+    }
+
+    ledger.set_finality_depth(3);
+
+    assert_eq!(ledger.finality_depth(), 3);
+    let threshold = ledger.finality_score();
+    assert!(threshold > 0, "finality has kicked in");
+    let tip = ledger.dag().selected_tip();
+    assert!(ledger.state(&tip).is_some(), "tip state kept");
+    assert!(ledger.state(&ledger.genesis()).is_none(), "genesis pruned");
+    for id in &ids {
+        let score = ledger.dag().ghostdag(id).unwrap().blue_score;
+        assert_eq!(
+            ledger.state(id).is_some(),
+            score >= threshold,
+            "block at score {score} vs threshold {threshold}"
+        );
+    }
+
+    // Building on final history is now rejected; building on the tip works.
+    // (A distinct timestamp keeps the block from colliding with an existing
+    // one — the duplicate check runs before the finality check.)
+    let early = ids[1];
+    let before = ledger.dag().len();
+    let err = ledger.insert(vec![early], 1, 1, 0, &[]).unwrap_err();
+    assert!(
+        matches!(err, LedgerInsertError::Finality { .. }),
+        "got {err:?}"
+    );
+    assert_eq!(ledger.dag().len(), before, "no rejected block was added");
+    assert!(ledger.insert(vec![tip], 1, 0, 0, &[]).is_ok());
+}
+
+#[test]
 fn reorg_above_finality_follows_the_heavier_branch() {
     // Two branches off genesis; the heavier one (more work) becomes the selected
     // tip and the current state follows it — an implicit re-org, no revert.
