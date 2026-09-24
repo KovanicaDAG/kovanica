@@ -112,6 +112,69 @@ fn loaded_node_reapplies_finality_policy() {
 }
 
 #[test]
+fn loaded_node_reapplies_block_pruning() {
+    // A node loaded from a replay log starts with block pruning disabled (the
+    // log does not persist the policy). Re-applying the depth — what
+    // `load_or_genesis` does from the network profile — must evict the
+    // now-final blocks (and their reachability-oracle entries) without
+    // corrupting the current state, and the chain must keep building on the
+    // (non-final) tip (RFC-008).
+    let log_path = temp_log("blockprune");
+    let founder = KeyPair::from_u64(1);
+
+    let mut node = Node::new();
+    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
+    node.set_miner(founder.address());
+    for _ in 0..10 {
+        node.produce_empty().unwrap();
+    }
+    node.persist_incremental(&log_path).unwrap();
+    let blocks_before = node.block_count().unwrap();
+
+    let mut recovered = Node::load_log(&log_path).unwrap();
+    assert_eq!(
+        recovered.block_pruning_depth(),
+        u64::MAX,
+        "log load starts with block pruning disabled"
+    );
+
+    let balance_before = recovered.balance(&founder.address()).unwrap();
+    // Block pruning is only safe once finality is on (RFC-008 invariant: the
+    // effective depth is clamped to `>= finality_depth`), so enable finality
+    // first — the order `restore_miner_and_policy` uses.
+    recovered.set_finality_depth(3).unwrap();
+    recovered.set_block_pruning_depth(3).unwrap();
+    assert_eq!(recovered.block_pruning_depth(), 3);
+    assert_eq!(
+        recovered.balance(&founder.address()).unwrap(),
+        balance_before,
+        "enabling block pruning must not corrupt the current state"
+    );
+    assert!(
+        recovered.block_count().unwrap() < blocks_before,
+        "final blocks evicted from the loaded DAG"
+    );
+    let after_prune = recovered.block_count().unwrap();
+    let height_after_prune = recovered.chain_height().unwrap();
+
+    // The recovered chain must still accept new blocks on the (non-final) tip.
+    // `block_count` is steady-state under pruning (each new block advances the
+    // tip and evicts one more old block), so assert on the chain height.
+    recovered.set_miner(founder.address());
+    recovered.produce_empty().unwrap();
+    assert!(
+        recovered.chain_height().unwrap() > height_after_prune,
+        "recovered chain must continue after enabling block pruning"
+    );
+    assert!(
+        recovered.block_count().unwrap() >= after_prune,
+        "the DAG stays bounded but non-empty"
+    );
+
+    remove_log(&log_path);
+}
+
+#[test]
 fn hybrid_log_preserves_staked_block_id() {
     let log_path = temp_log("hybrid");
     let cfg = HybridConfig {

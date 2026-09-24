@@ -2107,6 +2107,19 @@ fn compose_stake_delta(first: &StakeDelta, second: &StakeDelta) -> StakeDelta {
 /// typically set larger than the finality depth so that a node can serve block
 /// bodies for blocks that are final (and thus immutable) but no longer needed for
 /// validation. See [`kovanica_dag::Dag`] for details.
+///
+/// ## Block pruning
+///
+/// The underlying [`Dag`] also supports **block pruning** via
+/// [`Dag::set_block_pruning_depth`]: blocks more than `block_pruning_depth` blue
+/// score below the selected tip are evicted entirely — payload, consensus
+/// metadata, and their reachability-oracle entries — bounding the oracle's
+/// memory to `O(block_pruning_depth × width)` instead of growing with the chain.
+/// This is the knob that bounds the oracle's interval + future-covering-set maps
+/// (the dominant memory term on a long-lived node). It is consensus-safe when
+/// `block_pruning_depth >= finality_depth`: every evicted block is already final,
+/// so [`DagError::BuildsOnPrunedHistory`] fires only for blocks the finality
+/// check would already reject. See [`kovanica_dag::Dag`] for details.
 pub struct Ledger {
     dag: Dag,
     schedule: HalvingSchedule,
@@ -2117,6 +2130,10 @@ pub struct Ledger {
     /// Payload pruning depth for the underlying DAG: blocks this far in blue
     /// score below the selected tip have their payloads evicted. `u64::MAX` = never.
     payload_pruning_depth: u64,
+    /// Block pruning depth for the underlying DAG: blocks this far in blue score
+    /// below the selected tip are evicted entirely (payload, metadata, and
+    /// reachability-oracle entries). `u64::MAX` = never.
+    block_pruning_depth: u64,
     /// The UTXO state at the selected tip — the single materialised state.
     tip_state: UtxoSet,
     /// The stake registry at the selected tip.
@@ -2196,6 +2213,7 @@ impl Ledger {
         let genesis_id = genesis.id();
         let mut dag = Dag::with_validator(k, genesis, Box::new(TxStructureValidator));
         dag.set_payload_pruning_depth(u64::MAX);
+        dag.set_block_pruning_depth(u64::MAX);
 
         // Genesis's delta is relative to the empty set: applying it to an empty
         // UTXO set reproduces the genesis state.
@@ -2217,6 +2235,7 @@ impl Ledger {
             genesis: genesis_id,
             finality_depth: u64::MAX,
             payload_pruning_depth: u64::MAX,
+            block_pruning_depth: u64::MAX,
             tip_state: state,
             tip_stake: StakeState::new(),
             asset_registry: HashMap::new(),
@@ -2347,6 +2366,60 @@ impl Ledger {
         Ok(ledger)
     }
 
+    /// Like [`Ledger::new`], but with a finite block pruning depth for the
+    /// underlying DAG: blocks more than `block_pruning_depth` blue score below
+    /// the selected tip are evicted entirely (payload, consensus metadata, and
+    /// reachability-oracle entries). This bounds the oracle's memory to
+    /// `O(block_pruning_depth × width)` instead of growing with the chain.
+    /// Consensus-safe when `block_pruning_depth >= finality_depth` — every
+    /// evicted block is already final, so `BuildsOnPrunedHistory` fires only for
+    /// blocks the finality check would already reject.
+    pub fn with_block_pruning(
+        k: KParam,
+        schedule: HalvingSchedule,
+        genesis_txs: &[Transaction],
+        block_pruning_depth: u64,
+    ) -> Result<Self, LedgerError> {
+        let mut ledger = Self::new(k, schedule, genesis_txs)?;
+        ledger.apply_block_pruning_depth(block_pruning_depth);
+        Ok(ledger)
+    }
+
+    /// Like [`Ledger::with_finality`], but with both finality depth and block
+    /// pruning depth specified.
+    pub fn with_finality_and_block_pruning(
+        k: KParam,
+        schedule: HalvingSchedule,
+        genesis_txs: &[Transaction],
+        finality_depth: u64,
+        block_pruning_depth: u64,
+    ) -> Result<Self, LedgerError> {
+        let mut ledger = Self::new(k, schedule, genesis_txs)?;
+        ledger.finality_depth = finality_depth;
+        ledger.apply_block_pruning_depth(block_pruning_depth);
+        Ok(ledger)
+    }
+
+    /// Like [`Ledger::new`], but with all three pruning depths specified
+    /// (finality, payload, and block). `u64::MAX` disables any of them. This is
+    /// the combined constructor the node profile uses — a single call replaces
+    /// the pairwise builder matrix.
+    pub fn with_pruning(
+        k: KParam,
+        schedule: HalvingSchedule,
+        genesis_txs: &[Transaction],
+        finality_depth: u64,
+        payload_pruning_depth: u64,
+        block_pruning_depth: u64,
+    ) -> Result<Self, LedgerError> {
+        let mut ledger = Self::new(k, schedule, genesis_txs)?;
+        ledger.finality_depth = finality_depth;
+        ledger.payload_pruning_depth = payload_pruning_depth;
+        ledger.dag.set_payload_pruning_depth(payload_pruning_depth);
+        ledger.apply_block_pruning_depth(block_pruning_depth);
+        Ok(ledger)
+    }
+
     /// Borrow the underlying DAG (for consensus queries: tips, ghostdag,
     /// `linearize`, `selected_chain`, …).
     pub fn dag(&self) -> &Dag {
@@ -2394,6 +2467,9 @@ impl Ledger {
     pub fn set_finality_depth(&mut self, depth: u64) {
         self.finality_depth = depth;
         self.prune();
+        // RFC-008: keep block pruning at or above the (possibly raised) finality
+        // depth, so it can never evict a block the ledger still needs.
+        self.apply_block_pruning_depth(self.block_pruning_depth);
     }
 
     /// The blue-score threshold below which blocks are final: blocks with a blue
@@ -2433,6 +2509,48 @@ impl Ledger {
     pub fn set_payload_pruning_depth(&mut self, depth: u64) {
         self.payload_pruning_depth = depth;
         self.dag.set_payload_pruning_depth(depth);
+    }
+
+    /// The block pruning depth for the underlying DAG. `u64::MAX` means pruning
+    /// is disabled.
+    pub fn block_pruning_depth(&self) -> u64 {
+        self.block_pruning_depth
+    }
+
+    /// The blue-score threshold below which blocks are evicted in the underlying
+    /// DAG. Returns `0` when pruning is disabled or the DAG is not yet deep
+    /// enough. See [`Dag::block_pruning_score`].
+    pub fn block_pruning_score(&self) -> u64 {
+        self.dag.block_pruning_score()
+    }
+
+    /// Set the block pruning depth on the underlying DAG and prune immediately.
+    ///
+    /// Unlike [`Self::with_block_pruning`] (which builds a ledger with the policy
+    /// from genesis), this applies the policy to an already-built ledger — the
+    /// intended path for a node loaded from a replay log, which otherwise runs
+    /// with block pruning disabled (`u64::MAX`) and never evicts. The eviction
+    /// runs immediately, so enabling block pruning on a loaded chain drops the
+    /// now-evictable blocks' oracle entries right away.
+    ///
+    /// **RFC-008 invariant:** the effective depth is clamped to at least the
+    /// finality depth. A block is only safe to evict once it is final — its
+    /// per-block state has been pruned and [`Self::reconstruct_state`] stops at
+    /// the finality boundary before reaching it. Evicting a non-final block
+    /// would make its descendants' state unreconstructable. With finality
+    /// disabled (`u64::MAX`) this disables block pruning too.
+    pub fn set_block_pruning_depth(&mut self, depth: u64) {
+        self.apply_block_pruning_depth(depth);
+    }
+
+    /// Clamp `depth` to the RFC-008 invariant (`>= finality_depth`) and apply it
+    /// to the DAG, evicting immediately. Shared by the setters and builders so
+    /// no path can evict a non-final block.
+    fn apply_block_pruning_depth(&mut self, depth: u64) {
+        let depth = depth.max(self.finality_depth);
+        self.block_pruning_depth = depth;
+        self.dag.set_block_pruning_depth(depth);
+        self.dag.prune_old_blocks();
     }
 
     /// The genesis block id.
@@ -2589,13 +2707,21 @@ impl Ledger {
     /// Whether `id` is final: below the finality score, so its delta has been
     /// folded into its children and dropped. `false` when finality is disabled
     /// or not yet active.
+    ///
+    /// An **evicted** block (absent from the DAG because block pruning removed
+    /// it) is treated as final: by the RFC-008 invariant block pruning only
+    /// evicts final blocks, so this is what stops [`Self::reconstruct_state`] /
+    /// [`Self::reconstruct_stake`] at the pruning boundary instead of walking
+    /// into a block the DAG no longer knows.
     fn is_final(&self, id: &BlockId) -> bool {
         let threshold = self.finality_score();
-        threshold != 0
-            && self
-                .dag
-                .ghostdag(id)
-                .is_some_and(|g| g.blue_score < threshold)
+        if threshold == 0 {
+            return false;
+        }
+        match self.dag.ghostdag(id) {
+            Some(g) => g.blue_score < threshold,
+            None => true,
+        }
     }
 
     /// Reconstruct the UTXO state in `block`'s view from the undo log.
@@ -3618,6 +3744,10 @@ impl Ledger {
             genesis: checkpoint_id,
             finality_depth,
             payload_pruning_depth,
+            // Checkpoint format does not persist the block-pruning policy
+            // (RFC-008: format unchanged); it starts disabled and the caller
+            // re-applies its profile depth via `set_block_pruning_depth`.
+            block_pruning_depth: u64::MAX,
             tip_state: checkpoint_state,
             tip_stake: checkpoint_stake,
             asset_registry: checkpoint_asset_registry.unwrap_or_default(),

@@ -334,7 +334,8 @@ impl LightNode {
             },
             config.finality_depth,
             config.payload_pruning_depth,
-            None, // operator_seed: None for general FFI constructor
+            u64::MAX, // block pruning: light nodes keep the full oracle (follow-up)
+            None,     // operator_seed: None for general FFI constructor
         )?;
         Ok(Self {
             inner: Mutex::new(node),
