@@ -164,6 +164,95 @@ fn set_finality_depth_prunes_an_unbounded_ledger() {
 }
 
 #[test]
+fn set_block_pruning_depth_prunes_an_unbounded_ledger() {
+    // A ledger built without pruning (the replay-log load path) keeps every
+    // block in the DAG and its reachability-oracle entries. Enabling block
+    // pruning afterwards must evict the now-final blocks — the policy a loaded
+    // node re-applies from its network profile (RFC-008).
+    //
+    // Block pruning is only safe once finality is on (RFC-008 invariant: the
+    // effective depth is clamped to `>= finality_depth`), so enable finality
+    // first — the order `restore_miner_and_policy` uses.
+    let coinbase = Transaction::coinbase(
+        vec![TxOutput::native(500, KeyPair::from_u64(1).address())],
+        b"genesis".to_vec(),
+    );
+    let mut ledger = Ledger::new(K, SCHEDULE, &[coinbase]).unwrap();
+    let mut ids = vec![ledger.genesis()];
+    for _ in 0..10 {
+        let parent = *ids.last().unwrap();
+        ids.push(ledger.insert(vec![parent], 1, 0, 0, &[]).unwrap());
+    }
+    // Unbounded: nothing evicted, no pruning score.
+    assert_eq!(ledger.block_pruning_depth(), u64::MAX);
+    assert_eq!(ledger.block_pruning_score(), 0);
+    let before = ledger.dag().len();
+
+    ledger.set_finality_depth(3);
+    ledger.set_block_pruning_depth(3);
+
+    assert_eq!(ledger.block_pruning_depth(), 3);
+    assert!(ledger.block_pruning_score() > 0, "pruning has kicked in");
+    assert!(
+        ledger.dag().len() < before,
+        "final blocks evicted from the DAG"
+    );
+    let tip = ledger.dag().selected_tip();
+    assert!(ledger.dag().ghostdag(&tip).is_some(), "tip still present");
+    assert!(
+        ledger.dag().ghostdag(&ledger.genesis()).is_some(),
+        "genesis is never evicted"
+    );
+    assert!(
+        ledger.dag().ghostdag(&ids[1]).is_none(),
+        "an early final block is evicted"
+    );
+
+    // Building on evicted history is rejected. The evicted parent is gone from
+    // the DAG, so the insert fails before it can be admitted (the finality
+    // check would also reject it — `BuildsOnPrunedHistory` fires only for
+    // blocks `Finality` would already reject, the RFC-008 equivalence).
+    let early = ids[1];
+    let before = ledger.dag().len();
+    let err = ledger.insert(vec![early], 1, 1, 0, &[]).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            LedgerInsertError::Finality { .. } | LedgerInsertError::Dag(_)
+        ),
+        "got {err:?}"
+    );
+    assert_eq!(ledger.dag().len(), before, "no rejected block was added");
+    assert!(ledger.insert(vec![tip], 1, 0, 0, &[]).is_ok());
+}
+
+#[test]
+fn block_pruning_is_clamped_to_finality_depth() {
+    // RFC-008 invariant: a caller cannot evict a non-final block. With finality
+    // disabled, block pruning is disabled too; with finality on, a smaller
+    // requested depth is clamped up to the finality depth.
+    let coinbase = Transaction::coinbase(
+        vec![TxOutput::native(500, KeyPair::from_u64(1).address())],
+        b"genesis".to_vec(),
+    );
+    let mut ledger = Ledger::new(K, SCHEDULE, &[coinbase]).unwrap();
+    for _ in 0..10 {
+        let parent = ledger.dag().selected_tip();
+        ledger.insert(vec![parent], 1, 0, 0, &[]).unwrap();
+    }
+
+    // Finality disabled: block pruning clamps to `u64::MAX` (disabled).
+    ledger.set_block_pruning_depth(3);
+    assert_eq!(ledger.block_pruning_depth(), u64::MAX);
+    assert_eq!(ledger.block_pruning_score(), 0);
+
+    // Finality on: a smaller requested depth clamps up to the finality depth.
+    ledger.set_finality_depth(5);
+    ledger.set_block_pruning_depth(3);
+    assert_eq!(ledger.block_pruning_depth(), 5);
+}
+
+#[test]
 fn reorg_above_finality_follows_the_heavier_branch() {
     // Two branches off genesis; the heavier one (more work) becomes the selected
     // tip and the current state follows it — an implicit re-org, no revert.

@@ -800,12 +800,13 @@ impl Node {
             treasury,
             u64::MAX,
             u64::MAX,
+            u64::MAX,
             None,
         )
     }
 
-    /// Like [`Node::genesis`], but with configurable finality depth and payload
-    /// pruning depth for the ledger.
+    /// Like [`Node::genesis`], but with configurable finality depth, payload
+    /// pruning depth, and block pruning depth for the ledger.
     ///
     /// - `finality_depth`: blocks more than this many blue score below the selected
     ///   tip become final (their UTXO state is pruned and they cannot be built on).
@@ -813,6 +814,11 @@ impl Node {
     /// - `payload_pruning_depth`: blocks more than this many blue score below the
     ///   selected tip have their payloads evicted in the underlying DAG.
     ///   `u64::MAX` (the default) disables payload pruning.
+    /// - `block_pruning_depth`: blocks more than this many blue score below the
+    ///   selected tip are evicted entirely (payload, metadata, and
+    ///   reachability-oracle entries), bounding the oracle's memory.
+    ///   `u64::MAX` (the default) disables block pruning. Safe when
+    ///   `>= finality_depth` (every evicted block is already final).
     /// - `operator_seed`: optional deterministic seed for the operator wallet.
     ///   If `None`, a random wallet is generated (production). If `Some(seed)`,
     ///   a deterministic wallet is created (testnet reproducibility).
@@ -830,6 +836,7 @@ impl Node {
         treasury: Option<TreasuryGenesis>,
         finality_depth: u64,
         payload_pruning_depth: u64,
+        block_pruning_depth: u64,
         operator_seed: Option<[u8; 32]>,
     ) -> Result<(BlockId, Address), NodeError> {
         if self.ledger.is_some() {
@@ -890,24 +897,15 @@ impl Node {
             }
         };
         let schedule = HalvingSchedule::new(subsidy, DEFAULT_HALVING_ERA);
-        let ledger = if finality_depth == u64::MAX && payload_pruning_depth == u64::MAX {
-            Ledger::new(k, schedule, &[coinbase]).map_err(NodeError::Ledger)?
-        } else if finality_depth != u64::MAX && payload_pruning_depth == u64::MAX {
-            Ledger::with_finality(k, schedule, &[coinbase], finality_depth)
-                .map_err(NodeError::Ledger)?
-        } else if finality_depth == u64::MAX && payload_pruning_depth != u64::MAX {
-            Ledger::with_payload_pruning(k, schedule, &[coinbase], payload_pruning_depth)
-                .map_err(NodeError::Ledger)?
-        } else {
-            Ledger::with_finality_and_payload_pruning(
-                k,
-                schedule,
-                &[coinbase],
-                finality_depth,
-                payload_pruning_depth,
-            )
-            .map_err(NodeError::Ledger)?
-        };
+        let ledger = Ledger::with_pruning(
+            k,
+            schedule,
+            &[coinbase],
+            finality_depth,
+            payload_pruning_depth,
+            block_pruning_depth,
+        )
+        .map_err(NodeError::Ledger)?;
         let genesis = ledger.genesis();
         self.ledger = Some(ledger);
         // Default miner is the founder (for backward compatibility with tests).
@@ -968,6 +966,35 @@ impl Node {
         self.ledger
             .as_ref()
             .map(|l| l.payload_pruning_depth())
+            .unwrap_or(u64::MAX)
+    }
+
+    /// Enable (or disable) block pruning on the underlying DAG. Blocks more than
+    /// `depth` blue score below the selected tip are evicted entirely (payload,
+    /// consensus metadata, and reachability-oracle entries), bounding the
+    /// oracle's memory to `O(depth × width)`. `u64::MAX` disables pruning.
+    /// Returns an error if the node is not initialised.
+    ///
+    /// A node loaded from a replay log starts with block pruning disabled (the
+    /// log does not persist the policy); callers that boot a loaded node under a
+    /// network profile must re-apply the profile's depth here so the loaded node
+    /// matches a fresh-genesis node's memory bounds. Safe when `depth >=
+    /// finality_depth`: every evicted block is already final, so
+    /// `BuildsOnPrunedHistory` fires only for blocks the finality check would
+    /// already reject.
+    pub fn set_block_pruning_depth(&mut self, depth: u64) -> Result<(), NodeError> {
+        self.ledger
+            .as_mut()
+            .ok_or(NodeError::NotInitialized)?
+            .set_block_pruning_depth(depth);
+        Ok(())
+    }
+
+    /// The current block pruning depth, or `u64::MAX` if disabled.
+    pub fn block_pruning_depth(&self) -> u64 {
+        self.ledger
+            .as_ref()
+            .map(|l| l.block_pruning_depth())
             .unwrap_or(u64::MAX)
     }
 

@@ -49,6 +49,12 @@ const FOUNDER_SEED: u64 = 1;
 const TESTNET_FINALITY_DEPTH: u64 = 100;
 /// Payload pruning depth used by the live testnet (blocks below this score have payloads evicted).
 const TESTNET_PAYLOAD_PRUNING_DEPTH: u64 = 1000;
+/// Block pruning depth used by the live testnet (blocks below this score are
+/// evicted entirely — payload, metadata, and reachability-oracle entries).
+/// Equal to the payload depth: a node cannot serve a block body it has pruned
+/// anyway, and `>= TESTNET_FINALITY_DEPTH` keeps eviction to already-final
+/// blocks (consensus-safe).
+const TESTNET_BLOCK_PRUNING_DEPTH: u64 = 1000;
 const ACTORS: [u64; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 /// Single P2P path: plaintext TCP. Not 80/443/3010/8080 and not libp2p :30333.
 const P2P_LISTEN_DEFAULT: &str = "0.0.0.0:9000";
@@ -82,6 +88,12 @@ struct NetworkProfile {
     /// Payload pruning depth: blocks more than this many blue score below the
     /// tip have their payloads evicted. `u64::MAX` disables payload pruning.
     payload_pruning_depth: u64,
+    /// Block pruning depth: blocks more than this many blue score below the tip
+    /// are evicted entirely (payload, metadata, and reachability-oracle
+    /// entries), bounding the oracle's memory. `u64::MAX` disables block
+    /// pruning. Invariant: `>= finality_depth` (eviction stays within
+    /// already-final blocks).
+    block_pruning_depth: u64,
     /// Dormant placeholder: genesis parameters are TBD and the profile refuses
     /// to boot unless explicitly overridden.
     dormant: bool,
@@ -103,6 +115,7 @@ impl NetworkProfile {
             ],
             finality_depth: TESTNET_FINALITY_DEPTH,
             payload_pruning_depth: TESTNET_PAYLOAD_PRUNING_DEPTH,
+            block_pruning_depth: TESTNET_BLOCK_PRUNING_DEPTH,
             dormant: false,
         }
     }
@@ -119,6 +132,7 @@ impl NetworkProfile {
             operator_seed: [0u8; 32],
             finality_depth: 1000,
             payload_pruning_depth: 10_000,
+            block_pruning_depth: 10_000,
             dormant: true,
         }
     }
@@ -130,7 +144,7 @@ impl NetworkProfile {
 /// consensus parameters. The default is always testnet — mainnet is never
 /// activated implicitly.
 fn network_profile() -> NetworkProfile {
-    match std::env::var("KOVANICA_NETWORK").as_deref() {
+    let profile = match std::env::var("KOVANICA_NETWORK").as_deref() {
         Ok("kovanica-mainnet") | Ok("mainnet") => {
             if !env_flag("KOVANICA_MAINNET_OVERRIDE", false) {
                 panic!(
@@ -140,7 +154,19 @@ fn network_profile() -> NetworkProfile {
             NetworkProfile::mainnet()
         }
         _ => NetworkProfile::testnet(),
-    }
+    };
+    // RFC-008 invariant: block pruning must never evict a block that could
+    // still be built on. With `block_pruning_depth >= finality_depth` every
+    // evicted block is already final, so `BuildsOnPrunedHistory` fires only for
+    // blocks the finality check would already reject — no new rejection
+    // surface, no fork with nodes that prune less.
+    assert!(
+        profile.block_pruning_depth >= profile.finality_depth,
+        "block_pruning_depth ({}) must be >= finality_depth ({})",
+        profile.block_pruning_depth,
+        profile.finality_depth
+    );
+    profile
 }
 
 /// WebSocket message types for real-time updates
@@ -694,15 +720,17 @@ fn restore_miner_and_policy(node: &mut Node, name: &str) {
     } else if env_flag("KOVANICA_POW", true) {
         let _ = node.set_proof_of_work(true);
     }
-    // A log-loaded node starts with finality/payload pruning disabled (the
-    // replay log does not persist the policy; a snapshot restores it, but the
-    // profile is authoritative either way). Re-apply the network profile so a
-    // loaded node matches a fresh-genesis node's acceptance rules (deep-reorg
-    // blocks rejected) and memory bounds (per-block state pruned below the
-    // finality point).
+    // A log-loaded node starts with finality/payload/block pruning disabled
+    // (the replay log does not persist the policy; a snapshot restores the
+    // first two, but the profile is authoritative either way). Re-apply the
+    // network profile so a loaded node matches a fresh-genesis node's
+    // acceptance rules (deep-reorg blocks rejected) and memory bounds
+    // (per-block state pruned below the finality point; the reachability
+    // oracle bounded by block pruning).
     let profile = network_profile();
     let _ = node.set_finality_depth(profile.finality_depth);
     let _ = node.set_payload_pruning_depth(profile.payload_pruning_depth);
+    let _ = node.set_block_pruning_depth(profile.block_pruning_depth);
 }
 
 fn line_mesh() -> Mesh {
@@ -749,6 +777,7 @@ fn genesis_node() -> Node {
         Some(treasury),
         profile.finality_depth,
         profile.payload_pruning_depth,
+        profile.block_pruning_depth,
         Some(profile.operator_seed),
     )
     .expect("genesis");
@@ -1293,7 +1322,7 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             .unwrap_or((0, 0, 0, 0, MAX_SUPPLY));
 
         let body = format!(
-            "{{\"network\":{},\"genesis\":{},\"tip\":{},\"listen\":{},\"peers\":{},\"pow\":{},\"min_fee\":{},\"atom\":{},\"token\":\"KVNC\",\"k\":{},\"subsidy\":{},\"founder_amount\":{},\"founder_seed\":{},\"finality_depth\":{},\"payload_pruning_depth\":{},\"native_minted\":{},\"total\":{},\"circulating\":{},\"burned\":{},\"max_supply\":{},\"operator_wallet_address\":{},\"light_config\":{{\"k\":{},\"subsidy\":{},\"premine\":{},\"founder_seed\":{},\"finality_depth\":{},\"payload_pruning_depth\":{}}}}}",
+            "{{\"network\":{},\"genesis\":{},\"tip\":{},\"listen\":{},\"peers\":{},\"pow\":{},\"min_fee\":{},\"atom\":{},\"token\":\"KVNC\",\"k\":{},\"subsidy\":{},\"founder_amount\":{},\"founder_seed\":{},\"finality_depth\":{},\"payload_pruning_depth\":{},\"block_pruning_depth\":{},\"native_minted\":{},\"total\":{},\"circulating\":{},\"burned\":{},\"max_supply\":{},\"operator_wallet_address\":{},\"light_config\":{{\"k\":{},\"subsidy\":{},\"premine\":{},\"founder_seed\":{},\"finality_depth\":{},\"payload_pruning_depth\":{}}}}}",
             jstr(profile.id),
             jstr(&genesis),
             jstr(&tip),
@@ -1308,6 +1337,7 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             profile.founder_seed,
             profile.finality_depth,
             profile.payload_pruning_depth,
+            profile.block_pruning_depth,
             native_minted,
             total,
             circulating,
@@ -1340,13 +1370,16 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             let tip = n.selected_tip().map(|t| t.to_string()).unwrap_or_default();
             let blocks = n.block_count().unwrap_or(0);
             let body = format!(
-                "{{\"network\":{},\"genesis\":{},\"tip\":{},\"blocks\":{},\"min_fee\":{},\"atom\":{}}}",
+                "{{\"network\":{},\"genesis\":{},\"tip\":{},\"blocks\":{},\"min_fee\":{},\"atom\":{},\"finality_depth\":{},\"payload_pruning_depth\":{},\"block_pruning_depth\":{}}}",
                 jstr(network_profile().id),
                 jstr(&genesis),
                 jstr(&tip),
                 blocks,
                 n.min_fee(),
-                ATOM
+                ATOM,
+                n.finality_depth(),
+                n.payload_pruning_depth(),
+                n.block_pruning_depth(),
             );
             return respond(&mut stream, 200, "application/json", body.as_bytes());
         }
@@ -4326,6 +4359,11 @@ mod tests {
         assert_eq!(profile.founder_seed, FOUNDER_SEED);
         assert_eq!(profile.finality_depth, TESTNET_FINALITY_DEPTH);
         assert_eq!(profile.payload_pruning_depth, TESTNET_PAYLOAD_PRUNING_DEPTH);
+        assert_eq!(profile.block_pruning_depth, TESTNET_BLOCK_PRUNING_DEPTH);
+        assert!(
+            profile.block_pruning_depth >= profile.finality_depth,
+            "RFC-008 invariant: block pruning stays within final blocks"
+        );
     }
 
     #[test]
@@ -4413,6 +4451,11 @@ mod tests {
         assert_eq!(
             json["payload_pruning_depth"].as_u64().unwrap(),
             profile.payload_pruning_depth
+        );
+        assert_eq!(
+            json["block_pruning_depth"].as_u64().unwrap(),
+            profile.block_pruning_depth,
+            "RFC-008: bootstrap must advertise the block pruning depth"
         );
 
         // Nested light_config object expected by the mobile light node FFI.
