@@ -118,7 +118,7 @@ No blocking findings. Residual risk is end-user hygiene (terminal scrollback aft
 - **S-01 Done:** `sdk/` workspace exists (keys, fee, sdk facade, wasm binding, `generate_wallet` example).
 - **S-03 Done:** SLIP-0010 frozen derivation, `kvnc…dag` P2PK codec, known-answer vectors in `slip10_vectors.rs` (verified against the official SLIP-0010 test vectors).
 - **Partial:** stubs compile but advanced builders return "not yet implemented".
-- **S-03b / S-03c Done:** address codec and sighash are **locked to the node**. `kovanica-types::Transaction::encode_into` is a byte-identical port of `kovanica-state`; the shared `sighash_vector.rs` (both `sdk/` and `node/crates/kovanica-state/tests/`) fails loudly on drift. Script helpers (HTLC/multisig/vault) have their own vectors (`script_vectors.rs`).
+- **S-03b / S-03c Done:** address codec and sighash are **locked to the node**. `kovanica-types::Transaction::encode_into` is a byte-identical port of `kovanica-state`; the shared `sighash_vector.rs` (both `sdk/` and `protocol/crates/kovanica-state/tests/`) fails loudly on drift. Script helpers (HTLC/multisig/vault) have their own vectors (`script_vectors.rs`).
 - **Verified 2026-09-23:** `cargo test --workspace` → 62 passed / 0 failed; `cargo build --examples` → OK. Statuses above are code-verified, not aspirational.
 
 ### 3.3 Acceptance Criteria

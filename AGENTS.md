@@ -16,8 +16,10 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 - `protocol/` — Core consensus + ledger (Rust workspace). `crates/kovanica-dag`
   (BlockDAG/GHOSTDAG/VRF), `crates/kovanica-state` (UTXO, stake registry),
   `docs/` (RFCs, KVP, LEGIT-BOARD). **Consensus logic is authored here.**
-- `node/` — Runnable node + explorer HTTP API (Rust workspace). Cargo.toml repo
-  key is `KovanicaDAG/kovanica-node`. **The VPS builds from here.**
+- `node/` — Thin packaging surface for the runnable node + explorer HTTP API
+  (Rust workspace). Contains a single `kovanica-node-bin` crate that depends on
+  the protocol crates via path deps and builds the `kovanica-node` binary.
+  Cargo.toml repo key is `KovanicaDAG/kovanica-node`. **The VPS builds from here.**
 - `web/site/` — Explorer + wallet frontend. TanStack Start/Router, Vite, Nitro,
   Tailwind v4, Zustand, React Query, better-auth, **pglite** DB + migrations.
   (`web/` itself is just a wrapper; all commands run in `web/site/`.)
@@ -29,14 +31,14 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
   has `Makefile`), `data/` (runtime data, NOT versioned).
 - Root docs to know: `NETWORK.md` (canonical network/domain/ports), `MASTER-ROADMAP.md`.
 
-> **Crate-tree trap (2026-09-20):** both `node/crates/` and `protocol/crates/`
-> contain the same 5-crate workspace (`kovanica-dag`, `kovanica-state`,
-> `kovanica-node`, `kovanica-cli`, `kovanica-ffi`) — a legacy duplication from
-> consolidation. `node/crates/` is newer (carries `operator_seed`, post-re-key
-> additions; what VPS deploys build). `protocol/crates/` is an older mirror where
-> consensus work is authored. Keep peer/seed defaults in sync across both
-> (`P2P_BOOTSTRAP`, `DEFAULT_PEERS`, `dns_seed.rs`). A de-dup refactor is pending —
-> ask before relying on which is canonical for a given change.
+> **Crate-tree (deduped 2026-09-24):** `protocol/crates/` is the **single source
+> of truth** for the 5-crate workspace (`kovanica-dag`, `kovanica-state`,
+> `kovanica-node`, `kovanica-cli`, `kovanica-ffi`). The legacy `node/crates/`
+> mirror was deleted; `node/` now builds a thin `kovanica-node-bin` wrapper over
+> the protocol crates (path deps). Author consensus/ledger changes in
+> `protocol/crates/` only. Peer/seed defaults live in
+> `protocol/crates/kovanica-node/src/explorer.rs` (`P2P_BOOTSTRAP`,
+> `DEFAULT_PEERS`) and `dns_seed.rs`.
 
 ---
 
@@ -209,8 +211,8 @@ bindings (§2), commit generated Kotlin/Swift — **no monorepo CI enforces this
 | Issue | Look here |
 |-------|-----------|
 | Consensus fork | `kovanica-dag/tests/consensus.rs` — `adversarial_wide_fork` |
-| Mempool eviction / fee est | `node/crates/kovanica-node/src/mempool_v2.rs` |
-| P2P not connecting | `node/crates/kovanica-node/src/p2p_hardening.rs` |
+| Mempool eviction / fee est | `protocol/crates/kovanica-node/src/mempool_v2.rs` |
+| P2P not connecting | `protocol/crates/kovanica-node/src/p2p_hardening.rs` |
 | Wallet balance wrong | `web/site/src/components/wallet/wallet-view.tsx` |
 | Map black on mobile | `web/site/src/components/map/dashboard.tsx` (`h-[46vh] min-h-[300px]`) |
 

@@ -91,6 +91,7 @@ export KOVANICA_FAUCET=0
 export KOVANICA_TAP=0
 export KOVANICA_POW=1
 export KOVANICA_ALLOW_RESET=0
+export KOVANICA_OPERATOR=0
 export KOVANICA_DATA="$HOME_DIR/data"
 exec "$BIN" explorer 127.0.0.1:8080
 EOF
@@ -112,6 +113,8 @@ Environment=KOVANICA_MINE=0
 Environment=KOVANICA_MINE_SECS=120
 Environment=KOVANICA_FAUCET=0
 Environment=KOVANICA_POW=1
+Environment=KOVANICA_ALLOW_RESET=0
+Environment=KOVANICA_OPERATOR=0
 Environment=KOVANICA_DATA=${HOME_DIR}/data
 ExecStart=${BIN} explorer 127.0.0.1:8080
 Restart=on-failure

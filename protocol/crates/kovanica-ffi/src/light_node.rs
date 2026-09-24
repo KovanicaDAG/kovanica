@@ -240,6 +240,21 @@ pub struct HtlcInfo {
     pub outpoint_index: u32,
 }
 
+/// A created Vault output (RFC-005), as seen from the mobile FFI.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct VaultInfo {
+    /// The validated 40-byte Vault template, lowercase hex.
+    pub script_hex: String,
+    /// The Version 0x05 address the output is locked to (`kvnc…dag`).
+    pub address: String,
+    /// Id of the funding transaction, lowercase hex.
+    pub tx_id: String,
+    /// Funding transaction id of the outpoint, lowercase hex.
+    pub outpoint_tx: String,
+    /// Output index of the Vault output within the funding transaction.
+    pub outpoint_index: u32,
+}
+
 /// A Kovanica light node: ledger + mempool + hybrid validator identity.
 ///
 /// Sync model for mobile: call [`Self::export_blocks`] to hand peers your
@@ -308,7 +323,7 @@ impl LightNode {
             config.founder_amount,
             config.founder_seed,
             // RFC-006 genesis gate: the live light-node config uses
-            // founder_amount = RFC006_PREMINE (200_000 KVNC = 0.2M KVNC), so the genesis
+            // founder_amount = RFC006_PREMINE (200 KVNC), so the genesis
             // coinbase must include the 10x1M treasury vaults with the
             // placeholder keys to reproduce the live network genesis
             // (9565fc20…). Non-standard premines stay treasury-less.
@@ -319,6 +334,7 @@ impl LightNode {
             },
             config.finality_depth,
             config.payload_pruning_depth,
+            None, // operator_seed: None for general FFI constructor
         )?;
         Ok(Self {
             inner: Mutex::new(node),
@@ -1410,6 +1426,80 @@ impl LightNode {
         })
     }
 
+    // ---------------------------------------------------------------------------
+    // Vault / CSV time-lock (RFC-005)
+    // ---------------------------------------------------------------------------
+
+    /// Create a Vault (time-lock) output locking `amount` (native KVNC) to a
+    /// Version 0x05 address with the given `unlock_height` (absolute CLTV lock)
+    /// and `csv` (relative CSV lock in blocks since output creation).
+    /// `owner_pk_hex` is the Ed25519 public key authorized to spend when both
+    /// locks have elapsed. The funding transaction is mined immediately.
+    /// Returns the template, address, and funding outpoint.
+    pub fn create_vault(
+        &self,
+        signing_secret_hex: String,
+        amount: u64,
+        unlock_height: u32,
+        csv: u32,
+        owner_pk_hex: String,
+    ) -> Result<VaultInfo, LightNodeError> {
+        let kp = keypair_from_secret(&signing_secret_hex)?;
+        let owner_pk = decode_32(&owner_pk_hex, "owner public key")?;
+        let mut node = self.lock();
+        let info = node.create_vault(&kp, amount, unlock_height, csv, owner_pk)?;
+        Ok(VaultInfo {
+            script_hex: hex::encode(info.script.bytes()),
+            address: info.address.to_kvnc(),
+            tx_id: info.tx_id.to_hex(),
+            outpoint_tx: info.outpoint.tx.to_hex(),
+            outpoint_index: info.outpoint.index,
+        })
+    }
+
+    /// Release a Vault output when both locks (absolute and/or relative) have
+    /// elapsed. `signing_secret_hex` is the **owner**'s 32-byte Ed25519 secret
+    /// (hex); the witness is `[template, owner_sig]`. Fee is paid from the
+    /// vault value. Returns the release transaction id (lowercase hex).
+    pub fn release_vault(
+        &self,
+        signing_secret_hex: String,
+        outpoint_tx_hex: String,
+        outpoint_index: u32,
+        script_hex: String,
+        to_address: String,
+    ) -> Result<String, LightNodeError> {
+        let kp = keypair_from_secret(&signing_secret_hex)?;
+        let outpoint = parse_outpoint(&outpoint_tx_hex, outpoint_index)?;
+        let script = parse_vault_script(&script_hex)?;
+        let to = kovanica_state::Address::parse(&to_address)
+            .map_err(|e| invalid(format!("bad address: {e}")))?;
+        let mut node = self.lock();
+        let tx_id = node.release_vault(&kp, outpoint, &script, to)?;
+        Ok(tx_id.to_hex())
+    }
+
+    /// The spendable balance locked to a Vault template's address, in atoms.
+    pub fn balance_of_vault(&self, script_hex: String) -> Result<u64, LightNodeError> {
+        let script = parse_vault_script(&script_hex)?;
+        Ok(self.lock().balance_of_vault(&script))
+    }
+
+    /// Build a Vault template from its four parameters and return the
+    /// canonical 40-byte template as lowercase hex. Useful for constructing
+    /// a script to pass to [`Self::balance_of_vault`] or to share out of band.
+    pub fn vault_script_hex(
+        &self,
+        unlock_height: u32,
+        csv: u32,
+        owner_pk_hex: String,
+    ) -> Result<String, LightNodeError> {
+        let owner_pk = decode_32(&owner_pk_hex, "owner public key")?;
+        let script = kovanica_state::vault::VaultScript::new(unlock_height, csv, owner_pk)
+            .map_err(|e| invalid(format!("invalid Vault template: {e}")))?;
+        Ok(hex::encode(script.bytes()))
+    }
+
     /// Submit a fully signed CoinJoin transaction.
     /// `prepared` is the result from `coinjoin_prepare`.
     /// `signatures_hex` is a list of 64-byte Ed25519 signatures (lowercase hex),
@@ -1735,6 +1825,15 @@ fn parse_htlc_script(script_hex: &str) -> Result<kovanica_state::htlc::HtlcScrip
     let raw = decode_hex(script_hex, "HTLC script")?;
     kovanica_state::htlc::HtlcScript::parse(&raw)
         .map_err(|e| invalid(format!("invalid HTLC script: {e}")))
+}
+
+/// Parse a Vault template from its 40-byte hex form.
+fn parse_vault_script(
+    script_hex: &str,
+) -> Result<kovanica_state::vault::VaultScript, LightNodeError> {
+    let raw = decode_hex(script_hex, "Vault script")?;
+    kovanica_state::vault::VaultScript::parse(&raw)
+        .map_err(|e| invalid(format!("invalid Vault script: {e}")))
 }
 
 /// Parse an outpoint from a tx-id hex string and index.

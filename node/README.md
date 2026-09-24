@@ -74,7 +74,7 @@ Requirements: Rust 1.75+ ([rustup](https://rustup.rs)), Linux / macOS / Windows.
 ```sh
 git clone https://github.com/KovanicaDAG/kovanica-node.git
 cd kovanica-node
-cargo build --release -p kovanica-node
+cargo build --release
 ```
 
 Binary: `./target/release/kovanica-node` (or `.exe` on Windows).
@@ -141,16 +141,15 @@ Addresses on screen look like `kvnc…dag` (base58). The ledger stores 64-hex; b
 
 ## About this repository
 
-This repo ships the **runnable node** and the supporting crates so anyone can build or install a clone without the full monorepo.
+This repo is the **thin packaging surface** for the runnable node. The five
+protocol crates (`kovanica-dag`, `kovanica-state`, `kovanica-node`,
+`kovanica-cli`, `kovanica-ffi`) live in the monorepo's `protocol/crates/`
+(single source of truth); this workspace builds a single `kovanica-node`
+binary over them via path dependencies.
 
 ```
 kovanica-node/                  ← this repository
-├── crates/
-│   ├── kovanica-dag/           # DAG + GHOSTDAG consensus
-│   ├── kovanica-state/         # UTXO ledger
-│   ├── kovanica-node/          # Node binary + explorer
-│   ├── kovanica-cli/           # CLI wallet helpers
-│   └── kovanica-ffi/           # Mobile / FFI bindings
+├── kovanica-node-bin/          # Thin binary wrapper → builds `kovanica-node`
 ├── scripts/                    # One-click installers + USB
 └── deploy/                     # Optional nginx / Caddy / systemd examples
 ```

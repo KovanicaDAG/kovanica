@@ -800,6 +800,7 @@ impl Node {
             treasury,
             u64::MAX,
             u64::MAX,
+            None,
         )
     }
 
@@ -812,6 +813,9 @@ impl Node {
     /// - `payload_pruning_depth`: blocks more than this many blue score below the
     ///   selected tip have their payloads evicted in the underlying DAG.
     ///   `u64::MAX` (the default) disables payload pruning.
+    /// - `operator_seed`: optional deterministic seed for the operator wallet.
+    ///   If `None`, a random wallet is generated (production). If `Some(seed)`,
+    ///   a deterministic wallet is created (testnet reproducibility).
     ///
     /// Typically `payload_pruning_depth >= finality_depth` so that a node can
     /// serve block bodies for blocks that are final but no longer needed for
@@ -826,6 +830,7 @@ impl Node {
         treasury: Option<TreasuryGenesis>,
         finality_depth: u64,
         payload_pruning_depth: u64,
+        operator_seed: Option<[u8; 32]>,
     ) -> Result<(BlockId, Address), NodeError> {
         if self.ledger.is_some() {
             return Err(NodeError::AlreadyInitialized);
@@ -851,8 +856,11 @@ impl Node {
 
         // Generate or load operator wallet (receives mining rewards)
         let operator_wallet = self.operator_wallet.get_or_insert_with(|| {
-            let wallet =
-                Wallet::generate_with_mnemonic().expect("failed to generate operator wallet");
+            let wallet = if let Some(seed) = operator_seed {
+                Wallet::from_seed(seed)
+            } else {
+                Wallet::generate_with_mnemonic().expect("failed to generate operator wallet")
+            };
             let wallet_path = data_dir.join("operator-wallet.key");
             wallet
                 .save(&wallet_path, true)
@@ -1390,10 +1398,9 @@ impl Node {
             if !aid.is_native() {
                 if let Ok(ledger) = self.ledger() {
                     if let Some(entry) = ledger.asset_registry().get(&aid) {
-                        if entry.is_nft()
-                            && amount != 1 {
-                                return Err(NodeError::ZeroAmount); // Reuse for "invalid amount for NFT"
-                            }
+                        if entry.is_nft() && amount != 1 {
+                            return Err(NodeError::ZeroAmount); // Reuse for "invalid amount for NFT"
+                        }
                     }
                 }
             }
@@ -1667,10 +1674,7 @@ impl Node {
     }
 
     /// Unspent outputs owned by `owner`, including `asset_id` and KVP-106 NFT metadata.
-    pub fn utxos_detailed_of(
-        &self,
-        owner: &Address,
-    ) -> Result<Vec<DetailedUtxo>, NodeError> {
+    pub fn utxos_detailed_of(&self, owner: &Address) -> Result<Vec<DetailedUtxo>, NodeError> {
         let ledger = self.ledger()?;
         let state = ledger.ledger_state();
         let asset_registry = ledger.asset_registry();
@@ -1838,19 +1842,42 @@ impl Node {
         amount: u64,
         to: &StealthAddress,
     ) -> Result<TxId, NodeError> {
+        self.send_to_stealth_with_r(kp, amount, to, None)
+    }
+
+    /// Send `amount` from an explicit keypair to a **stealth address**
+    /// (`StealthAddress`) **immediately**, as a new block built on the current
+    /// tips, with an optional explicit ephemeral secret `r_secret`.
+    ///
+    /// If `r_secret` is `None`, a deterministic secret is derived from the
+    /// sender's seed, amount, and a per-send counter (same as `send_to_stealth`).
+    /// If `r_secret` is `Some(secret)`, that secret is used directly — this is
+    /// the **production path** for unlinkable stealth payments. The caller
+    /// must ensure `r_secret` is a fresh random 32-byte value for each send.
+    pub fn send_to_stealth_with_r(
+        &mut self,
+        kp: &KeyPair,
+        amount: u64,
+        to: &StealthAddress,
+        r_secret: Option<[u8; 32]>,
+    ) -> Result<TxId, NodeError> {
         if amount == 0 {
             return Err(NodeError::ZeroAmount);
         }
-        // Deterministic ephemeral secret: seed || amount_le || counter. See the
-        // doc comment above — production callers should supply a random r.
-        let counter = self
-            .stealth_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut r_input = Vec::with_capacity(32 + 8 + 8);
-        r_input.extend_from_slice(&kp.seed());
-        r_input.extend_from_slice(&amount.to_le_bytes());
-        r_input.extend_from_slice(&counter.to_le_bytes());
-        let r_secret: [u8; 32] = *blake3::hash(&r_input).as_bytes();
+        let r_secret = match r_secret {
+            Some(secret) => secret,
+            None => {
+                // Deterministic ephemeral secret: seed || amount_le || counter.
+                let counter = self
+                    .stealth_counter
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let mut r_input = Vec::with_capacity(32 + 8 + 8);
+                r_input.extend_from_slice(&kp.seed());
+                r_input.extend_from_slice(&amount.to_le_bytes());
+                r_input.extend_from_slice(&counter.to_le_bytes());
+                *blake3::hash(&r_input).as_bytes()
+            }
+        };
 
         let ext = to.derive_output(&r_secret).map_err(NodeError::Multisig)?;
         let output = TxOutput::stealth(amount, to.address(), ext);

@@ -1,10 +1,8 @@
-# Keep JNA and UniFFI classes
+# JNA loads libjnidispatch reflectively and uniffi's generated code reaches
+# the native library through it — both must survive R8 minification in the
+# consuming app.
 -keep class com.sun.jna.** { *; }
+-keepclassmembers class * extends com.sun.jna.** { *; }
 -keep class uniffi.kovanica.** { *; }
-
-# Keep Kotlin metadata
--keep class kotlin.Metadata { *; }
-
-# Don't warn about JNA
--dontwarn com.sun.jna.**
--dontwarn uniffi.kovanica.**
+-dontwarn java.awt.*
+-dontwarn javax.swing.*
