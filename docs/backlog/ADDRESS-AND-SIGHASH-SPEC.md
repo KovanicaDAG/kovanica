@@ -73,7 +73,7 @@ pub fn sighash(&self) -> [u8; 32] {
 | `Transaction::sighash()` | `encode_into(..., witness=false)` → BLAKE3 |
 | `Transaction::id()` (TxId) | full encoding **with** witness → BLAKE3 |
 
-Same logic exists in both workspaces (`node/crates/` and `protocol/crates/` mirror).
+Same logic lives in `protocol/crates/` (single source of truth; the legacy `node/crates/` mirror was deleted 2026-09-24).
 
 ---
 

@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn address_codec_matches_node_vectors() {
-        // Constants from `node/crates/kovanica-state/tests/sighash_vector.rs`.
+        // Constants from `protocol/crates/kovanica-state/tests/sighash_vector.rs`.
         const ALICE_KVNC: &str = "kvnc1CVDFLCAjXhVWiPXH9nTCTpCgVzmDVoiPzNJYuccr1dqBdag";
         const BOB_KVNC: &str = "kvnc1DdqGmK5uamYN5vmuZrzpQhKeehLdwtPLVJdhu5P2iJKCdag";
         const LEGACY32_KVNC: &str = "kvncCZ8YUVdk7znjrUmnb5n7kgySk9yRAsQDYmyCxzfSky9tdag";

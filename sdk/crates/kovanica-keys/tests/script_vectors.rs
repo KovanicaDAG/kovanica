@@ -1,6 +1,6 @@
 //! Script template vectors (multisig / HTLC / vault) — shared with the node.
 //!
-//! Same constants as `node/crates/kovanica-state/tests/script_vectors.rs`.
+//! Same constants as `protocol/crates/kovanica-state/tests/script_vectors.rs`.
 //! Derivation: ed25519-dalek `SigningKey::from_bytes([k LE, 0…0])` which is
 //! exactly what the node's `KeyPair::from_u64(k)` produces — so the template
 //! bytes and addresses must match byte-for-byte.

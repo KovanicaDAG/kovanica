@@ -13,7 +13,7 @@ Parallel implementations MUST match byte-for-byte. The **authoritative**
 known-answer vectors live in code, not here:
 
 - Rust (SDK): `sdk/crates/kovanica-keys/tests/slip10_vectors.rs`
-- Node-side command vectors: `node/crates/kovanica-state/tests/sighash_vector.rs`
+- Node-side command vectors: `protocol/crates/kovanica-state/tests/sighash_vector.rs`
 - TypeScript: `web/site/tests/` (mirrors the Rust suite)
 
 Any side that drifts fails its suite loudly. This document is the algorithm

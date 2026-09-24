@@ -52,8 +52,7 @@ const TESTNET_PAYLOAD_PRUNING_DEPTH: u64 = 1000;
 const ACTORS: [u64; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 /// Single P2P path: plaintext TCP. Not 80/443/3010/8080 and not libp2p :30333.
 const P2P_LISTEN_DEFAULT: &str = "0.0.0.0:9000";
-const P2P_BOOTSTRAP: &str =
-    "seed.kovanica.online:9000,seed2.kovanica.online:9000";
+const P2P_BOOTSTRAP: &str = "seed.kovanica.online:9000,seed2.kovanica.online:9000";
 
 /// A network profile: identity, genesis parameters, and data-dir isolation.
 ///
@@ -75,6 +74,8 @@ struct NetworkProfile {
     genesis_premine: u64,
     /// Founder actor seed (deterministic keys).
     founder_seed: u64,
+    /// Operator wallet seed (deterministic keys for testnet reproducibility).
+    operator_seed: [u8; 32],
     /// Finality depth: blocks more than this many blue score below the tip
     /// become final. `u64::MAX` disables finality pruning.
     finality_depth: u64,
@@ -95,6 +96,11 @@ impl NetworkProfile {
             genesis_subsidy: GENESIS_SUBSIDY,
             genesis_premine: GENESIS_PREMINE,
             founder_seed: FOUNDER_SEED,
+            operator_seed: [
+                0x4f, 0x50, 0x45, 0x52, 0x41, 0x54, 0x4f, 0x52, 0x5f, 0x54, 0x45, 0x53, 0x54, 0x4e,
+                0x45, 0x54, 0x5f, 0x53, 0x45, 0x45, 0x44, 0x5f, 0x32, 0x30, 0x32, 0x36, 0x5f, 0x30,
+                0x39, 0x5f, 0x31, 0x37,
+            ],
             finality_depth: TESTNET_FINALITY_DEPTH,
             payload_pruning_depth: TESTNET_PAYLOAD_PRUNING_DEPTH,
             dormant: false,
@@ -110,6 +116,7 @@ impl NetworkProfile {
             genesis_subsidy: GENESIS_SUBSIDY,
             genesis_premine: GENESIS_PREMINE,
             founder_seed: FOUNDER_SEED,
+            operator_seed: [0u8; 32],
             finality_depth: 1000,
             payload_pruning_depth: 10_000,
             dormant: true,
@@ -733,6 +740,7 @@ fn genesis_node() -> Node {
         Some(treasury),
         profile.finality_depth,
         profile.payload_pruning_depth,
+        Some(profile.operator_seed),
     )
     .expect("genesis");
     // Hybrid PoW + staked-VRF admission (A2 uplink): opt-in via
@@ -950,10 +958,7 @@ fn bind_v6_only(addr: &str) -> std::io::Result<TcpListener> {
     Ok(listener)
 }
 
-pub const DEFAULT_PEERS: &[&str] = &[
-    "seed.kovanica.online:9000",
-    "seed2.kovanica.online:9000",
-];
+pub const DEFAULT_PEERS: &[&str] = &["seed.kovanica.online:9000", "seed2.kovanica.online:9000"];
 
 fn peer_list() -> Vec<String> {
     match std::env::var("KOVANICA_PEERS") {
@@ -2323,18 +2328,15 @@ fn parse_coinjoin_participants(body_str: &str) -> Result<Vec<CoinJoinParticipant
             .get("recipient")
             .and_then(|v| v.as_str())
             .ok_or_else(|| format!("participants[{i}].recipient is required"))?;
-        let asset_id = p
-            .get("asset_id")
-            .and_then(|v| v.as_str())
-            .and_then(|s| {
-                let raw = hex::decode(s.trim()).ok()?;
-                if raw.len() != 32 {
-                    return None;
-                }
-                Some(AssetId::from_bytes(
-                    <[u8; 32]>::try_from(raw.as_slice()).ok()?,
-                ))
-            });
+        let asset_id = p.get("asset_id").and_then(|v| v.as_str()).and_then(|s| {
+            let raw = hex::decode(s.trim()).ok()?;
+            if raw.len() != 32 {
+                return None;
+            }
+            Some(AssetId::from_bytes(
+                <[u8; 32]>::try_from(raw.as_slice()).ok()?,
+            ))
+        });
         out.push(CoinJoinParticipant {
             from: parse_addr(address)?,
             outputs: vec![TxOutput::new(amount, asset_id, parse_addr(recipient)?)],
@@ -2849,9 +2851,7 @@ fn history_json(
             let collection_id =
                 row_asset.and_then(|id| asset_registry.get(&id).and_then(|e| e.collection_id));
             let coll_id = collection_id.map(hex::encode);
-            let asset_kind_json = kind_str
-                .map(jstr)
-                .unwrap_or_else(|| "null".to_string());
+            let asset_kind_json = kind_str.map(jstr).unwrap_or_else(|| "null".to_string());
             let metadata_hash_json = meta_hash
                 .as_deref()
                 .map(jstr)
@@ -4382,7 +4382,10 @@ mod tests {
                 !peer.contains("0.0.0.0") && !peer.contains("[::]"),
                 "peers must not contain the listen spec: {peer}"
             );
-            assert_ne!(peer, listen, "peers must not include the node's own listen address");
+            assert_ne!(
+                peer, listen,
+                "peers must not include the node's own listen address"
+            );
         }
 
         // Existing top-level fields remain for backward compatibility.

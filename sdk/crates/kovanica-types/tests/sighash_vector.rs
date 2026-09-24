@@ -1,6 +1,6 @@
 //! Parity vectors shared with the node — the *lock* between SDK and consensus.
 //!
-//! Same constants as `node/crates/kovanica-state/tests/sighash_vector.rs`.
+//! Same constants as `protocol/crates/kovanica-state/tests/sighash_vector.rs`.
 //! If either side drifts from `kovanica-state::tx::encode_into`, one of the two
 //! suites fails loudly.
 

@@ -4,13 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'node/crates/kovanica-ffi/**'
       - 'protocol/crates/kovanica-ffi/**'
       - '.github/workflows/build-android.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'node/crates/kovanica-ffi/**'
       - 'protocol/crates/kovanica-ffi/**'
       - '.github/workflows/build-android.yml'
   workflow_dispatch:
@@ -22,7 +20,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: node/crates/kovanica-ffi
+        working-directory: protocol/crates/kovanica-ffi
 
     steps:
       - name: Checkout
@@ -52,8 +50,8 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            node/crates/kovanica-ffi/target
-            node/crates/kovanica-ffi/android/src/main/jniLibs
+            protocol/crates/kovanica-ffi/target
+            protocol/crates/kovanica-ffi/android/src/main/jniLibs
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
@@ -69,6 +67,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kovanica-ffi-aar
-          path: node/crates/kovanica-ffi/android/
+          path: protocol/crates/kovanica-ffi/android/
           if-no-files-found: error
           retention-days: 7

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/kovanica-dag", "crates/kovanica-state", "crates/kovanica-node", "crates/kovanica-cli", "crates/kovanica-ffi"]
+members = [
+    "kovanica-node-bin",
+]
 
 [workspace.package]
 version = "0.2.0"
@@ -54,3 +56,10 @@ libfuzzer-sys = "0.4"
 
 # BIP39 mnemonic support (A13 operator/founder wallet)
 bip39 = { version = "2", features = ["rand", "std"] }
+
+# Protocol crates (single source of truth in protocol/)
+kovanica-dag = { path = "../protocol/crates/kovanica-dag" }
+kovanica-state = { path = "../protocol/crates/kovanica-state" }
+kovanica-node = { path = "../protocol/crates/kovanica-node" }
+kovanica-cli = { path = "../protocol/crates/kovanica-cli" }
+kovanica-ffi = { path = "../protocol/crates/kovanica-ffi" }

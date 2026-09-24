@@ -41,6 +41,7 @@ set KOVANICA_MINE_SECS=120
 set KOVANICA_FAUCET=0
 set KOVANICA_POW=1
 set KOVANICA_ALLOW_RESET=0
+set KOVANICA_OPERATOR=0
 set KOVANICA_DATA=$HomeDir\data
 "$HomeDir\bin\kovanica-node.exe" explorer 127.0.0.1:8080
 "@ | Set-Content -Encoding ASCII $run

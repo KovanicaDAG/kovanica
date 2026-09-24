@@ -5,7 +5,7 @@
 //! `kovanica-state` module (`multisig.rs`, `htlc.rs`, `vault.rs`) with the
 //! same validation rules. Script bytes → BLAKE3 → versioned address matches
 //! the node exactly; the parity vectors in
-//! `node/crates/kovanica-state/tests/script_vectors.rs` pin both sides.
+//! `protocol/crates/kovanica-state/tests/script_vectors.rs` pin both sides.
 
 mod htlc;
 mod multisig;

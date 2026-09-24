@@ -9,13 +9,13 @@ accepted on parse (node parity), legacy 64-hex + 32-byte `kvnc…dag` → P2PK.
 **Sighash / wire format:** BLAKE3 over witness-free encoding → 32 bytes; Ed25519
 signs that hash (`verify_strict`). `encode_into` is a **byte-identical port** of
 `kovanica-state::tx`, pinned by shared test vectors
-(`node/crates/kovanica-state/tests/sighash_vector.rs` ↔ `crates/kovanica-types/tests/sighash_vector.rs`).
+(`protocol/crates/kovanica-state/tests/sighash_vector.rs` ↔ `crates/kovanica-types/tests/sighash_vector.rs`).
 `Transaction::decode` is the matching inverse (witness included, trailing-bytes /
 truncation safe).  
 **Scripts (RFC-001/004/005):** multisig (M-of-N P2SH), HTLC, vault templates are
 byte-format ports of `kovanica-state` (`multisig.rs`/`htlc.rs`/`vault.rs`) with
 matching validation rules; addresses pinned by
-`node/crates/kovanica-state/tests/script_vectors.rs` ↔
+`protocol/crates/kovanica-state/tests/script_vectors.rs` ↔
 `crates/kovanica-keys/tests/script_vectors.rs`.  
 **Builders:** `TransferBuilder`, `HtlcBuilder`, `VaultBuilder` (funding txs),
 `MultisigSigner` (offline M-of-N signature shares → spend witness), `SignedTx`.  
