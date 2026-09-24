@@ -938,6 +938,31 @@ impl Node {
         Ok(())
     }
 
+    /// Enable (or disable) finality pruning on the ledger. Blocks more than
+    /// `depth` blue score below the selected tip become final: their per-block
+    /// state is pruned and they may not be built on. `u64::MAX` disables
+    /// finality/pruning. Returns an error if the node is not initialised.
+    ///
+    /// A node loaded from a replay log starts with finality disabled (the log
+    /// does not persist the policy); callers that boot a loaded node under a
+    /// network profile must re-apply the profile's depth here so the loaded
+    /// node matches a fresh-genesis node's acceptance rules and memory bounds.
+    pub fn set_finality_depth(&mut self, depth: u64) -> Result<(), NodeError> {
+        self.ledger
+            .as_mut()
+            .ok_or(NodeError::NotInitialized)?
+            .set_finality_depth(depth);
+        Ok(())
+    }
+
+    /// The current finality depth, or `u64::MAX` if disabled.
+    pub fn finality_depth(&self) -> u64 {
+        self.ledger
+            .as_ref()
+            .map(|l| l.finality_depth())
+            .unwrap_or(u64::MAX)
+    }
+
     /// The current payload pruning depth, or `u64::MAX` if disabled.
     pub fn payload_pruning_depth(&self) -> u64 {
         self.ledger

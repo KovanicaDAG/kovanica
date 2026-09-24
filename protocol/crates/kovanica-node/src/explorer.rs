@@ -694,6 +694,15 @@ fn restore_miner_and_policy(node: &mut Node, name: &str) {
     } else if env_flag("KOVANICA_POW", true) {
         let _ = node.set_proof_of_work(true);
     }
+    // A log-loaded node starts with finality/payload pruning disabled (the
+    // replay log does not persist the policy; a snapshot restores it, but the
+    // profile is authoritative either way). Re-apply the network profile so a
+    // loaded node matches a fresh-genesis node's acceptance rules (deep-reorg
+    // blocks rejected) and memory bounds (per-block state pruned below the
+    // finality point).
+    let profile = network_profile();
+    let _ = node.set_finality_depth(profile.finality_depth);
+    let _ = node.set_payload_pruning_depth(profile.payload_pruning_depth);
 }
 
 fn line_mesh() -> Mesh {

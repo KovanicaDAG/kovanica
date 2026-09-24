@@ -67,6 +67,51 @@ fn log_roundtrip_recovers_blocks_and_continues() {
 }
 
 #[test]
+fn loaded_node_reapplies_finality_policy() {
+    // A node loaded from a replay log starts with finality disabled (the log
+    // does not persist the policy). Re-applying the depth — what
+    // `load_or_genesis` does from the network profile — must prune the
+    // now-final blocks without corrupting the current state, and the chain
+    // must keep building on the (non-final) tip.
+    let log_path = temp_log("finality");
+    let founder = KeyPair::from_u64(1);
+
+    let mut node = Node::new();
+    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
+    node.set_miner(founder.address());
+    for _ in 0..10 {
+        node.produce_empty().unwrap();
+    }
+    node.persist_incremental(&log_path).unwrap();
+
+    let mut recovered = Node::load_log(&log_path).unwrap();
+    assert_eq!(
+        recovered.finality_depth(),
+        u64::MAX,
+        "log load starts with finality disabled"
+    );
+
+    let balance_before = recovered.balance(&founder.address()).unwrap();
+    recovered.set_finality_depth(3).unwrap();
+    assert_eq!(recovered.finality_depth(), 3);
+    assert_eq!(
+        recovered.balance(&founder.address()).unwrap(),
+        balance_before,
+        "enabling finality must not corrupt the current state"
+    );
+
+    // The recovered chain must still accept new blocks on the (non-final) tip.
+    recovered.set_miner(founder.address());
+    recovered.produce_empty().unwrap();
+    assert!(
+        recovered.block_count().unwrap() > node.block_count().unwrap(),
+        "recovered chain must continue after enabling finality"
+    );
+
+    remove_log(&log_path);
+}
+
+#[test]
 fn hybrid_log_preserves_staked_block_id() {
     let log_path = temp_log("hybrid");
     let cfg = HybridConfig {

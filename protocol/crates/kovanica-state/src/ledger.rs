@@ -2381,6 +2381,21 @@ impl Ledger {
         self.finality_depth
     }
 
+    /// Set the finality depth (blue score below the selected tip). Blocks below
+    /// the resulting threshold become final: their per-block state is pruned and
+    /// they may not be built on. `u64::MAX` disables finality/pruning.
+    ///
+    /// Unlike [`Self::with_finality`] (which builds a ledger with the policy from
+    /// genesis), this applies the policy to an already-built ledger — the
+    /// intended path for a node loaded from a replay log, which otherwise runs
+    /// with finality disabled (`u64::MAX`) and never prunes. The prune runs
+    /// immediately, so enabling finality on a loaded chain drops the now-final
+    /// blocks' state right away.
+    pub fn set_finality_depth(&mut self, depth: u64) {
+        self.finality_depth = depth;
+        self.prune();
+    }
+
     /// The blue-score threshold below which blocks are final: blocks with a blue
     /// score `< finality_score()` are pruned and may not be built on. `0` when
     /// finality is disabled or the DAG is not yet `finality_depth` deep.
