@@ -76,6 +76,17 @@ fn poa_block_signed_by(parents: Vec<BlockId>, slot: u64, sk: &SigningKey, payloa
     Block::new_with_authority(parents, 1, timestamp_ms, 0, sig, payload.to_vec())
 }
 
+/// A signing key that is **not** the authority scheduled for `slot` — the
+/// adversarial "wrong producer" case. Resolved by public key so the choice
+/// does not depend on the set's canonical ordering.
+fn sk_not_for_slot(set: &AuthoritySet, sks: &[SigningKey], slot: u64) -> SigningKey {
+    let scheduled = set.active_authority(slot);
+    sks.iter()
+        .find(|sk| sk.verifying_key() != *scheduled)
+        .expect("set has at least one non-scheduled authority")
+        .clone()
+}
+
 // ---------------------------------------------------------------------------
 // M2 exit criteria: 3-validator round-robin
 // ---------------------------------------------------------------------------
@@ -154,11 +165,13 @@ fn parallel_blocks_from_different_authorities_merge_under_ghostdag() {
 
 #[test]
 fn wrong_authority_is_rejected() {
-    let (mut dag, _set, sks) = poa_dag(3, 2);
+    let (mut dag, set, sks) = poa_dag(3, 2);
     let g = dag.genesis();
 
-    // Slot 0 belongs to authority 0; authority 1's signature must be rejected.
-    let bad = poa_block_signed_by(vec![g], 0, &sks[1], b"bad".as_slice());
+    // Slot 0 belongs to exactly one authority; any other authority's
+    // signature for that slot must be rejected.
+    let wrong = sk_not_for_slot(&set, &sks, 0);
+    let bad = poa_block_signed_by(vec![g], 0, &wrong, b"bad".as_slice());
     let bad_id = bad.id();
     let err = dag.insert(bad).unwrap_err();
     assert!(
@@ -207,13 +220,15 @@ fn slot_regression_below_parent_is_rejected() {
 
 #[test]
 fn timestamp_in_wrong_slot_is_rejected() {
-    let (mut dag, _set, sks) = poa_dag(3, 2);
+    let (mut dag, set, sks) = poa_dag(3, 2);
     let g = dag.genesis();
 
-    // A block whose timestamp maps to slot 1 but is signed by authority 0
-    // (slot 0's producer) is rejected — the slot is derived from the
-    // timestamp, so the signature must match the *derived* slot.
-    let bad = poa_block_signed_by(vec![g], 1, &sks[0], b"wrong-slot".as_slice());
+    // A block whose timestamp maps to slot 1 but is signed by an authority
+    // other than slot 1's scheduled producer is rejected — the slot is
+    // derived from the timestamp, so the signature must match the
+    // *derived* slot.
+    let wrong = sk_not_for_slot(&set, &sks, 1);
+    let bad = poa_block_signed_by(vec![g], 1, &wrong, b"wrong-slot".as_slice());
     let err = dag.insert(bad).unwrap_err();
     assert!(
         matches!(err, DagError::InvalidAuthoritySignature { .. }),

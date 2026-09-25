@@ -14,6 +14,9 @@
 //! - the set's identity is `hash()` — a BLAKE3 digest of the canonical
 //!   encoding (threshold, count, keys) — which is what the on-chain `KVA1`
 //!   Authority UTXO commits to
+//! - keys are held in **canonical order** (ascending 32-byte encoding), so
+//!   both `hash()` and the round-robin below are invariant to the order an
+//!   operator listed the keys in local config
 //! - the authority scheduled for a slot is `authorities[slot % len]`
 //!   (deterministic, no tie-break needed)
 //!
@@ -85,8 +88,31 @@ pub struct AuthoritySet {
 impl AuthoritySet {
     /// Build a set from `authorities` and `threshold`, enforcing the
     /// consensus invariants (count bounds, threshold bounds, distinct keys).
+    ///
+    /// The keys are **canonically ordered** (ascending by their 32-byte
+    /// encoding) before the set is built, so the set's identity
+    /// ([`AuthoritySet::hash`]) and its slot round-robin
+    /// ([`AuthoritySet::active_authority`]) depend only on *which* keys are in
+    /// the set — never on the order an operator happened to list them in.
+    ///
+    /// This matters for consensus safety: the key list arrives from local
+    /// configuration (`KOVANICA_AUTHORITIES`, a comma-separated string), not
+    /// from the chain. Without a canonical order two nodes holding the same
+    /// keys but listing them in a different order would
+    ///
+    /// 1. compute different [`AuthoritySet::hash`] values → commit different
+    ///    `KVA1` Authority UTXOs → build different genesis blocks and
+    ///    therefore be on **different chains**, and
+    /// 2. schedule a *different* authority for the same slot → reject each
+    ///    other's perfectly valid blocks as
+    ///    `DagError::InvalidAuthoritySignature`, halting the chain.
+    ///
+    /// Sorting is stable in the consensus sense: once duplicates are rejected
+    /// the keys are distinct, so the total order over 32-byte encodings is
+    /// total and every node agrees. It also subsumes the distinctness check,
+    /// which becomes a neighbour comparison on the sorted vector.
     pub fn new(
-        authorities: Vec<AuthorityPublicKey>,
+        mut authorities: Vec<AuthorityPublicKey>,
         threshold: usize,
     ) -> Result<Self, AuthorityError> {
         let n = authorities.len();
@@ -96,10 +122,10 @@ impl AuthoritySet {
         if !(MIN_THRESHOLD..=n).contains(&threshold) {
             return Err(AuthorityError::InvalidThreshold(threshold, n));
         }
-        // Distinct keys: sort the 32-byte encodings and check for neighbours.
-        let mut encodings: Vec<[u8; 32]> = authorities.iter().map(|pk| pk.to_bytes()).collect();
-        encodings.sort_unstable();
-        if encodings.windows(2).any(|w| w[0] == w[1]) {
+        // Canonical order: ascending 32-byte encoding.
+        authorities.sort_unstable_by_key(|pk| pk.to_bytes());
+        // Distinct keys: equal encodings are now necessarily neighbours.
+        if authorities.windows(2).any(|w| w[0] == w[1]) {
             return Err(AuthorityError::DuplicateAuthority);
         }
         let hash = blake3::hash(&Self::canonical_bytes_of(&authorities, threshold));
@@ -110,7 +136,9 @@ impl AuthoritySet {
         })
     }
 
-    /// The authority public keys, in set order (slot round-robin order).
+    /// The authority public keys, in **canonical order** (ascending 32-byte
+    /// encoding) — this is the slot round-robin order. Independent of the
+    /// order the keys were supplied in.
     pub fn authorities(&self) -> &[AuthorityPublicKey] {
         &self.authorities
     }
@@ -422,6 +450,19 @@ mod tests {
         (vec![pk1, pk2, pk3], vec![sk1, sk2, sk3])
     }
 
+    /// Re-order `sks` to match a set's canonical authority order, so a test
+    /// can sign as `sks[slot % n]` and be the scheduled authority for
+    /// `active_authority(slot)` — mirroring what a real authority node does
+    /// when it looks its key up by public key (`Node::try_produce_poa`).
+    fn sks_canonical(set: &AuthoritySet, mut sks: Vec<SigningKey>) -> Vec<SigningKey> {
+        sks.sort_unstable_by_key(|sk| sk.verifying_key().to_bytes());
+        assert_eq!(sks.len(), set.len());
+        for (i, sk) in sks.iter().enumerate() {
+            assert_eq!(sk.verifying_key(), set.authorities()[i]);
+        }
+        sks
+    }
+
     // ------------------------------------------------------------------
     // Construction invariants
     // ------------------------------------------------------------------
@@ -498,13 +539,41 @@ mod tests {
         let b = AuthoritySet::new(keys, 3).unwrap();
         assert_ne!(a.hash(), b.hash());
 
-        let (keys2, _) = three_authorities();
-        let mut keys3 = keys2.clone();
-        keys3.swap(0, 1); // same members, different order
+        // A genuinely different membership must hash differently.
+        let (keys2, _) = other_three_authorities();
         let c = AuthoritySet::new(keys2, 2).unwrap();
-        let d = AuthoritySet::new(keys3, 2).unwrap();
-        // Order is part of the canonical encoding (slot round-robin order).
-        assert_ne!(c.hash(), d.hash());
+        assert_ne!(a.hash(), c.hash());
+    }
+
+    #[test]
+    fn authority_set_hash_is_permutation_invariant() {
+        // The key list comes from local config (`KOVANICA_AUTHORITIES`), not
+        // from the chain, so the set identity — and therefore the on-chain
+        // `KVA1` commitment and the genesis block id — must not depend on the
+        // order an operator listed the keys in.
+        let (keys, _) = three_authorities();
+        let mut swapped = keys.clone();
+        swapped.swap(0, 1);
+        let a = AuthoritySet::new(keys, 2).unwrap();
+        let b = AuthoritySet::new(swapped, 2).unwrap();
+        assert_eq!(a.hash(), b.hash());
+        assert_eq!(a, b);
+        assert_eq!(a.to_bytes(), b.to_bytes());
+    }
+
+    #[test]
+    fn active_authority_is_permutation_invariant() {
+        // Two nodes with the same keys listed in a different order must
+        // schedule the *same* authority for every slot, or they reject each
+        // other's valid blocks (`InvalidAuthoritySignature`).
+        let (keys, _) = three_authorities();
+        let mut swapped = keys.clone();
+        swapped.swap(0, 1);
+        let a = AuthoritySet::new(keys, 2).unwrap();
+        let b = AuthoritySet::new(swapped, 2).unwrap();
+        for slot in 0..9 {
+            assert_eq!(a.active_authority(slot), b.active_authority(slot));
+        }
     }
 
     // ------------------------------------------------------------------
@@ -514,9 +583,10 @@ mod tests {
     #[test]
     fn active_authority_round_robins() {
         let (keys, _) = three_authorities();
-        let set = AuthoritySet::new(keys.clone(), 2).unwrap();
+        let set = AuthoritySet::new(keys, 2).unwrap();
+        // Round-robin over the set's *canonical* order.
         for slot in 0..9 {
-            let expected = &keys[slot as usize % 3];
+            let expected = &set.authorities()[slot as usize % 3];
             assert_eq!(set.active_authority(slot), expected);
         }
     }
@@ -529,6 +599,7 @@ mod tests {
     fn verify_slot_signature_accepts_scheduled_authority() {
         let (keys, sks) = three_authorities();
         let set = AuthoritySet::new(keys, 2).unwrap();
+        let sks = sks_canonical(&set, sks);
         let message = b"block hash without authority sig";
         // Slot 0 → authority 0, slot 1 → authority 1, slot 2 → authority 2.
         for (slot, sk) in sks.iter().enumerate() {
@@ -542,19 +613,24 @@ mod tests {
     fn verify_slot_signature_rejects_wrong_authority() {
         let (keys, sks) = three_authorities();
         let set = AuthoritySet::new(keys, 2).unwrap();
+        let sks = sks_canonical(&set, sks);
         let message = b"block hash";
-        // Slot 0 is authority 0's slot; authority 1's signature must fail.
-        let sig = sks[1].sign(message).to_bytes();
-        assert_eq!(
-            set.verify_slot_signature(0, message, &sig),
-            Err(AuthorityError::InvalidSignature)
-        );
+        // Slot 0 is authority 0's slot; any other authority's signature must
+        // fail, whichever key the canonical order puts in slot 1 or 2.
+        for sk in sks.iter().skip(1) {
+            let sig = sk.sign(message).to_bytes();
+            assert_eq!(
+                set.verify_slot_signature(0, message, &sig),
+                Err(AuthorityError::InvalidSignature)
+            );
+        }
     }
 
     #[test]
     fn verify_slot_signature_rejects_tampered_message() {
         let (keys, sks) = three_authorities();
         let set = AuthoritySet::new(keys, 2).unwrap();
+        let sks = sks_canonical(&set, sks);
         let sig = sks[0].sign(b"original").to_bytes();
         assert_eq!(
             set.verify_slot_signature(0, b"tampered", &sig),
@@ -590,9 +666,25 @@ mod tests {
             AuthoritySet::from_bytes(&bytes[..bytes.len() - 1]),
             Err(AuthorityError::MalformedEncoding)
         );
-        // Invalid Ed25519 point.
+        // Invalid Ed25519 point. About half of all 32-byte values fail to
+        // decompress, so find the first candidate the point decoder actually
+        // rejects instead of hardcoding a magic constant that could rot with
+        // an ed25519-dalek bump. The scan is deterministic, and we do not
+        // assume *where* the key lands in the canonical order.
+        let mut bad_point = None;
+        for i in 0u16..=u16::MAX {
+            let mut candidate = [0u8; 32];
+            candidate[0] = i as u8;
+            candidate[1] = (i >> 8) as u8;
+            candidate[31] = 0x40;
+            if VerifyingKey::from_bytes(&candidate).is_err() {
+                bad_point = Some(candidate);
+                break;
+            }
+        }
+        let bad_point = bad_point.expect("a non-decompressible point must exist");
         let mut bad = bytes.clone();
-        bad[16] = 0xff; // first key byte → not a valid point encoding
+        bad[16..48].copy_from_slice(&bad_point);
         assert_eq!(
             AuthoritySet::from_bytes(&bad),
             Err(AuthorityError::MalformedEncoding)

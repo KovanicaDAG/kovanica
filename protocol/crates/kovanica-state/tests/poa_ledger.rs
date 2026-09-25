@@ -33,6 +33,17 @@ fn authority_set(n: u8, threshold: usize) -> (AuthoritySet, Vec<SigningKey>) {
     (AuthoritySet::new(keys, threshold).unwrap(), sks)
 }
 
+/// A signing key that is **not** the authority scheduled for `slot` — the
+/// adversarial "wrong producer" case. Resolved by public key so the choice
+/// does not depend on the set's canonical ordering.
+fn sk_not_for_slot(set: &AuthoritySet, sks: &[SigningKey], slot: u64) -> SigningKey {
+    let scheduled = set.active_authority(slot);
+    sks.iter()
+        .find(|sk| sk.verifying_key() != *scheduled)
+        .expect("set has at least one non-scheduled authority")
+        .clone()
+}
+
 /// A ledger seeded with a simple genesis coinbase and PoA admission enabled.
 fn poa_ledger(n: u8, threshold: usize) -> (Ledger, AuthoritySet, Vec<SigningKey>) {
     let (set, sks) = authority_set(n, threshold);
@@ -162,12 +173,13 @@ fn poa_blocks_admitted_through_ledger() {
 
 #[test]
 fn wrong_authority_rejected_by_ledger() {
-    let (mut ledger, _set, sks) = poa_ledger(3, 2);
+    let (mut ledger, set, sks) = poa_ledger(3, 2);
     let g = ledger.genesis();
 
-    // Slot 0 must be signed by authority 0; sign with authority 1 instead.
+    // Slot 0 must be signed by its scheduled authority; sign with any other
+    // authority in the set instead.
     let timestamp_ms = 0;
-    let sk = &sks[1];
+    let sk = &sk_not_for_slot(&set, &sks, 0);
     let payload = encode_block_payload(&[]);
     let unsigned = Block::new(vec![g], 1, timestamp_ms, 0, payload.clone());
     let sig = sk
