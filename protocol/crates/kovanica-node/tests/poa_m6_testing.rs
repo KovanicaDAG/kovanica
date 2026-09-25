@@ -7,7 +7,9 @@
 //! - Resource profiling: CPU/RAM < 10% of PoW baseline
 
 use ed25519_dalek::{Signer, SigningKey};
-use kovanica_dag::{sign_update, AuthorityPublicKey, AuthoritySet, Block, BlockId};
+use kovanica_dag::{
+    sign_update, AuthorityPublicKey, AuthoritySet, Block, BlockId, POA_NOMINAL_WORK,
+};
 use kovanica_node::{BlockRecord, Node};
 use kovanica_state::encode_block_payload;
 use kovanica_state::spv::{AuthorityUpdateProof, MerkleProof};
@@ -219,9 +221,15 @@ fn authority_update_on_chain_and_spv_proof() {
 
 #[test]
 fn poa_reorg_ghostdag_k3() {
-    // Test that GHOSTDAG k=3 works correctly with PoA blocks
-    // Two competing branches with different authority signatures
-    // The heavier branch (more blue work) should win
+    // Test that GHOSTDAG k=3 works correctly with PoA blocks: a competing
+    // branch that is genuinely heavier must win the re-org.
+    //
+    // "Heavier" under PoA means *longer* — every admitted block carries the
+    // same nominal work (RFC-POA §4 item 5; `Dag` rejects any other value), so
+    // accumulated blue work is just a block count. This test used to forge
+    // `work = 2` to win, which both depended on and enshrined the very
+    // chain-selection vector the pin closes: an authority could claim
+    // arbitrary weight and steer the selected parent on its own.
 
     let (set, sks) = authority_set(3, 2);
 
@@ -259,31 +267,33 @@ fn poa_reorg_ghostdag_k3() {
     // Get the tip of branch A
     let _tip_a = branch_a.last().unwrap();
 
-    // Now create a competing branch B that splits from block 5
-    // We need to insert blocks directly with higher work to force a reorg
-    // In PoA, work is nominal (1), so we need to use the DAG's insert directly
-    // with blocks that have higher work
-
+    // Now create a competing branch B that splits from block 5. B is 8 blocks
+    // long from that split point, so it ends at depth 13 against branch A's
+    // 10 — strictly heavier at equal nominal work, with no forged weight.
     let _dag = node.ledger().unwrap().dag();
     let split_point = branch_a[4]; // Split at block 5 (0-indexed)
 
-    // Create a competing branch with higher work
     let mut heavier_branch = Vec::new();
     let mut parent = split_point;
     for i in 1..=8 {
-        // Create a block with higher work (2 instead of 1)
-        // Calculate the correct slot for this block
         // The first 10 blocks were at slots 1-10, so next blocks are at slots 11-18
         let timestamp = SLOT_MS * (10 + i as u64);
         let slot = timestamp / SLOT_MS;
         let authority_idx = (slot as usize) % 3;
-        let record = create_signed_poa_block(vec![parent], 2, timestamp, 0, authority_idx, &sks);
+        let record = create_signed_poa_block(
+            vec![parent],
+            POA_NOMINAL_WORK,
+            timestamp,
+            0,
+            authority_idx,
+            &sks,
+        );
         let block_id = node.receive_block(record).unwrap();
         heavier_branch.push(block_id);
         parent = block_id;
     }
 
-    // The heavier branch should become the selected tip
+    // The longer branch should become the selected tip
     let new_tip = node.selected_tip().unwrap();
     assert_eq!(new_tip, *heavier_branch.last().unwrap());
 
@@ -291,7 +301,7 @@ fn poa_reorg_ghostdag_k3() {
     let selected_chain = node.ledger().unwrap().dag().selected_chain();
     assert!(selected_chain.contains(&heavier_branch[0]));
 
-    println!("PoA re-org test passed: heavier branch won");
+    println!("PoA re-org test passed: longer branch won");
 }
 
 // ---------------------------------------------------------------------------
@@ -355,18 +365,27 @@ fn spv_sync_under_poa_reorg() {
 
     assert_eq!(spv_client.tip().unwrap().height, 10);
 
-    // Now create a reorg on the node
-    // Insert a heavier competing branch
+    // Now create a reorg on the node: a longer competing branch from block 5,
+    // which at equal nominal work ends strictly heavier than the 10-block
+    // chain the light client just synced to (RFC-POA §4 item 5 — `work` is pinned,
+    // so "heavier" can only mean "longer").
     let dag = node.ledger().unwrap().dag();
     let split_point = dag.selected_chain()[4]; // Split at block 5
 
-    // Insert heavier blocks
+    // Insert the longer branch
     let mut parent = split_point;
     for i in 1..=8 {
         let timestamp = SLOT_MS * (10 + i as u64);
         let slot = timestamp / SLOT_MS;
         let authority_idx = (slot as usize) % 3;
-        let record = create_signed_poa_block(vec![parent], 2, timestamp, 0, authority_idx, &sks);
+        let record = create_signed_poa_block(
+            vec![parent],
+            POA_NOMINAL_WORK,
+            timestamp,
+            0,
+            authority_idx,
+            &sks,
+        );
         node.receive_block(record).unwrap();
         parent = node.selected_tip().unwrap();
     }

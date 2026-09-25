@@ -35,7 +35,7 @@ Replace hybrid PoW+VRF block admission with pure Proof-of-Authority (PoA): fixed
 
 ### 2. Block Structure Changes
 - **New field:** `authority_sig: [u8; 64]` (Ed25519 signature over `block.hash_without_authority_sig()`).
-- **Preserved fields:** `nonce`, `work`, `timestamp_ms`, `parents`, `payload`, `vrf_*` (for wire compatibility; ignored under PoA).
+- **Preserved fields:** `nonce`, `work`, `timestamp_ms`, `parents`, `payload`, `vrf_*` (for wire compatibility). `work` is **pinned to the nominal value `POA_NOMINAL_WORK = 1`** at admission (§4.5), so it is present on the wire and in the hash but carries no weight in chain selection. `vrf_*` is ignored under PoA.
 - **Hash:** `block.id()` = BLAKE3(`parents` || `work` || `timestamp_ms` || `nonce` || `payload` || `authority_sig`).
 
 ### 3. Slot & Scheduling
@@ -50,10 +50,18 @@ Replace hybrid PoW+VRF block admission with pure Proof-of-Authority (PoA): fixed
 2. **Authority signature:** Verify `authority_sig` against `active_authority(slot).public_key` over `hash_without_authority_sig()`.
 3. **Slot consistency:** `slot == timestamp_ms / SLOT_DURATION_MS`; `slot ≥ parent_slots`.
 4. **GHOSTDAG:** Compute selected parent, mergeset, blue/red coloring (k=3 unchanged).
-4. **Transaction validation:** UTXO, signatures, conservation, RFC-001..005 rules (unchanged).
+5. **Nominal work:** `block.work() == POA_NOMINAL_WORK` (1). Reject otherwise
+   (`DagError::PoaWorkMismatch`). `work` is not a proof under PoA, but the
+   GHOSTDAG blue-work fold still consumes it, so an unpinned value would let a
+   single authority steer the selected parent of every successor by claiming
+   arbitrary weight. Pinning it at admission is what makes accumulated blue
+   work a plain block count — see §6.1(b).
+6. **Transaction validation:** UTXO, signatures, conservation, RFC-001..005 rules (unchanged).
 
 ### 5. GHOSTDAG & Consensus (unchanged)
-- k=3, blue score/work drive chain selection.
+- k=3, blue score/work drive chain selection. Under PoA the work term is
+  nominal by construction (§4.5), so selection reduces to blue score plus a
+  constant per block.
 - Linearization: `order(B) = order(sp) ++ mergeset ++ [B]`.
 - Finality: `finality_depth` blue-score depth (default 50, RFC-008).
 - Pruning: payload + block pruning per RFC-008 (unchanged).
@@ -90,6 +98,16 @@ Replace hybrid PoW+VRF block admission with pure Proof-of-Authority (PoA): fixed
 
 ## Backwards Compatibility
 - **Consensus-breaking:** Yes (hard fork). Requires coordinated upgrade at activation height.
+- **Activation requires a genesis reset; PoA must not be enabled on a live PoW
+  chain.** The nominal-work pin (§4 item 5) is a chain-format constraint, not a
+  runtime toggle. Turning PoA on for a chain that already contains PoW blocks
+  leaves a mixed-work history: pre-activation blocks carry real work (orders of
+  magnitude above 1) and out-compete every PoA block, so the selected parent
+  would never advance past the activation point and the chain would appear
+  frozen. Activation therefore needs a genesis reset (or an explicit
+  work-normalising migration), consistent with `TESTNET-RESET-POLICY.md` §1.
+  Replay (`Dag::insert_for_replay`) and snapshot restore skip the check, so
+  restoring a pre-pin PoA snapshot is safe.
 - **RPC/API:** New `authority_sig` field in block JSON; `staking` RPC reports authority set.
 - **Explorer:** Shows authority signature, slot, active authority.
 - **Wallet/CLI:** No changes to transaction signing; block production uses `produce_block` (staked path).
@@ -110,7 +128,7 @@ Replace hybrid PoW+VRF block admission with pure Proof-of-Authority (PoA): fixed
 | Milestone | Deliverable | Exit Criteria |
 |-----------|-------------|---------------|
 | M1: Core Types ✅ | `AuthoritySet`, `AuthorityUpdateTx`, `Block.authority_sig`, `hash_without_authority_sig()` | Unit tests: sig verify, slot active authority, update tx validation — **done** (`crates/kovanica-dag/src/authority.rs`, 21 tests; snapshot v7 + checkpoint v9 carry the sig; live-parity tests `#[ignore]`d pending the PoA reset) |
-| M2: Consensus ✅ | `BlockValidator` authority/slot check in `Dag::insert`; `Dag::insert_for_replay` skips PoW/VRF | Integration: 3-validator round-robin, 4-validator liveness (1 offline), re-org under GHOSTDAG — **done** (`Dag::set_poa` first-class switch + `check_poa` in `dag.rs`; `insert_for_replay` now skips PoW/difficulty/VRF/PoA; `tests/poa.rs`, 10 tests) |
+| M2: Consensus ✅ | `BlockValidator` authority/slot check in `Dag::insert`; `Dag::insert_for_replay` skips PoW/VRF | Integration: 3-validator round-robin, 4-validator liveness (1 offline), re-org under GHOSTDAG — **done** (`Dag::set_poa` first-class switch + `check_poa` in `dag.rs`; `insert_for_replay` now skips PoW/difficulty/VRF/PoA; `tests/poa.rs`, 11 tests incl. the `POA_NOMINAL_WORK` inflation pin, §6.1(b)) |
 | M3: Config/Genesis ✅ | `KOVANICA_CONSENSUS`, `KOVANICA_SLOT_DURATION`, `KOVANICA_AUTHORITIES`, genesis TOML | Genesis block carries authority set; `poa` feature default — **done** (`poa_config_from_env` + `PoaGenesisConfig` in `explorer.rs`; `genesis_with_poa` commits `KVA1 \|\| set_hash`; node PoA production via `try_produce_poa`/`set_authority_signing_key`; wire `BlockRecord.authority_sig` flag byte 2; PoA-aware immediate sends; `load_log_with_poa*` readers; `tests/poa_node.rs` incl. log round-trip, 9 tests) |
 | M4: SPV ✅ | Header `authority_sig`; light client authority set sync + update proofs | Light client syncs from genesis, verifies authority sigs, processes update tx — **done** (`BlockHeader` gains `authority_sig` / `authority_set_hash` / `hash_without_authority_sig`; `SpvClient::with_poa` + `add_header` verify the scheduled authority per slot; `apply_authority_update` validates an `AuthorityUpdateTx` + Merkle proof; KVLS v2 blob carries the PoA config; relay `Headers` message encodes the PoA fields; FFI `export_light_sync` v2 / `receive_light_sync` / `apply_authority_update`. Live-parity tests `#[ignore]`d pending the PoA reset) |
 | M5: RPC/Explorer ✅ | `staking` RPC; explorer shows authority sig, slot, active authority | Explorer displays authority set, slot, signatures — **done** (`block_detail_json` emits `authority_sig` / `slot` / `active_authority`; `kind` gains `poa` alongside `pow`/`staked`; `staking` RPC reports `slot_duration`, `authorities`, `threshold`; `blockCard` HTML renders the three fields) |
@@ -136,18 +154,47 @@ keys are in the set. Guarded by `authority_set_hash_is_permutation_invariant`
 and `active_authority_is_permutation_invariant`. This changes the set hash, so
 it must land before any PoA genesis is committed.
 
-**(b) OPEN — `work` is not ignored under PoA (§2 is unimplemented).** §2 says
-`work` is "preserved … for wire compatibility; ignored under PoA", but
-`Dag::set_poa` only clears `require_pow` and `difficulty`; nothing constrains
-`work`, and `compute_ghostdag` still accumulates `block.work()` into
-`blue_work`, which drives selected-parent choice. An authority can therefore
-mint an arbitrarily large `work` and unilaterally capture chain selection — the
-M6 re-org test currently *relies* on this by forging `work = 2`. The hybrid
-admission path already closes the same hole by pinning staked blocks to
-`HybridConfig::stake_nominal_work`. **Recommendation: pin PoA blocks to a
-nominal work (1) in `check_poa`, and drive re-orgs by blue score
-(`sp + 1 + mergeset_blues`) instead of work inflation.** Unresolved — this is
-a consensus-rule change and is deliberately not bundled into the M4–M6 commit.
+**(b) RESOLVED — `work` is now pinned to the nominal value under PoA.** §2
+claimed `work` was "preserved … for wire compatibility; ignored under PoA", but
+`Dag::set_poa` only cleared `require_pow` and `difficulty`; nothing constrained
+`work`, and `compute_ghostdag` still accumulates `block.work()` into `blue_work`,
+which drives selected-parent choice. An authority could mint an arbitrarily
+large `work` and unilaterally capture chain selection — and the M6 re-org test
+*relied* on that by forging `work = 2`, so the suite encoded the exploit as
+expected behaviour.
+
+Fixed by pinning `work` at admission, mirroring the hybrid path's
+`HybridConfig::stake_nominal_work`: `POA_NOMINAL_WORK = 1`
+(`kovanica_dag::POA_NOMINAL_WORK`), enforced in `Dag::check_poa` as
+`DagError::PoaWorkMismatch { id, expected, actual }`. Because the check runs at
+insertion, every block in the DAG provably has nominal work, so accumulated
+blue work is a plain block count and **no change to the GHOSTDAG fold is
+needed** — the property is established at the admission boundary instead.
+
+`POA_NOMINAL_WORK` is a constant, not a `PoAConfig` field: unlike a staked
+block competing against real PoW blocks, there is nothing to tune, since PoA
+blocks are one-per-slot and all carry equal weight by construction.
+
+Two corollaries, both now enforced rather than documented:
+
+- **The M6 re-org tests no longer forge work.** `poa_reorg_ghostdag_k3` and
+  `spv_sync_under_poa_reorg` built their competing branch at `work = 2`. At
+  nominal work a competing branch wins purely by being **longer** — the test
+  branch ends at depth 13 against the incumbent's 10 — so both re-org paths are
+  now exercised through the rule that actually governs them, with no forged
+  weight. The node's `receive_block` path surfaced the second forgery as a
+  `PoaWorkMismatch` rejection, confirming the pin holds end-to-end at the
+  wire boundary, not just in `Dag`.
+- **Genesis and honest production already complied.** `Block::genesis(1, …)`
+  and `Node::try_produce_poa` both already emit `work = 1`, so the pin changed
+  no legitimate block id. Every PoA producer in the workspace was already
+  nominal; the only deviations were the two adversarial tests.
+
+Regression test: `inflated_work_is_rejected_under_poa` — each of
+`work ∈ {0, 2, 1_000_000, u128::MAX}` is signed *correctly* by the authority
+scheduled for its slot (so the signature is genuinely valid; `work` is inside
+the signed hash), and each must be rejected while `POA_NOMINAL_WORK` is still
+admitted. Verified to fail against the pre-fix code.
 
 ---
 

@@ -64,6 +64,7 @@ pub use authority::{
 pub use block::{Block, BlockId};
 pub use dag::{
     BlockPreview, Dag, DagError, GhostdagData, KParam, PoAConfig, VrfConfig, DEFAULT_EPOCH_LENGTH,
+    POA_NOMINAL_WORK,
 };
 pub use difficulty::{Retarget, TimedWork};
 pub use pow::{meets_target, mine};
