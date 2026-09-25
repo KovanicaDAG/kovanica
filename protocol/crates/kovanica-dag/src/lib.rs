@@ -47,14 +47,11 @@
 pub mod authority;
 pub mod block;
 pub mod dag;
-pub mod difficulty;
 pub mod ghostdag;
 pub mod ordering;
-pub mod pow;
 pub mod reachability;
 pub mod snapshot;
 pub mod validation;
-pub mod vrf;
 
 pub use authority::{
     sign_update, update_payload, AuthorityError, AuthorityPublicKey, AuthoritySet,
@@ -63,15 +60,9 @@ pub use authority::{
 };
 pub use block::{Block, BlockId};
 pub use dag::{
-    BlockPreview, Dag, DagError, GhostdagData, KParam, PoAConfig, VrfConfig, DEFAULT_EPOCH_LENGTH,
+    BlockPreview, Dag, DagError, GhostdagData, KParam, PoAConfig,
     POA_NOMINAL_WORK,
 };
-pub use difficulty::{Retarget, TimedWork};
-pub use pow::{meets_target, mine};
 pub use reachability::Reachability;
 pub use snapshot::{decode_block, decode_snapshot, encode_block, DagSnapshot, SnapshotError};
 pub use validation::BlockValidator;
-pub use vrf::{
-    vrf_generate_keypair, vrf_keypair_from_seed, vrf_prove, vrf_verify, Scalar, VrfError,
-    VrfEvaluation, VrfOutput, VrfProof, VrfPublicKey, VrfSecretKey,
-};

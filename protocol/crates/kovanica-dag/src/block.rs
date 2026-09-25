@@ -29,7 +29,6 @@
 
 use core::fmt;
 
-use crate::vrf::{VrfOutput, VrfProof, VrfPublicKey};
 
 /// 32-byte BLAKE3 digest identifying a block.
 ///
@@ -106,34 +105,10 @@ pub struct Block {
     /// The block's timestamp, in milliseconds. Used by difficulty retargeting
     /// and, where enforced, must not precede any parent's timestamp.
     timestamp_ms: u64,
-    /// The proof-of-work nonce: the value a miner varies so the block's
-    /// id meets its `work` target (see [`crate::pow`]). Folded into the id, so
-    /// changing it changes the hash — which is what mining explores. Not
-    /// interpreted by GHOSTDAG; `0` for a block that was never mined.
+    /// Block nonce. Folded into the id, so changing it changes the hash. Not
+    /// interpreted by GHOSTDAG; `0` for every PoA block (PoA producers never
+    /// grind — the authority signature is the admission credential).
     nonce: u64,
-    /// VRF public key of the block producer (for VRF proof verification).
-    /// `None` for blocks produced before VRF activation.
-    vrf_public_key: Option<VrfPublicKey>,
-    /// VRF proof: verifiable proof that `vrf_output` was correctly computed
-    /// from `vrf_public_key` and the VRF input (derived from parent tips).
-    /// `None` if VRF is not used for this block.
-    vrf_proof: Option<VrfProof>,
-    /// VRF output: 32 bytes of verifiable randomness derived from the proof.
-    /// Used for leader eligibility (e.g., `output < threshold` means eligible)
-    /// and as a randomness beacon.
-    ///
-    /// In the snapshot/log wire format (version 6+), the three VRF fields are
-    /// encoded **independently**: `has_vrf` flag, then `vrf_public_key` (always
-    /// present when `has_vrf = 1`), then a **proof flag** (1 byte: 0 = absent,
-    /// 1 = 96-byte proof follows), then an **output flag** (1 byte: 0 = absent,
-    /// 1 = 32-byte output follows). This lets a block carry a proof without
-    /// committing the output (self-verification / block production without
-    /// publishing the draw) and vice-versa. Snapshot version **6** is required to
-    /// read this independent-field encoding; version 5 and earlier use the older
-    /// "all three present together" encoding and are decoded unchanged — a v6
-    /// writer never produces a v5 wire form, and a v5 reader rejects v6 snapshots
-    /// as `UnsupportedVersion`.
-    vrf_output: Option<VrfOutput>,
     /// Authority signature (PoA): 64-byte Ed25519 signature over the block's
     /// hash without the authority signature (`hash_without_authority_sig()`).
     /// `None` for blocks produced before PoA activation or in non-PoA modes.
@@ -166,9 +141,6 @@ impl Block {
             work,
             timestamp_ms,
             nonce,
-            vrf_public_key: None,
-            vrf_proof: None,
-            vrf_output: None,
             authority_sig: None,
             payload: Some(payload),
         };
@@ -178,33 +150,6 @@ impl Block {
 
     /// Create a block with full VRF fields.
     #[allow(clippy::too_many_arguments)]
-    pub fn new_with_vrf(
-        mut parents: Vec<BlockId>,
-        work: u128,
-        timestamp_ms: u64,
-        nonce: u64,
-        vrf_public_key: VrfPublicKey,
-        vrf_proof: VrfProof,
-        vrf_output: VrfOutput,
-        payload: Vec<u8>,
-    ) -> Self {
-        parents.sort_unstable();
-        parents.dedup();
-        let mut block = Self {
-            id: BlockId([0; 32]),
-            parents,
-            work,
-            timestamp_ms,
-            nonce,
-            vrf_public_key: Some(vrf_public_key),
-            vrf_proof: Some(vrf_proof),
-            vrf_output: Some(vrf_output),
-            authority_sig: None,
-            payload: Some(payload),
-        };
-        block.id = block.compute_id();
-        block
-    }
 
     /// Create a block with an explicitly `None` payload (used when reconstructing
     /// a pruned block from a snapshot). The `id` must be provided explicitly
@@ -224,24 +169,18 @@ impl Block {
             work,
             timestamp_ms,
             nonce,
-            vrf_public_key: None,
-            vrf_proof: None,
-            vrf_output: None,
             authority_sig: None,
             payload: None,
         }
     }
 
-    /// Create a pruned block with full VRF fields.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_pruned_with_vrf(
+    /// Create a pruned block that carries an authority signature (PoA).
+    pub fn new_pruned_with_authority(
         mut parents: Vec<BlockId>,
         work: u128,
         timestamp_ms: u64,
         nonce: u64,
-        vrf_public_key: Option<VrfPublicKey>,
-        vrf_proof: Option<VrfProof>,
-        vrf_output: Option<VrfOutput>,
+        authority_sig: Option<[u8; 64]>,
         id: BlockId,
     ) -> Self {
         parents.sort_unstable();
@@ -252,10 +191,7 @@ impl Block {
             work,
             timestamp_ms,
             nonce,
-            vrf_public_key,
-            vrf_proof,
-            vrf_output,
-            authority_sig: None,
+            authority_sig,
             payload: None,
         }
     }
@@ -278,9 +214,6 @@ impl Block {
             work,
             timestamp_ms,
             nonce,
-            vrf_public_key: None,
-            vrf_proof: None,
-            vrf_output: None,
             authority_sig: Some(authority_sig),
             payload: Some(payload),
         };
@@ -290,63 +223,9 @@ impl Block {
 
     /// Create a block with full VRF fields and authority signature (PoA + VRF).
     #[allow(clippy::too_many_arguments)]
-    pub fn new_with_vrf_and_authority(
-        mut parents: Vec<BlockId>,
-        work: u128,
-        timestamp_ms: u64,
-        nonce: u64,
-        vrf_public_key: VrfPublicKey,
-        vrf_proof: VrfProof,
-        vrf_output: VrfOutput,
-        authority_sig: [u8; 64],
-        payload: Vec<u8>,
-    ) -> Self {
-        parents.sort_unstable();
-        parents.dedup();
-        let mut block = Self {
-            id: BlockId([0; 32]),
-            parents,
-            work,
-            timestamp_ms,
-            nonce,
-            vrf_public_key: Some(vrf_public_key),
-            vrf_proof: Some(vrf_proof),
-            vrf_output: Some(vrf_output),
-            authority_sig: Some(authority_sig),
-            payload: Some(payload),
-        };
-        block.id = block.compute_id();
-        block
-    }
 
     /// Create a pruned block with full VRF fields and authority signature.
     #[allow(clippy::too_many_arguments)]
-    pub fn new_pruned_with_vrf_and_authority(
-        mut parents: Vec<BlockId>,
-        work: u128,
-        timestamp_ms: u64,
-        nonce: u64,
-        vrf_public_key: Option<VrfPublicKey>,
-        vrf_proof: Option<VrfProof>,
-        vrf_output: Option<VrfOutput>,
-        authority_sig: Option<[u8; 64]>,
-        id: BlockId,
-    ) -> Self {
-        parents.sort_unstable();
-        parents.dedup();
-        Self {
-            id,
-            parents,
-            work,
-            timestamp_ms,
-            nonce,
-            vrf_public_key,
-            vrf_proof,
-            vrf_output,
-            authority_sig,
-            payload: None,
-        }
-    }
 
     /// The canonical genesis block: no parents, the given work, timestamp,
     /// nonce, and payload.
@@ -357,9 +236,6 @@ impl Block {
             work,
             timestamp_ms,
             nonce,
-            vrf_public_key: None,
-            vrf_proof: None,
-            vrf_output: None,
             authority_sig: None,
             payload: Some(payload),
         };
@@ -375,9 +251,6 @@ impl Block {
             work,
             timestamp_ms,
             nonce,
-            vrf_public_key: None,
-            vrf_proof: None,
-            vrf_output: None,
             authority_sig: None,
             payload: None,
         }
@@ -401,26 +274,6 @@ impl Block {
     /// The proof-of-work nonce (see [`crate::pow`]).
     pub fn nonce(&self) -> u64 {
         self.nonce
-    }
-
-    /// The VRF public key of the block producer.
-    pub fn vrf_public_key(&self) -> Option<&VrfPublicKey> {
-        self.vrf_public_key.as_ref()
-    }
-
-    /// The VRF proof.
-    pub fn vrf_proof(&self) -> Option<&VrfProof> {
-        self.vrf_proof.as_ref()
-    }
-
-    /// The VRF output (32 bytes of verifiable randomness).
-    pub fn vrf_output(&self) -> Option<&VrfOutput> {
-        self.vrf_output.as_ref()
-    }
-
-    /// Whether this block has VRF fields (produced with VRF enabled).
-    pub fn has_vrf(&self) -> bool {
-        self.vrf_public_key.is_some()
     }
 
     /// The authority signature (PoA): 64-byte Ed25519 signature over the
@@ -461,23 +314,10 @@ impl Block {
         hasher.update(&self.work.to_le_bytes());
         hasher.update(&self.timestamp_ms.to_le_bytes());
         hasher.update(&self.nonce.to_le_bytes());
-        // VRF fields (included in id for blocks that have them), hashed
-        // independently to match the v6 wire encoding.
-        let has_vrf = self.vrf_public_key.is_some();
-        hasher.update(&[if has_vrf { 1u8 } else { 0u8 }]);
-        if let Some(pk) = &self.vrf_public_key {
-            hasher.update(pk.as_bytes());
-            let has_proof = self.vrf_proof.is_some();
-            hasher.update(&[if has_proof { 1u8 } else { 0u8 }]);
-            if has_proof {
-                hasher.update(&self.vrf_proof.as_ref().unwrap().to_bytes());
-            }
-            let has_output = self.vrf_output.is_some();
-            hasher.update(&[if has_output { 1u8 } else { 0u8 }]);
-            if has_output {
-                hasher.update(self.vrf_output.as_ref().unwrap().as_bytes());
-            }
-        }
+        // RESERVED (was the VRF has_vrf flag). VRF is removed; the byte
+        // stays so block ids and the wire format are byte-identical to
+        // every pre-removal block that carried no VRF fields.
+        hasher.update(&[0u8]);
         // Authority signature (PoA): flag + 64 bytes when present.
         let has_auth = self.authority_sig.is_some();
         hasher.update(&[if has_auth { 1u8 } else { 0u8 }]);
@@ -502,23 +342,10 @@ impl Block {
         hasher.update(&self.work.to_le_bytes());
         hasher.update(&self.timestamp_ms.to_le_bytes());
         hasher.update(&self.nonce.to_le_bytes());
-        // VRF fields (included in id for blocks that have them), hashed
-        // independently to match the v6 wire encoding.
-        let has_vrf = self.vrf_public_key.is_some();
-        hasher.update(&[if has_vrf { 1u8 } else { 0u8 }]);
-        if let Some(pk) = &self.vrf_public_key {
-            hasher.update(pk.as_bytes());
-            let has_proof = self.vrf_proof.is_some();
-            hasher.update(&[if has_proof { 1u8 } else { 0u8 }]);
-            if has_proof {
-                hasher.update(&self.vrf_proof.as_ref().unwrap().to_bytes());
-            }
-            let has_output = self.vrf_output.is_some();
-            hasher.update(&[if has_output { 1u8 } else { 0u8 }]);
-            if has_output {
-                hasher.update(self.vrf_output.as_ref().unwrap().as_bytes());
-            }
-        }
+        // RESERVED (was the VRF has_vrf flag). VRF is removed; the byte
+        // stays so block ids and the wire format are byte-identical to
+        // every pre-removal block that carried no VRF fields.
+        hasher.update(&[0u8]);
         // Authority signature flag is always 0 (excluded from the signed message).
         hasher.update(&[0u8]);
         let payload = self.payload.as_deref().unwrap_or(&[]);
@@ -561,18 +388,11 @@ impl Block {
     /// `kovanica_dag::encode_block`), used for skipping during checkpoint decode.
     pub fn encoded_len(&self) -> usize {
         // id (32) + parents.len() (8) + each parent (32) + work (16) + timestamp (8) + nonce (8) +
-        // has_vrf flag (1) + [vrf_pk (32) + proof_flag (1) + [proof (96) if present] +
-        //                      output_flag (1) + [output (32) if present]] if has_vrf +
+        // reserved has_vrf flag (1) +
         // has_auth flag (1) + [auth_sig (64) if present] +
         // payload.len (8) + payload
-        let vrf_len: usize = if self.vrf_public_key.is_some() {
-            32 + 1
-                + if self.vrf_proof.is_some() { 96 } else { 0 }
-                + 1
-                + if self.vrf_output.is_some() { 32 } else { 0 }
-        } else {
-            0
-        };
+        // RESERVED has_vrf flag byte: always present, always 0.
+        let vrf_len: usize = 0;
         let auth_len: usize = if self.authority_sig.is_some() {
             1 + 64
         } else {
@@ -660,5 +480,33 @@ mod tests {
         b.prune_payload();
         assert!(b.is_pruned());
         assert_eq!(b.payload(), b"");
+    }
+
+    /// The removed VRF `has_vrf` flag survives as a reserved zero byte in both
+    /// the id preimage and the wire encoding. This is what makes the removal
+    /// non-breaking: a block that carried no VRF fields hashes and encodes
+    /// byte-identically before and after, so every pre-removal block id, the
+    /// existing node logs, and shipped SPV/light-client wire data stay valid.
+    ///
+    /// Do NOT "clean up" the reserved byte. Removing it changes every block id
+    /// and silently invalidates the whole chain.
+    #[test]
+    fn reserved_has_vrf_byte_is_preserved_in_id_and_wire() {
+        let b = Block::new(vec![BlockId([7u8; 32])], 1, 1_000, 42, vec![]);
+
+        // Wire encoding still carries exactly one flag byte, and it is 0.
+        let mut enc = Vec::new();
+        crate::snapshot::encode_block(&b, &mut enc);
+        // id(32) + parents_len(8) + parent(32) + work(16) + ts(8) + nonce(8) = 104
+        // + reserved has_vrf(1) + has_auth(1) + payload_len(8) = 114
+        assert_eq!(enc.len(), 114, "reserved has_vrf byte must still be emitted");
+        assert_eq!(enc[104], 0, "reserved has_vrf flag must be 0");
+
+        // And the encoded length accounting agrees with the encoder.
+        assert_eq!(b.encoded_len(), enc.len());
+
+        // Round-trip: decode returns a block with an identical id.
+        let back = crate::snapshot::decode_block(&enc).expect("well-formed block decodes");
+        assert_eq!(back.id(), b.id());
     }
 }
