@@ -129,10 +129,8 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::authority::AuthoritySet;
 use crate::block::{Block, BlockId};
-use crate::difficulty::{Retarget, TimedWork};
 use crate::reachability::Reachability;
 use crate::validation::BlockValidator;
-use crate::vrf::vrf_verify;
 
 /// Errors returned when inserting a block into the [`Dag`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,13 +145,6 @@ pub enum DagError {
     GenesisAlreadySet,
     /// The installed [`BlockValidator`] rejected the block, with its reason.
     InvalidBlock { id: BlockId, reason: String },
-    /// Difficulty is enforced and the block's `work` does not equal the target
-    /// its past implies (see [`Dag::set_difficulty`] and [`crate::difficulty`]).
-    DifficultyMismatch {
-        id: BlockId,
-        expected: u128,
-        actual: u128,
-    },
     /// Difficulty is enforced and the block's timestamp precedes a parent's —
     /// a block may not be older than a block it builds on.
     NonMonotonicTimestamp {
@@ -161,12 +152,6 @@ pub enum DagError {
         timestamp_ms: u64,
         parent_timestamp_ms: u64,
     },
-    /// Proof-of-work is enforced (see [`Dag::set_proof_of_work`]) and the block's
-    /// id does not meet its `work` target — it was not adequately mined.
-    InsufficientProofOfWork { id: BlockId, work: u128 },
-    /// VRF is enforced (see [`Dag::set_vrf`]) and the block's VRF proof is invalid
-    /// or the VRF output does not meet the leader eligibility threshold.
-    InvalidVrf { id: BlockId, reason: String },
     /// PoA is enforced (see [`Dag::set_poa`]) and the block's authority
     /// signature is missing, does not verify against the authority scheduled
     /// for its slot, or its slot precedes a parent's (RFC-POA §4.2–4.3).
@@ -196,14 +181,6 @@ impl core::fmt::Display for DagError {
             DagError::InvalidBlock { id, reason } => {
                 write!(f, "block {id} rejected by validator: {reason}")
             }
-            DagError::DifficultyMismatch {
-                id,
-                expected,
-                actual,
-            } => write!(
-                f,
-                "block {id} has work {actual}, but difficulty requires {expected}"
-            ),
             DagError::NonMonotonicTimestamp {
                 id,
                 timestamp_ms,
@@ -211,14 +188,6 @@ impl core::fmt::Display for DagError {
             } => write!(
                 f,
                 "block {id} timestamp {timestamp_ms}ms precedes parent timestamp {parent_timestamp_ms}ms"
-            ),
-            DagError::InsufficientProofOfWork { id, work } => write!(
-                f,
-                "block {id} does not meet its proof-of-work target for work {work}"
-            ),
-            DagError::InvalidVrf { id, reason } => write!(
-                f,
-                "block {id} has invalid VRF: {reason}"
             ),
             DagError::InvalidAuthoritySignature { id, reason } => write!(
                 f,
@@ -305,15 +274,6 @@ pub struct Dag {
     /// Optional payload-aware validator run on each [`Dag::insert`]. See
     /// [`crate::validation`].
     validator: Option<Box<dyn BlockValidator>>,
-    /// Optional consensus-enforced difficulty policy. When set, each
-    /// [`Dag::insert`] requires the block's `work` to equal the target its past
-    /// implies and its timestamp not to precede any parent's. See
-    /// [`Dag::set_difficulty`] and [`crate::difficulty`].
-    difficulty: Option<Retarget>,
-    /// Consensus-enforced proof-of-work switch. When `true`, each [`Dag::insert`]
-    /// requires every non-genesis block's id to meet its `work` target (see
-    /// [`crate::pow`] and [`Dag::set_proof_of_work`]). Off by default.
-    require_pow: bool,
     /// Payload pruning depth: blocks more than this many blue score units below
     /// the selected tip have their payloads evicted (`payload = None`).
     /// `u64::MAX` means pruning is disabled (the default).
@@ -323,42 +283,12 @@ pub struct Dag {
     /// reachability oracle). `u64::MAX` means pruning is disabled (the default).
     /// See [`Dag::prune_old_blocks`] and [`Dag::pruning_point`].
     block_pruning_depth: u64,
-    /// Consensus-enforced VRF policy. When `Some(threshold)`, each [`Dag::insert`]
-    /// of a non-genesis block requires:
-    /// - A valid VRF proof (`vrf_public_key`, `vrf_proof`, `vrf_output`)
-    /// - The VRF output to be less than `threshold` (leader eligibility).
-    ///   A threshold of `u64::MAX` means all valid VRF outputs are eligible.
-    ///   The threshold is interpreted as a big-endian u64 from the VRF output.
-    ///   Off by default (`None`).
-    vrf_config: Option<VrfConfig>,
     /// Consensus-enforced Proof-of-Authority policy (RFC-POA §4). When
     /// `Some`, each [`Dag::insert`] of a non-genesis block requires a valid
     /// authority signature from the authority scheduled for its slot, and a
     /// slot not preceding any parent's. Replaces PoW/difficulty/VRF admission
     /// (enabling it clears those switches). Off by default (`None`).
     poa: Option<PoAConfig>,
-}
-
-/// Default epoch length (in blue-score units) for the epoch randomness beacon
-/// ([`Dag::epoch_beacon`]): the beacon is recomputed every `epoch_length` blue
-/// score units along the selected-parent chain. Used by [`Dag::set_vrf`] when
-/// no explicit epoch length is given. A consensus parameter — all nodes must
-/// agree on it, like `k`.
-pub const DEFAULT_EPOCH_LENGTH: u64 = 100;
-
-/// VRF consensus enforcement configuration.
-#[derive(Clone, Copy, Debug)]
-pub struct VrfConfig {
-    /// Eligibility threshold: blocks with VRF output < threshold are eligible
-    /// to produce a block. Interpreted as big-endian u64 from VRF output.
-    /// `u64::MAX` = all valid outputs eligible.
-    pub threshold: u64,
-    /// Epoch length in blue-score units: the epoch randomness beacon (the VRF
-    /// input, see [`Dag::epoch_beacon`]) is derived from the boundary block of
-    /// the epoch containing the block's selected parent, where
-    /// `epoch = blue_score(sp) / epoch_length`. A consensus parameter — all
-    /// nodes must agree on it, like `k`.
-    pub epoch_length: u64,
 }
 
 /// The `work` every block must claim while PoA is enforced
@@ -428,11 +358,8 @@ impl Dag {
             tips,
             reach: Reachability::empty(),
             validator: None,
-            difficulty: None,
-            require_pow: false,
             payload_pruning_depth: u64::MAX,
             block_pruning_depth: u64::MAX,
-            vrf_config: None,
             poa: None,
         };
         dag.reach = Reachability::build(&dag);
@@ -476,23 +403,6 @@ impl Dag {
     /// **not** bound a timestamp against wall-clock time (a "not too far in the
     /// future" rule is node policy, not a pure function of the DAG, and remains a
     /// follow-up).
-    pub fn set_difficulty(&mut self, retarget: Retarget) {
-        self.difficulty = Some(retarget);
-    }
-
-    /// Disable consensus-enforced difficulty. Useful when a higher layer takes
-    /// over work-target admission (e.g. the ledger's hybrid PoW/staked-VRF
-    /// policy) while still needing [`Self::work_target_with`] for its own
-    /// checks.
-    pub fn clear_difficulty(&mut self) {
-        self.difficulty = None;
-    }
-
-    /// The enforced difficulty policy, if any (see [`Dag::set_difficulty`]).
-    pub fn difficulty(&self) -> Option<Retarget> {
-        self.difficulty
-    }
-
     /// Enable (or disable) consensus-enforced proof-of-work.
     ///
     /// Once enabled, every subsequent [`Dag::insert`] of a non-genesis block
@@ -506,16 +416,6 @@ impl Dag {
     /// exactly as before. It composes with [`Dag::set_difficulty`]: with both on,
     /// difficulty pins `work` to [`Dag::next_work_target`] *and* the block must be
     /// mined to meet that work's target.
-    pub fn set_proof_of_work(&mut self, enabled: bool) {
-        self.require_pow = enabled;
-    }
-
-    /// Whether consensus-enforced proof-of-work is on (see
-    /// [`Dag::set_proof_of_work`]).
-    pub fn proof_of_work_enabled(&self) -> bool {
-        self.require_pow
-    }
-
     /// Enable consensus-enforced VRF leader selection.
     ///
     /// Once enabled, every subsequent [`Dag::insert`] of a non-genesis block
@@ -543,30 +443,6 @@ impl Dag {
     ///
     /// Uses the default epoch length ([`DEFAULT_EPOCH_LENGTH`]); use
     /// [`Dag::set_vrf_with_epoch`] to set a custom epoch length.
-    pub fn set_vrf(&mut self, threshold: u64) {
-        self.set_vrf_with_epoch(threshold, DEFAULT_EPOCH_LENGTH);
-    }
-
-    /// Enable consensus-enforced VRF leader selection with an explicit epoch
-    /// length (see [`Dag::set_vrf`] and [`Dag::epoch_beacon`]). `epoch_length`
-    /// is clamped to at least 1.
-    pub fn set_vrf_with_epoch(&mut self, threshold: u64, epoch_length: u64) {
-        self.vrf_config = Some(VrfConfig {
-            threshold,
-            epoch_length: epoch_length.max(1),
-        });
-    }
-
-    /// Disable consensus-enforced VRF (blocks no longer need VRF fields).
-    pub fn disable_vrf(&mut self) {
-        self.vrf_config = None;
-    }
-
-    /// The current VRF enforcement config, if any.
-    pub fn vrf_config(&self) -> Option<VrfConfig> {
-        self.vrf_config
-    }
-
     /// Enable consensus-enforced Proof-of-Authority admission (RFC-POA §4).
     ///
     /// Once enabled, every subsequent [`Dag::insert`] of a non-genesis block
@@ -591,10 +467,6 @@ impl Dag {
             authority_set,
             slot_duration_ms,
         });
-        // PoA replaces PoW/difficulty/VRF admission — no double standards.
-        self.require_pow = false;
-        self.difficulty = None;
-        self.vrf_config = None;
     }
 
     /// Disable consensus-enforced PoA (blocks no longer need authority
@@ -845,28 +717,6 @@ impl Dag {
         }
     }
 
-    /// The `work` a new block built on `parents` must carry to satisfy the
-    /// enforced difficulty policy, or `None` when difficulty is disabled.
-    ///
-    /// This is the miner's counterpart to insert-time enforcement: mine a block
-    /// with this work (and a timestamp not preceding any parent's) and it passes
-    /// [`Dag::insert`]'s difficulty check. `parents` must be present in the DAG.
-    pub fn next_work_target(&self, parents: &[BlockId]) -> Option<u128> {
-        let retarget = self.difficulty?;
-        Some(self.work_target_with(parents, &retarget))
-    }
-
-    /// The work target an explicit `retarget` policy implies for a block with
-    /// these parents — independent of whether difficulty enforcement is
-    /// enabled. This is what the ledger's hybrid admission path pins PoW-path
-    /// blocks to while dag-level difficulty is cleared.
-    pub fn work_target_with(&self, parents: &[BlockId], retarget: &Retarget) -> u128 {
-        match parents.iter().copied().max_by_key(|p| self.chain_key(p)) {
-            Some(sp) => retarget.next_work(&self.chain_samples(sp, retarget.window)),
-            None => retarget.min_work,
-        }
-    }
-
     /// The GHOSTDAG `k` parameter.
     pub fn k(&self) -> KParam {
         self.k
@@ -977,96 +827,6 @@ impl Dag {
         mergeset
     }
 
-    /// Enforce the difficulty rules on a prospective `block` (id `id`) with
-    /// selected parent `sp`, under policy `retarget`. See [`Dag::set_difficulty`].
-    fn check_difficulty(
-        &self,
-        block: &Block,
-        id: BlockId,
-        sp: BlockId,
-        retarget: &Retarget,
-    ) -> Result<(), DagError> {
-        // Timestamp must not precede any parent's (monotone along every path).
-        for parent in block.parents() {
-            let parent_ts = self.nodes[parent].block.timestamp_ms();
-            if block.timestamp_ms() < parent_ts {
-                return Err(DagError::NonMonotonicTimestamp {
-                    id,
-                    timestamp_ms: block.timestamp_ms(),
-                    parent_timestamp_ms: parent_ts,
-                });
-            }
-        }
-
-        // Work must equal the target the selected chain ending at `sp` implies.
-        let expected = retarget.next_work(&self.chain_samples(sp, retarget.window));
-        if block.work() != expected {
-            return Err(DagError::DifficultyMismatch {
-                id,
-                expected,
-                actual: block.work(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Enforce VRF rules on a prospective block.
-    fn check_vrf(
-        &self,
-        block: &Block,
-        id: BlockId,
-        ghostdag: &GhostdagData,
-        threshold: u64,
-    ) -> Result<(), DagError> {
-        // VRF input is the epoch randomness beacon of the block's selected
-        // parent — a pure function of the DAG, not of the parent list, so a
-        // validator cannot grind over parent sets (see [`Dag::epoch_beacon`]).
-        let sp = ghostdag
-            .selected_parent
-            .expect("non-genesis block has a selected parent");
-        let vrf_input = self.epoch_vrf_input(sp);
-
-        // Block must have VRF fields
-        let pk = block.vrf_public_key().ok_or_else(|| DagError::InvalidVrf {
-            id,
-            reason: "missing VRF public key".to_string(),
-        })?;
-        let proof = block.vrf_proof().ok_or_else(|| DagError::InvalidVrf {
-            id,
-            reason: "missing VRF proof".to_string(),
-        })?;
-        let output = block.vrf_output().ok_or_else(|| DagError::InvalidVrf {
-            id,
-            reason: "missing VRF output".to_string(),
-        })?;
-
-        // Verify the VRF proof
-        let verified_output =
-            vrf_verify(pk, &vrf_input, proof).map_err(|e| DagError::InvalidVrf {
-                id,
-                reason: format!("VRF verification failed: {e}"),
-            })?;
-
-        // Check output matches
-        if verified_output != *output {
-            return Err(DagError::InvalidVrf {
-                id,
-                reason: "VRF output does not match proof".to_string(),
-            });
-        }
-
-        // Check leader eligibility: output (as u64) < threshold
-        let output_u64 = output.as_u64();
-        if output_u64 >= threshold {
-            return Err(DagError::InvalidVrf {
-                id,
-                reason: format!("VRF output {output_u64} not eligible (threshold {threshold})"),
-            });
-        }
-
-        Ok(())
-    }
-
     /// Enforce PoA admission rules on a prospective block (RFC-POA §4.2–4.3).
     ///
     /// 1. The block must carry an `authority_sig` that verifies (Ed25519) over
@@ -1123,136 +883,6 @@ impl Dag {
         }
 
         Ok(())
-    }
-
-    /// Compute the VRF input from a block's parents.
-    /// Hash of concatenated parent IDs, domain-separated.
-    ///
-    /// **Legacy.** This is the pre-B1 parent-tip input (`H(tip1 || tip2 || ...)`),
-    /// kept for backward compatibility with callers that have not yet migrated
-    /// to the epoch randomness beacon (e.g. `kovanica-node`'s staked-block
-    /// producer and `kovanica-state`'s hybrid admission). Consensus VRF
-    /// enforcement ([`Dag::check_vrf`]) uses [`Dag::epoch_vrf_input`] instead.
-    /// New code should use [`Dag::epoch_vrf_input_for_parents`].
-    pub fn vrf_input(parents: &[BlockId]) -> Vec<u8> {
-        use blake3::Hasher;
-        let mut hasher = Hasher::new();
-        hasher.update(b"KOVANICA_VRF_INPUT_v1");
-        for parent in parents {
-            hasher.update(parent.as_bytes());
-        }
-        hasher.finalize().as_bytes().to_vec()
-    }
-
-    /// The epoch randomness beacon for a block whose selected parent is `sp`:
-    /// a 32-byte value that is a **pure function of the DAG** (the selected-
-    /// parent chain), used as the VRF input for leader eligibility.
-    ///
-    /// ## Construction (Algorand/Praos-style epoch randomness)
-    ///
-    /// The beacon is derived from the **boundary block** of the epoch containing
-    /// `sp`:
-    ///
-    /// ```text
-    /// epoch    = blue_score(sp) / epoch_length
-    /// boundary = the last block on the selected-parent chain ending at `sp`
-    ///            with blue_score < epoch * epoch_length
-    /// beacon   = H("KOVANICA_EPOCH_BEACON_v1" || boundary.id
-    ///             || boundary.vrf_output if present)
-    /// ```
-    ///
-    /// For epoch 0 the boundary is genesis (the anchor). The boundary block's
-    /// VRF output, when present, chains the previous epoch's leader randomness
-    /// into the next epoch's beacon (Algorand-style: the randomness of an epoch
-    /// is fixed by the blocks that precede it).
-    ///
-    /// ## Why this defeats parent-tip grinding
-    ///
-    /// The previous VRF input (`H(tip1 || tip2 || ...)`) let a validator grind:
-    /// by choosing *which* tips to reference it could evaluate the VRF over many
-    /// inputs until one made it eligible. The beacon removes that search space —
-    /// it depends only on the selected parent's epoch boundary, which is fixed
-    /// once the selected parent is chosen. A validator can only choose among the
-    /// beacons of the blocks it references as parents (a bounded set determined
-    /// by the DAG state), and within an epoch every block sharing a selected
-    /// parent shares the same beacon, so parent-set manipulation yields no
-    /// additional VRF evaluations.
-    ///
-    /// `epoch_length` is a consensus parameter (all nodes must agree, like `k`);
-    /// it comes from the configured [`VrfConfig`], defaulting to
-    /// [`DEFAULT_EPOCH_LENGTH`] when VRF is disabled.
-    pub fn epoch_beacon(&self, sp: BlockId) -> [u8; 32] {
-        let epoch_length = self
-            .vrf_config
-            .map_or(DEFAULT_EPOCH_LENGTH, |c| c.epoch_length)
-            .max(1);
-        let epoch = self.ghostdag(&sp).map_or(0, |g| g.blue_score) / epoch_length;
-        let threshold = epoch.saturating_mul(epoch_length);
-
-        // Walk the selected-parent chain from `sp` toward genesis; blue score
-        // strictly decreases going up, so the first block below the threshold is
-        // the deepest (last) chain block with blue_score < threshold. For epoch 0
-        // no block qualifies and the boundary stays genesis (the anchor).
-        let mut boundary = self.genesis;
-        let mut cur = Some(sp);
-        while let Some(id) = cur {
-            let node = &self.nodes[&id];
-            if node.ghostdag.blue_score < threshold {
-                boundary = id;
-                break;
-            }
-            cur = node.ghostdag.selected_parent;
-        }
-
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"KOVANICA_EPOCH_BEACON_v1");
-        hasher.update(boundary.as_bytes());
-        if let Some(output) = self.nodes[&boundary].block.vrf_output() {
-            hasher.update(output.as_bytes());
-        }
-        *hasher.finalize().as_bytes()
-    }
-
-    /// The VRF input for a block whose selected parent is `sp`: the epoch
-    /// randomness beacon ([`Dag::epoch_beacon`]) domain-separated for the VRF.
-    pub fn epoch_vrf_input(&self, sp: BlockId) -> Vec<u8> {
-        let beacon = self.epoch_beacon(sp);
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"KOVANICA_VRF_INPUT_v2");
-        hasher.update(&beacon);
-        hasher.finalize().as_bytes().to_vec()
-    }
-
-    /// The VRF input for a block with the given `parents`: the epoch randomness
-    /// beacon of the block's selected parent (the heaviest parent, exactly as
-    /// [`Dag::insert`] would choose it). Convenience for callers that know the
-    /// parents but not yet the selected parent (e.g. the node's staked-block
-    /// producer). `parents` must be non-empty (a non-genesis block).
-    pub fn epoch_vrf_input_for_parents(&self, parents: &[BlockId]) -> Vec<u8> {
-        let sp = parents
-            .iter()
-            .copied()
-            .max_by_key(|p| self.chain_key(p))
-            .expect("non-genesis block has at least one parent");
-        self.epoch_vrf_input(sp)
-    }
-
-    /// The last `window + 1` blocks of the selected-parent chain ending at `tip`
-    /// (inclusive), oldest first, as difficulty-retarget samples. This is the
-    /// window [`Retarget::next_work`] scores to set the *next* block's work.
-    fn chain_samples(&self, tip: BlockId, window: usize) -> Vec<TimedWork> {
-        let mut samples = Vec::new();
-        let mut cur = Some(tip);
-        while let Some(id) = cur {
-            let node = &self.nodes[&id];
-            samples.push(TimedWork::new(node.block.timestamp_ms(), node.block.work()));
-            if samples.len() == window + 1 {
-                break;
-            }
-            cur = node.ghostdag.selected_parent;
-        }
-        samples.reverse(); // collected newest-first; retarget wants oldest-first
-        samples
     }
 
     /// Preview the GHOSTDAG selected parent and mergeset a block would get if it
@@ -1361,37 +991,6 @@ impl Dag {
             .expect("non-genesis has a selected parent");
 
         // Consensus-enforced difficulty, if enabled: the block's timestamp must
-        // not precede a parent's, and its work must equal the target its past
-        // (the selected chain ending at `sp`) implies. Checked before the block
-        // is wired in, so a rejected block leaves the DAG unchanged. Skipped on
-        // replay (`insert_for_replay`) — replayed blocks are trusted history
-        // that was already admitted when first inserted.
-        if !skip_pruning_check {
-            if let Some(retarget) = self.difficulty {
-                self.check_difficulty(&block, id, sp, &retarget)?;
-            }
-        }
-
-        // Consensus-enforced proof-of-work, if enabled: the block's id must meet
-        // its `work` target (Nakamoto-style hash-target PoW; see `crate::pow`).
-        // Genesis is exempt, but this path only runs for non-genesis inserts.
-        // Independent of and composable with the difficulty check above.
-        // Skipped on replay, like difficulty.
-        if !skip_pruning_check && self.require_pow && !crate::pow::meets_target(&id, block.work()) {
-            return Err(DagError::InsufficientProofOfWork {
-                id,
-                work: block.work(),
-            });
-        }
-
-        // Consensus-enforced VRF leader selection, if enabled. Skipped on
-        // replay, like difficulty and PoW.
-        if !skip_pruning_check {
-            if let Some(vrf_config) = self.vrf_config {
-                self.check_vrf(&block, id, &ghostdag, vrf_config.threshold)?;
-            }
-        }
-
         // Consensus-enforced Proof-of-Authority, if enabled (RFC-POA §4).
         // Skipped on replay — replayed blocks are trusted history whose
         // signatures may come from an earlier authority set.
