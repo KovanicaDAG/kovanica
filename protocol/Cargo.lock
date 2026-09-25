@@ -1223,6 +1223,7 @@ dependencies = [
 name = "kovanica-ffi"
 version = "0.3.0"
 dependencies = [
+ "ed25519-dalek",
  "hex",
  "kovanica-dag",
  "kovanica-node",

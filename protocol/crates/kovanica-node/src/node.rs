@@ -3137,6 +3137,12 @@ impl Node {
         }
 
         let txs = decode_block_payload(block.payload()).ok()?;
+        let authority_set_hash = self
+            .ledger
+            .as_ref()
+            .and_then(|l| l.poa_config())
+            .map(|c| c.authority_set.hash())
+            .unwrap_or([0u8; 32]);
         Some(kovanica_state::spv::BlockHeader::from_block(
             block,
             prev_hash,
@@ -3144,6 +3150,7 @@ impl Node {
             chain_blue_work,
             height,
             &txs,
+            authority_set_hash,
         ))
     }
 

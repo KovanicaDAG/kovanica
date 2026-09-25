@@ -17,6 +17,7 @@ crate-type = ["lib", "staticlib", "cdylib"]
 kovanica-dag = { path = "../kovanica-dag" }
 kovanica-state = { path = "../kovanica-state" }
 kovanica-node = { path = "../kovanica-node" }
+ed25519-dalek = { workspace = true }
 hex.workspace = true
 thiserror.workspace = true
 uniffi.workspace = true
