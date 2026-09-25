@@ -3510,7 +3510,13 @@ fn block_detail_json(app: &Explorer, id_hex: &str) -> Result<String, String> {
         .map(|g| g.blue_anticone_sizes.keys().copied().collect())
         .unwrap_or_default();
     let colour = block_kind(id, genesis, &chain, &blue_set);
-    let kind = if rec.vrf.is_some() { "staked" } else { "pow" };
+    let kind = if rec.vrf.is_some() {
+        "staked"
+    } else if rec.authority_sig.is_some() {
+        "poa"
+    } else {
+        "pow"
+    };
     let confirming_status = if tip_id == Some(id) {
         "tip"
     } else if chain.contains(&id) {
@@ -3537,8 +3543,23 @@ fn block_detail_json(app: &Explorer, id_hex: &str) -> Result<String, String> {
         (prev, kovanica_state::spv::merkle_root(&rec.txs), height)
     };
 
+    // PoA fields: authority signature, slot, active authority
+    let (authority_sig, slot, active_authority) = if let Some(sig) = rec.authority_sig {
+        let poa = n.poa_config();
+        let slot_duration = poa.as_ref().map(|c| c.slot_duration_ms).unwrap_or(3000);
+        let slot = rec.timestamp_ms / slot_duration;
+        let active = poa.as_ref().and_then(|c| {
+            let authorities = c.authority_set.authorities();
+            let idx = slot as usize % authorities.len();
+            authorities.get(idx).map(|pk| hex::encode(pk.as_bytes()))
+        });
+        (Some(hex::encode(sig)), Some(slot), active)
+    } else {
+        (None, None, None)
+    };
+
     Ok(format!(
-        "{{\"id\":{},\"prev_hash\":{},\"merkle_root\":{},\"height\":{},\"timestamp_ms\":{},\"nonce\":{},\"blue_score\":{},\"chain_blue_work\":{},\"work\":{},\"parents\":{},\"children\":{},\"txs\":{},\"kind\":{},\"colour\":{},\"confirming_status\":{}}}",
+        "{{\"id\":{},\"prev_hash\":{},\"merkle_root\":{},\"height\":{},\"timestamp_ms\":{},\"nonce\":{},\"blue_score\":{},\"chain_blue_work\":{},\"work\":{},\"parents\":{},\"children\":{},\"txs\":{},\"kind\":{},\"colour\":{},\"confirming_status\":{},\"authority_sig\":{},\"slot\":{},\"active_authority\":{}}}",
         jstr(&id.to_string()),
         jstr(&prev_hash.to_string()),
         jstr(&hex::encode(merkle_root)),
@@ -3553,7 +3574,10 @@ fn block_detail_json(app: &Explorer, id_hex: &str) -> Result<String, String> {
         jarr(rec.txs.iter().map(|tx| jstr(&tx.id().to_string()))),
         jstr(kind),
         jstr(colour),
-        jstr(confirming_status)
+        jstr(confirming_status),
+        jstr_opt(authority_sig),
+        jstr_opt(slot.map(|s| s.to_string())),
+        jstr_opt(active_authority)
     ))
 }
 
@@ -4126,6 +4150,13 @@ fn jstr(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+fn jstr_opt(opt: Option<String>) -> String {
+    match opt {
+        Some(s) => jstr(&s),
+        None => "null".to_string(),
+    }
 }
 
 fn jarr(items: impl Iterator<Item = String>) -> String {

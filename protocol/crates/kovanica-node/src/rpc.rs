@@ -161,6 +161,24 @@ fn run(node: &mut Node, line: &str) -> Result<String, String> {
                     node.stake_of(&pk).map_err(|e| e.to_string())?
                 ));
             }
+            // PoA info
+            if let Some(poa) = node.poa_config() {
+                out.push_str(&format!(
+                    " poa=true slot_duration_ms={} authorities={} threshold={}",
+                    poa.slot_duration_ms,
+                    poa.authority_set.len(),
+                    poa.authority_set.threshold()
+                ));
+                let authorities_hex: Vec<String> = poa
+                    .authority_set
+                    .authorities()
+                    .iter()
+                    .map(|pk| hex::encode(pk.as_bytes()))
+                    .collect();
+                out.push_str(&format!(" authorities=[{}]", authorities_hex.join(",")));
+            } else {
+                out.push_str(" poa=false");
+            }
             Ok(out)
         }
 
