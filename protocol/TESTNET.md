@@ -2,6 +2,22 @@
 
 Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 
+> > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> > Proof-of-Work is being removed from the protocol. See
+> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical). Items marked `[TARGET]`
+> > are ratified but not yet implemented; `[CURRENT]` items describe shipped code.
+> >
+> > `[TARGET]` the `PoW` row below is removed and a PoA-only testnet replaces
+> > this one. `KOVANICA_CONSENSUS` already defaults to `poa` when unset, so the
+> > reset that the genesis row refers to is **mandatory** (RFC-POA §0.6) — a PoW
+> > chain and a PoA chain cannot be reconciled.
+> >
+> > **Every RFC-006 number in this table is unchanged by that decision.** The
+> > curve is height-indexed and `cumulative_minted` is hard-capped at
+> > `MAX_SUPPLY` in `apply_block`, so supply math does not depend on admission.
+> > Only the wall-clock *pace* changes (fixed 3000 ms slots, no retarget, no
+> > gap-fill); the 90.2M cap does not.
+
 | | |
 | --- | --- |
 | Explorer | https://explorer.kovanica.online |
@@ -16,7 +32,10 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 | Fee | Floor `max(1, subsidy/500_000)` atoms/byte; **75% burned / 25% producer** |
 | Min fee (genesis) | tracks subsidy (dynamic) |
 | k | 3 (GHOSTDAG) |
-| PoW | on (`KOVANICA_POW=1`) |
+| PoW | `[CURRENT]` on (`KOVANICA_POW=1`) — pre-reset chain / **`[TARGET]`-removed** |
+| PoA | `[CURRENT]` available, **default when `KOVANICA_CONSENSUS` is unset** · `[TARGET]` the only admission model |
+| Authority set | `[CURRENT]` `KOVANICA_AUTHORITIES`; testnet placeholder from the public constant `AUTHORITY_PLACEHOLDER_BASE = 9001` (publicly derivable, testnet-only) · rotation **mechanism settled** (genesis-fixed, on-chain M-of-N `AuthorityUpdateTx` only) · `[OPEN]` mainnet governance *inputs* (RFC-POA §0.7.2) |
+| Slot duration | `[CURRENT]` `KOVANICA_SLOT_DURATION`, default 3000 ms · no gap-fill |
 | P2P | **TCP only** `KOVANICA_LISTEN` (default `0.0.0.0:9000`) |
 | Bootstrap | DNS-only `seed.kovanica.online:9000` (not the Cloudflare hostname) |
 | Seeds | `seed.kovanica.online:9000` (primary) · `seed2.kovanica.online:9000` (secondary, Hostinger KVM2 VPS) · `seed3` retired |

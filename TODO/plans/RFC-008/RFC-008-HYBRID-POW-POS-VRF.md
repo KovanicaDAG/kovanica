@@ -1,10 +1,48 @@
 # RFC-008 — Hybrid PoW/PoS Admission with VRF + Light-Client (SPV) Path
 
-**Status:** Draft  
+**Status:** **SUPERSEDED — hybrid dropped entirely** (decided 2026-09-25, RFC-POA-Migration §0.7.1)  
 **Public name (proposed):** KVP-107 Hybrid Consensus  
 **Depends on:** RFC-006 (tokenomics, MAX_SUPPLY, maturity), GHOSTDAG k=3, RFC-005 (vaults for stake)  
 **Affects:** `kovanica-dag`, `kovanica-state`, `kovanica-node`, light-node / UniFFI, explorer, wallet  
 **Consensus impact:** **Hard fork** (admission rules + header extension). Requires testnet reset or carefully gated activation height.
+
+> > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> > Proof-of-Work is being removed from the protocol. See
+> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical). Items marked `[TARGET]`
+> > are ratified but not yet implemented; `[CURRENT]` items describe shipped code.
+> >
+> > **This plan is SUPERSEDED. Do not implement from it.**
+> >
+> > Its central premise — PoW as the "ultimate work source" with stake gating only
+> > a cheap secondary admission path — is **`[TARGET]`-obsolete**. It assumes a
+> > permissionless, work-based admission model, and PoA-only deliberately removes
+> > the protocol's permissionless admission path (RFC-POA-Migration §0.5). Most of
+> > this document is written to solve problems that no longer exist: sizing
+> > `FIXED_STAKE_WORK` as a fraction of live PoW work, keeping a PoW tip alive
+> > against a stake majority, and the pre/post-activation coexistence of "PoW-only"
+> > and "PoW+staked" header formats.
+> >
+> > **It is resolved: hybrid is dropped entirely.** RFC-POA-Migration
+> > **§0.7.1** decided **Option A** (2026-09-25) — PoA is the only admission
+> > path, and the "PoA + staked-VRF secondary tier" reading was considered and
+> > rejected. Keep this file as a historical record only. **Every parameter,
+> > threshold and schedule proposed below is dead** and must not be
+> > implemented; the stake registry retires with hybrid, and RFC-005
+> > vault/CSV and the treasury vaults are explicitly **unaffected**.
+> >
+> > `[CURRENT]`: the hybrid machinery described here is still in the code —
+> > `HybridConfig` (`crates/kovanica-state/src/ledger.rs` ~236) and
+> > `Ledger::set_hybrid` (~2831) — and its **staked-VRF half is a genuinely
+> > separate feature** from PoW, which is precisely why removing PoW alone did
+> > not decide it — the maintainer had to decide it separately (and did: drop)
+> > rather than automatic. Test suites that depend on it:
+> > `crates/kovanica-state/tests/hybrid.rs`,
+> > `crates/kovanica-node/tests/hybrid_node.rs`, `unbond_node.rs`,
+> > `incremental_persistence.rs`.
+> >
+> > Note: this RFC-008 is **not** the same document as
+> > `protocol/docs/RFC-008-OraclePruning.md` (Oracle + pruning), which is
+> > unaffected by the PoA-only decision.
 
 ---
 
@@ -18,10 +56,10 @@ Kovanica currently relies solely on Proof-of-Work for block admission and GHOSTD
 
 Goals:
 
-1. Hybrid security: PoW remains the ultimate work source; stake gates cheap admission.
-2. Light-client friendliness: compact headers + VRF proofs + blue-score finality.
-3. No inflation of blue weight by low-cost staked blocks (fixed nominal work).
-4. Clean interaction with existing MAX_SUPPLY, coinbase maturity, and fee-burn rules.
+1. Hybrid security: PoW remains the ultimate work source; stake gates cheap admission. — **`[TARGET]`-obsolete premise.** Under PoA-only there is no work source and no "ultimate"; blue work is a plain block count because every block is pinned to `POA_NOMINAL_WORK = 1` (RFC-POA §6.1(b)). This goal cannot be met and is replaced by the authority-set trust assumption (§0.5).
+2. Light-client friendliness: compact headers + VRF proofs + blue-score finality. — **survives**, and the SPV path was separately delivered under RFC-POA M4.
+3. No inflation of blue weight by low-cost staked blocks (fixed nominal work). — **survives** in spirit, and is already true under PoA by construction.
+4. Clean interaction with existing MAX_SUPPLY, coinbase maturity, and fee-burn rules. — **survives unchanged; see §5 below.**
 
 Non-goals (this RFC):
 
@@ -123,18 +161,31 @@ Exact script templates and slash conditions are specified in the companion techn
 
 ## 5. Interaction with RFC-006 tokenomics
 
+> **These bullets survive the PoA-only decision and should be read as still
+> accurate.** The emission curve is **height-indexed** (`subsidy_at(height)`) and
+> issuance is hard-capped inside `apply_block` (`crates/kovanica-state/src/ledger.rs` ~1617), which rejects any block where `cumulative_minted + claimed_native > MAX_SUPPLY`. Neither depends on who produced a block or how. MAX_SUPPLY **90.2M KVNC**, s₀ **10 KVNC/block**, era **2,000,000 blocks**, α **3/4**, maturity **100 blocks**, fee split **75% burned / 25% producer**, GHOSTDAG **k=3**, UTXO, Ed25519, **1 KVNC = 100_000_000 atoms** — all unchanged. The admission model moved; supply math did not. The only thing that shifts is the *pace* (fixed `SLOT_DURATION_MS` = 3000 ms default, no retarget, no gap-fill), never the cap.
+
 - Coinbase rules, `native_minted`, `MAX_SUPPLY`, 100-block maturity, and 75/25 fee burn apply **identically** to both PoW and staked blocks.
 - A staked block that would push `native_minted` over the hard cap is rejected exactly as a PoW block would be.
-- Security budget note: as subsidy → 0, the combination of remaining fees + economic value of stake (and future staking rewards if introduced) becomes the dominant incentive.
+- Security budget note: as subsidy → 0, the combination of remaining fees + economic value of stake (and future staking rewards if introduced) becomes the dominant incentive. — `[OPEN]` the PoA migration raises a related question this does not answer: with a fixed slot clock and no gap-fill, an unscheduled/offline slot emits no subsidy, so emission pace and its distribution depend on authority liveness (RFC-POA-Migration §0.7.3).
 
 ---
 
 ## 6. Consensus parameters (initial proposal)
 
+> ⚠️ `[TARGET]` **entirely obsolete — do not implement any row.** The table
+> below is kept for the record. `FIXED_STAKE_WORK` is specified as a
+> *fraction of live average PoW work*, and that reference point disappears with
+> PoW. Hybrid itself is now removed (§0.7.1), so there is no slot to allocate
+> and no `FIXED_STAKE_WORK` to size: the analogue `POA_NOMINAL_WORK = 1` is
+> the PoA admission pin and is **not** a hybrid field. Do not carry the 1–5 %
+> figure over, and do not re-derive this table — there is nothing to derive it
+> for.
+
 | Parameter              | Suggested starting value          | Notes |
 |------------------------|-----------------------------------|-------|
 | `SLOT_LENGTH`          | 10 blue-score units               | Tunable |
-| `FIXED_STAKE_WORK`     | Equivalent to ~1–5 % of current average PoW work | Must not let pure-stake tips overtake honest PoW |
+| `FIXED_STAKE_WORK`     | Equivalent to ~1–5 % of current average PoW work | Must not let pure-stake tips overtake honest PoW — `[TARGET]`-obsolete basis |
 | `THRESHOLD`            | 1 / expected_validators_per_slot  | Classic sortition |
 | `STAKE_ACTIVATION_BLOCKS` | 100–500                        | After deposit |
 | `UNBONDING_PERIOD`     | ≥ 2–4× practical finality depth   | k=3 aware |
@@ -147,9 +198,13 @@ All values are consensus constants; changing them after activation requires anot
 ## 7. Activation & migration
 
 - New consensus version / fork height (or genesis reset on testnet).
-- Pre-activation: only PoW blocks valid.
-- Post-activation: both types accepted under the rules above.
-- Testnet **must** reset or clear all prior state that assumed pure-PoW headers (same discipline as RFC-006).
+- Pre-activation: only PoW blocks valid. — **`[TARGET]`-obsolete:** the PoW
+  pre-activation phase cannot exist under PoA-only, and the mandatory reset means
+  there is no pre-activation phase to gate against (RFC-POA-Migration §0.6).
+- Post-activation: both types accepted under the rules above. — **`[TARGET]`-dead.**
+  "Both types" presupposes a PoW type, and neither type exists: PoW is removed
+  (§0.1) and hybrid is removed (§0.7.1). PoA is the only admission path.
+- Testnet **must** reset or clear all prior state that assumed pure-PoW headers (same discipline as RFC-006). — **still true, and now unconditionally required**, not conditional on this RFC shipping.
 - Light-node clients must be updated before or at activation; old light clients that ignore the new fields will be unsafe.
 
 ---

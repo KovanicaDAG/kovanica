@@ -1,7 +1,24 @@
 # Kovanica Protocol — Community Home (Discord)
 
 **Status**: Draft (P2.6)  
+**Consensus impact**: none (community/comms doc; no protocol parameters)  
 **Goal**: Single primary community channel with moderation rules, linked from kovanica.online
+
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Policy lives in
+> [`RFC-POA-Migration.md` §0](./RFC-POA-Migration.md). The channel roster below
+> follows the ratified target: `#consensus-research` drops **difficulty** and
+> **VRF** as topics and picks up **authority set** and **slot scheduling**.
+> RFC-006 tokenomics (**MAX_SUPPLY 90.2M KVNC**, s₀ **10 KVNC/block**, era
+> **2 000 000**, **α 3/4**, maturity **100**, fee **75% burned / 25%
+> producer**) and GHOSTDAG **k=3** are unchanged, so no other channel
+> description moves. VRF/staking is no longer a consensus topic at all: hybrid
+> was dropped entirely (decided 2026-09-25, RFC-POA-Migration §0.7.1), so
+> `#consensus-research` covers authority sets, slots and slot scheduling. The
+> mainnet authority-set *governance inputs* (who may join, key ceremony) remain
+> `[OPEN]` — §0.7.2.
 
 ---
 
@@ -32,7 +49,7 @@
 
 🛠️ DEVELOPMENT
 ├── #general-dev                (general protocol dev chat)
-├── #consensus-research         (GHOSTDAG, VRF, difficulty, forks)
+├── #consensus-research         (GHOSTDAG, authority set, slots, forks)
 ├── #ledger-state               (UTXO, stake registry, checkpoints)
 ├── #networking-p2p             (Mesh, DHT, relay, sync)
 ├── #ffi-mobile                 (UniFFI, Android, iOS)

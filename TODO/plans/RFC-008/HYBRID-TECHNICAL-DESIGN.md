@@ -1,16 +1,56 @@
 # Hybrid PoW/PoS + VRF — Technical Design (Kovanica)
 
+**Status:** **SUPERSEDED — hybrid dropped entirely** (decided 2026-09-25, RFC-POA-Migration §0.7.1)  
+**Consensus impact:** n/a (superseded; retained as a historical design record)
+
+> > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> > Proof-of-Work is being removed from the protocol. See
+> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical). Items marked `[TARGET]`
+> > are ratified but not yet implemented; `[CURRENT]` items describe shipped code.
+> >
+> > **This design is SUPERSEDED. Do not implement from it.**
+> >
+> > Its load-bearing assumption — *"stake decides who may propose; PoW (real or
+> > fixed) decides which chain wins"* — is **`[TARGET]`-obsolete**. Under PoA-only
+> > there is no work-based chain selection to protect and no permissionless
+> > admission to gate: a fixed authority set produces one block per slot by
+> > schedule, and every block carries `POA_NOMINAL_WORK = 1`, so accumulated blue
+> > work is a plain block count. The sections below on `FIXED_STAKE_WORK` sizing
+> > against live PoW work, on keeping a PoW tip alive against a stake majority,
+> > and on the "PoW path vs stake path" admission split are all solving problems
+> > the ratified direction removes.
+> >
+> > **It is resolved: hybrid is dropped entirely.** RFC-POA-Migration
+> > **§0.7.1** decided **Option A** (2026-09-25) — PoA is the only admission
+> > path, and the "PoA + staked-VRF secondary tier" reading was considered and
+> > rejected. Keep this file as a historical record only; nothing below should
+> > be implemented. The stake registry retires with hybrid, and **RFC-005
+> > vault/CSV plus the treasury vaults are explicitly unaffected** (verified:
+> > `vault.rs` has zero stake references).
+> >
+> > `[CURRENT]`: `HybridConfig` (`crates/kovanica-state/src/ledger.rs` ~236) and
+> > `Ledger::set_hybrid` (~2831) are still in the code, and the **staked-VRF half
+> > was a genuinely separate feature** from PoW — which is exactly why the
+> > decision needed to be made explicitly rather than assumed. Test suites:
+> > `crates/kovanica-state/tests/hybrid.rs`,
+> > `crates/kovanica-node/tests/hybrid_node.rs`, `unbond_node.rs`,
+> > `incremental_persistence.rs`.
+> >
+> > Note: this is not the same document as
+> > `protocol/docs/RFC-008-OraclePruning.md` (Oracle + pruning), which is
+> > unaffected by the PoA-only decision.
+
 Companion to **RFC-008**. This document is the engineering blueprint for implementers working in the monorepo (`kovanica-dag`, `kovanica-state`, `kovanica-node`, light-node).
 
 ---
 
 ## 1. Design principles
 
-1. **Blue-work remains sovereign** — GHOSTDAG(k=3) never changes its selection algorithm; only the work *value* fed into it changes for staked blocks.
-2. **Admission is gated, selection is not** — stake decides *who may propose*; PoW (real or fixed) decides *which chain wins*.
-3. **Determinism** — every full node must reach identical conclusions about eligibility and work from the same selected-parent view.
-4. **Light-client first-class** — header format and proofs must allow a resource-constrained client (mobile UniFFI light-node) to verify the selected tip without the full anticone or UTXO set.
-5. **Reuse existing primitives** — Ed25519, RFC-005 vaults, RFC-006 supply rules, current P2P framing.
+1. **Blue-work remains sovereign** — GHOSTDAG(k=3) never changes its selection algorithm; only the work *value* fed into it changes for staked blocks. — **still true, and now stronger than planned:** under PoA every block is pinned to `POA_NOMINAL_WORK = 1`, so blue work is a plain block count (RFC-POA §6.1(b)).
+2. **Admission is gated, selection is not** — stake decides *who may propose*; PoW (real or fixed) decides *which chain wins*. — **`[TARGET]`-obsolete.** With PoW removed there is no work source; selection is blue score plus a constant, and who may propose is decided by the **authority set and slot schedule**, not by stake. With hybrid also removed (§0.7.1) there is no stake-based gating at all, so this principle has no live analogue — do not re-state it.
+3. **Determinism** — every full node must reach identical conclusions about eligibility and work from the same selected-parent view. — **still true**, and the analogue under PoA is already enforced (canonical authority ordering, RFC-POA §6.1(a)).
+4. **Light-client first-class** — header format and proofs must allow a resource-constrained client (mobile UniFFI light-node) to verify the selected tip without the full anticone or UTXO set. — **still true; delivered** under RFC-POA M4.
+5. **Reuse existing primitives** — Ed25519, RFC-005 vaults, RFC-006 supply rules, current P2P framing. — **still true.**
 
 ---
 
@@ -60,11 +100,19 @@ Full node validation order:
 6. Assign `work = FIXED_STAKE_WORK`.
 7. Continue with normal GHOSTDAG + ledger checks (coinbase, MAX_SUPPLY, etc.).
 
-PoW blocks simply omit the proof and follow the existing difficulty target.
+PoW blocks simply omit the proof and follow the existing difficulty target. — **`[TARGET]`-obsolete:** both branches of this sentence disappear. There is no difficulty target (removed with PoW) and, under PoA, the "omit the proof" branch is the normal case — a plain block is validated by its **authority signature and slot schedule**, not by any work target.
 
 ---
 
 ## 3. Fixed nominal work
+
+> ⚠️ `[TARGET]` **entirely obsolete — do not implement.** Kept for the record.
+> The calibration below measures **live average PoW work**, and that quantity
+> ceases to exist when PoW is removed. Under PoA the analogue is the fixed
+> `POA_NOMINAL_WORK = 1` — a constant, not a calibrated value, because PoA blocks
+> are one-per-slot and equal by construction. Hybrid is now removed entirely
+> (§0.7.1), so there is nothing to calibrate **for**; this section is not to be
+> re-derived or re-scaled.
 
 ```rust
 pub const FIXED_STAKE_WORK: u128 = /* calibrated value */;
@@ -72,8 +120,8 @@ pub const FIXED_STAKE_WORK: u128 = /* calibrated value */;
 
 Calibration methodology (testnet):
 
-- Measure average real PoW work of honest miners over a window.
-- Set `FIXED_STAKE_WORK` to a small fraction (1–5 %) of that average so that a pure-stake majority cannot cheaply overtake a live PoW tip under normal network conditions.
+- Measure average real PoW work of honest miners over a window. — `[TARGET]`-obsolete; nothing to measure.
+- Set `FIXED_STAKE_WORK` to a small fraction (1–5 %) of that average so that a pure-stake majority cannot cheaply overtake a live PoW tip under normal network conditions. — `[TARGET]`-obsolete; there is no PoW tip to overtake. Under PoA the equivalent invariant is the one the shipped hybrid code already uses: keep the nominal value tiny so cheaply-inflatable weight stays out of chain selection (`HybridConfig::stake_nominal_work`).
 - Document the measurement script; treat the constant as consensus-critical after activation.
 
 GHOSTDAG receives this value exactly as it receives real PoW work today. No other changes to blue-set calculation.
