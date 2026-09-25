@@ -29,7 +29,6 @@
 
 use core::fmt;
 
-
 /// 32-byte BLAKE3 digest identifying a block.
 ///
 /// Ordering is defined over the raw bytes so that consensus tie-breaks (which
@@ -148,9 +147,6 @@ impl Block {
         block
     }
 
-    /// Create a block with full VRF fields.
-    #[allow(clippy::too_many_arguments)]
-
     /// Create a block with an explicitly `None` payload (used when reconstructing
     /// a pruned block from a snapshot). The `id` must be provided explicitly
     /// since the payload is not available for hashing.
@@ -220,12 +216,6 @@ impl Block {
         block.id = block.compute_id();
         block
     }
-
-    /// Create a block with full VRF fields and authority signature (PoA + VRF).
-    #[allow(clippy::too_many_arguments)]
-
-    /// Create a pruned block with full VRF fields and authority signature.
-    #[allow(clippy::too_many_arguments)]
 
     /// The canonical genesis block: no parents, the given work, timestamp,
     /// nonce, and payload.
@@ -499,7 +489,11 @@ mod tests {
         crate::snapshot::encode_block(&b, &mut enc);
         // id(32) + parents_len(8) + parent(32) + work(16) + ts(8) + nonce(8) = 104
         // + reserved has_vrf(1) + has_auth(1) + payload_len(8) = 114
-        assert_eq!(enc.len(), 114, "reserved has_vrf byte must still be emitted");
+        assert_eq!(
+            enc.len(),
+            114,
+            "reserved has_vrf byte must still be emitted"
+        );
         assert_eq!(enc[104], 0, "reserved has_vrf flag must be 0");
 
         // And the encoded length accounting agrees with the encoder.
