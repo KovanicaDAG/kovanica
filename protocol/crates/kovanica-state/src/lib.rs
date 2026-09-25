@@ -89,20 +89,20 @@ pub use crate::stake::{
 pub use htlc::{HtlcScript, HtlcScriptError, HTLC_SCRIPT_LEN};
 pub use keys::{verify, verify_pk, Address, KeyPair, StealthAddress};
 pub use ledger::{
-    apply_block, apply_dag, placeholder_treasury_key, rfc006_genesis_coinbase, BlockSummary,
-    HalvingSchedule, HybridConfig, Ledger, LedgerCheckpointError, LedgerError, LedgerInsertError,
-    LedgerRun, LedgerSnapshotError, StakedVrf, SupplyMetrics, ATOM, BLOCKS_PER_YEAR,
-    COINBASE_MATURITY, DEFAULT_HALVING_ERA, FEE_PRODUCER_DEN, FEE_PRODUCER_NUM,
-    HTLC_ACTIVATION_SCORE, MAX_SUPPLY, MULTISIG_ACTIVATION_SCORE, NATIVE_TOKEN_ACTIVATION_SCORE,
-    RFC006_ERA_LENGTH, RFC006_GENESIS_SUBSIDY, RFC006_PREMINE, RFC006_TREASURY_TOTAL,
-    RFC006_TREASURY_TRANCHE, RFC006_TREASURY_TRANCHES, TOKENOMICS_ACTIVATION_SCORE,
-    VAULT_ACTIVATION_SCORE,
+    apply_block, apply_dag, parse_poa_genesis_tag, placeholder_treasury_key, poa_genesis_tag,
+    rfc006_genesis_coinbase, BlockSummary, HalvingSchedule, HybridConfig, Ledger,
+    LedgerCheckpointError, LedgerError, LedgerInsertError, LedgerRun, LedgerSnapshotError,
+    StakedVrf, SupplyMetrics, ATOM, BLOCKS_PER_YEAR, COINBASE_MATURITY, DEFAULT_HALVING_ERA,
+    FEE_PRODUCER_DEN, FEE_PRODUCER_NUM, HTLC_ACTIVATION_SCORE, MAX_SUPPLY,
+    MULTISIG_ACTIVATION_SCORE, NATIVE_TOKEN_ACTIVATION_SCORE, RFC006_ERA_LENGTH,
+    RFC006_GENESIS_SUBSIDY, RFC006_PREMINE, RFC006_TREASURY_TOTAL, RFC006_TREASURY_TRANCHE,
+    RFC006_TREASURY_TRANCHES, TOKENOMICS_ACTIVATION_SCORE, VAULT_ACTIVATION_SCORE,
 };
 pub use multisig::{verify_threshold_signatures, MultisigScript, MAX_MULTISIG_KEYS};
 pub use spv::{
     generate_merkle_proof, merkle_root, BlockFilter, BlockHeader, MerkleProof, SpvClient, SpvError,
 };
-pub use store::{LedgerStore, StoreError};
+pub use store::{LedgerStore, PruningPolicy, StoreError};
 pub use tx::{
     decode_block_payload, derive_rwa_asset_id, encode_block_payload, AssetId, AssetKind,
     AssetRegistryEntry, DecodeError, OutPoint, Sig, StealthExt, Transaction, TxId, TxInput,

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use kovanica_dag::{Block, BlockId};
+use kovanica_dag::{AuthoritySet, Block, BlockId};
 use kovanica_state::{
     decode_block_payload, encode_block_payload, Address, AssetId, HybridConfig, OutPoint,
     Transaction, TxId, TxOutput, MAX_SUPPLY,
@@ -167,6 +167,123 @@ fn network_profile() -> NetworkProfile {
         profile.finality_depth
     );
     profile
+}
+
+/// Consensus admission mode, from `KOVANICA_CONSENSUS` (RFC-POA §7).
+///
+/// `poa` (default) — Proof-of-Authority: a fixed authority set produces blocks
+/// in slot round-robin; the DAG's PoW/difficulty/VRF switches are cleared.
+/// `pow` — legacy PoW (+ optional hybrid staked-VRF) admission, kept for
+/// replaying the pre-reset testnet and for `pow-vrf`-feature builds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ConsensusMode {
+    Poa,
+    Pow,
+}
+
+fn consensus_mode_from_env() -> ConsensusMode {
+    match std::env::var("KOVANICA_CONSENSUS").as_deref() {
+        Ok("poa") => ConsensusMode::Poa,
+        Ok("pow") | Ok("pow-vrf") => ConsensusMode::Pow,
+        Ok(other) => panic!("KOVANICA_CONSENSUS must be 'poa' or 'pow' (got '{other}')"),
+        Err(_) => ConsensusMode::Poa,
+    }
+}
+
+/// Base seed for the deterministic TESTNET-ONLY placeholder authority set
+/// (publicly derivable by design, mirroring the placeholder treasury keys).
+/// Mainnet refuses to boot without explicit `KOVANICA_AUTHORITIES`.
+const AUTHORITY_PLACEHOLDER_BASE: u64 = 9001;
+/// Number of placeholder authorities (RFC-POA §1: 3–4 keys at launch).
+const AUTHORITY_PLACEHOLDER_COUNT: u64 = 3;
+
+/// PoA genesis configuration parsed from the environment (RFC-POA §7).
+struct PoaGenesisConfig {
+    authority_set: AuthoritySet,
+    slot_duration_ms: u64,
+    /// Whether the set is the deterministic TESTNET-ONLY placeholder. When
+    /// true, `genesis_node` also loads the placeholder signing keys so a
+    /// single-node testnet/explorer can produce in every slot; an explicit
+    /// `KOVANICA_AUTHORITIES` set never loads keys into the node (each
+    /// authority operator sets their own via `set_authority_signing_key`).
+    placeholder: bool,
+}
+
+/// Parse the PoA genesis configuration from the environment (RFC-POA §7):
+/// `KOVANICA_CONSENSUS=poa` (default), `KOVANICA_AUTHORITIES` (comma-separated
+/// 64-hex Ed25519 public keys), `KOVANICA_AUTHORITY_THRESHOLD` (default strict
+/// majority), `KOVANICA_SLOT_DURATION` (default 3000 ms).
+///
+/// Returns `None` in `pow` mode. In `poa` mode with no `KOVANICA_AUTHORITIES`:
+/// testnet derives a deterministic placeholder set (TESTNET-ONLY); mainnet
+/// refuses to boot — the same fail-fast guard as the treasury seed.
+fn poa_config_from_env(profile: &NetworkProfile) -> Option<PoaGenesisConfig> {
+    if consensus_mode_from_env() == ConsensusMode::Pow {
+        return None;
+    }
+    let slot_duration_ms: u64 = std::env::var("KOVANICA_SLOT_DURATION")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(kovanica_dag::SLOT_DURATION_MS);
+    let (pks, placeholder) = match std::env::var("KOVANICA_AUTHORITIES") {
+        Ok(list) => (
+            list.split(',')
+                .map(|hex| {
+                    let hex = hex.trim();
+                    if hex.len() != 64 {
+                        panic!("KOVANICA_AUTHORITIES entries must be 64 hex chars (got '{hex}')");
+                    }
+                    let mut pk = [0u8; 32];
+                    for (i, byte) in hex.as_bytes().chunks(2).enumerate() {
+                        pk[i] =
+                            u8::from_str_radix(std::str::from_utf8(byte).expect("ascii hex"), 16)
+                                .expect("KOVANICA_AUTHORITIES must be hex");
+                    }
+                    pk
+                })
+                .collect::<Vec<[u8; 32]>>(),
+            false,
+        ),
+        Err(_) if profile.id == "kovanica-mainnet" => panic!(
+            "kovanica-mainnet requires KOVANICA_AUTHORITIES (comma-separated 64-hex \
+             Ed25519 public keys): refusing to boot with publicly-derivable \
+             placeholder authorities"
+        ),
+        Err(_) => (
+            // TESTNET-ONLY deterministic placeholder set (3 keys, threshold 2):
+            // publicly derivable by design, mirroring the placeholder treasury
+            // keys. Mainnet MUST boot with a real set from the key ceremony.
+            (0..AUTHORITY_PLACEHOLDER_COUNT)
+                .map(|i| {
+                    *kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE + i)
+                        .address()
+                        .payload()
+                })
+                .collect(),
+            true,
+        ),
+    };
+    let threshold: usize = std::env::var("KOVANICA_AUTHORITY_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| pks.len() / 2 + 1);
+    // Build the canonical encoding (`threshold u64 LE || count u64 LE || pks`)
+    // and decode through `AuthoritySet::from_bytes`, which enforces the
+    // consensus invariants (count/threshold bounds, distinct keys).
+    let mut bytes = Vec::with_capacity(16 + 32 * pks.len());
+    bytes.extend_from_slice(&(threshold as u64).to_le_bytes());
+    bytes.extend_from_slice(&(pks.len() as u64).to_le_bytes());
+    for pk in &pks {
+        bytes.extend_from_slice(pk);
+    }
+    let authority_set = AuthoritySet::from_bytes(&bytes).unwrap_or_else(|e| {
+        panic!("invalid KOVANICA_AUTHORITIES / KOVANICA_AUTHORITY_THRESHOLD: {e}")
+    });
+    Some(PoaGenesisConfig {
+        authority_set,
+        slot_duration_ms,
+        placeholder,
+    })
 }
 
 /// WebSocket message types for real-time updates
@@ -659,15 +776,33 @@ fn load_or_genesis(name: &str) -> Node {
     // persistence format. Loading replays the log through the ledger, so all
     // derived state is recomputed, never trusted from disk.
     let log = log_path(name);
+    let profile = network_profile();
     if log.is_file() {
         if let Some(p) = log.to_str() {
             // Hybrid-era logs must replay under the same policy or staked ids
             // silently change (identity-preserving replay lesson). Load with
             // the hybrid reader when the operator runs hybrid mode.
-            let loaded = if env_flag("KOVANICA_HYBRID", false) {
-                Node::load_log_with_hybrid(p, HybridConfig::default())
+            //
+            // The pruning policy is applied BEFORE replay so the DAG and
+            // per-block state stay bounded during the load (the O(n²)
+            // GHOSTDAG maps otherwise peak at the full chain's footprint and
+            // the allocator retains that peak after the post-load prune).
+            let policy = kovanica_state::PruningPolicy {
+                finality_depth: profile.finality_depth,
+                payload_pruning_depth: profile.payload_pruning_depth,
+                block_pruning_depth: profile.block_pruning_depth,
+            };
+            let loaded = if let Some(cfg) = poa_config_from_env(&profile) {
+                Node::load_log_with_poa_and_policy(
+                    p,
+                    cfg.authority_set,
+                    cfg.slot_duration_ms,
+                    policy,
+                )
+            } else if env_flag("KOVANICA_HYBRID", false) {
+                Node::load_log_with_hybrid_and_policy(p, HybridConfig::default(), policy)
             } else {
-                Node::load_log(p)
+                Node::load_log_with_policy(p, policy)
             };
             if let Ok(mut node) = loaded {
                 restore_miner_and_policy(&mut node, name);
@@ -680,7 +815,9 @@ fn load_or_genesis(name: &str) -> Node {
     if snap.is_file() {
         let mut node = Node::new();
         if let Some(p) = snap.to_str() {
-            let loaded = if env_flag("KOVANICA_HYBRID", false) {
+            let loaded = if let Some(cfg) = poa_config_from_env(&profile) {
+                node.load_with_poa(p, cfg.authority_set, cfg.slot_duration_ms)
+            } else if env_flag("KOVANICA_HYBRID", false) {
                 node.load_with_hybrid(p, HybridConfig::default())
             } else {
                 node.load(p)
@@ -715,7 +852,24 @@ fn restore_miner_and_policy(node: &mut Node, name: &str) {
     } else {
         node.set_miner(Node::address(1));
     }
-    if env_flag("KOVANICA_HYBRID", false) {
+    let profile = network_profile();
+    if let Some(cfg) = poa_config_from_env(&profile) {
+        // PoA admission is already active on a ledger loaded under the poa
+        // reader; re-apply so live admission enforces PoA regardless of which
+        // reader loaded the log (defense-in-depth — a PoA-era log loaded under
+        // a legacy reader would otherwise admit blocks without authority
+        // signatures).
+        let _ = node.enable_poa(cfg.authority_set, cfg.slot_duration_ms);
+        // Restore the placeholder signing keys on a placeholder-booted node so
+        // a loaded single-node explorer keeps producing in every slot.
+        if cfg.placeholder {
+            for i in 0..AUTHORITY_PLACEHOLDER_COUNT {
+                node.set_authority_signing_key(
+                    kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE + i).seed(),
+                );
+            }
+        }
+    } else if env_flag("KOVANICA_HYBRID", false) {
         // Hybrid admission is already active on the loaded ledger.
     } else if env_flag("KOVANICA_POW", true) {
         let _ = node.set_proof_of_work(true);
@@ -727,7 +881,6 @@ fn restore_miner_and_policy(node: &mut Node, name: &str) {
     // acceptance rules (deep-reorg blocks rejected) and memory bounds
     // (per-block state pruned below the finality point; the reachability
     // oracle bounded by block pruning).
-    let profile = network_profile();
     let _ = node.set_finality_depth(profile.finality_depth);
     let _ = node.set_payload_pruning_depth(profile.payload_pruning_depth);
     let _ = node.set_block_pruning_depth(profile.block_pruning_depth);
@@ -769,34 +922,65 @@ fn genesis_node() -> Node {
     } else {
         TreasuryGenesis::placeholder()
     };
-    node.genesis_with_finality(
-        profile.genesis_k,
-        profile.genesis_subsidy,
-        profile.genesis_premine,
-        profile.founder_seed,
-        Some(treasury),
-        profile.finality_depth,
-        profile.payload_pruning_depth,
-        profile.block_pruning_depth,
-        Some(profile.operator_seed),
-    )
-    .expect("genesis");
-    // Hybrid PoW + staked-VRF admission (A2 uplink): opt-in via
-    // `KOVANICA_HYBRID=1`. When on, the ledger owns admission and the DAG's
-    // own PoW switch is cleared by `set_hybrid` — so the two modes are
-    // mutually exclusive here, never stacked.
-    if env_flag("KOVANICA_HYBRID", false) {
-        let _ = node.enable_hybrid(HybridConfig::default());
-        // Staked admission needs the founder's coin bonded before any
-        // produce can win a draw — bond the premine to the founder key so
-        // the default testnet path (no explicit validator seed) still works.
-        let founder = kovanica_state::KeyPair::from_u64(1).address();
-        // Staked admission needs the founder's coin bonded before any
-        // produce can win a draw — the staked tests set their own validator
-        // seed and bond explicitly; nothing to do in the default path.
-        let _ = founder;
-    } else if env_flag("KOVANICA_POW", true) {
-        let _ = node.set_proof_of_work(true);
+    // RFC-POA §7: `KOVANICA_CONSENSUS=poa` (default) boots a PoA genesis whose
+    // coinbase commits to the authority set (`KVA1 || set_hash`); `pow` keeps
+    // the legacy PoW/hybrid path (pre-reset testnet replay).
+    if let Some(cfg) = poa_config_from_env(&profile) {
+        // TESTNET-ONLY placeholder convenience: load the placeholder signing
+        // keys so a single-node explorer can produce in every slot. An
+        // explicit `KOVANICA_AUTHORITIES` set never loads keys into the node —
+        // each authority operator sets their own via `set_authority_signing_key`.
+        if cfg.placeholder {
+            for i in 0..AUTHORITY_PLACEHOLDER_COUNT {
+                node.set_authority_signing_key(
+                    kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE + i).seed(),
+                );
+            }
+        }
+        node.genesis_with_poa(
+            profile.genesis_k,
+            profile.genesis_subsidy,
+            profile.genesis_premine,
+            profile.founder_seed,
+            Some(treasury),
+            profile.finality_depth,
+            profile.payload_pruning_depth,
+            profile.block_pruning_depth,
+            Some(profile.operator_seed),
+            cfg.authority_set,
+            cfg.slot_duration_ms,
+        )
+        .expect("genesis");
+    } else {
+        node.genesis_with_finality(
+            profile.genesis_k,
+            profile.genesis_subsidy,
+            profile.genesis_premine,
+            profile.founder_seed,
+            Some(treasury),
+            profile.finality_depth,
+            profile.payload_pruning_depth,
+            profile.block_pruning_depth,
+            Some(profile.operator_seed),
+        )
+        .expect("genesis");
+        // Hybrid PoW + staked-VRF admission (A2 uplink): opt-in via
+        // `KOVANICA_HYBRID=1`. When on, the ledger owns admission and the DAG's
+        // own PoW switch is cleared by `set_hybrid` — so the two modes are
+        // mutually exclusive here, never stacked.
+        if env_flag("KOVANICA_HYBRID", false) {
+            let _ = node.enable_hybrid(HybridConfig::default());
+            // Staked admission needs the founder's coin bonded before any
+            // produce can win a draw — bond the premine to the founder key so
+            // the default testnet path (no explicit validator seed) still works.
+            let founder = kovanica_state::KeyPair::from_u64(1).address();
+            // Staked admission needs the founder's coin bonded before any
+            // produce can win a draw — the staked tests set their own validator
+            // seed and bond explicitly; nothing to do in the default path.
+            let _ = founder;
+        } else if env_flag("KOVANICA_POW", true) {
+            let _ = node.set_proof_of_work(true);
+        }
     }
     node
 }
@@ -1825,6 +2009,7 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             timestamp_ms,
             nonce,
             vrf: None,
+            authority_sig: None,
             txs,
         };
 
@@ -3997,7 +4182,12 @@ mod tests {
         assert!(n.is_object());
         assert_eq!(n["token"].as_str().unwrap(), "KVNC");
         assert_eq!(n["ui"].as_str().unwrap(), "v5");
-        assert!(n["pow"].as_bool().unwrap());
+        // `pow` reports the live admission mode: false under the PoA default,
+        // true when the test process runs in `KOVANICA_CONSENSUS=pow` mode.
+        assert_eq!(
+            n["pow"].as_bool().unwrap(),
+            consensus_mode_from_env() == ConsensusMode::Pow
+        );
         // One genesis node: 200,000 KVNC premine + 10×1,000,000 KVNC treasury
         // = 10,200,000 KVNC = 1,020,000,000,000,000 atoms.
         assert_eq!(n["supply"].as_u64().unwrap(), 1_020_000_000_000_000);
@@ -4255,6 +4445,13 @@ mod tests {
 
     #[test]
     fn test_http_mine_template_and_submit_flow() {
+        // This suite exercises the external PoW mining endpoints, which are a
+        // pow-mode feature (RFC-POA §7: PoA replaces PoW mining). Force pow
+        // mode for this test and restore the default afterwards. The window is
+        // benign for concurrent tests: under pow mode the profile's work
+        // target is 1, so PoW enforcement is a no-op and every other test
+        // still boots and produces deterministically.
+        std::env::set_var("KOVANICA_CONSENSUS", "pow");
         let mut app = Explorer::boot();
         let (status, body) = send_req(
             &mut app,
@@ -4318,6 +4515,9 @@ mod tests {
         // Node DAG tips should now include the new block
         let alpha = app.mesh.node("alpha").unwrap();
         assert!(alpha.has_block(&block_id));
+
+        // Restore the default consensus mode for the rest of the process.
+        std::env::remove_var("KOVANICA_CONSENSUS");
     }
 
     #[test]

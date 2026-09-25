@@ -44,6 +44,7 @@
 //! assert_eq!(*order.last().unwrap(), c);
 //! ```
 
+pub mod authority;
 pub mod block;
 pub mod dag;
 pub mod difficulty;
@@ -55,8 +56,15 @@ pub mod snapshot;
 pub mod validation;
 pub mod vrf;
 
+pub use authority::{
+    sign_update, update_payload, AuthorityError, AuthorityPublicKey, AuthoritySet,
+    AuthorityUpdateTx, AUTHORITY_UTXO_TAG, MAX_AUTHORITIES, MIN_AUTHORITIES, MIN_THRESHOLD,
+    SLOT_DURATION_MS,
+};
 pub use block::{Block, BlockId};
-pub use dag::{BlockPreview, Dag, DagError, GhostdagData, KParam, VrfConfig, DEFAULT_EPOCH_LENGTH};
+pub use dag::{
+    BlockPreview, Dag, DagError, GhostdagData, KParam, PoAConfig, VrfConfig, DEFAULT_EPOCH_LENGTH,
+};
 pub use difficulty::{Retarget, TimedWork};
 pub use pow::{meets_target, mine};
 pub use reachability::Reachability;

@@ -7,6 +7,14 @@ use kovanica_dag::{pow, Block, BlockId};
 use kovanica_node::explorer::{handle, Explorer};
 use kovanica_state::KeyPair;
 
+/// Boot an explorer in legacy PoW mode (RFC-POA §7: the external mining
+/// endpoints are a pow-mode feature — PoA replaces PoW mining). Each mining
+/// test file is its own process, so setting the var here is race-free.
+fn boot_pow() -> Explorer {
+    std::env::set_var("KOVANICA_CONSENSUS", "pow");
+    Explorer::boot()
+}
+
 const MAX_FUTURE_DRIFT_MS: u64 = 2 * 60 * 60 * 1000; // 2 hours
 
 fn send_request_raw(app: &mut Explorer, req_bytes: &[u8]) -> (u16, String) {
@@ -150,7 +158,7 @@ fn mine_and_submit(
 
 #[test]
 fn test_http_large_and_boundary_payloads() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     // 1.1 Huge Content-Length (10MB) where client sends only 100 bytes and disconnects
     let partial_req = "POST /api/mine/submit HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 10485760\r\n\r\n{\"parents\":";
@@ -200,7 +208,7 @@ fn test_http_large_and_boundary_payloads() {
 
 #[test]
 fn test_http_slow_and_chunked_body_streaming() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let tmpl = get_mining_template(&mut app);
     let parents_arr = tmpl["parents"].as_array().unwrap();
     let parent_hex = parents_arr[0].as_str().unwrap();
@@ -242,7 +250,7 @@ fn test_http_slow_and_chunked_body_streaming() {
 
 #[test]
 fn test_http_malformed_json_matrix() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     let malformed_cases = [
         ("unterminated object", "{\"parents\": [\"0000000000000000000000000000000000000000000000000000000000000000\"]"),
@@ -317,7 +325,7 @@ fn test_http_malformed_json_matrix() {
 
 #[test]
 fn test_http_invalid_hex_and_type_coercions() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let tmpl = get_mining_template(&mut app);
     let parent_hex = tmpl["parents"][0].as_str().unwrap();
     let parent_id = BlockId::from_bytes(hex::decode(parent_hex).unwrap().try_into().unwrap());
@@ -418,7 +426,7 @@ fn test_http_invalid_hex_and_type_coercions() {
 fn test_boundary_work_values() {
     // 2.1 work == 0 with PoW disabled (hybrid/mock mode)
     {
-        let mut app = Explorer::boot();
+        let mut app = boot_pow();
         let tmpl = get_mining_template(&mut app);
         let parent_hex = tmpl["parents"][0].as_str().unwrap();
         let parent_id = BlockId::from_bytes(hex::decode(parent_hex).unwrap().try_into().unwrap());
@@ -436,7 +444,7 @@ fn test_boundary_work_values() {
 
     // 2.2 work == 0 with PoW enabled
     {
-        let mut app = Explorer::boot();
+        let mut app = boot_pow();
         let node = app.mesh.node_mut("alpha").unwrap();
         node.set_proof_of_work(true).unwrap();
 
@@ -457,7 +465,7 @@ fn test_boundary_work_values() {
 
     // 2.3 work == 1 with PoW enabled
     {
-        let mut app = Explorer::boot();
+        let mut app = boot_pow();
         let node = app.mesh.node_mut("alpha").unwrap();
         node.set_proof_of_work(true).unwrap();
 
@@ -477,7 +485,7 @@ fn test_boundary_work_values() {
 
     // 2.4 Extremely high work target with PoW enabled
     {
-        let mut app = Explorer::boot();
+        let mut app = boot_pow();
         let node = app.mesh.node_mut("alpha").unwrap();
         node.set_proof_of_work(true).unwrap();
 
@@ -508,7 +516,7 @@ fn test_boundary_work_values() {
 
 #[test]
 fn test_boundary_timestamps() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let tmpl = get_mining_template(&mut app);
     let parent_hex = tmpl["parents"][0].as_str().unwrap();
     let parent_id = BlockId::from_bytes(hex::decode(parent_hex).unwrap().try_into().unwrap());
@@ -566,7 +574,7 @@ fn test_boundary_timestamps() {
 
 #[test]
 fn test_boundary_parents_and_dag_topology() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     // 2.9 Non-existent / unknown parent
     let fake_parent = BlockId::from_bytes([0xef; 32]);
@@ -631,7 +639,7 @@ fn test_boundary_parents_and_dag_topology() {
 
 #[test]
 fn test_dag_consistency_after_corrupted_bursts() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     let node_initial = app.mesh.node("alpha").unwrap();
     let initial_tip = node_initial.selected_tip().unwrap();
@@ -683,7 +691,7 @@ fn test_dag_consistency_after_corrupted_bursts() {
 
 #[test]
 fn test_mining_template_and_continuous_block_pipeline() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     // Mine 10 consecutive blocks in a tight loop via HTTP endpoints
     for h in 1..=10 {
@@ -721,7 +729,7 @@ fn test_mining_template_and_continuous_block_pipeline() {
 
 #[test]
 fn test_mempool_drain_and_reorg_consistency() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let recipient = KeyPair::from_u64(2).address();
 
     // Pool transfer of 100 KVNC

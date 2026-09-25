@@ -299,8 +299,17 @@ impl Reachability {
         }
         reparent.sort_unstable();
 
-        // Drop the evicted entries.
+        // Drop the evicted entries. Also remove each evicted block from its
+        // tree-parent's children list: a mergeset block's selected parent can
+        // sit in `past(P_old)` (present), so an evicted block is not always a
+        // tree-child of another evicted block — leaving the dangling reference
+        // would make a later reindex walk hit a missing `tree_children` entry.
         for id in evicted {
+            if let Some(parent) = self.tree_parent.get(id).copied() {
+                if let Some(children) = self.tree_children.get_mut(&parent) {
+                    children.retain(|c| c != id);
+                }
+            }
             self.intervals.remove(id);
             self.fcs.remove(id);
             self.tree_children.remove(id);

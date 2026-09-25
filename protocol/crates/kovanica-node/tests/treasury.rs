@@ -215,7 +215,13 @@ fn treasury_keys_are_deterministic_placeholders() {
 /// The placeholder-treasury genesis MUST reproduce the live testnet genesis
 /// hash (9565fc20…) — the whole point of keeping the OLD placeholder
 /// derivation. A divergence here means a testnet reset.
+///
+/// ⚠️ PoA (RFC-POA-Migration) M1: `Block::compute_id` now hashes the
+/// authority-signature flag byte, so the genesis id changed. The live testnet
+/// has not reset yet — this test is `#[ignore]`d until the PoA testnet reset
+/// (M3) and `LIVE_TESTNET_GENESIS` is updated.
 #[test]
+#[ignore = "PoA M1 changed all block ids; update LIVE_TESTNET_GENESIS after the PoA testnet reset"]
 fn genesis_with_placeholder_treasury_matches_live_testnet_genesis() {
     let mut node = Node::new();
     let (genesis_id, _founder) = node

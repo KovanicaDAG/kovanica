@@ -13,7 +13,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
 
-use kovanica_dag::{decode_block, encode_block, Block, SnapshotError};
+use kovanica_dag::{decode_block, encode_block, AuthoritySet, Block, SnapshotError};
 
 use crate::ledger::{
     HalvingSchedule, Ledger, LedgerError, LedgerSnapshotError, DEFAULT_HALVING_ERA,
@@ -29,6 +29,31 @@ const MAX_RECORD: usize = 16 * 1024 * 1024;
 /// An open append-only ledger log.
 pub struct LedgerStore {
     file: File,
+}
+
+/// Pruning policy applied **during** log replay.
+///
+/// Without a policy, `open` replays the whole log with pruning disabled
+/// (`u64::MAX`), so a long chain materialises the full O(n²) GHOSTDAG
+/// `blue_anticone_sizes` maps before the caller prunes afterwards — the load
+/// peak that dominates RSS on a deep chain. Passing a policy sets the depths
+/// on the ledger *before* the replay loop, so `Dag::insert` and
+/// `Ledger::insert` prune incrementally and the DAG / per-block state stay
+/// bounded throughout the load.
+///
+/// Invariant (enforced by [`Ledger::set_block_pruning_depth`]): `block_depth`
+/// must be `>= finality_depth`, so every evicted block is already final and
+/// replay acceptance is unchanged (a replayed block's selected parent is
+/// always within `finality_depth` of the replay tip).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PruningPolicy {
+    /// Finality depth in blue-score units (`u64::MAX` = disabled).
+    pub finality_depth: u64,
+    /// Payload pruning depth in blue-score units (`u64::MAX` = disabled).
+    pub payload_pruning_depth: u64,
+    /// Block pruning depth in blue-score units (`u64::MAX` = disabled).
+    /// Must be `>= finality_depth`.
+    pub block_pruning_depth: u64,
 }
 
 /// Why a log could not be created, opened, or appended.
@@ -102,7 +127,18 @@ impl LedgerStore {
     /// policy, use [`Self::open_with_hybrid`] so staked blocks re-admit with
     /// their original ids.
     pub fn open(path: impl AsRef<Path>) -> Result<(Self, Ledger), StoreError> {
-        Self::open_impl(path, None)
+        Self::open_impl(path, None, None, None)
+    }
+
+    /// Like [`Self::open`], but the given pruning policy is applied **before**
+    /// replay, so the DAG and per-block state stay bounded during the load
+    /// instead of peaking at the full chain's memory footprint. See
+    /// [`PruningPolicy`].
+    pub fn open_with_policy(
+        path: impl AsRef<Path>,
+        policy: PruningPolicy,
+    ) -> Result<(Self, Ledger), StoreError> {
+        Self::open_impl(path, None, None, Some(policy))
     }
 
     /// Like [`Self::open`], but hybrid admission (with `config`) is active
@@ -113,12 +149,52 @@ impl LedgerStore {
         path: impl AsRef<Path>,
         config: crate::HybridConfig,
     ) -> Result<(Self, Ledger), StoreError> {
-        Self::open_impl(path, Some(config))
+        Self::open_impl(path, Some(config), None, None)
+    }
+
+    /// Like [`Self::open_with_hybrid`], with the pruning policy applied before
+    /// replay (see [`Self::open_with_policy`]).
+    pub fn open_with_hybrid_and_policy(
+        path: impl AsRef<Path>,
+        config: crate::HybridConfig,
+        policy: PruningPolicy,
+    ) -> Result<(Self, Ledger), StoreError> {
+        Self::open_impl(path, Some(config), None, Some(policy))
+    }
+
+    /// Like [`Self::open`], but Proof-of-Authority admission (with
+    /// `authority_set` and `slot_duration_ms`) is active during replay, so PoA
+    /// blocks re-admit with their original ids intact. Required for any log
+    /// produced in PoA mode — mirroring [`Self::open_with_hybrid`].
+    pub fn open_with_poa(
+        path: impl AsRef<Path>,
+        authority_set: AuthoritySet,
+        slot_duration_ms: u64,
+    ) -> Result<(Self, Ledger), StoreError> {
+        Self::open_impl(path, None, Some((authority_set, slot_duration_ms)), None)
+    }
+
+    /// Like [`Self::open_with_poa`], with the pruning policy applied before
+    /// replay (see [`Self::open_with_policy`]).
+    pub fn open_with_poa_and_policy(
+        path: impl AsRef<Path>,
+        authority_set: AuthoritySet,
+        slot_duration_ms: u64,
+        policy: PruningPolicy,
+    ) -> Result<(Self, Ledger), StoreError> {
+        Self::open_impl(
+            path,
+            None,
+            Some((authority_set, slot_duration_ms)),
+            Some(policy),
+        )
     }
 
     fn open_impl(
         path: impl AsRef<Path>,
         hybrid: Option<crate::HybridConfig>,
+        poa: Option<(kovanica_dag::AuthoritySet, u64)>,
+        policy: Option<PruningPolicy>,
     ) -> Result<(Self, Ledger), StoreError> {
         let mut file = OpenOptions::new().read(true).write(true).open(path)?;
         let mut magic = [0u8; 4];
@@ -154,6 +230,24 @@ impl LedgerStore {
         if let Some(config) = hybrid {
             ledger.set_hybrid(config);
         }
+        if let Some((authority_set, slot_duration_ms)) = poa {
+            ledger.set_poa(authority_set, slot_duration_ms);
+        }
+        // Apply the pruning policy before replay so the DAG and per-block
+        // state stay bounded during the load (see [`PruningPolicy`]). The
+        // setters run their prune immediately (a no-op on a genesis-only
+        // ledger) and enforce the `block >= finality` clamp invariant.
+        if let Some(policy) = policy {
+            ledger.set_finality_depth(policy.finality_depth);
+            ledger.set_payload_pruning_depth(policy.payload_pruning_depth);
+            ledger.set_block_pruning_depth(policy.block_pruning_depth);
+        }
+        // Enable replay mode: skips live-only consensus checks (e.g., DAG
+        // pruning invariant) so anticone blocks linearized last can be
+        // re-inserted even if their selected parent is in the pruned region.
+        if policy.is_some() {
+            ledger.set_replay_mode(true);
+        }
         while let Some(block) = read_record(&mut file)? {
             // Identity-preserving replay: the block's stored id (including any
             // VRF fields) is authoritative, so children's parent references
@@ -161,6 +255,9 @@ impl LedgerStore {
             ledger
                 .insert_raw_block(block)
                 .map_err(|e| StoreError::Replay(LedgerSnapshotError::Rebuild(e)))?;
+        }
+        if policy.is_some() {
+            ledger.set_replay_mode(false);
         }
         Ok((Self { file }, ledger))
     }

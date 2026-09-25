@@ -14,8 +14,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ed25519_dalek::{Signer, SigningKey};
 use kovanica_cli::Wallet;
-use kovanica_dag::{pow, Block, BlockId, Dag, VrfPublicKey, VrfSecretKey};
+use kovanica_dag::{
+    pow, AuthorityPublicKey, AuthoritySet, Block, BlockId, Dag, PoAConfig, VrfPublicKey,
+    VrfSecretKey,
+};
 use kovanica_dag::{vrf_keypair_from_seed, vrf_prove};
 use kovanica_state::ledger::apply_block_with_stake;
 use kovanica_state::multisig::{verify_threshold_signatures, MultisigScript};
@@ -112,6 +116,9 @@ pub enum NodeError {
     MultisigInputCount { expected: usize, actual: usize },
     /// Treasury genesis requires the standard RFC-006 premine amount.
     TreasuryPremineMismatch { amount: u64 },
+    /// A PoA `produce_empty` was requested but this node is not the scheduled
+    /// authority for the current slot (or holds no authority key at all).
+    NotAuthoritySlot,
 }
 
 impl core::fmt::Display for NodeError {
@@ -159,6 +166,9 @@ impl core::fmt::Display for NodeError {
             NodeError::TreasuryPremineMismatch { amount } => write!(
                 f,
                 "treasury genesis requires the standard RFC-006 premine ({amount} != RFC006_PREMINE)"
+            ),
+            NodeError::NotAuthoritySlot => f.write_str(
+                "not the scheduled PoA authority for this slot (or no authority key set)"
             ),
         }
     }
@@ -318,6 +328,10 @@ pub struct BlockRecord {
     pub nonce: u64,
     /// The staked-VRF bundle for hybrid-admitted blocks (`None` on PoW blocks).
     pub vrf: Option<StakedVrf>,
+    /// The 64-byte Ed25519 authority signature for PoA-admitted blocks
+    /// (`None` on PoW/hybrid blocks). Carried so a peer reconstructs the exact
+    /// same id — the authority flag byte is part of the canonical id encoding.
+    pub authority_sig: Option<[u8; 64]>,
     /// The block's transactions.
     pub txs: Vec<Transaction>,
 }
@@ -330,37 +344,50 @@ impl BlockRecord {
     /// rather than by position, since a server may omit pruned blocks.
     pub fn id(&self) -> BlockId {
         let payload = encode_block_payload(&self.txs);
-        let block = match &self.vrf {
-            Some(sv) => {
-                // A malformed VRF public key cannot be reconstructed; fall back
-                // to the non-VRF id (header verification rejects it anyway).
-                match VrfPublicKey::from_bytes(&sv.vrf_pk) {
-                    Ok(pk) => Block::new_with_vrf(
-                        self.parents.clone(),
-                        self.work,
-                        self.timestamp_ms,
-                        self.nonce,
-                        pk,
-                        sv.proof.clone(),
-                        sv.output,
-                        payload,
-                    ),
-                    Err(_) => Block::new(
-                        self.parents.clone(),
-                        self.work,
-                        self.timestamp_ms,
-                        self.nonce,
-                        payload,
-                    ),
-                }
-            }
-            None => Block::new(
+        let block = if let Some(sig) = self.authority_sig {
+            // PoA block: the authority flag byte is part of the canonical id
+            // encoding, so the signature MUST be carried on the wire.
+            Block::new_with_authority(
                 self.parents.clone(),
                 self.work,
                 self.timestamp_ms,
                 self.nonce,
+                sig,
                 payload,
-            ),
+            )
+        } else {
+            match &self.vrf {
+                Some(sv) => {
+                    // A malformed VRF public key cannot be reconstructed; fall back
+                    // to the non-VRF id (header verification rejects it anyway).
+                    match VrfPublicKey::from_bytes(&sv.vrf_pk) {
+                        Ok(pk) => Block::new_with_vrf(
+                            self.parents.clone(),
+                            self.work,
+                            self.timestamp_ms,
+                            self.nonce,
+                            pk,
+                            sv.proof.clone(),
+                            sv.output,
+                            payload,
+                        ),
+                        Err(_) => Block::new(
+                            self.parents.clone(),
+                            self.work,
+                            self.timestamp_ms,
+                            self.nonce,
+                            payload,
+                        ),
+                    }
+                }
+                None => Block::new(
+                    self.parents.clone(),
+                    self.work,
+                    self.timestamp_ms,
+                    self.nonce,
+                    payload,
+                ),
+            }
         };
         block.id()
     }
@@ -523,6 +550,13 @@ pub struct Node {
     miner: Option<Address>,
     /// This node's VRF signing key for staked-block production (hybrid mode).
     validator_sk: Option<VrfSecretKey>,
+    /// This node's Ed25519 authority signing keys for PoA block production.
+    /// Client-side identities (like the validator seed): the node never
+    /// receives another authority's key. A real authority node holds exactly
+    /// one key (its own); the testnet placeholder boot sets all placeholder
+    /// keys so a single node can produce in every slot. Empty on
+    /// non-authority nodes, which then never produce under PoA.
+    authority_sks: Vec<SigningKey>,
     /// DHT NodeId for peer discovery (optional).
     dht_node_id: Option<crate::dht::NodeId>,
     /// DHT routing table for peer discovery (optional).
@@ -567,6 +601,7 @@ impl Default for Node {
             clock: Clock::default(),
             miner: None,
             validator_sk: None,
+            authority_sks: Vec::new(),
             dht_node_id: None,
             dht_routing_table: None,
             log: None,
@@ -607,6 +642,7 @@ impl Node {
             clock: Clock::default(),
             miner: None,
             validator_sk: None,
+            authority_sks: Vec::new(),
             dht_node_id: None,
             dht_routing_table: None,
             log: None,
@@ -839,6 +875,74 @@ impl Node {
         block_pruning_depth: u64,
         operator_seed: Option<[u8; 32]>,
     ) -> Result<(BlockId, Address), NodeError> {
+        self.genesis_impl(
+            k,
+            subsidy,
+            amount,
+            founder_seed,
+            treasury,
+            finality_depth,
+            payload_pruning_depth,
+            block_pruning_depth,
+            operator_seed,
+            None,
+        )
+    }
+
+    /// Like [`Node::genesis_with_finality`], but the genesis coinbase commits
+    /// to the PoA authority set (`KVA1 || set_hash` tag, RFC-POA §1) and the
+    /// ledger runs Proof-of-Authority admission with `authority_set` and
+    /// `slot_duration_ms` from genesis (RFC-POA §3–4).
+    ///
+    /// The genesis block id changes: it commits to the authority set, so a node
+    /// configured with a different set derives a different genesis (a hard fork
+    /// marker). PoA and hybrid admission are mutually exclusive.
+    #[allow(clippy::too_many_arguments)] // genesis wiring takes every chain parameter explicitly
+    pub fn genesis_with_poa(
+        &mut self,
+        k: u16,
+        subsidy: u64,
+        amount: u64,
+        founder_seed: u64,
+        treasury: Option<TreasuryGenesis>,
+        finality_depth: u64,
+        payload_pruning_depth: u64,
+        block_pruning_depth: u64,
+        operator_seed: Option<[u8; 32]>,
+        authority_set: AuthoritySet,
+        slot_duration_ms: u64,
+    ) -> Result<(BlockId, Address), NodeError> {
+        self.genesis_impl(
+            k,
+            subsidy,
+            amount,
+            founder_seed,
+            treasury,
+            finality_depth,
+            payload_pruning_depth,
+            block_pruning_depth,
+            operator_seed,
+            Some((authority_set, slot_duration_ms)),
+        )
+    }
+
+    /// Shared genesis construction. `poa = Some((set, slot_duration_ms))`
+    /// commits the authority set to the genesis coinbase tag and enables PoA
+    /// admission on the ledger; `None` keeps the legacy genesis (PoW/VRF era).
+    #[allow(clippy::too_many_arguments)] // genesis wiring takes every chain parameter explicitly
+    fn genesis_impl(
+        &mut self,
+        k: u16,
+        subsidy: u64,
+        amount: u64,
+        founder_seed: u64,
+        treasury: Option<TreasuryGenesis>,
+        finality_depth: u64,
+        payload_pruning_depth: u64,
+        block_pruning_depth: u64,
+        operator_seed: Option<[u8; 32]>,
+        poa: Option<(AuthoritySet, u64)>,
+    ) -> Result<(BlockId, Address), NodeError> {
         if self.ledger.is_some() {
             return Err(NodeError::AlreadyInitialized);
         }
@@ -885,19 +989,38 @@ impl Node {
         // standard RFC-006 premine plus treasury vaults; `amount` must match
         // the standard premine (it is part of the consensus genesis and cannot
         // vary while the treasury is present).
-        let coinbase = match treasury {
-            Some(t) => {
+        //
+        // RFC-POA: when `poa` is set, the coinbase tag becomes
+        // `KVA1 || authority_set_hash` so the genesis id commits to the
+        // authority set (see [`kovanica_state::poa_genesis_tag`]).
+        let poa_tag = poa
+            .as_ref()
+            .map(|(set, _)| kovanica_state::poa_genesis_tag(&set.hash()));
+        let coinbase = match (treasury, poa_tag) {
+            (Some(t), Some(tag)) => {
+                if amount != kovanica_state::RFC006_PREMINE {
+                    return Err(NodeError::TreasuryPremineMismatch { amount });
+                }
+                let mut cb = kovanica_state::rfc006_genesis_coinbase(founder, t.seed);
+                // Re-tag with the KVA1 commitment (same outputs, PoA tag).
+                cb = Transaction::coinbase(cb.outputs().to_vec(), tag);
+                cb
+            }
+            (Some(t), None) => {
                 if amount != kovanica_state::RFC006_PREMINE {
                     return Err(NodeError::TreasuryPremineMismatch { amount });
                 }
                 kovanica_state::rfc006_genesis_coinbase(founder, t.seed)
             }
-            None => {
+            (None, Some(tag)) => {
+                Transaction::coinbase(vec![TxOutput::native(amount, founder)], tag)
+            }
+            (None, None) => {
                 Transaction::coinbase(vec![TxOutput::native(amount, founder)], b"genesis".to_vec())
             }
         };
         let schedule = HalvingSchedule::new(subsidy, DEFAULT_HALVING_ERA);
-        let ledger = Ledger::with_pruning(
+        let mut ledger = Ledger::with_pruning(
             k,
             schedule,
             &[coinbase],
@@ -906,6 +1029,9 @@ impl Node {
             block_pruning_depth,
         )
         .map_err(NodeError::Ledger)?;
+        if let Some((authority_set, slot_duration_ms)) = poa {
+            ledger.set_poa(authority_set, slot_duration_ms);
+        }
         let genesis = ledger.genesis();
         self.ledger = Some(ledger);
         // Default miner is the founder (for backward compatibility with tests).
@@ -1039,6 +1165,20 @@ impl Node {
         self.validator_sk.as_ref().map(|sk| sk.verifying_key())
     }
 
+    /// Set this node's PoA authority identity from a 32-byte Ed25519 seed
+    /// (RFC-POA §7). The derived public key must be a member of the active
+    /// authority set; the node produces only in slots where it is the
+    /// scheduled authority. Client-side identity — the node never receives
+    /// another authority's key.
+    pub fn set_authority_signing_key(&mut self, seed: [u8; 32]) {
+        self.authority_sks.push(SigningKey::from_bytes(&seed));
+    }
+
+    /// This authority's Ed25519 public key, if a signing key was set.
+    pub fn authority_public_key(&self) -> Option<AuthorityPublicKey> {
+        self.authority_sks.first().map(|sk| sk.verifying_key())
+    }
+
     /// Enable hybrid PoW / staked-VRF admission on the ledger. See
     /// [`HybridConfig`] and [`Ledger::set_hybrid`].
     pub fn enable_hybrid(&mut self, config: HybridConfig) -> Result<(), NodeError> {
@@ -1052,6 +1192,30 @@ impl Node {
     /// Whether hybrid admission is enabled on the underlying ledger.
     pub fn hybrid_enabled(&self) -> bool {
         self.ledger.as_ref().is_some_and(Ledger::hybrid_enabled)
+    }
+
+    /// Enable Proof-of-Authority admission on the ledger. See
+    /// [`PoAConfig`] and [`Ledger::set_poa`].
+    pub fn enable_poa(
+        &mut self,
+        authority_set: AuthoritySet,
+        slot_duration_ms: u64,
+    ) -> Result<(), NodeError> {
+        self.ledger
+            .as_mut()
+            .ok_or(NodeError::NotInitialized)?
+            .set_poa(authority_set, slot_duration_ms);
+        Ok(())
+    }
+
+    /// Whether Proof-of-Authority admission is enabled on the underlying ledger.
+    pub fn poa_enabled(&self) -> bool {
+        self.ledger.as_ref().is_some_and(Ledger::poa_enabled)
+    }
+
+    /// The active PoA policy, if any.
+    pub fn poa_config(&self) -> Option<PoAConfig> {
+        self.ledger.as_ref().and_then(Ledger::poa_config)
     }
 
     /// Protocol minimum fee for the next transfer, in atoms.
@@ -1257,12 +1421,13 @@ impl Node {
         let timestamp = self.next_timestamp(dag, &parents);
         let work = self.work_target_for_parents(&parents);
         let nonce = self.mine_nonce(&parents, work, timestamp, std::slice::from_ref(&tx));
-        let block = self
-            .ledger
-            .as_mut()
-            .ok_or(NodeError::NotInitialized)?
-            .insert(parents, work, timestamp, nonce, &[tx])
-            .map_err(NodeError::Insert)?;
+        let block = self.insert_immediate_block(
+            parents,
+            work,
+            timestamp,
+            nonce,
+            std::slice::from_ref(&tx),
+        )?;
         self.note_inserted(block);
         self.evict_mempool();
         Ok(Sent { block, tx: tx_id })
@@ -1792,10 +1957,13 @@ impl Node {
         let timestamp = self.next_timestamp(dag, &parents);
         let work = self.work_target_for_parents(&parents);
         let nonce = self.mine_nonce(&parents, work, timestamp, std::slice::from_ref(&tx));
-        let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
-        let block = ledger
-            .insert(parents, work, timestamp, nonce, &[tx])
-            .map_err(NodeError::Insert)?;
+        let block = self.insert_immediate_block(
+            parents,
+            work,
+            timestamp,
+            nonce,
+            std::slice::from_ref(&tx),
+        )?;
         self.note_inserted(block);
         self.evict_mempool();
         Ok(Sent { block, tx: tx_id })
@@ -2233,6 +2401,53 @@ impl Node {
         self.balance(&addr).unwrap_or(0) as u64
     }
 
+    /// Insert a block immediately on the current tips, PoA-aware: under PoA
+    /// the block is signed by the scheduled authority for its slot (erroring
+    /// with [`NodeError::NotAuthoritySlot`] when this node is not the
+    /// scheduled authority — an immediate send cannot wait for a later slot);
+    /// otherwise the legacy `ledger.insert` path is used. The shared tail of
+    /// the immediate-send flows (`send_with_asset`, `send_to_script_v2`,
+    /// `send_to_stealth`, the HTLC helpers, and `unbond_with`).
+    fn insert_immediate_block(
+        &mut self,
+        parents: Vec<BlockId>,
+        work: u128,
+        timestamp: u64,
+        nonce: u64,
+        txs: &[Transaction],
+    ) -> Result<BlockId, NodeError> {
+        if self.poa_enabled() {
+            let Some(cfg) = self.poa_config() else {
+                return Err(NodeError::NotAuthoritySlot);
+            };
+            let slot = timestamp / cfg.slot_duration_ms;
+            let scheduled = *cfg.authority_set.active_authority(slot);
+            let Some(sk) = self
+                .authority_sks
+                .iter()
+                .find(|sk| sk.verifying_key() == scheduled)
+                .cloned()
+            else {
+                return Err(NodeError::NotAuthoritySlot);
+            };
+            let payload = encode_block_payload(txs);
+            let unsigned = Block::new(parents.clone(), work, timestamp, nonce, payload.clone());
+            let sig = sk
+                .sign(unsigned.hash_without_authority_sig().as_bytes())
+                .to_bytes();
+            let block = Block::new_with_authority(parents, work, timestamp, nonce, sig, payload);
+            let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
+            ledger
+                .insert_prepared_block(block, txs)
+                .map_err(NodeError::Insert)
+        } else {
+            let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
+            ledger
+                .insert(parents, work, timestamp, nonce, txs)
+                .map_err(NodeError::Insert)
+        }
+    }
+
     /// Insert a single signed transaction as a new block on the current tips
     /// and return its id. The shared tail of the immediate-send flows
     /// (`send_with_asset`, `send_to_script_v2`, `send_to_stealth`, and the
@@ -2244,10 +2459,13 @@ impl Node {
         let timestamp = self.next_timestamp(dag, &parents);
         let work = self.work_target_for_parents(&parents);
         let nonce = self.mine_nonce(&parents, work, timestamp, std::slice::from_ref(&tx));
-        let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
-        let block = ledger
-            .insert(parents, work, timestamp, nonce, &[tx])
-            .map_err(NodeError::Insert)?;
+        let block = self.insert_immediate_block(
+            parents,
+            work,
+            timestamp,
+            nonce,
+            std::slice::from_ref(&tx),
+        )?;
         self.note_inserted(block);
         self.evict_mempool();
         Ok(tx_id)
@@ -2513,6 +2731,12 @@ impl Node {
         let mut block_txs = self.issuance_txs(timestamp, fees);
         block_txs.extend(selected);
 
+        // PoA mode: sign the block with this node's authority key when it is
+        // the scheduled authority for the slot; otherwise skip production.
+        if self.poa_enabled() {
+            return self.try_produce_poa(parents, timestamp, &block_txs, &selected_ids);
+        }
+
         // Hybrid mode: try the staked-VRF path first — signing is cheap and
         // needs no mining rig, which is exactly what a light/mobile validator
         // can do. When there is no bonded winner here, fall back to PoW.
@@ -2610,6 +2834,16 @@ impl Node {
         let parents = self.ledger()?.dag().tips();
         let timestamp = self.next_timestamp(self.ledger()?.dag(), &parents);
 
+        // PoA mode: sign with this node's authority key when it is the
+        // scheduled authority for the slot; otherwise skip production.
+        if self.poa_enabled() {
+            let txs = self.issuance_txs(timestamp, 0);
+            return match self.try_produce_poa(parents, timestamp, &txs, &[])? {
+                Some(id) => Ok(id),
+                None => Err(NodeError::NotAuthoritySlot),
+            };
+        }
+
         // Hybrid mode: staked-VRF first (see `produce_block`), PoW fallback.
         if self.hybrid_enabled() && self.validator_sk.is_some() {
             let txs = self.issuance_txs(timestamp, 0);
@@ -2634,6 +2868,53 @@ impl Node {
         self.note_inserted(id);
         self.note_block_produced(&id, duration);
         Ok(id)
+    }
+
+    /// PoA production: sign a block with this node's authority key when it is
+    /// the scheduled authority for `timestamp`'s slot (RFC-POA §3 round-robin).
+    /// Returns `Ok(None)` when the node holds no authority key or it is not its
+    /// turn — callers skip production, exactly like the hybrid draw missing.
+    ///
+    /// The block carries nominal work (1) and nonce 0: under PoA the DAG's
+    /// PoW/difficulty switches are cleared, so only the authority signature and
+    /// slot rules gate admission. Insertion goes through the identity-preserving
+    /// `insert_prepared_block` path so the signed id survives replay.
+    fn try_produce_poa(
+        &mut self,
+        parents: Vec<BlockId>,
+        timestamp: u64,
+        block_txs: &[Transaction],
+        selected_ids: &[TxId],
+    ) -> Result<Option<BlockId>, NodeError> {
+        let Some(cfg) = self.poa_config() else {
+            return Ok(None); // PoA not actually active
+        };
+        let slot = timestamp / cfg.slot_duration_ms;
+        let scheduled = *cfg.authority_set.active_authority(slot);
+        let Some(sk) = self
+            .authority_sks
+            .iter()
+            .find(|sk| sk.verifying_key() == scheduled)
+            .cloned()
+        else {
+            return Ok(None); // not an authority node, or not this node's slot
+        };
+        let payload = encode_block_payload(block_txs);
+        let unsigned = Block::new(parents.clone(), 1, timestamp, 0, payload.clone());
+        let sig = sk
+            .sign(unsigned.hash_without_authority_sig().as_bytes())
+            .to_bytes();
+        let block = Block::new_with_authority(parents, 1, timestamp, 0, sig, payload);
+        let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
+        let start = std::time::Instant::now();
+        let id = ledger
+            .insert_prepared_block(block, block_txs)
+            .map_err(NodeError::Insert)?;
+        let duration = start.elapsed();
+        self.note_inserted(id);
+        self.note_block_produced(&id, duration);
+        self.mempool.remove_all(selected_ids);
+        Ok(Some(id))
     }
 
     /// Build a candidate block template on current DAG tips with valid mempool
@@ -3165,6 +3446,7 @@ impl Node {
                 }),
                 _ => None,
             },
+            authority_sig: block.authority_sig().copied(),
             txs,
         })
     }
@@ -3224,29 +3506,40 @@ impl Node {
         }
         let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
 
-        // Build the received block exactly once, VRF fields included, so the id
-        // matches what the producer (and every other peer) computed.
+        // Build the received block exactly once, VRF/authority fields included,
+        // so the id matches what the producer (and every other peer) computed.
         let payload = encode_block_payload(&record.txs);
-        let block = match &record.vrf {
-            Some(sv) => Block::new_with_vrf(
+        let block = if let Some(sig) = record.authority_sig {
+            Block::new_with_authority(
                 record.parents.clone(),
                 record.work,
                 record.timestamp_ms,
                 record.nonce,
-                VrfPublicKey::from_bytes(&sv.vrf_pk).map_err(|_| {
-                    NodeError::Insert(LedgerInsertError::BadStakeProof { vrf_pk: sv.vrf_pk })
-                })?,
-                sv.proof.clone(),
-                sv.output,
+                sig,
                 payload,
-            ),
-            None => Block::new(
-                record.parents.clone(),
-                record.work,
-                record.timestamp_ms,
-                record.nonce,
-                payload,
-            ),
+            )
+        } else {
+            match &record.vrf {
+                Some(sv) => Block::new_with_vrf(
+                    record.parents.clone(),
+                    record.work,
+                    record.timestamp_ms,
+                    record.nonce,
+                    VrfPublicKey::from_bytes(&sv.vrf_pk).map_err(|_| {
+                        NodeError::Insert(LedgerInsertError::BadStakeProof { vrf_pk: sv.vrf_pk })
+                    })?,
+                    sv.proof.clone(),
+                    sv.output,
+                    payload,
+                ),
+                None => Block::new(
+                    record.parents.clone(),
+                    record.work,
+                    record.timestamp_ms,
+                    record.nonce,
+                    payload,
+                ),
+            }
         };
         let block_id = block.id();
         if ledger.dag().contains(&block_id) {
@@ -3339,6 +3632,27 @@ impl Node {
         Ok(())
     }
 
+    /// Like [`Node::load`], but Proof-of-Authority admission (with
+    /// `authority_set` and `slot_duration_ms`) runs during replay so PoA
+    /// blocks re-admit with their original ids. Required for snapshots
+    /// produced under a PoA policy — mirroring [`Node::load_with_hybrid`].
+    pub fn load_with_poa(
+        &mut self,
+        path: &str,
+        authority_set: AuthoritySet,
+        slot_duration_ms: u64,
+    ) -> Result<(), NodeError> {
+        let bytes = fs::read(path).map_err(|e| NodeError::Io(e.to_string()))?;
+        let ledger = Ledger::read_snapshot_with_poa(&bytes, authority_set, slot_duration_ms)
+            .map_err(|e| NodeError::Snapshot(e.to_string()))?;
+        self.ledger = Some(ledger);
+        // The ledger was replaced: any open log or pending ids belong to the
+        // previous ledger and must not be appended to.
+        self.log = None;
+        self.pending.clear();
+        Ok(())
+    }
+
     /// Replace the node's ledger with one loaded from a finality checkpoint at
     /// `path`. This is faster than a full snapshot load when the DAG is deep,
     /// as it only replays blocks above the finality boundary.
@@ -3378,7 +3692,21 @@ impl Node {
     /// on the node, so [`persist_incremental`](Self::persist_incremental) can
     /// append new inserts without rewriting the file.
     pub fn load_log(path: &str) -> Result<Self, NodeError> {
-        Self::load_log_impl(path, None)
+        Self::load_log_impl(path, None, None, None)
+    }
+
+    /// Like [`Node::load_log`], but the given pruning policy is applied
+    /// **before** replay, so the DAG and per-block state stay bounded during
+    /// the load instead of peaking at the full chain's memory footprint (see
+    /// [`kovanica_state::PruningPolicy`]). The caller is expected to re-apply
+    /// the policy afterwards anyway (`restore_miner_and_policy`); passing it
+    /// here only changes the load's memory high-water mark, never the
+    /// resulting ledger state.
+    pub fn load_log_with_policy(
+        path: &str,
+        policy: kovanica_state::PruningPolicy,
+    ) -> Result<Self, NodeError> {
+        Self::load_log_impl(path, None, None, Some(policy))
     }
 
     /// Like [`Node::load_log`], but hybrid admission (with `config`) is active
@@ -3389,16 +3717,71 @@ impl Node {
         path: &str,
         config: kovanica_state::HybridConfig,
     ) -> Result<Self, NodeError> {
-        Self::load_log_impl(path, Some(config))
+        Self::load_log_impl(path, Some(config), None, None)
+    }
+
+    /// Like [`Node::load_log_with_hybrid`], with the pruning policy applied
+    /// before replay (see [`Node::load_log_with_policy`]).
+    pub fn load_log_with_hybrid_and_policy(
+        path: &str,
+        config: kovanica_state::HybridConfig,
+        policy: kovanica_state::PruningPolicy,
+    ) -> Result<Self, NodeError> {
+        Self::load_log_impl(path, Some(config), None, Some(policy))
+    }
+
+    /// Like [`Node::load_log`], but Proof-of-Authority admission (with
+    /// `authority_set` and `slot_duration_ms`) is active during replay, so PoA
+    /// blocks re-admit with their original ids. Required for logs produced in
+    /// PoA mode — mirroring [`Node::load_log_with_hybrid`].
+    pub fn load_log_with_poa(
+        path: &str,
+        authority_set: AuthoritySet,
+        slot_duration_ms: u64,
+    ) -> Result<Self, NodeError> {
+        Self::load_log_impl(path, None, Some((authority_set, slot_duration_ms)), None)
+    }
+
+    /// Like [`Node::load_log_with_poa`], with the pruning policy applied before
+    /// replay (see [`Node::load_log_with_policy`]).
+    pub fn load_log_with_poa_and_policy(
+        path: &str,
+        authority_set: AuthoritySet,
+        slot_duration_ms: u64,
+        policy: kovanica_state::PruningPolicy,
+    ) -> Result<Self, NodeError> {
+        Self::load_log_impl(
+            path,
+            None,
+            Some((authority_set, slot_duration_ms)),
+            Some(policy),
+        )
     }
 
     fn load_log_impl(
         path: &str,
         hybrid: Option<kovanica_state::HybridConfig>,
+        poa: Option<(AuthoritySet, u64)>,
+        policy: Option<kovanica_state::PruningPolicy>,
     ) -> Result<Self, NodeError> {
-        let (store, ledger) = match hybrid {
-            Some(config) => LedgerStore::open_with_hybrid(path, config),
-            None => LedgerStore::open(path),
+        let (store, ledger) = match (poa, hybrid, policy) {
+            (Some((set, slot)), None, Some(policy)) => {
+                LedgerStore::open_with_poa_and_policy(path, set, slot, policy)
+            }
+            (Some((set, slot)), None, None) => LedgerStore::open_with_poa(path, set, slot),
+            (None, Some(config), Some(policy)) => {
+                LedgerStore::open_with_hybrid_and_policy(path, config, policy)
+            }
+            (None, Some(config), None) => LedgerStore::open_with_hybrid(path, config),
+            (None, None, Some(policy)) => LedgerStore::open_with_policy(path, policy),
+            (None, None, None) => LedgerStore::open(path),
+            // PoA and hybrid are mutually exclusive by construction
+            // (`Ledger::set_poa` clears hybrid and vice versa).
+            (Some(_), Some(_), _) => {
+                return Err(NodeError::Snapshot(
+                    "poa and hybrid cannot both be set".to_string(),
+                ))
+            }
         }
         .map_err(|e| NodeError::Snapshot(e.to_string()))?;
         Ok(Self {
@@ -3407,6 +3790,7 @@ impl Node {
             clock: Clock::default(),
             miner: None,
             validator_sk: None,
+            authority_sks: Vec::new(),
             dht_node_id: None,
             dht_routing_table: None,
             log: Some(store),
@@ -3431,6 +3815,7 @@ impl Node {
             clock: Clock::default(),
             miner: None,
             validator_sk: None,
+            authority_sks: Vec::new(),
             dht_node_id: None,
             dht_routing_table: None,
             log: None,

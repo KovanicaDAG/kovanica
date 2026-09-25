@@ -88,7 +88,7 @@ pub enum GossipKind {
 
 enum Envelope {
     Hello { advertised: Vec<String> },
-    Block { record: BlockRecord },
+    Block { record: Box<BlockRecord> },
     Tx { tx: Transaction },
 }
 
@@ -741,7 +741,7 @@ impl Mesh {
                 from,
                 &to,
                 Envelope::Block {
-                    record: record.clone(),
+                    record: Box::new(record.clone()),
                 },
             );
         }
@@ -815,7 +815,7 @@ impl Mesh {
         });
         match q.envelope {
             Envelope::Hello { advertised } => self.on_hello(&q.to, &q.from, advertised),
-            Envelope::Block { record } => self.on_block(&q.to, &q.from, record),
+            Envelope::Block { record } => self.on_block(&q.to, &q.from, *record),
             Envelope::Tx { tx } => self.on_tx(&q.to, &q.from, tx),
         }
     }
@@ -872,7 +872,7 @@ impl Mesh {
                 to,
                 &nxt,
                 Envelope::Block {
-                    record: record.clone(),
+                    record: Box::new(record.clone()),
                 },
             );
         }

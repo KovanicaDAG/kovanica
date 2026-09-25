@@ -42,7 +42,9 @@ const MAGIC: [u8; 4] = *b"KVDG";
 /// when has_vrf=1), then a proof flag (0/1 + 96 bytes if 1), then an output flag
 /// (0/1 + 32 bytes if 1). This lets a block carry a proof without the output
 /// (block-production self-verification) or an output without the proof.
-const VERSION: u16 = 6;
+/// v7 adds the authority signature (PoA): has_auth flag (1 byte), then if 1:
+/// authority_sig (64 bytes).
+const VERSION: u16 = 7;
 
 /// Why a snapshot could not be decoded or replayed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,7 +122,16 @@ impl Dag {
         let k = reader.read_u16()?;
         // v4 added block id (32 bytes). v3 and earlier don't have it.
         // v5 added VRF fields: 1 byte flag + up to 160 bytes (pk+proof+output)
-        let min_block_size = if version >= 4 { 80 } else { 48 };
+        // v7 added authority signature: 1 byte flag + 64 bytes
+        // Minimum block size: id(32) + parents_len(8) + work(16) + timestamp(8) + nonce(8) +
+        //   has_vrf(1) + has_auth(1) + payload_len(8) = 82 bytes (genesis, no VRF, no auth, empty payload)
+        let min_block_size = if version >= 7 {
+            82
+        } else if version >= 4 {
+            80
+        } else {
+            48
+        };
         let count = reader.read_count(min_block_size)?;
 
         if version >= 4 {
@@ -206,7 +217,16 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<DagSnapshot, SnapshotError> {
     let k = reader.read_u16()?;
     // v4 added block id (32 bytes). v3 and earlier don't have it.
     // v5 added VRF fields: 1 byte flag + up to 160 bytes (pk+proof+output)
-    let min_block_size = if version >= 4 { 80 } else { 48 };
+    // v7 added authority signature: 1 byte flag + 64 bytes
+    // Minimum block size: id(32) + parents_len(8) + work(16) + timestamp(8) + nonce(8) +
+    //   has_vrf(1) + has_auth(1) + payload_len(8) = 82 bytes (genesis, no VRF, no auth, empty payload)
+    let min_block_size = if version >= 7 {
+        82
+    } else if version >= 4 {
+        80
+    } else {
+        48
+    };
     let count = reader.read_count(min_block_size)?;
     let mut blocks = Vec::with_capacity(count);
     for _ in 0..count {
@@ -219,14 +239,16 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<DagSnapshot, SnapshotError> {
 }
 
 /// Encode a block's reconstruction data: id, parents, work, timestamp, nonce,
-/// VRF fields, payload (length-prefixed, little-endian). Used by the whole-DAG
-/// snapshot and the incremental append-only log.
+/// VRF fields, authority signature (PoA), payload (length-prefixed, little-endian).
+/// Used by the whole-DAG snapshot and the incremental append-only log.
 ///
 /// The block's id is stored explicitly so that pruned blocks (which have empty
 /// payload in the encoding) can be restored with their original id. The id is
 /// verified to match the recomputed id for non-pruned blocks.
 /// VRF fields (version 5+): has_vrf flag (1 byte), then if set: vrf_pk (32),
 /// vrf_proof (96), vrf_output (32).
+/// Authority signature (PoA, version 7+): has_auth flag (1 byte), then if set:
+/// authority_sig (64 bytes).
 pub fn encode_block(block: &Block, buf: &mut Vec<u8>) {
     buf.extend_from_slice(block.id().as_bytes());
     buf.extend_from_slice(&(block.parents().len() as u64).to_le_bytes());
@@ -259,6 +281,15 @@ pub fn encode_block(block: &Block, buf: &mut Vec<u8>) {
         }
     } else {
         buf.push(0u8); // no VRF
+    }
+
+    // Authority signature (PoA, version 7+): has_auth flag (1 byte), then if set:
+    //   authority_sig (64 bytes).
+    if let Some(sig) = block.authority_sig() {
+        buf.push(1u8); // has_auth flag
+        buf.extend_from_slice(sig);
+    } else {
+        buf.push(0u8); // no authority signature
     }
 
     let payload = block.payload();
@@ -403,13 +434,25 @@ impl<'a> Reader<'a> {
             (None, None, None)
         };
 
+        // Authority signature (PoA, version 7+): has_auth flag (1 byte), then if 1: sig(64).
+        let authority_sig = if self.version >= 7 {
+            let has_auth = self.read_u8()?;
+            if has_auth == 1 {
+                Some(self.read_array::<64>()?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let payload_len = self.read_count(1)?;
         if payload_len == 0 {
             // Pruned block: payload was evicted. Reconstruct with None payload.
             // The stored id is the authoritative one (computed at insertion time
             // over the original payload). We create a block with the same fields
             // using the stored id.
-            return Ok(Block::new_pruned_with_vrf(
+            return Ok(Block::new_pruned_with_vrf_and_authority(
                 parents,
                 work,
                 timestamp_ms,
@@ -417,6 +460,7 @@ impl<'a> Reader<'a> {
                 vrf_public_key,
                 vrf_proof,
                 vrf_output,
+                authority_sig,
                 stored_id,
             ));
         }
@@ -424,16 +468,32 @@ impl<'a> Reader<'a> {
         // For non-pruned blocks, verify the computed id matches the stored id.
         // Handle both legacy blocks (no VRF) and VRF blocks in v5+ format.
         let block = if let Some(pk) = vrf_public_key {
-            Block::new_with_vrf(
-                parents,
-                work,
-                timestamp_ms,
-                nonce,
-                pk,
-                vrf_proof.unwrap(),
-                vrf_output.unwrap(),
-                payload,
-            )
+            if let Some(auth_sig) = authority_sig {
+                Block::new_with_vrf_and_authority(
+                    parents,
+                    work,
+                    timestamp_ms,
+                    nonce,
+                    pk,
+                    vrf_proof.unwrap(),
+                    vrf_output.unwrap(),
+                    auth_sig,
+                    payload,
+                )
+            } else {
+                Block::new_with_vrf(
+                    parents,
+                    work,
+                    timestamp_ms,
+                    nonce,
+                    pk,
+                    vrf_proof.unwrap(),
+                    vrf_output.unwrap(),
+                    payload,
+                )
+            }
+        } else if let Some(auth_sig) = authority_sig {
+            Block::new_with_authority(parents, work, timestamp_ms, nonce, auth_sig, payload)
         } else {
             Block::new(parents, work, timestamp_ms, nonce, payload)
         };
@@ -472,13 +532,34 @@ mod tests {
         let mut dag = Dag::new(2, genesis);
         let g = dag.genesis();
         let a = dag
-            .insert(Block::new(vec![g], 1, 1, 0, b"a".to_vec()))
+            .insert(Block::new_with_authority(
+                vec![g],
+                1,
+                1,
+                0,
+                [0u8; 64],
+                b"a".to_vec(),
+            ))
             .unwrap();
         let b = dag
-            .insert(Block::new(vec![g], 1, 1, 0, b"b".to_vec()))
+            .insert(Block::new_with_authority(
+                vec![g],
+                1,
+                1,
+                0,
+                [0u8; 64],
+                b"b".to_vec(),
+            ))
             .unwrap();
         let _m = dag
-            .insert(Block::new(vec![a, b], 3, 2, 0, b"m".to_vec()))
+            .insert(Block::new_with_authority(
+                vec![a, b],
+                3,
+                2,
+                0,
+                [0u8; 64],
+                b"m".to_vec(),
+            ))
             .unwrap();
         dag
     }

@@ -14,6 +14,14 @@ use kovanica_state::{decode_block_payload, KeyPair};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
+/// Boot an explorer in legacy PoW mode (RFC-POA §7: the external mining
+/// endpoints are a pow-mode feature — PoA replaces PoW mining). Each mining
+/// test file is its own process, so setting the var here is race-free.
+fn boot_pow() -> Explorer {
+    std::env::set_var("KOVANICA_CONSENSUS", "pow");
+    Explorer::boot()
+}
+
 const ATOM: u64 = 100_000_000;
 
 fn http_exchange(app: &mut Explorer, req: &str) -> (u16, String, serde_json::Value) {
@@ -53,7 +61,7 @@ fn http_exchange(app: &mut Explorer, req: &str) -> (u16, String, serde_json::Val
 #[test]
 fn test_challenger_2_full_mining_lifecycle_and_consensus() {
     println!("\n=== [CHALLENGER 2 EMPIRICAL TEST HARNESS START] ===");
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     let node = app.mesh.node("alpha").unwrap();
     let initial_tip = node.selected_tip().unwrap();
