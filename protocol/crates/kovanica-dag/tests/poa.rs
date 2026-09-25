@@ -11,7 +11,9 @@
 //! `set_poa` clears the PoW/difficulty/VRF switches.
 
 use ed25519_dalek::{Signer, SigningKey};
-use kovanica_dag::{AuthorityPublicKey, AuthoritySet, Block, BlockId, Dag, DagError, Retarget};
+use kovanica_dag::{
+    AuthorityPublicKey, AuthoritySet, Block, BlockId, Dag, DagError, Retarget, POA_NOMINAL_WORK,
+};
 
 /// Slot duration used throughout (RFC-POA default).
 const SLOT_MS: u64 = 3000;
@@ -74,6 +76,31 @@ fn poa_block_signed_by(parents: Vec<BlockId>, slot: u64, sk: &SigningKey, payloa
         .sign(unsigned.hash_without_authority_sig().as_bytes())
         .to_bytes();
     Block::new_with_authority(parents, 1, timestamp_ms, 0, sig, payload.to_vec())
+}
+
+/// A correctly-signed block for `slot` that claims an arbitrary `work`. The
+/// authority signature *covers* `work` (it is part of the signed hash), so this
+/// is what a real chain-selection attack looks like: a block with an entirely
+/// valid authority signature that over-claims its weight.
+fn poa_block_with_work(
+    parents: Vec<BlockId>,
+    slot: u64,
+    work: u128,
+    set: &AuthoritySet,
+    sks: &[SigningKey],
+    payload: &[u8],
+) -> Block {
+    let timestamp_ms = slot * SLOT_MS;
+    let authority = set.active_authority(slot);
+    let sk = sks
+        .iter()
+        .find(|sk| sk.verifying_key() == *authority)
+        .expect("scheduled authority's signing key present");
+    let unsigned = Block::new(parents.clone(), work, timestamp_ms, 0, payload.to_vec());
+    let sig = sk
+        .sign(unsigned.hash_without_authority_sig().as_bytes())
+        .to_bytes();
+    Block::new_with_authority(parents, work, timestamp_ms, 0, sig, payload.to_vec())
 }
 
 /// A signing key that is **not** the authority scheduled for `slot` — the
@@ -162,6 +189,44 @@ fn parallel_blocks_from_different_authorities_merge_under_ghostdag() {
 // ---------------------------------------------------------------------------
 // Adversarial: admission rejections
 // ---------------------------------------------------------------------------
+
+#[test]
+fn inflated_work_is_rejected_under_poa() {
+    // RFC-POA §4 item 5. `work` proves nothing under PoA, but the GHOSTDAG
+    // blue-work fold still consumes it and `blue_work` drives the
+    // selected-parent choice. An authority able to claim arbitrary work could
+    // therefore unilaterally steer the selected parent of every successor,
+    // defeating the round-robin fairness PoA exists to provide. Admission pins
+    // `work` to the nominal value.
+    let (mut dag, set, sks) = poa_dag(3, 2);
+    let g = dag.genesis();
+
+    // Each of these is correctly signed by the authority scheduled for slot 0
+    // — the *only* thing wrong with them is the claimed weight. The pin is
+    // exact, not a cap, so both a mild and an absurd inflation are refused.
+    for greedy_work in [0, 2, 1_000_000, u128::MAX] {
+        let greedy = poa_block_with_work(vec![g], 0, greedy_work, &set, &sks, b"greedy".as_slice());
+        let greedy_id = greedy.id();
+        let err = dag.insert(greedy).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DagError::PoaWorkMismatch { id, expected, actual }
+                    if id == greedy_id
+                        && expected == POA_NOMINAL_WORK
+                        && actual == greedy_work
+            ),
+            "work {greedy_work} must be rejected, got {err:?}"
+        );
+        assert_eq!(dag.len(), 1, "the rejected block was not added");
+    }
+
+    // The nominal value is still admitted, so the pin closes the inflation
+    // vector without breaking honest production.
+    let honest = poa_block(vec![g], 0, &set, &sks, b"honest".as_slice());
+    let honest_id = honest.id();
+    assert_eq!(dag.insert(honest).unwrap(), honest_id);
+}
 
 #[test]
 fn wrong_authority_is_rejected() {

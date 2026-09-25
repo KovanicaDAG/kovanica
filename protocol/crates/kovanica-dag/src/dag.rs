@@ -171,6 +171,14 @@ pub enum DagError {
     /// signature is missing, does not verify against the authority scheduled
     /// for its slot, or its slot precedes a parent's (RFC-POA §4.2–4.3).
     InvalidAuthoritySignature { id: BlockId, reason: String },
+    /// PoA is enforced (see [`Dag::set_poa`]) and the block's `work` is not the
+    /// nominal [`POA_NOMINAL_WORK`] — an authority tried to buy chain weight
+    /// with an unproven value (RFC-POA §4 item 5).
+    PoaWorkMismatch {
+        id: BlockId,
+        expected: u128,
+        actual: u128,
+    },
     /// Block pruning is enabled (see [`Dag::set_block_pruning_depth`]) and the
     /// block's selected parent is not in `future(P) ∪ {P}` where `P` is the
     /// pruning point ([`Dag::pruning_point`]) — the block would build on
@@ -216,6 +224,11 @@ impl core::fmt::Display for DagError {
                 f,
                 "block {id} has invalid authority signature: {reason}"
             ),
+            DagError::PoaWorkMismatch {
+                id,
+                expected,
+                actual,
+            } => write!(f, "PoA block {id} work {actual} ≠ nominal {expected}"),
             DagError::BuildsOnPrunedHistory { id } => write!(
                 f,
                 "block {id} builds on pruned history (its selected parent is not in the pruning point's future)"
@@ -347,6 +360,33 @@ pub struct VrfConfig {
     /// nodes must agree on it, like `k`.
     pub epoch_length: u64,
 }
+
+/// The `work` every block must claim while PoA is enforced
+/// (RFC-POA §4 item 5).
+///
+/// Under PoW, `work` is a proof: the harder it is to find, the more the block
+/// should be favoured by chain selection. Under PoA it proves nothing — an
+/// authority's signature is the only admission credential — but it is *still*
+/// folded into `blue_work` by the GHOSTDAG fold (see [`crate::ghostdag`]),
+/// and `blue_work` drives the selected-parent choice. Left unpinned, `work`
+/// becomes an unauthenticated consensus input: any one authority could stamp
+/// an arbitrarily large value on its block and unilaterally steer the
+/// selected parent of every successor, defeating the round-robin fairness
+/// that is the whole point of PoA.
+///
+/// Pinning it at admission is therefore not cosmetic — it is what makes
+/// `blue_work` provably nominal, and it is why no change is needed in the
+/// GHOSTDAG fold: every block that reaches insertion has
+/// `work == POA_NOMINAL_WORK`, so the accumulated blue work is a plain block
+/// count. This mirrors the staked-VRF `nominal_work` pin in
+/// `kovanica_state::HybridConfig` (which lives in the state crate, so it is
+/// referenced here by name rather than linked).
+///
+/// This is a constant rather than a [`PoAConfig`] field because, unlike a
+/// staked block competing against real PoW blocks, there is nothing to tune:
+/// PoA blocks are one-per-slot and all carry equal weight by construction.
+/// (Consensus parameter — all nodes must agree on it, like `k`.)
+pub const POA_NOMINAL_WORK: u128 = 1;
 
 /// PoA consensus enforcement configuration (RFC-POA §3–4).
 #[derive(Clone, Debug)]
@@ -541,9 +581,11 @@ impl Dag {
     ///
     /// PoA **replaces** PoW/difficulty/VRF admission: enabling it clears those
     /// switches so there is no double standard (mirrors the ledger's hybrid
-    /// policy). Genesis is exempt. Replay ([`Dag::insert_for_replay`]) skips
-    /// the check — replayed blocks are trusted history whose signatures may
-    /// come from an earlier authority set.
+    /// policy). It additionally pins the block `work` to
+    /// [`POA_NOMINAL_WORK`], which PoW leaves free — see that constant for why
+    /// an unpinned `work` is a chain-selection vector. Genesis is exempt.
+    /// Replay ([`Dag::insert_for_replay`]) skips the check — replayed blocks are
+    /// trusted history whose signatures may come from an earlier authority set.
     pub fn set_poa(&mut self, authority_set: AuthoritySet, slot_duration_ms: u64) {
         self.poa = Some(PoAConfig {
             authority_set,
@@ -1035,6 +1077,20 @@ impl Dag {
     ///    monotone along every path, mirroring the difficulty timestamp rule).
     fn check_poa(&self, block: &Block, id: BlockId, poa: &PoAConfig) -> Result<(), DagError> {
         let slot = block.timestamp_ms() / poa.slot_duration_ms;
+
+        // `work` is pinned to the nominal value: it is not a proof under PoA,
+        // but the GHOSTDAG blue-work fold still consumes it, so an unpinned
+        // value would let one authority steer chain selection on its own.
+        // Checked before the signature so an inflated block is rejected on the
+        // clearest rule, and so the rest of this function only ever reasons
+        // about nominal-work blocks (RFC-POA §4 item 5).
+        if block.work() != POA_NOMINAL_WORK {
+            return Err(DagError::PoaWorkMismatch {
+                id,
+                expected: POA_NOMINAL_WORK,
+                actual: block.work(),
+            });
+        }
 
         // Authority signature must be present and verify against the authority
         // scheduled for the block's slot, over the hash without the signature.
