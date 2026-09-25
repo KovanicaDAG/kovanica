@@ -19,6 +19,14 @@ use kovanica_dag::{pow, Block, BlockId};
 use kovanica_node::explorer::{handle, Explorer};
 use kovanica_state::{decode_block_payload, KeyPair};
 
+/// Boot an explorer in legacy PoW mode (RFC-POA §7: the external mining
+/// endpoints are a pow-mode feature — PoA replaces PoW mining). Each mining
+/// test file is its own process, so setting the var here is race-free.
+fn boot_pow() -> Explorer {
+    std::env::set_var("KOVANICA_CONSENSUS", "pow");
+    Explorer::boot()
+}
+
 const ATOM: u64 = 100_000_000;
 
 /// Helper to send an HTTP request through Explorer::handle over real TCP loopback.
@@ -86,7 +94,7 @@ fn mine_template_candidate(
 
 #[test]
 fn test_empirical_external_mining_loop_and_chain_growth() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let node = app.mesh.node("alpha").unwrap();
     let initial_count = node.block_count().unwrap();
     let mut prev_tip = node.selected_tip().unwrap();
@@ -182,7 +190,7 @@ fn test_empirical_external_mining_loop_and_chain_growth() {
 
 #[test]
 fn test_empirical_adversarial_invalid_nonce_rejection() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     // Enable proof of work enforcement
     let node = app.mesh.node_mut("alpha").unwrap();
     node.set_proof_of_work(true).unwrap();
@@ -257,7 +265,7 @@ fn test_empirical_adversarial_invalid_nonce_rejection() {
 
 #[test]
 fn test_empirical_duplicate_block_submission_idempotent() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     // 1. Fetch template and mine valid block
     let (status, _, tmpl) = send_http_request(
@@ -332,7 +340,7 @@ fn test_empirical_duplicate_block_submission_idempotent() {
 
 #[test]
 fn test_empirical_mempool_packing_and_utxo_eviction() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     let sender_kp = KeyPair::from_u64(1);
     let recipient_kp = KeyPair::from_u64(2);
@@ -457,7 +465,7 @@ fn test_empirical_mempool_packing_and_utxo_eviction() {
 
 #[test]
 fn test_empirical_custom_miner_payout() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let custom_kp = KeyPair::from_u64(999);
     let custom_miner = custom_kp.address();
 
@@ -529,7 +537,7 @@ fn test_empirical_custom_miner_payout() {
 
 #[test]
 fn test_empirical_mesh_announcement_and_propagation() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     // Ensure we have a mesh with multiple nodes (alpha, beta, gamma)
     assert!(app.mesh.node("alpha").is_some());
     assert!(app.mesh.node("beta").is_some());
@@ -596,7 +604,7 @@ fn test_empirical_mesh_announcement_and_propagation() {
 
 #[test]
 fn test_empirical_malformed_inputs_rejection() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     let cases = vec![
         // Empty body

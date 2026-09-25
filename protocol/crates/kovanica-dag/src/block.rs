@@ -82,6 +82,11 @@ impl fmt::Display for BlockId {
 /// (the output determines if this producer was eligible to produce a block
 /// at this height) and a randomness beacon.
 ///
+/// **Authority signature** (PoA): `authority_sig` is a 64-byte Ed25519 signature
+/// over the block's hash without the authority signature itself
+/// (`hash_without_authority_sig()`). Used in PoA consensus mode to verify
+/// the block was produced by the scheduled authority for its slot.
+///
 /// The payload is `Option<Vec<u8>>` to support **DAG-level payload pruning**:
 /// once a block is sufficiently finalized (beyond `payload_pruning_depth` blue
 /// score below the selected tip), its payload can be set to `None` to reclaim
@@ -101,7 +106,7 @@ pub struct Block {
     /// The block's timestamp, in milliseconds. Used by difficulty retargeting
     /// and, where enforced, must not precede any parent's timestamp.
     timestamp_ms: u64,
-    /// The proof-of-work nonce: the value a miner searches over so the block's
+    /// The proof-of-work nonce: the value a miner varies so the block's
     /// id meets its `work` target (see [`crate::pow`]). Folded into the id, so
     /// changing it changes the hash — which is what mining explores. Not
     /// interpreted by GHOSTDAG; `0` for a block that was never mined.
@@ -129,6 +134,10 @@ pub struct Block {
     /// writer never produces a v5 wire form, and a v5 reader rejects v6 snapshots
     /// as `UnsupportedVersion`.
     vrf_output: Option<VrfOutput>,
+    /// Authority signature (PoA): 64-byte Ed25519 signature over the block's
+    /// hash without the authority signature (`hash_without_authority_sig()`).
+    /// `None` for blocks produced before PoA activation or in non-PoA modes.
+    authority_sig: Option<[u8; 64]>,
     /// Opaque application payload; not interpreted by consensus.
     /// `None` indicates the payload has been pruned.
     payload: Option<Vec<u8>>,
@@ -160,6 +169,7 @@ impl Block {
             vrf_public_key: None,
             vrf_proof: None,
             vrf_output: None,
+            authority_sig: None,
             payload: Some(payload),
         };
         block.id = block.compute_id();
@@ -189,6 +199,7 @@ impl Block {
             vrf_public_key: Some(vrf_public_key),
             vrf_proof: Some(vrf_proof),
             vrf_output: Some(vrf_output),
+            authority_sig: None,
             payload: Some(payload),
         };
         block.id = block.compute_id();
@@ -216,6 +227,7 @@ impl Block {
             vrf_public_key: None,
             vrf_proof: None,
             vrf_output: None,
+            authority_sig: None,
             payload: None,
         }
     }
@@ -243,6 +255,95 @@ impl Block {
             vrf_public_key,
             vrf_proof,
             vrf_output,
+            authority_sig: None,
+            payload: None,
+        }
+    }
+
+    /// Create a block with an authority signature (PoA).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_authority(
+        mut parents: Vec<BlockId>,
+        work: u128,
+        timestamp_ms: u64,
+        nonce: u64,
+        authority_sig: [u8; 64],
+        payload: Vec<u8>,
+    ) -> Self {
+        parents.sort_unstable();
+        parents.dedup();
+        let mut block = Self {
+            id: BlockId([0; 32]),
+            parents,
+            work,
+            timestamp_ms,
+            nonce,
+            vrf_public_key: None,
+            vrf_proof: None,
+            vrf_output: None,
+            authority_sig: Some(authority_sig),
+            payload: Some(payload),
+        };
+        block.id = block.compute_id();
+        block
+    }
+
+    /// Create a block with full VRF fields and authority signature (PoA + VRF).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_vrf_and_authority(
+        mut parents: Vec<BlockId>,
+        work: u128,
+        timestamp_ms: u64,
+        nonce: u64,
+        vrf_public_key: VrfPublicKey,
+        vrf_proof: VrfProof,
+        vrf_output: VrfOutput,
+        authority_sig: [u8; 64],
+        payload: Vec<u8>,
+    ) -> Self {
+        parents.sort_unstable();
+        parents.dedup();
+        let mut block = Self {
+            id: BlockId([0; 32]),
+            parents,
+            work,
+            timestamp_ms,
+            nonce,
+            vrf_public_key: Some(vrf_public_key),
+            vrf_proof: Some(vrf_proof),
+            vrf_output: Some(vrf_output),
+            authority_sig: Some(authority_sig),
+            payload: Some(payload),
+        };
+        block.id = block.compute_id();
+        block
+    }
+
+    /// Create a pruned block with full VRF fields and authority signature.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_pruned_with_vrf_and_authority(
+        mut parents: Vec<BlockId>,
+        work: u128,
+        timestamp_ms: u64,
+        nonce: u64,
+        vrf_public_key: Option<VrfPublicKey>,
+        vrf_proof: Option<VrfProof>,
+        vrf_output: Option<VrfOutput>,
+        authority_sig: Option<[u8; 64]>,
+        id: BlockId,
+    ) -> Self {
+        parents.sort_unstable();
+        parents.dedup();
+        Self {
+            id,
+            parents,
+            work,
+            timestamp_ms,
+            nonce,
+            vrf_public_key,
+            vrf_proof,
+            vrf_output,
+            authority_sig,
             payload: None,
         }
     }
@@ -259,6 +360,7 @@ impl Block {
             vrf_public_key: None,
             vrf_proof: None,
             vrf_output: None,
+            authority_sig: None,
             payload: Some(payload),
         };
         block.id = block.compute_id();
@@ -276,6 +378,7 @@ impl Block {
             vrf_public_key: None,
             vrf_proof: None,
             vrf_output: None,
+            authority_sig: None,
             payload: None,
         }
     }
@@ -320,6 +423,18 @@ impl Block {
         self.vrf_public_key.is_some()
     }
 
+    /// The authority signature (PoA): 64-byte Ed25519 signature over the
+    /// block's hash without the authority signature.
+    /// `None` for blocks produced before PoA activation or in non-PoA modes.
+    pub fn authority_sig(&self) -> Option<&[u8; 64]> {
+        self.authority_sig.as_ref()
+    }
+
+    /// Whether this block has an authority signature (produced with PoA enabled).
+    pub fn has_authority_sig(&self) -> bool {
+        self.authority_sig.is_some()
+    }
+
     /// The block's stored BLAKE3 id (computed at creation, never changes).
     pub fn id(&self) -> BlockId {
         self.id
@@ -334,6 +449,9 @@ impl Block {
     /// flag (present only when `vrf_output` is Some). This ensures that a block
     /// with a proof but no output hashes identically to its v6 wire encoding
     /// (proof_flag=1, output_flag=0).
+    ///
+    /// The authority signature (PoA) is hashed as a flag byte (0 = absent,
+    /// 1 = present + 64 bytes) followed by the 64-byte signature when present.
     fn compute_id(&self) -> BlockId {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&(self.parents.len() as u64).to_le_bytes());
@@ -360,6 +478,49 @@ impl Block {
                 hasher.update(self.vrf_output.as_ref().unwrap().as_bytes());
             }
         }
+        // Authority signature (PoA): flag + 64 bytes when present.
+        let has_auth = self.authority_sig.is_some();
+        hasher.update(&[if has_auth { 1u8 } else { 0u8 }]);
+        if let Some(sig) = &self.authority_sig {
+            hasher.update(sig);
+        }
+        let payload = self.payload.as_deref().unwrap_or(&[]);
+        hasher.update(&(payload.len() as u64).to_le_bytes());
+        hasher.update(payload);
+        BlockId(*hasher.finalize().as_bytes())
+    }
+
+    /// Compute the block's hash **without** the authority signature.
+    /// This is the message that the authority signs for PoA consensus.
+    /// The hash covers all consensus fields except the authority signature itself.
+    pub fn hash_without_authority_sig(&self) -> BlockId {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&(self.parents.len() as u64).to_le_bytes());
+        for parent in &self.parents {
+            hasher.update(parent.as_bytes());
+        }
+        hasher.update(&self.work.to_le_bytes());
+        hasher.update(&self.timestamp_ms.to_le_bytes());
+        hasher.update(&self.nonce.to_le_bytes());
+        // VRF fields (included in id for blocks that have them), hashed
+        // independently to match the v6 wire encoding.
+        let has_vrf = self.vrf_public_key.is_some();
+        hasher.update(&[if has_vrf { 1u8 } else { 0u8 }]);
+        if let Some(pk) = &self.vrf_public_key {
+            hasher.update(pk.as_bytes());
+            let has_proof = self.vrf_proof.is_some();
+            hasher.update(&[if has_proof { 1u8 } else { 0u8 }]);
+            if has_proof {
+                hasher.update(&self.vrf_proof.as_ref().unwrap().to_bytes());
+            }
+            let has_output = self.vrf_output.is_some();
+            hasher.update(&[if has_output { 1u8 } else { 0u8 }]);
+            if has_output {
+                hasher.update(self.vrf_output.as_ref().unwrap().as_bytes());
+            }
+        }
+        // Authority signature flag is always 0 (excluded from the signed message).
+        hasher.update(&[0u8]);
         let payload = self.payload.as_deref().unwrap_or(&[]);
         hasher.update(&(payload.len() as u64).to_le_bytes());
         hasher.update(payload);
@@ -402,6 +563,7 @@ impl Block {
         // id (32) + parents.len() (8) + each parent (32) + work (16) + timestamp (8) + nonce (8) +
         // has_vrf flag (1) + [vrf_pk (32) + proof_flag (1) + [proof (96) if present] +
         //                      output_flag (1) + [output (32) if present]] if has_vrf +
+        // has_auth flag (1) + [auth_sig (64) if present] +
         // payload.len (8) + payload
         let vrf_len: usize = if self.vrf_public_key.is_some() {
             32 + 1
@@ -411,6 +573,11 @@ impl Block {
         } else {
             0
         };
+        let auth_len: usize = if self.authority_sig.is_some() {
+            1 + 64
+        } else {
+            1
+        };
         32 + 8
             + (self.parents.len() * 32)
             + 16
@@ -418,6 +585,7 @@ impl Block {
             + 8
             + 1
             + vrf_len
+            + auth_len
             + 8
             + self.payload.as_deref().unwrap_or(&[]).len()
     }

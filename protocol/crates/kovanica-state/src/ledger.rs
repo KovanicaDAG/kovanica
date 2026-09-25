@@ -67,7 +67,8 @@
 use std::collections::{HashMap, HashSet};
 
 use kovanica_dag::{
-    decode_snapshot, Block, BlockId, BlockPreview, Dag, DagError, KParam, Retarget, SnapshotError,
+    decode_snapshot, AuthoritySet, Block, BlockId, BlockPreview, Dag, DagError, KParam, PoAConfig,
+    Retarget, SnapshotError,
 };
 
 use crate::htlc::HtlcScript;
@@ -2134,6 +2135,12 @@ pub struct Ledger {
     /// below the selected tip are evicted entirely (payload, metadata, and
     /// reachability-oracle entries). `u64::MAX` = never.
     block_pruning_depth: u64,
+    /// When `true`, the ledger is replaying a log/snapshot/checkpoint and
+    /// consensus checks that are only for live blocks (e.g., DAG pruning
+    /// invariant `BuildsOnPrunedHistory`) are skipped. This allows anticone
+    /// blocks linearized last to be re-inserted even if their selected parent
+    /// is in the pruned region.
+    replay_mode: bool,
     /// The UTXO state at the selected tip — the single materialised state.
     tip_state: UtxoSet,
     /// The stake registry at the selected tip.
@@ -2150,6 +2157,9 @@ pub struct Ledger {
     /// Hybrid PoW/staked-VRF admission policy; `None` = legacy behaviour (VRF
     /// fields on incoming blocks are ignored/stripped).
     hybrid: Option<HybridConfig>,
+    /// Proof-of-Authority admission policy (RFC-POA §3–4); `None` = PoA off.
+    /// Mutually exclusive with [`Self::hybrid`] — enabling one clears the other.
+    poa: Option<PoAConfig>,
     /// Selected-chain height at which hybrid admission was enabled. Used to
     /// avoid applying retarget checks retroactively to pre-hybrid blocks.
     hybrid_activation_height: u64,
@@ -2244,6 +2254,7 @@ impl Ledger {
             hybrid: None,
             hybrid_activation_height: 0,
             staked_seen: HashMap::new(),
+            poa: None,
             heights,
             multisig_activation_score: MULTISIG_ACTIVATION_SCORE,
             native_token_activation_score: NATIVE_TOKEN_ACTIVATION_SCORE,
@@ -2255,6 +2266,7 @@ impl Ledger {
             fees_burned: burned,
             block_minted,
             block_fees,
+            replay_mode: false,
         })
     }
 
@@ -2505,10 +2517,12 @@ impl Ledger {
         self.dag.payload_pruning_score()
     }
 
-    /// Set the payload pruning depth on the underlying DAG.
+    /// Set the payload pruning depth on the underlying DAG and immediately
+    /// prune payloads of blocks that are now beyond the threshold.
     pub fn set_payload_pruning_depth(&mut self, depth: u64) {
         self.payload_pruning_depth = depth;
         self.dag.set_payload_pruning_depth(depth);
+        self.dag.prune_old_payloads();
     }
 
     /// The block pruning depth for the underlying DAG. `u64::MAX` means pruning
@@ -2551,6 +2565,21 @@ impl Ledger {
         self.block_pruning_depth = depth;
         self.dag.set_block_pruning_depth(depth);
         self.dag.prune_old_blocks();
+    }
+
+    /// Enable or disable replay mode. When enabled, consensus checks that are
+    /// only for live blocks (e.g., DAG pruning invariant `BuildsOnPrunedHistory`)
+    /// are skipped. This allows anticone blocks linearized last to be re-inserted
+    /// even if their selected parent is in the pruned region.
+    pub fn set_replay_mode(&mut self, enabled: bool) {
+        self.replay_mode = enabled;
+        if enabled {
+            // Disable block pruning during replay: the log's linearized order may
+            // reference selected parents deep in history that would be evicted by
+            // normal block pruning. Payload pruning still runs to bound memory.
+            self.block_pruning_depth = u64::MAX;
+            self.dag.set_block_pruning_depth(u64::MAX);
+        }
     }
 
     /// The genesis block id.
@@ -2733,6 +2762,9 @@ impl Ledger {
     /// back up the chain reproduces `block`'s view exactly. `None` when `block`
     /// is absent, final (its delta was dropped), or its chain crosses a missing
     /// delta.
+    ///
+    /// During replay (`self.replay_mode`), we walk all the way to genesis since
+    /// deltas are not pruned and the finality boundary moves during the load.
     fn reconstruct_state(&self, block: &BlockId) -> Option<UtxoSet> {
         let mut path = vec![*block];
         let mut cur = *block;
@@ -2741,7 +2773,11 @@ impl Ledger {
             match gd.selected_parent {
                 None => break,
                 Some(sp) => {
-                    if self.is_final(&sp) {
+                    // During replay, don't stop at final blocks — walk to genesis.
+                    // `prune()` early-returns in replay mode, so deltas are never
+                    // folded to be relative to the empty set; the walk must reach
+                    // genesis for the reconstruction to be complete.
+                    if !self.replay_mode && self.is_final(&sp) {
                         break;
                     }
                     path.push(sp);
@@ -2767,7 +2803,8 @@ impl Ledger {
             match gd.selected_parent {
                 None => break,
                 Some(sp) => {
-                    if self.is_final(&sp) {
+                    // During replay, don't stop at final blocks — walk to genesis
+                    if !self.replay_mode && self.is_final(&sp) {
                         break;
                     }
                     path.push(sp);
@@ -2796,6 +2833,9 @@ impl Ledger {
         self.dag.set_proof_of_work(false);
         self.dag.clear_difficulty();
         self.dag.disable_vrf();
+        // PoA and hybrid are mutually exclusive admission regimes.
+        self.dag.disable_poa();
+        self.poa = None;
         self.hybrid = Some(config);
     }
 
@@ -2807,6 +2847,36 @@ impl Ledger {
     /// The active hybrid policy, if any ([`Ledger::set_hybrid`]).
     pub fn hybrid_config(&self) -> Option<HybridConfig> {
         self.hybrid.clone()
+    }
+
+    /// Enable Proof-of-Authority admission with `authority_set` and
+    /// `slot_duration_ms` (RFC-POA §3–4).
+    ///
+    /// This takes over block-admission from the underlying DAG's own checks:
+    /// dag-level proof-of-work, difficulty pinning, and VRF threshold are
+    /// cleared, and the authority/slot check is enforced here instead (see
+    /// [`kovanica_dag::Dag::set_poa`]). PoA and hybrid admission are mutually
+    /// exclusive — enabling one clears the other. Restoring a
+    /// snapshot/checkpoint that contains PoA blocks requires PoA to be
+    /// re-enabled before replay (mirrors [`Ledger::set_hybrid`]).
+    pub fn set_poa(&mut self, authority_set: AuthoritySet, slot_duration_ms: u64) {
+        // The ledger owns admission now.
+        self.dag.set_poa(authority_set, slot_duration_ms);
+        // PoA and hybrid are mutually exclusive admission regimes.
+        self.hybrid = None;
+        self.hybrid_activation_height = 0;
+        self.staked_seen.clear();
+        self.poa = self.dag.poa_config().cloned();
+    }
+
+    /// Whether Proof-of-Authority admission is enabled.
+    pub fn poa_enabled(&self) -> bool {
+        self.poa.is_some()
+    }
+
+    /// The active PoA policy, if any ([`Ledger::set_poa`]).
+    pub fn poa_config(&self) -> Option<PoAConfig> {
+        self.poa.clone()
     }
 
     /// The work target the hybrid retargeting policy implies for a block with
@@ -2963,12 +3033,15 @@ impl Ledger {
         // Finality: a block may not build on final history. Its selected parent
         // being final means its state has been pruned, so this check also
         // guarantees the state lookup below succeeds.
-        let parent_score = self
-            .dag
-            .ghostdag(&preview.selected_parent)
-            .map_or(0, |g| g.blue_score);
+        //
+        // Exception: the genesis block is never evicted and its delta is kept
+        // forever (see `prune()`), so a block whose selected parent is genesis
+        // is always allowed — this handles anticone blocks linearized last
+        // during replay-with-policy (e.g., the pay block in the test).
+        let sp = preview.selected_parent;
+        let parent_score = self.dag.ghostdag(&sp).map_or(0, |g| g.blue_score);
         let finality_score = self.finality_score();
-        if parent_score < finality_score {
+        if parent_score < finality_score && sp != self.dag.genesis() {
             return Err(LedgerInsertError::Finality {
                 parent_score,
                 finality_score,
@@ -2978,7 +3051,6 @@ impl Ledger {
         // Hybrid admission (before any state mutation, so errors stay atomic).
         // Eligibility reads the SELECTED PARENT's stake view — a bond carried in
         // this very block must not vote for its own producer.
-        let sp = preview.selected_parent;
         if let Some(cfg) = self.hybrid.as_ref() {
             let pre_stake = self.reconstruct_stake(&sp).unwrap_or_default();
             self.hybrid_admit(&block, &preview, staked.as_ref(), cfg, &pre_stake)?;
@@ -2989,8 +3061,9 @@ impl Ledger {
         let block_blue_score = parent_score + 1;
 
         // Reconstruct the selected parent's view state from the undo log. The
-        // finality check above guarantees `sp` is non-final, so its delta is
-        // present and the reconstruction succeeds.
+        // finality check above guarantees `sp` is non-final (or is genesis,
+        // whose delta is kept forever), so its delta is present and the
+        // reconstruction succeeds.
         let mut state = self
             .reconstruct_state(&sp)
             .expect("non-final selected parent always has a stored delta");
@@ -3086,7 +3159,11 @@ impl Ledger {
 
         // Commit: add to the DAG (structural checks run here), then store the
         // block's net delta relative to its selected parent's view.
-        let id = self.dag.insert(block)?;
+        let id = if self.replay_mode {
+            self.dag.insert_for_replay(block, None)?
+        } else {
+            self.dag.insert(block)?
+        };
         if let Some(s) = staked {
             self.staked_seen.insert((s.vrf_pk, sp), id);
         }
@@ -3233,6 +3310,12 @@ impl Ledger {
     /// parent (that is a finality violation) nor needed by
     /// [`Ledger::ledger_state`] (which starts from the selected tip).
     fn prune(&mut self) {
+        // During replay, we must not prune deltas because blocks later in the log
+        // (e.g., anticone blocks linearized last) may have selected parents that
+        // are currently final. Their deltas are needed for state reconstruction.
+        if self.replay_mode {
+            return;
+        }
         let threshold = self.finality_score();
         if threshold == 0 {
             return;
@@ -3369,7 +3452,7 @@ impl Ledger {
     /// [`Ledger::read_snapshot_with_hybrid`] — replay must run under the same
     /// admission rules that produced those ids.
     pub fn read_snapshot(bytes: &[u8]) -> Result<Ledger, LedgerSnapshotError> {
-        Self::read_snapshot_impl(bytes, None)
+        Self::read_snapshot_impl(bytes, None, None)
     }
 
     /// Like [`Ledger::read_snapshot`], but hybrid admission (with `config`) is
@@ -3379,12 +3462,27 @@ impl Ledger {
         bytes: &[u8],
         config: HybridConfig,
     ) -> Result<Ledger, LedgerSnapshotError> {
-        Self::read_snapshot_impl(bytes, Some(config))
+        Self::read_snapshot_impl(bytes, Some(config), None)
+    }
+
+    /// Like [`Ledger::read_snapshot`], but Proof-of-Authority admission (with
+    /// `authority_set` and `slot_duration_ms`) is active during replay, so PoA
+    /// blocks re-admit with their original ids intact (the live `dag.insert`
+    /// path enforces the authority signature; replay without the policy would
+    /// reject them). Required for any snapshot produced in PoA mode — mirroring
+    /// [`Ledger::read_snapshot_with_hybrid`].
+    pub fn read_snapshot_with_poa(
+        bytes: &[u8],
+        authority_set: AuthoritySet,
+        slot_duration_ms: u64,
+    ) -> Result<Ledger, LedgerSnapshotError> {
+        Self::read_snapshot_impl(bytes, None, Some((authority_set, slot_duration_ms)))
     }
 
     fn read_snapshot_impl(
         bytes: &[u8],
         hybrid: Option<HybridConfig>,
+        poa: Option<(AuthoritySet, u64)>,
     ) -> Result<Ledger, LedgerSnapshotError> {
         if bytes.len() < 4 || bytes[..4] != LEDGER_MAGIC {
             return Err(LedgerSnapshotError::BadMagic);
@@ -3418,6 +3516,9 @@ impl Ledger {
         ledger.dag.set_payload_pruning_depth(payload_pruning_depth);
         if let Some(config) = hybrid {
             ledger.set_hybrid(config);
+        }
+        if let Some((authority_set, slot_duration_ms)) = poa {
+            ledger.set_poa(authority_set, slot_duration_ms);
         }
         for block in blocks {
             // Identity-preserving replay: VRF-era snapshots must re-admit the
@@ -3540,7 +3641,7 @@ impl Ledger {
     /// For checkpoints whose tip segment contains staked-VRF blocks, use
     /// [`Ledger::read_checkpoint_with_hybrid`].
     pub fn read_checkpoint(bytes: &[u8]) -> Result<Ledger, LedgerCheckpointError> {
-        Self::read_checkpoint_impl(bytes, None)
+        Self::read_checkpoint_impl(bytes, None, None)
     }
 
     /// Like [`Ledger::read_checkpoint`], but hybrid admission runs during
@@ -3549,12 +3650,24 @@ impl Ledger {
         bytes: &[u8],
         config: HybridConfig,
     ) -> Result<Ledger, LedgerCheckpointError> {
-        Self::read_checkpoint_impl(bytes, Some(config))
+        Self::read_checkpoint_impl(bytes, Some(config), None)
+    }
+
+    /// Like [`Ledger::read_checkpoint`], but Proof-of-Authority admission runs
+    /// during tip-segment replay so PoA blocks keep their original ids —
+    /// mirroring [`Ledger::read_checkpoint_with_hybrid`].
+    pub fn read_checkpoint_with_poa(
+        bytes: &[u8],
+        authority_set: AuthoritySet,
+        slot_duration_ms: u64,
+    ) -> Result<Ledger, LedgerCheckpointError> {
+        Self::read_checkpoint_impl(bytes, None, Some((authority_set, slot_duration_ms)))
     }
 
     fn read_checkpoint_impl(
         bytes: &[u8],
         hybrid: Option<HybridConfig>,
+        poa: Option<(AuthoritySet, u64)>,
     ) -> Result<Ledger, LedgerCheckpointError> {
         if bytes.len() < 4 || bytes[..4] != CHECKPOINT_MAGIC {
             return Err(LedgerCheckpointError::BadMagic);
@@ -3690,7 +3803,7 @@ impl Ledger {
             let stored_id =
                 BlockId::from_bytes(bytes[block_pos..block_pos + 32].try_into().unwrap());
             block_pos += 32;
-            let (mut block, consumed) = decode_checkpoint_block(&bytes[block_pos..])?;
+            let (mut block, consumed) = decode_checkpoint_block(&bytes[block_pos..], version)?;
             block_pos += consumed;
 
             // For the first block (checkpoint block), reconstruct with original ID
@@ -3756,6 +3869,7 @@ impl Ledger {
             hybrid: None,
             hybrid_activation_height: 0,
             staked_seen: HashMap::new(),
+            poa: None,
             heights: HashMap::new(),
             multisig_activation_score: MULTISIG_ACTIVATION_SCORE,
             native_token_activation_score: NATIVE_TOKEN_ACTIVATION_SCORE,
@@ -3767,6 +3881,7 @@ impl Ledger {
             fees_burned: stored_burned.unwrap_or(0),
             block_minted: HashMap::new(),
             block_fees: HashMap::new(),
+            replay_mode: false,
         };
         ledger.deltas.insert(checkpoint_id, checkpoint_delta);
         ledger
@@ -3775,6 +3890,9 @@ impl Ledger {
         ledger.heights.insert(checkpoint_id, checkpoint_height);
         if let Some(config) = hybrid {
             ledger.set_hybrid(config);
+        }
+        if let Some((authority_set, slot_duration_ms)) = poa {
+            ledger.set_poa(authority_set, slot_duration_ms);
         }
 
         // Replay remaining tip segment blocks (those strictly above finality).
@@ -3902,6 +4020,30 @@ pub fn rfc006_genesis_coinbase(founder: Address, treasury_seed: Option<[u8; 32]>
     Transaction::coinbase(outputs, b"genesis-rfc006".to_vec())
 }
 
+/// The RFC-POA genesis coinbase tag committing to the authority set:
+/// `KVA1 || authority_set_hash` (RFC-POA §1).
+///
+/// The genesis coinbase's tag is part of the coinbase transaction id, which is
+/// part of the genesis block payload — so the genesis block id commits to the
+/// authority set. SPV/light clients verify the set they are told about against
+/// the genesis they sync from, and a node configured with a different set
+/// derives a different genesis id (a hard fork marker, not a silent mismatch).
+pub fn poa_genesis_tag(set_hash: &[u8; 32]) -> Vec<u8> {
+    let mut tag = kovanica_dag::AUTHORITY_UTXO_TAG.to_vec();
+    tag.extend_from_slice(set_hash);
+    tag
+}
+
+/// Parse an RFC-POA genesis coinbase tag into its authority-set hash, or
+/// `None` if `tag` is not a well-formed `KVA1 || hash` tag.
+pub fn parse_poa_genesis_tag(tag: &[u8]) -> Option<[u8; 32]> {
+    let prefix = kovanica_dag::AUTHORITY_UTXO_TAG;
+    if tag.len() != prefix.len() + 32 || !tag.starts_with(prefix) {
+        return None;
+    }
+    tag[prefix.len()..].try_into().ok()
+}
+
 /// Derive the placeholder treasury public key for tranche `k` (1-based).
 ///
 /// This matches the derivation used when `treasury_seed = None` in
@@ -3918,7 +4060,14 @@ pub fn placeholder_treasury_key(k: u32) -> [u8; 32] {
 
 /// Decode a single block from the checkpoint tip segment format.
 /// Returns the block and the number of bytes consumed.
-fn decode_checkpoint_block(bytes: &[u8]) -> Result<(Block, usize), LedgerCheckpointError> {
+///
+/// `version` is the checkpoint format version: v9+ blocks carry the
+/// authority-signature flag byte (matching `kovanica_dag::encode_block`);
+/// v8 and earlier do not.
+fn decode_checkpoint_block(
+    bytes: &[u8],
+    version: u16,
+) -> Result<(Block, usize), LedgerCheckpointError> {
     // Blocks in checkpoint are stored using kovanica_dag::encode_block format
     // (without the DAG magic/version header, just the block data).
     // The format: parents_len + parents + work + timestamp_ms + nonce + payload_len + payload
@@ -3967,9 +4116,25 @@ fn decode_checkpoint_block(bytes: &[u8]) -> Result<(Block, usize), LedgerCheckpo
         (None, None, None)
     };
 
+    // Authority signature (PoA, v9+): has_auth flag (1 byte), then if set:
+    // authority_sig (64 bytes). Checkpoint blocks never carry one (they are
+    // reconstructed via `Block::new_pruned` / `Block::new`), so the flag is
+    // always 0 here — but it must be consumed to stay aligned with
+    // `kovanica_dag::encode_block`.
+    let authority_sig = if version >= 9 {
+        let has_auth = reader.read_u8()?;
+        if has_auth == 1 {
+            Some(reader.read_array::<64>()?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let payload_len = reader.read_count(1)? as usize;
     if payload_len == 0 {
-        let block = Block::new_pruned_with_vrf(
+        let block = Block::new_pruned_with_vrf_and_authority(
             parents,
             work,
             timestamp_ms,
@@ -3977,6 +4142,7 @@ fn decode_checkpoint_block(bytes: &[u8]) -> Result<(Block, usize), LedgerCheckpo
             vrf_public_key,
             vrf_proof,
             vrf_output,
+            authority_sig,
             BlockId::from_bytes([0u8; 32]),
         );
         let consumed = reader.pos;
@@ -3986,10 +4152,19 @@ fn decode_checkpoint_block(bytes: &[u8]) -> Result<(Block, usize), LedgerCheckpo
         return Err(LedgerCheckpointError::UnexpectedEof);
     }
     let payload = reader.read_bytes(payload_len)?;
-    let block = if let Some(pk) = vrf_public_key {
-        // Non-pruned blocks carry all three VRF fields (matching the snapshot
-        // reader's v6 handling); the pruned path above accepts partial fields.
-        Block::new_with_vrf(
+    let block = match (vrf_public_key, authority_sig) {
+        (Some(pk), Some(sig)) => Block::new_with_vrf_and_authority(
+            parents,
+            work,
+            timestamp_ms,
+            nonce,
+            pk,
+            vrf_proof.unwrap(),
+            vrf_output.unwrap(),
+            sig,
+            payload,
+        ),
+        (Some(pk), None) => Block::new_with_vrf(
             parents,
             work,
             timestamp_ms,
@@ -3998,9 +4173,11 @@ fn decode_checkpoint_block(bytes: &[u8]) -> Result<(Block, usize), LedgerCheckpo
             vrf_proof.unwrap(),
             vrf_output.unwrap(),
             payload,
-        )
-    } else {
-        Block::new(parents, work, timestamp_ms, nonce, payload)
+        ),
+        (None, Some(sig)) => {
+            Block::new_with_authority(parents, work, timestamp_ms, nonce, sig, payload)
+        }
+        (None, None) => Block::new(parents, work, timestamp_ms, nonce, payload),
     };
     let consumed = reader.pos;
     Ok((block, consumed))
@@ -4155,7 +4332,10 @@ const CHECKPOINT_MAGIC: [u8; 4] = *b"KVCP";
 /// round-trip.
 /// v7 (RFC-006): UTXO entries carry `is_coinbase`; trailing native_minted + fees_burned.
 /// v8 (KVP-106): asset registry appended after stake registry.
-const CHECKPOINT_VERSION: u16 = 8;
+/// v9 (PoA): tip-segment blocks are encoded with `kovanica_dag::encode_block`,
+/// which now writes the authority-signature flag byte (0 = absent) after the VRF
+/// fields. v8 and earlier checkpoints (no flag byte) still decode.
+const CHECKPOINT_VERSION: u16 = 9;
 
 /// Why a ledger checkpoint could not be encoded or decoded.
 #[derive(Clone, Debug, PartialEq, Eq)]

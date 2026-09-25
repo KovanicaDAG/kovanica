@@ -11,6 +11,13 @@
 //!
 //! If this test starts failing off the fixture, re-capture the endpoint and
 //! revisit the genesis config — the network may have booted a new chain.
+//!
+//! ⚠️ PoA (RFC-POA-Migration) M1: `Block::compute_id` now hashes the
+//! authority-signature flag byte, so every block id — including genesis —
+//! changed. The live testnet has not reset yet, so local genesis no longer
+//! matches the live network. These tests are `#[ignore]`d until the PoA
+//! testnet reset (M3, genesis carries the authority set) and the fixture +
+//! constants below are re-captured — same precedent as RFC-003 stealth.
 
 use kovanica_ffi::{LightConfig, LightNode};
 
@@ -54,6 +61,7 @@ fn default_config_genesis_diverges_from_live_network() {
 }
 
 #[test]
+#[ignore = "PoA M1 changed all block ids; re-enable after the PoA testnet reset and re-capture the fixture"]
 fn live_params_reproduce_testnet_genesis() {
     let node = LightNode::new(live_config()).expect("genesis ok");
     assert_eq!(node.balance_of_seed(1).unwrap(), "20000000000000");
@@ -67,6 +75,7 @@ fn live_params_reproduce_testnet_genesis() {
 }
 
 #[test]
+#[ignore = "PoA M1 changed all block ids; re-enable after the PoA testnet reset and re-capture the fixture"]
 fn light_node_imports_live_testnet_chain() {
     let node = LightNode::new(live_config()).expect("genesis ok");
     let blob = std::fs::read(fixture_path()).expect("fetch tests/fixtures and commit it");

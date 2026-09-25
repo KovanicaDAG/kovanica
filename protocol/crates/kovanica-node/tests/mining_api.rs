@@ -5,6 +5,14 @@ use kovanica_dag::{pow, Block, BlockId};
 use kovanica_node::explorer::{handle, Explorer};
 use kovanica_state::{decode_block_payload, KeyPair};
 
+/// Boot an explorer in legacy PoW mode (RFC-POA §7: the external mining
+/// endpoints are a pow-mode feature — PoA replaces PoW mining). Each mining
+/// test file is its own process, so setting the var here is race-free.
+fn boot_pow() -> Explorer {
+    std::env::set_var("KOVANICA_CONSENSUS", "pow");
+    Explorer::boot()
+}
+
 const ATOM: u64 = 100_000_000;
 
 fn send_request(app: &mut Explorer, req: &str) -> (u16, String) {
@@ -41,7 +49,7 @@ fn send_request(app: &mut Explorer, req: &str) -> (u16, String) {
 
 #[test]
 fn test_get_mining_template_endpoint() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let (status, body) = send_request(
         &mut app,
         "GET /api/mine/template HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
@@ -67,7 +75,7 @@ fn test_get_mining_template_endpoint() {
 
 #[test]
 fn test_mine_and_submit_block() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let node_before = app.mesh.node("alpha").unwrap();
     let tip_before = node_before.selected_tip().unwrap();
 
@@ -134,7 +142,7 @@ fn test_mine_and_submit_block() {
 
 #[test]
 fn test_mine_block_with_mempool_transactions() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     // Pool transfer from actor 1 to actor 2
     let to_addr = KeyPair::from_u64(2).address();
@@ -199,7 +207,7 @@ fn test_mine_block_with_mempool_transactions() {
 
 #[test]
 fn test_consecutive_blocks_mining() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     for i in 1..=3 {
         let (status, body) = send_request(
@@ -254,7 +262,7 @@ fn test_consecutive_blocks_mining() {
 
 #[test]
 fn test_mining_template_custom_miner() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let custom_miner = KeyPair::from_u64(42).address();
     let query_req = format!(
         "GET /api/mine/template?miner={} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
@@ -309,7 +317,7 @@ fn test_mining_template_custom_miner() {
 
 #[test]
 fn test_negative_cases() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     // 1. Invalid JSON body
     let bad_json = "POST /api/mine/submit HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 10\r\n\r\n{invalid}}";
@@ -388,7 +396,7 @@ fn test_negative_cases() {
 
 #[test]
 fn test_idempotent_block_submission() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let (_, body) = send_request(
         &mut app,
         "GET /api/mine/template HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",

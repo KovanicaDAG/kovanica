@@ -318,6 +318,7 @@ fn test_wall_clock_drift_exact_boundary_on_node() {
         timestamp_ms: now_ms + MAX_FUTURE_DRIFT_MS,
         nonce: 0,
         vrf: None,
+        authority_sig: None,
         txs: vec![],
     };
     let res_limit = node.receive_block(block_at_limit);
@@ -333,6 +334,7 @@ fn test_wall_clock_drift_exact_boundary_on_node() {
         timestamp_ms: now_ms + MAX_FUTURE_DRIFT_MS + 1,
         nonce: 0,
         vrf: None,
+        authority_sig: None,
         txs: vec![],
     };
     let res_exceeded = node.receive_block(block_exceeded);
@@ -354,6 +356,7 @@ fn test_wall_clock_drift_exact_boundary_on_node() {
         timestamp_ms: u64::MAX,
         nonce: 0,
         vrf: None,
+        authority_sig: None,
         txs: vec![],
     };
     assert!(matches!(
@@ -669,6 +672,7 @@ fn test_dag_competing_branch_reorg_and_locator_common_ancestor_resolution() {
             timestamp_ms: 10_000 + i * 1_000,
             nonce: i,
             vrf: None,
+            authority_sig: None,
             txs: vec![],
         };
         let b_id = node.receive_block(block_rec).unwrap();

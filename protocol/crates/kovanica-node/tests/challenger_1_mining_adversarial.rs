@@ -19,6 +19,14 @@ use kovanica_dag::{pow, Block, BlockId};
 use kovanica_node::explorer::{handle, Explorer};
 use kovanica_state::KeyPair;
 
+/// Boot an explorer in legacy PoW mode (RFC-POA §7: the external mining
+/// endpoints are a pow-mode feature — PoA replaces PoW mining). Each mining
+/// test file is its own process, so setting the var here is race-free.
+fn boot_pow() -> Explorer {
+    std::env::set_var("KOVANICA_CONSENSUS", "pow");
+    Explorer::boot()
+}
+
 const MAX_FUTURE_DRIFT_MS: u64 = 2 * 60 * 60 * 1000; // 2 hours
 
 /// Helper to execute an HTTP request through `Explorer::handle` over local TCP.
@@ -98,7 +106,7 @@ fn mine_from_template(tmpl: &serde_json::Value) -> (Vec<BlockId>, u128, u64, u64
 
 #[test]
 fn test_adversarial_malformed_json_syntax_and_structures() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     let syntax_cases = [
         ("empty body with Content-Length: 0", ""),
@@ -145,7 +153,7 @@ fn test_adversarial_malformed_json_syntax_and_structures() {
 
 #[test]
 fn test_adversarial_missing_and_null_field_permutations() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     let valid_parent = "0000000000000000000000000000000000000000000000000000000000000000";
     let valid_payload = "00";
@@ -189,7 +197,7 @@ fn test_adversarial_missing_and_null_field_permutations() {
 
 #[test]
 fn test_adversarial_invalid_parent_ids() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     let invalid_parent_cases = [
         ("empty parents array", "{\"parents\":[],\"work\":1,\"timestamp_ms\":1000,\"nonce\":0,\"payload\":\"00\"}"),
@@ -231,7 +239,7 @@ fn test_adversarial_invalid_parent_ids() {
 
 #[test]
 fn test_adversarial_nonexistent_parent_id_rejection() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let tmpl_res = fetch_template(&mut app, "");
     assert_eq!(tmpl_res.0, 200);
     let tmpl = tmpl_res.2;
@@ -284,7 +292,7 @@ fn test_adversarial_nonexistent_parent_id_rejection() {
 
 #[test]
 fn test_adversarial_corrupted_payload_and_bad_hex() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let tmpl_res = fetch_template(&mut app, "");
     assert_eq!(tmpl_res.0, 200);
     let tmpl = tmpl_res.2;
@@ -337,7 +345,7 @@ fn test_adversarial_corrupted_payload_and_bad_hex() {
 
 #[test]
 fn test_adversarial_work_and_nonce_types() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let tmpl_res = fetch_template(&mut app, "");
     assert_eq!(tmpl_res.0, 200);
     let tmpl = tmpl_res.2;
@@ -394,7 +402,7 @@ fn test_adversarial_work_and_nonce_types() {
 
 #[test]
 fn test_adversarial_timestamp_drift_and_coercion() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
     let tmpl_res = fetch_template(&mut app, "");
     assert_eq!(tmpl_res.0, 200);
     let tmpl = tmpl_res.2;
@@ -515,7 +523,7 @@ fn test_adversarial_timestamp_drift_and_coercion() {
 
 #[test]
 fn test_adversarial_template_endpoint_queries() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     // 1. Unknown node queries
     let unknown_nodes = [
@@ -585,7 +593,7 @@ fn test_adversarial_template_endpoint_queries() {
 
 #[test]
 fn test_fuzz_burst_and_server_stability() {
-    let mut app = Explorer::boot();
+    let mut app = boot_pow();
 
     let founder = KeyPair::from_u64(1).address();
     let initial_bal = app.mesh.node("alpha").unwrap().balance(&founder).unwrap();

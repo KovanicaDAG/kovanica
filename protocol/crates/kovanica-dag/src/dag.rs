@@ -127,6 +127,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
+use crate::authority::AuthoritySet;
 use crate::block::{Block, BlockId};
 use crate::difficulty::{Retarget, TimedWork};
 use crate::reachability::Reachability;
@@ -166,6 +167,10 @@ pub enum DagError {
     /// VRF is enforced (see [`Dag::set_vrf`]) and the block's VRF proof is invalid
     /// or the VRF output does not meet the leader eligibility threshold.
     InvalidVrf { id: BlockId, reason: String },
+    /// PoA is enforced (see [`Dag::set_poa`]) and the block's authority
+    /// signature is missing, does not verify against the authority scheduled
+    /// for its slot, or its slot precedes a parent's (RFC-POA §4.2–4.3).
+    InvalidAuthoritySignature { id: BlockId, reason: String },
     /// Block pruning is enabled (see [`Dag::set_block_pruning_depth`]) and the
     /// block's selected parent is not in `future(P) ∪ {P}` where `P` is the
     /// pruning point ([`Dag::pruning_point`]) — the block would build on
@@ -206,6 +211,10 @@ impl core::fmt::Display for DagError {
             DagError::InvalidVrf { id, reason } => write!(
                 f,
                 "block {id} has invalid VRF: {reason}"
+            ),
+            DagError::InvalidAuthoritySignature { id, reason } => write!(
+                f,
+                "block {id} has invalid authority signature: {reason}"
             ),
             DagError::BuildsOnPrunedHistory { id } => write!(
                 f,
@@ -309,6 +318,12 @@ pub struct Dag {
     ///   The threshold is interpreted as a big-endian u64 from the VRF output.
     ///   Off by default (`None`).
     vrf_config: Option<VrfConfig>,
+    /// Consensus-enforced Proof-of-Authority policy (RFC-POA §4). When
+    /// `Some`, each [`Dag::insert`] of a non-genesis block requires a valid
+    /// authority signature from the authority scheduled for its slot, and a
+    /// slot not preceding any parent's. Replaces PoW/difficulty/VRF admission
+    /// (enabling it clears those switches). Off by default (`None`).
+    poa: Option<PoAConfig>,
 }
 
 /// Default epoch length (in blue-score units) for the epoch randomness beacon
@@ -331,6 +346,16 @@ pub struct VrfConfig {
     /// `epoch = blue_score(sp) / epoch_length`. A consensus parameter — all
     /// nodes must agree on it, like `k`.
     pub epoch_length: u64,
+}
+
+/// PoA consensus enforcement configuration (RFC-POA §3–4).
+#[derive(Clone, Debug)]
+pub struct PoAConfig {
+    /// The live authority set: the scheduled producer for a slot is
+    /// `authorities[slot % len]` (see [`AuthoritySet::active_authority`]).
+    pub authority_set: AuthoritySet,
+    /// Slot duration in milliseconds: `slot = timestamp_ms / slot_duration_ms`.
+    pub slot_duration_ms: u64,
 }
 
 impl Dag {
@@ -368,6 +393,7 @@ impl Dag {
             payload_pruning_depth: u64::MAX,
             block_pruning_depth: u64::MAX,
             vrf_config: None,
+            poa: None,
         };
         dag.reach = Reachability::build(&dag);
         dag
@@ -501,6 +527,46 @@ impl Dag {
         self.vrf_config
     }
 
+    /// Enable consensus-enforced Proof-of-Authority admission (RFC-POA §4).
+    ///
+    /// Once enabled, every subsequent [`Dag::insert`] of a non-genesis block
+    /// must satisfy:
+    /// - **Authority signature.** The block must carry a 64-byte `authority_sig`
+    ///   that verifies (Ed25519) over `block.hash_without_authority_sig()`
+    ///   against the authority scheduled for its slot —
+    ///   `authorities[slot % len]` where `slot = timestamp_ms / slot_duration_ms`
+    ///   (see [`AuthoritySet::active_authority`]).
+    /// - **Slot consistency.** The block's slot must be ≥ every parent's slot,
+    ///   so slots are monotone along every path (like difficulty timestamps).
+    ///
+    /// PoA **replaces** PoW/difficulty/VRF admission: enabling it clears those
+    /// switches so there is no double standard (mirrors the ledger's hybrid
+    /// policy). Genesis is exempt. Replay ([`Dag::insert_for_replay`]) skips
+    /// the check — replayed blocks are trusted history whose signatures may
+    /// come from an earlier authority set.
+    pub fn set_poa(&mut self, authority_set: AuthoritySet, slot_duration_ms: u64) {
+        self.poa = Some(PoAConfig {
+            authority_set,
+            slot_duration_ms,
+        });
+        // PoA replaces PoW/difficulty/VRF admission — no double standards.
+        self.require_pow = false;
+        self.difficulty = None;
+        self.vrf_config = None;
+    }
+
+    /// Disable consensus-enforced PoA (blocks no longer need authority
+    /// signatures). Does not re-enable PoW/difficulty/VRF — those are
+    /// independent opt-in switches.
+    pub fn disable_poa(&mut self) {
+        self.poa = None;
+    }
+
+    /// The current PoA enforcement config, if any.
+    pub fn poa_config(&self) -> Option<&PoAConfig> {
+        self.poa.as_ref()
+    }
+
     /// Set the payload pruning depth: blocks more than `depth` blue score units
     /// below the selected tip will have their payloads evicted on the next insert
     /// (or when [`Dag::prune_old_payloads`] is called explicitly). `u64::MAX`
@@ -542,15 +608,57 @@ impl Dag {
         if threshold == 0 {
             return;
         }
-        for node in self.nodes.values_mut() {
-            // Never prune genesis (blue_score == 0, but it's the root)
-            if node.ghostdag.blue_score == 0 {
-                continue;
-            }
-            if node.ghostdag.blue_score < threshold && !node.block.is_pruned() {
-                node.block.prune_payload();
+        // Compute the payload pruning point: the lowest selected-chain block
+        // with blue_score >= threshold. Only prune payloads of blocks in
+        // past(P) (the pruned region), not anticone blocks which are needed
+        // for ledger_state().
+        let p = self.payload_pruning_point();
+        // Collect candidate block ids first to avoid borrow conflicts.
+        let candidates: Vec<BlockId> = self
+            .nodes
+            .values()
+            .filter(|node| {
+                node.ghostdag.blue_score != 0
+                    && node.ghostdag.blue_score < threshold
+                    && !node.block.is_pruned()
+            })
+            .map(|node| node.block.id())
+            .collect();
+        eprintln!("PRUNE PAYLOADS: threshold={threshold} p={p} candidates={candidates:?}");
+        for nid in candidates {
+            let is_anc = self.is_ancestor(&nid, &p);
+            eprintln!("  candidate {nid} is_ancestor_of_p={is_anc}");
+            if nid == p || is_anc {
+                if let Some(node) = self.nodes.get_mut(&nid) {
+                    eprintln!("    PRUNING {nid}");
+                    node.block.prune_payload();
+                }
             }
         }
+    }
+
+    /// The **payload pruning point**: the lowest block on the selected-parent
+    /// chain with `blue_score >= payload_pruning_score()`. Genesis when
+    /// payload pruning is disabled or the DAG is not yet deep enough.
+    pub fn payload_pruning_point(&self) -> BlockId {
+        let threshold = self.payload_pruning_score();
+        if threshold == 0 {
+            return self.genesis;
+        }
+        let mut point = self.genesis;
+        let mut cur = Some(self.selected_tip());
+        while let Some(id) = cur {
+            match self.nodes.get(&id) {
+                Some(node) => {
+                    if node.ghostdag.blue_score >= threshold {
+                        point = id;
+                    }
+                    cur = node.ghostdag.selected_parent;
+                }
+                None => break,
+            }
+        }
+        point
     }
 
     /// Set the block pruning depth: blocks more than `depth` blue score units
@@ -917,6 +1025,50 @@ impl Dag {
         Ok(())
     }
 
+    /// Enforce PoA admission rules on a prospective block (RFC-POA §4.2–4.3).
+    ///
+    /// 1. The block must carry an `authority_sig` that verifies (Ed25519) over
+    ///    `block.hash_without_authority_sig()` against the authority scheduled
+    ///    for its slot — `authorities[slot % len]` with
+    ///    `slot = timestamp_ms / slot_duration_ms`.
+    /// 2. The block's slot must not precede any parent's slot (slots are
+    ///    monotone along every path, mirroring the difficulty timestamp rule).
+    fn check_poa(&self, block: &Block, id: BlockId, poa: &PoAConfig) -> Result<(), DagError> {
+        let slot = block.timestamp_ms() / poa.slot_duration_ms;
+
+        // Authority signature must be present and verify against the authority
+        // scheduled for the block's slot, over the hash without the signature.
+        let sig = block
+            .authority_sig()
+            .ok_or_else(|| DagError::InvalidAuthoritySignature {
+                id,
+                reason: "missing authority signature".to_string(),
+            })?;
+        let message = block.hash_without_authority_sig();
+        poa.authority_set
+            .verify_slot_signature(slot, message.as_bytes(), sig)
+            .map_err(|e| DagError::InvalidAuthoritySignature {
+                id,
+                reason: format!("slot {slot}: {e}"),
+            })?;
+
+        // Slot consistency: the block's slot must not precede any parent's.
+        for parent in block.parents() {
+            let parent_ts = self.nodes[parent].block.timestamp_ms();
+            let parent_slot = parent_ts / poa.slot_duration_ms;
+            if slot < parent_slot {
+                return Err(DagError::InvalidAuthoritySignature {
+                    id,
+                    reason: format!(
+                        "slot {slot} precedes parent slot {parent_slot} (parent {parent})"
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     /// Compute the VRF input from a block's parents.
     /// Hash of concatenated parent IDs, domain-separated.
     ///
@@ -1101,6 +1253,27 @@ impl Dag {
         block: Block,
         id: Option<BlockId>,
     ) -> Result<BlockId, DagError> {
+        self.insert_with_id_inner(block, id, false)
+    }
+
+    /// Like [`insert_with_id`], but skips the block-pruning invariant check
+    /// (`BuildsOnPrunedHistory`). Used during log/snapshot replay where the
+    /// block is known-valid history and its selected parent may be in the
+    /// pruned region (e.g., anticone blocks linearized last).
+    pub fn insert_for_replay(
+        &mut self,
+        block: Block,
+        id: Option<BlockId>,
+    ) -> Result<BlockId, DagError> {
+        self.insert_with_id_inner(block, id, true)
+    }
+
+    fn insert_with_id_inner(
+        &mut self,
+        block: Block,
+        id: Option<BlockId>,
+        skip_pruning_check: bool,
+    ) -> Result<BlockId, DagError> {
         let id = id.unwrap_or_else(|| block.id());
         if self.nodes.contains_key(&id) {
             return Err(DagError::DuplicateBlock(id));
@@ -1134,25 +1307,42 @@ impl Dag {
         // Consensus-enforced difficulty, if enabled: the block's timestamp must
         // not precede a parent's, and its work must equal the target its past
         // (the selected chain ending at `sp`) implies. Checked before the block
-        // is wired in, so a rejected block leaves the DAG unchanged.
-        if let Some(retarget) = self.difficulty {
-            self.check_difficulty(&block, id, sp, &retarget)?;
+        // is wired in, so a rejected block leaves the DAG unchanged. Skipped on
+        // replay (`insert_for_replay`) — replayed blocks are trusted history
+        // that was already admitted when first inserted.
+        if !skip_pruning_check {
+            if let Some(retarget) = self.difficulty {
+                self.check_difficulty(&block, id, sp, &retarget)?;
+            }
         }
 
         // Consensus-enforced proof-of-work, if enabled: the block's id must meet
         // its `work` target (Nakamoto-style hash-target PoW; see `crate::pow`).
         // Genesis is exempt, but this path only runs for non-genesis inserts.
         // Independent of and composable with the difficulty check above.
-        if self.require_pow && !crate::pow::meets_target(&id, block.work()) {
+        // Skipped on replay, like difficulty.
+        if !skip_pruning_check && self.require_pow && !crate::pow::meets_target(&id, block.work()) {
             return Err(DagError::InsufficientProofOfWork {
                 id,
                 work: block.work(),
             });
         }
 
-        // Consensus-enforced VRF leader selection, if enabled.
-        if let Some(vrf_config) = self.vrf_config {
-            self.check_vrf(&block, id, &ghostdag, vrf_config.threshold)?;
+        // Consensus-enforced VRF leader selection, if enabled. Skipped on
+        // replay, like difficulty and PoW.
+        if !skip_pruning_check {
+            if let Some(vrf_config) = self.vrf_config {
+                self.check_vrf(&block, id, &ghostdag, vrf_config.threshold)?;
+            }
+        }
+
+        // Consensus-enforced Proof-of-Authority, if enabled (RFC-POA §4).
+        // Skipped on replay — replayed blocks are trusted history whose
+        // signatures may come from an earlier authority set.
+        if !skip_pruning_check {
+            if let Some(poa) = &self.poa {
+                self.check_poa(&block, id, poa)?;
+            }
         }
 
         // Block-pruning invariant, if enabled: the new block's selected parent
@@ -1160,7 +1350,7 @@ impl Dag {
         // set (past(P)) inside the new block's past, so mergeset walks can treat
         // evicted blocks as boundaries. Checked before the block is wired in, so
         // a rejected block leaves the DAG unchanged.
-        if self.block_pruning_depth != u64::MAX {
+        if !skip_pruning_check && self.block_pruning_depth != u64::MAX {
             let p = self.pruning_point();
             if sp != p && !self.is_ancestor(&p, &sp) {
                 return Err(DagError::BuildsOnPrunedHistory { id });

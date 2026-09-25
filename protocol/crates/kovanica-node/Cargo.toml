@@ -26,6 +26,7 @@ metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 arbitrary.workspace = true
 proptest.workspace = true
+ed25519-dalek.workspace = true
 
 [dev-dependencies]
 libfuzzer-sys.workspace = true
