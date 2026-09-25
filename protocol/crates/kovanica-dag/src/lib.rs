@@ -59,10 +59,7 @@ pub use authority::{
     SLOT_DURATION_MS,
 };
 pub use block::{Block, BlockId};
-pub use dag::{
-    BlockPreview, Dag, DagError, GhostdagData, KParam, PoAConfig,
-    POA_NOMINAL_WORK,
-};
+pub use dag::{BlockPreview, Dag, DagError, GhostdagData, KParam, PoAConfig, POA_NOMINAL_WORK};
 pub use reachability::Reachability;
 pub use snapshot::{decode_block, decode_snapshot, encode_block, DagSnapshot, SnapshotError};
 pub use validation::BlockValidator;

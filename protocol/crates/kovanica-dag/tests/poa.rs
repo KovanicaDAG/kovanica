@@ -1,6 +1,6 @@
 //! Consensus enforcement of Proof-of-Authority admission (`Dag::set_poa`).
 //!
-//! RFC-POA §4 replaces PoW/VRF admission with authority signatures: a block is
+//! RFC-POA §4: PoA is the only admission path. A block is
 //! admitted only if it carries a valid Ed25519 `authority_sig` from the
 //! authority scheduled for its slot (`authorities[slot % len]`, with
 //! `slot = timestamp_ms / slot_duration_ms`), and its slot does not precede any
@@ -8,11 +8,11 @@
 //! M2 exit criteria: 3-validator round-robin, 4-validator liveness with one
 //! offline, re-org under GHOSTDAG — plus the adversarial cases (wrong
 //! authority, missing signature, slot regression), replay exemption, and that
-//! `set_poa` clears the PoW/difficulty/VRF switches.
+//! PoW, difficulty and VRF admission have been removed from the crate entirely.
 
 use ed25519_dalek::{Signer, SigningKey};
 use kovanica_dag::{
-    AuthorityPublicKey, AuthoritySet, Block, BlockId, Dag, DagError, Retarget, POA_NOMINAL_WORK,
+    AuthorityPublicKey, AuthoritySet, Block, BlockId, Dag, DagError, POA_NOMINAL_WORK,
 };
 
 /// Slot duration used throughout (RFC-POA default).
@@ -323,26 +323,6 @@ fn replay_skips_the_poa_check() {
 }
 
 // ---------------------------------------------------------------------------
-// set_poa clears PoW/difficulty/VRF
-// ---------------------------------------------------------------------------
-
-#[test]
-fn set_poa_clears_pow_difficulty_and_vrf() {
-    let genesis = Block::genesis(1, 0, 0, b"genesis".to_vec());
-    let mut dag = Dag::new(3, genesis);
-    dag.set_proof_of_work(true);
-    dag.set_difficulty(Retarget::default());
-    dag.set_vrf(u64::MAX);
-
-    let (set, _sks) = authority_set(3, 2);
-    dag.set_poa(set, SLOT_MS);
-
-    assert!(!dag.proof_of_work_enabled(), "PoW cleared by set_poa");
-    assert!(dag.difficulty().is_none(), "difficulty cleared by set_poa");
-    assert!(dag.vrf_config().is_none(), "VRF cleared by set_poa");
-    assert!(dag.poa_config().is_some(), "PoA config installed");
-}
-
 #[test]
 fn poa_off_by_default() {
     let genesis = Block::genesis(1, 0, 0, b"genesis".to_vec());
