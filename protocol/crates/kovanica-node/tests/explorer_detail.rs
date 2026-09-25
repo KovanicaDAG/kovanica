@@ -69,7 +69,11 @@ fn block_detail_includes_header_and_topology() {
     assert!(json["work"].as_u64().unwrap() >= 1);
     assert!(!json["parents"].as_array().unwrap().is_empty());
     assert!(!json["txs"].as_array().unwrap().is_empty());
-    assert!(json["kind"].as_str().unwrap() == "pow" || json["kind"].as_str().unwrap() == "staked");
+    assert!(
+        json["kind"].as_str().unwrap() == "pow"
+            || json["kind"].as_str().unwrap() == "staked"
+            || json["kind"].as_str().unwrap() == "poa"
+    );
     assert!(["genesis", "chain", "blue", "red"].contains(&json["colour"].as_str().unwrap()));
     assert!(["tip", "confirmed", "accepted", "pending"]
         .contains(&json["confirming_status"].as_str().unwrap()));
