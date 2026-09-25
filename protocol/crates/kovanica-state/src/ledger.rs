@@ -40,7 +40,6 @@
 //! * `deltas[&B]` records the net UTXO change from `selected_parent(B)`'s view
 //!   to `B`'s own view: outputs created by `B` (or its mergeset in `B`'s view)
 //!   and outputs spent in that transition.
-//! * `stake_deltas[&B]` records the analogous net change in the stake registry.
 //!
 //! Reconstructing a non-final block's view walks its selected-parent chain down
 //! to the deepest block whose selected parent is final (or genesis), applying
@@ -67,20 +66,13 @@
 use std::collections::{HashMap, HashSet};
 
 use kovanica_dag::{
-    decode_snapshot, AuthoritySet, Block, BlockId, BlockPreview, Dag, DagError, KParam, PoAConfig,
-    Retarget, SnapshotError,
+    decode_snapshot, AuthoritySet, Block, BlockId, Dag, DagError, KParam, PoAConfig, SnapshotError,
 };
 
 use crate::htlc::HtlcScript;
 use crate::keys::{verify, verify_pk, Address, KeyPair};
 use crate::multisig::{verify_threshold_signatures, MultisigScript};
 use crate::script_v2::ScriptV2;
-
-// Re-export stake types and functions for internal use and downstream crates
-pub use crate::stake::{
-    bond_tag, is_unbond_tag, parse_bond_tag, Freeze, StakeError, StakeState, BOND_PREFIX,
-    NATIVE_ASSET_ID, UNBOND_MATURITY, UNBOND_PREFIX,
-};
 use crate::vault::VaultScript;
 
 /// Default blue-score threshold for RFC-001 multisig activation.
@@ -207,67 +199,6 @@ pub struct SupplyMetrics {
     pub max_supply: u64,
 }
 
-/// The VRF bundle a bonded validator attaches to a staked block: the public key
-/// the bonded stake is registered under, the ECVRF proof over the VRF input,
-/// and the resulting output (the sortition draw).
-///
-/// The VRF input is the **epoch randomness beacon** of the block's selected
-/// parent by default ([`Dag::epoch_vrf_input_for_parents`][ep]). Set
-/// [`HybridConfig::use_epoch_beacon`] to `false` only when replaying legacy
-/// snapshots produced before the B1 epoch-beacon activation, which reverts
-/// the input to the pre-B1 parent-tip hash ([`Dag::vrf_input`]).
-///
-/// [ep]: kovanica_dag::Dag::epoch_vrf_input_for_parents
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StakedVrf {
-    /// The validator's VRF public key (32 bytes, Ed25519/Ristretto255).
-    pub vrf_pk: [u8; 32],
-    /// ECVRF proof `(Γ, c, s)` over [`Dag::vrf_input(parents)`](kovanica_dag::Dag::vrf_input).
-    pub proof: kovanica_dag::VrfProof,
-    /// The VRF output — compared against the stake-proportional threshold.
-    pub output: kovanica_dag::VrfOutput,
-}
-
-/// Hybrid admission policy: blocks enter the DAG either by **proof-of-work**
-/// (hash target met, work pinned to the retargeting policy's implication) or by
-/// **stake-weighted VRF sortition** ([`StakedVrf`], eligibility proportional to
-/// bonded stake). See [`Ledger::set_hybrid`] and [`Ledger::insert_with_vrf`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HybridConfig {
-    /// Sortition rate numerator: a validator holding the *whole* bonded supply
-    /// wins with probability ≈ `rate_num/rate_den` per block. `1/1` = every
-    /// slot; `1/10` = ten times rarer (useful when PoW issuance dominates).
-    pub rate_num: u64,
-    /// Sortition rate denominator (see [`Self::rate_num`]).
-    pub rate_den: u64,
-    /// The exact `work` value staked-VRF blocks are pinned to. Kept tiny so
-    /// staked blocks never dominate blue-work accumulation regardless of how
-    /// many a winner emits; chain selection stays PoW-dominated.
-    pub stake_nominal_work: u128,
-    /// Retargeting policy for PoW-path work pinning. `None` disables the pin
-    /// (PoW blocks then only need their hash to meet their claimed target —
-    /// useful for tests; production should set this).
-    pub retarget: Option<Retarget>,
-    /// Whether to use the epoch randomness beacon as the staked-VRF input.
-    /// Default `true` for all new blocks. Set `false` only to replay legacy
-    /// snapshots produced before the B1 epoch-beacon activation.
-    pub use_epoch_beacon: bool,
-}
-
-impl Default for HybridConfig {
-    /// One expected win per block per whole-stake at nominal work 1, with the
-    /// default retargeting policy (1 s target interval, 20-block window) and
-    /// epoch-beacon VRF input enabled.
-    fn default() -> Self {
-        Self {
-            rate_num: 1,
-            rate_den: 1,
-            stake_nominal_work: 1,
-            retarget: Some(Retarget::default()),
-            use_epoch_beacon: true,
-        }
-    }
-}
 use crate::tx::{
     decode_block_payload, encode_block_payload, AssetId, AssetKind, AssetRegistryEntry,
     DecodeError, OutPoint, Transaction, TxId, TxOutput,
@@ -316,9 +247,6 @@ pub enum LedgerError {
     },
     /// A block's payload could not be decoded into transactions.
     Payload(DecodeError),
-    /// The transaction violated a stake-registry rule (bond shape/ownership,
-    /// frozen-input spend, or immature/non-frozen unbond).
-    Stake { tx: TxId, reason: StakeError },
 
     // Multisig & Witness Upgrade Variants
     /// Witness stack does not match address requirements (e.g. count != 1 for V0 or != 1+M for V1)
@@ -485,7 +413,6 @@ impl core::fmt::Display for LedgerError {
                 "coinbase immature: {outpoint:?} created at {creation_height}, maturity {maturity}, block {block_height}"
             ),
             LedgerError::Payload(e) => write!(f, "payload decode: {e}"),
-            LedgerError::Stake { tx, reason } => write!(f, "stake rule violated in {tx}: {reason}"),
             LedgerError::InvalidWitnessCount {
                 tx,
                 input,
@@ -648,19 +575,6 @@ pub struct BlockSummary {
 /// `txs` is the block's transaction list; if the first has no inputs it is the
 /// coinbase. `subsidy` is the issuance allowance for this block. Returns a
 /// [`BlockSummary`] on success. On any error, `utxo` is left exactly as it was.
-///
-/// Stake rules are not enforced by this function — use
-/// [`apply_block_with_stake`] when the block's view has a
-/// [`StakeState`] (i.e. always, through [`Ledger`]).
-/// Apply one block's transactions to `utxo`, atomically.
-///
-/// `txs` is the block's transaction list; if the first has no inputs it is the
-/// coinbase. `subsidy` is the issuance allowance for this block. Returns a
-/// [`BlockSummary`] on success. On any error, `utxo` is left exactly as it was.
-///
-/// Stake rules are not enforced by this function — use
-/// [`apply_block_with_stake`] when the block's view has a
-/// [`StakeState`] (i.e. always, through [`Ledger`]).
 pub fn apply_block(
     utxo: &mut UtxoSet,
     txs: &[Transaction],
@@ -670,7 +584,6 @@ pub fn apply_block(
     apply_block_inner(
         utxo,
         &asset_registry,
-        None,
         txs,
         subsidy,
         0,        // cumulative_minted: not tracked in simple apply_block
@@ -685,20 +598,18 @@ pub fn apply_block(
     )
 }
 
-/// Like [`apply_block`], but additionally enforces the **stake registry**
-/// rules against (and updates) `stake`, at blue `height`:
+/// Apply one block's transactions to `utxo`, atomically, at an explicit
+/// `height`.
 ///
-/// * regular transactions may not spend frozen (bonded) outpoints;
-/// * a bond transaction (`KVB1 || vrf_pk` tag) must pay its single output back
-///   to its own input owner — that output becomes frozen backing `vrf_pk`;
-/// * an unbond transaction (`KVU1` tag) may only spend matured frozen outpoints
-///   owned by its signer, releasing their value from the registry.
-///
-/// Atomicity covers both structures: on any error neither `utxo` nor `stake`
-/// changes.
-pub fn apply_block_with_stake(
+/// Same transition as [`apply_block`], but the block's height is supplied by
+/// the caller instead of defaulting to `0`. Height matters for two rules:
+/// coinbase outputs are stamped with it and cannot be spent until
+/// `height + COINBASE_MATURITY` (RFC-006), and it selects the era on the
+/// emission curve. Use this when replaying a chain whose heights are known
+/// (e.g. an independent reference model); for a single isolated block with no
+/// coinbase, [`apply_block`] is enough.
+pub fn apply_block_at_height(
     utxo: &mut UtxoSet,
-    stake: &mut StakeState,
     txs: &[Transaction],
     subsidy: u64,
     height: u64,
@@ -707,10 +618,9 @@ pub fn apply_block_with_stake(
     apply_block_inner(
         utxo,
         &asset_registry,
-        Some(stake),
         txs,
         subsidy,
-        0, // cumulative_minted: not tracked in simple apply_block_with_stake
+        0, // cumulative_minted: not tracked in this simple entry point
         height,
         u64::MAX, // blue_score: max to disable activation gating
         MULTISIG_ACTIVATION_SCORE,
@@ -722,14 +632,14 @@ pub fn apply_block_with_stake(
     )
 }
 
-/// Shared implementation behind [`apply_block`] / [`apply_block_with_stake`].
+/// Shared implementation behind [`apply_block`] and the incremental
+/// [`Ledger::apply_new_block`] path.
 /// The activation scores are explicit parameters so both entry points pass
 /// their own policy; grouping them would churn every call site for no gain.
 #[allow(clippy::too_many_arguments)]
 fn apply_block_inner(
     utxo: &mut UtxoSet,
     asset_registry: &HashMap<AssetId, AssetRegistryEntry>,
-    mut stake: Option<&mut StakeState>,
     txs: &[Transaction],
     subsidy: u64,
     cumulative_minted: u64,
@@ -761,7 +671,6 @@ fn apply_block_inner(
             &mut staging,
             asset_registry,
             tx,
-            stake.as_deref_mut(),
             height,
             blue_score,
             multisig_activation_score,
@@ -807,15 +716,11 @@ fn apply_block_inner(
 }
 
 /// Validate and apply a regular (non-coinbase) transaction, returning its fee.
-///
-/// When `stake` is present the transaction must also satisfy the registry
-/// rules (see [`apply_block_with_stake`]); bond/unbond transactions update it.
 #[allow(clippy::too_many_arguments)] // consensus-critical; argument count is intentional
 fn apply_regular(
     staging: &mut UtxoSet,
     asset_registry: &HashMap<AssetId, AssetRegistryEntry>,
     tx: &Transaction,
-    stake: Option<&mut StakeState>,
     height: u64,
     blue_score: u64,
     multisig_activation_score: u64,
@@ -922,22 +827,9 @@ fn apply_regular(
         }
     }
 
-    // Tag-driven stake roles. A tag that matches neither convention is an
-    // ordinary transfer and only faces the frozen-input rule.
-    let bond_info = parse_bond_tag(tx.tag());
-    let unbond = is_unbond_tag(tx.tag());
-    let (bond_asset_id, bond_pk) = bond_info
-        .map(|(aid, pk)| (Some(aid), Some(pk)))
-        .unwrap_or((None, None));
-
     let sighash = tx.sighash();
     let mut seen: HashSet<OutPoint> = HashSet::with_capacity(tx.inputs().len());
     let mut sum_in: u64 = 0;
-    // Owner of the first input's spent output — a bond must pay back to it.
-    let mut first_owner: Option<Address> = None;
-    // Read-only registry view for every validation-phase rule; the mutating
-    // borrow is taken once, after validation, below.
-    let stake_view: Option<&StakeState> = stake.as_deref();
     for (i, input) in tx.inputs().iter().enumerate() {
         if !seen.insert(input.outpoint) {
             return Err(LedgerError::DuplicateInput(input.outpoint));
@@ -1370,28 +1262,6 @@ fn apply_regular(
             });
         }
 
-        if let Some(st) = stake_view {
-            // Frozen value moves only through an unbond transaction; an unbond
-            // may move *only* frozen value (checked after validation below).
-            if !unbond && st.is_frozen(&input.outpoint) {
-                return Err(LedgerError::Stake {
-                    tx: tx.id(),
-                    reason: StakeError::FrozenInput {
-                        outpoint: input.outpoint,
-                    },
-                });
-            }
-        }
-        if first_owner.is_none() {
-            first_owner = Some(prev.owner);
-        } else if bond_pk.is_some() && Some(&prev.owner) != first_owner.as_ref() {
-            // A bond must draw all its value from one owner so the bonded
-            // output unambiguously backs the signer's own VRF key.
-            return Err(LedgerError::Stake {
-                tx: tx.id(),
-                reason: StakeError::BondShape,
-            });
-        }
         sum_in = sum_in
             .checked_add(prev.value)
             .ok_or(LedgerError::ValueOverflow)?;
@@ -1507,27 +1377,6 @@ fn apply_regular(
     }
     let fee = native_in - native_out;
 
-    // Remaining stake-shape rules (still before any mutation, so errors stay
-    // atomic).
-    if let Some(st) = stake_view {
-        if unbond {
-            for input in tx.inputs() {
-                st.check_unbond(input.outpoint, height)
-                    .map_err(|reason| LedgerError::Stake {
-                        tx: tx.id(),
-                        reason,
-                    })?;
-            }
-        } else if bond_pk.is_some()
-            && (tx.outputs().len() != 1 || Some(&tx.outputs()[0].owner) != first_owner.as_ref())
-        {
-            return Err(LedgerError::Stake {
-                tx: tx.id(),
-                reason: StakeError::BondShape,
-            });
-        }
-    }
-
     // Validation passed; mutate the staging set. (Any error above returned
     // before this point, so partial mutation cannot leak — and `apply_block`
     // discards `staging` unless the whole block succeeds.)
@@ -1538,21 +1387,6 @@ fn apply_regular(
     // New outputs are born at the applying block's height (RFC-005 §3.2) —
     // this is the `creation_height` CSV measures relative age against.
     add_outputs(staging, txid, tx, height, false)?;
-
-    // Stake mutations come last and are infallible by now: every rule they
-    // enforce was pre-checked against the same inputs above.
-    if let Some(st) = stake {
-        if unbond {
-            for input in tx.inputs() {
-                st.unfreeze_spend(input.outpoint, height)
-                    .expect("unbond pre-checked above");
-            }
-        } else if let Some(vrf_pk) = bond_pk {
-            let asset_id = bond_asset_id.unwrap_or(NATIVE_ASSET_ID);
-            let value = tx.outputs()[0].value;
-            st.freeze(OutPoint::new(txid, 0), asset_id, vrf_pk, value, height);
-        }
-    }
 
     Ok(fee)
 }
@@ -1752,7 +1586,6 @@ pub fn apply_dag(dag: &Dag, subsidy: u64) -> LedgerRun {
             Ok(txs) => match apply_block_inner(
                 &mut run.utxo,
                 &HashMap::new(),
-                None,
                 &txs,
                 subsidy,
                 cumulative_minted, // track cumulative minted for supply cap
@@ -1790,43 +1623,6 @@ pub enum LedgerInsertError {
     /// A raw block's payload did not decode into transactions
     /// ([`Ledger::insert_raw_block`]).
     Payload(DecodeError),
-    /// A staked-VRF block was offered but hybrid admission is not enabled.
-    HybridDisabled,
-    /// The staked block's VRF proof did not verify (bad key, bad proof, or the
-    /// recovered output did not match the claimed one).
-    BadStakeProof { vrf_pk: [u8; 32] },
-    /// The staked producer's sortition draw missed: its output is at or above
-    /// the threshold its bonded stake implies.
-    NotEligible {
-        vrf_pk: [u8; 32],
-        threshold: u64,
-        output: u64,
-        stake: u64,
-        total: u64,
-    },
-    /// A staked block carried a `work` other than
-    /// [`HybridConfig::stake_nominal_work`].
-    StakeWorkMismatch {
-        expected_nominal: u128,
-        actual: u128,
-    },
-    /// This validator already has an accepted staked block on this selected
-    /// parent — sibling spam guard ([`Ledger::insert_with_vrf`] rule 4).
-    DuplicateStakedBlock {
-        vrf_pk: [u8; 32],
-        selected_parent: BlockId,
-    },
-    /// Hybrid PoW-path block whose id does not meet its `work` target.
-    PowTargetNotMet { id: BlockId, work: u128 },
-    /// Hybrid PoW-path block whose claimed work differs from the retargeting
-    /// policy's implication for its past.
-    WorkTargetMismatch { work: u128, expected: u128 },
-    /// The block's timestamp precedes one of its parents' (hybrid paths carry
-    /// the monotonicity rule dag-level difficulty used to enforce).
-    TimestampRegression {
-        timestamp_ms: u64,
-        parent_max_ms: u64,
-    },
     /// The block builds on final history — its selected parent's blue score is
     /// below the finality point, so it is rejected (a deep re-org).
     Finality {
@@ -1853,53 +1649,6 @@ impl core::fmt::Display for LedgerInsertError {
             LedgerInsertError::Dag(e) => write!(f, "dag rejected block: {e}"),
             LedgerInsertError::State(e) => write!(f, "invalid block state: {e}"),
             LedgerInsertError::Payload(e) => write!(f, "block payload undecodable: {e}"),
-            LedgerInsertError::HybridDisabled => {
-                f.write_str("staked-VRF insert requires hybrid mode (Ledger::set_hybrid)")
-            }
-            LedgerInsertError::BadStakeProof { vrf_pk } => write!(
-                f,
-                "staked block VRF proof invalid for key {}",
-                hex::encode(vrf_pk)
-            ),
-            LedgerInsertError::NotEligible {
-                threshold,
-                output,
-                stake,
-                total,
-                vrf_pk,
-            } => write!(
-                f,
-                "staked producer {} not eligible: output {output} ≥ threshold {threshold} (stake {stake} / {total})",
-                hex::encode(vrf_pk)
-            ),
-            LedgerInsertError::StakeWorkMismatch {
-                expected_nominal,
-                actual,
-            } => write!(
-                f,
-                "staked block work {actual} ≠ nominal {expected_nominal}"
-            ),
-            LedgerInsertError::DuplicateStakedBlock {
-                vrf_pk,
-                selected_parent,
-            } => write!(
-                f,
-                "validator {} already staked a block on selected parent {selected_parent}",
-                hex::encode(vrf_pk)
-            ),
-            LedgerInsertError::PowTargetNotMet { id, work } => {
-                write!(f, "block {id} does not meet its PoW target (work {work})")
-            }
-            LedgerInsertError::WorkTargetMismatch { work, expected } => {
-                write!(f, "PoW block work {work} ≠ retarget target {expected}")
-            }
-            LedgerInsertError::TimestampRegression {
-                timestamp_ms,
-                parent_max_ms,
-            } => write!(
-                f,
-                "block timestamp {timestamp_ms} precedes a parent's ({parent_max_ms})"
-            ),
             LedgerInsertError::Finality {
                 parent_score,
                 finality_score,
@@ -1926,14 +1675,6 @@ struct BlockDelta {
     created: Vec<(OutPoint, UtxoEntry)>,
 }
 
-/// Net stake-registry change of one block, mirroring [`BlockDelta`]: `frozen`
-/// entries were added to the registry, `unfrozen` entries were released.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct StakeDelta {
-    unfrozen: Vec<(OutPoint, Freeze)>,
-    frozen: Vec<(OutPoint, Freeze)>,
-}
-
 /// Diff two UTXO sets into a net delta: `created` are outputs in `post` but
 /// not `pre`, `spent` are outputs in `pre` but not `post`. Outputs are
 /// immutable once created, so the two lists are disjoint.
@@ -1951,23 +1692,6 @@ fn diff_utxo(pre: &UtxoSet, post: &UtxoSet) -> BlockDelta {
         }
     }
     BlockDelta { spent, created }
-}
-
-/// Diff two stake registries into a net delta.
-fn diff_stake(pre: &StakeState, post: &StakeState) -> StakeDelta {
-    let mut unfrozen = Vec::new();
-    let mut frozen = Vec::new();
-    for (op, f) in pre.iter_frozen() {
-        if !post.is_frozen(op) {
-            unfrozen.push((*op, *f));
-        }
-    }
-    for (op, f) in post.iter_frozen() {
-        if !pre.is_frozen(op) {
-            frozen.push((*op, *f));
-        }
-    }
-    StakeDelta { frozen, unfrozen }
 }
 
 /// Apply a net delta to a UTXO set: insert `created`, then remove `spent`.
@@ -1997,55 +1721,7 @@ fn compose_delta(first: &BlockDelta, second: &BlockDelta) -> BlockDelta {
     BlockDelta { spent, created }
 }
 
-/// Apply a net stake delta to a registry. The two lists are disjoint (a bond
-/// cannot be unbonded in the same block — maturity), so order is irrelevant.
-/// Unbonds are replayed at the bond's maturity height, which satisfies the
-/// registry's maturity check.
-fn apply_stake_delta(delta: &StakeDelta, stake: &mut StakeState) {
-    for (op, f) in &delta.frozen {
-        stake.freeze(*op, f.asset_id, f.vrf_pk, f.value, f.bond_height);
-    }
-    for (op, f) in &delta.unfrozen {
-        let matures_at = f.bond_height.saturating_add(UNBOND_MATURITY);
-        stake
-            .unfreeze_spend(*op, matures_at)
-            .expect("stake delta application is consistent");
-    }
-}
-
-/// Compose two stake deltas applied in sequence (`first` then `second`).
-///
-/// Unlike the UTXO set, an outpoint *can* be unfrozen by `first` and frozen by
-/// `second` (an unbond followed by a re-bond), or frozen by `first` and
-/// unfrozen by `second` (a bond followed by a matured unbond). Both cancel to
-/// no net change, so the composed lists must exclude them.
-fn compose_stake_delta(first: &StakeDelta, second: &StakeDelta) -> StakeDelta {
-    let mut frozen = Vec::new();
-    let mut unfrozen = Vec::new();
-    for (op, f) in &first.frozen {
-        if !second.unfrozen.iter().any(|(o, _)| o == op) {
-            frozen.push((*op, *f));
-        }
-    }
-    for (op, f) in &second.frozen {
-        if !first.unfrozen.iter().any(|(o, _)| o == op) {
-            frozen.push((*op, *f));
-        }
-    }
-    for (op, f) in &first.unfrozen {
-        if !second.frozen.iter().any(|(o, _)| o == op) {
-            unfrozen.push((*op, *f));
-        }
-    }
-    for (op, f) in &second.unfrozen {
-        if !first.frozen.iter().any(|(o, _)| o == op) {
-            unfrozen.push((*op, *f));
-        }
-    }
-    StakeDelta { frozen, unfrozen }
-}
-
-/// A DAG together with the **per-block UTXO and stake view** each block induces.
+/// A DAG together with the **per-block UTXO view** each block induces.
 ///
 /// [`apply_dag`] is the batch view: it (re)linearizes a finished DAG and folds
 /// every transaction from scratch. A `Ledger` is the *incremental* view. It owns
@@ -2072,11 +1748,10 @@ fn compose_stake_delta(first: &StakeDelta, second: &StakeDelta) -> StakeDelta {
 /// The structural [`TxStructureValidator`] is also installed on the underlying
 /// DAG, so malformed blocks are rejected even if the DAG is used directly.
 ///
-/// State is kept as a **single materialised UTXO set and stake registry at the
-/// selected tip** plus compact per-block undo deltas
-/// (Bitcoin/Kaspa UTXO + undo-log style): `deltas[&b]` records the net UTXO
-/// change from `b`'s selected parent's view to `b`'s own view, and
-/// `stake_deltas[&b]` records the analogous stake-registry change. Any
+/// State is kept as a **single materialised UTXO set at the selected tip** plus
+/// compact per-block undo deltas (Bitcoin/Kaspa UTXO + undo-log style):
+/// `deltas[&b]` records the net UTXO change from `b`'s selected parent's view to
+/// `b`'s own view. Any
 /// non-final block's view can be reconstructed on demand by walking its
 /// selected-parent chain and applying deltas. Final blocks' deltas are folded
 /// into their children before being dropped, so a child's delta is always
@@ -2084,7 +1759,7 @@ fn compose_stake_delta(first: &StakeDelta, second: &StakeDelta) -> StakeDelta {
 /// compositional and pruning is idempotent: applying the folded delta reproduces
 /// the same view as the original sequence, and calling [`Self::prune`] twice at
 /// the same finality threshold removes no additional state. Memory is bounded to
-/// `O(U + S + n·d)` (one tip state plus per-block deltas) instead of `O(n·U)`.
+/// `O(U + n·d)` (one tip state plus per-block deltas) instead of `O(n·U)`.
 ///
 /// ## Finality and pruning
 ///
@@ -2143,8 +1818,6 @@ pub struct Ledger {
     replay_mode: bool,
     /// The UTXO state at the selected tip — the single materialised state.
     tip_state: UtxoSet,
-    /// The stake registry at the selected tip.
-    tip_stake: StakeState,
     /// Asset registry: tracks per-asset metadata, supply, and NFT-specific fields.
     /// Keyed by AssetId. Native KVNC (AssetId::native()) is not stored here.
     asset_registry: HashMap<AssetId, AssetRegistryEntry>,
@@ -2152,21 +1825,8 @@ pub struct Ledger {
     /// selected parent's view to `b`'s own view (or from the empty set when the
     /// selected parent is final — see [`Self::prune`]). Non-final blocks only.
     deltas: HashMap<BlockId, BlockDelta>,
-    /// Per-block stake deltas, mirroring [`Self::deltas`].
-    stake_deltas: HashMap<BlockId, StakeDelta>,
-    /// Hybrid PoW/staked-VRF admission policy; `None` = legacy behaviour (VRF
-    /// fields on incoming blocks are ignored/stripped).
-    hybrid: Option<HybridConfig>,
     /// Proof-of-Authority admission policy (RFC-POA §3–4); `None` = PoA off.
-    /// Mutually exclusive with [`Self::hybrid`] — enabling one clears the other.
     poa: Option<PoAConfig>,
-    /// Selected-chain height at which hybrid admission was enabled. Used to
-    /// avoid applying retarget checks retroactively to pre-hybrid blocks.
-    hybrid_activation_height: u64,
-    /// Accepted staked blocks by `(vrf_pk, selected_parent)` — the sibling-spam
-    /// guard's memory. Entries whose selected parent falls below finality are
-    /// pruned alongside per-block state.
-    staked_seen: HashMap<([u8; 32], BlockId), BlockId>,
     /// Block heights: `heights[&b]` is the height of block `b` in the selected chain.
     heights: HashMap<BlockId, u64>,
     /// Blue score activation threshold for Version 0x01 multisig transactions.
@@ -2230,8 +1890,6 @@ impl Ledger {
         let genesis_delta = diff_utxo(&UtxoSet::new(), &state);
         let mut deltas = HashMap::new();
         deltas.insert(genesis_id, genesis_delta);
-        let mut stake_deltas = HashMap::new();
-        stake_deltas.insert(genesis_id, StakeDelta::default());
         let mut heights = HashMap::new();
         heights.insert(genesis_id, 0);
         let mut block_minted = HashMap::new();
@@ -2247,13 +1905,8 @@ impl Ledger {
             payload_pruning_depth: u64::MAX,
             block_pruning_depth: u64::MAX,
             tip_state: state,
-            tip_stake: StakeState::new(),
             asset_registry: HashMap::new(),
             deltas,
-            stake_deltas,
-            hybrid: None,
-            hybrid_activation_height: 0,
-            staked_seen: HashMap::new(),
             poa: None,
             heights,
             multisig_activation_score: MULTISIG_ACTIVATION_SCORE,
@@ -2441,23 +2094,6 @@ impl Ledger {
     /// Borrow the asset registry (for KVP-106 NFT metadata queries).
     pub fn asset_registry(&self) -> &HashMap<AssetId, AssetRegistryEntry> {
         &self.asset_registry
-    }
-
-    /// Enable consensus-enforced difficulty on the underlying DAG with policy
-    /// `retarget`: every subsequent [`Ledger::insert`] additionally requires the
-    /// block's `work` to equal [`Dag::next_work_target`] and its timestamp not to
-    /// precede any parent's. See [`Dag::set_difficulty`].
-    pub fn set_difficulty(&mut self, retarget: Retarget) {
-        self.dag.set_difficulty(retarget);
-    }
-
-    /// Enable (or disable) consensus-enforced proof-of-work on the underlying
-    /// DAG: every subsequent [`Ledger::insert`] additionally requires the block's
-    /// id to meet its `work` target — i.e. the block must have been mined (its
-    /// `nonce` chosen so the hash is small enough). See
-    /// [`Dag::set_proof_of_work`] and [`kovanica_dag::pow`]. Off by default.
-    pub fn set_proof_of_work(&mut self, enabled: bool) {
-        self.dag.set_proof_of_work(enabled);
     }
 
     /// The finality depth (blue score below the selected tip). `u64::MAX` means
@@ -2722,26 +2358,15 @@ impl Ledger {
         self.reconstruct_state(block)
     }
 
-    /// The stake registry in `block`'s own view, if `block` is present.
-    ///
-    /// Reconstructed on demand from the per-block stake deltas; `None` for
-    /// final or absent blocks.
-    pub fn stake_state(&self, block: &BlockId) -> Option<StakeState> {
-        if *block == self.dag.selected_tip() {
-            return Some(self.tip_stake.clone());
-        }
-        self.reconstruct_stake(block)
-    }
-
     /// Whether `id` is final: below the finality score, so its delta has been
     /// folded into its children and dropped. `false` when finality is disabled
     /// or not yet active.
     ///
     /// An **evicted** block (absent from the DAG because block pruning removed
     /// it) is treated as final: by the RFC-008 invariant block pruning only
-    /// evicts final blocks, so this is what stops [`Self::reconstruct_state`] /
-    /// [`Self::reconstruct_stake`] at the pruning boundary instead of walking
-    /// into a block the DAG no longer knows.
+    /// evicts final blocks, so this is what stops [`Self::reconstruct_state`]
+    /// at the pruning boundary instead of walking into a block the DAG no longer
+    /// knows.
     fn is_final(&self, id: &BlockId) -> bool {
         let threshold = self.finality_score();
         if threshold == 0 {
@@ -2793,79 +2418,18 @@ impl Ledger {
         Some(state)
     }
 
-    /// Reconstruct the stake registry in `block`'s view, mirroring
-    /// [`Self::reconstruct_state`].
-    fn reconstruct_stake(&self, block: &BlockId) -> Option<StakeState> {
-        let mut path = vec![*block];
-        let mut cur = *block;
-        loop {
-            let gd = self.dag.ghostdag(&cur)?;
-            match gd.selected_parent {
-                None => break,
-                Some(sp) => {
-                    // During replay, don't stop at final blocks — walk to genesis
-                    if !self.replay_mode && self.is_final(&sp) {
-                        break;
-                    }
-                    path.push(sp);
-                    cur = sp;
-                }
-            }
-        }
-        let mut stake = StakeState::new();
-        for p in path.iter().rev() {
-            let delta = self.stake_deltas.get(p)?;
-            apply_stake_delta(delta, &mut stake);
-        }
-        Some(stake)
-    }
-
-    /// Enable hybrid PoW / staked-VRF admission with policy `config`.
-    ///
-    /// This takes over block-admission from the underlying DAG's own checks:
-    /// dag-level proof-of-work, difficulty pinning, and VRF threshold are
-    /// cleared, and both paths are enforced here instead (see
-    /// [`HybridConfig`] and [`Ledger::insert_with_vrf`]). Restoring a
-    /// snapshot/checkpoint that contains staked blocks requires hybrid to be
-    /// re-enabled before replay.
-    pub fn set_hybrid(&mut self, config: HybridConfig) {
-        // The ledger owns admission now.
-        self.dag.set_proof_of_work(false);
-        self.dag.clear_difficulty();
-        self.dag.disable_vrf();
-        // PoA and hybrid are mutually exclusive admission regimes.
-        self.dag.disable_poa();
-        self.poa = None;
-        self.hybrid = Some(config);
-    }
-
-    /// Whether hybrid PoW / staked-VRF admission is enabled.
-    pub fn hybrid_enabled(&self) -> bool {
-        self.hybrid.is_some()
-    }
-
-    /// The active hybrid policy, if any ([`Ledger::set_hybrid`]).
-    pub fn hybrid_config(&self) -> Option<HybridConfig> {
-        self.hybrid.clone()
-    }
-
     /// Enable Proof-of-Authority admission with `authority_set` and
     /// `slot_duration_ms` (RFC-POA §3–4).
     ///
-    /// This takes over block-admission from the underlying DAG's own checks:
-    /// dag-level proof-of-work, difficulty pinning, and VRF threshold are
-    /// cleared, and the authority/slot check is enforced here instead (see
-    /// [`kovanica_dag::Dag::set_poa`]). PoA and hybrid admission are mutually
-    /// exclusive — enabling one clears the other. Restoring a
-    /// snapshot/checkpoint that contains PoA blocks requires PoA to be
-    /// re-enabled before replay (mirrors [`Ledger::set_hybrid`]).
+    /// PoA is the **only** admission regime: the authority/slot check (see
+    /// [`kovanica_dag::Dag::set_poa`]) plus the per-block `work` pin to
+    /// `POA_NOMINAL_WORK` replace what used to be dag-level PoW, difficulty
+    /// pinning, and staked-VRF sortition. Restoring a snapshot/checkpoint that
+    /// contains PoA blocks requires PoA to be re-enabled before replay (see
+    /// [`Ledger::read_snapshot_with_poa`] / [`Ledger::read_checkpoint_with_poa`]).
     pub fn set_poa(&mut self, authority_set: AuthoritySet, slot_duration_ms: u64) {
         // The ledger owns admission now.
         self.dag.set_poa(authority_set, slot_duration_ms);
-        // PoA and hybrid are mutually exclusive admission regimes.
-        self.hybrid = None;
-        self.hybrid_activation_height = 0;
-        self.staked_seen.clear();
         self.poa = self.dag.poa_config().cloned();
     }
 
@@ -2879,31 +2443,19 @@ impl Ledger {
         self.poa.clone()
     }
 
-    /// The work target the hybrid retargeting policy implies for a block with
-    /// these parents — what a miner should mine at (`None` when hybrid is off,
-    /// or no retargeting policy is configured).
-    pub fn expected_work(&self, parents: &[BlockId]) -> Option<u128> {
-        let cfg = self.hybrid.as_ref()?;
-        let rt = cfg.retarget.as_ref()?;
-        Some(self.dag.work_target_with(parents, rt))
-    }
-
     /// Insert a block referencing `parents`, carrying `work`, `timestamp_ms`,
     /// `nonce`, and `txs`.
     ///
     /// Validates `txs` against the block's view UTXO state and, on success, adds
     /// the block to the DAG and stores its per-block state. On any error the
-    /// ledger and DAG are left unchanged and the block is not added. When
-    /// proof-of-work is enforced (see [`Ledger::set_proof_of_work`]), `nonce`
-    /// must have been chosen so the block's id meets its `work` target — i.e. the
-    /// caller mined the block (see [`kovanica_dag::pow::mine`]); with PoW off,
-    /// `nonce` is unconstrained (pass `0`).
+    /// ledger and DAG are left unchanged and the block is not added.
     ///
-    /// When hybrid admission is enabled ([`Ledger::set_hybrid`]), this inserts a
-    /// **PoW-path** block: its id must meet the hash target for `work`, and — if
-    /// the hybrid config carries a [`Retarget`] policy — `work` must equal the
-    /// target that policy implies. Staked-VRF blocks go through
-    /// [`Ledger::insert_with_vrf`] instead.
+    /// This is the **template** path: it builds a fresh [`Block`], so it cannot
+    /// carry an authority signature. Under PoA (see [`Ledger::set_poa`]) every
+    /// block needs one, so use [`Ledger::insert_prepared_block`] with a
+    /// [`Block::new_with_authority`] block. `work` is pinned to
+    /// `POA_NOMINAL_WORK` at admission under PoA and `nonce` is unconstrained
+    /// (pass `0`).
     pub fn insert(
         &mut self,
         parents: Vec<BlockId>,
@@ -2919,81 +2471,23 @@ impl Ledger {
             nonce,
             encode_block_payload(txs),
         );
-        self.apply_new_block(block, txs, None)
-    }
-
-    /// Insert a **staked-VRF block**: a block admitted by stake-weighted VRF
-    /// sortition instead of proof-of-work (hybrid mode only).
-    ///
-    /// The block's `work` is pinned to
-    /// [`HybridConfig::stake_nominal_work`] — deliberately tiny so staked
-    /// blocks never out-compete mined blocks in blue-work accumulation, no
-    /// matter how a validator grinds parent combinations. Admission requires:
-    ///
-    /// 1. a valid ECVRF proof over the epoch randomness beacon of the block's
-    ///    selected parent ([`Dag::epoch_vrf_input_for_parents`](kovanica_dag::Dag::epoch_vrf_input_for_parents)),
-    ///    or the legacy parent-tip input ([`Dag::vrf_input`](kovanica_dag::Dag::vrf_input))
-    ///    when [`HybridConfig::use_epoch_beacon`] is `false`;
-    /// 2. eligibility — `output < threshold(stake_of(pk), total_stake, rate)`
-    ///    evaluated against the **selected parent's** stake view (pre-state, so
-    ///    bonds inside the block itself do not count for it);
-    /// 3. `timestamp_ms` not below any parent's;
-    /// 4. at most one accepted staked block per `(vrf_pk, selected_parent)` —
-    ///    without this an eligible winner could emit unlimited sibling variants.
-    ///
-    /// Requires [`Ledger::set_hybrid`] first; otherwise returns
-    /// [`LedgerInsertError::HybridDisabled`].
-    pub fn insert_with_vrf(
-        &mut self,
-        parents: Vec<BlockId>,
-        timestamp_ms: u64,
-        staked_vrf: StakedVrf,
-        txs: &[Transaction],
-    ) -> Result<BlockId, LedgerInsertError> {
-        let work = self
-            .hybrid
-            .as_ref()
-            .ok_or(LedgerInsertError::HybridDisabled)?
-            .stake_nominal_work;
-        let block = Block::new_with_vrf(
-            parents,
-            work,
-            timestamp_ms,
-            0,
-            kovanica_dag::VrfPublicKey::from_bytes(&staked_vrf.vrf_pk).map_err(|_| {
-                LedgerInsertError::BadStakeProof {
-                    vrf_pk: staked_vrf.vrf_pk,
-                }
-            })?,
-            staked_vrf.proof.clone(),
-            staked_vrf.output,
-            encode_block_payload(txs),
-        );
-        self.apply_new_block(block, txs, Some(staked_vrf))
+        self.apply_new_block(block, txs)
     }
 
     /// Insert an already-assembled `block` whose payload decodes to `txs`.
     ///
-    /// This is the identity-preserving path: the block's id (including any VRF
-    /// fields) is taken as given, so peers and snapshot/checkpoint replays can
-    /// re-admit exactly the block they received. All admission rules — stateful
-    /// transaction validation, hybrid PoW/stake checks — still run; only the
-    /// re-encoding of parents/work/timestamp into a fresh template is skipped.
+    /// This is the identity-preserving path: the block's id is taken as given, so
+    /// peers and snapshot/checkpoint replays can re-admit exactly the block they
+    /// received (and PoA blocks keep their authority signature). All admission
+    /// rules — stateful transaction validation and the authority/slot check —
+    /// still run; only the re-encoding of parents/work/timestamp into a fresh
+    /// template is skipped.
     pub fn insert_prepared_block(
         &mut self,
         block: Block,
         txs: &[Transaction],
     ) -> Result<BlockId, LedgerInsertError> {
-        let staked = block
-            .vrf_public_key()
-            .zip(block.vrf_proof())
-            .zip(block.vrf_output())
-            .map(|((pk, proof), output)| StakedVrf {
-                vrf_pk: *pk.as_bytes(),
-                proof: proof.clone(),
-                output: *output,
-            });
-        self.apply_new_block(block, txs, staked)
+        self.apply_new_block(block, txs)
     }
 
     /// Like [`Ledger::insert_prepared_block`], but the transactions are decoded
@@ -3006,25 +2500,9 @@ impl Ledger {
     /// Shared admission pipeline behind every public insert entry point.
     fn apply_new_block(
         &mut self,
-        mut block: Block,
+        block: Block,
         txs: &[Transaction],
-        mut staked: Option<StakedVrf>,
     ) -> Result<BlockId, LedgerInsertError> {
-        // Legacy shim: before hybrid mode existed, a prepared/raw block's VRF
-        // fields were silently dropped by template re-encoding (`insert` built a
-        // fresh `Block::new`). Preserve that behaviour for replays of old
-        // snapshots rather than rejecting history that was legal then.
-        if staked.is_some() && self.hybrid.is_none() {
-            staked = None;
-            block = Block::new(
-                block.parents().to_vec(),
-                block.work(),
-                block.timestamp_ms(),
-                block.nonce(),
-                block.payload().to_vec(),
-            );
-        }
-
         // Build the block's view pre-state: its selected parent's state with the
         // mergeset blocks' transactions applied in order. Previewing gets the
         // selected parent and mergeset without mutating the DAG.
@@ -3048,14 +2526,6 @@ impl Ledger {
             });
         }
 
-        // Hybrid admission (before any state mutation, so errors stay atomic).
-        // Eligibility reads the SELECTED PARENT's stake view — a bond carried in
-        // this very block must not vote for its own producer.
-        if let Some(cfg) = self.hybrid.as_ref() {
-            let pre_stake = self.reconstruct_stake(&sp).unwrap_or_default();
-            self.hybrid_admit(&block, &preview, staked.as_ref(), cfg, &pre_stake)?;
-        }
-
         let parent_height = self.heights.get(&sp).copied().unwrap_or(0);
         let new_height = parent_height + 1;
         let block_blue_score = parent_score + 1;
@@ -3067,9 +2537,7 @@ impl Ledger {
         let mut state = self
             .reconstruct_state(&sp)
             .expect("non-final selected parent always has a stored delta");
-        let mut stake = self.reconstruct_stake(&sp).unwrap_or_default();
         let state_pre = state.clone();
-        let stake_pre = stake.clone();
         // RFC-006: the cumulative native minted in this block's view. Starts at
         // the selected parent's cumulative total (block_minted is cumulative),
         // then adds every mergeset coinbase that actually applies in this view
@@ -3103,7 +2571,6 @@ impl Ledger {
                 if let Ok(merged_summary) = apply_block_inner(
                     &mut state,
                     &self.asset_registry,
-                    Some(&mut stake),
                     &merged_txs,
                     self.schedule.subsidy_at(merged_height),
                     view_minted, // pass current cumulative for supply cap check
@@ -3132,7 +2599,6 @@ impl Ledger {
         let summary = apply_block_inner(
             &mut state,
             &self.asset_registry,
-            Some(&mut stake),
             txs,
             self.schedule.subsidy_at(new_height),
             view_minted, // pass cumulative including mergeset for supply cap check
@@ -3164,13 +2630,8 @@ impl Ledger {
         } else {
             self.dag.insert(block)?
         };
-        if let Some(s) = staked {
-            self.staked_seen.insert((s.vrf_pk, sp), id);
-        }
         let delta = diff_utxo(&state_pre, &state);
-        let stake_delta = diff_stake(&stake_pre, &stake);
         self.deltas.insert(id, delta);
-        self.stake_deltas.insert(id, stake_delta);
         self.heights.insert(id, new_height);
         // Cumulative view totals (selected-parent chain + mergeset + own).
         self.block_minted.insert(id, view_minted);
@@ -3181,119 +2642,10 @@ impl Ledger {
         // does, its state is the single materialised tip state.
         if self.dag.selected_tip() == id {
             self.tip_state = state;
-            self.tip_stake = stake;
             self.recompute_supply();
         }
         self.prune();
         Ok(id)
-    }
-
-    /// Hybrid admission rules shared by both paths (PoW and staked-VRF). Runs
-    /// with `&self` only — pure read checks before anything mutates.
-    fn hybrid_admit(
-        &self,
-        block: &Block,
-        preview: &BlockPreview,
-        staked: Option<&StakedVrf>,
-        cfg: &HybridConfig,
-        pre_stake: &StakeState,
-    ) -> Result<(), LedgerInsertError> {
-        // Timestamp monotonicity (the rule dag-level difficulty used to carry):
-        // a block may not precede any of its parents.
-        let max_parent_ts = block
-            .parents()
-            .iter()
-            .filter_map(|p| self.dag.block(p))
-            .map(|b| b.timestamp_ms())
-            .max()
-            .unwrap_or(0);
-        if block.timestamp_ms() < max_parent_ts {
-            return Err(LedgerInsertError::TimestampRegression {
-                timestamp_ms: block.timestamp_ms(),
-                parent_max_ms: max_parent_ts,
-            });
-        }
-
-        match staked {
-            Some(s) => {
-                // 1+2. Verifiable sortition: proof must verify and beat the
-                // stake-proportional threshold under the pre-state registry.
-                let key = kovanica_dag::VrfPublicKey::from_bytes(&s.vrf_pk)
-                    .map_err(|_| LedgerInsertError::BadStakeProof { vrf_pk: s.vrf_pk })?;
-                let input = if cfg.use_epoch_beacon {
-                    self.dag.epoch_vrf_input_for_parents(block.parents())
-                } else {
-                    Dag::vrf_input(block.parents())
-                };
-                let verified = kovanica_dag::vrf::vrf_verify(&key, &input, &s.proof)
-                    .ok()
-                    .filter(|out| *out == s.output);
-                let Some(_) = verified else {
-                    return Err(LedgerInsertError::BadStakeProof { vrf_pk: s.vrf_pk });
-                };
-                let total = pre_stake.total_stake_all_assets();
-                let mine = pre_stake.stake_of_any_asset(&s.vrf_pk);
-                let threshold =
-                    StakeState::eligibility_threshold(mine, total, cfg.rate_num, cfg.rate_den);
-                if s.output.as_u64() >= threshold {
-                    return Err(LedgerInsertError::NotEligible {
-                        vrf_pk: s.vrf_pk,
-                        threshold,
-                        output: s.output.as_u64(),
-                        stake: mine,
-                        total,
-                    });
-                }
-                // Defensive pin (insert_with_vrf already enforces this).
-                if block.work() != cfg.stake_nominal_work {
-                    return Err(LedgerInsertError::StakeWorkMismatch {
-                        expected_nominal: cfg.stake_nominal_work,
-                        actual: block.work(),
-                    });
-                }
-                // 4. One staked block per (key, selected parent): kills sibling
-                // spam while leaving honest parallel production untouched.
-                if self
-                    .staked_seen
-                    .contains_key(&(s.vrf_pk, preview.selected_parent))
-                {
-                    return Err(LedgerInsertError::DuplicateStakedBlock {
-                        vrf_pk: s.vrf_pk,
-                        selected_parent: preview.selected_parent,
-                    });
-                }
-            }
-            None => {
-                // PoW path: the hash target must actually be met...
-                if !kovanica_dag::pow::meets_target(&block.id(), block.work()) {
-                    return Err(LedgerInsertError::PowTargetNotMet {
-                        id: block.id(),
-                        work: block.work(),
-                    });
-                }
-                // ...and, when a retargeting policy is configured, the claimed
-                // work must be exactly what that policy implies — no cheaply
-                // inflated blue weight. Only enforce for blocks produced after
-                // hybrid activation. Pre-hybrid blocks (produced with the
-                // default work=1) are exempt — the retarget policy wasn't
-                // active when they were mined. We detect pre-hybrid blocks by
-                // their work value: if the block claims work=1 but the retarget
-                // policy expects >1, it's a legacy block and we skip the check.
-                if let Some(rt) = &cfg.retarget {
-                    let expected = self.dag.work_target_with(block.parents(), rt);
-                    if block.work() != expected {
-                        // Allow pre-hybrid blocks that used the default work=1.
-                        if !(block.work() == 1 && expected > 1) {
-                            return Err(LedgerInsertError::WorkTargetMismatch {
-                                work: block.work(),
-                                expected,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Drop the stored delta of every block that is now final (below
@@ -3338,9 +2690,6 @@ impl Ledger {
             let Some(delta) = self.deltas.remove(&id) else {
                 continue;
             };
-            let Some(stake_delta) = self.stake_deltas.remove(&id) else {
-                continue;
-            };
             let children: Vec<BlockId> = self
                 .deltas
                 .keys()
@@ -3354,28 +2703,8 @@ impl Ledger {
             for c in children {
                 let child_delta = self.deltas.get_mut(&c).expect("child has a delta");
                 *child_delta = compose_delta(&delta, child_delta);
-                let child_stake = self
-                    .stake_deltas
-                    .get_mut(&c)
-                    .expect("child has a stake delta");
-                *child_stake = compose_stake_delta(&stake_delta, child_stake);
             }
             self.heights.remove(&id);
-        }
-        // The sibling-spam guard only needs to remember staked blocks whose
-        // selected parent is still non-final; older windows are free again.
-        let stale_seen: Vec<([u8; 32], BlockId)> = self
-            .staked_seen
-            .keys()
-            .copied()
-            .filter(|(_, sp)| {
-                self.dag
-                    .ghostdag(sp)
-                    .is_some_and(|g| g.blue_score < threshold)
-            })
-            .collect();
-        for key in stale_seen {
-            self.staked_seen.remove(&key);
         }
     }
 
@@ -3400,12 +2729,10 @@ impl Ledger {
                 .block(block)
                 .expect("block is in the DAG")
                 .payload();
-            let mut stake = StakeState::new();
             if let Ok(txs) = decode_block_payload(payload) {
                 let _ = apply_block_inner(
                     &mut state,
                     &self.asset_registry,
-                    Some(&mut stake),
                     &txs,
                     self.schedule.subsidy_at(height),
                     0, // cumulative_minted
@@ -3448,40 +2775,28 @@ impl Ledger {
     /// finality** (the snapshot stores blocks, not the runtime finality policy);
     /// re-apply [`Ledger::with_finality`]'s depth after loading if wanted.
     ///
-    /// For snapshots that contain **staked-VRF blocks**, use
-    /// [`Ledger::read_snapshot_with_hybrid`] — replay must run under the same
+    /// For snapshots that contain **PoA blocks**, use
+    /// [`Ledger::read_snapshot_with_poa`] — replay must run under the same
     /// admission rules that produced those ids.
     pub fn read_snapshot(bytes: &[u8]) -> Result<Ledger, LedgerSnapshotError> {
-        Self::read_snapshot_impl(bytes, None, None)
-    }
-
-    /// Like [`Ledger::read_snapshot`], but hybrid admission (with `config`) is
-    /// active during replay, so staked-VRF blocks re-admit with their original
-    /// ids intact. Required for any snapshot produced in hybrid mode.
-    pub fn read_snapshot_with_hybrid(
-        bytes: &[u8],
-        config: HybridConfig,
-    ) -> Result<Ledger, LedgerSnapshotError> {
-        Self::read_snapshot_impl(bytes, Some(config), None)
+        Self::read_snapshot_impl(bytes, None)
     }
 
     /// Like [`Ledger::read_snapshot`], but Proof-of-Authority admission (with
     /// `authority_set` and `slot_duration_ms`) is active during replay, so PoA
     /// blocks re-admit with their original ids intact (the live `dag.insert`
     /// path enforces the authority signature; replay without the policy would
-    /// reject them). Required for any snapshot produced in PoA mode — mirroring
-    /// [`Ledger::read_snapshot_with_hybrid`].
+    /// reject them). Required for any snapshot produced in PoA mode.
     pub fn read_snapshot_with_poa(
         bytes: &[u8],
         authority_set: AuthoritySet,
         slot_duration_ms: u64,
     ) -> Result<Ledger, LedgerSnapshotError> {
-        Self::read_snapshot_impl(bytes, None, Some((authority_set, slot_duration_ms)))
+        Self::read_snapshot_impl(bytes, Some((authority_set, slot_duration_ms)))
     }
 
     fn read_snapshot_impl(
         bytes: &[u8],
-        hybrid: Option<HybridConfig>,
         poa: Option<(AuthoritySet, u64)>,
     ) -> Result<Ledger, LedgerSnapshotError> {
         if bytes.len() < 4 || bytes[..4] != LEDGER_MAGIC {
@@ -3514,15 +2829,12 @@ impl Ledger {
         ledger.finality_depth = finality_depth;
         ledger.payload_pruning_depth = payload_pruning_depth;
         ledger.dag.set_payload_pruning_depth(payload_pruning_depth);
-        if let Some(config) = hybrid {
-            ledger.set_hybrid(config);
-        }
         if let Some((authority_set, slot_duration_ms)) = poa {
             ledger.set_poa(authority_set, slot_duration_ms);
         }
         for block in blocks {
-            // Identity-preserving replay: VRF-era snapshots must re-admit the
-            // exact block ids their children reference.
+            // Identity-preserving replay: the snapshot's blocks must re-admit
+            // with the exact ids their children reference.
             ledger
                 .insert_raw_block(block)
                 .map_err(LedgerSnapshotError::Rebuild)?;
@@ -3574,20 +2886,18 @@ impl Ledger {
         // The tip segment: the checkpoint block plus blocks in linearized order
         // whose blue score is strictly above the finality score (i.e. not final).
         // The checkpoint block is included so it can serve as the trusted genesis
-        // on restore, with its original ID preserved via Block::new_pruned.
+        // on restore, with its original ID preserved via Block::new_pruned*.
         let mut tip_segment = Vec::new();
         let cp_block = self
             .dag
             .block(&checkpoint_block)
             .expect("checkpoint block is present");
-        let pruned_cp = kovanica_dag::Block::new_pruned_with_vrf(
+        let pruned_cp = kovanica_dag::Block::new_pruned_with_authority(
             cp_block.parents().to_vec(),
             cp_block.work(),
             cp_block.timestamp_ms(),
             cp_block.nonce(),
-            cp_block.vrf_public_key().cloned(),
-            cp_block.vrf_proof().cloned(),
-            cp_block.vrf_output().cloned(),
+            cp_block.authority_sig().copied(),
             cp_block.id(),
         );
         tip_segment.push(pruned_cp);
@@ -3609,14 +2919,8 @@ impl Ledger {
         buf.extend_from_slice(&self.payload_pruning_depth.to_le_bytes());
         buf.extend_from_slice(&checkpoint_height.to_le_bytes());
         buf.extend_from_slice(&checkpoint_state.encode());
-        // v3: the stake registry as of the checkpoint block's view, applied
-        // directly on load (the tip-segment replay then extends it).
-        let stake_bytes = self
-            .reconstruct_stake(&checkpoint_block)
-            .unwrap_or_default()
-            .encode();
-        buf.extend_from_slice(&(stake_bytes.len() as u64).to_le_bytes());
-        buf.extend_from_slice(&stake_bytes);
+        // v10: the length-prefixed stake registry blob (present in v3..=v9) is
+        // no longer written — the stake registry retired with hybrid admission.
         // v8 (KVP-106): asset registry at the checkpoint block's view.
         let asset_registry_bytes = self.encode_asset_registry();
         buf.extend_from_slice(&(asset_registry_bytes.len() as u64).to_le_bytes());
@@ -3638,35 +2942,24 @@ impl Ledger {
     /// `finality_depth` and `payload_pruning_depth` as when the checkpoint was
     /// written.
     ///
-    /// For checkpoints whose tip segment contains staked-VRF blocks, use
-    /// [`Ledger::read_checkpoint_with_hybrid`].
+    /// For checkpoints whose tip segment contains PoA blocks, use
+    /// [`Ledger::read_checkpoint_with_poa`].
     pub fn read_checkpoint(bytes: &[u8]) -> Result<Ledger, LedgerCheckpointError> {
-        Self::read_checkpoint_impl(bytes, None, None)
-    }
-
-    /// Like [`Ledger::read_checkpoint`], but hybrid admission runs during
-    /// tip-segment replay so staked-VRF blocks keep their original ids.
-    pub fn read_checkpoint_with_hybrid(
-        bytes: &[u8],
-        config: HybridConfig,
-    ) -> Result<Ledger, LedgerCheckpointError> {
-        Self::read_checkpoint_impl(bytes, Some(config), None)
+        Self::read_checkpoint_impl(bytes, None)
     }
 
     /// Like [`Ledger::read_checkpoint`], but Proof-of-Authority admission runs
-    /// during tip-segment replay so PoA blocks keep their original ids —
-    /// mirroring [`Ledger::read_checkpoint_with_hybrid`].
+    /// during tip-segment replay so PoA blocks keep their original ids.
     pub fn read_checkpoint_with_poa(
         bytes: &[u8],
         authority_set: AuthoritySet,
         slot_duration_ms: u64,
     ) -> Result<Ledger, LedgerCheckpointError> {
-        Self::read_checkpoint_impl(bytes, None, Some((authority_set, slot_duration_ms)))
+        Self::read_checkpoint_impl(bytes, Some((authority_set, slot_duration_ms)))
     }
 
     fn read_checkpoint_impl(
         bytes: &[u8],
-        hybrid: Option<HybridConfig>,
         poa: Option<(AuthoritySet, u64)>,
     ) -> Result<Ledger, LedgerCheckpointError> {
         if bytes.len() < 4 || bytes[..4] != CHECKPOINT_MAGIC {
@@ -3678,7 +2971,10 @@ impl Ledger {
         }
         let version = u16::from_le_bytes([bytes[4], bytes[5]]);
         // Accept v3 (stake registry), v4 (asset_id in UTXO), v5 (stealth ext),
-        // and v6 (per-entry creation height — RFC-005 CSV).
+        // v6 (per-entry creation height — RFC-005 CSV), v7 (is_coinbase +
+        // supply counters), v8 (asset registry), and v9 (authority-signature
+        // flag byte in tip-segment blocks). v3..=v9 still carry the retired stake
+        // registry blob, which is read and discarded.
         if !(3..=CHECKPOINT_VERSION).contains(&version) {
             return Err(LedgerCheckpointError::UnsupportedVersion(version));
         }
@@ -3711,31 +3007,49 @@ impl Ledger {
         .map_err(|_| LedgerCheckpointError::Payload(DecodeError::UnexpectedEof))?;
         pos = bytes.len() - remaining.len();
 
-        // v3: length-prefixed stake registry blob.
-        if bytes.len() < pos + 8 {
-            return Err(LedgerCheckpointError::UnexpectedEof);
+        // v3..=v9: a length-prefixed stake registry blob followed the UTXO set.
+        // The stake registry retired with hybrid admission, so v10 no longer
+        // writes it — but legacy checkpoints still decode, so the blob is
+        // consumed and discarded here (same posture as the reserved VRF byte).
+        //
+        // `pos + len` is computed with `checked_add` throughout: a corrupt or
+        // hostile length prefix must be an error, never an overflow panic.
+        if version < 10 {
+            let Some(next) = pos.checked_add(8) else {
+                return Err(LedgerCheckpointError::UnexpectedEof);
+            };
+            if bytes.len() < next {
+                return Err(LedgerCheckpointError::UnexpectedEof);
+            }
+            let stake_len = u64::from_le_bytes(bytes[pos..next].try_into().unwrap()) as usize;
+            pos = next;
+            let Some(end) = pos.checked_add(stake_len) else {
+                return Err(LedgerCheckpointError::UnexpectedEof);
+            };
+            if bytes.len() < end {
+                return Err(LedgerCheckpointError::UnexpectedEof);
+            }
+            pos = end;
         }
-        let stake_len = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap()) as usize;
-        pos += 8;
-        if bytes.len() < pos + stake_len {
-            return Err(LedgerCheckpointError::UnexpectedEof);
-        }
-        let checkpoint_stake = StakeState::decode(&bytes[pos..pos + stake_len])
-            .map_err(|_| LedgerCheckpointError::UnexpectedEof)?;
-        pos += stake_len;
 
         // v8 (KVP-106): asset registry blob (for version >= 8).
         let checkpoint_asset_registry = if version >= 8 {
-            if bytes.len() < pos + 8 {
+            let Some(next) = pos.checked_add(8) else {
+                return Err(LedgerCheckpointError::UnexpectedEof);
+            };
+            if bytes.len() < next {
                 return Err(LedgerCheckpointError::UnexpectedEof);
             }
-            let asset_reg_len =
-                u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap()) as usize;
-            pos += 8;
-            if bytes.len() < pos + asset_reg_len {
+            let asset_reg_len = u64::from_le_bytes(bytes[pos..next].try_into().unwrap()) as usize;
+            pos = next;
+            let Some(end) = pos.checked_add(asset_reg_len) else {
+                return Err(LedgerCheckpointError::UnexpectedEof);
+            };
+            if bytes.len() < end {
                 return Err(LedgerCheckpointError::UnexpectedEof);
             }
-            let mut reader = CheckpointReader::new(&bytes[pos..pos + asset_reg_len]);
+            pos = end;
+            let mut reader = CheckpointReader::new(&bytes[pos - asset_reg_len..pos]);
             let mut registry = HashMap::new();
             let count = reader.read_u64()? as usize;
             for _ in 0..count {
@@ -3776,7 +3090,6 @@ impl Ledger {
                     },
                 );
             }
-            pos += asset_reg_len;
             Some(registry)
         } else {
             None
@@ -3850,7 +3163,6 @@ impl Ledger {
         // relative to the empty set (it is the trusted genesis of the restored
         // ledger), so its view state reconstructs to exactly the checkpoint.
         let checkpoint_delta = diff_utxo(&UtxoSet::new(), &checkpoint_state);
-        let checkpoint_stake_delta = diff_stake(&StakeState::new(), &checkpoint_stake);
         let mut ledger = Ledger {
             dag,
             schedule,
@@ -3862,13 +3174,8 @@ impl Ledger {
             // re-applies its profile depth via `set_block_pruning_depth`.
             block_pruning_depth: u64::MAX,
             tip_state: checkpoint_state,
-            tip_stake: checkpoint_stake,
             asset_registry: checkpoint_asset_registry.unwrap_or_default(),
             deltas: HashMap::new(),
-            stake_deltas: HashMap::new(),
-            hybrid: None,
-            hybrid_activation_height: 0,
-            staked_seen: HashMap::new(),
             poa: None,
             heights: HashMap::new(),
             multisig_activation_score: MULTISIG_ACTIVATION_SCORE,
@@ -3884,13 +3191,7 @@ impl Ledger {
             replay_mode: false,
         };
         ledger.deltas.insert(checkpoint_id, checkpoint_delta);
-        ledger
-            .stake_deltas
-            .insert(checkpoint_id, checkpoint_stake_delta);
         ledger.heights.insert(checkpoint_id, checkpoint_height);
-        if let Some(config) = hybrid {
-            ledger.set_hybrid(config);
-        }
         if let Some((authority_set, slot_duration_ms)) = poa {
             ledger.set_poa(authority_set, slot_duration_ms);
         }
@@ -3910,25 +3211,21 @@ impl Ledger {
                     }
                 })
                 .collect();
-            // Preserve VRF identity through the rewind; only parents are
-            // remapped (a block whose parents were rewired legitimately gets a
-            // new id — pre-existing checkpoint semantics).
-            let rebuilt = match (
-                block.vrf_public_key(),
-                block.vrf_proof(),
-                block.vrf_output(),
-            ) {
-                (Some(pk), Some(proof), Some(output)) => Block::new_with_vrf(
+            // Preserve the PoA authority signature through the rewind; only
+            // parents are remapped (a block whose parents were rewired
+            // legitimately gets a new id — pre-existing checkpoint semantics).
+            // Without this the rebuilt block would lose its authority sig and
+            // be rejected by PoA admission on the way back in.
+            let rebuilt = match block.authority_sig() {
+                Some(sig) => Block::new_with_authority(
                     mapped_parents,
                     block.work(),
                     block.timestamp_ms(),
                     block.nonce(),
-                    *pk,
-                    proof.clone(),
-                    *output,
+                    *sig,
                     block.payload().to_vec(),
                 ),
-                _ => Block::new(
+                None => Block::new(
                     mapped_parents,
                     block.work(),
                     block.timestamp_ms(),
@@ -4084,43 +3381,30 @@ fn decode_checkpoint_block(
     let timestamp_ms = reader.read_u64()?;
     let nonce = reader.read_u64()?;
 
-    // VRF fields (v6+ independent encoding, matching kovanica_dag::encode_block):
-    // has_vrf flag, then if set: vrf_public_key (32B, always present), then a
-    // proof_flag (1B: 0 = absent, 1 = 96-byte proof follows), then an output_flag
-    // (1B: 0 = absent, 1 = 32-byte output follows). A block may carry a proof
-    // without an output and vice-versa.
+    // Reserved `has_vrf` byte: VRF is removed, and `kovanica_dag::encode_block`
+    // still emits one zero byte there, so it MUST be consumed here to stay
+    // byte-aligned. Legacy (v6..=v9) checkpoints that were written while VRF
+    // was live may carry a 1 plus the proof/output tails — those are skipped
+    // without being interpreted, so the reader still lands on the right offset
+    // (same "skip legacy" posture as the retired stake blob).
     let has_vrf = reader.read_u8()?;
-    let (vrf_public_key, vrf_proof, vrf_output) = if has_vrf == 1 {
-        let pk_bytes: [u8; 32] = reader.read_array::<32>()?;
-        let pk = kovanica_dag::VrfPublicKey::from_bytes(&pk_bytes)
-            .map_err(|_| LedgerCheckpointError::UnexpectedEof)?;
-        let has_proof = reader.read_u8()?;
-        let proof = if has_proof == 1 {
-            let proof_bytes: [u8; 96] = reader.read_array::<96>()?;
-            Some(
-                kovanica_dag::VrfProof::from_bytes(&proof_bytes)
-                    .map_err(|_| LedgerCheckpointError::UnexpectedEof)?,
-            )
-        } else {
-            None
-        };
-        let has_output = reader.read_u8()?;
-        let output = if has_output == 1 {
-            let output_bytes: [u8; 32] = reader.read_array::<32>()?;
-            Some(kovanica_dag::VrfOutput::from_bytes(output_bytes))
-        } else {
-            None
-        };
-        (Some(pk), proof, output)
-    } else {
-        (None, None, None)
-    };
+    if has_vrf == 1 {
+        // vrf_public_key (32B), proof_flag (1B) [+ 96B proof], output_flag
+        // (1B) [+ 32B output].
+        reader.skip(32)?;
+        if reader.read_u8()? == 1 {
+            reader.skip(96)?;
+        }
+        if reader.read_u8()? == 1 {
+            reader.skip(32)?;
+        }
+    }
 
     // Authority signature (PoA, v9+): has_auth flag (1 byte), then if set:
-    // authority_sig (64 bytes). Checkpoint blocks never carry one (they are
-    // reconstructed via `Block::new_pruned` / `Block::new`), so the flag is
-    // always 0 here — but it must be consumed to stay aligned with
-    // `kovanica_dag::encode_block`.
+    // authority_sig (64 bytes). The checkpoint block itself never carries one
+    // (it is reconstructed via `Block::new_pruned`), but tip-segment blocks do
+    // — they are re-inserted and must pass PoA admission again, so the
+    // signature is preserved.
     let authority_sig = if version >= 9 {
         let has_auth = reader.read_u8()?;
         if has_auth == 1 {
@@ -4134,14 +3418,11 @@ fn decode_checkpoint_block(
 
     let payload_len = reader.read_count(1)? as usize;
     if payload_len == 0 {
-        let block = Block::new_pruned_with_vrf_and_authority(
+        let block = Block::new_pruned_with_authority(
             parents,
             work,
             timestamp_ms,
             nonce,
-            vrf_public_key,
-            vrf_proof,
-            vrf_output,
             authority_sig,
             BlockId::from_bytes([0u8; 32]),
         );
@@ -4152,32 +3433,9 @@ fn decode_checkpoint_block(
         return Err(LedgerCheckpointError::UnexpectedEof);
     }
     let payload = reader.read_bytes(payload_len)?;
-    let block = match (vrf_public_key, authority_sig) {
-        (Some(pk), Some(sig)) => Block::new_with_vrf_and_authority(
-            parents,
-            work,
-            timestamp_ms,
-            nonce,
-            pk,
-            vrf_proof.unwrap(),
-            vrf_output.unwrap(),
-            sig,
-            payload,
-        ),
-        (Some(pk), None) => Block::new_with_vrf(
-            parents,
-            work,
-            timestamp_ms,
-            nonce,
-            pk,
-            vrf_proof.unwrap(),
-            vrf_output.unwrap(),
-            payload,
-        ),
-        (None, Some(sig)) => {
-            Block::new_with_authority(parents, work, timestamp_ms, nonce, sig, payload)
-        }
-        (None, None) => Block::new(parents, work, timestamp_ms, nonce, payload),
+    let block = match authority_sig {
+        Some(sig) => Block::new_with_authority(parents, work, timestamp_ms, nonce, sig, payload),
+        None => Block::new(parents, work, timestamp_ms, nonce, payload),
     };
     let consumed = reader.pos;
     Ok((block, consumed))
@@ -4233,6 +3491,17 @@ impl<'a> CheckpointReader<'a> {
         let out = self.buf[self.pos..self.pos + len].to_vec();
         self.pos += len;
         Ok(out)
+    }
+
+    /// Advance the cursor by `len` bytes without interpreting them. Used to
+    /// stay byte-aligned across payload slots that are read but no longer
+    /// meaningful (the retired VRF tail).
+    fn skip(&mut self, len: usize) -> Result<(), LedgerCheckpointError> {
+        if self.remaining() < len {
+            return Err(LedgerCheckpointError::UnexpectedEof);
+        }
+        self.pos += len;
+        Ok(())
     }
 }
 
@@ -4333,9 +3602,13 @@ const CHECKPOINT_MAGIC: [u8; 4] = *b"KVCP";
 /// v7 (RFC-006): UTXO entries carry `is_coinbase`; trailing native_minted + fees_burned.
 /// v8 (KVP-106): asset registry appended after stake registry.
 /// v9 (PoA): tip-segment blocks are encoded with `kovanica_dag::encode_block`,
-/// which now writes the authority-signature flag byte (0 = absent) after the VRF
-/// fields. v8 and earlier checkpoints (no flag byte) still decode.
-const CHECKPOINT_VERSION: u16 = 9;
+/// which now writes the authority-signature flag byte (0 = absent) after the
+/// (now reserved) VRF byte. v8 and earlier checkpoints (no flag byte) still decode.
+/// v10 (PoA-only): the stake registry retired with hybrid admission and is no
+/// longer written; v3..=v9 checkpoints still decode (the blob is read and
+/// discarded). This is a consensus-breaking change — old readers cannot read
+/// v10.
+const CHECKPOINT_VERSION: u16 = 10;
 
 /// Why a ledger checkpoint could not be encoded or decoded.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4674,7 +3947,6 @@ mod tests {
         let err = apply_block_inner(
             &mut utxo.clone(),
             &HashMap::new(),
-            None,
             std::slice::from_ref(&spend),
             0,
             0, // cumulative_minted
@@ -4694,7 +3966,6 @@ mod tests {
         apply_block_inner(
             &mut utxo,
             &HashMap::new(),
-            None,
             std::slice::from_ref(&spend),
             0,
             0, // cumulative_minted
@@ -4709,179 +3980,6 @@ mod tests {
         )
         .unwrap();
         assert!(!utxo.contains(&op));
-    }
-
-    // ---- stake registry integration ----
-
-    use crate::stake::{bond_tag, StakeState, UNBOND_MATURITY};
-
-    fn vrf_pk(seed: u8) -> [u8; 32] {
-        kovanica_dag::vrf::vrf_keypair_from_seed(&[seed; 32])
-            .1
-            .to_bytes()
-    }
-
-    /// A bond transaction: `amount` from `kp`, single self-output, `KVB1||asset_id||pk` tag.
-    fn bond_tx(kp: &KeyPair, op: OutPoint, amount: u64, pk: [u8; 32]) -> Transaction {
-        Transaction::signed(
-            &[(op, kp)],
-            vec![TxOutput::native(amount, kp.address())],
-            bond_tag(NATIVE_ASSET_ID, &pk),
-        )
-    }
-
-    /// An unbond transaction spending frozen outpoints back to their owner
-    /// (a transaction must have at least one output, so the freed value returns
-    /// to the spender as an ordinary UTXO).
-    fn unbond_tx(kp: &KeyPair, ops: &[OutPoint], total: u64) -> Transaction {
-        let inputs: Vec<(OutPoint, &KeyPair)> = ops.iter().map(|op| (*op, kp)).collect();
-        Transaction::signed(
-            &inputs,
-            vec![TxOutput::native(total, kp.address())],
-            b"KVU1".to_vec(),
-        )
-    }
-
-    #[test]
-    fn bond_freezes_and_unbond_releases() {
-        let alice = KeyPair::from_u64(1);
-        let pk = vrf_pk(5);
-        let mut utxo = UtxoSet::new();
-        let op = funded(&mut utxo, &alice, 100, 1);
-        let mut stake = StakeState::new();
-
-        // Bond 60 of the 100.
-        apply_block_with_stake(&mut utxo, &mut stake, &[bond_tx(&alice, op, 60, pk)], 0, 10)
-            .unwrap();
-        let native = NATIVE_ASSET_ID;
-        assert_eq!(stake.stake_of(native, &pk), 60);
-        // The bond output is the only output (the 40 remainder is fee); it is
-        // still a normal UTXO — just frozen in the registry.
-        assert_eq!(utxo.balance(&alice.address()), 60);
-
-        // The frozen outpoint cannot be spent by a regular transaction.
-        let frozen_op = OutPoint::new(bond_tx(&alice, op, 60, pk).id(), 0);
-        let steal = Transaction::signed(
-            &[(frozen_op, &alice)],
-            vec![TxOutput::native(60, KeyPair::from_u64(9).address())],
-            vec![],
-        );
-        let err =
-            apply_block_with_stake(&mut utxo, &mut stake, std::slice::from_ref(&steal), 0, 11)
-                .unwrap_err();
-        assert!(matches!(
-            err,
-            LedgerError::Stake {
-                reason: StakeError::FrozenInput { .. },
-                ..
-            }
-        ));
-        // Atomic: the rejected steal changed nothing.
-        assert!(utxo.contains(&frozen_op));
-        let native = NATIVE_ASSET_ID;
-        assert_eq!(stake.stake_of(native, &pk), 60);
-
-        // Immature unbond is rejected.
-        let unbond = unbond_tx(&alice, &[frozen_op], 60);
-        let err =
-            apply_block_with_stake(&mut utxo, &mut stake, std::slice::from_ref(&unbond), 0, 50)
-                .unwrap_err();
-        assert!(matches!(
-            err,
-            LedgerError::Stake {
-                reason: StakeError::UnbondImmature { .. },
-                ..
-            }
-        ));
-
-        // After maturity the unbond applies and frees the value.
-        apply_block_with_stake(&mut utxo, &mut stake, &[unbond], 0, 10 + UNBOND_MATURITY).unwrap();
-        let native = NATIVE_ASSET_ID;
-        assert_eq!(stake.stake_of(native, &pk), 0);
-        assert_eq!(stake.total_stake(native), 0);
-
-        // The released output is an ordinary UTXO again.
-        let freed = OutPoint::new(unbond_tx(&alice, &[frozen_op], 60).id(), 0);
-        let spend = Transaction::signed(
-            &[(freed, &alice)],
-            vec![TxOutput::native(59, KeyPair::from_u64(9).address())],
-            vec![],
-        );
-        apply_block_with_stake(&mut utxo, &mut stake, &[spend], 0, 200).unwrap();
-    }
-
-    #[test]
-    fn ledger_tracks_stake_per_block_across_heights() {
-        let validator = KeyPair::from_u64(7);
-        let pk = vrf_pk(7);
-        let genesis_cb = Transaction::coinbase(
-            vec![TxOutput::native(1_000, validator.address())],
-            b"g".to_vec(),
-        );
-        let genesis_cb_id = genesis_cb.id();
-        let mut ledger =
-            Ledger::new(3, HalvingSchedule::new(1_000, 1_000), &[genesis_cb]).expect("genesis");
-        // Maturity the genesis coinbase (creation_height 0 → spendable at height 100).
-        for h in 1..=100 {
-            ledger.insert(vec![ledger.genesis()], 1, h, 0, &[]).unwrap();
-        }
-
-        // Height 101: bond 400.
-        let coin = OutPoint::new(genesis_cb_id, 0);
-        let bond = bond_tx(&validator, coin, 400, pk);
-        let bond_out = OutPoint::new(bond.id(), 0);
-        let b1 = ledger
-            .insert(vec![ledger.genesis()], 1, 1, 0, &[bond])
-            .unwrap();
-        let native = NATIVE_ASSET_ID;
-        assert_eq!(ledger.stake_state(&b1).unwrap().stake_of(native, &pk), 400);
-        // Genesis's view still shows zero (per-block states are independent).
-        assert_eq!(
-            ledger
-                .stake_state(&ledger.genesis())
-                .unwrap()
-                .total_stake(native),
-            0
-        );
-
-        // Height 2..maturity: regular spends of the frozen output never apply.
-        for h in 2..UNBOND_MATURITY {
-            let steal = Transaction::signed(
-                &[(bond_out, &validator)],
-                vec![TxOutput::native(399, validator.address())],
-                b"steal attempt".to_vec(),
-            );
-            assert!(
-                ledger.insert(vec![b1], 1, h, 0, &[steal]).is_err(),
-                "frozen spend must not apply at height {h}"
-            );
-        }
-
-        // Age to maturity with empty blocks, then unbond.
-        let mut tip = b1;
-        for h in UNBOND_MATURITY..UNBOND_MATURITY + 101 {
-            tip = ledger.insert(vec![tip], 1, h, 0, &[]).unwrap();
-        }
-        let unbond = unbond_tx(&validator, &[bond_out], 400);
-        let unbond_id = unbond.id();
-        let b_unbond = ledger
-            .insert(vec![tip], 1, 300, 0, &[unbond])
-            .expect("matured unbond applies");
-        let native = NATIVE_ASSET_ID;
-        assert_eq!(
-            ledger.stake_state(&b_unbond).unwrap().stake_of(native, &pk),
-            0
-        );
-        // The unbonded output is freely spendable in a later block.
-        let freed = OutPoint::new(unbond_id, 0);
-        let spend = Transaction::signed(
-            &[(freed, &validator)],
-            vec![TxOutput::native(399, validator.address())],
-            b"after unbond".to_vec(),
-        );
-        ledger
-            .insert(vec![b_unbond], 1, 301, 0, &[spend])
-            .expect("unbonded value is ordinary");
     }
 }
 
@@ -4929,49 +4027,33 @@ mod prune_tests {
         assert!(ledger.finality_score() > 0, "finality must be active");
 
         // Snapshot every non-final block's reconstructed state.
-        let before: Vec<(BlockId, UtxoSet, StakeState)> = ledger
+        let before: Vec<(BlockId, UtxoSet)> = ledger
             .dag()
             .linearize()
             .into_iter()
             .filter(|id| ledger.state(id).is_some())
-            .map(|id| {
-                (
-                    id,
-                    ledger.state(&id).unwrap(),
-                    ledger.stake_state(&id).unwrap(),
-                )
-            })
+            .map(|id| (id, ledger.state(&id).unwrap()))
             .collect();
         assert!(!before.is_empty(), "non-final blocks must exist");
 
         // First explicit prune.
         ledger.prune();
-        for (id, ref_utxo, ref_stake) in &before {
+        for (id, ref_utxo) in &before {
             assert_eq!(
                 ledger.state(id).as_ref(),
                 Some(ref_utxo),
                 "first prune changed UTXO view of {id}"
-            );
-            assert_eq!(
-                ledger.stake_state(id).as_ref(),
-                Some(ref_stake),
-                "first prune changed stake view of {id}"
             );
         }
 
         // Second prune must be idempotent: the threshold has not advanced,
         // so no new deltas are eligible for folding.
         ledger.prune();
-        for (id, ref_utxo, ref_stake) in &before {
+        for (id, ref_utxo) in &before {
             assert_eq!(
                 ledger.state(id).as_ref(),
                 Some(ref_utxo),
                 "second prune changed UTXO view of {id}"
-            );
-            assert_eq!(
-                ledger.stake_state(id).as_ref(),
-                Some(ref_stake),
-                "second prune changed stake view of {id}"
             );
         }
 

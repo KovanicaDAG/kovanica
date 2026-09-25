@@ -1,10 +1,10 @@
 //! Adversarial and property-style tests for the per-block undo-log / delta design.
 //!
 //! These tests exercise the ledger's promise that any non-final block's UTXO
-//! and stake-registry view can be reconstructed exactly from the compact
-//! deltas stored along its selected-parent chain, even across the finality
-//! boundary (where final deltas are folded into their children) and across
-//! wide re-organisations above finality.
+//! view can be reconstructed exactly from the compact deltas stored along its
+//! selected-parent chain, even across the finality boundary (where final deltas
+//! are folded into their children) and across wide re-organisations above
+//! finality.
 //!
 //! The re-orgs here are driven by **chain length** (blue score), not by
 //! per-block work. Heavier-but-shorter branches are a legitimate adversarial
@@ -13,10 +13,9 @@
 //! hardening. These tests still cover the core delta-folding invariants.
 
 use kovanica_dag::BlockId;
-use kovanica_state::stake::{StakeState, UNBOND_MATURITY};
 use kovanica_state::{
-    decode_block_payload, ledger::apply_block_with_stake, Address, HalvingSchedule, KeyPair,
-    Ledger, OutPoint, Transaction, TxOutput, UtxoSet, DEFAULT_HALVING_ERA,
+    apply_block_at_height, decode_block_payload, Address, HalvingSchedule, KeyPair, Ledger,
+    OutPoint, Transaction, TxOutput, UtxoSet, DEFAULT_HALVING_ERA,
 };
 
 const K: u16 = 3;
@@ -41,22 +40,6 @@ fn transfer(coin: OutPoint, from: &KeyPair, to: &Address, value: u64, funding: u
     Transaction::signed(&[(coin, from)], outputs, Vec::new())
 }
 
-fn bond_tx(coin: OutPoint, owner: &KeyPair, value: u64, vrf_pk: [u8; 32]) -> Transaction {
-    Transaction::signed(
-        &[(coin, owner)],
-        vec![TxOutput::native(value, owner.address())],
-        kovanica_state::bond_tag(kovanica_state::NATIVE_ASSET_ID, &vrf_pk),
-    )
-}
-
-fn unbond_tx(coin: OutPoint, owner: &KeyPair, value: u64) -> Transaction {
-    Transaction::signed(
-        &[(coin, owner)],
-        vec![TxOutput::native(value, owner.address())],
-        kovanica_state::stake::UNBOND_PREFIX.to_vec(),
-    )
-}
-
 /// Selected-parent chain height of `block` (== blue score in this design).
 fn chain_height(ledger: &Ledger, mut block: BlockId) -> u64 {
     let mut height = 0;
@@ -74,7 +57,7 @@ fn chain_height(ledger: &Ledger, mut block: BlockId) -> u64 {
 /// Reference per-block view state computed independently of the undo-log
 /// machinery: walk the selected-parent chain from `block` back to genesis and
 /// apply each block's mergeset then its own transactions from a fresh state.
-fn reference_state_and_stake(ledger: &Ledger, block: &BlockId) -> (UtxoSet, StakeState) {
+fn reference_state(ledger: &Ledger, block: &BlockId) -> UtxoSet {
     let dag = ledger.dag();
     let mut chain = vec![*block];
     let mut cur = *block;
@@ -85,8 +68,6 @@ fn reference_state_and_stake(ledger: &Ledger, block: &BlockId) -> (UtxoSet, Stak
     chain.reverse();
 
     let mut state = UtxoSet::new();
-    let mut stake = StakeState::new();
-    let activation = ledger.multisig_activation_score();
     for id in &chain {
         let gd = dag.ghostdag(id).expect("block has ghostdag data");
         let mergeset = gd.mergeset_blues.iter().chain(&gd.mergeset_reds);
@@ -94,18 +75,16 @@ fn reference_state_and_stake(ledger: &Ledger, block: &BlockId) -> (UtxoSet, Stak
             let payload = dag.block(merged).expect("mergeset block present").payload();
             if let Ok(txs) = decode_block_payload(payload) {
                 let h = chain_height(ledger, *merged);
-                let _ =
-                    apply_block_with_stake(&mut state, &mut stake, &txs, SCHEDULE.subsidy_at(h), h);
+                let _ = apply_block_at_height(&mut state, &txs, SCHEDULE.subsidy_at(h), h);
             }
-            let _ = activation;
         }
         let payload = dag.block(id).expect("block present").payload();
         let txs = decode_block_payload(payload).expect("valid payload");
         let h = chain_height(ledger, *id);
-        apply_block_with_stake(&mut state, &mut stake, &txs, SCHEDULE.subsidy_at(h), h)
+        apply_block_at_height(&mut state, &txs, SCHEDULE.subsidy_at(h), h)
             .expect("valid in its own view");
     }
-    (state, stake)
+    state
 }
 
 fn utxo_snapshot(utxo: &UtxoSet) -> Vec<(OutPoint, u64, Address)> {
@@ -115,30 +94,12 @@ fn utxo_snapshot(utxo: &UtxoSet) -> Vec<(OutPoint, u64, Address)> {
     rows
 }
 
-fn stake_snapshot(stake: &StakeState) -> Vec<(OutPoint, [u8; 32], u64, u64)> {
-    let mut rows: Vec<(OutPoint, [u8; 32], u64, u64)> = stake
-        .iter_frozen()
-        .map(|(op, f)| (*op, f.vrf_pk, f.value, f.bond_height))
-        .collect();
-    rows.sort_by_key(|row| row.0);
-    rows
-}
-
 fn assert_reconstructs(ledger: &Ledger, id: &BlockId) {
-    let (ref_utxo, ref_stake) = reference_state_and_stake(ledger, id);
+    let ref_utxo = reference_state(ledger, id);
     assert_eq!(
         utxo_snapshot(&ledger.state(id).expect("block must reconstruct")),
         utxo_snapshot(&ref_utxo),
         "UTXO mismatch at {id}"
-    );
-    assert_eq!(
-        stake_snapshot(
-            &ledger
-                .stake_state(id)
-                .expect("block must reconstruct stake")
-        ),
-        stake_snapshot(&ref_stake),
-        "stake mismatch at {id}"
     );
 }
 
@@ -147,7 +108,6 @@ fn long_selected_parent_chain_crosses_finality() {
     let alice = KeyPair::from_u64(1);
     let bob = KeyPair::from_u64(2);
     let carol = KeyPair::from_u64(3);
-    let pk = [0x12u8; 32];
     let (mut ledger, coin) = funded(3, 1_000);
     let genesis = ledger.genesis();
 
@@ -167,8 +127,10 @@ fn long_selected_parent_chain_crosses_finality() {
                 vec![tx]
             }
             15 => {
-                let tx = bond_tx(spendable, &alice, 600, pk);
-                spendable = OutPoint::new(tx.id(), 0);
+                // `spendable` is the 600-atoms change output from the i == 5
+                // spend above (output index 1 = 700 - 100).
+                let tx = transfer(spendable, &alice, &carol.address(), 300, 600);
+                spendable = OutPoint::new(tx.id(), 1);
                 vec![tx]
             }
             _ => vec![],
@@ -359,132 +321,6 @@ fn parallel_blocks_repeated_double_spends() {
         tip = reclaim;
         spendable = OutPoint::new(reclaim_tx.id(), 0);
         spendable_value = 100;
-    }
-}
-
-#[test]
-fn stake_registry_delta_composition_and_frozen_spend_rejection() {
-    let alice = KeyPair::from_u64(1);
-    let bob = KeyPair::from_u64(2);
-    let pk = [0x42u8; 32];
-    let (mut ledger, coin) = funded(u64::MAX, 1_000);
-    let genesis = ledger.genesis();
-
-    // Block A: bond the entire genesis coin.
-    let bond = bond_tx(coin, &alice, 1_000, pk);
-    let frozen_op = OutPoint::new(bond.id(), 0);
-    let a = ledger.insert(vec![genesis], 1, 1, 0, &[bond]).unwrap();
-    let native = kovanica_state::NATIVE_ASSET_ID;
-    assert_eq!(ledger.stake_state(&a).unwrap().stake_of(native, &pk), 1_000);
-
-    // Block B (parallel to A): regular spend of the same coin.
-    let spend_b = transfer(coin, &alice, &bob.address(), 1_000, 1_000);
-    let b = ledger.insert(vec![genesis], 1, 2, 0, &[spend_b]).unwrap();
-    assert_eq!(ledger.state(&b).unwrap().balance(&bob.address()), 1_000);
-
-    // Merge: only one of the two conflicting transactions can apply.
-    let m = ledger.insert(vec![a, b], 1, 3, 0, &[]).unwrap();
-    assert_reconstructs(&ledger, &m);
-    assert_eq!(ledger.state(&m).unwrap().total_value(), 1_000);
-
-    // A child of A that tries to spend the frozen output must fail.
-    let steal = transfer(frozen_op, &alice, &bob.address(), 1_000, 1_000);
-    assert!(
-        ledger.insert(vec![a], 1, 4, 0, &[steal]).is_err(),
-        "spending a frozen output must be rejected"
-    );
-}
-
-#[test]
-fn stake_unbond_and_maturity_across_finality() {
-    let alice = KeyPair::from_u64(1);
-    let pk = [0x33u8; 32];
-    // Small finality depth so the bond block itself crosses the boundary.
-    let (mut ledger, coin) = funded(10, 1_000);
-    let genesis = ledger.genesis();
-
-    let bond = bond_tx(coin, &alice, 1_000, pk);
-    let frozen_op = OutPoint::new(bond.id(), 0);
-    let mut tip = ledger.insert(vec![genesis], 1, 1, 0, &[bond]).unwrap();
-
-    // Age the chain past the unbond maturity point.
-    for h in 2..=(UNBOND_MATURITY + 2) {
-        tip = ledger.insert(vec![tip], 1, h, 0, &[]).unwrap();
-    }
-
-    let unbond = unbond_tx(frozen_op, &alice, 1_000);
-    let ub = ledger
-        .insert(vec![tip], 1, UNBOND_MATURITY + 3, 0, &[unbond])
-        .unwrap();
-    let native = kovanica_state::NATIVE_ASSET_ID;
-    assert_eq!(ledger.stake_state(&ub).unwrap().total_stake(native), 0);
-    assert_eq!(ledger.state(&ub).unwrap().total_value(), 1_000);
-
-    for id in ledger.dag().linearize() {
-        if ledger.state(&id).is_some() {
-            assert_reconstructs(&ledger, &id);
-        }
-    }
-}
-
-#[test]
-fn stake_delta_folding_across_finality_boundary() {
-    let alice = KeyPair::from_u64(1);
-    let bob = KeyPair::from_u64(2);
-    let pk = [0x55u8; 32];
-    // Length-based chain selection keeps the finality threshold monotonic.
-    let (mut ledger, coin) = funded(5, 1_000);
-    let genesis = ledger.genesis();
-
-    // Common prefix of six empty blocks.
-    let mut prefix = vec![genesis];
-    for i in 1..=6 {
-        let parent = *prefix.last().unwrap();
-        prefix.push(ledger.insert(vec![parent], 1, i, 0, &[]).unwrap());
-    }
-    let base = prefix[6];
-
-    // Main branch: bond the genesis coin, then extend two blocks.
-    let bond = bond_tx(coin, &alice, 1_000, pk);
-    let bond_block = ledger.insert(vec![base], 1, 10, 0, &[bond]).unwrap();
-    let mut main_tip = bond_block;
-    for i in 1..=2 {
-        main_tip = ledger.insert(vec![main_tip], 1, 10 + i, 0, &[]).unwrap();
-    }
-
-    // Side branch (longer) spends the genesis coin instead of bonding it,
-    // then extends past finality.
-    let side_spend = transfer(coin, &alice, &bob.address(), 1_000, 1_000);
-    let mut side_tip = ledger.insert(vec![base], 1, 30, 0, &[side_spend]).unwrap();
-    for i in 1..=5 {
-        side_tip = ledger.insert(vec![side_tip], 1, 30 + i, 0, &[]).unwrap();
-    }
-
-    assert_eq!(
-        ledger.dag().selected_tip(),
-        side_tip,
-        "side branch should win by length"
-    );
-
-    // Main's bond block still reconstructs with the frozen output.
-    let native = kovanica_state::NATIVE_ASSET_ID;
-    assert_eq!(
-        ledger
-            .stake_state(&bond_block)
-            .unwrap()
-            .stake_of(native, &pk),
-        1_000
-    );
-    // Side blocks never saw the bond.
-    assert_eq!(
-        ledger.stake_state(&side_tip).unwrap().stake_of(native, &pk),
-        0
-    );
-
-    for id in ledger.dag().linearize() {
-        if ledger.state(&id).is_some() {
-            assert_reconstructs(&ledger, &id);
-        }
     }
 }
 

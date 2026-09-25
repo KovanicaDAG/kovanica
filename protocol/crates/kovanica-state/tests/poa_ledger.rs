@@ -2,15 +2,16 @@
 //!
 //! M3 exit criteria at the state layer: the genesis coinbase tag commits to
 //! the authority set (`KVA1 || set_hash`), `Ledger::set_poa` enables PoA
-//! admission and is mutually exclusive with hybrid, and PoA blocks are
-//! admitted through the identity-preserving insert path (`insert_prepared_block`
-//! keeps the authority signature; the template `insert` path cannot carry one).
+//! admission (the only admission regime — no hybrid counterpart remains), and
+//! PoA blocks are admitted through the identity-preserving insert path
+//! (`insert_prepared_block` keeps the authority signature; the template `insert`
+//! path cannot carry one).
 
 use ed25519_dalek::{Signer, SigningKey};
 use kovanica_dag::{AuthorityPublicKey, AuthoritySet, Block, BlockId};
 use kovanica_state::{
-    encode_block_payload, parse_poa_genesis_tag, poa_genesis_tag, HalvingSchedule, HybridConfig,
-    KeyPair, Ledger, Transaction, TxOutput, ATOM,
+    encode_block_payload, parse_poa_genesis_tag, poa_genesis_tag, HalvingSchedule, KeyPair, Ledger,
+    Transaction, TxOutput, ATOM,
 };
 
 /// Slot duration used throughout (RFC-POA default).
@@ -115,11 +116,11 @@ fn genesis_coinbase_tag_commits_to_authority_set() {
 }
 
 // ---------------------------------------------------------------------------
-// set_poa / set_hybrid mutual exclusion
+// set_poa wiring
 // ---------------------------------------------------------------------------
 
 #[test]
-fn set_poa_clears_hybrid_and_vice_versa() {
+fn set_poa_enables_admission() {
     let founder = KeyPair::from_u64(1).address();
     let coinbase = Transaction::coinbase(
         vec![TxOutput::native(200_000 * ATOM, founder)],
@@ -127,26 +128,14 @@ fn set_poa_clears_hybrid_and_vice_versa() {
     );
     let mut ledger =
         Ledger::new(3, HalvingSchedule::new(10 * ATOM, 2_000_000), &[coinbase]).unwrap();
-    assert!(!ledger.poa_enabled());
-    assert!(!ledger.hybrid_enabled());
+    assert!(!ledger.poa_enabled(), "PoA is off until set_poa");
+    assert!(ledger.poa_config().is_none());
 
     let (set, _sks) = authority_set(3, 2);
-    ledger.set_hybrid(HybridConfig::default());
-    assert!(ledger.hybrid_enabled());
-    assert!(!ledger.poa_enabled());
-
-    // Enabling PoA clears hybrid (and its staked-seen memory).
     ledger.set_poa(set.clone(), SLOT_MS);
     assert!(ledger.poa_enabled());
-    assert!(!ledger.hybrid_enabled());
     assert_eq!(ledger.poa_config().unwrap().authority_set, set);
     assert_eq!(ledger.poa_config().unwrap().slot_duration_ms, SLOT_MS);
-
-    // Enabling hybrid clears PoA.
-    ledger.set_hybrid(HybridConfig::default());
-    assert!(ledger.hybrid_enabled());
-    assert!(!ledger.poa_enabled());
-    assert!(ledger.poa_config().is_none());
 }
 
 // ---------------------------------------------------------------------------
