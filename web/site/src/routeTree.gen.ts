@@ -24,6 +24,7 @@ import { Route as RoadmapRouteImport } from './routes/roadmap'
 import { Route as StealthRouteImport } from './routes/stealth'
 import { Route as VaultsRouteImport } from './routes/vaults'
 import { Route as WalletRouteImport } from './routes/wallet'
+import { Route as NftRouteImport } from './routes/nft'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as DownloadSplatRouteImport } from './routes/download/$'
 import { Route as WalletAtomicSwapRouteImport } from './routes/wallet/atomic-swap'
@@ -103,6 +104,11 @@ const VaultsRoute = VaultsRouteImport.update({
   path: '/vaults',
   getParentRoute: () => rootRouteImport,
 } as any)
+const NftRoute = NftRouteImport.update({
+  id: '/nft',
+  path: '/nft',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WalletRoute = WalletRouteImport.update({
   id: '/wallet',
   path: '/wallet',
@@ -161,6 +167,7 @@ export interface FileRoutesByFullPath {
   '/multi-asset': typeof MultiAssetRoute
   '/multisig': typeof MultisigRoute
   '/network': typeof NetworkRoute
+  '/nft': typeof NftRoute
   '/pool': typeof PoolRoute
   '/roadmap': typeof RoadmapRoute
   '/stealth': typeof StealthRoute
@@ -186,6 +193,7 @@ export interface FileRoutesByTo {
   '/multi-asset': typeof MultiAssetRoute
   '/multisig': typeof MultisigRoute
   '/network': typeof NetworkRoute
+  '/nft': typeof NftRoute
   '/pool': typeof PoolRoute
   '/roadmap': typeof RoadmapRoute
   '/stealth': typeof StealthRoute
@@ -212,6 +220,7 @@ export interface FileRoutesById {
   '/multi-asset': typeof MultiAssetRoute
   '/multisig': typeof MultisigRoute
   '/network': typeof NetworkRoute
+  '/nft': typeof NftRoute
   '/pool': typeof PoolRoute
   '/roadmap': typeof RoadmapRoute
   '/stealth': typeof StealthRoute
@@ -239,6 +248,7 @@ export interface FileRouteTypes {
     | '/multi-asset'
     | '/multisig'
     | '/network'
+    | '/nft'
     | '/pool'
     | '/roadmap'
     | '/stealth'
@@ -264,6 +274,7 @@ export interface FileRouteTypes {
     | '/multi-asset'
     | '/multisig'
     | '/network'
+    | '/nft'
     | '/pool'
     | '/roadmap'
     | '/stealth'
@@ -289,6 +300,7 @@ export interface FileRouteTypes {
     | '/multi-asset'
     | '/multisig'
     | '/network'
+    | '/nft'
     | '/pool'
     | '/roadmap'
     | '/stealth'
@@ -315,6 +327,7 @@ export interface RootRouteChildren {
   MultiAssetRoute: typeof MultiAssetRoute
   MultisigRoute: typeof MultisigRoute
   NetworkRoute: typeof NetworkRoute
+  NftRoute: typeof NftRoute
   PoolRoute: typeof PoolRoute
   RoadmapRoute: typeof RoadmapRoute
   StealthRoute: typeof StealthRoute
@@ -394,6 +407,13 @@ declare module '@tanstack/react-router' {
       path: '/network'
       fullPath: '/network'
       preLoaderRoute: typeof NetworkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/nft': {
+      id: '/nft'
+      path: '/nft'
+      fullPath: '/nft'
+      preLoaderRoute: typeof NftRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pool': {
@@ -532,6 +552,7 @@ const rootRouteChildren: RootRouteChildren = {
   MultiAssetRoute: MultiAssetRoute,
   MultisigRoute: MultisigRoute,
   NetworkRoute: NetworkRoute,
+  NftRoute: NftRoute,
   PoolRoute: PoolRoute,
   RoadmapRoute: RoadmapRoute,
   StealthRoute: StealthRoute,

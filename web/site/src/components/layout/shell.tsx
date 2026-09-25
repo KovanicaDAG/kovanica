@@ -1,3 +1,8 @@
+/**
+ * Shell — full protocol chrome (testnet / shared hosts).
+ * Change vs previous: NFT added to desktop primary NAV (after Assets).
+ * Mobile bottom bar stays ≤6 items; NFT reachable via product card / direct URL.
+ */
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
   Compass,
@@ -14,24 +19,20 @@ import {
   Vault,
   Layers,
   Droplets,
-  ShieldAlert,
+  Image,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SourceSwitch } from "@/components/layout/source-switch";
 import { NetworkBadge } from "@/components/layout/network-badge";
 import { getBadgeColor } from "@/lib/network";
-import { LIVE_KOVI } from "@/lib/api/contract";
 
-/**
- * Primary mobile strip: core surfaces only (fits without overflow).
- * Secondary items stay reachable via desktop nav / home cards / direct URL.
- */
 const NAV = [
   { to: "/", label: "Home", icon: Coins },
   { to: "/explorer", label: "Explorer", icon: Compass },
   { to: "/wallet", label: "Wallet", icon: Wallet },
   { to: "/multisig", label: "Multisig", icon: Users },
   { to: "/multi-asset", label: "Assets", icon: Layers },
+  { to: "/nft", label: "NFT", icon: Image },
   { to: "/stealth", label: "Stealth", icon: Eye },
   { to: "/htlc", label: "HTLC", icon: Lock },
   { to: "/vaults", label: "Vaults", icon: Vault },
@@ -104,12 +105,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
           >
             Docs
           </Link>
-          <a
-            href={LIVE_KOVI}
-            className="inline-flex h-10 items-center rounded-md px-1.5 text-sm font-medium text-muted transition-colors duration-150 hover:bg-surface-2 hover:text-fg xl:px-2.5"
-          >
-            Kovi
-          </a>
         </nav>
         <div className="flex items-center gap-1.5">
           <span className="hidden md:inline-flex">
@@ -176,24 +171,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
           })}
         </ul>
       </nav>
-
-      <footer className="hidden md:block border-t border-border bg-bg/50 px-4 py-3">
-        <div className="mx-auto max-w-7xl flex flex-col gap-2 text-center text-xs text-muted">
-          <p className="flex items-center justify-center gap-1.5">
-            <ShieldAlert className="size-3.5" />
-            <span>Kovanica Protocol is experimental testnet software. Use at your own risk. No guarantees of security, stability, or fitness for any purpose. Funds can be lost. This is not investment advice. tKVNC on testnet has no monetary value.</span>
-          </p>
-          <p className="flex items-center justify-center gap-1.5">
-            <span className="font-mono">tKVNC ≠ KVNC</span>
-            <span>·</span>
-            <a href="/docs" className="underline hover:text-fg">Docs</a>
-            <span>·</span>
-            <a href="/roadmap" className="underline hover:text-fg">Roadmap</a>
-            <span>·</span>
-            <a href="https://github.com/KovanicaDAG/kovanica" target="_blank" rel="noopener noreferrer" className="underline hover:text-fg">Source</a>
-          </p>
-        </div>
-      </footer>
     </div>
   );
 }
