@@ -1648,8 +1648,10 @@ fn encode_header(h: &kovanica_state::spv::BlockHeader, out: &mut Vec<u8>) {
     out.extend_from_slice(&h.height.to_be_bytes());
 }
 
-fn decode_header(buf: &[u8]) -> Option<(kovanica_state::spv::BlockHeader, &[u8])> {
-    if buf.len() < 136 {
+fn decode_header(buf: &[u8], version: u8) -> Option<(kovanica_state::spv::BlockHeader, &[u8])> {
+    // v1 header: 160 bytes, v2 header: 289 bytes
+    let min_len = if version >= 2 { 289 } else { 160 };
+    if buf.len() < min_len {
         return None;
     }
     let get32 = |o: usize| <[u8; 32]>::try_from(&buf[o..o + 32]).ok();
@@ -1663,8 +1665,32 @@ fn decode_header(buf: &[u8]) -> Option<(kovanica_state::spv::BlockHeader, &[u8])
         blue_score: u64::from_be_bytes(buf[128..136].try_into().ok()?),
         chain_blue_work: u128::from_be_bytes(buf.get(136..152)?.try_into().ok()?),
         height: u64::from_be_bytes(buf.get(152..160)?.try_into().ok()?),
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
-    Some((header, &buf[160..]))
+    let _header_len = if version >= 2 { 289 } else { 160 };
+    if version >= 2 {
+        let auth_flag = buf[160];
+        let authority_sig = if auth_flag == 1 {
+            Some(buf[161..225].try_into().ok()?)
+        } else {
+            None
+        };
+        let authority_set_hash = buf[225..257].try_into().ok()?;
+        let hash_without_authority_sig = buf[257..289].try_into().ok()?;
+        Some((
+            kovanica_state::spv::BlockHeader {
+                authority_sig,
+                authority_set_hash,
+                hash_without_authority_sig,
+                ..header
+            },
+            &buf[289..],
+        ))
+    } else {
+        Some((header, &buf[160..]))
+    }
 }
 
 fn encode_filter_into(f: &kovanica_state::spv::BlockFilter, out: &mut Vec<u8>) {
@@ -1709,14 +1735,21 @@ fn parse_light_sync(
     LightNodeError,
 > {
     let err = || invalid("undecodable light-sync blob");
-    if blob.len() < 9 || &blob[..4] != LIGHT_SYNC_MAGIC || blob[4] != LIGHT_SYNC_VERSION {
+    if blob.len() < 9 || &blob[..4] != LIGHT_SYNC_MAGIC {
         return Err(err());
+    }
+    let version = blob[4];
+    if version > LIGHT_SYNC_VERSION {
+        return Err(invalid(format!(
+            "unsupported light-sync version {}",
+            version
+        )));
     }
     let count = u32::from_be_bytes(blob[5..9].try_into().map_err(|_| err())?) as usize;
     let mut off = 9usize;
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
-        let (header, rest) = decode_header(&blob[off..]).ok_or_else(err)?;
+        let (header, rest) = decode_header(&blob[off..], version).ok_or_else(err)?;
         off = blob.len() - rest.len();
 
         // Filter: k(1) n(8) len(4) data(len).

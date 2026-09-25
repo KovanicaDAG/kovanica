@@ -4965,6 +4965,9 @@ mod tests {
                     blob[off + 136..off + 152].try_into().unwrap(),
                 ),
                 height: u64::from_be_bytes(blob[off + 152..off + 160].try_into().unwrap()),
+                authority_sig: None,
+                authority_set_hash: [0u8; 32],
+                hash_without_authority_sig: [0u8; 32],
             };
             off += 160;
             let k = blob[off];

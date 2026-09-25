@@ -328,6 +328,74 @@ pub fn sign_update(sk: &SigningKey, old_set_hash: &[u8; 32], new_set: &Authority
     sk.sign(&payload).to_bytes()
 }
 
+/// On-chain tag for an authority-set update transaction (RFC-POA §1).
+pub const AUTHORITY_UPDATE_TAG: &[u8; 4] = b"KVA2";
+
+impl AuthorityUpdateTx {
+    /// Canonical encoding: `old_set_hash (32) || new_set.to_bytes() || sig_count (u8) || (pk 32 || sig 64) * count`.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf =
+            Vec::with_capacity(32 + self.new_set.to_bytes().len() + 1 + self.signatures.len() * 96);
+        buf.extend_from_slice(&self.old_set_hash);
+        buf.extend_from_slice(&self.new_set.to_bytes());
+        buf.push(self.signatures.len() as u8);
+        for (pk, sig) in &self.signatures {
+            buf.extend_from_slice(pk.as_bytes());
+            buf.extend_from_slice(sig);
+        }
+        buf
+    }
+
+    /// Decode from the canonical encoding.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, AuthorityError> {
+        if bytes.len() < 33 {
+            return Err(AuthorityError::MalformedEncoding);
+        }
+        let old_set_hash: [u8; 32] = bytes[..32]
+            .try_into()
+            .map_err(|_| AuthorityError::MalformedEncoding)?;
+        // Parse new_set: first 16 bytes are threshold (u64) + count (u64), then count * 32 bytes of keys.
+        if bytes.len() < 32 + 16 {
+            return Err(AuthorityError::MalformedEncoding);
+        }
+        let count = u64::from_le_bytes(
+            bytes[40..48]
+                .try_into()
+                .map_err(|_| AuthorityError::MalformedEncoding)?,
+        ) as usize;
+        let new_set_len = 16 + count * 32;
+        if bytes.len() < 32 + new_set_len + 1 {
+            return Err(AuthorityError::MalformedEncoding);
+        }
+        let new_set = AuthoritySet::from_bytes(&bytes[32..32 + new_set_len])?;
+        let sig_start = 32 + new_set_len;
+        let sig_count = bytes[sig_start] as usize;
+        let expected_len = sig_start + 1 + sig_count * 96;
+        if bytes.len() != expected_len {
+            return Err(AuthorityError::MalformedEncoding);
+        }
+        let mut signatures = Vec::with_capacity(sig_count);
+        let mut off = sig_start + 1;
+        for _ in 0..sig_count {
+            let pk_bytes: [u8; 32] = bytes[off..off + 32]
+                .try_into()
+                .map_err(|_| AuthorityError::MalformedEncoding)?;
+            let pk = VerifyingKey::from_bytes(&pk_bytes)
+                .map_err(|_| AuthorityError::MalformedEncoding)?;
+            let sig: [u8; 64] = bytes[off + 32..off + 96]
+                .try_into()
+                .map_err(|_| AuthorityError::MalformedEncoding)?;
+            signatures.push((pk, sig));
+            off += 96;
+        }
+        Ok(Self {
+            old_set_hash,
+            new_set,
+            signatures,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,6 +738,71 @@ mod tests {
         assert_eq!(
             tx.validate(&old_set),
             Err(AuthorityError::InsufficientSignatures(2, 0))
+        );
+    }
+
+    #[test]
+    fn update_tx_roundtrip_encoding() {
+        let (keys, sks) = three_authorities();
+        let old_set = AuthoritySet::new(keys, 2).unwrap();
+        let (new_keys, _) = other_three_authorities();
+        let new_set = AuthoritySet::new(new_keys, 2).unwrap();
+
+        let sigs: Vec<_> = sks[..2]
+            .iter()
+            .map(|sk| {
+                (
+                    sk.verifying_key(),
+                    sign_update(sk, &old_set.hash(), &new_set),
+                )
+            })
+            .collect();
+        let tx = AuthorityUpdateTx::new(old_set.hash(), new_set.clone(), sigs).unwrap();
+
+        let bytes = tx.to_bytes();
+        let decoded = AuthorityUpdateTx::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded, tx);
+        assert_eq!(decoded.old_set_hash(), tx.old_set_hash());
+        assert_eq!(decoded.new_set(), tx.new_set());
+        assert_eq!(decoded.signatures(), tx.signatures());
+    }
+
+    #[test]
+    fn update_tx_from_bytes_rejects_malformed() {
+        let (keys, sks) = three_authorities();
+        let old_set = AuthoritySet::new(keys, 2).unwrap();
+        let (new_keys, _) = other_three_authorities();
+        let new_set = AuthoritySet::new(new_keys, 2).unwrap();
+        let sigs: Vec<_> = sks[..2]
+            .iter()
+            .map(|sk| {
+                (
+                    sk.verifying_key(),
+                    sign_update(sk, &old_set.hash(), &new_set),
+                )
+            })
+            .collect();
+        let tx = AuthorityUpdateTx::new(old_set.hash(), new_set.clone(), sigs).unwrap();
+        let bytes = tx.to_bytes();
+        let _new_set_bytes_len = new_set.to_bytes().len();
+
+        // Truncated
+        let mut truncated = bytes.clone();
+        truncated.pop();
+        assert_eq!(
+            AuthorityUpdateTx::from_bytes(&truncated),
+            Err(AuthorityError::MalformedEncoding)
+        );
+        // Wrong sig count (corrupt the sig_count byte at sig_start)
+        let mut bad = bytes.clone();
+        let _new_set_bytes_len = new_set.to_bytes().len();
+        let count = u64::from_le_bytes(bytes[40..48].try_into().unwrap()) as usize;
+        let new_set_len = 16 + count * 32;
+        let sig_start = 32 + new_set_len;
+        bad[sig_start] = 99; // corrupt sig_count
+        assert_eq!(
+            AuthorityUpdateTx::from_bytes(&bad),
+            Err(AuthorityError::MalformedEncoding)
         );
     }
 }

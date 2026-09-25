@@ -318,6 +318,16 @@ pub fn encode_msg(msg: &RelayMsg) -> Vec<u8> {
                 buf.extend_from_slice(&h.blue_score.to_le_bytes());
                 buf.extend_from_slice(&h.chain_blue_work.to_le_bytes());
                 buf.extend_from_slice(&h.height.to_le_bytes());
+                // PoA fields (M4)
+                match h.authority_sig {
+                    Some(sig) => {
+                        buf.push(1u8);
+                        buf.extend_from_slice(&sig);
+                    }
+                    None => buf.push(0u8),
+                }
+                buf.extend_from_slice(&h.authority_set_hash);
+                buf.extend_from_slice(&h.hash_without_authority_sig);
             }
         }
         RelayMsg::GetBlocks { locator, stop_hash } => {
@@ -497,7 +507,7 @@ pub fn decode_msg(bytes: &[u8]) -> Result<RelayMsg, NetError> {
         }
         TAG_HEADERS => {
             let mut r = Cursor { buf: rest, pos: 0 };
-            let header_count = r.read_count(160)?;
+            let header_count = u64::from_le_bytes(r.read_array::<8>()?) as usize;
             if header_count > MAX_HEADERS {
                 return Err(NetError::Decode("headers count too large".into()));
             }
@@ -512,6 +522,15 @@ pub fn decode_msg(bytes: &[u8]) -> Result<RelayMsg, NetError> {
                 let blue_score = u64::from_le_bytes(r.read_array::<8>()?);
                 let chain_blue_work = u128::from_le_bytes(r.read_array::<16>()?);
                 let height = u64::from_le_bytes(r.read_array::<8>()?);
+                // PoA fields (M4)
+                let auth_flag = r.read_array::<1>()?[0];
+                let authority_sig = if auth_flag == 1 {
+                    Some(r.read_array::<64>()?)
+                } else {
+                    None
+                };
+                let authority_set_hash = r.read_array::<32>()?;
+                let hash_without_authority_sig = r.read_array::<32>()?;
                 headers.push(SpvHeader {
                     id,
                     prev_hash,
@@ -522,6 +541,9 @@ pub fn decode_msg(bytes: &[u8]) -> Result<RelayMsg, NetError> {
                     blue_score,
                     chain_blue_work,
                     height,
+                    authority_sig,
+                    authority_set_hash,
+                    hash_without_authority_sig,
                 });
             }
             if r.remaining() != 0 {
@@ -793,6 +815,9 @@ mod tests {
             blue_score: 0,
             chain_blue_work: 100,
             height: 0,
+            authority_sig: None,
+            authority_set_hash: [0u8; 32],
+            hash_without_authority_sig: [0u8; 32],
         };
         let h2 = SpvHeader {
             id: BlockId::from_bytes([2u8; 32]),
@@ -804,6 +829,9 @@ mod tests {
             blue_score: 1,
             chain_blue_work: 300,
             height: 1,
+            authority_sig: None,
+            authority_set_hash: [0u8; 32],
+            hash_without_authority_sig: [0u8; 32],
         };
         let msg = RelayMsg::Headers {
             headers: vec![h1, h2],

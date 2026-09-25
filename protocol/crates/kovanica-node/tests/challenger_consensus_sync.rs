@@ -27,6 +27,9 @@ fn genesis_header(work: u128, timestamp_ms: u64) -> SpvHeader {
         blue_score: 0,
         chain_blue_work: work,
         height: 0,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     }
 }
 
@@ -106,6 +109,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 1,
         chain_blue_work: 2_000,
         height: 1,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert!(client.add_header(h1.clone()).is_ok());
 
@@ -120,6 +126,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 2,
         chain_blue_work: 3_000,
         height: 2,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert!(client.add_header(h2.clone()).is_ok());
 
@@ -138,6 +147,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 3,
         chain_blue_work: 4_000,
         height: 3,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert!(client.add_header(h3_stable.clone()).is_ok());
 
@@ -158,6 +170,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 4,
         chain_blue_work: 6_000,
         height: 4,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert!(client.add_header(h4_fast.clone()).is_ok());
 
@@ -184,6 +199,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 5,
         chain_blue_work: 10_000,
         height: 5,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert_eq!(
         client.add_header(h5_over),
@@ -200,6 +218,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 5,
         chain_blue_work: 10_000,
         height: 5,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert_eq!(
         client.add_header(h5_under),
@@ -217,6 +238,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 5,
         chain_blue_work: 10_000,
         height: 5,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert!(client.add_header(h5_valid.clone()).is_ok());
 
@@ -237,6 +261,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 6,
         chain_blue_work: 20_000,
         height: 6,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert!(client.add_header(h6_slow.clone()).is_ok());
 
@@ -254,6 +281,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 7,
         chain_blue_work: 30_000,
         height: 7,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert!(client.add_header(h7_slow.clone()).is_ok());
 
@@ -278,6 +308,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 8,
         chain_blue_work: 35_000,
         height: 8,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert_eq!(
         client.add_header(h8_under),
@@ -294,6 +327,9 @@ fn test_spv_difficulty_upward_and_downward_clamps_boundary_rejections() {
         blue_score: 8,
         chain_blue_work: 35_000,
         height: 8,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     assert!(client.add_header(h8_valid).is_ok());
 }
@@ -384,6 +420,9 @@ fn test_wall_clock_drift_exact_boundary_on_spv_tcp_relay() {
         blue_score: 1,
         chain_blue_work: 2,
         height: 1,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     let h2 = SpvHeader {
         id: BlockId::from_bytes([0x12; 32]),
@@ -395,6 +434,9 @@ fn test_wall_clock_drift_exact_boundary_on_spv_tcp_relay() {
         blue_score: 2,
         chain_blue_work: 3,
         height: 2,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
     let h3_bad = SpvHeader {
         id: BlockId::from_bytes([0x13; 32]),
@@ -406,6 +448,9 @@ fn test_wall_clock_drift_exact_boundary_on_spv_tcp_relay() {
         blue_score: 3,
         chain_blue_work: 4,
         height: 3,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -484,6 +529,9 @@ fn test_locator_generation_structure_and_exponential_backoff() {
             blue_score: h,
             chain_blue_work: (h + 1) as u128,
             height: h,
+            authority_sig: None,
+            authority_set_hash: [0u8; 32],
+            hash_without_authority_sig: [0u8; 32],
         };
         client.add_header(hdr.clone()).unwrap();
         prev = hdr;
@@ -788,6 +836,9 @@ fn test_large_chain_locator_bound() {
             blue_score: h,
             chain_blue_work: (h + 1) as u128,
             height: h,
+            authority_sig: None,
+            authority_set_hash: [0u8; 32],
+            hash_without_authority_sig: [0u8; 32],
         };
         client.add_header(hdr.clone()).unwrap();
         prev = hdr;

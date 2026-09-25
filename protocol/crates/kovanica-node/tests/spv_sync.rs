@@ -143,6 +143,9 @@ fn test_spv_difficulty_retarget_enforcement() {
     };
 
     let genesis_hdr = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([1u8; 32]),
         prev_hash: BlockId::from_bytes([0u8; 32]),
         merkle_root: [0u8; 32],
@@ -158,6 +161,9 @@ fn test_spv_difficulty_retarget_enforcement() {
 
     // Valid next header at height 1
     let h1 = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([2u8; 32]),
         prev_hash: genesis_hdr.id,
         merkle_root: [0u8; 32],
@@ -172,6 +178,9 @@ fn test_spv_difficulty_retarget_enforcement() {
 
     // Valid next header at height 2
     let h2 = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([3u8; 32]),
         prev_hash: h1.id,
         merkle_root: [0u8; 32],
@@ -186,6 +195,9 @@ fn test_spv_difficulty_retarget_enforcement() {
 
     // Header with invalid difficulty should be rejected
     let h3_bad_work = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([4u8; 32]),
         prev_hash: h2.id,
         merkle_root: [0u8; 32],
@@ -206,6 +218,9 @@ fn test_spv_wall_clock_drift_boundary() {
     const MAX_FUTURE_DRIFT_MS: u64 = 2 * 60 * 60 * 1000; // 7,200,000 ms
 
     let genesis_hdr = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([1u8; 32]),
         prev_hash: BlockId::from_bytes([0u8; 32]),
         merkle_root: [0u8; 32],
@@ -219,6 +234,9 @@ fn test_spv_wall_clock_drift_boundary() {
 
     // Header at exact drift boundary (now + 2h)
     let h_boundary = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([2u8; 32]),
         prev_hash: genesis_hdr.id,
         merkle_root: [0u8; 32],
@@ -255,6 +273,9 @@ fn test_spv_wall_clock_drift_boundary() {
 
     // Now test header exceeding drift boundary by 1ms (now + 2h + 1ms)
     let h_exceed = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([3u8; 32]),
         prev_hash: h_boundary.id,
         merkle_root: [0u8; 32],

@@ -47,6 +47,9 @@ fn sample_messages() -> Vec<RelayMsg> {
         blue_score: 1,
         chain_blue_work: 10,
         height: 0,
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
 
     let sample_tx = dummy_tx(1, 100);

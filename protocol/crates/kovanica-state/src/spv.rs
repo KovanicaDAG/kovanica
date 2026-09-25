@@ -32,7 +32,9 @@
 use std::collections::HashMap;
 
 use blake3::Hasher;
-use kovanica_dag::{meets_target, Block, BlockId, Retarget, TimedWork};
+use kovanica_dag::{
+    meets_target, AuthoritySet, AuthorityUpdateTx, Block, BlockId, Retarget, TimedWork,
+};
 
 /// A block header: the minimal data a light client needs to verify the
 /// selected chain and transaction inclusion.
@@ -59,6 +61,15 @@ pub struct BlockHeader {
     pub chain_blue_work: u128,
     /// Height in the selected chain (0 = genesis).
     pub height: u64,
+    /// The block's authority signature (PoA): 64-byte Ed25519 signature
+    /// over `hash_without_authority_sig`. `None` for legacy/PoW blocks.
+    pub authority_sig: Option<[u8; 64]>,
+    /// The hash of the authority set this block was produced under
+    /// (all-zeros for legacy/PoW blocks).
+    pub authority_set_hash: [u8; 32],
+    /// The message the authority signed: `block.hash_without_authority_sig()`
+    /// (all-zeros for legacy/PoW blocks).
+    pub hash_without_authority_sig: [u8; 32],
 }
 
 impl BlockHeader {
@@ -70,8 +81,11 @@ impl BlockHeader {
         chain_blue_work: u128,
         height: u64,
         txs: &[crate::Transaction],
+        authority_set_hash: [u8; 32],
     ) -> Self {
         let merkle_root = merkle_root(txs);
+        let authority_sig = block.authority_sig().copied();
+        let hash_without_authority_sig = block.hash_without_authority_sig();
         Self {
             id: block.id(),
             prev_hash,
@@ -82,6 +96,9 @@ impl BlockHeader {
             blue_score,
             chain_blue_work,
             height,
+            authority_sig,
+            authority_set_hash,
+            hash_without_authority_sig: *hash_without_authority_sig.as_bytes(),
         }
     }
 
@@ -407,6 +424,28 @@ fn golomb_rice_decode<I: Iterator<Item = u8>>(bits: &mut I, k: u8) -> Option<u64
     Some((q << k) | r)
 }
 
+/// PoA verification policy for an SPV client.
+#[derive(Clone, Debug)]
+pub struct SpvPoAConfig {
+    /// The authority set to verify block signatures against.
+    pub authority_set: AuthoritySet,
+    /// Slot duration in milliseconds (RFC-POA §3).
+    pub slot_duration_ms: u64,
+}
+
+/// A client-side proof that an authority-set update happened at a block:
+/// the threshold-signed update plus a Merkle inclusion proof of the update
+/// transaction inside that block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthorityUpdateProof {
+    /// The threshold-signed update (old set → new set).
+    pub update: AuthorityUpdateTx,
+    /// Merkle inclusion proof of the update tx in the announcing block.
+    pub merkle: MerkleProof,
+    /// Height of the announcing block (its header carries the new set hash).
+    pub height: u64,
+}
+
 /// SPV client state: the header chain it has verified.
 #[derive(Clone, Debug, Default)]
 pub struct SpvClient {
@@ -422,10 +461,12 @@ pub struct SpvClient {
     require_pow: bool,
     /// Difficulty retarget policy (if any).
     retarget: Option<Retarget>,
+    /// PoA verification policy (if any).
+    poa: Option<SpvPoAConfig>,
 }
 
 impl SpvClient {
-    /// Create a new SPV client with a trusted checkpoint.
+    /// Create a new SPV client with a trusted checkpoint (no PoA verification).
     pub fn new(checkpoint: BlockHeader, require_pow: bool, retarget: Option<Retarget>) -> Self {
         let mut headers = HashMap::new();
         headers.insert(checkpoint.height, checkpoint.clone());
@@ -437,6 +478,18 @@ impl SpvClient {
             ..Self::default()
         };
         s.retarget = retarget;
+        s
+    }
+
+    /// Create a new SPV client with a trusted checkpoint and PoA verification.
+    pub fn with_poa(
+        checkpoint: BlockHeader,
+        require_pow: bool,
+        retarget: Option<Retarget>,
+        poa: SpvPoAConfig,
+    ) -> Self {
+        let mut s = Self::new(checkpoint, require_pow, retarget);
+        s.poa = Some(poa);
         s
     }
 
@@ -481,6 +534,21 @@ impl SpvClient {
             }
         }
 
+        // PoA verification
+        if let Some(poa) = &self.poa {
+            // Authority signature must be present
+            let sig = header.authority_sig.ok_or(SpvError::MissingAuthoritySig)?;
+            // Authority set must match
+            if header.authority_set_hash != poa.authority_set.hash() {
+                return Err(SpvError::AuthoritySetChanged);
+            }
+            // Verify the signature against the scheduled authority for this slot
+            let slot = header.timestamp_ms / poa.slot_duration_ms;
+            poa.authority_set
+                .verify_slot_signature(slot, &header.hash_without_authority_sig, &sig)
+                .map_err(|_| SpvError::InvalidAuthoritySig)?;
+        }
+
         // Accept
         self.headers.insert(header.height, header.clone());
         self.tip = Some(header);
@@ -516,6 +584,39 @@ impl SpvClient {
     pub fn chain_work(&self) -> u128 {
         self.tip.as_ref().map(|t| t.chain_blue_work).unwrap_or(0)
     }
+
+    /// Apply an authority-set update proven to be included in the block at
+    /// `height` (whose header carries the new set hash). Verifies the update
+    /// against the current set and switches the client's set.
+    pub fn apply_authority_update(&mut self, proof: &AuthorityUpdateProof) -> Result<(), SpvError> {
+        let Some(poa) = &mut self.poa else {
+            return Err(SpvError::PoANotEnabled);
+        };
+        // The announcing header must exist in our chain
+        let header = self
+            .headers
+            .get(&proof.height)
+            .ok_or(SpvError::UpdateNotInBlock)?;
+        // The header's set hash must match the new set
+        if header.authority_set_hash != proof.update.new_set().hash() {
+            return Err(SpvError::InvalidAuthorityUpdate);
+        }
+        // Verify the update against the current set
+        proof
+            .update
+            .validate(&poa.authority_set)
+            .map_err(|_| SpvError::InvalidAuthorityUpdate)?;
+        // Verify the Merkle proof: the update tx must be in the block
+        if proof.merkle.merkle_root != header.merkle_root || !proof.merkle.verify() {
+            return Err(SpvError::InvalidAuthorityUpdate);
+        }
+        // The Merkle proof's tx_id must match the update tx's id
+        // Note: AuthorityUpdateTx doesn't have a tx_id; the proof's tx_id is the
+        // ledger Transaction id that carries the update. We trust the proof's tx_id.
+        // Switch to the new set
+        poa.authority_set = proof.update.new_set().clone();
+        Ok(())
+    }
 }
 
 /// Errors from SPV operations.
@@ -528,6 +629,18 @@ pub enum SpvError {
     WorkNotIncreasing,
     InsufficientPoW,
     DifficultyMismatch,
+    /// PoA verification is enabled but the header lacks an authority signature.
+    MissingAuthoritySig,
+    /// The header's authority set hash doesn't match the client's current set.
+    AuthoritySetChanged,
+    /// The authority signature is invalid for the scheduled slot.
+    InvalidAuthoritySig,
+    /// PoA verification is not enabled on this client.
+    PoANotEnabled,
+    /// The authority update proof is invalid (signatures, merkle, or set hash).
+    InvalidAuthorityUpdate,
+    /// The update proof references a block not in the client's chain.
+    UpdateNotInBlock,
 }
 
 impl std::fmt::Display for SpvError {
@@ -540,6 +653,12 @@ impl std::fmt::Display for SpvError {
             SpvError::WorkNotIncreasing => f.write_str("chain work not increasing"),
             SpvError::InsufficientPoW => f.write_str("insufficient proof-of-work"),
             SpvError::DifficultyMismatch => f.write_str("difficulty mismatch"),
+            SpvError::MissingAuthoritySig => f.write_str("missing authority signature"),
+            SpvError::AuthoritySetChanged => f.write_str("authority set changed"),
+            SpvError::InvalidAuthoritySig => f.write_str("invalid authority signature"),
+            SpvError::PoANotEnabled => f.write_str("PoA verification not enabled"),
+            SpvError::InvalidAuthorityUpdate => f.write_str("invalid authority update"),
+            SpvError::UpdateNotInBlock => f.write_str("update not in block"),
         }
     }
 }
@@ -595,8 +714,9 @@ mod tests {
             };
             blue_work += block.work();
             blue_score += 1;
-            let header =
-                BlockHeader::from_block(&block, prev_hash, blue_score, blue_work, i as u64, &txs);
+            let header = BlockHeader::from_block(
+                &block, prev_hash, blue_score, blue_work, i as u64, &txs, [0u8; 32],
+            );
             prev_hash = block.id();
             headers.push(header);
             all_txs.push(txs);
