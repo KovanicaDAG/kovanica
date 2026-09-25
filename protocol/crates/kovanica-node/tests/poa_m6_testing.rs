@@ -6,11 +6,12 @@
 //! - SPV sync under re-org (light client follows selected chain)
 //! - Resource profiling: CPU/RAM < 10% of PoW baseline
 
-use ed25519_dalek::{SigningKey, Signer};
-use kovanica_dag::{AuthorityPublicKey, AuthoritySet, AuthorityUpdateTx, Block, BlockId, sign_update};
-use kovanica_node::{Node, NodeError, BlockRecord};
-use kovanica_state::{ATOM, PruningPolicy};
-use kovanica_state::spv::{SpvClient, SpvPoAConfig, AuthorityUpdateProof, MerkleProof};
+use ed25519_dalek::{Signer, SigningKey};
+use kovanica_dag::{sign_update, AuthorityPublicKey, AuthoritySet, Block, BlockId};
+use kovanica_node::{BlockRecord, Node};
+use kovanica_state::encode_block_payload;
+use kovanica_state::spv::{AuthorityUpdateProof, MerkleProof};
+use kovanica_state::ATOM;
 
 /// Slot duration used throughout (RFC-POA default).
 const SLOT_MS: u64 = 3000;
@@ -22,18 +23,30 @@ fn keypair(seed: u8) -> (SigningKey, AuthorityPublicKey) {
 }
 
 /// An `n`-authority set with keys derived from seeds `base..base+n`.
-/// Returns the authority set and signing keys in the same order as the authority set's internal ordering.
+/// Returns the authority set and the signing keys in the set's **canonical**
+/// order (ascending public-key bytes), so `sks[i]` is the authority scheduled
+/// for `active_authority(slot)` whenever `i == slot % n`.
 fn authority_set_with_base(base: u8, n: u8, threshold: usize) -> (AuthoritySet, Vec<SigningKey>) {
     let mut key_pairs = Vec::new();
     for i in 0..n {
         let (sk, pk) = keypair(base + i);
         key_pairs.push((pk, sk));
     }
-    // Sort by public key bytes to match AuthoritySet's internal ordering
+    // `AuthoritySet::new` canonicalises by ascending public-key bytes; mirror
+    // that here so the returned signing keys line up index-for-index.
     key_pairs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
     let keys: Vec<_> = key_pairs.iter().map(|(pk, _)| *pk).collect();
     let sks: Vec<_> = key_pairs.iter().map(|(_, sk)| sk.clone()).collect();
-    (AuthoritySet::new(keys, threshold).unwrap(), sks)
+    let set = AuthoritySet::new(keys, threshold).unwrap();
+    // The invariant every caller below relies on: sks[i] signs for slot i % n.
+    for (i, sk) in sks.iter().enumerate() {
+        assert_eq!(
+            sk.verifying_key(),
+            *set.active_authority(i as u64),
+            "signing key {i} must be the authority scheduled for slot {i}"
+        );
+    }
+    (set, sks)
 }
 
 fn authority_set(n: u8, threshold: usize) -> (AuthoritySet, Vec<SigningKey>) {
@@ -46,7 +59,19 @@ fn placeholder_authority_set() -> (AuthoritySet, Vec<SigningKey>) {
     authority_set_with_base(1, 3, 2)
 }
 
-/// Helper to create a signed PoA block with the correct authority signature
+/// Helper to create a signed PoA block with the correct authority signature.
+///
+/// The payload **must** be built with `encode_block_payload`, exactly as
+/// `Node::receive_block` rebuilds it from the `BlockRecord`'s tx list. A
+/// hand-rolled empty payload would make the node reconstruct a different
+/// block, so `hash_without_authority_sig()` — and therefore the signature
+/// over it — would not match what we signed (the "identity-preserving block
+/// replay" invariant). For an empty tx list the payload is an 8-byte zero
+/// length prefix, *not* `Vec::new()`.
+///
+/// `authority_idx` must be the index into the set's **canonical** order (see
+/// `AuthoritySet::new`); `sks` is kept in that same order by
+/// `authority_set_with_base`.
 fn create_signed_poa_block(
     parents: Vec<BlockId>,
     work: u128,
@@ -55,10 +80,12 @@ fn create_signed_poa_block(
     authority_idx: usize,
     sks: &[SigningKey],
 ) -> BlockRecord {
-    let payload = Vec::new(); // Empty payload for empty block
+    let payload = encode_block_payload(&[]);
     let unsigned = Block::new(parents.clone(), work, timestamp_ms, nonce, payload.clone());
     let hash_without_sig = unsigned.hash_without_authority_sig();
-    let sig = sks[authority_idx].sign(hash_without_sig.as_bytes()).to_bytes();
+    let sig = sks[authority_idx]
+        .sign(hash_without_sig.as_bytes())
+        .to_bytes();
     let block = Block::new_with_authority(parents, work, timestamp_ms, nonce, sig, payload);
     BlockRecord {
         parents: block.parents().to_vec(),
@@ -71,22 +98,6 @@ fn create_signed_poa_block(
     }
 }
 
-fn temp_log(name: &str) -> String {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "kovanica-poa-m6-{}-{}-{}",
-        name,
-        std::process::id(),
-        rand::random::<u64>()
-    ));
-    path.set_extension("log");
-    path.to_str().unwrap().to_string()
-}
-
-fn remove_log(path: &str) {
-    let _ = std::fs::remove_file(path);
-}
-
 // ---------------------------------------------------------------------------
 // Authority Update Integration Test
 // ---------------------------------------------------------------------------
@@ -95,7 +106,6 @@ fn remove_log(path: &str) {
 fn authority_update_on_chain_and_spv_proof() {
     // Setup: 3-authority set, threshold 2
     let (set, sks) = authority_set(3, 2);
-    let _log_path = temp_log("authority-update");
 
     // Genesis with initial authority set
     let mut node = Node::new();
@@ -177,7 +187,8 @@ fn authority_update_on_chain_and_spv_proof() {
             set.hash(),
             placeholder_authority_set().0,
             vec![],
-        ).unwrap(),
+        )
+        .unwrap(),
         merkle: MerkleProof {
             tx_id: [0u8; 32],
             merkle_root: [0u8; 32],
@@ -189,9 +200,15 @@ fn authority_update_on_chain_and_spv_proof() {
     };
 
     // The client should reject the proof because the Merkle proof is invalid
-    let err = client.apply_authority_update(&update_proof).expect_err("invalid merkle proof rejected");
+    let err = client
+        .apply_authority_update(&update_proof)
+        .expect_err("invalid merkle proof rejected");
     // The error should be about the merkle proof or authority
-    assert!(err.to_string().contains("merkle") || err.to_string().contains("authority") || err.to_string().contains("update"));
+    assert!(
+        err.to_string().contains("merkle")
+            || err.to_string().contains("authority")
+            || err.to_string().contains("update")
+    );
 
     println!("Authority update SPV proof validation tests passed");
 }
@@ -260,14 +277,7 @@ fn poa_reorg_ghostdag_k3() {
         let timestamp = SLOT_MS * (10 + i as u64);
         let slot = timestamp / SLOT_MS;
         let authority_idx = (slot as usize) % 3;
-        let record = create_signed_poa_block(
-            vec![parent],
-            2,
-            timestamp,
-            0,
-            authority_idx,
-            &sks,
-        );
+        let record = create_signed_poa_block(vec![parent], 2, timestamp, 0, authority_idx, &sks);
         let block_id = node.receive_block(record).unwrap();
         heavier_branch.push(block_id);
         parent = block_id;
@@ -336,7 +346,9 @@ fn spv_sync_under_poa_reorg() {
 
     // Sync all headers
     for id in node.ledger().unwrap().dag().selected_chain() {
-        if id == genesis_id { continue; }
+        if id == genesis_id {
+            continue;
+        }
         let header = node.spv_header(&id).unwrap();
         spv_client.add_header(header).unwrap();
     }
@@ -354,23 +366,23 @@ fn spv_sync_under_poa_reorg() {
         let timestamp = SLOT_MS * (10 + i as u64);
         let slot = timestamp / SLOT_MS;
         let authority_idx = (slot as usize) % 3;
-        let record = create_signed_poa_block(
-            vec![parent],
-            2,
-            timestamp,
-            0,
-            authority_idx,
-            &sks,
-        );
-        let _ = node.receive_block(record).unwrap();
+        let record = create_signed_poa_block(vec![parent], 2, timestamp, 0, authority_idx, &sks);
+        node.receive_block(record).unwrap();
         parent = node.selected_tip().unwrap();
     }
 
     // Now the node has reorged to a new tip
-    let new_tip = node.selected_tip().unwrap();
+    let new_tip = node.selected_tip();
 
-    // SPV client should be able to sync the new chain
-    // by requesting headers from the new tip
+    // A light client must be able to verify the post-reorg chain.
+    //
+    // `SpvClient::add_header` only *extends* a chain (it requires
+    // `height == tip.height + 1` and `prev_hash == tip.id`) — it has no fork
+    // following, so a client that already synced to height 10 cannot walk onto
+    // a competing branch. The realistic light-client recovery is to re-sync
+    // from a trusted point (here: genesis), so we feed a fresh client the
+    // whole new selected chain and require it to verify every authority
+    // signature along the way and land on the node's new tip.
     let new_headers = node.export_spv_headers();
     let mut new_spv_client = kovanica_state::spv::SpvClient::with_poa(
         genesis_header.clone(),
@@ -382,13 +394,24 @@ fn spv_sync_under_poa_reorg() {
         },
     );
 
-    for header in new_headers {
-        if header.height <= 10 { continue; } // Skip already synced
+    let mut added = 0usize;
+    for header in new_headers.clone() {
+        if header.height == 0 {
+            continue; // already the client's tip (genesis)
+        }
         new_spv_client.add_header(header).unwrap();
+        added += 1;
     }
+    assert!(
+        added > 10,
+        "post-reorg chain must exceed the pre-reorg height"
+    );
 
-    assert_eq!(new_spv_client.tip().unwrap().id, new_tip);
-    assert!(new_spv_client.tip().unwrap().height > 10);
+    // The light client's independently verified tip must match the node's,
+    // and it must be past the fork point, i.e. on the new branch.
+    let spv_tip = new_spv_client.tip().unwrap();
+    assert_eq!(spv_tip.id, new_tip.unwrap());
+    assert!(spv_tip.height > 10);
 
     println!("SPV sync under re-org test passed");
 }
@@ -403,41 +426,43 @@ fn resource_profiling_poa_vs_pow() {
     // This test is ignored by default and should be run manually
     // to profile CPU/RAM usage of PoA vs PoW
 
-    use std::time::Instant;
-
     // PoA node
     let (set, sks) = authority_set(3, 2);
     let mut poa_node = Node::new();
-    poa_node.genesis_with_poa(
-        3,
-        10 * ATOM,
-        200_000 * ATOM,
-        1,
-        None,
-        u64::MAX,
-        u64::MAX,
-        u64::MAX,
-        None,
-        set.clone(),
-        SLOT_MS,
-    ).unwrap();
+    poa_node
+        .genesis_with_poa(
+            3,
+            10 * ATOM,
+            200_000 * ATOM,
+            1,
+            None,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            None,
+            set.clone(),
+            SLOT_MS,
+        )
+        .unwrap();
     for sk in &sks {
         poa_node.set_authority_signing_key(sk.to_bytes());
     }
 
     // PoW node
     let mut pow_node = Node::new();
-    pow_node.genesis_with_finality(
-        3,
-        10 * ATOM,
-        200_000 * ATOM,
-        1,
-        None,
-        u64::MAX,
-        u64::MAX,
-        u64::MAX,
-        None,
-    ).unwrap();
+    pow_node
+        .genesis_with_finality(
+            3,
+            10 * ATOM,
+            200_000 * ATOM,
+            1,
+            None,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            None,
+        )
+        .unwrap();
     pow_node.set_miner(kovanica_state::KeyPair::from_u64(1).address());
 
     // Measure PoA block production time
@@ -458,9 +483,14 @@ fn resource_profiling_poa_vs_pow() {
 
     println!("PoA 100 blocks: {:?}", poa_duration);
     println!("PoW 100 blocks: {:?}", pow_duration);
-    println!("PoA speedup: {:.2}x", pow_duration.as_secs_f64() / poa_duration.as_secs_f64());
+    println!(
+        "PoA speedup: {:.2}x",
+        pow_duration.as_secs_f64() / poa_duration.as_secs_f64()
+    );
 
     // PoA should be significantly faster (at least 10x)
-    assert!(poa_duration < pow_duration / 10, "PoA should be at least 10x faster than PoW");
+    assert!(
+        poa_duration < pow_duration / 10,
+        "PoA should be at least 10x faster than PoW"
+    );
 }
-

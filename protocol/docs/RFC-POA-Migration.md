@@ -26,6 +26,9 @@ Replace hybrid PoW+VRF block admission with pure Proof-of-Authority (PoA): fixed
 ### 1. Authority Set (KVP-201)
 - **On-chain representation:** Single live "Authority UTXO" (tag `KVA1` || `authority_set_hash`).
 - **Contents:** 3–4 Ed25519 public keys (`authorities`), threshold `t` (2 ≤ t ≤ n, n ≤ 16).
+- **Canonical order:** keys are sorted ascending by their 32-byte encoding. The set's
+  identity and its slot schedule are therefore properties of *which* keys are in the set,
+  never of the order an operator listed them in local config.
 - **Genesis:** First Authority UTXO created in genesis block (coinbase output with tag `KVA1`).
 - **Update:** `AuthorityUpdateTx` spends current Authority UTXO, requires ≥t distinct signatures from current authorities, creates new Authority UTXO with new set (3–4 keys, n ≤ 16).
 - **Maturity:** Authority UTXO spends are subject to 100-block maturity (RFC-005 vault/CSV).
@@ -38,7 +41,8 @@ Replace hybrid PoW+VRF block admission with pure Proof-of-Authority (PoA): fixed
 ### 3. Slot & Scheduling
 - **Slot duration:** `SLOT_DURATION_MS = 3000` (configurable via `KOVANICA_SLOT_DURATION`).
 - **Slot number:** `slot = timestamp_ms / SLOT_DURATION_MS`.
-- **Active authority:** `authorities[slot % authorities.len()]`.
+- **Active authority:** `authorities[slot % authorities.len()]`, over the canonical order
+  defined in §1.
 - **Slot consistency:** Block's `timestamp_ms` must fall within its claimed slot; `slot` must be ≥ parent slots.
 
 ### 4. Block Validation (replaces PoW/VRF checks)
@@ -108,9 +112,42 @@ Replace hybrid PoW+VRF block admission with pure Proof-of-Authority (PoA): fixed
 | M1: Core Types ✅ | `AuthoritySet`, `AuthorityUpdateTx`, `Block.authority_sig`, `hash_without_authority_sig()` | Unit tests: sig verify, slot active authority, update tx validation — **done** (`crates/kovanica-dag/src/authority.rs`, 21 tests; snapshot v7 + checkpoint v9 carry the sig; live-parity tests `#[ignore]`d pending the PoA reset) |
 | M2: Consensus ✅ | `BlockValidator` authority/slot check in `Dag::insert`; `Dag::insert_for_replay` skips PoW/VRF | Integration: 3-validator round-robin, 4-validator liveness (1 offline), re-org under GHOSTDAG — **done** (`Dag::set_poa` first-class switch + `check_poa` in `dag.rs`; `insert_for_replay` now skips PoW/difficulty/VRF/PoA; `tests/poa.rs`, 10 tests) |
 | M3: Config/Genesis ✅ | `KOVANICA_CONSENSUS`, `KOVANICA_SLOT_DURATION`, `KOVANICA_AUTHORITIES`, genesis TOML | Genesis block carries authority set; `poa` feature default — **done** (`poa_config_from_env` + `PoaGenesisConfig` in `explorer.rs`; `genesis_with_poa` commits `KVA1 \|\| set_hash`; node PoA production via `try_produce_poa`/`set_authority_signing_key`; wire `BlockRecord.authority_sig` flag byte 2; PoA-aware immediate sends; `load_log_with_poa*` readers; `tests/poa_node.rs` incl. log round-trip, 9 tests) |
-| M4: SPV | Header `authority_sig`; light client authority set sync + update proofs | Light client syncs from genesis, verifies authority sigs, processes update tx |
-| M5: RPC/Explorer | `staking` RPC; explorer shows authority sig, slot, active authority | Explorer displays authority set, slot, signatures |
-| M6: Testing | 3-validator soak (24h), authority update, re-org, SPV, resource (CPU/RAM vs PoW) | 24h stable testnet; authority update works; CPU/RAM < 10% of PoW |
+| M4: SPV ✅ | Header `authority_sig`; light client authority set sync + update proofs | Light client syncs from genesis, verifies authority sigs, processes update tx — **done** (`BlockHeader` gains `authority_sig` / `authority_set_hash` / `hash_without_authority_sig`; `SpvClient::with_poa` + `add_header` verify the scheduled authority per slot; `apply_authority_update` validates an `AuthorityUpdateTx` + Merkle proof; KVLS v2 blob carries the PoA config; relay `Headers` message encodes the PoA fields; FFI `export_light_sync` v2 / `receive_light_sync` / `apply_authority_update`. Live-parity tests `#[ignore]`d pending the PoA reset) |
+| M5: RPC/Explorer ✅ | `staking` RPC; explorer shows authority sig, slot, active authority | Explorer displays authority set, slot, signatures — **done** (`block_detail_json` emits `authority_sig` / `slot` / `active_authority`; `kind` gains `poa` alongside `pow`/`staked`; `staking` RPC reports `slot_duration`, `authorities`, `threshold`; `blockCard` HTML renders the three fields) |
+| M6: Testing 🟡 | 3-validator soak (24h), authority update, re-org, SPV, resource (CPU/RAM vs PoW) | **Code suite done, operational gates outstanding** — `tests/poa_m6_testing.rs`: authority update + SPV update proof, GHOSTDAG k=3 re-org, SPV sync over the post-re-org chain (3 tests green, `resource_profiling_poa_vs_pow` `#[ignore]`d). Still to do before activation: the 24h multi-validator testnet soak and the CPU/RAM-vs-PoW measurement |
+
+### 6.1 Consensus invariants hardened during M6
+
+Two defects were found while bringing the M6 suite green. Both are
+pre-activation, so fixing them now avoids a hard fork later.
+
+**(a) Canonical authority order (`AuthoritySet::new`).** The key list reaches
+the node from local config (`KOVANICA_AUTHORITIES`, a comma-separated string),
+not from the chain — but `AuthoritySet` stored the keys in the order the
+operator supplied them, and both consensus-relevant derivations used that
+order: `hash()` (the `KVA1` commitment) and `active_authority(slot)` (the
+round-robin). Two nodes holding the same keys in a different order would
+therefore compute **different set hashes** → different genesis `KVA1` outputs →
+different genesis block ids, i.e. **different chains**; and schedule a
+*different* authority per slot → rejecting each other's valid blocks as
+`InvalidAuthoritySignature`, halting the chain. `AuthoritySet::new` now sorts
+the keys by their 32-byte encoding, so both derivations depend only on *which*
+keys are in the set. Guarded by `authority_set_hash_is_permutation_invariant`
+and `active_authority_is_permutation_invariant`. This changes the set hash, so
+it must land before any PoA genesis is committed.
+
+**(b) OPEN — `work` is not ignored under PoA (§2 is unimplemented).** §2 says
+`work` is "preserved … for wire compatibility; ignored under PoA", but
+`Dag::set_poa` only clears `require_pow` and `difficulty`; nothing constrains
+`work`, and `compute_ghostdag` still accumulates `block.work()` into
+`blue_work`, which drives selected-parent choice. An authority can therefore
+mint an arbitrarily large `work` and unilaterally capture chain selection — the
+M6 re-org test currently *relies* on this by forging `work = 2`. The hybrid
+admission path already closes the same hole by pinning staked blocks to
+`HybridConfig::stake_nominal_work`. **Recommendation: pin PoA blocks to a
+nominal work (1) in `check_poa`, and drive re-orgs by blue score
+(`sp + 1 + mergeset_blues`) instead of work inflation.** Unresolved — this is
+a consensus-rule change and is deliberately not bundled into the M4–M6 commit.
 
 ---
 
