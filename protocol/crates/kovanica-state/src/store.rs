@@ -3,11 +3,11 @@
 //! [`Ledger::write_snapshot`] rewrites the *whole* DAG every time. [`LedgerStore`]
 //! writes a short header once, then **appends** each subsequent block as a
 //! length-prefixed record. Loading replays the log through
-//! [`Ledger::insert_raw_block`] — the identity-preserving path, so staked-VRF
-//! blocks re-admit with their original ids (use [`LedgerStore::open_with_hybrid`]
-//! when the log was produced under a hybrid policy) and pruned blocks restore
-//! with their stored ids. Derived consensus and UTXO state is never trusted from
-//! disk, same as the snapshot. The file is a streaming log, not mmap.
+//! [`Ledger::insert_raw_block`] — the identity-preserving path, so every block
+//! re-admits with its original id and pruned blocks restore with their stored
+//! ids (use [`LedgerStore::open_with_poa`] when the log was produced under a
+//! PoA policy). Derived consensus and UTXO state is never trusted from disk,
+//! same as the snapshot. The file is a streaming log, not mmap.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -121,13 +121,12 @@ impl LedgerStore {
     /// Open an existing log and replay it into a [`Ledger`].
     ///
     /// Replay runs through [`Ledger::insert_raw_block`], so every block is
-    /// re-admitted exactly as stored (its id — including any VRF fields — is
-    /// taken as given) and all derived state is recomputed from the log, never
-    /// trusted from disk. For logs produced under a hybrid PoW / staked-VRF
-    /// policy, use [`Self::open_with_hybrid`] so staked blocks re-admit with
-    /// their original ids.
+    /// re-admitted exactly as stored (its id is taken as given) and all derived
+    /// state is recomputed from the log, never trusted from disk. For logs
+    /// produced under a PoA policy, use [`Self::open_with_poa`] so blocks
+    /// re-admit with their original ids.
     pub fn open(path: impl AsRef<Path>) -> Result<(Self, Ledger), StoreError> {
-        Self::open_impl(path, None, None, None)
+        Self::open_impl(path, None, None)
     }
 
     /// Like [`Self::open`], but the given pruning policy is applied **before**
@@ -138,40 +137,19 @@ impl LedgerStore {
         path: impl AsRef<Path>,
         policy: PruningPolicy,
     ) -> Result<(Self, Ledger), StoreError> {
-        Self::open_impl(path, None, None, Some(policy))
-    }
-
-    /// Like [`Self::open`], but hybrid admission (with `config`) is active
-    /// during replay, so staked-VRF blocks re-admit with their original ids
-    /// intact. Required for any log produced in hybrid mode — mirroring
-    /// [`Ledger::read_snapshot_with_hybrid`].
-    pub fn open_with_hybrid(
-        path: impl AsRef<Path>,
-        config: crate::HybridConfig,
-    ) -> Result<(Self, Ledger), StoreError> {
-        Self::open_impl(path, Some(config), None, None)
-    }
-
-    /// Like [`Self::open_with_hybrid`], with the pruning policy applied before
-    /// replay (see [`Self::open_with_policy`]).
-    pub fn open_with_hybrid_and_policy(
-        path: impl AsRef<Path>,
-        config: crate::HybridConfig,
-        policy: PruningPolicy,
-    ) -> Result<(Self, Ledger), StoreError> {
-        Self::open_impl(path, Some(config), None, Some(policy))
+        Self::open_impl(path, None, Some(policy))
     }
 
     /// Like [`Self::open`], but Proof-of-Authority admission (with
     /// `authority_set` and `slot_duration_ms`) is active during replay, so PoA
     /// blocks re-admit with their original ids intact. Required for any log
-    /// produced in PoA mode — mirroring [`Self::open_with_hybrid`].
+    /// produced in PoA mode — mirroring [`Ledger::read_snapshot_with_poa`].
     pub fn open_with_poa(
         path: impl AsRef<Path>,
         authority_set: AuthoritySet,
         slot_duration_ms: u64,
     ) -> Result<(Self, Ledger), StoreError> {
-        Self::open_impl(path, None, Some((authority_set, slot_duration_ms)), None)
+        Self::open_impl(path, Some((authority_set, slot_duration_ms)), None)
     }
 
     /// Like [`Self::open_with_poa`], with the pruning policy applied before
@@ -182,17 +160,11 @@ impl LedgerStore {
         slot_duration_ms: u64,
         policy: PruningPolicy,
     ) -> Result<(Self, Ledger), StoreError> {
-        Self::open_impl(
-            path,
-            None,
-            Some((authority_set, slot_duration_ms)),
-            Some(policy),
-        )
+        Self::open_impl(path, Some((authority_set, slot_duration_ms)), Some(policy))
     }
 
     fn open_impl(
         path: impl AsRef<Path>,
-        hybrid: Option<crate::HybridConfig>,
         poa: Option<(kovanica_dag::AuthoritySet, u64)>,
         policy: Option<PruningPolicy>,
     ) -> Result<(Self, Ledger), StoreError> {
@@ -227,9 +199,6 @@ impl LedgerStore {
         let schedule = HalvingSchedule::new(subsidy, halving_era);
         let mut ledger = Ledger::new(k, schedule, &genesis_txs)
             .map_err(|e| StoreError::Replay(map_genesis(e)))?;
-        if let Some(config) = hybrid {
-            ledger.set_hybrid(config);
-        }
         if let Some((authority_set, slot_duration_ms)) = poa {
             ledger.set_poa(authority_set, slot_duration_ms);
         }
@@ -249,9 +218,9 @@ impl LedgerStore {
             ledger.set_replay_mode(true);
         }
         while let Some(block) = read_record(&mut file)? {
-            // Identity-preserving replay: the block's stored id (including any
-            // VRF fields) is authoritative, so children's parent references
-            // resolve exactly as they did in the producing node.
+            // Identity-preserving replay: the block's stored id is
+            // authoritative, so children's parent references resolve exactly as
+            // they did in the producing node.
             ledger
                 .insert_raw_block(block)
                 .map_err(|e| StoreError::Replay(LedgerSnapshotError::Rebuild(e)))?;
