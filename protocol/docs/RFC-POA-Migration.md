@@ -541,6 +541,65 @@ out of Phase 0's scope: the pre-existing two-decoder flag-1 disagreement in
 `net.rs` (wire behaviour), and the remotely-triggerable overflow panic in the
 asset registry.
 
+### 0.10 Phase 0, `kovanica-ffi`: what the wallet surface lost
+
+Removing the staking/mining API from `LightNode` forced three decisions that the
+core-crate removal did not, recorded here because two of them are consequences of
+B1 rather than independent problems.
+
+**The FFI now needs the authority set to be safe, and it must be *public*
+keys.** `LightConfig` gained `authority_public_keys` (hex Ed25519 public keys),
+`authority_threshold` and `slot_duration_ms`, and the genesis moved from
+`genesis_with_finality` to `genesis_with_poa`. This is not optional: a light
+node that cannot name the authority set cannot verify the authority signature on
+any block it accepts, and would be trusting whichever peer served it. The
+authority set is hashed into the genesis coinbase, so it is part of the chain
+identity — a node built with a different set derives a different genesis id and
+will not accept the network's blocks. `LightNode::new` now **fails closed** on
+an empty set rather than booting a node that admits anything.
+`load_snapshot` correspondingly takes the config again: a snapshot stores the
+ledger but not the admission config, the same contract as the full node's
+`restore_poa_policy`.
+
+**A wallet cannot seal anything, which is B1 reaching the mobile surface.**
+Every FFI method that seals a transaction (`send`, `send_asset`, `send_from`,
+`send_from_asset`, `send_to_script_v2`, `send_to_stealth`, the HTLC helpers)
+inserts a block immediately, and under PoA only the scheduled authority can do
+that. With no authority key held — the correct state for a wallet — they fail
+with `NodeError::NotAuthoritySlot`. That is a clean, honest refusal, not a
+silent no-op, and there is no PoW target left to fall back to. But it does mean
+the mobile wallet is currently **read-only**: it syncs, verifies, watches,
+queries and proves, and cannot originate a confirmed transaction. Resolving
+this is the same B1 decision, applied to a phone. The proper end state is not
+"give the wallet an authority key" but a broadcast-only wallet that submits to
+an authority network and polls for inclusion — which is Phase 4's SPV wallet,
+and is why Phase 4 is not optional.
+
+`set_authority_key_for_tests` exists so the FFI test suite can drive production
+at all. It is deliberately **outside `#[uniffi::export]`**, so no mobile caller
+can reach it, and it is a test fixture — it does **not** resolve B1, which is
+about how an *operator's* secret enters a *running node*.
+
+**A real bug the FFI work surfaced: two send paths minted unsigned blocks.**
+`Node::send_to_script_v2` and `Node::send_to_stealth` called `ledger.insert`
+directly instead of the PoA-aware `insert_immediate_block` used by every other
+immediate-send path. Under PoA the resulting block has no authority signature
+and the DAG rejects it — so RFC-003 script-v2 and stealth sends were
+*unconditionally broken* the moment PoA became the only admission regime, and
+both are FFI-exported. Fixed in the same change by routing them through
+`insert_immediate_block`. This was missed by the core-crate removal because
+nothing in `kovanica-dag`/`kovanica-state`/`kovanica-node`'s own test suites
+exercised those two paths under a PoA genesis; only the FFI's
+`send_to_script_v2_and_stealth_over_ffi` test did. Worth noting as a coverage
+lesson: the PoA adversarial suites must reach the *client* surfaces too, not
+just the DAG.
+
+**`BlockKind` is deleted.** It had exactly two variants, `Pow` and `Staked`, both
+of which name an admission path that no longer exists, and `BlockInfo` no longer
+carries a `kind` field. What remains to pin is the work invariant — every PoA
+block claims `POA_NOMINAL_WORK = 1`, because admission is by signature and not by
+meeting a target — which is now asserted directly instead.
+
 ---
 
 ## Motivation
