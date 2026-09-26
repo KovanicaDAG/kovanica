@@ -28,7 +28,7 @@ use crate::node::Node;
 pub const HELP: &str = "commands: help | genesis <k> <subsidy> <amount> <seed> | \
 genesis_finality <k> <subsidy> <amount> <seed> <finality_depth> | \
 genesis_poa <k> <subsidy> <amount> <seed> <finality_depth> <slot_duration> <authorities...> | \
-authority_key <key-hex> | \
+authority_key <key-hex> | authority_update <update-tx-hex> | \
 address <seed> | balance <seed|addr-hex> | send <from-seed> <amount> <to-seed> | \
 pool <from-seed> <amount> <to-seed> | produce | pending | tips | tip | len | \
 save <path> | load <path> | checkpoint <path> | load_checkpoint <path> | \
@@ -161,6 +161,25 @@ fn run(node: &mut Node, line: &str) -> Result<String, String> {
                 .map_err(|e| format!("bad authority key hex: {e}"))?;
             node.set_authority_signing_key(key);
             Ok("authority key set".into())
+        }
+
+        "authority_update" => {
+            // authority_update <update-tx-hex>
+            // Applies an on-chain authority set update (RFC-POA §1, KVP-201).
+            let [update_hex] = fixed::<1>(&args)?;
+            let update_hex = update_hex.trim();
+            let update_bytes =
+                hex::decode(update_hex).map_err(|e| format!("bad update hex: {e}"))?;
+            let update = kovanica_dag::AuthorityUpdateTx::from_bytes(&update_bytes)
+                .map_err(|e| format!("invalid authority update: {e}"))?;
+            let new_set = node
+                .apply_authority_update(&update)
+                .map_err(|e| format!("authority update rejected: {e}"))?;
+            Ok(format!(
+                "authority set updated: {} authorities, threshold {}",
+                new_set.authorities().len(),
+                new_set.threshold()
+            ))
         }
 
         "address" => {

@@ -17,7 +17,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ed25519_dalek::{Signer, SigningKey};
 use kovanica_cli::Wallet;
 use kovanica_dag::{
-    AuthorityPublicKey, AuthoritySet, Block, BlockId, Dag, PoAConfig, POA_NOMINAL_WORK,
+    AuthorityError, AuthorityPublicKey, AuthoritySet, AuthorityUpdateTx, Block, BlockId, Dag,
+    PoAConfig, POA_NOMINAL_WORK,
 };
 use kovanica_state::multisig::{verify_threshold_signatures, MultisigScript};
 use kovanica_state::{
@@ -975,6 +976,18 @@ impl Node {
         self.ledger.as_ref().and_then(Ledger::poa_config)
     }
 
+    /// Apply an on-chain authority set update (RFC-POA §1, KVP-201).
+    ///
+    /// Validates the update against the current authority set and replaces
+    /// it on success. Returns the new AuthoritySet.
+    pub fn apply_authority_update(
+        &mut self,
+        update: &AuthorityUpdateTx,
+    ) -> Result<AuthoritySet, AuthorityError> {
+        let ledger = self.ledger.as_mut().ok_or(AuthorityError::PoANotEnabled)?;
+        ledger.apply_authority_update(update)
+    }
+
     /// Protocol minimum fee for the next transfer, in atoms.
     pub fn min_fee(&self) -> u64 {
         let cap = self.ledger().map(|l| l.subsidy()).unwrap_or(1);
@@ -1639,10 +1652,13 @@ impl Node {
         let timestamp = self.next_timestamp(dag, &parents);
         let work = Self::LOCAL_WORK;
         let nonce = Self::LOCAL_NONCE;
-        let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
-        let block = ledger
-            .insert(parents, work, timestamp, nonce, &[tx])
-            .map_err(NodeError::Insert)?;
+        let block = self.insert_immediate_block(
+            parents,
+            work,
+            timestamp,
+            nonce,
+            std::slice::from_ref(&tx),
+        )?;
         self.note_inserted(block);
         self.evict_mempool();
         Ok(tx_id)
@@ -1714,10 +1730,13 @@ impl Node {
         let timestamp = self.next_timestamp(dag, &parents);
         let work = Self::LOCAL_WORK;
         let nonce = Self::LOCAL_NONCE;
-        let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
-        let block = ledger
-            .insert(parents, work, timestamp, nonce, &[tx])
-            .map_err(NodeError::Insert)?;
+        let block = self.insert_immediate_block(
+            parents,
+            work,
+            timestamp,
+            nonce,
+            std::slice::from_ref(&tx),
+        )?;
         self.note_inserted(block);
         self.evict_mempool();
         Ok(tx_id)
