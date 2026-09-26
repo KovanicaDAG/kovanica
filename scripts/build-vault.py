@@ -122,6 +122,31 @@ SENSITIVE: list[str] = [
     "TESTNET-RESET-CREDENTIALS.md", "TESTNET-RESET-PROCEDURE.md",
 ]
 
+# Duplicated or stale sources, kept out of the vault so the phone copy cannot
+# contradict canonical docs. Values are the reason, surfaced in 00-Home/Not-
+# vendored.md rather than silently dropped.
+STALE: dict[str, str] = {
+    # Canonical network truth is the root NETWORK.md (newer + more complete:
+    # carries the seed3 NXDOMAIN record and the tokenomics comparison table).
+    "protocol/NETWORK.md":
+        "duplicate of NETWORK.md — older and less complete",
+    # The RedesignDomains package calls this out itself: "Canonical full
+    # reference: ../NETWORK.md". Its 07-MAINNET-ACTIVATION.md stays (open).
+    "protocol/docs/upgrades/02-RedesignDomains/NETWORK.md":
+        "self-declared non-canonical copy of NETWORK.md",
+    # FACTUALLY WRONG under live RFC-006 tokenomics: claims 50 KVNC premine,
+    # 50 KVNC/block halving every 1000 blocks, 0.0001 KVNC min fee. Superseded
+    # by protocol/TESTNET.md. Do not sync to a phone — it would misconfigure.
+    "node/TESTNET.md":
+        "STALE — pre-RFC-006 economy (50 KVNC premine, halving/1000, 0.0001 fee)",
+}
+
+# Disambiguate notes that would otherwise share an Obsidian title.
+TITLE_OVERRIDES: dict[str, str] = {
+    "AGENTS.md": "AGENTS.md — Monorepo Conventions",
+    "protocol/AGENTS.md": "AGENTS.md — Protocol Consensus Doctrine",
+}
+
 # Agent/skill/command doctrine. Off by default (--with-agent-config to enable).
 AGENT_CONFIG_GLOBS = [
     ".opencode/agents/**", ".opencode/skills/**", ".opencode/commands/**",
@@ -223,6 +248,9 @@ def build_map(include_sensitive: bool, agent_cfg: bool):
             continue
         if rel in SENSITIVE and not include_sensitive:
             skipped.append((rel, "infra-sensitive — re-run with --include-sensitive"))
+            continue
+        if rel in STALE:
+            skipped.append((rel, f"stale/duplicate — {STALE[rel]}"))
             continue
         cat = categorise(rel, agent_cfg)
         if cat is None:
@@ -471,7 +499,7 @@ def main() -> int:
         text = src.read_text(encoding="utf-8", errors="replace")
         text, n = rewrite_links(text, src_rel, mapping)
         links += n
-        title = note_title(text, dest.stem)
+        title = TITLE_OVERRIDES.get(src_rel) or note_title(text, dest.stem)
         dest.write_text(upsert_frontmatter(text, title, dest_rel.parts[0], src_rel, synced),
                         encoding="utf-8")
 
