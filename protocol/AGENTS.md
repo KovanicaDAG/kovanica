@@ -503,9 +503,11 @@ rather than a fork.
   rejection in the merger view, fee burn 3/4, parallel fee conflicts at merge,
   batch-path cap enforcement, pruning-heights survival, snapshot/checkpoint
   supply continuity, mergeset creation height).
-- **Obsolete numbers** (pre-RFC-006, still quoted by some stale runbooks such as
-  `node/TESTNET.md`): 200 KVNC/block subsidy, 50 KVNC founder premine, binary
-  halving every 1000 blocks, `0.0001 KVNC` min fee. See `TESTNET-RFC006.md` and
+- **Obsolete numbers** (pre-RFC-006, still quoted in older docs and in git
+  history): 200 KVNC/block subsidy, 50 KVNC founder premine, binary halving
+  every 1000 blocks, `0.0001 KVNC` min fee. `node/TESTNET.md` used to carry a
+  stale copy of these; it is now a pointer to `TESTNET.md`, which is the single
+  canonical testnet parameter table. See `TESTNET-RFC006.md` and
   `docs/RFC-006-EmissionCurve.md` for current truth.
 
 ### Web app — Grok preview bridge (dev-only)

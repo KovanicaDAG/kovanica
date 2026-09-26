@@ -134,11 +134,11 @@ STALE: dict[str, str] = {
     # reference: ../NETWORK.md". Its 07-MAINNET-ACTIVATION.md stays (open).
     "protocol/docs/upgrades/02-RedesignDomains/NETWORK.md":
         "self-declared non-canonical copy of NETWORK.md",
-    # FACTUALLY WRONG under live RFC-006 tokenomics: claims 50 KVNC premine,
-    # 50 KVNC/block halving every 1000 blocks, 0.0001 KVNC min fee. Superseded
-    # by protocol/TESTNET.md. Do not sync to a phone — it would misconfigure.
+    # node/TESTNET.md is now only a pointer stub to protocol/TESTNET.md (it used
+    # to carry a factually wrong pre-RFC-006 economy). A 6-line pointer adds
+    # nothing on a phone, so keep the canonical table and drop the stub.
     "node/TESTNET.md":
-        "STALE — pre-RFC-006 economy (50 KVNC premine, halving/1000, 0.0001 fee)",
+        "pointer stub superseded by protocol/TESTNET.md (canonical parameter table)",
 }
 
 # Disambiguate notes that would otherwise share an Obsidian title.
