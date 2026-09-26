@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "UniFFI bindings: Kovanica light node (SPV-style sync + hybrid PoW/VRF-staked validation) for mobile apps"
+description = "UniFFI bindings: Kovanica light node (SPV-style sync + PoA authority admission) for mobile apps"
 
 [lib]
 name = "kovanica_ffi"
