@@ -14,3 +14,10 @@
 
 # Packed planning source (docs in docs/ are canonical)
 /plans/*.zip
+
+# Obsidian vault: a generated projection of this repo's docs, and its own git
+# repo. Tracked by scripts/build-vault.py -> ./vault, synced separately.
+/vault/
+
+# Vault transfer archives (regenerate with ./scripts/build-vault.sh --zip)
+/dist/

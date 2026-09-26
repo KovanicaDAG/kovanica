@@ -1,5 +1,9 @@
 # KVNC tokenomics (RFC-006)
 
+> **Full spec:** [`RFC-006-EmissionCurve.md`](RFC-006-EmissionCurve.md). This page
+> is the operator-facing numbers table; the RFC carries the rationale, the
+> activation semantics, and the realized-vs-nominal curve total.
+
 Numbers match the RFC-006 reference implementation in `kovanica-state` and
 `kovanica-node`. If code and this doc diverge, **code wins**.
 
