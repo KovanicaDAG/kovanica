@@ -9,8 +9,9 @@
 //! PoA policy). Derived consensus and UTXO state is never trusted from disk,
 //! same as the snapshot. The file is a streaming log, not mmap.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use kovanica_dag::{decode_block, encode_block, AuthoritySet, Block, BlockId, SnapshotError};
@@ -25,6 +26,15 @@ const MAGIC: [u8; 4] = *b"KVLF";
 const VERSION: u16 = 2;
 /// Refuse a single on-disk record larger than this.
 const MAX_RECORD: usize = 16 * 1024 * 1024;
+
+/// How many records pass 2 replays between prunable-set sweeps.
+///
+/// The finality boundary moves with the replay tip, so a block typically
+/// becomes prunable many inserts after its last referrer was replayed. Sweeping
+/// every `REPLAY_PRUNE_SWEEP` records bounds the live delta set to the
+/// finality window (plus one sweep window of slack) instead of the chain
+/// length, at O(deltas) amortised per record rather than O(deltas) per record.
+const REPLAY_PRUNE_SWEEP: usize = 256;
 
 /// An open append-only ledger log.
 pub struct LedgerStore {
@@ -217,46 +227,42 @@ impl LedgerStore {
             ledger.set_payload_pruning_depth(policy.payload_pruning_depth);
             ledger.set_block_pruning_depth(policy.block_pruning_depth);
         }
-        // Enable replay mode: skips live-only consensus checks (e.g., DAG
-        // pruning invariant) so anticone blocks linearized last can be
-        // re-inserted even if their selected parent is in the pruned region.
+        // Enable replay mode: DAG-level structural checks are relaxed so
+        // anticone blocks linearized last can be re-inserted. Note this does
+        // NOT relax `Ledger`'s own finality check in `apply_new_block`, which
+        // still runs — a block whose selected parent is below the finality
+        // threshold is rejected during replay exactly as it is live.
         if policy.is_some() {
             ledger.set_replay_mode(true);
         }
 
-        // Pass 1: scan the log to collect all blocks and build child_count map.
-        // child_count[parent] = number of blocks in the log that have this block
-        // as selected parent. This lets us know when a block is safe to prune
-        // during pass 2 (when its child_count reaches 0).
-        // Seek back to after the header to re-read blocks
-        file.seek(std::io::SeekFrom::Start(0))?;
-        let mut magic = [0u8; 4];
-        file.read_exact(&mut magic).map_err(map_header_eof)?;
-        let mut ver = [0u8; 2];
-        file.read_exact(&mut ver).map_err(map_header_eof)?;
-        let version = u16::from_le_bytes(ver);
-        file.read_exact(&mut [0u8; 8])?; // subsidy
-        if version >= 2 {
-            file.read_exact(&mut [0u8; 8])?; // halving_era
-        }
-        file.read_exact(&mut [0u8; 2])?; // k
-        let genesis_block = read_record(&mut file)?.ok_or(StoreError::Truncated)?;
-
-        // Collect all remaining blocks and count children
-        let mut blocks = Vec::new();
-        let mut child_count: std::collections::HashMap<BlockId, usize> =
-            std::collections::HashMap::new();
+        // Pass 1: count, for every block, how many log records name it as a
+        // parent. `remaining[id]` is decremented as those records are replayed,
+        // so `remaining[id] == 0` means no *future* record can select `id` as
+        // its parent. That count — not "is a child currently in `deltas`" — is
+        // what makes mid-replay pruning sound; see `Ledger::prune_replay_final`.
+        //
+        // Counting *every* parent, not just `parents()[0]`: the selected parent
+        // is chosen by blue work (`Dag::select_parent` = `max_by_key(chain_key)`)
+        // and is only known once the DAG has seen the block, so it cannot be
+        // read off the record here. A superset is the safe direction — it can
+        // only delay a prune, never perform one too early.
+        //
+        // The log is streamed rather than buffered: holding every `Block` in a
+        // `Vec` would keep the peak at O(chain) in block bytes and defeat the
+        // point of bounding the load.
+        let mut remaining: HashMap<BlockId, usize> = HashMap::new();
+        let genesis = rewind_to_genesis(&mut file)?;
         while let Some(block) = read_record(&mut file)? {
-            let sp = block.parents().first().copied();
-            blocks.push(block);
-            if let Some(sp) = sp {
-                *child_count.entry(sp).or_insert(0) += 1;
+            for parent in block.parents() {
+                *remaining.entry(*parent).or_insert(0) += 1;
             }
         }
 
-        // Re-initialize ledger for pass 2
+        // Re-initialise the ledger for pass 2 from the genesis record pass 1
+        // just read, so both passes agree on the genesis block byte-for-byte.
         let schedule = HalvingSchedule::new(subsidy, halving_era);
-        let mut ledger = Ledger::new(k, schedule, &kovanica_dag_payload(&genesis_block)?)
+        let mut ledger = Ledger::new(k, schedule, &kovanica_dag_payload(&genesis)?)
             .map_err(|e| StoreError::Replay(map_genesis(e)))?;
         if let Some((ref authority_set, slot_duration_ms)) = poa {
             ledger.set_poa(authority_set.clone(), slot_duration_ms);
@@ -265,34 +271,41 @@ impl LedgerStore {
             ledger.set_finality_depth(policy.finality_depth);
             ledger.set_payload_pruning_depth(policy.payload_pruning_depth);
             ledger.set_block_pruning_depth(policy.block_pruning_depth);
-        }
-        if policy.is_some() {
             ledger.set_replay_mode(true);
         }
 
-        // Pass 2: replay with pruning. After each block, decrement its
-        // selected parent's child count; when child_count reaches 0 and the
-        // parent is final, it's safe to prune.
-        for block in blocks {
-            // Decrement child count of selected parent (if any)
-            if let Some(sp) = block.parents().first() {
-                if let Some(count) = child_count.get_mut(sp) {
-                    *count = count.saturating_sub(1);
-                    // If parent now has 0 remaining children and is final, prune it
-                    if *count == 0 && policy.is_some() {
-                        ledger.prune_specific(*sp);
-                    }
-                }
-            }
+        // Pass 2: replay in log order, sweeping the prunable set as we go.
+        rewind_to_genesis(&mut file)?;
+        let mut replayed = 0usize;
+        while let Some(block) = read_record(&mut file)? {
+            // Captured before the move: these are the parents whose outstanding
+            // referrer count drops once this record is in the ledger.
+            let parents: Vec<BlockId> = block.parents().to_vec();
             ledger
                 .insert_raw_block(block)
                 .map_err(|e| StoreError::Replay(LedgerSnapshotError::Rebuild(e)))?;
+            for parent in &parents {
+                if let Some(count) = remaining.get_mut(parent) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+            replayed += 1;
+            // Swept periodically, not per block: the finality boundary moves
+            // with the tip, so a block only becomes prunable many inserts after
+            // its last referrer was replayed. Sweeping every block would rescan
+            // the whole delta set each time; every `REPLAY_PRUNE_SWEEP` blocks
+            // is what holds the live delta set to the finality window rather
+            // than the chain length.
+            if policy.is_some() && replayed % REPLAY_PRUNE_SWEEP == 0 {
+                ledger.prune_replay_final(&remaining);
+            }
         }
 
         if policy.is_some() {
             ledger.set_replay_mode(false);
         }
-        // Final prune pass to clean up any remaining final blocks
+        // Final prune pass: picks up blocks that only crossed the finality
+        // boundary in the last partial sweep window.
         if policy.is_some() {
             ledger.prune();
         }
@@ -330,6 +343,33 @@ fn map_header_eof(e: io::Error) -> StoreError {
     } else {
         StoreError::Io(e.to_string())
     }
+}
+
+/// Rewind `file` to the first record and return the genesis record.
+///
+/// The two-pass load in [`LedgerStore::open_impl`] reads the log twice, so each
+/// pass has to re-derive the exact same byte offset. The header is re-parsed
+/// here rather than cached so the two passes cannot drift apart: if the framing
+/// ever changes, both follow it. Magic and version were already validated on
+/// `open_impl`'s initial read, but are re-checked so a standalone call fails
+/// loudly instead of decoding garbage.
+fn rewind_to_genesis(file: &mut File) -> Result<Block, StoreError> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic).map_err(map_header_eof)?;
+    if magic != MAGIC {
+        return Err(StoreError::BadMagic);
+    }
+    let mut ver = [0u8; 2];
+    file.read_exact(&mut ver).map_err(map_header_eof)?;
+    let version = u16::from_le_bytes(ver);
+    let mut subsidy = [0u8; 8];
+    file.read_exact(&mut subsidy).map_err(map_header_eof)?;
+    if version >= 2 {
+        file.read_exact(&mut [0u8; 8]).map_err(map_header_eof)?; // halving_era
+    }
+    file.read_exact(&mut [0u8; 2]).map_err(map_header_eof)?; // k
+    read_record(file)?.ok_or(StoreError::Truncated)
 }
 
 fn map_genesis(e: LedgerError) -> LedgerSnapshotError {
