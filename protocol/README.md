@@ -1,154 +1,224 @@
-# kovanica-protocol
+# kovanica-protocol — Core Consensus + Ledger (Source-of-Truth)
 
-A **DAG-based distributed ledger** — a high-throughput BlockDAG protocol with
-**GHOSTDAG** consensus (Sompolinsky, Wyborski & Zohar; the protocol behind
-Kaspa). Blocks reference multiple parents so many blocks can be produced in
-parallel and merged later; consensus deterministically linearizes the DAG and a
-UTXO ledger applies transactions in that order. Hybrid admission combines
-Nakamoto proof-of-work with VRF-staked block production (Algorand/Praos-style
-sortition), and phones sync as light nodes through UniFFI bindings.
+> **Canonical protocol workspace** — This directory contains the **actual Rust workspace** with the 5 consensus/ledger crates. All consensus-critical changes are authored here.
 
-> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
-> Proof-of-Work is being **removed**, not merely disabled, and the hybrid
-> admission described in the paragraph above is superseded by it. Items marked
-> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
-> shipped code. The description above is `[CURRENT]` and will be rewritten when
-> the removal lands; the ratified target is proof-of-authority — a fixed
-> authority set produces blocks on a slot schedule with a
-> `KOVANICA_AUTHORITY_THRESHOLD` majority. See
-> [`docs/RFC-POA-Migration.md` §0](./docs/RFC-POA-Migration.md) for the
-> canonical policy, the removal inventory and the operator replacements.
-> **Both** halves of that hybrid admission are removed, the VRF-staked path
-> included — decided 2026-09-25, Option A
-> ([`docs/RFC-POA-Migration.md` §0.7.1](./docs/RFC-POA-Migration.md)). A
-> non-authority cannot produce a block by any route, and the stake registry
-> retires with it. **RFC-005 vault/CSV and the treasury vaults are
-> unaffected** (`vault.rs` has zero stake references).
->
-> Unchanged by the PoA removal: GHOSTDAG **k=3**, the UTXO ledger, Ed25519,
-> 1 KVNC = 100_000_000 atoms, and every RFC-006 tokenomics constant —
-> **MAX_SUPPLY 90.2M KVNC**, **s₀ 10 KVNC/block**, era **2 000 000**,
-> **α 3/4**, maturity **100**, fee **75% burned / 25% producer**.
+---
 
-> **Working on this repo?** Read [`AGENTS.md`](./AGENTS.md) first — it is the
-> source of truth for conventions, layout details, and the roadmap.
+## Architecture Overview
 
-## Layout
+```
+protocol/
+├── crates/
+│   ├── kovanica-dag/      # DAG + GHOSTDAG consensus core (reachability, colouring, linearization)
+│   ├── kovanica-state/    # UTXO ledger applied in GHOSTDAG order (ed25519, multi-asset, scripts)
+│   ├── kovanica-node/     # Runnable node: RPC, mempool, P2P mesh, block production, explorer
+│   ├── kovanica-cli/      # CLI wallet (embedded in node binary)
+│   └── kovanica-ffi/      # LightNode — UniFFI bindings for Kotlin/Swift mobile light nodes
+├── docs/                  # RFCs, KVP specs, LEGIT-BOARD, plans
+└── desktop-app/           # Embedded node desktop app (Tauri, separate crate)
+```
 
-| Crate | What |
-| --- | --- |
-| `crates/kovanica-dag` | DAG + GHOSTDAG consensus core: reachability oracle, colouring, linearization, PoW/difficulty/VRF (`[TARGET]`-for-removal: the `pow`/`difficulty` modules go away, the oracle/colouring/linearization do not) |
-| `crates/kovanica-state` | UTXO ledger applied in GHOSTDAG order: ed25519 spends, stake registry, hybrid admission, snapshots/checkpoints, SPV (`spv.rs`) |
-| `crates/kovanica-node` | Runnable node: RPC/mempool/P2P mesh + DHT/DNS discovery, metrics, self-hosted explorer |
-| `crates/kovanica-ffi` | `LightNode` — UniFFI bindings for Kotlin/Swift mobile light nodes |
-| `crates/kovanica-cli` | CLI wallet |
-| `web/` | TanStack Start web UI |
+---
 
-## Build, test & run
+## Consensus & Ledger (Canonical)
 
-Rust workspace (edition 2021). From the repo root:
+| Property | Value |
+|----------|-------|
+| **Consensus** | GHOSTDAG BlockDAG (k=3) |
+| **Ledger** | Pure UTXO |
+| **Signatures** | Ed25519 (64-byte / 128 hex) |
+| **Native Token** | KVNC (1 KVNC = 100,000,000 atoms) |
+| **Admission** | **PoA-only** (ratified 2026-09-25) — fixed authority set, 3s slots |
+| **P2P** | Plaintext TCP **9000** only (no libp2p) |
+| **Bootstrap** | `seed.kovanica.online:9000` (DNS-only, grey-cloud) |
 
-```sh
-cargo build                 # build everything
-cargo test                  # unit + integration + doctests
-cargo clippy --all-targets  # keep warning-clean
+### RFC-006 Tokenomics (Live on Testnet)
+
+| Parameter | Value |
+|-----------|-------|
+| **Max Supply** | 90.2M KVNC (`9,020,000,000,000,000` atoms) |
+| **Genesis Subsidy (s₀)** | 10 KVNC/block |
+| **Era Length** | 2,000,000 blocks |
+| **Decay (α)** | 3/4 per era (geometric, not halving) |
+| **Coinbase Maturity** | 100 blocks |
+| **Fee Split** | 75% burned / 25% to producer |
+| **Fee Floor** | `max(1, subsidy / 500,000)` atoms/byte |
+| **Founder Premine** | 0.2M KVNC |
+| **Treasury** | 10M KVNC (10 × 1M RFC-005 vaults) |
+
+> **PoA Migration**: Proof-of-Work and hybrid (PoW + VRF-staked) admission are `[TARGET]`-for-removal. See [RFC-POA-Migration.md](docs/RFC-POA-Migration.md) §0. The stake registry retires with hybrid. RFC-006 supply math is **unaffected** — only wall-clock pace changes.
+
+---
+
+## Shipped RFCs / KVP Standards
+
+| RFC | KVP | Feature | Status |
+|-----|-----|---------|--------|
+| 001 | KVP-101 | Multisig (M-of-N P2SH) | ✅ Main |
+| 002 | KVP-102 | Native Multi-Asset Tokens | ✅ Main |
+| 003 | KVP-103 | Stealth Addresses + Script v2 | ✅ Main |
+| 004 | KVP-104 | HTLC / Atomic Swaps | ✅ Main |
+| 005 | KVP-105 | Time-Lock Vault + CSV | ✅ Main |
+| 006 | — | Tokenomics (Emission, Cap, Fee Burn) | ✅ Live on testnet |
+| — | KVP-106 | NFT (RFC-007 draft) | 🚧 Draft |
+| — | — | DeFi (HTLC-first DEX) | 🚧 Design |
+| — | — | RWA Integration | 🚧 Design |
+
+---
+
+## Quick Start
+
+### Build & Test
+
+```bash
+# From protocol/ root
+cargo build                 # Build all 5 crates
+cargo test                  # Unit + integration + doctests
+cargo clippy --all-targets  # Keep warning-clean
 cargo fmt --check           # CI gate
 
-cargo run -p kovanica-node -- demo   # scripted end-to-end scenario
-cargo run -p kovanica-node           # serve REPL (try `help`)
+# Run the node (scripted demo)
+cargo run -p kovanica-node -- demo
+
+# Run REPL (try `help`)
+cargo run -p kovanica-node
 ```
 
-`unsafe` is forbidden crate-wide. Never commit to the default branch — feature
-branch + draft PR (see `AGENTS.md` §6).
+### Run a Light Node (Kotlin/Android)
 
-## Run a light node from Kotlin / Android
+```bash
+# Build native library + AAR (min SDK 24)
+./crates/kovanica-ffi/build-android.sh
 
-Build the native library and the AAR first (min SDK 24):
-
-```sh
-./crates/kovanica-ffi/build-android.sh   # cargo-ndk → jniLibs/{arm64-v8a,x86_64}
+# Add crates/kovanica-ffi/android/ to your Gradle project
+# Runtime dep: net.java.dev.jna:jna:5.14.0@aar
+# Bindings package: uniffi.kovanica
 ```
 
-Add the Gradle module at `crates/kovanica-ffi/android/` to your app (its only
-runtime dependency is `net.java.dev.jna:jna:5.14.0@aar`). The bindings live in
-package `uniffi.kovanica`. The snippet below mirrors the Rust integration test
-`sync_blob_between_two_nodes_converges`
-([`tests/ffi.rs`](./crates/kovanica-ffi/tests/ffi.rs)): two genesis-identical
-nodes converge purely from an exported byte blob.
+### Run a Light Node (Swift/iOS)
 
-```kotlin
-import uniffi.kovanica.LightConfig
-import uniffi.kovanica.LightNode
-import uniffi.kovanica.U128Parts
+```bash
+# Build xcframework (macOS host)
+./crates/kovanica-ffi/build-apple.sh
 
-val config = LightConfig(
-    k = 3u, subsidy = 1000uL, founderAmount = 1000uL, founderSeed = 1uL,
-    finalityDepth = ULong.MAX_VALUE, payloadPruningDepth = ULong.MAX_VALUE,
-)
-val nominalWork = U128Parts(high = 0uL, low = 7uL)
-
-// Producer: bonded validator producing staked blocks.
-val producer = LightNode(config)
-producer.setValidatorSeed(ByteArray(32) { 0xAB.toByte() })
-producer.enableHybrid(1uL, 1uL, nominalWork, false)
-producer.bondStake(1uL, 500uL)
-producer.produceEmptyBlock()
-producer.send(fromSeed = 1uL, amount = 400uL, toSeed = 2uL)
-
-// Peer starts identical (genesis) and catches up purely from bytes.
-val peer = LightNode(config)
-peer.setValidatorSeed(ByteArray(32) { 0xCD.toByte() })
-peer.enableHybrid(1uL, 1uL, nominalWork, false)
-peer.receiveBlocks(producer.exportBlocks())
-check(peer.selectedTip() == producer.selectedTip())  // tips converge
+# Add target/kovanica.xcframework to Xcode project
+# Compile bindings/swift/kovanica.swift into app target
 ```
 
-Both nodes are `AutoCloseable`; prefer wrapping in `.use { … }` in real apps.
+---
 
-## Run a light node from Swift / iOS
+## Development Conventions
 
-Build the xcframework first (macOS host, iOS arm64 + macOS arm64/x86_64):
+- **Rust Edition**: 2021, `rust-version` 1.75 (toolchain pinned to **1.98.0** via `rust-toolchain.toml`)
+- **CI Gates**: `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings`
+- **No `unsafe`** — forbidden crate-wide
+- **Determinism is sacred** — consensus must be a pure function of the DAG
+- **Branch naming**: `consensus/…`, `dag/…`, `ledger/…`, `claude/<topic>`
+- **Never commit to `main`** — feature branch + draft PR
 
-```sh
-./crates/kovanica-ffi/build-apple.sh      # → target/kovanica.xcframework
+See **[AGENTS.md](AGENTS.md)** for deep conventions, invariants, and workflow.
+
+---
+
+## Key Crates
+
+### `kovanica-dag` — Consensus Core
+- `block.rs` — Block (multi-parent vertex), `BlockId` (BLAKE3)
+- `dag.rs` — Insert/validate, oracle-backed reachability, mergeset, tips
+- `ghostdag.rs` — Selected parent, k-cluster blue/red colouring
+- `ordering.rs` — Recursive GHOSTDAG linearization
+- `reachability.rs` — Interval-tree + future-covering sets
+- `difficulty.rs` / `pow.rs` — `[TARGET]`-for-removal
+- `vrf.rs` — ECVRF over Ristretto255 (IRTF CFRG draft)
+
+### `kovanica-state` — UTXO Ledger
+- `keys.rs` — Address, KeyPair, `kvnc…dag` base58 encoding
+- `tx.rs` — Transaction, TxId, OutPoint, TxInput, TxOutput, sighash
+- `ledger.rs` — `apply_block`/`apply_dag`, per-block state, snapshots, finality pruning
+- `multisig.rs` — RFC-001 M-of-N P2SH
+- `script_v2.rs` — RFC-003 bounded stack machine
+- `htlc.rs` — RFC-004 HTLC template (100 bytes)
+- `vault.rs` — RFC-005 time-lock vault (40 bytes)
+- `stake.rs` — `[TARGET]`-retiring with hybrid
+
+### `kovanica-node` — Runnable Node
+- `node.rs` — Ledger + Mempool, genesis, produce, gossip, multi-input transfers
+- `mempool_v2.rs` — Orphan pool, fee-based eviction, capacity limits
+- `p2p.rs` / `p2p_hardening.rs` — Mesh, discovery, rate limits, peer scoring
+- `dht.rs` / `dns_seed.rs` — Kademlia DHT + DNS multi-seed resolver
+- `explorer.rs` — Self-hosted explorer (JSON API + WebSocket + static UI)
+- `spv.rs` — SPV light client wire sync + proof verification
+
+### `kovanica-ffi` — Mobile Bindings
+- `LightNode` — `Mutex<Node>` wrapper, full surface: genesis, validator, bond, produce, transfer, blob sync, SPV, history
+- **Bindings committed** — regenerate after UDL/Rust changes:
+  ```bash
+  cargo build --release -p kovanica-ffi
+  cargo run -p kovanica-ffi --bin uniffi-bindgen -- generate \
+    --library target/release/libkovanica_ffi.so \
+    --language kotlin --out-dir crates/kovanica-ffi/bindings/kotlin
+  cargo run -p kovanica-ffi --bin uniffi-bindgen -- generate \
+    --library target/release/libkovanica_ffi.so \
+    --language swift --out-dir crates/kovanica-ffi/bindings/swift
+  ```
+
+---
+
+## Testing
+
+```bash
+# All tests
+cargo test
+
+# Specific test suites
+cargo test -p kovanica-dag adversarial_wide_fork
+cargo test -p kovanica-state tokenomics
+cargo test -p kovanica-node network
+
+# FFI tests (offline)
+cargo test -p kovanica-ffi
 ```
 
-Add the framework to your Xcode project and compile
-[`bindings/swift/kovanica.swift`](./crates/kovanica-ffi/bindings/swift/kovanica.swift)
-into the app target (same module, no import needed). Same test, mirrored:
+---
 
-```swift
-let config = LightConfig(k: 3, subsidy: 1000, founderAmount: 1000, founderSeed: 1,
-                         finalityDepth: .max, payloadPruningDepth: .max)
-let nominalWork = U128Parts(high: 0, low: 7)
+## Documentation
 
-let producer = try LightNode(config: config)
-try producer.setValidatorSeed(seed: Data(repeating: 0xAB, count: 32))
-try producer.enableHybrid(rateNum: 1, rateDen: 1, nominalWork: nominalWork, retarget: false)
-try producer.bondStake(seed: 1, amount: 500)
-try producer.produceEmptyBlock()
-_ = try producer.send(fromSeed: 1, amount: 400, toSeed: 2)
+| Document | Path |
+|----------|------|
+| **Agent Conventions** | [AGENTS.md](AGENTS.md) |
+| **RFC Index** | [docs/](docs/) |
+| **RFC-006 Tokenomics** | [docs/RFC-006-EmissionCurve.md](docs/RFC-006-EmissionCurve.md) |
+| **PoA Migration** | [docs/RFC-POA-Migration.md](docs/RFC-POA-Migration.md) |
+| **LEGIT-BOARD** | [docs/LEGIT-BOARD.md](docs/LEGIT-BOARD.md) |
+| **Testnet Params** | [TESTNET-RFC006.md](TESTNET-RFC006.md) |
+| **Operations** | [OPERATIONS.md](OPERATIONS.md) |
 
-let peer = try LightNode(config: config)
-try peer.setValidatorSeed(seed: Data(repeating: 0xCD, count: 32))
-try peer.enableHybrid(rateNum: 1, rateDen: 1, nominalWork: nominalWork, retarget: false)
-try peer.receiveBlocks(blob: producer.exportBlocks())
-assert(try peer.selectedTip() == try producer.selectedTip())
-```
+---
 
-### SPV mode for watch-only wallets
+## Related Repositories (in the meta-monorepo)
 
-Instead of full payloads you can exchange compact light-sync blobs — verified
-headers plus one Golomb-Rice block filter each — and prove inclusion locally:
+| Component | Directory | Purpose |
+|-----------|-----------|---------|
+| Node Binary | `../node/` | Thin wrapper building `kovanica-node` |
+| Web Frontend | `../web/` | Explorer + wallet + map |
+| Mobile Wallet | `../wallet/` | Android/iOS + browser extension |
+| Light Node Mobile | `../mobile/` | FFI-based light clients |
+| Android Light Node | `../android-light-node/` | Active Android light node |
+| CLI Wallet | `../cli/` | Command-line wallet |
+| SDK | `../sdk/` | Rust/WASM SDK |
+| Installer | `../installer/` | One-click installers |
+| Hardware Wallet | `../ledger-app/` | Ledger/Trezor support |
 
-- `export_light_sync()` / `receive_light_sync(blob)` — sync headers + filters
-  (`KVLS` v1 blobs, verified through a real `SpvClient`)
-- `filter_matches(filter, address)` / `filter_matches_any(blob, [addresses])`
-  and `synced_filter_matches` / `synced_height` — watch-only address queries
-- `prove_tx(blockIdHex, txIdHex)` / `verify_tx_proof(proof)` — merkle inclusion
-  proofs rooted at a synced header
+---
 
-See `crates/kovanica-ffi/tests/ffi.rs` for runnable examples of every method.
-The generated bindings are committed under
-`crates/kovanica-ffi/bindings/`; CI regenerates them on every PR touching the
-crate and fails on drift (`.github/workflows/bindings.yml`) — never hand-edit.
+## License
+
+**MIT OR Apache-2.0** — See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+
+---
+
+## Security
+
+- Private keys and seeds **never** leave the client
+- Node policy never weakens consensus determinism
+- Report vulnerabilities: GitHub Security Advisories or `security@kovanica.online`

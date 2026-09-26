@@ -1,18 +1,186 @@
 # kovanica-mobile
 
-Kovanica light-node mobile clients (Android + future iOS).  
-**Distinct from kovanica-wallet** — this is the light node, not the full wallet.
+> **Kovanica light-node mobile clients (Android + future iOS)** — **Distinct from kovanica-wallet**: this is the light node (embedded `LightNode` via UniFFI/FFI), not the full API-backed wallet.
 
-## Structure
-- `android/` — Android light node client (Kotlin)
-- `ios/` — iOS light node (planned)
+---
 
-## Development
+## Repository Structure
+
+```
+kovanica-mobile/
+├── android/       # Android light node client (Kotlin + Jetpack Compose)
+├── ios/           # iOS light node (planned)
+└── shared/        # Shared logic (future)
+```
+
+---
+
+## What Is a Light Node?
+
+Unlike the API-backed wallet (`kovanica-wallet`), the light node:
+- **Embeds the consensus engine** via `kovanica-ffi` (`LightNode` — UniFFI bindings to Rust `kovanica-node`)
+- **Syncs via KVLS v1 blobs** — compact light-sync (headers + Golomb-Rice filters) from any node's `/api/light_sync`
+- **Verifies locally** — SPV proofs (Merkle inclusion) against synced headers
+- **Holds keys locally** — BIP-39 mnemonic → Ed25519 keys → signs offline
+- **Produces blocks** — if configured as validator (hybrid PoW+VRF or PoA authority)
+
+---
+
+## Android Light Node (Active)
+
+See **[android/README.md](android/README.md)** for build instructions, architecture, and slice status.
+
+### Prerequisites
+
+- Android SDK (API 36, NDK r27c) — only available in GitHub Actions
+- Rust 1.82+ with `aarch64-linux-android` / `x86_64-linux-android` targets
+- `cargo-ndk` (`cargo install cargo-ndk`)
+- `ANDROID_NDK_HOME` exported
+
+### Build (Development)
+
 ```bash
-cd android && ./gradlew build
-Related
-•	Protocol: kovanica-protocol
-•	Wallet: kovanica-wallet
-•	Web: kovanica-web
-License
-MIT OR Apache-2.0
+# 1. Build FFI AAR (from protocol root)
+cd ../protocol/crates/kovanica-ffi
+./build-android.sh
+
+# 2. Build Android app (project-dir AAR link)
+cd ../../kovanica-mobile/android
+./gradlew assembleDebug
+```
+
+**Output**: `app/build/outputs/apk/debug/app-debug.apk`
+
+### CI Build
+
+`.github/workflows/build-android.yml` mirrors `build-web`:
+1. Builds AAR via `cargo-ndk` (arm64-v8a + x86_64)
+2. Uploads AAR artifact
+3. (Future) Builds APK using downloaded AAR
+
+---
+
+## iOS Light Node (Planned)
+
+- Build xcframework: `../protocol/crates/kovanica-ffi/build-apple.sh`
+- Add `target/kovanica.xcframework` to Xcode project
+- Compile `bindings/swift/kovanica.swift` into app target
+
+---
+
+## Architecture (Slices 9a–9f)
+
+| Slice | Status | Description |
+|-------|--------|-------------|
+| **9a** | ✅ Scaffold | App scaffold + FFI wiring; genesis gate (live `/api/bootstrap` params) |
+| **9b** | 🔜 Wallet UX | Onboarding (create/import mnemonic), home, send, receive, history, settings |
+| **9c** | 🔜 Light Sync | `GET /api/light_sync` + `receiveLightSync` + KVLS v1 persistence |
+| **9d** | 🔜 Staking | Bond/unbond, `setValidatorSeed` + `enableHybrid`, `produceBlock` → `POST /api/mine/submit` |
+| **9e** | 🔜 Background | WorkManager periodic sync + local notifications |
+| **9f** | 🔜 Release | Branding, CI APK artifact, Play signing decision |
+
+---
+
+## Genesis Gate (Slice 9a — Critical)
+
+The app **must** reproduce the live network genesis before any UI work.
+
+**Live Parameters (RFC-006, hard requirement):**
+
+```kotlin
+LightConfig(
+    k = 3,
+    subsidy = 1_000_000_000L,           // 10 KVNC in atoms
+    founderAmount = 20_000_000_000_000L, // 200,000 KVNC (0.2M) in atoms
+    founderSeed = 1,
+    finalityDepth = Long.MAX_VALUE,
+    payloadPruningDepth = Long.MAX_VALUE
+)
+```
+
+Derived from `crates/kovanica-node/src/explorer.rs` `genesis_node()` + RFC-006 constants.
+
+**Gate Test** (landed in Rust layer):
+- `LightConfig::default()` (subsidy 1000) → **diverges** from live genesis
+- Live params above → **exact match** to live genesis `9565fc20…`
+- `receiveBlocks(live blob)` → blocks applied, tip matches live
+
+**v0.1 testnet pins these params as app constants**; a node slice should add them to `/api/bootstrap` before mainnet.
+
+---
+
+## FFI Integration
+
+- **AAR** produced from `protocol/crates/kovanica-ffi` (`build-android.sh`)
+- **Kotlin bindings** committed under `bindings/kotlin/uniffi/kovanica/`
+- **JNA-based** (UniFFI 0.32) — loads `libkovanica_ffi.so` on first use
+- App consumes AAR via project-dir link during dev, published AAR in CI
+
+---
+
+## Key Classes
+
+| Class | Purpose |
+|-------|---------|
+| `LightNodeRepository` | Owns `LightNode`, persists KVLS v1 blob (`light_sync.bin`), handles sync (`/api/light_sync` → `receiveLightSync` → filters → `/api/blocks`) |
+| `WalletRepository` | `sendFrom`, `bondStake`, `unbond`, `enableValidator` (`setValidatorSeed` + `enableHybrid`), `produceAndSubmitBlock` |
+| `WalletViewModel` | State management, lifecycle-aware coroutines |
+| `MainActivity` | Genesis gate screen → Wallet screen |
+
+---
+
+## Network Identity
+
+| Network | Genesis | `/api/bootstrap` | Seeds |
+|---------|---------|------------------|-------|
+| `kovanica-testnet` | `9565fc20cb465eec...` | `https://explorer.kovanica.online/api/bootstrap` | `seed.kovanica.online:9000`, `seed2.kovanica.online:9000` |
+
+**Live HTTP Surface on Seed** (`explorer.rs`):
+- `GET /api/bootstrap` → JSON (genesis, tip, subsidy, premine, seed, k, **light_config**)
+- `GET /api/blocks` → `application/octet-stream` = `encode_records` (feed to `receiveBlocks`)
+- `GET /api/light_sync` → KVLS v1 blob
+- `GET /api/head`, `/api/history`, `/api/utxos`, `/api/faucet`
+- `POST /api/mine/submit` → block uplink (octet-stream for staked blocks)
+
+---
+
+## Build Commands
+
+```bash
+# Debug APK (v0.1)
+./gradlew assembleDebug
+
+# Release APK (requires signing config)
+./gradlew assembleRelease
+
+# Lint + tests
+./gradlew check
+
+# Clean
+./gradlew clean
+```
+
+---
+
+## Signing (Slice 9f)
+
+- **v0.1 testnet**: Debug-signed APKs (Play requires signed release for production)
+- **Decision needed**: Obtain/repo-managed keystore vs local debug builds
+
+---
+
+## Related Repositories
+
+| Repo | Purpose |
+|------|---------|
+| [kovanica-protocol](https://github.com/KovanicaDAG/kovanica-protocol) | Core consensus + ledger (source of truth) |
+| [kovanica-ffi](https://github.com/KovanicaDAG/kovanica-protocol/tree/main/crates/kovanica-ffi) | UniFFI bindings (LightNode) |
+| [android-light-node](https://github.com/KovanicaDAG/android-light-node) | Actively developed Android light node (separate repo) |
+| [kovanica-wallet](https://github.com/KovanicaDAG/kovanica-wallet) | API-backed wallet (no light node) |
+| [kovanica-sdk](https://github.com/KovanicaDAG/kovanica-sdk) | Rust/WASM SDK |
+
+---
+
+## License
+
+**MIT OR Apache-2.0**

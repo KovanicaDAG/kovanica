@@ -1,65 +1,125 @@
 # Kovanica Wallet (Android)
 
-A standalone Android **Kovanica Wallet** — read + receive + faucet wallet that talks
-to a remote Kovanica node over HTTP. Built with **Kotlin + Jetpack Compose (Material3)**.
+> **Standalone Android KVNC wallet** — Read + receive + faucet wallet that talks to a remote Kovanica node over HTTP. Built with **Kotlin + Jetpack Compose (Material3)**.
+>
+> **Pure API-backed** — Does **NOT** run a light node, does **NOT** do SPV sync, uses **no FFI** (`LightNode`, `uniffi.kovanica`, or any native `.so` libs). Only reads node state through the public REST API.
 
-This is a **pure API-backed wallet**. It does **NOT** run a light node, does **NOT** do
-SPV sync, and uses **no FFI** (`LightNode`, `uniffi.kovanica`, or any native `.so` libs).
-It only reads node state through the public REST API.
+---
 
-## What it does (v1)
+## Features (v1)
 
-- Shows the KVNC logo, wallet address, formatted balance, and network/token badge.
-- Receive screen: shows the full `kvnc…` address with a **Copy** button, and explains
-  that this is a receive-only watch wallet (no private key on device in v1).
-- History screen: paginated list from `/api/history`, each row with a kind label,
-  signed formatted amount, and a tx hex prefix.
-- Faucet button: requests testnet KVNC via `POST /api/faucet`.
-- Polls `/api/head` to show the current chain tip / last block on the home screen.
+- ✅ Shows KVNC logo, wallet address (`kvnc…`), formatted balance, network/token badge
+- ✅ **Receive screen**: Full `kvnc…` address with **Copy** button + QR code; explains this is a receive-only watch wallet (no private key on device in v1)
+- ✅ **History screen**: Paginated list from `/api/history` — each row with kind label, signed formatted amount, tx hex prefix
+- ✅ **Faucet button**: Requests testnet KVNC via `POST /api/faucet`
+- ✅ **Polls `/api/head`** — shows current chain tip / last block on home screen
+- ❌ **Sending / signing is intentionally NOT implemented** — building and signing a transaction requires a crypto binding (Ed25519 keys + Kovanica sighash). This is a documented follow-up. The Send button is disabled/omitted by design.
 
-## What it does NOT do (v1)
+---
 
-**Sending / signing is intentionally NOT implemented.** Building and signing a
-transaction requires a crypto binding (Ed25519 keys + Kovanica sighash). That is a
-documented follow-up. Do not attempt to send from this v1 — there is a disabled
-"Send (coming soon)" affordance by design (or none displayed), and the README notes
-the signing follow-up.
+## API Contract (Verified Live)
 
-## The /api contract (verified live)
-
-Base URL is configurable. Default:
-`KOVANICA_API_DEFAULT = "https://explorer.kovanica.online"`
+Base URL configurable. Default: `KOVANICA_API_DEFAULT = "https://explorer.kovanica.online"`
 
 | Endpoint | Method | Notes |
 |----------|--------|-------|
 | `/api/head` | GET | `{network, genesis, tip, blocks, min_fee, atom}` |
-| `/api/bootstrap` | GET | token params, k, subsidy, founder, depths, pow |
+| `/api/bootstrap` | GET | Token params, k, subsidy, founder, depths, consensus |
 | `/api/fee_estimate` | GET | `{fee_rate, unit, mempool, bytes}` |
-| `/api/state` | GET | node/network state |
+| `/api/state` | GET | Node/network state |
 | `/api/address/<addr>` | GET | `{address, balance (atoms), tx_count}` |
-| `/api/utxos?address=&limit=` | GET | UTXO list |
-| `/api/history?address=&limit=&offset=` | GET | paginated history entries |
-| `/api/blocks?from=` | GET | block list |
-| `/api/faucet` | POST | body `{"address":"kvnc…"}` |
+| `/api/utxos` | GET | UTXO list (query: `address`, `limit`) |
+| `/api/history` | GET | Paginated history (query: `address`, `limit`, `offset`) |
+| `/api/blocks` | GET | Block list (query: `from`) |
+| `/api/faucet` | POST | Body: `{"address":"kvnc…"}` → tx receipt |
 
-Token facts (constants): symbol **KVNC**, name **Kovanica (KVNC)**, **8 decimals**,
-`1 KVNC = 100,000,000 atoms`.
+**Token Constants**: Symbol **KVNC**, Name **Kovanica (KVNC)**, **8 decimals**, `1 KVNC = 100,000,000 atoms`
+
+---
 
 ## Build
-
-> Note: building requires the Android SDK on the machine. This repo's CI host may not
-> have it installed, so the project is verified by self-review here.
 
 ```bash
 cd android
 chmod +x gradlew
 ./gradlew :app:assembleDebug
+
+# Install on connected device/emulator
+./gradlew :app:installDebug
 ```
 
-Install the resulting APK (e.g. with `./gradlew :app:installDebug` from a device/emulator).
+> **Note**: Building requires Android SDK on the machine. CI verifies via self-review; the project is wired into `.github/workflows/wallet.yml`.
 
-## Signing follow-up
+---
 
-A future v1.1 will add send/sign backed by an Ed25519 crypto binding (BIP39 mnemonic
--> seed -> keypair -> Kovanica address + sighash). Watch address display is already
-supported via `SeedStore` (plain SharedPreferences for v1).
+## Project Structure
+
+```
+android/
+├── app/
+│   ├── src/main/
+│   │   ├── java/com/kovanica/wallet/
+│   │   │   ├── MainActivity.kt
+│   │   │   ├── data/
+│   │   │   │   ├── SeedStore.kt          # SharedPreferences (v1 plain; encrypted v1.1)
+│   │   │   │   └── WalletRepository.kt   # API data layer
+│   │   │   ├── ui/
+│   │   │   │   ├── HomeScreen.kt
+│   │   │   │   ├── ReceiveScreen.kt
+│   │   │   │   ├── HistoryScreen.kt
+│   │   │   │   └── theme/                # Material3 + KVNCBrand colors
+│   │   │   └── viewmodel/
+│   │   │       └── WalletViewModel.kt
+│   │   └── res/
+│   │       └── values/strings.xml
+│   ├── build.gradle.kts
+│   └── proguard-rules.pro
+├── gradle/
+│   ├── libs.versions.toml               # Dependency versions
+│   └── wrapper/gradle-wrapper.properties
+├── settings.gradle.kts
+├── build.gradle.kts
+└── gradle.properties
+```
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Language | Kotlin |
+| UI | Jetpack Compose (Material3) |
+| Networking | OkHttp + Retrofit + Moshi |
+| Async | Kotlin Coroutines + Flow |
+| DI | Manual (no Hilt/Koin in v1) |
+| Min SDK | 24 (Android 7.0) |
+
+---
+
+## Signing Follow-up (v1.1)
+
+A future v1.1 will add send/sign backed by:
+- **BIP-39 mnemonic** → seed → Ed25519 keypair → Kovanica address + sighash
+- **Encrypted seed storage** (Android Keystore + AES-GCM)
+- **Offline signing**: `/api/prepare` → local Ed25519 sign → `/api/submit`
+
+Watch address display already supported via `SeedStore`.
+
+---
+
+## Related Repositories
+
+| Repo | Purpose |
+|------|---------|
+| [kovanica-wallet](https://github.com/KovanicaDAG/kovanica-wallet) | Parent repo (iOS/Extension) |
+| [kovanica-protocol](https://github.com/KovanicaDAG/kovanica-protocol) | Core consensus + ledger |
+| [kovanica-node](https://github.com/KovanicaDAG/kovanica-node) | Node binary (serves API) |
+| [kovanica-sdk](https://github.com/KovanicaDAG/kovanica-sdk) | Rust/WASM SDK (for future signing) |
+| [android-light-node](https://github.com/KovanicaDAG/android-light-node) | Light-node app (FFI-based, actively developed) |
+
+---
+
+## License
+
+**MIT OR Apache-2.0**

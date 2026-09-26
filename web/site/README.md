@@ -1,55 +1,118 @@
-# Kovanica web
+# Kovanica Web Application
 
-TypeScript **UI only**. Protocol (GHOSTDAG, UTXO, Ed25519, PoW) lives in
-[kovanica-ledger](https://github.com/KovanicaDAG/kovanica-ledger).
+> **TypeScript UI only** — Protocol (GHOSTDAG, UTXO, Ed25519, PoA) lives in [kovanica-protocol](https://github.com/KovanicaDAG/kovanica-protocol).
 
-## Live
+---
 
-| Host | App |
-| --- | --- |
-| [kovanica.online](https://kovanica.online) | this repo `/` |
-| [wallet.kovanica.online](https://wallet.kovanica.online) | `/wallet` |
-| [map.kovanica.online](http://map.kovanica.online) | `/map` |
-| [explorer.kovanica.online](https://explorer.kovanica.online) | **Rust node** — do not point at this app |
+## Live Deployment
 
-VPS: `pm2 kovanica-web` on `127.0.0.1:3000`. Node 20 is enough to **run** the built `.output`; build with Node 22.
+| Host | App | Notes |
+|------|-----|-------|
+| [kovanica.online](https://kovanica.online) | Landing | `/` |
+| [wallet.kovanica.online](https://wallet.kovanica.online) | Wallet | `/wallet` — create/import/send/encrypt seed |
+| [map.kovanica.online](http://map.kovanica.online) | Network Map | `/map` — origin choropleth |
+| [explorer.kovanica.online](https://explorer.kovanica.online) | **Rust Node Explorer** | Do **not** point this app at that URL — it's a separate binary |
 
-Header **Preview / Live**:
+**VPS**: `pm2 kovanica-web` on `127.0.0.1:3000`  
+**Build**: Node 22 → runs on Node 20
 
-- Preview = in-process demo DAG (different genesis)
-- Live = proxy to `https://explorer.kovanica.online` (`kovanica-testnet`)
+---
 
-## Paths
+## Route Map
 
-| Path | What |
-| --- | --- |
-| `/` | Landing |
-| `/explorer` | BlockDAG graph |
-| `/wallet` | Create / import / send / encrypt seed |
-| `/multisig` | M-of-N P2SH multisig (create, spend, combine) |
-| `/map` | Origin choropleth |
-| `/docs` | HTTP contract |
-| `/api/*` | Same contract as the node; `?source=live` proxies Rust |
+| Path | Feature |
+|------|---------|
+| `/` | Landing page |
+| `/explorer` | BlockDAG graph visualizer |
+| `/wallet` | Browser wallet (create, import, send, encrypt seed) |
+| `/multisig` | M-of-N P2SH multisig (create, spend, combine signatures) |
+| `/map` | Geographic origin choropleth |
+| `/docs` | HTTP API contract reference |
+| `/api/*` | Node API contract; `?source=live` proxies to Rust explorer |
 
-## Develop
+**Header Toggle**: Preview (in-process demo DAG, different genesis) ↔ Live (proxies to `https://explorer.kovanica.online`)
 
-```sh
+---
+
+## Development
+
+```bash
 npm ci
-npm run dev
+npm run dev              # Binds 0.0.0.0:8080 for Grok preview
 ```
 
-The default dev script binds to `0.0.0.0:8080` so the Grok live preview can
-reach it. When running locally on the shared server, **bind to `127.0.0.1` and
-avoid port 3000** — that port is forwarded to the internet by the Cloudflare
-tunnel and must not be used for dev servers. Use:
+**Local dev on shared server** — bind to localhost, avoid port 3000 (Cloudflare tunnel):
 
-```sh
+```bash
 npx vite dev --host 127.0.0.1 --port 8080
 ```
 
-See the root `CLAUDE.md` § "Port 3000 is JAVAN" and "Što se trenutno vrti" for
-why this matters.
+---
 
-VPS rebuild: `npm run build:vps` then rsync `.output` and `pm2 restart kovanica-web`. Do not steal ports from other apps on the box — see [DEPLOY.md](./DEPLOY.md).
+## Commands
 
-> **Canonical source**: active development happens in [`kovanica-protocol/web`](https://github.com/KovanicaDAG/kovanica-protocol/tree/main/web). This repo mirrors it; sync changes from there.
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Development server |
+| `npm run build` | Vite build + `db:migrate` |
+| `npm run build:vps` | Production build (no migrations, `NITRO_PRESET=node-server`) |
+| `npm run db:migrate` | Run pglite migrations |
+| `npm run typecheck` | TypeScript strict check |
+| `npm run lint` | Oxlint |
+| `npm run format` | Prettier (writes) |
+| `npm run test` | `node --test` |
+
+---
+
+## Deploy to VPS
+
+```bash
+# On development machine
+npm run build:vps
+
+# On VPS
+rsync -av .output/ user@vps:/path/to/kovanica-web/
+pm2 restart kovanica-web
+```
+
+See [DEPLOY.md](DEPLOY.md) for canonical VPS layout, seed env, and systemd config.
+
+---
+
+## Architecture Notes
+
+- **Dual-balance handling**: Native KVNC (`asset_id = null`) + multi-asset (KVP-102) balances displayed separately
+- **Native-null mapping**: `asset_id: null` in API → `AssetId::native()` in SDK → "KVNC" in UI
+- **Address format**: `kvnc…dag` (base58) everywhere; 64-hex accepted on input
+- **Signing**: Ed25519 offline in browser; node only verifies (`POST /api/prepare` → sign → `POST /api/submit`)
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Framework | TanStack Start (file routing, SSR) |
+| Build | Vite 5 + Nitro |
+| Styling | Tailwind CSS v4 |
+| State | Zustand + React Query (TanStack Query) |
+| Auth | better-auth |
+| Database | pglite (WASM PostgreSQL) + migrations |
+| Language | TypeScript (strict) |
+
+---
+
+## Related Repositories
+
+| Repo | Purpose |
+|------|---------|
+| [kovanica-protocol](https://github.com/KovanicaDAG/kovanica-protocol) | Core consensus + ledger (source of truth) |
+| [kovanica-node](https://github.com/KovanicaDAG/kovanica-node) | Rust node binary (serves `/api/*`) |
+| [kovanica-sdk](https://github.com/KovanicaDAG/kovanica-sdk) | Rust/WASM SDK (types, keys, tx builders, RPC) |
+| [kovanica-wallet](https://github.com/KovanicaDAG/kovanica-wallet) | Mobile wallet apps + browser extension |
+
+---
+
+## License
+
+**MIT OR Apache-2.0**
