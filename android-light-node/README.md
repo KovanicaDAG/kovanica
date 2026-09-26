@@ -1,11 +1,11 @@
 # Kovanica Light Node — Android App (Slice 9+)
 
-Android light-node client built on the landed FFI foundation (slices 4–8).
-Target: testnet v0.1 (debug-signed APKs). Mainnet gating: Play-signed release + `/api/bootstrap` exposes subsidy/premine/seed.
+> **Actively developed Android light-node client** built on the landed FFI foundation (slices 4–8).
+> Target: **testnet v0.1** (debug-signed APKs). Mainnet gating: Play-signed release + `/api/bootstrap` exposes subsidy/premine/seed.
 
 ---
 
-## Structure
+## Repository Structure
 
 ```
 android-light-node/
@@ -13,7 +13,7 @@ android-light-node/
 ├── gradle/libs.versions.toml    # AGP, Kotlin, Compose BOM, JNA pin
 ├── gradle.properties
 ├── app/
-│   ├── build.gradle.kts         # depends on kovanica-ffi AAR (project-dir link)
+│   ├── build.gradle.kts         # Depends on kovanica-ffi AAR (project-dir link)
 │   └── src/main/...             # MainActivity, Compose App, strings, themes
 └── README.md
 ```
@@ -43,14 +43,13 @@ cd ../../android-light-node
 ./gradlew assembleDebug
 ```
 
-**Output:** `app/build/outputs/apk/debug/app-debug.apk`
+**Output**: `app/build/outputs/apk/debug/app-debug.apk`
 
 ---
 
 ## CI Build (GitHub Actions)
 
-The workflow `.github/workflows/build-android.yml` handles AAR + APK build.
-It mirrors the `build-web` pattern:
+`.github/workflows/build-android.yml` mirrors the `build-web` pattern:
 
 1. Builds AAR via `cargo-ndk` (both ABIs: arm64-v8a, x86_64)
 2. Uploads AAR artifact
@@ -75,11 +74,12 @@ It mirrors the `build-web` pattern:
 
 The app **must** reproduce the live network genesis before any UI work.
 
-**Live parameters (hard requirement, RFC-006):**
+**Live Parameters (RFC-006, hard requirement):**
+
 ```kotlin
 LightConfig(
     k = 3,
-    subsidy = 1_000_000_000L,      // 10 KVNC in atoms
+    subsidy = 1_000_000_000L,           // 10 KVNC in atoms
     founderAmount = 20_000_000_000_000L, // 200,000 KVNC (0.2M) in atoms
     founderSeed = 1,
     finalityDepth = Long.MAX_VALUE,
@@ -87,10 +87,9 @@ LightConfig(
 )
 ```
 
-Derived from `crates/kovanica-node/src/explorer.rs` `genesis_node()` +
-RFC-006 constants (subsidy 10 KVNC, founder premine 0.2M KVNC).
+Derived from `crates/kovanica-node/src/explorer.rs` `genesis_node()` + RFC-006 constants.
 
-**Gate test** (already landed in Rust layer):
+**Gate Test** (already landed in Rust layer):
 - `LightConfig::default()` (subsidy 1000) → **diverges** from live genesis
 - Live params above → **exact match** to live genesis `9565fc20…`
 - `receiveBlocks(live blob)` → blocks applied, tip matches live
@@ -101,9 +100,9 @@ RFC-006 constants (subsidy 10 KVNC, founder premine 0.2M KVNC).
 
 ## FFI Integration
 
-- AAR produced from `protocol/crates/kovanica-ffi` (`build-android.sh`)
-- Kotlin bindings committed under `bindings/kotlin/uniffi/kovanica/`
-- JNA-based (UniFFI 0.32) — loads `libkovanica_ffi.so` on first use
+- **AAR** produced from `protocol/crates/kovanica-ffi` (`build-android.sh`)
+- **Kotlin bindings** committed under `bindings/kotlin/uniffi/kovanica/`
+- **JNA-based** (UniFFI 0.32) — loads `libkovanica_ffi.so` on first use
 - App consumes AAR via project-dir link during dev, published AAR in CI
 
 ---
@@ -125,7 +124,7 @@ RFC-006 constants (subsidy 10 KVNC, founder premine 0.2M KVNC).
 |---------|---------|------------------|-------|
 | `kovanica-testnet` | `9565fc20cb465eec...` | `https://explorer.kovanica.online/api/bootstrap` | `seed.kovanica.online:9000`, `seed2.kovanica.online:9000` |
 
-Live HTTP surface on seed (`explorer.rs`):
+**Live HTTP Surface on Seed** (`explorer.rs`):
 - `GET /api/bootstrap` → JSON (genesis, tip, subsidy, premine, seed, k, **light_config**)
 - `GET /api/blocks` → `application/octet-stream` = `encode_records` (feed to `receiveBlocks`)
 - `GET /api/light_sync` → KVLS v1 blob
@@ -141,7 +140,7 @@ Live HTTP surface on seed (`explorer.rs`):
 ./gradlew assembleDebug
 
 # Release APK (requires signing config)
-./gradlew assembleRelease
+./gradyw assembleRelease
 
 # Lint + tests
 ./gradlew check
@@ -154,14 +153,23 @@ Live HTTP surface on seed (`explorer.rs`):
 
 ## Signing (Slice 9f)
 
-- **v0.1 testnet**: debug-signed APKs (Play requires signed release for production)
-- **Decision needed**: obtain/repo-managed keystore vs local debug builds
+- **v0.1 testnet**: Debug-signed APKs (Play requires signed release for production)
+- **Decision needed**: Obtain/repo-managed keystore vs local debug builds
 
 ---
 
 ## Related
 
-- Protocol FFI: `../protocol/crates/kovanica-ffi/`
-- Android build script: `../protocol/crates/kovanica-ffi/build-android.sh`
-- Live sync spike test: `../protocol/crates/kovanica-ffi/tests/live_sync_spike.rs`
-- Plan: `../protocol/docs/plans/android-light-node-app.md`
+| Repo | Purpose |
+|------|---------|
+| [kovanica-protocol](https://github.com/KovanicaDAG/kovanica-protocol) | Core consensus + ledger |
+| [kovanica-ffi](https://github.com/KovanicaDAG/kovanica-protocol/tree/main/crates/kovanica-ffi) | UniFFI bindings (LightNode) |
+| [protocol/crates/kovanica-ffi/build-android.sh](https://github.com/KovanicaDAG/kovanica-protocol/blob/main/crates/kovanica-ffi/build-android.sh) | Android AAR build script |
+| [protocol/crates/kovanica-ffi/tests/live_sync_spike.rs](https://github.com/KovanicaDAG/kovanica-protocol/blob/main/crates/kovanica-ffi/tests/live_sync_spike.rs) | Live sync spike test |
+| [protocol/docs/plans/android-light-node-app.md](https://github.com/KovanicaDAG/kovanica-protocol/blob/main/docs/plans/android-light-node-app.md) | Full plan |
+
+---
+
+## License
+
+**MIT OR Apache-2.0**

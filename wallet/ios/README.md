@@ -1,88 +1,123 @@
 # Kovanica Wallet (iOS)
 
-API-backed wallet for the Kovanica testnet. Connects to a remote Kovanica node over HTTP — no light-node, no SPV sync, no FFI/UniFFI bindings.
+> **API-backed wallet for Kovanica testnet** — Pure SwiftUI + URLSession. Connects to a remote Kovanica node over HTTP. No light node, no SPV sync, no FFI/UniFFI bindings.
 
-## Architecture
-
-- **Pure URLSession networking** — REST API calls to any Kovanica node
-- **SwiftUI + Combine** — dark-themed native iOS UI
-- **Swift concurrency** — async/await, `@MainActor` view model
-- **No native libs** — zero C/Rust dependencies
+---
 
 ## Features (v1)
 
-- View wallet balance (atoms and KVNC formatted to 8 decimals)
-- Receive address display + copy to clipboard
-- Faucet: request 1 testnet KVNC
-- Transaction history with pagination
-- Configurable node URL
+- ✅ View wallet balance (atoms + KVNC formatted to 8 decimals)
+- ✅ Receive address display + copy to clipboard + QR code
+- ✅ Faucet: request 1 testnet KVNC
+- ✅ Transaction history with pagination
+- ✅ Configurable node URL
+- ❌ **Send / Sign** — *coming soon* (requires Ed25519 + sighash crypto binding)
 
-## Send / Sign
+---
 
-Signing requires ed25519 key generation and sighash computation — this is a follow-up. The Send button is disabled and marked "Coming Soon."
+## Architecture
 
-## Build
+| Layer | Technology |
+|-------|------------|
+| Networking | Pure `URLSession` — REST API calls |
+| UI | SwiftUI + Combine (dark-themed native) |
+| Concurrency | Swift Concurrency (`async/await`, `@MainActor` ViewModel) |
+| Dependencies | **Zero external deps** — no CocoaPods, SPM, or Carthage |
 
-1. Open `KovanicaWallet.xcodeproj` in Xcode 15+
-2. Select an iOS 16+ simulator or device target
-3. Build and run (`Cmd+R`)
+---
 
-No CocoaPods, SPM, or Carthage — zero external dependencies.
+## Build & Run
 
-## Install on a real iPhone — no Mac needed
+```bash
+# Requires macOS + Xcode 15+
+open KovanicaWallet.xcodeproj
+# Select iOS 16+ simulator or device → Cmd+R
+```
 
-iOS apps can only be *built* on macOS, but you do **not** need a Mac to *get the
-app onto your phone*: our CI builds the app for a physical device on GitHub's
-macOS runners and exports an **unsigned `.ipa`**. A sideload tool on any PC
-(Windows/Linux) re-signs it with your **free Apple ID** at install time.
+---
 
-**Prereqs:** an iPhone on iOS 16+, a PC (Windows/Linux), and a free Apple ID.
+## Install on Real iPhone — No Mac Needed
 
-1. **Get the `.ipa`.** In GitHub Actions, run the **"kovanica wallet"** workflow
-   (on `main`), then open the **"Export iOS wallet .ipa (unsigned, sideloadable)"**
-   job and download the `kovanica-wallet-ios-ipa` artifact (a
-   `KovanicaWallet-ios-unsigned.ipa`, ~3.6 MB). The job is defined in
-   `.github/workflows/wallet.yml`.
-2. **Install a sideload tool on your PC** — **AltStore** (altstore.io) or
-   **Sideloadly** (sideloadly.io).
-3. **Sign in** with your Apple ID, connect the iPhone via USB, and **trust** the
-   device when prompted.
+iOS apps can only be **built** on macOS, but you **don't need a Mac to install** on your phone:
+
+1. **Get the `.ipa`** — In GitHub Actions, run the **"kovanica wallet"** workflow (on `main`), then open the **"Export iOS wallet .ipa (unsigned, sideloadable)"** job and download the `kovanica-wallet-ios-ipa` artifact (`KovanicaWallet-ios-unsigned.ipa`, ~3.6 MB).
+
+2. **Install a sideload tool on your PC** — **AltStore** (altstore.io) or **Sideloadly** (sideloadly.io).
+
+3. **Sign in** with your Apple ID, connect iPhone via USB, **trust** the device when prompted.
+
 4. **Drag the `.ipa`** onto the tool. It installs and re-signs with your Apple ID.
-5. **On the phone:** **Settings → General → VPN & Device Management** → tap your
-   Apple ID profile → **Trust**, then open the Kovanica Wallet.
 
-**Limits of the free-Apple-ID route:** sideloads **expire after 7 days**
-(re-trust / reinstall weekly) and a free account covers only ~3 devices. A paid
-Apple Developer account removes the expiry and device-cap limits.
+5. **On iPhone**: Settings → General → VPN & Device Management → tap your Apple ID profile → **Trust**, then open Kovanica Wallet.
+
+> **Free Apple ID limits**: Sideloads expire after **7 days** (re-trust/reinstall weekly); covers ~3 devices. Paid Apple Developer account removes expiry and device limits.
+
+---
 
 ## Project Structure
 
 ```
 KovanicaWallet.xcodeproj/
 KovanicaWallet/
-  KovanicaWalletApp.swift        # @main entry point
-  ContentView.swift               # Navigation root, address entry
-  Models/WalletModels.swift       # Codable models, formatting
-  Networking/KovAPIClient.swift   # URLSession HTTP client
-  Networking/WalletRepository.swift
-  ViewModels/WalletViewModel.swift
-  Views/HomeView.swift            # Balance, actions, faucet
-  Views/ReceiveView.swift         # Address display + copy
-  Views/HistoryView.swift         # Paginated tx list
-  Views/Theme.swift               # KVNCBrand color palette
-  Info.plist
-  Assets.xcassets/                # App icon (kvnc-logo.png), accent color
+├── KovanicaWalletApp.swift        # @main entry point
+├── ContentView.swift               # Navigation root, address entry
+├── Models/
+│   └── WalletModels.swift         # Codable models, formatting
+├── Networking/
+│   ├── KovAPIClient.swift         # URLSession HTTP client
+│   └── WalletRepository.swift     # Data layer
+├── ViewModels/
+│   └── WalletViewModel.swift      # @MainActor state
+├── Views/
+│   ├── HomeView.swift             # Balance, actions, faucet
+│   ├── ReceiveView.swift          # Address display + copy + QR
+│   ├── HistoryView.swift          # Paginated tx list
+│   └── Theme.swift                # KVNCBrand color palette
+├── Info.plist
+└── Assets.xcassets/               # App icon (kvnc-logo.png), accent color
 ```
 
-## API
+---
 
-Default node: `https://explorer.kovanica.online` (settable in-app).
+## API Endpoints Used
 
-Endpoints used: `/api/head`, `/api/bootstrap`, `/api/state`, `/api/address/<addr>`, `/api/history`, `/api/fee_estimate`, `POST /api/faucet`.
+Default node: `https://explorer.kovanica.online` (settable in-app)
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/head` | Chain tip, network, genesis, min fee |
+| `GET /api/bootstrap` | Network params (k, subsidy, token, max_supply) |
+| `GET /api/state` | Node/network state |
+| `GET /api/address/<addr>` | Balance + tx count |
+| `GET /api/utxos` | UTXO list (for future send) |
+| `GET /api/history` | Paginated transaction history |
+| `GET /api/fee_estimate` | Current fee rate |
+| `POST /api/faucet` | Request 1 testnet KVNC |
+
+---
 
 ## Branding
 
-- Background: `#09090B`
-- Foreground: `#D8D4CC`
-- Accent gold: `#C9A227`
-- App icon: `kvnc-logo.png` (1024x1024, universal iOS)
+| Role | Color |
+|------|-------|
+| Background | `#09090B` |
+| Foreground | `#D8D4CC` |
+| Accent Gold | `#C9A227` |
+| App Icon | `kvnc-logo.png` (1024×1024, universal iOS) |
+
+---
+
+## Related Repositories
+
+| Repo | Purpose |
+|------|---------|
+| [kovanica-wallet](https://github.com/KovanicaDAG/kovanica-wallet) | Parent repo (Android/Extension) |
+| [kovanica-protocol](https://github.com/KovanicaDAG/kovanica-protocol) | Core consensus + ledger |
+| [kovanica-node](https://github.com/KovanicaDAG/kovanica-node) | Node binary (serves API) |
+| [kovanica-sdk](https://github.com/KovanicaDAG/kovanica-sdk) | Rust/WASM SDK (for future signing) |
+
+---
+
+## License
+
+**MIT OR Apache-2.0**
