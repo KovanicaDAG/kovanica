@@ -1,5 +1,10 @@
 # seed1 PoA Genesis Deployment
 
+> **Note:** the authority keys referenced by earlier revisions of this
+> document were committed to a public repository and are BURNED. See
+> [`AUTHORITY-KEY-CEREMONY.md`](../protocol/docs/AUTHORITY-KEY-CEREMONY.md).
+
+
 Repurposing seed1 as the **sole authority** for the new PoA testnet genesis.
 
 ---
@@ -164,7 +169,7 @@ curl -s http://127.0.0.1:8080/api/network | jq .
 
 ---
 
-## Authority Key Reference (from TESTNET_AUTHORITY_KEYS.md)
+## Authority Key Reference (from AUTHORITY-KEY-CEREMONY.md)
 
 ```bash
 # Authority 1 (seed1) - KEEP SECURE
