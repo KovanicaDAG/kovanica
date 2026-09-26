@@ -29,7 +29,7 @@ pub const HELP: &str = "commands: help | genesis <k> <subsidy> <amount> <seed> |
 genesis_finality <k> <subsidy> <amount> <seed> <finality_depth> | \
 address <seed> | balance <seed|addr-hex> | send <from-seed> <amount> <to-seed> | \
 pool <from-seed> <amount> <to-seed> | produce | pending | tips | tip | len | \
-staking [vrf-pk-hex] | save <path> | load <path> | checkpoint <path> | load_checkpoint <path> | \
+save <path> | load <path> | checkpoint <path> | load_checkpoint <path> | \
 htlc_create <from-seed> <amount> <recipient-pk-hex> <preimage-hash-hex> <timeout> | \
 htlc_redeem <from-seed> <outpoint-tx-hex> <outpoint-index> <script-hex> <preimage-hex> <to-addr> | \
 htlc_refund <from-seed> <outpoint-tx-hex> <outpoint-index> <script-hex> <to-addr> | \
@@ -140,47 +140,6 @@ fn run(node: &mut Node, line: &str) -> Result<String, String> {
         }
 
         "tip" => Ok(node.selected_tip().map_err(|e| e.to_string())?.to_string()),
-
-        // Read-only staking summary: hybrid status, this node's validator key,
-        // and bonded stakes (total, plus optionally one key's) at the tip view.
-        "staking" => {
-            let mut out = format!(
-                "hybrid={} total_stake={}",
-                node.hybrid_enabled(),
-                node.total_stake().map_err(|e| e.to_string())?
-            );
-            if let Some(pk) = node.validator_public_key() {
-                out.push_str(&format!(" validator={}", hex::encode(pk.as_bytes())));
-            }
-            if let [pk_hex] = args[..] {
-                let mut pk = [0u8; 32];
-                hex::decode_to_slice(pk_hex, &mut pk)
-                    .map_err(|e| format!("bad vrf-pk-hex: {e}"))?;
-                out.push_str(&format!(
-                    " stake_of={}",
-                    node.stake_of(&pk).map_err(|e| e.to_string())?
-                ));
-            }
-            // PoA info
-            if let Some(poa) = node.poa_config() {
-                out.push_str(&format!(
-                    " poa=true slot_duration_ms={} authorities={} threshold={}",
-                    poa.slot_duration_ms,
-                    poa.authority_set.len(),
-                    poa.authority_set.threshold()
-                ));
-                let authorities_hex: Vec<String> = poa
-                    .authority_set
-                    .authorities()
-                    .iter()
-                    .map(|pk| hex::encode(pk.as_bytes()))
-                    .collect();
-                out.push_str(&format!(" authorities=[{}]", authorities_hex.join(",")));
-            } else {
-                out.push_str(" poa=false");
-            }
-            Ok(out)
-        }
 
         "htlc_create" => {
             let [from, amount, recipient_pk_hex, preimage_hash_hex, timeout] = fixed::<5>(&args)?;

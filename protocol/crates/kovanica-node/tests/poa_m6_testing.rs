@@ -94,7 +94,6 @@ fn create_signed_poa_block(
         work: block.work(),
         timestamp_ms: block.timestamp_ms(),
         nonce: block.nonce(),
-        vrf: None,
         authority_sig: Some(sig),
         txs: Vec::new(),
     }
@@ -171,8 +170,6 @@ fn authority_update_on_chain_and_spv_proof() {
             authority_set_hash: set.hash(),
             hash_without_authority_sig: [0u8; 32],
         },
-        false,
-        None,
         kovanica_state::spv::SpvPoAConfig {
             authority_set: set.clone(),
             slot_duration_ms: SLOT_MS,
@@ -346,8 +343,6 @@ fn spv_sync_under_poa_reorg() {
     let genesis_header = node.spv_header(&genesis_id).unwrap();
     let mut spv_client = kovanica_state::spv::SpvClient::with_poa(
         genesis_header.clone(),
-        false,
-        None,
         kovanica_state::spv::SpvPoAConfig {
             authority_set: set.clone(),
             slot_duration_ms: SLOT_MS,
@@ -405,8 +400,6 @@ fn spv_sync_under_poa_reorg() {
     let new_headers = node.export_spv_headers();
     let mut new_spv_client = kovanica_state::spv::SpvClient::with_poa(
         genesis_header.clone(),
-        false,
-        None,
         kovanica_state::spv::SpvPoAConfig {
             authority_set: set.clone(),
             slot_duration_ms: SLOT_MS,
@@ -436,80 +429,72 @@ fn spv_sync_under_poa_reorg() {
 }
 
 // ---------------------------------------------------------------------------
-// Resource Profiling Test (CPU/RAM vs PoW)
+// Resource Profiling Test (CPU/RAM under PoA)
 // ---------------------------------------------------------------------------
+
+/// Resident set size in bytes, read from `/proc/self/status` (`VmRSS`).
+/// `None` off Linux.
+fn resident_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|l| {
+        let rest = l.strip_prefix("VmRSS:")?;
+        let kb: u64 = rest.trim().trim_end_matches(" kB").trim().parse().ok()?;
+        Some(kb * 1024)
+    })
+}
 
 #[test]
 #[ignore = "run manually for resource profiling"]
-fn resource_profiling_poa_vs_pow() {
-    // This test is ignored by default and should be run manually
-    // to profile CPU/RAM usage of PoA vs PoW
-
-    // PoA node
+fn resource_profiling_poa_production() {
+    // The PoW half of the original PoA-vs-PoW comparison was removed with PoW
+    // (RFC-POA); there is no longer a second arm to compare against. What
+    // remains is the measurement that matters for the Phase-1 adoption gate:
+    // per-block production cost and the node's resident footprint.
     let (set, sks) = authority_set(3, 2);
-    let mut poa_node = Node::new();
-    poa_node
-        .genesis_with_poa(
-            3,
-            10 * ATOM,
-            200_000 * ATOM,
-            1,
-            None,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            None,
-            set.clone(),
-            SLOT_MS,
-        )
-        .unwrap();
+    let mut node = Node::new();
+    node.genesis_with_poa(
+        3,
+        10 * ATOM,
+        200_000 * ATOM,
+        1,
+        None,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        None,
+        set,
+        SLOT_MS,
+    )
+    .unwrap();
     for sk in &sks {
-        poa_node.set_authority_signing_key(sk.to_bytes());
+        node.set_authority_signing_key(sk.to_bytes());
     }
 
-    // PoW node
-    let mut pow_node = Node::new();
-    pow_node
-        .genesis_with_finality(
-            3,
-            10 * ATOM,
-            200_000 * ATOM,
-            1,
-            None,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            None,
-        )
-        .unwrap();
-    pow_node.set_miner(kovanica_state::KeyPair::from_u64(1).address());
-
-    // Measure PoA block production time
+    let blocks = 100;
+    let rss_before = resident_bytes();
     let start = std::time::Instant::now();
-    for _ in 0..100 {
-        poa_node.produce_empty().unwrap();
+    for _ in 0..blocks {
+        node.produce_empty().unwrap();
     }
-    let poa_duration = start.elapsed();
+    let elapsed = start.elapsed();
+    let rss_after = resident_bytes();
 
-    // Measure PoW block production time (with low difficulty)
-    let _ = pow_node.set_proof_of_work(true);
-
-    let start = std::time::Instant::now();
-    for _ in 0..100 {
-        pow_node.produce_block().unwrap();
+    let per_block_us = elapsed.as_micros() as f64 / blocks as f64;
+    println!("PoA {blocks} blocks: {elapsed:?} ({per_block_us:.1} us/block)");
+    if let (Some(before), Some(after)) = (rss_before, rss_after) {
+        println!(
+            "RSS {} MiB -> {} MiB (+{:.1} KiB/block)",
+            before / (1 << 20),
+            after / (1 << 20),
+            (after.saturating_sub(before) as f64 / blocks as f64) / 1024.0
+        );
     }
-    let pow_duration = start.elapsed();
 
-    println!("PoA 100 blocks: {:?}", poa_duration);
-    println!("PoW 100 blocks: {:?}", pow_duration);
-    println!(
-        "PoA speedup: {:.2}x",
-        pow_duration.as_secs_f64() / poa_duration.as_secs_f64()
-    );
-
-    // PoA should be significantly faster (at least 10x)
+    // PoA production is a signature, not a hash search, so per-block cost must
+    // stay in the microsecond range. The bound is deliberately loose: it is a
+    // regression tripwire against a reintroduced search loop, not a benchmark.
     assert!(
-        poa_duration < pow_duration / 10,
-        "PoA should be at least 10x faster than PoW"
+        per_block_us < 50_000.0,
+        "PoA block production took {per_block_us:.1} us/block — a search loop may have crept back in"
     );
 }

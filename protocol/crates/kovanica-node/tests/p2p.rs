@@ -1,12 +1,49 @@
 //! Integration tests for continuous in-process gossip: peer discovery, the
 //! relay loop, transaction dissemination, and mempool eviction of spent txs.
 
+use ed25519_dalek::SigningKey;
+use kovanica_dag::{AuthorityPublicKey, AuthoritySet};
 use kovanica_node::{GossipKind, Mesh, Node};
+use kovanica_state::KeyPair;
 
+/// Slot duration used throughout (RFC-POA default).
+const SLOT_MS: u64 = 3000;
+/// Authority count (the `AuthoritySet` minimum is 3).
+const AUTHORITIES: u64 = 3;
+
+/// The shared authority set: keys from seeds `1..=AUTHORITIES`, threshold
+/// 2-of-3. Deterministic, so every peer commits to the same set and therefore
+/// the same genesis id.
+fn authority_set() -> AuthoritySet {
+    let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
+        .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
+        .collect();
+    AuthoritySet::new(keys, 2).expect("valid authority set")
+}
+
+/// A node with a pinned clock and a fresh PoA genesis, holding every authority
+/// signing key so it can produce in the slot it is asked to produce for
+/// (RFC-POA is the only admission regime).
 fn genesis_node() -> Node {
     let mut node = Node::new();
     node.set_now_ms(1_000);
-    node.genesis(3, 1000, 1000, 1, None).unwrap();
+    node.genesis_with_poa(
+        3,
+        1000,
+        1000,
+        1,
+        None,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        None,
+        authority_set(),
+        SLOT_MS,
+    )
+    .unwrap();
+    for i in 1..=AUTHORITIES {
+        node.set_authority_signing_key(KeyPair::from_u64(i).seed());
+    }
     node
 }
 

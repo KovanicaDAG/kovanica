@@ -64,7 +64,6 @@ fn sample_messages() -> Vec<RelayMsg> {
             work: 5,
             timestamp_ms: 2000,
             nonce: 12345,
-            vrf: None,
             authority_sig: None,
             txs: vec![sample_tx.clone()],
         }),
@@ -387,7 +386,7 @@ fn test_cross_block_merkle_forgery_and_tampered_payloads() {
 
     let gen_id = node.genesis_id().unwrap();
     let gen_hdr = node.spv_header(&gen_id).unwrap();
-    let mut spv_client = SpvClient::new(gen_hdr, false, None);
+    let mut spv_client = SpvClient::new(gen_hdr);
 
     // Block 1 with TX 1
     node.set_now_ms(2000);
@@ -544,7 +543,7 @@ fn test_concurrent_tcp_light_clients_and_high_throughput_load() {
             };
             let _ = session.set_read_timeout(Some(Duration::from_secs(3)));
 
-            let mut client = SpvClient::new(g_hdr, false, None);
+            let mut client = SpvClient::new(g_hdr);
 
             // Sync headers over TCP
             let _ = sync_headers_via_relay(&mut session, &mut client, None);

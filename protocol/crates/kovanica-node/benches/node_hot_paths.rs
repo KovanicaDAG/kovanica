@@ -143,7 +143,6 @@ fn make_records(num_records: usize, txs_per_record: usize) -> Vec<BlockRecord> {
             work: 1,
             timestamp_ms: i as u64 + 1,
             nonce: 0,
-            vrf: None,
             authority_sig: None,
             txs,
         });

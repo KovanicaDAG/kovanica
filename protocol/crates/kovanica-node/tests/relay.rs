@@ -5,12 +5,43 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
 
+use ed25519_dalek::SigningKey;
+use kovanica_dag::{AuthorityPublicKey, AuthoritySet};
 use kovanica_node::{apply_relay, Node, RelayMsg, RelaySession};
+use kovanica_state::KeyPair;
 
+/// Slot duration used throughout (RFC-POA default).
+const SLOT_MS: u64 = 3000;
+/// Authority count (the `AuthoritySet` minimum is 3).
+const AUTHORITIES: u64 = 3;
+
+/// A node with a pinned clock and a fresh PoA genesis, holding every authority
+/// signing key so it can produce in the slot it is asked to produce for
+/// (RFC-POA is the only admission regime).
 fn genesis_node() -> Node {
+    let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
+        .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
+        .collect();
+    let set = AuthoritySet::new(keys, 2).expect("valid authority set");
     let mut node = Node::new();
     node.set_now_ms(1_000);
-    node.genesis(3, 1000, 1000, 1, None).unwrap();
+    node.genesis_with_poa(
+        3,
+        1000,
+        1000,
+        1,
+        None,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        None,
+        set,
+        SLOT_MS,
+    )
+    .unwrap();
+    for i in 1..=AUTHORITIES {
+        node.set_authority_signing_key(KeyPair::from_u64(i).seed());
+    }
     node
 }
 

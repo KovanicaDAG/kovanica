@@ -12,8 +12,45 @@
 //! `height >= creation_height + csv`. A release's own block advances the
 //! chain, so walls are measured from the post-release tip.
 
+use ed25519_dalek::SigningKey;
+use kovanica_dag::{AuthorityPublicKey, AuthoritySet};
 use kovanica_node::{rpc, Node, NodeError};
 use kovanica_state::{KeyPair, LedgerError, LedgerInsertError, VaultScript};
+
+/// Slot duration used throughout (RFC-POA default).
+const SLOT_MS: u64 = 3000;
+/// Authority count (the `AuthoritySet` minimum is 3).
+const AUTHORITIES: u64 = 3;
+
+/// A PoA node holding every authority signing key, so it can advance the chain
+/// in any slot (RFC-POA is the only admission regime). Rewards go to the
+/// *first* loaded authority key, seed 1, so the owner funded from seed 1 keeps
+/// spending exactly as it did under the old PoW path.
+fn poa_node() -> Node {
+    let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
+        .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
+        .collect();
+    let set = AuthoritySet::new(keys, 2).expect("valid authority set");
+    let mut node = Node::new();
+    node.genesis_with_poa(
+        3,
+        2000,
+        2000,
+        1,
+        None,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        None,
+        set,
+        SLOT_MS,
+    )
+    .expect("genesis");
+    for i in 1..=AUTHORITIES {
+        node.set_authority_signing_key(KeyPair::from_u64(i).seed());
+    }
+    node
+}
 
 /// The owner who will eventually release the vault (seeded deterministically).
 fn owner(seed: u64) -> KeyPair {
@@ -39,8 +76,7 @@ fn create(
 fn vault_absolute_gate_enforced() {
     // An absolute-lock vault (CLTV-style): the release spend's own block must
     // sit at height >= unlock_height.
-    let mut node = Node::new();
-    node.genesis(3, 2000, 2000, 1, None).unwrap();
+    let mut node = poa_node();
 
     // unlock_height = pre-funding tip + 3: the funding block consumes one
     // height, so the first release attempt sits below the gate.
@@ -76,8 +112,7 @@ fn vault_absolute_gate_enforced() {
 fn vault_relative_gate_enforced() {
     // A relative-lock vault (CSV-style): release requires the spend block to
     // be `csv` blocks above this output's creation height.
-    let mut node = Node::new();
-    node.genesis(3, 2000, 2000, 1, None).unwrap();
+    let mut node = poa_node();
 
     let (script, outpoint) = create(&mut node, 0, 4);
     let alice = owner(1);
@@ -107,8 +142,7 @@ fn vault_relative_gate_enforced() {
 fn vault_both_locks_compose() {
     // With both locks set, the later gate wins. unlock_height sits far ahead,
     // so an early release is blocked even though the relative gate has passed.
-    let mut node = Node::new();
-    node.genesis(3, 2000, 2000, 1, None).unwrap();
+    let mut node = poa_node();
 
     let height_before_funding = node.chain_height().unwrap();
     let (script, outpoint) = create(&mut node, (height_before_funding + 10) as u32, 2);
@@ -132,8 +166,7 @@ fn vault_both_locks_compose() {
 fn vault_requires_owner_signature() {
     // A spend signed by a key that is not the template owner is rejected as a
     // bad signature (the ledger verifies `owner_pk` against the sighash).
-    let mut node = Node::new();
-    node.genesis(3, 2000, 2000, 1, None).unwrap();
+    let mut node = poa_node();
 
     let (script, outpoint) = create(&mut node, 0, 1);
     let mallory = owner(2);
@@ -153,8 +186,7 @@ fn vault_requires_owner_signature() {
 fn vault_rpc_commands() {
     // The three line-RPC commands end-to-end: create → balance → release →
     // balance, plus the help-text listing.
-    let mut node = Node::new();
-    node.genesis(3, 2000, 2000, 1, None).unwrap();
+    let mut node = poa_node();
 
     let alice = owner(1);
     let owner_pk_hex = hex::encode(alice.address().payload());
