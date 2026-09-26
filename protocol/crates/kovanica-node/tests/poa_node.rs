@@ -294,7 +294,6 @@ fn poa_log_roundtrip_preserves_ids_and_re_enforces_admission() {
             work: 1,
             timestamp_ms: 0,
             nonce: 0,
-            vrf: None,
             authority_sig: None,
             txs: Vec::new(),
         })

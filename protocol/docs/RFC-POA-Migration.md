@@ -429,6 +429,100 @@ difficulty carries a short note pointing here. Canonical list:
 `node/JOIN.md`, `node/TESTNET.md`, `sdk/COOKBOOK.md`, and the superseded hybrid
 plans in `TODO/plans/RFC-008/`.
 
+### 0.9 Phase 0 implementation record — what the removal actually left behind
+
+Phase 0 deletes PoW, difficulty, VRF and hybrid admission from `kovanica-dag`,
+`kovanica-state` and `kovanica-node`. Doing so surfaced five things the design
+sections above do not cover. They are recorded here rather than fixed in
+passing, because two of them are **blockers for any PoA genesis**, and one is a
+policy decision this removal is not entitled to make.
+
+**B1 — There is no way to give a node its authority signing key. `[BLOCKER]`**
+
+`Node::set_authority_signing_key` exists, but it has exactly three callers, all
+of them test scaffolding: the two TESTNET-ONLY placeholder blocks in
+`explorer.rs` (`genesis_node`, `restore_poa_policy`) and tests. There is **no**
+env var, **no** RPC command and **no** CLI flag that feeds an operator's own
+Ed25519 secret to the node. `KOVANICA_AUTHORITIES` carries only *public* keys.
+
+Consequence: today, the only blocks the network can ever produce are placeholder
+testnet blocks, signed with keys derived from the publicly known
+`AUTHORITY_PLACEHOLDER_BASE = 9001`. A real authority operator cannot start a
+producing node at all.
+
+This is deliberately **not** fixed inside Phase 0. The obvious fix is an env var
+like `KOVANICA_AUTHORITY_KEY`, but that means deciding *how a consensus signing
+key enters a process* — and the standing rule is that seeds and private keys
+stay client-side and never enter a node. Whether an authority key is exempt
+from that rule (it is arguably a node-side consensus credential, like a miner's
+key was), and if so whether it arrives by env var, interactive prompt, a
+unattended secret mount, or an external signer, is a **design decision with
+security weight** that must be made explicitly. `[OPEN]` — see §0.7.
+
+**B2 — The line-RPC surface cannot start a PoA chain. `[BLOCKER]`**
+
+`rpc::execute_line`'s `genesis` command builds a non-PoA genesis. Since PoA is
+the only admission regime (§0.1), `produce` on such a node always fails
+`NodeError::NotAuthoritySlot`, and there is no `genesis_poa` or
+`authority_key` command to replace it. So `kovanica-cli`/the REPL cannot run a
+producing node.
+
+The `mempool` integration suite was migrated off the RPC string surface onto the
+`Node` API for this reason; its module doc says so. Adding `genesis_poa` is
+mechanical, but it is blocked behind B1 — an operator still has nowhere to put
+the key. `[OPEN]`
+
+**B3 — No full-node path applies an `AuthorityUpdateTx`. `[BLOCKER]`**
+
+`apply_authority_update` exists only at `kovanica-state/src/spv.rs` (light
+client). On a full node, `Ledger` receives an authority set exactly twice: at
+genesis (`set_poa`) or from a snapshot. So the on-chain rotation that §0.7.2
+and KVP-201 specify has no full-node implementation, and the authority set is in
+practice immutable after genesis. Unchanged by Phase 0, re-recorded because
+B1/B2 make it the third face of the same gap: **PoA has no operational
+lifecycle yet.**
+
+**B4 — The block reward is credited to `authority_sks[0]`, not to the signer.**
+
+`produce_empty`/`produce_block` compute the coinbase recipient from
+`authority_public_key()` — the *first* key pushed into the node — **before**
+`try_produce_poa` resolves which authority is scheduled for the slot. For a
+correctly configured operator node (exactly one key) the two coincide, so
+production behaviour is right. But a node holding several keys — the testnet
+placeholder convenience, or a future key-rotating operator — silently pays every
+reward to whichever key happens to be first, regardless of who signed.
+
+Not fixed here: choosing the reward rule (signer vs. first key) is a tokenomics
+decision with supply-distribution consequences, so it is `[OPEN]`, not a
+mechanical fix. It is recorded because it is the reason four `explorer`/`mempool`
+assertions had to be restated from "founder" to "authority".
+
+**B5 — No gossip-load test under PoA admission. `[RESOLVED IN PHASE 0]`**
+
+Recorded as a possible gap when
+`load_gossip_convergence::pow_mining_preserves_convergence` was deleted, then
+closed in the same change: the whole suite's `genesis_node` helper was moved to
+a PoA genesis with the full authority set installed, so `p2p.rs`,
+`load_gossip_convergence.rs` and `relay.rs` now measure propagation, mempool
+pressure and fork churn **with every block's authority signature verified on
+every peer** — a stronger posture than the "no admission at all" mesh those
+suites previously ran under.
+
+Also deleted, without replacement (the subject does not exist under PoA):
+`spv_sync::test_spv_difficulty_retarget_enforcement`,
+`challenger_consensus_sync::{test_difficulty_retarget_pure_math_clamps,
+test_spv_difficulty_upward_and_downward_clamps_boundary_rejections,
+test_extreme_difficulty_oscillations_stress}`, and 7 whole binaries
+(`mining_api`, `mining_stress`, `challenger_1_mining_adversarial`,
+challenger_external_mining`, `challenger_e2e_mining_lifecycle`, `hybrid_node`,
+`unbond_node`). The adversarial *harness* gap in §0.7.3 is **not** closed by
+this and still stands.
+
+Two further items were deliberately left alone, both consensus-adjacent and both
+out of Phase 0's scope: the pre-existing two-decoder flag-1 disagreement in
+`net.rs` (wire behaviour), and the remotely-triggerable overflow panic in the
+asset registry.
+
 ---
 
 ## Motivation

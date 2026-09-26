@@ -17,18 +17,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ed25519_dalek::{Signer, SigningKey};
 use kovanica_cli::Wallet;
 use kovanica_dag::{
-    pow, AuthorityPublicKey, AuthoritySet, Block, BlockId, Dag, PoAConfig, VrfPublicKey,
-    VrfSecretKey,
+    AuthorityPublicKey, AuthoritySet, Block, BlockId, Dag, PoAConfig, POA_NOMINAL_WORK,
 };
-use kovanica_dag::{vrf_keypair_from_seed, vrf_prove};
-use kovanica_state::ledger::apply_block_with_stake;
 use kovanica_state::multisig::{verify_threshold_signatures, MultisigScript};
-use kovanica_state::stake::{Freeze, UNBOND_MATURITY, UNBOND_PREFIX};
 use kovanica_state::{
-    decode_block_payload, encode_block_payload, verify, Address, AssetId, HalvingSchedule,
-    HtlcScript, HybridConfig, KeyPair, Ledger, LedgerError, LedgerInsertError, LedgerStore,
-    OutPoint, Sig, StakedVrf, StealthAddress, Transaction, TxId, TxInput, TxOutput, UtxoSet,
-    VaultScript, COINBASE_MATURITY, DEFAULT_HALVING_ERA, FEE_PRODUCER_DEN, FEE_PRODUCER_NUM,
+    apply_block_at_height, decode_block_payload, encode_block_payload, verify, Address, AssetId,
+    HalvingSchedule, HtlcScript, KeyPair, Ledger, LedgerError, LedgerInsertError, LedgerStore,
+    OutPoint, Sig, StealthAddress, Transaction, TxId, TxInput, TxOutput, UtxoSet, VaultScript,
+    COINBASE_MATURITY, DEFAULT_HALVING_ERA, FEE_PRODUCER_DEN, FEE_PRODUCER_NUM,
 };
 
 use crate::mempool_v2::{MempoolConfig, MempoolV2};
@@ -90,18 +86,6 @@ pub enum NodeError {
     },
     /// A mempool operation failed.
     Mempool(String),
-    /// An unbond requested more than the matured bonded stake covers.
-    InsufficientStake {
-        /// The unbond amount that was requested.
-        requested: u64,
-        /// The sum of currently matured, owned frozen outpoints.
-        available: u64,
-    },
-    /// A frozen outpoint backing `vrf_pk` is not owned by the signing key.
-    UnbondOwnerMismatch {
-        /// The offending frozen outpoint.
-        outpoint: OutPoint,
-    },
     /// The multisig redeem script for `address` is not known to this node.
     UnknownMultisigAddress { address: Address },
     /// The supplied multisig redeem script or partial signatures are invalid.
@@ -141,13 +125,6 @@ impl core::fmt::Display for NodeError {
                 "block timestamp ({timestamp_ms} ms) is more than 2h ahead of local clock ({now_ms} ms)"
             ),
             NodeError::Mempool(err) => write!(f, "mempool error: {err}"),
-            NodeError::InsufficientStake { requested, available } => write!(
-                f,
-                "insufficient matured stake: requested {requested}, available {available}"
-            ),
-            NodeError::UnbondOwnerMismatch { outpoint } => {
-                write!(f, "frozen outpoint {outpoint:?} is not owned by the signing key")
-            }
             NodeError::UnknownMultisigAddress { address } => {
                 write!(f, "unknown multisig address {address}")
             }
@@ -323,14 +300,13 @@ pub struct BlockRecord {
     pub work: u128,
     /// The block's timestamp, in milliseconds.
     pub timestamp_ms: u64,
-    /// The block's proof-of-work nonce. Carried so a peer reconstructs the exact
-    /// same id (and, under enforced PoW, the block still meets its target).
+    /// The block nonce. Under PoA-only admission nothing is searched over, so
+    /// it is always zero — but it is still part of the canonical id encoding,
+    /// so it must be carried for a peer to reconstruct the exact same id.
     pub nonce: u64,
-    /// The staked-VRF bundle for hybrid-admitted blocks (`None` on PoW blocks).
-    pub vrf: Option<StakedVrf>,
-    /// The 64-byte Ed25519 authority signature for PoA-admitted blocks
-    /// (`None` on PoW/hybrid blocks). Carried so a peer reconstructs the exact
-    /// same id — the authority flag byte is part of the canonical id encoding.
+    /// The 64-byte Ed25519 authority signature for PoA-admitted blocks. Carried
+    /// so a peer reconstructs the exact same id — the authority flag byte is
+    /// part of the canonical id encoding.
     pub authority_sig: Option<[u8; 64]>,
     /// The block's transactions.
     pub txs: Vec<Transaction>,
@@ -339,55 +315,33 @@ pub struct BlockRecord {
 impl BlockRecord {
     /// The block id this record represents — the BLAKE3 hash of the canonical
     /// encoding, exactly as [`Node::receive_block`] computes it when it
-    /// reconstructs the block (parents, work, timestamp, nonce, VRF fields,
-    /// and the encoded-tx payload). Used to match a body to its header by id
-    /// rather than by position, since a server may omit pruned blocks.
+    /// reconstructs the block (parents, work, timestamp, nonce, the authority
+    /// signature, and the encoded-tx payload). Used to match a body to its
+    /// header by id rather than by position, since a server may omit pruned
+    /// blocks.
     pub fn id(&self) -> BlockId {
         let payload = encode_block_payload(&self.txs);
-        let block = if let Some(sig) = self.authority_sig {
+        let block = match self.authority_sig {
             // PoA block: the authority flag byte is part of the canonical id
             // encoding, so the signature MUST be carried on the wire.
-            Block::new_with_authority(
+            Some(sig) => Block::new_with_authority(
                 self.parents.clone(),
                 self.work,
                 self.timestamp_ms,
                 self.nonce,
                 sig,
                 payload,
-            )
-        } else {
-            match &self.vrf {
-                Some(sv) => {
-                    // A malformed VRF public key cannot be reconstructed; fall back
-                    // to the non-VRF id (header verification rejects it anyway).
-                    match VrfPublicKey::from_bytes(&sv.vrf_pk) {
-                        Ok(pk) => Block::new_with_vrf(
-                            self.parents.clone(),
-                            self.work,
-                            self.timestamp_ms,
-                            self.nonce,
-                            pk,
-                            sv.proof.clone(),
-                            sv.output,
-                            payload,
-                        ),
-                        Err(_) => Block::new(
-                            self.parents.clone(),
-                            self.work,
-                            self.timestamp_ms,
-                            self.nonce,
-                            payload,
-                        ),
-                    }
-                }
-                None => Block::new(
-                    self.parents.clone(),
-                    self.work,
-                    self.timestamp_ms,
-                    self.nonce,
-                    payload,
-                ),
-            }
+            ),
+            // No authority signature: this cannot be admitted under PoA, but
+            // the id is still well defined (the flag byte is simply zero), so
+            // peers agree on it and the ledger rejects the block later.
+            None => Block::new(
+                self.parents.clone(),
+                self.work,
+                self.timestamp_ms,
+                self.nonce,
+                payload,
+            ),
         };
         block.id()
     }
@@ -434,84 +388,6 @@ pub struct MerkleBlock {
     pub matched_tx: Option<Transaction>,
 }
 
-/// A candidate block template for external miners/stratum pools.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MiningTemplate {
-    /// Current tips of the DAG that will be the parents of the new block.
-    pub parents: Vec<BlockId>,
-    /// Proof-of-work target difficulty weight.
-    pub work: u128,
-    /// Candidate timestamp in milliseconds (monotonically advanced beyond parents).
-    pub timestamp_ms: u64,
-    /// Canonical binary block payload encoded as lowercase hexadecimal string.
-    pub payload: String,
-    /// Transactions included in the candidate block (coinbase first, then selected mempool txs).
-    pub transactions: Vec<Transaction>,
-    /// Address receiving the coinbase subsidy + fees, if configured.
-    pub miner: Option<Address>,
-    /// Block subsidy at current height in atoms.
-    pub subsidy: u64,
-    /// Total collected transaction fees in atoms.
-    pub fees: u64,
-}
-
-impl MiningTemplate {
-    /// Serialize this mining template to a JSON string matching the API schema.
-    pub fn to_json(&self) -> String {
-        let parents_json = format!(
-            "[{}]",
-            self.parents
-                .iter()
-                .map(|p| format!("\"{}\"", p.to_hex()))
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        let miner_json = match self.miner {
-            Some(m) => format!("\"{}\"", m.to_hex()),
-            None => "null".to_string(),
-        };
-        let txs_json = format!(
-            "[{}]",
-            self.transactions
-                .iter()
-                .map(|tx| {
-                    let outputs_json = format!(
-                        "[{}]",
-                        tx.outputs()
-                            .iter()
-                            .map(|o| format!(
-                                "{{\"value\":{},\"owner\":\"{}\"}}",
-                                o.value,
-                                o.owner.to_hex()
-                            ))
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    );
-                    format!(
-                        "{{\"id\":\"{}\",\"coinbase\":{},\"inputs\":{},\"outputs\":{}}}",
-                        tx.id(),
-                        tx.is_coinbase(),
-                        tx.inputs().len(),
-                        outputs_json
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        format!(
-            "{{\"ok\":true,\"parents\":{},\"work\":{},\"timestamp_ms\":{},\"payload\":\"{}\",\"transactions\":{},\"miner\":{},\"subsidy\":{},\"fees\":{}}}",
-            parents_json,
-            self.work,
-            self.timestamp_ms,
-            self.payload,
-            txs_json,
-            miner_json,
-            self.subsidy,
-            self.fees,
-        )
-    }
-}
-
 /// A block header: the block's consensus fields plus a commitment to its
 /// payload, but without the payload itself. Headers are **untrusted inventory**
 /// — a peer advertises which blocks it has by sending headers; the receiver
@@ -533,7 +409,7 @@ pub struct BlockHeader {
     pub work: u128,
     /// The block's timestamp, in milliseconds.
     pub timestamp_ms: u64,
-    /// The block's proof-of-work nonce.
+    /// The block nonce (always zero under PoA-only admission).
     pub nonce: u64,
     /// `BLAKE3(payload)` where `payload = encode_block_payload(txs)`.
     pub payload_hash: [u8; 32],
@@ -546,10 +422,7 @@ pub struct Node {
     ledger: Option<Ledger>,
     mempool: MempoolV2,
     clock: Clock,
-    /// Address that receives the per-block KVNC subsidy coinbase.
-    miner: Option<Address>,
-    /// This node's VRF signing key for staked-block production (hybrid mode).
-    validator_sk: Option<VrfSecretKey>,
+
     /// This node's Ed25519 authority signing keys for PoA block production.
     /// Client-side identities (like the validator seed): the node never
     /// receives another authority's key. A real authority node holds exactly
@@ -599,8 +472,6 @@ impl Default for Node {
             ledger: None,
             mempool: MempoolV2::default(),
             clock: Clock::default(),
-            miner: None,
-            validator_sk: None,
             authority_sks: Vec::new(),
             dht_node_id: None,
             dht_routing_table: None,
@@ -628,6 +499,15 @@ pub type DetailedUtxo = (
     Option<[u8; 32]>,
 );
 
+/// Returns the data directory for wallet storage.
+fn data_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("KOVANICA_DATA") {
+        return PathBuf::from(dir);
+    }
+    // Default to testnet data directory
+    PathBuf::from("data")
+}
+
 impl Node {
     /// A fresh node with no ledger yet.
     pub fn new() -> Self {
@@ -640,8 +520,6 @@ impl Node {
             ledger: None,
             mempool: MempoolV2::new(config),
             clock: Clock::default(),
-            miner: None,
-            validator_sk: None,
             authority_sks: Vec::new(),
             dht_node_id: None,
             dht_routing_table: None,
@@ -724,88 +602,30 @@ impl Node {
         self.now_ms().max(floor)
     }
 
-    /// The work target to use for a block built on `parents`. When hybrid mode
-    /// with a retargeting policy is active, this returns the hybrid config's
-    /// retarget target (via [`Ledger::expected_work`]); otherwise it falls back
-    /// to the DAG's difficulty target or 1.
-    fn work_target_for_parents(&self, parents: &[BlockId]) -> u128 {
-        if let Some(ledger) = self.ledger.as_ref() {
-            if let Some(work) = ledger.expected_work(parents) {
-                eprintln!(
-                    "DEBUG work_target_for_parents: expected_work returned {} (hybrid_enabled={})",
-                    work,
-                    ledger.hybrid_enabled()
-                );
-                return work;
-            } else {
-                eprintln!("DEBUG work_target_for_parents: expected_work returned None (hybrid_enabled={})", ledger.hybrid_enabled());
-            }
-        }
-        let fallback = self
-            .ledger()
-            .ok()
-            .and_then(|l| l.dag().next_work_target(parents))
-            .unwrap_or(1);
-        eprintln!(
-            "DEBUG work_target_for_parents: fallback returned {}",
-            fallback
-        );
-        fallback
-    }
-
-    /// The proof-of-work nonce to stamp on a new block built on `parents` with
-    /// `work`, `timestamp_ms`, and transactions `txs`.
+    /// Operator wallet (BIP39 mnemonic) for receiving block rewards, if generated.
     ///
-    /// When proof-of-work is enforced on the ledger's DAG, mine the block —
-    /// Nakamoto-style hash-target search over the nonce
-    /// ([`kovanica_dag::pow::mine`]) — so its id meets its `work` target and it
-    /// passes insert; otherwise `0` (no mining). The template here must be
-    /// byte-identical to the block [`Ledger::insert`] will build (same parents,
-    /// work, timestamp, and payload encoding) so the winning nonce carries over
-    /// to exactly the same id.
-    /// Mine a nonce for a block with the given parameters. Returns 0 if neither
-    /// DAG-level PoW nor hybrid retargeting is enforced.
-    fn mine_nonce(
-        &self,
-        parents: &[BlockId],
-        work: u128,
-        timestamp_ms: u64,
-        txs: &[Transaction],
-    ) -> u64 {
-        let ledger = self.ledger.as_ref().expect("checked above");
-        let dag = ledger.dag();
-        // Mine if either DAG-level PoW is enabled OR hybrid mode with retarget is active.
-        let hybrid_retarget = ledger.hybrid_config().and_then(|c| c.retarget).is_some();
-        if !dag.proof_of_work_enabled() && !hybrid_retarget {
-            return 0;
-        }
-        let template = Block::new(
-            parents.to_vec(),
-            work,
-            timestamp_ms,
-            0,
-            encode_block_payload(txs),
-        );
-        pow::mine(&template).nonce()
+    /// This is a payout address only — under PoA it is unrelated to admission,
+    /// which is decided solely by the authority set.
+    pub fn operator_wallet(&self) -> Option<&Wallet> {
+        self.operator_wallet.as_ref()
     }
 
-    /// Enable (or disable) consensus-enforced proof-of-work on the ledger. Once
-    /// enabled, produced blocks are mined and received blocks must meet their
-    /// target. See [`Ledger::set_proof_of_work`]. Errors if not initialised.
-    pub fn set_proof_of_work(&mut self, enabled: bool) -> Result<(), NodeError> {
-        self.ledger
-            .as_mut()
-            .ok_or(NodeError::NotInitialized)?
-            .set_proof_of_work(enabled);
-        Ok(())
+    /// Founder wallet (BIP39 mnemonic) for receiving the premine, if generated.
+    pub fn founder_wallet(&self) -> Option<&Wallet> {
+        self.founder_wallet.as_ref()
     }
 
-    /// Whether consensus-enforced proof-of-work is on.
-    pub fn proof_of_work(&self) -> bool {
-        self.ledger()
-            .map(|l| l.dag().proof_of_work_enabled())
-            .unwrap_or(false)
-    }
+    /// The work a locally built block carries. Under PoA-only admission the DAG
+    /// pins `work` to [`POA_NOMINAL_WORK`] at insertion (see `Dag::insert`), so
+    /// producing anything else is rejected. There is no difficulty window and
+    /// no retarget: the value is a constant, not a target to search for.
+    const LOCAL_WORK: u128 = POA_NOMINAL_WORK;
+
+    /// The nonce a locally built block carries. Under PoA-only admission nothing
+    /// is searched over, so the nonce is always zero. It is still part of the
+    /// canonical id encoding
+    /// emit the same value [`Ledger::insert`] will use.
+    const LOCAL_NONCE: u64 = 0;
 
     /// Whether a genesis has been created.
     pub fn is_initialized(&self) -> bool {
@@ -948,7 +768,7 @@ impl Node {
         }
 
         // Get data directory for wallet storage
-        let data_dir = Self::data_dir();
+        let data_dir = data_dir();
 
         // Generate or load founder wallet (receives 200K KVNC premine)
         // For test compatibility, derive deterministically from founder_seed
@@ -1034,22 +854,7 @@ impl Node {
         }
         let genesis = ledger.genesis();
         self.ledger = Some(ledger);
-        // Default miner is the founder (for backward compatibility with tests).
-        // The operator wallet is generated and saved for future use (operator can
-        // call set_miner(operator_wallet.address()) to switch).
-        if self.miner.is_none() {
-            self.miner = Some(founder);
-        }
         Ok((genesis, founder))
-    }
-
-    /// Returns the data directory for wallet storage.
-    fn data_dir() -> PathBuf {
-        if let Ok(dir) = std::env::var("KOVANICA_DATA") {
-            return PathBuf::from(dir);
-        }
-        // Default to testnet data directory
-        PathBuf::from("data")
     }
 
     /// Enable (or disable) payload pruning on the underlying DAG. Returns an
@@ -1132,39 +937,6 @@ impl Node {
             .unwrap_or(0)
     }
 
-    /// Who receives the native-token (KVNC) subsidy on produced blocks.
-    pub fn set_miner(&mut self, miner: Address) {
-        self.miner = Some(miner);
-    }
-
-    /// Current miner address, if set.
-    pub fn miner(&self) -> Option<Address> {
-        self.miner
-    }
-
-    /// Operator wallet (BIP39 mnemonic) for receiving mining rewards, if generated.
-    pub fn operator_wallet(&self) -> Option<&Wallet> {
-        self.operator_wallet.as_ref()
-    }
-
-    /// Founder wallet (BIP39 mnemonic) for receiving the premine, if generated.
-    pub fn founder_wallet(&self) -> Option<&Wallet> {
-        self.founder_wallet.as_ref()
-    }
-
-    /// Set this node's staked-validator identity from a 32-byte VRF seed. The
-    /// derived public key must be bonded (see `bond_stake`) before the node can
-    /// win sortition; production falls back to PoW whenever the draw misses.
-    pub fn set_validator_seed(&mut self, seed: [u8; 32]) {
-        let (sk, _pk) = vrf_keypair_from_seed(&seed);
-        self.validator_sk = Some(sk);
-    }
-
-    /// This validator's VRF public key, if a seed was set.
-    pub fn validator_public_key(&self) -> Option<VrfPublicKey> {
-        self.validator_sk.as_ref().map(|sk| sk.verifying_key())
-    }
-
     /// Set this node's PoA authority identity from a 32-byte Ed25519 seed
     /// (RFC-POA §7). The derived public key must be a member of the active
     /// authority set; the node produces only in slots where it is the
@@ -1177,21 +949,6 @@ impl Node {
     /// This authority's Ed25519 public key, if a signing key was set.
     pub fn authority_public_key(&self) -> Option<AuthorityPublicKey> {
         self.authority_sks.first().map(|sk| sk.verifying_key())
-    }
-
-    /// Enable hybrid PoW / staked-VRF admission on the ledger. See
-    /// [`HybridConfig`] and [`Ledger::set_hybrid`].
-    pub fn enable_hybrid(&mut self, config: HybridConfig) -> Result<(), NodeError> {
-        self.ledger
-            .as_mut()
-            .ok_or(NodeError::NotInitialized)?
-            .set_hybrid(config);
-        Ok(())
-    }
-
-    /// Whether hybrid admission is enabled on the underlying ledger.
-    pub fn hybrid_enabled(&self) -> bool {
-        self.ledger.as_ref().is_some_and(Ledger::hybrid_enabled)
     }
 
     /// Enable Proof-of-Authority admission on the ledger. See
@@ -1277,160 +1034,9 @@ impl Node {
         Ok(self.ledger()?.dag().tips())
     }
 
-    /// Total bonded stake in the selected tip's view.
-    pub fn total_stake(&self) -> Result<u64, NodeError> {
-        let ledger = self.ledger()?;
-        let tip = ledger.dag().selected_tip();
-        Ok(ledger
-            .stake_state(&tip)
-            .map(|s| s.total_stake(kovanica_state::NATIVE_ASSET_ID))
-            .unwrap_or(0))
-    }
-
-    /// `vrf_pk`'s bonded stake in the selected tip's view.
-    pub fn stake_of(&self, vrf_pk: &[u8; 32]) -> Result<u64, NodeError> {
-        let ledger = self.ledger()?;
-        let tip = ledger.dag().selected_tip();
-        Ok(ledger
-            .stake_state(&tip)
-            .map(|s| s.stake_of(kovanica_state::NATIVE_ASSET_ID, vrf_pk))
-            .unwrap_or(0))
-    }
-
-    /// Whether `outpoint` is frozen (bonded) in the selected tip's view —
-    /// a spendable-looking UTXO that only an unbond transaction may move.
-    pub fn outpoint_is_frozen(&self, outpoint: &OutPoint) -> Result<bool, NodeError> {
-        let ledger = self.ledger()?;
-        let tip = ledger.dag().selected_tip();
-        Ok(ledger
-            .stake_state(&tip)
-            .is_some_and(|s| s.is_frozen(outpoint)))
-    }
-
     /// The current chain height: the selected tip's blue score.
     pub fn chain_height(&self) -> Result<u64, NodeError> {
         Ok(self.ledger()?.tip_blue_score())
-    }
-
-    /// Earliest height at which some bonded stake of `vrf_pk` unlocks next, or
-    /// `None` when nothing is pending — either nothing is bonded or every bond
-    /// has already matured. UI countdown material.
-    pub fn pending_unbond_height(&self, vrf_pk: &[u8; 32]) -> Result<Option<u64>, NodeError> {
-        let ledger = self.ledger()?;
-        let tip = ledger.dag().selected_tip();
-        let now = ledger.tip_blue_score();
-        Ok(ledger.stake_state(&tip).and_then(|s| {
-            s.iter_frozen()
-                .filter(|(_, f)| f.vrf_pk == *vrf_pk)
-                .map(|(_, f)| f.bond_height + UNBOND_MATURITY)
-                .filter(|matures_at| *matures_at > now)
-                .min()
-        }))
-    }
-
-    /// Unbond up to `amount` of the stake backing `vrf_pk`, **immediately** as
-    /// a new block on the current tips. Only matured frozen outpoints owned by
-    /// `kp` are used (oldest first); change stays unfrozen and returns to `to`.
-    ///
-    /// Errors with [`NodeError::InsufficientStake`] when the matured, owned
-    /// total does not cover `amount` (immature bonds do not count), and with
-    /// [`NodeError::UnbondOwnerMismatch`] when a frozen outpoint backing
-    /// `vrf_pk` belongs to someone else — unbonds must not silently skip it.
-    pub fn unbond_with(
-        &mut self,
-        kp: &KeyPair,
-        vrf_pk: &[u8; 32],
-        amount: u64,
-        to: Address,
-    ) -> Result<Sent, NodeError> {
-        if amount == 0 {
-            return Err(NodeError::ZeroAmount);
-        }
-        let (next_height, frozen, owners) = {
-            let ledger = self.ledger()?;
-            let tip = ledger.dag().selected_tip();
-            let next_height = ledger.tip_blue_score() + 1;
-            let frozen: Vec<(OutPoint, Freeze)> = ledger
-                .stake_state(&tip)
-                .map(|s| {
-                    s.iter_frozen()
-                        .filter(|(_, f)| f.vrf_pk == *vrf_pk)
-                        .map(|(op, f)| (*op, *f))
-                        .collect()
-                })
-                .unwrap_or_default();
-            // Frozen outputs are UTXOs; resolve each owner for the guard below.
-            let state = ledger.ledger_state();
-            let mut owners = std::collections::HashMap::new();
-            for (op, f) in &frozen {
-                match state.get(op) {
-                    Some(out) => {
-                        owners.insert(*op, out.owner);
-                    }
-                    None => {
-                        let _ = f;
-                    }
-                }
-            }
-            (next_height, frozen, owners)
-        };
-        for (op, _) in &frozen {
-            if owners.get(op) != Some(&kp.address()) {
-                return Err(NodeError::UnbondOwnerMismatch { outpoint: *op });
-            }
-        }
-
-        // FIFO over matured coins only; immature coins are skipped.
-        let mut ordered: Vec<(OutPoint, Freeze)> = frozen;
-        ordered.sort_by_key(|(_, f)| f.bond_height);
-        let mut picks: Vec<OutPoint> = Vec::new();
-        let mut total = 0u64;
-        for (op, f) in ordered {
-            if f.bond_height + UNBOND_MATURITY > next_height {
-                continue;
-            }
-            total = total.saturating_add(f.value);
-            picks.push(op);
-            if total >= amount {
-                break;
-            }
-        }
-        if total < amount {
-            return Err(NodeError::InsufficientStake {
-                requested: amount,
-                available: total,
-            });
-        }
-
-        // Value-conserving unbond: fee 0, change (if any) back to `to` as an
-        // ordinary unfrozen output.
-        let mut outputs = vec![TxOutput::native(amount, to)];
-        if total > amount {
-            outputs.push(TxOutput::native(total - amount, to));
-        }
-        let unsigned = Transaction::unsigned(&picks, outputs, UNBOND_PREFIX.to_vec());
-        let tx_id = unsigned.id();
-        let sig = Sig::from_bytes(kp.sign(&unsigned.sighash()));
-        let mut tx = unsigned;
-        for i in 0..tx.inputs().len() {
-            tx.attach_signature(i, sig);
-        }
-
-        let parents = self.ledger()?.dag().tips();
-        let dag = self.ledger()?.dag();
-        let timestamp = self.next_timestamp(dag, &parents);
-        let work = self.work_target_for_parents(&parents);
-        let nonce = self.mine_nonce(&parents, work, timestamp, std::slice::from_ref(&tx));
-        let block = self.insert_immediate_block(
-            parents,
-            work,
-            timestamp,
-            nonce,
-            std::slice::from_ref(&tx),
-        )?;
-        self.note_inserted(block);
-        self.evict_mempool();
-        Ok(Sent { block, tx: tx_id })
     }
 
     /// The selected (heaviest) tip.
@@ -1955,8 +1561,8 @@ impl Node {
         let parents = self.ledger()?.dag().tips();
         let dag = self.ledger()?.dag();
         let timestamp = self.next_timestamp(dag, &parents);
-        let work = self.work_target_for_parents(&parents);
-        let nonce = self.mine_nonce(&parents, work, timestamp, std::slice::from_ref(&tx));
+        let work = Self::LOCAL_WORK;
+        let nonce = Self::LOCAL_NONCE;
         let block = self.insert_immediate_block(
             parents,
             work,
@@ -2031,8 +1637,8 @@ impl Node {
         let parents = self.ledger()?.dag().tips();
         let dag = self.ledger()?.dag();
         let timestamp = self.next_timestamp(dag, &parents);
-        let work = self.work_target_for_parents(&parents);
-        let nonce = self.mine_nonce(&parents, work, timestamp, std::slice::from_ref(&tx));
+        let work = Self::LOCAL_WORK;
+        let nonce = Self::LOCAL_NONCE;
         let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
         let block = ledger
             .insert(parents, work, timestamp, nonce, &[tx])
@@ -2106,8 +1712,8 @@ impl Node {
         let parents = self.ledger()?.dag().tips();
         let dag = self.ledger()?.dag();
         let timestamp = self.next_timestamp(dag, &parents);
-        let work = self.work_target_for_parents(&parents);
-        let nonce = self.mine_nonce(&parents, work, timestamp, std::slice::from_ref(&tx));
+        let work = Self::LOCAL_WORK;
+        let nonce = Self::LOCAL_NONCE;
         let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
         let block = ledger
             .insert(parents, work, timestamp, nonce, &[tx])
@@ -2457,8 +2063,8 @@ impl Node {
         let parents = self.ledger()?.dag().tips();
         let dag = self.ledger()?.dag();
         let timestamp = self.next_timestamp(dag, &parents);
-        let work = self.work_target_for_parents(&parents);
-        let nonce = self.mine_nonce(&parents, work, timestamp, std::slice::from_ref(&tx));
+        let work = Self::LOCAL_WORK;
+        let nonce = Self::LOCAL_NONCE;
         let block = self.insert_immediate_block(
             parents,
             work,
@@ -2688,14 +2294,12 @@ impl Node {
             return Ok(None);
         }
 
-        let (subsidy, mut working, original, mut stake, next_height) = {
+        let (subsidy, mut working, original, next_height) = {
             let ledger = self.ledger.as_ref().expect("checked above");
-            let tip = ledger.dag().selected_tip();
             (
                 ledger.subsidy(),
                 ledger.ledger_state(),
                 ledger.ledger_state(),
-                ledger.stake_state(&tip).unwrap_or_default(),
                 ledger.tip_blue_score() + 1,
             )
         };
@@ -2704,9 +2308,8 @@ impl Node {
         for tx in self.mempool.ordered_pending() {
             // Validate against the real next block height so coinbase-maturity
             // (RFC-006) is judged correctly: immature spends are excluded.
-            if apply_block_with_stake(
+            if apply_block_at_height(
                 &mut working,
-                &mut stake,
                 std::slice::from_ref(&tx),
                 subsidy,
                 next_height,
@@ -2728,40 +2331,20 @@ impl Node {
             let ts = self.next_timestamp(ledger.dag(), &parents);
             (parents, ts)
         };
-        let mut block_txs = self.issuance_txs(timestamp, fees);
+        let authority = self
+            .authority_public_key()
+            .map(|pk| Address::p2pk(*pk.as_bytes()));
+        let mut block_txs = Self::issuance_txs_for(authority, subsidy, timestamp, fees);
         block_txs.extend(selected);
 
-        // PoA mode: sign the block with this node's authority key when it is
-        // the scheduled authority for the slot; otherwise skip production.
-        if self.poa_enabled() {
-            return self.try_produce_poa(parents, timestamp, &block_txs, &selected_ids);
+        // PoA-only admission (RFC-POA): a block is produced only when this node
+        // holds the scheduled authority key for `timestamp`'s slot. There is no
+        // hash search and no sortition draw, so the alternative to signing as
+        // the authority is not producing at all.
+        match self.try_produce_poa(parents, timestamp, &block_txs, &selected_ids)? {
+            Some(id) => Ok(Some(id)),
+            None => Err(NodeError::NotAuthoritySlot),
         }
-
-        // Hybrid mode: try the staked-VRF path first — signing is cheap and
-        // needs no mining rig, which is exactly what a light/mobile validator
-        // can do. When there is no bonded winner here, fall back to PoW.
-        if self.hybrid_enabled() && self.validator_sk.is_some() {
-            let start = std::time::Instant::now();
-            if let Some(id) = self.try_insert_staked(parents.clone(), timestamp, &block_txs)? {
-                self.note_block_produced(&id, start.elapsed());
-                self.mempool.remove_all(&selected_ids);
-                return Ok(Some(id));
-            }
-        }
-
-        let _dag = self.ledger.as_ref().expect("checked above").dag();
-        let work = self.work_target_for_parents(&parents);
-        let nonce = self.mine_nonce(&parents, work, timestamp, &block_txs);
-        let ledger = self.ledger.as_mut().expect("checked above");
-        let start = std::time::Instant::now();
-        let block = ledger
-            .insert(parents, work, timestamp, nonce, &block_txs)
-            .map_err(NodeError::Insert)?;
-        let duration = start.elapsed();
-        self.note_inserted(block);
-        self.note_block_produced(&block, duration);
-        self.mempool.remove_all(&selected_ids);
-        Ok(Some(block))
     }
 
     /// Shared production bookkeeping: validation metrics, mempool eviction.
@@ -2781,103 +2364,33 @@ impl Node {
         );
     }
 
-    /// Attempt a staked-VRF block on `parents` at `timestamp_ms` carrying
-    /// `block_txs`. Signs the VRF input with this node's validator key and
-    /// submits via [`Ledger::insert_with_vrf`]. The input is the epoch
-    /// randomness beacon of the selected parent when
-    /// [`HybridConfig::use_epoch_beacon`] is `true` (the default), or the
-    /// legacy parent-tip hash when `false`. Returns `Ok(None)` when the
-    /// sortition draw missed (not eligible / already produced for this tip) —
-    /// the caller falls back to PoW. Any other insert error propagates.
-    fn try_insert_staked(
-        &mut self,
-        parents: Vec<BlockId>,
-        timestamp_ms: u64,
-        block_txs: &[Transaction],
-    ) -> Result<Option<BlockId>, NodeError> {
-        let sk = self
-            .validator_sk
-            .as_ref()
-            .expect("caller checks validator_sk");
-        let ledger_ref = self.ledger.as_ref().expect("checked above");
-        let use_beacon = ledger_ref
-            .hybrid_config()
-            .map_or(true, |cfg| cfg.use_epoch_beacon);
-        let input = if use_beacon {
-            ledger_ref.dag().epoch_vrf_input_for_parents(&parents)
-        } else {
-            Dag::vrf_input(&parents)
-        };
-        let eval = vrf_prove(sk, &input);
-        let sv = StakedVrf {
-            vrf_pk: *sk.verifying_key().as_bytes(),
-            proof: eval.proof,
-            output: eval.output,
-        };
-        let ledger = self.ledger.as_mut().expect("checked above");
-        match ledger.insert_with_vrf(parents, timestamp_ms, sv, block_txs) {
-            Ok(id) => {
-                self.note_inserted(id);
-                Ok(Some(id))
-            }
-            Err(
-                LedgerInsertError::NotEligible { .. }
-                | LedgerInsertError::DuplicateStakedBlock { .. },
-            ) => Ok(None),
-            Err(e) => Err(NodeError::Insert(e)),
-        }
-    }
-
     /// Insert a block with no user transactions. If subsidy > 0, mints that many
-    /// KVNC to the miner via coinbase — this is how supply grows after genesis.
+    /// KVNC to the signing authority via coinbase — this is how supply grows
+    /// after genesis.
     pub fn produce_empty(&mut self) -> Result<BlockId, NodeError> {
         let parents = self.ledger()?.dag().tips();
         let timestamp = self.next_timestamp(self.ledger()?.dag(), &parents);
-
-        // PoA mode: sign with this node's authority key when it is the
-        // scheduled authority for the slot; otherwise skip production.
-        if self.poa_enabled() {
-            let txs = self.issuance_txs(timestamp, 0);
-            return match self.try_produce_poa(parents, timestamp, &txs, &[])? {
-                Some(id) => Ok(id),
-                None => Err(NodeError::NotAuthoritySlot),
-            };
+        let authority = self
+            .authority_public_key()
+            .map(|pk| Address::p2pk(*pk.as_bytes()));
+        let subsidy = self.ledger()?.subsidy();
+        let txs = Self::issuance_txs_for(authority, subsidy, timestamp, 0);
+        // PoA-only admission (RFC-POA): sign with this node's authority key when
+        // it is the scheduled authority for the slot; otherwise skip production.
+        match self.try_produce_poa(parents, timestamp, &txs, &[])? {
+            Some(id) => Ok(id),
+            None => Err(NodeError::NotAuthoritySlot),
         }
-
-        // Hybrid mode: staked-VRF first (see `produce_block`), PoW fallback.
-        if self.hybrid_enabled() && self.validator_sk.is_some() {
-            let txs = self.issuance_txs(timestamp, 0);
-            let start = std::time::Instant::now();
-            if let Some(id) = self.try_insert_staked(parents.clone(), timestamp, &txs)? {
-                self.note_block_produced(&id, start.elapsed());
-                return Ok(id);
-            }
-        }
-
-        let _dag = self.ledger()?.dag();
-        let work = self.work_target_for_parents(&parents);
-        eprintln!("DEBUG produce_empty: work = {}", work);
-        let txs = self.issuance_txs(timestamp, 0);
-        let nonce = self.mine_nonce(&parents, work, timestamp, &txs);
-        let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
-        let start = std::time::Instant::now();
-        let id = ledger
-            .insert(parents, work, timestamp, nonce, &txs)
-            .map_err(NodeError::Insert)?;
-        let duration = start.elapsed();
-        self.note_inserted(id);
-        self.note_block_produced(&id, duration);
-        Ok(id)
     }
 
     /// PoA production: sign a block with this node's authority key when it is
     /// the scheduled authority for `timestamp`'s slot (RFC-POA §3 round-robin).
-    /// Returns `Ok(None)` when the node holds no authority key or it is not its
-    /// turn — callers skip production, exactly like the hybrid draw missing.
+    /// Returns `Ok(None)` when PoA is not active, the node holds no authority
+    /// key, or it is not its turn — callers then produce nothing.
     ///
-    /// The block carries nominal work (1) and nonce 0: under PoA the DAG's
-    /// PoW/difficulty switches are cleared, so only the authority signature and
-    /// slot rules gate admission. Insertion goes through the identity-preserving
+    /// The block carries nominal work ([`Self::LOCAL_WORK`] = 1) and nonce 0:
+    /// under PoA-only admission only the authority signature and the slot rules
+    /// gate admission. Insertion goes through the identity-preserving
     /// `insert_prepared_block` path so the signed id survives replay.
     fn try_produce_poa(
         &mut self,
@@ -2900,11 +2413,24 @@ impl Node {
             return Ok(None); // not an authority node, or not this node's slot
         };
         let payload = encode_block_payload(block_txs);
-        let unsigned = Block::new(parents.clone(), 1, timestamp, 0, payload.clone());
+        let unsigned = Block::new(
+            parents.clone(),
+            Self::LOCAL_WORK,
+            timestamp,
+            Self::LOCAL_NONCE,
+            payload.clone(),
+        );
         let sig = sk
             .sign(unsigned.hash_without_authority_sig().as_bytes())
             .to_bytes();
-        let block = Block::new_with_authority(parents, 1, timestamp, 0, sig, payload);
+        let block = Block::new_with_authority(
+            parents,
+            Self::LOCAL_WORK,
+            timestamp,
+            Self::LOCAL_NONCE,
+            sig,
+            payload,
+        );
         let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
         let start = std::time::Instant::now();
         let id = ledger
@@ -2917,74 +2443,17 @@ impl Node {
         Ok(Some(id))
     }
 
-    /// Build a candidate block template on current DAG tips with valid mempool
-    /// transactions and coinbase issuance, without searching for a nonce.
-    pub fn mining_template(&self) -> Result<MiningTemplate, NodeError> {
-        self.mining_template_for(self.miner)
-    }
-
-    /// Build a candidate block template paying coinbase to the specified miner.
-    pub fn mining_template_for(&self, miner: Option<Address>) -> Result<MiningTemplate, NodeError> {
-        let ledger = self.ledger.as_ref().ok_or(NodeError::NotInitialized)?;
-        let subsidy = ledger.subsidy();
-        let tip = ledger.dag().selected_tip();
-        let next_height = ledger.tip_blue_score() + 1;
-        let mut working = ledger.ledger_state();
-        let mut stake = ledger.stake_state(&tip).unwrap_or_default();
-        let original = ledger.ledger_state();
-
-        let mut selected = Vec::new();
-        for tx in self.mempool.ordered_pending() {
-            // Validate against the real next block height so templates exclude
-            // immature-coinbase spends (RFC-006) that would be rejected at submit.
-            if apply_block_with_stake(
-                &mut working,
-                &mut stake,
-                std::slice::from_ref(&tx),
-                subsidy,
-                next_height,
-            )
-            .is_ok()
-            {
-                selected.push(tx);
-            }
-        }
-        let fees: u64 = selected.iter().map(|tx| fee_of(&original, tx)).sum();
-
-        let parents = ledger.dag().tips();
-        let timestamp_ms = self.next_timestamp(ledger.dag(), &parents);
-        let work = self.work_target_for_parents(&parents);
-        let _dag = ledger.dag();
-
-        let mut block_txs = self.issuance_txs_for(miner, timestamp_ms, fees);
-        block_txs.extend(selected);
-
-        let payload_bytes = encode_block_payload(&block_txs);
-        let payload = hex::encode(payload_bytes);
-
-        Ok(MiningTemplate {
-            parents,
-            work,
-            timestamp_ms,
-            payload,
-            transactions: block_txs,
-            miner,
-            subsidy,
-            fees,
-        })
-    }
-
-    /// Coinbase claiming subsidy + `extra_fees` for `miner`. Empty if nothing to mint.
+    /// Coinbase claiming `subsidy` + `extra_fees` for the signing `authority`.
+    /// Empty if nothing to mint.
     pub fn issuance_txs_for(
-        &self,
-        miner: Option<Address>,
+        authority: Option<Address>,
+        subsidy: u64,
         timestamp_ms: u64,
         extra_fees: u64,
     ) -> Vec<Transaction> {
-        let Some(miner) = miner else {
+        let Some(authority) = authority else {
             return Vec::new();
         };
-        let subsidy = self.issuance().unwrap_or(0);
         // RFC-006: 75% of fees are burned; the producer claims subsidy + fees/4.
         let fee_share = extra_fees / FEE_PRODUCER_DEN * FEE_PRODUCER_NUM;
         let total = subsidy.saturating_add(fee_share);
@@ -2992,14 +2461,9 @@ impl Node {
             return Vec::new();
         }
         vec![Transaction::coinbase(
-            vec![TxOutput::native(total, miner)],
+            vec![TxOutput::native(total, authority)],
             timestamp_ms.to_le_bytes().to_vec(),
         )]
-    }
-
-    /// Coinbase claiming subsidy + `extra_fees` for `self.miner`. Empty if nothing to mint.
-    fn issuance_txs(&self, timestamp_ms: u64, extra_fees: u64) -> Vec<Transaction> {
-        self.issuance_txs_for(self.miner, timestamp_ms, extra_fees)
     }
 
     /// A pending mempool transaction by id, if present.
@@ -3441,18 +2905,6 @@ impl Node {
             work: block.work(),
             timestamp_ms: block.timestamp_ms(),
             nonce: block.nonce(),
-            vrf: match (
-                block.vrf_public_key(),
-                block.vrf_proof(),
-                block.vrf_output(),
-            ) {
-                (Some(pk), Some(proof), Some(output)) => Some(StakedVrf {
-                    vrf_pk: *pk.as_bytes(),
-                    proof: proof.clone(),
-                    output: *output,
-                }),
-                _ => None,
-            },
             authority_sig: block.authority_sig().copied(),
             txs,
         })
@@ -3513,7 +2965,7 @@ impl Node {
         }
         let ledger = self.ledger.as_mut().ok_or(NodeError::NotInitialized)?;
 
-        // Build the received block exactly once, VRF/authority fields included,
+        // Build the received block exactly once, authority fields included,
         // so the id matches what the producer (and every other peer) computed.
         let payload = encode_block_payload(&record.txs);
         let block = if let Some(sig) = record.authority_sig {
@@ -3526,27 +2978,14 @@ impl Node {
                 payload,
             )
         } else {
-            match &record.vrf {
-                Some(sv) => Block::new_with_vrf(
-                    record.parents.clone(),
-                    record.work,
-                    record.timestamp_ms,
-                    record.nonce,
-                    VrfPublicKey::from_bytes(&sv.vrf_pk).map_err(|_| {
-                        NodeError::Insert(LedgerInsertError::BadStakeProof { vrf_pk: sv.vrf_pk })
-                    })?,
-                    sv.proof.clone(),
-                    sv.output,
-                    payload,
-                ),
-                None => Block::new(
-                    record.parents.clone(),
-                    record.work,
-                    record.timestamp_ms,
-                    record.nonce,
-                    payload,
-                ),
-            }
+            // Legacy PoW block (no admission) - the id is still well-defined
+            Block::new(
+                record.parents.clone(),
+                record.work,
+                record.timestamp_ms,
+                record.nonce,
+                payload,
+            )
         };
         let block_id = block.id();
         if ledger.dag().contains(&block_id) {
@@ -3615,34 +3054,10 @@ impl Node {
         Ok(())
     }
 
-    /// This node's active hybrid policy, if any (mirrors the ledger's).
-    pub fn hybrid_config(&self) -> Option<kovanica_state::HybridConfig> {
-        self.ledger.as_ref().and_then(Ledger::hybrid_config)
-    }
-
-    /// Like [`Node::load`], but hybrid admission runs during replay so
-    /// staked-VRF blocks re-admit with their original ids. Required for
-    /// snapshots produced under a hybrid policy.
-    pub fn load_with_hybrid(
-        &mut self,
-        path: &str,
-        config: kovanica_state::HybridConfig,
-    ) -> Result<(), NodeError> {
-        let bytes = fs::read(path).map_err(|e| NodeError::Io(e.to_string()))?;
-        let ledger = Ledger::read_snapshot_with_hybrid(&bytes, config)
-            .map_err(|e| NodeError::Snapshot(e.to_string()))?;
-        self.ledger = Some(ledger);
-        // The ledger was replaced: any open log or pending ids belong to the
-        // previous ledger and must not be appended to.
-        self.log = None;
-        self.pending.clear();
-        Ok(())
-    }
-
     /// Like [`Node::load`], but Proof-of-Authority admission (with
     /// `authority_set` and `slot_duration_ms`) runs during replay so PoA
     /// blocks re-admit with their original ids. Required for snapshots
-    /// produced under a PoA policy — mirroring [`Node::load_with_hybrid`].
+    /// produced under a PoA policy.
     pub fn load_with_poa(
         &mut self,
         path: &str,
@@ -3699,54 +3114,33 @@ impl Node {
     /// on the node, so [`persist_incremental`](Self::persist_incremental) can
     /// append new inserts without rewriting the file.
     pub fn load_log(path: &str) -> Result<Self, NodeError> {
-        Self::load_log_impl(path, None, None, None)
+        Self::load_log_impl(path, None, None)
     }
 
     /// Like [`Node::load_log`], but the given pruning policy is applied
     /// **before** replay, so the DAG and per-block state stay bounded during
     /// the load instead of peaking at the full chain's memory footprint (see
     /// [`kovanica_state::PruningPolicy`]). The caller is expected to re-apply
-    /// the policy afterwards anyway (`restore_miner_and_policy`); passing it
+    /// the policy afterwards anyway (`restore_poa_policy`); passing it
     /// here only changes the load's memory high-water mark, never the
     /// resulting ledger state.
     pub fn load_log_with_policy(
         path: &str,
         policy: kovanica_state::PruningPolicy,
     ) -> Result<Self, NodeError> {
-        Self::load_log_impl(path, None, None, Some(policy))
-    }
-
-    /// Like [`Node::load_log`], but hybrid admission (with `config`) is active
-    /// during replay, so staked-VRF blocks re-admit with their original ids.
-    /// Required for logs produced in hybrid mode — mirroring
-    /// [`Node::load_with_hybrid`] for snapshots.
-    pub fn load_log_with_hybrid(
-        path: &str,
-        config: kovanica_state::HybridConfig,
-    ) -> Result<Self, NodeError> {
-        Self::load_log_impl(path, Some(config), None, None)
-    }
-
-    /// Like [`Node::load_log_with_hybrid`], with the pruning policy applied
-    /// before replay (see [`Node::load_log_with_policy`]).
-    pub fn load_log_with_hybrid_and_policy(
-        path: &str,
-        config: kovanica_state::HybridConfig,
-        policy: kovanica_state::PruningPolicy,
-    ) -> Result<Self, NodeError> {
-        Self::load_log_impl(path, Some(config), None, Some(policy))
+        Self::load_log_impl(path, None, Some(policy))
     }
 
     /// Like [`Node::load_log`], but Proof-of-Authority admission (with
     /// `authority_set` and `slot_duration_ms`) is active during replay, so PoA
     /// blocks re-admit with their original ids. Required for logs produced in
-    /// PoA mode — mirroring [`Node::load_log_with_hybrid`].
+    /// PoA mode.
     pub fn load_log_with_poa(
         path: &str,
         authority_set: AuthoritySet,
         slot_duration_ms: u64,
     ) -> Result<Self, NodeError> {
-        Self::load_log_impl(path, None, Some((authority_set, slot_duration_ms)), None)
+        Self::load_log_impl(path, Some((authority_set, slot_duration_ms)), None)
     }
 
     /// Like [`Node::load_log_with_poa`], with the pruning policy applied before
@@ -3757,46 +3151,27 @@ impl Node {
         slot_duration_ms: u64,
         policy: kovanica_state::PruningPolicy,
     ) -> Result<Self, NodeError> {
-        Self::load_log_impl(
-            path,
-            None,
-            Some((authority_set, slot_duration_ms)),
-            Some(policy),
-        )
+        Self::load_log_impl(path, Some((authority_set, slot_duration_ms)), Some(policy))
     }
 
     fn load_log_impl(
         path: &str,
-        hybrid: Option<kovanica_state::HybridConfig>,
         poa: Option<(AuthoritySet, u64)>,
         policy: Option<kovanica_state::PruningPolicy>,
     ) -> Result<Self, NodeError> {
-        let (store, ledger) = match (poa, hybrid, policy) {
-            (Some((set, slot)), None, Some(policy)) => {
+        let (store, ledger) = match (poa, policy) {
+            (Some((set, slot)), Some(policy)) => {
                 LedgerStore::open_with_poa_and_policy(path, set, slot, policy)
             }
-            (Some((set, slot)), None, None) => LedgerStore::open_with_poa(path, set, slot),
-            (None, Some(config), Some(policy)) => {
-                LedgerStore::open_with_hybrid_and_policy(path, config, policy)
-            }
-            (None, Some(config), None) => LedgerStore::open_with_hybrid(path, config),
-            (None, None, Some(policy)) => LedgerStore::open_with_policy(path, policy),
-            (None, None, None) => LedgerStore::open(path),
-            // PoA and hybrid are mutually exclusive by construction
-            // (`Ledger::set_poa` clears hybrid and vice versa).
-            (Some(_), Some(_), _) => {
-                return Err(NodeError::Snapshot(
-                    "poa and hybrid cannot both be set".to_string(),
-                ))
-            }
+            (Some((set, slot)), None) => LedgerStore::open_with_poa(path, set, slot),
+            (None, Some(policy)) => LedgerStore::open_with_policy(path, policy),
+            (None, None) => LedgerStore::open(path),
         }
         .map_err(|e| NodeError::Snapshot(e.to_string()))?;
         Ok(Self {
             ledger: Some(ledger),
             mempool: MempoolV2::default(),
             clock: Clock::default(),
-            miner: None,
-            validator_sk: None,
             authority_sks: Vec::new(),
             dht_node_id: None,
             dht_routing_table: None,
@@ -3820,8 +3195,6 @@ impl Node {
             ledger: Some(ledger),
             mempool: MempoolV2::default(),
             clock: Clock::default(),
-            miner: None,
-            validator_sk: None,
             authority_sks: Vec::new(),
             dht_node_id: None,
             dht_routing_table: None,
@@ -4111,69 +3484,5 @@ mod tests {
         // Non-existent block
         let unknown_block = BlockId::from_bytes([99u8; 32]);
         assert!(node.merkle_block(&unknown_block, &sent.tx).is_err());
-    }
-
-    #[test]
-    fn test_mining_template_uninitialized() {
-        let node = Node::new();
-        assert!(matches!(
-            node.mining_template(),
-            Err(NodeError::NotInitialized)
-        ));
-    }
-
-    #[test]
-    fn test_mining_template_genesis_and_coinbase() {
-        let mut node = Node::new();
-        let miner_kp = KeyPair::from_u64(1);
-        node.set_miner(miner_kp.address());
-        let (genesis, _) = node.genesis(3, 1000, 1000, 1, None).unwrap();
-
-        let template = node.mining_template().unwrap();
-        assert_eq!(template.parents, vec![genesis]);
-        assert!(template.work >= 1);
-        assert!(template.timestamp_ms > 0);
-        assert_eq!(template.subsidy, 1000);
-        assert_eq!(template.fees, 0);
-        assert_eq!(template.miner, Some(miner_kp.address()));
-        assert_eq!(template.transactions.len(), 1);
-        assert!(template.transactions[0].is_coinbase());
-
-        let decoded_txs = decode_block_payload(&hex::decode(&template.payload).unwrap()).unwrap();
-        assert_eq!(decoded_txs, template.transactions);
-
-        let json = template.to_json();
-        assert!(json.contains("\"ok\":true"));
-        assert!(json.contains(&genesis.to_hex()));
-        assert!(json.contains(&template.payload));
-        assert!(json.contains(&miner_kp.address().to_hex()));
-        assert!(json.contains("\"subsidy\":1000"));
-    }
-
-    #[test]
-    fn test_mining_template_with_mempool_tx_and_fees() {
-        let mut node = Node::new();
-        let miner_kp = KeyPair::from_u64(1);
-        node.set_miner(miner_kp.address());
-        node.genesis(3, 1000, 1000, 1, None).unwrap();
-
-        // Submit a spend to the mempool
-        node.pool(1, 100, 2).unwrap();
-        assert_eq!(node.mempool.len_pending(), 1);
-
-        let template = node.mining_template().unwrap();
-        assert_eq!(template.transactions.len(), 2);
-        assert!(template.transactions[0].is_coinbase());
-        assert!(!template.transactions[1].is_coinbase());
-        assert!(template.fees >= node.min_fee());
-
-        // Custom miner check
-        let custom_miner = KeyPair::from_u64(99).address();
-        let custom_template = node.mining_template_for(Some(custom_miner)).unwrap();
-        assert_eq!(custom_template.miner, Some(custom_miner));
-        assert_eq!(
-            custom_template.transactions[0].outputs()[0].owner,
-            custom_miner
-        );
     }
 }

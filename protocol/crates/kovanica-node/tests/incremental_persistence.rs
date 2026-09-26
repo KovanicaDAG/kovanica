@@ -3,11 +3,76 @@
 //! These exercise [`Node::persist_incremental`] and [`Node::load_log`]: a node
 //! is rebuilt from its append-only replay log, derived state is recomputed from
 //! the records, and the chain can continue afterwards.
+//!
+//! Every node here is booted under Proof-of-Authority. The `hybrid_log_...`
+//! variant that used to assert id stability across a *staked-VRF* replay was
+//! converted rather than dropped: id stability across replay is a
+//! consensus-critical invariant of any admission scheme, and PoA is the scheme
+//! that now enforces it.
 
 use std::fs;
 
+use ed25519_dalek::SigningKey;
+use kovanica_dag::{AuthorityPublicKey, AuthoritySet};
 use kovanica_node::Node;
-use kovanica_state::{HybridConfig, KeyPair};
+use kovanica_state::KeyPair;
+
+/// Slot duration used throughout (RFC-POA default).
+const SLOT_MS: u64 = 3000;
+/// Authority count for the test set. Threshold is 2-of-3.
+const AUTHORITIES: u8 = 3;
+
+/// The test authority set: `AUTHORITIES` keys from seeds `1..=AUTHORITIES`,
+/// threshold 2-of-3.
+fn authority_set() -> AuthoritySet {
+    let keys: Vec<AuthorityPublicKey> = (0..AUTHORITIES)
+        .map(|i| SigningKey::from_bytes(&[i + 1; 32]).verifying_key())
+        .collect();
+    AuthoritySet::new(keys, 2).expect("valid authority set")
+}
+
+/// Install every authority signing key so the node can produce in any slot.
+fn hold_all_authority_keys(node: &mut Node) {
+    for i in 0..AUTHORITIES {
+        node.set_authority_signing_key([i + 1; 32]);
+    }
+}
+
+/// A PoA-booted node holding **every** authority signing key, so it can produce
+/// in any slot: round-robin picks the scheduled authority, and
+/// `try_produce_poa` matches that key against every key the node holds.
+///
+/// Pruning is left disabled (`u64::MAX`) so each test can re-apply a specific
+/// depth and observe the effect, mirroring `load_or_genesis`.
+fn poa_node(subsidy: u64, premine: u64) -> Node {
+    let mut node = Node::new();
+    node.genesis_with_poa(
+        3,
+        subsidy,
+        premine,
+        1,
+        None,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        None,
+        authority_set(),
+        SLOT_MS,
+    )
+    .expect("genesis");
+    hold_all_authority_keys(&mut node);
+    node
+}
+
+/// Reload from a replay log under the same PoA admission and keys — what
+/// `load_or_genesis` does via `restore_poa_policy`. Without this the reloaded
+/// node has no admission config and `produce_empty` would fail with
+/// `NotAuthoritySlot`.
+fn reload_poa(log_path: &str) -> Node {
+    let mut node = Node::load_log_with_poa(log_path, authority_set(), SLOT_MS).expect("replay");
+    hold_all_authority_keys(&mut node);
+    node
+}
 
 fn temp_log(name: &str) -> String {
     let mut path = std::env::temp_dir();
@@ -28,13 +93,10 @@ fn remove_log(path: &str) {
 #[test]
 fn log_roundtrip_recovers_blocks_and_continues() {
     let log_path = temp_log("roundtrip");
-    let founder = KeyPair::from_u64(1);
     let recipient = KeyPair::from_u64(2);
 
     // Produce blocks on the original node and persist incrementally.
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
-    node.set_miner(founder.address());
+    let mut node = poa_node(1_000, 1_000);
     node.produce_empty().unwrap();
     node.pool(1, 100, 2).unwrap();
     node.produce_block().unwrap().unwrap();
@@ -43,7 +105,7 @@ fn log_roundtrip_recovers_blocks_and_continues() {
 
     // Rebuild from the log and verify the same non-genesis blocks are present
     // in the same order.
-    let mut recovered = Node::load_log(&log_path).unwrap();
+    let mut recovered = reload_poa(&log_path);
     let headers_after: Vec<_> = recovered.export_headers().iter().map(|h| h.id).collect();
     assert_eq!(
         headers_before, headers_after,
@@ -56,7 +118,6 @@ fn log_roundtrip_recovers_blocks_and_continues() {
     );
 
     // The recovered chain must accept new blocks.
-    recovered.set_miner(founder.address());
     recovered.produce_empty().unwrap();
     assert!(
         recovered.block_count().unwrap() > node.block_count().unwrap(),
@@ -76,15 +137,13 @@ fn loaded_node_reapplies_finality_policy() {
     let log_path = temp_log("finality");
     let founder = KeyPair::from_u64(1);
 
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
-    node.set_miner(founder.address());
+    let mut node = poa_node(1_000, 1_000);
     for _ in 0..10 {
         node.produce_empty().unwrap();
     }
     node.persist_incremental(&log_path).unwrap();
 
-    let mut recovered = Node::load_log(&log_path).unwrap();
+    let mut recovered = reload_poa(&log_path);
     assert_eq!(
         recovered.finality_depth(),
         u64::MAX,
@@ -101,7 +160,6 @@ fn loaded_node_reapplies_finality_policy() {
     );
 
     // The recovered chain must still accept new blocks on the (non-final) tip.
-    recovered.set_miner(founder.address());
     recovered.produce_empty().unwrap();
     assert!(
         recovered.block_count().unwrap() > node.block_count().unwrap(),
@@ -122,16 +180,14 @@ fn loaded_node_reapplies_block_pruning() {
     let log_path = temp_log("blockprune");
     let founder = KeyPair::from_u64(1);
 
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
-    node.set_miner(founder.address());
+    let mut node = poa_node(1_000, 1_000);
     for _ in 0..10 {
         node.produce_empty().unwrap();
     }
     node.persist_incremental(&log_path).unwrap();
     let blocks_before = node.block_count().unwrap();
 
-    let mut recovered = Node::load_log(&log_path).unwrap();
+    let mut recovered = reload_poa(&log_path);
     assert_eq!(
         recovered.block_pruning_depth(),
         u64::MAX,
@@ -141,7 +197,7 @@ fn loaded_node_reapplies_block_pruning() {
     let balance_before = recovered.balance(&founder.address()).unwrap();
     // Block pruning is only safe once finality is on (RFC-008 invariant: the
     // effective depth is clamped to `>= finality_depth`), so enable finality
-    // first — the order `restore_miner_and_policy` uses.
+    // first — the order `restore_poa_policy` uses.
     recovered.set_finality_depth(3).unwrap();
     recovered.set_block_pruning_depth(3).unwrap();
     assert_eq!(recovered.block_pruning_depth(), 3);
@@ -160,7 +216,6 @@ fn loaded_node_reapplies_block_pruning() {
     // The recovered chain must still accept new blocks on the (non-final) tip.
     // `block_count` is steady-state under pruning (each new block advances the
     // tip and evicts one more old block), so assert on the chain height.
-    recovered.set_miner(founder.address());
     recovered.produce_empty().unwrap();
     assert!(
         recovered.chain_height().unwrap() > height_after_prune,
@@ -175,49 +230,30 @@ fn loaded_node_reapplies_block_pruning() {
 }
 
 #[test]
-fn hybrid_log_preserves_staked_block_id() {
-    let log_path = temp_log("hybrid");
-    let cfg = HybridConfig {
-        rate_num: 1,
-        rate_den: 1,
-        stake_nominal_work: 1,
-        use_epoch_beacon: true,
-        retarget: None,
-    };
-    let founder = KeyPair::from_u64(1);
+fn poa_log_preserves_authority_block_id() {
+    // The identity-preserving-replay invariant, under PoA admission. A block id
+    // commits to the authority signature, so replay must re-admit the exact
+    // signed bytes — a reader that recomputed or dropped the signature would
+    // derive a different id and silently fork the node off its own history.
+    let log_path = temp_log("poa");
 
-    // Bond the founder's coin so the validator can win a staked-VRF block.
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
-    node.enable_hybrid(cfg.clone()).unwrap();
-    node.set_validator_seed([7u8; 32]);
-
-    let (coin, _) = node
-        .utxos_of(&founder.address())
-        .unwrap()
-        .first()
-        .copied()
-        .unwrap();
-    let pk = *node.validator_public_key().unwrap().as_bytes();
-    let bond = kovanica_state::Transaction::signed(
-        &[(coin, &founder)],
-        vec![kovanica_state::TxOutput::native(1_000, founder.address())],
-        kovanica_state::bond_tag(kovanica_state::NATIVE_ASSET_ID, &pk),
-    );
-    node.submit_tx(bond).unwrap();
-    node.produce_block().unwrap().unwrap();
-
-    // Produce the staked-VRF empty block.
-    let staked_id = node.produce_empty().unwrap();
+    let mut node = poa_node(1_000, 1_000);
+    let authority_id = node.produce_empty().unwrap();
+    node.pool(1, 100, 2).unwrap();
+    // A tx-carrying block too: the signature rides on a non-empty payload, so
+    // replay must restore the id without re-deriving it from the txs.
+    let spend_id = node.produce_block().unwrap().unwrap();
     node.persist_incremental(&log_path).unwrap();
 
-    // Replay under the same hybrid policy: the staked block must keep its id.
-    let recovered = Node::load_log_with_hybrid(&log_path, cfg).unwrap();
+    // Replay under the same PoA policy: the signed blocks must keep their ids.
+    let recovered = reload_poa(&log_path);
     let header_ids: Vec<_> = recovered.export_headers().iter().map(|h| h.id).collect();
-    assert!(
-        header_ids.contains(&staked_id),
-        "staked block id must be preserved across hybrid replay"
-    );
+    for (id, what) in [(authority_id, "empty"), (spend_id, "tx-carrying")] {
+        assert!(
+            header_ids.contains(&id),
+            "authority-signed {what} block id must be preserved across PoA replay"
+        );
+    }
 
     remove_log(&log_path);
 }

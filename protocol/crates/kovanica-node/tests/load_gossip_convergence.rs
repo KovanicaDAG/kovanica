@@ -15,20 +15,65 @@
 //! every receiver after the first on any fan-out wider than a line. The
 //! per-receiver seen-sets now gate delivery (see `p2p.rs` `on_block`/`on_tx`),
 //! and this suite is the regression coverage that would have caught it.
+//!
+//! The mesh runs under **Proof-of-Authority** admission (RFC-POA): every peer
+//! holds the whole authority key set, so any peer can produce in the slot it
+//! is asked to produce for, and every peer re-verifies each authority
+//! signature on every block it relays. That is the admission path these
+//! scenarios now measure — the previous PoW-based variant was deleted with
+//! PoW, and a mesh with *no* admission would have exercised nothing at all.
 
+use ed25519_dalek::SigningKey;
+use kovanica_dag::{AuthorityPublicKey, AuthoritySet};
 use kovanica_node::{GossipKind, Mesh, Node, P2pHardeningConfig};
+use kovanica_state::KeyPair;
 
 const RING_SIZE: usize = 8;
 const SUBSIDY: u64 = 1000;
 const FOUNDER_AMOUNT: u64 = 1000;
+/// Slot duration used throughout (RFC-POA default).
+const SLOT_MS: u64 = 3000;
+/// Authority set size (the `AuthoritySet` minimum is 3).
+const AUTHORITIES: u64 = 3;
 
-/// A node with a pinned clock and a fresh genesis. All mesh nodes must share
-/// the same genesis (a different founder seed would produce an incompatible
-/// DAG), so `founder_seed` defaults to 1 like the other mesh suites.
+/// The shared authority set: keys derived from seeds `1..=AUTHORITIES`,
+/// threshold 2-of-3. Deterministic, so every mesh peer commits to the same
+/// authority set and therefore the same genesis id.
+fn authority_set() -> AuthoritySet {
+    let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
+        .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
+        .collect();
+    AuthoritySet::new(keys, 2).expect("valid authority set")
+}
+
+/// A node with a pinned clock and a fresh PoA genesis. All mesh nodes must
+/// share the same genesis (a different founder seed or authority set would
+/// produce an incompatible DAG), so `founder_seed` defaults to 1 and the
+/// authority set is the shared [`authority_set`].
+///
+/// The node holds **every** authority signing key, so `produce_empty`
+/// succeeds in any slot: `try_produce_poa` looks up the round-robin scheduled
+/// authority among the keys the node holds.
 fn genesis_node() -> Node {
     let mut node = Node::new();
     node.set_now_ms(1_000);
-    node.genesis(3, SUBSIDY, FOUNDER_AMOUNT, 1, None).unwrap();
+    node.genesis_with_poa(
+        3,
+        SUBSIDY,
+        FOUNDER_AMOUNT,
+        1,
+        None,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        None,
+        authority_set(),
+        SLOT_MS,
+    )
+    .unwrap();
+    for i in 1..=AUTHORITIES {
+        node.set_authority_signing_key(KeyPair::from_u64(i).seed());
+    }
     node
 }
 
@@ -169,42 +214,6 @@ fn eight_node_ring_converges_under_round_robin_production() {
         total_ticks <= 10 * (produced as u64),
         "propagation too slow: {total_ticks} ticks for {produced} blocks"
     );
-}
-
-#[test]
-fn pow_mining_preserves_convergence() {
-    let mut mesh = honest_mesh();
-    for i in 0..RING_SIZE {
-        let mut node = genesis_node();
-        // PoW is consensus-enforced on the ledger; the genesis block is exempt,
-        // and every produced block mines against work=1 (no difficulty
-        // retarget), so the search is immediate and every peer can re-validate.
-        node.set_proof_of_work(true).unwrap();
-        mesh.add(format!("node-{i}"), node);
-    }
-    for i in 0..RING_SIZE {
-        let j = (i + 1) % RING_SIZE;
-        let a = format!("node-{i}");
-        let b = format!("node-{j}");
-        mesh.connect(&a, &b).unwrap();
-        mesh.connect(&b, &a).unwrap();
-    }
-    mesh.drain(64);
-    assert!(mesh.is_idle());
-
-    for r in 0..20 {
-        let name = format!("node-{}", r % RING_SIZE);
-        mesh.produce_empty(&name).unwrap();
-        let ticks = ticks_to_quiesce(&mut mesh, 64);
-        assert!(ticks >= 1);
-    }
-
-    assert_converged(&mesh);
-    for name in mesh.names() {
-        let node = mesh.node(&name).unwrap();
-        assert!(node.proof_of_work(), "{name} lost the PoW setting");
-        assert_eq!(node.block_count().unwrap(), 21, "{name} missed blocks");
-    }
 }
 
 // ----------------------------------------------------------------------------
