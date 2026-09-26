@@ -18,7 +18,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use kovanica_cli::Wallet;
 use kovanica_dag::{
     AuthorityError, AuthorityPublicKey, AuthoritySet, AuthorityUpdateTx, Block, BlockId, Dag,
-    PoAConfig, POA_NOMINAL_WORK,
+    PoAConfig, POA_NOMINAL_WORK, StakeMerkleProof,
 };
 use kovanica_state::multisig::{verify_threshold_signatures, MultisigScript};
 use kovanica_state::{
@@ -974,6 +974,29 @@ impl Node {
     /// The active PoA policy, if any.
     pub fn poa_config(&self) -> Option<PoAConfig> {
         self.ledger.as_ref().and_then(Ledger::poa_config)
+    }
+
+    /// Get the stake merkle proof for the authority scheduled at `slot`.
+    /// Returns the stake merkle proof for SW-PoA SPV verification.
+    pub fn get_stake_proof(&self, slot: u64) -> Result<StakeMerkleProof, NodeError> {
+        let ledger = self.ledger.as_ref().ok_or(NodeError::NotInitialized)?;
+        let poa = ledger.poa_config().ok_or(NodeError::NotInitialized)?;
+        let authority = poa.authority_set.active_authority(slot);
+        let proof = poa.authority_set.stake_merkle_proof(authority)
+            .ok_or(NodeError::NotInitialized)?;
+        Ok(proof)
+    }
+
+    /// Get the full authority stake set for an epoch (for light client caching).
+    /// An epoch is typically 100k slots.
+    pub fn get_epoch_authority_set(&self, epoch: u64) -> Result<Vec<(AuthorityPublicKey, u64)>, NodeError> {
+        let ledger = self.ledger.as_ref().ok_or(NodeError::NotInitialized)?;
+        let poa = ledger.poa_config().ok_or(NodeError::NotInitialized)?;
+        let authorities = poa.authority_set.authorities().to_vec();
+        let stakes = poa.authority_set.stakes().map(|s| s.to_vec()).unwrap_or_else(|| {
+            vec![1u64; authorities.len()]
+        });
+        Ok(authorities.into_iter().zip(stakes.iter().copied()).collect())
     }
 
     /// Apply an on-chain authority set update (RFC-POA §1, KVP-201).
