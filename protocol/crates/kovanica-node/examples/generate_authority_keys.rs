@@ -9,7 +9,7 @@ fn main() {
         getrandom(&mut seed).expect("OS randomness");
         let sk = SigningKey::from_bytes(&seed);
         let pk = sk.verifying_key();
-        println!("Authority {}:", i+1);
+        println!("Authority {}:", i + 1);
         println!("  Secret (64 hex): {}", hex::encode(sk.to_bytes()));
         println!("  Public (64 hex): {}", hex::encode(pk.as_bytes()));
         println!();
