@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, Context};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -79,10 +79,126 @@ impl MenuItem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+enum SendStep {
+    KeyPath,
+    ToAddress,
+    Amount,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum HtlcStep {
+    SubCommand,
+    KeyPath,
+    Amount,
+    RecipientPk,
+    PreimageHash,
+    Timeout,
+    AssetId,
+    OutpointTx,
+    OutpointIndex,
+    Script,
+    Preimage,
+    ToAddress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum OfferStep {
+    SubCommand,
+    Maker,
+    GiveAsset,
+    GiveAmount,
+    TakeAsset,
+    TakeAmount,
+    PreimageHash,
+    Timeout,
+    ExpiresAt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RwaStep {
+    SubCommand,
+    Issuer,
+    Class,
+    Id,
+    Version,
+    KeyPath,
+    AssetId,
+    Amount,
+    MetadataPath,
+    CollectionId,
+    ToAddress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NftStep {
+    SubCommand,
+    AssetId,
+    CollectionId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum InputMode {
     Normal,
     BalanceAddress,
     AddressKeyPath,
+    Send(SendStep),
+    Htlc(HtlcStep),
+    Offer(OfferStep),
+    Rwa(RwaStep),
+    Nft(NftStep),
+}
+
+struct SendState {
+    key_path: Option<String>,
+    to_address: Option<String>,
+    amount: Option<u64>,
+}
+
+struct HtlcState {
+    sub_command: Option<String>,
+    key_path: Option<String>,
+    amount: Option<u64>,
+    recipient_pk: Option<String>,
+    preimage_hash: Option<String>,
+    timeout: Option<u32>,
+    asset_id: Option<String>,
+    outpoint_tx: Option<String>,
+    outpoint_index: Option<u32>,
+    script: Option<String>,
+    preimage: Option<String>,
+    to_address: Option<String>,
+}
+
+struct OfferState {
+    sub_command: Option<String>,
+    maker: Option<String>,
+    give_asset: Option<String>,
+    give_amount: Option<u64>,
+    take_asset: Option<String>,
+    take_amount: Option<u64>,
+    preimage_hash: Option<String>,
+    timeout: Option<u32>,
+    expires_at: Option<String>,
+}
+
+struct RwaState {
+    sub_command: Option<String>,
+    issuer: Option<String>,
+    class: Option<String>,
+    id: Option<String>,
+    version: Option<u8>,
+    key_path: Option<String>,
+    asset_id: Option<String>,
+    amount: Option<u64>,
+    metadata_path: Option<String>,
+    collection_id: Option<String>,
+    to_address: Option<String>,
+}
+
+struct NftState {
+    sub_command: Option<String>,
+    asset_id: Option<String>,
+    collection_id: Option<String>,
 }
 
 struct App {
@@ -93,6 +209,11 @@ struct App {
     input_buffer: String,
     input_prompt: Option<String>,
     input_mode: InputMode,
+    send_state: SendState,
+    htlc_state: HtlcState,
+    offer_state: OfferState,
+    rwa_state: RwaState,
+    nft_state: NftState,
 }
 
 impl App {
@@ -107,6 +228,11 @@ impl App {
             input_buffer: String::new(),
             input_prompt: None,
             input_mode: InputMode::Normal,
+            send_state: SendState::default(),
+            htlc_state: HtlcState::default(),
+            offer_state: OfferState::default(),
+            rwa_state: RwaState::default(),
+            nft_state: NftState::default(),
         }
     }
 
@@ -134,35 +260,87 @@ impl App {
         self.input_mode = mode;
     }
 
-    fn handle_input_char(&mut self, c: char) {
-        self.input_buffer.push(c);
-    }
-
-    fn handle_input_backspace(&mut self) {
-        self.input_buffer.pop();
-    }
-
     async fn submit_input(&mut self) -> Result<()> {
         let input = std::mem::take(&mut self.input_buffer);
         let mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
         self.input_prompt = None;
 
         match mode {
-            InputMode::Normal => {}
             InputMode::BalanceAddress => {
-                let addr = Address::parse(&input).map_err(|e| anyhow::anyhow!("invalid address: {e}"))?;
+                let addr = Address::parse(&self.input_buffer).map_err(|e| anyhow::anyhow!("invalid address: {e}"))?;
                 let result = self.client.utxos(&addr.to_hex())?;
                 self.output = serde_json::to_string_pretty(&result)?;
                 self.show_output = true;
             }
             InputMode::AddressKeyPath => {
-                let path = if input.trim().is_empty() { "kovanica.key".to_string() } else { input };
+                let path = if self.input_buffer.trim().is_empty() { "kovanica.key".to_string() } else { self.input_buffer.clone() };
                 let wallet = crate::Wallet::load(&PathBuf::from(&path))?;
                 let addr = wallet.address();
                 self.output = format!("address (kvnc): {}\naddress (hex):  {}", addr.to_kvnc(), addr.to_hex());
                 self.show_output = true;
             }
+            InputMode::Send(step) => {
+                match step {
+                    SendStep::KeyPath => {
+                        self.send_state.key_path = Some(if self.input_buffer.trim().is_empty() { "kovanica.key".to_string() } else { self.input_buffer.clone() });
+                        self.start_input("Enter recipient address (kvnc...dag or hex): ".to_string(), InputMode::Send(SendStep::ToAddress));
+                    }
+                    SendStep::ToAddress => {
+                        self.send_state.to_address = Some(self.input_buffer.clone());
+                        self.start_input("Enter amount in atoms (1 KVNC = 100000000): ".to_string(), InputMode::Send(SendStep::Amount));
+                    }
+                    SendStep::Amount => {
+                        let amount = self.input_buffer.parse::<u64>().map_err(|_| anyhow::anyhow!("invalid amount"))?;
+                        self.send_state.amount = Some(amount);
+                        self.execute_send().await?;
+                    }
+                }
+            }
+            InputMode::Htlc(step) => {
+                // HTLC implementation would go here
+                self.output = "HTLC multi-step input not yet fully implemented".to_string();
+                self.show_output = true;
+            }
+            InputMode::Offer(step) => {
+                // Offer implementation would go here
+                self.output = "Offer multi-step input not yet fully implemented".to_string();
+                self.show_output = true;
+            }
+            InputMode::Rwa(step) => {
+                // RWA implementation would go here
+                self.output = "RWA multi-step input not yet fully implemented".to_string();
+                self.show_output = true;
+            }
+            InputMode::Nft(step) => {
+                // NFT implementation would go here
+                self.output = "NFT multi-step input not yet fully implemented".to_string();
+                self.show_output = true;
+            }
+            InputMode::Normal => {}
         }
+        Ok(())
+    }
+
+    async fn execute_send(&mut self) -> Result<()> {
+        let key_path = self.send_state.key_path.clone().unwrap_or_else(|| "kovanica.key".to_string());
+        let to_address = self.send_state.to_address.clone().unwrap();
+        let amount = self.send_state.amount.unwrap();
+
+        let wallet = crate::Wallet::load(&PathBuf::from(&key_path))?;
+        let from = wallet.address().to_hex();
+        let to_addr = Address::parse(&to_address).map_err(|e| anyhow::anyhow!("invalid address: {e}"))?.to_hex();
+
+        let prepared = self.client.prepare(&from, &to_addr, amount)?;
+        let sighash_hex = prepared.get("sighash").and_then(|v| v.as_str()).context("missing sighash")?;
+        let sighash = hex::decode(sighash_hex.trim()).context("sighash not hex")?;
+
+        let wallet = crate::Wallet::load(&PathBuf::from(&key_path))?;
+        let sig = wallet.keypair().sign(&sighash);
+        let sig_hex = hex::encode(sig);
+
+        let result = self.client.submit(&from, &to_addr, amount, &sig_hex)?;
+        self.output = format!("Sent {} atoms ({} KVNC) to {}", amount, amount / 100_000_000, to_address);
+        self.show_output = true;
         Ok(())
     }
 
@@ -216,30 +394,80 @@ impl App {
                 );
             }
             MenuItem::Send => {
-                self.output = "Send requires multi-step input. Use CLI: kovanica send --key <key> --to <addr> --amount <atoms>".to_string();
-                self.show_output = true;
+                self.send_state = SendState::default();
+                self.start_input(
+                    "Enter key file path (default: kovanica.key): ".to_string(),
+                    InputMode::Send(SendStep::KeyPath),
+                );
             }
             MenuItem::Htlc => {
-                self.output = "HTLC - use CLI: kovanica htlc create/redeem/refund/balance".to_string();
-                self.show_output = true;
+                self.htlc_state = HtlcState::default();
+                self.start_input(
+                    "HTLC subcommand (create/redeem/refund/balance): ".to_string(),
+                    InputMode::Htlc(HtlcStep::SubCommand),
+                );
             }
             MenuItem::Offer => {
-                self.output = "Offer - use CLI: kovanica offer create/verify".to_string();
-                self.show_output = true;
+                self.offer_state = OfferState::default();
+                self.start_input(
+                    "Offer subcommand (create/verify): ".to_string(),
+                    InputMode::Offer(OfferStep::SubCommand),
+                );
             }
             MenuItem::Rwa => {
-                self.output = "RWA - use CLI: kovanica rwa derive/issue/burn/info".to_string();
-                self.show_output = true;
+                self.rwa_state = RwaState::default();
+                self.start_input(
+                    "RWA subcommand (derive/issue/burn/info): ".to_string(),
+                    InputMode::Rwa(RwaStep::SubCommand),
+                );
             }
             MenuItem::Nft => {
-                self.output = "NFT - use CLI: kovanica nft info/collection".to_string();
-                self.show_output = true;
+                self.nft_state = NftState::default();
+                self.start_input(
+                    "NFT subcommand (info/collection): ".to_string(),
+                    InputMode::Nft(NftStep::SubCommand),
+                );
             }
             MenuItem::Quit => {
                 return Err(anyhow::anyhow!("quit"));
             }
         }
         Ok(())
+    }
+}
+
+// Default implementations for state structs
+impl Default for SendState {
+    fn default() -> Self {
+        Self { key_path: None, to_address: None, amount: None }
+    }
+}
+
+impl Default for HtlcState {
+    fn default() -> Self {
+        Self { 
+            sub_command: None, key_path: None, amount: None, recipient_pk: None,
+            preimage_hash: None, timeout: None, asset_id: None, outpoint_tx: None,
+            outpoint_index: None, script: None, preimage: None, to_address: None 
+        }
+    }
+}
+
+impl Default for OfferState {
+    fn default() -> Self {
+        Self { sub_command: None, maker: None, give_asset: None, give_amount: None, take_asset: None, take_amount: None, preimage_hash: None, timeout: None, expires_at: None }
+    }
+}
+
+impl Default for RwaState {
+    fn default() -> Self {
+        Self { sub_command: None, issuer: None, class: None, id: None, version: None, key_path: None, asset_id: None, amount: None, metadata_path: None, collection_id: None, to_address: None }
+    }
+}
+
+impl Default for NftState {
+    fn default() -> Self {
+        Self { sub_command: None, asset_id: None, collection_id: None }
     }
 }
 
