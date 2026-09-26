@@ -12,7 +12,7 @@
 //! Every assertion is checked against a live `GET /api/head` +
 //! `GET /api/bootstrap` before being written:
 //! - `atom = 1e8`, `subsidy = 1e9` (era 0: s0 = 10 KVNC),
-//!   `max_supply = 90_200_000_000_000_000` (RFC-006),
+//!   `max_supply = 9_020_000_000_000_000` (RFC-006),
 //! - `min_fee = 2000` (era 0 floor: `max(1, 1e9 / 500_000)` atoms/byte),
 //! - `k = 3` (GHOSTDAG), `token = "KVNC"`,
 //! - peer list uses DNS seed names on TCP 9000 (no orange-cloud hosts).
