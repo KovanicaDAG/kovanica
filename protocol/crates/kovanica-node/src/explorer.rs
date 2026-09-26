@@ -3,6 +3,7 @@
 //! [`Mesh`] / [`Node`] already computed.
 
 use base64::Engine;
+use hex;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
@@ -1494,8 +1495,36 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
                 .unwrap_or_default();
             let tip = n.selected_tip().map(|t| t.to_string()).unwrap_or_default();
             let blocks = n.block_count().unwrap_or(0);
+            // PoA status
+            let (authority_set_json, current_slot, slot_duration) = match n.poa_config() {
+                Some(cfg) => {
+                    let set = &cfg.authority_set;
+                    let authorities_json = set
+                        .authorities()
+                        .iter()
+                        .map(|pk| format!("\"{}\"", hex::encode(pk.as_bytes())))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let authority_json = format!(
+                        "{{\"authorities\":[{}],\"threshold\":{},\"count\":{}}}",
+                        authorities_json,
+                        set.threshold(),
+                        set.authorities().len()
+                    );
+                    let ledger = n.ledger().ok();
+                    let tip_block = n
+                        .selected_tip()
+                        .ok()
+                        .and_then(|id| ledger.as_ref().and_then(|l| l.dag().block(&id)));
+                    let slot = tip_block
+                        .map(|b| b.timestamp_ms() / cfg.slot_duration_ms)
+                        .unwrap_or(0);
+                    (authority_json, slot, cfg.slot_duration_ms)
+                }
+                None => (String::from("null"), 0, 0),
+            };
             let body = format!(
-                "{{\"network\":{},\"genesis\":{},\"tip\":{},\"blocks\":{},\"min_fee\":{},\"atom\":{},\"finality_depth\":{},\"payload_pruning_depth\":{},\"block_pruning_depth\":{}}}",
+                "{{\"network\":{},\"genesis\":{},\"tip\":{},\"blocks\":{},\"min_fee\":{},\"atom\":{},\"finality_depth\":{},\"payload_pruning_depth\":{},\"block_pruning_depth\":{},\"authority_set\":{},\"current_slot\":{},\"slot_duration_ms\":{}}}",
                 jstr(network_profile().id),
                 jstr(&genesis),
                 jstr(&tip),
@@ -1505,7 +1534,91 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
                 n.finality_depth(),
                 n.payload_pruning_depth(),
                 n.block_pruning_depth(),
+                authority_set_json,
+                current_slot,
+                slot_duration,
             );
+            return respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+    }
+    if method == "GET" && path == "/api/network" {
+        if let Some(n) = app.mesh.node(&app.selected) {
+            let (authority_set_json, current_slot, slot_duration, time_to_next, next_slot_ts) =
+                match n.poa_config() {
+                    Some(cfg) => {
+                        let set = &cfg.authority_set;
+                        let authorities_json = set
+                            .authorities()
+                            .iter()
+                            .map(|pk| format!("\"{}\"", hex::encode(pk.as_bytes())))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let authority_json = format!(
+                        "{{\"authorities\":[{}],\"threshold\":{},\"count\":{},\"hash\":\"{}\"}}",
+                        authorities_json, set.threshold(), set.authorities().len(), hex::encode(set.hash())
+                    );
+                        let tip_id = n.selected_tip().ok();
+                        let ledger = n.ledger().ok();
+                        let tip_block =
+                            tip_id.and_then(|id| ledger.as_ref().and_then(|l| l.dag().block(&id)));
+                        let slot = tip_block
+                            .map(|b| b.timestamp_ms() / cfg.slot_duration_ms)
+                            .unwrap_or(0);
+                        let next_slot_ts = (slot + 1) * cfg.slot_duration_ms;
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        let time_to_next = next_slot_ts.saturating_sub(now_ms);
+                        (
+                            authority_json,
+                            slot,
+                            cfg.slot_duration_ms,
+                            time_to_next,
+                            next_slot_ts,
+                        )
+                    }
+                    None => (String::from("null"), 0, 0, 0, 0),
+                };
+            let peers = app
+                .peers
+                .iter()
+                .map(|s| jstr(s))
+                .collect::<Vec<_>>()
+                .join(",");
+            let blue_score = n
+                .selected_tip()
+                .ok()
+                .and_then(|tip| n.ledger().ok().and_then(|l| l.dag().ghostdag(&tip)))
+                .map(|g| g.blue_score)
+                .unwrap_or(0);
+            let body = format!(
+                "{{\"network\":{},\"genesis\":{},\"tip\":{},\"blue_score\":{},\"peers\":[{}]}}",
+                jstr(network_profile().id),
+                jstr(
+                    &n.ledger()
+                        .ok()
+                        .map(|l| l.genesis().to_string())
+                        .unwrap_or_default()
+                ),
+                jstr(&n.selected_tip().map(|t| t.to_string()).unwrap_or_default()),
+                blue_score,
+                peers,
+            );
+            // Add authority set info if PoA is enabled
+            let body = if authority_set_json != "null" {
+                format!(
+                    "{},\"authority_set\":{},\"current_slot\":{},\"slot_duration_ms\":{},\"time_to_next_slot_ms\":{},\"next_slot_timestamp_ms\":{}}}",
+                    &body[..body.len()-1], // remove trailing }
+                    authority_set_json,
+                    current_slot,
+                    slot_duration,
+                    time_to_next,
+                    next_slot_ts,
+                )
+            } else {
+                format!("{}}}", &body[..body.len() - 1]) // just close the object
+            };
             return respond(&mut stream, 200, "application/json", body.as_bytes());
         }
     }
