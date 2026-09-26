@@ -339,12 +339,27 @@ pub fn serve(addr: impl ToSocketAddrs) -> std::io::Result<()> {
     let bound = listener.local_addr()?;
     eprintln!("kovanica explorer on http://{bound}");
 
-    // Initialize metrics (Prometheus + tracing)
-    let metrics_addr = "0.0.0.0:9090";
-    if let Err(e) = init_metrics(metrics_addr) {
-        eprintln!("Failed to init metrics: {e}");
-    } else {
-        eprintln!("kovanica metrics on http://{metrics_addr}/metrics");
+    // Initialize metrics (Prometheus + tracing).
+    //
+    // The bind address is overridable because the default is a fixed
+    // 0.0.0.0:9090: two nodes on one host collide, and a fixed 0.0.0.0 bind
+    // exposes the scrape endpoint on every interface. Set
+    // KOVANICA_METRICS_LISTEN to any addr, or to one of `off`/`none`/`0`/
+    // `disabled` to skip metrics entirely.
+    match metrics_bind_target(
+        std::env::var("KOVANICA_METRICS_LISTEN")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+    ) {
+        None => eprintln!("kovanica metrics disabled (KOVANICA_METRICS_LISTEN)"),
+        Some(addr) => {
+            if let Err(e) = init_metrics(addr) {
+                eprintln!("Failed to init metrics on {addr}: {e}");
+            } else {
+                eprintln!("kovanica metrics on http://{addr}/metrics");
+            }
+        }
     }
 
     // A node that cannot replay its own log has no correct state to serve.
@@ -1032,17 +1047,15 @@ fn load_or_genesis(name: &str) -> Result<Node, String> {
                 })?;
             restore_poa_policy(&mut node, &profile);
             // Migrate to the incremental store so subsequent persistence
-            // appends only new blocks.
-            if let Some(lp) = log.to_str() {
-                let _ = node.create_log(lp);
-            }
+            // appends only new blocks. This is load-bearing, not best-effort:
+            // without a writable log the node would accept and serve blocks it
+            // cannot persist, and every one of them would vanish on restart.
+            open_replay_log(&mut node, &log, name, "after loading a snapshot")?;
             Ok(node)
         }
         LoadTier::Genesis => {
             let mut node = genesis_node();
-            if let Some(p) = log.to_str() {
-                let _ = node.create_log(p);
-            }
+            open_replay_log(&mut node, &log, name, "on a fresh data directory")?;
             // Fresh data directory: this is where the chain's authority set is
             // fixed, so record it now. Every later boot is checked against it.
             let cfg = poa_config_from_env(&profile);
@@ -1050,6 +1063,72 @@ fn load_or_genesis(name: &str) -> Result<Node, String> {
             Ok(node)
         }
     }
+}
+
+/// Resolve the Prometheus scrape bind address from `KOVANICA_METRICS_LISTEN`.
+///
+/// Returns `None` when metrics are switched off, which the operator signals
+/// with `off` / `none` / `0` / `disabled`. Anything else is used verbatim as the
+/// bind address, defaulting to `0.0.0.0:9090`.
+///
+/// An unset or empty value means *default*, not *off*: a systemd unit written as
+/// `Environment=KOVANICA_METRICS_LISTEN=` should behave the same as omitting
+/// the line, and silently disabling metrics because someone cleared a variable
+/// would remove observability without anyone noticing.
+///
+/// Split out from `serve` so the policy is testable without binding a socket:
+/// `init_metrics` has process-global side effects and can only bind once.
+fn metrics_bind_target(raw: Option<&str>) -> Option<&str> {
+    const DEFAULT: &str = "0.0.0.0:9090";
+    let v = raw.unwrap_or_default().trim();
+    if v.is_empty() {
+        return Some(DEFAULT);
+    }
+    if matches!(
+        v.to_ascii_lowercase().as_str(),
+        "off" | "none" | "0" | "disabled"
+    ) {
+        return None;
+    }
+    Some(v)
+}
+
+/// Open the append-only replay log, or refuse to hand back a node.
+///
+/// Every tier except [`LoadTier::Log`] has to create this file before the node
+/// can serve anything, and both remaining call sites used to be
+/// `let _ = node.create_log(..)`. That discarded two independent failure modes
+/// and turned each into silent data loss:
+///
+/// * `create_log` failing (read-only mount, full disk, bad path) left the node
+///   running with **no persistence at all**. It would produce and serve blocks
+///   that no restart could recover, while every health check looked green.
+/// * `log.to_str()` returning `None` — a data-dir path containing non-UTF-8
+///   bytes — skipped persistence *entirely* without even attempting it.
+///
+/// Both are the same class of bug as refusing to boot on a log that will not
+/// load: a node that cannot durably record the chain it is serving is worse
+/// than a node that does not start, because the damage is invisible until
+/// someone restarts it.
+fn open_replay_log(node: &mut Node, log: &Path, name: &str, context: &str) -> Result<(), String> {
+    let p = log.to_str().ok_or_else(|| {
+        format!(
+            "replay log path for node {name} is not valid UTF-8: {}\n\
+             refusing to start {context} without persistence: the node would \
+             produce blocks it cannot durably record, and they would be silently \
+             lost on restart. Point KOVANICA_DATA at a UTF-8 path.",
+            log.display()
+        )
+    })?;
+    node.create_log(p).map_err(|e| {
+        format!(
+            "cannot open the replay log {p} for node {name} {context}: {e}\n\
+             refusing to start: the node would produce blocks it cannot durably \
+             record, and they would be silently lost on restart. Resolve the \
+             cause above — usually the data directory's permissions or free \
+             space, or KOVANICA_DATA pointing somewhere unwritable."
+        )
+    })
 }
 
 /// Re-apply PoA admission and the network profile after loading a node from disk
@@ -4812,6 +4891,89 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
         dir
+    }
+
+    /// A node that cannot durably record the chain it serves is worse than a
+    /// node that refuses to start, so `open_replay_log` must never return `Ok`
+    /// without a live log. These pin the two failure modes the old
+    /// `let _ = node.create_log(..)` silently swallowed.
+    #[test]
+    fn open_replay_log_refuses_when_the_path_cannot_be_created() {
+        let dir = tier_test_dir("unwritable");
+        // A path whose parent is a regular file cannot be created.
+        let blocker = dir.join("not-a-dir");
+        fs::write(&blocker, b"i am a file").unwrap();
+        let log = blocker.join("alpha.log");
+
+        let mut node = Node::new();
+        let err = open_replay_log(&mut node, &log, "alpha", "on a fresh data directory")
+            .expect_err("must refuse rather than run without persistence");
+        assert!(
+            err.contains("cannot durably record"),
+            "message should explain the consequence, got: {err}"
+        );
+        assert!(err.contains("KOVANICA_DATA"), "should be actionable: {err}");
+    }
+
+    #[test]
+    fn open_replay_log_refuses_a_non_utf8_path_instead_of_skipping_persistence() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tier_test_dir("non-utf8");
+        // 0xFF is never valid UTF-8, so `to_str()` yields None. The old code
+        // used `if let Some(p) = log.to_str()`, which skipped persistence
+        // entirely and returned a node with no log at all.
+        let log = dir.join(OsStr::from_bytes(b"alpha-\xff.log"));
+
+        let mut node = Node::new();
+        let err = open_replay_log(&mut node, &log, "alpha", "on a fresh data directory")
+            .expect_err("a non-UTF-8 path must not silently skip persistence");
+        assert!(err.contains("not valid UTF-8"), "got: {err}");
+        assert!(
+            err.contains("cannot durably record"),
+            "message should explain the consequence, got: {err}"
+        );
+    }
+
+    #[test]
+    fn open_replay_log_succeeds_on_a_writable_path() {
+        let dir = tier_test_dir("writable");
+        let log = dir.join("alpha.log");
+        // Needs a real ledger: `create_log` persists the node's current chain.
+        let mut node = genesis_node();
+        open_replay_log(&mut node, &log, "alpha", "on a fresh data directory")
+            .expect("a writable path must succeed");
+        assert!(log.exists(), "the log file must actually be created");
+    }
+
+    /// The scrape endpoint used to bind a fixed `0.0.0.0:9090`, so two nodes on
+    /// one host collided and every interface got a Prometheus endpoint.
+    #[test]
+    fn metrics_listen_is_configurable_and_can_be_disabled() {
+        // Unset and empty both mean "default" — a systemd unit with
+        // `Environment=KOVANICA_METRICS_LISTEN=` must behave like no line at all,
+        // not silently drop observability.
+        assert_eq!(metrics_bind_target(None), Some("0.0.0.0:9090"));
+        assert_eq!(metrics_bind_target(Some("")), Some("0.0.0.0:9090"));
+        assert_eq!(metrics_bind_target(Some("   ")), Some("0.0.0.0:9090"));
+
+        assert_eq!(
+            metrics_bind_target(Some("127.0.0.1:19090")),
+            Some("127.0.0.1:19090")
+        );
+        assert_eq!(
+            metrics_bind_target(Some(" 10.0.0.5:9090 ")),
+            Some("10.0.0.5:9090"),
+            "surrounding whitespace is trimmed"
+        );
+
+        for off in ["off", "OFF", " none ", "0", "disabled", "DISABLED"] {
+            assert_eq!(
+                metrics_bind_target(Some(off)),
+                None,
+                "{off:?} should disable metrics"
+            );
+        }
     }
 
     #[test]
