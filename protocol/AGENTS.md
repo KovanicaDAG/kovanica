@@ -428,6 +428,86 @@ upgrade gated on blue score (`VAULT_ACTIVATION_SCORE = 0` default).
 - **Format bump: checkpoint v6 only** — tx encoding, snapshot, and `kvnc…dag`
   rendering unchanged. **No testnet reset.**
 
+### Tokenomics — RFC-006 (emission, cap, maturity, fee burn)
+
+Shipped in `kovanica-state`; full spec in `docs/RFC-006-EmissionCurve.md`.
+**Live on `kovanica-testnet`** since 2026-09-20. RFC-006 defines the money
+supply: a smooth geometric emission curve, a hard 90.2M cap, 100-block coinbase
+maturity, and a 75% fee burn. It is the only RFC that is **not** blue-score
+gated — see "Activation" below, which is the reason it needed a genesis reset
+rather than a fork.
+
+- **Constants** (`ledger.rs`): `ATOM = 100_000_000` (1 KVNC = 1e8 atoms),
+  `RFC006_GENESIS_SUBSIDY = 10 * ATOM`, `RFC006_ERA_LENGTH = 2_000_000`,
+  `MAX_SUPPLY = 90_200_000 * ATOM`, `RFC006_PREMINE = 200_000 * ATOM`,
+  `RFC006_TREASURY_TOTAL = 10_000_000 * ATOM` (10 × 1M tranches),
+  `COINBASE_MATURITY = 100`, `FEE_PRODUCER_NUM/DEN = 1/4`.
+- **Emission** (`HalvingSchedule::subsidy_at`): `era = height / 2_000_000`,
+  `s(0) = 10 KVNC`, `s(e) = floor(s(e-1) * 3/4)`, **0 for era ≥ 256**. The type
+  name `HalvingSchedule` is retained for API stability — the decay is
+  **geometric (α = 3/4), not a binary halving**. Do not infer halving semantics
+  from the name. (`DEFAULT_HALVING_ERA` is an alias; prefer
+  `HalvingSchedule::rfc006()`.)
+- **The 80M curve total is asymptotic, not exact.** Summing `s(e) · E` with
+  integer flooring at each step realizes **79 999 997.6 KVNC**, so the honest
+  emission ceiling is `0.2M + 10M + 79 999 997.6` = **90 199 997.8 KVNC**,
+  ~2.2 KVNC *under* `MAX_SUPPLY`. The cap is a backstop against over-claiming
+  coinbases, never a curve truncation. Docs quoting a flat "80M curve" are
+  quoting the asymptotic limit.
+- **Activation — the odd one out.** `TOKENOMICS_ACTIVATION_SCORE = 0` is a
+  **documented marker only**: the curve, cap, maturity, and fee split are
+  **unconditional hard rules active from genesis**. There is no pre-activation
+  schedule (the ledger holds a single emission schedule), so per the code comment
+  **do not branch on it**. Structurally opposite to RFC-001…005, which are all
+  blue-score gated and therefore backward-compatible; RFC-006 cannot be, which
+  is why activating it reset the chain and wiped pre-RFC-006 balances.
+- **Cap enforcement** is per-view, in `apply_block`: a coinbase whose native
+  outputs would push cumulative minted past the cap is rejected as
+  `LedgerError::SupplyCapExceeded { claimed, native_minted, max_supply }`. Two
+  parallel blocks that each bring cumulative minted to exactly `MAX_SUPPLY` are
+  **both** valid in their own view; the conflict resolves only in the merger's
+  view. Landing exactly on the cap is accepted; one atom past is rejected.
+  Genesis may mint premine + treasury up to the cap; the curve applies from
+  height 1.
+- **Maturity** is measured on the **selected-parent chain height**, not blue
+  score (blue score counts merged blue blocks and exceeds chain height for
+  mergeset blocks) — so the incremental `Ledger` and the batch `apply_dag` path
+  agree (`mergeset_coinbase_creation_height_matches_apply_dag`). Genesis is
+  exempt. Pruning must retain UTXO creation heights for ≥ `COINBASE_MATURITY`
+  blocks.
+- **Fees**: floor `max(1, subsidy / 500_000)` atoms/byte — **2000 atoms/byte at
+  genesis**, 1500 at height 2 000 000, never below 1. Decays with the subsidy.
+  Paid in **native KVNC only** (RFC-002 non-native assets cannot pay fees).
+  Producer takes `fees / 4`, the remaining 75% is burned. Because
+  `fees - fees/4` is **not additive**, cumulative burn is tracked as an explicit
+  per-block sum (`Ledger::fees_burned`, carried in each block's view) rather than
+  recomputed as `total - total/4`, which drifts from the true sum.
+- **Treasury**: 10 × 1M RFC-005 vault tranches; tranche *k* (1..=10) unlocks at
+  `k * BLOCKS_PER_YEAR` (`31_536_000`, one tranche/year at 1 block/s), enforced
+  by the RFC-005 absolute lock. ⚠️ Owner keys are **testnet placeholders**
+  (`KeyPair::from_u64(TREASURY_SEED_BASE + k)` — publicly derivable by design).
+  Production **must** pass a real secret `treasury_seed` via key ceremony.
+- **Supply metrics** (`Ledger::supply()` → `SupplyMetrics`): `total`/
+  `native_minted` (cumulative), `circulating` (tip UTXO native total —
+  **approximate**, not a maturity-aware spendable balance; clients must filter
+  immature coinbases themselves, which the tx builder already does), `burned`,
+  `max_supply`. Exposed on `GET /api/bootstrap`.
+- **Format bump: none** — no new persisted field; RFC-006 rides existing ones.
+  Breaking at the **economic** layer only: a pre-RFC-006 and an RFC-006 chain
+  both parse but disagree on subsidy/maturity/fees, so pre-2026-09-20 testnet
+  data is disposable.
+- **Tests**: `crates/kovanica-state/tests/tokenomics.rs` (18 tests — geometric
+  decay per era, closed-form total, monotone + terminates after 256 eras, cap
+  rejection, exact-cap-accepted/over-cap-rejected, near-cap parallel blocks
+  rejected order-independently, maturity incl. genesis exemption and mergeset
+  rejection in the merger view, fee burn 3/4, parallel fee conflicts at merge,
+  batch-path cap enforcement, pruning-heights survival, snapshot/checkpoint
+  supply continuity, mergeset creation height).
+- **Obsolete numbers** (pre-RFC-006, still quoted by some stale runbooks such as
+  `node/TESTNET.md`): 200 KVNC/block subsidy, 50 KVNC founder premine, binary
+  halving every 1000 blocks, `0.0001 KVNC` min fee. See `TESTNET-RFC006.md` and
+  `docs/RFC-006-EmissionCurve.md` for current truth.
+
 ### Web app — Grok preview bridge (dev-only)
 
 `web/src/lib/preview-host-bridge.ts`, `web/src/lib/preview-embedder-origin.ts`, and
