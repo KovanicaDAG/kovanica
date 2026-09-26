@@ -12,6 +12,14 @@
 .env.*
 !.env.example
 
+# Deploy environment data / keys / logs (never commit)
+deploy/*/data/
+deploy/*/keys/
+deploy/*/logs/
+deploy/*/seeds/*/keys/
+deploy/testnet/authority-keys/*.env
+deploy/mainnet/authority-keys/*.env
+
 # Packed planning source (docs in docs/ are canonical)
 /plans/*.zip
 
@@ -21,3 +29,7 @@
 
 # Vault transfer archives (regenerate with ./scripts/build-vault.sh --zip)
 /dist/
+
+# Authority private keys (never commit)
+protocol/authority-keys/*.env
+protocol/mainnet-authority-keys/*.env

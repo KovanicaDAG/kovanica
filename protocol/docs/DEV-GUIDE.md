@@ -1,6 +1,6 @@
 # Kovanica Development Guide
 
-Canonical repo: `https://github.com/KovanicaDAG/kovanica` (monorepo) / `kovanica-workspace`
+Canonical repo: `https://github.com/KovanicaDAG/kovanica` (monorepo)
 Current network: `kovanica-testnet`
 
 ## Core Architecture (never change without RFC)

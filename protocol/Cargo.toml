@@ -6,7 +6,7 @@ members = ["crates/kovanica-dag", "crates/kovanica-state", "crates/kovanica-node
 version = "0.3.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/KovanicaDAG/kovanica-protocol"
+repository = "https://github.com/KovanicaDAG/kovanica"
 rust-version = "1.75"
 
 [workspace.dependencies]

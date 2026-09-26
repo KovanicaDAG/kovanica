@@ -27,9 +27,14 @@ kovanica/                          ← THIS REPO (source-of-truth)
 ├── installer/                     # One-click installers (30+ platforms)
 ├── ledger-app/                    # Hardware wallet harness
 ├── agent/                         # RAG agent service (Python)
+├── deploy/                        # Environment configs (developing/testnet/mainnet)
+│   ├── developing/                # Local dev environment
+│   ├── testnet/                   # Live testnet (seeds, systemd, env)
+│   ├── mainnet/                   # Dormant mainnet (systemd, env)
+│   └── scripts/                   # Deploy scripts
 ├── data/                          # Runtime data (NOT versioned)
 ├── brain-vault/                   # Private knowledge base (Obsidian)
-└── docs/                          # Cross-cutting docs (NETWORK.md, MASTER-ROADMAP.md)
+└── docs/                          # Cross-cutting docs (NETWORK.md, MASTER-ROADMAP.md, mainnet/)
 ```
 
 > **External repos** (live outside this workspace):
@@ -68,6 +73,7 @@ cd kovanica
 | **`sdk/`** | Rust/WASM SDK | `cargo build --workspace` |
 | **`installer/`** | Cross-platform installers | Used by `kovanica-node` releases |
 | **`ledger-app/`** | Ledger/Trezor hardware wallet support | `make -C ledger-app/app` |
+| **`deploy/`** | Environment configs (dev/testnet/mainnet) | Source env.sh per tier |
 | **`agent/`** | Python RAG agent | `python -m agent.core` |
 
 ---
@@ -174,7 +180,8 @@ cargo build --release
 | **RFC Index** | [protocol/docs/](protocol/docs/) |
 | **Operations Runbook** | [protocol/OPERATIONS.md](protocol/OPERATIONS.md) |
 | **Web Deploy** | [web/site/DEPLOY.md](web/site/DEPLOY.md) |
-| **PoA Migration RFC** | [protocol/docs/RFC-POA-Migration.md](protocol/docs/RFC-POA-Migration.md) |
+| **PoA Migration RFC** | [docs/RFC-POA-Migration.md](docs/RFC-POA-Migration.md) |
+| **Mainnet Prep Docs** | [docs/mainnet/](docs/mainnet/) |
 | **Agent Conventions** | [protocol/AGENTS.md](protocol/AGENTS.md) |
 
 ---
