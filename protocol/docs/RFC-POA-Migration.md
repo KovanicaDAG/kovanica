@@ -381,6 +381,24 @@ is the intended end state.
   what, has not been said. See §0.1.1: restoring one would itself be
   consensus-breaking.
 
+- **Future hybrid authority source: PoA signing + delegated pool — `[OPEN]`.**
+  The PoA signing/verification layer (`try_produce_poa`, block validation) is
+  already a pure consumer of an `AuthoritySet`. A future upgrade could replace
+  the *source* of that set (currently: genesis + explicit `AuthorityUpdateTx`)
+  with a **delegation-driven epoch selection** while keeping the signing logic
+  identical. Three hybrid models were sketched (2026-09-26):
+  - **Model A (Governance Core + Delegated Periphery)**: fixed core authorities
+    (3–4 keys) + rotating delegated slots (e.g., 2–5 per epoch).
+  - **Model B (Delegation with Governance Veto)**: fully permissionless pool,
+    governance multisig can veto/replace a malicious selection.
+  - **Model C (Phased Transition)**: start with pure PoA; add 2 delegated slots
+    after 6–12 months; expand to 7 delegated + 1 emergency core; optionally
+    full delegation later. Each phase is a separate hard fork with clear authority-
+    set source swap.
+  The PoA signing path never changes — only the authority-set source module.
+  This is **not** on the current roadmap; it is recorded as an architectural
+  option if governance later demands permissionless participation.
+
 - **Removed-module fallout and the adversarial coverage gap — `[OPEN]`.**
   With PoW (§0.1) **and** hybrid (§0.7.1) both being removed, six test binaries
   have no target module left to test and are slated for deletion:

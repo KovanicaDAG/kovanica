@@ -204,12 +204,19 @@ struct PoaGenesisConfig {
     /// `KOVANICA_AUTHORITIES` set never loads keys into the node (each
     /// authority operator sets their own via `set_authority_signing_key`).
     placeholder: bool,
+    /// Operator's own Ed25519 authority signing key (32 bytes = 64 hex chars),
+    /// if provided via `KOVANICA_AUTHORITY_KEY`. This is the operator's
+    /// consensus credential — it allows this node to sign blocks when it is
+    /// the scheduled authority for a slot. It is NOT the same as the treasury
+    /// seed or the founder seed.
+    authority_signing_key: Option<[u8; 32]>,
 }
 
 /// Parse the PoA genesis configuration from the environment (RFC-POA §7):
 /// `KOVANICA_AUTHORITIES` (comma-separated 64-hex Ed25519 public keys),
 /// `KOVANICA_AUTHORITY_THRESHOLD` (default strict majority),
-/// `KOVANICA_SLOT_DURATION` (default 3000 ms).
+/// `KOVANICA_SLOT_DURATION` (default 3000 ms),
+/// `KOVANICA_AUTHORITY_KEY` (optional: this operator's 64-hex Ed25519 signing key).
 ///
 /// Always yields a config — PoA is the only admission regime. With no
 /// `KOVANICA_AUTHORITIES`: testnet derives a deterministic placeholder set
@@ -275,10 +282,27 @@ fn poa_config_from_env(profile: &NetworkProfile) -> PoaGenesisConfig {
     let authority_set = AuthoritySet::from_bytes(&bytes).unwrap_or_else(|e| {
         panic!("invalid KOVANICA_AUTHORITIES / KOVANICA_AUTHORITY_THRESHOLD: {e}")
     });
+    // Optional: this operator's own authority signing key.
+    let authority_signing_key = std::env::var("KOVANICA_AUTHORITY_KEY").ok().map(|hex| {
+        let hex = hex.trim();
+        if hex.len() != 64 {
+            panic!(
+                "KOVANICA_AUTHORITY_KEY must be 64 hex chars (32 bytes, got {})",
+                hex.len()
+            );
+        }
+        let mut key = [0u8; 32];
+        for (i, byte) in hex.as_bytes().chunks(2).enumerate() {
+            key[i] = u8::from_str_radix(std::str::from_utf8(byte).expect("ascii hex"), 16)
+                .expect("KOVANICA_AUTHORITY_KEY must be hex");
+        }
+        key
+    });
     PoaGenesisConfig {
         authority_set,
         slot_duration_ms,
         placeholder,
+        authority_signing_key,
     }
 }
 
@@ -836,7 +860,9 @@ fn load_or_genesis(name: &str) -> Node {
 fn restore_poa_policy(node: &mut Node, profile: &NetworkProfile) {
     let cfg = poa_config_from_env(profile);
     let _ = node.enable_poa(cfg.authority_set, cfg.slot_duration_ms);
-    if cfg.placeholder {
+    if let Some(key) = cfg.authority_signing_key {
+        node.set_authority_signing_key(key);
+    } else if cfg.placeholder {
         for i in 0..AUTHORITY_PLACEHOLDER_COUNT {
             node.set_authority_signing_key(
                 kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE + i).seed(),
@@ -895,11 +921,11 @@ fn genesis_node() -> Node {
     // (`KVA1 || set_hash`). There is no other genesis shape — PoW, difficulty,
     // VRF and hybrid admission were removed (RFC-POA §0).
     let cfg = poa_config_from_env(&profile);
-    // TESTNET-ONLY placeholder convenience: load the placeholder signing
-    // keys so a single-node explorer can produce in every slot. An
-    // explicit `KOVANICA_AUTHORITIES` set never loads keys into the node —
-    // each authority operator sets their own via `set_authority_signing_key`.
-    if cfg.placeholder {
+    // Operator's authority signing key (from KOVANICA_AUTHORITY_KEY) takes
+    // precedence; otherwise fall back to TESTNET-ONLY placeholder keys.
+    if let Some(key) = cfg.authority_signing_key {
+        node.set_authority_signing_key(key);
+    } else if cfg.placeholder {
         for i in 0..AUTHORITY_PLACEHOLDER_COUNT {
             node.set_authority_signing_key(
                 kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE + i).seed(),

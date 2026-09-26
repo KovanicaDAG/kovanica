@@ -27,6 +27,8 @@ use crate::node::Node;
 /// The help text listing every command.
 pub const HELP: &str = "commands: help | genesis <k> <subsidy> <amount> <seed> | \
 genesis_finality <k> <subsidy> <amount> <seed> <finality_depth> | \
+genesis_poa <k> <subsidy> <amount> <seed> <finality_depth> <slot_duration> <authorities...> | \
+authority_key <key-hex> | \
 address <seed> | balance <seed|addr-hex> | send <from-seed> <amount> <to-seed> | \
 pool <from-seed> <amount> <to-seed> | produce | pending | tips | tip | len | \
 save <path> | load <path> | checkpoint <path> | load_checkpoint <path> | \
@@ -88,6 +90,77 @@ fn run(node: &mut Node, line: &str) -> Result<String, String> {
                 )
                 .map_err(|e| e.to_string())?;
             Ok(format!("genesis {genesis} founder {founder}"))
+        }
+
+        "genesis_poa" => {
+            // genesis_poa <k> <subsidy> <amount> <seed> <finality_depth> <slot_duration> <authority1-hex> [<authority2-hex> ...]
+            if args.len() < 6 {
+                return Err("genesis_poa needs at least 6 args: k subsidy amount seed finality_depth slot_duration authority1-hex [authority2-hex...]".into());
+            }
+            let k = u16_arg(args[0])?;
+            let subsidy = u64_arg(args[1])?;
+            let amount = u64_arg(args[2])?;
+            let seed = u64_arg(args[3])?;
+            let finality_depth = u64_arg(args[4])?;
+            let slot_duration = u64_arg(args[5])?;
+            // Parse authority public keys (64 hex chars each)
+            let mut pks = Vec::new();
+            for hex in &args[6..] {
+                let hex = hex.trim();
+                if hex.len() != 64 {
+                    return Err(format!(
+                        "authority key must be 64 hex chars (got '{}')",
+                        hex
+                    ));
+                }
+                let mut pk = [0u8; 32];
+                hex::decode_to_slice(hex, &mut pk)
+                    .map_err(|e| format!("bad authority key hex: {e}"))?;
+                pks.push(pk);
+            }
+            if pks.len() < 3 {
+                return Err("need at least 3 authority keys".into());
+            }
+            // Build AuthoritySet with strict majority threshold
+            let threshold = pks.len() / 2 + 1;
+            let mut bytes = Vec::with_capacity(16 + 32 * pks.len());
+            bytes.extend_from_slice(&(threshold as u64).to_le_bytes());
+            bytes.extend_from_slice(&(pks.len() as u64).to_le_bytes());
+            for pk in &pks {
+                bytes.extend_from_slice(pk);
+            }
+            let authority_set = kovanica_dag::AuthoritySet::from_bytes(&bytes)
+                .map_err(|e| format!("invalid authority set: {e}"))?;
+            let (genesis, founder) = node
+                .genesis_with_poa(
+                    k,
+                    subsidy,
+                    amount,
+                    seed,
+                    None, // RPC genesis is treasury-less
+                    finality_depth,
+                    u64::MAX,
+                    u64::MAX, // block pruning: RPC genesis keeps the full oracle
+                    None,     // operator_seed: None for manual genesis
+                    authority_set,
+                    slot_duration,
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(format!("genesis {genesis} founder {founder}"))
+        }
+
+        "authority_key" => {
+            // authority_key <64-hex-signing-key>
+            let [key_hex] = fixed::<1>(&args)?;
+            let key_hex = key_hex.trim();
+            if key_hex.len() != 64 {
+                return Err("authority_key must be 64 hex chars (32 bytes)".into());
+            }
+            let mut key = [0u8; 32];
+            hex::decode_to_slice(key_hex, &mut key)
+                .map_err(|e| format!("bad authority key hex: {e}"))?;
+            node.set_authority_signing_key(key);
+            Ok("authority key set".into())
         }
 
         "address" => {
@@ -326,6 +399,13 @@ fn parse_target(token: &str) -> Result<Address, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{SigningKey, VerifyingKey};
+
+    fn valid_auth(seed: u8) -> (VerifyingKey, String) {
+        let sk = SigningKey::from_bytes(&[seed; 32]);
+        let pk = sk.verifying_key();
+        (pk, hex::encode(pk.as_bytes()))
+    }
 
     #[test]
     fn blank_and_unknown() {
@@ -341,5 +421,90 @@ mod tests {
         assert!(execute_line(&mut node, "genesis 3 1000").starts_with("err expected 4"));
         assert!(execute_line(&mut node, "genesis x 1 1 1").starts_with("err"));
         assert!(execute_line(&mut node, "balance 1").starts_with("err")); // no ledger yet
+    }
+
+    #[test]
+    fn genesis_poa_creates_chain_with_authority_set() {
+        let mut node = Node::new();
+        // 3 valid Ed25519 public keys from seeds 0x01, 0x02, 0x03
+        let (_, auth1) = valid_auth(0x01);
+        let (_, auth2) = valid_auth(0x02);
+        let (_, auth3) = valid_auth(0x03);
+        let cmd = format!(
+            "genesis_poa 3 1000 1000 1 100 3000 {} {} {}",
+            auth1, auth2, auth3
+        );
+        let resp = execute_line(&mut node, &cmd);
+        assert!(resp.starts_with("ok genesis "), "got: {}", resp);
+        // Verify the node has PoA enabled
+        assert!(node.poa_enabled());
+        let poa_cfg = node.poa_config().expect("poa config");
+        assert_eq!(
+            poa_cfg.authority_set.active_authority(0).as_bytes().len(),
+            32
+        );
+    }
+
+    #[test]
+    fn genesis_poa_rejects_insufficient_authorities() {
+        let mut node = Node::new();
+        let (_, auth1) = valid_auth(0x01);
+        let (_, auth2) = valid_auth(0x02);
+        let cmd = format!("genesis_poa 3 1000 1000 1 100 3000 {} {}", auth1, auth2);
+        let resp = execute_line(&mut node, &cmd);
+        assert!(
+            resp.starts_with("err need at least 3 authority keys"),
+            "got: {}",
+            resp
+        );
+    }
+
+    #[test]
+    fn genesis_poa_rejects_bad_key_length() {
+        let mut node = Node::new();
+        let (_, auth1) = valid_auth(0x01);
+        let (_, auth2) = valid_auth(0x02);
+        let auth3 = "short";
+        let cmd = format!(
+            "genesis_poa 3 1000 1000 1 100 3000 {} {} {}",
+            auth1, auth2, auth3
+        );
+        let resp = execute_line(&mut node, &cmd);
+        assert!(
+            resp.starts_with("err authority key must be 64 hex chars"),
+            "got: {}",
+            resp
+        );
+    }
+
+    #[test]
+    fn authority_key_sets_signing_key() {
+        let mut node = Node::new();
+        // First create a PoA genesis
+        let (_, auth1) = valid_auth(0x01);
+        let (_, auth2) = valid_auth(0x02);
+        let (_, auth3) = valid_auth(0x03);
+        let cmd = format!(
+            "genesis_poa 3 1000 1000 1 100 3000 {} {} {}",
+            auth1, auth2, auth3
+        );
+        execute_line(&mut node, &cmd);
+        // Now set an authority signing key (seed 0x01 -> valid key)
+        let (_, key_hex) = valid_auth(0x01);
+        let resp = execute_line(&mut node, &format!("authority_key {}", key_hex));
+        assert_eq!(resp, "ok authority key set");
+        // Verify the node has the key
+        assert!(node.authority_public_key().is_some());
+    }
+
+    #[test]
+    fn authority_key_rejects_bad_length() {
+        let mut node = Node::new();
+        let resp = execute_line(&mut node, "authority_key short");
+        assert!(
+            resp.starts_with("err authority_key must be 64 hex chars"),
+            "got: {}",
+            resp
+        );
     }
 }
