@@ -1241,6 +1241,7 @@ dependencies = [
  "blake3",
  "criterion",
  "ed25519-dalek",
+ "getrandom 0.2.17",
  "hex",
  "kovanica-cli",
  "kovanica-dag",
