@@ -58,7 +58,7 @@ PRUNE_DIRS = {
 # Top-level trees excluded wholesale. `kovanica-protocol/` is an untracked
 # scratch copy of the agent config; `trezor-coin-def/` is an external vendor
 # clone already ignored by the monorepo .gitignore.
-PRUNE_ROOTS = {"kovanica-protocol", "trezor-coin-def"}
+PRUNE_ROOTS = {"kovanica-protocol", "trezor-coin-def", "00-Home"}
 
 # Files with generated / vendored content that add no vault value.
 PRUNE_FILE_RE = re.compile(
@@ -101,9 +101,9 @@ CATEGORIES: list[tuple[str, list[str]]] = [
         "protocol/desktop-app/**",
     ]),
     ("60-Planning", [
+        "60-Planning/**",
         "MASTER-ROADMAP.md", "docs/**", "TODO/plans/**", "plans/**",
         "protocol/docs/plans/**", "protocol/TODO.md", "protocol/Restructure*.md",
-        "protocol/docs/PRODUCT-POLISH.md", "kovanica-poa-migration/**",
     ]),
     ("70-Policy", [
         "protocol/LEGAL_PAYMENT_POLICY.md", "protocol/docs/ENTITY-LEGAL.md",
@@ -154,6 +154,7 @@ AGENT_CONFIG_GLOBS = [
 ]
 
 MD_LINK = re.compile(r"(!?)\[([^\]]*)\]\(([^)\s]+?)(?:\s+\"[^\"]*\")?\)")
+WIKI_LINK = re.compile(r"(!?)\[\[([^\]|#]+)(#[^\]|]*)?(?:\|([^\]]*))?\]\]")
 FM_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)
 
 
@@ -277,10 +278,23 @@ def resolve(target: str, source_rel: str, mapping: dict[str, PurePosixPath]) -> 
         return None
     path_part = target.split("#", 1)[0]
     anchor = target[len(path_part):]
-    if not path_part or not path_part.lower().endswith(".md"):
+    if not path_part:
         return None
+    # Auto-append .md if missing (Obsidian convention)
+    if not path_part.lower().endswith(".md"):
+        path_part += ".md"
+    
+    # First try as repo-root-relative (for absolute-like links like 60-Planning/...)
+    norm = os_norm(path_part)
+    if not norm.startswith("..") and norm in mapping:
+        dest = mapping[norm]
+        return str(dest.with_suffix("")) + anchor
+    
+    # Fall back to source-relative resolution
+    if not path_part.lower().endswith(".md"):
+        path_part += ".md"
     src_dir = PurePosixPath(source_rel).parent
-    norm = os_norm(str((src_dir / path_part)))
+    norm = os_norm(str((PurePosixPath(source_rel).parent / path_part)))
     if norm.startswith(".."):
         return None
     dest = mapping.get(norm)
@@ -305,7 +319,7 @@ def os_norm(p: str) -> str:
 def rewrite_links(text: str, source_rel: str, mapping: dict[str, PurePosixPath]) -> tuple[str, int]:
     count = 0
 
-    def sub(m: re.Match) -> str:
+    def sub_md(m: re.Match) -> str:
         nonlocal count
         bang, label, target = m.group(1), m.group(2), m.group(3)
         link = resolve(target, source_rel, mapping)
@@ -317,7 +331,22 @@ def rewrite_links(text: str, source_rel: str, mapping: dict[str, PurePosixPath])
             return f"{bang}[[{link}|{label.strip()}]]"
         return f"{bang}[[{link}]]"
 
-    return MD_LINK.sub(sub, text), count
+    def sub_wiki(m: re.Match) -> str:
+        nonlocal count
+        bang, target, anchor, alias = m.group(1), m.group(2), m.group(3), m.group(4)
+        full_target = target + (anchor or "")
+        link = resolve(full_target, source_rel, mapping)
+        if link is None:
+            return m.group(0)
+        count += 1
+        if alias and alias.strip():
+            return f"{bang}[[{link}|{alias.strip()}]]"
+        return f"{bang}[[{link}]]"
+
+    text = MD_LINK.sub(sub_md, text)
+    text, n_wiki = WIKI_LINK.subn(sub_wiki, text)
+    count += n_wiki
+    return text, count
 
 
 def upsert_frontmatter(text: str, title: str, cat: str, source_rel: str, synced: str) -> str:

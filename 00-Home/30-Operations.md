@@ -19,7 +19,7 @@ generated_by: scripts/build-vault.py
 - [[30-Operations/protocol--TESTNET_AUTHORITY_KEYS|Testnet Authority Keys (Post-PoA Reset)]]
 - [[30-Operations/protocol--deploy--README|explorer.kovanica.online (nginx + certbot)]]
 - [[30-Operations/protocol--docs--OPS-HARDENING|Kovanica Protocol — Operations Hardening]]
-- [[30-Operations/protocol--docs--RAM-REDUCTION|RAM Reduction Design Note (RFC-008 follow-up)]]
+
 - [[30-Operations/protocol--docs--RELEASE|Release checklist]]
 - [[30-Operations/protocol--docs--RUN-A-NODE|Run a Kovanica Node — Complete Guide]]
 - [[30-Operations/protocol--docs--TESTNET-RESET-POLICY|Testnet Reset Policy]]
