@@ -47,6 +47,7 @@ fn default_threshold(count: usize) -> u64 {
     (count / 2 + 1) as u64
 }
 
+#[derive(Debug)]
 struct Args {
     out_dir: PathBuf,
     count: usize,
@@ -60,7 +61,8 @@ fn usage() -> &'static str {
      OPTIONS:\n\
      \x20   --out-dir <DIR>          Where to write key files [default: ./authority-keys]\n\
      \x20   --count <N>              Number of authorities to generate [default: 3]\n\
-     \x20   --threshold <T>          On-chain AuthorityUpdateTx threshold [default: majority]\n\
+     \x20   --threshold <T>          AuthorityUpdateTx threshold, an integer [default: a\n\
+     \x20                             strict majority of --count, i.e. count/2 + 1]\n\
      \x20   --slot-duration <MS>     Slot length in milliseconds [default: 3000]\n\
      \x20   -h, --help               Print this help\n\n\
      Secrets are written to mode-0600 files, never to stdout. Exits non-zero if\n\
@@ -68,12 +70,18 @@ fn usage() -> &'static str {
 }
 
 fn parse_args() -> Result<Args, String> {
+    // Split out so the parsing rules are unit-testable; `std::env::args()`
+    // cannot be driven from a test.
+    parse_from(std::env::args().skip(1))
+}
+
+fn parse_from<I: Iterator<Item = String>>(args: I) -> Result<Args, String> {
     let mut out_dir = PathBuf::from("./authority-keys");
     let mut count = DEFAULT_COUNT;
     let mut threshold = None;
     let mut slot_duration = DEFAULT_SLOT_DURATION;
 
-    let mut it = std::env::args().skip(1);
+    let mut it = args;
     while let Some(arg) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{arg} requires a value"));
         match arg.as_str() {
@@ -88,11 +96,24 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|_| "--count must be a positive integer".to_string())?
             }
             "--threshold" => {
-                threshold = Some(
-                    value()?
-                        .parse()
-                        .map_err(|_| "--threshold must be an integer".to_string())?,
-                )
+                // Accept the literal `majority` as well as an integer: the help
+                // text advertises it as the default, so rejecting it would fail
+                // on the exact value a reader is most likely to type.
+                let raw = value()?;
+                match raw.parse::<u64>() {
+                    Ok(n) => threshold = Some(n),
+                    Err(_) if raw.eq_ignore_ascii_case("majority") => {
+                        // Leave `threshold` as `None` so it resolves to a strict
+                        // majority of the *final* `--count`, which may itself be
+                        // parsed after this flag.
+                        threshold = None;
+                    }
+                    Err(_) => {
+                        return Err(format!(
+                            "--threshold must be an integer or `majority`; got {raw:?}"
+                        ))
+                    }
+                }
             }
             "--slot-duration" => {
                 slot_duration = value()?
@@ -265,6 +286,45 @@ mod tests {
         assert_eq!(default_threshold(4), 3);
         assert_eq!(default_threshold(5), 3);
         assert_eq!(default_threshold(7), 4);
+    }
+
+    #[test]
+    fn threshold_accepts_the_literal_majority_the_help_advertises() {
+        // Regression: `--help` advertised `[default: majority]` but the parser
+        // only accepted an integer, so the documented default was rejected.
+        let a = parse_from(
+            ["--threshold", "majority", "--count", "5"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(a.threshold, default_threshold(5));
+    }
+
+    #[test]
+    fn threshold_majority_resolves_against_a_later_count() {
+        // `--threshold majority` is resolved against the *final* --count, so
+        // flag order must not matter.
+        let a = parse_from(
+            ["--threshold", "majority", "--count", "7"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(a.threshold, 4);
+    }
+
+    #[test]
+    fn threshold_still_accepts_an_explicit_integer() {
+        let a = parse_from(["--threshold", "2"].into_iter().map(String::from)).unwrap();
+        assert_eq!(a.threshold, 2);
+    }
+
+    #[test]
+    fn threshold_rejects_other_words_with_a_helpful_message() {
+        let err = parse_from(["--threshold", "most"].into_iter().map(String::from))
+            .expect_err("`most` is not a valid threshold");
+        assert!(err.contains("integer"), "unhelpful error: {err}");
     }
 
     #[test]
