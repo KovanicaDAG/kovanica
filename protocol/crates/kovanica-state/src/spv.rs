@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 
 use blake3::Hasher;
-use kovanica_dag::{AuthoritySet, AuthorityUpdateTx, Block, BlockId};
+use kovanica_dag::{AuthoritySet, AuthorityUpdateTx, Block, BlockId, StakeMerkleProof, StakeLeaf};
 
 /// A block header: the minimal data a light client needs to verify the
 /// selected chain and transaction inclusion.
@@ -385,6 +385,9 @@ pub struct SpvPoAConfig {
     pub authority_set: AuthoritySet,
     /// Slot duration in milliseconds (RFC-POA §3).
     pub slot_duration_ms: u64,
+    /// Whether SW-PoA (stake-weighted) is enabled.
+    /// If true, stake merkle proofs are required for verification.
+    pub sw_poa: bool,
 }
 
 /// A client-side proof that an authority-set update happened at a block:
@@ -398,6 +401,20 @@ pub struct AuthorityUpdateProof {
     pub merkle: MerkleProof,
     /// Height of the announcing block (its header carries the new set hash).
     pub height: u64,
+}
+
+/// SW-PoA stake proof for a block's authority.
+/// Used by light clients to verify stake-weighted authority selection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SwPoAProof {
+    /// The stake merkle proof for the authority that signed this block.
+    pub stake_proof: StakeMerkleProof,
+    /// The authority set's stake merkle root (from the block header).
+    pub stake_root: [u8; 32],
+    /// Total stake in the authority set.
+    pub total_stake: u64,
+    /// The slot number this block was produced for.
+    pub slot: u64,
 }
 
 /// SPV client state: the header chain it has verified.
@@ -463,12 +480,96 @@ impl SpvClient {
             if header.authority_set_hash != poa.authority_set.hash() {
                 return Err(SpvError::AuthoritySetChanged);
             }
-            // Verify the signature against the scheduled authority for this slot
-            let slot = header.timestamp_ms / poa.slot_duration_ms;
-            poa.authority_set
-                .verify_slot_signature(slot, &header.hash_without_authority_sig, &sig)
-                .map_err(|_| SpvError::InvalidAuthoritySig)?;
+            
+            if poa.sw_poa {
+                // SW-PoA: verify stake-weighted authority selection
+                // For this, we need the stake proof passed separately
+                // This is a placeholder - actual implementation requires the stake proof
+                // to be provided when calling add_header for SW-PoA
+                return Err(SpvError::SwPoAStakeProofRequired);
+            } else {
+                // Classic PoA: verify signature against scheduled authority for this slot
+                let slot = header.timestamp_ms / poa.slot_duration_ms;
+                poa.authority_set
+                    .verify_slot_signature(slot, &header.hash_without_authority_sig, &sig)
+                    .map_err(|_| SpvError::InvalidAuthoritySig)?;
+            }
         }
+
+        // Accept
+        self.headers.insert(header.height, header.clone());
+        self.tip = Some(header);
+        Ok(true)
+    }
+
+    /// Add a new header to the SPV chain with SW-PoA stake proof.
+    /// Returns true if accepted and becomes new tip.
+    ///
+    /// This method is used when SW-PoA is enabled. It requires a `SwPoAProof`
+    /// containing the stake merkle proof for the authority that signed the block.
+    pub fn add_header_sw_poa(
+        &mut self,
+        header: BlockHeader,
+        sw_poa_proof: &SwPoAProof,
+    ) -> Result<bool, SpvError> {
+        // Must extend the current tip
+        let Some(tip) = &self.tip else {
+            return Err(SpvError::NoCheckpoint);
+        };
+        if header.height != tip.height + 1 {
+            return Err(SpvError::HeightMismatch);
+        }
+        if header.prev_hash != tip.id {
+            return Err(SpvError::PrevHashMismatch);
+        }
+        if header.timestamp_ms < tip.timestamp_ms {
+            return Err(SpvError::TimestampNotMonotonic);
+        }
+        if header.chain_blue_work <= tip.chain_blue_work {
+            return Err(SpvError::WorkNotIncreasing);
+        }
+
+        // PoA verification (must be SW-PoA enabled)
+        let Some(poa) = &self.poa else {
+            return Err(SpvError::PoANotEnabled);
+        };
+        if !poa.sw_poa {
+            return Err(SpvError::PoANotEnabled);
+        }
+
+        // Authority signature must be present
+        let sig = header.authority_sig.ok_or(SpvError::MissingAuthoritySig)?;
+        // Authority set must match
+        if header.authority_set_hash != poa.authority_set.hash() {
+            return Err(SpvError::AuthoritySetChanged);
+        }
+        // SW-PoA: stake root must match
+        if sw_poa_proof.stake_root != poa.authority_set.stake_merkle_root().unwrap_or([0u8; 32]) {
+            return Err(SpvError::InvalidAuthoritySig);
+        }
+        // Total stake must match
+        if sw_poa_proof.total_stake != poa.authority_set.total_stake() {
+            return Err(SpvError::InvalidAuthoritySig);
+        }
+        // Slot must match
+        let slot = header.timestamp_ms / poa.slot_duration_ms;
+        if sw_poa_proof.slot != slot {
+            return Err(SpvError::InvalidAuthoritySig);
+        }
+        // Verify stake proof against the committed stake root
+        if !sw_poa_proof.stake_proof.verify(sw_poa_proof.stake_root) {
+            return Err(SpvError::InvalidAuthoritySig);
+        }
+        // Verify the authority signature against the expected authority for this slot
+        // The stake proof's leaf contains the authority pubkey
+        let expected_authority = poa.authority_set.active_authority(slot);
+        if sw_poa_proof.stake_proof.leaf.authority_pubkey != expected_authority.to_bytes() {
+            return Err(SpvError::InvalidAuthoritySig);
+        }
+        // Verify the authority signature
+        poa.authority_set
+            .verify_slot_signature(slot, &header.hash_without_authority_sig, &header.authority_sig.unwrap())
+            .map_err(|_| SpvError::InvalidAuthoritySig)?;
 
         // Accept
         self.headers.insert(header.height, header.clone());
@@ -560,6 +661,8 @@ pub enum SpvError {
     InvalidAuthorityUpdate,
     /// The update proof references a block not in the client's chain.
     UpdateNotInBlock,
+    /// SW-PoA is enabled but no stake proof was provided for the block.
+    SwPoAStakeProofRequired,
 }
 
 impl std::fmt::Display for SpvError {
@@ -576,6 +679,7 @@ impl std::fmt::Display for SpvError {
             SpvError::PoANotEnabled => f.write_str("PoA verification not enabled"),
             SpvError::InvalidAuthorityUpdate => f.write_str("invalid authority update"),
             SpvError::UpdateNotInBlock => f.write_str("update not in block"),
+            SpvError::SwPoAStakeProofRequired => f.write_str("SW-PoA stake proof required"),
         }
     }
 }
