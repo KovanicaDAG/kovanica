@@ -71,6 +71,8 @@ pub enum AuthorityError {
     UnknownAuthoritySet,
     #[error("authority set bytes are malformed")]
     MalformedEncoding,
+    #[error("PoA admission is not enabled on this node")]
+    PoANotEnabled,
 }
 
 /// A fixed set of Ed25519 authorities with a threshold for updates.

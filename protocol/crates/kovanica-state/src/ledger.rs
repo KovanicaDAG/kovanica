@@ -66,7 +66,8 @@
 use std::collections::{HashMap, HashSet};
 
 use kovanica_dag::{
-    decode_snapshot, AuthoritySet, Block, BlockId, Dag, DagError, KParam, PoAConfig, SnapshotError,
+    decode_snapshot, AuthorityError, AuthoritySet, AuthorityUpdateTx, Block, BlockId, Dag,
+    DagError, KParam, PoAConfig, SnapshotError,
 };
 
 use crate::htlc::HtlcScript;
@@ -2441,6 +2442,19 @@ impl Ledger {
     /// The active PoA policy, if any ([`Ledger::set_poa`]).
     pub fn poa_config(&self) -> Option<PoAConfig> {
         self.poa.clone()
+    }
+
+    /// Apply an on-chain authority set update (RFC-POA §1, KVP-201).
+    ///
+    /// Delegates to the DAG for validation; on success, updates the ledger's
+    /// cached PoA config and returns the new AuthoritySet.
+    pub fn apply_authority_update(
+        &mut self,
+        update: &AuthorityUpdateTx,
+    ) -> Result<AuthoritySet, AuthorityError> {
+        let new_set = self.dag.apply_authority_update(update)?;
+        self.poa = self.dag.poa_config().cloned();
+        Ok(new_set)
     }
 
     /// Insert a block referencing `parents`, carrying `work`, `timestamp_ms`,

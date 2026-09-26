@@ -127,7 +127,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-use crate::authority::AuthoritySet;
+use crate::authority::{AuthorityError, AuthoritySet, AuthorityUpdateTx};
 use crate::block::{Block, BlockId};
 use crate::reachability::Reachability;
 use crate::validation::BlockValidator;
@@ -479,6 +479,29 @@ impl Dag {
     /// The current PoA enforcement config, if any.
     pub fn poa_config(&self) -> Option<&PoAConfig> {
         self.poa.as_ref()
+    }
+
+    /// Apply an on-chain authority set update (RFC-POA §1, KVP-201).
+    ///
+    /// Validates the `AuthorityUpdateTx` against the current authority set:
+    /// - old_set_hash matches current authority set hash
+    /// - ≥ threshold distinct signatures from current authorities
+    /// - signatures verify over the canonical update payload
+    ///
+    /// On success, replaces the current authority set with the new set.
+    /// Returns the new AuthoritySet for the caller to persist.
+    pub fn apply_authority_update(
+        &mut self,
+        update: &AuthorityUpdateTx,
+    ) -> Result<AuthoritySet, AuthorityError> {
+        let current = self.poa_config().ok_or(AuthorityError::PoANotEnabled)?;
+        update.validate(&current.authority_set)?;
+        let new_set = update.new_set().clone();
+        self.poa = Some(PoAConfig {
+            authority_set: new_set.clone(),
+            slot_duration_ms: current.slot_duration_ms,
+        });
+        Ok(new_set)
     }
 
     /// Set the payload pruning depth: blocks more than `depth` blue score units
