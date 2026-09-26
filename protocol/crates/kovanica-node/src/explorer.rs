@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -347,7 +347,15 @@ pub fn serve(addr: impl ToSocketAddrs) -> std::io::Result<()> {
         eprintln!("kovanica metrics on http://{metrics_addr}/metrics");
     }
 
-    let mut app = Explorer::boot_persist();
+    // A node that cannot replay its own log has no correct state to serve.
+    // Abort the listener rather than come up on a fallback chain: the caller
+    // gets the reason on stderr and a non-zero exit.
+    let mut app =
+        Explorer::boot_persist().map_err(|e| std::io::Error::other(format!("kovanica: {e}")))?;
+    eprintln!(
+        "kovanica explorer state loaded from {}",
+        data_dir().display()
+    );
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -661,19 +669,21 @@ impl Explorer {
         persist_all(&mut self.mesh);
     }
 
-    fn boot_persist() -> Self {
+    /// Boot the persistent mesh, or report why a node's state could not be
+    /// loaded (see [`load_or_genesis`]).
+    fn boot_persist() -> Result<Self, String> {
         let _ = fs::create_dir_all(data_dir());
         ensure_network();
         let mut mesh = Mesh::new();
         // Create alpha node with DHT
-        let mut alpha_node = load_or_genesis("alpha");
+        let mut alpha_node = load_or_genesis("alpha")?;
         let node_id = NodeId::random();
         alpha_node.init_dht_routing_table(node_id, 8);
         mesh.add_with_dht("alpha", alpha_node, node_id);
 
         if env_flag("KOVANICA_DEMO_MESH", false) {
-            mesh.add("beta", load_or_genesis("beta"));
-            mesh.add("gamma", load_or_genesis("gamma"));
+            mesh.add("beta", load_or_genesis("beta")?);
+            mesh.add("gamma", load_or_genesis("gamma")?);
             let _ = mesh.connect("alpha", "beta");
             let _ = mesh.connect("beta", "gamma");
         }
@@ -720,7 +730,7 @@ impl Explorer {
             last_dht_replenish: 0,
         };
         app.sync_peers(Duration::from_secs(3), true);
-        app
+        Ok(app)
     }
 
     fn select(&mut self, name: &str) {
@@ -787,14 +797,72 @@ fn wipe_data() {
     }
 }
 
-fn load_or_genesis(name: &str) -> Node {
+/// True when `path` exists and is non-empty.
+///
+/// A zero-length file is treated as *absent* rather than corrupt:
+/// `LedgerStore::create` truncates before it writes the header, so a crash in
+/// that window leaves a 0-byte log that cannot be replayed but is also not
+/// operator data worth refusing to boot over. Distinguishing the two cases is
+/// what keeps a torn write from bricking an otherwise recoverable node.
+fn has_content(path: &Path) -> bool {
+    fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false)
+}
+
+/// Persistence tiers, in the order [`load_or_genesis`] will try them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadTier {
+    /// Append-only replay log — the primary store.
+    Log,
+    /// Whole-file snapshot — portable backups / pre-log deployments.
+    Snapshot,
+    /// Nothing persisted: mint a genesis node.
+    Genesis,
+}
+
+/// Pick the tier to load for a node, given its two on-disk artifacts.
+///
+/// Split out from [`load_or_genesis`] so the ordering policy is testable
+/// without touching the process-global data directory.
+///
+/// The snapshot tier is reachable **only when there is no replay log**. This is
+/// the whole point of the function: a snapshot must never mask a log that
+/// exists but will not replay, because the old code treated that case as
+/// "no log at all" and then served a different chain while truncating the
+/// operator's log away.
+fn choose_load_tier(log: &Path, snap: &Path) -> LoadTier {
+    if has_content(log) {
+        LoadTier::Log
+    } else if has_content(snap) {
+        LoadTier::Snapshot
+    } else {
+        LoadTier::Genesis
+    }
+}
+
+/// Load a persisted node for `name`, or report why it could not be loaded.
+///
+/// Callers must treat `Err` as fatal. A node that cannot replay its own log has
+/// no correct state to serve, and every fallback available here is wrong in a
+/// way that is invisible from the outside: the snapshot tier serves an older
+/// chain, and the genesis tier serves a different chain *and* truncates the
+/// replay log (`LedgerStore::create` opens with `truncate(true)`), destroying
+/// the operator's data. Failing loudly keeps that decision with the operator.
+fn load_or_genesis(name: &str) -> Result<Node, String> {
     // Incremental store first: the append-only replay log is the primary
     // persistence format. Loading replays the log through the ledger, so all
     // derived state is recomputed, never trusted from disk.
     let log = log_path(name);
     let profile = network_profile();
-    if log.is_file() {
-        if let Some(p) = log.to_str() {
+    let snap = snap_path(name);
+
+    match choose_load_tier(&log, &snap) {
+        LoadTier::Log => {
+            let p = log.to_str().ok_or_else(|| {
+                format!(
+                    "replay log path for node {name} is not valid UTF-8: {}",
+                    log.display()
+                )
+            })?;
             // PoA-era logs must replay under PoA or block ids silently change
             // (identity-preserving replay lesson). Load with the PoA reader when
             // the operator runs PoA mode.
@@ -809,41 +877,62 @@ fn load_or_genesis(name: &str) -> Node {
                 block_pruning_depth: profile.block_pruning_depth,
             };
             let cfg = poa_config_from_env(&profile);
-            let loaded = Node::load_log_with_poa_and_policy(
+            let mut node = Node::load_log_with_poa_and_policy(
                 p,
                 cfg.authority_set,
                 cfg.slot_duration_ms,
                 policy,
-            );
-            if let Ok(mut node) = loaded {
-                restore_poa_policy(&mut node, &profile);
-                return node;
-            }
+            )
+            .map_err(|e| {
+                format!(
+                    "replay log {} for node {name} failed to load: {e}\n\
+                     refusing to fall back to a snapshot or to genesis: the snapshot \
+                     would serve an older chain, and the genesis path truncates this \
+                     log, destroying it.\n\
+                     To start a fresh node, move the file aside first:\n  \
+                     mv {} {}.broken",
+                    log.display(),
+                    log.display(),
+                    log.display(),
+                )
+            })?;
+            restore_poa_policy(&mut node, &profile);
+            Ok(node)
         }
-    }
-    // Whole-file snapshot fallback (portable backups / pre-log deployments).
-    let snap = snap_path(name);
-    if snap.is_file() {
-        let mut node = Node::new();
-        if let Some(p) = snap.to_str() {
+        LoadTier::Snapshot => {
+            let p = snap.to_str().ok_or_else(|| {
+                format!(
+                    "snapshot path for node {name} is not valid UTF-8: {}",
+                    snap.display()
+                )
+            })?;
+            let mut node = Node::new();
             let cfg = poa_config_from_env(&profile);
-            let loaded = node.load_with_poa(p, cfg.authority_set, cfg.slot_duration_ms);
-            if loaded.is_ok() {
-                restore_poa_policy(&mut node, &profile);
-                // Migrate to the incremental store so subsequent persistence
-                // appends only new blocks.
-                if let Some(lp) = log.to_str() {
-                    let _ = node.create_log(lp);
-                }
-                return node;
+            node.load_with_poa(p, cfg.authority_set, cfg.slot_duration_ms)
+                .map_err(|e| {
+                    format!(
+                        "snapshot {} for node {name} failed to load: {e}\n\
+                         refusing to fall back to genesis, which would serve a \
+                         different chain. Move the file aside to start fresh.",
+                        snap.display(),
+                    )
+                })?;
+            restore_poa_policy(&mut node, &profile);
+            // Migrate to the incremental store so subsequent persistence
+            // appends only new blocks.
+            if let Some(lp) = log.to_str() {
+                let _ = node.create_log(lp);
             }
+            Ok(node)
+        }
+        LoadTier::Genesis => {
+            let mut node = genesis_node();
+            if let Some(p) = log.to_str() {
+                let _ = node.create_log(p);
+            }
+            Ok(node)
         }
     }
-    let mut node = genesis_node();
-    if let Some(p) = log.to_str() {
-        let _ = node.create_log(p);
-    }
-    node
 }
 
 /// Re-apply PoA admission and the network profile after loading a node from disk
@@ -2891,7 +2980,8 @@ fn dispatch(
                 return Err("reset disabled on this network".into());
             }
             wipe_data();
-            *app = Explorer::boot_persist();
+            *app =
+                Explorer::boot_persist().map_err(|e| format!("reset: fresh boot failed: {e}"))?;
         }
         "origin" => {
             let iso = q.get("iso3").ok_or("iso3 required")?;
@@ -4592,6 +4682,108 @@ mod tests {
             data_dir_for(&NetworkProfile::mainnet()),
             PathBuf::from("data/kovanica-mainnet")
         );
+    }
+
+    /// A scratch directory for the load-tier tests. Unique per test name so
+    /// parallel test threads cannot collide, and cleaned up by the caller.
+    fn tier_test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "kovanica-load-tier-{}-{name}-{}",
+            std::process::id(),
+            name.len()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    #[test]
+    fn load_tier_prefers_the_log_over_the_snapshot() {
+        let dir = tier_test_dir("prefers-log");
+        let log = dir.join("alpha.log");
+        let snap = dir.join("alpha.snap");
+        fs::write(&log, b"log bytes").unwrap();
+        fs::write(&snap, b"snapshot bytes").unwrap();
+        assert_eq!(choose_load_tier(&log, &snap), LoadTier::Log);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_tier_never_masks_a_broken_log_with_the_snapshot() {
+        // The regression this whole change exists for. A log that exists but
+        // will not replay must NOT route to Snapshot (older chain) or Genesis
+        // (different chain + the log is truncated). It has to surface as an
+        // error so the operator decides.
+        let dir = tier_test_dir("broken-log");
+        let log = dir.join("alpha.log");
+        let snap = dir.join("alpha.snap");
+        // Byte contents are irrelevant here — `has_content` is what routes.
+        fs::write(&log, b"not a valid log header at all").unwrap();
+        fs::write(&snap, b"snapshot bytes").unwrap();
+        assert_eq!(choose_load_tier(&log, &snap), LoadTier::Log);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_tier_treats_a_zero_length_log_as_absent() {
+        // `LedgerStore::create` truncates before writing the header, so a crash
+        // in that window leaves 0 bytes. That is a torn write, not operator
+        // data, and must not brick the node.
+        let dir = tier_test_dir("torn-log");
+        let log = dir.join("alpha.log");
+        let snap = dir.join("alpha.snap");
+        fs::write(&log, b"").unwrap();
+        fs::write(&snap, b"snapshot bytes").unwrap();
+        assert_eq!(choose_load_tier(&log, &snap), LoadTier::Snapshot);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_tier_falls_back_to_genesis_only_when_nothing_is_persisted() {
+        let dir = tier_test_dir("genesis");
+        let log = dir.join("alpha.log");
+        let snap = dir.join("alpha.snap");
+        assert_eq!(choose_load_tier(&log, &snap), LoadTier::Genesis);
+        // Both artifacts present but zero-length: still nothing to load.
+        fs::write(&log, b"").unwrap();
+        fs::write(&snap, b"").unwrap();
+        assert_eq!(choose_load_tier(&log, &snap), LoadTier::Genesis);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_corrupt_replay_log_reports_an_error_instead_of_loading() {
+        // End-to-end on the actual reader: garbage where the log should be must
+        // come back as `Err`, so `serve` aborts rather than coming up on a
+        // fallback chain.
+        let dir = tier_test_dir("corrupt-log-loads");
+        let log = dir.join("alpha.log");
+        fs::write(&log, b"KOV\x00garbage that is not a ledger log").unwrap();
+        let profile = network_profile();
+        let policy = kovanica_state::PruningPolicy {
+            finality_depth: profile.finality_depth,
+            payload_pruning_depth: profile.payload_pruning_depth,
+            block_pruning_depth: profile.block_pruning_depth,
+        };
+        let cfg = poa_config_from_env(&profile);
+        let loaded = Node::load_log_with_poa_and_policy(
+            log.to_str().unwrap(),
+            cfg.authority_set,
+            cfg.slot_duration_ms,
+            policy,
+        );
+        assert!(
+            loaded.is_err(),
+            "a corrupt log must not load; the old code swallowed this and \
+             served genesis"
+        );
+        // And the corrupt file is still on disk — the fix must not truncate it.
+        assert_eq!(
+            fs::read(&log).unwrap(),
+            b"KOV\x00garbage that is not a ledger log",
+            "a failed load must leave the operator's log untouched"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
