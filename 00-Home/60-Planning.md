@@ -1,0 +1,63 @@
+---
+title: "Planning index"
+category: index
+synced: 2026-09-26
+generated_by: scripts/build-vault.py
+---
+
+# Planning
+
+← [[00-Home/Home|Home]] · 52 notes
+
+- [[60-Planning/MASTER-ROADMAP|Kovanica — Master Roadmap (merged checklist)]]
+- [[60-Planning/TODO--plans--DeFi--DEFI-API-AND-CLIENT-NOTES|DeFi — API & Client Notes]]
+- [[60-Planning/TODO--plans--DeFi--DEFI-ARCHITECTURE|DeFi Architecture — Kovanica Protocol]]
+- [[60-Planning/TODO--plans--DeFi--DEFI-CHECKLIST|DeFi Integration — Operational & Delivery Checklist]]
+- [[60-Planning/TODO--plans--DeFi--DEFI-HTLC-DEX|HTLC-based Atomic Swap DEX — Detailed Design]]
+- [[60-Planning/TODO--plans--DeFi--DEFI-LENDING|Collateralized Lending & Escrow Patterns]]
+- [[60-Planning/TODO--plans--DeFi--DEFI-PROJECT-PLAN|DeFi Integration — Project Plan & Milestones]]
+- [[60-Planning/TODO--plans--DeFi--DEFI-README|Kovanica DeFi Integration Pack]]
+- [[60-Planning/TODO--plans--DeFi--DEFI-TECHNICAL-DESIGN|DeFi Technical Design — Kovanica]]
+- [[60-Planning/TODO--plans--RFC-007--NFT-API-AND-CLIENT-NOTES|NFT API & Client Notes (KVP-106)]]
+- [[60-Planning/TODO--plans--RFC-007--NFT-INTEGRATION-PLAN|NFT Integration Plan — Kovanica (KVP-106)]]
+- [[60-Planning/TODO--plans--RFC-007--NFT-LEDGER-NOTES|NFT Ledger Notes — kovanica-state (KVP-106)]]
+- [[60-Planning/TODO--plans--RFC-007--NFT-README|Kovanica NFT Integration Pack (KVP-106)]]
+- [[60-Planning/TODO--plans--RFC-007--RFC-007-KVP-106-NFT|RFC-007 / KVP-106 — Native Non-Fungible Assets (NFT)]]
+- [[60-Planning/TODO--plans--RFC-007--RFC-007-RWA-INTEGRATION|RFC-007 / KVP-106 — RWA (Real World Assets) Integration]]
+- [[60-Planning/TODO--plans--RFC-007--RWA-CHECKLIST|RWA Integration — Operational & Delivery Checklist]]
+- [[60-Planning/TODO--plans--RFC-007--RWA-TECHNICAL-DESIGN|RWA Technical Design — Kovanica Protocol]]
+- [[60-Planning/TODO--plans--RFC-008--HYBRID-CHECKLIST|Hybrid PoW/PoS + VRF + SPV — Implementation & Activation Checklist]]
+- [[60-Planning/TODO--plans--RFC-008--HYBRID-PROJECT-PLAN|Hybrid PoW/PoS + VRF + SPV — Project Plan]]
+- [[60-Planning/TODO--plans--RFC-008--HYBRID-TECHNICAL-DESIGN|Hybrid PoW/PoS + VRF — Technical Design (Kovanica)]]
+- [[60-Planning/TODO--plans--RFC-008--LIGHT-NODE-SPV-AND-VRF|Light-Node / SPV Path for Hybrid PoW/PoS + VRF]]
+- [[60-Planning/TODO--plans--RFC-008--README|Kovanica Hybrid PoW/PoS + VRF + SPV — Document Package]]
+- [[60-Planning/TODO--plans--RFC-008--RFC-008-HYBRID-POW-POS-VRF|RFC-008 — Hybrid PoW/PoS Admission with VRF + Light-Client (SPV) Path]]
+- [[60-Planning/TODO--plans--RFC-008--RWA-PROJECT-PLAN|RWA Integration — Project Plan & Milestones]]
+- [[60-Planning/docs--backlog--ADDRESS-AND-SIGHASH-SPEC|Address & Sighash Spec (from kovanica-node)]]
+- [[60-Planning/docs--backlog--CONSISTENCY-FIXES|Consistency Fixes — Roadmap · Backlog · SDK Skeleton]]
+- [[60-Planning/docs--backlog--DERIVATION|Kovanica Derivation — Frozen SLIP-0010 Spec]]
+- [[60-Planning/docs--backlog--MASTER-ROADMAP|Kovanica Protocol — Master Roadmap]]
+- [[60-Planning/docs--backlog--SDK-CRATE-STRUCTURE|Kovanica Protocol — kovanica-sdk Crate Structure Draft]]
+- [[60-Planning/docs--backlog--TASK-BREAKDOWN-BIP39-SDK|Kovanica Protocol — Detailed Task Breakdown]]
+- [[60-Planning/docs--backlog--TECHNICAL-BACKLOG|Kovanica Protocol — Technical Backlog]]
+- [[60-Planning/docs--foundation--FOUNDATION-LEGAL-SKELETON|Kovanica Protocol — Foundation & Legal Skeleton]]
+- [[60-Planning/docs--foundation--FOUNDER-PAGE-OUTLINE|Kovanica Protocol — Founder / Team Page Outline]]
+- [[60-Planning/kovanica-poa-migration--01-RFC-POA|RFC: Proof-of-Authority (PoA) Consensus for Kovanica]]
+- [[60-Planning/kovanica-poa-migration--02-AUTHORITY-SET|Authority Set Design]]
+- [[60-Planning/kovanica-poa-migration--03-MIGRATION-GUIDE|Migration Guide: PoW + VRF → PoA]]
+- [[60-Planning/kovanica-poa-migration--04-BLOCK-VALIDATION|Block Validation Changes under PoA]]
+- [[60-Planning/kovanica-poa-migration--05-SPV-COMPATIBILITY|SPV / Light Client Compatibility]]
+- [[60-Planning/kovanica-poa-migration--06-CONFIG-AND-FLAGS|Configuration, Feature Flags & Genesis]]
+- [[60-Planning/kovanica-poa-migration--07-TESTING-PLAN|Testing Plan for PoA Migration]]
+- [[60-Planning/kovanica-poa-migration--README|Kovanica Consensus Migration: PoW + VRF → PoA]]
+- [[60-Planning/plans--desktop-node-app|Desktop Node App — Master Roadmap]]
+- [[60-Planning/protocol--Restructure-plan|Na serveru / root okruženju]]
+- [[60-Planning/protocol--Restructure|---------- 1. Standalone repos: plain mv, git history + remote netaknuti ----------]]
+- [[60-Planning/protocol--TODO|TODO — Kovanica Protocol Development]]
+- [[60-Planning/protocol--docs--PRODUCT-POLISH|Kovanica Protocol — Product Polish (P2.9)]]
+- [[60-Planning/protocol--docs--plans--android-light-node-app|Android LightNode App — Implementation Plan (Slice 9+)]]
+- [[60-Planning/protocol--docs--plans--desktop-node-app|Desktop Node App — Implementation Plan]]
+- [[60-Planning/protocol--docs--plans--htlc-atomic-swap|HTLC / Atomic Swap — RFC-004 (Slice 5A)]]
+- [[60-Planning/protocol--docs--plans--mobile-light-node|Mobile Light-Node Slices 4–8 — Implementation Plan]]
+- [[60-Planning/protocol--docs--plans--stealth-script-v2-rfc-003|Plan: Stealth Addresses (6A) + Script v2 (3B) — RFC-003]]
+- [[60-Planning/protocol--docs--plans--vault-time-lock|Time-Lock Vault / Escrow — RFC-005 (Slice 5B)]]
