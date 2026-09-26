@@ -36,7 +36,7 @@ use crate::p2p::Mesh;
 
 const UI: &str = include_str!("explorer.html");
 const BIP39: &str = include_str!("bip39-english.txt");
-const DOCS: &str = include_str!("../../../TESTNET.md");
+const DOCS: &str = include_str!("../../../../TESTNET.md");
 /// 1 KVNC = 10^8 base units (atoms).
 const ATOM: u64 = 100_000_000;
 /// RFC-006 genesis subsidy: 10 KVNC/block.
