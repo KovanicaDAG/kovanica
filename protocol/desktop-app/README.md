@@ -1,14 +1,53 @@
 # kovanica-desktop — Kovanica Desktop Node App
 
+**Status**: Draft (slices 1–4 landed; slice 5 partially superseded)  
+**Consensus impact**: client-only — this crate embeds a node but authors no
+consensus rules; see the PoA note below.
+
 Cross-platform (Windows / Linux / macOS) desktop application that runs an
 embedded Kovanica node and provides a full UI for every protocol feature:
 wallet, transfer, mining, staking (hybrid PoW + VRF), multisig, native tokens,
 stealth, script v2, HTLC/atomic swap, vault, DAG explorer, SPV light mode.
 
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Policy lives in
+> [`../docs/RFC-POA-Migration.md` §0](../docs/RFC-POA-Migration.md).
+>
+> **Impact on this README (client-only, no consensus edits required).** The
+> "mining" and "hybrid PoW + VRF" features described below are
+> `[TARGET]`-for-removal in the embedded node, so the corresponding UI is
+> `[TARGET]`-for-removal too. The ratified replacement is an **authority
+> operator** surface driven by `KOVANICA_CONSENSUS=poa` +
+> `KOVANICA_AUTHORITIES` + `KOVANICA_AUTHORITY_THRESHOLD` +
+> `KOVANICA_SLOT_DURATION`.
+>
+> **Slice 5 — do not land as written. The staking half is dead.**
+> - `start_mining`/`stop_mining` (the "Mining cadence" tick) and the
+>   "Staking/Mining" panel → `[TARGET]`-for-removal, replaced by an
+>   authority-slot cadence.
+> - `enable_hybrid`, `set_validator_seed`, `bond_stake`, `unbond_stake` and
+>   `get_staking`'s `HybridConfig` readout → **`[TARGET]`-for-removal. Decided
+>   2026-09-25** (RFC-POA-Migration §0.7.1, Option A): hybrid is dropped
+>   entirely, the stake registry retires with it, and a non-authority can never
+>   produce a block. The "redefine as a PoA secondary tier" option was
+>   considered and **rejected** — do not attempt a port.
+> - `NetworkProfile` genesis parameters: unaffected — RFC-006 tokenomics
+>   (**MAX_SUPPLY 90.2M KVNC**, s₀ **10 KVNC/block**, era **2 000 000**,
+>   **α 3/4**, maturity **100**, fee **75% burned / 25% producer**) and
+>   GHOSTDAG **k=3** are unchanged, and the mandatory PoA reset (RFC-POA-Migration
+>   §0.6) is what invalidates the current profile, not any tokenomics value.
+> - SPV light mode below is unaffected apart from `require_pow = false`
+>   becoming unconditional.
+> - **Still worth landing:** slices 1–4, and any custody/wallet work. The
+>   staking UI is not.
+
 The master plan lives in the [meta repo plans](../../../plans/desktop-node-app.md)
 and its own working plan [docs/plans/desktop-node-app.md](../../docs/plans/desktop-node-app.md).
 This crate is the **Rust core**; the Tauri shell (UI) is built up in later slices.
-Slices 1–4 are landed; **Slice 5 (staking & mining cadence) is in progress**.
+Slices 1–4 are landed; **Slice 5 (staking & mining cadence) is in progress —
+and is `[TARGET]`-superseded for its mining/hybrid half**.
 
 ## Status — Slice A (gate verified ✅)
 
@@ -60,13 +99,20 @@ Slices 1–4 are landed; **Slice 5 (staking & mining cadence) is in progress**.
     the Merkle proof against the synced header. Verified end-to-end against the
     live explorer blob (4,953/4,953 headers). KVLS/proof parsing is byte-compatible
     with `kovanica-ffi`, guarded by unit tests.
-- [ ] **Slice 5 — staking & mining cadence (worker, Tauri handlers and UI)**:
+- [ ] **Slice 5 — staking & mining cadence (worker, Tauri handlers and UI)** —
+      **`[TARGET]`-cancelled for its mining *and* staking halves**; see the PoA
+      note at the top. The "Do not land as written" list there is binding:
+      the cadence tick becomes an authority-slot schedule, and the validator
+      seed / hybrid / bond / unbond controls are removed, not ported.
   - **Validator identity**: `set_validator_seed` parses 32-byte seeds and sets
     the node's VRF validator key (`ValidatorReady` event + surfaced pk).
+    `[TARGET]`-for-removal — hybrid dropped entirely (§0.7.1).
   - **Hybrid sortition**: `enable_hybrid` mirrors the FFI's
     `HybridConfig { rate_num, rate_den, stake_nominal_work: 1,
     use_epoch_beacon: true, retarget }` (zero rates rejected), so the worker
     can win slots by stake-weighted VRF draw instead of PoW.
+    `[TARGET]`-for-removal — `stake_nominal_work` and `retarget` go with it.
+    Do not port this to a "PoA secondary tier": that option was rejected.
   - **Bonding**: `bond_stake` mirrors the FFI's two-step bond — auto-splits an
     oversized unfrozen coin via a mined block, then bonds the requested amount
     via a `KVB1||vrf_pk`-tagged tx (mined/`produce_block`-sealed), freezing it
@@ -77,12 +123,15 @@ Slices 1–4 are landed; **Slice 5 (staking & mining cadence) is in progress**.
   - **Mining cadence**: `start_mining`/`stop_mining` run a live
     `MissedTickBehavior::Skip` interval that produces a block every N seconds
     (staked draw first, PoW fallback); the status Peers/counters clean up.
+    `[TARGET]`-for-removal — replaced by an authority slot schedule
+    (`KOVANICA_SLOT_DURATION`).
   - **`get_staking`** reports validator pk, hybrid config, total/my stake,
     chain height, era issuance, pending-unbond height and mining state for the
-    Staking/Mining panel.
+    Staking/Mining panel. `[TARGET]`-for-removal of the hybrid/mining fields.
   - **Staking/Mining UI panel**: validator seed + hybrid controls, bond/unbond
     (KVNC), mining cadence, and a live staking-state readout, all through the
     new `tauri_main.rs` handlers; bonding requires an unlocked wallet.
+    `[TARGET]`-for-removal of the validator-seed/mining-cadence controls.
   - Unit tests: seed parsing, FFI-parity hybrid config, bond-source
     selection (exact coin → split → shortfall), and a full
     bond → maturity → unbond lifecycle on an embedded node (10 lib tests).

@@ -8,6 +8,24 @@ Your node is a **clone**. It pulls the DAG over TCP 9000 and can push extra
 blocks back to the seed. Do **not** point `KOVANICA_PEERS` at this box if you
 **are** the seed.
 
+> > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> > Proof-of-Work is being removed from the protocol. See
+> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical). Items marked `[TARGET]`
+> > are ratified but not yet implemented; `[CURRENT]` items describe shipped code.
+> >
+> > **For a clone this is a simplification, not a new chore.** `[TARGET]`
+> > `KOVANICA_POW`, `KOVANICA_MINE` and `KOVANICA_MINE_SECS` are removed, and
+> > producing blocks becomes a **permissioned** authority role rather than mining.
+> > A clone is a validator and relay — it does not need to produce at all, and
+> > `KOVANICA_CONSENSUS` already defaults to `poa` when unset.
+> >
+> > `[OPEN]` **How anyone *becomes* an authority is still not settled** (RFC-POA
+> > §0.7.2). The rotation *mechanism* is settled — the set is fixed at genesis
+> > and can only change by an on-chain M-of-N `AuthorityUpdateTx` — but who is
+> > eligible, how the first mainnet set is picked, and the key ceremony are not
+> > (residuals 1–3). So there is nothing to configure here yet. If you are only
+> > joining to run a node, ignore the PoA vars entirely.
+
 ## One click (no `git clone`)
 
 **Linux / macOS:**
@@ -78,14 +96,21 @@ and restart the node.
 | --- | --- |
 | `KOVANICA_LISTEN` | `0.0.0.0:9000` (also tries `[::]:9000`) |
 | `KOVANICA_PEERS` | `seed.kovanica.online:9000,seed2.kovanica.online:9000` |
-| `KOVANICA_MINE` | `0` |
-| `KOVANICA_MINE_SECS` | `120` (only if mine is on) |
+| `KOVANICA_CONSENSUS` | `poa` when unset — **clones can leave this alone** |
+| `KOVANICA_SLOT_DURATION` | `3000` ms |
+| `KOVANICA_MINE` | `0` — `[TARGET]`-removed |
+| `KOVANICA_MINE_SECS` | `120` (only if mine is on) — `[TARGET]`-removed |
 | `KOVANICA_FAUCET` | `0` |
 | `KOVANICA_TAP` | `0` on clones |
-| `KOVANICA_POW` | `1` |
+| `KOVANICA_POW` | `1` — `[CURRENT]` pre-reset / **`[TARGET]`-removed** |
 | `KOVANICA_DATA` | `./data` (installer uses `~/kovanica-node/data`) |
 | `KOVANICA_ALLOW_RESET` | `0` |
 | `KOVANICA_OPERATOR` | `0` — never enable on public clones |
+
+`[TARGET]` A clone does **not** set `KOVANICA_AUTHORITIES` or
+`KOVANICA_AUTHORITY_THRESHOLD`; those describe the genesis authority set and are
+for operators of the network, not participants. Testnet derives a placeholder
+set internally; mainnet refuses to boot without an explicit one.
 
 Addresses on screen look like `kvnc…dag` (base58 of the 32-byte key). The ledger
 still stores 64-hex; paste either form into send / API.

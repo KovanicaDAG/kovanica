@@ -7,12 +7,48 @@
 
 *Updated: 2026-09-21 (seed3 decommissioned incl. DNS; see §1/§3)*
 
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Canonical policy, the removal inventory, and the operator
+> replacements live in [`docs/RFC-POA-Migration.md` §0](./docs/RFC-POA-Migration.md)
+> — this runbook does not restate them.
+>
+> **What this means for this file.** §1 (live topology) and §6 (quick
+> commands) are `[CURRENT]` and will change at the PoA transition: every
+> `KOVANICA_MINE=1` producer role below becomes an **authority operator** role
+> driven by `KOVANICA_CONSENSUS=poa` + `KOVANICA_AUTHORITIES` +
+> `KOVANICA_AUTHORITY_THRESHOLD` + `KOVANICA_SLOT_DURATION`. `KOVANICA_MINE`,
+> `KOVANICA_MINE_SECS` and `KOVANICA_POW` are `[TARGET]`-for-removal.
+>
+> **What is *not* changing.** RFC-006 tokenomics is untouched by the PoA
+> removal (the emission curve is height-indexed, not work-indexed, and
+> `cumulative_minted` is capped in `apply_block`): **MAX_SUPPLY 90.2M KVNC**,
+> genesis subsidy **s₀ 10 KVNC / block**, era length **2 000 000** blocks,
+> decay **α 3/4 per era**, coinbase maturity **100 blocks**, fee split
+> **75% burned / 25% to producer**. GHOSTDAG stays at **k=3**; the ledger stays
+> UTXO; signatures stay Ed25519. Block *pace* will change (authorities produce
+> on a slot schedule, not on mining luck) — *total* minted KVNC does not.
+>
+> **This is a one-way door.** Once the mining path and `KOVANICA_POW` are
+> deleted there is **no permissionless admission path in the codebase at all**,
+> and restoring one later would itself be a consensus-breaking change — not a
+> config flip, not a revert. There is no `KOVANICA_POW=0` to come back to. If you
+> are tempted to "just re-enable mining" during an incident, you are proposing a
+> second hard fork. See RFC-POA-Migration §0.1.1.
+>
+> **Incident history stays.** §5 (soak snapshots, the 2026-08-24 … 2026-09-03
+> incidents, the difficulty-retarget explanation) is a dated, factual record of
+> the PoW-era chain. It is **not** edited or deleted here; it is flagged
+> `[HISTORICAL — PoW era]` so nobody re-applies a retarget or mining fix to the
+> post-transition chain.
+
 ## 1. Topology (all on VPS `srv1745734`, 145.223.116.178, unless noted)
 
 | Component | Where | Notes |
 | --- | --- | --- |
-| **seed** (primary, VPS) | systemd `kovanica-explorer` — P2P `0.0.0.0:9000`, HTTP loopback `127.0.0.1:8080`, metrics `0.0.0.0:9090`, data `/root/kovanica-data` | the real primary seed: serves `seed.kovanica.online:9000`; auto-mines 1 block/min (`KOVANICA_MINE=1 MINE_SECS=60`); faucet + operator on; `KOVANICA_PEERS=seed2.kovanica.online:9000`; ⚠️ unit is active but `is-enabled=disabled` (survives only until reboot) |
-| **seed1** (VPS) | systemd `kovanica-seed1` — P2P `0.0.0.0:9002`, HTTP loopback `127.0.0.1:28080`, data `/var/lib/kovanica-seed1` | extra local seed (my 2026-09-20 fix); `MINE=1 MINE_SECS=60`, faucet off; peers `seed.kovanica.online:9000,seed2.kovanica.online:9000` |
+| **seed** (primary, VPS) | systemd `kovanica-explorer` — P2P `0.0.0.0:9000`, HTTP loopback `127.0.0.1:8080`, metrics `0.0.0.0:9090`, data `/root/kovanica-data` | the real primary seed: serves `seed.kovanica.online:9000`; auto-mines 1 block/min (`KOVANICA_MINE=1 MINE_SECS=60`) → `[TARGET]` replaced by an authority slot schedule; faucet + operator on; `KOVANICA_PEERS=seed2.kovanica.online:9000`; ⚠️ unit is active but `is-enabled=disabled` (survives only until reboot) |
+| **seed1** (VPS) | systemd `kovanica-seed1` — P2P `0.0.0.0:9002`, HTTP loopback `127.0.0.1:28080`, data `/var/lib/kovanica-seed1` | extra local seed (my 2026-09-20 fix); `MINE=1 MINE_SECS=60` (`[TARGET]`-for-removal), faucet off; peers `seed.kovanica.online:9000,seed2.kovanica.online:9000` |
 | **seed2** (VPS) | systemd `kovanica-seed2` — P2P `0.0.0.0:9001`, HTTP loopback `127.0.0.1:18080`, data `/var/lib/kovanica-seed2` | nginx `/api/*` backend; `MINE=0`; peers `seed.kovanica.online:9000` |
 | **seed2** (secondary, Hostinger KVM2 VPS) | systemd `kovanica-seed2` on the Hostinger VPS (`srv1991525`), P2P `:9000`, HTTP loopback `:18080` | off-box redundancy; DNS `seed2.kovanica.online` → `76.13.250.65`; creds `/root/seeds/seed2` |
 | **web** (kovanica.online + wallet + map + explorer pages) | pm2 `kovanica-web`, `127.0.0.1:3000` | built via `npm run build:vps`, deployed to `/root/kovanica-web/.output` |
@@ -146,12 +182,12 @@ verifies genesis match against the primary seed.
   | blue_score / blue_work | 3816 / 3816 |
   | tips | 1 (linear selected chain) |
   | k | 3 |
-  | PoW | on; per-block `work=1` (blue_work == blue_score) |
+  | PoW | on; per-block `work=1` (blue_work == blue_score) — `[HISTORICAL — PoW era]` |
   | subsidy | 200 KVNC / block (20_000_000_000 atoms) |
   | supply | 76_340_000_000_000 atoms = 3817 × subsidy (coinbase-only, checks) |
   | mempool | 0 |
   | advertised peers | `seed2.kovanica.online:9001`, `seed3.kovanica.online:9000` |
-  | mining | true (`KOVANICA_MINE_SECS=60`) |
+  | mining | true (`KOVANICA_MINE_SECS=60`) — `[HISTORICAL — PoW era]` |
 
   Rate vs plan:
 
@@ -163,9 +199,16 @@ verifies genesis match against the primary seed.
 
   The 5×-slow window after the genesis reset was difficulty retarget, not a
   stall. The last ~39 h recovered to ~1.2 min/block, in range of the 1/min
-  mine interval. **Do not retune `k`, finality depth, payload pruning, or
-  the difficulty window on this snapshot** — the retarget is doing its job.
+  mine interval. **Do not retune `k`, finality depth, or payload pruning on
+  this snapshot** — the retarget is doing its job.
   Revisit after another week of data.
+
+  > `[HISTORICAL — PoW era]` The *difficulty window* half of the original
+  > advice ("do not retune … the difficulty window") is **obsolete at the PoA
+  > transition**: there is no difficulty, no retarget and no work
+  > target left to tune, so the knob is gone rather than mis-set. Do not
+  > carry this sentence forward to a post-transition chain — see
+  > [`docs/RFC-POA-Migration.md` §0.1](./docs/RFC-POA-Migration.md).
 
   Caveats (cannot close ANT-16 from the public API alone):
   - `/metrics` is **not** public (`explorer.kovanica.online/metrics` → 404).
@@ -183,7 +226,7 @@ verifies genesis match against the primary seed.
   | genesis | `596874eac2…d0048f` |
   | height / chain_len | **5239** |
   | blue_score / blue_work | 5238 / 5238 (linear, tips=1) |
-  | k / PoW / work | 3 / on / 1 |
+  | k / PoW / work | 3 / on / 1 | — `[HISTORICAL — PoW era]`; k=3 unchanged |
   | min_fee | 40_000 atoms |
   | subsidy / supply | 200 KVNC/block / 104_780_000_000_000 atoms ✓ |
   | advertised peers | `seed2.kovanica.online:9001`, `seed3.kovanica.online:9000` |
@@ -208,6 +251,11 @@ verifies genesis match against the primary seed.
     Fix: `KOVANICA_MINE=0→1` on
     `/etc/systemd/system/kovanica-explorer.service` (unit backed up), daemon-reload
     + restart. Height resumed and holds ≥1/min (5259+ at 09-03 ~02:50 local).
+    `[HISTORICAL — PoW era]` — the equivalent post-transition failure mode is an
+    authority set with no responsive majority (empty slots are not gap-filled),
+    not a node with mining disabled. There is no mining fallback to fall back
+    to and no staked-VRF fallback either — hybrid is removed (§0.7.1), so the
+    authority set is the *only* admission path.
   - **seed3 OOM-crash-loop (2026-09-03) — the independent AWS miner is down:**
     seed3 SSH works from the VPS (`/root/.ssh/aws_seed3`, key comment
     `kovanica-seed3-aws`), but port 22 is **intermittent** from the VPS
@@ -233,7 +281,7 @@ verifies genesis match against the primary seed.
       the 4 GB Oracle Always-Free tier), then redeploy the current binary
       (seed3's is 2026-08-24, pre-metrics `c8590a5`) so it also reports the
       passive gauges (`kovanica_block_height`/`kovanica_dag_blue_score`) and
-      can hold `KOVANICA_MINE=1` mining at current chain size.
+      can hold `KOVANICA_MINE=1` mining at current chain size. `[HISTORICAL — PoW era]`
     - **Primary chain unaffected:** the VPS seed (`KOVANICA_MINE=1`) is the
       reliable producer and is healthy/advancing (5290+); PR #72 post-deploy,
       its `/metrics` now shows `kovanica_block_height`/`kovanica_dag_blue_score`
@@ -255,7 +303,7 @@ sudo install -m755 ~/bin/kovanica-node /usr/local/bin/kovanica-node.new \
   && sudo mv -f /usr/local/bin/kovanica-node{.new,}
 sudo systemctl restart kovanica-explorer kovanica-seed1 kovanica-seed2
 
-# Watch sync/mining logs
+# Watch sync/production logs (was: sync/mining)
 journalctl -u kovanica-seed2 -f
 journalctl -u kovanica-explorer -f
 
@@ -280,7 +328,7 @@ Cloudflare Tunnel is NOT suitable for seeds (no raw public TCP without client ag
 
 Roadmap naming: the off-box node shipped 2026-08-24 was **seed3** — AWS EC2
 `t3.micro` in eu-north-1 (Amazon Linux 2023, systemd `kovanica-seed3`,
-mining on; later tried Elastic IP + `c7i.large`). The secondary seed in the
+mining on; later tried Elastic IP + `c7i.large`). `[HISTORICAL — PoW era]` The secondary seed in the
 **live set** is **seed2** — a separate **Hostinger KVM2 VPS** (`srv1991525`),
 DNS `A seed2.kovanica.online` (grey-cloud) → `76.13.250.65`, systemd
 `kovanica-seed2` (P2P :9000). Seed3 (AWS `15.228.170.29`) is **retired**:
@@ -297,6 +345,10 @@ the files.
 
 The scripts back up the node data directory (`data/` or `$KOVANICA_DATA`) and
 any wallet seed files matching `*.miner`, `*.seed`, `*.wallet`, or `*.key`.
+The `*.miner` glob is retained on purpose: existing pre-PoA data dirs may
+still contain a miner wallet, and dropping the glob would silently stop
+backing it up. Post-transition an authority key is a normal wallet key and is
+covered by `*.wallet` / `*.key`.
 
 ### Create a backup
 

@@ -1,5 +1,23 @@
 # TODO — Kovanica Protocol Development
 
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Canonical policy, the removal inventory and the operator
+> replacements are in [`docs/RFC-POA-Migration.md` §0](./docs/RFC-POA-Migration.md).
+>
+> This file is a **dated session log**, so its mining/difficulty entries are kept
+> verbatim as `[HISTORICAL — PoW era]` rather than rewritten. Two consequences
+> for anything still unchecked below:
+> - "revisit mining difficulty / retarget" style items are **moot** — there is
+>   no difficulty left to tune after the removal.
+> - "Prometheus armed / baseline captured" items were satisfied against the
+>   PoW-era chain; the baselines must be **re-captured** post-transition.
+>
+> Not affected: RFC-006 tokenomics (**MAX_SUPPLY 90.2M KVNC**, s₀ **10
+> KVNC/block**, era **2 000 000**, **α 3/4**, maturity **100**, fee **75%
+> burned / 25% producer**) and GHOSTDAG **k=3** are untouched by the removal.
+
 ## Current Session: Public Mirror Pipeline & seed3 (2026-08-24)
 
 ### Shipped
@@ -10,7 +28,7 @@
 | Prebuilt binaries — rolling release `v0.1.0` | ✅ Done | Linux x86_64/aarch64 (static musl, zigbuild cross) + macOS x86_64/aarch64, sha256 per asset, tag replaced in place |
 | `install.sh` prebuilt-first | ✅ Done | kovanica-node#2; downloads latest release asset, source build only as fallback |
 | `deploy-seed.sh` Amazon Linux / RHEL support | ✅ Done | PR #15 — package-manager detection (apt/dnf), no curl-minimal conflict on AL2023 |
-| **seed3** deployed — first true off-box node | ✅ Done | AWS EC2 t3.micro, eu-north-1, Amazon Linux 2023, systemd `kovanica-seed3`, mining on; genesis `76cc019d…` matches testnet, headers-first sync climbing past launch |
+| **seed3** deployed — first true off-box node | ✅ Done | AWS EC2 t3.micro, eu-north-1, Amazon Linux 2023, systemd `kovanica-seed3`, mining on `[HISTORICAL — PoW era]`; genesis `76cc019d…` matches testnet, headers-first sync climbing past launch |
 | DNS `seed3.kovanica.online` | ✅ Done | A record, DNS-only → `3.79.148.71`; P2P :9000 verified through hostname |
 ### Follow-ups
 
@@ -37,10 +55,14 @@
        height 3817, genesis `596874ea…`, k=3, PoW on, work=1, supply checks,
        advertised seed2+seed3. Post-reset window was ~5.3 min/block; last 39 h
        recovered to ~1.18 min/block. **No retune** of k / finality / pruning /
-       difficulty on this data.
+       difficulty on this data. `[HISTORICAL — PoW era]`
 5. [ ] VPS Prometheus scrape (orphan rate, propagation, fork/reorg, disk,
        `live_peers` on seed + seed3) — `/metrics` is not public
 6. [ ] Revisit tuning after another week of recovered ~1/min mining
+       → `[TARGET]` **split**: the "mining" half is moot post-removal (no
+       difficulty to retune); the "tuning" half should be re-scoped to the
+       authority slot schedule (`KOVANICA_SLOT_DURATION`) and to re-capturing
+       baselines on the post-transition chain.
 
 Also this session: process manager unified on systemd — pm2 retired for node
 processes after a supervisor port fight; auto-deploy now swaps the binary

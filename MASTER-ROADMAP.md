@@ -13,6 +13,37 @@
 > **Status key:** ✅ done · 🟡 partial · ❌ missing · 🔒 shipped in core but node API not
 > exposed · ⏳ pending / planned · 🔴 **ACTIVE**.
 
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Canonical policy, the removal inventory, the operator
+> replacements and the open decisions are in
+> [`protocol/docs/RFC-POA-Migration.md` §0](protocol/docs/RFC-POA-Migration.md)
+> — this roadmap cites it and does not restate it.
+>
+> **Roadmap-level consequences** (annotations below name the affected rows):
+> - **A13 + A6 / C12 (testnet reset) is superseded in scope.** The reset is now
+>   **mandatory** for the PoA transition, not optional (RFC-POA-Migration §0.6),
+>   and it must additionally re-seed the authority set.
+> - **A6 (RFC-006 tokenomics) is unaffected** — MAX_SUPPLY 90.2M KVNC, s₀
+>   10 KVNC/block, era 2 000 000, α 3/4, maturity 100, fee 75% burned /
+>   25% producer. Do not re-derive these for the PoA work.
+> - **A10 (stake registry / sortition) is CANCELLED, not `[OPEN]`.** Hybrid
+>   was dropped entirely (§0.7.1, decided 2026-09-25) and the stake registry
+>   retires with it. There is no DeFi 5.3 sortition primitive to extend —
+>   `StakeState` asset support is moot unless a *different* staking design is
+>   proposed. **RFC-005 vault/CSV and the treasury vaults are unaffected** and
+>   remain the live multi-asset custody story.
+> - **C6 (security notes) changes class.** `docs/SECURITY.md` must be written
+>   against a *permissioned* PoA threat model, not a hash-power one — and it
+>   must own the adversarial-coverage gap left by deleting the `challenger_*`
+>   suites (§0.7.3).
+> - **C9 tuning review drops "difficulty"** from its scope; it gains authority
+>   slot pacing.
+> - **Dormant: no mainnet** is unchanged — the mainnet authority-set
+>   governance question is `[OPEN]` (§0.7.2), which is another reason mainnet
+>   stays parked.
+
 ---
 
 ## A — Protocol & consensus upgrades
@@ -27,11 +58,11 @@
 | A3 | **RFC-003 Stealth + Script v2** (KVP-103) | ✅ | Address `0x02`/`0x03`; checkpoint v5; one-time-key ECDH, CLTV/CSV ops; 25-test suite |
 | A4 | **RFC-004 HTLC / atomic swap** (KVP-104) | ✅ | PR #88 merged 2026-09-08 (`fb13741`); no format bump; Tier Nolan `atomic_swap.rs`; CLTV fix included |
 | A5 | **RFC-005 Vault / CSV** (KVP-105) | ✅ | Real CSV + per-UTXO creation height; checkpoint v6, no format bump; **⏳ FFI surface deferred** (HTLC FFI slice is the model) |
-| A6 | **RFC-006 Tokenomics** (emission curve) | ✅ **CORE DONE** | Steps 1–4 **landed** on `tokenomics/rfc-006-emission-curve` (785 tests): smooth α=¾ emission, MAX_SUPPLY 90.2M, coinbase maturity 100, fee burn 75/25. **Steps 5–6 done** (treasury genesis + mainnet profile merged via fix/rfc006-critical-issues), **Step 7 done** (supply accounting on /api/head). Activation = **consensus fork → testnet reset, checkpoint v7**. `TOKENOMICS_ACTIVATION_SCORE=0` active at genesis on main. |
+| A6 | **RFC-006 Tokenomics** (emission curve) | ✅ **CORE DONE** | Steps 1–4 **landed** on `tokenomics/rfc-006-emission-curve` (785 tests): smooth α=¾ emission, MAX_SUPPLY 90.2M, coinbase maturity 100, fee burn 75/25. **Steps 5–6 done** (treasury genesis + mainnet profile merged via fix/rfc006-critical-issues), **Step 7 done** (supply accounting on /api/head). Activation = **consensus fork → testnet reset, checkpoint v7**. `TOKENOMICS_ACTIVATION_SCORE=0` active at genesis on main. **Unaffected by the PoA-only decision** — the curve is height-indexed, not work-indexed, and `cumulative_minted` is capped in `apply_block`, so not one number here changes. |
 | A7 | **Epoch randomness beacon** | ✅ | `UPGRADE-PHASES` B1, merged via PR #49 (Phase 2) |
 | A8 | **DAG-level past-set pruning** | ✅ | `UPGRADE-PHASES` B2, PRs #36 / #51 |
 | A9 | **UTXO undo log** | ✅ | `UPGRADE-PHASES` B3, PR #50; enables ledger per-block state pruning (6-point plan 2.3) |
-| A10 | **Token staking / sortition** (DeFi 5.3) | ⏳ | Stake registry shipped (hybrid PoW+VRF); extending `StakeState` to assets is next DeFi primitive |
+| A10 | **Token staking / sortition** (DeFi 5.3) | ❌ **CANCELLED** | Hybrid dropped entirely (§0.7.1, decided 2026-09-25); stake registry retires with it; a non-authority can never produce a block. Extending `StakeState` to assets is moot. **RFC-005 vault/CSV + treasury vaults unaffected** and remain the live custody path |
 | A11 | **Research / docs-only gates** (bridge RFC 4.x, VM decision 5.5, CT 6.3, DEX design 5.4) | ⏳ | All deferred; no implementation in scope; VM explicitly **not EVM** |
 | A12 | **CoinJoin batching** (6.2) | ⏳ | Node-level, non-consensus, `prepare_transfer` pattern |
 | A13 | **Codebase fix + testnet reset** | ✅ **CODE DONE** | Operator/founder wallet genesis implemented; all code changes + tests pass. **Awaiting testnet reset execution** (A13.13–A13.24). |
@@ -57,6 +88,14 @@
 ## A13 Detail — Codebase fix + testnet reset (tracking)
 
 > **Purpose:** Single checklist for any change that requires a **testnet reset** (genesis hash change → all nodes resync from zero).
+> **PoA overlay (2026-09-25):** this checklist is now the *de facto* procedure for
+> the mandatory PoA reset (RFC-POA-Migration §0.6) as well as A13/A6. Two steps
+> must be added before use: configure the authority set on every seed
+> (`KOVANICA_CONSENSUS=poa`, `KOVANICA_AUTHORITIES`,
+> `KOVANICA_AUTHORITY_THRESHOLD`, `KOVANICA_SLOT_DURATION`) and replace
+> A13.19's "verify block production (mining / staking)" with "verify authority
+> slot production". Until then, treat the A6/A13 numbers as `[CURRENT]` and the
+> PoA additions as `[TARGET]`.
 
 ### 1. Define the fix scope
 - [x] **A13.1** Root cause / motivation: No main node wallet address — node operator has no dedicated wallet to receive mining rewards; currently defaults to founder (seed=1) address
@@ -101,7 +140,7 @@
 - [ ] **A13.16** Deploy new binaries to seeds (`deploy-seed.sh` / `deploy-seed2.sh`)
 - [ ] **A13.17** Start seeds, verify genesis match (`/api/head` on all)
 - [ ] **A13.18** Verify peer connectivity (mesh, DHT, DNS seeds)
-- [ ] **A13.19** Verify block production (mining / staking)
+- [ ] **A13.19** Verify block production (mining / staking) `[TARGET]`→ verify authority slot production
 - [ ] **A13.20** Update explorer / web (if API changed)
 
 ### 5. Post-reset validation
@@ -124,10 +163,10 @@
 | C3 | **Multiple public seeds** (was P1.3) | ✅ | seed (Hostinger VPS, `kovanica-explorer`) ✅ + seed2 (Hostinger KVM2 VPS `76.13.250.65`, `srv1991525`) ✅ — org-distinct; seed3 (AWS) **fully decommissioned 2026-09-21** (instance stopped + DNS deleted, NXDOMAIN); `/api/bootstrap` peer leak fixed (commit `7bd9aab`), both VPSes deploy fixed binary with clean `KOVANICA_PEERS` |
 | C4 | **Run-a-node guide** (was P1.4) | 🟡 | `install.sh` prebuilt-first + `OPERATIONS.md` runbook; single operator guide + “tip == explorer” smoke ⏳ |
 | C5 | **Public status surface** (was P1.5) | 🟡 | `/network` page shipped (PR #89) ✅; uptime history ❌ |
-| C6 | **Security notes / threat model** (was P1.6) | ❌ | `docs/SECURITY.md` (PoW+GHOSTDAG guarantees, key handling, finality/reorg expectations) not written |
+| C6 | **Security notes / threat model** (was P1.6) | ❌ | `docs/SECURITY.md` (PoW+GHOSTDAG guarantees, key handling, finality/reorg expectations) not written — **and its premise is now wrong**: the guarantee set is permissioned-PoA + GHOSTDAG, not hash-power + GHOSTDAG. Must be rewritten against the PoA threat model (RFC-POA-Migration §0.5) before it ships |
 | C7 | **Open issue tracker** (was P1.7) | 🟡 | Public Issues on mirrored repos; bug/feature templates + security contact (GH advisories / `security@kovanica.online`) ⏳ |
 | C8 | **Spec index** (was P1.8) | ❌ | Docs index of KVP-101…105 + RFC links + roadmap-sync ⏳ (skills `rfcs-index` exists in vault) |
-| C9 | **Testnet soak** (roadmap item 4 / 6-point 1.1) | 🔴 **ACTIVE** | Baseline 2026-08-24 (h448/447, 2 peers, no reorgs) + public-API snapshot 2026-08-31 (~1.18 min/block recovered, **no retune**). Next: **⏳ VPS Prometheus scrape** (orphan/propagation/fork/disk, `/metrics` not public) and **⏳ tuning review** (k, finality, pruning, difficulty) |
+| C9 | **Testnet soak** (roadmap item 4 / 6-point 1.1) | 🔴 **ACTIVE** | Baseline 2026-08-24 (h448/447, 2 peers, no reorgs) + public-API snapshot 2026-08-31 (~1.18 min/block recovered, **no retune**) — both `[HISTORICAL — PoW era]`, must be re-captured post-transition. Next: **⏳ VPS Prometheus scrape** (orphan/propagation/fork/disk, `/metrics` not public) and **⏳ tuning review** (k, finality, pruning — **difficulty is dropped**, there is nothing to retune after the removal; authority slot pacing is added) |
 | C10 | **Ops hardening** (6-point 1.2 / Phase 6) | 🟡 | Backup automation ✅ (#40), systemd unified ✅, atomic binary swap ✅; restore drill + tunnel alerting + release pinning ✔️ in OPS-HARDENING doc, drills ⏳ |
 | C11 | **Security hardening** (6-point 1.3) | 🟡 | `cargo-audit` CI ✅ (D2); extended net-boundary fuzz + ed25519/VRF crypto review ⏳ |
 | C12 | **Testnet reset execution** (for A13 + A6) | 🟡 **READY** | A13.1–A13.12 complete; A6 core done on main; use A13.13–A13.24 checklist + TESTNET-RESET-PROCEDURE.md; coordinate with seed operators |
@@ -193,8 +232,8 @@
 
 ## Sequenced next actions (top-N, cross-group)
 
-1. **C12**: Execute testnet reset (A13 + A6 combined) — run A13.13–A13.24 checklist + TESTNET-RESET-PROCEDURE.md; deploy to seed1 (primary) + seed2; verify genesis match, peer connectivity, block production, smoke tests, light-node sync.
-2. **C9**: VPS Prometheus scrape (orphan rate, propagation, fork/reorg, disk) and post-~2-week tuning review (k, finality, pruning, difficulty). **Dormant: no mainnet.**
+1. **C12**: Execute testnet reset (A13 + A6 combined) — run A13.13–A13.24 checklist + TESTNET-RESET-PROCEDURE.md; deploy to seed1 (primary) + seed2; verify genesis match, peer connectivity, block production, smoke tests, light-node sync. `[TARGET]` — also serves as the mandatory PoA reset, so fold in the authority-set config and slot-production check (RFC-POA-Migration §0.6).
+2. **C9**: VPS Prometheus scrape (orphan rate, propagation, fork/reorg, disk) and post-~2-week tuning review (k, finality, pruning; **difficulty removed**). **Dormant: no mainnet.**
 3. **C3 follow-up**: provision a third-provider/continent/ASN seed for geo diversity (seed2 = Hostinger KVM2 VPS ✅, **seed3 = AWS fully decommissioned 2026-09-21**); e.g. `deploy-seed.sh`, post-deploy checks (DNS, grey-cloud :9000, `/api/head`, bootstrap list). `/api/bootstrap` peer leak fixed on both VPSes (2026-09-21).
 4. **E3**: finish Android 9e (WorkManager periodic sync) + 9f; add subsidy/premine/seed to `/api/bootstrap`.
 5. **C4 / C6 / C7 / C8**: run-a-node operator guide, `SECURITY.md`, issue templates + security contact, spec index — the "legit v1" bundle (all B + C1/C2/C3/C4/C7).

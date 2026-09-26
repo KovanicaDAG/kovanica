@@ -1,7 +1,16 @@
 # Kovanica Specification Index
 
 > **Purpose:** Single reference for all KVP (Kovanica Protocol) specifications and RFCs.
-> Updated: 2026-09-20 | Network: `kovanica-testnet` | Status: Testnet (mainnet dormant)
+> Updated: 2026-09-25 | Network: `kovanica-testnet` | Status: Testnet (mainnet dormant)
+>
+> > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> > Proof-of-Work is being removed from the protocol. See
+> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical). Items marked `[TARGET]`
+> > are ratified but not yet implemented; `[CURRENT]` items describe shipped code.
+> >
+> > The **Consensus Parameters** table below is `[CURRENT]` (PoW/difficulty/hybrid
+> > are all still in the tree) with the `[TARGET]` end-state annotated per row. Do
+> > not read it as a description of where the protocol is going.
 
 ---
 
@@ -27,6 +36,7 @@
 | **RFC-004** | HTLC / Atomic Swaps | KVP-104 | ✅ Shipped | [RFC-004-Htlc.md](RFC-004-Htlc.md) | `kovanica-state/src/htlc.rs`, `kovanica-node/src/atomic_swap.rs`, 23-test suite |
 | **RFC-005** | Vault / CSV | KVP-105 | ✅ Shipped | [RFC-005-Vault.md](RFC-005-Vault.md) | `kovanica-state/src/vault.rs`, per-UTXO creation height, 26-test suite |
 | **RFC-006** | Tokenomics (Emission Curve) | — | ✅ Core Done | [RFC-006-EmissionCurve.md](RFC-006-EmissionCurve.md) | `kovanica-state/src/ledger.rs`, smooth α=¾, MAX_SUPPLY 90.2M |
+| **RFC-POA** | PoA-only Consensus Migration | **KVP-201** | 📝 Draft — §0 ratified | [RFC-POA-Migration.md](RFC-POA-Migration.md) | Authority set + slot round-robin + authority signature; `POA_NOMINAL_WORK = 1` pin. **§0 is canonical for the PoA-only decision** |
 
 ---
 
@@ -48,15 +58,30 @@
 
 ## Consensus Parameters (Testnet)
 
-| Parameter | Value | Source |
-|-----------|-------|--------|
-| GHOSTDAG **k** | 3 | `dag.rs` |
-| Finality depth | 100 blocks | `ledger.rs` |
-| Payload pruning depth | 1000 blocks | `dag.rs` |
-| PoW | Opt-in, real | `pow.rs` |
-| Difficulty | Opt-in, enforced | `difficulty.rs` |
-| VRF | Opt-in, leader selection | `vrf.rs` |
-| Hybrid admission | Opt-in (PoW + VRF-staked) | `ledger.rs` |
+**Mixed `[CURRENT]` / `[TARGET]` — read the marker column.** The `[CURRENT]`
+column is true of the code today; the `[TARGET]` column is the ratified
+end-state after PoW removal (RFC-POA-Migration §0.1).
+
+| Parameter | `[CURRENT]` value | `[TARGET]` value | Source |
+|-----------|-------|--------|--------|
+| GHOSTDAG **k** | 3 | **3 (unchanged)** | `dag.rs` |
+| Finality depth | 100 blocks | unchanged | `ledger.rs` |
+| Payload pruning depth | 1000 blocks | unchanged | `dag.rs` |
+| PoW | Opt-in, real (`KOVANICA_POW`, `KOVANICA_CONSENSUS=pow`) | **Removed entirely** — modules, env var, RPC `kind`, FFI `BlockKind::Pow` | `pow.rs` |
+| Difficulty | Opt-in, enforced (node-local `Retarget`; no env var) | **Removed** — PoA has nothing to retarget | `difficulty.rs` |
+| VRF | Opt-in, leader selection | **Removed** with hybrid | `vrf.rs` |
+| Hybrid admission | Opt-in (PoW + VRF-staked), `KOVANICA_HYBRID` | **Removed entirely — decided 2026-09-25** (RFC-POA-Migration §0.7.1). Stake registry retires with it; **RFC-005 vault/CSV + treasury vaults unaffected** | `ledger.rs` |
+| PoA admission | Available; **default when `KOVANICA_CONSENSUS` is unset** | **The only admission model** | `explorer.rs` `consensus_mode_from_env()` |
+| Authority set | `KOVANICA_AUTHORITIES`; testnet placeholder from `AUTHORITY_PLACEHOLDER_BASE = 9001` (publicly derivable, testnet-only); mainnet refuses to boot without it | **Mechanism settled** — fixed at genesis, rotation only by on-chain M-of-N `AuthorityUpdateTx`. **Governance inputs `[OPEN]`** (§0.7.2): initial set choice, eligibility, key ceremony, threshold `t`, expansion, dissolution | `explorer.rs` |
+| Slot duration | `KOVANICA_SLOT_DURATION`, default `SLOT_DURATION_MS` = 3000 ms | unchanged | `authority.rs` |
+
+**Tokenomics are untouched by the PoA-only decision.** The emission curve is
+height-indexed and `cumulative_minted` is hard-capped at `MAX_SUPPLY` in
+`apply_block`, so neither depends on who produced a block. MAX_SUPPLY
+**90.2M KVNC**, s₀ **10 KVNC/block**, era **2,000,000 blocks**, α **3/4**,
+maturity **100 blocks**, fee split **75% burned / 25% producer**,
+**1 KVNC = 100_000_000 atoms** — all unchanged. Only the wall-clock *pace*
+changes (fixed slot clock, no retarget, no gap-fill); the cap does not.
 
 **All RFC activation scores = 0 (active from genesis on testnet).**
 
@@ -106,6 +131,7 @@
 |----------|---------|
 | [SECURITY.md](SECURITY.md) | Threat model, key handling, finality, incident response |
 | [TOKENOMICS.md](TOKENOMICS.md) | Emission curve, supply parameters, fees |
+| **[RFC-POA-Migration.md](RFC-POA-Migration.md)** | **Canonical for the PoA-only consensus decision — see its §0** |
 | [NETWORK.md](../NETWORK.md) | Domain map, DNS, redirect rules |
 | [OPERATIONS.md](../OPERATIONS.md) | Seed runbook, deploy pipeline, incident lessons |
 | [LEGIT-BOARD.md](LEGIT-BOARD.md) | Public visibility checklist |
@@ -129,6 +155,7 @@
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-09-25 | 1.1 | Record the PoA-only consensus decision (§0 canonical in RFC-POA-Migration); split Consensus Parameters into `[CURRENT]` / `[TARGET]`; added RFC-POA / KVP-201 to the RFC index |
 | 2026-09-20 | 1.0 | Initial spec index (Legit v1 bundle) |
 
 ---
