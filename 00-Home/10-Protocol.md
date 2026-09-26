@@ -22,7 +22,7 @@ generated_by: scripts/build-vault.py
 - [[10-Protocol/protocol--docs--RFC-006-EmissionCurve|RFC-006 — Tokenomics (emission, supply cap, maturity, fee burn)]]
 - [[10-Protocol/protocol--docs--RFC-008-OraclePruning|RFC-008 — Reachability Oracle Pruning (block-pruning depth wiring)]]
 - [[10-Protocol/protocol--docs--RFC-POA-Migration|RFC-POA: Pure Proof-of-Authority Consensus Migration]]
-- [[10-Protocol/protocol--docs--SECURITY|Kovanica Security Notes]]
+- [[10-Protocol/protocol--docs--SECURITY|Kovanica Security Notes (PoA Threat Model)]]
 - [[10-Protocol/protocol--docs--SPEC-INDEX|Kovanica Specification Index]]
 - [[10-Protocol/protocol--docs--TOKENOMICS|KVNC tokenomics (RFC-006)]]
 - [[10-Protocol/protocol--docs--WHAT-IS-KOVANICA|What is Kovanica?]]

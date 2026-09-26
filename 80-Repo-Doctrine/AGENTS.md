@@ -14,6 +14,40 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 > **Deep protocol context lives in `protocol/AGENTS.md`** (consensus invariants,
 > RFC implementation notes, "hard-won lessons") — read it before touching
 > `kovanica-dag` / `kovanica-state`.
+>
+> > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> > Proof-of-Work is being removed from the protocol. See
+> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical). Items marked `[TARGET]`
+> > are ratified but not yet implemented; `[CURRENT]` items describe shipped code.
+> >
+> > `[TARGET]` PoW is **deleted**, not merely off by default: `Dag::set_proof_of_work`,
+> > `set_difficulty`, the `pow` and `difficulty` modules, and `KOVANICA_POW` all
+> > go away, and `KOVANICA_CONSENSUS=pow` is transitional only. PoA needs
+> > `KOVANICA_CONSENSUS`, `KOVANICA_AUTHORITIES`, `KOVANICA_AUTHORITY_THRESHOLD`,
+> > `KOVANICA_SLOT_DURATION`. `[CURRENT]` PoW is still in the tree and still
+> > reachable, so **do not write a `[TARGET]` claim as though it were shipped.**
+> >
+> > **DECIDED 2026-09-25 — hybrid / staked-VRF admission is dropped entirely**
+> > (§0.7.1). PoA is the only admission path; the "PoA + staked-VRF secondary
+> > tier" option was considered and rejected. The stake registry retires with
+> > it. **RFC-005 vault/CSV and the treasury vaults are unaffected** (verified:
+> > `vault.rs` has zero stake references). A non-authority can never produce a
+> > block.
+> >
+> > `[OPEN]` — still not settled, do not implement on the strength of §0:
+> > **mainnet authority-set governance** — the rotation *mechanism* is settled
+> > (genesis-fixed set, on-chain M-of-N `AuthorityUpdateTx` only); the residual
+> > *inputs* are not: initial set choice, eligibility, authority-key ceremony,
+> > threshold `t`, expansion, and dissolution/recovery (§0.7.2).
+> >
+> > **RFC-006 supply math is unaffected.** The emission curve is height-indexed
+> > and `cumulative_minted` is hard-capped at `MAX_SUPPLY` in `apply_block`, so
+> > neither depends on who produced a block. MAX_SUPPLY **90.2M KVNC**, s₀
+> > **10 KVNC/block**, era **2,000,000 blocks**, α **3/4**, maturity **100
+> > blocks**, fee split **75% burned / 25% producer**, GHOSTDAG **k=3**, UTXO,
+> > Ed25519, **1 KVNC = 100_000_000 atoms** — all unchanged. What changes is the
+> > *pace* (fixed `SLOT_DURATION_MS`, default 3000 ms, no retarget, no gap-fill),
+> > never the cap.
 
 ---
 
@@ -139,7 +173,9 @@ High-signal facts that are easy to get wrong:
   **wiped all pre-RFC-006 balances**. Subsidy 10 KVNC/block (geometric decay ×¾
   every 2,000,000 blocks), hard cap 90.2M, coinbase maturity 100 blocks, 75% fee
   burned. Current truth is in `protocol/TESTNET-RFC006.md` — the older "200×ATOM /
-  founder seed=1" genesis notes are obsolete.
+  founder seed=1" genesis notes are obsolete. **These numbers are unaffected by
+  the PoA-only decision** (height-indexed curve + `MAX_SUPPLY` cap in
+  `apply_block`) — only the wall-clock *pace* changes.
 - P2P is **TCP 9000 only** (libp2p removed). Seeds: `seed.kovanica.online:9000`
   (primary, IP behind grey-cloud DNS) and `seed2.kovanica.online:9000`; `seed3`
   retired. **Never dial `explorer.kovanica.online:9000`** — it is Cloudflare
@@ -147,6 +183,9 @@ High-signal facts that are easy to get wrong:
 - Run a node (from `protocol/`):
   `KOVANICA_POW=1 KOVANICA_LISTEN=0.0.0.0:9000 KOVANICA_PEERS=seed.kovanica.ons…`
   … exact env from `protocol/TESTNET.md`.
+  `[TARGET]` `KOVANICA_POW=1` drops out of this line; the PoA equivalent is
+  `KOVANICA_CONSENSUS=poa` (already the default when unset) plus, for an
+  authority operator, their signing key via `set_authority_signing_key`.
 
 (Deployment steps: web `cd web/site && npm run build:vps && pm2 restart kovanica-web`;
 node `cd node && cargo build --release --workspace` then restart systemd units —
@@ -164,8 +203,17 @@ Deep detail + invariants: `protocol/AGENTS.md`. This monorepo-level summary:
 - **Ledger**: UTXO, Ed25519 spend auth, per-asset conservation (KVP-102); per-block
   state incremental from selected parent + mergeset; finality pruning folds deltas
   into children; stake registry bonds via `KVB1||vrf_pk` / `KVU1` tags, maturity 100.
-- **Hybrid admission**: PoW (`H*work < 2^256`, retargeted) and staked-VRF over an
-  epoch beacon; one staked block per `(vrf_pk, selected_parent)`.
+- **Hybrid admission** `[CURRENT]`, **`[TARGET]`-removed entirely**: PoW
+  (`H*work < 2^256`, retargeted) and staked-VRF over an epoch beacon; one
+  staked block per `(vrf_pk, selected_parent)`. **Both halves are being
+  removed** (RFC-POA-Migration §0.7.1, decided 2026-09-25) — the staked-VRF
+  half was not left to ride along with PoW. The stake registry
+  (`kovanica-state/src/stake.rs`) retires with it. Do not build on it, and do
+  not port it to a "secondary tier": that option was rejected.
+- **PoA admission** `[CURRENT]`: fixed authority set (`KVA1` UTXO), slot
+  round-robin at `SLOT_DURATION_MS` (default 3000), Ed25519 authority signature
+  per block, `work` pinned to `POA_NOMINAL_WORK = 1`. `[TARGET]` PoA is the
+  *only* admission model once PoW and hybrid are removed.
 
 | RFC | Feature | Status |
 |-----|---------|--------|
@@ -175,6 +223,7 @@ Deep detail + invariants: `protocol/AGENTS.md`. This monorepo-level summary:
 | 004 | HTLC / Atomic swaps | main |
 | 005 | Vault / CSV | main |
 | 006 | Tokenomics (emission, cap, fee burn) | **live on testnet** (activation fork wiped balances) |
+| RFC-POA / KVP-201 | PoA-only consensus (authority set + slots) | **Draft**; §0 ratified, PoW removal `[TARGET]` |
 
 ---
 

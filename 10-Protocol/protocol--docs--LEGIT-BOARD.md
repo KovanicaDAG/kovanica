@@ -8,6 +8,36 @@ synced: 2026-09-26
 
 Actionable checklist to make the project **credibly public**, not just a private monorepo with a testnet UI.
 
+**Status**: Draft / Stage-3 (board baseline predates the PoA decision)  
+**Consensus impact**: none (checklist document; changes no protocol rule).
+
+**One-line summary:** Credibility checklist for going public, with the
+security and status rows re-pointed at the ratified PoA-only target.
+
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Policy lives in
+> [[10-Protocol/protocol--docs--RFC-POA-Migration|`RFC-POA-Migration.md` §0]].
+>
+> **How this board changes.** It does not get thrown away — the credibility
+> work is unaffected. Three rows are re-pointed:
+> - **P1.5** — "shows … PoW" becomes "shows the **authority set / slot
+>   production**". Shipping a status page that advertises PoW would be
+>   advertising a consensus rule the network no longer has.
+> - **P1.6** — the "what PoW + GHOSTDAG protect" bullet is **wrong** for a
+>   permissioned chain and must be rewritten against the PoA threat model
+>   (RFC-POA-Migration §0.5). It should *not* be softened into a vague
+>   "GHOSTDAG is great" claim: PoA loses the permissionless admission path, and
+>   the doc has to say so plainly.
+> - Operator material that teaches mining teaches a role that is being
+>   deleted; it becomes authority-operator material.
+>
+> **Not affected:** RFC-006 tokenomics — MAX_SUPPLY 90.2M KVNC, s₀ 10
+> KVNC/block, era 2 000 000, α 3/4, maturity 100, fee 75% burned / 25%
+> producer — and GHOSTDAG **k=3**. A tokenomics row on this board does not
+> need editing for PoA.
+
 **How to use:** check boxes in PRs that close an item; link the PR next to the row. Status below is the baseline as of the board’s introduction.
 
 | Priority | Goal | Horizon |
@@ -110,14 +140,17 @@ Others can run peers and build on the API.
 **Done when:** cold operator follows doc and reaches the selected tip.
 
 ### P1.5 Public status surface
-- [ ] `/network` (or status subdomain) shows head, peers, PoW, deploy age
+- [ ] `/network` (or status subdomain) shows head, peers, **authority set / slot production** `[TARGET]` (was: PoW), deploy age
 - [ ] Optional: simple uptime history
 
 **Done when:** outages are visible without asking in chat.
 
 ### P1.6 Security notes (lightweight threat model)
-- [ ] Doc: what PoW + GHOSTDAG k protect; what they don’t
-- [ ] Key handling: browser wallet vs hardware vs seed files
+- [ ] Doc: what **PoA + GHOSTDAG k** protect; what they don’t — must also state
+      that permissionless admission is **gone** `[TARGET]`. The old
+      "what PoW + GHOSTDAG k protect" framing is superseded (RFC-POA-Migration §0.5)
+- [ ] Key handling: browser wallet vs hardware vs seed files — **plus authority-key
+      custody**, which becomes consensus-critical under PoA `[TARGET]`
 - [ ] Finality depth / reorg expectations on testnet
 
 **Done when:** `docs/SECURITY.md` (or section) exists and is linked.

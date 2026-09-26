@@ -8,6 +8,60 @@ synced: 2026-09-26
 
 Guidance for AI assistants (and humans) working in the **kovanica-protocol** repository.
 
+> > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> > Proof-of-Work is being removed from the protocol. See
+> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical). Items marked `[TARGET]`
+> > are ratified but not yet implemented; `[CURRENT]` items describe shipped code.
+> >
+> > **What this means for you as an agent touching `kovanica-dag` / `kovanica-state`:**
+> > - `[TARGET]` PoW is **deleted**, not merely off by default. Removal surface:
+> >   `Dag::set_proof_of_work` / `set_difficulty` / `proof_of_work_enabled`,
+> >   `DagError::InsufficientProofOfWork` / `DifficultyMismatch`, the `pow` module
+> >   (`mine`, `mine_from`, `meets_target`, `is_mined`) and the `difficulty` module
+> >   (`Retarget`, `TimedWork`, `next_work`), `KOVANICA_POW`, the node mining loop,
+> >   the RPC/explorer `kind: "pow"`, FFI `BlockKind::Pow`, and the
+> >   `pow`/`pow-vrf` cargo features. Full table with line refs: RFC-POA-Migration §0.1.
+> > - `[CURRENT]` All of the above is **still in the tree and still reachable**.
+> >   `KOVANICA_POW` is still read (`explorer.rs` ~874, ~981, default `true` when
+> >   unset) and `KOVANICA_CONSENSUS=pow` still selects legacy PoW admission.
+> >   **Never write a `[TARGET]` claim as though it were shipped** — a previous
+> >   revision of RFC-POA §2 claimed PoA "ignored" a block's `work` when the code
+> >   did not, and that divergence was a live consensus bug (§6.1(b)). The
+> >   `[TARGET]`/`[CURRENT]` split exists to stop that recurring.
+> > - **RFC-006 supply math is unaffected.** The emission curve is
+> >   **height-indexed** (`subsidy_at`) and issuance is hard-capped in
+> >   `apply_block` (`ledger.rs` ~1617: reject if
+> >   `cumulative_minted + claimed_native > MAX_SUPPLY`) — neither depends on who
+> >   produced a block or how. MAX_SUPPLY **90.2M KVNC**, s₀ **10 KVNC/block**,
+> >   era **2,000,000 blocks**, α **3/4**, maturity **100 blocks**, fee split
+> >   **75% burned / 25% producer**, GHOSTDAG **k=3**, UTXO, Ed25519,
+> >   **1 KVNC = 100_000_000 atoms** — all unchanged. What changes is the
+> >   *pace*: fixed `SLOT_DURATION_MS` (default 3000), no retarget, no gap-fill
+> >   (an offline authority yields an empty slot). The cap never moves.
+> > - **DECIDED 2026-09-25 — hybrid / staked-VRF admission is dropped entirely**
+> >   (§0.7.1). `HybridConfig` is PoW **+** staked-VRF, and **both halves go**:
+> >   remove `HybridConfig`, `StakedVrf`, `set_hybrid`/`hybrid_enabled`,
+> >   `stake_nominal_work`, the `insert_with_vrf` staked-block path, and the
+> >   `KOVANICA_HYBRID` env var. The "PoA + staked-VRF secondary tier" option
+> >   was considered and **rejected** — do not re-derive it.
+> >   **The stake registry retires with it** (`crates/kovanica-state/src/stake.rs`:
+> >   referenced only by `ledger.rs`, `lib.rs`, and the `node.rs` unbond path).
+> >   ⚠️ **Do not remove `POA_NOMINAL_WORK`** — it is an independent dag-level
+> >   constant, not a `HybridConfig` field.
+> >   ✅ **RFC-005 vault/CSV and the treasury vaults are UNAFFECTED** —
+> >   `crates/kovanica-state/src/vault.rs` has **zero** `stake`/`bond`/`unbond`/
+> >   `vrf`/`Freeze` references (verified 2026-09-25). Treasury vault keys are
+> >   a separate concern from authority signing keys.
+> > - `[OPEN]` **Do not implement these on the strength of §0** — not settled,
+> >   and a governance decision rather than an engineering one: **mainnet
+> >   authority-set governance** (§0.7.2). The rotation *mechanism* **is**
+> >   settled — the set is fixed at genesis and can only ever rotate via an
+> >   on-chain M-of-N `AuthorityUpdateTx`; no election, no external randomness,
+> >   no off-chain path, no hardcoded schedule. The residuals are the *inputs*:
+> >   how the initial mainnet set is chosen, who is eligible, the authority-key
+> >   ceremony (distinct from RFC-005 treasury keys), threshold `t`, expansion
+> >   toward `n ≤ 16`, and dissolution/recovery if `t` authorities are lost.
+
 > **Status: early implementation.** Three vertical slices exist, build, and are
 > tested: the block DAG and GHOSTDAG consensus core (`crates/kovanica-dag`); the
 > UTXO ledger/state layer that applies transactions in GHOSTDAG-linearized order
@@ -17,7 +71,8 @@ Guidance for AI assistants (and humans) working in the **kovanica-protocol** rep
 > mempool, block production, multi-node block gossip, and an in-process
 > continuous overlay (`crates/kovanica-node`: `net` one-shot sync + `p2p::Mesh`
 > with peer discovery, a delayed relay loop, and tx dissemination).
-> **Proof-of-work is real and opt-in**: blocks carry a `nonce`, and
+> **Proof-of-work is real and opt-in `[CURRENT]` / `[TARGET]`-for-removal**:
+> blocks carry a `nonce`, and
 > `Dag::set_proof_of_work(true)` makes `Dag::insert` require each block's id to
 > meet its `work` target (Nakamoto-style `H * work < 2^256`, so `work` = expected
 > hashes). Difficulty is both an algorithm (`kovanica-dag::difficulty`) and, now,
@@ -80,20 +135,20 @@ crates/
     src/
       lib.rs                   Crate docs + re-exports + a doctest quick tour
       block.rs                 Block (multi-parent vertex, work + timestamp + nonce) and BlockId (BLAKE3 hash)
-      dag.rs                   Dag store: insert/validate, oracle-backed reachability + mergeset, past_size, tips, GhostdagData, preview(), chain_key, set_difficulty/next_work_target
+      dag.rs                   Dag store: insert/validate, oracle-backed reachability + mergeset, past_size, tips, GhostdagData, preview(), chain_key, set_difficulty/next_work_target [TARGET-for-removal]
       ghostdag.rs              compute_ghostdag(): selected parent, mergeset, k-cluster blue/red colouring
       ordering.rs              linearize() (recursive GHOSTDAG order), selected_tip/selected_chain
       validation.rs            BlockValidator trait + Dag::with_validator: pluggable insert-time validation
       snapshot.rs              Dag::write_snapshot()/read_snapshot(): replay-log persistence; encode_block/decode_block for the incremental log
-      difficulty.rs            Retarget::next_work(): difficulty retargeting for block work (algorithm); enforced via Dag::set_difficulty
-      pow.rs                   meets_target()/mine(): Nakamoto hash-target proof-of-work (H*work < 2^256); enforced via Dag::set_proof_of_work
+      difficulty.rs            Retarget::next_work(): difficulty retargeting for block work (algorithm); enforced via Dag::set_difficulty [TARGET-for-removal]
+      pow.rs                   meets_target()/mine(): Nakamoto hash-target proof-of-work (H*work < 2^256); enforced via Dag::set_proof_of_work [TARGET-for-removal]
       reachability.rs          Reachability oracle: interval-tree + future-covering sets (the Dag's backing for is_ancestor + mergeset)
       vrf.rs                   ECVRF over Ristretto255 (Ed25519 curve), IRTF CFRG draft; vrf_prove/vrf_verify for leader selection / randomness beacon (Stage 3)
     tests/
       consensus.rs             Integration + adversarial tests (wide fork, determinism, k-cluster invariant, validator hook)
       reachability.rs          Differential: Dag/oracle is_ancestor == naive parent-walk over random adversarial DAGs
-      difficulty.rs            Integration + adversarial: enforced work/timestamp (understate/overstate/backdate rejected, target deterministic)
-      pow.rs                   Integration + adversarial: enforced proof-of-work (unmined rejected, genesis exempt, off-by-default, composes with difficulty)
+      difficulty.rs            Integration + adversarial: enforced work/timestamp (understate/overstate/backdate rejected, target deterministic) [TARGET-for-removal]
+      pow.rs                   Integration + adversarial: enforced proof-of-work (unmined rejected, genesis exempt, off-by-default, composes with difficulty) [TARGET-for-removal]
   kovanica-state/              UTXO ledger applied in GHOSTDAG order (second slice)
     src/
       lib.rs                   Crate docs + re-exports + an end-to-end doctest
@@ -114,7 +169,7 @@ crates/
       persistence.rs           Integration: Ledger snapshot round-trip (state recomputed by replay)
       store.rs                 Integration: append-only log grows; reopen matches snapshot
       finality.rs              Integration: finality-depth pruning, deep-reorg rejection, implicit re-org
-      difficulty.rs            Integration: Ledger::set_difficulty enforces work/timestamp end-to-end
+      difficulty.rs            Integration: Ledger::set_difficulty enforces work/timestamp end-to-end [TARGET-for-removal]
       multisig_consensus.rs     Adversarial consensus suite for RFC-001 multisig (35 tests: M-of-N spends, malformed scripts, activation gating, mixed P2PK/P2SH, snapshot roundtrip)
       native_token_consensus.rs  Adversarial consensus suite for RFC-002 native tokens (29 tests: single/multi-asset transfers, per-asset conservation, fee-in-native, coinbase minting, activation gating, mixed blocks, parallel-DAG conflicts, checkpoint/snapshot roundtrip)
       stealth_script_v2_consensus.rs  Adversarial consensus suite for RFC-003 stealth + script v2 (25 tests: 12 stealth + 13 script v2 — one-time-key ECDH spends, view tags, CLTV/CSV/hash-lock/threshold scripts, activation gating, parallel-DAG conflicts, checkpoint roundtrip)
@@ -148,10 +203,10 @@ crates/
       p2p.rs                   Integration: discovery, relay, tx dissemination, mempool eviction
       relay.rs                 Integration: persistent TCP session, block/tx over a live socket
       timestamps.rs            Integration: wall-clock timestamp policy (pinned clock, monotone stamps, far-future reject)
-      challenger_1_mining_adversarial.rs   Adversarial/empirical stress on external mining endpoints (9 tests: malformed JSON, invalid parents, corrupted payloads, work/nonce types, timestamp drift, template queries, fuzz burst)
-      challenger_external_mining.rs        Empirical external-mining JSON endpoint suite (7 tests: full mine loop, invalid nonce, duplicate idempotency, mempool packing, custom payout, mesh propagation, malformed inputs)
-      challenger_e2e_mining_lifecycle.rs   Challenger 2 e2e external-mining lifecycle + consensus integration harness (1 test: template → PoW → submit → DAG/mempool/coinbase verification)
-      challenger_consensus_sync.rs         Empirical consensus-invariant suite (10 tests: difficulty retarget clamps, SPV difficulty bounds, wall-clock drift, reorg locator sync, deep-reorg/fork convergence)
+      challenger_1_mining_adversarial.rs   Adversarial/empirical stress on external mining endpoints (9 tests: malformed JSON, invalid parents, corrupted payloads, work/nonce types, timestamp drift, template queries, fuzz burst) [TARGET-for-removal]
+      challenger_external_mining.rs        Empirical external-mining JSON endpoint suite (7 tests: full mine loop, invalid nonce, duplicate idempotency, mempool packing, custom payout, mesh propagation, malformed inputs) [TARGET-for-removal]
+      challenger_e2e_mining_lifecycle.rs   Challenger 2 e2e external-mining lifecycle + consensus integration harness (1 test: template → PoW → submit → DAG/mempool/coinbase verification) [TARGET-for-removal]
+      challenger_consensus_sync.rs         Empirical consensus-invariant suite (10 tests: difficulty retarget clamps, SPV difficulty bounds, wall-clock drift, reorg locator sync, deep-reorg/fork convergence) — the difficulty-retarget cases are [TARGET]-obsolete, the rest survive
       htlc_node.rs             Integration: RFC-004 swap e2e (create/verify/redeem/extract/refund), timeout-ordering enforcement, htlc_* RPC commands
       vault_node.rs            Integration: RFC-005 vault node surface — create/release/balance, absolute + relative + combined gates, owner-signature requirement, vault_* RPC commands
 ```
@@ -585,7 +640,8 @@ chrome drive navigation and query registered routes. Not part of the production 
   DAG (via `Dag::preview`), so a block invalid in its own view is rejected at
   insert. Two *parallel* blocks that spend the same output are each valid in their
   own view and both admitted; their conflict resolves only in a merger's view.
-- **Proof-of-work** is now real, and opt-in. `Block` carries a `nonce` (in the
+- **Proof-of-work** `[CURRENT]` / `[TARGET]`-for-removal — is now real, and
+  opt-in. `Block` carries a `nonce` (in the
   canonical id encoding); `pow::meets_target(id, work)` is the
   Nakamoto/Bitcoin-style hash-target rule — the id read as a big-endian 256-bit
   integer `H` must satisfy `H * work < 2^256`, so `work` is the *expected number
@@ -599,7 +655,15 @@ chrome drive navigation and query registered routes. Not part of the production 
   **Off by default**, so a DAG that does not opt in accepts any nonce, exactly as
   before. PoW and difficulty are independent, composable switches (with both on,
   difficulty pins `work` and PoW requires the block to be mined to it).
-- **Difficulty** now has both the algorithm and consensus enforcement. `Block`
+  **`[TARGET]`** all of this — the whole bullet, plus the `pow` and `difficulty`
+  modules, `Dag::set_proof_of_work`/`set_difficulty`/`proof_of_work_enabled`,
+  `InsufficientProofOfWork`/`DifficultyMismatch`, `KOVANICA_POW`, the node mining
+  loop and the RPC `kind: "pow"` — is **removed** under RFC-POA-Migration §0.1.
+  Do not extend it, and do not port it to a new crate. Note the PoA path does
+  **not** need it: under PoA `work` is pinned to the nominal `POA_NOMINAL_WORK = 1`
+  at admission, so blue work is a plain block count (RFC-POA §6.1(b)).
+- **Difficulty** `[CURRENT]` / `[TARGET]`-for-removal — now has both the
+  algorithm and consensus enforcement. `Block`
   carries a `timestamp_ms` (in the canonical id encoding); `work` is caller-set
   *unless* difficulty is enabled.
   `difficulty::Retarget::next_work` is the retargeting *algorithm*;
@@ -617,6 +681,14 @@ chrome drive navigation and query registered routes. Not part of the production 
   `MAX_FUTURE_DRIFT_MS` = 2h); the node's clock is injectable (`Node::set_now_ms`)
   so production timestamps and the bound are deterministic in tests, and produced
   blocks now stamp wall-clock now clamped monotone above their parents.
+  **`[TARGET]`** the `difficulty` module, `Dag::set_difficulty`/`clear_difficulty`
+  and `DifficultyMismatch` are **removed** (RFC-POA-Migration §0.1). PoA has
+  nothing to retarget: a fixed `SLOT_DURATION_MS` (default 3000) and no gap-fill,
+  so there is no "difficulty window" to tune. Two consequences for ops: the
+  `difficulty` tuning knob in the soak/tuning review is moot, and the
+  "difficulty retarget window" non-trigger in `TESTNET-RESET-POLICY.md` is
+  `[TARGET]`-historic. There is **no** `KOVANICA_DIFFICULTY` env var today and
+  none is planned — difficulty was always node-local policy, never operator-set.
 
 ## 4. Build, test & run
 
@@ -737,6 +809,9 @@ CI gates every push (`fmt --check`, `clippy -D warnings`,
       over the selected-parent chain — a pure function of the DAG) and its
       timestamp against its parents'. Threaded through `Ledger::set_difficulty` and
       the node's miner.
+      **`[TARGET]`-for-removal** — PoA has nothing to retarget (fixed
+      `SLOT_DURATION_MS`, no gap-fill). Keep the record; do not build on it
+      (RFC-POA-Migration §0.1).
 - [x] Wall-clock future-time bound on block timestamps (**node policy**, not
       pure-DAG): `Node::receive_block` rejects a block whose `timestamp_ms` is more
       than `MAX_FUTURE_DRIFT_MS` (2h) ahead of the node's clock. The clock is
@@ -751,6 +826,8 @@ CI gates every push (`fmt --check`, `clippy -D warnings`,
       exempt); `pow::mine` searches the nonce; threaded through
       `Ledger::set_proof_of_work` and the node's miner. Opt-in and composable with
       difficulty (`crates/kovanica-dag/tests/pow.rs`).
+      **`[TARGET]`-for-removal** — this item is the history of a subsystem that
+      is being deleted. Keep the record; do not build on it (RFC-POA-Migration §0.1).
 - [x] Halving schedule (`HalvingSchedule` in `ledger.rs`, `Node::issuance_at()` in `node.rs`)
 - [x] TX size limits (`MAX_TX_SIZE`, `MAX_BLOCK_PAYLOAD_SIZE`, `MAX_TXS_PER_BLOCK` in `validation.rs`)
 - [x] WebSocket explorer (`/ws` endpoint in `explorer.rs`, `WsMsg` types)
@@ -862,7 +939,9 @@ deterministic + adversarial tests per the conventions above.
   - `Dag::set_vrf(threshold)`: consensus-enforced leader eligibility
   - VRF input = `H(tip1 || tip2 || ...)` from parent tips
   - Eligibility: `VRF_output.as_u64() < threshold`; `u64::MAX` = all eligible (randomness beacon)
-  - Composes with PoW + difficulty (independent opt-in switches)
+  - Composes with PoW + difficulty (independent opt-in switches) —
+    `[TARGET]`-obsolete: **both** halves are removed. The PoW/difficulty half
+    dies with PoW (§0.1); the VRF half died with hybrid (§0.7.1)
   - Snapshot format v5 includes VRF fields
   - Tests: eligibility, invalid proof, wrong key, missing fields, composes with PoW, beacon
 - [x] P2P hardening: per-peer rate limits on framed reads, duplicate-block
@@ -877,6 +956,15 @@ deterministic + adversarial tests per the conventions above.
   - Tests: rate limit enforcement, duplicate penalties, ban prevents relay, stats
 - [x] Mempool upgrades: orphan handling, fee-based eviction, capacity limits.
 - [x] Stake registry for hybrid PoW + VRF-staked validation (slice 1: ledger layer).
+  - `[TARGET]` **Retiring.** This registry existed to feed VRF-staked admission,
+    and hybrid is now **removed entirely** (RFC-POA-Migration §0.7.1, decided
+    2026-09-25), so the registry retires with it. `stake.rs` is referenced only
+    by `ledger.rs`, `lib.rs` and the `node.rs` unbond path — there is no
+    remaining consumer. Delete with the rest of the hybrid surface; do not
+    retain it "in case it is useful later".
+  - ⚠️ **This is NOT RFC-005.** Vault/CSV and the 10 × 1M KVNC treasury
+    tranches do **not** touch the stake registry — `vault.rs` has zero stake
+    references. Do not "clean up" vault code alongside this.
   - `kovanica-state::stake`: bond/unbond via tag conventions on ordinary
     transactions — no new tx types. Bond tag = `KVB1 || vrf_pk(32)`, unbond tag
     = `KVU1`. A bond must pay one output back to its own input owner; that
@@ -898,11 +986,21 @@ deterministic + adversarial tests per the conventions above.
     per-block stake across heights, threshold/sortition distribution,
     encode/decode roundtrip.
 - [x] Hybrid PoW + VRF-staked block admission (slice 2: enforcement layer).
-  - Rationale: keeps PoW as the chain-selection work source while letting a
-    bonded validator win slots by stake-weighted sortition — the phone-friendly
-    production path (sign one VRF over the tip input; no mining rig). Kaspa-
-    style mergeability is untouched; Algorand/Praos-style eligibility decides
-    *who may add*, GHOSTDAG blue-work still decides *what wins*.
+  - `[TARGET]` **REMOVED ENTIRELY — decided 2026-09-25**, not "partly obsolete"
+    (RFC-POA-Migration **§0.7.1**, Option A). Both halves go: the PoW half with
+    §0.1, the staked-VRF half with this decision. Remove `HybridConfig`,
+    `StakedVrf`, `Ledger::set_hybrid` / `hybrid_enabled`, the `set_poa`/
+    `hybrid` mutual exclusion, `stake_nominal_work`, the `insert_with_vrf`
+    staked-block path, and the `KOVANICA_HYBRID` env var. The "PoA +
+    staked-VRF secondary tier" option was considered and **rejected** — do not
+    build a second tier on top of PoA.
+  - ⚠️ Keep `POA_NOMINAL_WORK` (`dag.rs`) — it is **not** a `HybridConfig` field,
+    and removing the wrong constant reintroduces the §6.1(b) work-inflation
+    exploit.
+  - Historical rationale (why it existed): kept PoW as the chain-selection work
+    source while letting a bonded validator win slots by stake-weighted
+    sortition — the phone-friendly production path. Both halves of that premise
+    are gone.
   - All admission lives in `Ledger` (`crates/kovanica-state/src/ledger.rs`);
     the DAG core's own PoW/difficulty/VRF switches are CLEARED by
     `Ledger::set_hybrid(HybridConfig)` to avoid double standards.
@@ -1199,14 +1297,21 @@ teaches us it needs.
      recorder in the other crate version's global slot
 
 4. **Testnet soak & parameter tuning** — run for weeks: **◀ ACTIVE NEXT**
+   - ⚠️ `[TARGET]` **This soak must be re-planned before it counts.** It is
+     written for a PoW testnet; under PoA-only (§0) a soak is a *multi-authority*
+     soak, and the existing testnet chain must be reset first (mandatory, §0.6).
    - 24/7 testnet with multiple independent seed operators
      (seed = Hostinger VPS, unit `kovanica-explorer`; **seed2 = Hostinger KVM2
      VPS `76.13.250.65`** (`srv1991525`) — live since 2026-08-24, mining on,
      genesis verified, DNS `seed2.kovanica.online`; `seed3.kovanica.online`
-     (AWS) retired)
+     (AWS) retired) — `[CURRENT]`-state description of the *pre-reset* PoW
+     testnet; those hosts will need re-genesis under PoA.
    - Measure: orphan rate, propagation latency, fork rate, disk growth
      (both seeds expose `/metrics`; `alerting_rules.yml` ready to arm)
    - Tune: `k`, finality depth, payload pruning depth, difficulty window
+     — `[TARGET]` the **difficulty window** is obsolete (removed with PoW);
+     PoA tuning knobs are the authority set, `KOVANICA_SLOT_DURATION`, and the
+     authority-set threshold.
 
 5. ~~**Wallet & explorer polish** — end-user UX:~~ ✅
    - Hardware wallet (Ledger via WebHID, Trezor via WebUSB) in the node explorer

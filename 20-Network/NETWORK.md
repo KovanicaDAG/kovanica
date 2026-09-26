@@ -8,6 +8,18 @@ synced: 2026-09-26
 
 > Last updated: 2026-09-20  
 > Status: Pre-Mainnet (RFC-006 activated on testnet — tokenomics live; operator/founder wallet genesis reset pending)
+> Consensus impact: none — this file documents domains/networks, not consensus rules.
+
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Canonical policy: [[10-Protocol/protocol--docs--RFC-POA-Migration|`protocol/docs/RFC-POA-Migration.md` §0]].
+> **Domain/port/network facts in this file are unaffected** — the PoA
+> transition changes *who produces blocks*, not which host serves what. GHOSTDAG
+> stays **k=3**; TCP **9000** remains the only P2P port. What the transition does
+> change: the "Consensus" row below gains a PoA row, and the mandatory reset
+> (RFC-POA-Migration §0.6) will change the genesis hash and invalidate the
+> `[CURRENT]` value recorded here.
 
 This document is the single source of truth for how the Kovanica public domains and networks are organised.
 
@@ -44,6 +56,7 @@ This document is the single source of truth for how the Kovanica public domains 
 | API base              | `https://api.kovanica.online`| `https://api.kovanica.online`|
 | Faucet                | Yes                          | No                           |
 | Consensus             | GHOSTDAG k=3                 | GHOSTDAG k=3                 |
+| Block producer        | PoW / hybrid (hybrid default 0) → `[TARGET]` PoA authority set | `[TARGET]` PoA authority set |
 | Token                 | KVNC (test)                  | KVNC                         |
 | Current phase         | Live (RFC-006 activated)     | Not yet open                 |
 | Tokenomics            | RFC-006 (smooth emission, MAX_SUPPLY cap, coinbase maturity 100, 75% fee burn) | RFC-006 (same) |
@@ -52,6 +65,16 @@ This document is the single source of truth for how the Kovanica public domains 
 | Founder premine       | 0.2M KVNC                    | 0.2M KVNC                    |
 | Treasury              | 10×1M KVNC vaults (placeholder keys) | 10×1M KVNC vaults (ceremony keys) |
 | Bootstrap endpoint    | `GET /api/bootstrap` → {network, genesis, tip, subsidy, native_minted, total, circulating, burned, max_supply, light_config} | Same |
+
+> **Tokenomics in this table are unchanged by the PoA-only decision** and stay
+> canonical: MAX_SUPPLY **90.2M KVNC**, genesis subsidy **10 KVNC/block**,
+> founder premine **0.2M KVNC**, treasury **10 × 1M KVNC** vaults, era
+> **2 000 000** blocks, decay **α 3/4**, coinbase maturity **100**, fee split
+> **75% burned / 25% producer**. Do not edit these rows for PoA work.
+>
+> `[OPEN]` — who may sit in the **mainnet** authority set, and how that set is
+> governed, is undecided (RFC-POA-Migration §0.7.2). The mainnet "Block
+> producer" cell is a placeholder, not a commitment.
 
 ### Detection logic (client-side)
 

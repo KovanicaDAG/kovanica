@@ -1,181 +1,120 @@
 ---
-title: "Kovanica Security Notes"
+title: "Kovanica Security Notes (PoA Threat Model)"
 category: 10-Protocol
 source: protocol/docs/SECURITY.md
 synced: 2026-09-26
 ---
-# Kovanica Security Notes
+# Kovanica Security Notes (PoA Threat Model)
 
-> **Status:** Testnet software — no investment advice. Funds can be lost.
-
----
-
-## 1. Threat Model
-
-### What GHOSTDAG (k=3) + PoW Protects
-
-| Property | Guarantee | Assumptions |
-|----------|-----------|-------------|
-| **Safety (no double-spend)** | Two honest nodes never finalize conflicting transactions | > 50% of *blue work* controlled by honest miners; network delay ≤ `k` blocks |
-| **Liveness** | New transactions eventually confirm | Honest miners keep mining; network eventually delivers messages |
-| **Chain selection** | Heaviest blue work wins | Blue work = sum of PoW of blue blocks; deterministic ordering |
-
-### What It Does **Not** Protect Against
-
-| Risk | Mitigation |
-|------|------------|
-| **Selfish mining / block withholding** | Not mitigated; k=3 tolerates some but not all |
-| **Eclipse attacks on P2P** | DHT + DNS seeds + peer scoring help; not provable |
-| **Majority hash-power attack** | None — PoW chain selection follows most work |
-| **Private-key compromise** | None — Ed25519 spend auth is single-key |
-| **Quantum computer** | Ed25519 is vulnerable; no post-quantum path yet |
+**Version:** 1.0 (PoA-only consensus, RFC-POA §0.5)
+**Audience:** Operators, auditors, developers, external integrators
 
 ---
 
-## 2. Consensus Guarantees
+## 1. What PoA + GHOSTDAG k=3 Protect
 
-### GHOSTDAG Parameters (Testnet)
-- `k = 3` — maximum blue anticone size
-- `finality_depth = 100` blocks — UTXO state pruned, reorgs beyond this rejected
-- `payload_pruning_depth = 1000` — block payloads evicted, headers retained
-- `MULTISIG_ACTIVATION_SCORE = 0` (active from genesis)
-- `NATIVE_TOKEN_ACTIVATION_SCORE = 0`
-- `STEALTH_ACTIVATION_SCORE = 0`
-- `SCRIPT_V2_ACTIVATION_SCORE = 0`
-- `HTLC_ACTIVATION_SCORE = 0`
-- `VAULT_ACTIVATION_SCORE = 0`
-- `TOKENOMICS_ACTIVATION_SCORE = 0` (RFC-006)
-- `CHECKPOINT_VERSION = 7`
+| Property | Mechanism | Notes |
+|----------|-----------|-------|
+| **Chain ordering** | GHOSTDAG k=3 | Honest majority of blocks by blue score; forks ≤ k blocks reorg naturally |
+| **Block validity** | Authority signatures | Every block signed by scheduled authority; invalid sig = immediate rejection |
+| **Emission schedule** | Height-indexed (RFC-006) | s₀=10 KVNC, era=2M blocks, α=¾; MAX_SUPPLY 90.2M KVNC hard cap |
+| **Coinbase maturity** | 100 blocks | Enforced in UTXO selection; immature coinbases unspendable |
+| **Fee burn** | 75% burned, 25% to producer | Hardcoded in `apply_block`; cannot be changed without hard fork |
 
-### Finality Semantics
-- A block is **final** when its blue score is > `finality_depth` below the selected tip
-- Final blocks cannot be built on; their UTXO state is merged and pruned
-- Reorg depth observed on testnet: 0 (linear chain)
-- Expected reorg depth under attack: ≤ `k` = 3 blocks for non-final; unbounded for final (safety violation)
+---
+
+## 2. What PoA Does **NOT** Protect Against
+
+| Threat | Why | Mitigation |
+|--------|-----|------------|
+| **Majority authority collusion** (≥ t of n) | Authority set is permissioned; t signers can produce any block, rotate the set, censor | Social: small n (3–16), known operators, on-chain rotation transparency |
+| **Single authority key compromise** | One key = one slot; compromised key signs valid blocks for its slots | Operational: HSM, offline backup, key rotation via `AuthorityUpdateTx` |
+| **Offline authority (liveness)** | No gap-fill: missing slot = no block, no coinbase, no fee collection | Operational: monitoring, alerting, ≥ 3 authorities with geographic diversity |
+| **Sybil on P2P layer** | Authority set admission is on-chain; P2P is unauthenticated gossip | Eclipse resistance: ≥ 3 seed nodes, grey-cloud DNS seeds, outbound peer diversity |
+| **Permissionless admission** | **Removed** (PoW/hybrid deleted). No open entry to become authority. | Governance: `AuthorityUpdateTx` with ≥ t sigs is the only path |
 
 ---
 
 ## 3. Key Handling
 
-| Key Type | Derivation | Storage | Rotation |
-|----------|------------|---------|----------|
-| **Spend key (Ed25519)** | BIP39 mnemonic (24 words) → 32-byte seed | `kvnc…dag` address = `0x00 \| pk` | Not supported; new wallet required |
-| **Stealth scan/spend** | Two independent Ed25519 keys (65-byte `StealthAddress`) | Published off-chain; spend key never on-chain | Not supported |
-| **VRF key (staking)** | 32-byte seed (from mnemonic or ceremony) | Node memory + optional `*.wallet` file | Unbond → rebond with new key |
-| **Operator wallet** | BIP39 mnemonic (auto-generated on first boot) | `$KOVANICA_DATA/operator-wallet.key` (0600) | Not yet supported |
+### 3.1 Authority Signing Keys (Consensus-Critical)
+- **One key per authority** — held by that operator only
+- **Never shared, never on disk unencrypted** — use HSM, systemd Credentials, or operator prompt at boot
+- **Distinct from treasury vault keys** — RFC-005 vault keys (`TREASURY_SEED`) guard funds; authority keys guard consensus
+- **Rotation** — via on-chain `AuthorityUpdateTx` requiring ≥ t sigs from current set
 
-### Best Practices
-- **Never** commit wallet files to git
-- **Always** use `KOVANICA_DATA` outside the repo tree
-- **Hardware wallets** (Ledger/Trezor) planned — not yet implemented
-- **Multisig** (RFC-001) available for M-of-N custody
+### 3.2 Wallet/Client Keys (User Funds)
+- **Stay client-side** — mobile wallet (FFI), browser wallet, CLI all derive from user seed
+- **Never enter the node** — node only sees signed transactions
+- **BIP39 mnemonic optional** — CLI supports 24-word recovery
 
----
-
-## 4. Network & P2P
-
-### Seed Nodes (Testnet)
-| Hostname | IP | Notes |
-|----------|----|-------|
-| `seed.kovanica.online` | 145.223.116.178 (Hostinger VPS) | Primary, mines 1 block/60s |
-| `seed2.kovanica.online` | 76.13.250.65 (Hostinger KVM2 VPS) | Secondary |
-| `seed3.kovanica.online` | (retired) | — |
-
-- **P2P port:** 9000 (TCP, **grey-cloud** only — Cloudflare proxy breaks raw TCP)
-- **DNS seeds:** `seed.kovanica.online`, `seed2.kovanica.online` (`seed3` retired 2026-09-17)
-- **DHT:** Kademlia XOR metric, k-buckets, relay tags 0x20–0x23
-
-### Peer Scoring (Hardening)
-- Valid block: +1 score
-- Duplicate block: -5 score
-- Invalid block: -20 score
-- Auto-ban at score ≤ -50
-- Rate limits: max bytes/msg per peer per window
+### 3.3 Seed Keys (Operator Infrastructure)
+- `KOVANICA_TREASURY_SEED` — 64 hex, required on mainnet, derives treasury vault keys
+- `KOVANICA_AUTHORITY_KEY` — 64 hex, this operator's consensus signing key
+- `KOVANICA_AUTHORITIES` — comma-separated public keys (not secrets)
 
 ---
 
-## 5. Tokenomics (RFC-006)
+## 4. Threat Model: Attacker Capabilities
 
-| Parameter | Value |
-|-----------|-------|
-| Genesis subsidy | 10 KVNC/block (1,000,000,000 atoms) |
-| Halving era | 2,000,000 blocks |
-| Emission decay | Smooth α = ¾ (geometric) |
-| MAX_SUPPLY | 90.2M KVNC |
-| Coinbase maturity | 100 blocks |
-| Fee split | 75% burned / 25% producer |
-| Treasury | 10 × 1M KVNC vaults (placeholder keys) |
-
-### Emission Formula
-```
-subsidy(h) = initial_subsidy * (3/4)^floor(h / era_length)
-```
-Total supply converges to ≈ 90.2M KVNC.
+| Attacker Type | Can Do | Cannot Do (without key) |
+|---------------|--------|-------------------------|
+| **Network observer** | See all blocks, txs, addresses | Forge authority signatures, reorg past finality |
+| **P2P peer** | Eclipse a node, withhold blocks | Produce valid blocks, change authority set |
+| **Single authority** | Sign blocks for own slots, propose `AuthorityUpdateTx` | Sign for other slots, rotate set alone (needs ≥ t) |
+| **≥ t authorities** | Full control: any block, any set rotation, censorship | Break RFC-006 tokenomics (cap, emission, burn) |
+| **User with funds** | Send, receive, create HTLC/vault/multisig | Spend others' coins, forge signatures |
 
 ---
 
-## 6. Known Limitations & Deferred Work
+## 5. Operational Security
 
-| Area | Limitation | Tracking |
-|------|------------|----------|
-| **Stealth `r_secret`** | Node derives deterministically; production must use random `r` | RFC-003 |
-| **CSV relative locktime** | Per-UTXO creation-height tracking added (RFC-005); script v2 CSV opcode still decorative | RFC-005 |
-| **Mint/burn authority** | Native tokens: coinbase-only mint; no tag-based policy yet | KVP-102 |
-| **SPV light client** | KVLS v1 blob sync + filters + Merkle proofs shipped; browser SPV not yet | Slice 5 |
-| **Hardware wallet** | Ledger (WebHID) + Trezor (WebUSB) planned; not implemented | PRODUCT-POLISH |
-| **Audit** | Target Q1 2027; scope = dag + state + RPC | AUDIT-PLAN |
-| **Bug bounty** | Draft ready; not yet live | BUG-BOUNTY |
+### 5.1 Node Hardening
+- `MemoryMax=6G` (or higher) cgroup limit — replay memory bug exists
+- `RestartSec=30` — prevent OOM restart storms
+- `LimitNOFILE=65536` — handle peer connections
+- Run as non-root user, minimal capabilities
 
----
+### 5.2 Seed Node Policy
+- **3–4 geographically distributed seeds** (grey-cloud DNS, not orange-cloud)
+- **Each seed runs exactly one authority** — never multiple on one host
+- **Outbound peer diversity** — connect to ≥ 2 seeds + random peers
 
-## 7. Incident Response
-
-### Chain Stall
-- **Symptom:** Block height stops advancing
-- **Check:** `KOVANICA_MINE=1` on at least one seed; seed3 OOM (resize to ≥2GB)
-- **Fix:** Ensure at least one seed mining; restart stalled nodes
-
-### Fork / Reorg
-- **Symptom:** Multiple tips, peer count drops
-- **Check:** `/api/head` on all seeds; Prometheus `kovanica_peer_count`
-- **Fix:** Wait for GHOSTDAG resolution; manual intervention only if safety violation suspected
-
-### Data Corruption
-- **Backup:** `/root/kovanica-backups/` (encrypted, 48h/30d/90d retention)
-- **Restore:** `scripts/restore-node.sh --data-dir /root/kovanica-data`
-- **Drill:** Quarterly restore to `/tmp/kov-restore-drill/` and verify genesis
+### 5.3 Monitoring & Alerting
+- Block production: alert if no block for > 2× slot duration (6s)
+- Authority set: alert on `AuthorityUpdateTx` (check signatures)
+- Peer count: alert if < 2 peers
+- Memory: alert if > 80% of `MemoryMax`
 
 ---
 
-## 8. Security Contacts
+## 6. Incident Response
 
-- **Vulnerability disclosure:** GitHub Security Advisories (preferred) or `security@kovanica.online`
-- **Public security discussions:** GitHub Issues using the [Security template](https://github.com/KovanicaDAG/kovanica/issues/new?template=security.yml)
-- **Bug bounty (planned):** `BUG-BOUNTY.md` — severity tiers, safe harbor
-- **Maintainer:** Toni (see `ENTITY-LEGAL.md`)
-
----
-
-## 9. Audit Scope (Planned)
-
-| Component | LoC (approx) | Criticality | Notes |
-|-----------|--------------|-------------|-------|
-| `kovanica-dag` | ~4,500 | Critical | GHOSTDAG, reachability, PoW, VRF |
-| `kovanica-state` | ~8,500 | Critical | UTXO ledger, stake registry, hybrid admission |
-| `kovanica-node` RPC | ~2,000 | High | Line RPC, explorer HTTP API |
-
-**Out of scope:** FFI/mobile, CLI, web frontend, infra.
+| Incident | Detection | Response |
+|----------|-----------|----------|
+| **Authority key compromise** | Unusual blocks from that authority | 1. Other authorities propose `AuthorityUpdateTx` replacing compromised key<br>2. ≥ t sigs required<br>3. Compromised operator generates new key offline |
+| **Authority offline** | Missing slots, alerts | 1. Contact operator<br>2. If prolonged, propose `AuthorityUpdateTx` replacing |
+| **P2P eclipse** | Peer count drops, sync stalls | 1. Restart node (new peer selection)<br>2. Verify seed DNS resolves correctly |
+| **Replay OOM** | `MemoryMax` hit, restart loop | 1. Increase `MemoryMax` temporarily<br>2. Track as Phase-1 footprint fix |
 
 ---
 
-## 10. Version & Update Policy
+## 7. Audit Scope
 
-- **Testnet resets** only on wire-format bumps or safety incidents
-- **Epoch tags:** `kovanica-testnet-eN` (current: reset at RFC-006 activation)
-- **Binary releases:** Rolling `v0.1.0` with SHA256SUMS on GitHub Releases
-- **Dependency updates:** `cargo audit` in CI; `metrics` minor version must match exporter
+**In scope for consensus audit:**
+- `kovanica-dag` — GHOSTDAG k=3, PoA admission, authority set logic
+- `kovanica-state` — UTXO ledger, RFC-001..005, `apply_authority_update`
+- `kovanica-node` — RPC surface, `genesis_poa`, `authority_update`, block production
+
+**Out of scope:**
+- Web explorer, wallet UI, mobile apps
+- P2P gossip (standard TCP 9000, no encryption)
+- Key generation ceremony (operational, not code)
 
 ---
 
-*Last updated: 2026-09-17*
-*See also: `LEGIT-BOARD.md`, `TOKENOMICS.md`, `OPS-HARDENING.md`, `AUDIT-PLAN.md`*
+## 8. Reporting
+
+**Security contact:** `security@kovanica.online` or GitHub Security Advisories
+
+**Disclosure policy:** 90-day coordinated disclosure for consensus-critical issues; no bounty program yet (see `BUG-BOUNTY.md` when published).

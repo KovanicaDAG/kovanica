@@ -6,7 +6,17 @@ synced: 2026-09-26
 ---
 # Discord Server Setup — Kovanica Protocol
 
-**Reference**: `COMMUNITY-DISCORD.md` for full structure
+**Reference**: `COMMUNITY-DISCORD.md` for full structure  
+**Consensus impact**: none (server configuration; no protocol parameters)
+
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Policy lives in
+> [[10-Protocol/protocol--docs--RFC-POA-Migration|`RFC-POA-Migration.md` §0]]. Only the
+> `#consensus-research` topic list below moves (difficulty → authority set /
+> slots); everything else in this setup doc is unaffected. RFC-006
+> tokenomics and GHOSTDAG **k=3** are unchanged.
 
 ---
 
@@ -40,7 +50,7 @@ synced: 2026-09-26
 
 🛠️ DEVELOPMENT
 ├── #general-dev                (general protocol dev chat)
-├── #consensus-research         (GHOSTDAG, VRF, difficulty, forks)
+├── #consensus-research         (GHOSTDAG, authority set, slots, forks)
 ├── #ledger-state               (UTXO, stake registry, checkpoints)
 ├── #networking-p2p             (Mesh, DHT, relay, sync)
 ├── #ffi-mobile                 (UniFFI, Android, iOS)

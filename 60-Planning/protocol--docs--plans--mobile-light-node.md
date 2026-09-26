@@ -6,6 +6,53 @@ synced: 2026-09-26
 ---
 # Mobile Light-Node Slices 4–8 — Implementation Plan
 
+**Status**: Draft / Stage-3 (slices 4–5 landed)  
+**Consensus impact**: none directly — this plan is test/tooling work. Its
+*inputs* (PoW work pinning, hybrid staked blocks, retarget) are `[TARGET]`-for-removal.
+
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Policy lives in
+> [[10-Protocol/protocol--docs--RFC-POA-Migration|`../RFC-POA-Migration.md` §0]].
+>
+> **This plan is partially obsoleted — read before executing.** The landable
+> *product* work (custody keys, the stake bond/unbond lifecycle, SPV
+> verification, filter-based watch) survives the PoA removal and should still be
+> done. What is superseded is the **proof strategy**:
+> - §4a/§4b/§4c lean on *PoW work pinning* ("nominal work is legacy 1 ⇒
+>   `mine_nonce` succeeds on first hash", "a PoW-fallback block whose work did
+>   not pin the retarget target would fail the peer's admission"). With no work
+>   target there is nothing to pin, so these "instant mining" shortcuts and
+>   `WorkTargetMismatch` proofs are `[TARGET]`-for-removal and their tests must
+>   be re-derived against authority-slot admission.
+> - `receive_light_sync(..., require_pow=false)` is correct as written and
+>   becomes *unconditionally* correct; the `retarget: None` argument it explains
+>   disappears.
+> - The `enable_hybrid(...)` / `set_miner_seed(...)` / `BlockKind::Pow` FFI
+>   surface used in these slices is `[TARGET]`-for-removal — and so is the
+>   **entire staking lifecycle** it builds. Hybrid was dropped entirely
+>   (decided 2026-09-25, RFC-POA-Migration §0.7.1), so `set_validator_seed`,
+>   `bond_stake`, `unbond`, `pending_unbond_height` and `BlockKind::Staked`
+>   are removed with it.
+>
+> **What this means for the roadmap — now decided, not open:**
+> 1. **Slices 4–5's stake work is dead code.** The bond → mature → unbond
+>    lifecycle, `StakeState` accounting, `InsufficientStake` mapping and the
+>    `ValidatorReady` identity were all built to feed staked-VRF admission.
+>    With hybrid removed and the stake registry retired (§0.7.1), a **non-authority
+>    can never produce a block**, so there is nothing on the phone to bond for.
+>    Do not extend it; plan to remove it.
+> 2. The **custody-key** half of slice 4 (`send_with`, real secrets, no
+>    demo seeds) is *not* affected and remains worth landing.
+> 3. `KOVANICA_SLOT_DURATION` replaces the "1 block/min" pacing that several
+>    timing assertions below assume; which tests are slot-time sensitive needs
+>    re-stating when slots land.
+>
+> Unchanged: RFC-006 tokenomics (**MAX_SUPPLY 90.2M KVNC**, s₀ **10
+> KVNC/block**, era **2 000 000**, **α 3/4**, maturity **100**, fee **75%
+> burned / 25% producer**) and GHOSTDAG **k=3**.
+
 Continues Stage-3 slices 1–3 (hybrid consensus → enforcement → FFI). Baseline:
 slice 3 landed (kovanica-ffi, Kotlin/Swift bindings committed, 37 suites green,
 clippy 0). Rules that carry into every slice below:
@@ -41,7 +88,9 @@ real secrets and completes the stake lifecycle (bond → mature → unbond).
   takes any client-generated 32 bytes (`vrf_keypair_from_seed`). No new
   validator API needed — document it.
 - Hybrid un-retargeted PoW work target is legacy 1 ⇒ producing 100+ blocks in
-  tests is instant (`mine_nonce` succeeds on first hash).
+  tests is instant (`mine_nonce` succeeds on first hash). `[TARGET]`-for-removal
+  — this "instant blocks" shortcut disappears with the work target; after
+  removal, test block production must go through authority slots instead.
 
 ### 4a. Imported spending keys
 
@@ -99,7 +148,13 @@ pub fn unbond_with(&mut self, kp: &KeyPair, vrf_pk: &[u8;32],
 - `pending_unbond_height() -> Option<u64>` and `chain_height() -> u64`.
 - Error mapping: `InsufficientStake` passthrough as typed variant.
 
-### 4c. Retarget-enabled hybrid e2e (fold into ffi.rs)
+### 4c. Retarget-enabled hybrid e2e (fold into ffi.rs) — `[TARGET]`-for-removal
+
+`[TARGET]`-for-removal: the PoW-fallback work-pinning assertion below has no
+meaning once the work target is gone. Keep the *two-node blob sync* part as a
+light-sync regression test; drop the work-pinning part. See RFC-POA-Migration
+§0.1. This test is **deleted** along with the rest of the hybrid surface
+(§0.7.1) — there is no staked or PoW path left to exercise.
 
 `enable_hybrid(1, 1, NOMINAL_WORK, true)` on two nodes: A produces PoW-fallback
 block + bonded staked block; B receives A's blob — success proves A's PoW work
@@ -147,20 +202,23 @@ reject otherwise). Staked block still pins nominal work.
   UnbondOwnerMismatch{outpoint}}`.
 - Retarget e2e proved by peer-rejection symmetry: a PoW-fallback block whose
   work did not pin the retarget target would fail the peer's admission
-  (`WorkTargetMismatch`), so successful blob sync IS the pin proof.
+  (`WorkTargetMismatch`), so successful blob sync IS the pin proof. `[TARGET]`-for-removal
+  — post-removal there is no work to pin, so blob sync proves *nothing* about
+  consensus admission and this bullet must not be presented as coverage.
 - Test-window surprise worth remembering: a release's own unbond block
   advances the chain height by 1, so maturity windows must be measured from
   the post-release tip — two bonds only ~2 heights apart can BOTH mature by
   the time the second release applies (`height >= matures_at` passes on
   equality). The FIFO test now separates bonds by ≥5 heights.
 
-### 4c. Retarget-enabled hybrid e2e (small, fold into 4b's test run)
+### 4c. Retarget-enabled hybrid e2e (small, fold into 4b's test run) — `[TARGET]`-for-removal
 
 - ffi.rs test with `enable_hybrid(1, 2, nominal, retarget=true)`: PoW-fallback
   block work must equal `work_target_with(parents, default_retarget)` (compute
   expected via a second fresh node's dag query or pin to a computed constant);
   staked block still pins nominal; two-node blob sync converges under
-  retargeting.
+  retargeting. `[TARGET]`-for-removal — keep only the blob-sync convergence
+  assertion; the `work_target_with` expectations are deleted with the target.
 
 ---
 
@@ -209,7 +267,10 @@ rejected (mirror adversarial_spv.rs cases through FFI types).
   work; linkage/timestamp/monotone blue work still enforced), then stores
   header+filter pairs for local queries: `synced_height`,
   `synced_filter_matches(block_id, address)` (phone-side watch without blob
-  round-trips).
+  round-trips). `[TARGET]` note: `require_pow` and the `retarget: None`
+  argument are `[TARGET]`-for-removal; after the PoA removal the SPV verifier
+  simply never has a work check to parameterize. Linkage, timestamp and
+  monotone blue work enforcement is unaffected.
 - `verify_tx_proof` requires BOTH internal verification AND root equality
   with the synced header; unknown block errors rather than returning false.
 - Surprise worth remembering: single-payload-tx blocks prove as bare leaves

@@ -8,6 +8,76 @@ synced: 2026-09-26
 
 **Status:** ACTIVE (kovanica-testnet) · Owner: genesis-testnet role
 **Applies to:** `kovanica-testnet` only. Mainnet has no reset path.
+**Consensus impact:** **consensus-breaking** (a reset changes the genesis block
+id and forks the chain). A reset is not a parameter tweak, and the PoA reset in
+particular is a hard fork — see RFC-POA-Migration §0.6.
+
+> > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> > Proof-of-Work is being removed from the protocol. See
+> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical). Items marked `[TARGET]`
+> > are ratified but not yet implemented; `[CURRENT]` items describe shipped code.
+
+## 0. The PoA-only transition makes a reset MANDATORY
+
+`[TARGET]` **This is no longer a "last resort" judgement call. The PoA-only
+transition requires a testnet reset, and it qualifies under trigger §1.1
+(consensus format bump) on its own.** Do not treat it as optional and do not
+debate it per-reset.
+
+`KOVANICA_CONSENSUS` already **defaults to `poa` when unset**
+(`consensus_mode_from_env()` in `kovanica-node/src/explorer.rs`). So a node that
+has not been explicitly pinned to `pow` will, after this transition, refuse to
+extend a PoW chain. Two independent, verified reasons — details in
+RFC-POA-Migration §0.6:
+
+1. **The nominal-work pin is a chain-format constraint, not a runtime toggle.**
+   Under PoA every block must carry `work == POA_NOMINAL_WORK = 1`, enforced at
+   admission (`Dag::check_poa` → `DagError::PoaWorkMismatch`). A pre-transition
+   PoW block carries real work orders of magnitude above 1, so it out-competes
+   every PoA block in the GHOSTDAG blue-work fold: the selected parent would
+   never advance past the transition point and the chain would appear frozen.
+   Replay (`Dag::insert_for_replay`) and snapshot restore deliberately skip the
+   check, so restoring a **pre-pin** PoA snapshot for post-mortem analysis is
+   still safe — but live re-validating a mixed history is not.
+2. **Genesis is a different block.** A PoA genesis commits the authority set as a
+   `KVA1`-tagged coinbase output, so its block id differs from the pre-reset PoW
+   genesis. There is no genesis that satisfies both.
+
+**Affects §1 below:** trigger §1.1 gains a standing, already-met case. The
+"non-triggers" list in §1 still holds for everything else.
+
+**Affects §2 below:** wallet keys still survive; RFC-006 tokenomics constants
+still survive **unchanged** — removing PoW does not touch supply math. The PoA
+authority set does **not** survive in the sense of the old chain: it is
+re-established at the new genesis.
+
+### 0.1 Planning is authorised; execution is NOT
+
+**Authorised 2026-09-25:** *planning* the PoA reset — this runbook, the
+pre-execution gate list below, and the key-ceremony procedure for testnet
+authority keys.
+
+**Not authorised:** *executing* it. No testnet data directory may be wiped and
+no PoA genesis committed until all four gates are closed. This split is
+deliberate — planning artefacts are needed before anyone is in a position to
+execute, and producing them cannot half-happen and damage a live chain.
+
+### 0.2 Pre-execution gates — all four must be closed
+
+| # | Gate | Status | Why it blocks |
+|---|------|--------|--------------|
+| **1** | **Real, random testnet authority keys** — *not* `AUTHORITY_PLACEHOLDER_BASE = 9001` | ☐ open | The placeholder set is publicly derivable, so a soak on it exercises an **unauthenticated** PoA: anyone can forge any authority. A green soak on placeholders is **not** evidence for a green soak on real keys — it cannot detect key compromise, key reuse, or a bad ceremony. |
+| **2** | **24h multi-validator soak** (M6 exit criterion) | ☐ open | Short runs do not exercise authority failover, slot-clock drift, or a rotating set over a realistic day. |
+| **3** | **CPU/RAM-vs-PoW measurement** | ☐ open | `resource_profiling_poa_vs_pow` (`kovanica-node/tests/poa_m6_testing.rs` ~444) is still `#[ignore]`d. The efficiency claim behind the migration is asserted, not measured. |
+| **4** | **Mainnet key ceremony** (per §0.7.2 residuals) | ☐ open | Required before any **mainnet** authority set is frozen. Independent of the testnet reset, but the same ceremony procedure is being written for gate 1 and should not be written twice. |
+
+**Already closed:** the nominal-work pin. `POA_NOMINAL_WORK = 1` and
+`DagError::PoaWorkMismatch` landed in `a8b0e82` (`consensus/poa-nominal-work`),
+so the work-inflation exploit is fixed at the admission boundary. Note this
+does **not** weaken the mandatory-reset argument above — the pin is precisely
+*why* the reset is needed.
+
+---
 
 ## 1. When we reset
 
@@ -15,8 +85,8 @@ A testnet reset (genesis wipe) is a **last resort**, triggered only by:
 
 1. **Consensus format bumps** — wire-format changes that make old blobs
    undecodable by new readers (e.g. RFC-002 native-token asset flag, RFC-006
-   activation fork). These are *mandatory* resets: old and new nodes cannot
-   agree on a chain.
+   activation fork, the PoA-only transition). These are *mandatory* resets: old
+   and new nodes cannot agree on a chain.
 2. **Irrecoverable state corruption** on both seeds (disk loss, bad
    checkpoint) with no usable backup.
 3. **Explicit operator decision** documented in this file before execution —
@@ -24,6 +94,12 @@ A testnet reset (genesis wipe) is a **last resort**, triggered only by:
 
 Non-triggers: difficulty retarget windows, slow sync, mempool churn, explorer
 outages, or a single seed going down (the other seed + backups cover these).
+**`[TARGET]`** the *difficulty retarget window* is `[TARGET]`-obsolete — difficulty
+is removed with PoW and has no gap to retarget into. PoA stalls look different:
+an offline authority yields an **empty slot**, and the chain continues on the
+fixed `SLOT_DURATION_MS` clock rather than slowing down. A run of empty slots is
+an **authority liveness** problem, not a difficulty problem, and it is **not** a
+reset trigger.
 
 ## 2. What survives a reset
 
@@ -31,8 +107,9 @@ outages, or a single seed going down (the other seed + backups cover these).
 | --- | --- | --- |
 | Wallet keys / mnemonics | ✅ | Client-side; addresses are derived from keys, not chain state |
 | Address format (`kvnc…dag`) | ✅ | Versioned encoding, unchanged by resets |
-| RFC-006 tokenomics constants | ✅ | 90.2M cap, s₀=10 KVNC, era 2M, α=¾, maturity 100, fee 75/25 — frozen |
-| Pre-reset balances | ❌ | Wiped at activation forks (RFC-006 wiped all pre-fork balances) |
+| RFC-006 tokenomics constants | ✅ | 90.2M cap, s₀=10 KVNC, era 2M, α=¾, maturity 100, fee 75/25 — frozen. **Unaffected by the PoA-only decision:** the curve is height-indexed and `cumulative_minted` is capped in `apply_block` |
+| PoA authority set | ⚠️ `[TARGET]` | Re-established at the new genesis. Testnet falls back to the deterministic placeholder set from `AUTHORITY_PLACEHOLDER_BASE = 9001` (publicly derivable, testnet-only); mainnet refuses to boot without an explicit `KOVANICA_AUTHORITIES` |
+| Pre-reset balances | ❌ | Wiped at activation forks (RFC-006 wiped all pre-fork balances; the PoA transition will too) |
 | Treasury vaults | ⚠️ | Re-created from the RFC-006 genesis (10 × 1M vaults) |
 | Node data dirs (`KOVANICA_DATA`) | ❌ | Must be deleted before first sync on the new genesis |
 

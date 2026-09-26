@@ -15,6 +15,24 @@ Verified against SDK `0.1.0-alpha.1` (2026-09-23): `cargo test --workspace`
 → 67 passed; live suite 5/5 vs `api.kovanica.online`. All multi-asset recipes
 below are merged and code-verified on this tree.
 
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. Policy lives in
+> [[10-Protocol/protocol--docs--RFC-POA-Migration|`../protocol/docs/RFC-POA-Migration.md` §0]].
+>
+> **SDK impact: none of the recipes below change.** Prepare → offline Ed25519
+> sign → submit, the dual-balance/native-null model, and the KVP-101…105 script
+> helpers are all consensus-agnostic client code. The only SDK-visible change is
+> the node env block in §7 (`KOVANICA_POW` / `KOVANICA_MINE` are
+> `[TARGET]`-for-removal; a plain participant node sets neither). Do not add
+> work/difficulty fields to any recipe: a post-transition block has no work
+> target, and `blue_work` stops being the thing to assert on. RFC-006
+> tokenomics (**MAX_SUPPLY 90.2M KVNC**, s₀ **10 KVNC/block**, era
+> **2 000 000**, **α 3/4**, maturity **100**, fee **75% burned / 25%
+> producer**) and GHOSTDAG **k=3** are unchanged, so all fee/subsidy math in
+> this cookbook stays valid.
+
 ---
 
 ## 1. Quick start
@@ -208,11 +226,18 @@ vault 0x05) — no manual hashing needed.
 
 ```bash
 # participant node (no mining, no faucet, no operator role)
+# [CURRENT] pre-transition. KOVANICA_POW / KOVANICA_MINE are [TARGET]-for-removal.
 export KOVANICA_POW=1 KOVANICA_MINE=0 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0
 export KOVANICA_OPERATOR=0 KOVANICA_LISTEN=0.0.0.0:9000
 export KOVANICA_PEERS=seed.kovanica.online:9000
 export KOVANICA_DATA="$PWD/data"
 ./target/release/kovanica-node explorer 127.0.0.1:8080
+
+# [TARGET] post-transition equivalent — plain participant, no consensus role
+export KOVANICA_CONSENSUS=poa KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0
+export KOVANICA_OPERATOR=0 KOVANICA_LISTEN=0.0.0.0:9000
+export KOVANICA_PEERS=seed.kovanica.online:9000
+export KOVANICA_DATA="$PWD/data"
 ```
 
 Point the SDK at it: `Client::new("http://127.0.0.1:8080")`. Live tests:
