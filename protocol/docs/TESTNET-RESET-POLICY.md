@@ -52,18 +52,37 @@ pre-execution gate list below, and the key-ceremony procedure for testnet
 authority keys.
 
 **Not authorised:** *executing* it. No testnet data directory may be wiped and
-no PoA genesis committed until all four gates are closed. This split is
+no PoA genesis committed until gates 1-3 below are closed (gate 4 gates *mainnet*, not this reset). This split is
 deliberate — planning artefacts are needed before anyone is in a position to
 execute, and producing them cannot half-happen and damage a live chain.
 
-### 0.2 Pre-execution gates — all four must be closed
+### 0.2 Pre-execution gates — 1-3 must be closed before a testnet reset
 
 | # | Gate | Status | Why it blocks |
 |---|------|--------|--------------|
 | **1** | **Real, random testnet authority keys** — *not* `AUTHORITY_PLACEHOLDER_BASE = 9001` | ☐ open | The placeholder set is publicly derivable, so a soak on it exercises an **unauthenticated** PoA: anyone can forge any authority. A green soak on placeholders is **not** evidence for a green soak on real keys — it cannot detect key compromise, key reuse, or a bad ceremony. Procedure: [`AUTHORITY-KEY-CEREMONY.md`](AUTHORITY-KEY-CEREMONY.md) (written, not yet performed). |
 | **2** | **24h multi-validator soak** (M6 exit criterion) | ☐ open | Short runs do not exercise authority failover, slot-clock drift, or a rotating set over a realistic day. |
-| **3** | **CPU/RAM-vs-PoW measurement** | ☐ open — **unclosable as worded, needs a maintainer decision** | The PoW comparison arm was deleted with PoW in `1df0114` (test renamed `resource_profiling_poa_production`, `kovanica-node/tests/poa_m6_testing.rs:448`). It was `#[ignore]`d in every revision it ever had, so no PoW baseline was ever recorded and the comparison is unrecoverable. A PoA-only run now measures 112.7 us/block and +7.4 KiB/block RSS. See `RFC-POA-Migration.md` §0.9.1. |
+| **3** | **PoA resource footprint** (CPU/RAM) | ☑ **closed 2026-09-26** | Reworded from "CPU/RAM-vs-PoW" — see the decision note below. Baseline recorded: **112.7 us/block, +7.4 KiB/block RSS** over 100 blocks, from `resource_profiling_poa_production` (`kovanica-node/tests/poa_m6_testing.rs:448`, `#[ignore]`d, run manually). The PoA-vs-PoW ratio is formally unrecoverable. |
 | **4** | **Mainnet key ceremony** (per §0.7.2 residuals) | ☐ open | Required before any **mainnet** authority set is frozen. Independent of the testnet reset, but the same ceremony procedure is being written for gate 1 and should not be written twice. Procedure: [`AUTHORITY-KEY-CEREMONY.md`](AUTHORITY-KEY-CEREMONY.md) §7 (gate-4 addenda). |
+
+**Gate 3 decision, 2026-09-26 (maintainer).** The gate asked for a
+CPU/RAM-vs-PoW measurement that can no longer be produced: `1df0114` renamed the
+test to `resource_profiling_poa_production` and deleted the PoW arm, and the
+test carried `#[ignore]` in *every* revision it ever had, so no PoW baseline was
+ever recorded anywhere in the history. Rather than leave a permanently
+unclosable gate, it is reworded to a **PoA resource-footprint** measurement with
+the figures recorded. What that bar now protects: catching a reintroduced
+search loop, an accidentally quadratic path, or a leaked per-block allocation.
+What it does **not** do is support any claim that PoA is cheaper than PoW — that
+is a design assertion now, not a measured result, and should be cited as
+unmeasured. Full reasoning in `RFC-POA-Migration.md` §0.9.1.
+
+**Gate 4 scope.** §0.1 previously required "all four gates" before a testnet
+reset, while gate 4's own row says it is "independent of the testnet reset" —
+gate 4 gates freezing a *mainnet* authority set. Read literally the old wording
+deadlocked the testnet behind the mainnet ceremony, which itself waits on
+§0.7.2. §0.1 and §0.2 now say gates 1-3. Gate 4 remains open and still blocks
+mainnet.
 
 **Already closed:** the nominal-work pin. `POA_NOMINAL_WORK = 1` and
 `DagError::PoaWorkMismatch` landed in `a8b0e82` (`consensus/poa-nominal-work`),
@@ -135,3 +154,4 @@ reset trigger.
 | Date | Reason | Genesis | Notes |
 | --- | --- | --- | --- |
 | RFC-006 activation | Consensus fork (tokenomics) | `9565fc20…` | All pre-RFC-006 balances wiped; see `TESTNET-RFC006.md` |
+| 2026-09-26 | Gate 3 closed (decision recorded) | — | Gate 3 reworded from "CPU/RAM-vs-PoW" to a PoA resource-footprint measurement and closed with the baseline **112.7 us/block, +7.4 KiB/block RSS**. PoA-vs-PoW ratio formally unrecoverable. Gate 4 re-scoped as a *mainnet* gate. **Authorised by the maintainer; execution of the reset itself is still not authorised below.** |
