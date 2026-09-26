@@ -20,7 +20,7 @@ never reads, writes, or deletes it.
 - [[00-Home/60-Planning|Planning]] — 52 notes
 - [[00-Home/70-Policy|Policy]] — 7 notes
 - [[00-Home/80-Repo-Doctrine|Repo-Doctrine]] — 7 notes
-- [[00-Home/99-Unfiled|Unfiled]] — 1 notes
+- [[00-Home/99-Unfiled|Unfiled]] — 2 notes
 
 ## How sync stays honest
 
