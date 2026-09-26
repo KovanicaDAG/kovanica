@@ -22,7 +22,7 @@ fn boot(
 ) -> String {
     let mut node = kovanica_node::Node::new();
     let (genesis, founder) = node
-        .genesis_with_finality(k, subsidy, premine, founder_seed, treasury, 100, 1000)
+        .genesis_with_finality(k, subsidy, premine, founder_seed, treasury, 100, 1000, 100u64, None)
         .expect("genesis boots");
     eprintln!("  founder: {founder}");
     genesis.to_string()

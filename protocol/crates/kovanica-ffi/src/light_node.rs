@@ -1495,6 +1495,16 @@ fn encode_header(h: &kovanica_state::spv::BlockHeader, out: &mut Vec<u8>) {
     out.extend_from_slice(&h.blue_score.to_be_bytes());
     out.extend_from_slice(&h.chain_blue_work.to_be_bytes());
     out.extend_from_slice(&h.height.to_be_bytes());
+    // v2 PoA extension (289 bytes total)
+    if let Some(sig) = &h.authority_sig {
+        out.push(1);
+        out.extend_from_slice(sig.as_slice());
+    } else {
+        out.push(0);
+        out.extend_from_slice(&[0u8; 64]);
+    }
+    out.extend_from_slice(&h.authority_set_hash);
+    out.extend_from_slice(&h.hash_without_authority_sig);
 }
 
 fn decode_header(buf: &[u8], version: u8) -> Option<(kovanica_state::spv::BlockHeader, &[u8])> {

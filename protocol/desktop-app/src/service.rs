@@ -111,6 +111,8 @@ impl NodeService {
                 Some(TreasuryGenesis::placeholder()),
                 self.profile.finality_depth,
                 self.profile.payload_pruning_depth,
+                100u64,
+                None,
             )
             .map_err(BootError::Node)?;
         let out = (genesis.to_string(), founder.to_string());

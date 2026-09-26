@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables, unused_imports)]
 //! # kovanica-desktop
 //!
 //! Core crate for the **Kovanica Desktop Node App** (Windows / Linux / macOS).

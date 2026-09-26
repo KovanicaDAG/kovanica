@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 
 use blake3::Hasher;
-use kovanica_dag::{AuthoritySet, AuthorityUpdateTx, Block, BlockId, StakeMerkleProof, StakeLeaf};
+use kovanica_dag::{AuthoritySet, AuthorityUpdateTx, Block, BlockId, StakeMerkleProof};
 
 /// A block header: the minimal data a light client needs to verify the
 /// selected chain and transaction inclusion.
@@ -475,7 +475,7 @@ impl SpvClient {
         // PoA verification
         if let Some(poa) = &self.poa {
             // Authority signature must be present
-            let sig = header.authority_sig.ok_or(SpvError::MissingAuthoritySig)?;
+            let _sig = header.authority_sig.ok_or(SpvError::MissingAuthoritySig)?;
             // Authority set must match
             if header.authority_set_hash != poa.authority_set.hash() {
                 return Err(SpvError::AuthoritySetChanged);
@@ -491,7 +491,7 @@ impl SpvClient {
                 // Classic PoA: verify signature against scheduled authority for this slot
                 let slot = header.timestamp_ms / poa.slot_duration_ms;
                 poa.authority_set
-                    .verify_slot_signature(slot, &header.hash_without_authority_sig, &sig)
+                    .verify_slot_signature(slot, &header.hash_without_authority_sig, &_sig)
                     .map_err(|_| SpvError::InvalidAuthoritySig)?;
             }
         }
@@ -538,7 +538,7 @@ impl SpvClient {
         }
 
         // Authority signature must be present
-        let sig = header.authority_sig.ok_or(SpvError::MissingAuthoritySig)?;
+        let _sig = header.authority_sig.ok_or(SpvError::MissingAuthoritySig)?;
         // Authority set must match
         if header.authority_set_hash != poa.authority_set.hash() {
             return Err(SpvError::AuthoritySetChanged);
