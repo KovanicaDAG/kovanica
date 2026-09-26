@@ -137,12 +137,12 @@ KVLSv2 {
 
 ### Phase 0: PoA Migration Completion (Active)
 **Gate:** All code shipped, operational gates only
-- [x] **Gate 1:** Real, random testnet authority keys (not `AUTHORITY_PLACEHOLDER_BASE = 9001`) — **COMPLETE 2026-09-26** (keys at `protocol/authority-keys/`)
-- [ ] **Gate 2:** 24h multi-validator soak (M6 exit criterion) — authority failover, slot-clock drift, rotating set over a realistic day
+- [x] **Gate 1:** Real, random testnet authority keys (not `AUTHORITY_PLACEHOLDER_BASE = 9001`) — **COMPLETE 2026-09-26** (keys at `protocol/authority-keys/`, 3 authorities generated)
+- [ ] **Gate 2:** 24h multi-validator soak (M6 exit criterion) — **2 validators (seed1, seed2) active; seed3 planned future** — authority failover, slot-clock drift, rotating set over a realistic day
 - [x] **Gate 3:** PoA resource footprint measurement — **CLOSED 2026-09-26** (baseline: 112.7 µs/block, +7.4 KiB/block RSS)
 - [ ] **Gate 4:** Mainnet key ceremony (independent, blocks mainnet, not testnet reset)
 
-**Activation:** Coordinated testnet reset → PoA genesis → multi-validator soak
+**Activation:** Coordinated testnet reset → PoA genesis → 2-validator soak (seed1, seed2) → seed3 added later
 
 ---
 
