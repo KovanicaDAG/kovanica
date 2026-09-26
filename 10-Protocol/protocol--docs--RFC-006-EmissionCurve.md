@@ -119,7 +119,7 @@ are quoting the asymptotic limit.
 | Founder premine | 0.2M KVNC | Genesis coinbase (P2PK), `RFC006_PREMINE` |
 | Treasury | 10M KVNC | 10 × 1M RFC-005 vaults at genesis |
 | Curve emission | 80M KVNC (nominal) | Block subsidies |
-| **MAX_SUPPLY** | **90.2M KVNC** = `90_200_000_000_000_000` atoms | enforced per-view |
+| **MAX_SUPPLY** | **90.2M KVNC** = `9_020_000_000_000_000` atoms | enforced per-view |
 
 ### 4.1 Enforcement
 

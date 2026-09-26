@@ -67,7 +67,7 @@ Post-RFC-006 `/api/head` also reports:
   "total": <atoms>,
   "circulating": <atoms>,
   "burned": <atoms>,
-  "max_supply": 90200000000000000
+  "max_supply": 9020000000000000
 }
 ```
 
