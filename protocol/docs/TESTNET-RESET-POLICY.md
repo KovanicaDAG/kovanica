@@ -60,10 +60,10 @@ execute, and producing them cannot half-happen and damage a live chain.
 
 | # | Gate | Status | Why it blocks |
 |---|------|--------|--------------|
-| **1** | **Real, random testnet authority keys** — *not* `AUTHORITY_PLACEHOLDER_BASE = 9001` | ☐ open | The placeholder set is publicly derivable, so a soak on it exercises an **unauthenticated** PoA: anyone can forge any authority. A green soak on placeholders is **not** evidence for a green soak on real keys — it cannot detect key compromise, key reuse, or a bad ceremony. |
+| **1** | **Real, random testnet authority keys** — *not* `AUTHORITY_PLACEHOLDER_BASE = 9001` | ☐ open | The placeholder set is publicly derivable, so a soak on it exercises an **unauthenticated** PoA: anyone can forge any authority. A green soak on placeholders is **not** evidence for a green soak on real keys — it cannot detect key compromise, key reuse, or a bad ceremony. Procedure: [`AUTHORITY-KEY-CEREMONY.md`](AUTHORITY-KEY-CEREMONY.md) (written, not yet performed). |
 | **2** | **24h multi-validator soak** (M6 exit criterion) | ☐ open | Short runs do not exercise authority failover, slot-clock drift, or a rotating set over a realistic day. |
 | **3** | **CPU/RAM-vs-PoW measurement** | ☐ open | `resource_profiling_poa_vs_pow` (`kovanica-node/tests/poa_m6_testing.rs` ~444) is still `#[ignore]`d. The efficiency claim behind the migration is asserted, not measured. |
-| **4** | **Mainnet key ceremony** (per §0.7.2 residuals) | ☐ open | Required before any **mainnet** authority set is frozen. Independent of the testnet reset, but the same ceremony procedure is being written for gate 1 and should not be written twice. |
+| **4** | **Mainnet key ceremony** (per §0.7.2 residuals) | ☐ open | Required before any **mainnet** authority set is frozen. Independent of the testnet reset, but the same ceremony procedure is being written for gate 1 and should not be written twice. Procedure: [`AUTHORITY-KEY-CEREMONY.md`](AUTHORITY-KEY-CEREMONY.md) §7 (gate-4 addenda). |
 
 **Already closed:** the nominal-work pin. `POA_NOMINAL_WORK = 1` and
 `DagError::PoaWorkMismatch` landed in `a8b0e82` (`consensus/poa-nominal-work`),
@@ -102,7 +102,7 @@ reset trigger.
 | Wallet keys / mnemonics | ✅ | Client-side; addresses are derived from keys, not chain state |
 | Address format (`kvnc…dag`) | ✅ | Versioned encoding, unchanged by resets |
 | RFC-006 tokenomics constants | ✅ | 90.2M cap, s₀=10 KVNC, era 2M, α=¾, maturity 100, fee 75/25 — frozen. **Unaffected by the PoA-only decision:** the curve is height-indexed and `cumulative_minted` is capped in `apply_block` |
-| PoA authority set | ⚠️ `[TARGET]` | Re-established at the new genesis. Testnet falls back to the deterministic placeholder set from `AUTHORITY_PLACEHOLDER_BASE = 9001` (publicly derivable, testnet-only); mainnet refuses to boot without an explicit `KOVANICA_AUTHORITIES` |
+| PoA authority set | ⚠️ `[TARGET]` | Re-established at the new genesis. Mainnet refuses to boot without an explicit `KOVANICA_AUTHORITIES`. Testnet falls back to the deterministic placeholder set from `AUTHORITY_PLACEHOLDER_BASE = 9001` (publicly derivable, testnet-only) — **but gate 1 above requires replacing that with ceremony keys, and the new genesis must commit those.** Once the real set is committed, the node records the set commitment to `$KOVANICA_DATA/<node>.authorities` and refuses to boot under a different set, so the placeholder→real transition needs a data-dir wipe (i.e. part of this reset, not after it) |
 | Pre-reset balances | ❌ | Wiped at activation forks (RFC-006 wiped all pre-fork balances; the PoA transition will too) |
 | Treasury vaults | ⚠️ | Re-created from the RFC-006 genesis (10 × 1M vaults) |
 | Node data dirs (`KOVANICA_DATA`) | ❌ | Must be deleted before first sync on the new genesis |

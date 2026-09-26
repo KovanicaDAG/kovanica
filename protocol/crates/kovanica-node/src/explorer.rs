@@ -763,6 +763,113 @@ fn snap_path(name: &str) -> PathBuf {
     data_dir().join(format!("{name}.snap"))
 }
 
+/// Path of the authority-set commitment for node `name`.
+///
+/// See [`record_authority_set`] / [`check_authority_set`].
+fn authorities_path(name: &str) -> PathBuf {
+    data_dir().join(format!("{name}.authorities"))
+}
+
+/// Hex form of the authority set's identity, as committed at genesis.
+fn authority_set_commitment(set: &AuthoritySet) -> String {
+    hex::encode(set.hash())
+}
+
+/// Record which authority set this data directory's genesis was built with.
+///
+/// `AuthoritySet::hash()` covers the threshold, the count and the canonically
+/// ordered keys, and the PoA genesis coinbase tag (`KVA1 || set_hash`) is part
+/// of the genesis block id — so this value is exactly "which authority set does
+/// this chain's genesis commit to". It is public data, not a secret: the
+/// commitment exists to make a *mismatch* detectable, not to keep the keys
+/// private.
+///
+/// Written only when a data directory is first populated. See
+/// [`check_authority_set`] for the read side.
+fn record_authority_set(name: &str, set: &AuthoritySet) {
+    record_authority_set_at(&authorities_path(name), set);
+}
+
+/// [`record_authority_set`] against an explicit path. Split out so the
+/// commitment lifecycle is testable without the process-global data directory.
+fn record_authority_set_at(path: &Path, set: &AuthoritySet) {
+    let commitment = authority_set_commitment(set);
+    match fs::write(path, &commitment) {
+        Ok(()) => {}
+        Err(e) => eprintln!(
+            "kovanica: WARNING could not record authority-set commitment to {}: {e}\n\
+             the mismatch check will be skipped on future boots",
+            path.display()
+        ),
+    }
+}
+
+/// Refuse to boot when the configured authority set is not the one this data
+/// directory's genesis committed to.
+///
+/// Without this, an operator who restarts a node without their real
+/// `KOVANICA_AUTHORITIES` silently gets the placeholder set applied to a chain
+/// whose genesis committed something else. Nothing errors: the node loads, and
+/// then any block signed by a placeholder key — keys anyone can regenerate from
+/// the public constant `AUTHORITY_PLACEHOLDER_BASE` — is admitted. A mistyped or
+/// missing env var turns into an authority-key substitution.
+///
+/// This is also the check that makes the placeholder → real-key transition
+/// safe. Booting fresh records the placeholder commitment; the first boot with
+/// real keys then fails here and says a reset is required, instead of quietly
+/// forking a chain away from the genesis everyone else is following.
+///
+/// A missing commitment file is *not* an error: data directories created
+/// before this check existed have none, and refusing to boot them would be a
+/// self-inflicted outage. The absence is reported so the operator knows the
+/// check is inactive.
+fn check_authority_set(name: &str, set: &AuthoritySet) -> Result<(), String> {
+    check_authority_set_at(&authorities_path(name), name, set)
+}
+
+/// [`check_authority_set`] against an explicit path. Split out so the mismatch
+/// behaviour is testable without the process-global data directory.
+fn check_authority_set_at(path: &Path, name: &str, set: &AuthoritySet) -> Result<(), String> {
+    let recorded = match fs::read_to_string(path) {
+        Ok(s) => s.trim().to_ascii_lowercase(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "kovanica: no authority-set commitment at {}; authority-set mismatch \
+                 checking is inactive for node {name}",
+                path.display()
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!(
+                "kovanica: WARNING could not read authority-set commitment {}: {e}; \
+                 skipping the mismatch check for node {name}",
+                path.display()
+            );
+            return Ok(());
+        }
+    };
+    let configured = authority_set_commitment(set);
+    if recorded == configured {
+        return Ok(());
+    }
+    Err(format!(
+        "authority-set mismatch for node {name}:\n  \
+         this data directory's genesis committed {recorded}\n  \
+         but KOVANICA_AUTHORITIES now resolves to      {configured}\n\
+         Booting anyway would apply a different authority set to an existing \
+         chain: the node would admit blocks signed by keys the genesis does not \
+         commit to, and would not agree with peers on the same data directory.\n\
+         If the env change was unintended, restore the original \
+         KOVANICA_AUTHORITIES.\n\
+         If you are moving to a new authority set, that is a consensus-breaking \
+         change: it needs a new genesis, so wipe KOVANICA_DATA and reset the \
+         chain (protocol/docs/TESTNET-RESET-POLICY.md).\n\
+         Commitment file: {}",
+        path.display()
+    ))
+}
+
 fn log_path(name: &str) -> PathBuf {
     data_dir().join(format!("{name}.log"))
 }
@@ -788,9 +895,8 @@ fn wipe_data() {
     if let Ok(rd) = fs::read_dir(&dir) {
         for e in rd.flatten() {
             let p = e.path();
-            if p.extension().and_then(|s| s.to_str()) == Some("snap")
-                || p.extension().and_then(|s| s.to_str()) == Some("log")
-            {
+            let ext = p.extension().and_then(|s| s.to_str());
+            if ext == Some("snap") || ext == Some("log") || ext == Some("authorities") {
                 let _ = fs::remove_file(p);
             }
         }
@@ -877,6 +983,10 @@ fn load_or_genesis(name: &str) -> Result<Node, String> {
                 block_pruning_depth: profile.block_pruning_depth,
             };
             let cfg = poa_config_from_env(&profile);
+            // Checked before the load: the log's genesis already committed an
+            // authority set, and there is no point replaying a chain we are
+            // about to refuse to serve.
+            check_authority_set(name, &cfg.authority_set)?;
             let mut node = Node::load_log_with_poa_and_policy(
                 p,
                 cfg.authority_set,
@@ -896,6 +1006,8 @@ fn load_or_genesis(name: &str) -> Result<Node, String> {
                     log.display(),
                 )
             })?;
+            // The log's genesis already committed an authority set. Refuse to run
+            // it under a different one before any state is served.
             restore_poa_policy(&mut node, &profile);
             Ok(node)
         }
@@ -908,6 +1020,7 @@ fn load_or_genesis(name: &str) -> Result<Node, String> {
             })?;
             let mut node = Node::new();
             let cfg = poa_config_from_env(&profile);
+            check_authority_set(name, &cfg.authority_set)?;
             node.load_with_poa(p, cfg.authority_set, cfg.slot_duration_ms)
                 .map_err(|e| {
                     format!(
@@ -930,6 +1043,10 @@ fn load_or_genesis(name: &str) -> Result<Node, String> {
             if let Some(p) = log.to_str() {
                 let _ = node.create_log(p);
             }
+            // Fresh data directory: this is where the chain's authority set is
+            // fixed, so record it now. Every later boot is checked against it.
+            let cfg = poa_config_from_env(&profile);
+            record_authority_set(name, &cfg.authority_set);
             Ok(node)
         }
     }
@@ -4782,6 +4899,161 @@ mod tests {
             fs::read(&log).unwrap(),
             b"KOV\x00garbage that is not a ledger log",
             "a failed load must leave the operator's log untouched"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- authority-set commitment ----------------------------------------
+
+    /// Build a valid `AuthoritySet` from small-integer seeds, the way
+    /// `poa_config_from_env` builds one from `KOVANICA_AUTHORITIES`. Uses
+    /// `KeyPair::from_u64` purely to get well-formed Ed25519 public keys;
+    /// `MIN_AUTHORITIES = 3` and `MIN_THRESHOLD = 2` still apply.
+    fn set_from_seeds(seeds: &[u64], threshold: usize) -> AuthoritySet {
+        let pks = seeds
+            .iter()
+            .map(|s| {
+                let bytes = kovanica_state::KeyPair::from_u64(*s).public_key();
+                ed25519_dalek::VerifyingKey::from_bytes(&bytes).expect("valid ed25519 pubkey")
+            })
+            .collect();
+        AuthoritySet::new(pks, threshold).expect("valid test authority set")
+    }
+
+    /// Three keys, threshold 2 — the smallest set `AuthoritySet` accepts.
+    fn scratch_authority_set() -> AuthoritySet {
+        set_from_seeds(&[7, 9, 11], 2)
+    }
+
+    #[test]
+    fn authority_set_commitment_is_the_set_hash_hex() {
+        let set = scratch_authority_set();
+        assert_eq!(
+            authority_set_commitment(&set),
+            hex::encode(set.hash()),
+            "the commitment must be the set hash the genesis KVA1 tag commits to"
+        );
+    }
+
+    #[test]
+    fn authority_set_commitment_covers_the_threshold_not_just_the_keys() {
+        // Two thresholds over the same keys are two different authority sets and
+        // two different genesis ids, so the commitment must distinguish them.
+        // If it did not, `KOVANICA_AUTHORITY_THRESHOLD` could be changed under a
+        // live chain and the guard would stay silent.
+        let two = set_from_seeds(&[7, 9, 11], 2);
+        let three = set_from_seeds(&[7, 9, 11], 3);
+        assert_ne!(
+            authority_set_commitment(&two),
+            authority_set_commitment(&three),
+            "threshold must be part of the committed identity"
+        );
+    }
+
+    #[test]
+    fn authority_set_commitment_is_stable_across_key_ordering() {
+        // `AuthoritySet` canonically orders keys, so the same set presented in a
+        // different order must commit identically — otherwise a cosmetic env
+        // reorder would trip the guard.
+        let a = set_from_seeds(&[7, 9, 11], 2);
+        let b = set_from_seeds(&[11, 7, 9], 2);
+        assert_eq!(authority_set_commitment(&a), authority_set_commitment(&b));
+    }
+
+    #[test]
+    fn recording_then_checking_the_same_authority_set_passes() {
+        // The guard must not fire on every ordinary restart.
+        let dir = tier_test_dir("authority-match");
+        let path = dir.join("alpha.authorities");
+        let set = scratch_authority_set();
+        record_authority_set_at(&path, &set);
+        assert_eq!(
+            check_authority_set_at(&path, "alpha", &set),
+            Ok(()),
+            "a matching commitment must not block boot"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checking_a_different_authority_set_refuses_to_boot() {
+        // The regression this guard exists for. Same data directory, different
+        // `KOVANICA_AUTHORITIES` — previously silent, and the node went on to
+        // admit blocks signed by keys the genesis does not commit to.
+        let dir = tier_test_dir("authority-mismatch");
+        let path = dir.join("alpha.authorities");
+        record_authority_set_at(&path, &scratch_authority_set());
+        let other = set_from_seeds(&[1, 2, 3], 2);
+        let err = check_authority_set_at(&path, "alpha", &other)
+            .expect_err("a different authority set must refuse to boot");
+        assert!(err.contains("authority-set mismatch"), "got: {err}");
+        assert!(
+            err.contains("consensus-breaking"),
+            "the message must say a new authority set needs a reset: {err}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_commitment_does_not_block_boot() {
+        // Data directories created before this check existed have no commitment
+        // file. Refusing those would be a self-inflicted outage.
+        let dir = tier_test_dir("authority-missing");
+        let path = dir.join("alpha.authorities");
+        assert_eq!(
+            check_authority_set_at(&path, "alpha", &scratch_authority_set()),
+            Ok(()),
+            "an absent commitment must not block boot"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_placeholder_authority_set_is_not_a_real_ceremony() {
+        // Sanity check on the premise of gate 1: the placeholder set is derived
+        // from the public constant `AUTHORITY_PLACEHOLDER_BASE`, so a "soak" run
+        // against it proves nothing about key custody. This test pins the
+        // placeholder set's identity so that if the derivation ever changes,
+        // the ceremony doc's claim is re-examined rather than silently rotting.
+        let placeholder = set_from_seeds(
+            &(0..AUTHORITY_PLACEHOLDER_COUNT)
+                .map(|i| AUTHORITY_PLACEHOLDER_BASE + i)
+                .collect::<Vec<u64>>(),
+            2,
+        );
+        let real = scratch_authority_set();
+        assert_ne!(
+            authority_set_commitment(&placeholder),
+            authority_set_commitment(&real),
+            "a ceremony set must differ from the placeholder set"
+        );
+    }
+
+    #[test]
+    fn wipe_data_also_removes_the_authority_set_commitment() {
+        // A stale commitment surviving a wipe would make the next fresh boot
+        // trip the very guard the wipe is supposed to reset.
+        let dir = tier_test_dir("wipe-authorities");
+        for name in ["alpha.log", "alpha.snap", "alpha.authorities", "keep.txt"] {
+            fs::write(dir.join(name), b"x").unwrap();
+        }
+        // Same extension filter `wipe_data` uses.
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let p = entry.path();
+            let ext = p.extension().and_then(|s| s.to_str());
+            if ext == Some("snap") || ext == Some("log") || ext == Some("authorities") {
+                fs::remove_file(p).unwrap();
+            }
+        }
+        assert!(!dir.join("alpha.log").exists());
+        assert!(!dir.join("alpha.snap").exists());
+        assert!(
+            !dir.join("alpha.authorities").exists(),
+            "a stale commitment would block the post-reset boot"
+        );
+        assert!(
+            dir.join("keep.txt").exists(),
+            "wipe must stay scoped to persistence artifacts"
         );
         let _ = fs::remove_dir_all(&dir);
     }
