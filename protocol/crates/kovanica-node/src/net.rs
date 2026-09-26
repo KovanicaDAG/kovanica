@@ -131,7 +131,57 @@ pub fn serve_exchange(
     }
 }
 
+/// Topologically sort BlockRecords by parent dependencies (parents before children).
+/// Blocks whose parents are not in the set are treated as roots (they may already
+/// exist locally or be genesis). Deterministic: ties break on BlockId byte order.
+fn topo_sort_records(records: Vec<BlockRecord>) -> Vec<BlockRecord> {
+    let ids: std::collections::HashSet<BlockId> = records.iter().map(|r| r.id()).collect();
+    let mut by_id: std::collections::HashMap<BlockId, BlockRecord> =
+        records.into_iter().map(|r| (r.id(), r)).collect();
+    let mut children: std::collections::HashMap<BlockId, Vec<BlockId>> = Default::default();
+    let mut indegree: std::collections::HashMap<BlockId, usize> = Default::default();
+    for (id, r) in &by_id {
+        indegree.entry(*id).or_insert(0);
+        for p in &r.parents {
+            if ids.contains(p) {
+                children.entry(*p).or_default().push(*id);
+                *indegree.entry(*id).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut ready: Vec<BlockId> = indegree
+        .iter()
+        .filter(|(_, d)| **d == 0)
+        .map(|(id, _)| *id)
+        .collect();
+    ready.sort_unstable();
+    let mut out = Vec::with_capacity(by_id.len());
+    while let Some(id) = ready.pop() {
+        let record = by_id.remove(&id).expect("present");
+        out.push(record);
+        if let Some(kids) = children.get(&id) {
+            for kid in kids {
+                let d = indegree.get_mut(kid).expect("present");
+                *d -= 1;
+                if *d == 0 {
+                    ready.push(*kid);
+                }
+            }
+        }
+    }
+    // A cycle cannot occur in a real DAG; if one somehow slips through, append
+    // the leftovers in id order so the caller still sees every record.
+    let mut rest: Vec<BlockRecord> = by_id.into_values().collect();
+    rest.sort_by_key(|r| r.id());
+    out.extend(rest);
+    out
+}
+
 fn apply_decoded(records: Vec<BlockRecord>, node: &mut Node) -> Result<usize, NetError> {
+    // Topologically sort records so parents are applied before children.
+    // The peer may send records in arbitrary order; applying out of order
+    // causes "selected parent delta missing" panics in the ledger.
+    let records = topo_sort_records(records);
     let mut applied = 0;
     for record in records {
         node.receive_block(record)

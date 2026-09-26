@@ -2893,13 +2893,26 @@ impl Node {
         if *blake3::hash(&payload).as_bytes() != header.payload_hash {
             return None;
         }
-        let block = Block::new(
-            record.parents.clone(),
-            record.work,
-            record.timestamp_ms,
-            record.nonce,
-            payload,
-        );
+        let block = if let Some(sig) = record.authority_sig {
+            // PoA block: authority signature is part of the canonical id encoding
+            Block::new_with_authority(
+                record.parents.clone(),
+                record.work,
+                record.timestamp_ms,
+                record.nonce,
+                sig,
+                payload,
+            )
+        } else {
+            // Legacy PoW block (no admission)
+            Block::new(
+                record.parents.clone(),
+                record.work,
+                record.timestamp_ms,
+                record.nonce,
+                payload,
+            )
+        };
         let id = block.id();
         if id != header.id {
             return None;
