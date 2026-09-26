@@ -19,12 +19,12 @@ import { Route as MapRouteImport } from './routes/map'
 import { Route as MultiAssetRouteImport } from './routes/multi-asset'
 import { Route as MultisigRouteImport } from './routes/multisig'
 import { Route as NetworkRouteImport } from './routes/network'
+import { Route as NftRouteImport } from './routes/nft'
 import { Route as PoolRouteImport } from './routes/pool'
 import { Route as RoadmapRouteImport } from './routes/roadmap'
 import { Route as StealthRouteImport } from './routes/stealth'
 import { Route as VaultsRouteImport } from './routes/vaults'
 import { Route as WalletRouteImport } from './routes/wallet'
-import { Route as NftRouteImport } from './routes/nft'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as DownloadSplatRouteImport } from './routes/download/$'
 import { Route as WalletAtomicSwapRouteImport } from './routes/wallet/atomic-swap'
@@ -84,6 +84,11 @@ const NetworkRoute = NetworkRouteImport.update({
   path: '/network',
   getParentRoute: () => rootRouteImport,
 } as any)
+const NftRoute = NftRouteImport.update({
+  id: '/nft',
+  path: '/nft',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PoolRoute = PoolRouteImport.update({
   id: '/pool',
   path: '/pool',
@@ -102,11 +107,6 @@ const StealthRoute = StealthRouteImport.update({
 const VaultsRoute = VaultsRouteImport.update({
   id: '/vaults',
   path: '/vaults',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NftRoute = NftRouteImport.update({
-  id: '/nft',
-  path: '/nft',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WalletRoute = WalletRouteImport.update({

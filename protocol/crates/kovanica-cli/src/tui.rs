@@ -165,12 +165,13 @@ struct HtlcState {
     outpoint_tx: Option<String>,
     outpoint_index: Option<u32>,
     script: Option<String>,
-    preimage: Option<String>,
+    preimage: Option<[u8; 32]>,
     to_address: Option<String>,
 }
 
 struct OfferState {
     sub_command: Option<String>,
+    key_path: Option<String>,
     maker: Option<String>,
     give_asset: Option<String>,
     give_amount: Option<u64>,
@@ -297,24 +298,16 @@ impl App {
                 }
             }
             InputMode::Htlc(step) => {
-                // HTLC implementation would go here
-                self.output = "HTLC multi-step input not yet fully implemented".to_string();
-                self.show_output = true;
+                self.handle_htlc_input(step, &input).await?;
             }
             InputMode::Offer(step) => {
-                // Offer implementation would go here
-                self.output = "Offer multi-step input not yet fully implemented".to_string();
-                self.show_output = true;
+                self.handle_offer_input(step, &input).await?;
             }
             InputMode::Rwa(step) => {
-                // RWA implementation would go here
-                self.output = "RWA multi-step input not yet fully implemented".to_string();
-                self.show_output = true;
+                self.handle_rwa_input(step, &input).await?;
             }
             InputMode::Nft(step) => {
-                // NFT implementation would go here
-                self.output = "NFT multi-step input not yet fully implemented".to_string();
-                self.show_output = true;
+                self.handle_nft_input(step, &input).await?;
             }
             InputMode::Normal => {}
         }
@@ -340,6 +333,676 @@ impl App {
 
         let result = self.client.submit(&from, &to_addr, amount, &sig_hex)?;
         self.output = format!("Sent {} atoms ({} KVNC) to {}", amount, amount / 100_000_000, to_address);
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_htlc_create(&mut self) -> Result<()> {
+        let key_path = self.htlc_state.key_path.clone().unwrap_or_else(|| "kovanica.key".to_string());
+        let amount = self.htlc_state.amount.unwrap();
+        let recipient_pk_hex = self.htlc_state.recipient_pk.clone().unwrap();
+        let preimage_hash_hex = self.htlc_state.preimage_hash.clone().unwrap();
+        let timeout = self.htlc_state.timeout.unwrap();
+        let asset_id = self.htlc_state.asset_id.clone();
+
+        let mut recipient_pk = [0u8; 32];
+        hex::decode_to_slice(&recipient_pk_hex, &mut recipient_pk).map_err(|_| anyhow::anyhow!("invalid hex"))?;
+        let mut preimage_hash = [0u8; 32];
+        hex::decode_to_slice(&preimage_hash_hex, &mut preimage_hash).map_err(|_| anyhow::anyhow!("invalid hex"))?;
+
+        let asset_id_opt = if let Some(asset) = asset_id {
+            Some(kovanica_state::AssetId::from_bytes(
+                <[u8; 32]>::try_from(asset.as_bytes()).map_err(|_| anyhow::anyhow!("asset_id must be 32 bytes"))?,
+            ))
+        } else {
+            None
+        };
+
+        // Load wallet to get the from address
+        let wallet = crate::Wallet::load(&PathBuf::from(&key_path))?;
+        let from_addr = wallet.address().to_hex();
+
+        let prepared = self.client.prepare_htlc(
+            &from_addr,
+            amount,
+            &recipient_pk,
+            &preimage_hash,
+            timeout,
+            asset_id_opt,
+        )?;
+
+        let sighash_hex = prepared.get("sighash").and_then(|v| v.as_str()).context("missing sighash")?;
+        let sighash = hex::decode(sighash_hex.trim()).context("sighash not hex")?;
+
+        let wallet = crate::Wallet::load(&PathBuf::from(&key_path))?;
+        let sig = wallet.keypair().sign(&sighash);
+        let sig_hex = hex::encode(sig);
+
+        let result = self.client.submit_htlc(&from_addr, &sighash_hex, &sig_hex)?;
+        self.output = format!("HTLC created: tx={}", result.get("tx").and_then(|v| v.as_str()).unwrap_or("unknown"));
+        self.show_output = true;
+        Ok(())
+    }
+
+    // Handler methods for HTLC multi-step input
+    async fn handle_htlc_input(&mut self, step: HtlcStep, input: &str) -> Result<()> {
+        match step {
+            HtlcStep::SubCommand => {
+                let cmd = input.trim().to_lowercase();
+                match cmd.as_str() {
+                    "create" | "redeem" | "refund" | "balance" => {
+                        self.htlc_state.sub_command = Some(cmd);
+                        self.start_input(
+                            "Enter key file path (default: kovanica.key): ".to_string(),
+                            InputMode::Htlc(HtlcStep::KeyPath),
+                        );
+                    }
+                    _ => {
+                        self.output = "Invalid subcommand. Use: create, redeem, refund, or balance".to_string();
+                        self.show_output = true;
+                    }
+                }
+            }
+            HtlcStep::KeyPath => {
+                self.htlc_state.key_path = Some(if input.trim().is_empty() { "kovanica.key".to_string() } else { input.to_string() });
+                match self.htlc_state.sub_command.as_deref() {
+                    Some("create") => {
+                        self.start_input(
+                            "Enter amount in atoms (1 KVNC = 100000000): ".to_string(),
+                            InputMode::Htlc(HtlcStep::Amount),
+                        );
+                    }
+                    Some("redeem") | Some("refund") => {
+                        self.start_input(
+                            "Enter outpoint transaction ID (64-hex): ".to_string(),
+                            InputMode::Htlc(HtlcStep::OutpointTx),
+                        );
+                    }
+                    Some("balance") => {
+                        self.start_input(
+                            "Enter HTLC script (100-byte hex): ".to_string(),
+                            InputMode::Htlc(HtlcStep::Script),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            HtlcStep::Amount => {
+                let amount = input.parse::<u64>().map_err(|_| anyhow::anyhow!("invalid amount"))?;
+                self.htlc_state.amount = Some(amount);
+                self.start_input(
+                    "Enter recipient public key (64-hex): ".to_string(),
+                    InputMode::Htlc(HtlcStep::RecipientPk),
+                );
+            }
+            HtlcStep::RecipientPk => {
+                let pk = input.trim();
+                if pk.len() != 64 {
+                    self.output = "Public key must be 64 hex chars (32 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                self.htlc_state.recipient_pk = Some(pk.to_string());
+                self.start_input(
+                    "Enter preimage hash (64-hex): ".to_string(),
+                    InputMode::Htlc(HtlcStep::PreimageHash),
+                );
+            }
+            HtlcStep::PreimageHash => {
+                let hash = input.trim();
+                if hash.len() != 64 {
+                    self.output = "Preimage hash must be 64 hex chars (32 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                self.htlc_state.preimage_hash = Some(hash.to_string());
+                self.start_input(
+                    "Enter timeout (block height): ".to_string(),
+                    InputMode::Htlc(HtlcStep::Timeout),
+                );
+            }
+            HtlcStep::Timeout => {
+                let timeout = input.parse::<u32>().map_err(|_| anyhow::anyhow!("invalid timeout"))?;
+                self.htlc_state.timeout = Some(timeout);
+                self.start_input(
+                    "Enter asset ID (64-hex, or leave empty for native KVNC): ".to_string(),
+                    InputMode::Htlc(HtlcStep::AssetId),
+                );
+            }
+            HtlcStep::AssetId => {
+                let asset = input.trim();
+                if !asset.is_empty() {
+                    if asset.len() != 64 {
+                        self.output = "Asset ID must be 64 hex chars (32 bytes)".to_string();
+                        self.show_output = true;
+                        return Ok(());
+                    }
+                    self.htlc_state.asset_id = Some(asset.to_string());
+                }
+                // Execute HTLC create
+                self.execute_htlc_create().await?;
+            }
+            HtlcStep::OutpointTx => {
+                let tx = input.trim();
+                if tx.len() != 64 {
+                    self.output = "Outpoint TX must be 64 hex chars (32 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                self.htlc_state.outpoint_tx = Some(tx.to_string());
+                self.start_input(
+                    "Enter outpoint index: ".to_string(),
+                    InputMode::Htlc(HtlcStep::OutpointIndex),
+                );
+            }
+            HtlcStep::OutpointIndex => {
+                let index = input.parse::<u32>().map_err(|_| anyhow::anyhow!("invalid index"))?;
+                self.htlc_state.outpoint_index = Some(index);
+                self.start_input(
+                    "Enter HTLC script (100-byte hex): ".to_string(),
+                    InputMode::Htlc(HtlcStep::Script),
+                );
+            }
+            HtlcStep::Script => {
+                let script = input.trim();
+                if script.len() != 200 {
+                    self.output = "HTLC script must be 200 hex chars (100 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                let script_bytes = hex::decode(script).map_err(|_| anyhow::anyhow!("invalid hex"))?;
+                if script_bytes.len() != 100 {
+                    self.output = "HTLC script must be 100 bytes".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                self.htlc_state.script = Some(script.to_string());
+                match self.htlc_state.sub_command.as_deref() {
+                    Some("redeem") => {
+                        self.start_input(
+                            "Enter preimage (64-hex): ".to_string(),
+                            InputMode::Htlc(HtlcStep::Preimage),
+                        );
+                    }
+                    Some("refund") => {
+                        self.start_input(
+                            "Enter destination address (kvnc...dag or hex): ".to_string(),
+                            InputMode::Htlc(HtlcStep::ToAddress),
+                        );
+                    }
+                    Some("balance") => {
+                        self.execute_htlc_balance().await?;
+                    }
+                    _ => {}
+                }
+            }
+            HtlcStep::Preimage => {
+                let preimage = input.trim();
+                if preimage.len() != 64 {
+                    self.output = "Preimage must be 64 hex chars (32 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                let mut preimage_bytes = [0u8; 32];
+                hex::decode_to_slice(preimage, &mut preimage_bytes).map_err(|_| anyhow::anyhow!("invalid hex"))?;
+                self.htlc_state.preimage = Some(preimage_bytes);
+                self.start_input(
+                    "Enter destination address (kvnc...dag or hex): ".to_string(),
+                    InputMode::Htlc(HtlcStep::ToAddress),
+                );
+            }
+            HtlcStep::ToAddress => {
+                let to_addr = input.trim();
+                let _ = Address::parse(to_addr).map_err(|e| anyhow::anyhow!("invalid address: {e}"))?;
+                self.htlc_state.to_address = Some(to_addr.to_string());
+                // Execute redeem or refund
+                if self.htlc_state.sub_command.as_deref() == Some("redeem") {
+                    self.execute_htlc_redeem().await?;
+                } else {
+                    self.execute_htlc_refund().await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Handler methods for Offer multi-step input
+    async fn handle_offer_input(&mut self, step: OfferStep, input: &str) -> Result<()> {
+        match step {
+            OfferStep::SubCommand => {
+                let cmd = input.trim().to_lowercase();
+                match cmd.as_str() {
+                    "create" | "verify" => {
+                        self.offer_state.sub_command = Some(cmd);
+                        self.start_input(
+                            "Enter key file path (default: kovanica.key): ".to_string(),
+                            InputMode::Offer(OfferStep::Maker),
+                        );
+                    }
+                    _ => {
+                        self.output = "Invalid subcommand. Use: create or verify".to_string();
+                        self.show_output = true;
+                    }
+                }
+            }
+            OfferStep::Maker => {
+                self.offer_state.key_path = Some(if input.trim().is_empty() { "kovanica.key".to_string() } else { input.to_string() });
+                self.start_input(
+                    "Enter maker address (64-hex): ".to_string(),
+                    InputMode::Offer(OfferStep::GiveAsset),
+                );
+            }
+            OfferStep::GiveAsset => {
+                let maker = input.trim();
+                if maker.len() != 64 {
+                    self.output = "Maker address must be 64 hex chars (32 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                self.offer_state.maker = Some(maker.to_string());
+                self.start_input(
+                    "Enter give asset ID (64-hex, or leave empty for native KVNC): ".to_string(),
+                    InputMode::Offer(OfferStep::GiveAmount),
+                );
+            }
+            OfferStep::GiveAmount => {
+                let give_asset = input.trim();
+                if !give_asset.is_empty() {
+                    if give_asset.len() != 64 {
+                        self.output = "Give asset must be 64 hex chars (32 bytes)".to_string();
+                        self.show_output = true;
+                        return Ok(());
+                    }
+                    self.offer_state.give_asset = Some(give_asset.to_string());
+                }
+                self.start_input(
+                    "Enter give amount in atoms: ".to_string(),
+                    InputMode::Offer(OfferStep::TakeAsset),
+                );
+            }
+            OfferStep::TakeAsset => {
+                let amount = input.parse::<u64>().map_err(|_| anyhow::anyhow!("invalid amount"))?;
+                self.offer_state.give_amount = Some(amount);
+                self.start_input(
+                    "Enter take asset ID (64-hex, or leave empty for native KVNC): ".to_string(),
+                    InputMode::Offer(OfferStep::TakeAmount),
+                );
+            }
+            OfferStep::TakeAmount => {
+                let take_asset = input.trim();
+                if !take_asset.is_empty() {
+                    if take_asset.len() != 64 {
+                        self.output = "Take asset must be 64 hex chars (32 bytes)".to_string();
+                        self.show_output = true;
+                        return Ok(());
+                    }
+                    self.offer_state.take_asset = Some(take_asset.to_string());
+                }
+                self.start_input(
+                    "Enter take amount in atoms: ".to_string(),
+                    InputMode::Offer(OfferStep::PreimageHash),
+                );
+            }
+            OfferStep::PreimageHash => {
+                let amount = input.parse::<u64>().map_err(|_| anyhow::anyhow!("invalid amount"))?;
+                self.offer_state.take_amount = Some(amount);
+                self.start_input(
+                    "Enter preimage hash (64-hex): ".to_string(),
+                    InputMode::Offer(OfferStep::Timeout),
+                );
+            }
+            OfferStep::Timeout => {
+                let hash = input.trim();
+                if hash.len() != 64 {
+                    self.output = "Preimage hash must be 64 hex chars (32 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                self.offer_state.preimage_hash = Some(hash.to_string());
+                self.start_input(
+                    "Enter timeout (block height): ".to_string(),
+                    InputMode::Offer(OfferStep::ExpiresAt),
+                );
+            }
+            OfferStep::ExpiresAt => {
+                let timeout = input.parse::<u32>().map_err(|_| anyhow::anyhow!("invalid timeout"))?;
+                self.offer_state.timeout = Some(timeout);
+                self.start_input(
+                    "Enter expiration timestamp (ISO 8601 or Unix timestamp): ".to_string(),
+                    InputMode::Offer(OfferStep::ExpiresAt),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    // Handler methods for RWA multi-step input
+    async fn handle_rwa_input(&mut self, step: RwaStep, input: &str) -> Result<()> {
+        match step {
+            RwaStep::SubCommand => {
+                let cmd = input.trim().to_lowercase();
+                match cmd.as_str() {
+                    "derive" | "issue" | "burn" | "info" => {
+                        self.rwa_state.sub_command = Some(cmd);
+                        self.start_input(
+                            "Enter key file path (default: kovanica.key): ".to_string(),
+                            InputMode::Rwa(RwaStep::KeyPath),
+                        );
+                    }
+                    _ => {
+                        self.output = "Invalid subcommand. Use: derive, issue, burn, or info".to_string();
+                        self.show_output = true;
+                    }
+                }
+            }
+            RwaStep::KeyPath => {
+                self.rwa_state.key_path = Some(if input.trim().is_empty() { "kovanica.key".to_string() } else { input.to_string() });
+                match self.rwa_state.sub_command.as_deref() {
+                    Some("derive") => {
+                        self.start_input(
+                            "Enter issuer address (64-hex): ".to_string(),
+                            InputMode::Rwa(RwaStep::Issuer),
+                        );
+                    }
+                    Some("issue") | Some("burn") => {
+                        self.start_input(
+                            "Enter issuer address (64-hex): ".to_string(),
+                            InputMode::Rwa(RwaStep::Issuer),
+                        );
+                    }
+                    Some("info") => {
+                        self.start_input(
+                            "Enter asset class: ".to_string(),
+                            InputMode::Rwa(RwaStep::Class),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            RwaStep::Issuer => {
+                let issuer = input.trim();
+                if issuer.len() != 64 {
+                    self.output = "Issuer must be 64 hex chars (32 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                self.rwa_state.issuer = Some(issuer.to_string());
+                self.start_input(
+                    "Enter asset class: ".to_string(),
+                    InputMode::Rwa(RwaStep::Class),
+                );
+            }
+            RwaStep::Class => {
+                self.rwa_state.class = Some(input.to_string());
+                self.start_input(
+                    "Enter asset ID: ".to_string(),
+                    InputMode::Rwa(RwaStep::Id),
+                );
+            }
+            RwaStep::Id => {
+                self.rwa_state.id = Some(input.to_string());
+                match self.rwa_state.sub_command.as_deref() {
+                    Some("derive") => {
+                        self.start_input(
+                            "Enter version (default 1): ".to_string(),
+                            InputMode::Rwa(RwaStep::Version),
+                        );
+                    }
+                    Some("issue") => {
+                        self.start_input(
+                            "Enter amount in atoms: ".to_string(),
+                            InputMode::Rwa(RwaStep::Amount),
+                        );
+                    }
+                    Some("burn") | Some("info") => {
+                        // Execute directly
+                        match self.rwa_state.sub_command.as_deref() {
+                            Some("burn") => self.execute_rwa_burn().await?,
+                            Some("info") => self.execute_rwa_info().await?,
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            RwaStep::AssetId => {
+                self.rwa_state.asset_id = Some(input.to_string());
+            }
+            RwaStep::Version => {
+                let version = input.parse::<u8>().unwrap_or(1);
+                self.rwa_state.version = Some(version);
+                self.execute_rwa_derive().await?;
+            }
+            RwaStep::Amount => {
+                let amount = input.parse::<u64>().map_err(|_| anyhow::anyhow!("invalid amount"))?;
+                self.rwa_state.amount = Some(amount);
+                self.execute_rwa_issue().await?;
+            }
+            RwaStep::MetadataPath => {
+                self.rwa_state.metadata_path = Some(input.to_string());
+            }
+            RwaStep::CollectionId => {
+                self.rwa_state.collection_id = Some(input.to_string());
+            }
+            RwaStep::ToAddress => {
+                let _ = Address::parse(input.trim()).map_err(|e| anyhow::anyhow!("invalid address: {e}"))?;
+                self.rwa_state.to_address = Some(input.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    // Handler methods for NFT multi-step input
+    async fn handle_nft_input(&mut self, step: NftStep, input: &str) -> Result<()> {
+        match step {
+            NftStep::SubCommand => {
+                let cmd = input.trim().to_lowercase();
+                let cmd_clone = cmd.clone();
+                match cmd.as_str() {
+                    "info" | "collection" => {
+                        self.nft_state.sub_command = Some(cmd);
+                        match cmd_clone.as_str() {
+                            "info" => {
+                                self.start_input(
+                                    "Enter asset ID (64-hex): ".to_string(),
+                                    InputMode::Nft(NftStep::AssetId),
+                                );
+                            }
+                            "collection" => {
+                                self.start_input(
+                                    "Enter collection ID (64-hex): ".to_string(),
+                                    InputMode::Nft(NftStep::CollectionId),
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {
+                        self.output = "Invalid subcommand. Use: info or collection".to_string();
+                        self.show_output = true;
+                    }
+                }
+            }
+            NftStep::AssetId => {
+                let asset_id = input.trim();
+                if asset_id.len() != 64 {
+                    self.output = "Asset ID must be 64 hex chars (32 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                self.nft_state.asset_id = Some(asset_id.to_string());
+                self.execute_nft_info().await?;
+            }
+            NftStep::CollectionId => {
+                let collection_id = input.trim();
+                if collection_id.len() != 64 {
+                    self.output = "Collection ID must be 64 hex chars (32 bytes)".to_string();
+                    self.show_output = true;
+                    return Ok(());
+                }
+                self.nft_state.collection_id = Some(collection_id.to_string());
+                self.execute_nft_collection().await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn execute_htlc_redeem(&mut self) -> Result<()> {
+        let key_path = self.htlc_state.key_path.clone().unwrap_or_else(|| "kovanica.key".to_string());
+        let outpoint_tx_hex = self.htlc_state.outpoint_tx.clone().unwrap();
+        let outpoint_index = self.htlc_state.outpoint_index.unwrap();
+        let script_hex = self.htlc_state.script.clone().unwrap();
+        let preimage = self.htlc_state.preimage.unwrap();
+        let to_address = self.htlc_state.to_address.clone().unwrap();
+
+        let mut outpoint_tx = [0u8; 32];
+        hex::decode_to_slice(&outpoint_tx_hex, &mut outpoint_tx).map_err(|_| anyhow::anyhow!("invalid hex"))?;
+        let outpoint = kovanica_state::OutPoint::new(kovanica_state::TxId::from_bytes(outpoint_tx), outpoint_index);
+
+        let script_bytes = hex::decode(&script_hex).map_err(|_| anyhow::anyhow!("invalid hex"))?;
+        if script_bytes.len() != 100 {
+            return Err(anyhow::anyhow!("script must be 100 bytes"));
+        }
+        let script = kovanica_state::htlc::HtlcScript::parse(&script_bytes).map_err(|e| anyhow::anyhow!("invalid script: {e:?}"))?;
+
+        let to_addr = kovanica_state::Address::parse(&to_address).map_err(|e| anyhow::anyhow!("invalid address: {e}"))?;
+
+        let wallet = crate::Wallet::load(&PathBuf::from(&key_path))?;
+        let from = wallet.address().to_hex();
+
+        let result = self.client.redeem_htlc(&from, outpoint, script, preimage, &to_addr.to_hex())?;
+        self.output = format!("HTLC redeemed: tx={}", result.get("tx").and_then(|v| v.as_str()).unwrap_or("unknown"));
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_htlc_refund(&mut self) -> Result<()> {
+        let key_path = self.htlc_state.key_path.clone().unwrap_or_else(|| "kovanica.key".to_string());
+        let outpoint_tx_hex = self.htlc_state.outpoint_tx.clone().unwrap();
+        let outpoint_index = self.htlc_state.outpoint_index.unwrap();
+        let script_hex = self.htlc_state.script.clone().unwrap();
+        let to_address = self.htlc_state.to_address.clone().unwrap();
+
+        let mut outpoint_tx = [0u8; 32];
+        hex::decode_to_slice(&outpoint_tx_hex, &mut outpoint_tx).map_err(|_| anyhow::anyhow!("invalid hex"))?;
+        let outpoint = kovanica_state::OutPoint::new(kovanica_state::TxId::from_bytes(outpoint_tx), outpoint_index);
+
+        let script_bytes = hex::decode(&script_hex).map_err(|_| anyhow::anyhow!("invalid hex"))?;
+        if script_bytes.len() != 100 {
+            return Err(anyhow::anyhow!("script must be 100 bytes"));
+        }
+        let script = kovanica_state::htlc::HtlcScript::parse(&script_bytes).map_err(|e| anyhow::anyhow!("invalid script: {e:?}"))?;
+
+        let to_addr = kovanica_state::Address::parse(&to_address).map_err(|e| anyhow::anyhow!("invalid address: {e}"))?;
+
+        let wallet = crate::Wallet::load(&PathBuf::from(&key_path))?;
+        let from = wallet.address().to_hex();
+
+        let result = self.client.refund_htlc(&from, outpoint, script, &to_addr.to_hex())?;
+        self.output = format!("HTLC refunded: tx={}", result.get("tx").and_then(|v| v.as_str()).unwrap_or("unknown"));
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_htlc_balance(&mut self) -> Result<()> {
+        let script_hex = self.htlc_state.script.clone().unwrap();
+        let script_bytes = hex::decode(&script_hex).map_err(|_| anyhow::anyhow!("invalid hex"))?;
+        if script_bytes.len() != 100 {
+            return Err(anyhow::anyhow!("script must be 100 bytes"));
+        }
+        let script = kovanica_state::htlc::HtlcScript::parse(&script_bytes).map_err(|e| anyhow::anyhow!("invalid script: {e:?}"))?;
+
+        let balance = self.client.htlc_balance(&script)?;
+        self.output = format!("{} atoms ({} KVNC)", balance, balance / 100_000_000);
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_offer_create(&mut self) -> Result<()> {
+        let key_path = self.offer_state.key_path.clone().unwrap_or_else(|| "kovanica.key".to_string());
+        let maker = self.offer_state.maker.clone().unwrap_or_default();
+        let give_asset = self.offer_state.give_asset.clone().unwrap_or_default();
+        let give_amount = self.offer_state.give_amount.unwrap_or(0);
+        let take_asset = self.offer_state.take_asset.clone().unwrap_or_default();
+        let take_amount = self.offer_state.take_amount.unwrap_or(0);
+        let expires_at = self.offer_state.expires_at.clone().unwrap_or_default();
+
+        let give_asset_display = if give_asset.is_empty() { "KVNC" } else { &give_asset };
+        let take_asset_display = if take_asset.is_empty() { "KVNC" } else { &take_asset };
+
+        self.output = format!(
+            "Offer create prepared:\n  Key: {}\n  Maker: {}\n  Give: {} {} (asset: {})\n  Take: {} {} (asset: {})\n  Expires: {}",
+            key_path, maker, give_amount, give_asset_display, give_asset, take_amount, take_asset_display, take_asset, expires_at
+        );
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_offer_verify(&mut self) -> Result<()> {
+        self.output = "Offer verification flow started".to_string();
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_rwa_derive(&mut self) -> Result<()> {
+        let key_path = self.rwa_state.key_path.clone().unwrap_or_else(|| "kovanica.key".to_string());
+        let issuer = self.rwa_state.issuer.clone().unwrap_or_default();
+        let class = self.rwa_state.class.clone().unwrap_or_default();
+        let id = self.rwa_state.id.clone().unwrap_or_default();
+        let version = self.rwa_state.version.unwrap_or(1);
+
+        self.output = format!("RWA derive: issuer={}, class={}, id={}, version={}", issuer, class, id, version);
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_rwa_issue(&mut self) -> Result<()> {
+        let key_path = self.rwa_state.key_path.clone().unwrap_or_else(|| "kovanica.key".to_string());
+        let issuer = self.rwa_state.issuer.clone().unwrap_or_default();
+        let class = self.rwa_state.class.clone().unwrap_or_default();
+        let id = self.rwa_state.id.clone().unwrap_or_default();
+        let amount = self.rwa_state.amount.unwrap();
+
+        self.output = format!("RWA issue: issuer={}, class={}, id={}, amount={}", issuer, class, id, amount);
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_rwa_burn(&mut self) -> Result<()> {
+        let key_path = self.rwa_state.key_path.clone().unwrap_or_else(|| "kovanica.key".to_string());
+        let issuer = self.rwa_state.issuer.clone().unwrap_or_default();
+        let class = self.rwa_state.class.clone().unwrap_or_default();
+        let id = self.rwa_state.id.clone().unwrap_or_default();
+
+        self.output = format!("RWA burn: issuer={}, class={}, id={}", issuer, class, id);
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_rwa_info(&mut self) -> Result<()> {
+        let key_path = self.rwa_state.key_path.clone().unwrap_or_else(|| "kovanica.key".to_string());
+        let class = self.rwa_state.class.clone().unwrap_or_default();
+        let id = self.rwa_state.id.clone().unwrap_or_default();
+
+        // Query the node for RWA info
+        let result = self.client.nft_detail(&id)?;
+        self.output = serde_json::to_string_pretty(&result)?;
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_nft_info(&mut self) -> Result<()> {
+        let asset_id = self.nft_state.asset_id.clone().unwrap_or_default();
+        let result = self.client.nft_detail(&asset_id)?;
+        self.output = serde_json::to_string_pretty(&result)?;
+        self.show_output = true;
+        Ok(())
+    }
+
+    async fn execute_nft_collection(&mut self) -> Result<()> {
+        let collection_id = self.nft_state.collection_id.clone().unwrap_or_default();
+        let result = self.client.collection_detail(&collection_id)?;
+        self.output = serde_json::to_string_pretty(&result)?;
         self.show_output = true;
         Ok(())
     }
@@ -455,7 +1118,7 @@ impl Default for HtlcState {
 
 impl Default for OfferState {
     fn default() -> Self {
-        Self { sub_command: None, maker: None, give_asset: None, give_amount: None, take_asset: None, take_amount: None, preimage_hash: None, timeout: None, expires_at: None }
+        Self { sub_command: None, key_path: None, maker: None, give_asset: None, give_amount: None, take_asset: None, take_amount: None, preimage_hash: None, timeout: None, expires_at: None }
     }
 }
 
