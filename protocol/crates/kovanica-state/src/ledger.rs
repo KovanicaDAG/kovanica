@@ -2389,8 +2389,13 @@ impl Ledger {
     /// is absent, final (its delta was dropped), or its chain crosses a missing
     /// delta.
     ///
-    /// During replay (`self.replay_mode`), we walk all the way to genesis since
-    /// deltas are not pruned and the finality boundary moves during the load.
+    /// During replay the finality boundary moves, so the stop condition is not
+    /// "is the parent final" but "is the parent's delta still stored": a
+    /// parent's delta is present until it is pruned, and pruning always folds
+    /// it into its children, so a block whose selected parent's delta is gone
+    /// is already relative to the empty set. That is the only condition under
+    /// which stopping early is complete, and it holds identically for the live
+    /// path and for mid-replay pruning.
     fn reconstruct_state(&self, block: &BlockId) -> Option<UtxoSet> {
         let mut path = vec![*block];
         let mut cur = *block;
@@ -2399,11 +2404,10 @@ impl Ledger {
             match gd.selected_parent {
                 None => break,
                 Some(sp) => {
-                    // During replay, don't stop at final blocks — walk to genesis.
-                    // `prune()` early-returns in replay mode, so deltas are never
-                    // folded to be relative to the empty set; the walk must reach
-                    // genesis for the reconstruction to be complete.
-                    if !self.replay_mode && self.is_final(&sp) {
+                    // The parent's delta was pruned, so it was folded into this
+                    // block's delta: the accumulated path below is the whole
+                    // state and we can stop.
+                    if !self.deltas.contains_key(&sp) {
                         break;
                     }
                     path.push(sp);
@@ -2526,14 +2530,26 @@ impl Ledger {
         // being final means its state has been pruned, so this check also
         // guarantees the state lookup below succeeds.
         //
-        // Exception: the genesis block is never evicted and its delta is kept
-        // forever (see `prune()`), so a block whose selected parent is genesis
-        // is always allowed — this handles anticone blocks linearized last
-        // during replay-with-policy (e.g., the pay block in the test).
+        // This is a **live-admission** rule, not a replay rule. It rejects a
+        // block that arrives *now* on top of history the ledger has already
+        // discarded, because such a block's pre-state is unrecoverable going
+        // forward. Replay has no such problem: the log is replayed in a fixed
+        // order and `reconstruct_state` below walks as far as stored deltas
+        // allow, so a block whose selected parent is final is reconstructible
+        // as long as the deltas back to the last fold point are present. During
+        // replay the deltas are exactly what pruning manages, and the fold on
+        // prune keeps every surviving block's delta complete, so gating here
+        // would reject blocks that the log legitimately contains.
+        //
+        // Gating on replay would make a linearized-order log unloadable at any
+        // non-trivial `finality_depth`: an anticone block ordered after the
+        // chain has advanced past it has a final selected parent by
+        // construction, and the genesis exemption below is only a special case
+        // of that. Hence: no finality gate in replay mode.
         let sp = preview.selected_parent;
         let parent_score = self.dag.ghostdag(&sp).map_or(0, |g| g.blue_score);
         let finality_score = self.finality_score();
-        if parent_score < finality_score && sp != self.dag.genesis() {
+        if !self.replay_mode && parent_score < finality_score && sp != self.dag.genesis() {
             return Err(LedgerInsertError::Finality {
                 parent_score,
                 finality_score,
@@ -2679,6 +2695,9 @@ impl Ledger {
         // During replay, we must not prune deltas because blocks later in the log
         // (e.g., anticone blocks linearized last) may have selected parents that
         // are currently final. Their deltas are needed for state reconstruction.
+        // `prune_replay_final` is the mid-replay path that can prune safely,
+        // because it is gated on a count of not-yet-replayed referrers rather
+        // than on this blanket assumption.
         if self.replay_mode {
             return;
         }
@@ -2686,9 +2705,6 @@ impl Ledger {
         if threshold == 0 {
             return;
         }
-        // Fold final blocks' deltas into their children, deepest first (blue
-        // score ascending), so a chain of final blocks propagates its composed
-        // delta up to the first non-final child.
         let mut stale: Vec<BlockId> = self
             .deltas
             .keys()
@@ -2699,71 +2715,85 @@ impl Ledger {
                     .is_some_and(|g| g.blue_score < threshold)
             })
             .collect();
-        stale.sort_by_key(|id| self.dag.ghostdag(id).map_or(0, |g| g.blue_score));
+        self.sort_by_blue_score(&mut stale);
         for id in stale {
-            let Some(delta) = self.deltas.remove(&id) else {
-                continue;
-            };
-            let children: Vec<BlockId> = self
-                .deltas
-                .keys()
-                .copied()
-                .filter(|c| {
-                    self.dag
-                        .ghostdag(c)
-                        .is_some_and(|g| g.selected_parent == Some(id))
-                })
-                .collect();
-            for c in children {
-                let child_delta = self.deltas.get_mut(&c).expect("child has a delta");
-                *child_delta = compose_delta(&delta, child_delta);
-            }
-            self.heights.remove(&id);
+            self.prune_one(id);
         }
     }
 
-    /// Prune a specific block if it is final and safe to prune.
-    /// Used during replay to prune blocks whose child_count has reached 0.
-    pub(crate) fn prune_specific(&mut self, id: BlockId) {
+    /// Prune during replay every block that is final **and** that no
+    /// not-yet-replayed log record can still reference.
+    ///
+    /// `remaining[id]` is the number of log records that still name `id` as a
+    /// parent and have not been replayed (see `LedgerStore`'s two-pass load).
+    /// `remaining[id] == 0` is strictly stronger than "no child is currently in
+    /// `self.deltas`": a record that has not been replayed yet is by definition
+    /// absent from `deltas`, so only the caller's count can rule out a future
+    /// block *selecting* `id` as its parent. That is what makes pruning
+    /// mid-replay sound, where [`Ledger::prune`] can only refuse to prune at
+    /// all.
+    ///
+    /// Folding is identical to [`Ledger::prune`]: the dropped block's delta is
+    /// composed into each child's delta, so every child stays reconstructible
+    /// from the empty set and a run of prunable blocks propagates one
+    /// accumulated delta up to the first block that must be kept.
+    pub(crate) fn prune_replay_final(&mut self, remaining: &HashMap<BlockId, usize>) {
         let threshold = self.finality_score();
         if threshold == 0 {
             return;
         }
-        // Check if block is final
-        let is_final = self
-            .dag
-            .ghostdag(&id)
-            .is_some_and(|g| g.blue_score < threshold);
-        if !is_final {
+        let mut stale: Vec<BlockId> = self
+            .deltas
+            .keys()
+            .copied()
+            .filter(|id| {
+                remaining.get(id).copied().unwrap_or(0) == 0
+                    && self
+                        .dag
+                        .ghostdag(id)
+                        .is_some_and(|g| g.blue_score < threshold)
+            })
+            .collect();
+        self.sort_by_blue_score(&mut stale);
+        for id in stale {
+            self.prune_one(id);
+        }
+    }
+
+    /// Order ids deepest-first (blue score ascending) so a chain of prunable
+    /// blocks composes its accumulated delta up to the first block that is
+    /// kept, rather than each block folding into a child that is itself about
+    /// to be dropped.
+    fn sort_by_blue_score(&self, ids: &mut [BlockId]) {
+        ids.sort_by_key(|id| self.dag.ghostdag(id).map_or(0, |g| g.blue_score));
+    }
+
+    /// Drop one block's delta, first composing it into every block that selects
+    /// it as its selected parent.
+    ///
+    /// Dropping a delta without that composition is **not** a safe
+    /// simplification: `reconstruct_state` rebuilds a block by applying the
+    /// deltas along its selected-parent chain, so a child whose delta is still
+    /// relative to a discarded parent silently loses that parent's effects.
+    fn prune_one(&mut self, id: BlockId) {
+        let Some(delta) = self.deltas.remove(&id) else {
             return;
+        };
+        let children: Vec<BlockId> = self
+            .deltas
+            .keys()
+            .copied()
+            .filter(|c| {
+                self.dag
+                    .ghostdag(c)
+                    .is_some_and(|g| g.selected_parent == Some(id))
+            })
+            .collect();
+        for c in children {
+            let child_delta = self.deltas.get_mut(&c).expect("child has a delta");
+            *child_delta = compose_delta(&delta, child_delta);
         }
-        // Check if block has no remaining children in deltas (safe to prune)
-        let has_children = self.deltas.keys().any(|c| {
-            self.dag
-                .ghostdag(c)
-                .is_some_and(|g| g.selected_parent == Some(id))
-        });
-        if has_children {
-            return;
-        }
-        // Safe to prune: fold delta into children, then remove
-        if let Some(delta) = self.deltas.remove(&id) {
-            let children: Vec<BlockId> = self
-                .deltas
-                .keys()
-                .copied()
-                .filter(|c| {
-                    self.dag
-                        .ghostdag(c)
-                        .is_some_and(|g| g.selected_parent == Some(id))
-                })
-                .collect();
-            for c in children {
-                let child_delta = self.deltas.get_mut(&c).expect("child has a delta");
-                *child_delta = compose_delta(&delta, child_delta);
-            }
-            self.heights.remove(&id);
-        }
+        self.heights.remove(&id);
     }
 
     /// The full current ledger state: every block applied in linearized order.
