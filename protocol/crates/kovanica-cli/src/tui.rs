@@ -13,8 +13,11 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io;
+use std::path::PathBuf;
 
 use crate::api::Client;
+use crate::Wallet;
+use kovanica_state::Address;
 use tokio::runtime::Runtime;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,11 +78,21 @@ impl MenuItem {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum InputMode {
+    Normal,
+    BalanceAddress,
+    AddressKeyPath,
+}
+
 struct App {
     menu_state: ListState,
     client: Client,
     output: String,
     show_output: bool,
+    input_buffer: String,
+    input_prompt: Option<String>,
+    input_mode: InputMode,
 }
 
 impl App {
@@ -91,21 +104,66 @@ impl App {
             client,
             output: String::new(),
             show_output: false,
+            input_buffer: String::new(),
+            input_prompt: None,
+            input_mode: InputMode::Normal,
         }
     }
 
     fn next(&mut self) {
-        let i = self.menu_state.selected().unwrap_or(0);
-        if i < MenuItem::all().len() - 1 {
-            self.menu_state.select(Some(i + 1));
+        if self.input_prompt.is_none() {
+            let i = self.menu_state.selected().unwrap_or(0);
+            if i < MenuItem::all().len() - 1 {
+                self.menu_state.select(Some(i + 1));
+            }
         }
     }
 
     fn previous(&mut self) {
-        let i = self.menu_state.selected().unwrap_or(0);
-        if i > 0 {
-            self.menu_state.select(Some(i - 1));
+        if self.input_prompt.is_none() {
+            let i = self.menu_state.selected().unwrap_or(0);
+            if i > 0 {
+                self.menu_state.select(Some(i - 1));
+            }
         }
+    }
+
+    fn start_input(&mut self, prompt: String, mode: InputMode) {
+        self.input_prompt = Some(prompt);
+        self.input_buffer.clear();
+        self.input_mode = mode;
+    }
+
+    fn handle_input_char(&mut self, c: char) {
+        self.input_buffer.push(c);
+    }
+
+    fn handle_input_backspace(&mut self) {
+        self.input_buffer.pop();
+    }
+
+    async fn submit_input(&mut self) -> Result<()> {
+        let input = std::mem::take(&mut self.input_buffer);
+        let mode = std::mem::replace(&mut self.input_mode, InputMode::Normal);
+        self.input_prompt = None;
+
+        match mode {
+            InputMode::Normal => {}
+            InputMode::BalanceAddress => {
+                let addr = Address::parse(&input).map_err(|e| anyhow::anyhow!("invalid address: {e}"))?;
+                let result = self.client.utxos(&addr.to_hex())?;
+                self.output = serde_json::to_string_pretty(&result)?;
+                self.show_output = true;
+            }
+            InputMode::AddressKeyPath => {
+                let path = if input.trim().is_empty() { "kovanica.key".to_string() } else { input };
+                let wallet = crate::Wallet::load(&PathBuf::from(&path))?;
+                let addr = wallet.address();
+                self.output = format!("address (kvnc): {}\naddress (hex):  {}", addr.to_kvnc(), addr.to_hex());
+                self.show_output = true;
+            }
+        }
+        Ok(())
     }
 
     async fn execute(&mut self, item: MenuItem) -> Result<()> {
@@ -134,31 +192,48 @@ impl App {
                 self.output = serde_json::to_string_pretty(&result)?;
             }
             MenuItem::Balance => {
-                self.output = "Enter address (kvnc...dag or hex): ".to_string();
-                // In a real app, you'd show an input dialog here
-                self.output
-                    .push_str("\n[Not fully implemented in TUI yet - use CLI]");
+                self.start_input(
+                    "Enter address (kvnc...dag or 64-hex): ".to_string(),
+                    InputMode::BalanceAddress,
+                );
             }
             MenuItem::Keygen => {
-                self.output = "Keygen - use CLI for now".to_string();
+                let wallet = crate::Wallet::generate()?;
+                let key_path = "kovanica.key";
+                wallet.save(&PathBuf::from("kovanica.key"), false)?;
+                let addr = wallet.address();
+                let mut output = String::new();
+                output.push_str(&format!("Wrote key to {key_path} (keep it secret)\n"));
+                output.push_str(&format!("address (kvnc): {}\n", addr.to_kvnc()));
+                output.push_str(&format!("address (hex):  {}", addr.to_hex()));
+                self.output = output;
+                self.show_output = true;
             }
             MenuItem::Address => {
-                self.output = "Address - use CLI for now".to_string();
+                self.start_input(
+                    "Enter key file path (default: kovanica.key): ".to_string(),
+                    InputMode::AddressKeyPath,
+                );
             }
             MenuItem::Send => {
-                self.output = "Send - use CLI for now".to_string();
+                self.output = "Send requires multi-step input. Use CLI: kovanica send --key <key> --to <addr> --amount <atoms>".to_string();
+                self.show_output = true;
             }
             MenuItem::Htlc => {
-                self.output = "HTLC - use CLI for now".to_string();
+                self.output = "HTLC - use CLI: kovanica htlc create/redeem/refund/balance".to_string();
+                self.show_output = true;
             }
             MenuItem::Offer => {
-                self.output = "Offer - use CLI for now".to_string();
+                self.output = "Offer - use CLI: kovanica offer create/verify".to_string();
+                self.show_output = true;
             }
             MenuItem::Rwa => {
-                self.output = "RWA - use CLI for now".to_string();
+                self.output = "RWA - use CLI: kovanica rwa derive/issue/burn/info".to_string();
+                self.show_output = true;
             }
             MenuItem::Nft => {
-                self.output = "NFT - use CLI for now".to_string();
+                self.output = "NFT - use CLI: kovanica nft info/collection".to_string();
+                self.show_output = true;
             }
             MenuItem::Quit => {
                 return Err(anyhow::anyhow!("quit"));
@@ -201,12 +276,15 @@ fn ui(f: &mut Frame, app: &App) {
 
     f.render_stateful_widget(menu, chunks[0], &mut app.menu_state.clone());
 
-    let output_block = Block::default().borders(Borders::ALL).title("Output");
-    let output_text = if app.show_output {
-        Text::from(app.output.clone())
+    let (output_title, output_text) = if app.input_prompt.is_some() {
+        ("Input".to_string(), Text::from(format!("{}{}", app.input_prompt.as_ref().unwrap(), app.input_buffer)))
+    } else if app.show_output {
+        ("Output".to_string(), Text::from(app.output.clone()))
     } else {
-        Text::from("Select a command from the menu (Enter to execute, Q to quit)")
+        ("Output".to_string(), Text::from("Select a command from the menu (Enter to execute, Q to quit)"))
     };
+
+    let output_block = Block::default().borders(Borders::ALL).title(output_title);
     let output = Paragraph::new(output_text)
         .block(output_block)
         .wrap(Wrap { trim: true });
@@ -226,7 +304,12 @@ fn ui(f: &mut Frame, app: &App) {
             height: 4,
         });
 
-    let help = Paragraph::new("↑/↓: Navigate | Enter: Execute | Q: Quit")
+    let help_text = if app.input_prompt.is_some() {
+        "Type input | Enter: Submit | Esc: Cancel"
+    } else {
+        "↑/↓: Navigate | Enter: Execute | Q: Quit"
+    };
+    let help = Paragraph::new(help_text)
         .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     f.render_widget(help, footer_chunks[0]);
@@ -291,24 +374,45 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
-                    KeyCode::Up => app.previous(),
-                    KeyCode::Down => app.next(),
-                    KeyCode::Enter => {
-                        if let Some(selected) = app.menu_state.selected() {
-                            let item = MenuItem::all()[selected];
-                            if item == MenuItem::Quit {
-                                return Ok(());
-                            }
-                            if let Err(e) = app.execute(item).await {
+                if app.input_prompt.is_some() {
+                    match key.code {
+                        KeyCode::Char(c) => app.input_buffer.push(c),
+                        KeyCode::Backspace => { app.input_buffer.pop(); }
+                        KeyCode::Enter => {
+                            if let Err(e) = app.submit_input().await {
                                 if e.to_string() != "quit" {
                                     app.output = format!("Error: {}", e);
+                                    app.show_output = true;
                                 }
                             }
                         }
+                        KeyCode::Esc => {
+                            app.input_prompt = None;
+                            app.input_buffer.clear();
+                            app.input_mode = InputMode::Normal;
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                } else {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
+                        KeyCode::Up => app.previous(),
+                        KeyCode::Down => app.next(),
+                        KeyCode::Enter => {
+                            if let Some(selected) = app.menu_state.selected() {
+                                let item = MenuItem::all()[selected];
+                                if item == MenuItem::Quit {
+                                    return Ok(());
+                                }
+                                if let Err(e) = app.execute(item).await {
+                                    if e.to_string() != "quit" {
+                                        app.output = format!("Error: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
