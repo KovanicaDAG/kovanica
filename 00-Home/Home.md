@@ -12,10 +12,10 @@ never reads, writes, or deletes it.
 
 ## Browse
 
-- [[00-Home/10-Protocol|Protocol]] — 16 notes
-- [[00-Home/20-Network|Network]] — 17 notes
+- [[00-Home/10-Protocol|Protocol]] — 17 notes
+- [[00-Home/20-Network|Network]] — 15 notes
 - [[00-Home/30-Operations|Operations]] — 17 notes
-- [[00-Home/40-Node|Node]] — 11 notes
+- [[00-Home/40-Node|Node]] — 10 notes
 - [[00-Home/50-Components|Components]] — 19 notes
 - [[00-Home/60-Planning|Planning]] — 52 notes
 - [[00-Home/70-Policy|Policy]] — 7 notes

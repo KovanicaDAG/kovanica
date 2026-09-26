@@ -32,7 +32,7 @@ synced: 2026-09-26
 | **RFC-003** | Stealth + Script v2 | KVP-103 | ✅ Shipped | [[10-Protocol/protocol--docs--RFC-003-ScriptV2-and-Stealth|RFC-003-ScriptV2-and-Stealth.md]] | `kovanica-state/src/script_v2.rs`, `stealth.rs`, 25-test suite |
 | **RFC-004** | HTLC / Atomic Swaps | KVP-104 | ✅ Shipped | [[10-Protocol/protocol--docs--RFC-004-Htlc|RFC-004-Htlc.md]] | `kovanica-state/src/htlc.rs`, `kovanica-node/src/atomic_swap.rs`, 23-test suite |
 | **RFC-005** | Vault / CSV | KVP-105 | ✅ Shipped | [[10-Protocol/protocol--docs--RFC-005-Vault|RFC-005-Vault.md]] | `kovanica-state/src/vault.rs`, per-UTXO creation height, 26-test suite |
-| **RFC-006** | Tokenomics (Emission Curve) | — | ✅ Core Done | [RFC-006-EmissionCurve.md](RFC-006-EmissionCurve.md) | `kovanica-state/src/ledger.rs`, smooth α=¾, MAX_SUPPLY 90.2M |
+| **RFC-006** | Tokenomics (Emission Curve) | — | ✅ Core Done | [[10-Protocol/protocol--docs--RFC-006-EmissionCurve|RFC-006-EmissionCurve.md]] | `kovanica-state/src/ledger.rs`, smooth α=¾, MAX_SUPPLY 90.2M |
 
 ---
 
@@ -112,7 +112,7 @@ synced: 2026-09-26
 |----------|---------|
 | [[10-Protocol/protocol--docs--SECURITY|SECURITY.md]] | Threat model, key handling, finality, incident response |
 | [[10-Protocol/protocol--docs--TOKENOMICS|TOKENOMICS.md]] | Emission curve, supply parameters, fees |
-| [[20-Network/protocol--NETWORK|NETWORK.md]] | Domain map, DNS, redirect rules |
+| [NETWORK.md](../NETWORK.md) | Domain map, DNS, redirect rules |
 | [[30-Operations/protocol--OPERATIONS|OPERATIONS.md]] | Seed runbook, deploy pipeline, incident lessons |
 | [[10-Protocol/protocol--docs--LEGIT-BOARD|LEGIT-BOARD.md]] | Public visibility checklist |
 | [[70-Policy/protocol--docs--AUDIT-PLAN|AUDIT-PLAN.md]] | Audit scope, firms, timeline |

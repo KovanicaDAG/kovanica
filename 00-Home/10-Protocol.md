@@ -7,7 +7,7 @@ generated_by: scripts/build-vault.py
 
 # Protocol
 
-← [[00-Home/Home|Home]] · 16 notes
+← [[00-Home/Home|Home]] · 17 notes
 
 - [[10-Protocol/protocol--AGENTS|AGENTS.md]]
 - [[10-Protocol/protocol--docs--KVP-102-NativeTokens|KVP-102 — Native Multi-Asset Tokens]]
@@ -19,6 +19,7 @@ generated_by: scripts/build-vault.py
 - [[10-Protocol/protocol--docs--RFC-003-ScriptV2-and-Stealth|RFC-003 — Stealth Addresses (6A) + Script v2 (3B)]]
 - [[10-Protocol/protocol--docs--RFC-004-Htlc|RFC-004 — HTLC / Atomic Swap (5.1)]]
 - [[10-Protocol/protocol--docs--RFC-005-Vault|RFC-005 — Time-Lock Vault / Escrow (5.2)]]
+- [[10-Protocol/protocol--docs--RFC-006-EmissionCurve|RFC-006 — Tokenomics (emission, supply cap, maturity, fee burn)]]
 - [[10-Protocol/protocol--docs--RFC-008-OraclePruning|RFC-008 — Reachability Oracle Pruning (block-pruning depth wiring)]]
 - [[10-Protocol/protocol--docs--RFC-POA-Migration|RFC-POA: Pure Proof-of-Authority Consensus Migration]]
 - [[10-Protocol/protocol--docs--SECURITY|Kovanica Security Notes]]

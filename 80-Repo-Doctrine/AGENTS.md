@@ -1,5 +1,5 @@
 ---
-title: "AGENTS.md"
+title: "AGENTS.md — Monorepo Conventions"
 category: 80-Repo-Doctrine
 source: AGENTS.md
 synced: 2026-09-26

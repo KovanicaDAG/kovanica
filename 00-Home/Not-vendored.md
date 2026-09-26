@@ -61,3 +61,6 @@ sensitive material stays in the repo where it belongs.
 - `.opencode/tools/README.md` — agent doctrine — re-run with --with-agent-config
 - `TESTNET-RESET-CREDENTIALS.md` — infra-sensitive — re-run with --include-sensitive
 - `TESTNET-RESET-PROCEDURE.md` — infra-sensitive — re-run with --include-sensitive
+- `node/TESTNET.md` — stale/duplicate — STALE — pre-RFC-006 economy (50 KVNC premine, halving/1000, 0.0001 fee)
+- `protocol/NETWORK.md` — stale/duplicate — duplicate of NETWORK.md — older and less complete
+- `protocol/docs/upgrades/02-RedesignDomains/NETWORK.md` — stale/duplicate — self-declared non-canonical copy of NETWORK.md

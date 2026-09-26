@@ -63,7 +63,7 @@ curl -s https://explorer.kovanica.online/api/head
 
 `network` and `genesis` must match. `blocks` / tip will catch up after the first pull.
 
-More detail: **[[40-Node/node--JOIN|JOIN.md]]** · Testnet parameters: **[[40-Node/node--TESTNET|TESTNET.md]]**
+More detail: **[[40-Node/node--JOIN|JOIN.md]]** · Testnet parameters: **[TESTNET.md](./TESTNET.md)**
 
 ---
 
