@@ -229,7 +229,7 @@ operator supplies their own via `set_authority_signing_key`.
 gates below, and the key-ceremony procedure for testnet authority keys.
 
 **Not authorised:** executing the reset. No testnet data directory may be wiped
-and no new PoA genesis may be committed until all four gates below are closed.
+and no new PoA genesis may be committed until gates 1-3 below are closed (gate 4 gates *mainnet*, not this reset).
 This is a deliberate split: the planning artefacts are needed *before* anyone is
 in a position to execute, and producing them is not a step that can half-happen
 and damage a live chain.
@@ -240,7 +240,7 @@ and damage a live chain.
 |---|------|--------|-----------------|
 | **1** | **Real, random testnet authority keys** — *not* the `AUTHORITY_PLACEHOLDER_BASE = 9001` set | ☐ open | The placeholder set is publicly derivable, so a soak run against it exercises an **unauthenticated** PoA. It cannot detect a real authority compromise, key reuse, or a bad ceremony, because every participant can forge any authority. A green soak on placeholders is **not** evidence for a green soak on real keys. |
 | **2** | **24h multi-validator soak** (M6 exit criterion) | ☐ open | Single-node and short-run checks do not exercise authority failover, slot-clock drift, or a rotating authority set over a realistic day. |
-| **3** | **CPU/RAM-vs-PoW measurement** | ☐ open — **unclosable as worded, needs a maintainer decision** | The comparison this gate asks for can no longer be produced. The test was renamed `resource_profiling_poa_production` in `1df0114`, which deleted the PoW arm with PoW. It was `#[ignore]`d in *every* revision it ever had (`f00c151`, `ddbe469`, `c5db750`, `1df0114`), so it never ran and **no PoW baseline was ever recorded**. See §0.9.1. |
+| **3** | **PoA resource footprint** (CPU/RAM) | ☑ **closed 2026-09-26** | Reworded from "CPU/RAM-vs-PoW", which is unrecoverable: `1df0114` renamed the test to `resource_profiling_poa_production` and deleted the PoW arm, and the test was `#[ignore]`d in every revision it ever had (`f00c151`, `ddbe469`, `c5db750`, `1df0114`), so no PoW baseline was ever recorded. Baseline from a manual run: **112.7 us/block, +7.4 KiB/block RSS** over 100 blocks. A regression bar against a reintroduced search loop, **not** an efficiency claim — see §0.9.1. |
 | **4** | **Mainnet key ceremony** (per §0.7.2 residuals) | ☐ open | Required before *any* mainnet authority set is frozen. Independent of the testnet reset, but listed here because the same ceremony procedure is being written for gate 1 and should not be written twice. |
 
 **Gate already closed:** the nominal-work pin. `POA_NOMINAL_WORK = 1` and
@@ -611,8 +611,8 @@ So the "three of the five items are blockers for any PoA genesis" claim in the
 authority key is read-only under PoA) are **unchanged** — those follow from PoA
 admission itself, not from B1's status.
 
-**Gate 3 cannot be closed as worded.** It asks for a CPU/RAM-vs-PoW
-measurement. That comparison is no longer expressible:
+**Gate 3 was reworded and closed on 2026-09-26 (option 1 below).** It originally
+asked for a CPU/RAM-vs-PoW measurement. That comparison is no longer expressible:
 
 - `1df0114` renamed `resource_profiling_poa_vs_pow` to
   `resource_profiling_poa_production` and deleted the PoW arm along with PoW.
@@ -627,19 +627,24 @@ isolation: **112.7 us/block, +7.4 KiB/block RSS** over 100 blocks. Its assertion
 is `per_block_us < 50_000.0`, a loose tripwire against a reintroduced search
 loop rather than a benchmark, so it cannot support an efficiency claim either.
 
-This is a gate that demands a measurement which never happened and can no longer
-be produced. Closing it honestly needs a maintainer decision, not a code change:
+**Decision: option 1, reword.** The gate is now a PoA resource-footprint
+measurement with the figures above recorded as the baseline, and the
+PoA-vs-PoW ratio is formally accepted as unrecoverable. Options 2 and 3 were
+rejected: there is no pre-`1df0114` tag carrying a two-armed test that ever
+passed, and retiring the gate outright would have dropped a real footgun
+tripwire along with the unrecoverable comparison.
 
-1. **Reword** the gate to a PoA-only footprint measurement and record the figures
-   above, accepting that the PoA-vs-PoW ratio is unrecoverable; or
-2. **Recover a baseline** from a pre-`1df0114` tag and check out the old
-   two-armed test to produce one number, then record it; or
-3. **Retire** the gate, on the grounds that the claim it protected (PoA is
-   cheaper than PoW) is now a design assertion rather than a live risk.
+**What this bar is and is not.** It is a *regression* bar: it catches a
+reintroduced search loop, an accidentally quadratic path, or a leaked per-block
+allocation. It is **not** an efficiency claim, and it no longer says anything
+about PoA being cheaper than PoW — that is a design assertion now, not a
+measured result. Anyone citing a PoA-vs-PoW number in future must say it is
+unmeasured.
 
-Until one of those is chosen, gate 3 stays open and the §0.6.2 reset stays
-blocked. Option 1 lowers a documented safety bar and should not be taken by an
-implementer acting unilaterally — which is why it is written up here instead.
+The test remains `#[ignore]`d because it writes wallet key files and is a
+manual profiling run, not a unit test; the Rust gate in
+`.github/workflows/rust-gate.yml` therefore does not execute it. The recorded
+figures came from a deliberate manual run.
 
 ### 0.10 Phase 0, `kovanica-ffi`: what the wallet surface lost
 
