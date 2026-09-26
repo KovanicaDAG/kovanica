@@ -10,10 +10,10 @@
 //! same as the snapshot. The file is a streaming log, not mmap.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::Path;
 
-use kovanica_dag::{decode_block, encode_block, AuthoritySet, Block, SnapshotError};
+use kovanica_dag::{decode_block, encode_block, AuthoritySet, Block, BlockId, SnapshotError};
 
 use crate::ledger::{
     HalvingSchedule, Ledger, LedgerError, LedgerSnapshotError, DEFAULT_HALVING_ERA,
@@ -91,6 +91,12 @@ impl std::error::Error for StoreError {}
 impl From<io::Error> for StoreError {
     fn from(e: io::Error) -> Self {
         StoreError::Io(e.to_string())
+    }
+}
+
+impl From<LedgerSnapshotError> for StoreError {
+    fn from(e: LedgerSnapshotError) -> Self {
+        StoreError::Replay(e)
     }
 }
 
@@ -199,8 +205,8 @@ impl LedgerStore {
         let schedule = HalvingSchedule::new(subsidy, halving_era);
         let mut ledger = Ledger::new(k, schedule, &genesis_txs)
             .map_err(|e| StoreError::Replay(map_genesis(e)))?;
-        if let Some((authority_set, slot_duration_ms)) = poa {
-            ledger.set_poa(authority_set, slot_duration_ms);
+        if let Some((ref authority_set, slot_duration_ms)) = poa {
+            ledger.set_poa(authority_set.clone(), slot_duration_ms);
         }
         // Apply the pruning policy before replay so the DAG and per-block
         // state stay bounded during the load (see [`PruningPolicy`]). The
@@ -217,17 +223,80 @@ impl LedgerStore {
         if policy.is_some() {
             ledger.set_replay_mode(true);
         }
+
+        // Pass 1: scan the log to collect all blocks and build child_count map.
+        // child_count[parent] = number of blocks in the log that have this block
+        // as selected parent. This lets us know when a block is safe to prune
+        // during pass 2 (when its child_count reaches 0).
+        // Seek back to after the header to re-read blocks
+        file.seek(std::io::SeekFrom::Start(0))?;
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic).map_err(map_header_eof)?;
+        let mut ver = [0u8; 2];
+        file.read_exact(&mut ver).map_err(map_header_eof)?;
+        let version = u16::from_le_bytes(ver);
+        file.read_exact(&mut [0u8; 8])?; // subsidy
+        if version >= 2 {
+            file.read_exact(&mut [0u8; 8])?; // halving_era
+        }
+        file.read_exact(&mut [0u8; 2])?; // k
+        let genesis_block = read_record(&mut file)?.ok_or(StoreError::Truncated)?;
+
+        // Collect all remaining blocks and count children
+        let mut blocks = Vec::new();
+        let mut child_count: std::collections::HashMap<BlockId, usize> =
+            std::collections::HashMap::new();
         while let Some(block) = read_record(&mut file)? {
-            // Identity-preserving replay: the block's stored id is
-            // authoritative, so children's parent references resolve exactly as
-            // they did in the producing node.
+            let sp = block.parents().first().copied();
+            blocks.push(block);
+            if let Some(sp) = sp {
+                *child_count.entry(sp).or_insert(0) += 1;
+            }
+        }
+
+        // Re-initialize ledger for pass 2
+        let schedule = HalvingSchedule::new(subsidy, halving_era);
+        let mut ledger = Ledger::new(k, schedule, &kovanica_dag_payload(&genesis_block)?)
+            .map_err(|e| StoreError::Replay(map_genesis(e)))?;
+        if let Some((ref authority_set, slot_duration_ms)) = poa {
+            ledger.set_poa(authority_set.clone(), slot_duration_ms);
+        }
+        if let Some(policy) = policy {
+            ledger.set_finality_depth(policy.finality_depth);
+            ledger.set_payload_pruning_depth(policy.payload_pruning_depth);
+            ledger.set_block_pruning_depth(policy.block_pruning_depth);
+        }
+        if policy.is_some() {
+            ledger.set_replay_mode(true);
+        }
+
+        // Pass 2: replay with pruning. After each block, decrement its
+        // selected parent's child count; when child_count reaches 0 and the
+        // parent is final, it's safe to prune.
+        for block in blocks {
+            // Decrement child count of selected parent (if any)
+            if let Some(sp) = block.parents().first() {
+                if let Some(count) = child_count.get_mut(sp) {
+                    *count = count.saturating_sub(1);
+                    // If parent now has 0 remaining children and is final, prune it
+                    if *count == 0 && policy.is_some() {
+                        ledger.prune_specific(*sp);
+                    }
+                }
+            }
             ledger
                 .insert_raw_block(block)
                 .map_err(|e| StoreError::Replay(LedgerSnapshotError::Rebuild(e)))?;
         }
+
         if policy.is_some() {
             ledger.set_replay_mode(false);
         }
+        // Final prune pass to clean up any remaining final blocks
+        if policy.is_some() {
+            ledger.prune();
+        }
+
         Ok((Self { file }, ledger))
     }
 

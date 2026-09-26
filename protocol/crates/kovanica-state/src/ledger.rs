@@ -2675,7 +2675,7 @@ impl Ledger {
     /// final blocks are dropped, which are never a future block's selected
     /// parent (that is a finality violation) nor needed by
     /// [`Ledger::ledger_state`] (which starts from the selected tip).
-    fn prune(&mut self) {
+    pub(crate) fn prune(&mut self) {
         // During replay, we must not prune deltas because blocks later in the log
         // (e.g., anticone blocks linearized last) may have selected parents that
         // are currently final. Their deltas are needed for state reconstruction.
@@ -2704,6 +2704,50 @@ impl Ledger {
             let Some(delta) = self.deltas.remove(&id) else {
                 continue;
             };
+            let children: Vec<BlockId> = self
+                .deltas
+                .keys()
+                .copied()
+                .filter(|c| {
+                    self.dag
+                        .ghostdag(c)
+                        .is_some_and(|g| g.selected_parent == Some(id))
+                })
+                .collect();
+            for c in children {
+                let child_delta = self.deltas.get_mut(&c).expect("child has a delta");
+                *child_delta = compose_delta(&delta, child_delta);
+            }
+            self.heights.remove(&id);
+        }
+    }
+
+    /// Prune a specific block if it is final and safe to prune.
+    /// Used during replay to prune blocks whose child_count has reached 0.
+    pub(crate) fn prune_specific(&mut self, id: BlockId) {
+        let threshold = self.finality_score();
+        if threshold == 0 {
+            return;
+        }
+        // Check if block is final
+        let is_final = self
+            .dag
+            .ghostdag(&id)
+            .is_some_and(|g| g.blue_score < threshold);
+        if !is_final {
+            return;
+        }
+        // Check if block has no remaining children in deltas (safe to prune)
+        let has_children = self.deltas.keys().any(|c| {
+            self.dag
+                .ghostdag(c)
+                .is_some_and(|g| g.selected_parent == Some(id))
+        });
+        if has_children {
+            return;
+        }
+        // Safe to prune: fold delta into children, then remove
+        if let Some(delta) = self.deltas.remove(&id) {
             let children: Vec<BlockId> = self
                 .deltas
                 .keys()
