@@ -187,7 +187,7 @@ mod tests {
         let mut node = Node::new();
         node.genesis(3, 1000, 1000, 1, None).unwrap();
         let genesis_hdr = node.spv_header(&node.genesis_id().unwrap()).unwrap();
-        let client = SpvClient::new(genesis_hdr.clone(), false, None);
+        let client = SpvClient::new(genesis_hdr.clone());
 
         let loc = build_locator(&client);
         assert_eq!(loc.len(), 1);
@@ -201,7 +201,7 @@ mod tests {
         let sent = node.send(1, 200, 2).unwrap();
 
         let genesis_hdr = node.spv_header(&node.genesis_id().unwrap()).unwrap();
-        let mut client = SpvClient::new(genesis_hdr, false, None);
+        let mut client = SpvClient::new(genesis_hdr);
 
         let block_hdr = node.spv_header(&sent.block).unwrap();
         client.add_header(block_hdr).unwrap();

@@ -8,6 +8,28 @@ UTXO ledger applies transactions in that order. Hybrid admission combines
 Nakamoto proof-of-work with VRF-staked block production (Algorand/Praos-style
 sortition), and phones sync as light nodes through UniFFI bindings.
 
+> **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
+> Proof-of-Work is being **removed**, not merely disabled, and the hybrid
+> admission described in the paragraph above is superseded by it. Items marked
+> `[TARGET]` are ratified but not yet implemented; `[CURRENT]` items describe
+> shipped code. The description above is `[CURRENT]` and will be rewritten when
+> the removal lands; the ratified target is proof-of-authority — a fixed
+> authority set produces blocks on a slot schedule with a
+> `KOVANICA_AUTHORITY_THRESHOLD` majority. See
+> [`docs/RFC-POA-Migration.md` §0](./docs/RFC-POA-Migration.md) for the
+> canonical policy, the removal inventory and the operator replacements.
+> **Both** halves of that hybrid admission are removed, the VRF-staked path
+> included — decided 2026-09-25, Option A
+> ([`docs/RFC-POA-Migration.md` §0.7.1](./docs/RFC-POA-Migration.md)). A
+> non-authority cannot produce a block by any route, and the stake registry
+> retires with it. **RFC-005 vault/CSV and the treasury vaults are
+> unaffected** (`vault.rs` has zero stake references).
+>
+> Unchanged by the PoA removal: GHOSTDAG **k=3**, the UTXO ledger, Ed25519,
+> 1 KVNC = 100_000_000 atoms, and every RFC-006 tokenomics constant —
+> **MAX_SUPPLY 90.2M KVNC**, **s₀ 10 KVNC/block**, era **2 000 000**,
+> **α 3/4**, maturity **100**, fee **75% burned / 25% producer**.
+
 > **Working on this repo?** Read [`AGENTS.md`](./AGENTS.md) first — it is the
 > source of truth for conventions, layout details, and the roadmap.
 
@@ -15,7 +37,7 @@ sortition), and phones sync as light nodes through UniFFI bindings.
 
 | Crate | What |
 | --- | --- |
-| `crates/kovanica-dag` | DAG + GHOSTDAG consensus core: reachability oracle, colouring, linearization, PoW/difficulty/VRF |
+| `crates/kovanica-dag` | DAG + GHOSTDAG consensus core: reachability oracle, colouring, linearization, PoW/difficulty/VRF (`[TARGET]`-for-removal: the `pow`/`difficulty` modules go away, the oracle/colouring/linearization do not) |
 | `crates/kovanica-state` | UTXO ledger applied in GHOSTDAG order: ed25519 spends, stake registry, hybrid admission, snapshots/checkpoints, SPV (`spv.rs`) |
 | `crates/kovanica-node` | Runnable node: RPC/mempool/P2P mesh + DHT/DNS discovery, metrics, self-hosted explorer |
 | `crates/kovanica-ffi` | `LightNode` — UniFFI bindings for Kotlin/Swift mobile light nodes |

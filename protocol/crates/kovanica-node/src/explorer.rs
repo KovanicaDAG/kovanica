@@ -3,6 +3,7 @@
 //! [`Mesh`] / [`Node`] already computed.
 
 use base64::Engine;
+use hex;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
@@ -12,10 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use kovanica_dag::{AuthoritySet, Block, BlockId};
+use kovanica_dag::{AuthoritySet, BlockId};
 use kovanica_state::{
-    decode_block_payload, encode_block_payload, Address, AssetId, HybridConfig, OutPoint,
-    Transaction, TxId, TxOutput, MAX_SUPPLY,
+    decode_block_payload, Address, AssetId, OutPoint, Transaction, TxId, TxOutput, MAX_SUPPLY,
 };
 
 use crate::dht::{NodeId, PeerContact, RoutingTable};
@@ -169,24 +169,22 @@ fn network_profile() -> NetworkProfile {
     profile
 }
 
-/// Consensus admission mode, from `KOVANICA_CONSENSUS` (RFC-POA §7).
+/// Fail fast on a legacy `KOVANICA_CONSENSUS` selection.
 ///
-/// `poa` (default) — Proof-of-Authority: a fixed authority set produces blocks
-/// in slot round-robin; the DAG's PoW/difficulty/VRF switches are cleared.
-/// `pow` — legacy PoW (+ optional hybrid staked-VRF) admission, kept for
-/// replaying the pre-reset testnet and for `pow-vrf`-feature builds.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ConsensusMode {
-    Poa,
-    Pow,
-}
-
-fn consensus_mode_from_env() -> ConsensusMode {
-    match std::env::var("KOVANICA_CONSENSUS").as_deref() {
-        Ok("poa") => ConsensusMode::Poa,
-        Ok("pow") | Ok("pow-vrf") => ConsensusMode::Pow,
-        Ok(other) => panic!("KOVANICA_CONSENSUS must be 'poa' or 'pow' (got '{other}')"),
-        Err(_) => ConsensusMode::Poa,
+/// PoA is the only admission regime (RFC-POA §0). `pow` / `pow-vrf` used to
+/// select PoW or hybrid admission, both of which were deleted; silently booting
+/// a genesis with no admission control would be a silent downgrade, so this
+/// refuses to start and names the migration step.
+fn reject_legacy_consensus_mode() {
+    if let Ok(mode) = std::env::var("KOVANICA_CONSENSUS") {
+        if mode != "poa" {
+            panic!(
+                "KOVANICA_CONSENSUS={mode:?} is no longer supported: PoW, difficulty, VRF \
+                 and hybrid admission were removed (RFC-POA §0). PoA is the only regime — \
+                 unset KOVANICA_CONSENSUS, or set it to \"poa\", and supply the authority \
+                 set via KOVANICA_AUTHORITIES (or KOVANICA_AUTHORITY_THRESHOLD)."
+            );
+        }
     }
 }
 
@@ -207,20 +205,26 @@ struct PoaGenesisConfig {
     /// `KOVANICA_AUTHORITIES` set never loads keys into the node (each
     /// authority operator sets their own via `set_authority_signing_key`).
     placeholder: bool,
+    /// Operator's own Ed25519 authority signing key (32 bytes = 64 hex chars),
+    /// if provided via `KOVANICA_AUTHORITY_KEY`. This is the operator's
+    /// consensus credential — it allows this node to sign blocks when it is
+    /// the scheduled authority for a slot. It is NOT the same as the treasury
+    /// seed or the founder seed.
+    authority_signing_key: Option<[u8; 32]>,
 }
 
 /// Parse the PoA genesis configuration from the environment (RFC-POA §7):
-/// `KOVANICA_CONSENSUS=poa` (default), `KOVANICA_AUTHORITIES` (comma-separated
-/// 64-hex Ed25519 public keys), `KOVANICA_AUTHORITY_THRESHOLD` (default strict
-/// majority), `KOVANICA_SLOT_DURATION` (default 3000 ms).
+/// `KOVANICA_AUTHORITIES` (comma-separated 64-hex Ed25519 public keys),
+/// `KOVANICA_AUTHORITY_THRESHOLD` (default strict majority),
+/// `KOVANICA_SLOT_DURATION` (default 3000 ms),
+/// `KOVANICA_AUTHORITY_KEY` (optional: this operator's 64-hex Ed25519 signing key).
 ///
-/// Returns `None` in `pow` mode. In `poa` mode with no `KOVANICA_AUTHORITIES`:
-/// testnet derives a deterministic placeholder set (TESTNET-ONLY); mainnet
-/// refuses to boot — the same fail-fast guard as the treasury seed.
-fn poa_config_from_env(profile: &NetworkProfile) -> Option<PoaGenesisConfig> {
-    if consensus_mode_from_env() == ConsensusMode::Pow {
-        return None;
-    }
+/// Always yields a config — PoA is the only admission regime. With no
+/// `KOVANICA_AUTHORITIES`: testnet derives a deterministic placeholder set
+/// (TESTNET-ONLY); mainnet refuses to boot — the same fail-fast guard as the
+/// treasury seed.
+fn poa_config_from_env(profile: &NetworkProfile) -> PoaGenesisConfig {
+    reject_legacy_consensus_mode();
     let slot_duration_ms: u64 = std::env::var("KOVANICA_SLOT_DURATION")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -279,11 +283,28 @@ fn poa_config_from_env(profile: &NetworkProfile) -> Option<PoaGenesisConfig> {
     let authority_set = AuthoritySet::from_bytes(&bytes).unwrap_or_else(|e| {
         panic!("invalid KOVANICA_AUTHORITIES / KOVANICA_AUTHORITY_THRESHOLD: {e}")
     });
-    Some(PoaGenesisConfig {
+    // Optional: this operator's own authority signing key.
+    let authority_signing_key = std::env::var("KOVANICA_AUTHORITY_KEY").ok().map(|hex| {
+        let hex = hex.trim();
+        if hex.len() != 64 {
+            panic!(
+                "KOVANICA_AUTHORITY_KEY must be 64 hex chars (32 bytes, got {})",
+                hex.len()
+            );
+        }
+        let mut key = [0u8; 32];
+        for (i, byte) in hex.as_bytes().chunks(2).enumerate() {
+            key[i] = u8::from_str_radix(std::str::from_utf8(byte).expect("ascii hex"), 16)
+                .expect("KOVANICA_AUTHORITY_KEY must be hex");
+        }
+        key
+    });
+    PoaGenesisConfig {
         authority_set,
         slot_duration_ms,
         placeholder,
-    })
+        authority_signing_key,
+    }
 }
 
 /// WebSocket message types for real-time updates
@@ -352,8 +373,11 @@ pub fn serve(addr: impl ToSocketAddrs) -> std::io::Result<()> {
 pub struct Explorer {
     pub mesh: Mesh,
     pub selected: String,
-    pub mining: bool,
-    pub mine_every: u64,
+    /// Produce a block on a rotating node every `produce_every` ticks. Under
+    /// PoA a node only produces in the slots its authority key owns, so this is
+    /// a "tick the chain" driver, not mining.
+    pub producing: bool,
+    pub produce_every: u64,
     pub ticks: u64,
     pub rotate: usize,
     pub faucet: bool,
@@ -394,8 +418,8 @@ impl Explorer {
         Self {
             mesh,
             selected: "alpha".into(),
-            mining: false,
-            mine_every: mine_every_ticks(),
+            producing: false,
+            produce_every: produce_every_ticks(),
             ticks: 0,
             rotate: 0,
             faucet: true,
@@ -425,7 +449,7 @@ impl Explorer {
         self.ticks += 1;
         self.tick_p2p();
         self.tick_dht();
-        if self.mining && self.mine_every > 0 && self.ticks % self.mine_every == 0 {
+        if self.producing && self.produce_every > 0 && self.ticks % self.produce_every == 0 {
             let names = self.mesh.names();
             if !names.is_empty() {
                 let name = &names[self.rotate % names.len()];
@@ -672,8 +696,8 @@ impl Explorer {
         let mut app = Self {
             mesh,
             selected: "alpha".into(),
-            mining: env_flag("KOVANICA_MINE", false),
-            mine_every: mine_every_ticks(),
+            producing: env_flag("KOVANICA_PRODUCE", env_flag("KOVANICA_MINE", false)),
+            produce_every: produce_every_ticks(),
             ticks: 0,
             rotate: 0,
             faucet: env_flag("KOVANICA_FAUCET", false),
@@ -733,10 +757,6 @@ fn log_path(name: &str) -> PathBuf {
     data_dir().join(format!("{name}.log"))
 }
 
-fn miner_path(name: &str) -> PathBuf {
-    data_dir().join(format!("{name}.miner"))
-}
-
 /// Persist every node's ledger **incrementally**: each node appends only the
 /// blocks inserted since the last call to its append-only replay log (see
 /// [`Node::persist_incremental`]), instead of rewriting a whole-file snapshot
@@ -749,9 +769,6 @@ fn persist_all(mesh: &mut Mesh) {
             if let Some(p) = log_path(&name).to_str() {
                 let _ = n.persist_incremental(p);
             }
-            if let Some(m) = n.miner() {
-                let _ = fs::write(miner_path(&name), m.to_hex());
-            }
         }
     }
 }
@@ -762,7 +779,6 @@ fn wipe_data() {
         for e in rd.flatten() {
             let p = e.path();
             if p.extension().and_then(|s| s.to_str()) == Some("snap")
-                || p.extension().and_then(|s| s.to_str()) == Some("miner")
                 || p.extension().and_then(|s| s.to_str()) == Some("log")
             {
                 let _ = fs::remove_file(p);
@@ -779,9 +795,9 @@ fn load_or_genesis(name: &str) -> Node {
     let profile = network_profile();
     if log.is_file() {
         if let Some(p) = log.to_str() {
-            // Hybrid-era logs must replay under the same policy or staked ids
-            // silently change (identity-preserving replay lesson). Load with
-            // the hybrid reader when the operator runs hybrid mode.
+            // PoA-era logs must replay under PoA or block ids silently change
+            // (identity-preserving replay lesson). Load with the PoA reader when
+            // the operator runs PoA mode.
             //
             // The pruning policy is applied BEFORE replay so the DAG and
             // per-block state stay bounded during the load (the O(n²)
@@ -792,20 +808,15 @@ fn load_or_genesis(name: &str) -> Node {
                 payload_pruning_depth: profile.payload_pruning_depth,
                 block_pruning_depth: profile.block_pruning_depth,
             };
-            let loaded = if let Some(cfg) = poa_config_from_env(&profile) {
-                Node::load_log_with_poa_and_policy(
-                    p,
-                    cfg.authority_set,
-                    cfg.slot_duration_ms,
-                    policy,
-                )
-            } else if env_flag("KOVANICA_HYBRID", false) {
-                Node::load_log_with_hybrid_and_policy(p, HybridConfig::default(), policy)
-            } else {
-                Node::load_log_with_policy(p, policy)
-            };
+            let cfg = poa_config_from_env(&profile);
+            let loaded = Node::load_log_with_poa_and_policy(
+                p,
+                cfg.authority_set,
+                cfg.slot_duration_ms,
+                policy,
+            );
             if let Ok(mut node) = loaded {
-                restore_miner_and_policy(&mut node, name);
+                restore_poa_policy(&mut node, &profile);
                 return node;
             }
         }
@@ -815,15 +826,10 @@ fn load_or_genesis(name: &str) -> Node {
     if snap.is_file() {
         let mut node = Node::new();
         if let Some(p) = snap.to_str() {
-            let loaded = if let Some(cfg) = poa_config_from_env(&profile) {
-                node.load_with_poa(p, cfg.authority_set, cfg.slot_duration_ms)
-            } else if env_flag("KOVANICA_HYBRID", false) {
-                node.load_with_hybrid(p, HybridConfig::default())
-            } else {
-                node.load(p)
-            };
+            let cfg = poa_config_from_env(&profile);
+            let loaded = node.load_with_poa(p, cfg.authority_set, cfg.slot_duration_ms);
             if loaded.is_ok() {
-                restore_miner_and_policy(&mut node, name);
+                restore_poa_policy(&mut node, &profile);
                 // Migrate to the incremental store so subsequent persistence
                 // appends only new blocks.
                 if let Some(lp) = log.to_str() {
@@ -840,39 +846,29 @@ fn load_or_genesis(name: &str) -> Node {
     node
 }
 
-/// Restore a node's miner address and PoW/hybrid policy after loading it from
-/// disk (log or snapshot). Hybrid admission is already active on a ledger
-/// loaded under the hybrid reader; otherwise PoW is re-enabled when the
-/// operator runs PoW mode.
-fn restore_miner_and_policy(node: &mut Node, name: &str) {
-    if let Ok(h) = fs::read_to_string(miner_path(name)) {
-        if let Ok(addr) = parse_addr(h.trim()) {
-            node.set_miner(addr);
+/// Re-apply PoA admission and the network profile after loading a node from disk
+/// (log or snapshot).
+///
+/// PoA admission is already active on a ledger loaded under the PoA reader;
+/// re-applying it is defense-in-depth, so a PoA-era log loaded under a legacy
+/// reader cannot admit blocks without authority signatures.
+///
+/// There is deliberately no on-disk persistence of authority signing keys. Keys
+/// are supplied by the operator (env / key file) on every start; the node only
+/// ever holds the public key on the wire. The placeholder block below exists so
+/// a single-node explorer keeps producing in every slot — it is test-only and
+/// must never be used for a real network.
+fn restore_poa_policy(node: &mut Node, profile: &NetworkProfile) {
+    let cfg = poa_config_from_env(profile);
+    let _ = node.enable_poa(cfg.authority_set, cfg.slot_duration_ms);
+    if let Some(key) = cfg.authority_signing_key {
+        node.set_authority_signing_key(key);
+    } else if cfg.placeholder {
+        for i in 0..AUTHORITY_PLACEHOLDER_COUNT {
+            node.set_authority_signing_key(
+                kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE + i).seed(),
+            );
         }
-    } else {
-        node.set_miner(Node::address(1));
-    }
-    let profile = network_profile();
-    if let Some(cfg) = poa_config_from_env(&profile) {
-        // PoA admission is already active on a ledger loaded under the poa
-        // reader; re-apply so live admission enforces PoA regardless of which
-        // reader loaded the log (defense-in-depth — a PoA-era log loaded under
-        // a legacy reader would otherwise admit blocks without authority
-        // signatures).
-        let _ = node.enable_poa(cfg.authority_set, cfg.slot_duration_ms);
-        // Restore the placeholder signing keys on a placeholder-booted node so
-        // a loaded single-node explorer keeps producing in every slot.
-        if cfg.placeholder {
-            for i in 0..AUTHORITY_PLACEHOLDER_COUNT {
-                node.set_authority_signing_key(
-                    kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE + i).seed(),
-                );
-            }
-        }
-    } else if env_flag("KOVANICA_HYBRID", false) {
-        // Hybrid admission is already active on the loaded ledger.
-    } else if env_flag("KOVANICA_POW", true) {
-        let _ = node.set_proof_of_work(true);
     }
     // A log-loaded node starts with finality/payload/block pruning disabled
     // (the replay log does not persist the policy; a snapshot restores the
@@ -922,66 +918,35 @@ fn genesis_node() -> Node {
     } else {
         TreasuryGenesis::placeholder()
     };
-    // RFC-POA §7: `KOVANICA_CONSENSUS=poa` (default) boots a PoA genesis whose
-    // coinbase commits to the authority set (`KVA1 || set_hash`); `pow` keeps
-    // the legacy PoW/hybrid path (pre-reset testnet replay).
-    if let Some(cfg) = poa_config_from_env(&profile) {
-        // TESTNET-ONLY placeholder convenience: load the placeholder signing
-        // keys so a single-node explorer can produce in every slot. An
-        // explicit `KOVANICA_AUTHORITIES` set never loads keys into the node —
-        // each authority operator sets their own via `set_authority_signing_key`.
-        if cfg.placeholder {
-            for i in 0..AUTHORITY_PLACEHOLDER_COUNT {
-                node.set_authority_signing_key(
-                    kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE + i).seed(),
-                );
-            }
-        }
-        node.genesis_with_poa(
-            profile.genesis_k,
-            profile.genesis_subsidy,
-            profile.genesis_premine,
-            profile.founder_seed,
-            Some(treasury),
-            profile.finality_depth,
-            profile.payload_pruning_depth,
-            profile.block_pruning_depth,
-            Some(profile.operator_seed),
-            cfg.authority_set,
-            cfg.slot_duration_ms,
-        )
-        .expect("genesis");
-    } else {
-        node.genesis_with_finality(
-            profile.genesis_k,
-            profile.genesis_subsidy,
-            profile.genesis_premine,
-            profile.founder_seed,
-            Some(treasury),
-            profile.finality_depth,
-            profile.payload_pruning_depth,
-            profile.block_pruning_depth,
-            Some(profile.operator_seed),
-        )
-        .expect("genesis");
-        // Hybrid PoW + staked-VRF admission (A2 uplink): opt-in via
-        // `KOVANICA_HYBRID=1`. When on, the ledger owns admission and the DAG's
-        // own PoW switch is cleared by `set_hybrid` — so the two modes are
-        // mutually exclusive here, never stacked.
-        if env_flag("KOVANICA_HYBRID", false) {
-            let _ = node.enable_hybrid(HybridConfig::default());
-            // Staked admission needs the founder's coin bonded before any
-            // produce can win a draw — bond the premine to the founder key so
-            // the default testnet path (no explicit validator seed) still works.
-            let founder = kovanica_state::KeyPair::from_u64(1).address();
-            // Staked admission needs the founder's coin bonded before any
-            // produce can win a draw — the staked tests set their own validator
-            // seed and bond explicitly; nothing to do in the default path.
-            let _ = founder;
-        } else if env_flag("KOVANICA_POW", true) {
-            let _ = node.set_proof_of_work(true);
+    // RFC-POA: the genesis coinbase commits to the authority set
+    // (`KVA1 || set_hash`). There is no other genesis shape — PoW, difficulty,
+    // VRF and hybrid admission were removed (RFC-POA §0).
+    let cfg = poa_config_from_env(&profile);
+    // Operator's authority signing key (from KOVANICA_AUTHORITY_KEY) takes
+    // precedence; otherwise fall back to TESTNET-ONLY placeholder keys.
+    if let Some(key) = cfg.authority_signing_key {
+        node.set_authority_signing_key(key);
+    } else if cfg.placeholder {
+        for i in 0..AUTHORITY_PLACEHOLDER_COUNT {
+            node.set_authority_signing_key(
+                kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE + i).seed(),
+            );
         }
     }
+    node.genesis_with_poa(
+        profile.genesis_k,
+        profile.genesis_subsidy,
+        profile.genesis_premine,
+        profile.founder_seed,
+        Some(treasury),
+        profile.finality_depth,
+        profile.payload_pruning_depth,
+        profile.block_pruning_depth,
+        Some(profile.operator_seed),
+        cfg.authority_set,
+        cfg.slot_duration_ms,
+    )
+    .expect("genesis");
     node
 }
 
@@ -1083,14 +1048,17 @@ fn save_faucet_given(map: &HashMap<String, u64>) {
 
 /// Explorer loop sleeps 40ms per tick.
 const TICK_MS: u64 = 40;
-/// Default public mine interval when `KOVANICA_MINE=1` (seconds).
-const MINE_SECS_DEFAULT: u64 = 120;
+/// Default interval between block-production attempts when
+/// `KOVANICA_PRODUCE=1` (seconds). Under PoA an attempt succeeds only if the
+/// node holds the authority key for that slot.
+const PRODUCE_SECS_DEFAULT: u64 = 120;
 
-fn mine_every_ticks() -> u64 {
-    let secs = std::env::var("KOVANICA_MINE_SECS")
+fn produce_every_ticks() -> u64 {
+    let secs = std::env::var("KOVANICA_PRODUCE_SECS")
         .ok()
+        .or_else(|| std::env::var("KOVANICA_MINE_SECS").ok())
         .and_then(|s| s.parse().ok())
-        .unwrap_or(MINE_SECS_DEFAULT);
+        .unwrap_or(PRODUCE_SECS_DEFAULT);
     (secs.saturating_mul(1000) / TICK_MS).max(1)
 }
 
@@ -1453,32 +1421,6 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             DOCS.as_bytes(),
         );
     }
-    if method == "GET" && path == "/api/mine/template" {
-        let node_name = query
-            .get("node")
-            .map(|s| s.as_str())
-            .unwrap_or(&app.selected);
-        let Some(node) = app.mesh.node(node_name) else {
-            let err = format!("{{\"ok\":false,\"error\":\"unknown node {}\"}}", node_name);
-            return respond(&mut stream, 400, "application/json", err.as_bytes());
-        };
-        let custom_miner = query.get("miner").and_then(|s| parse_addr(s).ok());
-        let template_res = if custom_miner.is_some() {
-            node.mining_template_for(custom_miner)
-        } else {
-            node.mining_template()
-        };
-        match template_res {
-            Ok(template) => {
-                let body = template.to_json();
-                return respond(&mut stream, 200, "application/json", body.as_bytes());
-            }
-            Err(e) => {
-                let err = format!("{{\"ok\":false,\"error\":{}}}", jstr(&e.to_string()));
-                return respond(&mut stream, 400, "application/json", err.as_bytes());
-            }
-        }
-    }
     if method == "GET" && path == "/api/bootstrap" {
         let n = app.mesh.node(&app.selected);
         let genesis = n
@@ -1489,7 +1431,7 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             .and_then(|n| n.selected_tip().ok())
             .map(|t| t.to_string())
             .unwrap_or_default();
-        let pow = n.map(|n| n.proof_of_work()).unwrap_or(false);
+        let admission = n.map(|n| n.poa_enabled()).unwrap_or(false);
         let min_fee = n.map(|n| n.min_fee()).unwrap_or(0);
         // Peers are dialable addresses only; the node's own listen spec is
         // reported separately in the `listen` field and must not leak here.
@@ -1506,13 +1448,13 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             .unwrap_or((0, 0, 0, 0, MAX_SUPPLY));
 
         let body = format!(
-            "{{\"network\":{},\"genesis\":{},\"tip\":{},\"listen\":{},\"peers\":{},\"pow\":{},\"min_fee\":{},\"atom\":{},\"token\":\"KVNC\",\"k\":{},\"subsidy\":{},\"founder_amount\":{},\"founder_seed\":{},\"finality_depth\":{},\"payload_pruning_depth\":{},\"block_pruning_depth\":{},\"native_minted\":{},\"total\":{},\"circulating\":{},\"burned\":{},\"max_supply\":{},\"operator_wallet_address\":{},\"light_config\":{{\"k\":{},\"subsidy\":{},\"premine\":{},\"founder_seed\":{},\"finality_depth\":{},\"payload_pruning_depth\":{}}}}}",
+            "{{\"network\":{},\"genesis\":{},\"tip\":{},\"listen\":{},\"peers\":{},\"admission\":\"poa\",\"poa_enabled\":{},\"min_fee\":{},\"atom\":{},\"token\":\"KVNC\",\"k\":{},\"subsidy\":{},\"founder_amount\":{},\"founder_seed\":{},\"finality_depth\":{},\"payload_pruning_depth\":{},\"block_pruning_depth\":{},\"native_minted\":{},\"total\":{},\"circulating\":{},\"burned\":{},\"max_supply\":{},\"operator_wallet_address\":{},\"light_config\":{{\"k\":{},\"subsidy\":{},\"premine\":{},\"founder_seed\":{},\"finality_depth\":{},\"payload_pruning_depth\":{}}}}}",
             jstr(profile.id),
             jstr(&genesis),
             jstr(&tip),
             jstr(&app.listen_addr),
             peers,
-            pow,
+            admission,
             min_fee,
             ATOM,
             profile.genesis_k,
@@ -1553,8 +1495,36 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
                 .unwrap_or_default();
             let tip = n.selected_tip().map(|t| t.to_string()).unwrap_or_default();
             let blocks = n.block_count().unwrap_or(0);
+            // PoA status
+            let (authority_set_json, current_slot, slot_duration) = match n.poa_config() {
+                Some(cfg) => {
+                    let set = &cfg.authority_set;
+                    let authorities_json = set
+                        .authorities()
+                        .iter()
+                        .map(|pk| format!("\"{}\"", hex::encode(pk.as_bytes())))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let authority_json = format!(
+                        "{{\"authorities\":[{}],\"threshold\":{},\"count\":{}}}",
+                        authorities_json,
+                        set.threshold(),
+                        set.authorities().len()
+                    );
+                    let ledger = n.ledger().ok();
+                    let tip_block = n
+                        .selected_tip()
+                        .ok()
+                        .and_then(|id| ledger.as_ref().and_then(|l| l.dag().block(&id)));
+                    let slot = tip_block
+                        .map(|b| b.timestamp_ms() / cfg.slot_duration_ms)
+                        .unwrap_or(0);
+                    (authority_json, slot, cfg.slot_duration_ms)
+                }
+                None => (String::from("null"), 0, 0),
+            };
             let body = format!(
-                "{{\"network\":{},\"genesis\":{},\"tip\":{},\"blocks\":{},\"min_fee\":{},\"atom\":{},\"finality_depth\":{},\"payload_pruning_depth\":{},\"block_pruning_depth\":{}}}",
+                "{{\"network\":{},\"genesis\":{},\"tip\":{},\"blocks\":{},\"min_fee\":{},\"atom\":{},\"finality_depth\":{},\"payload_pruning_depth\":{},\"block_pruning_depth\":{},\"authority_set\":{},\"current_slot\":{},\"slot_duration_ms\":{}}}",
                 jstr(network_profile().id),
                 jstr(&genesis),
                 jstr(&tip),
@@ -1564,7 +1534,91 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
                 n.finality_depth(),
                 n.payload_pruning_depth(),
                 n.block_pruning_depth(),
+                authority_set_json,
+                current_slot,
+                slot_duration,
             );
+            return respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+    }
+    if method == "GET" && path == "/api/network" {
+        if let Some(n) = app.mesh.node(&app.selected) {
+            let (authority_set_json, current_slot, slot_duration, time_to_next, next_slot_ts) =
+                match n.poa_config() {
+                    Some(cfg) => {
+                        let set = &cfg.authority_set;
+                        let authorities_json = set
+                            .authorities()
+                            .iter()
+                            .map(|pk| format!("\"{}\"", hex::encode(pk.as_bytes())))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let authority_json = format!(
+                        "{{\"authorities\":[{}],\"threshold\":{},\"count\":{},\"hash\":\"{}\"}}",
+                        authorities_json, set.threshold(), set.authorities().len(), hex::encode(set.hash())
+                    );
+                        let tip_id = n.selected_tip().ok();
+                        let ledger = n.ledger().ok();
+                        let tip_block =
+                            tip_id.and_then(|id| ledger.as_ref().and_then(|l| l.dag().block(&id)));
+                        let slot = tip_block
+                            .map(|b| b.timestamp_ms() / cfg.slot_duration_ms)
+                            .unwrap_or(0);
+                        let next_slot_ts = (slot + 1) * cfg.slot_duration_ms;
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        let time_to_next = next_slot_ts.saturating_sub(now_ms);
+                        (
+                            authority_json,
+                            slot,
+                            cfg.slot_duration_ms,
+                            time_to_next,
+                            next_slot_ts,
+                        )
+                    }
+                    None => (String::from("null"), 0, 0, 0, 0),
+                };
+            let peers = app
+                .peers
+                .iter()
+                .map(|s| jstr(s))
+                .collect::<Vec<_>>()
+                .join(",");
+            let blue_score = n
+                .selected_tip()
+                .ok()
+                .and_then(|tip| n.ledger().ok().and_then(|l| l.dag().ghostdag(&tip)))
+                .map(|g| g.blue_score)
+                .unwrap_or(0);
+            let body = format!(
+                "{{\"network\":{},\"genesis\":{},\"tip\":{},\"blue_score\":{},\"peers\":[{}]}}",
+                jstr(network_profile().id),
+                jstr(
+                    &n.ledger()
+                        .ok()
+                        .map(|l| l.genesis().to_string())
+                        .unwrap_or_default()
+                ),
+                jstr(&n.selected_tip().map(|t| t.to_string()).unwrap_or_default()),
+                blue_score,
+                peers,
+            );
+            // Add authority set info if PoA is enabled
+            let body = if authority_set_json != "null" {
+                format!(
+                    "{},\"authority_set\":{},\"current_slot\":{},\"slot_duration_ms\":{},\"time_to_next_slot_ms\":{},\"next_slot_timestamp_ms\":{}}}",
+                    &body[..body.len()-1], // remove trailing }
+                    authority_set_json,
+                    current_slot,
+                    slot_duration,
+                    time_to_next,
+                    next_slot_ts,
+                )
+            } else {
+                format!("{}}}", &body[..body.len() - 1]) // just close the object
+            };
             return respond(&mut stream, 200, "application/json", body.as_bytes());
         }
     }
@@ -2008,7 +2062,6 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             work,
             timestamp_ms,
             nonce,
-            vrf: None,
             authority_sig: None,
             txs,
         };
@@ -2018,26 +2071,9 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             return respond(&mut stream, 400, "application/json", err.as_bytes());
         };
 
-        // Check PoW target if node enforces proof of work
-        if node.proof_of_work() {
-            let block = Block::new(
-                record.parents.clone(),
-                record.work,
-                record.timestamp_ms,
-                record.nonce,
-                encode_block_payload(&record.txs),
-            );
-            if !kovanica_dag::pow::meets_target(&block.id(), record.work) {
-                let err = format!(
-                    "{{\"ok\":false,\"error\":{}}}",
-                    jstr(&format!(
-                        "proof of work target not met for block {}",
-                        block.id()
-                    ))
-                );
-                return respond(&mut stream, 400, "application/json", err.as_bytes());
-            }
-        }
+        // PoA-only: there is no work target to check on submit. The DAG pins
+        // `work` to `POA_NOMINAL_WORK` and enforces the authority signature on
+        // `receive_block`, which is the admission check that matters.
 
         match node.receive_block(record.clone()) {
             Ok(block_id) => {
@@ -2800,6 +2836,8 @@ fn dispatch(
         .cloned()
         .unwrap_or_else(|| app.selected.clone());
     match action {
+        // "mine" is retained as an alias so existing operator scripts and the
+        // web surface keep working; under PoA it produces, it does not mine.
         "mine" | "produce" => match app.mesh.produce(&node).map_err(|e| e.to_string())? {
             Some(_) => {}
             None => {
@@ -2809,7 +2847,7 @@ fn dispatch(
                 app.mesh.produce_empty(&node).map_err(|e| e.to_string())?;
             }
         },
-        "empty" | "send" | "pool" | "parallel" | "fork" | "mining" | "miner" => {
+        "empty" | "send" | "pool" | "parallel" | "fork" | "producing" => {
             if !app.operator {
                 return Err("operator only".into());
             }
@@ -2842,20 +2880,8 @@ fn dispatch(
                         let _ = app.mesh.produce_empty(&name);
                     }
                 }
-                "mining" => {
-                    app.mining = q.get("on").map(|v| v != "0").unwrap_or(true);
-                }
-                "miner" => {
-                    let addr = parse_addr(q.get("addr").ok_or("addr required")?)?;
-                    let n = app
-                        .mesh
-                        .node_mut(&node)
-                        .ok_or_else(|| "unknown node".to_string())?;
-                    n.set_miner(addr);
-                    return Ok(format!(
-                        "{{\"ok\":true,\"miner\":{}}}",
-                        jstr(&addr.to_hex())
-                    ));
+                "producing" => {
+                    app.producing = q.get("on").map(|v| v != "0").unwrap_or(true);
                 }
                 _ => {}
             }
@@ -3510,7 +3536,13 @@ fn block_detail_json(app: &Explorer, id_hex: &str) -> Result<String, String> {
         .map(|g| g.blue_anticone_sizes.keys().copied().collect())
         .unwrap_or_default();
     let colour = block_kind(id, genesis, &chain, &blue_set);
-    let kind = if rec.vrf.is_some() { "staked" } else { "pow" };
+    // PoA-only: a block either carries an authority signature or it does not
+    // (the latter can only be a pre-PoA legacy block still on disk).
+    let kind = if rec.authority_sig.is_some() {
+        "poa"
+    } else {
+        "unsigned"
+    };
     let confirming_status = if tip_id == Some(id) {
         "tip"
     } else if chain.contains(&id) {
@@ -3537,8 +3569,23 @@ fn block_detail_json(app: &Explorer, id_hex: &str) -> Result<String, String> {
         (prev, kovanica_state::spv::merkle_root(&rec.txs), height)
     };
 
+    // PoA fields: authority signature, slot, active authority
+    let (authority_sig, slot, active_authority) = if let Some(sig) = rec.authority_sig {
+        let poa = n.poa_config();
+        let slot_duration = poa.as_ref().map(|c| c.slot_duration_ms).unwrap_or(3000);
+        let slot = rec.timestamp_ms / slot_duration;
+        let active = poa.as_ref().and_then(|c| {
+            let authorities = c.authority_set.authorities();
+            let idx = slot as usize % authorities.len();
+            authorities.get(idx).map(|pk| hex::encode(pk.as_bytes()))
+        });
+        (Some(hex::encode(sig)), Some(slot), active)
+    } else {
+        (None, None, None)
+    };
+
     Ok(format!(
-        "{{\"id\":{},\"prev_hash\":{},\"merkle_root\":{},\"height\":{},\"timestamp_ms\":{},\"nonce\":{},\"blue_score\":{},\"chain_blue_work\":{},\"work\":{},\"parents\":{},\"children\":{},\"txs\":{},\"kind\":{},\"colour\":{},\"confirming_status\":{}}}",
+        "{{\"id\":{},\"prev_hash\":{},\"merkle_root\":{},\"height\":{},\"timestamp_ms\":{},\"nonce\":{},\"blue_score\":{},\"chain_blue_work\":{},\"work\":{},\"parents\":{},\"children\":{},\"txs\":{},\"kind\":{},\"colour\":{},\"confirming_status\":{},\"authority_sig\":{},\"slot\":{},\"active_authority\":{}}}",
         jstr(&id.to_string()),
         jstr(&prev_hash.to_string()),
         jstr(&hex::encode(merkle_root)),
@@ -3553,7 +3600,10 @@ fn block_detail_json(app: &Explorer, id_hex: &str) -> Result<String, String> {
         jarr(rec.txs.iter().map(|tx| jstr(&tx.id().to_string()))),
         jstr(kind),
         jstr(colour),
-        jstr(confirming_status)
+        jstr(confirming_status),
+        jstr_opt(authority_sig),
+        jstr_opt(slot.map(|s| s.to_string())),
+        jstr_opt(active_authority)
     ))
 }
 
@@ -3937,9 +3987,9 @@ fn snapshot(app: &Explorer) -> String {
         })
         .collect();
     format!(
-        "{{\"selected\":{},\"mining\":{},\"faucet\":{},\"allow_reset\":{},\"operator\":{},\"network\":{},\"listen\":{},\"peers\":{},\"mesh\":{{\"now\":{},\"queued\":{},\"nodes\":{},\"events\":{}}},\"node\":{},\"wallets\":{}}}",
+        "{{\"selected\":{},\"producing\":{},\"faucet\":{},\"allow_reset\":{},\"operator\":{},\"network\":{},\"listen\":{},\"peers\":{},\"mesh\":{{\"now\":{},\"queued\":{},\"nodes\":{},\"events\":{}}},\"node\":{},\"wallets\":{}}}",
         jstr(selected),
-        app.mining,
+        app.producing,
         app.faucet,
         app.allow_reset,
         app.operator,
@@ -4002,7 +4052,7 @@ fn node_json(node: &Node) -> String {
     let utxo = ledger.ledger_state();
     let supply = ledger.supply();
     format!(
-        "{{\"blocks\":{},\"tips\":{},\"selected_tip\":{},\"blue_score\":{},\"blue_work\":{},\"k\":{},\"subsidy\":{},\"issuance\":{},\"halving_era\":{},\"min_fee\":{},\"genesis\":{},\"supply\":{},\"native_minted\":{},\"circulating\":{},\"burned\":{},\"max_supply\":{},\"token\":{},\"decimals\":{},\"miner\":{},\"atom\":{},\"pow\":{},\"ui\":{},\"utxos\":{},\"chain_len\":{},\"mempool\":{},\"tx_count\":{},\"dag\":{},\"order\":{},\"pending\":{}}}",
+        "{{\"blocks\":{},\"tips\":{},\"selected_tip\":{},\"blue_score\":{},\"blue_work\":{},\"k\":{},\"subsidy\":{},\"issuance\":{},\"halving_era\":{},\"min_fee\":{},\"genesis\":{},\"supply\":{},\"native_minted\":{},\"circulating\":{},\"burned\":{},\"max_supply\":{},\"token\":{},\"decimals\":{},\"authority_pk\":{},\"atom\":{},\"admission\":\"poa\",\"poa_enabled\":{},\"ui\":{},\"utxos\":{},\"chain_len\":{},\"mempool\":{},\"tx_count\":{},\"dag\":{},\"order\":{},\"pending\":{}}}",
         dag.len(),
         jarr(dag.tips().iter().map(|t| jstr(&t.to_string()))),
         jstr(&selected_tip),
@@ -4021,12 +4071,12 @@ fn node_json(node: &Node) -> String {
         supply.max_supply,
         jstr("KVNC"),
         8,
-        match node.miner() {
-            Some(m) => jstr(&m.to_hex()),
+        match node.authority_public_key() {
+            Some(pk) => jstr(&hex_encode(&pk.to_bytes())),
             None => "null".into(),
         },
         ATOM,
-        node.proof_of_work(),
+        node.poa_enabled(),
         jstr("v5"),
         utxo.len(),
         chain.len(),
@@ -4114,6 +4164,16 @@ fn wallets_json(node: &Node) -> String {
     jarr(rows.into_iter())
 }
 
+/// Lowercase hex encoding of raw bytes.
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(char::from_digit((b >> 4) as u32, 16).expect("nibble"));
+        out.push(char::from_digit((b & 0xf) as u32, 16).expect("nibble"));
+    }
+    out
+}
+
 fn jstr(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
@@ -4126,6 +4186,13 @@ fn jstr(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+fn jstr_opt(opt: Option<String>) -> String {
+    match opt {
+        Some(s) => jstr(&s),
+        None => "null".to_string(),
+    }
 }
 
 fn jarr(items: impl Iterator<Item = String>) -> String {
@@ -4161,6 +4228,18 @@ fn ws_frame_text(text: &str) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    /// The address a PoA block reward is credited to.
+    ///
+    /// Under PoA the coinbase pays the signing authority, not the genesis
+    /// founder. `Node::produce_empty` derives the recipient from
+    /// `authority_public_key()` — the *first* loaded authority key — before
+    /// slot ownership is resolved, so in a placeholder set this is always
+    /// `AUTHORITY_PLACEHOLDER_BASE`'s key regardless of which authority
+    /// actually signs for the slot.
+    fn authority_reward_address() -> kovanica_state::Address {
+        kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE).address()
+    }
+
     #[test]
     fn snapshot_has_three_nodes_and_genesis() {
         let app = Explorer::boot();
@@ -4182,12 +4261,11 @@ mod tests {
         assert!(n.is_object());
         assert_eq!(n["token"].as_str().unwrap(), "KVNC");
         assert_eq!(n["ui"].as_str().unwrap(), "v5");
-        // `pow` reports the live admission mode: false under the PoA default,
-        // true when the test process runs in `KOVANICA_CONSENSUS=pow` mode.
-        assert_eq!(
-            n["pow"].as_bool().unwrap(),
-            consensus_mode_from_env() == ConsensusMode::Pow
-        );
+        // `admission` is the regime and `poa_enabled` the live ledger switch.
+        // PoA is the only regime (RFC-POA §0), so `admission` is a constant
+        // while `poa_enabled` tracks whether this node's ledger has it on.
+        assert_eq!(n["admission"].as_str().unwrap(), "poa");
+        assert!(n["poa_enabled"].as_bool().unwrap());
         // One genesis node: 200,000 KVNC premine + 10×1,000,000 KVNC treasury
         // = 10,200,000 KVNC = 1,020,000,000,000,000 atoms.
         assert_eq!(n["supply"].as_u64().unwrap(), 1_020_000_000_000_000);
@@ -4201,24 +4279,30 @@ mod tests {
     #[test]
     fn empty_block_mints_kvnc_subsidy_to_miner() {
         let mut app = Explorer::boot();
-        app.mining = false;
-        let founder = kovanica_state::KeyPair::from_u64(1).address();
-        let before = app.mesh.node("alpha").unwrap().balance(&founder).unwrap();
+        app.producing = false;
+        // Under PoA the subsidy is credited to the authority, not the founder.
+        let authority = authority_reward_address();
+        let before = app.mesh.node("alpha").unwrap().balance(&authority).unwrap();
         app.mesh.produce_empty("alpha").unwrap();
-        let after = app.mesh.node("alpha").unwrap().balance(&founder).unwrap();
+        let after = app.mesh.node("alpha").unwrap().balance(&authority).unwrap();
         assert_eq!(after, before + u128::from(GENESIS_SUBSIDY));
     }
 
     #[test]
     fn produce_block_mints_kvnc_subsidy_with_the_spend() {
         let mut app = Explorer::boot();
-        app.mining = false;
+        app.producing = false;
         // Maturity the founder's genesis coinbase under the CSV rule so the
         // pool() spend from seed 1 is valid (creation_height + 100 <= height).
         for _ in 0..100 {
             app.mesh.produce_empty("alpha").unwrap();
         }
+        // Under PoA every subsidy is credited to the authority; the founder
+        // receives none, so the 100 maturity blocks above do not help this
+        // UTXO at all.
+        let authority = authority_reward_address();
         let founder = kovanica_state::KeyPair::from_u64(1).address();
+        let authority_before = app.mesh.node("alpha").unwrap().balance(&authority).unwrap();
         app.mesh.pool("alpha", 1, ATOM, 2).unwrap();
         app.mesh.produce("alpha").unwrap();
         let n = app.mesh.node("alpha").unwrap();
@@ -4228,12 +4312,16 @@ mod tests {
                 .unwrap(),
             ATOM.into()
         );
-        // RFC-006: the 100 maturity blocks minted 100 subsidies to the founder,
-        // the spend pays ATOM + fee from the premine, and the produced block
-        // mints one more subsidy plus the producer's fee share (fees/4).
+        // RFC-006: `produce` mints one more subsidy to the authority, which
+        // also claims the producer's fee share (fees/4, the other 75% is
+        // burned). The founder only lost the spend.
+        assert_eq!(
+            n.balance(&authority).unwrap(),
+            authority_before + u128::from(GENESIS_SUBSIDY + fee / 4)
+        );
         assert_eq!(
             n.balance(&founder).unwrap(),
-            u128::from(GENESIS_PREMINE - ATOM + 101 * GENESIS_SUBSIDY - 3 * fee / 4)
+            u128::from(GENESIS_PREMINE - ATOM - fee)
         );
     }
 
@@ -4242,22 +4330,21 @@ mod tests {
         use kovanica_state::KeyPair;
 
         let mut app = Explorer::boot();
-        app.mining = false;
-        // Maturity the founder's genesis coinbase so the transfer is valid
-        // under the CSV rule (creation_height + 100 <= height).
+        app.producing = false;
+        // Maturity the genesis coinbases under the CSV rule so the transfer is
+        // valid (creation_height + 100 <= height).
         for _ in 0..100 {
             app.mesh.produce_empty("alpha").unwrap();
         }
-        let from = KeyPair::from_u64(1);
+        // Under PoA the accumulated subsidy coinbases belong to the authority,
+        // so the authority is the sender here: it is the only actor holding
+        // many small 10-KVNC coinbases, which is what this test is about.
+        let from = KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE);
         let to = KeyPair::from_u64(9);
         app.mesh.produce_empty("alpha").unwrap();
-        // Send the premine away so the founder's only UTXOs are subsidy
-        // coinbases — the 20T premine alone would cover a 1-subsidy transfer
-        // with a single input. (amount = premine - fee so the premine exactly
-        // covers amount + fee.)
         let fee = app.mesh.node("alpha").unwrap().min_fee();
-        // Dump the premine to a third actor (seed 8) so `to` (seed 9) only
-        // receives the transfer under test.
+        // Dump the founder's premine to a third actor (seed 8) so `to` (seed 9)
+        // only receives the transfer under test.
         app.mesh.pool("alpha", 1, GENESIS_PREMINE - fee, 8).unwrap();
         app.mesh.produce("alpha").unwrap();
         let prepared = app
@@ -4289,7 +4376,7 @@ mod tests {
     #[test]
     fn history_lists_credit_to_an_address() {
         let mut app = Explorer::boot();
-        app.mining = false;
+        app.producing = false;
         // Maturity the founder's genesis coinbase under the CSV rule so the
         // pool() spend from seed 1 is valid (creation_height + 100 <= height).
         for _ in 0..100 {
@@ -4443,107 +4530,6 @@ mod tests {
         (status, String::from_utf8_lossy(&body).to_string())
     }
 
-    #[test]
-    fn test_http_mine_template_and_submit_flow() {
-        // This suite exercises the external PoW mining endpoints, which are a
-        // pow-mode feature (RFC-POA §7: PoA replaces PoW mining). Force pow
-        // mode for this test and restore the default afterwards. The window is
-        // benign for concurrent tests: under pow mode the profile's work
-        // target is 1, so PoW enforcement is a no-op and every other test
-        // still boots and produces deterministically.
-        std::env::set_var("KOVANICA_CONSENSUS", "pow");
-        let mut app = Explorer::boot();
-        let (status, body) = send_req(
-            &mut app,
-            "GET /api/mine/template HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
-        );
-        assert_eq!(status, 200);
-        assert!(body.contains("\"ok\":true"));
-        assert!(body.contains("\"parents\""));
-        assert!(body.contains("\"work\""));
-        assert!(body.contains("\"timestamp_ms\""));
-        assert!(body.contains("\"payload\""));
-
-        let template_json: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let parents = template_json["parents"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| {
-                BlockId::from_bytes(
-                    hex::decode(p.as_str().unwrap())
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                )
-            })
-            .collect::<Vec<_>>();
-        let work = template_json["work"].as_u64().unwrap() as u128;
-        let ts = template_json["timestamp_ms"].as_u64().unwrap();
-        let payload_hex = template_json["payload"].as_str().unwrap();
-        let payload_bytes = hex::decode(payload_hex).unwrap();
-
-        let template_block = Block::new(parents.clone(), work, ts, 0, payload_bytes.clone());
-        let mined = kovanica_dag::pow::mine(&template_block);
-        let nonce = mined.nonce();
-        let block_id = mined.id();
-
-        let submit_body = format!(
-            "{{\"parents\":[{}],\"work\":{},\"timestamp_ms\":{},\"nonce\":{},\"payload\":\"{}\"}}",
-            parents
-                .iter()
-                .map(|p| format!("\"{}\"", p.to_hex()))
-                .collect::<Vec<_>>()
-                .join(","),
-            work,
-            ts,
-            nonce,
-            payload_hex
-        );
-
-        let post_req = format!(
-            "POST /api/mine/submit HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            submit_body.len(),
-            submit_body
-        );
-
-        let (sub_status, sub_body) = send_req(&mut app, &post_req);
-        assert_eq!(sub_status, 200);
-        assert!(sub_body.contains("\"ok\":true"));
-        assert!(sub_body.contains(&block_id.to_hex()));
-
-        // Node DAG tips should now include the new block
-        let alpha = app.mesh.node("alpha").unwrap();
-        assert!(alpha.has_block(&block_id));
-
-        // Restore the default consensus mode for the rest of the process.
-        std::env::remove_var("KOVANICA_CONSENSUS");
-    }
-
-    #[test]
-    fn test_http_mine_submit_negative_cases() {
-        let mut app = Explorer::boot();
-
-        // 1. Invalid JSON
-        let bad_json_req = "POST /api/mine/submit HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\nnotjson";
-        let (status, body) = send_req(&mut app, bad_json_req);
-        assert_eq!(status, 400);
-        assert!(body.contains("\"ok\":false"));
-
-        // 2. Missing parents
-        let missing_parents = "POST /api/mine/submit HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"work\":1,\"nonce\":0,\"payload\":\"00\"}";
-        let (status, body) = send_req(&mut app, missing_parents);
-        assert_eq!(status, 400);
-        assert!(body.contains("\"ok\":false"));
-
-        // 3. Unknown node
-        let unknown_node =
-            "GET /api/mine/template?node=nonexistent HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
-        let (status, body) = send_req(&mut app, unknown_node);
-        assert_eq!(status, 400);
-        assert!(body.contains("\"ok\":false"));
-    }
-
     // ---- A1: network profile (dormant mainnet) ----
 
     #[test]
@@ -4678,238 +4664,7 @@ mod tests {
         );
     }
 
-    // ---- A2: staked-block uplink on POST /api/mine/submit ----
-
-    /// Hybrid policy for the uplink tests: every slot winnable, nominal staked
-    /// work 1, no retarget pin so PoW-path blocks mine trivially.
-    fn uplink_hybrid_cfg() -> HybridConfig {
-        HybridConfig {
-            rate_num: 1,
-            rate_den: 1,
-            stake_nominal_work: 1,
-            use_epoch_beacon: true,
-            retarget: None,
-        }
-    }
-
-    #[test]
-    fn test_http_mine_submit_accepts_staked_wire_block() {
-        use kovanica_dag::vrf_keypair_from_seed;
-        use kovanica_state::{KeyPair, Transaction, TxOutput};
-
-        let mut app = Explorer::boot();
-        app.mining = false;
-        // Maturity the founder's genesis coinbase under the CSV rule before
-        // trying to bond it (creation_height + 100 <= block_height).
-        for _ in 0..100 {
-            app.mesh.produce_empty("alpha").unwrap();
-        }
-        let cfg = uplink_hybrid_cfg();
-        // Alpha produces (bonded validator); beta is the submit target and
-        // must run the same hybrid policy to re-admit the staked block with
-        // its original id.
-        app.mesh
-            .node_mut("alpha")
-            .unwrap()
-            .enable_hybrid(cfg.clone())
-            .unwrap();
-        app.mesh
-            .node_mut("beta")
-            .unwrap()
-            .enable_hybrid(cfg.clone())
-            .unwrap();
-
-        let validator_seed = [7u8; 32];
-        let (_sk, vk) = vrf_keypair_from_seed(&validator_seed);
-        let pk = *vk.as_bytes();
-        app.mesh
-            .node_mut("alpha")
-            .unwrap()
-            .set_validator_seed(validator_seed);
-
-        // Bond the founder's whole coin to the validator key on alpha.
-        // The founder's genesis coinbase was matured above (100 empty blocks).
-        let founder = KeyPair::from_u64(1);
-        // Bond the founder's largest UTXO (the 20T premine, creation_height 0
-        // and always mature) — `.first()` is outpoint-ordered and may pick a
-        // recently-mined subsidy coinbase that is still immature.
-        let (coin, value) = app
-            .mesh
-            .node("alpha")
-            .unwrap()
-            .utxos_of(&founder.address())
-            .unwrap()
-            .into_iter()
-            .max_by_key(|(_, v)| *v)
-            .unwrap();
-        let bond = Transaction::signed(
-            &[(coin, &founder)],
-            vec![TxOutput::native(value, founder.address())],
-            kovanica_state::bond_tag(kovanica_state::NATIVE_ASSET_ID, &pk),
-        );
-        app.mesh.node_mut("alpha").unwrap().submit_tx(bond).unwrap();
-        app.mesh
-            .produce("alpha")
-            .unwrap()
-            .expect("bond block mined");
-
-        // Sync the bond block to beta so its stake registry knows the bond.
-        app.mesh.sync_headers_first("alpha", "beta").unwrap();
-
-        // Produce a staked empty block on alpha (draw wins: 100% of bonded
-        // stake) and upload it to beta in the gossip wire format.
-        let staked_id = app.mesh.produce_empty("alpha").unwrap();
-        let record = app
-            .mesh
-            .node("alpha")
-            .unwrap()
-            .block_record(&staked_id)
-            .expect("produced block known");
-        assert!(
-            record.vrf.is_some(),
-            "hybrid produce_empty must carry the VRF bundle"
-        );
-        let wire = encode_records(&[record]);
-
-        let head = format!(
-            "POST /api/mine/submit?node=beta HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
-            wire.len()
-        );
-        let (status, body) = send_req_bytes(&mut app, &head, &wire);
-        assert_eq!(status, 200, "staked uplink rejected: {body}");
-        assert!(body.contains(&staked_id.to_hex()), "{body}");
-
-        // The block is genuinely admitted on beta with the SAME id the
-        // producer computed (identity-preserving wire path).
-        assert!(app.mesh.node("beta").unwrap().has_block(&staked_id));
-        assert_eq!(
-            app.mesh.node("beta").unwrap().selected_tip().unwrap(),
-            staked_id
-        );
-    }
-
-    #[test]
-    fn test_http_mine_submit_wire_rejects_ineligible_staked_block() {
-        use kovanica_dag::vrf_keypair_from_seed;
-        use kovanica_state::{KeyPair, Transaction, TxOutput};
-
-        let mut app = Explorer::boot();
-        app.mining = false;
-        // Maturity the founder's genesis coinbase under the CSV rule before
-        // trying to bond it (creation_height + 100 <= block_height).
-        for _ in 0..100 {
-            app.mesh.produce_empty("alpha").unwrap();
-        }
-        // Alpha: rate 1/1 — a bonded validator wins every draw.
-        app.mesh
-            .node_mut("alpha")
-            .unwrap()
-            .enable_hybrid(uplink_hybrid_cfg())
-            .unwrap();
-        // Beta: rate 0/1 — the eligibility threshold is always 0, so NO
-        // staked block can ever be eligible there (deterministic adversarial
-        // gate, no reliance on VRF draw luck).
-        let never_eligible = HybridConfig {
-            rate_num: 0,
-            rate_den: 1,
-            stake_nominal_work: 1,
-            use_epoch_beacon: true,
-            retarget: None,
-        };
-        app.mesh
-            .node_mut("beta")
-            .unwrap()
-            .enable_hybrid(never_eligible)
-            .unwrap();
-
-        // Alpha bonds and produces a valid staked block.
-        // The founder's genesis coinbase was matured above (100 empty blocks).
-        let validator_seed = [7u8; 32];
-        let (_sk, vk) = vrf_keypair_from_seed(&validator_seed);
-        let pk = *vk.as_bytes();
-        app.mesh
-            .node_mut("alpha")
-            .unwrap()
-            .set_validator_seed(validator_seed);
-        let founder = KeyPair::from_u64(1);
-        // Bond the founder's largest UTXO (the 20T premine, creation_height 0
-        // and always mature) — `.first()` is outpoint-ordered and may pick a
-        // recently-mined subsidy coinbase that is still immature.
-        let (coin, value) = app
-            .mesh
-            .node("alpha")
-            .unwrap()
-            .utxos_of(&founder.address())
-            .unwrap()
-            .into_iter()
-            .max_by_key(|(_, v)| *v)
-            .unwrap();
-        let bond = Transaction::signed(
-            &[(coin, &founder)],
-            vec![TxOutput::native(value, founder.address())],
-            kovanica_state::bond_tag(kovanica_state::NATIVE_ASSET_ID, &pk),
-        );
-        app.mesh.node_mut("alpha").unwrap().submit_tx(bond).unwrap();
-        app.mesh
-            .produce("alpha")
-            .unwrap()
-            .expect("bond block mined");
-        // Beta has the chain up to the bond block (so the staked block's
-        // parent exists) but its own policy can never admit a staked block:
-        // the uplink must reject it as ineligible — the adversarial case for
-        // the slice-9d gate. (Sync BEFORE the staked block is produced, since
-        // beta would reject it during sync too.)
-        app.mesh.sync_headers_first("alpha", "beta").unwrap();
-        let staked_id = app.mesh.produce_empty("alpha").unwrap();
-        let record = app
-            .mesh
-            .node("alpha")
-            .unwrap()
-            .block_record(&staked_id)
-            .unwrap();
-        let wire = encode_records(&[record]);
-
-        let head = format!(
-            "POST /api/mine/submit?node=beta HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
-            wire.len()
-        );
-        let (status, body) = send_req_bytes(&mut app, &head, &wire);
-        assert_eq!(
-            status, 400,
-            "ineligible staked block must be rejected: {body}"
-        );
-        assert!(body.contains("\"ok\":false"), "{body}");
-        assert!(
-            body.contains("eligible") || body.contains("stake"),
-            "expected an eligibility error, got: {body}"
-        );
-        assert!(!app.mesh.node("beta").unwrap().has_block(&staked_id));
-    }
-
-    #[test]
-    fn test_http_mine_submit_wire_accepts_pow_block() {
-        let mut app = Explorer::boot();
-        app.mining = false;
-        // Alpha runs plain PoW (the default profile config): a mined block
-        // uploaded in the wire format must still be admitted.
-        let pow_id = app.mesh.produce_empty("alpha").unwrap();
-        let record = app
-            .mesh
-            .node("alpha")
-            .unwrap()
-            .block_record(&pow_id)
-            .unwrap();
-        assert!(record.vrf.is_none());
-        let wire = encode_records(&[record]);
-
-        let head = format!(
-            "POST /api/mine/submit HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
-            wire.len()
-        );
-        let (status, body) = send_req_bytes(&mut app, &head, &wire);
-        assert_eq!(status, 200, "PoW wire uplink rejected: {body}");
-        assert!(body.contains(&pow_id.to_hex()), "{body}");
-    }
+    // ---- PoA: authority-signed block uplink on POST /api/mine/submit ----
 
     #[test]
     fn test_http_mine_submit_wire_rejects_garbage() {
@@ -4965,6 +4720,9 @@ mod tests {
                     blob[off + 136..off + 152].try_into().unwrap(),
                 ),
                 height: u64::from_be_bytes(blob[off + 152..off + 160].try_into().unwrap()),
+                authority_sig: None,
+                authority_set_hash: [0u8; 32],
+                hash_without_authority_sig: [0u8; 32],
             };
             off += 160;
             let k = blob[off];
@@ -4981,7 +4739,7 @@ mod tests {
     #[test]
     fn test_light_sync_blob_matches_headers_and_filters() {
         let mut app = Explorer::boot();
-        app.mining = false;
+        app.producing = false;
         // A few blocks so the selected chain is non-trivial.
         app.mesh.produce_empty("alpha").unwrap();
         app.mesh.produce_empty("alpha").unwrap();
@@ -5019,7 +4777,7 @@ mod tests {
     #[test]
     fn test_light_sync_from_is_incremental() {
         let mut app = Explorer::boot();
-        app.mining = false;
+        app.producing = false;
         app.mesh.produce_empty("alpha").unwrap();
         app.mesh.produce_empty("alpha").unwrap();
         app.mesh.produce_empty("alpha").unwrap();
@@ -5056,7 +4814,7 @@ mod tests {
     #[test]
     fn test_light_proof_endpoint_verifies() {
         let mut app = Explorer::boot();
-        app.mining = false;
+        app.producing = false;
         // Maturity the founder's genesis coinbase under the CSV rule so the
         // pool() spend from seed 1 is valid (creation_height + 100 <= height).
         for _ in 0..100 {
@@ -5130,7 +4888,7 @@ mod tests {
     #[test]
     fn faucet_enforces_per_address_cap() {
         let mut app = Explorer::boot();
-        app.mining = false;
+        app.producing = false;
         // The faucet pays from the operator's coinbase; mature it so the
         // spend is valid under the CSV rule (creation_height + 100 <= height).
         for _ in 0..100 {
@@ -5174,7 +4932,7 @@ mod tests {
     #[test]
     fn blocks_endpoint_paginates_from_a_block_id() {
         let mut app = Explorer::boot();
-        app.mining = false;
+        app.producing = false;
         app.mesh.produce_empty("alpha").unwrap();
         app.mesh.produce_empty("alpha").unwrap();
         app.mesh.produce_empty("alpha").unwrap();
@@ -5234,7 +4992,7 @@ mod tests {
     #[test]
     fn history_endpoint_paginates_limit_and_offset() {
         let mut app = Explorer::boot();
-        app.mining = false;
+        app.producing = false;
         // The operator (seed 1) is the only funded account; mature its genesis
         // coinbase so the CSV rule allows spending it (creation_height + 100 <= height).
         for _ in 0..100 {
@@ -5267,12 +5025,14 @@ mod tests {
     #[test]
     fn utxos_endpoint_paginates_limit_and_offset() {
         let mut app = Explorer::boot();
-        app.mining = false;
+        app.producing = false;
         // Produce several coinbases all paid to actor 1.
         for _ in 0..3 {
             app.mesh.produce_empty("alpha").unwrap();
         }
-        let addr = kovanica_state::KeyPair::from_u64(1).address().to_hex();
+        // Under PoA the coinbases are paid to the authority, so that is the
+        // address holding the three UTXOs this pagination test needs.
+        let addr = authority_reward_address().to_hex();
         let body = send_req(
             &mut app,
             &format!(

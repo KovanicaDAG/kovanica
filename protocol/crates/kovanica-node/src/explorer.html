@@ -322,6 +322,9 @@ function blockCard(s) {
       <div style="display:flex;justify-content:space-between"><dt>Txs</dt><dd class="mono" style="color:var(--fg)">${b.txs.length}</dd></div>
       <div style="display:flex;justify-content:space-between"><dt>Nonce</dt><dd class="mono" style="color:var(--fg)">${b.nonce}</dd></div>
       <div style="display:flex;justify-content:space-between"><dt>Time</dt><dd class="mono" style="color:var(--fg)">${b.timestamp_ms}</dd></div>
+      ${b.authority_sig ? `<div style="display:flex;justify-content:space-between"><dt>Authority Sig</dt><dd class="mono" style="color:var(--fg)">${b.authority_sig.slice(0,16)}...</dd></div>` : ""}
+      ${b.slot !== undefined ? `<div style="display:flex;justify-content:space-between"><dt>Slot</dt><dd class="mono" style="color:var(--fg)">${b.slot}</dd></div>` : ""}
+      ${b.active_authority ? `<div style="display:flex;justify-content:space-between"><dt>Active Authority</dt><dd class="mono" style="color:var(--fg)">${b.active_authority.slice(0,16)}...</dd></div>` : ""}
     </dl>
     <ul class="muted" style="padding:8px 0 0;margin:8px 0 0;list-style:none">${b.txs.map((t) => `<li class="mono">${t.coinbase ? "coinbase" : "tx"} · <a href="/api/tx/${t.id}" target="_blank">${short(t.id)}</a></li>`).join("")}</ul>
   </aside>`;

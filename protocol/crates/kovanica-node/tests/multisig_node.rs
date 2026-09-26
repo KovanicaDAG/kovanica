@@ -6,8 +6,61 @@
 //! RFC-001/AGENTS.md §5 (duplicate signatures, unauthorized signers,
 //! threshold shortfall, wrong redeem script).
 
+use ed25519_dalek::SigningKey;
+use kovanica_dag::{AuthorityPublicKey, AuthoritySet};
 use kovanica_node::Node;
 use kovanica_state::{Address, KeyPair, TxOutput};
+
+/// Slot duration used throughout (RFC-POA default).
+const SLOT_MS: u64 = 3000;
+/// Authority count (the `AuthoritySet` minimum is 3).
+const AUTHORITIES: u64 = 3;
+
+/// A PoA node holding every authority signing key, so `produce_block` succeeds
+/// in any slot (RFC-POA is the only admission regime). Rewards go to the
+/// *first* loaded authority key, seed 1, so a plain genesis premine is still
+/// spendable by actor 1.
+fn poa_node(subsidy: u64, premine: u64) -> Node {
+    let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
+        .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
+        .collect();
+    let set = AuthoritySet::new(keys, 2).expect("valid authority set");
+    let mut node = Node::new();
+    node.genesis_with_poa(
+        3,
+        subsidy,
+        premine,
+        1,
+        None,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        None,
+        set,
+        SLOT_MS,
+    )
+    .expect("genesis");
+    for i in 1..=AUTHORITIES {
+        node.set_authority_signing_key(KeyPair::from_u64(i).seed());
+    }
+    node
+}
+
+/// Reload a snapshot under the same PoA admission and keys. A snapshot stores
+/// the ledger but not the admission config, so without this the restored node
+/// has no authority set and cannot produce.
+fn load_poa(path: &str) -> Node {
+    let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
+        .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
+        .collect();
+    let set = AuthoritySet::new(keys, 2).expect("valid authority set");
+    let mut node = Node::new();
+    node.load_with_poa(path, set, SLOT_MS).expect("load");
+    for i in 1..=AUTHORITIES {
+        node.set_authority_signing_key(KeyPair::from_u64(i).seed());
+    }
+    node
+}
 
 fn secret_for(seed: u64) -> String {
     let mut bytes = [0u8; 32];
@@ -25,8 +78,7 @@ fn make_2of3(node: &mut Node) -> (Address, String) {
 
 #[test]
 fn two_of_three_create_fund_spend() {
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
+    let mut node = poa_node(1_000, 1_000);
     let (ms_addr, _script) = make_2of3(&mut node);
 
     // Fund the multisig address with a single coin.
@@ -70,8 +122,7 @@ fn two_of_three_create_fund_spend() {
 
 #[test]
 fn multisig_spend_fails_with_one_signature() {
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
+    let mut node = poa_node(1_000, 1_000);
     let (ms_addr, _script) = make_2of3(&mut node);
     node.send_to(1, 500, ms_addr).unwrap();
 
@@ -93,8 +144,7 @@ fn multisig_spend_fails_with_one_signature() {
 
 #[test]
 fn multisig_spend_rejects_unauthorized_signer() {
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
+    let mut node = poa_node(1_000, 1_000);
     let (ms_addr, _script) = make_2of3(&mut node);
     node.send_to(1, 500, ms_addr).unwrap();
 
@@ -116,8 +166,7 @@ fn multisig_spend_rejects_unauthorized_signer() {
 
 #[test]
 fn multisig_spend_rejects_duplicate_signature() {
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
+    let mut node = poa_node(1_000, 1_000);
     let (ms_addr, _script) = make_2of3(&mut node);
     node.send_to(1, 500, ms_addr).unwrap();
 
@@ -140,8 +189,7 @@ fn multisig_spend_rejects_duplicate_signature() {
 
 #[test]
 fn multisig_spend_rejects_wrong_redeem_script() {
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
+    let mut node = poa_node(1_000, 1_000);
     let (ms_addr, _script) = make_2of3(&mut node);
     node.send_to(1, 500, ms_addr).unwrap();
 
@@ -176,15 +224,13 @@ fn snapshot_roundtrip_preserves_multisig_utxo() {
     };
     let path_str = path.to_str().unwrap();
 
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
+    let mut node = poa_node(1_000, 1_000);
     let (ms_addr, _script) = make_2of3(&mut node);
     node.send_to(1, 500, ms_addr).unwrap();
     node.save(path_str).unwrap();
 
     // Fresh node loads the snapshot and must re-register the script to spend.
-    let mut restored = Node::new();
-    restored.load(path_str).unwrap();
+    let mut restored = load_poa(path_str);
     assert_eq!(restored.balance(&ms_addr).unwrap(), 500);
 
     // Re-register the redeem script so the node can build the spend.
@@ -224,8 +270,7 @@ fn snapshot_roundtrip_preserves_multisig_utxo() {
 
 #[test]
 fn create_multisig_rejects_bad_threshold() {
-    let mut node = Node::new();
-    node.genesis(3, 1_000, 1_000, 1, None).unwrap();
+    let mut node = poa_node(1_000, 1_000);
     let pks: Vec<[u8; 32]> = (1..=3)
         .map(|s| *KeyPair::from_u64(s).address().payload())
         .collect();

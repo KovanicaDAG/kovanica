@@ -5,12 +5,12 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
 
-use kovanica_dag::{BlockId, Retarget};
+use kovanica_dag::BlockId;
 use kovanica_node::{
     handle_relay_query, request_merkle_block, sync_headers_via_relay,
     sync_headers_via_relay_with_clock, verify_merkle_block, Node, RelayMsg, RelaySession,
 };
-use kovanica_state::spv::{BlockHeader as SpvHeader, SpvClient, SpvError};
+use kovanica_state::spv::{BlockHeader as SpvHeader, SpvClient};
 use kovanica_state::{KeyPair, OutPoint, Transaction, TxId, TxOutput};
 
 fn genesis_node() -> Node {
@@ -60,7 +60,7 @@ fn test_e2e_spv_header_sync_over_tcp() {
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
 
-    let mut spv_client = SpvClient::new(genesis_hdr, false, None);
+    let mut spv_client = SpvClient::new(genesis_hdr);
     let count = sync_headers_via_relay(&mut client_session, &mut spv_client, None).unwrap();
     assert_eq!(count, 5);
 
@@ -103,7 +103,7 @@ fn test_e2e_spv_merkle_proof_verification_over_tcp() {
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
 
-    let mut spv_client = SpvClient::new(genesis_hdr, false, None);
+    let mut spv_client = SpvClient::new(genesis_hdr);
 
     // 1. Sync headers
     let count = sync_headers_via_relay(&mut client_session, &mut spv_client, None).unwrap();
@@ -134,78 +134,14 @@ fn test_e2e_spv_merkle_proof_verification_over_tcp() {
 }
 
 #[test]
-fn test_spv_difficulty_retarget_enforcement() {
-    let retarget = Retarget {
-        window: 2,
-        target_interval_ms: 1_000,
-        max_factor: 4,
-        min_work: 1,
-    };
-
-    let genesis_hdr = SpvHeader {
-        id: BlockId::from_bytes([1u8; 32]),
-        prev_hash: BlockId::from_bytes([0u8; 32]),
-        merkle_root: [0u8; 32],
-        work: 1,
-        timestamp_ms: 1_000,
-        nonce: 0,
-        blue_score: 0,
-        chain_blue_work: 1,
-        height: 0,
-    };
-
-    let mut client = SpvClient::new(genesis_hdr.clone(), false, Some(retarget));
-
-    // Valid next header at height 1
-    let h1 = SpvHeader {
-        id: BlockId::from_bytes([2u8; 32]),
-        prev_hash: genesis_hdr.id,
-        merkle_root: [0u8; 32],
-        work: 1,
-        timestamp_ms: 2_000,
-        nonce: 0,
-        blue_score: 1,
-        chain_blue_work: 2,
-        height: 1,
-    };
-    assert!(client.add_header(h1.clone()).is_ok());
-
-    // Valid next header at height 2
-    let h2 = SpvHeader {
-        id: BlockId::from_bytes([3u8; 32]),
-        prev_hash: h1.id,
-        merkle_root: [0u8; 32],
-        work: 1,
-        timestamp_ms: 3_000,
-        nonce: 0,
-        blue_score: 2,
-        chain_blue_work: 3,
-        height: 2,
-    };
-    assert!(client.add_header(h2.clone()).is_ok());
-
-    // Header with invalid difficulty should be rejected
-    let h3_bad_work = SpvHeader {
-        id: BlockId::from_bytes([4u8; 32]),
-        prev_hash: h2.id,
-        merkle_root: [0u8; 32],
-        work: 999, // Mismatched difficulty target
-        timestamp_ms: 4_000,
-        nonce: 0,
-        blue_score: 3,
-        chain_blue_work: 1002,
-        height: 3,
-    };
-    let res = client.add_header(h3_bad_work);
-    assert_eq!(res, Err(SpvError::DifficultyMismatch));
-}
-
-#[test]
 fn test_spv_wall_clock_drift_boundary() {
     let now_ms = 1_000_000u64;
     const MAX_FUTURE_DRIFT_MS: u64 = 2 * 60 * 60 * 1000; // 7,200,000 ms
 
     let genesis_hdr = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([1u8; 32]),
         prev_hash: BlockId::from_bytes([0u8; 32]),
         merkle_root: [0u8; 32],
@@ -219,6 +155,9 @@ fn test_spv_wall_clock_drift_boundary() {
 
     // Header at exact drift boundary (now + 2h)
     let h_boundary = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([2u8; 32]),
         prev_hash: genesis_hdr.id,
         merkle_root: [0u8; 32],
@@ -245,7 +184,7 @@ fn test_spv_wall_clock_drift_boundary() {
     });
 
     let mut client_session = RelaySession::connect(addr).unwrap();
-    let mut spv_client = SpvClient::new(genesis_hdr.clone(), false, None);
+    let mut spv_client = SpvClient::new(genesis_hdr.clone());
 
     // Accept header at exact boundary
     let res =
@@ -255,6 +194,9 @@ fn test_spv_wall_clock_drift_boundary() {
 
     // Now test header exceeding drift boundary by 1ms (now + 2h + 1ms)
     let h_exceed = SpvHeader {
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
         id: BlockId::from_bytes([3u8; 32]),
         prev_hash: h_boundary.id,
         merkle_root: [0u8; 32],
@@ -297,7 +239,7 @@ fn test_spv_tampered_merkle_proof_rejection() {
     let genesis_hdr = node.spv_header(&genesis).unwrap();
     let sent = node.send(1, 100, 2).unwrap();
 
-    let mut spv_client = SpvClient::new(genesis_hdr, false, None);
+    let mut spv_client = SpvClient::new(genesis_hdr);
     let sent_hdr = node.spv_header(&sent.block).unwrap();
     spv_client.add_header(sent_hdr).unwrap();
 
@@ -376,7 +318,7 @@ fn test_spv_mobile_wallet_payment_workflow_and_bandwidth() {
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
 
-    let mut spv_client = SpvClient::new(genesis_hdr, false, None);
+    let mut spv_client = SpvClient::new(genesis_hdr);
 
     // Sync 20 headers
     let synced = sync_headers_via_relay(&mut client_session, &mut spv_client, None).unwrap();

@@ -1,29 +1,72 @@
 //! Tests for the FFI surface — the exact API foreign bindings expose. If a
 //! flow works here it works from Kotlin/Swift; anything unreachable through
 //! `LightNode` is deliberately not part of the mobile contract.
+//!
+//! PoA-only (RFC-POA §0). The staking/PoW/hybrid API is gone, so these tests
+//! drive production through [`LightNode::set_authority_key_for_tests`], a
+//! **Rust-only** seam deliberately kept outside `#[uniffi::export]`: no mobile
+//! caller can obtain a consensus signing key through the FFI. It is a test
+//! fixture, not an operator key-ingestion path, and it does not resolve
+//! blocker B1 (RFC-POA-Migration §0.9) — a wallet on a real network still
+//! cannot seal anything, because the node has no way to accept an operator's
+//! authority secret.
 
-use kovanica_ffi::{BlockKind, LightConfig, LightNode, U128Parts};
+use ed25519_dalek::SigningKey;
+use kovanica_ffi::{LightConfig, LightNode, U128Parts};
 
-const NOMINAL_WORK: U128Parts = U128Parts { high: 0, low: 7 };
+/// Nominal work every PoA block carries (`POA_NOMINAL_WORK`): admission is by
+/// authority signature, so work carries no ranking weight.
+const POA_WORK: U128Parts = U128Parts { high: 0, low: 1 };
 
+/// Three authority signing keys, seeds `AUTHORITY_BASE + i`. The minimum PoA
+/// authority set is 3 keys (RFC-POA `MIN_AUTHORITIES`).
+const AUTHORITY_BASE: u8 = 0xA1;
+const AUTHORITY_N: usize = 3;
+
+fn authority_seeds() -> Vec<[u8; 32]> {
+    (0..AUTHORITY_N)
+        .map(|i| [AUTHORITY_BASE + i as u8; 32])
+        .collect()
+}
+
+/// A `LightConfig` whose genesis commits to the test authority set. Every node
+/// in a test must use this same config or the genesis id (and therefore the
+/// whole chain) diverges.
+fn authority_config() -> LightConfig {
+    let authority_public_keys = authority_seeds()
+        .iter()
+        .map(|seed| hex::encode(SigningKey::from_bytes(seed).verifying_key().as_bytes()))
+        .collect();
+    LightConfig {
+        authority_public_keys,
+        ..LightConfig::default()
+    }
+}
+
+/// A producing light node: PoA genesis over the test authority set, holding
+/// **all** of its signing keys so it is the scheduled authority in every slot
+/// and production never has to wait for a turn.
 fn fresh() -> LightNode {
-    LightNode::new(LightConfig::default()).expect("genesis ok")
+    let node = LightNode::new(authority_config()).expect("genesis ok");
+    for seed in authority_seeds() {
+        node.set_authority_key_for_tests(seed);
+    }
+    node
+}
+
+/// A light node that knows the authority set but holds **no** signing key —
+/// i.e. a real wallet. It can verify every block it accepts, and seal none.
+fn wallet() -> LightNode {
+    LightNode::new(authority_config()).expect("genesis ok")
 }
 
 /// Advance past the RFC-006 coinbase-maturity boundary (100 blocks) so
 /// seed 1's genesis coinbase is spendable.
 fn mature(node: &LightNode) {
     for _ in 0..100 {
-        let _ = node.produce_empty_block();
+        node.produce_empty_block()
+            .expect("holds every authority key, so it is always scheduled");
     }
-}
-
-/// A light node with a validator identity and hybrid admission active.
-fn validator_node() -> LightNode {
-    let node = fresh();
-    node.set_validator_seed(vec![0xAB; 32]).unwrap();
-    node.enable_hybrid(1, 1, NOMINAL_WORK, false).unwrap();
-    node
 }
 
 fn temp_path(label: &str) -> String {
@@ -42,7 +85,6 @@ fn temp_path(label: &str) -> String {
 fn genesis_lifecycle_and_queries() {
     let node = fresh();
     assert_eq!(node.balance_of_seed(1).unwrap(), "1000");
-    assert!(!node.hybrid_enabled());
     assert_eq!(node.block_count().unwrap(), 1);
 
     // Tip ids are well-formed hex.
@@ -56,107 +98,96 @@ fn genesis_lifecycle_and_queries() {
 }
 
 #[test]
-fn seed_length_is_validated() {
+fn poa_blocks_carry_nominal_work() {
+    // PoA is the only admission regime, so there is exactly one block kind and
+    // `BlockInfo` no longer carries a `kind` field to distinguish a PoW block
+    // from a staked one. What is left to pin is the work invariant: every PoA
+    // block claims nominal work 1, because admission is by authority signature
+    // and not by meeting a work target.
     let node = fresh();
-    let err = node.set_validator_seed(vec![1; 31]).unwrap_err();
+    let info = node.produce_empty_block().unwrap();
+    assert_eq!(info.work, POA_WORK, "PoA block must carry nominal work");
+    let again = node.produce_empty_block().unwrap();
+    assert_eq!(
+        again.work, POA_WORK,
+        "work must not drift with chain selection"
+    );
+}
+
+#[test]
+fn empty_authority_set_is_rejected() {
+    // A light node that cannot name the authority set cannot verify the
+    // authority signature on any block it accepts — it would be trusting
+    // whichever peer served the block. Fail closed at construction instead.
+    let err = LightNode::new(LightConfig::default())
+        .err()
+        .expect("a node with no authority set must not build");
+    assert!(err.to_string().contains("authority_public_keys"), "{err}");
+}
+
+#[test]
+fn malformed_authority_key_is_rejected() {
+    let mut config = authority_config();
+    config.authority_public_keys[1] = "not-hex".into();
+    let err = LightNode::new(config)
+        .err()
+        .expect("non-hex authority key must not build");
+    assert!(err.to_string().contains("authority_public_keys"), "{err}");
+
+    let mut config = authority_config();
+    config.authority_public_keys[1] = "aabb".into();
+    let err = LightNode::new(config)
+        .err()
+        .expect("short authority key must not build");
     assert!(err.to_string().contains("32 bytes"), "{err}");
 }
 
 #[test]
-fn bonding_requires_validator_identity() {
-    let node = fresh();
-    node.enable_hybrid(1, 1, NOMINAL_WORK, false).unwrap();
-    let err = node.bond_stake(1, 500).unwrap_err();
-    assert!(err.to_string().contains("set_validator_seed"), "{err}");
-}
+fn wallet_without_authority_key_can_verify_but_not_seal() {
+    // The security-relevant property of the PoA-only FFI: a node that holds no
+    // authority secret still validates the chain (it can read the same blocks a
+    // producer made), but every sealing path refuses. No PoW fallback exists to
+    // quietly let it through.
+    let producer = fresh();
+    mature(&producer);
+    producer.send(1, 400, 2).unwrap();
 
-#[test]
-fn bond_splits_then_freezes_and_staked_block_wins() {
-    let node = validator_node();
-    mature(&node);
-
-    // The founder holds one coin of exactly 1000; bonding 500 forces a sizing
-    // split (500 frozen + 500 spendable), then the bond transaction itself.
-    assert_eq!(node.total_stake().unwrap(), 0);
-    let bond_tx_hex = node.bond_stake(1, 500).unwrap();
-    assert_eq!(hex::decode(&bond_tx_hex).unwrap().len(), 32);
-
-    assert_eq!(node.total_stake().unwrap(), 500);
-    assert_eq!(node.my_stake().unwrap(), 500);
-
-    // Steady-state heartbeat with an empty mempool: the draw wins.
-    let info = node.produce_empty_block().unwrap();
-    assert_eq!(info.kind, BlockKind::Staked, "full bonded share must win");
+    let phone = wallet();
+    let applied = phone.receive_blocks(producer.export_blocks()).unwrap();
+    // Both nodes start from the same genesis, so the blob contributes every
+    // block *except* that one.
+    assert_eq!(applied, producer.block_count().unwrap() - 1);
     assert_eq!(
-        info.work, NOMINAL_WORK,
-        "staked blocks pinned to nominal work"
+        phone.selected_tip().unwrap(),
+        producer.selected_tip().unwrap()
     );
+    assert_eq!(phone.balance_of_seed(2).unwrap(), "400");
 
-    // The split remainder is still spendable: transfer part of it onward.
-    let receipt = node.send(1, 400, 2).unwrap();
-    let sealed = node
-        .block_by_id(receipt.block_id_hex.clone())
-        .unwrap()
-        .expect("send's block is known");
-    assert_eq!(sealed.id_hex, receipt.block_id_hex);
-}
-
-#[test]
-fn rebonding_skips_frozen_coins_and_refills_from_coinbase() {
-    let node = validator_node();
-    mature(&node);
-    node.bond_stake(1, 500).unwrap();
-
-    // Only an unfrozen 500-coin remains: a second 500-bond must reuse it
-    // exactly (no split needed), not try to spend the frozen output.
-    node.bond_stake(1, 500).unwrap();
-    assert_eq!(node.total_stake().unwrap(), 1000);
-
-    // Unfrozen funds are exhausted — but this node is also the miner, and the
-    // sizing/bond flow's own blocks pay founder coinbase, so a third bond is
-    // funded from freshly mined coins while frozen outputs stay untouched.
-    node.bond_stake(1, 500).unwrap();
-    assert_eq!(node.total_stake().unwrap(), 1500);
-
-    // A wallet-less actor genuinely cannot bond: nothing to size or spend.
-    assert!(node.bond_stake(9, 500).is_err());
-}
-
-#[test]
-fn unbonded_validator_falls_back_to_pow() {
-    let node = validator_node(); // identity set, NOTHING bonded
-    let info = node.produce_empty_block().unwrap();
-    assert_eq!(
-        info.kind,
-        BlockKind::Pow,
-        "missed draw must fall back to PoW"
-    );
-    // Without a retargeting policy the PoW path carries the ledger's legacy
-    // fixed work target — deliberately NOT the staked nominal weight.
-    assert_ne!(info.work, NOMINAL_WORK);
+    // …but it cannot seal: no authority key means no slot, and there is no
+    // work target to grind instead.
+    let err = phone.send(1, 100, 3).unwrap_err();
+    assert!(err.to_string().contains("authority"), "{err}");
+    assert!(phone.produce_block().is_err() || phone.produce_block().unwrap().is_none());
+    assert!(phone.produce_empty_block().is_err());
 }
 
 #[test]
 fn sync_blob_between_two_nodes_converges() {
-    let producer = validator_node();
+    let producer = fresh();
     mature(&producer);
-    producer.bond_stake(1, 500).unwrap();
     producer.produce_empty_block().unwrap();
     producer.send(1, 400, 2).unwrap();
-    let staked_tip_before = producer.selected_tip().unwrap();
+    let producer_tip_before = producer.selected_tip().unwrap();
 
     // The peer starts identical (genesis) and catches up purely from bytes.
     let peer = fresh();
-    peer.set_validator_seed(vec![0xCD; 32]).unwrap();
-    peer.enable_hybrid(1, 1, NOMINAL_WORK, false).unwrap();
 
     let applied = peer.receive_blocks(producer.export_blocks()).unwrap();
     assert!(
-        applied >= 4,
-        "split+bond+staked+send at minimum, got {applied}"
+        applied >= 2,
+        "at least the coinbase and the send block, got {applied}"
     );
-    assert_eq!(peer.selected_tip().unwrap(), staked_tip_before);
-    assert_eq!(peer.total_stake().unwrap(), 500);
+    assert_eq!(peer.selected_tip().unwrap(), producer_tip_before);
     assert_eq!(
         peer.balance_of_seed(2).unwrap(),
         producer.balance_of_seed(2).unwrap()
@@ -179,35 +210,37 @@ fn garbage_sync_blob_is_rejected_not_panicked_on() {
 }
 
 #[test]
-fn snapshot_roundtrip_preserves_staked_ids_and_keeps_producing() {
-    let node = validator_node();
+fn snapshot_roundtrip_preserves_authority_ids_and_keeps_producing() {
+    let node = fresh();
     mature(&node);
-    node.bond_stake(1, 500).unwrap();
-    let staked = node.produce_empty_block().unwrap();
-    assert_eq!(staked.kind, BlockKind::Staked);
+    let authority_block = node.produce_empty_block().unwrap();
+    assert_eq!(authority_block.work, POA_WORK);
 
     let path = temp_path("roundtrip");
     node.save_snapshot(path.clone()).unwrap();
 
-    // Restore into a brand-new node that runs the same policy BEFORE loading:
-    // hybrid replay keeps every staked id intact.
-    let restored = validator_node();
-    restored.load_snapshot(path.clone()).unwrap();
+    // A snapshot stores the ledger but NOT the admission config, so the
+    // authority set has to be supplied again on load — same contract as the
+    // full node's `restore_poa_policy`. PoA replay is what keeps every
+    // authority-signed id intact.
+    let restored = fresh();
+    restored
+        .load_snapshot(path.clone(), authority_config())
+        .unwrap();
     assert_eq!(
         restored.selected_tip().unwrap(),
         node.selected_tip().unwrap()
     );
 
     let back = restored
-        .block_by_id(staked.id_hex.clone())
+        .block_by_id(authority_block.id_hex.clone())
         .unwrap()
-        .expect("staked id survived");
-    assert_eq!(back.kind, BlockKind::Staked);
-    assert_eq!(restored.total_stake().unwrap(), 500);
+        .expect("authority-signed id survived");
+    assert_eq!(back.work, POA_WORK);
 
-    // And the restored validator can keep producing immediately.
+    // And the restored node can keep producing immediately.
     let next = restored.produce_empty_block().unwrap();
-    assert_eq!(next.kind, BlockKind::Staked);
+    assert_eq!(next.work, POA_WORK);
 
     let _ = std::fs::remove_file(&path);
 }
@@ -231,52 +264,6 @@ fn send_from_uses_imported_secret_without_storing_it() {
     // Wrong-length secrets are rejected up front.
     let err = node.send_from("abcd".to_string(), 1, to_addr).unwrap_err();
     assert!(err.to_string().contains("32 bytes"), "{err}");
-}
-
-#[test]
-fn unbond_through_ffi_requires_maturity() {
-    let node = validator_node();
-    mature(&node);
-    node.bond_stake(1, 500).unwrap();
-    assert!(node.pending_unbond_height().unwrap().is_some());
-    assert!(node.chain_height().unwrap() > 0);
-
-    // Nothing matured yet: typed InsufficientStake, nothing released.
-    let err = node.unbond(1, 300).unwrap_err();
-    assert!(
-        err.to_string().contains("insufficient matured stake"),
-        "{err}"
-    );
-    assert_eq!(node.my_stake().unwrap(), 500);
-}
-
-#[test]
-fn retarget_enabled_hybrid_pins_pow_and_syncs() {
-    let producer = fresh();
-    mature(&producer);
-    producer.set_validator_seed(vec![0xAB; 32]).unwrap();
-    producer.enable_hybrid(1, 1, NOMINAL_WORK, true).unwrap();
-
-    // Nothing bonded: PoW fallback under an active retarget policy. The block
-    // must pin the policy's target — NOT the nominal staked work — and the
-    // peer-side check below proves it exactly (WorkTargetMismatch otherwise).
-    let pow = producer.produce_empty_block().unwrap();
-    assert_eq!(pow.kind, BlockKind::Pow);
-    assert_ne!(pow.work, NOMINAL_WORK);
-
-    producer.bond_stake(1, 500).unwrap();
-    let staked = producer.produce_empty_block().unwrap();
-    assert_eq!(staked.kind, BlockKind::Staked);
-    assert_eq!(staked.work, NOMINAL_WORK);
-
-    let peer = fresh();
-    peer.set_validator_seed(vec![0xCD; 32]).unwrap();
-    peer.enable_hybrid(1, 1, NOMINAL_WORK, true).unwrap();
-    let _applied = peer.receive_blocks(producer.export_blocks()).unwrap();
-    assert_eq!(
-        peer.selected_tip().unwrap(),
-        producer.selected_tip().unwrap()
-    );
 }
 
 #[test]
@@ -427,47 +414,6 @@ fn filter_matches_any_batches_watch_addresses() {
     assert!(node
         .filter_matches_any(vec![0u8; 9], vec![founder])
         .is_err());
-}
-
-#[test]
-fn bond_and_unbond_from_secret_spend_wallet_funds() {
-    let node = validator_node();
-    mature(&node);
-
-    // The deterministic founder actor (seed 1) is funded by genesis. Its
-    // Ed25519 secret is the little-endian encoding of 1 padded to 32 bytes.
-    let founder_secret = "0100000000000000000000000000000000000000000000000000000000000000";
-
-    // Bonding from the wallet secret freezes the founder's own coins and
-    // returns change to the same wallet address.
-    let bond_tx_hex = node
-        .bond_stake_from_secret(founder_secret.into(), 500)
-        .unwrap();
-    assert_eq!(hex::decode(&bond_tx_hex).unwrap().len(), 32);
-    assert_eq!(node.total_stake().unwrap(), 500);
-    assert_eq!(node.my_stake().unwrap(), 500);
-
-    // Immature unbond fails.
-    let err = node
-        .unbond_from_secret(founder_secret.into(), 300)
-        .unwrap_err();
-    assert!(
-        err.to_string().contains("insufficient matured stake"),
-        "{err}"
-    );
-    assert_eq!(node.my_stake().unwrap(), 500);
-
-    // Mine enough blocks to mature the bond (`UNBOND_MATURITY` = 100).
-    for _ in 0..105 {
-        let _ = node.produce_empty_block().unwrap();
-    }
-
-    let receipt = node.unbond_from_secret(founder_secret.into(), 300).unwrap();
-    assert!(!receipt.block_id_hex.is_empty());
-    assert!(!receipt.tx_id_hex.is_empty());
-    assert_eq!(node.my_stake().unwrap(), 0);
-    // The remaining 200 atoms were returned as an unfrozen change output.
-    assert_eq!(node.total_stake().unwrap(), 0);
 }
 
 #[test]

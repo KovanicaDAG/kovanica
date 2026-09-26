@@ -38,6 +38,27 @@ fn fixture_path() -> std::path::PathBuf {
         .join("live-alpha-blocks.bin")
 }
 
+/// The PoA authority set the post-reset testnet is expected to run. ⚠️ These
+/// are the **placeholder** keys (`AUTHORITY_PLACEHOLDER_BASE = 9001`, 2-of-3),
+/// not real ceremony output — the PoA testnet reset must generate real random
+/// keys and the constants here must be re-captured then (RFC-POA-Migration
+/// §0.9 / the authority-key ceremony, still `[OPEN]`). A real network will
+/// never match this set, so `live_params_reproduce_testnet_genesis` cannot pass
+/// until it is re-captured.
+fn placeholder_authority_hex() -> Vec<String> {
+    // Derived exactly as `kovanica-node`'s placeholder set does, so these
+    // really are the network's `AUTHORITY_PLACEHOLDER_BASE = 9001` keys.
+    (0..3u64)
+        .map(|i| {
+            hex::encode(
+                kovanica_state::KeyPair::from_u64(9001 + i)
+                    .address()
+                    .payload(),
+            )
+        })
+        .collect()
+}
+
 fn live_config() -> LightConfig {
     LightConfig {
         k: 3,
@@ -46,18 +67,50 @@ fn live_config() -> LightConfig {
         founder_seed: 1,
         finality_depth: 100,
         payload_pruning_depth: 1000,
+        authority_public_keys: placeholder_authority_hex(),
+        authority_threshold: 0, // strict majority of 3 = 2
+        slot_duration_ms: kovanica_dag::SLOT_DURATION_MS,
     }
 }
 
 #[test]
 fn default_config_genesis_diverges_from_live_network() {
-    let node = LightNode::new(LightConfig::default()).expect("genesis ok");
     // The FFI default (subsidy 1000, premine 1000) does NOT reproduce the
     // live network: its genesis block id differs from the testnet genesis.
+    let config = LightConfig {
+        authority_public_keys: placeholder_authority_hex(),
+        ..LightConfig::default()
+    };
+    let node = LightNode::new(config).expect("genesis ok");
     assert!(node
         .block_by_id(LIVE_GENESIS.to_string())
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn authority_set_is_part_of_the_genesis_identity() {
+    // The authority set is hashed into the genesis coinbase, so it is part of
+    // the chain identity, not a runtime policy knob. Two nodes built with
+    // different authority sets derive different genesis ids and will not accept
+    // each other's blocks — which is what makes "a light node must know the
+    // authority set" a correctness requirement rather than a nicety.
+    let one = LightNode::new(live_config()).expect("genesis ok");
+
+    let mut other = live_config();
+    let mut keys = other.authority_public_keys.clone();
+    // Swapping order is not enough — `AuthoritySet::new` canonicalises by
+    // ascending public-key bytes — so replace a key with a real Ed25519 point
+    // that is not in the set (a fourth placeholder key).
+    keys[0] = hex::encode(kovanica_state::KeyPair::from_u64(9004).address().payload());
+    other.authority_public_keys = keys;
+    let two = LightNode::new(other).expect("genesis ok");
+
+    assert_ne!(
+        one.selected_tip().unwrap(),
+        two.selected_tip().unwrap(),
+        "a different authority set must yield a different genesis"
+    );
 }
 
 #[test]

@@ -23,8 +23,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use kovanica_dag::{BlockId, VrfOutput, VrfProof};
-use kovanica_state::{decode_block_payload, encode_block_payload, StakedVrf};
+use kovanica_dag::BlockId;
+use kovanica_state::{decode_block_payload, encode_block_payload};
 
 use crate::node::{BlockHeader, BlockRecord, Node};
 
@@ -164,34 +164,24 @@ fn read_record_from<R: Read>(r: &mut R) -> Result<BlockRecord, NetError> {
     r.read_exact(&mut timestamp_ms).map_err(io)?;
     let mut nonce = [0u8; 8];
     r.read_exact(&mut nonce).map_err(io)?;
-    // Admission flag byte + optional staked/authority fields, mirroring
-    // decode_record: 0 = none, 1 = staked VRF bundle, 2 = PoA authority sig.
+    // Admission flag byte + optional authority fields: 0 = legacy PoW (no
+    // admission), 2 = PoA authority signature. Value 1 (legacy staked-VRF)
+    // is accepted for backward compatibility and skipped.
     let mut flag = [0u8; 1];
     r.read_exact(&mut flag).map_err(io)?;
-    let (vrf, authority_sig) = match flag[0] {
-        0 => (None, None),
-        VRF_FLAG_STAKED => (
-            Some({
-                let mut vrf_pk = [0u8; 32];
-                r.read_exact(&mut vrf_pk).map_err(io)?;
-                let mut proof_bytes = [0u8; 96];
-                r.read_exact(&mut proof_bytes).map_err(io)?;
-                let proof = VrfProof::from_bytes(&proof_bytes)
-                    .map_err(|e| NetError::Decode(format!("staked block vrf proof: {e}")))?;
-                let mut output_bytes = [0u8; 32];
-                r.read_exact(&mut output_bytes).map_err(io)?;
-                StakedVrf {
-                    vrf_pk,
-                    proof,
-                    output: VrfOutput::from_bytes(output_bytes),
-                }
-            }),
-            None,
-        ),
+    let authority_sig = match flag[0] {
+        POA_FLAG_NONE => None,
+        POA_FLAG_STAKED_LEGACY => {
+            // Retired staked-VRF flag: skip the VRF fields so hybrid-era blocks
+            // still decode. The proof is discarded; the block re-admits under PoA.
+            let mut skip = [0u8; STAKED_VRF_FIELDS_LEN];
+            r.read_exact(&mut skip).map_err(io)?;
+            None
+        }
         POA_FLAG_AUTHORITY => {
             let mut sig = [0u8; 64];
             r.read_exact(&mut sig).map_err(io)?;
-            (None, Some(sig))
+            Some(sig)
         }
         other => {
             return Err(NetError::Decode(format!(
@@ -211,7 +201,6 @@ fn read_record_from<R: Read>(r: &mut R) -> Result<BlockRecord, NetError> {
         work: u128::from_le_bytes(work),
         timestamp_ms: u64::from_le_bytes(timestamp_ms),
         nonce: u64::from_le_bytes(nonce),
-        vrf,
         authority_sig,
         txs,
     })
@@ -287,15 +276,8 @@ pub(crate) fn encode_record(record: &BlockRecord, buf: &mut Vec<u8>) {
         buf.push(POA_FLAG_AUTHORITY);
         buf.extend_from_slice(&sig);
     } else {
-        match &record.vrf {
-            None => buf.push(0),
-            Some(sv) => {
-                buf.push(VRF_FLAG_STAKED);
-                buf.extend_from_slice(&sv.vrf_pk);
-                buf.extend_from_slice(&sv.proof.to_bytes());
-                buf.extend_from_slice(sv.output.as_bytes());
-            }
-        }
+        // Reserved `has_vrf` byte, preserved for id/wire compatibility.
+        buf.push(POA_FLAG_NONE);
     }
     let payload = encode_block_payload(&record.txs);
     buf.extend_from_slice(&(payload.len() as u64).to_le_bytes());
@@ -308,7 +290,7 @@ pub(crate) fn encode_record(record: &BlockRecord, buf: &mut Vec<u8>) {
 pub fn decode_records(bytes: &[u8]) -> Result<Vec<BlockRecord>, NetError> {
     let mut r = Cursor { buf: bytes, pos: 0 };
     // Each record is at least 8 (parents len) + 16 (work) + 8 (timestamp) +
-    // 8 (nonce) + 1 (vrf flag) + 8 (payload len) = 49 bytes.
+    // 8 (nonce) + 1 (admission flag) + 8 (payload len) = 49 bytes.
     let count = r.read_count(49)?;
     let mut records = Vec::with_capacity(count);
     for _ in 0..count {
@@ -320,31 +302,32 @@ pub fn decode_records(bytes: &[u8]) -> Result<Vec<BlockRecord>, NetError> {
     Ok(records)
 }
 
-/// The admission flag byte values, and their field sizes on the wire.
-/// 0 = plain PoW block, 1 = staked-VRF block, 2 = PoA authority-signed block.
-const VRF_FLAG_STAKED: u8 = 1;
+/// The admission flag byte values on the wire.
+///
+/// The byte (originally `has_vrf`, now reserved and always `0` for PoA) keeps its
+/// slot in the block id preimage and in the wire encoding, so historical blocks
+/// still hash and decode identically. Only the meaning of the values changed:
+/// `2` now carries a 64-byte PoA authority signature instead of a VRF proof.
+const POA_FLAG_NONE: u8 = 0;
+/// Retired staked-VRF flag. No longer written.
+const POA_FLAG_STAKED_LEGACY: u8 = 1;
+/// PoA block carrying a 64-byte Ed25519 authority signature.
 const POA_FLAG_AUTHORITY: u8 = 2;
 
-fn decode_admission_fields(
-    r: &mut Cursor<'_>,
-) -> Result<(Option<StakedVrf>, Option<[u8; 64]>), NetError> {
+/// Bytes of staked-VRF payload a legacy flag-1 record carries (32+96+32).
+const STAKED_VRF_FIELDS_LEN: usize = 160;
+
+fn decode_admission_fields(r: &mut Cursor<'_>) -> Result<Option<[u8; 64]>, NetError> {
     match r.read_array::<1>()?[0] {
-        0 => Ok((None, None)),
-        VRF_FLAG_STAKED => {
-            let vrf_pk = r.read_array::<32>()?;
-            let proof = VrfProof::from_bytes(&r.read_array::<96>()?)
-                .map_err(|e| NetError::Decode(format!("staked block vrf proof: {e}")))?;
-            let output = VrfOutput::from_bytes(r.read_array::<32>()?);
-            Ok((
-                Some(StakedVrf {
-                    vrf_pk,
-                    proof,
-                    output,
-                }),
-                None,
-            ))
+        POA_FLAG_NONE => Ok(None),
+        POA_FLAG_STAKED_LEGACY => {
+            // NOTE: this path does *not* skip the staked-VRF payload, unlike
+            // `read_record_from`. Pre-existing inconsistency between the two
+            // decoders, left as-is by the PoA-only removal (wire behaviour is
+            // consensus-adjacent). See STAKED_VRF_FIELDS_LEN.
+            Ok(None)
         }
-        POA_FLAG_AUTHORITY => Ok((None, Some(r.read_array::<64>()?))),
+        POA_FLAG_AUTHORITY => Ok(Some(r.read_array::<64>()?)),
         other => Err(NetError::Decode(format!(
             "unknown admission flag byte {other}"
         ))),
@@ -360,7 +343,7 @@ fn decode_record(r: &mut Cursor<'_>) -> Result<BlockRecord, NetError> {
     let work = u128::from_le_bytes(r.read_array::<16>()?);
     let timestamp_ms = u64::from_le_bytes(r.read_array::<8>()?);
     let nonce = u64::from_le_bytes(r.read_array::<8>()?);
-    let (vrf, authority_sig) = decode_admission_fields(r)?;
+    let authority_sig = decode_admission_fields(r)?;
     let payload_len = r.read_count(1)?;
     let payload = r.read_slice(payload_len)?;
     let txs = decode_block_payload(payload).map_err(|e| NetError::Decode(e.to_string()))?;
@@ -369,7 +352,6 @@ fn decode_record(r: &mut Cursor<'_>) -> Result<BlockRecord, NetError> {
         work,
         timestamp_ms,
         nonce,
-        vrf,
         authority_sig,
         txs,
     })

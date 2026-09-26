@@ -1,10 +1,37 @@
 //! FFI-level multisig flow tests — mirror the Kotlin/Swift surface exactly.
 
+use ed25519_dalek::SigningKey;
 use kovanica_ffi::{LightConfig, LightNode, MultisigSpendOutput};
 use kovanica_state::KeyPair;
 
+/// The PoA authority set for these tests (3 keys, the RFC-POA minimum).
+const AUTHORITY_BASE: u8 = 0xB1;
+
+fn authority_seeds() -> Vec<[u8; 32]> {
+    (0..3usize)
+        .map(|i| [AUTHORITY_BASE + i as u8; 32])
+        .collect()
+}
+
+fn authority_config() -> LightConfig {
+    LightConfig {
+        authority_public_keys: authority_seeds()
+            .iter()
+            .map(|seed| hex::encode(SigningKey::from_bytes(seed).verifying_key().as_bytes()))
+            .collect(),
+        ..LightConfig::default()
+    }
+}
+
+/// A node that is an authority in every slot, so `produce_block` can seal the
+/// multisig spend. Under PoA nothing else can (RFC-POA §0: admission is by
+/// authority signature, and there is no PoW fallback).
 fn fresh() -> LightNode {
-    LightNode::new(LightConfig::default()).expect("genesis ok")
+    let node = LightNode::new(authority_config()).expect("genesis ok");
+    for seed in authority_seeds() {
+        node.set_authority_key_for_tests(seed);
+    }
+    node
 }
 
 fn secret_for(seed: u64) -> String {

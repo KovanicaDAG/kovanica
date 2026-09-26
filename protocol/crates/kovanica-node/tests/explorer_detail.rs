@@ -44,7 +44,7 @@ fn send_req(app: &mut Explorer, req: &str) -> (u16, String) {
 #[test]
 fn block_detail_includes_header_and_topology() {
     let mut app = Explorer::boot();
-    app.mining = false;
+    app.producing = false;
 
     // Produce a block so we have a non-genesis block to query.
     app.mesh.pool("alpha", 1, ATOM, 3).unwrap();
@@ -69,7 +69,11 @@ fn block_detail_includes_header_and_topology() {
     assert!(json["work"].as_u64().unwrap() >= 1);
     assert!(!json["parents"].as_array().unwrap().is_empty());
     assert!(!json["txs"].as_array().unwrap().is_empty());
-    assert!(json["kind"].as_str().unwrap() == "pow" || json["kind"].as_str().unwrap() == "staked");
+    assert!(
+        json["kind"].as_str().unwrap() == "pow"
+            || json["kind"].as_str().unwrap() == "staked"
+            || json["kind"].as_str().unwrap() == "poa"
+    );
     assert!(["genesis", "chain", "blue", "red"].contains(&json["colour"].as_str().unwrap()));
     assert!(["tip", "confirmed", "accepted", "pending"]
         .contains(&json["confirming_status"].as_str().unwrap()));
@@ -89,7 +93,7 @@ fn block_detail_returns_404_for_unknown_block() {
 #[test]
 fn tx_detail_reports_amount_fee_and_confirmations() {
     let mut app = Explorer::boot();
-    app.mining = false;
+    app.producing = false;
 
     let to = KeyPair::from_u64(7);
     app.mesh.pool("alpha", 1, ATOM, 7).unwrap();
@@ -145,7 +149,7 @@ fn tx_detail_returns_404_for_unknown_tx() {
 #[test]
 fn address_detail_returns_balance_and_paginated_history() {
     let mut app = Explorer::boot();
-    app.mining = false;
+    app.producing = false;
 
     let to = KeyPair::from_u64(8);
     app.mesh.pool("alpha", 1, ATOM, 8).unwrap();
@@ -182,7 +186,7 @@ fn address_detail_returns_balance_and_paginated_history() {
 #[test]
 fn address_detail_pagination_respects_per_page() {
     let mut app = Explorer::boot();
-    app.mining = false;
+    app.producing = false;
 
     let to = KeyPair::from_u64(3);
     app.mesh.pool("alpha", 1, ATOM, 3).unwrap();

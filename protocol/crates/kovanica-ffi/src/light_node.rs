@@ -12,14 +12,18 @@
 //! * **Keys stay seed-derived** for now (matching the demo stack); the wallet
 //!   holds its seeds and calls methods with them. Moving key custody fully
 //!   client-side is follow-up work, not an API break of this surface.
+//! * **PoA-only admission** (RFC-POA §0) — `LightConfig` carries the authority
+//!   set as **public** keys, because a light node that cannot name the set
+//!   cannot verify the authority signature on a block and would be trusting
+//!   whichever peer served it. The wallet holds no authority secret: production
+//!   is a validator capability, not a wallet one. See `LightConfig` and
+//!   RFC-POA-Migration §0.9 (blocker B1) for what that costs a real phone.
 
 use std::sync::{Mutex, MutexGuard};
 
-use kovanica_dag::BlockId;
+use kovanica_dag::{AuthorityPublicKey, AuthoritySet, BlockId};
 use kovanica_node::{net, Node, TreasuryGenesis};
-use kovanica_state::{
-    KeyPair, OutPoint, Sig, StealthAddress, Transaction, TxOutput, RFC006_PREMINE,
-};
+use kovanica_state::{OutPoint, StealthAddress, Transaction, TxOutput, RFC006_PREMINE};
 
 /// Why a [`LightNode`] operation failed.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -28,16 +32,12 @@ pub enum LightNodeError {
     AlreadyInitialized,
     #[error("invalid hex in {field}")]
     Hex { field: String },
-    #[error("validator seed must be exactly 32 bytes")]
-    BadSeedLength,
     #[error("{msg}")]
     Invalid { msg: String },
     #[error("insufficient funds (need an unfrozen coin worth at least {needed})")]
     InsufficientFunds { needed: u64 },
     #[error("secret key must be exactly 32 bytes hex, got {got}")]
     BadSecretLength { expected: u32, got: u32 },
-    #[error("insufficient matured stake: requested {requested}, available {available} (bonded but not yet matured does not count)")]
-    InsufficientStake { requested: u64, available: u64 },
     #[error("node error: {msg}")]
     Node { msg: String },
 }
@@ -50,6 +50,43 @@ impl From<kovanica_node::NodeError> for LightNodeError {
 
 fn invalid(msg: impl Into<String>) -> LightNodeError {
     LightNodeError::Invalid { msg: msg.into() }
+}
+
+/// Build the PoA authority set from [`LightConfig`].
+///
+/// Public keys only — a wallet verifies signatures, it never signs blocks, so
+/// no secret ever crosses this boundary. `authority_threshold == 0` selects the
+/// default strict majority.
+fn authority_set_from_config(config: &LightConfig) -> Result<AuthoritySet, LightNodeError> {
+    if config.authority_public_keys.is_empty() {
+        return Err(invalid(
+            "authority_public_keys is empty: a light node needs the PoA authority set to \
+             verify block admission (RFC-POA KVP-201)",
+        ));
+    }
+    let mut pks = Vec::with_capacity(config.authority_public_keys.len());
+    for hex_pk in &config.authority_public_keys {
+        let raw = hex::decode(hex_pk.trim()).map_err(|_| LightNodeError::Hex {
+            field: format!("authority_public_keys[{hex_pk}]"),
+        })?;
+        let bytes: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
+            invalid(format!(
+                "authority public key must be 32 bytes, got {}",
+                raw.len()
+            ))
+        })?;
+        pks.push(
+            AuthorityPublicKey::from_bytes(&bytes)
+                .map_err(|e| invalid(format!("invalid authority public key {hex_pk}: {e}")))?,
+        );
+    }
+    let threshold = if config.authority_threshold == 0 {
+        pks.len() / 2 + 1
+    } else {
+        config.authority_threshold as usize
+    };
+    AuthoritySet::new(pks, threshold)
+        .map_err(|e| invalid(format!("invalid PoA authority set: {e}")))
 }
 
 /// A 128-bit value split across two 64-bit halves — the FFI stand-in for the
@@ -78,15 +115,6 @@ impl U128Parts {
     }
 }
 
-/// How a block was admitted.
-#[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BlockKind {
-    /// Proof-of-work path (hash meets target).
-    Pow,
-    /// Stake-weighted VRF sortition path.
-    Staked,
-}
-
 /// A summary of one block in this node's DAG — enough for wallets to render
 /// history without holding payloads.
 #[derive(uniffi::Record, Clone, Debug)]
@@ -95,9 +123,9 @@ pub struct BlockInfo {
     pub id_hex: String,
     /// Parent ids, lowercase hex (sorted, de-duplicated, as `Block` stores them).
     pub parents_hex: Vec<String>,
-    /// Which hybrid admission path produced it.
-    pub kind: BlockKind,
-    /// Claimed work weight (nominal `1` for staked blocks).
+    /// Claimed work weight. Under PoA this is always the nominal `1`
+    /// (`POA_NOMINAL_WORK`): admission is by authority signature, not by a
+    /// work target, so work carries no ranking weight.
     pub work: U128Parts,
     /// Milliseconds since the UNIX epoch.
     pub timestamp_ms: u64,
@@ -153,6 +181,23 @@ pub struct LightConfig {
     pub finality_depth: u64,
     /// Payload pruning depth; keep ≥ `finality_depth`.
     pub payload_pruning_depth: u64,
+    /// The PoA authority set as lowercase-hex 32-byte Ed25519 **public** keys
+    /// (RFC-POA KVP-201, `KVA1 || set_hash`).
+    ///
+    /// A light node must know this set or it cannot verify the authority
+    /// signature on every block it accepts, and would be trusting the peer that
+    /// served it. These are public keys: the wallet never holds, and must never
+    /// hold, the matching secrets — block production is not a wallet capability.
+    ///
+    /// Minimum 3 keys (RFC-POA `MIN_AUTHORITIES`). Must be identical across
+    /// every node on the network: the set is hashed into the genesis coinbase,
+    /// so a different set yields a different genesis id.
+    pub authority_public_keys: Vec<String>,
+    /// Authority-set threshold M for an on-chain rotation. `0` selects the
+    /// default strict majority.
+    pub authority_threshold: u32,
+    /// Slot duration in milliseconds (RFC-POA default 3000).
+    pub slot_duration_ms: u64,
 }
 
 impl Default for LightConfig {
@@ -164,6 +209,9 @@ impl Default for LightConfig {
             founder_seed: 1,
             finality_depth: u64::MAX,
             payload_pruning_depth: u64::MAX,
+            authority_public_keys: Vec::new(),
+            authority_threshold: 0,
+            slot_duration_ms: kovanica_dag::SLOT_DURATION_MS,
         }
     }
 }
@@ -296,28 +344,46 @@ impl LightNode {
 
     fn block_info(&self, node: &Node, id: &BlockId) -> Option<BlockInfo> {
         let record = node.block_record(id)?;
-        let kind = if record.vrf.is_some() {
-            BlockKind::Staked
-        } else {
-            BlockKind::Pow
-        };
         Some(BlockInfo {
             id_hex: id.to_hex(),
             parents_hex: record.parents.iter().map(BlockId::to_hex).collect(),
-            kind,
             work: U128Parts::from_u128(record.work),
             timestamp_ms: record.timestamp_ms,
         })
+    }
+
+    // ------------------------------------------------------------------
+    // Rust-only test seam — NOT part of the FFI contract
+    // ------------------------------------------------------------------
+    //
+    // Deliberately outside `#[uniffi::export]`, so it never reaches Kotlin or
+    // Swift: no mobile caller can obtain a consensus signing key through the
+    // FFI. This is a test fixture, not an operator key-ingestion path, and it
+    // does **not** resolve blocker B1 (see RFC-POA-Migration §0.9) — the node
+    // still has no env var, RPC command or CLI flag that feeds an operator's
+    // own authority secret to a running process. The FFI test suite needs to
+    // be an authority because under PoA a block can only be sealed by the
+    // scheduled authority, and the send surface below is what the tests
+    // exercise.
+    pub fn set_authority_key_for_tests(&self, seed: [u8; 32]) {
+        self.lock().set_authority_signing_key(seed);
     }
 }
 
 #[uniffi::export]
 impl LightNode {
     /// Bring up a fresh node at genesis with `config`.
+    ///
+    /// The genesis is a PoA genesis: its coinbase commits to
+    /// `config.authority_public_keys` (`KVA1 || set_hash`), so a node built
+    /// with a different authority set derives a different genesis id and will
+    /// not accept the network's blocks. PoA is the only admission regime
+    /// (RFC-POA §0) — there is no non-PoA genesis to fall back to.
     #[uniffi::constructor]
     pub fn new(config: LightConfig) -> Result<Self, LightNodeError> {
+        let authority_set = authority_set_from_config(&config)?;
         let mut node = Node::new();
-        let (_id, _founder) = node.genesis_with_finality(
+        let (_id, _founder) = node.genesis_with_poa(
             config.k,
             config.subsidy,
             config.founder_amount,
@@ -336,281 +402,13 @@ impl LightNode {
             config.payload_pruning_depth,
             u64::MAX, // block pruning: light nodes keep the full oracle (follow-up)
             None,     // operator_seed: None for general FFI constructor
+            authority_set,
+            config.slot_duration_ms,
         )?;
         Ok(Self {
             inner: Mutex::new(node),
             light: Mutex::new(LightSyncState::default()),
         })
-    }
-
-    // ------------------------------------------------------------------
-    // Identity & hybrid policy
-    // ------------------------------------------------------------------
-
-    /// Adopt a validator identity from a 32-byte VRF seed. Bond stake via
-    /// [`Self::bond_stake`] before production draws can win.
-    pub fn set_validator_seed(&self, seed: Vec<u8>) -> Result<(), LightNodeError> {
-        let seed: [u8; 32] = seed.try_into().map_err(|_| LightNodeError::BadSeedLength)?;
-        self.lock().set_validator_seed(seed);
-        Ok(())
-    }
-
-    /// This validator's VRF public key, lowercase hex, if a seed was set.
-    pub fn validator_public_key_hex(&self) -> Option<String> {
-        self.lock()
-            .validator_public_key()
-            .map(|pk| hex::encode(pk.as_bytes()))
-    }
-
-    /// Receive the per-block subsidy coinbase on produced blocks under this
-    /// actor seed.
-    pub fn set_miner_seed(&self, seed: u64) -> Result<(), LightNodeError> {
-        self.lock().set_miner(Node::address(seed));
-        Ok(())
-    }
-
-    /// Enable hybrid admission: blocks enter by PoW or by eligible VRF draw.
-    ///
-    /// `rate_num/rate_den` scales slot frequency relative to bonded share
-    /// (`1/1` = one expected win per block at full supply); `nominal_work`
-    /// pins staked-block weight (keep tiny so mining stays king of chain
-    /// selection); `retarget` adopts the default difficulty-retargeting pin
-    /// for PoW-path work claims.
-    pub fn enable_hybrid(
-        &self,
-        rate_num: u64,
-        rate_den: u64,
-        nominal_work: U128Parts,
-        retarget: bool,
-    ) -> Result<(), LightNodeError> {
-        let cfg = kovanica_state::HybridConfig {
-            rate_num,
-            rate_den,
-            stake_nominal_work: nominal_work.as_u128(),
-            use_epoch_beacon: true,
-            retarget: retarget.then(kovanica_dag::Retarget::default),
-        };
-        self.lock().enable_hybrid(cfg)?;
-        Ok(())
-    }
-
-    /// Whether hybrid admission is active.
-    pub fn hybrid_enabled(&self) -> bool {
-        self.lock().hybrid_enabled()
-    }
-
-    // ------------------------------------------------------------------
-    // Bonding (the phone's "stake" action)
-    // ------------------------------------------------------------------
-
-    /// Bond `amount` atoms of actor `seed`'s spendable coins to THIS node's
-    /// validator key, sealing both the sizing split (if needed) and the bond
-    /// transaction in mined PoW blocks. Returns the bond tx id, lowercase hex.
-    ///
-    /// A bond freezes whole coin(s): the flow splits a larger coin first so
-    /// exactly `amount` is frozen and the remainder stays spendable.
-    pub fn bond_stake(&self, seed: u64, amount: u64) -> Result<String, LightNodeError> {
-        if amount == 0 {
-            return Err(invalid("bond amount must be positive"));
-        }
-        let kp = KeyPair::from_u64(seed);
-        let addr = kp.address();
-
-        let mut node = self.lock();
-        let vrf_pk = node
-            .validator_public_key()
-            .map(|pk| *pk.as_bytes())
-            .ok_or_else(|| invalid("call set_validator_seed before bonding"))?;
-
-        // Source coin selection over UNFROZEN coins only (frozen value moves
-        // exclusively through unbond transactions).
-        // Spendable coins only: `spendable_utxos_of` respects RFC-006
-        // coinbase maturity, so a freshly-mined subsidy coinbase is never
-        // chosen over an older (mature) funding coin.
-        let candidates: Vec<(OutPoint, u64)> = node
-            .spendable_utxos_of(&addr)?
-            .into_iter()
-            .filter(|(op, _)| !node.outpoint_is_frozen(op).unwrap_or(true))
-            .collect();
-
-        // Exact-size coin already available → skip the split.
-        let exact = candidates.iter().find(|(_, v)| *v == amount).copied();
-        let source_op = match exact {
-            Some((op, _)) => op,
-            None => {
-                let funder = candidates
-                    .iter()
-                    .filter(|(_, v)| *v > amount)
-                    .max_by_key(|(_, v)| *v)
-                    .map(|(op, _)| *op)
-                    .ok_or(LightNodeError::InsufficientFunds { needed: amount })?;
-                let rest = candidates
-                    .iter()
-                    .find(|(op, _v)| *op == funder)
-                    .map(|(_, v)| *v - amount)
-                    .unwrap_or(0);
-                let fee = node.min_fee();
-                let mut outputs = vec![TxOutput::native(amount, addr)];
-                if rest > fee {
-                    outputs.push(TxOutput::native(rest - fee, addr));
-                } else if rest == fee {
-                    // exact: fee is paid, no change
-                }
-                let mut split =
-                    Transaction::unsigned(std::slice::from_ref(&funder), outputs, Vec::new());
-                split.attach_signature(0, Sig::from_bytes(kp.sign(&split.sighash())));
-                let split_id = split.id();
-                node.submit_tx(split)?;
-                node.produce_block()?.expect("mempool non-empty");
-                OutPoint::new(split_id, 0)
-            }
-        };
-
-        let bond = Transaction::signed(
-            &[(source_op, &kp)],
-            vec![TxOutput::native(amount, addr)],
-            kovanica_state::bond_tag(kovanica_state::NATIVE_ASSET_ID, &vrf_pk),
-        );
-        let bond_id = bond.id();
-        node.submit_tx(bond)?;
-        node.produce_block()?.expect("mempool non-empty");
-        Ok(hex::encode(bond_id.as_bytes()))
-    }
-
-    /// Total bonded stake across all validators (tip view), in atoms.
-    pub fn total_stake(&self) -> Result<u64, LightNodeError> {
-        Ok(self.lock().total_stake()?)
-    }
-
-    /// This validator's bonded stake (tip view), in atoms.
-    pub fn my_stake(&self) -> Result<u64, LightNodeError> {
-        let node = self.lock();
-        match node.validator_public_key() {
-            Some(pk) => Ok(node.stake_of(pk.as_bytes())?),
-            None => Err(invalid("no validator identity set")),
-        }
-    }
-
-    /// Unbond `amount` of this validator's stake back to the seed actor's own
-    /// address. Only matured bonds count (`UNBOND_MATURITY` blue heights after
-    /// bonding); oldest bonds are released first, change stays unfrozen.
-    /// Sealed immediately in a mined block.
-    pub fn unbond(&self, from_seed: u64, amount: u64) -> Result<SendReceipt, LightNodeError> {
-        let kp = KeyPair::from_u64(from_seed);
-        let mut node = self.lock();
-        let vrf_pk = node
-            .validator_public_key()
-            .map(|pk| *pk.as_bytes())
-            .ok_or_else(|| invalid("call set_validator_seed before unbonding"))?;
-        let sent = node.unbond_with(&kp, &vrf_pk, amount, kp.address())?;
-        Ok(SendReceipt {
-            block_id_hex: sent.block.to_hex(),
-            tx_id_hex: hex::encode(sent.tx.as_bytes()),
-        })
-    }
-
-    /// Bond `amount` atoms from the wallet identity derived from a 32-byte
-    /// Ed25519 secret (hex) to THIS node's validator key. The source coins,
-    /// sizing split, and bond change all live at the wallet address, so
-    /// staking spends wallet funds and returns the remainder to the wallet.
-    pub fn bond_stake_from_secret(
-        &self,
-        secret_hex: String,
-        amount: u64,
-    ) -> Result<String, LightNodeError> {
-        if amount == 0 {
-            return Err(invalid("bond amount must be positive"));
-        }
-        let kp = keypair_from_secret(&secret_hex)?;
-        let addr = kp.address();
-
-        let mut node = self.lock();
-        let vrf_pk = node
-            .validator_public_key()
-            .map(|pk| *pk.as_bytes())
-            .ok_or_else(|| invalid("call set_validator_seed before bonding"))?;
-
-        // Spendable coins only: `spendable_utxos_of` respects RFC-006
-        // coinbase maturity, so a freshly-mined subsidy coinbase is never
-        // chosen over an older (mature) funding coin.
-        let candidates: Vec<(OutPoint, u64)> = node
-            .spendable_utxos_of(&addr)?
-            .into_iter()
-            .filter(|(op, _)| !node.outpoint_is_frozen(op).unwrap_or(true))
-            .collect();
-
-        let exact = candidates.iter().find(|(_, v)| *v == amount).copied();
-        let source_op = match exact {
-            Some((op, _)) => op,
-            None => {
-                let funder = candidates
-                    .iter()
-                    .filter(|(_, v)| *v > amount)
-                    .max_by_key(|(_, v)| *v)
-                    .map(|(op, _)| *op)
-                    .ok_or(LightNodeError::InsufficientFunds { needed: amount })?;
-                let rest = candidates
-                    .iter()
-                    .find(|(op, _v)| *op == funder)
-                    .map(|(_, v)| *v - amount)
-                    .unwrap_or(0);
-                let fee = node.min_fee();
-                let mut outputs = vec![TxOutput::native(amount, addr)];
-                if rest > fee {
-                    outputs.push(TxOutput::native(rest - fee, addr));
-                } else if rest == fee {
-                    // exact: fee is paid, no change
-                }
-                let mut split =
-                    Transaction::unsigned(std::slice::from_ref(&funder), outputs, Vec::new());
-                split.attach_signature(0, Sig::from_bytes(kp.sign(&split.sighash())));
-                let split_id = split.id();
-                node.submit_tx(split)?;
-                node.produce_block()?.expect("mempool non-empty");
-                OutPoint::new(split_id, 0)
-            }
-        };
-
-        let bond = Transaction::signed(
-            &[(source_op, &kp)],
-            vec![TxOutput::native(amount, addr)],
-            kovanica_state::bond_tag(kovanica_state::NATIVE_ASSET_ID, &vrf_pk),
-        );
-        let bond_id = bond.id();
-        node.submit_tx(bond)?;
-        node.produce_block()?.expect("mempool non-empty");
-        Ok(hex::encode(bond_id.as_bytes()))
-    }
-
-    /// Unbond `amount` of this validator's matured stake back to the wallet
-    /// address derived from a 32-byte Ed25519 secret (hex).
-    pub fn unbond_from_secret(
-        &self,
-        secret_hex: String,
-        amount: u64,
-    ) -> Result<SendReceipt, LightNodeError> {
-        let kp = keypair_from_secret(&secret_hex)?;
-        let mut node = self.lock();
-        let vrf_pk = node
-            .validator_public_key()
-            .map(|pk| *pk.as_bytes())
-            .ok_or_else(|| invalid("call set_validator_seed before unbonding"))?;
-        let sent = node.unbond_with(&kp, &vrf_pk, amount, kp.address())?;
-        Ok(SendReceipt {
-            block_id_hex: sent.block.to_hex(),
-            tx_id_hex: hex::encode(sent.tx.as_bytes()),
-        })
-    }
-
-    /// Earliest height at which bonded stake unlocks next (`None` when
-    /// everything already has). Compare against [`Self::chain_height`].
-    pub fn pending_unbond_height(&self) -> Result<Option<u64>, LightNodeError> {
-        let node = self.lock();
-        let vrf_pk = node
-            .validator_public_key()
-            .map(|pk| *pk.as_bytes())
-            .ok_or_else(|| invalid("no validator identity set"))?;
-        node.pending_unbond_height(&vrf_pk).map_err(Into::into)
     }
 
     /// The current chain height (selected tip's blue score).
@@ -622,8 +420,14 @@ impl LightNode {
     // Production & transfers
     // ------------------------------------------------------------------
 
-    /// Pack pending mempool transactions into the next block: tries the
-    /// staked-VRF draw first, falls back to PoW. `None` when nothing is pending.
+    /// Pack pending mempool transactions into the next block, signing with this
+    /// node's authority key. `None` when nothing is pending.
+    ///
+    /// Under PoA this node must hold the authority key scheduled for the
+    /// current slot, and block *immediately* rather than waiting for the next
+    /// one — so on a wallet with no authority key it fails with
+    /// "not the scheduled authority for this slot". PoA is the only admission
+    /// regime (RFC-POA §0); there is no PoW fallback to fall back to.
     pub fn produce_block(&self) -> Result<Option<BlockInfo>, LightNodeError> {
         let mut node = self.lock();
         match node.produce_block()? {
@@ -632,9 +436,8 @@ impl LightNode {
         }
     }
 
-    /// Produce a block even with an empty mempool (coinbase-only when a miner
-    /// seed is set). Staked draw first, PoW fallback — this is the phone's
-    /// steady-state heartbeat.
+    /// Produce a block even with an empty mempool (coinbase-only, crediting the
+    /// authority). Same authority-slot requirement as [`Self::produce_block`].
     pub fn produce_empty_block(&self) -> Result<BlockInfo, LightNodeError> {
         let mut node = self.lock();
         let id = node.produce_empty()?;
@@ -642,7 +445,12 @@ impl LightNode {
     }
 
     /// Transfer `amount` from actor `from_seed` to `to_seed`, sealed
-    /// immediately in a mined block.
+    /// immediately in a block.
+    ///
+    /// Sealing requires this node to be the authority scheduled for the current
+    /// slot; a wallet without an authority key gets
+    /// "not the scheduled authority for this slot" rather than a silently
+    /// unsealed transfer.
     pub fn send(
         &self,
         from_seed: u64,
@@ -909,21 +717,24 @@ impl LightNode {
             .and_then(|_| self.block_info(&node, &id)))
     }
 
-    /// Write a full snapshot (UTXO + stake registry + blocks) to `path`.
+    /// Write a full snapshot (UTXO + blocks) to `path`.
     pub fn save_snapshot(&self, path: String) -> Result<(), LightNodeError> {
         self.lock().save(&path)?;
         Ok(())
     }
 
-    /// Replace state with a snapshot from `path`. If this node has a hybrid
-    /// policy active, replay runs under it so staked-VRF blocks keep their
-    /// original ids; plain (pre-hybrid) snapshots load normally either way.
-    pub fn load_snapshot(&self, path: String) -> Result<(), LightNodeError> {
+    /// Replace state with a snapshot from `path`, replaying under `config`'s
+    /// PoA authority set.
+    ///
+    /// A snapshot stores the ledger but **not** the admission config, so the
+    /// authority set must be supplied again on every load — the same contract
+    /// as the full node's `restore_poa_policy`. Loading without it would leave
+    /// the node unable to verify authority signatures, i.e. accepting blocks on
+    /// the serving peer's word alone.
+    pub fn load_snapshot(&self, path: String, config: LightConfig) -> Result<(), LightNodeError> {
+        let authority_set = authority_set_from_config(&config)?;
         let mut node = self.lock();
-        match node.hybrid_config() {
-            Some(cfg) => node.load_with_hybrid(&path, cfg)?,
-            None => node.load(&path)?,
-        }
+        node.load_with_poa(&path, authority_set, config.slot_duration_ms)?;
         Ok(())
     }
 
@@ -1015,11 +826,11 @@ impl LightNode {
     }
 
     /// Accept a light-sync blob: header chain is verified for linkage,
-    /// monotonic timestamps and rising blue work (`require_pow` off — hybrid
-    /// staked blocks carry nominal work). Returns accepted header count.
+    /// monotonic timestamps and rising blue work. Returns accepted header
+    /// count.
     pub fn receive_light_sync(&self, blob: Vec<u8>) -> Result<u32, LightNodeError> {
         let parsed = parse_light_sync(&blob)?;
-        let mut client = kovanica_state::spv::SpvClient::new(parsed[0].0.clone(), false, None);
+        let mut client = kovanica_state::spv::SpvClient::new(parsed[0].0.clone());
         for (h, _) in &parsed[1..] {
             client
                 .add_header(h.clone())
@@ -1648,8 +1459,10 @@ fn encode_header(h: &kovanica_state::spv::BlockHeader, out: &mut Vec<u8>) {
     out.extend_from_slice(&h.height.to_be_bytes());
 }
 
-fn decode_header(buf: &[u8]) -> Option<(kovanica_state::spv::BlockHeader, &[u8])> {
-    if buf.len() < 136 {
+fn decode_header(buf: &[u8], version: u8) -> Option<(kovanica_state::spv::BlockHeader, &[u8])> {
+    // v1 header: 160 bytes, v2 header: 289 bytes
+    let min_len = if version >= 2 { 289 } else { 160 };
+    if buf.len() < min_len {
         return None;
     }
     let get32 = |o: usize| <[u8; 32]>::try_from(&buf[o..o + 32]).ok();
@@ -1663,8 +1476,32 @@ fn decode_header(buf: &[u8]) -> Option<(kovanica_state::spv::BlockHeader, &[u8])
         blue_score: u64::from_be_bytes(buf[128..136].try_into().ok()?),
         chain_blue_work: u128::from_be_bytes(buf.get(136..152)?.try_into().ok()?),
         height: u64::from_be_bytes(buf.get(152..160)?.try_into().ok()?),
+        authority_sig: None,
+        authority_set_hash: [0u8; 32],
+        hash_without_authority_sig: [0u8; 32],
     };
-    Some((header, &buf[160..]))
+    let _header_len = if version >= 2 { 289 } else { 160 };
+    if version >= 2 {
+        let auth_flag = buf[160];
+        let authority_sig = if auth_flag == 1 {
+            Some(buf[161..225].try_into().ok()?)
+        } else {
+            None
+        };
+        let authority_set_hash = buf[225..257].try_into().ok()?;
+        let hash_without_authority_sig = buf[257..289].try_into().ok()?;
+        Some((
+            kovanica_state::spv::BlockHeader {
+                authority_sig,
+                authority_set_hash,
+                hash_without_authority_sig,
+                ..header
+            },
+            &buf[289..],
+        ))
+    } else {
+        Some((header, &buf[160..]))
+    }
 }
 
 fn encode_filter_into(f: &kovanica_state::spv::BlockFilter, out: &mut Vec<u8>) {
@@ -1709,14 +1546,21 @@ fn parse_light_sync(
     LightNodeError,
 > {
     let err = || invalid("undecodable light-sync blob");
-    if blob.len() < 9 || &blob[..4] != LIGHT_SYNC_MAGIC || blob[4] != LIGHT_SYNC_VERSION {
+    if blob.len() < 9 || &blob[..4] != LIGHT_SYNC_MAGIC {
         return Err(err());
+    }
+    let version = blob[4];
+    if version > LIGHT_SYNC_VERSION {
+        return Err(invalid(format!(
+            "unsupported light-sync version {}",
+            version
+        )));
     }
     let count = u32::from_be_bytes(blob[5..9].try_into().map_err(|_| err())?) as usize;
     let mut off = 9usize;
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
-        let (header, rest) = decode_header(&blob[off..]).ok_or_else(err)?;
+        let (header, rest) = decode_header(&blob[off..], version).ok_or_else(err)?;
         off = blob.len() - rest.len();
 
         // Filter: k(1) n(8) len(4) data(len).

@@ -5,6 +5,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::num::NonZeroUsize;
 
+use ed25519_dalek::SigningKey;
+use kovanica_dag::{AuthorityPublicKey, AuthoritySet};
 use kovanica_node::explorer::{handle, Explorer};
 use kovanica_node::{MempoolConfig, Node};
 use kovanica_state::{KeyPair, OutPoint, Transaction, TxOutput};
@@ -52,6 +54,46 @@ fn actor1_utxos(node: &Node) -> Vec<(OutPoint, u64)> {
     node.utxos_of(&Node::address(1)).unwrap()
 }
 
+/// Slot duration used throughout (RFC-POA default).
+const SLOT_MS: u64 = 3000;
+/// Authority seeds for [`poa_node_producing_for_actor1`].
+const FEE_MARKET_AUTHORITIES: u64 = 3;
+
+/// A PoA node whose block rewards are credited to `Node::address(1)`.
+///
+/// Under PoA the coinbase pays a signing authority, not the genesis founder.
+/// The recipient is always `authority_public_key()` — the *first* key pushed
+/// into the node — so seeding the set with seeds `1..=FEE_MARKET_AUTHORITIES`
+/// and loading seed 1's signing key first points every reward at actor 1 and
+/// leaves the suite's spends/signs valid. A 3-key set is the minimum
+/// `AuthoritySet` accepts (`MIN_AUTHORITIES`), so the two filler keys are
+/// required; they never receive a reward.
+fn poa_node_producing_for_actor1(config: MempoolConfig) -> Node {
+    let keys: Vec<AuthorityPublicKey> = (1..=FEE_MARKET_AUTHORITIES)
+        .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
+        .collect();
+    let set = AuthoritySet::new(keys, 2).expect("valid authority set");
+    let mut node = Node::with_mempool_config(config);
+    node.genesis_with_poa(
+        3,
+        100_000,
+        100_000,
+        1,
+        None,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        None,
+        set,
+        SLOT_MS,
+    )
+    .unwrap();
+    for i in 1..=FEE_MARKET_AUTHORITIES {
+        node.set_authority_signing_key(KeyPair::from_u64(i).seed());
+    }
+    node
+}
+
 #[test]
 fn fee_rate_eviction_drops_lowest_rate_tx() {
     let config = MempoolConfig {
@@ -60,8 +102,7 @@ fn fee_rate_eviction_drops_lowest_rate_tx() {
         min_fee_rate: 0,
         ..Default::default()
     };
-    let mut node = Node::with_mempool_config(config);
-    node.genesis(3, 100_000, 100_000, 1, None).unwrap();
+    let mut node = poa_node_producing_for_actor1(config);
 
     // Produce two empty blocks to create additional actor-1 UTXOs.
     node.produce_empty().unwrap();
@@ -141,7 +182,7 @@ fn replace_by_fee_rejects_insufficient_bump() {
 #[test]
 fn fee_estimate_endpoint_returns_rate() {
     let mut app = Explorer::boot();
-    app.mining = false;
+    app.producing = false;
 
     let (status, body) = send_req(
         &mut app,
