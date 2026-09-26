@@ -7,6 +7,11 @@ generated_by: scripts/build-vault.py
 
 # Operations
 
+> **Note:** the authority keys referenced by earlier revisions of this
+> document were committed to a public repository and are BURNED. See
+> [`AUTHORITY-KEY-CEREMONY.md`](../protocol/docs/AUTHORITY-KEY-CEREMONY.md).
+
+
 ← [[00-Home/Home|Home]] · 18 notes
 
 - [[30-Operations/installer--README|Kovanica Protocol — 30+ Ways to Install & Run a Node]]

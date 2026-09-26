@@ -1,5 +1,15 @@
 # Testnet Reset Procedure (PoA Transition)
 
+> ## ⚠ PARTIALLY REDACTED — P0 secret-leak incident, 2026-09-26
+>
+> The authority **signing secrets** referenced by this procedure were
+> committed to a public repository and are **BURNED**. Never deploy them.
+> The secret values below have been replaced with placeholders; the rotation
+> status and the replacement-key procedure are documented in
+> [`TESTNET_AUTHORITY_KEYS.md`](TESTNET_AUTHORITY_KEYS.md) and
+> [`AUTHORITY-KEY-CEREMONY.md`](AUTHORITY-KEY-CEREMONY.md).
+
+
 **Prerequisite:** Phase 0 complete (PoA-only code on `main`), Phase 1 steps 1.1–1.4 complete.
 
 ---
@@ -7,7 +17,7 @@
 ## 1. Pre-Reset Checklist
 
 - [ ] All core crates (`kovanica-dag`, `kovanica-state`, `kovanica-node`, `kovanica-ffi`) on `main` with PoA-only code
-- [ ] Real authority keys generated and distributed to 3 operators (see `TESTNET_AUTHORITY_KEYS.md`)
+- [ ] Real authority keys generated and distributed to 3 operators (see `AUTHORITY-KEY-CEREMONY.md`)
 - [ ] Each operator has their `KOVANICA_AUTHORITY_KEY` secret and all have `KOVANICA_AUTHORITIES` public keys
 - [ ] `koinca-cli` supports `genesis_poa` and `authority_key` commands
 - [ ] Explorer/API updated to show authority set and slot production
@@ -32,30 +42,45 @@ rm -rf /var/lib/kovanica-seed3/*
 rm -rf /var/lib/kovanica-seed4/*
 ```
 
-### 2.3 Update Systemd Units with Real Keys
+### 2.3 Update Systemd Units (public set inline, secret via EnvironmentFile)
 
 **seed2 (authority 1):**
 ```ini
-Environment=KOVANICA_AUTHORITIES=b288d2c6b7c5b270bc579ec07e263d43acf02c28534952dcd0a3374a2b458995,e2094f3434e2d1d69c39e7e3f998ccc29dc4d5ce368961619595f039a3ad272e,7d19d93019cd1c9d2fb22a0f46ee8e3233533868cb258250a5296d4b051b1d61
+Environment=KOVANICA_AUTHORITIES=<BURNED-KEY>,<BURNED-KEY>,<BURNED-KEY>
 Environment=KOVANICA_AUTHORITY_THRESHOLD=2
 Environment=KOVANICA_SLOT_DURATION=3000
-Environment=KOVANICA_AUTHORITY_KEY=48fdbcfc774a2bd90190b30895bfea4d6059a9b5649fb51baceda38fec586b55
+# SECRET — never inline this in a unit file; units are world-readable in
+# backups, in `systemctl cat`, and in any config dump. Use a 0600 file:
+#     /etc/kovanica/authority.env   (chmod 600, owned by root)
+# and in the unit:
+#     EnvironmentFile=/etc/kovanica/authority.env
+# whose single line is:  KOVANICA_AUTHORITY_KEY=<secret>
 ```
 
 **seed3 (authority 2):**
 ```ini
-Environment=KOVANICA_AUTHORITIES=b288d2c6b7c5b270bc579ec07e263d43acf02c28534952dcd0a3374a2b458995,e2094f3434e2d1d69c39e7e3f998ccc29dc4d5ce368961619595f039a3ad272e,7d19d93019cd1c9d2fb22a0f46ee8e3233533868cb258250a5296d4b051b1d61
+Environment=KOVANICA_AUTHORITIES=<BURNED-KEY>,<BURNED-KEY>,<BURNED-KEY>
 Environment=KOVANICA_AUTHORITY_THRESHOLD=2
 Environment=KOVANICA_SLOT_DURATION=3000
-Environment=KOVANICA_AUTHORITY_KEY=0b9227ebc0e249de5c7d8dcb633dc9e3c463e250ed07ef6a2ca5647ffd7c1c1f
+# SECRET — never inline this in a unit file; units are world-readable in
+# backups, in `systemctl cat`, and in any config dump. Use a 0600 file:
+#     /etc/kovanica/authority.env   (chmod 600, owned by root)
+# and in the unit:
+#     EnvironmentFile=/etc/kovanica/authority.env
+# whose single line is:  KOVANICA_AUTHORITY_KEY=<secret>
 ```
 
 **seed4 (authority 3):**
 ```ini
-Environment=KOVANICA_AUTHORITIES=b288d2c6b7c5b270bc579ec07e263d43acf02c28534952dcd0a3374a2b458995,e2094f3434e2d1d69c39e7e3f998ccc29dc4d5ce368961619595f039a3ad272e,7d19d93019cd1c9d2fb22a0f46ee8e3233533868cb258250a5296d4b051b1d61
+Environment=KOVANICA_AUTHORITIES=<BURNED-KEY>,<BURNED-KEY>,<BURNED-KEY>
 Environment=KOVANICA_AUTHORITY_THRESHOLD=2
 Environment=KOVANICA_SLOT_DURATION=3000
-Environment=KOVANICA_AUTHORITY_KEY=8c44b6b3f643c729626ac50ebc4cdb7c83dd196567c41b890e277dd4c27bb99e
+# SECRET — never inline this in a unit file; units are world-readable in
+# backups, in `systemctl cat`, and in any config dump. Use a 0600 file:
+#     /etc/kovanica/authority.env   (chmod 600, owned by root)
+# and in the unit:
+#     EnvironmentFile=/etc/kovanica/authority.env
+# whose single line is:  KOVANICA_AUTHORITY_KEY=<secret>
 ```
 
 ### 2.4 Start Nodes Sequentially (Coordinator controls order)
