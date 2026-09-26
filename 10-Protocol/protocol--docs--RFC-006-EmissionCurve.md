@@ -247,48 +247,6 @@ immature coinbases themselves — the transaction builder already does.
   `subsidy` and the fee floor from the node rather than hard-coding them, since
   both decay with height.
 
-### 9.1 Interaction with the PoA-only decision
-
-Kovanica is **PoA-only** (ratified 2026-09-25; see
-[[10-Protocol/protocol--docs--RFC-POA-Migration|`RFC-POA-Migration.md`]] §0, canonical). PoW,
-difficulty and the staked-VRF hybrid tier are being removed. **None of that
-changes the numbers in this RFC**, and it is worth being explicit about why,
-because "emission depends on who produces blocks" is a natural thing to assume:
-
-- **The curve is height-indexed.** `subsidy_at(height)` is a pure function of
-  height. It reads nothing about admission, so it is invariant under any choice
-  of block producer.
-- **The cap is enforced in `apply_block`.** `cumulative_minted` is compared
-  against `MAX_SUPPLY` per block, so it cannot be evaded by producing blocks
-  through a different path.
-- **`work` is pinned.** Under PoA every block carries `POA_NOMINAL_WORK = 1`
-  (`kovanica-dag/src/dag.rs`), enforced at insertion, so accumulated blue work
-  is a plain block count. GHOSTDAG chain selection is unchanged in mechanism.
-
-What *does* change is the **pace**, never the cap:
-
-| | pre-PoA (PoW retarget) | PoA |
-| --- | --- | --- |
-| Block interval | retargeted, variable | fixed `SLOT_DURATION_MS = 3000` |
-| Gap fill | possible | none |
-| Coinbase maturity 100 blocks | variable wall-clock | ≈ 5 minutes |
-| Genesis emission rate | retarget-dependent | 10 KVNC per 3 s slot |
-
-Two consequences worth flagging:
-
-1. **Coinbase maturity becomes a wall-clock guarantee.** 100 blocks at a fixed
-   3 s slot is ~5 minutes, where under variable PoW difficulty it was not
-   bounded. Wallets and pool operators can now rely on it; scripts that assumed
-   "maturity takes a while" should be re-checked.
-2. **The 25 % producer share now accrues to the authority** that produced the
-   block, not to whoever won a hash race. The 75 % burn is unchanged. Note that
-   under a fixed slot with no gap fill, authority reward is a function of
-   uptime, not of hashrate — there is no hashrate to compete with.
-
-A non-authority can never produce a block, so `cumulative_minted` growth rate is
-now bounded by the authority set's aggregate uptime rather than by miner
-distribution. This is a *pace* bound. `MAX_SUPPLY` remains the hard ceiling.
-
 ---
 
 ## 10. Open questions
@@ -312,7 +270,6 @@ distribution. This is a *pace* bound. `MAX_SUPPLY` remains the hard ceiling.
 - `docs/TOKENOMICS.md` — short operator-facing numbers table
 - `docs/RFC-002-NativeTokens.md` — multi-asset conservation; fees are native-only
 - `docs/RFC-005-Vault.md` — the treasury vesting mechanism
-- `docs/RFC-POA-Migration.md` — PoA-only consensus; §9.1 above covers the interaction
 - `crates/kovanica-state/src/ledger.rs` — constants, `subsidy_at`, supply metrics
 - `crates/kovanica-state/tests/tokenomics.rs` — 18 adversarial tests
 - `TESTNET-RFC006.md` — live testnet economy and run env
