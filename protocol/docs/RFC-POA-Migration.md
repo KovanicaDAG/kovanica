@@ -240,7 +240,7 @@ and damage a live chain.
 |---|------|--------|-----------------|
 | **1** | **Real, random testnet authority keys** — *not* the `AUTHORITY_PLACEHOLDER_BASE = 9001` set | ☐ open | The placeholder set is publicly derivable, so a soak run against it exercises an **unauthenticated** PoA. It cannot detect a real authority compromise, key reuse, or a bad ceremony, because every participant can forge any authority. A green soak on placeholders is **not** evidence for a green soak on real keys. |
 | **2** | **24h multi-validator soak** (M6 exit criterion) | ☐ open | Single-node and short-run checks do not exercise authority failover, slot-clock drift, or a rotating authority set over a realistic day. |
-| **3** | **CPU/RAM-vs-PoW measurement** | ☐ open | `resource_profiling_poa_vs_pow` (`kovanica-node/tests/poa_m6_testing.rs` ~444) is still `#[ignore = "run manually for resource profiling"]`. The efficiency claim behind the migration is asserted, not measured. |
+| **3** | **CPU/RAM-vs-PoW measurement** | ☐ open — **unclosable as worded, needs a maintainer decision** | The comparison this gate asks for can no longer be produced. The test was renamed `resource_profiling_poa_production` in `1df0114`, which deleted the PoW arm with PoW. It was `#[ignore]`d in *every* revision it ever had (`f00c151`, `ddbe469`, `c5db750`, `1df0114`), so it never ran and **no PoW baseline was ever recorded**. See §0.9.1. |
 | **4** | **Mainnet key ceremony** (per §0.7.2 residuals) | ☐ open | Required before *any* mainnet authority set is frozen. Independent of the testnet reset, but listed here because the same ceremony procedure is being written for gate 1 and should not be written twice. |
 
 **Gate already closed:** the nominal-work pin. `POA_NOMINAL_WORK = 1` and
@@ -455,7 +455,12 @@ sections above do not cover. They are recorded here rather than fixed in
 passing, because two of them are **blockers for any PoA genesis**, and one is a
 policy decision this removal is not entitled to make.
 
-**B1 — There is no way to give a node its authority signing key. `[BLOCKER]`**
+> **Status: superseded in part.** B1, B2, B3 and B4 have since been implemented
+> and are **no longer** outstanding blockers — see §0.9.1 for the evidence and
+> for the security decision B1 was not entitled to make. The text below is kept
+> as the original record of *why* each was a blocker. B5 was resolved in Phase 0.
+
+**B1 — There is no way to give a node its authority signing key. `[BLOCKER → RESOLVED, see §0.9.1]`**
 
 `Node::set_authority_signing_key` exists, but it has exactly three callers, all
 of them test scaffolding: the two TESTNET-ONLY placeholder blocks in
@@ -477,7 +482,7 @@ key was), and if so whether it arrives by env var, interactive prompt, a
 unattended secret mount, or an external signer, is a **design decision with
 security weight** that must be made explicitly. `[OPEN]` — see §0.7.
 
-**B2 — The line-RPC surface cannot start a PoA chain. `[BLOCKER]`**
+**B2 — The line-RPC surface cannot start a PoA chain. `[BLOCKER → RESOLVED, see §0.9.1]`**
 
 `rpc::execute_line`'s `genesis` command builds a non-PoA genesis. Since PoA is
 the only admission regime (§0.1), `produce` on such a node always fails
@@ -490,7 +495,7 @@ The `mempool` integration suite was migrated off the RPC string surface onto the
 mechanical, but it is blocked behind B1 — an operator still has nowhere to put
 the key. `[OPEN]`
 
-**B3 — No full-node path applies an `AuthorityUpdateTx`. `[BLOCKER]`**
+**B3 — No full-node path applies an `AuthorityUpdateTx`. `[BLOCKER → RESOLVED, see §0.9.1]`**
 
 `apply_authority_update` exists only at `kovanica-state/src/spv.rs` (light
 client). On a full node, `Ledger` receives an authority set exactly twice: at
@@ -500,7 +505,7 @@ practice immutable after genesis. Unchanged by Phase 0, re-recorded because
 B1/B2 make it the third face of the same gap: **PoA has no operational
 lifecycle yet.**
 
-**B4 — The block reward is credited to `authority_sks[0]`, not to the signer.**
+**B4 — The block reward is credited to `authority_sks[0]`, not to the signer. `[RESOLVED, see §0.9.1]`**
 
 `produce_empty`/`produce_block` compute the coinbase recipient from
 `authority_public_key()` — the *first* key pushed into the node — **before**
@@ -540,6 +545,101 @@ Two further items were deliberately left alone, both consensus-adjacent and both
 out of Phase 0's scope: the pre-existing two-decoder flag-1 disagreement in
 `net.rs` (wire behaviour), and the remotely-triggerable overflow panic in the
 asset registry.
+
+### 0.9.1 B1–B4 status correction, and the gate-3 measurement gap
+
+This subsection corrects §0.9 above, which was accurate when written but no
+longer matches the tree. Nothing here changes a consensus rule.
+
+**B1 — resolved.** The env var exists: `KOVANICA_AUTHORITY_KEY` is parsed as 64
+hex chars (32 bytes) in `explorer.rs:287` and applied via
+`node.set_authority_signing_key(key)` at `explorer.rs:1071`. There is also a
+line-RPC `authority_key <64-hex>` command (`rpc.rs:155-163`), so a key can be
+installed without an env var at all. `SEED1_POA_DEPLOYMENT.md` documents the env
+var, and `examples/generate_authority_keys.rs` generates a set.
+
+> **The decision §0.9 said Phase 0 was "not entitled to make" has been made, and
+> is recorded here for ratification rather than quietly blessed.** Putting a
+> *consensus signing key* into a node process sits against the standing rule that
+> seeds and private keys stay client-side and never enter a node. The defensible
+> reading is that an authority key is a node-side consensus credential (like a
+> miner's key was), but that is a **security-policy call for the maintainers**,
+> not a code detail. What follows is the threat model as implemented, so the
+> call can be made deliberately:
+>
+> - The key enters via environment or a line-RPC command, so it is readable by
+>   anything that can read the process environment or the unit file — on the
+>   seed hosts, that means root.
+> - It is held in memory for the life of the process.
+> - **Anyone holding it can sign the blocks the network accepts as canonical.**
+>   Loss is not a degradation, it is a chain stall, because production is
+>   strict round-robin `authorities[slot % len]` and does not redistribute a lost
+>   key's slots.
+> - `generate_authority_keys` **on `main` today prints every secret to stdout**
+>   (`hex::encode(sk.to_bytes())`), which puts the key into terminal scrollback,
+>   any `tmux`/`screen` capture, and any CI log. PR #53 changes it to write one
+>   `0600` file per authority so the key never has to pass through a shell or a
+>   chat on its way into the unit. Until that merges, do not run the `main`
+>   version for a real ceremony.
+>
+> Open questions this does **not** answer: whether an external signer should be
+> supported instead; whether the env-var path should be refused on a
+> multi-authority host; whether `KOVANICA_AUTHORITY_KEY` should be wiped from the
+> environment after first use.
+
+**B2 — resolved.** The line-RPC surface grew `genesis_poa <k> <subsidy> <amount>
+<seed> <finality_depth> <slot_duration> <authorities...>` (`rpc.rs:30`), and
+`authority_key` (above) closes the gap B2 was blocked behind.
+
+**B3 — resolved.** `Node::apply_authority_update(&AuthorityUpdateTx)` exists
+(`node.rs:983-990`, delegating to `Ledger::apply_authority_update`) and is
+reachable from the line-RPC `authority_update <update-tx-hex>` command
+(`rpc.rs:165-183`), which parses and validates the update before replacing the
+set. On-chain authority rotation therefore has a full-node path.
+
+**B4 — resolved.** `produce_block`/`produce_empty` now resolve the *scheduled*
+authority for the slot and select the signing key by matching
+`sk.verifying_key() == scheduled` (`node.rs:2049-2054` and `node.rs:2424-2431`),
+instead of crediting `authority_sks[0]`. The coinbase recipient is the authority
+that actually signed.
+
+**B5 — resolved in Phase 0**, as originally recorded.
+
+So the "three of the five items are blockers for any PoA genesis" claim in the
+§0.9 preamble no longer holds: none of B1–B5 is an outstanding code blocker.
+§0.10's consequences of B1 (FFI needs the public set; a wallet holding no
+authority key is read-only under PoA) are **unchanged** — those follow from PoA
+admission itself, not from B1's status.
+
+**Gate 3 cannot be closed as worded.** It asks for a CPU/RAM-vs-PoW
+measurement. That comparison is no longer expressible:
+
+- `1df0114` renamed `resource_profiling_poa_vs_pow` to
+  `resource_profiling_poa_production` and deleted the PoW arm along with PoW.
+- The test carried `#[ignore = "run manually for resource profiling"]` in
+  **every** revision it ever existed (`f00c151`, `ddbe469`, `c5db750`,
+  `1df0114`), so it never ran and **no PoW baseline figure was ever recorded
+  anywhere in the history**.
+
+Running what remains (`cargo test -p kovanica-node --release --test
+poa_m6_testing -- --ignored --nocapture resource_profiling`) measures PoA in
+isolation: **112.7 us/block, +7.4 KiB/block RSS** over 100 blocks. Its assertion
+is `per_block_us < 50_000.0`, a loose tripwire against a reintroduced search
+loop rather than a benchmark, so it cannot support an efficiency claim either.
+
+This is a gate that demands a measurement which never happened and can no longer
+be produced. Closing it honestly needs a maintainer decision, not a code change:
+
+1. **Reword** the gate to a PoA-only footprint measurement and record the figures
+   above, accepting that the PoA-vs-PoW ratio is unrecoverable; or
+2. **Recover a baseline** from a pre-`1df0114` tag and check out the old
+   two-armed test to produce one number, then record it; or
+3. **Retire** the gate, on the grounds that the claim it protected (PoA is
+   cheaper than PoW) is now a design assertion rather than a live risk.
+
+Until one of those is chosen, gate 3 stays open and the §0.6.2 reset stays
+blocked. Option 1 lowers a documented safety bar and should not be taken by an
+implementer acting unilaterally — which is why it is written up here instead.
 
 ### 0.10 Phase 0, `kovanica-ffi`: what the wallet surface lost
 
@@ -750,7 +850,7 @@ Residual PoA-*design* questions, still open and not covered by §0.7:
 | M3: Config/Genesis ✅ | `KOVANICA_CONSENSUS`, `KOVANICA_SLOT_DURATION`, `KOVANICA_AUTHORITIES`, genesis TOML | Genesis block carries authority set; `poa` feature default — **done** (`poa_config_from_env` + `PoaGenesisConfig` in `explorer.rs`; `genesis_with_poa` commits `KVA1 \|\| set_hash`; node PoA production via `try_produce_poa`/`set_authority_signing_key`; wire `BlockRecord.authority_sig` flag byte 2; PoA-aware immediate sends; `load_log_with_poa*` readers; `tests/poa_node.rs` incl. log round-trip, 9 tests) |
 | M4: SPV ✅ | Header `authority_sig`; light client authority set sync + update proofs | Light client syncs from genesis, verifies authority sigs, processes update tx — **done** (`BlockHeader` gains `authority_sig` / `authority_set_hash` / `hash_without_authority_sig`; `SpvClient::with_poa` + `add_header` verify the scheduled authority per slot; `apply_authority_update` validates an `AuthorityUpdateTx` + Merkle proof; KVLS v2 blob carries the PoA config; relay `Headers` message encodes the PoA fields; FFI `export_light_sync` v2 / `receive_light_sync` / `apply_authority_update`. Live-parity tests `#[ignore]`d pending the PoA reset) |
 | M5: RPC/Explorer ✅ | `staking` RPC; explorer shows authority sig, slot, active authority | Explorer displays authority set, slot, signatures — **done** (`block_detail_json` emits `authority_sig` / `slot` / `active_authority`; `kind` gains `poa` alongside `pow`/`staked`; `staking` RPC reports `slot_duration`, `authorities`, `threshold`; `blockCard` HTML renders the three fields) |
-| M6: Testing 🟡 | 3-validator soak (24h), authority update, re-org, SPV, resource (CPU/RAM vs PoW) | **Code suite done, operational gates outstanding** — `tests/poa_m6_testing.rs`: authority update + SPV update proof, GHOSTDAG k=3 re-org, SPV sync over the post-re-org chain (3 tests green, `resource_profiling_poa_vs_pow` `#[ignore]`d). Still to do before activation: the 24h multi-validator testnet soak and the CPU/RAM-vs-PoW measurement — both are pre-execution reset gates, see §0.6.2 |
+| M6: Testing 🟡 | 3-validator soak (24h), authority update, re-org, SPV, resource (CPU/RAM vs PoW) | **Code suite done, operational gates outstanding** — `tests/poa_m6_testing.rs`: authority update + SPV update proof, GHOSTDAG k=3 re-org, SPV sync over the post-re-org chain (3 tests green, `resource_profiling_poa_production` `#[ignore]`d — renamed from `..._poa_vs_pow` in `1df0114`, which deleted the PoW arm). Still to do before activation: the 24h multi-validator testnet soak and the resource measurement. The soak is straightforwardly outstanding; the measurement is **blocked on a decision, not on work** — the vs-PoW comparison it originally meant is unrecoverable, see §0.9.1 and §0.6.2 gate 3 |
 
 ### 6.1 Consensus invariants hardened during M6
 
