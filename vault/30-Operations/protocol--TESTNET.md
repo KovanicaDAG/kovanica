@@ -30,7 +30,7 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 | Wallet | https://wallet.kovanica.online |
 | Node source | https://github.com/KovanicaDAG/kovanica-node |
 | Network | `kovanica-testnet` |
-| Genesis | `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97` |
+| Genesis | `93efd2d784c19e0ea74b53c4b1aec1aa070a2d6cd8042058d934b18a6e23ab0a` |
 | Premine | **0.2M KVNC** (founder) + **10M** treasury vaults |
 | Subsidy | **10 KVNC / block** at genesis, geometric decay ×3/4 every **2 000 000** blocks |
 | Max supply | **90.2M KVNC** hard cap |
