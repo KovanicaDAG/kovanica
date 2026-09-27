@@ -3867,11 +3867,13 @@ fn block_detail_json(app: &Explorer, id_hex: &str) -> Result<String, String> {
         let poa = n.poa_config();
         let slot_duration = poa.as_ref().map(|c| c.slot_duration_ms).unwrap_or(3000);
         let slot = rec.timestamp_ms / slot_duration;
-        let active = poa.as_ref().and_then(|c| {
-            let authorities = c.authority_set.authorities();
-            let idx = slot as usize % authorities.len();
-            authorities.get(idx).map(|pk| hex::encode(pk.as_bytes()))
-        });
+        // Delegate to the set rather than re-deriving the slot rule here: a
+        // second copy of `slot % len` is a second place to get the u64/usize
+        // narrowing wrong on 32-bit, and an explorer that names the wrong
+        // signer for a block is worse than one that names none.
+        let active = poa
+            .as_ref()
+            .map(|c| hex::encode(c.authority_set.active_authority(slot).as_bytes()));
         (Some(hex::encode(sig)), Some(slot), active)
     } else {
         (None, None, None)

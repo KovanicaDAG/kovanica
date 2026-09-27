@@ -27,7 +27,7 @@
 //! canonical update payload (`old_set_hash || new_set`). This is the
 //! governance path: no single authority can change the set alone.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use std::fmt;
 
 /// Minimum number of authorities in a set (RFC-POA §1: 3–4 keys at launch).
@@ -83,6 +83,18 @@ pub enum AuthorityError {
     /// See docs/RFC-009-StakeWeightedPoA.md.
     #[error("stake weights are not permitted: the authority set is equal-weight (KVP-201)")]
     StakesNotPermitted,
+    /// An authority key is a small-order (low-order) Ed25519 point.
+    ///
+    /// Such a key verifies a signature without possessing the secret, so
+    /// anyone could forge that authority's blocks. `VerifyingKey::is_weak`
+    /// catches exactly the order-1/2/4/8 points that a naive implementation
+    /// would otherwise admit into a `KVA1` Authority UTXO.
+    #[error("authority key is a low-order Ed25519 point and cannot sign")]
+    WeakAuthorityKey,
+    /// An update carries more signature slots than the `u8` count field in the
+    /// canonical encoding can express. Rejected at construction.
+    #[error("authority update carries {0} signatures, above the 255 the encoding can express")]
+    TooManySignatures(usize),
 }
 
 /// A fixed set of Ed25519 authorities with a threshold for updates.
@@ -141,6 +153,14 @@ impl AuthoritySet {
         if authorities.windows(2).any(|w| w[0] == w[1]) {
             return Err(AuthorityError::DuplicateAuthority);
         }
+        // A small-order point verifies a signature without the secret, so an
+        // authority set containing one hands block production to anyone. Note
+        // this is not the same test as `DuplicateAuthority` above: dalek's
+        // `PartialEq` compares compressed encodings, so two distinct
+        // encodings of one curve point would otherwise pass as two members.
+        if authorities.iter().any(|pk| pk.is_weak()) {
+            return Err(AuthorityError::WeakAuthorityKey);
+        }
         let hash = blake3::hash(&Self::canonical_bytes_of(&authorities, threshold));
         Ok(Self {
             authorities,
@@ -189,12 +209,29 @@ impl AuthoritySet {
     /// found against a since-deleted stake branch, and documents the
     /// smooth-weighted-round-robin rule should stake weighting ever be
     /// re-admitted. Do not reintroduce weighting here without it.
+    ///
+    /// The modulo is taken in the `u64` domain on purpose. `slot` comes from a
+    /// peer-controlled `timestamp_ms` with no upper bound enforced at ingest,
+    /// so it can exceed `u32::MAX`; `slot as usize % len` would then truncate
+    /// on a 32-bit target (Android CI builds `i686`/`armv7`) and that node
+    /// would admit a different authority than a 64-bit node admits for the
+    /// same block — the same silent fork RFC-009 exists to close, since the
+    /// `KVA1` Authority UTXO hash is identical on both. Reducing first, then
+    /// narrowing, makes the result ≤ `len()-1` ≤ 15 and therefore lossless on
+    /// every supported target.
     pub fn active_authority(&self, slot: u64) -> &AuthorityPublicKey {
-        &self.authorities[slot as usize % self.authorities.len()]
+        let idx = (slot % self.authorities.len() as u64) as usize;
+        &self.authorities[idx]
     }
 
     /// Verify a 64-byte Ed25519 `sig` over `message` against the authority
     /// scheduled for `slot`.
+    ///
+    /// `verify_strict`, not `verify`: a weak (low-order) authority key accepts
+    /// a signature from anyone, and a non-canonical `S` gives a second
+    /// signature over the same message, so a lax verifier has more than one
+    /// answer to the same consensus question. Our own signing paths emit
+    /// canonical scalars, so strictness costs nothing on honest traffic.
     pub fn verify_slot_signature(
         &self,
         slot: u64,
@@ -203,7 +240,7 @@ impl AuthoritySet {
     ) -> Result<(), AuthorityError> {
         let pk = self.active_authority(slot);
         let signature = Signature::from_bytes(sig);
-        pk.verify(message, &signature)
+        pk.verify_strict(message, &signature)
             .map_err(|_| AuthorityError::InvalidSignature)
     }
 
@@ -234,7 +271,7 @@ impl AuthoritySet {
                 return Err(AuthorityError::DuplicateSigner);
             }
             let signature = Signature::from_bytes(sig);
-            if pk.verify(message, &signature).is_ok() {
+            if pk.verify_strict(message, &signature).is_ok() {
                 valid += 1;
             }
         }
@@ -293,7 +330,14 @@ impl AuthoritySet {
             return Err(AuthorityError::MalformedEncoding);
         }
         if !(MIN_AUTHORITIES as u64..=MAX_AUTHORITIES as u64).contains(&count) {
-            return Err(AuthorityError::InvalidAuthorityCount(count as usize));
+            // Saturate rather than truncate: on a 32-bit target `as usize`
+            // would print a plausible-looking wrong count (e.g. `2^59` -> 0)
+            // in a diagnostic, which is the same class of lie the `threshold`
+            // conversion below is written to avoid. The value is already
+            // rejected; this only affects the error message.
+            return Err(AuthorityError::InvalidAuthorityCount(
+                usize::try_from(count).unwrap_or(usize::MAX),
+            ));
         }
         // `count` is now 3..=16, so this `usize` conversion is exact on every
         // target and every offset below is in bounds.
@@ -371,6 +415,15 @@ impl AuthorityUpdateTx {
         new_set: AuthoritySet,
         signatures: Vec<(AuthorityPublicKey, [u8; 64])>,
     ) -> Result<Self, AuthorityError> {
+        // The encoding carries the signature count in a single `u8`, so
+        // `to_bytes` would otherwise truncate a longer list and emit bytes
+        // that our own `from_bytes` rejects. Bound it at construction, where
+        // the caller can still see why. Unreachable in practice — a set holds
+        // at most `MAX_AUTHORITIES` distinct signers — but the encoder is
+        // consensus-facing and must not be able to produce a corrupt block.
+        if signatures.len() > u8::MAX as usize {
+            return Err(AuthorityError::TooManySignatures(signatures.len()));
+        }
         let mut seen = std::collections::HashSet::new();
         for (pk, _) in &signatures {
             if !seen.insert(pk.to_bytes()) {
@@ -462,7 +515,14 @@ impl AuthorityUpdateTx {
         // as in debug. Bounding it to the legal set size (3..=16) makes every
         // length below exact: `sig_start <= 32 + 16 + 32 * 16 = 560`.
         if !(MIN_AUTHORITIES as u64..=MAX_AUTHORITIES as u64).contains(&count) {
-            return Err(AuthorityError::InvalidAuthorityCount(count as usize));
+            // Saturate rather than truncate: on a 32-bit target `as usize`
+            // would print a plausible-looking wrong count (e.g. `2^59` -> 0)
+            // in a diagnostic, which is the same class of lie the `threshold`
+            // conversion below is written to avoid. The value is already
+            // rejected; this only affects the error message.
+            return Err(AuthorityError::InvalidAuthorityCount(
+                usize::try_from(count).unwrap_or(usize::MAX),
+            ));
         }
         let new_set_len = 16 + 32 * count as usize;
         let sig_start = 32 + new_set_len;
@@ -551,21 +611,128 @@ mod tests {
     /// every loadable set. It belongs in the tree under any future option,
     /// including reintroducing weighting — in which case this test must be
     /// replaced by one pinning the ratified rule, not merely deleted.
+    /// The spec's rule, written the way the spec writes it: arithmetic on the
+    /// `u64` `slot`, with the narrowing to an index as the *last* step.
+    ///
+    /// Kept as a helper rather than inlined so the test cannot drift back to
+    /// the defect it exists to catch. An earlier version of this test wrote
+    /// the expectation as `slot as usize % set.len()` — the identical
+    /// expression as the implementation — which made it incapable of failing
+    /// for a narrowing bug, and its probe slots (`u64::MAX`, `999_983`, …)
+    /// happened to give the same answer under both rules, so a simulated
+    /// 32-bit implementation still passed. Both are fixed here.
+    fn spec_index(slot: u64, n: usize) -> usize {
+        (slot % n as u64) as usize
+    }
+
+    /// Probe slots that separate the spec rule from a 32-bit truncating one.
+    ///
+    /// `2^32` is exactly where `slot as usize` wraps on a 32-bit target, and
+    /// `u64::MAX` truncates to `0xFFFF_FFFF`. For a set of size `n` the two
+    /// rules agree whenever `2^32 ≡ 0 (mod n)`, so these are only meaningful
+    /// in combination with the odd sizes below — which is why the sweep tests
+    /// each `n` against this list rather than picking a "big" number once.
+    const WIDE_SLOTS: [u64; 8] = [
+        0,
+        1,
+        u32::MAX as u64,
+        1 << 32,
+        (1 << 32) + 1,
+        (1 << 32) + 2,
+        u64::MAX - 1,
+        u64::MAX,
+    ];
+
     #[test]
     fn active_authority_matches_the_spec_rule() {
-        for n in [MIN_AUTHORITIES, 4, 5, MAX_AUTHORITIES] {
+        // Odd sizes included on purpose: 3, 5 and 7 do not divide 2^32, so a
+        // `slot as usize % len` implementation gives a *different* answer at
+        // these slots and the test genuinely bites.
+        for n in [MIN_AUTHORITIES, 4, 5, 7, MAX_AUTHORITIES] {
             let pks: Vec<VerifyingKey> = (1..=n as u8).map(|s| keypair(s).1).collect();
             let set = AuthoritySet::new(pks, 2).expect("valid set");
-            // Sweep several full rotations plus a wide tail, including a slot
-            // index far beyond `usize::MAX / 2` would be nice but the rule is
-            // `slot % len`, so a wide spread is what matters.
-            for slot in (0..(4 * n as u64)).chain([u64::MAX, u64::MAX - 1, 999_983]) {
+            // Every rotation, then the wide/discriminating probes.
+            for slot in (0..(4 * n as u64)).chain(WIDE_SLOTS) {
                 assert_eq!(
                     set.active_authority(slot),
-                    &set.authorities()[slot as usize % set.len()],
+                    &set.authorities()[spec_index(slot, set.len())],
                     "n={n} slot={slot}: scheduled authority is not authorities[slot % {n}]"
                 );
             }
+        }
+    }
+
+    /// The regression test for the narrowing defect itself: at slots above
+    /// `u32::MAX` the scheduled authority must follow the `u64` rule, and must
+    /// therefore *differ* from what a truncating cast would pick.
+    ///
+    /// This is a separate test from the sweep above because it is the only
+    /// assertion that would have failed on Android/32-bit CI, where the
+    /// narrowing is real rather than simulated.
+    #[test]
+    fn slots_above_u32_max_are_not_narrowed_to_32_bits() {
+        let set = AuthoritySet::new(three_authorities().0, 2).unwrap();
+        let n = set.len();
+
+        // Only slots where the two rules *disagree* can catch the defect, so
+        // each expectation is derived from the spec rule and the
+        // discriminating property is asserted explicitly below rather than
+        // assumed. (An earlier draft hardcoded `u64::MAX`, but
+        // `u64::MAX % 3 == 0` and `u32::MAX % 3 == 0` — that slot is
+        // non-discriminating for a 3-key set and the test passed against a
+        // deliberately-truncating implementation.)
+        for &slot in &[1u64 << 32, (1u64 << 32) + 1, (1u64 << 33) + 5, u64::MAX / 3] {
+            let spec = spec_index(slot, n);
+            let truncated = ((slot as u32) as usize) % n;
+            assert_ne!(
+                spec, truncated,
+                "probe slot {slot} no longer separates the u64 rule from a 32-bit one \
+                 (n={n}); pick another, or this test cannot fail"
+            );
+            assert_eq!(
+                set.active_authority(slot),
+                &set.authorities()[spec],
+                "n={n} slot={slot}: not the spec's authorities[slot % {n}]"
+            );
+        }
+
+        // And the whole point: simulate the bug. A truncating index must NOT
+        // equal what the set returns at these slots.
+        let slot = 1u64 << 32;
+        assert_ne!(
+            set.active_authority(slot),
+            &set.authorities()[((slot as u32) as usize) % n],
+            "active_authority is following a 32-bit truncation"
+        );
+    }
+
+    /// The only test that can actually catch a `slot as usize` regression on
+    /// a 32-bit target — and the only one that *fails* under such a mutation.
+    ///
+    /// On a 64-bit host `slot as usize` is a widening no-op, so the truncated
+    /// and correct implementations compute identical indices and no
+    /// 64-bit test can tell them apart. That was verified directly: with
+    /// `active_authority` reverted to `slot as usize % len`, all 47 unit
+    /// tests still passed here. The defect is real but only *observable*
+    /// where `usize` is 32 bits.
+    ///
+    /// So this test is gated to those targets, and it is not optional
+    /// bookkeeping: `.github/workflows/android.yml` builds
+    /// `i686-linux-android` and `armv7-linux-androideabi`, so CI does run it.
+    /// A 64-bit-only test suite would pass with the bug present and the
+    /// 32-bit release binary would disagree with the network about who may
+    /// produce — the same silent fork RFC-009 exists to close.
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn slots_above_u32_max_are_reduced_in_the_u64_domain() {
+        let set = AuthoritySet::new(three_authorities().0, 2).unwrap();
+        let n = set.len();
+        for &slot in &[1u64 << 32, (1u64 << 32) + 1, (1u64 << 33) + 5] {
+            assert_eq!(
+                set.active_authority(slot),
+                &set.authorities()[spec_index(slot, n)],
+                "slot={slot}: a 32-bit target narrowed `slot` before reducing"
+            );
         }
     }
 
@@ -623,6 +790,47 @@ mod tests {
                 "count = 2^59..usize::MAX must not wrap past the length check"
             );
         }
+    }
+
+    /// A low-order authority point verifies a signature from *anyone*, with
+    /// no key material — so accepting one into the set would hand block
+    /// production to the public. Rejected at construction, which is the only
+    /// place both entry points pass through.
+    #[test]
+    fn rejects_a_weak_authority_key() {
+        // The all-zero encoding decodes to an order-8 point.
+        let weak = VerifyingKey::from_bytes(&[0u8; 32]).expect("decodes");
+        assert!(weak.is_weak(), "test premise: all-zero must be low-order");
+
+        let (pks, _) = three_authorities();
+        let with_weak = vec![pks[0], pks[1], weak];
+        assert_eq!(
+            AuthoritySet::new(with_weak.clone(), 2).unwrap_err(),
+            AuthorityError::WeakAuthorityKey
+        );
+
+        // `from_bytes` delegates to `new`, so the on-chain path is covered too.
+        // Hand-build the canonical bytes so the weak key sits in a
+        // well-formed encoding: header + exactly 3 keys. Otherwise the only
+        // thing that can reject these bytes is a length or count rule, and
+        // the test would pass for the wrong reason.
+        let mut enc = Vec::new();
+        enc.extend_from_slice(&2u64.to_le_bytes()); // threshold
+        enc.extend_from_slice(&3u64.to_le_bytes()); // count
+        enc.extend_from_slice(pks[0].as_bytes());
+        enc.extend_from_slice(pks[1].as_bytes());
+        enc.extend_from_slice(&[0u8; 32]); // the weak key
+        assert_eq!(enc.len(), 16 + 3 * 32, "well-formed: exact length");
+        assert_eq!(
+            AuthoritySet::from_bytes(&enc).unwrap_err(),
+            AuthorityError::WeakAuthorityKey
+        );
+
+        // Same bytes with a *good* third key must load, proving the rejection
+        // above is caused by the weak key and not by the encoding.
+        enc.truncate(16 + 2 * 32);
+        enc.extend_from_slice(pks[2].as_bytes());
+        assert!(AuthoritySet::from_bytes(&enc).is_ok());
     }
 
     /// A `KVA1` Authority UTXO carrying a trailing stake vector must be
