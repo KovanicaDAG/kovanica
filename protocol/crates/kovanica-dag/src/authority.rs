@@ -42,7 +42,12 @@ pub const SLOT_DURATION_MS: u64 = 3000;
 /// On-chain Authority UTXO tag (RFC-POA §1): `KVA1` || authority_set_hash.
 pub const AUTHORITY_UTXO_TAG: &[u8; 4] = b"KVA1";
 
-/// Upper bound on the length of the precomputed SW-PoA slot schedule.
+/// Upper bound on the length of the precomputed stake-weighted slot schedule.
+///
+/// **Provisional.** The ratified canonical spec (docs/SW-PoA-SPV-CONSENSUS.md,
+/// KVP-201) has no stake-weighted path, so this bound only matters if
+/// docs/RFC-009-StakeWeightedPoA.md is accepted. It would become a consensus
+/// constant at that point.
 ///
 /// The schedule is one table entry per slot in a full weighting period, so a
 /// pathological weight vector (large co-prime stakes such as `[65537, 65539]`,
@@ -52,7 +57,7 @@ pub const AUTHORITY_UTXO_TAG: &[u8; 4] = b"KVA1";
 ///
 /// Sets whose gcd-normalised period exceeds this are **rejected at
 /// construction** rather than truncated: a silently shortened period would
-/// quietly change the slot→authority mapping, which is a consensus rule.
+/// quietly change the slot→authority mapping, which would be a consensus rule.
 pub const MAX_SCHEDULE_PERIOD: u64 = 65_536;
 
 /// An Ed25519 authority public key (same type as address keys).
@@ -122,6 +127,36 @@ pub enum AuthorityError {
 /// 10·10⁸]` normalises to `[7, 2, 1]` and a 10-slot table instead of a
 /// 100_000_000-slot one.
 ///
+/// Smooth weighted round-robin (SWRR) schedule over gcd-normalised stakes.
+///
+/// **This is a proposed rule, not a ratified one.** The canonical spec
+/// (docs/SW-PoA-SPV-CONSENSUS.md, KVP-201, ratified 2026-09-25) states the
+/// scheduled authority is `authorities[slot % n]` and that there is
+/// "no permissionless path and no stake-weighted path" — stake weighting was
+/// removed on purpose (§0.7.1 of docs/RFC-POA-Migration.md). This function
+/// implements the alternative that docs/RFC-009-StakeWeightedPoA.md puts
+/// forward for maintainer decision. It is reachable today only from
+/// `from_bytes`, i.e. from on-chain `KVA1` data carrying a stake vector.
+///
+/// The returned table has length `period`; `table[slot % period]` is the index
+/// of the authority that owns `slot`.
+///
+/// Determinism requirements, all of which would become consensus-critical if
+/// this path is ratified, because two nodes disagreeing here would reject each
+/// other's blocks:
+///
+/// 1. Weights are the stakes divided by their gcd, so `[70, 20, 10]` and
+///    `[7, 2, 1]` yield the same 10-slot table. The schedule depends on stake
+///    *ratios* only, never on the unit the operator denominated them in.
+/// 2. The stake sum must fit `u64`; a vector whose sum overflows is rejected
+///    rather than wrapped.
+/// 3. `period` is bounded by [`MAX_SCHEDULE_PERIOD`] and oversized sets are
+///    **rejected, never truncated** — a shortened period would silently change
+///    the slot→authority mapping.
+/// 4. Ties on the round's highest score resolve to the **highest index**
+///    (see the `max_by_key` note below). Arbitrary, but must be identical
+///    everywhere.
+///
 /// `cur` is `i64` rather than `u64` on purpose: a score is charged `total`
 /// when its authority wins, so scores run negative and an unsigned type would
 /// underflow.
@@ -166,8 +201,17 @@ fn build_schedule(stakes: &[u64]) -> Result<Vec<u16>, AuthorityError> {
         for (slot_score, &w) in cur.iter_mut().zip(&weights) {
             *slot_score += w as i64;
         }
-        // `max_by_key` returns the first maximum, so equal scores resolve to
-        // the lowest index — deterministic on every node.
+        // `max_by_key` yields the *last* maximum, so equal scores resolve to
+        // the highest index.
+        //
+        // NOTE: this tie-break is arbitrary, and the ratified canonical spec
+        // (docs/SW-PoA-SPV-CONSENSUS.md, KVP-201) says there is no
+        // stake-weighted path at all, so this branch should not be reachable
+        // in a conformant set. It is documented here only because the branch
+        // exists and the behaviour must be deterministic *if* it is ever
+        // reached. See docs/RFC-009-StakeWeightedPoA.md, which proposes either
+        // deleting this path or amending the ratified decision — and must not
+        // be read as already canonical.
         let winner = cur
             .iter()
             .enumerate()
@@ -903,6 +947,36 @@ mod tests {
         assert_eq!(sorted, vec![1, 2, 7], "weights should normalise to 7/2/1");
         assert_eq!(period, 10);
         assert_eq!(slot_counts(&set, period), expected);
+    }
+
+    /// The exact schedule table is pinned as a literal so the rule cannot drift
+    /// silently. This also pins the tie-break: `build_schedule` picks the
+    /// *highest* index among equal scores (Rust's `max_by_key` returns the last
+    /// maximum), so the table begins `0, 1, …` and not `0, 0, …`.
+    ///
+    /// These are *proposed* constants, not ratified ones — the canonical spec
+    /// (docs/SW-PoA-SPV-CONSENSUS.md) has no stake-weighted path at all. See
+    /// docs/RFC-009-StakeWeightedPoA.md §2; if Option A is taken this test is
+    /// deleted along with the code it covers. If Option B is taken, changing
+    /// any literal here is a consensus change and needs a hard-fork assessment.
+    #[test]
+    fn sw_poa_schedule_table_is_pinned() {
+        // [70, 20, 10] normalises to weights [7, 2, 1], period 10.
+        let table = build_schedule(&[70, 20, 10]).expect("ordinary weight vector");
+        assert_eq!(table, vec![0, 1, 0, 0, 2, 0, 0, 1, 0, 0]);
+        // A stake vector's common factor must not change the table.
+        let atoms = 100_000_000u64;
+        assert_eq!(
+            build_schedule(&[70 * atoms, 20 * atoms, 10 * atoms]).expect("same ratios"),
+            table
+        );
+        // Two vectors with identical ratios but different magnitudes agree.
+        assert_eq!(build_schedule(&[7, 2, 1]).expect("already normalised"), table);
+        // Equal stakes: a plain round-robin over the canonical order.
+        assert_eq!(build_schedule(&[1, 1, 1]).expect("equal"), vec![2, 1, 0]);
+        // The highest-index tie-break is visible here: slot 1 goes to index 1,
+        // not index 0, because after the first round both hold the same score.
+        assert_eq!(build_schedule(&[1, 2]).expect("two authorities"), vec![1, 0, 1]);
     }
 
     /// Proportionality must survive stake vectors that are not already
