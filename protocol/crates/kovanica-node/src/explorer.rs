@@ -476,7 +476,13 @@ impl Explorer {
             let names = self.mesh.names();
             if !names.is_empty() {
                 let name = &names[self.rotate % names.len()];
-                let _ = self.mesh.produce_empty(name);
+                if let Err(e) = self.mesh.produce_empty(name) {
+                    // NotAuthoritySlot is routine for a participant node that is
+                    // not the scheduled producer; only log real errors.
+                    if !matches!(e, crate::p2p::P2pError::Node(crate::node::NodeError::NotAuthoritySlot)) {
+                        eprintln!("produce_empty error for {}: {}", name, e);
+                    }
+                }
                 self.rotate += 1;
                 persist_all(&mut self.mesh);
             }
@@ -721,7 +727,7 @@ impl Explorer {
         let mut app = Self {
             mesh,
             selected: "alpha".into(),
-            producing: env_flag("KOVANICA_PRODUCE", env_flag("KOVANICA_MINE", false)),
+            producing: env_flag("KOVANICA_PRODUCE", false),
             produce_every: produce_every_ticks(),
             ticks: 0,
             rotate: 0,
@@ -1341,7 +1347,6 @@ const PRODUCE_SECS_DEFAULT: u64 = 120;
 fn produce_every_ticks() -> u64 {
     let secs = std::env::var("KOVANICA_PRODUCE_SECS")
         .ok()
-        .or_else(|| std::env::var("KOVANICA_MINE_SECS").ok())
         .and_then(|s| s.parse().ok())
         .unwrap_or(PRODUCE_SECS_DEFAULT);
     (secs.saturating_mul(1000) / TICK_MS).max(1)
@@ -4516,14 +4521,21 @@ mod tests {
 
     /// The address a PoA block reward is credited to.
     ///
-    /// Under PoA the coinbase pays the signing authority, not the genesis
-    /// founder. `Node::produce_empty` derives the recipient from
-    /// `authority_public_key()` — the *first* loaded authority key — before
-    /// slot ownership is resolved, so in a placeholder set this is always
-    /// `AUTHORITY_PLACEHOLDER_BASE`'s key regardless of which authority
-    /// actually signs for the slot.
+    /// Under PoA the coinbase pays the scheduled signing authority. With the
+    /// deterministic placeholder set, pinning the wall clock to the start of
+    /// slot 0 makes `AUTHORITY_PLACEHOLDER_BASE` the scheduled signer for every
+    /// block produced in the test.
     fn authority_reward_address() -> kovanica_state::Address {
         kovanica_state::KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE).address()
+    }
+
+    /// Pin a mesh node to slot 0 so placeholder-authority tests are
+    /// deterministic: slot 0's scheduled authority is the first placeholder key
+    /// (`AUTHORITY_PLACEHOLDER_BASE`).
+    fn pin_slot_zero(mesh: &mut crate::p2p::Mesh, name: &str) {
+        mesh.node_mut(name)
+            .expect("node exists")
+            .set_now_ms(1);
     }
 
     #[test]
@@ -4566,7 +4578,8 @@ mod tests {
     fn empty_block_mints_kvnc_subsidy_to_miner() {
         let mut app = Explorer::boot();
         app.producing = false;
-        // Under PoA the subsidy is credited to the authority, not the founder.
+        pin_slot_zero(&mut app.mesh, "alpha");
+        // Under PoA the subsidy is credited to the scheduled authority.
         let authority = authority_reward_address();
         let before = app.mesh.node("alpha").unwrap().balance(&authority).unwrap();
         app.mesh.produce_empty("alpha").unwrap();
@@ -4578,12 +4591,13 @@ mod tests {
     fn produce_block_mints_kvnc_subsidy_with_the_spend() {
         let mut app = Explorer::boot();
         app.producing = false;
+        pin_slot_zero(&mut app.mesh, "alpha");
         // Maturity the founder's genesis coinbase under the CSV rule so the
         // pool() spend from seed 1 is valid (creation_height + 100 <= height).
         for _ in 0..100 {
             app.mesh.produce_empty("alpha").unwrap();
         }
-        // Under PoA every subsidy is credited to the authority; the founder
+        // Under PoA every subsidy is credited to the scheduled authority; the founder
         // receives none, so the 100 maturity blocks above do not help this
         // UTXO at all.
         let authority = authority_reward_address();
@@ -4617,14 +4631,15 @@ mod tests {
 
         let mut app = Explorer::boot();
         app.producing = false;
+        pin_slot_zero(&mut app.mesh, "alpha");
         // Maturity the genesis coinbases under the CSV rule so the transfer is
         // valid (creation_height + 100 <= height).
         for _ in 0..100 {
             app.mesh.produce_empty("alpha").unwrap();
         }
-        // Under PoA the accumulated subsidy coinbases belong to the authority,
-        // so the authority is the sender here: it is the only actor holding
-        // many small 10-KVNC coinbases, which is what this test is about.
+        // Under PoA the accumulated subsidy coinbases belong to the scheduled
+        // authority. Pinned to slot 0, that is the first placeholder key, so it
+        // is the only actor holding many small 10-KVNC coinbases.
         let from = KeyPair::from_u64(AUTHORITY_PLACEHOLDER_BASE);
         let to = KeyPair::from_u64(9);
         app.mesh.produce_empty("alpha").unwrap();
@@ -5652,12 +5667,13 @@ mod tests {
     fn utxos_endpoint_paginates_limit_and_offset() {
         let mut app = Explorer::boot();
         app.producing = false;
-        // Produce several coinbases all paid to actor 1.
+        pin_slot_zero(&mut app.mesh, "alpha");
+        // Produce several coinbases all paid to the scheduled authority.
         for _ in 0..3 {
             app.mesh.produce_empty("alpha").unwrap();
         }
-        // Under PoA the coinbases are paid to the authority, so that is the
-        // address holding the three UTXOs this pagination test needs.
+        // Under PoA the coinbases are paid to the scheduled authority, so that
+        // is the address holding the three UTXOs this pagination test needs.
         let addr = authority_reward_address().to_hex();
         let body = send_req(
             &mut app,
