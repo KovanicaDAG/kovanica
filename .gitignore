@@ -33,3 +33,4 @@ deploy/mainnet/authority-keys/*.env
 # Authority private keys (never commit)
 protocol/authority-keys/*.env
 protocol/mainnet-authority-keys/*.env
+.slim/deepwork/
