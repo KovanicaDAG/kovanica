@@ -21,8 +21,8 @@ use kovanica_state::{
 use crate::dht::{NodeId, PeerContact, RoutingTable};
 use crate::dns_seed::{DnsSeedConfig, DnsSeedResolver};
 use crate::metrics::{
-    init_metrics, record_explorer_http_request, record_supply, render_prometheus,
-    set_explorer_ws_clients, set_peer_count,
+    init_metrics, record_explorer_http_request, record_poa_authority_set, record_poa_slot_duration,
+    record_supply, render_prometheus, set_explorer_ws_clients, set_peer_count,
 };
 use crate::net::{
     decode_records, encode_records, pull_blocks_timeout, serve_exchange, serve_headers_first,
@@ -1668,6 +1668,13 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
         if let Some(n) = app.mesh.node(&app.selected) {
             if let Ok(ledger) = n.ledger() {
                 record_supply(ledger.supply());
+            }
+            // PoA / SW-PoA authority-set gauges. These are pure functions of
+            // the committed set, so sampling them per scrape is enough and
+            // avoids a hook on every produced block.
+            if let Some(cfg) = n.poa_config() {
+                record_poa_authority_set(&cfg.authority_set);
+                record_poa_slot_duration(cfg.slot_duration_ms);
             }
         }
         return respond_prometheus_metrics(&mut stream);

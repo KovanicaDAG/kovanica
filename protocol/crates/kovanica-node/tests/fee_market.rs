@@ -61,18 +61,38 @@ const FEE_MARKET_AUTHORITIES: u64 = 3;
 
 /// A PoA node whose block rewards are credited to `Node::address(1)`.
 ///
-/// Under PoA the coinbase pays a signing authority, not the genesis founder.
-/// The recipient is always `authority_public_key()` — the *first* key pushed
-/// into the node — so seeding the set with seeds `1..=FEE_MARKET_AUTHORITIES`
-/// and loading seed 1's signing key first points every reward at actor 1 and
-/// leaves the suite's spends/signs valid. A 3-key set is the minimum
-/// `AuthoritySet` accepts (`MIN_AUTHORITIES`), so the two filler keys are
-/// required; they never receive a reward.
+/// Under PoA the coinbase pays the authority **scheduled for the slot**, not
+/// the genesis founder and not the first key loaded into the node. Classic PoA
+/// schedules `authorities[slot % len]`, so with a
+/// `FEE_MARKET_AUTHORITIES`-key set only one slot in every three is actor 1's —
+/// leaving the suite without enough actor-1 UTXOs to evict with.
+///
+/// So the clock is pinned into a slot actor 1 owns. The pinned value sits far
+/// above the genesis timestamp, which makes `next_timestamp` clock-dominated on
+/// every call: each block lands in the same slot and every reward goes to
+/// `Node::address(1)`, keeping the spends and signs below valid. The two filler
+/// authorities still exist because a 3-key set is the minimum `AuthoritySet`
+/// accepts (`MIN_AUTHORITIES`); they simply never win the pinned slot.
 fn poa_node_producing_for_actor1(config: MempoolConfig) -> Node {
     let keys: Vec<AuthorityPublicKey> = (1..=FEE_MARKET_AUTHORITIES)
         .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
         .collect();
     let set = AuthoritySet::new(keys, 2).expect("valid authority set");
+
+    // Canonical order is by key encoding, not by the order supplied here, so
+    // actor 1's slot has to be looked up rather than assumed to be 0.
+    let actor1 = SigningKey::from_bytes(&KeyPair::from_u64(1).seed()).verifying_key();
+    let actor1_slot = set
+        .authorities()
+        .iter()
+        .position(|pk| *pk == actor1)
+        .expect("actor 1 is in the authority set") as u64;
+    // `slot = timestamp_ms / SLOT_MS`, and
+    // `(FEE_MARKET_AUTHORITIES * EPOCHS + actor1_slot) % FEE_MARKET_AUTHORITIES`
+    // is `actor1_slot` because the leading term is a whole multiple.
+    const EPOCHS: u64 = 1_000;
+    let pinned_now_ms = (FEE_MARKET_AUTHORITIES * EPOCHS + actor1_slot) * SLOT_MS;
+
     let mut node = Node::with_mempool_config(config);
     node.genesis_with_poa(
         3,
@@ -88,6 +108,7 @@ fn poa_node_producing_for_actor1(config: MempoolConfig) -> Node {
         SLOT_MS,
     )
     .unwrap();
+    node.set_now_ms(pinned_now_ms);
     for i in 1..=FEE_MARKET_AUTHORITIES {
         node.set_authority_signing_key(KeyPair::from_u64(i).seed());
     }
