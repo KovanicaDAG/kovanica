@@ -115,16 +115,6 @@
 //! replay can proceed, and the stubs are evicted again once the replay
 //! completes. The snapshot format is unchanged.
 //!
-//! ## Epoch randomness beacon (VRF input)
-//!
-//! VRF leader eligibility ([`Dag::set_vrf`]) is keyed to an **epoch randomness
-//! beacon** rather than the block's parent tips. The beacon is a pure function
-//! of the DAG — the boundary block of the epoch containing the block's selected
-//! parent (Algorand/Praos-style epoch randomness; see [`Dag::epoch_beacon`] for
-//! the construction and the anti-grinding rationale). The legacy parent-tip
-//! input ([`Dag::vrf_input`]) is retained for backward compatibility with
-//! callers that have not yet migrated.
-
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::authority::{AuthorityError, AuthoritySet, AuthorityUpdateTx};
@@ -380,69 +370,6 @@ impl Dag {
         self.validator = Some(validator);
     }
 
-    /// Enable consensus-enforced difficulty with retargeting policy `retarget`.
-    ///
-    /// Once enabled, every subsequent [`Dag::insert`] of a non-genesis block
-    /// must satisfy both rules (see [`crate::difficulty`]):
-    ///
-    /// * **Enforced work.** The block's `work` must equal
-    ///   `retarget.next_work(samples)`, where `samples` are the last
-    ///   `window + 1` blocks of the selected-parent chain ending at the block's
-    ///   selected parent (oldest first). Because the samples and the selected
-    ///   chain are a pure function of the DAG, every node computes the same
-    ///   target, so this is a deterministic consensus rule. Blocks with too
-    ///   little history are required to carry [`Retarget::min_work`].
-    /// * **Monotone timestamp.** The block's timestamp must not be earlier than
-    ///   any parent's, so timestamps along every path are non-decreasing and the
-    ///   retarget's timespans are well defined.
-    ///
-    /// Genesis is exempt (it has no past). Difficulty is off by default, so a
-    /// DAG built without this call accepts any `work`, exactly as before.
-    ///
-    /// Note: this enforces work against the target the DAG implies; it does
-    /// **not** bound a timestamp against wall-clock time (a "not too far in the
-    /// future" rule is node policy, not a pure function of the DAG, and remains a
-    /// follow-up).
-    /// Enable (or disable) consensus-enforced proof-of-work.
-    ///
-    /// Once enabled, every subsequent [`Dag::insert`] of a non-genesis block
-    /// requires the block's id to meet its `work` target — i.e. it must have been
-    /// **mined** so that `H * work < 2^256`, where `H` is the id as a big-endian
-    /// 256-bit integer (Nakamoto-style hash-target PoW; see [`crate::pow`]).
-    /// Genesis is exempt (it is a fixed anchor, not mined).
-    ///
-    /// Verification is a pure function of the block, so every node agrees. PoW is
-    /// **off by default**, so a DAG built without this call accepts any nonce,
-    /// exactly as before. It composes with [`Dag::set_difficulty`]: with both on,
-    /// difficulty pins `work` to [`Dag::next_work_target`] *and* the block must be
-    /// mined to meet that work's target.
-    /// Enable consensus-enforced VRF leader selection.
-    ///
-    /// Once enabled, every subsequent [`Dag::insert`] of a non-genesis block
-    /// must satisfy:
-    /// - **Valid VRF proof.** The block must carry `vrf_public_key`, `vrf_proof`,
-    ///   and `vrf_output` fields, and the proof must verify correctly against
-    ///   the VRF input — the epoch randomness beacon of the block's selected
-    ///   parent (see [`Dag::epoch_beacon`]).
-    /// - **Leader eligibility.** The VRF output (interpreted as big-endian u64)
-    ///   must be less than the configured `threshold`. A threshold of `u64::MAX`
-    ///   means any valid VRF output is eligible (useful for randomness beacon
-    ///   without leader selection).
-    ///
-    /// The VRF input is the **epoch randomness beacon**: a pure function of the
-    /// DAG (the selected-parent chain), not of the block's parent list. This
-    /// makes leader eligibility ungrindable — a validator cannot search over
-    /// parent sets for a favourable input; it can only choose among the beacons
-    /// of the blocks it references as parents (see [`Dag::epoch_beacon`] for
-    /// the full rationale).
-    ///
-    /// Genesis is exempt. VRF enforcement is **off by default** (`None`), so a
-    /// DAG built without this call accepts blocks without VRF fields, exactly as
-    /// before. It composes with [`Dag::set_difficulty`] and
-    /// [`Dag::set_proof_of_work`]: all three can be enabled independently.
-    ///
-    /// Uses the default epoch length ([`DEFAULT_EPOCH_LENGTH`]); use
-    /// [`Dag::set_vrf_with_epoch`] to set a custom epoch length.
     /// Enable consensus-enforced Proof-of-Authority admission (RFC-POA §4).
     ///
     /// Once enabled, every subsequent [`Dag::insert`] of a non-genesis block
@@ -455,10 +382,8 @@ impl Dag {
     /// - **Slot consistency.** The block's slot must be ≥ every parent's slot,
     ///   so slots are monotone along every path (like difficulty timestamps).
     ///
-    /// PoA **replaces** PoW/difficulty/VRF admission: enabling it clears those
-    /// switches so there is no double standard (mirrors the ledger's hybrid
-    /// policy). It additionally pins the block `work` to
-    /// [`POA_NOMINAL_WORK`], which PoW leaves free — see that constant for why
+    /// PoA is the only admission model. It pins the block `work` to
+    /// [`POA_NOMINAL_WORK`] — see that constant for why
     /// an unpinned `work` is a chain-selection vector. Genesis is exempt.
     /// Replay ([`Dag::insert_for_replay`]) skips the check — replayed blocks are
     /// trusted history whose signatures may come from an earlier authority set.

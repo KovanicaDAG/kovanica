@@ -604,8 +604,8 @@ impl LightNode {
     // Sync (byte blobs over any transport)
     // ------------------------------------------------------------------
 
-    /// Every known block as a wire-format blob (framed count + records, VRF
-    /// bundles included). Hand this to a peer; idempotent on their side.
+    /// Every known block as a wire-format blob (framed count + records). Hand
+    /// this to a peer; idempotent on their side.
     pub fn export_blocks(&self) -> Vec<u8> {
         net::encode_records(&self.lock().export())
     }
@@ -922,21 +922,17 @@ impl LightNode {
     }
 
     /// SW-PoA stake proof for a block's authority (SPV).
-
 // ------------------------------------------------------------------
 // SW-PoA SPV verification (stake-weighted PoA)
 // ------------------------------------------------------------------
-
-/// Verify an SW-PoA block header with a stake proof.
-/// Returns true if the header is valid under the stake-weighted authority set.
+/// Previously verified an SW-PoA block header with a stake proof.
+/// Removed: stake/VRF admission was dropped entirely (RFC-POA-Migration §0.7.1).
 pub fn verify_sw_poa_header(
     &self,
-    header_blob: Vec<u8>,
-    proof_hex: String,
+    _header_blob: Vec<u8>,
+    _proof_hex: String,
 ) -> Result<bool, LightNodeError> {
-    // This would require the SPV client to have the authority set
-    // For now, return a placeholder - full implementation needs SPV client access
-    Err(invalid("SW-PoA verification not yet exposed via FFI"))
+    Err(invalid("SW-PoA verification removed"))
 }
 
 /// Fetch the stake merkle proof for a slot from the node.
@@ -1483,7 +1479,7 @@ fn decode_tx_blob(blob: &[u8]) -> Result<Transaction, LightNodeError> {
 
 const FILTER_K: u8 = 8;
 const LIGHT_SYNC_MAGIC: &[u8; 4] = b"KVLS";
-const LIGHT_SYNC_VERSION: u8 = 1;
+const LIGHT_SYNC_VERSION: u8 = 2;
 
 fn encode_header(h: &kovanica_state::spv::BlockHeader, out: &mut Vec<u8>) {
     out.extend_from_slice(h.id.as_bytes());
@@ -1513,6 +1509,9 @@ fn decode_header(buf: &[u8], version: u8) -> Option<(kovanica_state::spv::BlockH
     if buf.len() < min_len {
         return None;
     }
+    // Ensure the buffer is at least the declared header length for the version.
+    // Ensure the buffer is at least the declared header length for the version.
+    // (The check above is redundant but kept for clarity.)
     let get32 = |o: usize| <[u8; 32]>::try_from(&buf[o..o + 32]).ok();
     let header = kovanica_state::spv::BlockHeader {
         id: BlockId::from_bytes(get32(0)?),

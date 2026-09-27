@@ -989,7 +989,7 @@ impl Node {
 
     /// Get the full authority stake set for an epoch (for light client caching).
     /// An epoch is typically 100k slots.
-    pub fn get_epoch_authority_set(&self, epoch: u64) -> Result<Vec<(AuthorityPublicKey, u64)>, NodeError> {
+    pub fn get_epoch_authority_set(&self, _epoch: u64) -> Result<Vec<(AuthorityPublicKey, u64)>, NodeError> {
         let ledger = self.ledger.as_ref().ok_or(NodeError::NotInitialized)?;
         let poa = ledger.poa_config().ok_or(NodeError::NotInitialized)?;
         let authorities = poa.authority_set.authorities().to_vec();

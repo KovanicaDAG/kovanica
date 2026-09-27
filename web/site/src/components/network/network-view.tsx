@@ -106,17 +106,10 @@ export function NetworkView() {
               sub={`tip ${shortId(h.tip)}`}
             />
             <StatCard
-              icon={Shield}
-              label="PoW"
-              value={b.pow ? "On" : "Off"}
-              sub={`k = ${b.k}`}
-              accent={b.pow ? "ok" : "muted"}
-            />
-            <StatCard
               icon={Globe}
               label="Network"
               value={h.network}
-              sub={`min fee ${(h.min_fee / ATOM).toFixed(4)} ${TOKEN}`}
+              sub={`k = ${b.k} · min fee ${(h.min_fee / ATOM).toFixed(4)} ${TOKEN}`}
             />
             <StatCard
               icon={Server}

@@ -60,7 +60,7 @@ export const Route = createRootRoute({
               ? "Kovanica Faucet"
               : "Kovanica Testnet";
     const description = isLanding
-      ? "Kovanica Protocol — a BlockDAG Layer-1 with GHOSTDAG consensus, hybrid PoW + VRF, native multi-asset UTXOs and privacy primitives. Testnet live."
+      ? "Kovanica Protocol — a BlockDAG Layer-1 with GHOSTDAG consensus, Proof-of-Authority, native multi-asset UTXOs and privacy primitives. Testnet live."
       : isMainnet
         ? "Kovanica Protocol mainnet — launching soon. Explore the BlockDAG, wallet and protocol on testnet meanwhile."
         : "Kovanica Protocol testnet — BlockDAG explorer, wallet, origins map and protocol tools for KVNC on kovanica-testnet.";

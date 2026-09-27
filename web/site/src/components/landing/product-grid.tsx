@@ -90,7 +90,7 @@ const PRODUCTS: {
     to: "/network",
     icon: Activity,
     title: "Network",
-    body: "Live head, peers, PoW, subsidy, finality and bootstrap seeds for the selected source.",
+    body: "Live head, peers, subsidy, finality and bootstrap seeds for the selected source.",
   },
   {
     to: "/roadmap",

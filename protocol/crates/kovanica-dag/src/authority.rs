@@ -42,7 +42,7 @@ pub const SLOT_DURATION_MS: u64 = 3000;
 /// On-chain Authority UTXO tag (RFC-POA §1): `KVA1` || authority_set_hash.
 pub const AUTHORITY_UTXO_TAG: &[u8; 4] = b"KVA1";
 
-/// An Ed25519 authority public key (same type as VRF/address keys).
+/// An Ed25519 authority public key (same type as address keys).
 pub type AuthorityPublicKey = VerifyingKey;
 
 /// Errors from authority-set construction, signature verification, and
@@ -117,7 +117,7 @@ impl AuthoritySet {
     /// total and every node agrees. It also subsumes the distinctness check,
     /// which becomes a neighbour comparison on the sorted vector.
     pub fn new(
-        mut authorities: Vec<AuthorityPublicKey>,
+        authorities: Vec<AuthorityPublicKey>,
         threshold: usize,
     ) -> Result<Self, AuthorityError> {
         Self::new_with_stakes(authorities, threshold, None)
@@ -130,7 +130,7 @@ impl AuthoritySet {
     /// assignment in SW-PoA mode. If `None`, classic PoA equal-weight round-robin
     /// is used.
     pub fn new_with_stakes(
-        mut authorities: Vec<AuthorityPublicKey>,
+        authorities: Vec<AuthorityPublicKey>,
         threshold: usize,
         stakes: Option<Vec<u64>>,
     ) -> Result<Self, AuthorityError> {
@@ -146,7 +146,7 @@ impl AuthoritySet {
             if stakes.len() != n {
                 return Err(AuthorityError::InvalidAuthorityCount(n));
             }
-            if stakes.iter().any(|&s| s == 0) {
+            if stakes.contains(&0) {
                 return Err(AuthorityError::InvalidAuthorityCount(n)); // Reuse for zero stake
             }
         }
@@ -419,7 +419,7 @@ impl AuthoritySet {
         }
         let mut current = leaves.to_vec();
         while current.len() > 1 {
-            let mut next = Vec::with_capacity((current.len() + 1) / 2);
+            let mut next = Vec::with_capacity(current.len().div_ceil(2));
             for i in (0..current.len()).step_by(2) {
                 let left = current[i];
                 let right = if i + 1 < current.len() { current[i + 1] } else { left };
@@ -446,7 +446,7 @@ impl AuthoritySet {
                 current[idx] // last odd leaf paired with itself
             };
             path.push(sibling);
-            let mut next = Vec::with_capacity((current.len() + 1) / 2);
+            let mut next = Vec::with_capacity(current.len().div_ceil(2));
             for i in (0..current.len()).step_by(2) {
                 let left = current[i];
                 let right = if i + 1 < current.len() { current[i + 1] } else { left };

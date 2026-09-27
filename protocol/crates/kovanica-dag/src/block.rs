@@ -68,17 +68,9 @@ impl fmt::Display for BlockId {
 
 /// A block: a vertex of the DAG.
 ///
-/// Consensus (GHOSTDAG) interprets `parents`, `work`, and `timestamp_ms`
-/// (the last two feed difficulty retargeting and its enforcement — see
-/// [`crate::difficulty`]); `nonce` is the field a miner varies to make the
-/// block's id meet its proof-of-work target (see [`crate::pow`]); `payload` is
-/// opaque bytes (transactions, in a full ledger) and only affects the id.
-///
-/// **VRF fields** (Stage 3): `vrf_public_key` identifies the block producer;
-/// `vrf_proof` and `vrf_output` constitute a verifiable random function
-/// evaluation over the block's parent tips, providing leader eligibility
-/// (the output determines if this producer was eligible to produce a block
-/// at this height) and a randomness beacon.
+/// Consensus (GHOSTDAG) interprets `parents`, `work`, and `timestamp_ms`.
+/// `payload` is opaque bytes (transactions, in a full ledger) and only affects
+/// the id.
 ///
 /// **Authority signature** (PoA): `authority_sig` is a 64-byte Ed25519 signature
 /// over the block's hash without the authority signature itself
@@ -99,10 +91,11 @@ pub struct Block {
     id: BlockId,
     /// Ids of the parent blocks this block references. Empty only for genesis.
     parents: Vec<BlockId>,
-    /// The block's own work/difficulty weight; contributes to blue work.
+    /// The block's own work weight; contributes to blue work.
+    /// Under PoA, pinned to [`crate::POA_NOMINAL_WORK`].
     work: u128,
-    /// The block's timestamp, in milliseconds. Used by difficulty retargeting
-    /// and, where enforced, must not precede any parent's timestamp.
+    /// The block's timestamp, in milliseconds. Must not precede any parent's
+    /// timestamp (monotone along every path).
     timestamp_ms: u64,
     /// Block nonce. Folded into the id, so changing it changes the hash. Not
     /// interpreted by GHOSTDAG; `0` for every PoA block (PoA producers never
@@ -122,9 +115,7 @@ impl Block {
     /// `timestamp_ms`, `nonce`, and `payload`.
     ///
     /// Parents are de-duplicated and sorted so the id is independent of the
-    /// order in which a miner happened to list them.
-    ///
-    /// VRF fields are initialized to `None` (legacy block without VRF).
+    /// order in which they were listed.
     pub fn new(
         mut parents: Vec<BlockId>,
         work: u128,
@@ -261,7 +252,7 @@ impl Block {
         self.timestamp_ms
     }
 
-    /// The proof-of-work nonce (see [`crate::pow`]).
+    /// The block's nonce field.
     pub fn nonce(&self) -> u64 {
         self.nonce
     }
@@ -284,15 +275,9 @@ impl Block {
     }
 
     /// Compute the BLAKE3 id from the block's current fields.
-    /// Used at creation time and when nonce changes (mining).
+    /// Used at creation time and when nonce changes.
     ///
-    /// The VRF fields are hashed **independently** (matching the v6+ snapshot
-    /// wire format): `has_vrf` flag, then if set `vrf_public_key`, then a
-    /// `proof` flag (present only when `vrf_proof` is Some), then an `output`
-    /// flag (present only when `vrf_output` is Some). This ensures that a block
-    /// with a proof but no output hashes identically to its v6 wire encoding
-    /// (proof_flag=1, output_flag=0).
-    ///
+    /// A reserved byte (always 0) preserves wire-format compatibility.
     /// The authority signature (PoA) is hashed as a flag byte (0 = absent,
     /// 1 = present + 64 bytes) followed by the 64-byte signature when present.
     fn compute_id(&self) -> BlockId {
@@ -304,9 +289,7 @@ impl Block {
         hasher.update(&self.work.to_le_bytes());
         hasher.update(&self.timestamp_ms.to_le_bytes());
         hasher.update(&self.nonce.to_le_bytes());
-        // RESERVED (was the VRF has_vrf flag). VRF is removed; the byte
-        // stays so block ids and the wire format are byte-identical to
-        // every pre-removal block that carried no VRF fields.
+        // Reserved byte (always 0) for wire-format compatibility.
         hasher.update(&[0u8]);
         // Authority signature (PoA): flag + 64 bytes when present.
         let has_auth = self.authority_sig.is_some();
@@ -332,9 +315,7 @@ impl Block {
         hasher.update(&self.work.to_le_bytes());
         hasher.update(&self.timestamp_ms.to_le_bytes());
         hasher.update(&self.nonce.to_le_bytes());
-        // RESERVED (was the VRF has_vrf flag). VRF is removed; the byte
-        // stays so block ids and the wire format are byte-identical to
-        // every pre-removal block that carried no VRF fields.
+        // Reserved byte (always 0) for wire-format compatibility.
         hasher.update(&[0u8]);
         // Authority signature flag is always 0 (excluded from the signed message).
         hasher.update(&[0u8]);
@@ -344,9 +325,8 @@ impl Block {
         BlockId(*hasher.finalize().as_bytes())
     }
 
-    /// Return a copy of this block with the nonce set to `nonce`. Used by the
-    /// miner ([`crate::pow::mine`]) to search nonces without rebuilding the rest
-    /// of the block. Recomputes the id since nonce is part of the hash.
+    /// Return a copy of this block with the nonce set to `nonce`.
+    /// Recomputes the id since nonce is part of the hash.
     pub fn with_nonce(&self, nonce: u64) -> Self {
         let mut block = Self {
             nonce,

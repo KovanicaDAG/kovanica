@@ -1,7 +1,7 @@
 # Hybrid PoW/PoS + VRF — Technical Design (Kovanica)
 
-**Status:** **SUPERSEDED — hybrid dropped entirely** (decided 2026-09-25, RFC-POA-Migration §0.7.1)  
-**Consensus impact:** n/a (superseded; retained as a historical design record)
+**Status:** **OBSOLETE — hybrid dropped entirely, PoW removal complete** (decided 2026-09-25, RFC-POA-Migration §0.7.1)  
+**Consensus impact:** n/a (obsolete; retained as a historical design record)
 
 > > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
 > > Proof-of-Work is being removed from the protocol. See

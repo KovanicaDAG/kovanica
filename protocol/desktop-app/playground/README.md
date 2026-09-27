@@ -59,3 +59,6 @@ Never enter the node. Client-side only (`KeyPair`, `keyring`). Standard flow: `P
 - Linux: binary + Tauri bundle done (GTK installed).
 - Windows: requires `mingw` / `cross` CI runner.
 - Alpine: `installer/linux/alpine/install.sh` verified (`bash -n`, musl target, builds from source if pre-built missing).
+
+---
+UPDATED: 2026-09-26 — desktop-alp build complete (binary 24M, Tauri bundle, 26 dead tests stubbed, SDK sync, commit e21303b). Deploy stage: ready for pm2/release server (not public endpoint; no fixture needed). Consensus: client-only / consensus-safe.

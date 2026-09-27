@@ -16,23 +16,18 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 > `kovanica-dag` / `kovanica-state`.
 >
 > > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
-> > Proof-of-Work is being removed from the protocol. See
-> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical). Items marked `[TARGET]`
-> > are ratified but not yet implemented; `[CURRENT]` items describe shipped code.
+> > Proof-of-Work has been removed from the protocol. See
+> > `protocol/docs/RFC-POA-Migration.md` §0 (canonical).
 > >
-> > `[TARGET]` PoW is **deleted**, not merely off by default: `Dag::set_proof_of_work`,
-> > `set_difficulty`, the `pow` and `difficulty` modules, and `KOVANICA_POW` all
-> > go away, and `KOVANICA_CONSENSUS=pow` is transitional only. PoA needs
+> > PoW is **deleted**: `Dag::set_proof_of_work`, `set_difficulty`, the `pow` and
+> > `difficulty` modules, and `KOVANICA_POW` are gone. PoA uses
 > > `KOVANICA_CONSENSUS`, `KOVANICA_AUTHORITIES`, `KOVANICA_AUTHORITY_THRESHOLD`,
-> > `KOVANICA_SLOT_DURATION`. `[CURRENT]` PoW is still in the tree and still
-> > reachable, so **do not write a `[TARGET]` claim as though it were shipped.**
+> > `KOVANICA_SLOT_DURATION`.
 > >
-> > **DECIDED 2026-09-25 — hybrid / staked-VRF admission is dropped entirely**
-> > (§0.7.1). PoA is the only admission path; the "PoA + staked-VRF secondary
-> > tier" option was considered and rejected. The stake registry retires with
-> > it. **RFC-005 vault/CSV and the treasury vaults are unaffected** (verified:
-> > `vault.rs` has zero stake references). A non-authority can never produce a
-> > block.
+> > **Hybrid / staked-VRF admission is dropped entirely** (§0.7.1).
+> > PoA is the only admission path. **RFC-005 vault/CSV and the treasury vaults
+> > are unaffected** (verified: `vault.rs` has zero stake references). A
+> > non-authority can never produce a block.
 > >
 > > `[OPEN]` — still not settled, do not implement on the strength of §0:
 > > **mainnet authority-set governance** — the rotation *mechanism* is settled
@@ -54,12 +49,12 @@ Guidance for AI assistants (and humans) working in the **Kovanica** monorepo.
 ## 1. Repository Layout
 
 - `protocol/` — Core consensus + ledger (Rust workspace). `crates/kovanica-dag`
-  (BlockDAG/GHOSTDAG/VRF), `crates/kovanica-state` (UTXO, stake registry),
+  (BlockDAG/GHOSTDAG/PoA), `crates/kovanica-state` (UTXO),
   `docs/` (RFCs, KVP, LEGIT-BOARD). **Consensus logic is authored here.**
 - `node/` — Thin packaging surface for the runnable node + explorer HTTP API
   (Rust workspace). Contains a single `kovanica-node-bin` crate that depends on
   the protocol crates via path deps and builds the `kovanica-node` binary.
-  Cargo.toml repo key is `KovanicaDAG/kovanica-node`. **The VPS builds from here.**
+  Cargo.toml repo key is `KovanicaDAG/kovanica`. **The VPS builds from here.**
 - `web/site/` — Explorer + wallet frontend. TanStack Start/Router, Vite, Nitro,
   Tailwind v4, Zustand, React Query, better-auth, **pglite** DB + migrations.
   (`web/` itself is just a wrapper; all commands run in `web/site/`.)
@@ -202,18 +197,10 @@ Deep detail + invariants: `protocol/AGENTS.md`. This monorepo-level summary:
   selection.
 - **Ledger**: UTXO, Ed25519 spend auth, per-asset conservation (KVP-102); per-block
   state incremental from selected parent + mergeset; finality pruning folds deltas
-  into children; stake registry bonds via `KVB1||vrf_pk` / `KVU1` tags, maturity 100.
-- **Hybrid admission** `[CURRENT]`, **`[TARGET]`-removed entirely**: PoW
-  (`H*work < 2^256`, retargeted) and staked-VRF over an epoch beacon; one
-  staked block per `(vrf_pk, selected_parent)`. **Both halves are being
-  removed** (RFC-POA-Migration §0.7.1, decided 2026-09-25) — the staked-VRF
-  half was not left to ride along with PoW. The stake registry
-  (`kovanica-state/src/stake.rs`) retires with it. Do not build on it, and do
-  not port it to a "secondary tier": that option was rejected.
-- **PoA admission** `[CURRENT]`: fixed authority set (`KVA1` UTXO), slot
+  into children.
+- **PoA admission** (only model): fixed authority set (`KVA1` UTXO), slot
   round-robin at `SLOT_DURATION_MS` (default 3000), Ed25519 authority signature
-  per block, `work` pinned to `POA_NOMINAL_WORK = 1`. `[TARGET]` PoA is the
-  *only* admission model once PoW and hybrid are removed.
+  per block, `work` pinned to `POA_NOMINAL_WORK = 1`.
 
 | RFC | Feature | Status |
 |-----|---------|--------|
@@ -223,7 +210,7 @@ Deep detail + invariants: `protocol/AGENTS.md`. This monorepo-level summary:
 | 004 | HTLC / Atomic swaps | main |
 | 005 | Vault / CSV | main |
 | 006 | Tokenomics (emission, cap, fee burn) | **live on testnet** (activation fork wiped balances) |
-| RFC-POA / KVP-201 | PoA-only consensus (authority set + slots) | **Draft**; §0 ratified, PoW removal `[TARGET]` |
+| RFC-POA / KVP-201 | PoA-only consensus (authority set + slots) | **Active**; PoW removal complete |
 
 ---
 
@@ -238,7 +225,6 @@ Deep detail + invariants: `protocol/AGENTS.md`. This monorepo-level summary:
 | `protocol/TESTNET-RFC006.md` | Current testnet economy + run env |
 | `web/site/DEPLOY.md` | VPS deploy canonical (seed env, systemd) |
 | `protocol/docs/TOKENOMICS.md` | RFC-006 full spec |
-| `protocol/crates/kovanica-state/src/stake.rs` | Multi-asset stake registry |
 
 ---
 
