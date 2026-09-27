@@ -173,7 +173,6 @@ fn authority_update_on_chain_and_spv_proof() {
         kovanica_state::spv::SpvPoAConfig {
             authority_set: set.clone(),
             slot_duration_ms: SLOT_MS,
-            sw_poa: false,
         },
     );
 
@@ -347,7 +346,6 @@ fn spv_sync_under_poa_reorg() {
         kovanica_state::spv::SpvPoAConfig {
             authority_set: set.clone(),
             slot_duration_ms: SLOT_MS,
-            sw_poa: false,
         },
     );
 
@@ -405,7 +403,6 @@ fn spv_sync_under_poa_reorg() {
         kovanica_state::spv::SpvPoAConfig {
             authority_set: set.clone(),
             slot_duration_ms: SLOT_MS,
-            sw_poa: false,
         },
     );
 

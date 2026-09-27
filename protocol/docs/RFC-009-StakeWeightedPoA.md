@@ -19,8 +19,16 @@ This document does two things:
 authority is admitted to produce a block, and the schedule is not committed
 on chain, so divergence is silent.
 **Reference implementation:** `crates/kovanica-dag/src/authority.rs`
-(`build_schedule`, `active_authority`, `schedule_period`, `total_stake`,
-`stake_merkle_root`, `stake_merkle_proof`)
+
+> **Option A is implemented.** The stake-weighted surface this document reports
+> has been deleted; the code now matches the ratified spec. See §2 and §12.
+> The symbols named below no longer exist and are listed only so the record
+> matches what was found: `new_with_stakes`, `build_schedule`, `gcd_u64`,
+> `active_authority`'s stake branch, `stakes`, `total_stake`, `schedule_period`,
+> `stake_of`, `stake_merkle_root`, `stake_merkle_proof`, `StakeMerkleProof`,
+> `StakeLeaf`, `MAX_SCHEDULE_PERIOD`, `SwPoAProof`, `SwPoAStakeProofRequired`, and
+> the `*_STAKE*` / `*_SHARE_BPS*` / `*_SCHEDULE_PERIOD` / `*_STAKED*` metric
+> series.
 
 > **Read §2 before anything else.** The framing of this document changed
 > during drafting. An earlier version described the stake-weighted path as a
@@ -95,10 +103,14 @@ and no format bump to catch it.
 
 ### Option A — delete the staked path (conforms to the ratified spec)
 
-`new_with_stakes` rejects any stake vector with a new
-`AuthorityError::StakesNotPermitted`; `from_bytes` treats a stake-bearing
-encoding as `MalformedEncoding`; `stakes()`, `total_stake()`'s stake branch,
-`stake_merkle_root`, `stake_merkle_proof` and the SW-PoA metrics are deleted.
+**Status: implemented.** `new_with_stakes` is gone; the only constructor is
+`AuthoritySet::new(authorities, threshold)`, which admits no stake vector.
+`from_bytes` requires an exact `16 + 32n` encoding, so a stake-suffixed
+encoding is `MalformedEncoding`. `stakes()`, `total_stake()`, `schedule_period()`,
+`stake_of()`, `stake_merkle_root`, `stake_merkle_proof`, `StakeMerkleProof`,
+`StakeLeaf`, `SwPoAProof` and the stake metric series are all deleted.
+`active_authority` is the single rule `authorities[slot % len]`, pinned by the
+new test `active_authority_matches_the_spec_rule`.
 
 - **Consensus impact: none for existing chains.** Classic PoA scheduling is
   untouched and byte-identical. The change only makes an already-invalid input
@@ -483,3 +495,4 @@ Option A it must read `0` forever.
 |---|---|
 | Draft 1 | Initial draft. Framed as a specification that shipped after its code. |
 | Draft 2 | **Corrected.** Found `SW-PoA-SPV-CONSENSUS.md` (canonical, ratified 2026-09-25) and `RFC-POA-Migration.md` §0.7.1, which both state stake weighting was deliberately removed. Reframed as a contradiction report plus an explicit Option A / Option B decision, with A recommended. Downgraded all code comments from "normative" to "proposed". |
+| Draft 3 | **Option A implemented.** The stake-weighted surface is deleted across `kovanica-dag`, `kovanica-state` (`spv.rs`), `kovanica-node` (`metrics.rs`, `node.rs`, `rpc.rs`) and `kovanica-ffi`. `active_authority` is now the only slot rule and the spec is pinned by `active_authority_matches_the_spec_rule`. §4 below is retained as the specification should Option B ever be taken; it is **not** implemented. |

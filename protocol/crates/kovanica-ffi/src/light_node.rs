@@ -935,22 +935,15 @@ pub fn verify_sw_poa_header(
     Err(invalid("SW-PoA verification removed"))
 }
 
-/// Fetch the stake merkle proof for a slot from the node.
-/// Returns the proof as a hex-encoded bincode blob.
-pub fn fetch_stake_proof(&self, slot: u64) -> Result<String, LightNodeError> {
-    let node = self.lock();
-    let proof = node.get_stake_proof(slot)?;
-    Ok(hex::encode(bincode::serialize(&proof).unwrap()))
-}
-
-/// Fetch the full authority stake set for an epoch.
-/// Returns lines of "pubkey_hex stake_atoms".
+/// Fetch the full authority set for an epoch.
+/// Returns lines of "pubkey_hex weight" (weight is always 1: PoA is
+/// equal-weight, KVP-201). See docs/RFC-009-StakeWeightedPoA.md.
 pub fn fetch_epoch_authority_set(&self, epoch: u64) -> Result<String, LightNodeError> {
     let node = self.lock();
     let set = node.get_epoch_authority_set(epoch)?;
     let mut out = Vec::new();
-    for (pk, stake) in set {
-        out.push(format!("{} {}", hex::encode(pk.as_bytes()), stake));
+    for (pk, weight) in set {
+        out.push(format!("{} {}", hex::encode(pk.as_bytes()), weight));
     }
     Ok(out.join("\n"))
 }

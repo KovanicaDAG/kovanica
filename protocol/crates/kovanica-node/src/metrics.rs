@@ -179,14 +179,6 @@ pub mod names {
     // from configuration.
     pub const POA_AUTHORITY_COUNT: &str = "kovanica_poa_authority_count";
     pub const POA_THRESHOLD: &str = "kovanica_poa_threshold";
-    pub const POA_SW_POA_ENABLED: &str = "kovanica_poa_sw_poa_enabled";
-    pub const POA_TOTAL_STAKE: &str = "kovanica_poa_total_stake";
-    /// Length of the SWRR slot-schedule table; 0 for classic (equal-weight) PoA.
-    pub const POA_SCHEDULE_PERIOD: &str = "kovanica_poa_schedule_period";
-    /// Per-authority stake, labelled `authority="<hex pubkey>"`.
-    pub const POA_AUTHORITY_STAKE: &str = "kovanica_poa_authority_stake";
-    /// Per-authority share of total stake in basis points, same label.
-    pub const POA_AUTHORITY_SHARE_BPS: &str = "kovanica_poa_authority_share_bps";
     /// Slots where the labelled authority was the scheduled signer.
     pub const POA_SLOTS_SCHEDULED_TOTAL: &str = "kovanica_poa_slots_scheduled_total";
     /// Slots where the labelled authority actually produced a block.
@@ -220,9 +212,6 @@ pub mod names {
     pub const SPV_TX_INCLUSION_VERIFIED_TOTAL: &str = "kovanica_spv_tx_inclusion_verified_total";
     pub const SPV_TX_INCLUSION_REJECTED_TOTAL: &str =
         "kovanica_spv_tx_inclusion_rejected_total";
-    /// SW-PoA stake-Merkle proofs checked against the header's stake root.
-    pub const SPV_STAKE_PROOFS_VERIFIED_TOTAL: &str = "kovanica_spv_stake_proofs_verified_total";
-    pub const SPV_STAKE_PROOFS_REJECTED_TOTAL: &str = "kovanica_spv_stake_proofs_rejected_total";
     /// Rejections by [`SpvError`] variant, labelled `reason="<variant>"`.
     pub const SPV_REJECTED_BY_REASON: &str = "kovanica_spv_rejected_by_reason";
 }
@@ -413,19 +402,6 @@ fn authority_label(key: &VerifyingKey) -> String {
     hex::encode(key.to_bytes())
 }
 
-/// One authority's share of total stake, in basis points (10_000 = 100%).
-///
-/// Split out as a pure function so the proportional arithmetic is testable
-/// without the process-global recorder. `total` is `u128` because stake sums
-/// are validated to fit `u64` but the ratio multiplies before dividing;
-/// `stake * 10_000` would overflow `u64` for a large single stake.
-fn poa_share_bps(stake: u64, total: u128) -> f64 {
-    if total == 0 {
-        return 0.0;
-    }
-    (stake as u128 * 10_000 / total) as f64
-}
-
 /// Surface the PoA authority set as gauges: shape of the set, whether SW-PoA
 /// is engaged, and each authority's stake and share.
 ///
@@ -435,26 +411,8 @@ fn poa_share_bps(stake: u64, total: u128) -> f64 {
 /// meaningful float encoding, and it is already available from `/api/network`
 /// as `authority_set.hash`.
 pub fn record_poa_authority_set(set: &AuthoritySet) {
-    let sw_poa = set.stakes().is_some();
     gauge!(names::POA_AUTHORITY_COUNT).set(set.len() as f64);
     gauge!(names::POA_THRESHOLD).set(set.threshold() as f64);
-    gauge!(names::POA_SW_POA_ENABLED).set(u8::from(sw_poa) as f64);
-    gauge!(names::POA_TOTAL_STAKE).set(set.total_stake() as f64);
-    // Classic PoA has no schedule table: report 0 rather than the key count,
-    // so a dashboard can distinguish "no table" from "one entry per slot".
-    gauge!(names::POA_SCHEDULE_PERIOD).set(set.schedule_period().unwrap_or(0) as f64);
-
-    if !sw_poa {
-        return;
-    }
-    let total = set.total_stake() as u128;
-    for key in set.authorities() {
-        let Some(stake) = set.stake_of(key) else { continue };
-        let owner = authority_label(key);
-        gauge!(names::POA_AUTHORITY_STAKE, "authority" => owner.clone()).set(stake as f64);
-        gauge!(names::POA_AUTHORITY_SHARE_BPS, "authority" => owner)
-            .set(poa_share_bps(stake, total));
-    }
 }
 
 /// Record that `slot` was scheduled to the given authority (PoA slot on-chain).
@@ -507,11 +465,9 @@ pub fn record_spv_header_verified(headers_tracked: usize, duration: Duration) {
 /// (`InvalidAuthoritySig`), which are completely different incidents.
 ///
 /// This touches only the header and per-reason counters. The
-/// authority-update and stake-proof counters are owned by
-/// [`record_spv_authority_update_applied`] and [`record_spv_stake_proof`],
-/// which are driven by the actual verification step. Folding a header
-/// rejection into them too would double-count: a header missing its stake
-/// proof is not a stake proof that failed to hash into the root.
+/// authority-update counter is owned by [`record_spv_authority_update`], which
+/// is driven by the actual verification step. Folding a header rejection into
+/// it too would double-count.
 pub fn record_spv_header_rejected(err: &SpvError) {
     counter!(names::SPV_HEADERS_REJECTED_TOTAL).increment(1);
     counter!(names::SPV_REJECTED_BY_REASON, "reason" => spv_error_reason(err)).increment(1);
@@ -569,19 +525,6 @@ pub fn record_spv_tx_inclusion(verified: bool) {
     counter!(series).increment(1);
 }
 
-/// Record an SW-PoA stake-Merkle proof check against the header's stake root.
-///
-/// `verified = false` means the proof did not hash into the committed stake
-/// root: either the stake was forged or the header is from a different set.
-pub fn record_spv_stake_proof(verified: bool) {
-    let series = if verified {
-        names::SPV_STAKE_PROOFS_VERIFIED_TOTAL
-    } else {
-        names::SPV_STAKE_PROOFS_REJECTED_TOTAL
-    };
-    counter!(series).increment(1);
-}
-
 /// Stable, low-cardinality label for an [`SpvError`] variant.
 ///
 /// Returns the Rust variant name. Every variant is a fixed compile-time string
@@ -599,7 +542,6 @@ fn spv_error_reason(err: &SpvError) -> &'static str {
         SpvError::PoANotEnabled => "PoANotEnabled",
         SpvError::InvalidAuthorityUpdate => "InvalidAuthorityUpdate",
         SpvError::UpdateNotInBlock => "UpdateNotInBlock",
-        SpvError::SwPoAStakeProofRequired => "SwPoAStakeProofRequired",
     }
 }
 
@@ -663,12 +605,11 @@ mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
 
-    /// A classic (equal-weight) PoA set of `n` authorities at `threshold`.
+    /// A PoA set of `n` authorities at `threshold`.
     ///
-    /// Seeds start at 200 so the keys are disjoint from the stake-weighted
-    /// helpers. That lets a test assert that classic PoA emits *no* series for
-    /// these specific authorities without racing the shared process-global
-    /// recorder that the stake-weighted tests also write to.
+    /// Seeds start at 200 so the keys are disjoint from the sets used by the
+    /// slot-accounting tests, letting those assert exact values on labelled
+    /// series without racing the shared process-global recorder.
     fn classic_set(n: u8, threshold: usize) -> AuthoritySet {
         let keys: Vec<VerifyingKey> = (200..200 + n)
             .map(|s| SigningKey::from_bytes(&[s; 32]).verifying_key())
@@ -676,18 +617,6 @@ mod tests {
         AuthoritySet::new(keys, threshold).expect("classic set")
     }
 
-    /// A stake-weighted set. `stakes` are paired with the supplied keys and
-    /// then sorted into canonical order with them, so index `i` of
-    /// `set.authorities()` pairs with `set.stakes()[i]` — which is what the
-    /// metrics under test read.
-    fn staked_set(stakes: &[u64], threshold: usize) -> Result<AuthoritySet, String> {
-        let sks: Vec<SigningKey> = (1..=stakes.len() as u8)
-            .map(|s| SigningKey::from_bytes(&[s; 32]))
-            .collect();
-        let keys = sks.iter().map(SigningKey::verifying_key).collect();
-        AuthoritySet::new_with_stakes(keys, threshold, Some(stakes.to_vec()))
-            .map_err(|e| e.to_string())
-    }
 
     #[test]
     fn records_and_renders_prometheus_payload() {
@@ -785,114 +714,28 @@ mod tests {
         for series in [
             names::POA_AUTHORITY_COUNT,
             names::POA_THRESHOLD,
-            names::POA_SW_POA_ENABLED,
-            names::POA_TOTAL_STAKE,
-            names::POA_SCHEDULE_PERIOD,
             names::POA_SLOT_DURATION_MS,
         ] {
             assert!(body.contains(series), "missing {series} in:\n{body}");
         }
-        // Equal-weight PoA must not emit per-authority stake series: there is
-        // no stake, so a "stake" gauge would be a fabricated number. Assert
-        // against these sets' own (disjoint-seed) keys so the shared recorder
-        // cannot make this order-dependent.
-        for key in set.authorities() {
-            let owner = authority_label(key);
-            assert!(
-                !body.contains(&format!("kovanica_poa_authority_stake{{authority=\"{owner}\"}}")),
-                "classic PoA emitted a stake series for {owner}:\n{body}"
-            );
-            assert!(
-                !body.contains(&format!("kovanica_poa_authority_share_bps{{authority=\"{owner}\"}}")),
-                "classic PoA emitted a share series for {owner}:\n{body}"
-            );
-        }
-        // Shape facts are exact here, from the set rather than the shared
-        // gauges (which a concurrently-running stake-weighted test overwrites).
-        assert!(!set.stakes().is_some(), "classic set has no stakes");
-        assert_eq!(set.schedule_period(), None, "classic set has no schedule");
-        assert_eq!(set.total_stake(), 3, "equal weight counts one per key");
-    }
-
-    #[test]
-    fn poa_share_bps_is_proportional_and_never_exceeds_one_hundred_percent() {
-        // 70/20/10
-        assert_eq!(poa_share_bps(70, 100), 7000.0);
-        assert_eq!(poa_share_bps(20, 100), 2000.0);
-        assert_eq!(poa_share_bps(10, 100), 1000.0);
-        // Sole authority owns 100%.
-        assert_eq!(poa_share_bps(5, 5), 10_000.0);
-        // A stake of 0 is 0%, not a divide-by-zero.
-        assert_eq!(poa_share_bps(0, 100), 0.0);
-        assert_eq!(poa_share_bps(1, 0), 0.0);
-        // A stake that would overflow u64 when multiplied still converts.
-        // MAX as u64 * 10_000 needs 78 bits, so the u128 ratio is required.
-        assert_eq!(poa_share_bps(u64::MAX, u128::from(u64::MAX)), 10_000.0);
-    }
-
-    #[test]
-    fn surfaces_sw_poa_stake_and_share_per_authority() {
-        init_metrics("127.0.0.1:39094").expect("metrics init");
-
-        let set = staked_set(&[70, 20, 10], 2).expect("staked set");
-        assert_eq!(set.total_stake(), 100);
-        assert_eq!(set.schedule_period(), Some(10), "gcd(70,20,10) = 10");
-        record_poa_authority_set(&set);
-
-        let body = render_prometheus();
-        for series in [
-            names::POA_TOTAL_STAKE,
-            names::POA_SCHEDULE_PERIOD,
-            names::POA_SW_POA_ENABLED,
-            names::POA_AUTHORITY_COUNT,
-        ] {
-            assert!(body.contains(series), "missing {series} in:\n{body}");
-        }
-        // Per-authority series are labelled by key, and this set's keys are
-        // disjoint from the classic set's, so values are stable under
-        // concurrent tests: each label must carry that authority's own stake
-        // and its proportional share.
-        let mut shares: Vec<f64> = set
-            .authorities()
-            .iter()
-            .map(|k| {
-                let stake = set.stake_of(k).expect("staked authority");
-                let owner = authority_label(k);
-                let share = gauge_value(&body, names::POA_AUTHORITY_SHARE_BPS, &owner);
-                assert_eq!(
-                    gauge_value(&body, names::POA_AUTHORITY_STAKE, &owner),
-                    stake as f64,
-                    "stake gauge disagrees with the set for {owner}"
-                );
-                assert_eq!(share, poa_share_bps(stake, 100), "share for {owner}");
-                share
-            })
-            .collect();
-        shares.sort_by(|a, b| a.partial_cmp(b).expect("finite bps"));
-        assert_eq!(
-            shares,
-            vec![1000.0, 2000.0, 7000.0],
-            "stake shares must be proportional in basis points"
+        // PoA is equal-weight (KVP-201), so per-authority stake series must
+        // not exist at all: a "stake" gauge would be a fabricated number.
+        // See docs/RFC-009-StakeWeightedPoA.md.
+        assert!(
+            !body.contains("poa_authority_stake"),
+            "stake series must not exist under equal-weight PoA:\n{body}"
         );
-    }
-
-    /// Read `name{authority="<owner>"}` out of a rendered Prometheus payload.
-    /// Gauges are unlabelled or keyed by authority; this keeps the assertions
-    /// above readable and fails loudly on a malformed payload.
-    fn gauge_value(body: &str, name: &str, owner: &str) -> f64 {
-        let prefix = format!("{name}{{authority=\"{owner}\"}}");
-        let value = body
-            .lines()
-            .find_map(|l| l.strip_prefix(&prefix))
-            .unwrap_or_else(|| panic!("missing {prefix} in:\n{body}"));
-        value.trim().parse().unwrap_or_else(|e| panic!("{prefix}: {e}"))
+        assert!(
+            !body.contains("poa_authority_share_bps"),
+            "share series must not exist under equal-weight PoA:\n{body}"
+        );
     }
 
     #[test]
     fn records_poa_slot_scheduled_produced_and_missed_per_authority() {
         init_metrics("127.0.0.1:39095").expect("metrics init");
 
-        let set = staked_set(&[70, 20, 10], 2).expect("staked set");
+        let set = classic_set(3, 2);
         let owner = set.authorities()[0];
         record_poa_slot_scheduled(&owner);
         record_poa_slot_produced(&owner);
@@ -933,14 +776,12 @@ mod tests {
         record_spv_header_rejected(&SpvError::PrevHashMismatch);
         record_spv_header_rejected(&SpvError::InvalidAuthoritySig);
         record_spv_header_rejected(&SpvError::InvalidAuthorityUpdate);
-        record_spv_header_rejected(&SpvError::SwPoAStakeProofRequired);
         set_spv_tip(500, 1_000_000, 12345, 1_060_000);
         record_spv_merkle_proof(true);
         record_spv_merkle_proof(false);
         record_spv_tx_inclusion(true);
         record_spv_authority_update(true);
         record_spv_authority_update(false);
-        record_spv_stake_proof(false);
 
         let body = render_prometheus();
         for series in [
@@ -956,12 +797,11 @@ mod tests {
             names::SPV_MERKLE_PROOFS_VERIFIED_TOTAL,
             names::SPV_MERKLE_PROOFS_REJECTED_TOTAL,
             names::SPV_TX_INCLUSION_VERIFIED_TOTAL,
-            names::SPV_STAKE_PROOFS_REJECTED_TOTAL,
             names::SPV_REJECTED_BY_REASON,
         ] {
             assert!(body.contains(series), "missing {series} in:\n{body}");
         }
-        assert!(body.contains("kovanica_spv_headers_rejected_total 5"), "{body}");
+        assert!(body.contains("kovanica_spv_headers_rejected_total 4"), "{body}");
         assert!(
             body.contains("kovanica_spv_rejected_by_reason{reason=\"PrevHashMismatch\"} 2"),
             "{body}"
@@ -971,18 +811,14 @@ mod tests {
             "{body}"
         );
         // Each dedicated counter is owned by exactly one verification step, so
-        // a header rejection never inflates it. One applied + one rejected
-        // update, one rejected stake proof — not two.
+        // a header rejection never inflates it: one applied + one rejected
+        // update, not three.
         assert!(
             body.contains("kovanica_spv_authority_updates_total 1"),
             "{body}"
         );
         assert!(
             body.contains("kovanica_spv_authority_updates_rejected_total 1"),
-            "{body}"
-        );
-        assert!(
-            body.contains("kovanica_spv_stake_proofs_rejected_total 1"),
             "{body}"
         );
         // 60s of wall clock between the tip timestamp and now.
@@ -1019,7 +855,6 @@ mod tests {
             SpvError::PoANotEnabled,
             SpvError::InvalidAuthorityUpdate,
             SpvError::UpdateNotInBlock,
-            SpvError::SwPoAStakeProofRequired,
         ];
         let mut seen: Vec<&str> = all.iter().map(spv_error_reason).collect();
         seen.sort_unstable();

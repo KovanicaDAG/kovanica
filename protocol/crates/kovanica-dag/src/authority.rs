@@ -42,24 +42,6 @@ pub const SLOT_DURATION_MS: u64 = 3000;
 /// On-chain Authority UTXO tag (RFC-POA §1): `KVA1` || authority_set_hash.
 pub const AUTHORITY_UTXO_TAG: &[u8; 4] = b"KVA1";
 
-/// Upper bound on the length of the precomputed stake-weighted slot schedule.
-///
-/// **Provisional.** The ratified canonical spec (docs/SW-PoA-SPV-CONSENSUS.md,
-/// KVP-201) has no stake-weighted path, so this bound only matters if
-/// docs/RFC-009-StakeWeightedPoA.md is accepted. It would become a consensus
-/// constant at that point.
-///
-/// The schedule is one table entry per slot in a full weighting period, so a
-/// pathological weight vector (large co-prime stakes such as `[65537, 65539]`,
-/// whose smallest period is 131_076) would otherwise let an operator — or an
-/// attacker minting a `KVA1` Authority UTXO — force every node to allocate an
-/// arbitrarily large table and to grow it on every authority-set update.
-///
-/// Sets whose gcd-normalised period exceeds this are **rejected at
-/// construction** rather than truncated: a silently shortened period would
-/// quietly change the slot→authority mapping, which would be a consensus rule.
-pub const MAX_SCHEDULE_PERIOD: u64 = 65_536;
-
 /// An Ed25519 authority public key (same type as address keys).
 pub type AuthorityPublicKey = VerifyingKey;
 
@@ -91,147 +73,16 @@ pub enum AuthorityError {
     MalformedEncoding,
     #[error("PoA admission is not enabled on this node")]
     PoANotEnabled,
-    #[error("total stake overflows u64")]
-    StakeOverflow,
-    #[error(
-        "stake weights imply a scheduling period of {period} slots, above the \
-         MAX_SCHEDULE_PERIOD of {max}; express stake in units that share a \
-         common factor"
-    )]
-    SchedulePeriodTooLarge { period: u64, max: u64 },
-}
-
-/// Build the precomputed SW-PoA slot schedule for `stakes`.
-///
-/// Returns one authority index per slot of a full weighting period, laid out
-/// by **smooth weighted round-robin** (SWRR). SWRR is used rather than a
-/// cumulative-interval walk because it satisfies both properties a consensus
-/// scheduler needs at once:
-///
-/// 1. **Exact proportionality.** Over one period of `sum(weights)` slots,
-///    authority `i` is selected exactly `weights[i]` times. This is the
-///    defining property of SWRR: each step adds `w[i]` to every score, hands
-///    the slot to the highest score, and charges that winner the full period
-///    `total`. An authority therefore wins again only after its score has had
-///    to climb back past its rivals' — which is what makes the count over a
-///    full period land exactly on its weight.
-/// 2. **Near-uniform gaps.** The gap between two consecutive selections of
-///    `i` stays within 2 slots of the ideal `total / w[i]`, so no authority is
-///    starved for long and none is over-served. A cumulative-interval walk
-///    instead gives a 70%-stake authority 70 *consecutive* slots, which is a
-///    liveness hazard: that one authority being down would stall the chain for
-///    70 slots even though the others were healthy.
-///
-/// Stakes are gcd-normalised first so the table is as short as the *ratios*
-/// allow. Stakes are usually quoted in KVNC atoms, so `[70·10⁸, 20·10⁸,
-/// 10·10⁸]` normalises to `[7, 2, 1]` and a 10-slot table instead of a
-/// 100_000_000-slot one.
-///
-/// Smooth weighted round-robin (SWRR) schedule over gcd-normalised stakes.
-///
-/// **This is a proposed rule, not a ratified one.** The canonical spec
-/// (docs/SW-PoA-SPV-CONSENSUS.md, KVP-201, ratified 2026-09-25) states the
-/// scheduled authority is `authorities[slot % n]` and that there is
-/// "no permissionless path and no stake-weighted path" — stake weighting was
-/// removed on purpose (§0.7.1 of docs/RFC-POA-Migration.md). This function
-/// implements the alternative that docs/RFC-009-StakeWeightedPoA.md puts
-/// forward for maintainer decision. It is reachable today only from
-/// `from_bytes`, i.e. from on-chain `KVA1` data carrying a stake vector.
-///
-/// The returned table has length `period`; `table[slot % period]` is the index
-/// of the authority that owns `slot`.
-///
-/// Determinism requirements, all of which would become consensus-critical if
-/// this path is ratified, because two nodes disagreeing here would reject each
-/// other's blocks:
-///
-/// 1. Weights are the stakes divided by their gcd, so `[70, 20, 10]` and
-///    `[7, 2, 1]` yield the same 10-slot table. The schedule depends on stake
-///    *ratios* only, never on the unit the operator denominated them in.
-/// 2. The stake sum must fit `u64`; a vector whose sum overflows is rejected
-///    rather than wrapped.
-/// 3. `period` is bounded by [`MAX_SCHEDULE_PERIOD`] and oversized sets are
-///    **rejected, never truncated** — a shortened period would silently change
-///    the slot→authority mapping.
-/// 4. Ties on the round's highest score resolve to the **highest index**
-///    (see the `max_by_key` note below). Arbitrary, but must be identical
-///    everywhere.
-///
-/// `cur` is `i64` rather than `u64` on purpose: a score is charged `total`
-/// when its authority wins, so scores run negative and an unsigned type would
-/// underflow.
-fn build_schedule(stakes: &[u64]) -> Result<Vec<u16>, AuthorityError> {
-    let n = stakes.len();
-    if n == 0 {
-        return Ok(Vec::new());
-    }
-    debug_assert!(
-        n <= usize::from(u16::MAX),
-        "authority count is bounded by MAX_AUTHORITIES"
-    );
-
-    // Reject a stake sum that cannot be represented, rather than letting a
-    // later `.sum()` wrap or panic in debug builds.
-    let _total = stakes
-        .iter()
-        .try_fold(0u64, |acc, &s| acc.checked_add(s))
-        .ok_or(AuthorityError::StakeOverflow)?;
-
-    // Minimal integer weights: divide out the common factor so the period is
-    // as short as the stake *ratios* permit.
-    let gcd = stakes
-        .iter()
-        .fold(0u64, |acc, &s| gcd_u64(acc, s));
-    if gcd == 0 {
-        return Err(AuthorityError::StakeOverflow);
-    }
-    let weights: Vec<u64> = stakes.iter().map(|&s| s / gcd).collect();
-    let period: u64 = weights.iter().sum();
-    if period > MAX_SCHEDULE_PERIOD {
-        return Err(AuthorityError::SchedulePeriodTooLarge {
-            period,
-            max: MAX_SCHEDULE_PERIOD,
-        });
-    }
-
-    let total = i64::try_from(period).map_err(|_| AuthorityError::StakeOverflow)?;
-    let mut cur = vec![0i64; n];
-    let mut schedule = Vec::with_capacity(period as usize);
-    for _ in 0..period {
-        for (slot_score, &w) in cur.iter_mut().zip(&weights) {
-            *slot_score += w as i64;
-        }
-        // `max_by_key` yields the *last* maximum, so equal scores resolve to
-        // the highest index.
-        //
-        // NOTE: this tie-break is arbitrary, and the ratified canonical spec
-        // (docs/SW-PoA-SPV-CONSENSUS.md, KVP-201) says there is no
-        // stake-weighted path at all, so this branch should not be reachable
-        // in a conformant set. It is documented here only because the branch
-        // exists and the behaviour must be deterministic *if* it is ever
-        // reached. See docs/RFC-009-StakeWeightedPoA.md, which proposes either
-        // deleting this path or amending the ratified decision — and must not
-        // be read as already canonical.
-        let winner = cur
-            .iter()
-            .enumerate()
-            .max_by_key(|&(_, &score)| score)
-            .map(|(i, _)| i)
-            .expect("authority set is non-empty");
-        cur[winner] -= total;
-        schedule.push(winner as u16);
-    }
-    Ok(schedule)
-}
-
-/// Greatest common divisor of two `u64`s, Euclid's algorithm.
-fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
-    while b != 0 {
-        let t = a % b;
-        a = b;
-        b = t;
-    }
-    a
+    /// Stake weights were supplied. The ratified canonical spec
+    /// (docs/SW-PoA-SPV-CONSENSUS.md, KVP-201) has **no** stake-weighted
+    /// path: §0.7.1 of docs/RFC-POA-Migration.md deliberately removed it and
+    /// declared the deletion a one-way door. This variant exists so a
+    /// stake-bearing `KVA1` Authority UTXO is **rejected** rather than
+    /// silently activating an unspecified slot rule.
+    ///
+    /// See docs/RFC-009-StakeWeightedPoA.md.
+    #[error("stake weights are not permitted: the authority set is equal-weight (KVP-201)")]
+    StakesNotPermitted,
 }
 
 /// A fixed set of Ed25519 authorities with a threshold for updates.
@@ -244,16 +95,6 @@ pub struct AuthoritySet {
     authorities: Vec<AuthorityPublicKey>,
     threshold: usize,
     hash: [u8; 32],
-    /// Stake weights for SW-PoA (optional, None = classic PoA equal weight)
-    /// Each entry corresponds to the authority at the same index in `authorities`.
-    stakes: Option<Vec<u64>>,
-    /// Precomputed SW-PoA slot schedule, one authority index per slot of a
-    /// full weighting period. `None` for classic PoA.
-    ///
-    /// Derived purely from `stakes`, so it never affects
-    /// [`AuthoritySet::hash`]; it is a cache of the slot→authority rule, not
-    /// part of the set's identity.
-    schedule: Option<Vec<u16>>,
 }
 
 impl AuthoritySet {
@@ -286,20 +127,6 @@ impl AuthoritySet {
         authorities: Vec<AuthorityPublicKey>,
         threshold: usize,
     ) -> Result<Self, AuthorityError> {
-        Self::new_with_stakes(authorities, threshold, None)
-    }
-
-    /// Build a set with optional stake weights for SW-PoA.
-    ///
-    /// If `stakes` is provided, it must have the same length as `authorities`
-    /// and contain non-zero values. The stakes are used for weighted slot
-    /// assignment in SW-PoA mode. If `None`, classic PoA equal-weight round-robin
-    /// is used.
-    pub fn new_with_stakes(
-        authorities: Vec<AuthorityPublicKey>,
-        threshold: usize,
-        stakes: Option<Vec<u64>>,
-    ) -> Result<Self, AuthorityError> {
         let n = authorities.len();
         if !(MIN_AUTHORITIES..=MAX_AUTHORITIES).contains(&n) {
             return Err(AuthorityError::InvalidAuthorityCount(n));
@@ -307,44 +134,18 @@ impl AuthoritySet {
         if !(MIN_THRESHOLD..=n).contains(&threshold) {
             return Err(AuthorityError::InvalidThreshold(threshold, n));
         }
-        // Validate stakes if provided
-        if let Some(ref stakes) = stakes {
-            if stakes.len() != n {
-                return Err(AuthorityError::InvalidAuthorityCount(n));
-            }
-            if stakes.contains(&0) {
-                return Err(AuthorityError::InvalidAuthorityCount(n)); // Reuse for zero stake
-            }
-        }
         // Canonical order: ascending 32-byte encoding.
-        // We need to sort authorities and stakes together
-        let mut pairs: Vec<(AuthorityPublicKey, Option<u64>)> = if let Some(stakes) = stakes {
-            authorities.into_iter().zip(stakes.into_iter().map(Some)).collect()
-        } else {
-            authorities.into_iter().map(|pk| (pk, None)).collect()
-        };
-        pairs.sort_unstable_by_key(|(pk, _)| pk.to_bytes());
+        let mut authorities = authorities;
+        authorities.sort_unstable_by_key(|pk| pk.to_bytes());
         // Distinct keys: equal encodings are now necessarily neighbours.
-        if pairs.windows(2).any(|w| w[0].0 == w[1].0) {
+        if authorities.windows(2).any(|w| w[0] == w[1]) {
             return Err(AuthorityError::DuplicateAuthority);
         }
-        let (authorities, stakes): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
-        let stakes_opt = if stakes.iter().all(|s| s.is_some()) {
-            Some(stakes.into_iter().map(|s| s.unwrap()).collect())
-        } else {
-            None
-        };
-        let hash = blake3::hash(&Self::canonical_bytes_of(&authorities, threshold, stakes_opt.as_deref()));
-        let schedule = match stakes_opt.as_deref() {
-            Some(stakes) => Some(build_schedule(stakes)?),
-            None => None,
-        };
+        let hash = blake3::hash(&Self::canonical_bytes_of(&authorities, threshold));
         Ok(Self {
             authorities,
             threshold,
             hash: *hash.as_bytes(),
-            stakes: stakes_opt,
-            schedule,
         })
     }
 
@@ -370,39 +171,6 @@ impl AuthoritySet {
         self.threshold
     }
 
-    /// Get stake weights for SW-PoA (None = classic PoA equal weight).
-    pub fn stakes(&self) -> Option<&[u64]> {
-        self.stakes.as_deref()
-    }
-
-    /// Total stake across all authorities.
-    ///
-    /// Saturating rather than `sum()`: construction rejects a stake vector
-    /// whose total overflows ([`AuthorityError::StakeOverflow`]), so this can
-    /// only saturate on a set built before that check existed, and a saturated
-    /// total is still the right answer for a share denominator.
-    pub fn total_stake(&self) -> u64 {
-        self.stakes.as_ref().map_or(self.authorities.len() as u64, |s| {
-            s.iter().fold(0u64, |acc, &v| acc.saturating_add(v))
-        })
-    }
-
-    /// Length in slots of one full SW-PoA weighting period, or `None` for
-    /// classic PoA.
-    ///
-    /// The schedule repeats every `period` slots, so `period` is also the
-    /// granularity at which a stake rebalance takes effect: with a 10-slot
-    /// period a weight change moves the next slot's owner.
-    pub fn schedule_period(&self) -> Option<u64> {
-        self.schedule.as_ref().map(|s| s.len() as u64)
-    }
-
-    /// The stake of `pk`, or `None` for classic PoA / unknown key.
-    pub fn stake_of(&self, pk: &AuthorityPublicKey) -> Option<u64> {
-        let idx = self.authorities.iter().position(|k| k == pk)?;
-        self.stakes.as_ref().map(|s| s[idx])
-    }
-
     /// The set's identity: BLAKE3 of the canonical encoding. This is what the
     /// on-chain `KVA1` Authority UTXO commits to.
     pub fn hash(&self) -> [u8; 32] {
@@ -411,18 +179,18 @@ impl AuthoritySet {
 
     /// The authority scheduled to produce the block for `slot`.
     ///
-    /// - Classic PoA (no stakes): `authorities[slot % len]` — deterministic round-robin.
-    /// - SW-PoA (with stakes): the precomputed smooth-weighted schedule,
-    ///   `authorities[schedule[slot % period]]`, which is proportional to
-    ///   stake over each full period and never holds one authority for two
-    ///   consecutive slots.
+    /// This is `authorities[slot % len]` over the canonical (sorted) key
+    /// order — the rule fixed by KVP-201 and by the ratified canonical spec
+    /// docs/SW-PoA-SPV-CONSENSUS.md. It is the **only** slot rule; there is no
+    /// stake-weighted alternative, because §0.7.1 of
+    /// docs/RFC-POA-Migration.md removed that path deliberately.
+    ///
+    /// docs/RFC-009-StakeWeightedPoA.md records a spec/code contradiction
+    /// found against a since-deleted stake branch, and documents the
+    /// smooth-weighted-round-robin rule should stake weighting ever be
+    /// re-admitted. Do not reintroduce weighting here without it.
     pub fn active_authority(&self, slot: u64) -> &AuthorityPublicKey {
-        if let Some(schedule) = &self.schedule {
-            &self.authorities[usize::from(schedule[slot as usize % schedule.len()])]
-        } else {
-            // Classic PoA: simple round-robin
-            &self.authorities[slot as usize % self.authorities.len()]
-        }
+        &self.authorities[slot as usize % self.authorities.len()]
     }
 
     /// Verify a 64-byte Ed25519 `sig` over `message` against the authority
@@ -480,25 +248,40 @@ impl AuthoritySet {
     }
 
     /// Canonical byte encoding: `threshold (u64 LE) || count (u64 LE) ||
-    /// pk_1 (32) || … || pk_n (32) || [stake_1 (u64 LE) || … || stake_n (u64 LE)]`.
-    /// The hash is BLAKE3 of exactly this.
+    /// pk_1 (32) || … || pk_n (32)`. The hash is BLAKE3 of exactly this.
     pub fn to_bytes(&self) -> Vec<u8> {
-        Self::canonical_bytes_of(&self.authorities, self.threshold, self.stakes.as_deref())
+        Self::canonical_bytes_of(&self.authorities, self.threshold)
     }
 
     /// Decode a set from its canonical byte encoding.
+    ///
+    /// A trailing stake vector (`… || stake_1 (u64 LE) || …`) is **rejected**
+    /// as [`AuthorityError::MalformedEncoding`]. Such an encoding can only
+    /// come from a `KVA1` Authority UTXO minted before stake weighting was
+    /// removed, and accepting it would activate an unspecified slot rule.
+    /// See docs/RFC-009-StakeWeightedPoA.md.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, AuthorityError> {
         if bytes.len() < 16 {
             return Err(AuthorityError::MalformedEncoding);
         }
         let threshold = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
         let count = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
-        let expected_len = 16 + count * 32;
-        let has_stakes = bytes.len() > expected_len;
-        if has_stakes && bytes.len() != expected_len + count * 8 {
-            return Err(AuthorityError::MalformedEncoding);
-        }
-        if !has_stakes && bytes.len() != expected_len {
+        // Exact length only: no stake suffix, no trailing slack.
+        //
+        // `count` is attacker-controlled: a `KVA2` AuthorityUpdateTx on chain
+        // carries the raw bytes of the new set, so any peer chooses it. The
+        // arithmetic is therefore checked. Unchecked, `count = 2^59` wraps
+        // `16 + count * 32` back around to 16, so a 16-byte blob passes this
+        // length test and the `with_capacity` below then aborts the process
+        // with "capacity overflow" — a remote abort from a block. With the
+        // checked form, any `count` that gets this far satisfies
+        // `bytes.len() == 16 + 32 * count` without wrapping, hence
+        // `count <= (bytes.len() - 16) / 32`, and the allocation is bounded
+        // by the input size rather than amplifying it.
+        let expected_len = 16usize
+            .checked_add(count.checked_mul(32).ok_or(AuthorityError::MalformedEncoding)?)
+            .ok_or(AuthorityError::MalformedEncoding)?;
+        if bytes.len() != expected_len {
             return Err(AuthorityError::MalformedEncoding);
         }
         let mut authorities = Vec::with_capacity(count);
@@ -510,141 +293,17 @@ impl AuthoritySet {
                 .map_err(|_| AuthorityError::MalformedEncoding)?;
             authorities.push(pk);
         }
-        let stakes = if has_stakes {
-            let mut stakes = Vec::with_capacity(count);
-            let stake_start = expected_len;
-            for i in 0..count {
-                let stake = u64::from_le_bytes(
-                    bytes[stake_start + i * 8..stake_start + (i + 1) * 8]
-                        .try_into()
-                        .map_err(|_| AuthorityError::MalformedEncoding)?
-                );
-                stakes.push(stake);
-            }
-            Some(stakes)
-        } else {
-            None
-        };
-        Self::new_with_stakes(authorities, threshold, stakes)
+        Self::new(authorities, threshold)
     }
 
-    fn canonical_bytes_of(
-        authorities: &[AuthorityPublicKey],
-        threshold: usize,
-        stakes: Option<&[u64]>,
-    ) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(16 + 32 * authorities.len() + stakes.map(|s| s.len() * 8).unwrap_or(0));
+    fn canonical_bytes_of(authorities: &[AuthorityPublicKey], threshold: usize) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(16 + 32 * authorities.len());
         buf.extend_from_slice(&(threshold as u64).to_le_bytes());
         buf.extend_from_slice(&(authorities.len() as u64).to_le_bytes());
         for pk in authorities {
             buf.extend_from_slice(pk.as_bytes());
         }
-        if let Some(stakes) = stakes {
-            for stake in stakes {
-                buf.extend_from_slice(&stake.to_le_bytes());
-            }
-        }
         buf
-    }
-    
-    /// Build a merkle tree of (pubkey -> stake) for SPV stake proofs.
-    /// Returns the merkle root (32 bytes).
-    pub fn stake_merkle_root(&self) -> Option<[u8; 32]> {
-        if let Some(stakes) = &self.stakes {
-            let leaves: Vec<[u8; 32]> = self
-                .authorities
-                .iter()
-                .zip(stakes.iter())
-                .map(|(pk, stake)| {
-                    let mut hasher = blake3::Hasher::new();
-                    hasher.update(pk.as_bytes());
-                    hasher.update(&stake.to_le_bytes());
-                    *hasher.finalize().as_bytes()
-                })
-                .collect();
-            Some(Self::merkle_root(&leaves))
-        } else {
-            None
-        }
-    }
-    
-    /// Generate a merkle proof for a specific authority's stake.
-    /// Returns None if no stakes or authority not found.
-    pub fn stake_merkle_proof(&self, authority_pubkey: &AuthorityPublicKey) -> Option<StakeMerkleProof> {
-        let stakes = self.stakes.as_ref()?;
-        let idx = self.authorities.iter().position(|pk| pk == authority_pubkey)?;
-        
-        let leaves: Vec<[u8; 32]> = self
-            .authorities
-            .iter()
-            .zip(stakes.iter())
-            .map(|(pk, stake)| {
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(pk.as_bytes());
-                hasher.update(&stake.to_le_bytes());
-                *hasher.finalize().as_bytes()
-            })
-            .collect();
-        
-        let path = Self::merkle_path(&leaves, idx);
-        Some(StakeMerkleProof {
-            leaf: StakeLeaf {
-                authority_pubkey: authority_pubkey.to_bytes(),
-                stake: stakes[idx],
-                vault_id: 0, // TODO: link to KVP-105 vault
-            },
-            path,
-            index: idx,
-        })
-    }
-    
-    /// Compute merkle root from leaves.
-    fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
-        if leaves.is_empty() {
-            return [0u8; 32];
-        }
-        let mut current = leaves.to_vec();
-        while current.len() > 1 {
-            let mut next = Vec::with_capacity(current.len().div_ceil(2));
-            for i in (0..current.len()).step_by(2) {
-                let left = current[i];
-                let right = if i + 1 < current.len() { current[i + 1] } else { left };
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(&left);
-                hasher.update(&right);
-                next.push(*hasher.finalize().as_bytes());
-            }
-            current = next;
-        }
-        current[0]
-    }
-    
-    /// Compute merkle path for a leaf at index.
-    fn merkle_path(leaves: &[[u8; 32]], index: usize) -> Vec<[u8; 32]> {
-        let mut path = Vec::new();
-        let mut current = leaves.to_vec();
-        let mut idx = index;
-        while current.len() > 1 {
-            let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
-            let sibling = if sibling_idx < current.len() {
-                current[sibling_idx]
-            } else {
-                current[idx] // last odd leaf paired with itself
-            };
-            path.push(sibling);
-            let mut next = Vec::with_capacity(current.len().div_ceil(2));
-            for i in (0..current.len()).step_by(2) {
-                let left = current[i];
-                let right = if i + 1 < current.len() { current[i + 1] } else { left };
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(&left);
-                hasher.update(&right);
-                next.push(*hasher.finalize().as_bytes());
-            }
-            current = next;
-            idx /= 2;
-        }
-        path
     }
 }
 
@@ -657,42 +316,6 @@ impl fmt::Display for AuthoritySet {
             self.threshold,
             hex::encode(&self.hash[..8])
         )
-    }
-}
-
-/// Merkle proof for an authority's stake weight (SW-PoA SPV).
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct StakeMerkleProof {
-    pub leaf: StakeLeaf,
-    pub path: Vec<[u8; 32]>,
-    pub index: usize,
-}
-
-/// A leaf in the stake merkle tree.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct StakeLeaf {
-    pub authority_pubkey: [u8; 32],
-    pub stake: u64,
-    pub vault_id: u64, // KVP-105 vault ID for slashing
-}
-
-impl StakeMerkleProof {
-    /// Verify the merkle proof against a given root.
-    pub fn verify(&self, root: [u8; 32]) -> bool {
-        let mut hash = {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(&self.leaf.authority_pubkey);
-            hasher.update(&self.leaf.stake.to_le_bytes());
-            *hasher.finalize().as_bytes()
-        };
-        for sibling in &self.path {
-            let (left, right) = if self.index % 2 == 0 { (hash, *sibling) } else { (*sibling, hash) };
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(&left);
-            hasher.update(&right);
-            hash = *hasher.finalize().as_bytes();
-        }
-        hash == root
     }
 }
 
@@ -883,216 +506,57 @@ mod tests {
         }
         sks
     }
-
     // ------------------------------------------------------------------
-    // SW-PoA slot scheduling
+    // Slot scheduling — spec conformance
     // ------------------------------------------------------------------
 
-    /// A stake-weighted set over the three test authorities.
-    fn staked_set(stakes: [u64; 3]) -> AuthoritySet {
-        let (pks, _) = three_authorities();
-        AuthoritySet::new_with_stakes(pks, 2, Some(stakes.to_vec()))
-            .expect("stake set should be valid")
-    }
-
-    /// The slot counts a set must produce over one period.
+    /// The canonical spec rule, quoted so the test cannot drift from it:
+    /// *"The scheduled authority is `authorities[slot % len]` over the
+    /// canonical (sorted) key order"*
+    /// (docs/SW-PoA-SPV-CONSENSUS.md, KVP-201).
     ///
-    /// `new_with_stakes` binds each stake to the key it was supplied with and
-    /// then sorts keys and stakes **together** into canonical order, so the
-    /// stake at canonical index `i` is a permutation of the input vector.
-    /// Expectations are therefore derived from [`AuthoritySet::stakes`], which
-    /// is already in canonical order, rather than from the input literal.
-    fn expected_counts(set: &AuthoritySet) -> Vec<usize> {
-        let stakes = set.stakes().expect("staked set");
-        let gcd = stakes.iter().fold(0u64, |acc, &s| gcd_u64(acc, s));
-        stakes.iter().map(|&s| (s / gcd) as usize).collect()
-    }
-
-    /// Count how many of the first `slots` slots each authority index owns.
-    fn slot_counts(set: &AuthoritySet, slots: u64) -> Vec<usize> {
-        let mut counts = vec![0usize; set.len()];
-        for slot in 0..slots {
-            let owner = set.active_authority(slot);
-            let idx = set.authorities().iter().position(|k| k == owner).unwrap();
-            counts[idx] += 1;
-        }
-        counts
-    }
-
-    /// Regression test for the defect where `active_authority` computed
-    /// `slot * total_stake % total_stake`, which is `0` for every slot, so the
-    /// first authority took *every* slot and the other N-1 were permanently
-    /// starved (their blocks failed `verify_slot_signature`, so at threshold
-    /// 2-of-3 the chain could not progress at all).
+    /// This is the test whose absence let RFC-009 §1 sit undetected: a
+    /// stake-weighted branch shipped alongside a spec that says there is no
+    /// stake-weighted path, and nothing asserted the *spec's* rule held for
+    /// every loadable set. It belongs in the tree under any future option,
+    /// including reintroducing weighting — in which case this test must be
+    /// replaced by one pinning the ratified rule, not merely deleted.
     #[test]
-    fn sw_poa_every_authority_gets_slots() {
-        let set = staked_set([70, 20, 10]);
-        let counts = slot_counts(&set, 30);
-        assert!(
-            counts.iter().all(|&c| c > 0),
-            "every authority must be scheduled, got {counts:?}"
-        );
-    }
-
-    /// The core SW-PoA invariant: over one full period an authority owns
-    /// exactly as many slots as its weight, so slot share == stake share.
-    #[test]
-    fn sw_poa_schedule_is_exactly_proportional() {
-        let set = staked_set([70, 20, 10]);
-        let expected = expected_counts(&set);
-        let period = set.schedule_period().expect("staked set has a period");
-        // 70/20/10 shares a factor of 10, so the period is 7 + 2 + 1.
-        let mut sorted = expected.clone();
-        sorted.sort_unstable();
-        assert_eq!(sorted, vec![1, 2, 7], "weights should normalise to 7/2/1");
-        assert_eq!(period, 10);
-        assert_eq!(slot_counts(&set, period), expected);
-    }
-
-    /// The exact schedule table is pinned as a literal so the rule cannot drift
-    /// silently. This also pins the tie-break: `build_schedule` picks the
-    /// *highest* index among equal scores (Rust's `max_by_key` returns the last
-    /// maximum), so the table begins `0, 1, …` and not `0, 0, …`.
-    ///
-    /// These are *proposed* constants, not ratified ones — the canonical spec
-    /// (docs/SW-PoA-SPV-CONSENSUS.md) has no stake-weighted path at all. See
-    /// docs/RFC-009-StakeWeightedPoA.md §2; if Option A is taken this test is
-    /// deleted along with the code it covers. If Option B is taken, changing
-    /// any literal here is a consensus change and needs a hard-fork assessment.
-    #[test]
-    fn sw_poa_schedule_table_is_pinned() {
-        // [70, 20, 10] normalises to weights [7, 2, 1], period 10.
-        let table = build_schedule(&[70, 20, 10]).expect("ordinary weight vector");
-        assert_eq!(table, vec![0, 1, 0, 0, 2, 0, 0, 1, 0, 0]);
-        // A stake vector's common factor must not change the table.
-        let atoms = 100_000_000u64;
-        assert_eq!(
-            build_schedule(&[70 * atoms, 20 * atoms, 10 * atoms]).expect("same ratios"),
-            table
-        );
-        // Two vectors with identical ratios but different magnitudes agree.
-        assert_eq!(build_schedule(&[7, 2, 1]).expect("already normalised"), table);
-        // Equal stakes: a plain round-robin over the canonical order.
-        assert_eq!(build_schedule(&[1, 1, 1]).expect("equal"), vec![2, 1, 0]);
-        // The highest-index tie-break is visible here: slot 1 goes to index 1,
-        // not index 0, because after the first round both hold the same score.
-        assert_eq!(build_schedule(&[1, 2]).expect("two authorities"), vec![1, 0, 1]);
-    }
-
-    /// Proportionality must survive stake vectors that are not already
-    /// normalised, including atom-denominated stakes (1 KVNC = 10^8 atoms).
-    #[test]
-    fn sw_poa_schedule_normalises_stake_units() {
-        let atoms = 100_000_000u64;
-        let set = staked_set([70 * atoms, 20 * atoms, 10 * atoms]);
-        assert_eq!(
-            set.schedule_period(),
-            Some(10),
-            "a common stake unit must not lengthen the schedule"
-        );
-        assert_eq!(slot_counts(&set, 10), expected_counts(&set));
-    }
-
-    /// Smooth weighted round-robin keeps the wait between two selections of
-    /// the same authority within 2 slots of the ideal `period / weight`. That
-    /// bound is the fault-tolerance property: no authority is idle for long,
-    /// so the chain keeps making progress even if the heaviest one goes down.
-    ///
-    /// (The bound is deliberately *not* "never two consecutive slots" — a
-    /// 70%-weight authority in a 10-slot period owns 7 of them, so adjacency
-    /// is unavoidable. A cumulative-interval walk would instead put all 7 in
-    /// one contiguous run.)
-    #[test]
-    fn sw_poa_schedule_keeps_gaps_near_uniform() {
-        let set = staked_set([70, 20, 10]);
-        let period = set.schedule_period().unwrap();
-        let expected = expected_counts(&set);
-        // Two full periods so each authority's wrap-around gap is covered.
-        let horizon = period * 2;
-        for (idx, &weight) in expected.iter().enumerate() {
-            let weight = weight as u64;
-            let slots: Vec<u64> = (0..horizon)
-                .filter(|&slot| set.active_authority(slot) == &set.authorities()[idx])
-                .collect();
-            assert_eq!(
-                slots.len(),
-                weight as usize * 2,
-                "authority {idx} owned {} slots in {horizon}, want {}",
-                slots.len(),
-                weight as usize * 2
-            );
-            for pair in slots.windows(2) {
-                let gap = pair[1] - pair[0];
-                // `gap` is within 2 of the ideal period/weight, written
-                // without floats so the bound is exact.
-                assert!(
-                    weight * gap <= period + 2 * weight && weight * gap + 2 * weight >= period,
-                    "authority {idx} waited {gap} slots; ideal is {}/{weight}",
-                    period
+    fn active_authority_matches_the_spec_rule() {
+        for n in [MIN_AUTHORITIES, 4, 5, MAX_AUTHORITIES] {
+            let pks: Vec<VerifyingKey> = (1..=n as u8).map(|s| keypair(s).1).collect();
+            let set = AuthoritySet::new(pks, 2).expect("valid set");
+            // Sweep several full rotations plus a wide tail, including a slot
+            // index far beyond `usize::MAX / 2` would be nice but the rule is
+            // `slot % len`, so a wide spread is what matters.
+            for slot in (0..(4 * n as u64)).chain([u64::MAX, u64::MAX - 1, 999_983]) {
+                assert_eq!(
+                    set.active_authority(slot),
+                    &set.authorities()[slot as usize % set.len()],
+                    "n={n} slot={slot}: scheduled authority is not authorities[slot % {n}]"
                 );
             }
         }
     }
 
-    /// The schedule is a pure function of the stake vector, so a set that
-    /// arrives from chain data (`from_bytes`) schedules exactly like one built
-    /// from local config. If these diverged, nodes would disagree about who
-    /// owns a slot and reject each other's blocks.
+    /// Round-robin gives every authority an equal share, so no authority can
+    /// be starved — the failure mode the removed weighted branch had.
     #[test]
-    fn sw_poa_schedule_survives_serialisation_round_trip() {
-        let set = staked_set([70, 20, 10]);
-        let decoded = AuthoritySet::from_bytes(&set.to_bytes()).expect("round trip");
-        assert_eq!(set.schedule_period(), decoded.schedule_period());
-        for slot in 0..50u64 {
-            assert_eq!(
-                set.active_authority(slot),
-                decoded.active_authority(slot),
-                "slot {slot} scheduled differently after a round trip"
-            );
+    fn classic_poa_schedules_every_authority_evenly() {
+        let set = AuthoritySet::new(three_authorities().0, 2).unwrap();
+        let mut counts = vec![0usize; set.len()];
+        for slot in 0..(3 * set.len() as u64) {
+            let owner = set.active_authority(slot);
+            counts[set.authorities().iter().position(|k| k == owner).unwrap()] += 1;
         }
+        assert_eq!(counts, vec![3, 3, 3], "three rotations must be 3 slots each");
     }
 
-    /// The schedule repeats with its period, so a rebalance only takes effect
-    /// on a period boundary and the mapping stays bounded.
-    #[test]
-    fn sw_poa_schedule_repeats_every_period() {
-        let set = staked_set([70, 20, 10]);
-        let period = set.schedule_period().unwrap();
-        for slot in 0..30u64 {
-            assert_eq!(
-                set.active_authority(slot),
-                set.active_authority(slot + period),
-                "slot {slot} does not repeat at +{period}"
-            );
-        }
-    }
-
-    /// The schedule is a **cache of the slot rule, not part of the set's
-    /// identity**. It is not serialised, so tuning it (as this fix did) can
-    /// never change the `KVA1` Authority UTXO a chain has already committed to
-    /// and can never force a re-commitment. The stake vector, by contrast, *is*
-    /// consensus data and does belong in the hash.
-    #[test]
-    fn sw_poa_schedule_is_not_part_of_the_serialised_identity() {
-        let (pks, _) = three_authorities();
-        let a = AuthoritySet::new_with_stakes(pks.clone(), 2, Some(vec![70, 20, 10])).unwrap();
-        let b = AuthoritySet::new_with_stakes(pks.clone(), 2, Some(vec![70, 20, 10])).unwrap();
-        assert_eq!(a.hash(), b.hash(), "identical sets share a hash");
-        // Stakes are consensus data and are committed to.
-        let c = AuthoritySet::new_with_stakes(pks, 2, Some(vec![70, 20, 11])).unwrap();
-        assert_ne!(a.hash(), c.hash(), "stake changes must change the hash");
-        // The schedule is not serialised: the encoding is exactly
-        // threshold||count||keys||stakes.
-        let expected_len = 16 + a.len() * 32 + a.len() * 8;
-        assert_eq!(a.to_bytes().len(), expected_len);
-    }
-
-    /// Classic PoA keeps plain round-robin and gains no schedule, so its
-    /// behaviour is byte-identical to before SW-PoA existed.
+    /// Classic PoA keeps plain round-robin, byte-identical to before SW-PoA
+    /// existed.
     #[test]
     fn classic_poa_keeps_plain_round_robin() {
         let set = AuthoritySet::new(three_authorities().0, 2).unwrap();
-        assert_eq!(set.schedule_period(), None, "classic PoA has no schedule");
         for slot in 0..30u64 {
             assert_eq!(
                 set.active_authority(slot),
@@ -1101,72 +565,50 @@ mod tests {
         }
     }
 
-    /// A weight vector with a huge minimal period (co-prime large stakes) must
-    /// be rejected at construction rather than forcing an unbounded table.
-    /// Truncating instead would silently change the slot->authority mapping,
-    /// which is itself a consensus rule.
+    /// A `count` chosen to wrap the length arithmetic must be rejected, not
+    /// abort the process.
+    ///
+    /// `count = 2^59` makes `16 + count * 32` wrap back to exactly 16, so a
+    /// 16-byte blob passes an unchecked length test. The decode then asks for
+    /// `Vec::with_capacity(2^59)`, which panics on capacity overflow — a
+    /// remote abort from a 16-byte `KVA2` AuthorityUpdateTx in a block. See
+    /// [`AuthoritySet::from_bytes`].
     #[test]
-    fn sw_poa_rejects_an_oversized_schedule_period() {
-        let (pks, _) = three_authorities();
-        let err = AuthoritySet::new_with_stakes(pks, 2, Some(vec![65_537, 65_539, 65_533]))
-            .expect_err("period above MAX_SCHEDULE_PERIOD must be rejected");
-        assert!(
-            matches!(err, AuthorityError::SchedulePeriodTooLarge { .. }),
-            "got {err:?}"
-        );
-    }
-
-    /// A small legal set still schedules, so the guard rejects only genuinely
-    /// pathological ratios.
-    #[test]
-    fn sw_poa_accepts_an_ordinary_weight_vector() {
-        let (pks, _) = three_authorities();
-        // gcd(1, 1, 2) == 1, so the period is 1 + 1 + 2 == 4.
-        let set = AuthoritySet::new_with_stakes(pks, 2, Some(vec![1, 1, 2])).unwrap();
-        assert_eq!(set.schedule_period(), Some(4));
-        assert_eq!(slot_counts(&set, 4), expected_counts(&set));
-    }
-
-    /// A stake sum that overflows `u64` is rejected at construction instead of
-    /// wrapping (which would corrupt every share) or panicking in debug.
-    #[test]
-    fn sw_poa_rejects_a_stake_sum_overflow() {
-        let (pks, _) = three_authorities();
-        let err = AuthoritySet::new_with_stakes(pks, 2, Some(vec![u64::MAX, 1, 1]))
-            .expect_err("overflowing stake sum must be rejected");
-        assert!(matches!(err, AuthorityError::StakeOverflow), "got {err:?}");
-    }
-
-    /// A dominant authority is a valid ratio: it takes almost every slot, but
-    /// the small ones still get theirs.
-    #[test]
-    fn sw_poa_handles_a_dominant_authority() {
-        let set = staked_set([1000, 1, 1]);
-        let mut expected = expected_counts(&set);
-        expected.sort_unstable();
-        assert_eq!(expected, vec![1, 1, 1000]);
-        assert_eq!(slot_counts(&set, 1002), expected_counts(&set));
-    }
-
-    /// The scheduled owner must be able to verify its own block signature,
-    /// otherwise the node cannot produce and peers reject the block. This is
-    /// the end-to-end shape of the original defect.
-    #[test]
-    fn sw_poa_scheduled_owner_can_sign_its_slot() {
-        let (_, sks) = three_authorities();
-        let set = staked_set([70, 20, 10]);
-        let sks = sks_canonical(&set, sks);
-        for slot in 0..30u64 {
-            let owner = set.active_authority(slot);
-            let idx = set.authorities().iter().position(|k| k == owner).unwrap();
-            let message = slot.to_le_bytes();
-            let sig = sks[idx].sign(&message).to_bytes();
-            assert!(
-                set.verify_slot_signature(slot, &message, &sig).is_ok(),
-                "the authority scheduled for slot {slot} could not verify its own signature"
+    fn from_bytes_rejects_a_count_that_wraps_the_length_check() {
+        for count in [1u64 << 59, 1u64 << 60, u64::MAX, usize::MAX as u64] {
+            let mut blob = 2u64.to_le_bytes().to_vec();
+            blob.extend_from_slice(&count.to_le_bytes());
+            assert_eq!(blob.len(), 16, "the blob that used to slip through");
+            assert_eq!(
+                AuthoritySet::from_bytes(&blob).unwrap_err(),
+                AuthorityError::MalformedEncoding,
+                "count = 2^59..usize::MAX must not wrap past the length check"
             );
         }
     }
+
+    /// A `KVA1` Authority UTXO carrying a trailing stake vector must be
+    /// rejected outright. Accepting it would mean acting on an unspecified
+    /// slot rule, and because the schedule was never committed on chain the
+    /// resulting divergence would be silent — nodes would agree on the UTXO
+    /// hash and still disagree about who may produce.
+    #[test]
+    fn from_bytes_rejects_a_stake_suffixed_encoding() {
+        let set = AuthoritySet::new(three_authorities().0, 2).unwrap();
+        let mut with_stakes = set.to_bytes();
+        with_stakes.extend_from_slice(&[
+            7u64.to_le_bytes(),
+            2u64.to_le_bytes(),
+            1u64.to_le_bytes(),
+        ]
+        .concat());
+        assert_eq!(
+            AuthoritySet::from_bytes(&with_stakes).unwrap_err(),
+            AuthorityError::MalformedEncoding,
+            "a stake-suffixed authority encoding must not be loadable"
+        );
+    }
+
 
     // ------------------------------------------------------------------
     // Construction invariants

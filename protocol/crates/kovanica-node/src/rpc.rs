@@ -360,16 +360,6 @@ fn run(node: &mut Node, line: &str) -> Result<String, String> {
             Ok("loaded".to_string())
         }
 
-        "get_stake_proof" => {
-            // get_stake_proof <slot>
-            // Returns the stake merkle proof for the authority scheduled at <slot>
-            let [slot] = fixed::<1>(&args)?;
-            let slot = u64_arg(slot)?;
-            let proof = node
-                .get_stake_proof(slot)
-                .map_err(|e| e.to_string())?;
-            Ok(hex::encode(bincode::serialize(&proof).unwrap()))
-        }
 
         "get_epoch_authority_set" => {
             // get_epoch_authority_set <epoch>

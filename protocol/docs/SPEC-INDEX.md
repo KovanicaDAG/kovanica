@@ -37,6 +37,7 @@
 | **RFC-005** | Vault / CSV | KVP-105 | ✅ Shipped | [RFC-005-Vault.md](RFC-005-Vault.md) | `kovanica-state/src/vault.rs`, per-UTXO creation height, 26-test suite |
 | **RFC-006** | Tokenomics (Emission Curve) | — | ✅ Core Done | [RFC-006-EmissionCurve.md](RFC-006-EmissionCurve.md) | `kovanica-state/src/ledger.rs`, smooth α=¾, MAX_SUPPLY 90.2M |
 | **RFC-POA** | PoA-only Consensus Migration | **KVP-201** | 📝 Draft — §0 ratified | [RFC-POA-Migration.md](RFC-POA-Migration.md) | Authority set + slot round-robin + authority signature; `POA_NOMINAL_WORK = 1` pin. **§0 is canonical for the PoA-only decision** |
+| **RFC-009** | Stake-Weighted PoA (spec/code contradiction) | would be KVP-202 | 📝 Draft — **not canonical** | [RFC-009-StakeWeightedPoA.md](RFC-009-StakeWeightedPoA.md) | Reports a stake-weighted branch that contradicted KVP-201. **Option A (delete) is implemented**; §4 records the SWRR rule should Option B ever be ratified |
 
 ---
 
