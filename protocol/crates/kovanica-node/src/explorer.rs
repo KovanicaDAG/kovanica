@@ -727,7 +727,11 @@ impl Explorer {
         let mut app = Self {
             mesh,
             selected: "alpha".into(),
-            producing: env_flag("KOVANICA_PRODUCE", false),
+            // `KOVANICA_MINE` is the deprecated pre-PoA name and is still
+            // honoured as a fallback: deployed seed units written by
+            // protocol/scripts/deploy-seed*.sh carry it, and those units
+            // would otherwise go silently silent after this change.
+            producing: env_flag("KOVANICA_PRODUCE", env_flag("KOVANICA_MINE", false)),
             produce_every: produce_every_ticks(),
             ticks: 0,
             rotate: 0,
@@ -1345,8 +1349,11 @@ const TICK_MS: u64 = 40;
 const PRODUCE_SECS_DEFAULT: u64 = 120;
 
 fn produce_every_ticks() -> u64 {
+    // `KOVANICA_MINE_SECS` is the deprecated pre-PoA name, kept as a fallback
+    // for the same reason as `KOVANICA_MINE` above.
     let secs = std::env::var("KOVANICA_PRODUCE_SECS")
         .ok()
+        .or_else(|| std::env::var("KOVANICA_MINE_SECS").ok())
         .and_then(|s| s.parse().ok())
         .unwrap_or(PRODUCE_SECS_DEFAULT);
     (secs.saturating_mul(1000) / TICK_MS).max(1)
