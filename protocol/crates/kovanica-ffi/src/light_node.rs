@@ -922,46 +922,46 @@ impl LightNode {
     }
 
     /// SW-PoA stake proof for a block's authority (SPV).
-// ------------------------------------------------------------------
-// SW-PoA SPV verification (stake-weighted PoA)
-// ------------------------------------------------------------------
-/// Previously verified an SW-PoA block header with a stake proof.
-/// Removed: stake/VRF admission was dropped entirely (RFC-POA-Migration §0.7.1).
-pub fn verify_sw_poa_header(
-    &self,
-    _header_blob: Vec<u8>,
-    _proof_hex: String,
-) -> Result<bool, LightNodeError> {
-    Err(invalid("SW-PoA verification removed"))
-}
-
-/// Fetch the stake merkle proof for a slot from the node.
-/// Returns the proof as a hex-encoded bincode blob.
-pub fn fetch_stake_proof(&self, slot: u64) -> Result<String, LightNodeError> {
-    let node = self.lock();
-    let proof = node.get_stake_proof(slot)?;
-    Ok(hex::encode(bincode::serialize(&proof).unwrap()))
-}
-
-/// Fetch the full authority stake set for an epoch.
-/// Returns lines of "pubkey_hex stake_atoms".
-pub fn fetch_epoch_authority_set(&self, epoch: u64) -> Result<String, LightNodeError> {
-    let node = self.lock();
-    let set = node.get_epoch_authority_set(epoch)?;
-    let mut out = Vec::new();
-    for (pk, stake) in set {
-        out.push(format!("{} {}", hex::encode(pk.as_bytes()), stake));
+    // ------------------------------------------------------------------
+    // SW-PoA SPV verification (stake-weighted PoA)
+    // ------------------------------------------------------------------
+    /// Previously verified an SW-PoA block header with a stake proof.
+    /// Removed: stake/VRF admission was dropped entirely (RFC-POA-Migration §0.7.1).
+    pub fn verify_sw_poa_header(
+        &self,
+        _header_blob: Vec<u8>,
+        _proof_hex: String,
+    ) -> Result<bool, LightNodeError> {
+        Err(invalid("SW-PoA verification removed"))
     }
-    Ok(out.join("\n"))
-}
 
-// ------------------------------------------------------------------
-// Multisig (M-of-N P2SH) mobile helpers
-// ------------------------------------------------------------------
+    /// Fetch the stake merkle proof for a slot from the node.
+    /// Returns the proof as a hex-encoded bincode blob.
+    pub fn fetch_stake_proof(&self, slot: u64) -> Result<String, LightNodeError> {
+        let node = self.lock();
+        let proof = node.get_stake_proof(slot)?;
+        Ok(hex::encode(bincode::serialize(&proof).unwrap()))
+    }
 
-/// Create a threshold-multisig P2SH address from `threshold` and a list of
-/// 64-hex Ed25519 public keys. Returns the human address plus the redeem
-/// script (which must be shared with all cosigners out of band).
+    /// Fetch the full authority stake set for an epoch.
+    /// Returns lines of "pubkey_hex stake_atoms".
+    pub fn fetch_epoch_authority_set(&self, epoch: u64) -> Result<String, LightNodeError> {
+        let node = self.lock();
+        let set = node.get_epoch_authority_set(epoch)?;
+        let mut out = Vec::new();
+        for (pk, stake) in set {
+            out.push(format!("{} {}", hex::encode(pk.as_bytes()), stake));
+        }
+        Ok(out.join("\n"))
+    }
+
+    // ------------------------------------------------------------------
+    // Multisig (M-of-N P2SH) mobile helpers
+    // ------------------------------------------------------------------
+
+    /// Create a threshold-multisig P2SH address from `threshold` and a list of
+    /// 64-hex Ed25519 public keys. Returns the human address plus the redeem
+    /// script (which must be shared with all cosigners out of band).
     pub fn create_multisig_address(
         &self,
         threshold: u8,

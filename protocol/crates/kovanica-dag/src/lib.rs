@@ -55,7 +55,7 @@ pub mod validation;
 
 pub use authority::{
     sign_update, update_payload, AuthorityError, AuthorityPublicKey, AuthoritySet,
-    AuthorityUpdateTx, StakeMerkleProof, StakeLeaf, AUTHORITY_UTXO_TAG, MAX_AUTHORITIES,
+    AuthorityUpdateTx, StakeLeaf, StakeMerkleProof, AUTHORITY_UTXO_TAG, MAX_AUTHORITIES,
     MIN_AUTHORITIES, MIN_THRESHOLD, SLOT_DURATION_MS,
 };
 pub use block::{Block, BlockId};

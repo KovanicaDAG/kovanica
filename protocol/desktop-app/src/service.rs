@@ -27,6 +27,9 @@ pub enum BootError {
     DormantNetwork(&'static str),
     /// The node crate rejected the genesis parameters.
     Node(NodeError),
+    /// The profile's PoA authority set violates the RFC-POA §1 invariants
+    /// (3–16 distinct keys, `2 <= threshold <= count`).
+    Authority(String),
 }
 
 impl std::fmt::Display for BootError {
@@ -38,6 +41,11 @@ impl std::fmt::Display for BootError {
                  refusing to boot (mainnet is never activated implicitly)"
             ),
             BootError::Node(e) => write!(f, "node genesis failed: {e}"),
+            BootError::Authority(e) => write!(
+                f,
+                "invalid PoA authority set (RFC-POA §1): {e}; the genesis coinbase \
+                 commits to this set, so a wrong set is a hard fork"
+            ),
         }
     }
 }
@@ -96,14 +104,26 @@ impl NodeService {
     /// the RFC-006 treasury tranches (10×1M KVNC vaults with placeholder
     /// keys), so we pass `Some(TreasuryGenesis::placeholder())` — the same
     /// construction the explorer's `genesis_node()` uses to reproduce the
-    /// live genesis `9565fc20…`.
+    /// live genesis `08fa538f…`.
+    ///
+    /// **PoA is the only admission regime** (RFC-POA-Migration §0), so this
+    /// boots through `genesis_with_poa`, not the legacy
+    /// `genesis_with_finality`: under PoA the genesis coinbase tag is
+    /// `KVA1 || authority_set_hash`, so the genesis id commits to the
+    /// authority set. The legacy path tags the coinbase `b"genesis"` and
+    /// derives the pre-PoA id `7c5361da…`, which would hard-fork from the
+    /// live network. Mirrors the explorer's `genesis_node()`.
     pub fn boot(&mut self) -> Result<(String, String), BootError> {
         if self.profile.dormant {
             return Err(BootError::DormantNetwork(self.profile.id));
         }
+        let authority_set = self
+            .profile
+            .authority_set()
+            .map_err(|e| BootError::Authority(e.to_string()))?;
         let mut node = Node::new();
         let (genesis, founder) = node
-            .genesis_with_finality(
+            .genesis_with_poa(
                 self.profile.genesis_k,
                 self.profile.genesis_subsidy,
                 self.profile.genesis_premine,
@@ -111,8 +131,10 @@ impl NodeService {
                 Some(TreasuryGenesis::placeholder()),
                 self.profile.finality_depth,
                 self.profile.payload_pruning_depth,
-                100u64,
-                None,
+                self.profile.block_pruning_depth,
+                Some(self.profile.operator_seed),
+                authority_set,
+                self.profile.slot_duration_ms,
             )
             .map_err(BootError::Node)?;
         let out = (genesis.to_string(), founder.to_string());

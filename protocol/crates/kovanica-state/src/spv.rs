@@ -480,7 +480,7 @@ impl SpvClient {
             if header.authority_set_hash != poa.authority_set.hash() {
                 return Err(SpvError::AuthoritySetChanged);
             }
-            
+
             if poa.sw_poa {
                 // SW-PoA: verify stake-weighted authority selection
                 // For this, we need the stake proof passed separately
@@ -568,7 +568,11 @@ impl SpvClient {
         }
         // Verify the authority signature
         poa.authority_set
-            .verify_slot_signature(slot, &header.hash_without_authority_sig, &header.authority_sig.unwrap())
+            .verify_slot_signature(
+                slot,
+                &header.hash_without_authority_sig,
+                &header.authority_sig.unwrap(),
+            )
             .map_err(|_| SpvError::InvalidAuthoritySig)?;
 
         // Accept

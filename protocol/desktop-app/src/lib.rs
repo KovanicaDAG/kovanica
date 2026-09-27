@@ -23,6 +23,7 @@
 //! consensus. Every call maps 1:1 onto the node crate's audited APIs; the UI
 //! layers that arrive in later slices are pure renderers over this service.
 
+pub mod authority_keys;
 pub mod datadir;
 pub mod events;
 pub mod profile;

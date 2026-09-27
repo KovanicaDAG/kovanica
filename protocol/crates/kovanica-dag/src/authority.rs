@@ -153,7 +153,10 @@ impl AuthoritySet {
         // Canonical order: ascending 32-byte encoding.
         // We need to sort authorities and stakes together
         let mut pairs: Vec<(AuthorityPublicKey, Option<u64>)> = if let Some(stakes) = stakes {
-            authorities.into_iter().zip(stakes.into_iter().map(Some)).collect()
+            authorities
+                .into_iter()
+                .zip(stakes.into_iter().map(Some))
+                .collect()
         } else {
             authorities.into_iter().map(|pk| (pk, None)).collect()
         };
@@ -168,7 +171,11 @@ impl AuthoritySet {
         } else {
             None
         };
-        let hash = blake3::hash(&Self::canonical_bytes_of(&authorities, threshold, stakes_opt.as_deref()));
+        let hash = blake3::hash(&Self::canonical_bytes_of(
+            &authorities,
+            threshold,
+            stakes_opt.as_deref(),
+        ));
         Ok(Self {
             authorities,
             threshold,
@@ -206,7 +213,10 @@ impl AuthoritySet {
 
     /// Total stake across all authorities.
     pub fn total_stake(&self) -> u64 {
-        self.stakes.as_ref().map(|s| s.iter().sum()).unwrap_or(self.authorities.len() as u64)
+        self.stakes
+            .as_ref()
+            .map(|s| s.iter().sum())
+            .unwrap_or(self.authorities.len() as u64)
     }
 
     /// The set's identity: BLAKE3 of the canonical encoding. This is what the
@@ -331,7 +341,7 @@ impl AuthoritySet {
                 let stake = u64::from_le_bytes(
                     bytes[stake_start + i * 8..stake_start + (i + 1) * 8]
                         .try_into()
-                        .map_err(|_| AuthorityError::MalformedEncoding)?
+                        .map_err(|_| AuthorityError::MalformedEncoding)?,
                 );
                 stakes.push(stake);
             }
@@ -347,7 +357,9 @@ impl AuthoritySet {
         threshold: usize,
         stakes: Option<&[u64]>,
     ) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(16 + 32 * authorities.len() + stakes.map(|s| s.len() * 8).unwrap_or(0));
+        let mut buf = Vec::with_capacity(
+            16 + 32 * authorities.len() + stakes.map(|s| s.len() * 8).unwrap_or(0),
+        );
         buf.extend_from_slice(&(threshold as u64).to_le_bytes());
         buf.extend_from_slice(&(authorities.len() as u64).to_le_bytes());
         for pk in authorities {
@@ -360,7 +372,7 @@ impl AuthoritySet {
         }
         buf
     }
-    
+
     /// Build a merkle tree of (pubkey -> stake) for SPV stake proofs.
     /// Returns the merkle root (32 bytes).
     pub fn stake_merkle_root(&self) -> Option<[u8; 32]> {
@@ -381,13 +393,19 @@ impl AuthoritySet {
             None
         }
     }
-    
+
     /// Generate a merkle proof for a specific authority's stake.
     /// Returns None if no stakes or authority not found.
-    pub fn stake_merkle_proof(&self, authority_pubkey: &AuthorityPublicKey) -> Option<StakeMerkleProof> {
+    pub fn stake_merkle_proof(
+        &self,
+        authority_pubkey: &AuthorityPublicKey,
+    ) -> Option<StakeMerkleProof> {
         let stakes = self.stakes.as_ref()?;
-        let idx = self.authorities.iter().position(|pk| pk == authority_pubkey)?;
-        
+        let idx = self
+            .authorities
+            .iter()
+            .position(|pk| pk == authority_pubkey)?;
+
         let leaves: Vec<[u8; 32]> = self
             .authorities
             .iter()
@@ -399,7 +417,7 @@ impl AuthoritySet {
                 *hasher.finalize().as_bytes()
             })
             .collect();
-        
+
         let path = Self::merkle_path(&leaves, idx);
         Some(StakeMerkleProof {
             leaf: StakeLeaf {
@@ -411,7 +429,7 @@ impl AuthoritySet {
             index: idx,
         })
     }
-    
+
     /// Compute merkle root from leaves.
     fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
         if leaves.is_empty() {
@@ -422,7 +440,11 @@ impl AuthoritySet {
             let mut next = Vec::with_capacity(current.len().div_ceil(2));
             for i in (0..current.len()).step_by(2) {
                 let left = current[i];
-                let right = if i + 1 < current.len() { current[i + 1] } else { left };
+                let right = if i + 1 < current.len() {
+                    current[i + 1]
+                } else {
+                    left
+                };
                 let mut hasher = blake3::Hasher::new();
                 hasher.update(&left);
                 hasher.update(&right);
@@ -432,7 +454,7 @@ impl AuthoritySet {
         }
         current[0]
     }
-    
+
     /// Compute merkle path for a leaf at index.
     fn merkle_path(leaves: &[[u8; 32]], index: usize) -> Vec<[u8; 32]> {
         let mut path = Vec::new();
@@ -449,7 +471,11 @@ impl AuthoritySet {
             let mut next = Vec::with_capacity(current.len().div_ceil(2));
             for i in (0..current.len()).step_by(2) {
                 let left = current[i];
-                let right = if i + 1 < current.len() { current[i + 1] } else { left };
+                let right = if i + 1 < current.len() {
+                    current[i + 1]
+                } else {
+                    left
+                };
                 let mut hasher = blake3::Hasher::new();
                 hasher.update(&left);
                 hasher.update(&right);
@@ -500,7 +526,11 @@ impl StakeMerkleProof {
             *hasher.finalize().as_bytes()
         };
         for sibling in &self.path {
-            let (left, right) = if self.index % 2 == 0 { (hash, *sibling) } else { (*sibling, hash) };
+            let (left, right) = if self.index % 2 == 0 {
+                (hash, *sibling)
+            } else {
+                (*sibling, hash)
+            };
             let mut hasher = blake3::Hasher::new();
             hasher.update(&left);
             hasher.update(&right);

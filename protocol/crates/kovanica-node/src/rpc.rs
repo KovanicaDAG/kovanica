@@ -365,9 +365,7 @@ fn run(node: &mut Node, line: &str) -> Result<String, String> {
             // Returns the stake merkle proof for the authority scheduled at <slot>
             let [slot] = fixed::<1>(&args)?;
             let slot = u64_arg(slot)?;
-            let proof = node
-                .get_stake_proof(slot)
-                .map_err(|e| e.to_string())?;
+            let proof = node.get_stake_proof(slot).map_err(|e| e.to_string())?;
             Ok(hex::encode(bincode::serialize(&proof).unwrap()))
         }
 
