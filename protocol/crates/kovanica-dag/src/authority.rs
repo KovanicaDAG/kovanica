@@ -264,26 +264,40 @@ impl AuthoritySet {
         if bytes.len() < 16 {
             return Err(AuthorityError::MalformedEncoding);
         }
-        let threshold = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
-        let count = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
-        // Exact length only: no stake suffix, no trailing slack.
+        let threshold = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let count = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        // The key count is a **field of the encoding**, so it is never used as
+        // a length. It is instead checked against the count the *input* can
+        // hold, which is derived from the real slice length and therefore
+        // cannot overflow:
         //
-        // `count` is attacker-controlled: a `KVA2` AuthorityUpdateTx on chain
-        // carries the raw bytes of the new set, so any peer chooses it. The
-        // arithmetic is therefore checked. Unchecked, `count = 2^59` wraps
-        // `16 + count * 32` back around to 16, so a 16-byte blob passes this
-        // length test and the `with_capacity` below then aborts the process
-        // with "capacity overflow" — a remote abort from a block. With the
-        // checked form, any `count` that gets this far satisfies
-        // `bytes.len() == 16 + 32 * count` without wrapping, hence
-        // `count <= (bytes.len() - 16) / 32`, and the allocation is bounded
-        // by the input size rather than amplifying it.
-        let expected_len = 16usize
-            .checked_add(count.checked_mul(32).ok_or(AuthorityError::MalformedEncoding)?)
-            .ok_or(AuthorityError::MalformedEncoding)?;
-        if bytes.len() != expected_len {
+        // - `body % 32 != 0` rejects a partial key, trailing slack, and a
+        //   trailing stake vector (the stake suffix is 8n bytes, so the
+        //   equality below is what actually catches a stake-suffixed set).
+        // - The equality check rejects a declared `count` that does not match
+        //   the body. It also rejects a declared count large enough to wrap
+        //   `16 + count * 32` back onto the input length: unchecked, `count =
+        //   2^59` makes that expression exactly 16, so a 16-byte blob passes
+        //   the length test and the `with_capacity` below aborts the process
+        //   with "capacity overflow".
+        // - The range check runs before the allocation, so a rejected count
+        //   never reserves memory. `new` accepts 3..=16 keys and
+        //   `VerifyingKey` is 192 bytes against a 32-byte wire field, so
+        //   bounding first caps the work at 3 KiB instead of letting
+        //   `with_capacity(count)` amplify the input sixfold.
+        //
+        // The count is compared in the `u64` domain so the value is the same on
+        // 32-bit FFI targets, where `as usize` would truncate it.
+        let body = bytes.len() - 16;
+        if body % 32 != 0 || count != (body / 32) as u64 {
             return Err(AuthorityError::MalformedEncoding);
         }
+        if !(MIN_AUTHORITIES as u64..=MAX_AUTHORITIES as u64).contains(&count) {
+            return Err(AuthorityError::InvalidAuthorityCount(count as usize));
+        }
+        // `count` is now 3..=16, so this `usize` conversion is exact on every
+        // target and every offset below is in bounds.
+        let count = count as usize;
         let mut authorities = Vec::with_capacity(count);
         for i in 0..count {
             let pk_bytes: [u8; 32] = bytes[16 + i * 32..16 + (i + 1) * 32]
@@ -293,6 +307,12 @@ impl AuthoritySet {
                 .map_err(|_| AuthorityError::MalformedEncoding)?;
             authorities.push(pk);
         }
+        // A `threshold` that cannot be represented on this target is not a legal
+        // threshold. Reported as malformed rather than truncated, so the
+        // `InvalidThreshold` message can never show a number that is not the
+        // one that was encoded (32-bit FFI targets are real).
+        let threshold =
+            usize::try_from(threshold).map_err(|_| AuthorityError::MalformedEncoding)?;
         Self::new(authorities, threshold)
     }
 
@@ -434,14 +454,24 @@ impl AuthorityUpdateTx {
             bytes[40..48]
                 .try_into()
                 .map_err(|_| AuthorityError::MalformedEncoding)?,
-        ) as usize;
-        let new_set_len = 16 + count * 32;
-        if bytes.len() < 32 + new_set_len + 1 {
+        );
+        // `count` is a field of the encoding, so it is range-checked before it
+        // is used as a length. Unchecked, `16 + count * 32` wraps for a large
+        // count — `2^59` wraps it back to 16 — and the slice below becomes
+        // `bytes[32..16]`, which panics on a reversed range in release as well
+        // as in debug. Bounding it to the legal set size (3..=16) makes every
+        // length below exact: `sig_start <= 32 + 16 + 32 * 16 = 560`.
+        if !(MIN_AUTHORITIES as u64..=MAX_AUTHORITIES as u64).contains(&count) {
+            return Err(AuthorityError::InvalidAuthorityCount(count as usize));
+        }
+        let new_set_len = 16 + 32 * count as usize;
+        let sig_start = 32 + new_set_len;
+        if bytes.len() <= sig_start {
             return Err(AuthorityError::MalformedEncoding);
         }
-        let new_set = AuthoritySet::from_bytes(&bytes[32..32 + new_set_len])?;
-        let sig_start = 32 + new_set_len;
+        let new_set = AuthoritySet::from_bytes(&bytes[32..sig_start])?;
         let sig_count = bytes[sig_start] as usize;
+        // `sig_count` is a `u8`, so `255 * 96` cannot overflow.
         let expected_len = sig_start + 1 + sig_count * 96;
         if bytes.len() != expected_len {
             return Err(AuthorityError::MalformedEncoding);
@@ -570,9 +600,17 @@ mod tests {
     ///
     /// `count = 2^59` makes `16 + count * 32` wrap back to exactly 16, so a
     /// 16-byte blob passes an unchecked length test. The decode then asks for
-    /// `Vec::with_capacity(2^59)`, which panics on capacity overflow — a
-    /// remote abort from a 16-byte `KVA2` AuthorityUpdateTx in a block. See
-    /// [`AuthoritySet::from_bytes`].
+    /// `Vec::with_capacity(2^59)`, which panics on capacity overflow. See
+    /// [`AuthoritySet::from_bytes`] for why the count is now never used as a
+    /// length.
+    ///
+    /// Reachability today is operator-local, not remote: this decoder is
+    /// reached from `KOVANICA_AUTHORITIES` genesis config, the
+    /// `authority_set <hex>` / `authority_update <hex>` stdio REPL commands,
+    /// and [`AuthorityUpdateTx::from_bytes`]. `AUTHORITY_UPDATE_TAG` (`KVA2`)
+    /// is declared but never dispatched, so no block or P2P path carries
+    /// attacker-chosen bytes here yet — which is exactly why the decoders must
+    /// not panic before that dispatch exists.
     #[test]
     fn from_bytes_rejects_a_count_that_wraps_the_length_check() {
         for count in [1u64 << 59, 1u64 << 60, u64::MAX, usize::MAX as u64] {
@@ -1034,14 +1072,27 @@ mod tests {
         );
         // Wrong sig count (corrupt the sig_count byte at sig_start)
         let mut bad = bytes.clone();
-        let _new_set_bytes_len = new_set.to_bytes().len();
-        let count = u64::from_le_bytes(bytes[40..48].try_into().unwrap()) as usize;
-        let new_set_len = 16 + count * 32;
+        let count = u64::from_le_bytes(bytes[40..48].try_into().unwrap());
+        let new_set_len = 16 + 32 * count as usize;
         let sig_start = 32 + new_set_len;
         bad[sig_start] = 99; // corrupt sig_count
         assert_eq!(
             AuthorityUpdateTx::from_bytes(&bad),
             Err(AuthorityError::MalformedEncoding)
         );
+        // A `count` that wraps `16 + count * 32` used to make the slice below
+        // `bytes[32..16]`, panicking on a reversed range in release as well as
+        // in debug. `2^59` wraps it to exactly 16; `u64::MAX` wraps it to a
+        // length that also passes the bounds check. Both must be rejected
+        // before they are used as a length.
+        for hostile in [1u64 << 59, u64::MAX, usize::MAX as u64, 17, 2] {
+            let mut wrapped = bytes.clone();
+            wrapped[40..48].copy_from_slice(&hostile.to_le_bytes());
+            assert_eq!(
+                AuthorityUpdateTx::from_bytes(&wrapped),
+                Err(AuthorityError::InvalidAuthorityCount(hostile as usize)),
+                "count = {hostile} must be rejected as an illegal set size, not panic"
+            );
+        }
     }
 }
