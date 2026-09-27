@@ -64,13 +64,14 @@ pub fn run() {
             spv_sync,
             spv_matches,
             spv_verify,
-            set_validator_seed,
-            enable_hybrid,
-            get_staking,
-            bond_stake,
-            unbond_stake,
-            start_mining,
-            stop_mining
+            // [TARGET]-for-removal (PoA-only): staking/mining commands disabled
+            // set_validator_seed,
+            // enable_hybrid,
+            // get_staking,
+            // bond_stake,
+            // unbond_stake,
+            // start_mining,
+            // stop_mining,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

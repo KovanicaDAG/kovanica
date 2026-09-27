@@ -11,7 +11,7 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
-use kovanica_dag::{BlockId, Retarget};
+use kovanica_dag::{BlockId, Block};
 use kovanica_node::net;
 use kovanica_node::spv::{BlockFilter, BlockHeader, MerkleProof, SpvClient};
 use kovanica_node::{Node, NodeError};
@@ -388,9 +388,11 @@ impl NodeHandle {
                 datadir.profile.genesis_subsidy,
                 datadir.profile.genesis_premine,
                 datadir.profile.founder_seed,
-                None, // treasury: None for live testnet
+                None, // treasury
                 datadir.profile.finality_depth,
                 datadir.profile.payload_pruning_depth,
+                100u64,
+                None,
             )
             .map_err(WorkerError::Node)?;
 
@@ -784,110 +786,42 @@ impl NodeHandle {
                 };
                 WorkerResp::SpvVerified(verified)
             }
-            WorkerCmd::SetValidatorSeed { seed_hex } => {
-                let seed = match parse_validator_seed(&seed_hex) {
-                    Ok(s) => s,
-                    Err(e) => return WorkerResp::ValidatorSeed(Err(e)),
-                };
-                node.set_validator_seed(seed);
-                match node.validator_public_key() {
-                    Some(pk) => {
-                        let pk_hex = hex::encode(*pk.as_bytes());
-                        let _ = events.send(NodeEvent::ValidatorReady { pk: pk_hex.clone() });
-                        WorkerResp::ValidatorSeed(Ok(pk_hex))
-                    }
-                    None => WorkerResp::ValidatorSeed(Err("validator identity not derived".into())),
-                }
+            WorkerCmd::SetValidatorSeed { seed_hex: _ } => {
+                WorkerResp::ValidatorSeed(Err("validator seed: disabled under PoA-only".into()))
             }
-            WorkerCmd::EnableHybrid {
-                rate_num,
-                rate_den,
-                retarget,
-            } => match hybrid_config_for(rate_num, rate_den, retarget) {
-                Ok(cfg) => match node.enable_hybrid(cfg) {
-                    Ok(_) => {
-                        let retarget = if retarget { "on" } else { "off" };
-                        WorkerResp::HybridStatus(format!(
-                                "hybrid enabled: staked slot rate {rate_num}/{rate_den}, difficulty retarget {retarget}"
-                            ))
-                    }
-                    Err(e) => WorkerResp::HybridStatus(format!("hybrid enable failed: {e}")),
-                },
-                Err(e) => WorkerResp::HybridStatus(e),
-            },
+            WorkerCmd::EnableHybrid { .. } => {
+                WorkerResp::HybridStatus("hybrid: disabled under PoA-only".into())
+            }
             WorkerCmd::GetStaking => {
-                let validator_pk = node
-                    .validator_public_key()
-                    .map(|pk| hex::encode(*pk.as_bytes()));
-                let (hybrid_enabled, rate_num, rate_den, retarget) = match node.hybrid_config() {
-                    Some(cfg) => (true, cfg.rate_num, cfg.rate_den, cfg.retarget.is_some()),
-                    None => (false, 0, 0, false),
-                };
-                let chain_height = node.chain_height().unwrap_or(0);
-                let my_stake = validator_pk
-                    .as_ref()
-                    .and_then(|_| node.validator_public_key())
-                    .map(|pk| node.stake_of(pk.as_bytes()).unwrap_or(0))
-                    .unwrap_or(0);
-                let pending_unbond_height = validator_pk
-                    .as_ref()
-                    .and_then(|_| node.validator_public_key())
-                    .map(|pk| node.pending_unbond_height(pk.as_bytes()).unwrap_or(None))
-                    .unwrap_or(None);
-                let mining_interval_secs = mining.enabled.then_some(mining.interval_secs);
                 WorkerResp::Staking(StakingInfo {
-                    validator_pk,
-                    hybrid_enabled,
-                    rate_num,
-                    rate_den,
-                    retarget,
-                    total_stake: node.total_stake().unwrap_or(0),
-                    my_stake,
-                    pending_unbond_height,
-                    chain_height,
+                    validator_pk: None,
+                    hybrid_enabled: false,
+                    rate_num: 0,
+                    rate_den: 0,
+                    retarget: false,
+                    total_stake: 0,
+                    my_stake: 0,
+                    pending_unbond_height: None,
+                    chain_height: node.chain_height().unwrap_or(0),
                     issuance_at_height: Node::issuance_at(
                         datadir.profile.genesis_subsidy,
-                        chain_height,
+                        node.chain_height().unwrap_or(0),
                     ),
-                    mining: mining.enabled,
-                    mining_interval_secs,
+                    mining: false,
+                    mining_interval_secs: None,
                 })
             }
-            WorkerCmd::BondStake { amount } => {
-                if wallet.is_locked() {
-                    return WorkerResp::StakingTx(Err("wallet locked — unlock to bond".into()));
-                }
-                let kp = match wallet.keypair() {
-                    Some(k) => k,
-                    None => return WorkerResp::StakingTx(Err("no wallet keypair".into())),
-                };
-                match bond_stake(node, &kp, amount, events) {
-                    Ok(tx_id) => WorkerResp::StakingTx(Ok(tx_id.to_string())),
-                    Err(e) => WorkerResp::StakingTx(Err(e)),
-                }
+            WorkerCmd::BondStake { amount: _ } => {
+                WorkerResp::StakingTx(Err("bond stake: disabled under PoA-only".into()))
             }
-            WorkerCmd::UnbondStake { amount } => {
-                if wallet.is_locked() {
-                    return WorkerResp::StakingTx(Err("wallet locked — unlock to unbond".into()));
-                }
-                let kp = match wallet.keypair() {
-                    Some(k) => k,
-                    None => return WorkerResp::StakingTx(Err("no wallet keypair".into())),
-                };
-                match unbond_stake(node, &kp, amount, events) {
-                    Ok(tx_id) => WorkerResp::StakingTx(Ok(tx_id.to_string())),
-                    Err(e) => WorkerResp::StakingTx(Err(e)),
-                }
+            WorkerCmd::UnbondStake { amount: _ } => {
+                WorkerResp::StakingTx(Err("unbond stake: disabled under PoA-only".into()))
             }
-            WorkerCmd::StartMining { interval_secs } => {
-                if interval_secs == 0 {
-                    WorkerResp::MiningStatus("mining interval must be > 0".into())
-                } else {
-                    WorkerResp::MiningStatus(format!("mining every {interval_secs}s"))
-                }
+            WorkerCmd::StartMining { interval_secs: _ } => {
+                WorkerResp::MiningStatus("mining: disabled under PoA-only".into())
             }
             WorkerCmd::StopMining => {
-                WorkerResp::MiningStatus("mining stopped (manual Produce Block still works)".into())
+                WorkerResp::MiningStatus("mining: disabled under PoA-only".into())
             }
             WorkerCmd::Shutdown => WorkerResp::Ok,
         }
@@ -989,143 +923,7 @@ fn mine_for_cadence(node: &mut Node, events: &broadcast::Sender<NodeEvent>) {
     }
 }
 
-/// Parse a 32-byte hex validator seed.
-fn parse_validator_seed(s: &str) -> Result<[u8; 32], String> {
-    let raw = hex::decode(s.trim()).map_err(|e| format!("validator seed: {e}"))?;
-    let arr: [u8; 32] = raw
-        .as_slice()
-        .try_into()
-        .map_err(|_| "validator seed must be 32 bytes (64 hex chars)".to_string())?;
-    Ok(arr)
-}
-
-/// Build the hybrid config exactly like `kovanica-ffi::enable_hybrid`:
-/// nominal stake work pinned to 1, epoch-beacon VRF input, optional
-/// difficulty retarget. Zero rates are rejected (a `0/0` config would be
-/// ambiguous, and the FFI construction would divide by zero).
-fn hybrid_config_for(
-    rate_num: u64,
-    rate_den: u64,
-    retarget: bool,
-) -> Result<kovanica_state::HybridConfig, String> {
-    if rate_num == 0 || rate_den == 0 {
-        return Err("rate_num and rate_den must be positive".into());
-    }
-    Ok(kovanica_state::HybridConfig {
-        rate_num,
-        rate_den,
-        stake_nominal_work: 1,
-        use_epoch_beacon: true,
-        retarget: retarget.then(Retarget::default),
-    })
-}
-
-/// Choose the source coin for a bond: an exact-size unfrozen spendable coin,
-/// or a one-block split of the largest oversized coin (holding `value` intact
-/// until the split tx is mined — the change then lands back at the wallet).
-fn select_bond_source(candidates: &[(OutPoint, u64)], amount: u64) -> Result<BondSource, String> {
-    if amount == 0 {
-        return Err("bond amount must be positive".into());
-    }
-    if let Some((op, _)) = candidates.iter().find(|(_, v)| *v == amount) {
-        return Ok(BondSource::Exact(*op));
-    }
-    let (fund, value) = candidates
-        .iter()
-        .filter(|(_, v)| *v > amount)
-        .max_by_key(|(_, v)| *v)
-        .copied()
-        .ok_or_else(|| format!("insufficient funds: needed {amount} atoms"))?;
-    Ok(BondSource::Split { fund, value })
-}
-
-/// Bond `amount` atoms of `kp`'s native KVNC to the node's validator
-/// identity. Mirrors `kovanica-ffi::bond_stake`: the source coin is an
-/// unfrozen, spendable (mature) coin chosen over unfrozen spendable coins
-/// only; an oversized coin is auto-split via a mined block; then the `KVB1`
-/// tagged bond is submitted and sealed in a mined block.
-fn bond_stake(
-    node: &mut Node,
-    kp: &KeyPair,
-    amount: u64,
-    events: &broadcast::Sender<NodeEvent>,
-) -> Result<TxId, String> {
-    let addr = kp.address();
-    let vrf_pk = node
-        .validator_public_key()
-        .map(|pk| *pk.as_bytes())
-        .ok_or_else(|| "set validator seed before bonding".to_string())?;
-
-    // Spendable coins only: `spendable_utxos_of` respects coinbase maturity,
-    // so a freshly-mined subsidy coinbase is never picked over a mature coin.
-    let candidates: Vec<(OutPoint, u64)> = node
-        .spendable_utxos_of(&addr)
-        .map_err(|e| format!("spendable utxos: {e}"))?
-        .into_iter()
-        .filter(|(op, _)| !node.outpoint_is_frozen(op).unwrap_or(true))
-        .collect();
-
-    let source_op = match select_bond_source(&candidates, amount)? {
-        BondSource::Exact(op) => op,
-        BondSource::Split { fund, value } => {
-            let fee = node.min_fee();
-            let rest = value - amount;
-            let mut outputs = vec![TxOutput::native(amount, addr)];
-            if rest > fee {
-                outputs.push(TxOutput::native(rest - fee, addr));
-            }
-            let mut split = Transaction::unsigned(std::slice::from_ref(&fund), outputs, Vec::new());
-            split.attach_signature(0, Sig::from_bytes(kp.sign(&split.sighash())));
-            let split_id = split.id();
-            node.submit_tx(split)
-                .map_err(|e| format!("submit split: {e}"))?;
-            produce_block_sealed(node, events)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "mempool empty after split submit".to_string())?;
-            OutPoint::new(split_id, 0)
-        }
-    };
-
-    let bond = Transaction::signed(
-        &[(source_op, kp)],
-        vec![TxOutput::native(amount, addr)],
-        kovanica_state::bond_tag(kovanica_state::NATIVE_ASSET_ID, &vrf_pk),
-    );
-    let bond_id = bond.id();
-    node.submit_tx(bond)
-        .map_err(|e| format!("submit bond: {e}"))?;
-    produce_block_sealed(node, events)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "mempool empty after bond submit".to_string())?;
-    Ok(bond_id)
-}
-
-/// Unbond `amount` atoms of this validator's matured stake back to `kp`'s
-/// address. `Node::unbond_with` (FIFO over matured owned coins) builds and
-/// mines its own block, so the release is sealed immediately — matching the
-/// FFI `unbond` surface.
-fn unbond_stake(
-    node: &mut Node,
-    kp: &KeyPair,
-    amount: u64,
-    events: &broadcast::Sender<NodeEvent>,
-) -> Result<TxId, String> {
-    let addr = kp.address();
-    let vrf_pk = node
-        .validator_public_key()
-        .map(|pk| *pk.as_bytes())
-        .ok_or_else(|| "set validator seed before unbonding".to_string())?;
-    let sent = node
-        .unbond_with(kp, &vrf_pk, amount, addr)
-        .map_err(|e| format!("unbond: {e}"))?;
-    let _ = events.send(NodeEvent::BlockProduced {
-        block_id: sent.block.to_string(),
-        height: node.block_count().unwrap_or(0) as u64,
-        tx_count: 1,
-    });
-    Ok(sent.tx)
-}
-
+/* DEAD STAKING/MINING CODE REMOVED FOR POA ONLY */
 /// One P2P round: serve any inbound connections, then sync from each
 /// configured peer. Mirrors the explorer's `tick_p2p`/`sync_peers` pattern —
 /// headers-first sync with a full-dump fallback per peer. Live peers are the
@@ -1196,7 +994,7 @@ fn spv_fetch_verify(url: &str) -> Result<(SpvSyncInfo, SpvStore), String> {
     if parsed.is_empty() {
         return Err("light-sync blob is empty".into());
     }
-    let mut client = SpvClient::new(parsed[0].0.clone(), false, None);
+    let mut client = SpvClient::new(parsed[0].0.clone());
     let mut verified = 1u64;
     for (h, _) in &parsed[1..] {
         client
@@ -1320,6 +1118,9 @@ fn parse_light_sync(blob: &[u8]) -> Result<Vec<(BlockHeader, BlockFilter)>, Stri
                     .and_then(|s| s.try_into().ok())
                     .ok_or_else(err)?,
             ),
+            authority_sig: None,
+            authority_set_hash: [0u8; 32],
+            hash_without_authority_sig: [0u8; 32],
         };
         let fend = off.checked_add(13).ok_or_else(err)?;
         let f = blob.get(off..fend).ok_or_else(err)?;
@@ -1429,6 +1230,9 @@ mod tests {
             blue_score: height,
             chain_blue_work: height as u128,
             height,
+            authority_sig: None,
+            authority_set_hash: [0u8; 32],
+            hash_without_authority_sig: [0u8; 32],
         }
     }
 
@@ -1459,13 +1263,13 @@ mod tests {
         assert_eq!(parsed[0].1.data, Vec::<u8>::new());
 
         // The whole chain verifies through SpvClient (require_pow = false).
-        let mut client = SpvClient::new(parsed[0].0.clone(), false, None);
+        let mut client = SpvClient::new(parsed[0].0.clone());
         assert!(client.add_header(parsed[1].0.clone()).expect("verified"));
         assert_eq!(client.tip().map(|t| t.height), Some(1));
         // A broken prev-hash link is rejected.
         let mut bad = h1.clone();
         bad.prev_hash = BlockId::from_bytes([9u8; 32]);
-        let mut client = SpvClient::new(parsed[0].0.clone(), false, None);
+        let mut client = SpvClient::new(parsed[0].0.clone());
         assert!(client.add_header(bad).is_err());
     }
 
@@ -1506,137 +1310,18 @@ mod tests {
     }
 
     #[test]
-    fn parses_validator_seed_hex_and_rejects_bad_length() {
-        assert_eq!(parse_validator_seed(&"ab".repeat(32)).unwrap(), [0xab; 32]);
-        assert!(parse_validator_seed("zz").is_err(), "garbage rejected");
-        assert!(
-            parse_validator_seed(&"ab".repeat(31)).is_err(),
-            "31 bytes rejected"
-        );
-    }
+    #[ignore = "dead under PoA-only (validator/mining/staking APIs removed)"]
+    fn parses_validator_seed_hex_and_rejects_bad_length() { /* dead under PoA */ }
 
     #[test]
-    fn hybrid_config_matches_ffi_field_values() {
-        // The FFI pins stake_nominal_work=1, epoch beacon on, optional retarget.
-        let off = hybrid_config_for(1, 1, false).unwrap();
-        assert_eq!(off.rate_num, 1);
-        assert_eq!(off.rate_den, 1);
-        assert_eq!(off.stake_nominal_work, 1);
-        assert!(off.use_epoch_beacon);
-        assert!(off.retarget.is_none());
-
-        let on = hybrid_config_for(3, 10, true).unwrap();
-        assert!(on.retarget.is_some());
-
-        assert!(hybrid_config_for(0, 1, false).is_err());
-        assert!(hybrid_config_for(1, 0, false).is_err());
-    }
+    #[ignore = "dead under PoA-only"]
+    fn hybrid_config_matches_ffi_field_values() { /* dead under PoA */ }
 
     #[test]
-    fn selects_source_coin_exact_then_split_then_shortfall() {
-        let op1 = OutPoint::new(TxId::from_bytes([1u8; 32]), 0);
-        let op2 = OutPoint::new(TxId::from_bytes([2u8; 32]), 1);
-        let candidates = vec![(op1, 100), (op2, 200)];
-
-        // Exact-size coin wins outright.
-        assert_eq!(
-            select_bond_source(&candidates, 200).unwrap(),
-            BondSource::Exact(op2)
-        );
-        // No exact match → the largest oversized coin is split.
-        assert_eq!(
-            select_bond_source(&candidates, 150).unwrap(),
-            BondSource::Split {
-                fund: op2,
-                value: 200
-            }
-        );
-        // Nothing large enough → shortfall.
-        assert!(select_bond_source(&candidates, 300).is_err());
-        // Zero amount is rejected up front.
-        assert!(select_bond_source(&candidates, 0).is_err());
-    }
+    #[ignore = "dead under PoA-only"]
+    fn selects_source_coin_exact_then_split_then_shortfall() { /* dead under PoA */ }
 
     #[test]
-    fn bond_then_unbond_lifecycle_on_an_embedded_node() {
-        use kovanica_state::ledger::COINBASE_MATURITY;
-
-        let profile = NetworkProfile::testnet();
-        let (events, _rx) = broadcast::channel(64);
-        let founder = KeyPair::from_u64(1);
-
-        let mut node = Node::new();
-        node.genesis_with_finality(
-            profile.genesis_k,
-            profile.genesis_subsidy,
-            profile.genesis_premine,
-            1,
-            None,
-            profile.finality_depth,
-            profile.payload_pruning_depth,
-        )
-        .expect("genesis boots");
-
-        // Coinbase-mature the founder's premine before any bond. `produce_block`
-        // returns `Ok(None)` on an empty mempool, so use `produce_empty` to
-        // advance the chain (mints the subsidy coinbase to the founder).
-        for _ in 0..=COINBASE_MATURITY {
-            node.produce_empty().expect("mine maturing block");
-        }
-        assert!(
-            !node
-                .spendable_utxos_of(&founder.address())
-                .unwrap()
-                .is_empty(),
-            "founder has spendable coins after maturity"
-        );
-
-        // Set a validator and enable hybrid 1/1 (every slot is the validator's).
-        node.set_validator_seed([0xab; 32]);
-        assert!(node.validator_public_key().is_some());
-        let cfg = hybrid_config_for(1, 1, false).unwrap();
-        node.enable_hybrid(cfg).expect("hybrid enabled");
-
-        // Bond a modest amount from the founder wallet (oversized-coin split).
-        let bond_amount = 1_000_000u64;
-        let bond_id = bond_stake(&mut node, &founder, bond_amount, &events).expect("bond seals");
-        assert_eq!(node.total_stake().unwrap(), bond_amount);
-        assert_eq!(
-            node.stake_of(node.validator_public_key().unwrap().as_bytes())
-                .unwrap(),
-            bond_amount
-        );
-
-        // The gate is that an unbond before UNBOND_MATURITY is rejected.
-        let pre_release = 400_000u64;
-        assert!(
-            node.unbond_with(
-                &founder,
-                node.validator_public_key().unwrap().as_bytes(),
-                pre_release,
-                founder.address()
-            )
-            .is_err(),
-            "unbond before maturity is rejected"
-        );
-
-        // Let the bond mature, then release part of it. An unbond spends ALL
-        // matured frozen outpoints — the unreleased remainder returns as
-        // unfrozen change — so a fully-matured 1,000,000 bond unbonds to 0.
-        for _ in 0..(COINBASE_MATURITY + 5) {
-            node.produce_empty().expect("mine maturity block");
-        }
-        let unbond_id =
-            unbond_stake(&mut node, &founder, pre_release, &events).expect("unbond seals");
-        assert_eq!(node.total_stake().unwrap(), 0);
-        assert_eq!(
-            node.stake_of(node.validator_public_key().unwrap().as_bytes())
-                .unwrap(),
-            0
-        );
-        assert!(
-            bond_id != unbond_id,
-            "bond and unbond are distinct transactions"
-        );
-    }
+    #[ignore = "dead under PoA-only (staking/mining lifecycle removed)"]
+    fn bond_then_unbond_lifecycle_on_an_embedded_node() { /* dead under PoA */ }
 }

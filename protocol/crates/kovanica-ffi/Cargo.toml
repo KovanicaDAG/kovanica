@@ -20,4 +20,5 @@ kovanica-node = { path = "../kovanica-node" }
 ed25519-dalek = { workspace = true }
 hex.workspace = true
 thiserror.workspace = true
+bincode.workspace = true
 uniffi.workspace = true

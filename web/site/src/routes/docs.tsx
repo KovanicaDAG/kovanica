@@ -301,27 +301,20 @@ function DocsBody() {
           </ul>
         </section>
 
-        {/* Staking */}
+        {/* Authority set */}
         <section id="staking" className="mt-10 scroll-mt-20">
-          <h2 className="font-display text-2xl tracking-tight text-fg">Staking</h2>
+          <h2 className="font-display text-2xl tracking-tight text-fg">Authority Set</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            Hybrid block production: proof-of-work secures the base, and any holder who{" "}
-            <strong className="text-fg">bonds</strong> coins can attempt VRF-based block production.
-            Sortition is proportional to bonded stake — the more you bond, the more slots you win.
+            Block production is Proof-of-Authority: a fixed set of Ed25519 authorities take turns
+            producing blocks in slot round-robin order. The set is represented on-chain as a single
+            live Authority UTXO and updated via threshold-signed transactions.
           </p>
           <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-            <Fact k="Bond" v="Tagged tx KVB1 ‖ asset_id ‖ vrf_pk — freezes the outpoint" />
-            <Fact k="Unbond" v="Tagged tx KVU1 — unlocks after maturity" />
-            <Fact k="Multi-asset" v="Bonds can be denominated in any KVP-102 token" />
-            <Fact k="Maturity" v="Bonds must age before unbonding (mirrors coinbase maturity)" />
+            <Fact k="Slot duration" v="3000 ms" />
+            <Fact k="Finality" v="100 blue score" />
+            <Fact k="Update threshold" v="2-of-3 (minimum)" />
+            <Fact k="Max authorities" v="16" />
           </dl>
-          <p className="mt-4 text-sm leading-relaxed text-muted">
-            A staked block carries a VRF bundle: the public key the stake is registered under, the
-            ECVRF proof over the slot input, and the output compared against a stake-proportional
-            threshold. Staked blocks arrive on{" "}
-            <code className="font-mono text-fg">POST /api/mine/submit</code>. A wallet staking UI is
-            on the roadmap — bonds and unbonds are ordinary tagged transactions today.
-          </p>
         </section>
 
         {/* Protocol */}
@@ -339,9 +332,9 @@ function DocsBody() {
             <Fact k="P2P" v="TCP :9000 · seed.kovanica.online:9000" />
           </dl>
           <p className="mt-4 text-sm leading-relaxed text-muted">
-            Block production is hybrid: proof-of-work secures the base while VRF-staked producers
-            earn the right to mint — a design that resists nothing-at-stake without centralizing on
-            a single leader. Finality settles at 100 blue score; payloads prune at 1000.
+            Block production is Proof-of-Authority: a fixed set of Ed25519 authorities take turns
+            producing blocks in slot round-robin order. Finality settles at 100 blue score; payloads
+            prune at 1000.
           </p>
         </section>
 

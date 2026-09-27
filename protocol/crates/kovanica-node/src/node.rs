@@ -15,10 +15,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::{Signer, SigningKey};
-use kovanica_cli::Wallet;
 use kovanica_dag::{
     AuthorityError, AuthorityPublicKey, AuthoritySet, AuthorityUpdateTx, Block, BlockId, Dag,
-    PoAConfig, POA_NOMINAL_WORK,
+    PoAConfig, StakeMerkleProof, POA_NOMINAL_WORK,
 };
 use kovanica_state::multisig::{verify_threshold_signatures, MultisigScript};
 use kovanica_state::{
@@ -27,6 +26,7 @@ use kovanica_state::{
     OutPoint, Sig, StealthAddress, Transaction, TxId, TxInput, TxOutput, UtxoSet, VaultScript,
     COINBASE_MATURITY, DEFAULT_HALVING_ERA, FEE_PRODUCER_DEN, FEE_PRODUCER_NUM,
 };
+use kovanica_wallet::Wallet;
 
 use crate::mempool_v2::{MempoolConfig, MempoolV2};
 use crate::metrics::{
@@ -250,6 +250,68 @@ pub struct CoinJoinPrepared {
     pub values: Vec<u64>,
     /// Total protocol fee for the batch (atoms).
     pub fee: u64,
+}
+
+/// An unsigned HTLC creation ready for a wallet to sign.
+///
+/// Mirrors the [`Prepared`] pattern but includes the HTLC template data
+/// that the recipient needs to verify the contract.
+#[derive(Clone, Debug)]
+pub struct HtlcCreatePrepared {
+    /// The unsigned transaction (zeroed signatures).
+    pub tx: Transaction,
+    /// BLAKE3 sighash the wallet must sign.
+    pub sighash: [u8; 32],
+    /// Selected funding outpoint.
+    pub outpoint: OutPoint,
+    /// Value of that outpoint.
+    pub value: u64,
+    /// Protocol fee burned-or-paid to the miner (atoms).
+    pub fee: u64,
+    /// The HTLC script template (100 bytes).
+    pub script: HtlcScript,
+    /// The Version 0x04 address the HTLC output is locked to.
+    pub address: Address,
+}
+
+/// An unsigned HTLC redeem ready for a wallet to sign.
+#[derive(Clone, Debug)]
+pub struct HtlcRedeemPrepared {
+    /// The unsigned transaction (zeroed signatures).
+    pub tx: Transaction,
+    /// BLAKE3 sighash the wallet must sign.
+    pub sighash: [u8; 32],
+    /// The HTLC outpoint being redeemed.
+    pub outpoint: OutPoint,
+    /// Value of the HTLC outpoint.
+    pub value: u64,
+    /// Protocol fee (atoms).
+    pub fee: u64,
+    /// The HTLC script template.
+    pub script: HtlcScript,
+    /// The preimage that unlocks the HTLC.
+    pub preimage: Vec<u8>,
+    /// Destination address for the redeemed funds.
+    pub to: Address,
+}
+
+/// An unsigned HTLC refund ready for a wallet to sign.
+#[derive(Clone, Debug)]
+pub struct HtlcRefundPrepared {
+    /// The unsigned transaction (zeroed signatures).
+    pub tx: Transaction,
+    /// BLAKE3 sighash the wallet must sign.
+    pub sighash: [u8; 32],
+    /// The HTLC outpoint being refunded.
+    pub outpoint: OutPoint,
+    /// Value of the HTLC outpoint.
+    pub value: u64,
+    /// Protocol fee (atoms).
+    pub fee: u64,
+    /// The HTLC script template.
+    pub script: HtlcScript,
+    /// Destination address for the refunded funds.
+    pub to: Address,
 }
 
 /// Participant specification for CoinJoin batching.
@@ -976,6 +1038,39 @@ impl Node {
         self.ledger.as_ref().and_then(Ledger::poa_config)
     }
 
+    /// Get the stake merkle proof for the authority scheduled at `slot`.
+    /// Returns the stake merkle proof for SW-PoA SPV verification.
+    pub fn get_stake_proof(&self, slot: u64) -> Result<StakeMerkleProof, NodeError> {
+        let ledger = self.ledger.as_ref().ok_or(NodeError::NotInitialized)?;
+        let poa = ledger.poa_config().ok_or(NodeError::NotInitialized)?;
+        let authority = poa.authority_set.active_authority(slot);
+        let proof = poa
+            .authority_set
+            .stake_merkle_proof(authority)
+            .ok_or(NodeError::NotInitialized)?;
+        Ok(proof)
+    }
+
+    /// Get the full authority stake set for an epoch (for light client caching).
+    /// An epoch is typically 100k slots.
+    pub fn get_epoch_authority_set(
+        &self,
+        _epoch: u64,
+    ) -> Result<Vec<(AuthorityPublicKey, u64)>, NodeError> {
+        let ledger = self.ledger.as_ref().ok_or(NodeError::NotInitialized)?;
+        let poa = ledger.poa_config().ok_or(NodeError::NotInitialized)?;
+        let authorities = poa.authority_set.authorities().to_vec();
+        let stakes = poa
+            .authority_set
+            .stakes()
+            .map(|s| s.to_vec())
+            .unwrap_or_else(|| vec![1u64; authorities.len()]);
+        Ok(authorities
+            .into_iter()
+            .zip(stakes.iter().copied())
+            .collect())
+    }
+
     /// Apply an on-chain authority set update (RFC-POA §1, KVP-201).
     ///
     /// Validates the update against the current authority set and replaces
@@ -1345,6 +1440,285 @@ impl Node {
         let sig = Sig::from_bytes(signature);
         for i in 0..tx.inputs().len() {
             tx.attach_signature(i, sig);
+        }
+        self.submit_tx(tx)
+    }
+
+    // === HTLC (RFC-004) prepare/submit methods ===
+    //
+    // These mirror the standard prepare/submit pattern:
+    // 1. prepare_* builds an unsigned transaction and returns a Prepared struct
+    //    containing the sighash the wallet must sign.
+    // 2. submit_* takes the signature, verifies it against the sighash, attaches
+    //    the signature to the transaction, and submits to the mempool.
+    // The secret key never enters the node.
+
+    /// Prepare an unsigned HTLC creation transaction.
+    ///
+    /// The caller must fund the HTLC output: `from` must own UTXOs covering
+    /// `amount + fee`. The output locks `amount` to the HTLC template address
+    /// derived from `recipient_pk`, `preimage_hash`, and `timeout` (with the
+    /// sender pk implicit from `from`).
+    ///
+    /// Returns a [`HtlcCreatePrepared`] with the unsigned tx, sighash, and the
+    /// full HTLC template so the recipient can verify it.
+    pub fn prepare_create_htlc(
+        &self,
+        from: Address,
+        amount: u64,
+        asset_id: Option<AssetId>,
+        recipient_pk: [u8; 32],
+        preimage_hash: [u8; 32],
+        timeout: u32,
+    ) -> Result<HtlcCreatePrepared, NodeError> {
+        if amount == 0 {
+            return Err(NodeError::ZeroAmount);
+        }
+        // Validate and construct the HTLC script with sender = from
+        let script = HtlcScript::new(preimage_hash, recipient_pk, *from.payload(), timeout)
+            .map_err(|e| NodeError::Htlc(e.as_str()))?;
+        let htlc_address = script.address();
+
+        let fee = self.min_fee();
+        let need = amount
+            .checked_add(fee)
+            .ok_or(NodeError::InsufficientFunds)?;
+        let state = self.ledger()?.ledger_state();
+        let chain_height = self
+            .ledger()
+            .as_ref()
+            .map(|l| l.tip_blue_score())
+            .unwrap_or(0);
+        let mature_before = chain_height.saturating_sub(COINBASE_MATURITY);
+        let mut owned: Vec<(OutPoint, u64)> = state
+            .iter()
+            .filter(|(_, out)| out.owner == from && out.asset_id == asset_id)
+            .filter(|(op, _)| match state.get_entry(op) {
+                Some(entry) => !entry.is_coinbase || entry.creation_height <= mature_before,
+                None => true,
+            })
+            .map(|(op, out)| (*op, out.value))
+            .collect();
+        owned.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+        let mut selected: Vec<(OutPoint, u64)> = Vec::new();
+        let mut total: u64 = 0;
+        for (op, value) in owned {
+            selected.push((op, value));
+            total = total.saturating_add(value);
+            if total >= need {
+                break;
+            }
+        }
+        if total < need {
+            return Err(NodeError::InsufficientFunds);
+        }
+
+        let mut outputs = vec![TxOutput::new(amount, asset_id, htlc_address)];
+        let change = total - need;
+        if change > 0 {
+            outputs.push(TxOutput::new(change, asset_id, from));
+        }
+        let outpoints: Vec<OutPoint> = selected.iter().map(|(op, _)| *op).collect();
+        let tx = Transaction::unsigned(&outpoints, outputs, Vec::new());
+        let sighash = tx.sighash();
+        Ok(HtlcCreatePrepared {
+            tx,
+            sighash,
+            outpoint: selected[0].0,
+            value: total,
+            fee,
+            script,
+            address: htlc_address,
+        })
+    }
+
+    /// Submit a signed HTLC creation transaction.
+    ///
+    /// Verifies `signature` against the sighash from `prepare_create_htlc`,
+    /// attaches it to the transaction inputs, and submits to the mempool.
+    pub fn submit_create_htlc(
+        &mut self,
+        prepared: HtlcCreatePrepared,
+        signature: [u8; 64],
+    ) -> Result<TxId, NodeError> {
+        let mut tx = prepared.tx;
+        let sig = Sig::from_bytes(signature);
+        for i in 0..tx.inputs().len() {
+            tx.attach_signature(i, sig);
+        }
+        self.submit_tx(tx)
+    }
+
+    /// Prepare an unsigned HTLC redeem transaction.
+    ///
+    /// The caller must be the **recipient** (knows the preimage). The witness
+    /// will be `[template, preimage, recipient_sig]` with no time constraint.
+    ///
+    /// For asset HTLCs, a native fee input is selected from the caller's UTXOs.
+    pub fn prepare_redeem_htlc(
+        &self,
+        from: Address,
+        outpoint: OutPoint,
+        script: &HtlcScript,
+        preimage: &[u8],
+        to: Address,
+    ) -> Result<HtlcRedeemPrepared, NodeError> {
+        let fee = self.min_fee();
+        let state = self.ledger()?.ledger_state();
+        let htlc_out = state.get(&outpoint).ok_or(NodeError::InsufficientFunds)?;
+        if htlc_out.owner != script.address() {
+            return Err(NodeError::InsufficientFunds);
+        }
+        if htlc_out.owner != from {
+            return Err(NodeError::InsufficientFunds);
+        }
+
+        let mut inputs = vec![TxInput::new(outpoint, Vec::new())];
+        let mut outputs = Vec::new();
+        match htlc_out.asset_id {
+            None => {
+                let value = htlc_out
+                    .value
+                    .checked_sub(fee)
+                    .ok_or(NodeError::InsufficientFunds)?;
+                outputs.push(TxOutput::native(value, to));
+            }
+            Some(asset) => {
+                outputs.push(TxOutput::new(htlc_out.value, Some(asset), to));
+                // Native fee input, largest-first from `from`'s UTXOs.
+                let mut owned: Vec<(OutPoint, u64)> = state
+                    .iter()
+                    .filter(|(_, out)| out.owner == from && out.asset_id.is_none())
+                    .map(|(op, out)| (*op, out.value))
+                    .collect();
+                owned.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                let (fee_op, fee_value) = owned
+                    .into_iter()
+                    .find(|(_, v)| *v >= fee)
+                    .ok_or(NodeError::InsufficientFunds)?;
+                inputs.push(TxInput::new(fee_op, Vec::new()));
+                let change = fee_value - fee;
+                if change > 0 {
+                    outputs.push(TxOutput::native(change, from));
+                }
+            }
+        }
+
+        let tx = Transaction::new(inputs, outputs, Vec::new());
+        let sighash = tx.sighash();
+        Ok(HtlcRedeemPrepared {
+            tx,
+            sighash,
+            outpoint,
+            value: htlc_out.value,
+            fee,
+            script: *script,
+            preimage: preimage.to_vec(),
+            to,
+        })
+    }
+
+    /// Submit a signed HTLC redeem transaction.
+    pub fn submit_redeem_htlc(
+        &mut self,
+        prepared: HtlcRedeemPrepared,
+        signature: [u8; 64],
+    ) -> Result<TxId, NodeError> {
+        let mut tx = prepared.tx;
+        let witness = prepared
+            .script
+            .redeem_witness(&prepared.preimage, signature);
+        tx.inputs_mut()[0].witness = witness;
+        // Attach signature to fee input if present (uses same key)
+        if tx.inputs().len() > 1 {
+            let sig = Sig::from_bytes(signature);
+            for i in 1..tx.inputs().len() {
+                tx.attach_signature(i, sig);
+            }
+        }
+        self.submit_tx(tx)
+    }
+
+    /// Prepare an unsigned HTLC refund transaction.
+    ///
+    /// The caller must be the **sender**. The witness is `[template, sender_sig]`.
+    /// The ledger will enforce `chain_height >= script.timeout()`.
+    pub fn prepare_refund_htlc(
+        &self,
+        from: Address,
+        outpoint: OutPoint,
+        script: &HtlcScript,
+        to: Address,
+    ) -> Result<HtlcRefundPrepared, NodeError> {
+        let fee = self.min_fee();
+        let state = self.ledger()?.ledger_state();
+        let htlc_out = state.get(&outpoint).ok_or(NodeError::InsufficientFunds)?;
+        if htlc_out.owner != script.address() {
+            return Err(NodeError::InsufficientFunds);
+        }
+        if htlc_out.owner != from {
+            return Err(NodeError::InsufficientFunds);
+        }
+
+        let mut inputs = vec![TxInput::new(outpoint, Vec::new())];
+        let mut outputs = Vec::new();
+        match htlc_out.asset_id {
+            None => {
+                let value = htlc_out
+                    .value
+                    .checked_sub(fee)
+                    .ok_or(NodeError::InsufficientFunds)?;
+                outputs.push(TxOutput::native(value, to));
+            }
+            Some(asset) => {
+                outputs.push(TxOutput::new(htlc_out.value, Some(asset), to));
+                // Native fee input, largest-first from `from`'s UTXOs.
+                let mut owned: Vec<(OutPoint, u64)> = state
+                    .iter()
+                    .filter(|(_, out)| out.owner == from && out.asset_id.is_none())
+                    .map(|(op, out)| (*op, out.value))
+                    .collect();
+                owned.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                let (fee_op, fee_value) = owned
+                    .into_iter()
+                    .find(|(_, v)| *v >= fee)
+                    .ok_or(NodeError::InsufficientFunds)?;
+                inputs.push(TxInput::new(fee_op, Vec::new()));
+                let change = fee_value - fee;
+                if change > 0 {
+                    outputs.push(TxOutput::native(change, from));
+                }
+            }
+        }
+
+        let tx = Transaction::new(inputs, outputs, Vec::new());
+        let sighash = tx.sighash();
+        Ok(HtlcRefundPrepared {
+            tx,
+            sighash,
+            outpoint,
+            value: htlc_out.value,
+            fee,
+            script: *script,
+            to,
+        })
+    }
+
+    /// Submit a signed HTLC refund transaction.
+    pub fn submit_refund_htlc(
+        &mut self,
+        prepared: HtlcRefundPrepared,
+        signature: [u8; 64],
+    ) -> Result<TxId, NodeError> {
+        let mut tx = prepared.tx;
+        let witness = prepared.script.refund_witness(signature);
+        tx.inputs_mut()[0].witness = witness;
+        if tx.inputs().len() > 1 {
+            let sig = Sig::from_bytes(signature);
+            for i in 1..tx.inputs().len() {
+                tx.attach_signature(i, sig);
+            }
         }
         self.submit_tx(tx)
     }

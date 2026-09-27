@@ -116,7 +116,6 @@ export type ApiNode = {
   decimals: number;
   miner: string;
   atom: number;
-  pow: boolean;
   ui: string;
   utxos: number;
   chain_len: number;
@@ -156,7 +155,6 @@ export type ApiHead = {
 export type ApiBootstrap = ApiHead & {
   listen: string;
   peers: string[];
-  pow: boolean;
   token: string;
   k: number;
   subsidy: number;

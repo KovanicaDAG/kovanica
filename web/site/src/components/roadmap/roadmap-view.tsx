@@ -130,7 +130,7 @@ const NEXT: Item[] = [
     title: "Wallet staking UI",
     status: "next",
     blurb:
-      "Bond/unbond flows over tagged KVB1/KVU1 transactions, bonded-stake display, VRF key management.",
+      "Bond/unbond flows over tagged KVB1/KVU1 transactions, bonded-stake display.",
   },
   {
     id: "token-staking",

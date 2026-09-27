@@ -309,5 +309,87 @@ distribution. This is a *pace* bound. `MAX_SUPPLY` remains the hard ceiling.
 - `docs/RFC-POA-Migration.md` — PoA-only consensus; §9.1 above covers the interaction
 - `crates/kovanica-state/src/ledger.rs` — constants, `subsidy_at`, supply metrics
 - `crates/kovanica-state/tests/tokenomics.rs` — 18 adversarial tests
-- `TESTNET-RFC006.md` — live testnet economy and run env
 - `NETWORK.md` — genesis hash and per-network parameter table
+
+---
+
+## Appendix A: Operator Quick Reference (from TOKENOMICS.md)
+
+> This appendix mirrors the operator-facing numbers table from `TOKENOMICS.md`.
+> The RFC above carries the full rationale, design goals, and worked examples.
+
+### Units
+
+| Symbol | Meaning |
+|--------|---------|
+| **KVNC** | Native currency ticker |
+| **atom** | Smallest unit |
+| **Decimals** | 8 |
+| **1 KVNC** | `100_000_000` atoms (`ATOM` in code) |
+
+### Emission (smooth geometric curve)
+
+| Parameter | Value |
+|-----------|--------|
+| Genesis subsidy \(s_0\) | **10 KVNC** per block |
+| Era length \(E\) | **2_000_000** blocks |
+| Decay \(\alpha\) | **3/4** per era (integer floor) |
+| Curve total | **80_000_000 KVNC** |
+
+```text
+era = floor(height / 2_000_000)
+s(era) = floor(s(era-1) * 3/4)   with s(0) = 10 KVNC
+```
+
+### Hard cap & distribution
+
+| Component | Amount | Mechanism |
+|-----------|--------|-----------|
+| Founder premine | 0.2M KVNC | Genesis coinbase (P2PK) |
+| Treasury | 10M KVNC | 10 × 1M RFC-005 vaults at genesis |
+| Curve emission | 80M KVNC | Block subsidies |
+| **MAX_SUPPLY** | **90.2M KVNC** | Enforced via `native_minted` |
+
+Treasury tranche *k* (1..=10) unlocks at height `k * 31_536_000`.
+Owner keys are **placeholders** (`TREASURY_SEED_BASE + k`) until ceremony.
+
+### Coinbase maturity
+
+| Parameter | Value |
+|-----------|--------|
+| `COINBASE_MATURITY` | **100** blocks |
+| Error | `LedgerError::CoinbaseImmature` |
+
+### Fees
+
+| Parameter | Value |
+|-----------|--------|
+| Floor | `max(1, subsidy / 500_000)` atoms per byte |
+| Producer share | **25%** (`fee / 4`) |
+| Burned | **75%** |
+
+### Supply metrics
+
+| Metric | Definition |
+|--------|------------|
+| `total` / `native_minted` | cumulative minted |
+| `circulating` | tip UTXO native total (approx.) |
+| `burned` | cumulative 75% fee burn |
+| `max_supply` | `MAX_SUPPLY` |
+
+Exposed via `Ledger::supply()` and HTTP snapshot JSON fields.
+
+### Consensus parameters (related)
+
+| Parameter | Value | Status |
+|-----------|--------|--------|
+| GHOSTDAG **k** | 3 | `[CURRENT]` — unchanged by the PoA decision |
+| PoW | real, opt-in | `[TARGET]`-for-removal (being deleted, not just off). Replaced by an authority set: `KOVANICA_CONSENSUS=poa` + `KOVANICA_AUTHORITIES` + `KOVANICA_AUTHORITY_THRESHOLD` + `KOVANICA_SLOT_DURATION`. See RFC-POA-Migration §0.2 |
+| Difficulty / retarget | exists, `H*work < 2^256` | `[TARGET]`-for-removal — **there is no retune knob to mis-set**, so any pre-transition "don't retune the difficulty window" advice is void. Block pace becomes a fixed slot |
+| Emission index | block **height** | `[CURRENT]` — *the reason tokenomics survives PoA removal* |
+
+### References
+
+- `crates/kovanica-state/src/ledger.rs`
+- `crates/kovanica-node/src/explorer.rs` — `NetworkProfile`
+- RFC-005 `VaultScript`

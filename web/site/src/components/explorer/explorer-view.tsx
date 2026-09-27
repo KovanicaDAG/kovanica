@@ -101,7 +101,6 @@ export function ExplorerView() {
         <Stat label="Chain" value={String(n?.chain_len ?? "—")} />
         <Stat label="Mempool" value={String(n?.mempool ?? "—")} />
         <Stat label="Fee" value={n ? fmtKvnc(n.min_fee) : "—"} />
-        <Stat label="PoW" value={n?.pow ? "on" : "off"} />
         <Stat label="Genesis" value={n ? shortId(n.genesis) : "—"} />
         <Stat label="Txs" value={String(n?.tx_count ?? "—")} />
       </dl>

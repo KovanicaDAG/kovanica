@@ -42,7 +42,7 @@ export function MainnetLaunching() {
           </h1>
           <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-muted">
             The production network is being finalized — genesis, node
-            distribution and the VRF-staked producer set. Meanwhile the full
+            distribution and the authority set. Meanwhile the full
             protocol is live on testnet.
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
@@ -54,7 +54,7 @@ export function MainnetLaunching() {
             </Button>
           </div>
           <p className="mt-6 font-mono text-[10px] tracking-wide text-subtle uppercase">
-            mainnet.kovanica.online · GHOSTDAG · hybrid PoW + VRF
+            mainnet.kovanica.online · GHOSTDAG · Proof-of-Authority
           </p>
         </div>
       </main>

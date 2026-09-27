@@ -604,8 +604,8 @@ impl LightNode {
     // Sync (byte blobs over any transport)
     // ------------------------------------------------------------------
 
-    /// Every known block as a wire-format blob (framed count + records, VRF
-    /// bundles included). Hand this to a peer; idempotent on their side.
+    /// Every known block as a wire-format blob (framed count + records). Hand
+    /// this to a peer; idempotent on their side.
     pub fn export_blocks(&self) -> Vec<u8> {
         net::encode_records(&self.lock().export())
     }
@@ -919,6 +919,40 @@ impl LightNode {
             return Ok(false);
         }
         Ok(proof.verify())
+    }
+
+    /// SW-PoA stake proof for a block's authority (SPV).
+    // ------------------------------------------------------------------
+    // SW-PoA SPV verification (stake-weighted PoA)
+    // ------------------------------------------------------------------
+    /// Previously verified an SW-PoA block header with a stake proof.
+    /// Removed: stake/VRF admission was dropped entirely (RFC-POA-Migration §0.7.1).
+    pub fn verify_sw_poa_header(
+        &self,
+        _header_blob: Vec<u8>,
+        _proof_hex: String,
+    ) -> Result<bool, LightNodeError> {
+        Err(invalid("SW-PoA verification removed"))
+    }
+
+    /// Fetch the stake merkle proof for a slot from the node.
+    /// Returns the proof as a hex-encoded bincode blob.
+    pub fn fetch_stake_proof(&self, slot: u64) -> Result<String, LightNodeError> {
+        let node = self.lock();
+        let proof = node.get_stake_proof(slot)?;
+        Ok(hex::encode(bincode::serialize(&proof).unwrap()))
+    }
+
+    /// Fetch the full authority stake set for an epoch.
+    /// Returns lines of "pubkey_hex stake_atoms".
+    pub fn fetch_epoch_authority_set(&self, epoch: u64) -> Result<String, LightNodeError> {
+        let node = self.lock();
+        let set = node.get_epoch_authority_set(epoch)?;
+        let mut out = Vec::new();
+        for (pk, stake) in set {
+            out.push(format!("{} {}", hex::encode(pk.as_bytes()), stake));
+        }
+        Ok(out.join("\n"))
     }
 
     // ------------------------------------------------------------------
@@ -1445,7 +1479,7 @@ fn decode_tx_blob(blob: &[u8]) -> Result<Transaction, LightNodeError> {
 
 const FILTER_K: u8 = 8;
 const LIGHT_SYNC_MAGIC: &[u8; 4] = b"KVLS";
-const LIGHT_SYNC_VERSION: u8 = 1;
+const LIGHT_SYNC_VERSION: u8 = 2;
 
 fn encode_header(h: &kovanica_state::spv::BlockHeader, out: &mut Vec<u8>) {
     out.extend_from_slice(h.id.as_bytes());
@@ -1457,6 +1491,16 @@ fn encode_header(h: &kovanica_state::spv::BlockHeader, out: &mut Vec<u8>) {
     out.extend_from_slice(&h.blue_score.to_be_bytes());
     out.extend_from_slice(&h.chain_blue_work.to_be_bytes());
     out.extend_from_slice(&h.height.to_be_bytes());
+    // v2 PoA extension (289 bytes total)
+    if let Some(sig) = &h.authority_sig {
+        out.push(1);
+        out.extend_from_slice(sig.as_slice());
+    } else {
+        out.push(0);
+        out.extend_from_slice(&[0u8; 64]);
+    }
+    out.extend_from_slice(&h.authority_set_hash);
+    out.extend_from_slice(&h.hash_without_authority_sig);
 }
 
 fn decode_header(buf: &[u8], version: u8) -> Option<(kovanica_state::spv::BlockHeader, &[u8])> {
@@ -1465,6 +1509,9 @@ fn decode_header(buf: &[u8], version: u8) -> Option<(kovanica_state::spv::BlockH
     if buf.len() < min_len {
         return None;
     }
+    // Ensure the buffer is at least the declared header length for the version.
+    // Ensure the buffer is at least the declared header length for the version.
+    // (The check above is redundant but kept for clarity.)
     let get32 = |o: usize| <[u8; 32]>::try_from(&buf[o..o + 32]).ok();
     let header = kovanica_state::spv::BlockHeader {
         id: BlockId::from_bytes(get32(0)?),

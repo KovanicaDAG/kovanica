@@ -50,7 +50,7 @@ GET /api/head
   { network, genesis, tip, blocks, min_fee, atom }
 
 GET /api/bootstrap
-  head + { listen, peers, pow, token, k, subsidy, founder_amount, founder_seed, source, upstream }
+  head + { listen, peers, token, k, subsidy, founder_amount, founder_seed, source, upstream }
   + finality_depth, payload_pruning_depth
 
 GET /api/state
