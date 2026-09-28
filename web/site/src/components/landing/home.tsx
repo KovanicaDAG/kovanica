@@ -1,7 +1,8 @@
 /**
- * HomeLanding — orchestrator for apex (kovanica.online).
- * Keeps WalletDownloads + all previous product surfaces.
- * New: Hero (responsive), What’s New, About, NFT card.
+ * HomeLanding — marketing home for apex only (kovanica.online).
+ * Order: Hero → WalletDownloads → What’s New → Surfaces → About (founder last).
+ *
+ * Do NOT use this on testnet. or mainnet. hosts — use HomeTestnet / HomeMainnet.
  */
 import { WalletDownloads } from "@/components/wallet/wallet-downloads";
 import { useLedger } from "@/lib/ledger/store";
@@ -30,9 +31,10 @@ export function HomeLanding() {
 
       <WhatsNew />
 
-      <About />
+      {/* Surfaces first; founder/About intentionally last */}
+      <ProductGrid variant="landing" />
 
-      <ProductGrid />
+      <About />
     </main>
   );
 }

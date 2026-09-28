@@ -35,9 +35,6 @@ use crate::node::{
 };
 use crate::p2p::Mesh;
 
-const UI: &str = include_str!("explorer.html");
-const BIP39: &str = include_str!("bip39-english.txt");
-const DOCS: &str = include_str!("../../../../vault/docs/_root/TESTNET.md");
 /// 1 KVNC = 10^8 base units (atoms).
 const ATOM: u64 = 100_000_000;
 /// RFC-006 genesis subsidy: 10 KVNC/block.
@@ -1674,39 +1671,6 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
         return respond_prometheus_metrics(&mut stream);
     }
 
-    if method == "HEAD" && (path == "/" || path == "/index.html" || path == "/wallet") {
-        return respond(&mut stream, 200, "text/html; charset=utf-8", b"");
-    }
-    if method == "GET" && (path == "/" || path == "/index.html" || path == "/wallet") {
-        return respond(&mut stream, 200, "text/html; charset=utf-8", UI.as_bytes());
-    }
-    if method == "GET" && path == "/bip39.txt" {
-        return respond(
-            &mut stream,
-            200,
-            "text/plain; charset=utf-8",
-            BIP39.as_bytes(),
-        );
-    }
-    if method == "GET" && path == "/kovanica-explorer-wallet.patch" {
-        let body = std::fs::read("/workspace/kovanica-explorer-wallet.patch")
-            .or_else(|_| std::fs::read("/tmp/kovanica-explorer-wallet.patch"))
-            .unwrap_or_default();
-        return respond_download(
-            &mut stream,
-            "text/x-patch; charset=utf-8",
-            "kovanica-explorer-wallet.patch",
-            &body,
-        );
-    }
-    if method == "GET" && path == "/docs" {
-        return respond(
-            &mut stream,
-            200,
-            "text/plain; charset=utf-8",
-            DOCS.as_bytes(),
-        );
-    }
     if method == "GET" && path == "/api/bootstrap" {
         let n = app.mesh.node(&app.selected);
         let genesis = n

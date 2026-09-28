@@ -1,8 +1,7 @@
 /**
- * What’s New section — data-driven.
- * Mobile: vertical stack · Desktop: 2-col cards
+ * What’s New — marketing Landing only.
+ * Prefer absolute hrefs (http/https); no in-app protocol Links on apex.
  */
-import { Link } from "@tanstack/react-router";
 import { WHATS_NEW } from "@/lib/content/whats-new";
 
 export function WhatsNew() {
@@ -32,15 +31,9 @@ export function WhatsNew() {
               </div>
               <h3 className="mt-2 font-display text-lg tracking-tight text-fg">
                 {item.href ? (
-                  item.href.startsWith("http") ? (
-                    <a href={item.href} className="hover:underline">
-                      {item.title}
-                    </a>
-                  ) : (
-                    <Link to={item.href as "/nft" | "/multi-asset" | "/docs" | "/roadmap"} className="hover:underline">
-                      {item.title}
-                    </Link>
-                  )
+                  <a href={item.href} className="hover:underline">
+                    {item.title}
+                  </a>
                 ) : (
                   item.title
                 )}
