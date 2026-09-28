@@ -22,6 +22,7 @@ export type HostRole =
   | "docs"
   | "api"
   | "faucet"
+  | "playground"
   | "shared";
 
 export function hostRoleFromHost(host: string): HostRole {
@@ -31,6 +32,7 @@ export function hostRoleFromHost(host: string): HostRole {
   if (h === "docs.kovanica.online" || h.startsWith("docs.")) return "docs";
   if (h === "api.kovanica.online" || h.startsWith("api.")) return "api";
   if (h === "faucet.testnet.kovanica.online" || h.startsWith("faucet.")) return "faucet";
+  if (h === "playground.kovanica.online" || h.startsWith("playground.")) return "playground";
   if (h === "testnet.kovanica.online" || h.startsWith("testnet.")) return "testnet";
   // explorer., wallet., pool., status., kovi. — share the app surface
   return "shared";

@@ -37,6 +37,9 @@ export const Route = createRootRoute({
       if (role === "faucet") {
         throw redirect({ to: "/faucet", replace: true });
       }
+      if (role === "playground") {
+        throw redirect({ to: "/playground", replace: true });
+      }
     }
 
     return { host, role };
@@ -58,12 +61,16 @@ export const Route = createRootRoute({
             ? "Kovanica API"
             : role === "faucet"
               ? "Kovanica Faucet"
-              : "Kovanica Testnet";
+              : role === "playground"
+                ? "Kovanica Playground"
+                : "Kovanica Testnet";
     const description = isLanding
       ? "Kovanica Protocol — a BlockDAG Layer-1 with GHOSTDAG consensus, Proof-of-Authority, native multi-asset UTXOs and privacy primitives. Testnet live."
       : isMainnet
         ? "Kovanica Protocol mainnet — launching soon. Explore the BlockDAG, wallet and protocol on testnet meanwhile."
-        : "Kovanica Protocol testnet — BlockDAG explorer, wallet, origins map and protocol tools for KVNC on kovanica-testnet.";
+        : role === "playground"
+          ? "Kovanica Playground — interactive onboarding, live API console, and code snippets for the Kovanica Protocol."
+          : "Kovanica Protocol testnet — BlockDAG explorer, wallet, origins map and protocol tools for KVNC on kovanica-testnet.";
     return {
       meta: [
         { charSet: "utf-8" },

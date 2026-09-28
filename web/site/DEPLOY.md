@@ -3,8 +3,27 @@
 `/root/kovanica-web` and `/root/kovanica-ledger` are **not git repos.** Clone
 sidecars. Do not `git -C` them.
 
-Kovanica owns `127.0.0.1:3000` (web), `127.0.0.1:8080` (explorer HTTP,
-primary seed unit `kovanica-explorer`), `0.0.0.0:9000` (P2P). Leave dashboard / trader / postgres / docker alone.
+## Multi-surface topology
+
+All web surfaces are served from a single Vite build (`/root/kovanica-web/.output/`)
+via PM2 on `127.0.0.1:3000`. Caddy terminates TLS and reverse-proxies to it.
+
+| Domain | Surface | Description |
+|--------|---------|-------------|
+| `kovanica.online` | Landing | Pure landing page |
+| `testnet.kovanica.online` | Testnet app | Explorer, wallet, network tabs |
+| `mainnet.kovanica.online` | Mainnet app | Same app, mainnet (launching soon) |
+| `playground.kovanica.online` | Playground | Onboarding, API console, snippets |
+| `docs.kovanica.online` | Docs | Documentation |
+| `api.kovanica.online` | API reference | API reference page |
+| `faucet.testnet.kovanica.online` | Faucet | Testnet faucet |
+| `explorer.kovanica.online` | Legacy | Redirects to testnet |
+
+The Rust node serves `/api/*` on `127.0.0.1:8080` (systemd `kovanica-explorer`).
+Caddy proxies `/api/*` to the node; all other paths go to the web app.
+
+Kovanica owns `127.0.0.1:3000` (web), `127.0.0.1:8080` (node API),
+`0.0.0.0:9000` (P2P). Leave dashboard / trader / postgres / docker alone.
 
 > > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
 > > Proof-of-Work is being removed from the protocol. See

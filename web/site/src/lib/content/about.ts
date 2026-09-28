@@ -1,6 +1,7 @@
 /**
- * About / Founder content for Landing.
+ * About / Founder content for Landing (apex only).
  * Aligns with roadmap-pack/Kovanica-Founder-Page-Outline.md
+ * All hrefs absolute so apex never routes into protocol SPA paths.
  */
 
 export const ABOUT = {
@@ -23,13 +24,13 @@ export const ABOUT = {
     { label: "Docs", href: "https://docs.kovanica.online" },
     { label: "GitHub", href: "https://github.com/KovanicaDAG" },
     { label: "API", href: "https://api.kovanica.online" },
-    { label: "Roadmap", href: "/roadmap" },
+    { label: "Roadmap", href: "https://testnet.kovanica.online/roadmap" },
     { label: "Testnet", href: "https://testnet.kovanica.online" },
     { label: "Dev", href: "mailto:dev@kovanica.online" },
     { label: "Security", href: "mailto:security@kovanica.online" },
   ] as const,
 
-  /** Personal GitHub (founder) — optional secondary link */
+  /** Personal GitHub (founder) */
   personalGithub: "https://github.com/BetterCallDzuks",
 
   transparency:
