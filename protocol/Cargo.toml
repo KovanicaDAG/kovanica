@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/kovanica-dag", "crates/kovanica-state", "crates/kovanica-wallet", "crates/kovanica-node", "crates/kovanica-cli", "crates/kovanica-ffi"]
+members = ["crates/kovanica-dag", "crates/kovanica-state", "crates/kovanica-wallet", "crates/kovanica-node", "crates/kovanica-cli", "crates/kovanica-ffi", "crates/kovanica-chat"]
 
 [workspace.package]
 version = "0.3.0"
@@ -58,3 +58,7 @@ libfuzzer-sys = "0.4"
 # BIP-39 mnemonic parsing/entropy. Used by kovanica-wallet only — it is the sole
 # owner of key derivation, so no other crate should take this dependency.
 bip39 = { version = "2", features = ["rand", "std"] }
+
+# chat encryption
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
