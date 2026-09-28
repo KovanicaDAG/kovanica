@@ -178,11 +178,11 @@ pub fn record_block_produced(height: u64, blue_score: u64, duration: Duration) {
 
 /// Surface the passive chain head on any block insert (produce *or* receive).
 ///
-/// Non-mining validation seeds never hit the production path, so
+/// Non-producing validation seeds never hit the production path, so
 /// [`record_block_produced`] never runs for them and the height/blue-score
 /// gauges stay unregistered (metrics-exporter-prometheus only renders
 /// observed series). This sets the two gauges on every insert — including
-/// blocks received from peers on a `KOVANICA_MINE=0` seed — so soak
+/// blocks received from peers on a `KOVANICA_PRODUCE=0` seed — so soak
 /// monitoring sees chain progress without counting these as produced.
 /// [`names::BLOCKS_PRODUCED_TOTAL`] is intentionally not touched here.
 ///

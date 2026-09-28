@@ -1006,12 +1006,38 @@ impl Node {
     /// scheduled authority. Client-side identity — the node never receives
     /// another authority's key.
     pub fn set_authority_signing_key(&mut self, seed: [u8; 32]) {
-        self.authority_sks.push(SigningKey::from_bytes(&seed));
+        let sk = SigningKey::from_bytes(&seed);
+        eprintln!(
+            "Loaded PoA authority signing key; derived public key: {}",
+            hex::encode(sk.verifying_key().as_bytes())
+        );
+        self.authority_sks.push(sk);
     }
 
     /// This authority's Ed25519 public key, if a signing key was set.
     pub fn authority_public_key(&self) -> Option<AuthorityPublicKey> {
         self.authority_sks.first().map(|sk| sk.verifying_key())
+    }
+
+    /// If PoA is enabled and this node holds the signing key for `timestamp`'s
+    /// scheduled authority, return the scheduled public key and a clone of the
+    /// signing key. Logs a diagnostic when the node holds authority keys but
+    /// none match the scheduled slot — the usual symptom of loading the wrong
+    /// key or pointing the service at the wrong authority set.
+    fn poa_signer_for(&self, timestamp: u64) -> Option<(AuthorityPublicKey, SigningKey)> {
+        let cfg = self.poa_config()?;
+        let slot = timestamp / cfg.slot_duration_ms;
+        let scheduled = *cfg.authority_set.active_authority(slot);
+        let sk = self.authority_sks.iter().find(|sk| sk.verifying_key() == scheduled);
+        if sk.is_none() && !self.authority_sks.is_empty() {
+            eprintln!(
+                "PoA slot {} scheduled authority {} not held by this node (loaded {} key(s))",
+                slot,
+                hex::encode(scheduled.as_bytes()),
+                self.authority_sks.len()
+            );
+        }
+        sk.cloned().map(|sk| (scheduled, sk))
     }
 
     /// Enable Proof-of-Authority admission on the ledger. See
@@ -2421,12 +2447,19 @@ impl Node {
             };
             let slot = timestamp / cfg.slot_duration_ms;
             let scheduled = *cfg.authority_set.active_authority(slot);
-            let Some(sk) = self
+            let sk = self
                 .authority_sks
                 .iter()
-                .find(|sk| sk.verifying_key() == scheduled)
-                .cloned()
-            else {
+                .find(|sk| sk.verifying_key() == scheduled);
+            if sk.is_none() && !self.authority_sks.is_empty() {
+                eprintln!(
+                    "PoA immediate-send slot {} scheduled authority {} not held by this node (loaded {} key(s))",
+                    slot,
+                    hex::encode(scheduled.as_bytes()),
+                    self.authority_sks.len()
+                );
+            }
+            let Some(sk) = sk.cloned() else {
                 return Err(NodeError::NotAuthoritySlot);
             };
             let payload = encode_block_payload(txs);
@@ -2724,20 +2757,19 @@ impl Node {
             let ts = self.next_timestamp(ledger.dag(), &parents);
             (parents, ts)
         };
-        let authority = self
-            .authority_public_key()
-            .map(|pk| Address::p2pk(*pk.as_bytes()));
-        let mut block_txs = Self::issuance_txs_for(authority, subsidy, timestamp, fees);
+        let Some((authority_pk, signer)) = self.poa_signer_for(timestamp) else {
+            return Err(NodeError::NotAuthoritySlot);
+        };
+        let authority = Address::p2pk(*authority_pk.as_bytes());
+        let mut block_txs = Self::issuance_txs_for(Some(authority), subsidy, timestamp, fees);
         block_txs.extend(selected);
 
         // PoA-only admission (RFC-POA): a block is produced only when this node
         // holds the scheduled authority key for `timestamp`'s slot. There is no
         // hash search and no sortition draw, so the alternative to signing as
         // the authority is not producing at all.
-        match self.try_produce_poa(parents, timestamp, &block_txs, &selected_ids)? {
-            Some(id) => Ok(Some(id)),
-            None => Err(NodeError::NotAuthoritySlot),
-        }
+        let id = self.try_produce_poa(parents, timestamp, &block_txs, &selected_ids, &signer)?;
+        Ok(Some(id))
     }
 
     /// Shared production bookkeeping: validation metrics, mempool eviction.
@@ -2763,48 +2795,32 @@ impl Node {
     pub fn produce_empty(&mut self) -> Result<BlockId, NodeError> {
         let parents = self.ledger()?.dag().tips();
         let timestamp = self.next_timestamp(self.ledger()?.dag(), &parents);
-        let authority = self
-            .authority_public_key()
-            .map(|pk| Address::p2pk(*pk.as_bytes()));
+        let Some((authority_pk, signer)) = self.poa_signer_for(timestamp) else {
+            return Err(NodeError::NotAuthoritySlot);
+        };
+        let authority = Address::p2pk(*authority_pk.as_bytes());
         let subsidy = self.ledger()?.subsidy();
-        let txs = Self::issuance_txs_for(authority, subsidy, timestamp, 0);
+        let txs = Self::issuance_txs_for(Some(authority), subsidy, timestamp, 0);
         // PoA-only admission (RFC-POA): sign with this node's authority key when
         // it is the scheduled authority for the slot; otherwise skip production.
-        match self.try_produce_poa(parents, timestamp, &txs, &[])? {
-            Some(id) => Ok(id),
-            None => Err(NodeError::NotAuthoritySlot),
-        }
+        self.try_produce_poa(parents, timestamp, &txs, &[], &signer)
     }
 
-    /// PoA production: sign a block with this node's authority key when it is
-    /// the scheduled authority for `timestamp`'s slot (RFC-POA §3 round-robin).
-    /// Returns `Ok(None)` when PoA is not active, the node holds no authority
-    /// key, or it is not its turn — callers then produce nothing.
-    ///
-    /// The block carries nominal work ([`Self::LOCAL_WORK`] = 1) and nonce 0:
-    /// under PoA-only admission only the authority signature and the slot rules
-    /// gate admission. Insertion goes through the identity-preserving
-    /// `insert_prepared_block` path so the signed id survives replay.
+    /// PoA production: sign a block with the supplied authority key.
+    /// Callers must already have resolved slot ownership (see
+    /// [`Self::poa_signer_for`]). The block carries nominal work
+    /// ([`Self::LOCAL_WORK`] = 1) and nonce 0: under PoA-only admission only the
+    /// authority signature and the slot rules gate admission. Insertion goes
+    /// through the identity-preserving `insert_prepared_block` path so the
+    /// signed id survives replay.
     fn try_produce_poa(
         &mut self,
         parents: Vec<BlockId>,
         timestamp: u64,
         block_txs: &[Transaction],
         selected_ids: &[TxId],
-    ) -> Result<Option<BlockId>, NodeError> {
-        let Some(cfg) = self.poa_config() else {
-            return Ok(None); // PoA not actually active
-        };
-        let slot = timestamp / cfg.slot_duration_ms;
-        let scheduled = *cfg.authority_set.active_authority(slot);
-        let Some(sk) = self
-            .authority_sks
-            .iter()
-            .find(|sk| sk.verifying_key() == scheduled)
-            .cloned()
-        else {
-            return Ok(None); // not an authority node, or not this node's slot
-        };
+        signer: &SigningKey,
+    ) -> Result<BlockId, NodeError> {
         let payload = encode_block_payload(block_txs);
         let unsigned = Block::new(
             parents.clone(),
@@ -2813,7 +2829,7 @@ impl Node {
             Self::LOCAL_NONCE,
             payload.clone(),
         );
-        let sig = sk
+        let sig = signer
             .sign(unsigned.hash_without_authority_sig().as_bytes())
             .to_bytes();
         let block = Block::new_with_authority(
@@ -2833,7 +2849,7 @@ impl Node {
         self.note_inserted(id);
         self.note_block_produced(&id, duration);
         self.mempool.remove_all(selected_ids);
-        Ok(Some(id))
+        Ok(id)
     }
 
     /// Coinbase claiming `subsidy` + `extra_fees` for the signing `authority`.
@@ -3657,7 +3673,7 @@ impl Node {
     /// Record a successfully inserted block for the next
     /// [`persist_incremental`](Self::persist_incremental) append, and surface
     /// the passive chain head on every insert (produce *and* receive). A
-    /// non-mining seed (`KOVANICA_MINE=0`) only ever inserts blocks received
+    /// non-producing seed (`KOVANICA_PRODUCE=0`) only ever inserts blocks received
     /// from peers, so without this the height/blue-score gauges would never be
     /// observed by the metrics recorder — the soak-monitoring gap this fixes.
     fn note_inserted(&mut self, id: BlockId) {
