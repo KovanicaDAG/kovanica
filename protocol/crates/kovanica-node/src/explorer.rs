@@ -477,7 +477,10 @@ impl Explorer {
                 if let Err(e) = self.mesh.produce_empty(name) {
                     // NotAuthoritySlot is routine for a participant node that is
                     // not the scheduled producer; only log real errors.
-                    if !matches!(e, crate::p2p::P2pError::Node(crate::node::NodeError::NotAuthoritySlot)) {
+                    if !matches!(
+                        e,
+                        crate::p2p::P2pError::Node(crate::node::NodeError::NotAuthoritySlot)
+                    ) {
                         eprintln!("produce_empty error for {}: {}", name, e);
                     }
                 }
@@ -4357,21 +4360,6 @@ fn respond(stream: &mut TcpStream, code: u16, ctype: &str, body: &[u8]) -> std::
     stream.flush()
 }
 
-fn respond_download(
-    stream: &mut TcpStream,
-    ctype: &str,
-    filename: &str,
-    body: &[u8],
-) -> std::io::Result<()> {
-    let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Disposition: attachment; filename=\"{filename}\"\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(head.as_bytes())?;
-    stream.write_all(body)?;
-    stream.flush()
-}
-
 fn respond_prometheus_metrics(stream: &mut TcpStream) -> std::io::Result<()> {
     // Render the live recorder payload (same series the dedicated scrape
     // endpoint on :9090 serves).
@@ -4672,9 +4660,7 @@ mod tests {
     /// deterministic: slot 0's scheduled authority is the first placeholder key
     /// (`AUTHORITY_PLACEHOLDER_BASE`).
     fn pin_slot_zero(mesh: &mut crate::p2p::Mesh, name: &str) {
-        mesh.node_mut(name)
-            .expect("node exists")
-            .set_now_ms(1);
+        mesh.node_mut(name).expect("node exists").set_now_ms(1);
     }
 
     #[test]
