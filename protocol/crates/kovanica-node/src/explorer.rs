@@ -231,6 +231,14 @@ fn profile_for_env(network: Option<&str>, mainnet_override: bool) -> NetworkProf
             NetworkProfile::mainnet()
         }
         Some("kovanica-devnet") | Some("devnet") => NetworkProfile::devnet(),
+        // Testnet is the default when `KOVANICA_NETWORK` is unset, but it is
+        // also a *documented, supported* explicit value: DEPLOY-SEED.md and
+        // NODE-OPERATOR.md both instruct operators to set
+        // `KOVANICA_NETWORK=kovanica-testnet`. This arm must stay in the same
+        // match as the other networks — without it, the panic below rejects the
+        // value our own operator docs tell people to use, and every node
+        // deployed from those docs crash-loops on boot.
+        Some("kovanica-testnet") | Some("testnet") => NetworkProfile::testnet(),
         // An unrecognised network name used to fall through to testnet, which
         // meant a typo (or a not-yet-implemented network) produced a node that
         // silently joined the *public testnet*: correct-looking, publicly
@@ -4954,6 +4962,32 @@ mod tests {
         let p = profile_for_env(None, false);
         assert_eq!(p.id, "kovanica-testnet");
         assert!(!p.dormant);
+    }
+
+    /// Regression: the devnet-isolation change made an unrecognised network a
+    /// panic, but the initial match had no arm for the explicit testnet names
+    /// — so `KOVANICA_NETWORK=kovanica-testnet`, the value DEPLOY-SEED.md and
+    /// NODE-OPERATOR.md instruct every operator to set, hit the panic and
+    /// crash-looped the node. The panic text even advertised "kovanica-testnet"
+    /// as a known network while the code rejected it. Pin every spelling the
+    /// docs use, and pin that the explicit form equals the implicit default.
+    #[test]
+    fn explicit_testnet_name_is_not_rejected() {
+        for name in ["kovanica-testnet", "testnet"] {
+            let p = profile_for_env(Some(name), false);
+            assert_eq!(p.id, "kovanica-testnet", "{name} should select testnet");
+            assert!(!p.dormant, "{name} is an active network");
+        }
+        // Explicit must be indistinguishable from the unset default.
+        let implicit = profile_for_env(None, false);
+        for name in ["kovanica-testnet", "testnet"] {
+            let explicit = profile_for_env(Some(name), false);
+            assert_eq!(explicit.id, implicit.id);
+            assert_eq!(explicit.default_peers, implicit.default_peers);
+            assert_eq!(explicit.genesis_k, implicit.genesis_k);
+            assert_eq!(explicit.genesis_subsidy, implicit.genesis_subsidy);
+            assert_eq!(explicit.p2p_listen_default, implicit.p2p_listen_default);
+        }
     }
 
     #[test]
