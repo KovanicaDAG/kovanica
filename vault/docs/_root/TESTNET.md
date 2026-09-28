@@ -1,5 +1,24 @@
 # kovanica-testnet
 
+> ## ⛔ TESTNET STOPPED — 2026-09-28
+>
+> **The public testnet has been stopped and disabled** (seed3, via
+> `systemctl stop` + `systemctl disable kovanica-testnet.service`). A new
+> testnet is being planned; the launch decisions and their open blockers are in
+> **[NETWORK-LAUNCH-PLAN.md](./NETWORK-LAUNCH-PLAN.md)**.
+>
+> This file remains as the **parameter and economics reference** — the RFC-006
+> values below are still canonical and are not affected by the outage. The
+> endpoints (`explorer.kovanica.online`) are down, and the genesis recorded in
+> this document belongs to the retired chain.
+>
+> Canonical plan: [`protocol/docs/NETWORK-LAUNCH-PLAN.md`](../../protocol/docs/NETWORK-LAUNCH-PLAN.md).
+>
+> The node was stopped because a devnet configuration silently booted nodes
+> onto the public testnet peer network, and the testnet boot config listed
+> consensus parameters the binary does not read. Both are fixed; the network is
+> being relaunched deliberately rather than restored as-is.
+
 Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 
 > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
