@@ -1,7 +1,22 @@
 # Kovanica Network & Domain Architecture
 
-> Last updated: 2026-09-20  
-> Status: Pre-Mainnet (RFC-006 activated on testnet — tokenomics live; operator/founder wallet genesis reset pending)
+> ## ⛔ NETWORK STOPPED — 2026-09-28
+>
+> The public testnet (`kovanica-testnet`) has been **stopped and disabled**, and
+> the seed/explorer surfaces below are **not currently serving**. A new testnet,
+> devnet and mainnet launch is being planned.
+>
+> See **[protocol/docs/NETWORK-LAUNCH-PLAN.md](../../protocol/docs/NETWORK-LAUNCH-PLAN.md)**
+> for the current status, the reason the testnet was stood down, and the open
+> blockers (chiefly the `[OPEN]` mainnet authority-set governance question,
+> RFC-POA §0.7.2).
+>
+> The domain and port facts in this file remain the design of record for the
+> next launch. The **"live"** annotations describing currently-serving hosts are
+> historical — read them as "how it was configured when last running".
+
+> Last updated: 2026-09-28  
+> Status: **Testnet stopped; relaunch planned** (RFC-006 tokenomics remain canonical; operator/founder wallet genesis reset still pending)
 > Consensus impact: none — this file documents domains/networks, not consensus rules.
 
 > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**

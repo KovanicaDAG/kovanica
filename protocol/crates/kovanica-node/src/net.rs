@@ -803,6 +803,34 @@ pub fn sync_headers_first(
                 let headers_bytes = read_frame(&mut stream, MAX_FRAME_BYTES)?;
                 let headers = decode_headers(&headers_bytes)?;
 
+                // Iteratively filter out headers whose parents are not in the
+                // set AND not already in the local DAG — these would fail with
+                // MissingParent. A single pass is insufficient: removing a header
+                // may orphan its children, so repeat until stable.
+                let mut headers = headers;
+                loop {
+                    let header_ids: std::collections::HashSet<BlockId> =
+                        headers.iter().map(|h| h.id).collect();
+                    let filtered: Vec<BlockHeader> = headers
+                        .into_iter()
+                        .filter(|h| {
+                            h.parents.iter().all(|p| {
+                                header_ids.contains(p)
+                                    || node.ledger().is_ok_and(|l| l.dag().contains(p))
+                            })
+                        })
+                        .collect();
+                    if filtered.len() == header_ids.len() {
+                        headers = filtered;
+                        break;
+                    }
+                    if filtered.is_empty() {
+                        headers = filtered;
+                        break;
+                    }
+                    headers = filtered;
+                }
+
                 // Topologically sort the headers (parents before children) before
                 // requesting bodies: a block can only be applied once its parents
                 // are present. Old servers may return headers in ID-sorted order,
@@ -839,9 +867,20 @@ pub fn sync_headers_first(
                             stats.errors += 1;
                             continue;
                         }
+                        let block_id = body.id();
                         match node.receive_block(body) {
                             Ok(_) => stats.bodies_applied += 1,
-                            Err(_) => stats.errors += 1,
+                            Err(e) => {
+                                stats.errors += 1;
+                                if stats.errors <= 3 {
+                                    let parent_ids: Vec<String> =
+                                        header.parents.iter().map(|p| p.to_string()).collect();
+                                    eprintln!(
+                                        "kovanica sync block {block_id} rejected: {e:?}  parents=[{}]",
+                                        parent_ids.join(", ")
+                                    );
+                                }
+                            }
                         }
                     }
                 }
