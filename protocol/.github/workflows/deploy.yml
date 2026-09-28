@@ -5,6 +5,9 @@ on:
     branches:
       - main
   pull_request:
+  # Deliberate manual path, for when auto-deploy is armed below but you want a
+  # specific main commit shipped rather than the next one that lands.
+  workflow_dispatch:
 
 jobs:
   test-rust:
@@ -96,9 +99,23 @@ jobs:
     # SSH) is surfaced as a warning on this job but does NOT fail the overall
     # workflow run, so an infrastructure outage can't red a green build.
     continue-on-error: true
+    # Deploy is opt-in via the DEPLOY_ENABLED repository variable.
+    #
+    # This switch has been documented as the arming mechanism since
+    # AGENTS.md "Arm auto-deploy", but was never referenced by this file, so
+    # the deploy ran on *every* push to main regardless of intent. Unset the
+    # variable = no deploys; the tests above still run and still gate PRs.
+    #
+    # To arm:  gh variable set DEPLOY_ENABLED --body true
+    # To disarm: gh variable set DEPLOY_ENABLED --body false
+    #
+    # Left as a variable rather than a code edit on purpose: re-arming must be
+    # an explicit, auditable repo-settings act, not a workflow change that
+    # merges itself back in.
     if: >-
-      github.event_name == 'push'
-      && github.ref == 'refs/heads/main'
+      (github.event_name == 'push' && github.ref == 'refs/heads/main'
+       || github.event_name == 'workflow_dispatch')
+      && vars.DEPLOY_ENABLED == 'true'
     steps:
       - name: Download binary
         uses: actions/download-artifact@v4
