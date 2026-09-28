@@ -59,21 +59,46 @@ const SLOT_MS: u64 = 3000;
 /// Authority seeds for [`poa_node_producing_for_actor1`].
 const FEE_MARKET_AUTHORITIES: u64 = 3;
 
+/// A clock pin that lands every produced block in the slot scheduled to
+/// `seed`.
+///
+/// Genesis is stamped at `0`, so a produced block's timestamp is
+/// `max(now_ms, 1)` (see `Node::next_timestamp`) and its slot is
+/// `timestamp / SLOT_MS`. Consecutive `produce_empty` calls then advance the
+/// timestamp by one millisecond each, which stays inside the same slot.
+fn pin_scheduling(set: &AuthoritySet, seed: u64) -> u64 {
+    let key = SigningKey::from_bytes(&KeyPair::from_u64(seed).seed()).verifying_key();
+    let slot = (0..FEE_MARKET_AUTHORITIES)
+        .find(|slot| *set.active_authority(*slot) == key)
+        .expect("seed is a member of the authority set");
+    // `slot == 0` needs a pin of at least 1, since genesis is stamped at 0.
+    slot * SLOT_MS + 1
+}
+
 /// A PoA node whose block rewards are credited to `Node::address(1)`.
 ///
-/// Under PoA the coinbase pays a signing authority, not the genesis founder.
-/// The recipient is always `authority_public_key()` — the *first* key pushed
-/// into the node — so seeding the set with seeds `1..=FEE_MARKET_AUTHORITIES`
-/// and loading seed 1's signing key first points every reward at actor 1 and
-/// leaves the suite's spends/signs valid. A 3-key set is the minimum
-/// `AuthoritySet` accepts (`MIN_AUTHORITIES`), so the two filler keys are
-/// required; they never receive a reward.
+/// Under PoA the coinbase pays a *slot-scheduled* authority, not the genesis
+/// founder and not the first key loaded. Two details make that recipient
+/// non-obvious:
+///
+/// - `AuthoritySet::new` sorts authorities into ascending public-key encoding,
+///   so `authorities[0]` is not necessarily the first seed supplied.
+/// - The scheduled authority is `active_authority(timestamp / SLOT_MS)`, so
+///   the recipient depends on the wall clock and changes every slot.
+///
+/// Genesis is stamped at `0`, so pinning the clock before genesis fully
+/// determines every produced block's timestamp — and therefore its slot. We
+/// pin to the slot that schedules seed 1, keeping every reward on actor 1 and
+/// leaving the suite's spends/signs valid. `pin_scheduling` looks the slot up
+/// rather than assuming one, and stays within a single slot across consecutive
+/// `produce_empty` calls, so repeated blocks remain deterministic.
 fn poa_node_producing_for_actor1(config: MempoolConfig) -> Node {
     let keys: Vec<AuthorityPublicKey> = (1..=FEE_MARKET_AUTHORITIES)
         .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
         .collect();
     let set = AuthoritySet::new(keys, 2).expect("valid authority set");
     let mut node = Node::with_mempool_config(config);
+    node.set_now_ms(pin_scheduling(&set, 1));
     node.genesis_with_poa(
         3,
         100_000,

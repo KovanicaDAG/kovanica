@@ -35,9 +35,6 @@ use crate::node::{
 };
 use crate::p2p::Mesh;
 
-const UI: &str = include_str!("explorer.html");
-const BIP39: &str = include_str!("bip39-english.txt");
-const DOCS: &str = include_str!("../../../../vault/docs/_root/TESTNET.md");
 /// 1 KVNC = 10^8 base units (atoms).
 const ATOM: u64 = 100_000_000;
 /// RFC-006 genesis subsidy: 10 KVNC/block.
@@ -57,9 +54,21 @@ const TESTNET_PAYLOAD_PRUNING_DEPTH: u64 = 1000;
 /// blocks (consensus-safe).
 const TESTNET_BLOCK_PRUNING_DEPTH: u64 = 1000;
 const ACTORS: [u64; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+
+/// Devnet operator seed (ASCII, exactly 32 bytes — see `devnet_operator_seed`
+/// which pins the length at compile time via a test).
+///
+/// Deliberately distinct from the testnet operator seed so a devnet node never
+/// derives the same wallet addresses as a testnet node: identical addresses
+/// across two chains is exactly the confusion that makes cross-chain spend
+/// replay reports ambiguous.
+const DEVNET_OPERATOR_SEED: &[u8; 32] = b"KOVANICA_DEVNET_OPERATOR_SEED_01";
 /// Single P2P path: plaintext TCP. Not 80/443/3010/8080 and not libp2p :30333.
 const P2P_LISTEN_DEFAULT: &str = "0.0.0.0:9000";
-const P2P_BOOTSTRAP: &str = "seed.kovanica.online:9000,seed2.kovanica.online:9000";
+/// Devnet's default P2P bind. Loopback, and a distinct port from the testnet's
+/// 9000, so a devnet node neither collides with a testnet node on the same host
+/// nor is reachable from outside it unless `KOVANICA_LISTEN` says so.
+const DEVNET_P2P_LISTEN_DEFAULT: &str = "127.0.0.1:9002";
 
 /// A network profile: identity, genesis parameters, and data-dir isolation.
 ///
@@ -98,6 +107,23 @@ struct NetworkProfile {
     /// Dormant placeholder: genesis parameters are TBD and the profile refuses
     /// to boot unless explicitly overridden.
     dormant: bool,
+    /// Seeds dialled when `KOVANICA_PEERS` is unset.
+    ///
+    /// Only the public testnet has a default. Devnet and mainnet default to
+    /// **empty**: a node must never silently join a network it was not
+    /// explicitly pointed at. Before devnet existed, an unrecognised
+    /// `KOVANICA_NETWORK` fell through to the testnet profile, so a container
+    /// labelled "devnet" booted a *testnet* node and dialled the public seeds —
+    /// a silent cross-chain join with no error. The default peer list is the
+    /// last line of defence against that class of accident, so it is per-profile
+    /// and opt-in rather than global.
+    default_peers: &'static [&'static str],
+    /// P2P bind address used when `KOVANICA_LISTEN` is unset.
+    ///
+    /// Devnet defaults to loopback so a developer's node is not reachable from
+    /// the network by accident; a container that needs peer-to-peer reachability
+    /// overrides it via `KOVANICA_LISTEN=0.0.0.0:<port>`.
+    p2p_listen_default: &'static str,
 }
 
 impl NetworkProfile {
@@ -118,6 +144,37 @@ impl NetworkProfile {
             payload_pruning_depth: TESTNET_PAYLOAD_PRUNING_DEPTH,
             block_pruning_depth: TESTNET_BLOCK_PRUNING_DEPTH,
             dormant: false,
+            default_peers: DEFAULT_PEERS,
+            p2p_listen_default: P2P_LISTEN_DEFAULT,
+        }
+    }
+
+    /// Local development network — a separate chain, never a public one.
+    ///
+    /// Economics and finality are **identical to testnet on purpose**: a devnet
+    /// is a rehearsal, so it should rehearse the parameters that will actually
+    /// run. Devnet's speed comes from its slot duration, not from a weakened
+    /// finality depth or a different emission curve. Diverging them would make
+    /// a successful devnet run weak evidence that mainnet will behave.
+    ///
+    /// What devnet *does* change is blast radius: its own data directory, its
+    /// own P2P port, and — critically — **no default seeds**, so it cannot
+    /// silently join the public testnet.
+    fn devnet() -> Self {
+        Self {
+            id: "kovanica-devnet",
+            genesis_k: 3,
+            genesis_subsidy: GENESIS_SUBSIDY,
+            genesis_premine: GENESIS_PREMINE,
+            founder_seed: FOUNDER_SEED,
+            operator_seed: *DEVNET_OPERATOR_SEED,
+            finality_depth: TESTNET_FINALITY_DEPTH,
+            payload_pruning_depth: TESTNET_PAYLOAD_PRUNING_DEPTH,
+            block_pruning_depth: TESTNET_BLOCK_PRUNING_DEPTH,
+            dormant: false,
+            // Empty on purpose: a devnet node dials only what it is told to.
+            default_peers: &[],
+            p2p_listen_default: DEVNET_P2P_LISTEN_DEFAULT,
         }
     }
 
@@ -135,26 +192,64 @@ impl NetworkProfile {
             payload_pruning_depth: 10_000,
             block_pruning_depth: 10_000,
             dormant: true,
+            // No default seeds: mainnet's bootstrap set is an unsettled input
+            // (RFC-POA §0.7.2 is OPEN on how the initial set is chosen), so a
+            // mainnet node must be handed its seeds explicitly rather than
+            // inheriting the testnet's.
+            default_peers: &[],
+            p2p_listen_default: P2P_LISTEN_DEFAULT,
         }
     }
 }
 
 /// The active network profile, selected from `KOVANICA_NETWORK` (default
-/// `kovanica-testnet`). The mainnet profile is dormant: selecting it without
+/// `kovanica-testnet`). `kovanica-devnet` selects the local development chain.
+/// The mainnet profile is dormant: selecting it without
 /// `KOVANICA_MAINNET_OVERRIDE=1` refuses to boot rather than inventing
 /// consensus parameters. The default is always testnet — mainnet is never
-/// activated implicitly.
+/// activated implicitly — and an **unrecognised** name panics rather than
+/// falling back, because falling back would silently attach the node to the
+/// public testnet.
 fn network_profile() -> NetworkProfile {
-    let profile = match std::env::var("KOVANICA_NETWORK").as_deref() {
-        Ok("kovanica-mainnet") | Ok("mainnet") => {
-            if !env_flag("KOVANICA_MAINNET_OVERRIDE", false) {
+    profile_for_env(
+        std::env::var("KOVANICA_NETWORK").ok().as_deref(),
+        env_flag("KOVANICA_MAINNET_OVERRIDE", false),
+    )
+}
+
+/// Pure selection logic behind [`network_profile`], taking the two inputs
+/// explicitly so it is testable without mutating process environment (which
+/// would race across the parallel test harness and leak into other tests).
+fn profile_for_env(network: Option<&str>, mainnet_override: bool) -> NetworkProfile {
+    let profile = match network {
+        Some("kovanica-mainnet") | Some("mainnet") => {
+            if !mainnet_override {
                 panic!(
                     "kovanica-mainnet is DORMANT: genesis parameters are TBD.                      Set KOVANICA_MAINNET_OVERRIDE=1 to force boot (unsafe; do not use in production)."
                 );
             }
             NetworkProfile::mainnet()
         }
-        _ => NetworkProfile::testnet(),
+        Some("kovanica-devnet") | Some("devnet") => NetworkProfile::devnet(),
+        // Testnet is the default when `KOVANICA_NETWORK` is unset, but it is
+        // also a *documented, supported* explicit value: DEPLOY-SEED.md and
+        // NODE-OPERATOR.md both instruct operators to set
+        // `KOVANICA_NETWORK=kovanica-testnet`. This arm must stay in the same
+        // match as the other networks — without it, the panic below rejects the
+        // value our own operator docs tell people to use, and every node
+        // deployed from those docs crash-loops on boot.
+        Some("kovanica-testnet") | Some("testnet") => NetworkProfile::testnet(),
+        // An unrecognised network name used to fall through to testnet, which
+        // meant a typo (or a not-yet-implemented network) produced a node that
+        // silently joined the *public testnet*: correct-looking, publicly
+        // reachable, and the wrong chain. Refuse instead — an operator who asked
+        // for a network we do not have needs to know, not a fallback.
+        Some(other) => panic!(
+            "unknown KOVANICA_NETWORK={other:?}: known networks are \
+             \"kovanica-testnet\" (default), \"kovanica-devnet\", and \"kovanica-mainnet\". \
+             Refusing to fall back to testnet, which would silently join the public testnet."
+        ),
+        None => NetworkProfile::testnet(),
     };
     // RFC-008 invariant: block pruning must never evict a block that could
     // still be built on. With `block_pruning_depth >= finality_depth` every
@@ -480,7 +575,10 @@ impl Explorer {
                 if let Err(e) = self.mesh.produce_empty(name) {
                     // NotAuthoritySlot is routine for a participant node that is
                     // not the scheduled producer; only log real errors.
-                    if !matches!(e, crate::p2p::P2pError::Node(crate::node::NodeError::NotAuthoritySlot)) {
+                    if !matches!(
+                        e,
+                        crate::p2p::P2pError::Node(crate::node::NodeError::NotAuthoritySlot)
+                    ) {
                         eprintln!("produce_empty error for {}: {}", name, e);
                     }
                 }
@@ -1373,7 +1471,8 @@ fn ensure_network() {
 }
 
 fn bind_p2p() -> Vec<TcpListener> {
-    let raw = std::env::var("KOVANICA_LISTEN").unwrap_or_else(|_| P2P_LISTEN_DEFAULT.into());
+    let raw = std::env::var("KOVANICA_LISTEN")
+        .unwrap_or_else(|_| network_profile().p2p_listen_default.into());
     if env_off(&raw) {
         eprintln!("kovanica p2p listen disabled");
         return Vec::new();
@@ -1456,7 +1555,14 @@ fn peer_list() -> Vec<String> {
             .map(|x| x.trim().to_string())
             .filter(|x| !x.is_empty())
             .collect(),
-        Err(_) => DEFAULT_PEERS.iter().map(|s| s.to_string()).collect(),
+        // Fall back to the *active profile's* seeds, not a global constant: a
+        // devnet node with KOVANICA_PEERS unset must come up with no peers
+        // rather than the public testnet's.
+        Err(_) => network_profile()
+            .default_peers
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
     }
 }
 
@@ -1686,39 +1792,6 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
         return respond_prometheus_metrics(&mut stream);
     }
 
-    if method == "HEAD" && (path == "/" || path == "/index.html" || path == "/wallet") {
-        return respond(&mut stream, 200, "text/html; charset=utf-8", b"");
-    }
-    if method == "GET" && (path == "/" || path == "/index.html" || path == "/wallet") {
-        return respond(&mut stream, 200, "text/html; charset=utf-8", UI.as_bytes());
-    }
-    if method == "GET" && path == "/bip39.txt" {
-        return respond(
-            &mut stream,
-            200,
-            "text/plain; charset=utf-8",
-            BIP39.as_bytes(),
-        );
-    }
-    if method == "GET" && path == "/kovanica-explorer-wallet.patch" {
-        let body = std::fs::read("/workspace/kovanica-explorer-wallet.patch")
-            .or_else(|_| std::fs::read("/tmp/kovanica-explorer-wallet.patch"))
-            .unwrap_or_default();
-        return respond_download(
-            &mut stream,
-            "text/x-patch; charset=utf-8",
-            "kovanica-explorer-wallet.patch",
-            &body,
-        );
-    }
-    if method == "GET" && path == "/docs" {
-        return respond(
-            &mut stream,
-            200,
-            "text/plain; charset=utf-8",
-            DOCS.as_bytes(),
-        );
-    }
     if method == "GET" && path == "/api/bootstrap" {
         let n = app.mesh.node(&app.selected);
         let genesis = n
@@ -1921,11 +1994,15 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
         }
     }
     if method == "GET" && path == "/api/p2p" {
+        // `bootstrap` reports the seeds this profile would dial with
+        // KOVANICA_PEERS unset — not a hardcoded testnet constant, which on a
+        // devnet node would advertise the public seeds it is not part of.
+        let bootstrap = network_profile().default_peers.join(",");
         let body = format!(
             "{{\"path\":\"tcp\",\"listen\":{},\"peers\":{},\"bootstrap\":{}}}",
             jstr(&app.listen_addr),
             jarr(app.peers.iter().map(|s| jstr(s))),
-            jstr(P2P_BOOTSTRAP)
+            jstr(&bootstrap)
         );
         return respond(&mut stream, 200, "application/json", body.as_bytes());
     }
@@ -4393,21 +4470,6 @@ fn respond(stream: &mut TcpStream, code: u16, ctype: &str, body: &[u8]) -> std::
     stream.flush()
 }
 
-fn respond_download(
-    stream: &mut TcpStream,
-    ctype: &str,
-    filename: &str,
-    body: &[u8],
-) -> std::io::Result<()> {
-    let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Disposition: attachment; filename=\"{filename}\"\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(head.as_bytes())?;
-    stream.write_all(body)?;
-    stream.flush()
-}
-
 fn respond_prometheus_metrics(stream: &mut TcpStream) -> std::io::Result<()> {
     // Render the live recorder payload (same series the dedicated scrape
     // endpoint on :9090 serves).
@@ -4708,9 +4770,7 @@ mod tests {
     /// deterministic: slot 0's scheduled authority is the first placeholder key
     /// (`AUTHORITY_PLACEHOLDER_BASE`).
     fn pin_slot_zero(mesh: &mut crate::p2p::Mesh, name: &str) {
-        mesh.node_mut(name)
-            .expect("node exists")
-            .set_now_ms(1);
+        mesh.node_mut(name).expect("node exists").set_now_ms(1);
     }
 
     #[test]
@@ -4889,15 +4949,186 @@ mod tests {
         assert!(fee > 1);
     }
 
+    // ── Network profile selection ────────────────────────────────────────────
+    //
+    // These exercise `profile_for_env` (the pure core) rather than
+    // `network_profile()`, which reads process env. `std::env::set_var` is
+    // process-global: mutating it from a parallel test would race with every
+    // other test in this binary and could flip a *different* test's network
+    // mid-run. Only one test in this file is allowed to set env, and none do.
+
+    #[test]
+    fn unset_network_is_testnet() {
+        let p = profile_for_env(None, false);
+        assert_eq!(p.id, "kovanica-testnet");
+        assert!(!p.dormant);
+    }
+
+    /// Regression: the devnet-isolation change made an unrecognised network a
+    /// panic, but the initial match had no arm for the explicit testnet names
+    /// — so `KOVANICA_NETWORK=kovanica-testnet`, the value DEPLOY-SEED.md and
+    /// NODE-OPERATOR.md instruct every operator to set, hit the panic and
+    /// crash-looped the node. The panic text even advertised "kovanica-testnet"
+    /// as a known network while the code rejected it. Pin every spelling the
+    /// docs use, and pin that the explicit form equals the implicit default.
+    #[test]
+    fn explicit_testnet_name_is_not_rejected() {
+        for name in ["kovanica-testnet", "testnet"] {
+            let p = profile_for_env(Some(name), false);
+            assert_eq!(p.id, "kovanica-testnet", "{name} should select testnet");
+            assert!(!p.dormant, "{name} is an active network");
+        }
+        // Explicit must be indistinguishable from the unset default.
+        let implicit = profile_for_env(None, false);
+        for name in ["kovanica-testnet", "testnet"] {
+            let explicit = profile_for_env(Some(name), false);
+            assert_eq!(explicit.id, implicit.id);
+            assert_eq!(explicit.default_peers, implicit.default_peers);
+            assert_eq!(explicit.genesis_k, implicit.genesis_k);
+            assert_eq!(explicit.genesis_subsidy, implicit.genesis_subsidy);
+            assert_eq!(explicit.p2p_listen_default, implicit.p2p_listen_default);
+        }
+    }
+
+    #[test]
+    fn devnet_selects_devnet_profile() {
+        for name in ["devnet", "kovanica-devnet"] {
+            let p = profile_for_env(Some(name), false);
+            assert_eq!(p.id, "kovanica-devnet", "{name} should select devnet");
+            assert!(!p.dormant, "devnet is a usable profile");
+        }
+    }
+
+    /// The bug this whole change exists to prevent: a node configured for a
+    /// network we don't have came up as a *testnet* node and dialled the public
+    /// testnet seeds. Both halves are pinned — the panic, and devnet's empty
+    /// default peer list.
+    #[test]
+    fn devnet_never_dials_public_seeds_by_default() {
+        let p = profile_for_env(Some("devnet"), false);
+        assert!(
+            p.default_peers.is_empty(),
+            "devnet must have no default seeds, got {:?}",
+            p.default_peers
+        );
+        // And it must not name any public seed host, even defensively.
+        for peer in p.default_peers {
+            assert!(!peer.contains("kovanica.online"), "devnet named {peer}");
+        }
+    }
+
+    /// Testnet keeps its public seeds; devnet and dormant mainnet do not. A
+    /// regression here means some network silently joins another.
+    #[test]
+    fn only_testnet_has_default_seeds() {
+        assert_eq!(profile_for_env(None, false).default_peers, DEFAULT_PEERS);
+        assert!(profile_for_env(Some("devnet"), false)
+            .default_peers
+            .is_empty());
+        assert!(
+            profile_for_env(Some("mainnet"), true)
+                .default_peers
+                .is_empty(),
+            "dormant mainnet must not inherit the testnet's bootstrap set"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown KOVANICA_NETWORK")]
+    fn unknown_network_panics_instead_of_falling_back_to_testnet() {
+        // The regression guard: this used to return the testnet profile.
+        profile_for_env(Some("kovanica-typo"), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "DORMANT")]
+    fn mainnet_stays_dormant_without_override() {
+        profile_for_env(Some("mainnet"), false);
+    }
+
+    #[test]
+    fn mainnet_boots_only_with_explicit_override() {
+        let p = profile_for_env(Some("mainnet"), true);
+        assert_eq!(p.id, "kovanica-mainnet");
+        assert!(
+            p.dormant,
+            "override forces boot but the profile stays dormant"
+        );
+    }
+
+    /// Devnet data must not land in the testnet directory, and vice versa —
+    /// the marker-wipe in `ensure_network` keys off this id.
+    #[test]
+    fn devnet_data_dir_is_separate_from_testnet() {
+        let devnet = profile_for_env(Some("devnet"), false);
+        let testnet = profile_for_env(None, false);
+        assert_ne!(data_dir_for(&devnet), data_dir_for(&testnet));
+        assert_eq!(data_dir_for(&devnet), PathBuf::from("data/kovanica-devnet"));
+    }
+
+    /// Devnet is a rehearsal: identical economics and finality to testnet, so a
+    /// clean devnet run is real evidence about production. It differs only in
+    /// isolation (ids, data dir, seeds, port).
+    #[test]
+    fn devnet_economics_match_testnet() {
+        let devnet = profile_for_env(Some("devnet"), false);
+        let testnet = profile_for_env(None, false);
+        assert_eq!(devnet.genesis_k, testnet.genesis_k);
+        assert_eq!(devnet.genesis_subsidy, testnet.genesis_subsidy);
+        assert_eq!(devnet.genesis_premine, testnet.genesis_premine);
+        assert_eq!(devnet.founder_seed, testnet.founder_seed);
+        assert_eq!(devnet.finality_depth, testnet.finality_depth);
+        assert_eq!(devnet.payload_pruning_depth, testnet.payload_pruning_depth);
+        assert_eq!(devnet.block_pruning_depth, testnet.block_pruning_depth);
+    }
+
+    /// GHOSTDAG k is a protocol constant, not a per-network dial.
+    #[test]
+    fn devnet_keeps_k3() {
+        assert_eq!(profile_for_env(Some("devnet"), false).genesis_k, 3);
+    }
+
+    /// Distinct operator seed, so a devnet node never derives the same wallet
+    /// addresses as a testnet node — identical addresses across two chains make
+    /// cross-chain spend reports ambiguous.
+    #[test]
+    fn devnet_operator_seed_is_distinct_32_bytes() {
+        let devnet = profile_for_env(Some("devnet"), false);
+        let testnet = profile_for_env(None, false);
+        assert_eq!(
+            devnet.operator_seed.len(),
+            32,
+            "operator_seed is a fixed [u8; 32]; this guards the literal"
+        );
+        assert_ne!(
+            devnet.operator_seed, testnet.operator_seed,
+            "devnet and testnet must not share an operator seed"
+        );
+    }
+
+    /// Devnet binds loopback by default so a developer's node is not exposed.
+    #[test]
+    fn devnet_p2p_defaults_to_loopback_on_its_own_port() {
+        let devnet = profile_for_env(Some("devnet"), false);
+        assert!(devnet.p2p_listen_default.starts_with("127.0.0.1:"));
+        assert_ne!(
+            devnet.p2p_listen_default,
+            profile_for_env(None, false).p2p_listen_default,
+            "devnet must not collide with the testnet P2P port"
+        );
+    }
+
     #[test]
     fn p2p_off_tokens() {
         assert!(env_off("off"));
         assert!(env_off("none"));
         assert!(env_off("0"));
         assert!(!env_off(P2P_LISTEN_DEFAULT));
+        // The testnet profile's default seeds are the public testnet, and are
+        // reported from DEFAULT_PEERS rather than a second hardcoded copy.
         assert_eq!(
-            P2P_BOOTSTRAP,
-            "seed.kovanica.online:9000,seed2.kovanica.online:9000"
+            DEFAULT_PEERS,
+            &["seed.kovanica.online:9000", "seed2.kovanica.online:9000"]
         );
     }
 

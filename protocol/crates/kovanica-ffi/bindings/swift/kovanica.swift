@@ -668,6 +668,11 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     func balanceOfStealth(stealthAddressHex: String) throws  -> UInt64
     
     /**
+     * The spendable balance locked to a Vault template's address, in atoms.
+     */
+    func balanceOfVault(scriptHex: String) throws  -> UInt64
+    
+    /**
      * Summary of one block by lowercase-hex id.
      */
     func blockById(idHex: String) throws  -> BlockInfo?
@@ -685,24 +690,6 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     func blockFilter(blockIdHex: String) throws  -> Data
     
     /**
-     * Bond `amount` atoms of actor `seed`'s spendable coins to THIS node's
-     * validator key, sealing both the sizing split (if needed) and the bond
-     * transaction in mined PoW blocks. Returns the bond tx id, lowercase hex.
-     *
-     * A bond freezes whole coin(s): the flow splits a larger coin first so
-     * exactly `amount` is frozen and the remainder stays spendable.
-     */
-    func bondStake(seed: UInt64, amount: UInt64) throws  -> String
-    
-    /**
-     * Bond `amount` atoms from the wallet identity derived from a 32-byte
-     * Ed25519 secret (hex) to THIS node's validator key. The source coins,
-     * sizing split, and bond change all live at the wallet address, so
-     * staking spends wallet funds and returns the remainder to the wallet.
-     */
-    func bondStakeFromSecret(secretHex: String, amount: UInt64) throws  -> String
-    
-    /**
      * Build an unsigned multisig spend paying `outputs` from a single UTXO
      * owned by `address`. Returns a transaction blob encoding the unsigned tx
      * with the redeem script attached as `witness[0]`.
@@ -713,6 +700,25 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
      * The current chain height (selected tip's blue score).
      */
     func chainHeight() throws  -> UInt64
+    
+    /**
+     * Build an **unsigned** CoinJoin transaction from multiple participants.
+     * Each participant provides their address, desired outputs, and optional asset.
+     * The method selects covering UTXOs for each participant, builds a single
+     * transaction with all inputs and outputs, and returns the unsigned transaction
+     * plus sighashes for each input that each participant must sign.
+     *
+     * This is a non-consensus, node-level utility for privacy-enhancing batched spends.
+     */
+    func coinjoinPrepare(participants: [CoinJoinParticipant]) throws  -> CoinJoinPrepared
+    
+    /**
+     * Submit a fully signed CoinJoin transaction.
+     * `prepared` is the result from `coinjoin_prepare`.
+     * `signatures_hex` is a list of 64-byte Ed25519 signatures (lowercase hex),
+     * one per input, in the same order as `prepared.outpoints_hex`.
+     */
+    func coinjoinSubmit(prepared: CoinJoinPrepared, signaturesHex: [String]) throws  -> String
     
     /**
      * Combine `partial_sigs` (each from [`Self::sign_multisig_partial`]) with
@@ -738,15 +744,14 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     func createMultisigAddress(threshold: UInt8, pubkeysHex: [String]) throws  -> MultisigAddress
     
     /**
-     * Enable hybrid admission: blocks enter by PoW or by eligible VRF draw.
-     *
-     * `rate_num/rate_den` scales slot frequency relative to bonded share
-     * (`1/1` = one expected win per block at full supply); `nominal_work`
-     * pins staked-block weight (keep tiny so mining stays king of chain
-     * selection); `retarget` adopts the default difficulty-retargeting pin
-     * for PoW-path work claims.
+     * Create a Vault (time-lock) output locking `amount` (native KVNC) to a
+     * Version 0x05 address with the given `unlock_height` (absolute CLTV lock)
+     * and `csv` (relative CSV lock in blocks since output creation).
+     * `owner_pk_hex` is the Ed25519 public key authorized to spend when both
+     * locks have elapsed. The funding transaction is mined immediately.
+     * Returns the template, address, and funding outpoint.
      */
-    func enableHybrid(rateNum: UInt64, rateDen: UInt64, nominalWork: U128Parts, retarget: Bool) throws 
+    func createVault(signingSecretHex: String, amount: UInt64, unlockHeight: UInt32, csv: UInt32, ownerPkHex: String) throws  -> VaultInfo
     
     /**
      * Export a single block as a one-record wire-format blob. `None` if the
@@ -761,8 +766,8 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     func exportBlockById(idHex: String) throws  -> Data?
     
     /**
-     * Every known block as a wire-format blob (framed count + records, VRF
-     * bundles included). Hand this to a peer; idempotent on their side.
+     * Every known block as a wire-format blob (framed count + records). Hand
+     * this to a peer; idempotent on their side.
      */
     func exportBlocks()  -> Data
     
@@ -778,6 +783,13 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
      * header chain.
      */
     func exportLightSyncFrom(fromIdHex: String)  -> Data
+    
+    /**
+     * Fetch the full authority set for an epoch.
+     * Returns lines of "pubkey_hex weight" (weight is always 1: PoA is
+     * equal-weight, KVP-201). See docs/RFC-009-StakeWeightedPoA.md.
+     */
+    func fetchEpochAuthoritySet(epoch: UInt64) throws  -> String
     
     /**
      * Whether `address` MIGHT appear in the filtered block (Golomb-Rice
@@ -814,38 +826,32 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     func htlcScriptHex(preimageHashHex: String, recipientPkHex: String, senderPkHex: String, timeout: UInt32) throws  -> String
     
     /**
-     * Whether hybrid admission is active.
+     * Replace state with a snapshot from `path`, replaying under `config`'s
+     * PoA authority set.
+     *
+     * A snapshot stores the ledger but **not** the admission config, so the
+     * authority set must be supplied again on every load — the same contract
+     * as the full node's `restore_poa_policy`. Loading without it would leave
+     * the node unable to verify authority signatures, i.e. accepting blocks on
+     * the serving peer's word alone.
      */
-    func hybridEnabled()  -> Bool
+    func loadSnapshot(path: String, config: LightConfig) throws 
     
     /**
-     * Replace state with a snapshot from `path`. If this node has a hybrid
-     * policy active, replay runs under it so staked-VRF blocks keep their
-     * original ids; plain (pre-hybrid) snapshots load normally either way.
-     */
-    func loadSnapshot(path: String) throws 
-    
-    /**
-     * This validator's bonded stake (tip view), in atoms.
-     */
-    func myStake() throws  -> UInt64
-    
-    /**
-     * Earliest height at which bonded stake unlocks next (`None` when
-     * everything already has). Compare against [`Self::chain_height`].
-     */
-    func pendingUnbondHeight() throws  -> UInt64?
-    
-    /**
-     * Pack pending mempool transactions into the next block: tries the
-     * staked-VRF draw first, falls back to PoW. `None` when nothing is pending.
+     * Pack pending mempool transactions into the next block, signing with this
+     * node's authority key. `None` when nothing is pending.
+     *
+     * Under PoA this node must hold the authority key scheduled for the
+     * current slot, and block *immediately* rather than waiting for the next
+     * one — so on a wallet with no authority key it fails with
+     * "not the scheduled authority for this slot". PoA is the only admission
+     * regime (RFC-POA §0); there is no PoW fallback to fall back to.
      */
     func produceBlock() throws  -> BlockInfo?
     
     /**
-     * Produce a block even with an empty mempool (coinbase-only when a miner
-     * seed is set). Staked draw first, PoW fallback — this is the phone's
-     * steady-state heartbeat.
+     * Produce a block even with an empty mempool (coinbase-only, crediting the
+     * authority). Same authority-slot requirement as [`Self::produce_block`].
      */
     func produceEmptyBlock() throws  -> BlockInfo
     
@@ -864,8 +870,8 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     
     /**
      * Accept a light-sync blob: header chain is verified for linkage,
-     * monotonic timestamps and rising blue work (`require_pow` off — hybrid
-     * staked blocks carry nominal work). Returns accepted header count.
+     * monotonic timestamps and rising blue work. Returns accepted header
+     * count.
      */
     func receiveLightSync(blob: Data) throws  -> UInt32
     
@@ -886,7 +892,15 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     func refundHtlc(signingSecretHex: String, outpointTxHex: String, outpointIndex: UInt32, scriptHex: String, toAddress: String) throws  -> String
     
     /**
-     * Write a full snapshot (UTXO + stake registry + blocks) to `path`.
+     * Release a Vault output when both locks (absolute and/or relative) have
+     * elapsed. `signing_secret_hex` is the **owner**'s 32-byte Ed25519 secret
+     * (hex); the witness is `[template, owner_sig]`. Fee is paid from the
+     * vault value. Returns the release transaction id (lowercase hex).
+     */
+    func releaseVault(signingSecretHex: String, outpointTxHex: String, outpointIndex: UInt32, scriptHex: String, toAddress: String) throws  -> String
+    
+    /**
+     * Write a full snapshot (UTXO + blocks) to `path`.
      */
     func saveSnapshot(path: String) throws 
     
@@ -897,7 +911,12 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     
     /**
      * Transfer `amount` from actor `from_seed` to `to_seed`, sealed
-     * immediately in a mined block.
+     * immediately in a block.
+     *
+     * Sealing requires this node to be the authority scheduled for the current
+     * slot; a wallet without an authority key gets
+     * "not the scheduled authority for this slot" rather than a silently
+     * unsealed transfer.
      */
     func send(fromSeed: UInt64, amount: UInt64, toSeed: UInt64) throws  -> SendReceipt
     
@@ -940,18 +959,6 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     func sendToStealth(signingSecretHex: String, amount: UInt64, stealthAddressHex: String) throws  -> String
     
     /**
-     * Receive the per-block subsidy coinbase on produced blocks under this
-     * actor seed.
-     */
-    func setMinerSeed(seed: UInt64) throws 
-    
-    /**
-     * Adopt a validator identity from a 32-byte VRF seed. Bond stake via
-     * [`Self::bond_stake`] before production draws can win.
-     */
-    func setValidatorSeed(seed: Data) throws 
-    
-    /**
      * Sign a multisig transaction blob with a 32-byte Ed25519 secret (hex).
      * Returns the raw 64-byte partial signature.
      */
@@ -987,28 +994,18 @@ public protocol LightNodeProtocol: AnyObject, Sendable {
     func tips() throws  -> [String]
     
     /**
-     * Total bonded stake across all validators (tip view), in atoms.
+     * Build a Vault template from its four parameters and return the
+     * canonical 40-byte template as lowercase hex. Useful for constructing
+     * a script to pass to [`Self::balance_of_vault`] or to share out of band.
      */
-    func totalStake() throws  -> UInt64
+    func vaultScriptHex(unlockHeight: UInt32, csv: UInt32, ownerPkHex: String) throws  -> String
     
     /**
-     * Unbond `amount` of this validator's stake back to the seed actor's own
-     * address. Only matured bonds count (`UNBOND_MATURITY` blue heights after
-     * bonding); oldest bonds are released first, change stays unfrozen.
-     * Sealed immediately in a mined block.
+     * SW-PoA stake proof for a block's authority (SPV).
+     * Previously verified an SW-PoA block header with a stake proof.
+     * Removed: stake/VRF admission was dropped entirely (RFC-POA-Migration §0.7.1).
      */
-    func unbond(fromSeed: UInt64, amount: UInt64) throws  -> SendReceipt
-    
-    /**
-     * Unbond `amount` of this validator's matured stake back to the wallet
-     * address derived from a 32-byte Ed25519 secret (hex).
-     */
-    func unbondFromSecret(secretHex: String, amount: UInt64) throws  -> SendReceipt
-    
-    /**
-     * This validator's VRF public key, lowercase hex, if a seed was set.
-     */
-    func validatorPublicKeyHex()  -> String?
+    func verifySwPoaHeader(headerBlob: Data, proofHex: String) throws  -> Bool
     
     /**
      * Verify an inclusion-proof blob against the light-synced header of
@@ -1074,6 +1071,12 @@ open class LightNode: LightNodeProtocol, @unchecked Sendable {
     }
     /**
      * Bring up a fresh node at genesis with `config`.
+     *
+     * The genesis is a PoA genesis: its coinbase commits to
+     * `config.authority_public_keys` (`KVA1 || set_hash`), so a node built
+     * with a different authority set derives a different genesis id and will
+     * not accept the network's blocks. PoA is the only admission regime
+     * (RFC-POA §0) — there is no non-PoA genesis to fall back to.
      */
 public convenience init(config: LightConfig)throws  {
     let handle =
@@ -1181,6 +1184,19 @@ open func balanceOfStealth(stealthAddressHex: String)throws  -> UInt64  {
 }
     
     /**
+     * The spendable balance locked to a Vault template's address, in atoms.
+     */
+open func balanceOfVault(scriptHex: String)throws  -> UInt64  {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_ffi_fn_method_lightnode_balance_of_vault(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(scriptHex),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Summary of one block by lowercase-hex id.
      */
 open func blockById(idHex: String)throws  -> BlockInfo?  {
@@ -1221,42 +1237,6 @@ open func blockFilter(blockIdHex: String)throws  -> Data  {
 }
     
     /**
-     * Bond `amount` atoms of actor `seed`'s spendable coins to THIS node's
-     * validator key, sealing both the sizing split (if needed) and the bond
-     * transaction in mined PoW blocks. Returns the bond tx id, lowercase hex.
-     *
-     * A bond freezes whole coin(s): the flow splits a larger coin first so
-     * exactly `amount` is frozen and the remainder stays spendable.
-     */
-open func bondStake(seed: UInt64, amount: UInt64)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
-        uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_bond_stake(
-            self.uniffiCloneHandle(),
-        FfiConverterUInt64.lower(seed),
-        FfiConverterUInt64.lower(amount),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * Bond `amount` atoms from the wallet identity derived from a 32-byte
-     * Ed25519 secret (hex) to THIS node's validator key. The source coins,
-     * sizing split, and bond change all live at the wallet address, so
-     * staking spends wallet funds and returns the remainder to the wallet.
-     */
-open func bondStakeFromSecret(secretHex: String, amount: UInt64)throws  -> String  {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
-        uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_bond_stake_from_secret(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(secretHex),
-        FfiConverterUInt64.lower(amount),uniffiCallStatus
-    )
-})
-}
-    
-    /**
      * Build an unsigned multisig spend paying `outputs` from a single UTXO
      * owned by `address`. Returns a transaction blob encoding the unsigned tx
      * with the redeem script attached as `witness[0]`.
@@ -1280,6 +1260,42 @@ open func chainHeight()throws  -> UInt64  {
         uniffiCallStatus in
     uniffi_kovanica_ffi_fn_method_lightnode_chain_height(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Build an **unsigned** CoinJoin transaction from multiple participants.
+     * Each participant provides their address, desired outputs, and optional asset.
+     * The method selects covering UTXOs for each participant, builds a single
+     * transaction with all inputs and outputs, and returns the unsigned transaction
+     * plus sighashes for each input that each participant must sign.
+     *
+     * This is a non-consensus, node-level utility for privacy-enhancing batched spends.
+     */
+open func coinjoinPrepare(participants: [CoinJoinParticipant])throws  -> CoinJoinPrepared  {
+    return try  FfiConverterTypeCoinJoinPrepared_lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_ffi_fn_method_lightnode_coinjoin_prepare(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceTypeCoinJoinParticipant.lower(participants),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Submit a fully signed CoinJoin transaction.
+     * `prepared` is the result from `coinjoin_prepare`.
+     * `signatures_hex` is a list of 64-byte Ed25519 signatures (lowercase hex),
+     * one per input, in the same order as `prepared.outpoints_hex`.
+     */
+open func coinjoinSubmit(prepared: CoinJoinPrepared, signaturesHex: [String])throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_ffi_fn_method_lightnode_coinjoin_submit(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeCoinJoinPrepared_lower(prepared),
+        FfiConverterSequenceString.lower(signaturesHex),uniffiCallStatus
     )
 })
 }
@@ -1339,24 +1355,25 @@ open func createMultisigAddress(threshold: UInt8, pubkeysHex: [String])throws  -
 }
     
     /**
-     * Enable hybrid admission: blocks enter by PoW or by eligible VRF draw.
-     *
-     * `rate_num/rate_den` scales slot frequency relative to bonded share
-     * (`1/1` = one expected win per block at full supply); `nominal_work`
-     * pins staked-block weight (keep tiny so mining stays king of chain
-     * selection); `retarget` adopts the default difficulty-retargeting pin
-     * for PoW-path work claims.
+     * Create a Vault (time-lock) output locking `amount` (native KVNC) to a
+     * Version 0x05 address with the given `unlock_height` (absolute CLTV lock)
+     * and `csv` (relative CSV lock in blocks since output creation).
+     * `owner_pk_hex` is the Ed25519 public key authorized to spend when both
+     * locks have elapsed. The funding transaction is mined immediately.
+     * Returns the template, address, and funding outpoint.
      */
-open func enableHybrid(rateNum: UInt64, rateDen: UInt64, nominalWork: U128Parts, retarget: Bool)throws   {try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
+open func createVault(signingSecretHex: String, amount: UInt64, unlockHeight: UInt32, csv: UInt32, ownerPkHex: String)throws  -> VaultInfo  {
+    return try  FfiConverterTypeVaultInfo_lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
         uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_enable_hybrid(
+    uniffi_kovanica_ffi_fn_method_lightnode_create_vault(
             self.uniffiCloneHandle(),
-        FfiConverterUInt64.lower(rateNum),
-        FfiConverterUInt64.lower(rateDen),
-        FfiConverterTypeU128Parts_lower(nominalWork),
-        FfiConverterBool.lower(retarget),uniffiCallStatus
+        FfiConverterString.lower(signingSecretHex),
+        FfiConverterUInt64.lower(amount),
+        FfiConverterUInt32.lower(unlockHeight),
+        FfiConverterUInt32.lower(csv),
+        FfiConverterString.lower(ownerPkHex),uniffiCallStatus
     )
-}
+})
 }
     
     /**
@@ -1388,8 +1405,8 @@ open func exportBlockById(idHex: String)throws  -> Data?  {
 }
     
     /**
-     * Every known block as a wire-format blob (framed count + records, VRF
-     * bundles included). Hand this to a peer; idempotent on their side.
+     * Every known block as a wire-format blob (framed count + records). Hand
+     * this to a peer; idempotent on their side.
      */
 open func exportBlocks() -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
@@ -1424,6 +1441,21 @@ open func exportLightSyncFrom(fromIdHex: String) -> Data  {
     uniffi_kovanica_ffi_fn_method_lightnode_export_light_sync_from(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(fromIdHex),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Fetch the full authority set for an epoch.
+     * Returns lines of "pubkey_hex weight" (weight is always 1: PoA is
+     * equal-weight, KVP-201). See docs/RFC-009-StakeWeightedPoA.md.
+     */
+open func fetchEpochAuthoritySet(epoch: UInt64)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_ffi_fn_method_lightnode_fetch_epoch_authority_set(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(epoch),uniffiCallStatus
     )
 })
 }
@@ -1509,59 +1541,34 @@ open func htlcScriptHex(preimageHashHex: String, recipientPkHex: String, senderP
 }
     
     /**
-     * Whether hybrid admission is active.
+     * Replace state with a snapshot from `path`, replaying under `config`'s
+     * PoA authority set.
+     *
+     * A snapshot stores the ledger but **not** the admission config, so the
+     * authority set must be supplied again on every load — the same contract
+     * as the full node's `restore_poa_policy`. Loading without it would leave
+     * the node unable to verify authority signatures, i.e. accepting blocks on
+     * the serving peer's word alone.
      */
-open func hybridEnabled() -> Bool  {
-    return try!  FfiConverterBool.lift(try! rustCall() {
-        uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_hybrid_enabled(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * Replace state with a snapshot from `path`. If this node has a hybrid
-     * policy active, replay runs under it so staked-VRF blocks keep their
-     * original ids; plain (pre-hybrid) snapshots load normally either way.
-     */
-open func loadSnapshot(path: String)throws   {try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
+open func loadSnapshot(path: String, config: LightConfig)throws   {try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
         uniffiCallStatus in
     uniffi_kovanica_ffi_fn_method_lightnode_load_snapshot(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(path),uniffiCallStatus
+        FfiConverterString.lower(path),
+        FfiConverterTypeLightConfig_lower(config),uniffiCallStatus
     )
 }
 }
     
     /**
-     * This validator's bonded stake (tip view), in atoms.
-     */
-open func myStake()throws  -> UInt64  {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
-        uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_my_stake(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * Earliest height at which bonded stake unlocks next (`None` when
-     * everything already has). Compare against [`Self::chain_height`].
-     */
-open func pendingUnbondHeight()throws  -> UInt64?  {
-    return try  FfiConverterOptionUInt64.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
-        uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_pending_unbond_height(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * Pack pending mempool transactions into the next block: tries the
-     * staked-VRF draw first, falls back to PoW. `None` when nothing is pending.
+     * Pack pending mempool transactions into the next block, signing with this
+     * node's authority key. `None` when nothing is pending.
+     *
+     * Under PoA this node must hold the authority key scheduled for the
+     * current slot, and block *immediately* rather than waiting for the next
+     * one — so on a wallet with no authority key it fails with
+     * "not the scheduled authority for this slot". PoA is the only admission
+     * regime (RFC-POA §0); there is no PoW fallback to fall back to.
      */
 open func produceBlock()throws  -> BlockInfo?  {
     return try  FfiConverterOptionTypeBlockInfo.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
@@ -1573,9 +1580,8 @@ open func produceBlock()throws  -> BlockInfo?  {
 }
     
     /**
-     * Produce a block even with an empty mempool (coinbase-only when a miner
-     * seed is set). Staked draw first, PoW fallback — this is the phone's
-     * steady-state heartbeat.
+     * Produce a block even with an empty mempool (coinbase-only, crediting the
+     * authority). Same authority-slot requirement as [`Self::produce_block`].
      */
 open func produceEmptyBlock()throws  -> BlockInfo  {
     return try  FfiConverterTypeBlockInfo_lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
@@ -1618,8 +1624,8 @@ open func receiveBlocks(blob: Data)throws  -> UInt32  {
     
     /**
      * Accept a light-sync blob: header chain is verified for linkage,
-     * monotonic timestamps and rising blue work (`require_pow` off — hybrid
-     * staked blocks carry nominal work). Returns accepted header count.
+     * monotonic timestamps and rising blue work. Returns accepted header
+     * count.
      */
 open func receiveLightSync(blob: Data)throws  -> UInt32  {
     return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
@@ -1673,7 +1679,27 @@ open func refundHtlc(signingSecretHex: String, outpointTxHex: String, outpointIn
 }
     
     /**
-     * Write a full snapshot (UTXO + stake registry + blocks) to `path`.
+     * Release a Vault output when both locks (absolute and/or relative) have
+     * elapsed. `signing_secret_hex` is the **owner**'s 32-byte Ed25519 secret
+     * (hex); the witness is `[template, owner_sig]`. Fee is paid from the
+     * vault value. Returns the release transaction id (lowercase hex).
+     */
+open func releaseVault(signingSecretHex: String, outpointTxHex: String, outpointIndex: UInt32, scriptHex: String, toAddress: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_ffi_fn_method_lightnode_release_vault(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(signingSecretHex),
+        FfiConverterString.lower(outpointTxHex),
+        FfiConverterUInt32.lower(outpointIndex),
+        FfiConverterString.lower(scriptHex),
+        FfiConverterString.lower(toAddress),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Write a full snapshot (UTXO + blocks) to `path`.
      */
 open func saveSnapshot(path: String)throws   {try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
         uniffiCallStatus in
@@ -1698,7 +1724,12 @@ open func selectedTip()throws  -> String  {
     
     /**
      * Transfer `amount` from actor `from_seed` to `to_seed`, sealed
-     * immediately in a mined block.
+     * immediately in a block.
+     *
+     * Sealing requires this node to be the authority scheduled for the current
+     * slot; a wallet without an authority key gets
+     * "not the scheduled authority for this slot" rather than a silently
+     * unsealed transfer.
      */
 open func send(fromSeed: UInt64, amount: UInt64, toSeed: UInt64)throws  -> SendReceipt  {
     return try  FfiConverterTypeSendReceipt_lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
@@ -1803,32 +1834,6 @@ open func sendToStealth(signingSecretHex: String, amount: UInt64, stealthAddress
 }
     
     /**
-     * Receive the per-block subsidy coinbase on produced blocks under this
-     * actor seed.
-     */
-open func setMinerSeed(seed: UInt64)throws   {try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
-        uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_set_miner_seed(
-            self.uniffiCloneHandle(),
-        FfiConverterUInt64.lower(seed),uniffiCallStatus
-    )
-}
-}
-    
-    /**
-     * Adopt a validator identity from a 32-byte VRF seed. Bond stake via
-     * [`Self::bond_stake`] before production draws can win.
-     */
-open func setValidatorSeed(seed: Data)throws   {try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
-        uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_set_validator_seed(
-            self.uniffiCloneHandle(),
-        FfiConverterData.lower(seed),uniffiCallStatus
-    )
-}
-}
-    
-    /**
      * Sign a multisig transaction blob with a 32-byte Ed25519 secret (hex).
      * Returns the raw 64-byte partial signature.
      */
@@ -1911,57 +1916,34 @@ open func tips()throws  -> [String]  {
 }
     
     /**
-     * Total bonded stake across all validators (tip view), in atoms.
+     * Build a Vault template from its four parameters and return the
+     * canonical 40-byte template as lowercase hex. Useful for constructing
+     * a script to pass to [`Self::balance_of_vault`] or to share out of band.
      */
-open func totalStake()throws  -> UInt64  {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
+open func vaultScriptHex(unlockHeight: UInt32, csv: UInt32, ownerPkHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
         uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_total_stake(
-            self.uniffiCloneHandle(),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * Unbond `amount` of this validator's stake back to the seed actor's own
-     * address. Only matured bonds count (`UNBOND_MATURITY` blue heights after
-     * bonding); oldest bonds are released first, change stays unfrozen.
-     * Sealed immediately in a mined block.
-     */
-open func unbond(fromSeed: UInt64, amount: UInt64)throws  -> SendReceipt  {
-    return try  FfiConverterTypeSendReceipt_lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
-        uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_unbond(
+    uniffi_kovanica_ffi_fn_method_lightnode_vault_script_hex(
             self.uniffiCloneHandle(),
-        FfiConverterUInt64.lower(fromSeed),
-        FfiConverterUInt64.lower(amount),uniffiCallStatus
+        FfiConverterUInt32.lower(unlockHeight),
+        FfiConverterUInt32.lower(csv),
+        FfiConverterString.lower(ownerPkHex),uniffiCallStatus
     )
 })
 }
     
     /**
-     * Unbond `amount` of this validator's matured stake back to the wallet
-     * address derived from a 32-byte Ed25519 secret (hex).
+     * SW-PoA stake proof for a block's authority (SPV).
+     * Previously verified an SW-PoA block header with a stake proof.
+     * Removed: stake/VRF admission was dropped entirely (RFC-POA-Migration §0.7.1).
      */
-open func unbondFromSecret(secretHex: String, amount: UInt64)throws  -> SendReceipt  {
-    return try  FfiConverterTypeSendReceipt_lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
+open func verifySwPoaHeader(headerBlob: Data, proofHex: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeLightNodeError_lift) {
         uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_unbond_from_secret(
+    uniffi_kovanica_ffi_fn_method_lightnode_verify_sw_poa_header(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(secretHex),
-        FfiConverterUInt64.lower(amount),uniffiCallStatus
-    )
-})
-}
-    
-    /**
-     * This validator's VRF public key, lowercase hex, if a seed was set.
-     */
-open func validatorPublicKeyHex() -> String?  {
-    return try!  FfiConverterOptionString.lift(try! rustCall() {
-        uniffiCallStatus in
-    uniffi_kovanica_ffi_fn_method_lightnode_validator_public_key_hex(
-            self.uniffiCloneHandle(),uniffiCallStatus
+        FfiConverterData.lower(headerBlob),
+        FfiConverterString.lower(proofHex),uniffiCallStatus
     )
 })
 }
@@ -2044,11 +2026,9 @@ public struct BlockInfo: Equatable, Hashable {
      */
     public var parentsHex: [String]
     /**
-     * Which hybrid admission path produced it.
-     */
-    public var kind: BlockKind
-    /**
-     * Claimed work weight (nominal `1` for staked blocks).
+     * Claimed work weight. Under PoA this is always the nominal `1`
+     * (`POA_NOMINAL_WORK`): admission is by authority signature, not by a
+     * work target, so work carries no ranking weight.
      */
     public var work: U128Parts
     /**
@@ -2066,17 +2046,15 @@ public struct BlockInfo: Equatable, Hashable {
          * Parent ids, lowercase hex (sorted, de-duplicated, as `Block` stores them).
          */parentsHex: [String], 
         /**
-         * Which hybrid admission path produced it.
-         */kind: BlockKind, 
-        /**
-         * Claimed work weight (nominal `1` for staked blocks).
+         * Claimed work weight. Under PoA this is always the nominal `1`
+         * (`POA_NOMINAL_WORK`): admission is by authority signature, not by a
+         * work target, so work carries no ranking weight.
          */work: U128Parts, 
         /**
          * Milliseconds since the UNIX epoch.
          */timestampMs: UInt64) {
         self.idHex = idHex
         self.parentsHex = parentsHex
-        self.kind = kind
         self.work = work
         self.timestampMs = timestampMs
     }
@@ -2099,7 +2077,6 @@ public struct FfiConverterTypeBlockInfo: FfiConverterRustBuffer {
             try BlockInfo(
                 idHex: FfiConverterString.read(from: &buf), 
                 parentsHex: FfiConverterSequenceString.read(from: &buf), 
-                kind: FfiConverterTypeBlockKind.read(from: &buf), 
                 work: FfiConverterTypeU128Parts.read(from: &buf), 
                 timestampMs: FfiConverterUInt64.read(from: &buf)
         )
@@ -2108,7 +2085,6 @@ public struct FfiConverterTypeBlockInfo: FfiConverterRustBuffer {
     public static func write(_ value: BlockInfo, into buf: inout [UInt8]) {
         FfiConverterString.write(value.idHex, into: &buf)
         FfiConverterSequenceString.write(value.parentsHex, into: &buf)
-        FfiConverterTypeBlockKind.write(value.kind, into: &buf)
         FfiConverterTypeU128Parts.write(value.work, into: &buf)
         FfiConverterUInt64.write(value.timestampMs, into: &buf)
     }
@@ -2127,6 +2103,263 @@ public func FfiConverterTypeBlockInfo_lift(_ buf: RustBuffer) throws -> BlockInf
 #endif
 public func FfiConverterTypeBlockInfo_lower(_ value: BlockInfo) -> RustBuffer {
     return FfiConverterTypeBlockInfo.lower(value)
+}
+
+
+/**
+ * An output specification for CoinJoin.
+ */
+public struct CoinJoinOutput: Equatable, Hashable {
+    /**
+     * The amount in atoms (decimal string).
+     */
+    public var amount: String
+    /**
+     * The recipient address.
+     */
+    public var to: String
+    /**
+     * The asset to use (None = native KVNC).
+     */
+    public var assetIdHex: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The amount in atoms (decimal string).
+         */amount: String, 
+        /**
+         * The recipient address.
+         */to: String, 
+        /**
+         * The asset to use (None = native KVNC).
+         */assetIdHex: String?) {
+        self.amount = amount
+        self.to = to
+        self.assetIdHex = assetIdHex
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension CoinJoinOutput: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoinJoinOutput: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoinJoinOutput {
+        return
+            try CoinJoinOutput(
+                amount: FfiConverterString.read(from: &buf), 
+                to: FfiConverterString.read(from: &buf), 
+                assetIdHex: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CoinJoinOutput, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.amount, into: &buf)
+        FfiConverterString.write(value.to, into: &buf)
+        FfiConverterOptionString.write(value.assetIdHex, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoinJoinOutput_lift(_ buf: RustBuffer) throws -> CoinJoinOutput {
+    return try FfiConverterTypeCoinJoinOutput.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoinJoinOutput_lower(_ value: CoinJoinOutput) -> RustBuffer {
+    return FfiConverterTypeCoinJoinOutput.lower(value)
+}
+
+
+/**
+ * A participant in a CoinJoin batch.
+ */
+public struct CoinJoinParticipant: Equatable, Hashable {
+    /**
+     * The participant's address (must own the UTXOs being spent).
+     */
+    public var from: String
+    /**
+     * The outputs this participant wants to create.
+     */
+    public var outputs: [CoinJoinOutput]
+    /**
+     * The asset to spend (None = native KVNC).
+     */
+    public var assetIdHex: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The participant's address (must own the UTXOs being spent).
+         */from: String, 
+        /**
+         * The outputs this participant wants to create.
+         */outputs: [CoinJoinOutput], 
+        /**
+         * The asset to spend (None = native KVNC).
+         */assetIdHex: String?) {
+        self.from = from
+        self.outputs = outputs
+        self.assetIdHex = assetIdHex
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension CoinJoinParticipant: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoinJoinParticipant: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoinJoinParticipant {
+        return
+            try CoinJoinParticipant(
+                from: FfiConverterString.read(from: &buf), 
+                outputs: FfiConverterSequenceTypeCoinJoinOutput.read(from: &buf), 
+                assetIdHex: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CoinJoinParticipant, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.from, into: &buf)
+        FfiConverterSequenceTypeCoinJoinOutput.write(value.outputs, into: &buf)
+        FfiConverterOptionString.write(value.assetIdHex, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoinJoinParticipant_lift(_ buf: RustBuffer) throws -> CoinJoinParticipant {
+    return try FfiConverterTypeCoinJoinParticipant.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoinJoinParticipant_lower(_ value: CoinJoinParticipant) -> RustBuffer {
+    return FfiConverterTypeCoinJoinParticipant.lower(value)
+}
+
+
+/**
+ * A prepared CoinJoin transaction ready for participants to sign.
+ */
+public struct CoinJoinPrepared: Equatable, Hashable {
+    /**
+     * The unsigned batched transaction, hex-encoded.
+     */
+    public var txHex: String
+    /**
+     * Sighash for each input (all inputs share the same transaction sighash).
+     */
+    public var sighashesHex: [String]
+    /**
+     * The outpoints being spent, in order (hex-encoded).
+     */
+    public var outpointsHex: [String]
+    /**
+     * Values of the outpoints being spent, in order (decimal strings).
+     */
+    public var values: [String]
+    /**
+     * Total protocol fee for the batch (atoms, decimal string).
+     */
+    public var fee: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The unsigned batched transaction, hex-encoded.
+         */txHex: String, 
+        /**
+         * Sighash for each input (all inputs share the same transaction sighash).
+         */sighashesHex: [String], 
+        /**
+         * The outpoints being spent, in order (hex-encoded).
+         */outpointsHex: [String], 
+        /**
+         * Values of the outpoints being spent, in order (decimal strings).
+         */values: [String], 
+        /**
+         * Total protocol fee for the batch (atoms, decimal string).
+         */fee: String) {
+        self.txHex = txHex
+        self.sighashesHex = sighashesHex
+        self.outpointsHex = outpointsHex
+        self.values = values
+        self.fee = fee
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension CoinJoinPrepared: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoinJoinPrepared: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoinJoinPrepared {
+        return
+            try CoinJoinPrepared(
+                txHex: FfiConverterString.read(from: &buf), 
+                sighashesHex: FfiConverterSequenceString.read(from: &buf), 
+                outpointsHex: FfiConverterSequenceString.read(from: &buf), 
+                values: FfiConverterSequenceString.read(from: &buf), 
+                fee: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CoinJoinPrepared, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.txHex, into: &buf)
+        FfiConverterSequenceString.write(value.sighashesHex, into: &buf)
+        FfiConverterSequenceString.write(value.outpointsHex, into: &buf)
+        FfiConverterSequenceString.write(value.values, into: &buf)
+        FfiConverterString.write(value.fee, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoinJoinPrepared_lift(_ buf: RustBuffer) throws -> CoinJoinPrepared {
+    return try FfiConverterTypeCoinJoinPrepared.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoinJoinPrepared_lower(_ value: CoinJoinPrepared) -> RustBuffer {
+    return FfiConverterTypeCoinJoinPrepared.lower(value)
 }
 
 
@@ -2360,6 +2593,29 @@ public struct LightConfig: Equatable, Hashable {
      * Payload pruning depth; keep ≥ `finality_depth`.
      */
     public var payloadPruningDepth: UInt64
+    /**
+     * The PoA authority set as lowercase-hex 32-byte Ed25519 **public** keys
+     * (RFC-POA KVP-201, `KVA1 || set_hash`).
+     *
+     * A light node must know this set or it cannot verify the authority
+     * signature on every block it accepts, and would be trusting the peer that
+     * served it. These are public keys: the wallet never holds, and must never
+     * hold, the matching secrets — block production is not a wallet capability.
+     *
+     * Minimum 3 keys (RFC-POA `MIN_AUTHORITIES`). Must be identical across
+     * every node on the network: the set is hashed into the genesis coinbase,
+     * so a different set yields a different genesis id.
+     */
+    public var authorityPublicKeys: [String]
+    /**
+     * Authority-set threshold M for an on-chain rotation. `0` selects the
+     * default strict majority.
+     */
+    public var authorityThreshold: UInt32
+    /**
+     * Slot duration in milliseconds (RFC-POA default 3000).
+     */
+    public var slotDurationMs: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -2382,13 +2638,36 @@ public struct LightConfig: Equatable, Hashable {
          */finalityDepth: UInt64, 
         /**
          * Payload pruning depth; keep ≥ `finality_depth`.
-         */payloadPruningDepth: UInt64) {
+         */payloadPruningDepth: UInt64, 
+        /**
+         * The PoA authority set as lowercase-hex 32-byte Ed25519 **public** keys
+         * (RFC-POA KVP-201, `KVA1 || set_hash`).
+         *
+         * A light node must know this set or it cannot verify the authority
+         * signature on every block it accepts, and would be trusting the peer that
+         * served it. These are public keys: the wallet never holds, and must never
+         * hold, the matching secrets — block production is not a wallet capability.
+         *
+         * Minimum 3 keys (RFC-POA `MIN_AUTHORITIES`). Must be identical across
+         * every node on the network: the set is hashed into the genesis coinbase,
+         * so a different set yields a different genesis id.
+         */authorityPublicKeys: [String], 
+        /**
+         * Authority-set threshold M for an on-chain rotation. `0` selects the
+         * default strict majority.
+         */authorityThreshold: UInt32, 
+        /**
+         * Slot duration in milliseconds (RFC-POA default 3000).
+         */slotDurationMs: UInt64) {
         self.k = k
         self.subsidy = subsidy
         self.founderAmount = founderAmount
         self.founderSeed = founderSeed
         self.finalityDepth = finalityDepth
         self.payloadPruningDepth = payloadPruningDepth
+        self.authorityPublicKeys = authorityPublicKeys
+        self.authorityThreshold = authorityThreshold
+        self.slotDurationMs = slotDurationMs
     }
 
     
@@ -2412,7 +2691,10 @@ public struct FfiConverterTypeLightConfig: FfiConverterRustBuffer {
                 founderAmount: FfiConverterUInt64.read(from: &buf), 
                 founderSeed: FfiConverterUInt64.read(from: &buf), 
                 finalityDepth: FfiConverterUInt64.read(from: &buf), 
-                payloadPruningDepth: FfiConverterUInt64.read(from: &buf)
+                payloadPruningDepth: FfiConverterUInt64.read(from: &buf), 
+                authorityPublicKeys: FfiConverterSequenceString.read(from: &buf), 
+                authorityThreshold: FfiConverterUInt32.read(from: &buf), 
+                slotDurationMs: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -2423,6 +2705,9 @@ public struct FfiConverterTypeLightConfig: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.founderSeed, into: &buf)
         FfiConverterUInt64.write(value.finalityDepth, into: &buf)
         FfiConverterUInt64.write(value.payloadPruningDepth, into: &buf)
+        FfiConverterSequenceString.write(value.authorityPublicKeys, into: &buf)
+        FfiConverterUInt32.write(value.authorityThreshold, into: &buf)
+        FfiConverterUInt64.write(value.slotDurationMs, into: &buf)
     }
 }
 
@@ -2706,60 +2991,85 @@ public func FfiConverterTypeU128Parts_lower(_ value: U128Parts) -> RustBuffer {
 
 
 /**
- * How a block was admitted.
+ * A created Vault output (RFC-005), as seen from the mobile FFI.
  */
+public struct VaultInfo: Equatable, Hashable {
+    /**
+     * The validated 40-byte Vault template, lowercase hex.
+     */
+    public var scriptHex: String
+    /**
+     * The Version 0x05 address the output is locked to (`kvnc…dag`).
+     */
+    public var address: String
+    /**
+     * Id of the funding transaction, lowercase hex.
+     */
+    public var txId: String
+    /**
+     * Funding transaction id of the outpoint, lowercase hex.
+     */
+    public var outpointTx: String
+    /**
+     * Output index of the Vault output within the funding transaction.
+     */
+    public var outpointIndex: UInt32
 
-public enum BlockKind: Equatable, Hashable {
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The validated 40-byte Vault template, lowercase hex.
+         */scriptHex: String, 
+        /**
+         * The Version 0x05 address the output is locked to (`kvnc…dag`).
+         */address: String, 
+        /**
+         * Id of the funding transaction, lowercase hex.
+         */txId: String, 
+        /**
+         * Funding transaction id of the outpoint, lowercase hex.
+         */outpointTx: String, 
+        /**
+         * Output index of the Vault output within the funding transaction.
+         */outpointIndex: UInt32) {
+        self.scriptHex = scriptHex
+        self.address = address
+        self.txId = txId
+        self.outpointTx = outpointTx
+        self.outpointIndex = outpointIndex
+    }
+
     
-    /**
-     * Proof-of-work path (hash meets target).
-     */
-    case pow
-    /**
-     * Stake-weighted VRF sortition path.
-     */
-    case staked
 
-
-
-
-
+    
 }
 
 #if compiler(>=6)
-extension BlockKind: Sendable {}
+extension VaultInfo: Sendable {}
 #endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeBlockKind: FfiConverterRustBuffer {
-    typealias SwiftType = BlockKind
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BlockKind {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        
-        case 1: return .pow
-        
-        case 2: return .staked
-        
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
+public struct FfiConverterTypeVaultInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VaultInfo {
+        return
+            try VaultInfo(
+                scriptHex: FfiConverterString.read(from: &buf), 
+                address: FfiConverterString.read(from: &buf), 
+                txId: FfiConverterString.read(from: &buf), 
+                outpointTx: FfiConverterString.read(from: &buf), 
+                outpointIndex: FfiConverterUInt32.read(from: &buf)
+        )
     }
 
-    public static func write(_ value: BlockKind, into buf: inout [UInt8]) {
-        switch value {
-        
-        
-        case .pow:
-            writeInt(&buf, Int32(1))
-        
-        
-        case .staked:
-            writeInt(&buf, Int32(2))
-        
-        }
+    public static func write(_ value: VaultInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.scriptHex, into: &buf)
+        FfiConverterString.write(value.address, into: &buf)
+        FfiConverterString.write(value.txId, into: &buf)
+        FfiConverterString.write(value.outpointTx, into: &buf)
+        FfiConverterUInt32.write(value.outpointIndex, into: &buf)
     }
 }
 
@@ -2767,17 +3077,16 @@ public struct FfiConverterTypeBlockKind: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBlockKind_lift(_ buf: RustBuffer) throws -> BlockKind {
-    return try FfiConverterTypeBlockKind.lift(buf)
+public func FfiConverterTypeVaultInfo_lift(_ buf: RustBuffer) throws -> VaultInfo {
+    return try FfiConverterTypeVaultInfo.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeBlockKind_lower(_ value: BlockKind) -> RustBuffer {
-    return FfiConverterTypeBlockKind.lower(value)
+public func FfiConverterTypeVaultInfo_lower(_ value: VaultInfo) -> RustBuffer {
+    return FfiConverterTypeVaultInfo.lower(value)
 }
-
 
 
 /**
@@ -2791,14 +3100,11 @@ enum LightNodeError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError
     case AlreadyInitialized
     case Hex(field: String
     )
-    case BadSeedLength
     case Invalid(msg: String
     )
     case InsufficientFunds(needed: UInt64
     )
     case BadSecretLength(expected: UInt32, got: UInt32
-    )
-    case InsufficientStake(requested: UInt64, available: UInt64
     )
     case Node(msg: String
     )
@@ -2835,22 +3141,17 @@ public struct FfiConverterTypeLightNodeError: FfiConverterRustBuffer {
         case 2: return .Hex(
             field: try FfiConverterString.read(from: &buf)
             )
-        case 3: return .BadSeedLength
-        case 4: return .Invalid(
+        case 3: return .Invalid(
             msg: try FfiConverterString.read(from: &buf)
             )
-        case 5: return .InsufficientFunds(
+        case 4: return .InsufficientFunds(
             needed: try FfiConverterUInt64.read(from: &buf)
             )
-        case 6: return .BadSecretLength(
+        case 5: return .BadSecretLength(
             expected: try FfiConverterUInt32.read(from: &buf), 
             got: try FfiConverterUInt32.read(from: &buf)
             )
-        case 7: return .InsufficientStake(
-            requested: try FfiConverterUInt64.read(from: &buf), 
-            available: try FfiConverterUInt64.read(from: &buf)
-            )
-        case 8: return .Node(
+        case 6: return .Node(
             msg: try FfiConverterString.read(from: &buf)
             )
 
@@ -2874,34 +3175,24 @@ public struct FfiConverterTypeLightNodeError: FfiConverterRustBuffer {
             FfiConverterString.write(field, into: &buf)
             
         
-        case .BadSeedLength:
-            writeInt(&buf, Int32(3))
-        
-        
         case let .Invalid(msg):
-            writeInt(&buf, Int32(4))
+            writeInt(&buf, Int32(3))
             FfiConverterString.write(msg, into: &buf)
             
         
         case let .InsufficientFunds(needed):
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(4))
             FfiConverterUInt64.write(needed, into: &buf)
             
         
         case let .BadSecretLength(expected,got):
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(5))
             FfiConverterUInt32.write(expected, into: &buf)
             FfiConverterUInt32.write(got, into: &buf)
             
         
-        case let .InsufficientStake(requested,available):
-            writeInt(&buf, Int32(7))
-            FfiConverterUInt64.write(requested, into: &buf)
-            FfiConverterUInt64.write(available, into: &buf)
-            
-        
         case let .Node(msg):
-            writeInt(&buf, Int32(8))
+            writeInt(&buf, Int32(6))
             FfiConverterString.write(msg, into: &buf)
             
         }
@@ -3171,6 +3462,56 @@ fileprivate struct FfiConverterSequenceData: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeCoinJoinOutput: FfiConverterRustBuffer {
+    typealias SwiftType = [CoinJoinOutput]
+
+    public static func write(_ value: [CoinJoinOutput], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeCoinJoinOutput.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [CoinJoinOutput] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [CoinJoinOutput]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeCoinJoinOutput.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeCoinJoinParticipant: FfiConverterRustBuffer {
+    typealias SwiftType = [CoinJoinParticipant]
+
+    public static func write(_ value: [CoinJoinParticipant], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeCoinJoinParticipant.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [CoinJoinParticipant] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [CoinJoinParticipant]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeCoinJoinParticipant.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeHistoryEntry: FfiConverterRustBuffer {
     typealias SwiftType = [HistoryEntry]
 
@@ -3251,6 +3592,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kovanica_ffi_checksum_method_lightnode_balance_of_stealth() != 17890) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_balance_of_vault() != 39327) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_block_by_id() != 61413) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3260,16 +3604,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kovanica_ffi_checksum_method_lightnode_block_filter() != 27849) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_bond_stake() != 41825) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_bond_stake_from_secret() != 24831) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_build_multisig_spend() != 63072) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_chain_height() != 36538) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_coinjoin_prepare() != 46939) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_coinjoin_submit() != 60656) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_combine_multisig_sigs() != 55489) {
@@ -3281,7 +3625,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kovanica_ffi_checksum_method_lightnode_create_multisig_address() != 49800) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_enable_hybrid() != 31711) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_create_vault() != 44270) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_export_block() != 44821) {
@@ -3290,13 +3634,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kovanica_ffi_checksum_method_lightnode_export_block_by_id() != 11244) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_export_blocks() != 64729) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_export_blocks() != 60774) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_export_light_sync() != 32984) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_export_light_sync_from() != 29986) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_fetch_epoch_authority_set() != 59310) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_filter_matches() != 44042) {
@@ -3314,22 +3661,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kovanica_ffi_checksum_method_lightnode_htlc_script_hex() != 4516) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_hybrid_enabled() != 35199) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_load_snapshot() != 1056) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_load_snapshot() != 23192) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_produce_block() != 12284) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_my_stake() != 14958) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_pending_unbond_height() != 48072) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_produce_block() != 32605) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_produce_empty_block() != 37908) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_produce_empty_block() != 47595) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_prove_tx() != 12721) {
@@ -3338,7 +3676,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kovanica_ffi_checksum_method_lightnode_receive_blocks() != 58012) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_receive_light_sync() != 51134) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_receive_light_sync() != 17003) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_redeem_htlc() != 36801) {
@@ -3347,13 +3685,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kovanica_ffi_checksum_method_lightnode_refund_htlc() != 54357) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_save_snapshot() != 41165) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_release_vault() != 1050) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_save_snapshot() != 50358) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_selected_tip() != 22558) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_send() != 59372) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_send() != 13684) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_send_asset() != 10369) {
@@ -3369,12 +3710,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_send_to_stealth() != 19173) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_set_miner_seed() != 15947) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_set_validator_seed() != 59967) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_sign_multisig_partial() != 43077) {
@@ -3395,22 +3730,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kovanica_ffi_checksum_method_lightnode_tips() != 38486) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_total_stake() != 40840) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_vault_script_hex() != 26065) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_unbond() != 38383) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_unbond_from_secret() != 46109) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kovanica_ffi_checksum_method_lightnode_validator_public_key_hex() != 29090) {
+    if (uniffi_kovanica_ffi_checksum_method_lightnode_verify_sw_poa_header() != 48076) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_ffi_checksum_method_lightnode_verify_tx_proof() != 40302) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_ffi_checksum_constructor_lightnode_new() != 20948) {
+    if (uniffi_kovanica_ffi_checksum_constructor_lightnode_new() != 28946) {
         return InitializationResult.apiChecksumMismatch
     }
 

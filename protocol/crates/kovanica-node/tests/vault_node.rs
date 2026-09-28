@@ -23,9 +23,18 @@ const SLOT_MS: u64 = 3000;
 const AUTHORITIES: u64 = 3;
 
 /// A PoA node holding every authority signing key, so it can advance the chain
-/// in any slot (RFC-POA is the only admission regime). Rewards go to the
-/// *first* loaded authority key, seed 1, so the owner funded from seed 1 keeps
-/// spending exactly as it did under the old PoW path.
+/// in any slot (RFC-POA is the only admission regime).
+///
+/// The owner here is seeded from `founder_seed = 1`, and the genesis premine is
+/// paid deterministically to the founder wallet for that seed — *not* to
+/// whoever wins the producing slot. So funding from seed 1 does not depend on
+/// slot scheduling, and these tests are stable across wall-clock slots.
+///
+/// Do not "fix" a perceived seed-1 reward assumption here: block subsidy goes
+/// to `authority_set.active_authority(slot)` (slot-scheduled, and indexed by
+/// public-key-sorted order), not to the first loaded key. Suites that assert on
+/// reward UTXOs must pin the clock and look up the scheduled authority — see
+/// `fee_market.rs` and `mempool.rs` for the working pattern.
 fn poa_node() -> Node {
     let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
         .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())

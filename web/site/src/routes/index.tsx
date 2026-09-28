@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Shell } from "@/components/layout/shell";
 import { LandingChrome } from "@/components/layout/landing-chrome";
-import { HomeLanding } from "@/components/landing/home";
+import { PlaygroundChrome } from "@/components/layout/playground-chrome";
+import { HomeByRole } from "@/components/landing/home-by-role";
+import { PlaygroundOnboarding } from "@/components/playground/playground-onboarding";
 import { getHost, hostRoleFromHost } from "@/lib/host";
 
 export const Route = createFileRoute("/")({
@@ -24,15 +26,24 @@ function Home() {
   if (role === "landing") {
     return (
       <LandingChrome>
-        <HomeLanding />
+        <HomeByRole role={role} />
       </LandingChrome>
     );
   }
 
-  // testnet / shared hosts — full interactive chrome
+  // Playground = guided onboarding + API console + snippets
+  if (role === "playground") {
+    return (
+      <PlaygroundChrome>
+        <PlaygroundOnboarding />
+      </PlaygroundChrome>
+    );
+  }
+
+  // testnet / mainnet / shared hosts — role picks the correct home
   return (
     <Shell>
-      <HomeLanding />
+      <HomeByRole role={role} />
     </Shell>
   );
 }

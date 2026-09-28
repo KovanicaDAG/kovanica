@@ -1,7 +1,8 @@
 /**
- * Shell — full protocol chrome (testnet / shared hosts).
- * Change vs previous: NFT added to desktop primary NAV (after Assets).
- * Mobile bottom bar stays ≤6 items; NFT reachable via product card / direct URL.
+ * Shell — full protocol chrome (testnet / shared hosts only).
+ * Not used on apex landing or mainnet gate.
+ * NFT in desktop primary NAV (after Assets).
+ * Mobile bottom bar stays ≤6 items; NFT via product card / direct URL.
  */
 import { Link, useRouterState } from "@tanstack/react-router";
 import {

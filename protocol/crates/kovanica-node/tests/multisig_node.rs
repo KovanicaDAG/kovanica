@@ -17,9 +17,18 @@ const SLOT_MS: u64 = 3000;
 const AUTHORITIES: u64 = 3;
 
 /// A PoA node holding every authority signing key, so `produce_block` succeeds
-/// in any slot (RFC-POA is the only admission regime). Rewards go to the
-/// *first* loaded authority key, seed 1, so a plain genesis premine is still
-/// spendable by actor 1.
+/// in any slot (RFC-POA is the only admission regime).
+///
+/// The `premine` argument is paid to the founder wallet for `founder_seed = 1`
+/// deterministically at genesis, which is what funds `send_to(1, …)` below.
+/// That premine is slot-independent, so these balance assertions hold in every
+/// slot.
+///
+/// Block *subsidy* is a different mechanism: it goes to
+/// `authority_set.active_authority(slot)` — slot-scheduled, indexed by
+/// public-key-sorted order — not to the first loaded key. No assertion here
+/// depends on it. Suites that do must pin the clock and resolve the scheduled
+/// authority; see `fee_market.rs` and `mempool.rs`.
 fn poa_node(subsidy: u64, premine: u64) -> Node {
     let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
         .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())

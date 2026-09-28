@@ -13,20 +13,46 @@ use kovanica_state::KeyPair;
 
 /// Slot duration used throughout (RFC-POA default).
 const SLOT_MS: u64 = 3000;
-/// Authority count (the `AuthoritySet` minimum is 3).
-const AUTHORITIES: u64 = 3;
+/// Authority count. The `AuthoritySet` minimum is 3; this suite uses 5 so that
+/// one seed can be reserved as a dedicated block producer that none of the
+/// transfer assertions below touch.
+const AUTHORITIES: u64 = 5;
+/// Seed reserved as the block producer. Every block subsidy lands here, so the
+/// mempool assertions on actors 1..=4 stay free of subsidy arithmetic.
+const PRODUCER_SEED: u64 = 5;
+
+fn authority_key(seed: u64) -> AuthorityPublicKey {
+    SigningKey::from_bytes(&KeyPair::from_u64(seed).seed()).verifying_key()
+}
+
+fn poa_authority_set() -> AuthoritySet {
+    let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES).map(authority_key).collect();
+    AuthoritySet::new(keys, 2).expect("valid authority set")
+}
+
+/// A clock pin that makes the block subsidy land on [`PRODUCER_SEED`].
+///
+/// Genesis is stamped at `0`, so a produced block's timestamp is
+/// `max(now_ms, 1)` (see `Node::next_timestamp`) and its slot is
+/// `timestamp / SLOT_MS`. `AuthoritySet` stores authorities in ascending
+/// public-key encoding — *not* in the order they were supplied — so which seed
+/// owns a given slot has to be looked up, never assumed.
+fn pin_scheduling_producer(set: &AuthoritySet) -> u64 {
+    let slot = (0..AUTHORITIES)
+        .find(|slot| *set.active_authority(*slot) == authority_key(PRODUCER_SEED))
+        .expect("producer seed is a member of the set");
+    // `slot == 0` needs a pin of at least 1, since genesis is stamped at 0.
+    slot * SLOT_MS + 1
+}
 
 /// A PoA node holding every authority signing key, so it produces in any
-/// slot. Rewards are credited to the *first* loaded authority key
-/// (`authority_public_key()`), which is seed 1 — so the subsidy assertions
-/// below read as "actor 1 earned the subsidy" while the actual signer may be
-/// any of the three.
+/// slot. With the clock pinned by [`pin_scheduling_producer`], the subsidy is
+/// credited to [`PRODUCER_SEED`] (seed 5) on every block, and the transfer
+/// assertions below only involve actors 1..=4.
 fn poa_node(subsidy: u64, premine: u64) -> Node {
-    let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
-        .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
-        .collect();
-    let set = AuthoritySet::new(keys, 2).expect("valid authority set");
+    let set = poa_authority_set();
     let mut node = Node::new();
+    node.set_now_ms(pin_scheduling_producer(&set));
     node.genesis_with_poa(
         3,
         subsidy,
@@ -41,8 +67,8 @@ fn poa_node(subsidy: u64, premine: u64) -> Node {
         SLOT_MS,
     )
     .expect("genesis");
-    for i in 1..=AUTHORITIES {
-        node.set_authority_signing_key(KeyPair::from_u64(i).seed());
+    for seed in 1..=AUTHORITIES {
+        node.set_authority_signing_key(KeyPair::from_u64(seed).seed());
     }
     node
 }
@@ -60,8 +86,10 @@ fn a_pooled_transfer_is_packed_into_a_block() {
     assert!(node.produce_block().unwrap().is_some());
     assert_eq!(node.pending_count(), 0);
     assert_eq!(bal(&mut node, 2), 400);
-    // 599 change (1000 - 400 - 1 fee) + 1000 KVNC subsidy.
-    assert_eq!(bal(&mut node, 1), 1599);
+    // 599 change (1000 - 400 - 1 fee). The 1000 KVNC subsidy is credited to
+    // the slot-scheduled producer (seed 5), not to the spender.
+    assert_eq!(bal(&mut node, 1), 599);
+    assert_eq!(bal(&mut node, 5), 1000);
     assert_eq!(node.block_count().unwrap(), 2); // genesis + produced block
 }
 
@@ -77,11 +105,13 @@ fn non_conflicting_entries_from_two_actors_pack_together() {
 
     assert!(node.produce_block().unwrap().is_some());
     assert_eq!(node.pending_count(), 0);
-    // 398 change (499 - 100 - 1 fee) + 1000 subsidy coinbase.
-    assert_eq!(bal(&mut node, 1), 1398);
+    // 398 change (499 - 100 - 1 fee). The 1000 KVNC subsidy coinbase goes to
+    // the producer, so actors 1..=4 show transfer arithmetic only.
+    assert_eq!(bal(&mut node, 1), 398);
     assert_eq!(bal(&mut node, 2), 399); // 500 - 100 - 1 fee
     assert_eq!(bal(&mut node, 3), 100);
     assert_eq!(bal(&mut node, 4), 100);
+    assert_eq!(bal(&mut node, 5), 1000);
 }
 
 #[test]
@@ -97,6 +127,7 @@ fn conflicting_pool_entries_are_partially_included() {
     assert!(node.produce_block().unwrap().is_some());
     let (b2, b3) = (bal(&mut node, 2), bal(&mut node, 3));
     assert!((b2 == 400 && b3 == 0) || (b2 == 0 && b3 == 300));
+    assert_eq!(bal(&mut node, 5), 1000); // subsidy went to the producer
     assert_eq!(node.pending_count(), 0);
 
     assert!(node.produce_block().unwrap().is_none());
