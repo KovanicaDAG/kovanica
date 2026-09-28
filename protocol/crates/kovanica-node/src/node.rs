@@ -1028,7 +1028,10 @@ impl Node {
         let cfg = self.poa_config()?;
         let slot = timestamp / cfg.slot_duration_ms;
         let scheduled = *cfg.authority_set.active_authority(slot);
-        let sk = self.authority_sks.iter().find(|sk| sk.verifying_key() == scheduled);
+        let sk = self
+            .authority_sks
+            .iter()
+            .find(|sk| sk.verifying_key() == scheduled);
         if sk.is_none() && !self.authority_sks.is_empty() {
             eprintln!(
                 "PoA slot {} scheduled authority {} not held by this node (loaded {} key(s))",
