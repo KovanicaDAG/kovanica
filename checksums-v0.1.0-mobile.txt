@@ -1,0 +1,15 @@
+# Kovanica Mobile Apps v0.1.0 — SHA256 Checksums
+# Generated: 2026-09-30
+# Tag: v0.1.0-mobile
+
+# Android
+7b40fb9153a20bd435934557c8b701b36f095066ea4378dace92d2b880311e13  mobile/android/app/build/outputs/apk/debug/app-debug.apk
+5f68f3f154b25063739602477250ab1b870a4aa28db2066c296e0426fc443f3f  mobile/android/app/build/outputs/apk/release/app-release.apk
+
+# Linux Tauri
+efc01a5a6737fcf1fadfaa8146c5a7e8c688db41b0cf9f14549ba23a22574b23  mobile/console/kovanica/src-tauri/target/release/bundle/appimage/kovanica-console_0.1.0_amd64.AppImage
+511c5ba8d4dcd79b0c456f0226d9ac1368fdda72f15109d789950861cfff78c8  mobile/console/kovanica/src-tauri/target/release/bundle/deb/kovanica-console_0.1.0_amd64.deb
+87f896bb419b289c235485c6ee01e6da0de0d8635c5abb9352b81fd0c9a630be  mobile/console/kovanica/src-tauri/target/release/bundle/rpm/kovanica-console-0.1.0-1.x86_64.rpm
+
+# Windows Tauri
+16dde466972bf7251aa8ca2e2ae3d711c461d44295427eb2267c6a612bd4ca3e  mobile/console/kovanica/src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/Kovanica Console_0.1.0_x64-setup.exe

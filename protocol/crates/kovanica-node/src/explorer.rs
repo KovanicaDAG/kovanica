@@ -2330,6 +2330,41 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             }
         }
     }
+    if method == "GET" && path == "/api/dex/tokens" {
+        match dex_tokens_json(app, &query) {
+            Ok(body) => return respond(&mut stream, 200, "application/json", body.as_bytes()),
+            Err(e) => {
+                return respond(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    err_json(&e).as_bytes(),
+                )
+            }
+        }
+    }
+    if method == "GET" && path.starts_with("/api/token/") {
+        let asset_id_str = path.trim_start_matches("/api/token/");
+        match token_detail_json(app, asset_id_str, &query) {
+            Ok(body) => return respond(&mut stream, 200, "application/json", body.as_bytes()),
+            Err(e) if e == "token not found" || e == "asset is an NFT, not a fungible token" => {
+                return respond(
+                    &mut stream,
+                    404,
+                    "application/json",
+                    err_json(&e).as_bytes(),
+                );
+            }
+            Err(e) => {
+                return respond(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    err_json(&e).as_bytes(),
+                )
+            }
+        }
+    }
     if method == "GET" && path == "/api/fee_estimate" {
         match fee_estimate_json(app, &query) {
             Ok(body) => return respond(&mut stream, 200, "application/json", body.as_bytes()),
@@ -3984,6 +4019,195 @@ fn collection_detail_json(
         jstr(&hex::encode(collection_id)),
         jarr(assets.into_iter())
     ))
+}
+
+/// DEX token listing: returns all fungible tokens (non-NFT, non-RWA) from asset registry.
+/// GET /api/dex/tokens
+fn dex_tokens_json(
+    app: &Explorer,
+    q: &std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    let node_name = q
+        .get("node")
+        .cloned()
+        .unwrap_or_else(|| app.selected.clone());
+    let n = app.mesh.node(&node_name).ok_or("unknown node")?;
+    let ledger = n.ledger().map_err(|e| e.to_string())?;
+    let asset_registry = ledger.asset_registry();
+    let state = ledger.ledger_state();
+
+    // Optional search query
+    let search = q.get("search").map(|s| s.to_lowercase());
+
+    // Find all fungible tokens (not NFT, not RWA, not native)
+    let mut tokens = Vec::new();
+    for (asset_id, entry) in asset_registry {
+        // Skip native KVNC
+        if asset_id.is_native() {
+            continue;
+        }
+        // Skip NFTs
+        if entry.is_nft() {
+            continue;
+        }
+        // Skip RWAs (check kind - no RWA kind in current AssetKind, but keep for future)
+        if entry.kind != kovanica_state::AssetKind::Fungible {
+            continue;
+        }
+
+        // Apply search filter
+        if let Some(ref search) = search {
+            let name = entry.metadata_hash.map(hex::encode).unwrap_or_default();
+            // Note: metadata isn't directly available in registry, but we can check if name matches
+            if !name.to_lowercase().contains(search) {
+                continue;
+            }
+        }
+
+        // Find current supply (sum of all UTXOs with this asset)
+        let mut total_supply: u64 = 0;
+        for (_, out) in state.iter() {
+            if out.asset_id == Some(*asset_id) {
+                total_supply = total_supply.saturating_add(out.value);
+            }
+        }
+
+        // Find a sample holder for owner info
+        let mut holder = None;
+        for (_, out) in state.iter() {
+            if out.asset_id == Some(*asset_id) {
+                holder = Some(out.owner);
+                break;
+            }
+        }
+
+        let meta_hash = entry.metadata_hash.map(hex::encode);
+        let meta_hash_json = meta_hash
+            .as_deref()
+            .map(jstr)
+            .unwrap_or_else(|| "null".to_string());
+        let holder_json = holder
+            .map(|a| jstr(&a.to_kvnc()))
+            .unwrap_or_else(|| "null".to_string());
+
+        tokens.push(format!(
+            "{{\"asset_id\":{},\"total_supply\":{},\"metadata_hash\":{},\"holder\":{}}}",
+            jstr(&asset_id.to_hex()),
+            total_supply,
+            meta_hash_json,
+            holder_json
+        ));
+    }
+
+    Ok(format!("{{\"tokens\":{}}}", jarr(tokens.into_iter())))
+}
+
+/// Token detail: returns registry entry + supply + holders for a fungible token.
+/// GET /api/token/<asset_id>
+fn token_detail_json(
+    app: &Explorer,
+    asset_id_str: &str,
+    q: &std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    let node_name = q
+        .get("node")
+        .cloned()
+        .unwrap_or_else(|| app.selected.clone());
+    let n = app.mesh.node(&node_name).ok_or("unknown node")?;
+    let ledger = n.ledger().map_err(|e| e.to_string())?;
+    let asset_registry = ledger.asset_registry();
+    let state = ledger.ledger_state();
+
+    // Parse asset_id from hex
+    let asset_id_bytes =
+        hex::decode(asset_id_str.trim()).map_err(|_| "asset_id is not hex".to_string())?;
+    if asset_id_bytes.len() != 32 {
+        return Err("asset_id must be 32 bytes (64 hex chars)".to_string());
+    }
+    let mut asset_id_arr = [0u8; 32];
+    asset_id_arr.copy_from_slice(&asset_id_bytes);
+    let asset_id = kovanica_state::AssetId::from_bytes(asset_id_arr);
+
+    // Skip native KVNC
+    if asset_id.is_native() {
+        return Err("use /api/head for native KVNC info".to_string());
+    }
+
+    // Get registry entry
+    let entry = asset_registry.get(&asset_id).ok_or("token not found")?;
+    if entry.is_nft() {
+        return Err("asset is an NFT, not a fungible token".to_string());
+    }
+    if entry.kind != kovanica_state::AssetKind::Fungible {
+        return Err("asset is an RWA, not a fungible token".to_string());
+    }
+
+    // Calculate total supply from UTXOs
+    let mut total_supply: u64 = 0;
+    let mut holders: Vec<TokenHolder> = Vec::new();
+    for (_op, out) in state.iter() {
+        if out.asset_id == Some(asset_id) {
+            total_supply = total_supply.saturating_add(out.value);
+            // Track unique holders with their balances
+            let mut found = false;
+            for h in &mut holders {
+                if h.address == out.owner {
+                    h.balance = h.balance.saturating_add(out.value);
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                holders.push(TokenHolder {
+                    address: out.owner,
+                    balance: out.value,
+                });
+            }
+        }
+    }
+
+    // Sort holders by balance descending
+    holders.sort_by_key(|a| std::cmp::Reverse(a.balance));
+
+    let meta_hash = entry.metadata_hash.map(hex::encode);
+    let meta_hash_json = meta_hash
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let coll_id = entry.collection_id.map(hex::encode);
+    let coll_id_json = coll_id
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let creator = entry.creator.map(hex::encode);
+    let creator_json = creator
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+
+    let holders_json = holders
+        .into_iter()
+        .map(|h| format!("{{\"address\":{},\"balance\":{}}}", jstr(&h.address.to_kvnc()), h.balance))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    Ok(format!(
+        "{{\"asset_id\":{},\"kind\":\"token\",\"max_supply\":{},\"minted\":{},\"total_supply\":{},\"metadata_hash\":{},\"collection_id\":{},\"creator\":{},\"holders\":[{}]}}",
+        jstr(&asset_id.to_hex()),
+        entry.max_supply,
+        entry.minted,
+        total_supply,
+        meta_hash_json,
+        coll_id_json,
+        creator_json,
+        holders_json
+    ))
+}
+
+/// Helper struct for token holder tracking
+struct TokenHolder {
+    address: kovanica_state::Address,
+    balance: u64,
 }
 
 /// Derive RWA asset_id from issuer key and parameters (KVP-106).

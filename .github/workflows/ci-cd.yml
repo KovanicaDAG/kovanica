@@ -1,6 +1,6 @@
 name: Kovanica CI/CD
 
-on:
+"on":
   push:
     branches: [main, develop]
     tags: ['v*']
