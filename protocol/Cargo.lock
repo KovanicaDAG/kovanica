@@ -1291,6 +1291,7 @@ dependencies = [
  "hex",
  "kovanica-dag",
  "kovanica-state",
+ "kovanica-types",
  "kovanica-wallet",
  "libfuzzer-sys",
  "metrics",

@@ -10,6 +10,7 @@ description = "Runnable node for the Kovanica Protocol: a line RPC over an in-me
 [dependencies]
 kovanica-dag = { path = "../kovanica-dag" }
 kovanica-state = { path = "../kovanica-state" }
+kovanica-types = { path = "../../../sdk/crates/kovanica-types" }
 # Genesis keys come from the shared wallet crate, not from the CLI. Depending on
 # the CLI here used to drag ratatui/crossterm/tokio into the node for a single
 # `Wallet` type.
