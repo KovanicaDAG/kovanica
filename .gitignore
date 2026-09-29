@@ -40,3 +40,10 @@ deploy/mainnet/authority-keys/*.env
 protocol/authority-keys/*.env
 protocol/mainnet-authority-keys/*.env
 .slim/deepwork/
+
+# One-off local dev bootstrap / migration scratch (INSPECT-REPORT I1-b).
+# kovanica-clean-setup.sh deletes /root/.cargo and /root/.rustup, so keep
+# these out of the repo rather than risking a committed footgun.
+/kovanica-clean-setup.sh
+/kovanica_dev_setup.sh
+/PRE-MIGRATION-LS.txt
