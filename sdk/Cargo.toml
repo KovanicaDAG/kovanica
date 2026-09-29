@@ -6,6 +6,10 @@ members = [
     "crates/kovanica-tx",
     "crates/kovanica-rpc",
     "crates/kovanica-fee",
+    "crates/kovanica-dex",
+    "crates/kovanica-airdrop",
+    "crates/kovanica-bridge",
+    "crates/kovanica-merchant",
     "crates/kovanica-sdk",
     "bindings/kovanica-wasm",
 ]

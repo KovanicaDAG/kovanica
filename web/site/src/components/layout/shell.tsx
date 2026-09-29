@@ -21,11 +21,14 @@ import {
   Layers,
   Droplets,
   Image,
+  ArrowLeftRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SourceSwitch } from "@/components/layout/source-switch";
 import { NetworkBadge } from "@/components/layout/network-badge";
 import { getBadgeColor } from "@/lib/network";
+
+import { Gift } from "lucide-react";
 
 const NAV = [
   { to: "/", label: "Home", icon: Coins },
@@ -36,6 +39,9 @@ const NAV = [
   { to: "/nft", label: "NFT", icon: Image },
   { to: "/stealth", label: "Stealth", icon: Eye },
   { to: "/htlc", label: "HTLC", icon: Lock },
+  { to: "/wallet/dex", label: "DEX", icon: ArrowLeftRight },
+  { to: "/wallet/token-listings", label: "Tokens", icon: Coins },
+  { to: "/wallet/airdrops", label: "Airdrops", icon: Gift },
   { to: "/vaults", label: "Vaults", icon: Vault },
   { to: "/network", label: "Network", icon: Activity },
   { to: "/map", label: "Map", icon: Map },

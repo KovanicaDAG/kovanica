@@ -23,6 +23,7 @@ kovanica-fee = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 blake3 = { workspace = true }
+kovanica-airdrop = { path = "../kovanica-airdrop" }
 
 [[example]]
 name = "generate_wallet"
@@ -39,3 +40,7 @@ path = "../../examples/create_asset.rs"
 [[example]]
 name = "transfer_asset"
 path = "../../examples/transfer_asset.rs"
+
+[[example]]
+name = "airdrop"
+path = "../../examples/airdrop.rs"

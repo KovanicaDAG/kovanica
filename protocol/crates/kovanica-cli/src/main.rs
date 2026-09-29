@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use kovanica_state::{derive_rwa_asset_id, Address, AssetId};
+use kovanica_types::{Address as TypesAddress, AssetId as TypesAssetId, Hash32};
 
 use kovanica_cli::api::{print_json, Client};
 use kovanica_cli::Wallet;
@@ -103,6 +104,12 @@ enum Command {
     /// NFT (Non-Fungible Token) operations (KVP-106).
     #[command(subcommand)]
     Nft(NftCommand),
+    /// DEX (Decentralized Exchange) operations — HTLC-based atomic swaps.
+    #[command(subcommand)]
+    Dex(DexCommand),
+    /// Airdrop operations — Merkle proof based claims.
+    #[command(subcommand)]
+    Airdrop(AirdropCommand),
     /// Launch interactive TUI.
     Tui,
 }
@@ -341,6 +348,144 @@ enum NftCommand {
         collection_id: String,
     },
 }
+/// DEX (Decentralized Exchange) operations — HTLC-based atomic swaps.
+#[derive(Subcommand)]
+enum DexCommand {
+    /// Fund an HTLC for a swap (maker side).
+    Fund {
+        /// Path to the key file to spend from.
+        #[arg(long, env = "KOVANICA_KEY", default_value = "kovanica.key")]
+        key: PathBuf,
+        /// Amount to lock, in atoms.
+        #[arg(long)]
+        amount: u64,
+        /// Recipient public key (32-byte hex).
+        #[arg(long)]
+        recipient_pk: String,
+        /// Preimage hash (32-byte hex, SHA256 of preimage).
+        #[arg(long)]
+        preimage_hash: String,
+        /// Timeout height (absolute block height when refund becomes available).
+        #[arg(long)]
+        timeout: u32,
+        /// Asset ID to lock (32-byte hex), or native KVNC if omitted.
+        #[arg(long)]
+        asset_id: Option<String>,
+    },
+    /// Claim a swap by revealing the preimage (taker side).
+    Claim {
+        /// Path to the key file to spend from.
+        #[arg(long, env = "KOVANICA_KEY", default_value = "kovanica.key")]
+        key: PathBuf,
+        /// Outpoint transaction ID (hex).
+        #[arg(long)]
+        outpoint_tx: String,
+        /// Outpoint index.
+        #[arg(long)]
+        outpoint_index: u32,
+        /// HTLC script (100-byte hex).
+        #[arg(long)]
+        script: String,
+        /// Preimage (32-byte hex).
+        #[arg(long)]
+        preimage: String,
+        /// Destination address for claimed funds.
+        #[arg(long)]
+        to: String,
+    },
+    /// Refund an expired swap (maker side).
+    Refund {
+        /// Path to the key file to spend from.
+        #[arg(long, env = "KOVANICA_KEY", default_value = "kovanica.key")]
+        key: PathBuf,
+        /// Outpoint transaction ID (hex).
+        #[arg(long)]
+        outpoint_tx: String,
+        /// Outpoint index.
+        #[arg(long)]
+        outpoint_index: u32,
+        /// HTLC script (100-byte hex).
+        #[arg(long)]
+        script: String,
+        /// Destination address for refunded funds.
+        #[arg(long)]
+        to: String,
+    },
+    /// Check the status of a swap.
+    Status {
+        /// HTLC script (100-byte hex).
+        #[arg(long)]
+        script: String,
+    },
+}
+
+/// Airdrop operations — Merkle proof based claims (client-side only).
+#[derive(Subcommand)]
+enum AirdropCommand {
+    /// Create an airdrop campaign JSON from a list of recipients.
+    Create {
+        /// Output file path (or stdout if omitted).
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Campaign ID (32-byte hex).
+        #[arg(long)]
+        campaign_id: String,
+        /// Asset ID (32-byte hex), or native KVNC if omitted.
+        #[arg(long)]
+        asset_id: Option<String>,
+        /// Expiry height (block height when campaign expires).
+        #[arg(long)]
+        expires_at: u64,
+        /// CSV file with recipients: address,amount (one per line, no header).
+        #[arg(long)]
+        recipients: PathBuf,
+        /// Total amount allocated (atoms) — for verification.
+        #[arg(long)]
+        total_amount: u64,
+    },
+    /// Generate a Merkle proof for a claimant from a campaign.
+    Proof {
+        /// Campaign JSON file (from `airdrop create`).
+        #[arg(long)]
+        campaign: PathBuf,
+        /// Claimant address (kvnc…dag or 64-hex).
+        #[arg(long)]
+        claimant: String,
+        /// Recipients CSV file (from `airdrop create`) to reconstruct leaves.
+        #[arg(long)]
+        recipients: PathBuf,
+        /// Output file for the proof JSON (or stdout if omitted).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Verify a Merkle proof against a campaign root.
+    Verify {
+        /// Campaign JSON file.
+        #[arg(long)]
+        campaign: PathBuf,
+        /// Proof JSON file (from `airdrop proof`).
+        #[arg(long)]
+        proof: PathBuf,
+    },
+    /// Build a claim transaction (prepare step - outputs sighash for signing).
+    Claim {
+        /// Campaign JSON file.
+        #[arg(long)]
+        campaign: PathBuf,
+        /// Proof JSON file (from `airdrop proof`).
+        #[arg(long)]
+        proof: PathBuf,
+        /// Path to the claimant's key file.
+        #[arg(long, env = "KOVANICA_KEY", default_value = "kovanica.key")]
+        key: PathBuf,
+        /// BIP39 passphrase (only if the wallet was created with one).
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Output file for the prepared claim (or stdout if omitted).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -384,6 +529,8 @@ fn main() -> Result<()> {
         Command::Offer(offer_cmd) => offer(&client, offer_cmd)?,
         Command::Rwa(rwa_cmd) => rwa(&client, rwa_cmd)?,
         Command::Nft(nft_cmd) => nft(&client, nft_cmd)?,
+        Command::Dex(dex_cmd) => dex(&client, dex_cmd)?,
+        Command::Airdrop(airdrop_cmd) => airdrop(&client, airdrop_cmd)?,
         Command::Tui => crate::tui::run(client)?,
     }
     Ok(())
@@ -955,6 +1102,452 @@ fn nft(client: &Client, cmd: NftCommand) -> Result<()> {
         NftCommand::Collection { collection_id } => {
             let result = client.collection_detail(&collection_id)?;
             print_json(&result)?;
+            Ok(())
+        }
+    }
+}
+
+/// DEX command implementations — HTLC-based atomic swaps.
+fn dex(client: &Client, cmd: DexCommand) -> Result<()> {
+    match cmd {
+        DexCommand::Fund {
+            key,
+            amount,
+            recipient_pk,
+            preimage_hash,
+            timeout,
+            asset_id,
+        } => {
+            if amount == 0 {
+                bail!("amount must be greater than zero");
+            }
+            let wallet = Wallet::load(&key)?;
+            let from = wallet.address().to_hex();
+            let recipient_pk_bytes =
+                hex::decode(&recipient_pk).context("recipient_pk must be 32-byte hex")?;
+            let recipient_pk: [u8; 32] = recipient_pk_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("recipient_pk must be 32 bytes"))?;
+            let preimage_hash_bytes =
+                hex::decode(&preimage_hash).context("preimage_hash must be 32-byte hex")?;
+            let preimage_hash: [u8; 32] = preimage_hash_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("preimage_hash must be 32 bytes"))?;
+            let asset_id = if let Some(id) = asset_id {
+                let raw = hex::decode(&id).context("asset_id must be 32-byte hex")?;
+                if raw.len() != 32 {
+                    bail!("asset_id must be 32 bytes");
+                }
+                Some(kovanica_state::AssetId::from_bytes(
+                    <[u8; 32]>::try_from(raw.as_slice())
+                        .map_err(|_| anyhow::anyhow!("asset_id must be 32 bytes"))?,
+                ))
+            } else {
+                None
+            };
+
+            let prepared = client.prepare_create_htlc(
+                &from,
+                amount,
+                &recipient_pk,
+                &preimage_hash,
+                timeout,
+                asset_id,
+            )?;
+            let sighash_hex = prepared
+                .get("sighash")
+                .and_then(|v| v.as_str())
+                .context("prepare response is missing a sighash")?;
+            let sighash = hex::decode(sighash_hex.trim()).context("sighash is not valid hex")?;
+
+            let wallet = Wallet::load(&key)?;
+            let sig = wallet.keypair().sign(&sighash);
+            let sig_hex = hex::encode(sig);
+
+            let result = client.submit_create_htlc(
+                &from,
+                amount,
+                &recipient_pk,
+                &preimage_hash,
+                timeout,
+                asset_id,
+                sighash_hex,
+                &sig_hex,
+            )?;
+            println!("Funded DEX swap");
+            print_json(&result)?;
+            Ok(())
+        }
+        DexCommand::Claim {
+            key,
+            outpoint_tx,
+            outpoint_index,
+            script,
+            preimage,
+            to,
+        } => {
+            let wallet = Wallet::load(&key)?;
+            let from = wallet.address().to_hex();
+            let outpoint_tx_bytes =
+                hex::decode(&outpoint_tx).context("outpoint_tx must be 32-byte hex")?;
+            let txid = kovanica_state::TxId::from_bytes(
+                outpoint_tx_bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("outpoint_tx must be 32 bytes"))?,
+            );
+            let outpoint = kovanica_state::OutPoint::new(txid, outpoint_index);
+            let script_bytes = hex::decode(&script).context("script must be 100-byte hex")?;
+            if script_bytes.len() != 100 {
+                bail!("script must be 100 bytes");
+            }
+            let script = kovanica_state::HtlcScript::parse(&script_bytes)
+                .map_err(|e| anyhow::anyhow!("invalid script: {e:?}"))?;
+            let preimage_bytes = hex::decode(&preimage).context("preimage must be 32-byte hex")?;
+            if preimage_bytes.len() != 32 {
+                bail!("preimage must be 32 bytes");
+            }
+            let preimage: [u8; 32] = preimage_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("preimage must be 32 bytes"))?;
+            let to_addr = parse_address(&to)?;
+
+            let wallet = Wallet::load(&key)?;
+            let sighash_hex = {
+                let prepared = client.prepare_redeem_htlc(
+                    &from,
+                    outpoint,
+                    script,
+                    preimage,
+                    &to_addr.to_hex(),
+                )?;
+                let sighash_hex = prepared
+                    .get("sighash")
+                    .and_then(|v| v.as_str())
+                    .context("missing sighash")?
+                    .to_string();
+                sighash_hex
+            };
+            let sighash = hex::decode(sighash_hex.trim()).context("sighash not hex")?;
+            let sig = wallet.keypair().sign(&sighash);
+            let sig_hex = hex::encode(sig);
+            let sent = client.submit_redeem_htlc(
+                &from,
+                outpoint,
+                script,
+                preimage,
+                &to_addr.to_hex(),
+                &sighash_hex,
+                &sig_hex,
+            )?;
+            println!("Claimed DEX swap");
+            print_json(&sent)?;
+            Ok(())
+        }
+        DexCommand::Refund {
+            key,
+            outpoint_tx,
+            outpoint_index,
+            script,
+            to,
+        } => {
+            let wallet = Wallet::load(&key)?;
+            let from = wallet.address().to_hex();
+            let outpoint_tx_bytes =
+                hex::decode(&outpoint_tx).context("outpoint_tx must be 32-byte hex")?;
+            let txid = kovanica_state::TxId::from_bytes(
+                outpoint_tx_bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("outpoint_tx must be 32 bytes"))?,
+            );
+            let outpoint = kovanica_state::OutPoint::new(txid, outpoint_index);
+            let script_bytes = hex::decode(&script).context("script must be 100-byte hex")?;
+            if script_bytes.len() != 100 {
+                bail!("script must be 100 bytes");
+            }
+            let script = kovanica_state::HtlcScript::parse(&script_bytes)
+                .map_err(|e| anyhow::anyhow!("invalid script: {e:?}"))?;
+            let to_addr = parse_address(&to)?;
+
+            let wallet = Wallet::load(&key)?;
+            let sighash_hex = {
+                let prepared =
+                    client.prepare_refund_htlc(&from, outpoint, script, &to_addr.to_hex())?;
+                let sighash_hex = prepared
+                    .get("sighash")
+                    .and_then(|v| v.as_str())
+                    .context("missing sighash")?
+                    .to_string();
+                sighash_hex
+            };
+            let sighash = hex::decode(sighash_hex.trim()).context("sighash not hex")?;
+            let sig = wallet.keypair().sign(&sighash);
+            let sig_hex = hex::encode(sig);
+            let sent = client.submit_refund_htlc(
+                &from,
+                outpoint,
+                script,
+                &to_addr.to_hex(),
+                &sighash_hex,
+                &sig_hex,
+            )?;
+            println!("Refunded DEX swap");
+            print_json(&sent)?;
+            Ok(())
+        }
+        DexCommand::Status { script } => {
+            let script_bytes = hex::decode(&script).context("script must be 100-byte hex")?;
+            if script_bytes.len() != 100 {
+                bail!("script must be 100 bytes");
+            }
+            let script = kovanica_state::HtlcScript::parse(&script_bytes)
+                .map_err(|e| anyhow::anyhow!("invalid script: {e:?}"))?;
+            let balance = client.htlc_balance(&script)?;
+            println!("{} atoms ({} KVNC)", balance, format_kvnc(balance));
+            Ok(())
+        }
+    }
+}
+
+/// Airdrop command implementations — Merkle proof based claims (client-side only).
+fn airdrop(_client: &Client, cmd: AirdropCommand) -> Result<()> {
+    use kovanica_airdrop::{AirdropCampaign, AirdropLeaf, MerkleProof, build_merkle_root, generate_proof};
+
+    match cmd {
+        AirdropCommand::Create {
+            output,
+            campaign_id,
+            asset_id,
+            expires_at,
+            recipients,
+            total_amount,
+        } => {
+            // Parse campaign ID
+            let campaign_id_bytes = hex::decode(&campaign_id).context("campaign_id must be 32-byte hex")?;
+            if campaign_id_bytes.len() != 32 {
+                bail!("campaign_id must be 32 bytes (64 hex chars)");
+            }
+            let campaign_id = Hash32(
+                campaign_id_bytes
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("campaign_id must be 32 bytes"))?
+            );
+
+            // Parse asset ID
+            let asset_id = if let Some(id) = asset_id {
+                let raw = hex::decode(&id).context("asset_id must be 32-byte hex")?;
+                if raw.len() != 32 {
+                    bail!("asset_id must be 32 bytes");
+                }
+                Some(TypesAssetId(Hash32(
+                    raw.try_into()
+                        .map_err(|_| anyhow::anyhow!("asset_id must be 32 bytes"))?
+                )))
+            } else {
+                None
+            };
+
+            // Parse recipients CSV
+            let csv_content = std::fs::read_to_string(&recipients)
+                .with_context(|| format!("cannot read recipients file {}", recipients.display()))?;
+            
+            let mut leaves = Vec::new();
+            let mut computed_total = 0u64;
+            
+            for (line_num, line) in csv_content.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() != 2 {
+                    bail!("line {}: expected 'address,amount', got: {}", line_num + 1, line);
+                }
+                let addr_state = parse_address(parts[0].trim())?;
+                let addr_types = TypesAddress::from_versioned(*addr_state.as_bytes());
+                let amount: u64 = parts[1].trim().parse()
+                    .with_context(|| format!("line {}: invalid amount", line_num + 1))?;
+                
+                leaves.push(AirdropLeaf { address: addr_types, amount });
+                computed_total = computed_total.saturating_add(amount);
+            }
+
+            if computed_total != total_amount {
+                bail!("total_amount {} does not match sum of recipients {}", total_amount, computed_total);
+            }
+
+            // Build Merkle root
+            let merkle_root = build_merkle_root(&leaves);
+
+            let campaign = AirdropCampaign {
+                id: campaign_id,
+                total_amount,
+                asset_id: asset_id.unwrap_or(TypesAssetId::NATIVE),
+                expires_at,
+                merkle_root,
+            };
+
+            let json = serde_json::to_string_pretty(&campaign)?;
+            
+            if let Some(path) = output {
+                std::fs::write(&path, &json)
+                    .with_context(|| format!("cannot write to {}", path.display()))?;
+                println!("Wrote airdrop campaign to {}", path.display());
+            } else {
+                println!("{}", json);
+            }
+            Ok(())
+        }
+        AirdropCommand::Proof {
+            campaign,
+            claimant,
+            recipients,
+            output,
+        } => {
+            // Load campaign
+            let campaign_json = std::fs::read_to_string(&campaign)
+                .with_context(|| format!("cannot read campaign file {}", campaign.display()))?;
+            let campaign: AirdropCampaign = serde_json::from_str(&campaign_json)
+                .context("invalid campaign JSON")?;
+
+            // Parse claimant address
+            let claimant_addr = parse_address(&claimant)?;
+
+            // Load recipients CSV to reconstruct leaves
+            let csv_content = std::fs::read_to_string(&recipients)
+                .with_context(|| format!("cannot read recipients file {}", recipients.display()))?;
+            
+            let mut leaves = Vec::new();
+            for line in csv_content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() != 2 {
+                    continue; // skip malformed lines
+                }
+                let addr_state = parse_address(parts[0].trim())?;
+                let addr_types = TypesAddress::from_versioned(*addr_state.as_bytes());
+                let amount: u64 = parts[1].trim().parse().unwrap_or(0);
+                leaves.push(AirdropLeaf { address: addr_types, amount });
+            }
+
+            // Find the leaf index for this claimant
+            let claimant_types = TypesAddress::from_versioned(*claimant_addr.as_bytes());
+            let index = leaves.iter().position(|l| l.address == claimant_types)
+                .ok_or_else(|| anyhow::anyhow!("claimant not found in recipients list"))?;
+
+            // Generate proof
+            let proof = generate_proof(&leaves, index)
+                .ok_or_else(|| anyhow::anyhow!("failed to generate proof"))?;
+
+            // Verify the proof
+            if !proof.verify(campaign.merkle_root) {
+                bail!("generated proof does not verify against campaign merkle root - data mismatch");
+            }
+
+            let json = serde_json::to_string_pretty(&proof)?;
+            
+            if let Some(path) = output {
+                std::fs::write(&path, &json)
+                    .with_context(|| format!("cannot write to {}", path.display()))?;
+                println!("Wrote Merkle proof to {}", path.display());
+            } else {
+                println!("{}", json);
+            }
+            Ok(())
+        }
+        AirdropCommand::Verify {
+            campaign,
+            proof,
+        } => {
+            // Load campaign
+            let campaign_json = std::fs::read_to_string(&campaign)
+                .with_context(|| format!("cannot read campaign file {}", campaign.display()))?;
+            let campaign: AirdropCampaign = serde_json::from_str(&campaign_json)
+                .context("invalid campaign JSON")?;
+
+            // Load proof
+            let proof_json = std::fs::read_to_string(&proof)
+                .with_context(|| format!("cannot read proof file {}", proof.display()))?;
+            let proof: MerkleProof = serde_json::from_str(&proof_json)
+                .context("invalid proof JSON")?;
+
+            let valid = proof.verify(campaign.merkle_root);
+            if valid {
+                println!("✓ Proof is VALID for campaign {}", campaign.id);
+            } else {
+                println!("✗ Proof is INVALID for campaign {}", campaign.id);
+            }
+            Ok(())
+        }
+        AirdropCommand::Claim {
+            campaign,
+            proof,
+            key,
+            passphrase,
+            output,
+        } => {
+            // Load campaign
+            let campaign_json = std::fs::read_to_string(&campaign)
+                .with_context(|| format!("cannot read campaign file {}", campaign.display()))?;
+            let campaign: AirdropCampaign = serde_json::from_str(&campaign_json)
+                .context("invalid campaign JSON")?;
+
+            // Load proof
+            let proof_json = std::fs::read_to_string(&proof)
+                .with_context(|| format!("cannot read proof file {}", proof.display()))?;
+            let proof: MerkleProof = serde_json::from_str(&proof_json)
+                .context("invalid proof JSON")?;
+
+            // Verify proof
+            if !proof.verify(campaign.merkle_root) {
+                bail!("proof does not verify against campaign merkle root");
+            }
+
+            // Load wallet
+            let wallet = Wallet::load_with_passphrase(&key, passphrase.as_deref().unwrap_or(""))?;
+            let claimant_addr = wallet.address();
+
+            // Verify the proof leaf matches the wallet address (compare raw bytes)
+            let leaf_addr_bytes = proof.leaf.address.as_bytes();
+            let claimant_addr_bytes = claimant_addr.as_bytes();
+            if leaf_addr_bytes != claimant_addr_bytes {
+                bail!("proof leaf address does not match wallet address");
+            }
+
+            // Build claim transaction using the node's prepare endpoint
+            // This would need an API endpoint like /api/prepare/airdrop-claim
+            // For now, we output the prepared claim structure
+            let claim_tx = serde_json::json!({
+                "type": "airdrop_claim",
+                "campaign_id": campaign.id.to_hex(),
+                "claimant": claimant_addr.to_hex(),
+                "amount": proof.leaf.amount,
+                "asset_id": campaign.asset_id.to_string(), // AssetId Display impl
+                "merkle_proof": {
+                    "leaf": {
+                        "address": hex::encode(leaf_addr_bytes),
+                        "amount": proof.leaf.amount,
+                    },
+                    "siblings": proof.siblings.iter().map(|h| h.to_hex()).collect::<Vec<_>>(),
+                },
+            });
+
+            let json = serde_json::to_string_pretty(&claim_tx)?;
+            
+            if let Some(path) = output {
+                std::fs::write(&path, &json)
+                    .with_context(|| format!("cannot write to {}", path.display()))?;
+                println!("Wrote claim transaction to {}", path.display());
+            } else {
+                println!("{}", json);
+            }
+            println!("Note: Sign the sighash and submit via the node's airdrop claim endpoint");
             Ok(())
         }
     }

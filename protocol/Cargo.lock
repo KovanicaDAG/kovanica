@@ -1205,8 +1205,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-airdrop"
+version = "0.4.0"
+dependencies = [
+ "blake3",
+ "kovanica-types",
+ "serde",
+]
+
+[[package]]
 name = "kovanica-chat"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -1220,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "kovanica-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1228,7 +1237,9 @@ dependencies = [
  "crossterm",
  "getrandom 0.2.17",
  "hex",
+ "kovanica-airdrop",
  "kovanica-state",
+ "kovanica-types",
  "kovanica-wallet",
  "ratatui",
  "serde_json",
@@ -1238,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "kovanica-dag"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "blake3",
  "criterion",
@@ -1254,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "kovanica-ffi"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bincode",
  "ed25519-dalek",
@@ -1268,7 +1279,7 @@ dependencies = [
 
 [[package]]
 name = "kovanica-node"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arbitrary",
  "base64 0.22.1",
@@ -1297,7 +1308,7 @@ dependencies = [
 
 [[package]]
 name = "kovanica-state"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "blake3",
  "criterion",
@@ -1309,8 +1320,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-types"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "blake3",
+ "hex",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "kovanica-wallet"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bip39",
