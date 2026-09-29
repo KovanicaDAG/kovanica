@@ -4804,7 +4804,13 @@ mod tests {
         // 10,200,000 KVNC before the 2026-09-29 reduction to 8.)
         assert_eq!(n["supply"].as_u64().unwrap(), 820_000_000_000_000);
         assert_eq!(n["subsidy"].as_u64().unwrap(), 1_000_000_000);
-        assert_eq!(n["halving_era"].as_u64().unwrap(), 2_000_000);
+        // Derived, not hardcoded: this field tracks RFC006_ERA_LENGTH, which is
+        // 2_050_000. It previously read 2_000_000 and had to be hand-edited on
+        // every era change.
+        assert_eq!(
+            n["halving_era"].as_u64().unwrap(),
+            kovanica_state::RFC006_ERA_LENGTH
+        );
         assert_eq!(n["min_fee"].as_u64().unwrap(), 2000);
         assert_eq!(n["max_supply"].as_u64().unwrap(), 9_020_000_000_000_000);
         assert_eq!(n["issuance"].as_u64().unwrap(), 1_000_000_000);
@@ -4932,12 +4938,17 @@ mod tests {
 
     #[test]
     fn issuance_geometric_each_era() {
-        // era length HALVING_ERA (2_000_000); alpha = 3/4
+        // Heights are DERIVED from the era length, never hardcoded. This test
+        // used to assert at 1_999_999 / 2_000_000 / 4_000_000, which meant it
+        // kept passing after the era length changed underneath it — the
+        // assertion was checking a stale constant rather than behaviour.
+        use kovanica_state::RFC006_ERA_LENGTH;
+        let era = RFC006_ERA_LENGTH;
         assert_eq!(Node::issuance_at(10 * ATOM, 0), 10 * ATOM);
-        assert_eq!(Node::issuance_at(10 * ATOM, 1_999_999), 10 * ATOM);
-        assert_eq!(Node::issuance_at(10 * ATOM, 2_000_000), 10 * ATOM * 3 / 4);
+        assert_eq!(Node::issuance_at(10 * ATOM, era - 1), 10 * ATOM);
+        assert_eq!(Node::issuance_at(10 * ATOM, era), 10 * ATOM * 3 / 4);
         assert_eq!(
-            Node::issuance_at(10 * ATOM, 4_000_000),
+            Node::issuance_at(10 * ATOM, 2 * era),
             10 * ATOM * 3 / 4 * 3 / 4
         );
     }

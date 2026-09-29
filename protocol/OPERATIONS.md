@@ -24,7 +24,7 @@
 > **What is *not* changing.** RFC-006 tokenomics is untouched by the PoA
 > removal (the emission curve is height-indexed, not work-indexed, and
 > `cumulative_minted` is capped in `apply_block`): **MAX_SUPPLY 90.2M KVNC**,
-> genesis subsidy **s₀ 10 KVNC / block**, era length **2 000 000** blocks,
+> genesis subsidy **s₀ 10 KVNC / block**, era length **2 050 000** blocks,
 > decay **α 3/4 per era**, coinbase maturity **100 blocks**, fee split
 > **75% burned / 25% to producer**. GHOSTDAG stays at **k=3**; the ledger stays
 > UTXO; signatures stay Ed25519. Block *pace* will change (authorities produce

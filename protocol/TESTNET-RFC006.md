@@ -82,7 +82,7 @@ peer address clones should dial. The primary seed dials its sibling
 - **Hard cap** 90.2M KVNC enforced via cumulative `native_minted`.
 - **Coinbase maturity 100 blocks** — early spends rejected (`CoinbaseImmature`).
 - Fee split: 75% burned, 25% claimable by block producer.
-- Curve emission: 80M KVNC over geometric eras (s₀=10 KVNC, E=2M, α=3/4).
+- Curve emission: 82M KVNC over geometric eras (s₀=10 KVNC, E=2.05M, α=3/4).
 - Treasury: 8 × 1M RFC-005 time-lock vaults (placeholder keys are
   **testnet-only and publicly derivable by design**; production must pass a
   real secret seed via key ceremony).

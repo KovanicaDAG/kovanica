@@ -58,7 +58,7 @@ Design goals, in order:
 | Parameter | Value | Code |
 |-----------|-------|------|
 | Genesis subsidy \(s_0\) | **10 KVNC** / block | `RFC006_GENESIS_SUBSIDY` |
-| Era length \(E\) | **2_000_000** blocks | `RFC006_ERA_LENGTH` |
+| Era length \(E\) | **2_050_000** blocks | `RFC006_ERA_LENGTH` |
 | Decay \(\alpha\) | **3/4** per era (integer floor) | — |
 | Nominal curve total | **80 000 000 KVNC** | — |
 
@@ -103,14 +103,16 @@ i.e. **~2.0M KVNC below `MAX_SUPPLY`** (2 000 002.2 KVNC exactly, of which
 2 000 000 is the treasury cut and 2.2 is the pre-existing truncation shortfall).
 The cap is a backstop that honest subsidy can never reach; it exists to reject
 *malformed or over-claiming* coinbases (§4), not to truncate the curve. Docs that
-quote a flat "80M curve" are quoting the asymptotic limit.
+quote a flat "82M curve" are quoting the asymptotic limit.
 
-The ~2M gap is **deliberately unallocated**: treasury was cut from 10 × 1M to
-8 × 1M on 2026-09-29 and the freed 2M is not folded into the curve, because curve
-emission is derived from `s0`, era length and α — enlarging it would move
-`subsidy_at`, the fee floor (`subsidy / 500_000`) and `/api/head`. `MAX_SUPPLY`
-remains a **ceiling, never a target**: do not top up to close the gap, and do
-not lower the cap either.
+The freed 2M was **reallocated to the curve**: treasury was cut from 10 × 1M to
+8 × 1M on 2026-09-29, and the curve rose from 80M to 82M to match. Curve emission
+is derived from `s0`, era length and α, so the 2M was absorbed by moving the era
+length `E` from 2_000_000 to **2_050_000** — chosen over `s0` or α because `s0` is
+the most widely-quoted tokenomics number and also feeds the fee floor
+(`subsidy / 500_000`) and `/api/head`. The only residual gap is the 2.46 KVNC lost
+to per-era integer flooring. `MAX_SUPPLY` remains a **ceiling, never a target**:
+do not top up to close it, and do not lower the cap either.
 
 ---
 
@@ -120,7 +122,7 @@ not lower the cap either.
 |-----------|--------|-----------|
 | Founder premine | 0.2M KVNC | Genesis coinbase (P2PK), `RFC006_PREMINE` |
 | Treasury | 8M KVNC | 8 × 1M RFC-005 vaults at genesis |
-| Curve emission | 80M KVNC (nominal) | Block subsidies |
+| Curve emission | 82M KVNC (nominal) | Block subsidies |
 | **MAX_SUPPLY** | **90.2M KVNC** = `9_020_000_000_000_000` atoms | enforced per-view |
 
 ### 4.1 Enforcement
@@ -340,7 +342,7 @@ distribution. This is a *pace* bound. `MAX_SUPPLY` remains the hard ceiling.
 | Parameter | Value |
 |-----------|--------|
 | Genesis subsidy \(s_0\) | **10 KVNC** per block |
-| Era length \(E\) | **2_000_000** blocks |
+| Era length \(E\) | **2_050_000** blocks |
 | Decay \(\alpha\) | **3/4** per era (integer floor) |
 | Curve total | **80_000_000 KVNC** |
 
@@ -355,7 +357,7 @@ s(era) = floor(s(era-1) * 3/4)   with s(0) = 10 KVNC
 |-----------|--------|-----------|
 | Founder premine | 0.2M KVNC | Genesis coinbase (P2PK) |
 | Treasury | 8M KVNC | 8 × 1M RFC-005 vaults at genesis |
-| Curve emission | 80M KVNC | Block subsidies |
+| Curve emission | 82M KVNC | Block subsidies |
 | **MAX_SUPPLY** | **90.2M KVNC** | Enforced via `native_minted` |
 
 Treasury tranche *k* (1..=10) unlocks at height `k * 31_536_000`.

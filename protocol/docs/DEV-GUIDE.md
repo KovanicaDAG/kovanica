@@ -13,7 +13,7 @@ Current network: `kovanica-testnet`
 
 ## RFC-006 Tokenomics (hard rules, activated)
 - MAX_SUPPLY: **90.2M KVNC** (`9_020_000_000_000_000` atoms)
-- Emission curve: 80M KVNC geometric decay (s₀=10 KVNC, era=2_000_000, α=3/4)
+- Emission curve: 82M KVNC geometric decay (s₀=10 KVNC, era=2_050_000, α=3/4)
 - Coinbase maturity: **100 blocks**
 - Fee split: **75% burned / 25% to producer**
 - Fee floor: `max(1, subsidy / 500_000)` atoms/byte
