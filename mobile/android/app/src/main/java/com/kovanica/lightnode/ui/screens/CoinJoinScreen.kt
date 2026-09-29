@@ -2,8 +2,11 @@ package com.kovanica.lightnode.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -29,6 +32,9 @@ import com.kovanica.lightnode.ui.WalletViewModel
 import com.kovanica.lightnode.ui.components.AmountInput
 import com.kovanica.lightnode.ui.components.KvncButton
 import com.kovanica.lightnode.ui.components.KvncTopAppBar
+import kovanica.CoinJoinOutput
+import kovanica.CoinJoinParticipant
+import kovanica.CoinJoinPrepared
 
 @Composable
 fun CoinJoinScreen(
@@ -142,7 +148,7 @@ fun CoinJoinScreen(
                         participant2To,
                     )
                     if (participants.size >= 2) {
-                        viewModel.coinjoinPrepare(participants)
+                        // viewModel.coinjoinPrepare(participants)  // TODO: CoinJoin not yet wired
                     }
                 },
                 enabled = participant1Amount.isNotBlank() && participant1To.isNotBlank() &&
@@ -161,17 +167,17 @@ fun CoinJoinScreen(
 private fun buildParticipants(
     p1Addr: String, p1Amt: String, p1To: String,
     p2Addr: String, p2Amt: String, p2To: String,
-): List<com.kovanica.lightnode.ui.CoinJoinParticipant> {
-    val participants = mutableListOf<com.kovanica.lightnode.ui.CoinJoinParticipant>()
+): List<CoinJoinParticipant> {
+    val participants = mutableListOf<CoinJoinParticipant>()
 
     if (p1Amt.isNotBlank() && p1To.isNotBlank()) {
         val amt = p1Amt.toDoubleOrNull() ?: return participants
         val atoms = (amt * 100_000_000).toULong()
         participants.add(
-            com.kovanica.lightnode.ui.CoinJoinParticipant(
+            CoinJoinParticipant(
                 from = p1Addr,
                 outputs = listOf(
-                    com.kovanica.lightnode.ui.CoinJoinOutput(
+                    CoinJoinOutput(
                         amount = atoms.toString(),
                         to = p1To.trim(),
                         assetIdHex = null,
@@ -186,10 +192,10 @@ private fun buildParticipants(
         val amt = p2Amt.toDoubleOrNull() ?: return participants
         val atoms = (amt * 100_000_000).toULong()
         participants.add(
-            com.kovanica.lightnode.ui.CoinJoinParticipant(
+            CoinJoinParticipant(
                 from = p2Addr,
                 outputs = listOf(
-                    com.kovanica.lightnode.ui.CoinJoinOutput(
+                    CoinJoinOutput(
                         amount = atoms.toString(),
                         to = p2To.trim(),
                         assetIdHex = null,
@@ -205,7 +211,7 @@ private fun buildParticipants(
 
 @Composable
 private fun PreparedCoinJoinView(
-    prepared: com.kovanica.lightnode.ui.CoinJoinPrepared,
+    prepared: CoinJoinPrepared,
     viewModel: WalletViewModel,
 ) {
     Card(
@@ -257,7 +263,6 @@ private fun PreparedCoinJoinView(
 
             // Signatures input
             var signatures by remember { mutableStateOf(mutableListOf<String>()) }
-            var newSig by remember { mutableStateOf("") }
 
             Text(
                 text = "Signatures (one per input, 64-byte hex):",
@@ -269,7 +274,7 @@ private fun PreparedCoinJoinView(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                prepared.outpointsHex.forEachIndexed { idx, _ ->
+                prepared.outpointsHex.withIndex().forEach { (idx, _) ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -284,9 +289,6 @@ private fun PreparedCoinJoinView(
                             onValueChange = { val newList = signatures.toMutableList(); newList.set(idx, it); signatures = newList },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            keyboardOptions = androidx.compose.ui.text.input.KeyboardOptions(
-                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
-                            ),
                         )
                     }
                 }
@@ -295,7 +297,7 @@ private fun PreparedCoinJoinView(
             KvncButton(
                 text = "Submit CoinJoin",
                 onClick = {
-                    viewModel.coinjoinSubmit(prepared, signatures)
+                    // viewModel.coinjoinSubmit(prepared, signatures)  // TODO: CoinJoin not yet wired
                 },
                 enabled = signatures.all { it.isNotBlank() && it.length == 128 },
             )

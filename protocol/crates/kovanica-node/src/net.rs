@@ -895,7 +895,42 @@ pub fn sync_headers_first(
 /// Server-side: run a headers-first sync exchange on an accepted stream.
 /// Reads our inventory, writes peer's inventory, then serves headers/bodies on demand.
 /// Returns when the peer closes the connection or on error.
+/// Serve one headers-first exchange on an accepted connection.
+///
+/// **Every I/O error is reported as a clean `Ok(())`.** That is a deliberate
+/// invariant, not leniency: `NetError` has exactly three variants and `io()`
+/// funnels *every* `std::io::Error` into `NetError::Io`, so `Io` carries
+/// exactly one meaning — *the socket died* — with no finer distinction to
+/// recover. A dead socket is routine on a gossip network: an up-to-date peer
+/// that has nothing to ask for hangs up mid-exchange (it sends its inventory,
+/// reads ours, computes an empty `missing`, and drops), and a dialer whose read
+/// deadline expires under load tears down just as early.
+///
+/// Letting those reach the caller is what made this a live bug. The caller's
+/// error path is the legacy full-dump exchange, so a peer that explicitly
+/// asked for **nothing** would make this node serialise and ship its *entire
+/// chain* — one dial and a hang-up is a remotely-triggerable
+/// bandwidth-amplification vector, and the symptom is a peer hanging up
+/// forever while the chain is re-dumped on every pass.
+///
+/// The rule is enforced at this one boundary on purpose. Scattering per-read
+/// `Io` guards across the four read/write sites is how step 1 came to be
+/// missed while step 2 was fixed; a single choke point cannot be forgotten.
+///
+/// Real protocol faults still propagate: a malformed frame is
+/// `NetError::Decode` and a bad apply is `NetError::Apply`.
 pub fn serve_headers_first(
+    stream: &mut TcpStream,
+    node: &mut Node,
+    timeout: Duration,
+) -> Result<(), NetError> {
+    match serve_headers_first_inner(stream, node, timeout) {
+        Err(NetError::Io(_)) => Ok(()),
+        other => other,
+    }
+}
+
+fn serve_headers_first_inner(
     stream: &mut TcpStream,
     node: &mut Node,
     timeout: Duration,
@@ -913,9 +948,10 @@ pub fn serve_headers_first(
     let our_inv = encode_inventory(&node.inventory());
     write_frame(stream, &our_inv)?;
 
-    // Step 2: read get-headers (client sends ids it wants headers for)
-    let get_headers_bytes = read_frame(stream, MAX_FRAME_BYTES)?;
-    let want_ids = decode_getheaders(&get_headers_bytes)?;
+    // Step 2: read get-headers (client sends ids it wants headers for).
+    // An `Io` here means the peer hung up; the boundary in `serve_headers_first`
+    // turns that into a clean return.
+    let want_ids = decode_getheaders(&read_frame(stream, MAX_FRAME_BYTES)?)?;
 
     // Step 3: respond with headers for those ids, in topological order
     // (parents before children). The client's request is ID-sorted, which is
@@ -933,26 +969,15 @@ pub fn serve_headers_first(
     let headers_frame = encode_headers(&headers);
     write_frame(stream, &headers_frame)?;
 
-    // Step 4: loop: read getbodies, write bodies until EOF or error
+    // Step 4: loop: read getbodies, write bodies until EOF or error.
+    // A peer that is done simply stops asking, so the read that ends this loop
+    // is a normal exit, not a fault; the boundary above maps the `Io` to `Ok`.
     loop {
-        let req_bytes = match read_frame(stream, MAX_FRAME_BYTES) {
-            Ok(b) => b,
-            Err(NetError::Io(_)) => break, // peer closed
-            Err(e) => return Err(e),
-        };
-        let want = decode_getbodies(&req_bytes)?;
+        let want = decode_getbodies(&read_frame(stream, MAX_FRAME_BYTES)?)?;
         let records: Vec<BlockRecord> =
             want.iter().filter_map(|id| node.block_record(id)).collect();
-        let bodies_frame = encode_bodies(&records);
-        if let Err(e) = write_frame(stream, &bodies_frame) {
-            // Peer may have closed; not an error.
-            if matches!(e, NetError::Io(_)) {
-                break;
-            }
-            return Err(e);
-        }
+        write_frame(stream, &encode_bodies(&records))?;
     }
-    Ok(())
 }
 
 /// Backward-compatible full-dump exchange (used by explorer loop).

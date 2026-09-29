@@ -25,11 +25,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.kovanica.lightnode.R
 import com.kovanica.lightnode.ui.WalletViewModel
 import com.kovanica.lightnode.ui.components.KvncButton
 import com.kovanica.lightnode.ui.components.KvncTopAppBar
@@ -49,7 +47,7 @@ fun OnboardingScreen(
     }
 
     Scaffold(
-        topBar = { KvncTopAppBar(title = stringResource(R.string.app_name)) },
+        topBar = { KvncTopAppBar(title = "Kovanica") },
     ) { padding ->
         Column(
             modifier = Modifier

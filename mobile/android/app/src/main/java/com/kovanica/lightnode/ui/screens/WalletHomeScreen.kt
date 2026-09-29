@@ -20,13 +20,11 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Toll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -34,10 +32,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.compose.rememberNavController
 import com.kovanica.lightnode.ui.WalletViewModel
+import com.kovanica.lightnode.ui.HistoryItem
 import com.kovanica.lightnode.ui.navigation.AppDestinations
+import com.kovanica.lightnode.ui.components.ActionButton
+import com.kovanica.lightnode.ui.components.AddressCard
+import com.kovanica.lightnode.ui.components.HistoryItemCard
+import com.kovanica.lightnode.ui.components.KvncTopAppBar
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WalletHomeScreen(
     viewModel: WalletViewModel,
@@ -49,83 +52,76 @@ fun WalletHomeScreen(
     onSettings: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val navController = rememberNavController()
 
     Scaffold(
         topBar = { KvncTopAppBar(title = "Wallet") },
     ) { padding ->
-        PullToRefreshBox(
-            isRefreshing = state.isLoading,
-            onRefresh = viewModel::refreshBalance,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
-            ) {
-                item {
-                    AddressCard(
-                        address = state.address,
-                        onCopy = { /* TODO: copy to clipboard */ },
-                        onShowQr = onReceive,
-                    )
-                }
+            item {
+                AddressCard(
+                    address = state.address,
+                    onCopy = { /* TODO: copy to clipboard */ },
+                    onShowQr = onReceive,
+                )
+            }
 
-                item { BalanceCard(balance = state.spendableBalance) }
+            item { BalanceCard(balance = state.spendableBalance) }
 
-                item {
+            item {
+                Text(
+                    text = "Actions",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Spacer(Modifier.height(12.dp))
+                ActionGrid(
+                    onSync = viewModel::syncNode,
+                    onSend = onSend,
+                    onReceive = onReceive,
+                    onStake = onStake,
+                    onCoinJoin = { navController.navigate(AppDestinations.CoinJoin.route) },
+                    onHistory = onHistory,
+                    onSettings = onSettings,
+                )
+            }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
-                        text = "Actions",
+                        text = "Recent activity",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
-                    Spacer(Modifier.height(12.dp))
-                    ActionGrid(
-                        onSync = viewModel::syncNode,
-                        onSend = onSend,
-                        onReceive = onReceive,
-                        onStake = onStake,
-                        onCoinJoin = { navController.navigate(AppDestinations.CoinJoin.route) },
-                        onHistory = onHistory,
-                        onSettings = onSettings,
+                    IconButton(onClick = onHistory) {
+                        Icon(
+                            imageVector = Icons.Filled.List,
+                            contentDescription = "All history",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+
+            if (state.recentHistory.isEmpty()) {
+                item {
+                    Text(
+                        text = "No transactions yet. Pull down to refresh after syncing.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Recent activity",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onBackground,
-                        )
-                        IconButton(onClick = onHistory) {
-                            Icon(
-                                imageVector = Icons.Filled.List,
-                                contentDescription = "All history",
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
-                }
-
-                if (state.recentHistory.isEmpty()) {
-                    item {
-                        Text(
-                            text = "No transactions yet. Pull down to refresh after syncing.",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                } else {
-                    items(state.recentHistory.take(5), key = { it.txIdHex }) { item ->
-                        HistoryItemCard(item = item)
-                    }
+            } else {
+                items(state.recentHistory.take(5), key = { it.txIdHex }) { item ->
+                    HistoryItemCard(item = item)
                 }
             }
         }

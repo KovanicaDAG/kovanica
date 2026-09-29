@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit
  */
 object SyncWorkScheduler {
 
+    private const val SYNC_WORK_NAME = "kovanica_background_sync"
+
     /**
      * Enqueue a unique periodic sync. Subsequent calls are no-ops unless the
      * existing work is cancelled first (ExistingPeriodicWorkPolicy.KEEP).
@@ -29,11 +31,11 @@ object SyncWorkScheduler {
 
         val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
             .setConstraints(constraints)
-            .addTag(SyncWorker.WORK_NAME)
+            .addTag(SYNC_WORK_NAME)
             .build()
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            SyncWorker.WORK_NAME,
+            SYNC_WORK_NAME,
             ExistingPeriodicWorkPolicy.KEEP,
             request,
         )
@@ -43,6 +45,6 @@ object SyncWorkScheduler {
      * Cancel the periodic sync (used when the wallet is reset).
      */
     fun cancel(context: Context) {
-        WorkManager.getInstance(context).cancelUniqueWork(SyncWorker.WORK_NAME)
+        WorkManager.getInstance(context).cancelUniqueWork(SYNC_WORK_NAME)
     }
 }

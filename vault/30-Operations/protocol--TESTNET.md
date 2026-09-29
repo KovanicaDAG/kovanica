@@ -30,9 +30,9 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 | Wallet | https://wallet.kovanica.online |
 | Node source | https://github.com/KovanicaDAG/kovanica-node |
 | Network | `kovanica-testnet` |
-| Genesis | `93efd2d784c19e0ea74b53c4b1aec1aa070a2d6cd8042058d934b18a6e23ab0a` |
-| Premine | **0.2M KVNC** (founder) + **10M** treasury vaults |
-| Subsidy | **10 KVNC / block** at genesis, geometric decay ×3/4 every **2 000 000** blocks |
+| Genesis | `1a6359157df2d1cdb09e04bd420c9d01800840a4415e27cdafff8bb041e6e602` |
+| Premine | **0.2M KVNC** (founder) + **8M** treasury vaults (8 × 1M) |
+| Subsidy | **10 KVNC / block** at genesis, geometric decay ×3/4 every **2 050 000** blocks |
 | Max supply | **90.2M KVNC** hard cap |
 | Coinbase maturity | **100 blocks** |
 | Fee | Floor `max(1, subsidy/500_000)` atoms/byte; **75% burned / 25% producer** |
@@ -44,7 +44,7 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 | Slot duration | `[CURRENT]` `KOVANICA_SLOT_DURATION`, default 3000 ms · no gap-fill |
 | P2P | **TCP only** `KOVANICA_LISTEN` (default `0.0.0.0:9000`) |
 | Bootstrap | DNS-only `seed.kovanica.online:9000` (not the Cloudflare hostname) |
-| Seeds | `seed.kovanica.online:9000` (primary) · `seed2.kovanica.online:9000` (secondary, Hostinger KVM2 VPS) · `seed3` retired |
+| Seeds | `seed.kovanica.online:9000` (primary, this host) · `seed2.kovanica.online:9000` (76.13.250.65, authority-2) · `seed3.kovanica.online:9000` (187.7.27.139, non-producing — no signing key) |
 
 Live genesis and tip: `GET https://explorer.kovanica.online/api/head`  
 P2P status on a running node: `GET /api/p2p`  
@@ -56,8 +56,11 @@ and never gossiped blocks.
 
 `explorer.kovanica.online` is orange-cloud. TCP 9000 never reaches the seed
 through that name. Grey-cloud `seed.kovanica.online` (or the origin IP) is the
-peer address clones should dial. The primary seed dials its sibling seed
-(`seed2.kovanica.online:9000`, formerly also `seed3` — retired 2026-09-17).
+peer address clones should dial. The primary seed dials its siblings
+(`seed2.kovanica.online:9000` and `seed3.kovanica.online:9000`). seed3 was
+briefly retired on 2026-09-17 and re-provisioned on 2026-09-29 as a
+**non-producing** seed: it runs a PoA node with no `KOVANICA_AUTHORITY_KEY`
+and `KOVANICA_OPERATOR=0`, so it relays and serves but never signs a block.
 
 
 ## Tokenomics (RFC-006)
