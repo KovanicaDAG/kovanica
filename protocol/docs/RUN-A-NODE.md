@@ -364,7 +364,7 @@ server {
 |------|---------|-------|
 | seed1 | `seed.kovanica.online:9000` | Primary (Hostinger VPS) |
 | seed2 | `seed2.kovanica.online:9000` | Secondary (Hostinger KVM2 VPS) |
-| seed3 | `seed3.kovanica.online:9000` | Tertiary (retired) |
+| seed3 | `seed3.kovanica.online:9000` | Tertiary — **new VPS, not yet in service** (`187.7.27.139`, `srv2013143`). Node not running, TCP 9000 closed, and the A record still points at Cloudflare proxy IPs, so the name does not work yet. Do not list it in `KOVANICA_PEERS` until both are fixed. |
 
 ### 6.2 Connectivity Verification
 

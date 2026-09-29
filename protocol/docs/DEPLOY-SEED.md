@@ -15,7 +15,7 @@
 | **seed** (primary) | Hostinger VPS `srv1745734` | `seed.kovanica.online` | `145.223.116.178` | 9000 | 8080 (loopback) | `kovanica-explorer` |
 | **seed2** (secondary) | Hostinger KVM2 `srv1991525` | `seed2.kovanica.online` | `76.13.250.65` | 9000 | 18080 (loopback, nginx `/api`) | `kovanica-seed2` |
 
-> **Note:** `seed1.kovanica.online` is a CNAME alias to `seed2.kovanica.online`. `seed3.kovanica.online` (AWS) was decommissioned 2026-09-21 (DNS deleted, NXDOMAIN).
+> **Note:** `seed1.kovanica.online` is a CNAME alias to `seed2.kovanica.online`. The original `seed3.kovanica.online` (AWS `t3.micro`) was decommissioned 2026-09-21. **Do not describe its DNS as deleted/NXDOMAIN** — as of 2026-09-29 the name still resolves, but to Cloudflare proxy IPs, not to a node. A **new** `seed3` VPS (`187.7.27.139`, `srv2013143`) has been provisioned; its A record still needs to be re-pointed there as **DNS-only (grey-cloud)** before the name is usable for P2P.
 
 ---
 
