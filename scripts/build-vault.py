@@ -78,7 +78,7 @@ CATEGORIES: list[tuple[str, list[str]]] = [
         "protocol/docs/MAINNET-CRITERIA.md", "protocol/AGENTS.md",
     ]),
     ("20-Network", [
-        "NETWORK.md", "protocol/NETWORK.md", "protocol/docs/upgrades/**",
+        "protocol/NETWORK.md", "protocol/docs/upgrades/**",
         "THIRD-SEED-PROVIDER-CHECKLIST.md", "TODO/seed2-deploy.md",
         "TODO/public-api-bootstrap-peers.md", "TODO/git-remote-credential-rotation.md",
     ]),
@@ -126,10 +126,15 @@ SENSITIVE: list[str] = [
 # contradict canonical docs. Values are the reason, surfaced in 00-Home/Not-
 # vendored.md rather than silently dropped.
 STALE: dict[str, str] = {
-    # Canonical network truth is the root NETWORK.md (newer + more complete:
-    # carries the seed3 NXDOMAIN record and the tokenomics comparison table).
-    "protocol/NETWORK.md":
-        "duplicate of NETWORK.md — older and less complete",
+    # protocol/NETWORK.md is the single canonical network truth. It was
+    # previously listed here as a stale "duplicate of NETWORK.md" on the
+    # premise that a root-level NETWORK.md was newer and more complete. No
+    # root NETWORK.md exists (it moved under protocol/), so that entry
+    # excluded the ONLY canonical copy from the vault — and the tracked
+    # vault/docs/_root/NETWORK.md was a leftover that kept drifting (it
+    # carried a false "seed3 DNS deleted / NXDOMAIN" claim). Removing the
+    # entry lets 20-Network vend protocol/NETWORK.md fresh on each build.
+    #
     # The RedesignDomains package calls this out itself: "Canonical full
     # reference: ../NETWORK.md". Its 07-MAINNET-ACTIVATION.md stays (open).
     "protocol/docs/upgrades/02-RedesignDomains/NETWORK.md":
