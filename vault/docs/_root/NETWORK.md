@@ -50,7 +50,7 @@ This document is the single source of truth for how the Kovanica public domains 
 | **seed.kovanica.online**            | Primary P2P seed (TCP 9000)                | DNS-only (grey cloud); Hostinger VPS `srv1745734`; live unit `kovanica-explorer` |
 | **seed1.kovanica.online**           | Legacy alias → `seed2`                    | CNAME to `seed2.kovanica.online` (Hostinger KVM2) |
 | **seed2.kovanica.online**           | Secondary seed (TCP 9000)                  | DNS-only; Hostinger KVM2 VPS `76.13.250.65` (`srv1991525`) |
-| **seed3.kovanica.online**           | Decommissioned                             | Instance stopped + **DNS deleted 2026-09-21** (AWS box retired 2026-09-17); **NXDOMAIN** — no node serves it |
+| **seed3.kovanica.online**           | Decommissioned                             | Instance stopped (AWS box retired 2026-09-17, decommissioned 2026-09-21). ⚠️ The A record was **not** deleted — as of 2026-09-29 it still resolves to `187.7.27.139`, which runs no node (TCP 9000 closed). Peers get a dial *timeout*, not a fast NXDOMAIN. Do not add to `KOVANICA_PEERS`; delete the record when winding down. |
 | **kovi.kovanica.online**          | Reserved / brand short link                  | Kept |
 | **monitor / pool / opencode**     | Internal / experimental                      | — |
 
