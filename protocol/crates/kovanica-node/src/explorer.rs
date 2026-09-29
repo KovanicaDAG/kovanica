@@ -516,6 +516,29 @@ pub struct Explorer {
     pub origins: HashMap<String, u64>,
     /// Peers that answered our last sync attempt (live connectivity).
     pub live_peers: HashSet<String>,
+    /// Last sync error observed per peer, used to log a peer-sync failure only
+    /// when it *changes*.
+    ///
+    /// Sync runs on a timer (`ticks % 250`), so a peer that is permanently
+    /// unreachable — a retired bootstrap seed, a peer behind a dead port — would
+    /// otherwise reprint an identical error every ~10s forever. Keying on the
+    /// error text collapses that to one line per distinct failure while still
+    /// surfacing a *new* failure the moment it appears. Without this the
+    /// outbound path failed completely silently: [`Explorer::sync_peers`] used
+    /// to take a `log: bool` that every steady-state caller passed as `false`,
+    /// and its `Err` arm was gated behind that flag, so a node that could reach
+    /// nothing looked identical to a node that was fully synced.
+    pub peer_sync_errors: HashMap<String, String>,
+    /// Rotating start offset into [`Explorer::peers`] for the outbound sync pass.
+    ///
+    /// Peers are dialled sequentially with a per-peer timeout, so a peer that is
+    /// first in the list is always dialled first and always pays its full
+    /// timeout before any other peer is attempted. A permanently dead entry at
+    /// the head of the list therefore delays every live peer by a full timeout
+    /// on every pass. Advancing the cursor by one peer per pass means a dead
+    /// peer is only ever first on every Nth pass, so it can no longer
+    /// deterministically starve the peers behind it.
+    peer_sync_cursor: usize,
     pub ws_clients: Arc<Mutex<Vec<Arc<Mutex<TcpStream>>>>>,
     /// DHT routing table for the explorer's alpha node.
     pub dht_table: Option<RoutingTable>,
@@ -554,6 +577,8 @@ impl Explorer {
             peers: Vec::new(),
             origins: HashMap::new(),
             live_peers: HashSet::new(),
+            peer_sync_errors: HashMap::new(),
+            peer_sync_cursor: 0,
             ws_clients: Arc::new(Mutex::new(Vec::new())),
             dht_table: None,
             dht_node_id: None,
@@ -698,7 +723,16 @@ impl Explorer {
                         eprintln!("kovanica p2p headers-first served {peer}");
                         persist_all(&mut self.mesh);
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        // Surface why the efficient path did not serve this
+                        // peer. This arm used to bind `_e` and discard it, which
+                        // made a persistently broken handshake look exactly like
+                        // a normal full-dump exchange in the logs — the reason a
+                        // live seed could be stuck on the fallback path with no
+                        // indication of the cause.
+                        eprintln!(
+                            "kovanica p2p headers-first serve {peer} failed: {e}; falling back to full dump"
+                        );
                         // Fall back to legacy full-dump exchange
                         stream.set_nonblocking(false).unwrap();
                         match serve_exchange(&mut stream, n, Duration::from_millis(800)) {
@@ -719,18 +753,43 @@ impl Explorer {
             }
         }
         if !self.peers.is_empty() && self.ticks % 250 == 0 {
-            self.sync_peers(Duration::from_millis(800), false);
+            self.sync_peers(Duration::from_millis(800));
         }
     }
 
-    fn sync_peers(&mut self, timeout: Duration, log: bool) {
+    /// Dial order for this pass: every peer exactly once, starting at `cursor`.
+    ///
+    /// Peers are dialled sequentially with a per-peer timeout, so the first
+    /// entry in the list always pays its timeout before anything else is
+    /// attempted. A permanently dead entry therefore front-runs the whole list
+    /// on every pass unless the start point moves. Returns a rotation of
+    /// `peers` (same multiset, same relative order) — never a subset, so a pass
+    /// can never silently skip a live peer. Empty input yields empty output.
+    fn dial_order(&self, peers: &[String]) -> Vec<String> {
+        if peers.is_empty() {
+            return Vec::new();
+        }
+        let start = self.peer_sync_cursor % peers.len();
+        peers[start..]
+            .iter()
+            .chain(peers[..start].iter())
+            .cloned()
+            .collect()
+    }
+
+    fn sync_peers(&mut self, timeout: Duration) {
         let peers = self.peers.clone();
         if peers.is_empty() {
             return;
         }
+        // Rotate the dial order (see [`Explorer::dial_order`]) and advance the
+        // cursor for next pass. Computed before `node_mut` so the cursor update
+        // does not fight the mesh borrow.
+        let order = self.dial_order(&peers);
+        self.peer_sync_cursor = (self.peer_sync_cursor + 1) % order.len();
         let mut answered: HashSet<String> = HashSet::new();
         if let Some(n) = self.mesh.node_mut("alpha") {
-            for addr in peers {
+            for addr in order {
                 // Try headers-first sync first (more efficient)
                 match sync_headers_first(&addr, n, timeout) {
                     Ok(stats) if stats.bodies_applied > 0 => {
@@ -762,11 +821,19 @@ impl Explorer {
                     Ok(_) => {
                         // Reachable, just nothing new to apply.
                         answered.insert(addr.clone());
+                        self.peer_sync_errors.remove(&addr);
                     }
                     Err(e) => {
-                        // Fall back to legacy full-dump pull
-                        if log {
-                            eprintln!("kovanica p2p headers-first failed {addr}: {e}, falling back to full dump");
+                        // Log on *change* only: sync runs on a timer, so a dead
+                        // peer would otherwise reprint forever. Previously this
+                        // arm was gated behind `log`, which `tick_p2p` never
+                        // sets, so every outbound sync failure was invisible.
+                        let msg = e.to_string();
+                        if self.peer_sync_errors.get(&addr) != Some(&msg) {
+                            eprintln!(
+                                "kovanica p2p headers-first failed {addr}: {e}, falling back to full dump"
+                            );
+                            self.peer_sync_errors.insert(addr.clone(), msg);
                         }
                         match pull_blocks_timeout(&addr, n, timeout) {
                             Ok(k) if k > 0 => {
@@ -774,9 +841,16 @@ impl Explorer {
                                     "kovanica p2p pulled {k} records from {addr} (full dump)"
                                 );
                                 answered.insert(addr.clone());
+                                self.peer_sync_errors.remove(&addr);
                             }
                             Ok(_) => {}
-                            Err(_) => {}
+                            Err(fe) => {
+                                let fmsg = format!("headers-first: {e}; full dump: {fe}");
+                                if self.peer_sync_errors.get(&addr) != Some(&fmsg) {
+                                    eprintln!("kovanica p2p peer {addr} unreachable: {fe}");
+                                    self.peer_sync_errors.insert(addr.clone(), fmsg);
+                                }
+                            }
                         }
                     }
                 }
@@ -846,6 +920,8 @@ impl Explorer {
             peers,
             origins: load_origins(),
             live_peers: HashSet::new(),
+            peer_sync_errors: HashMap::new(),
+            peer_sync_cursor: 0,
             ws_clients: Arc::new(Mutex::new(Vec::new())),
             dht_table: None,
             dht_node_id: Some(node_id),
@@ -853,7 +929,7 @@ impl Explorer {
             last_dht_bootstrap: 0,
             last_dht_replenish: 0,
         };
-        app.sync_peers(Duration::from_secs(3), true);
+        app.sync_peers(Duration::from_secs(3));
         Ok(app)
     }
 
@@ -4771,6 +4847,67 @@ mod tests {
     /// (`AUTHORITY_PLACEHOLDER_BASE`).
     fn pin_slot_zero(mesh: &mut crate::p2p::Mesh, name: &str) {
         mesh.node_mut(name).expect("node exists").set_now_ms(1);
+    }
+
+    /// A dead peer at the head of the list must not front-run the live peers on
+    /// every pass.
+    ///
+    /// `sync_peers` dials sequentially with a per-peer timeout, so a peer that
+    /// is first in the list always pays a full timeout before any other peer is
+    /// reached. Live testnet had exactly that shape — `seed.kovanica.online`
+    /// (dead) at the head of a list whose live peers were behind it — so every
+    /// sync pass spent its budget on the corpse before touching a live node.
+    /// The cursor advances one slot per pass, so a dead peer is first only on
+    /// every Nth pass.
+    #[test]
+    fn dial_order_rotates_so_no_peer_is_always_first() {
+        let mut app = Explorer::boot();
+        let peers: Vec<String> = ["dead:9000", "live-a:9000", "live-b:9000"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut starts = Vec::new();
+        for _ in 0..3 {
+            starts.push(app.dial_order(&peers)[0].clone());
+            // Same advance the sync pass performs.
+            app.peer_sync_cursor = (app.peer_sync_cursor + 1) % peers.len();
+        }
+        assert_eq!(
+            starts,
+            vec!["dead:9000", "live-a:9000", "live-b:9000"],
+            "each peer must get a turn at the head across three passes"
+        );
+    }
+
+    /// Rotation is a permutation, never a filter: a pass that started at a
+    /// non-zero cursor must still visit every peer, and wrap-around at the end
+    /// of the cursor cycle must not drop the tail of the list.
+    #[test]
+    fn dial_order_is_a_permutation_at_every_cursor_position() {
+        let mut app = Explorer::boot();
+        let peers: Vec<String> = ["a:9000", "b:9000", "c:9000", "d:9000"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        for cursor in 0..peers.len() {
+            app.peer_sync_cursor = cursor;
+            let order = app.dial_order(&peers);
+            assert_eq!(order.len(), peers.len(), "cursor {cursor} lost a peer");
+            let mut sorted_order = order.clone();
+            sorted_order.sort();
+            let mut sorted_peers = peers.clone();
+            sorted_peers.sort();
+            assert_eq!(
+                sorted_order, sorted_peers,
+                "cursor {cursor} changed the set"
+            );
+        }
+        // A stale cursor left over from a longer peer list must not panic or
+        // slice out of bounds.
+        app.peer_sync_cursor = 9;
+        assert_eq!(app.dial_order(&peers).len(), peers.len());
+        assert!(app.dial_order(&[]).is_empty());
     }
 
     #[test]
