@@ -32,7 +32,7 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 | Wallet | https://wallet.kovanica.online |
 | Node source | https://github.com/KovanicaDAG/kovanica-node |
 | Network | `kovanica-testnet` |
-| Premine | **0.2M KVNC** (founder) + **10M** treasury vaults |
+| Premine | **0.2M KVNC** (founder) + **8M** treasury vaults |
 | Subsidy | **10 KVNC / block** at genesis, geometric decay α=3/4 every **2 000 000** blocks |
 | Max supply | **90.2M KVNC** hard cap |
 | Coinbase maturity | **100 blocks** |
@@ -83,7 +83,7 @@ peer address clones should dial. The primary seed dials its sibling
 - **Coinbase maturity 100 blocks** — early spends rejected (`CoinbaseImmature`).
 - Fee split: 75% burned, 25% claimable by block producer.
 - Curve emission: 80M KVNC over geometric eras (s₀=10 KVNC, E=2M, α=3/4).
-- Treasury: 10 × 1M RFC-005 time-lock vaults (placeholder keys are
+- Treasury: 8 × 1M RFC-005 time-lock vaults (placeholder keys are
   **testnet-only and publicly derivable by design**; production must pass a
   real secret seed via key ceremony).
 - Activation was a **consensus fork** — all pre-RFC-006 balances were wiped.

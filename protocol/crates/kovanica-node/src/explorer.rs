@@ -39,7 +39,7 @@ use crate::p2p::Mesh;
 const ATOM: u64 = 100_000_000;
 /// RFC-006 genesis subsidy: 10 KVNC/block.
 const GENESIS_SUBSIDY: u64 = 10 * ATOM;
-/// RFC-006 founder premine: 0.2M KVNC (+ 10M treasury vaults in coinbase).
+/// RFC-006 founder premine: 0.2M KVNC (+ 8M treasury vaults in coinbase).
 const GENESIS_PREMINE: u64 = 200_000 * ATOM;
 /// Founder actor seed used by `genesis_node()` (deterministic keys).
 const FOUNDER_SEED: u64 = 1;
@@ -4799,9 +4799,10 @@ mod tests {
         // while `poa_enabled` tracks whether this node's ledger has it on.
         assert_eq!(n["admission"].as_str().unwrap(), "poa");
         assert!(n["poa_enabled"].as_bool().unwrap());
-        // One genesis node: 200,000 KVNC premine + 10×1,000,000 KVNC treasury
-        // = 10,200,000 KVNC = 1,020,000,000,000,000 atoms.
-        assert_eq!(n["supply"].as_u64().unwrap(), 1_020_000_000_000_000);
+        // One genesis node: 200,000 KVNC premine + 8×1,000,000 KVNC treasury
+        // = 8,200,000 KVNC = 820,000,000,000,000 atoms. (Was 10 tranches /
+        // 10,200,000 KVNC before the 2026-09-29 reduction to 8.)
+        assert_eq!(n["supply"].as_u64().unwrap(), 820_000_000_000_000);
         assert_eq!(n["subsidy"].as_u64().unwrap(), 1_000_000_000);
         assert_eq!(n["halving_era"].as_u64().unwrap(), 2_000_000);
         assert_eq!(n["min_fee"].as_u64().unwrap(), 2000);

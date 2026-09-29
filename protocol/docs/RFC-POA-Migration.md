@@ -159,7 +159,7 @@ and nothing to retarget — the clock is a fixed `SLOT_DURATION_MS` (default
 empty slot, and the next scheduled authority continues on schedule. So the PoA
 migration changes the *pace* of emission in wall-clock terms, **not its
 cumulative cap**. 90.2M KVNC is 90.2M KVNC before and after. The 80M KVNC curve /
-0.2M premine / 10M treasury allocation is likewise untouched.
+0.2M premine / 8M treasury allocation is likewise untouched.
 
 ### 0.5 Governance consequence: admission becomes permissioned
 
@@ -302,7 +302,7 @@ it is a maintenance liability, not an option.
 easy-to-get-wrong consequence, so it was verified directly rather than inferred:
 `crates/kovanica-state/src/vault.rs` contains **zero** references to `stake`,
 `bond`, `unbond`, `vrf`, or `Freeze`. RFC-005 vaults, CSV time-locks, and the
-10 × 1M KVNC treasury tranches do **not** depend on the stake registry and are
+8 × 1M KVNC treasury tranches do **not** depend on the stake registry and are
 **not** part of this removal. Their keys (`TREASURY_SEED_BASE`) are a
 *separate* concern from authority signing keys (§0.7.2).
 

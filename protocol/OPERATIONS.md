@@ -62,7 +62,7 @@ Current network: genesis `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac
 parameters: genesis subsidy **10 KVNC**, era **2 000 000** blocks, per-era
 decay **×3/4** (geometric, total ≈80M), **MAX_SUPPLY 90.2M KVNC**, coinbase
 maturity **100 blocks**, fee split **75% burned / 25% producer**, treasury
-**10 × 1M KVNC** vault tranches in genesis (tranche k unlocks at
+**8 × 1M KVNC** vault tranches in genesis (tranche k unlocks at
 `k × 31 536 000` blocks; placeholder keys are testnet-only and publicly
 derivable by design — production must pass a real secret seed via key
 ceremony). The pre-RFC-006 chain (genesis `596874eac2…`, subsidy 200 KVNC)

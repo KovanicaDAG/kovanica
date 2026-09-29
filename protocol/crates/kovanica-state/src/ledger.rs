@@ -170,12 +170,37 @@ pub const RFC006_ERA_LENGTH: u64 = 2_000_000;
 pub const MAX_SUPPLY: u64 = 90_200_000 * ATOM;
 /// RFC-006 founder premine: 0.2M KVNC.
 pub const RFC006_PREMINE: u64 = 200_000 * ATOM;
-/// RFC-006 treasury total: 10M KVNC.
-pub const RFC006_TREASURY_TOTAL: u64 = 10_000_000 * ATOM;
 /// RFC-006 per-tranche treasury: 1M KVNC.
 pub const RFC006_TREASURY_TRANCHE: u64 = 1_000_000 * ATOM;
-/// RFC-006 number of treasury vault tranches.
-pub const RFC006_TREASURY_TRANCHES: u32 = 10;
+/// RFC-006 number of treasury vault tranches: **8** (was 10).
+///
+/// Reduced from 10 to 8 on 2026-09-29. The 2M KVNC difference is deliberately
+/// **not** reallocated to the emission curve — see [`RFC006_TREASURY_TOTAL`] and
+/// the `rfc006_supply_decomposition` test for the arithmetic.
+///
+/// Why not reallocate? The 80M curve emission is *derived* from
+/// [`RFC006_GENESIS_SUBSIDY`] x [`RFC006_ERA_LENGTH`] x 1/(1-alpha) = 10 x
+/// 2_000_000 x 4 = 80M exactly. There is no curve-total constant to move, so
+/// absorbing the 2M would require changing s0, the era length, or alpha — which
+/// cascades into `subsidy_at`, the RFC-006 fee floor (`subsidy / 500_000`) and
+/// `/api/head`. [`MAX_SUPPLY`] stays 90.2M and the 2M simply never issues.
+///
+/// **CONSENSUS-CRITICAL.** This constant sets the number of vault outputs in the
+/// genesis coinbase (see [`rfc006_genesis_coinbase`]), so changing it changes
+/// the genesis hash. Mainnet is dormant and unaffected; an already-running
+/// testnet would require a chain reset to adopt it.
+pub const RFC006_TREASURY_TRANCHES: u32 = 8;
+/// RFC-006 treasury total: 8M KVNC. **Derived — do not hard-code.**
+///
+/// Derived as `TRANCHE * TRANCHES` so the two can never disagree. This was a
+/// literal `10_000_000 * ATOM` with no consumer anywhere in the workspace, i.e.
+/// a documentation-only constant that nothing kept honest: raising or lowering
+/// [`RFC006_TREASURY_TRANCHES`] would have silently desynchronised it.
+///
+/// Resulting RFC-006 issuance: 80M curve + 0.2M premine + 8M treasury =
+/// **88.2M** against a [`MAX_SUPPLY`] ceiling of 90.2M, leaving 2M KVNC
+/// permanently unissued. `MAX_SUPPLY` is a ceiling, not a target.
+pub const RFC006_TREASURY_TOTAL: u64 = RFC006_TREASURY_TRANCHE * RFC006_TREASURY_TRANCHES as u64;
 /// ~blocks/year at 1 block/s (vault absolute unlock spacing).
 pub const BLOCKS_PER_YEAR: u32 = 31_536_000;
 /// RFC-006 coinbase maturity.
@@ -3365,7 +3390,7 @@ impl Ledger {
     }
 }
 
-/// RFC-006 genesis coinbase: founder premine + 10x1M treasury vaults.
+/// RFC-006 genesis coinbase: founder premine + RFC006_TREASURY_TRANCHES x1M treasury vaults.
 ///
 /// Treasury keys are derived from `treasury_seed` (32 bytes) if provided:
 /// `BLAKE3(seed || "treasury" || k)` — not derivable without the seed.
@@ -3996,6 +4021,87 @@ mod tests {
             s.subsidy_at(2 * RFC006_ERA_LENGTH),
             RFC006_GENESIS_SUBSIDY * 3 / 4 * 3 / 4
         );
+    }
+
+    /// Pins the RFC-006 supply decomposition end to end.
+    ///
+    /// The treasury was cut from 10 x 1M to 8 x 1M on 2026-09-29. That made the
+    /// 2M KVNC difference unallocated, and nothing in the workspace tested the
+    /// decomposition at all — the one invariant the change actually moves. This
+    /// test binds the three allocation legs together, proves the curve leg is
+    /// *derived* (80M exactly, not a stored constant), and ties the constants to
+    /// the real genesis coinbase so the numbers cannot drift away from what is
+    /// actually minted.
+    #[test]
+    fn rfc006_supply_decomposition() {
+        let schedule = HalvingSchedule::rfc006();
+
+        // Curve leg: sum the per-era subsidy across every era the schedule pays
+        // out (era >= 256 is zero by definition). This is the 80M figure derived
+        // from s0 x era_length x 1/(1-alpha) = 10 x 2_000_000 x 4.
+        let mut curve_total: u64 = 0;
+        for era in 0..256u64 {
+            let per_block = schedule.subsidy_at(era * RFC006_ERA_LENGTH);
+            curve_total = curve_total
+                .checked_add(
+                    per_block
+                        .checked_mul(RFC006_ERA_LENGTH)
+                        .expect("per-era emission must not overflow"),
+                )
+                .expect("curve total must not overflow");
+        }
+        // The implemented schedule lands 2.4 KVNC BELOW the ideal geometric sum of
+        // 80M, for two reasons that are both intentional: `subsidy_at` floors each
+        // era's decay to whole atoms, and every era >= 256 pays zero, so the
+        // never-converging tail is truncated. MAX_SUPPLY was therefore already
+        // unreachable by 2.2 KVNC before the treasury change. RFC-006-EmissionCurve.md
+        // has always documented the realised figure (79 999 997.6).
+        assert_eq!(
+            curve_total,
+            7_999_999_760_000_000,
+            "RFC-006 realised curve emission must stay 79 999 997.6 KVNC (ideal 80M less 2.4 KVNC of per-era floor + era-256 cutoff)"
+        );
+
+        // Treasury leg: TOTAL is derived, so this guards the derivation itself
+        // and pins the tranche count that determines the genesis output count.
+        assert_eq!(
+            RFC006_TREASURY_TOTAL,
+            RFC006_TREASURY_TRANCHE * u64::from(RFC006_TREASURY_TRANCHES),
+            "RFC006_TREASURY_TOTAL must stay derived from TRANCHE * TRANCHES"
+        );
+        assert_eq!(
+            RFC006_TREASURY_TRANCHES, 8,
+            "treasury tranche count is 8 since 2026-09-29"
+        );
+        assert_eq!(RFC006_TREASURY_TOTAL, 8_000_000 * ATOM);
+
+        // All three legs must fit under the cap. 88 199 997.6 of 90 200 000, i.e.
+        // 2 000 002.4 KVNC permanently unissued: 2M from the treasury cut plus the
+        // 2.4 KVNC the integer subsidy schedule has never been able to issue.
+        // MAX_SUPPLY is a ceiling, not a target.
+        let issued = curve_total
+            .checked_add(RFC006_PREMINE)
+            .and_then(|v| v.checked_add(RFC006_TREASURY_TOTAL))
+            .expect("decomposition must not overflow");
+        assert_eq!(issued, 8_819_999_760_000_000);
+        assert!(issued <= MAX_SUPPLY, "issuance must never exceed the cap");
+        assert_eq!(
+            MAX_SUPPLY - issued,
+            200_000_240_000_000,
+            "2 000 002.4 KVNC unissued (2M treasury cut + 2.4 KVNC schedule shortfall)"
+        );
+
+        // Tie the constants to what genesis actually mints: one founder premine
+        // output plus exactly one vault output per tranche.
+        let founder = KeyPair::from_u64(7);
+        let cb = rfc006_genesis_coinbase(founder.address(), None);
+        assert_eq!(
+            cb.outputs().len(),
+            1 + RFC006_TREASURY_TRANCHES as usize,
+            "genesis coinbase must carry 1 premine + 1 vault per tranche"
+        );
+        let minted: u64 = cb.outputs().iter().map(|o| o.value).sum();
+        assert_eq!(minted, RFC006_PREMINE + RFC006_TREASURY_TOTAL);
     }
 
     #[test]

@@ -96,13 +96,21 @@ The shortfall is repeated truncation, not a policy reserve. Consequently the
 honest emission ceiling is
 
 ```text
-0.2M premine + 10M treasury + 79 999 997.6 curve = 90 199 997.8 KVNC
+0.2M premine + 8M treasury + 79 999 997.6 curve = 88 199 997.8 KVNC
 ```
 
-i.e. **~2.2 KVNC below `MAX_SUPPLY`**. The cap is a backstop that honest
-subsidy can never reach; it exists to reject *malformed or over-claiming*
-coinbases (§4), not to truncate the curve. Docs that quote a flat "80M curve"
-are quoting the asymptotic limit.
+i.e. **~2.0M KVNC below `MAX_SUPPLY`** (2 000 002.2 KVNC exactly, of which
+2 000 000 is the treasury cut and 2.2 is the pre-existing truncation shortfall).
+The cap is a backstop that honest subsidy can never reach; it exists to reject
+*malformed or over-claiming* coinbases (§4), not to truncate the curve. Docs that
+quote a flat "80M curve" are quoting the asymptotic limit.
+
+The ~2M gap is **deliberately unallocated**: treasury was cut from 10 × 1M to
+8 × 1M on 2026-09-29 and the freed 2M is not folded into the curve, because curve
+emission is derived from `s0`, era length and α — enlarging it would move
+`subsidy_at`, the fee floor (`subsidy / 500_000`) and `/api/head`. `MAX_SUPPLY`
+remains a **ceiling, never a target**: do not top up to close the gap, and do
+not lower the cap either.
 
 ---
 
@@ -111,7 +119,7 @@ are quoting the asymptotic limit.
 | Component | Amount | Mechanism |
 |-----------|--------|-----------|
 | Founder premine | 0.2M KVNC | Genesis coinbase (P2PK), `RFC006_PREMINE` |
-| Treasury | 10M KVNC | 10 × 1M RFC-005 vaults at genesis |
+| Treasury | 8M KVNC | 8 × 1M RFC-005 vaults at genesis |
 | Curve emission | 80M KVNC (nominal) | Block subsidies |
 | **MAX_SUPPLY** | **90.2M KVNC** = `9_020_000_000_000_000` atoms | enforced per-view |
 
@@ -346,7 +354,7 @@ s(era) = floor(s(era-1) * 3/4)   with s(0) = 10 KVNC
 | Component | Amount | Mechanism |
 |-----------|--------|-----------|
 | Founder premine | 0.2M KVNC | Genesis coinbase (P2PK) |
-| Treasury | 10M KVNC | 10 × 1M RFC-005 vaults at genesis |
+| Treasury | 8M KVNC | 8 × 1M RFC-005 vaults at genesis |
 | Curve emission | 80M KVNC | Block subsidies |
 | **MAX_SUPPLY** | **90.2M KVNC** | Enforced via `native_minted` |
 

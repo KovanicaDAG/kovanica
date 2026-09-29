@@ -15,17 +15,35 @@
 //! ⚠️ PoA (RFC-POA-Migration) M1: `Block::compute_id` now hashes the
 //! authority-signature flag byte, so every block id — including genesis —
 //! changed. The live testnet has not reset yet, so local genesis no longer
-//! matches the live network. These tests are `#[ignore]`d until the PoA
-//! testnet reset (M3, genesis carries the authority set) and the fixture +
-//! constants below are re-captured — same precedent as RFC-003 stealth.
+//! matches the live network. Same precedent as RFC-003 stealth.
+//!
+//! Neither test below can be pinned to a post-reset value yet, and the reason
+//! is structural rather than "we forgot":
+//!
+//!   * `live_params_reproduce_testnet_genesis` boots a `LightNode` and compares
+//!     its genesis against `LIVE_GENESIS`. `LightNode` derives genesis through
+//!     `Node::genesis_with_poa`, which folds a **PoA authority set** into the
+//!     genesis. So it cannot borrow the constant pinned in `kovanica-node`'s
+//!     `treasury.rs` — that one comes from `Node::genesis`, which passes
+//!     `authority_set: None` and therefore produces a *different* id from an
+//!     identical allocation.
+//!   * The real post-reset value is **not yet knowable**: RFC-POA-Migration
+//!     §0.9's authority-key ceremony is still `[OPEN]`, so the keys the live
+//!     genesis will carry do not exist. Substituting placeholder keys and
+//!     pinning that would be precisely the false green this file exists to
+//!     catch.
+//!
+//! So `LIVE_GENESIS` stays a **pre-reset capture**, kept because `LIVE_TIP` and
+//! `tests/fixtures/live-alpha-blocks.bin` descend from it. When the ceremony
+//! lands, re-capture genesis and blocks from `/api/head` + `/api/blocks` and
+//! move all three together.
 
 use kovanica_ffi::{LightConfig, LightNode};
 
-/// Live network constants (RFC-006, read from
-/// `GET https://explorer.kovanica.online/api/bootstrap` 2026-09-14):
-/// genesis 9565fc20…, k=3, subsidy 10 KVNC, premine 200_000 KVNC
-/// (RFC006_PREMINE), founder_seed 1, finality 100, payload pruning 1000.
-/// The fixture tip is the 9th post-genesis record of `/api/blocks`.
+/// Genesis of the **pre-reset** testnet chain, captured from
+/// `GET /api/bootstrap` on 2026-09-14. See the module header for why this
+/// cannot simply be moved forward, and what must be re-captured together with
+/// it once RFC-POA-Migration §0.9's authority-key ceremony lands.
 const LIVE_GENESIS: &str = "9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97";
 const LIVE_TIP: &str = "c62cd17cd79762036f1ae5f6dd0bba3d7c1aa437082d7199965bd3075cd3d154";
 const LIVE_BLOCKS: u32 = 10;
@@ -114,7 +132,7 @@ fn authority_set_is_part_of_the_genesis_identity() {
 }
 
 #[test]
-#[ignore = "PoA M1 changed all block ids; re-enable after the PoA testnet reset and re-capture the fixture"]
+#[ignore = "LightNode derives genesis via genesis_with_poa, so it cannot match the authority_set:None constant pinned in kovanica-node/tests/treasury.rs; the real post-reset value needs RFC-POA-Migration §0.9's authority keys, still [OPEN]"]
 fn live_params_reproduce_testnet_genesis() {
     let node = LightNode::new(live_config()).expect("genesis ok");
     assert_eq!(node.balance_of_seed(1).unwrap(), "20000000000000");
@@ -128,7 +146,7 @@ fn live_params_reproduce_testnet_genesis() {
 }
 
 #[test]
-#[ignore = "PoA M1 changed all block ids; re-enable after the PoA testnet reset and re-capture the fixture"]
+#[ignore = "fixture live-alpha-blocks.bin is a pre-reset capture descending from genesis 9565fc20…; re-capture from /api/blocks after the PoA testnet reset, then update LIVE_TIP"]
 fn light_node_imports_live_testnet_chain() {
     let node = LightNode::new(live_config()).expect("genesis ok");
     let blob = std::fs::read(fixture_path()).expect("fetch tests/fixtures and commit it");

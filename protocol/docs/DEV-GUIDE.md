@@ -17,7 +17,7 @@ Current network: `kovanica-testnet`
 - Coinbase maturity: **100 blocks**
 - Fee split: **75% burned / 25% to producer**
 - Fee floor: `max(1, subsidy / 500_000)` atoms/byte
-- Founder premine: 0.2M KVNC; Treasury: 10M KVNC (10 × 1M vaults)
+- Founder premine: 0.2M KVNC; Treasury: 8M KVNC (8 × 1M vaults)
 
 ## Phase Milestones
 | Phase | Topic | Status | Key Doc |

@@ -390,9 +390,13 @@ impl LightNode {
             config.founder_seed,
             // RFC-006 genesis gate: the live light-node config uses
             // founder_amount = RFC006_PREMINE (200 KVNC), so the genesis
-            // coinbase must include the 10x1M treasury vaults with the
-            // placeholder keys to reproduce the live network genesis
-            // (9565fc20…). Non-standard premines stay treasury-less.
+            // coinbase must include the RFC-006 treasury vaults
+            // (RFC006_TREASURY_TRANCHES × 1M, currently 8) with the
+            // placeholder keys. Non-standard premines stay treasury-less.
+            // ⚠️ The id this yields is NOT the one pinned in
+            // kovanica-node/tests/treasury.rs: this path folds in a PoA
+            // authority set, that one passes `authority_set: None`.
+            // See crates/kovanica-ffi/tests/live_sync_spike.rs.
             if config.founder_amount == RFC006_PREMINE {
                 Some(TreasuryGenesis::placeholder())
             } else {

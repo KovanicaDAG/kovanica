@@ -33,7 +33,7 @@
 | **Decay (α)** | 3/4 per era (geometric, integer floor) |
 | **Curve emission** | 80M KVNC |
 | **Founder premine** | 0.2M KVNC (genesis coinbase) |
-| **Treasury** | 10M KVNC (10 x 1M RFC-005 vaults) |
+| **Treasury** | 8M KVNC (8 x 1M RFC-005 vaults) |
 | **MAX_SUPPLY** | 90.2M KVNC = 90,200,000,000,000,000 atoms |
 | **Coinbase maturity** | 100 blocks |
 | **Fee split** | 75% burned / 25% to producer |
