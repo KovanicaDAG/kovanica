@@ -61,18 +61,42 @@ const FEE_MARKET_AUTHORITIES: u64 = 3;
 
 /// A PoA node whose block rewards are credited to `Node::address(1)`.
 ///
-/// Under PoA the coinbase pays a signing authority, not the genesis founder.
-/// The recipient is always `authority_public_key()` — the *first* key pushed
-/// into the node — so seeding the set with seeds `1..=FEE_MARKET_AUTHORITIES`
-/// and loading seed 1's signing key first points every reward at actor 1 and
-/// leaves the suite's spends/signs valid. A 3-key set is the minimum
-/// `AuthoritySet` accepts (`MIN_AUTHORITIES`), so the two filler keys are
-/// required; they never receive a reward.
+/// Under PoA the coinbase pays the authority **scheduled for the block's
+/// slot** (`Node::poa_signer_for`) — not the first key loaded into the node.
+/// Paying the first loaded key was a real bug: a node producing in a slot it
+/// did not own still paid the reward to whichever key it happened to load
+/// first. That was fixed in #70 (`db1b0c6`), and this helper previously
+/// encoded the buggy behaviour, so it has to pin the clock to land on the
+/// right slot rather than assume every reward follows the first key.
+///
+/// Two things make "the right slot" non-obvious:
+///
+/// - `AuthoritySet::new` **sorts authorities by public-key bytes**, so index 0
+///   is not necessarily the key for seed 1.
+/// - Classic round-robin schedules `authorities[slot % len]`, so the slot
+///   owned by seed 1's key is found by search rather than assumed to be 0.
+///
+/// `next_timestamp` clamps monotonically above the parent (genesis is at t=0),
+/// so pinning to `slot * SLOT_MS` puts the first block at exactly that slot and
+/// the second at `slot * SLOT_MS + 1` — the same slot. Both pay actor 1. Left on
+/// the wall clock the slot would be `now_ms / SLOT_MS`, a value in the hundreds
+/// of millions that rotates through the authority set, making the UTXO count
+/// below wall-clock dependent.
+///
+/// A 3-key set is the minimum `AuthoritySet` accepts (`MIN_AUTHORITIES`), so the
+/// two filler keys are required; all three signing keys are loaded so the node
+/// can produce in whatever slot it is scheduled for, but only actor 1's key
+/// ever receives a reward here.
 fn poa_node_producing_for_actor1(config: MempoolConfig) -> Node {
     let keys: Vec<AuthorityPublicKey> = (1..=FEE_MARKET_AUTHORITIES)
         .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
         .collect();
     let set = AuthoritySet::new(keys, 2).expect("valid authority set");
+    // Which slot does round-robin schedule to seed 1's key? (see doc comment)
+    let actor1_pk = SigningKey::from_bytes(&KeyPair::from_u64(1).seed()).verifying_key();
+    let actor1_slot = (0..FEE_MARKET_AUTHORITIES)
+        .find(|slot| *set.active_authority(*slot).as_bytes() == actor1_pk.to_bytes())
+        .expect("seed 1 is in the authority set");
     let mut node = Node::with_mempool_config(config);
     node.genesis_with_poa(
         3,
@@ -91,6 +115,10 @@ fn poa_node_producing_for_actor1(config: MempoolConfig) -> Node {
     for i in 1..=FEE_MARKET_AUTHORITIES {
         node.set_authority_signing_key(KeyPair::from_u64(i).seed());
     }
+    // Pin the clock into the slot round-robin schedules to actor 1 (see the doc
+    // comment): under PoA the coinbase follows the scheduled authority, so an
+    // unpinned wall clock would send these rewards to an arbitrary one.
+    node.set_now_ms(actor1_slot * SLOT_MS);
     node
 }
 

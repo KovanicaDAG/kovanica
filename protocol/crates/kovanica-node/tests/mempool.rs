@@ -17,15 +17,28 @@ const SLOT_MS: u64 = 3000;
 const AUTHORITIES: u64 = 3;
 
 /// A PoA node holding every authority signing key, so it produces in any
-/// slot. Rewards are credited to the *first* loaded authority key
-/// (`authority_public_key()`), which is seed 1 — so the subsidy assertions
-/// below read as "actor 1 earned the subsidy" while the actual signer may be
-/// any of the three.
+/// slot. The clock is pinned to the slot round-robin schedules to seed 1's key,
+/// so the subsidy assertions below read as "actor 1 earned the subsidy" — and
+/// now mean it, rather than relying on the subsidy landing on the first-loaded
+/// key regardless of who actually produced the block. That old behaviour was a
+/// bug, fixed in #70 (`db1b0c6`): under PoA the coinbase pays the authority
+/// *scheduled for the block's slot* (`Node::poa_signer_for`).
+///
+/// Two details make the slot non-obvious rather than 0:
+/// `AuthoritySet::new` sorts authorities by public-key bytes, and classic
+/// round-robin schedules `authorities[slot % len]`, so the slot owned by seed 1
+/// is found by search. On the wall clock the slot would be `now_ms / SLOT_MS` —
+/// a value in the hundreds of millions that rotates through the authority set,
+/// making every balance assertion here wall-clock dependent.
 fn poa_node(subsidy: u64, premine: u64) -> Node {
     let keys: Vec<AuthorityPublicKey> = (1..=AUTHORITIES)
         .map(|i| SigningKey::from_bytes(&KeyPair::from_u64(i).seed()).verifying_key())
         .collect();
     let set = AuthoritySet::new(keys, 2).expect("valid authority set");
+    let actor1_pk = SigningKey::from_bytes(&KeyPair::from_u64(1).seed()).verifying_key();
+    let actor1_slot = (0..AUTHORITIES)
+        .find(|slot| *set.active_authority(*slot).as_bytes() == actor1_pk.to_bytes())
+        .expect("seed 1 is in the authority set");
     let mut node = Node::new();
     node.genesis_with_poa(
         3,
@@ -44,6 +57,7 @@ fn poa_node(subsidy: u64, premine: u64) -> Node {
     for i in 1..=AUTHORITIES {
         node.set_authority_signing_key(KeyPair::from_u64(i).seed());
     }
+    node.set_now_ms(actor1_slot * SLOT_MS);
     node
 }
 
