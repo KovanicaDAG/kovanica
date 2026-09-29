@@ -3,10 +3,10 @@ package com.kovanica.lightnode.data
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import uniffi.kovanica.CoinJoinOutput
-import uniffi.kovanica.CoinJoinParticipant
-import uniffi.kovanica.CoinJoinPrepared
-import uniffi.kovanica.SendReceipt
+import kovanica.CoinJoinOutput
+import kovanica.CoinJoinParticipant
+import kovanica.CoinJoinPrepared
+import kovanica.SendReceipt
 import com.kovanica.lightnode.ui.util.Bip39
 import com.kovanica.lightnode.ui.util.KovanicaAddress
 
@@ -53,8 +53,9 @@ class WalletRepository(
      * The wallet's Ed25519 seed is reused as the VRF validator seed, and the
      * bond transaction spends from / returns change to the wallet address
      * derived from that same seed.
+     * TODO: Not yet exposed in FFI
      */
-    suspend fun bondStake(mnemonic: String, amountAtoms: ULong): Result<String> {
+    /*suspend fun bondStake(mnemonic: String, amountAtoms: ULong): Result<String> {
         val seed = withContext(Dispatchers.Default) {
             bip39.mnemonicToEd25519Seed(mnemonic)
         }
@@ -70,6 +71,7 @@ class WalletRepository(
     /**
      * Unbond matured stake back to the wallet address derived from the
      * mnemonic.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun unbond(mnemonic: String, amountAtoms: ULong): Result<SendReceipt> {
         val secretHex = withContext(Dispatchers.Default) {
@@ -81,13 +83,14 @@ class WalletRepository(
     /**
      * Set the 32-byte validator [seed] and enable hybrid admission with
      * sensible v0.1 defaults.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun setValidatorSeedAndEnable(seed: ByteArray): Result<Unit> {
         return lightNode.setValidatorSeed(seed).fold(
             onSuccess = { lightNode.enableHybrid() },
             onFailure = { Result.failure(it) },
         )
-    }
+    }*/
 
     /**
      * Produce a block and, if one is produced, export it as a wire-format blob

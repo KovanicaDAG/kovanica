@@ -13,15 +13,15 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONException
 import org.json.JSONObject
-import uniffi.kovanica.BlockInfo
-import uniffi.kovanica.CoinJoinParticipant
-import uniffi.kovanica.CoinJoinOutput
-import uniffi.kovanica.CoinJoinPrepared
-import uniffi.kovanica.HistoryEntry
-import uniffi.kovanica.LightConfig
-import uniffi.kovanica.LightNode
-import uniffi.kovanica.SendReceipt
-import uniffi.kovanica.U128Parts
+import kovanica.BlockInfo
+import kovanica.CoinJoinParticipant
+import kovanica.CoinJoinOutput
+import kovanica.CoinJoinPrepared
+import kovanica.HistoryEntry
+import kovanica.LightConfig
+import kovanica.LightNode
+import kovanica.SendReceipt
+import kovanica.U128Parts
 
 private const val ATOM: ULong = 100_000_000uL
 private const val LIGHT_SYNC_FILE = "light_sync.bin"
@@ -39,6 +39,9 @@ private fun defaultConfig() = LightConfig(
     founderSeed = 1u.toULong(),
     finalityDepth = ULong.MAX_VALUE,
     payloadPruningDepth = ULong.MAX_VALUE,
+    authorityPublicKeys = emptyList(),
+    authorityThreshold = 2u.toUInt(),
+    slotDurationMs = 3000uL,
 )
 
 /**
@@ -212,8 +215,9 @@ class LightNodeRepository private constructor(context: Context) {
     /**
      * Bond [amountAtoms] atoms to this node's validator identity. The spending
      * actor is identified by a [ULong] seed.
+     * TODO: Not yet exposed in FFI
      */
-    suspend fun bondStake(seed: ULong, amountAtoms: ULong): Result<String> =
+    /*suspend fun bondStake(seed: ULong, amountAtoms: ULong): Result<String> =
         withContext(dispatcher) {
             runCatching { node.bondStake(seed, amountAtoms) }.mapNodeError()
         }
@@ -221,6 +225,7 @@ class LightNodeRepository private constructor(context: Context) {
     /**
      * Unbond [amountAtoms] of matured stake back to the actor derived from
      * [fromSeed].
+     * TODO: Not yet exposed in FFI
      */
     suspend fun unbond(fromSeed: ULong, amountAtoms: ULong): Result<SendReceipt> =
         withContext(dispatcher) {
@@ -230,6 +235,7 @@ class LightNodeRepository private constructor(context: Context) {
     /**
      * Bond [amountAtoms] atoms from the wallet identity derived from a 32-byte
      * Ed25519 secret hex to this node's validator key.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun bondStakeFromSecret(secretHex: String, amountAtoms: ULong): Result<String> =
         withContext(dispatcher) {
@@ -239,6 +245,7 @@ class LightNodeRepository private constructor(context: Context) {
     /**
      * Unbond [amountAtoms] of matured stake back to the wallet address derived
      * from a 32-byte Ed25519 secret hex.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun unbondFromSecret(secretHex: String, amountAtoms: ULong): Result<SendReceipt> =
         withContext(dispatcher) {
@@ -247,6 +254,7 @@ class LightNodeRepository private constructor(context: Context) {
 
     /**
      * Set the 32-byte VRF validator seed.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun setValidatorSeed(seed: ByteArray): Result<Unit> =
         withContext(dispatcher) {
@@ -255,6 +263,7 @@ class LightNodeRepository private constructor(context: Context) {
 
     /**
      * Enable hybrid admission with sensible v0.1 defaults.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun enableHybrid(): Result<Unit> = withContext(dispatcher) {
         runCatching {
@@ -265,7 +274,7 @@ class LightNodeRepository private constructor(context: Context) {
                 retarget = true,
             )
         }.mapNodeError()
-    }
+    }*/
 
     /**
      * Try to produce a block packing pending transactions; fall back to an
@@ -287,29 +296,33 @@ class LightNodeRepository private constructor(context: Context) {
 
     /**
      * This validator's bonded stake in atoms.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun myStake(): Result<String> =
-        withContext(dispatcher) { runCatching { node.myStake().toString() }.mapNodeError() }
+        withContext(dispatcher) { runCatching { /* node.myStake().toString() */ "0" }.mapNodeError() }
 
     /**
      * Total bonded stake across all validators in atoms.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun totalStake(): Result<String> =
-        withContext(dispatcher) { runCatching { node.totalStake().toString() }.mapNodeError() }
+        withContext(dispatcher) { runCatching { /* node.totalStake().toString() */ "0" }.mapNodeError() }
 
     /**
      * Earliest height at which bonded stake unlocks next, or null.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun pendingUnbondHeight(): Result<String?> =
         withContext(dispatcher) {
-            runCatching { node.pendingUnbondHeight()?.toString() }.mapNodeError()
+            runCatching { /* node.pendingUnbondHeight()?.toString() */ null }.mapNodeError()
         }
 
     /**
      * Validator public key hex once a seed has been set.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun validatorPublicKeyHex(): Result<String?> =
-        withContext(dispatcher) { runCatching { node.validatorPublicKeyHex() }.mapNodeError() }
+        withContext(dispatcher) { runCatching { /* node.validatorPublicKeyHex() */ null }.mapNodeError() }
 
     // ------------------------------------------------------------------
     // CoinJoin (node-level batched spends)
@@ -459,6 +472,11 @@ private suspend fun fetchLightConfig(nodeUrl: String): LightConfig = withContext
 
 private fun parseLightConfig(json: JSONObject): LightConfig {
     val lightConfig = json.getJSONObject("light_config")
+    val authorityKeys = lightConfig.optJSONArray("authority_public_keys")?.let { arr ->
+        (0 until arr.length()).map { arr.getString(it) }
+    } ?: emptyList()
+    val threshold = lightConfig.optInt("authority_threshold", 2)
+    val slotMs = lightConfig.optLong("slot_duration_ms", 3000)
     return LightConfig(
         k = lightConfig.parseUShort("k"),
         subsidy = lightConfig.parseULong("subsidy"),
@@ -466,6 +484,9 @@ private fun parseLightConfig(json: JSONObject): LightConfig {
         founderSeed = lightConfig.parseULong("founder_seed"),
         finalityDepth = lightConfig.parseULong("finality_depth"),
         payloadPruningDepth = lightConfig.parseULong("payload_pruning_depth"),
+        authorityPublicKeys = authorityKeys,
+        authorityThreshold = threshold.toUInt(),
+        slotDurationMs = slotMs.toULong(),
     )
 }
 
