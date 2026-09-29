@@ -33,6 +33,7 @@
 | .rpm | `mobile/console/kovanica/src-tauri/target/release/bundle/rpm/kovanica-console-0.1.0-1.x86_64.rpm` | 2.5 MB |
 
 **Routes (9)**: Explorer, Blocks, Transactions, Peers, Authorities, Wallet, Multisig, HTLC, Developer
+**Production Hardening**: CSP, FS scope, HTTP scope, NSIS/Deb/AppImage config, macOS entitlements, updater endpoints
 
 ---
 
@@ -42,6 +43,7 @@
 | NSIS Installer | `mobile/console/kovanica/src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/Kovanica Console_0.1.0_x64-setup.exe` | 3.4 MB |
 
 *Cross-compiled from Linux via mingw-w64*
+**Production Hardening**: NSIS config with license, icons, CSP, FS scope, HTTP scope, updater endpoints
 
 ---
 
@@ -64,7 +66,11 @@
 ### iOS Wallet (SwiftUI Skeleton)
 - **Source**: `mobile/ios/KovanicaWallet/` (10 Swift files)
 - **Screens (8)**: ContentView, HomeView, SendView, ReceiveView, WalletSetupView, SettingsView, Theme, Models, WalletViewModel, KovanicaWalletApp
-- **Status**: Requires macOS + Xcode to build (`xcodebuild -scheme KovanicaWallet -configuration Release`)
+- **Build Config**: `mobile/ios/Package.swift` (SPM), `mobile/ios/xcodegen.yml`, `mobile/ios/KovanicaWallet/Info.plist`
+- **Build Guide**: `mobile/ios/BUILD.md`
+- **Status**: Requires macOS + Xcode 15.4+ to build
+- **Dependencies**: KeychainSwift, BIP39Swift, SwiftCrypto (via SPM)
+- **FFI Integration**: Needs UniFFI-generated Swift bindings from Rust `kovanica` crate
 
 ---
 
@@ -100,10 +106,10 @@
 
 ## Deployment Checklist
 
-- [ ] Push tag to remote: `git push origin main v0.1.0-mobile`
+- [x] Push tag to remote: `git push kovanica main v0.1.0-mobile` ✅
 - [ ] Configure GitHub Secrets for CI/CD
 - [ ] Test Android release APK on physical device
-- [ ] Build iOS on macOS: `cd mobile/ios && xcodebuild -scheme KovanicaWallet -configuration Release`
+- [ ] Build iOS on macOS: `cd mobile/ios && xcodegen generate && xcodebuild -scheme KovanicaWallet -configuration Release`
 - [ ] Deploy web consoles to VPS:
   ```bash
   cd /opt/kovanica/mobile/console/kovanica && pm2 start ecosystem.config.js
