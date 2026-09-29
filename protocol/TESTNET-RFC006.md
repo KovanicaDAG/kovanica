@@ -13,7 +13,7 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 > > is hard-capped inside `apply_block` (`kovanica-state/src/ledger.rs`), which
 > > rejects any block where `cumulative_minted + claimed_native > MAX_SUPPLY`.
 > > Neither depends on who produced a block or how. MAX_SUPPLY **90.2M KVNC**, s₀
-> > **10 KVNC/block**, era **2,000,000 blocks**, α **3/4**, maturity **100
+> > **10 KVNC/block**, era **2,050,000 blocks**, α **3/4**, maturity **100
 > > blocks**, fee split **75% burned / 25% producer**, GHOSTDAG **k=3**, UTXO,
 > > Ed25519, **1 KVNC = 100_000_000 atoms** — all unchanged.
 > >
@@ -33,7 +33,7 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 | Node source | https://github.com/KovanicaDAG/kovanica-node |
 | Network | `kovanica-testnet` |
 | Premine | **0.2M KVNC** (founder) + **8M** treasury vaults |
-| Subsidy | **10 KVNC / block** at genesis, geometric decay α=3/4 every **2 000 000** blocks |
+| Subsidy | **10 KVNC / block** at genesis, geometric decay α=3/4 every **2 050 000** blocks |
 | Max supply | **90.2M KVNC** hard cap |
 | Coinbase maturity | **100 blocks** |
 | Fee | Floor `max(1, subsidy/500_000)` atoms/byte; **75% burned / 25% producer** |

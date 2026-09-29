@@ -80,15 +80,21 @@ Pays 1 KVNC from operator funds. Rate-limited per address.
 
 ---
 
-## 4. Mining & Staking
+## 4. Block Production & Staking
 
-### Q: How do I mine?
-**A:** Set `KOVANICA_MINE=1` and `KOVANICA_MINE_SECS=60` (or desired interval). Requires `KOVANICA_POW=1`. The node will produce blocks on the mining interval.
+### Q: How do I produce blocks?
+**A:** There is no mining -- Kovanica is proof-of-authority. To produce
+blocks your node must (a) hold the authority key scheduled for the slot,
+via `KOVANICA_AUTHORITY_KEY`, and (b) be set to produce, with
+`KOVANICA_PRODUCE=1` and `KOVANICA_PRODUCE_SECS=<interval>` (the
+pre-PoA aliases `KOVANICA_MINE` / `KOVANICA_MINE_SECS` still work). A node
+without the scheduled key produces nothing. There is no proof-of-work and
+no difficulty retarget.
 
 ### Q: What is the block reward?
 **A:** RFC-006 emission curve:
 - Genesis subsidy: 10 KVNC/block
-- Era: 2,000,000 blocks
+- Era: 2,050,000 blocks
 - Decay: 3/4 per era (geometric)
 - Fee split: 75% burned / 25% to producer
 

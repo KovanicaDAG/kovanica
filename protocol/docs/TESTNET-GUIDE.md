@@ -72,7 +72,6 @@ cargo build --release -p kovanica-node
 ```sh
 export KOVANICA_LISTEN=0.0.0.0:9000
 export KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000
-export KOVANICA_POW=1
 export KOVANICA_MINE=0          # Leave off unless you intend to mint
 export KOVANICA_MINE_SECS=120
 export KOVANICA_FAUCET=0
@@ -100,7 +99,6 @@ The `network` and `genesis` fields must match. Your tip will catch up after the 
 |----------|---------|-------------|
 | `KOVANICA_LISTEN` | `0.0.0.0:9000` | P2P bind address (also tries `[::]:9000`) |
 | `KOVANICA_PEERS` | `seed.kovanica.online:9000` | Comma-separated bootstrap peers |
-| `KOVANICA_POW` | `1` | Enable consensus PoW enforcement |
 | `KOVANICA_MINE` | `0` | Enable auto-mining (produce blocks) |
 | `KOVANICA_MINE_SECS` | `120` | Mining interval in seconds (when `MINE=1`) |
 | `KOVANICA_FAUCET` | `0` | Enable faucet endpoint (seed-only) |
@@ -122,10 +120,13 @@ The `network` and `genesis` fields must match. Your tip will catch up after the 
 - **Ports:** Outbound 9000 only (inbound optional for serving peers)
 - **Data:** Preserves `KOVANICA_DATA` across restarts
 
-### Miner
-- **Purpose:** Produce blocks for rewards
+### Block producer (PoA authority)
+- **Purpose:** Sign blocks in authority slots for rewards
 - **Config:** `MINE=1`, `MINE_SECS=60` (or desired interval)
-- **Requires:** `KOVANICA_POW=1`, sufficient compute for PoW
+- **Requires:** a PoA authority key (`KOVANICA_AUTHORITY_KEY`) matching the
+  authority scheduled for each slot. Blocks are signed, not mined -- there is
+  no proof-of-work and no difficulty retarget. Without the key this role
+  produces nothing.
 - **Reward:** 25% of fees + block subsidy (per RFC-006 curve)
 
 ### Seed / Explorer Node

@@ -63,7 +63,7 @@ Design goals, in order:
 | Nominal curve total | **80 000 000 KVNC** | — |
 
 ```text
-era   = height / 2_000_000
+era   = height / 2_050_000
 s(0)  = 10 KVNC
 s(e)  = floor(s(e-1) * 3 / 4)
 subsidy_at(height) = s(era),  and 0 for era >= 256
@@ -89,7 +89,7 @@ Worked values (confirmed against `supply-calc_subsidyAt`):
 Summing `s(e) · E` over all 256 eras with integer flooring at every step yields
 
 ```text
-realized curve total = 79 999 997.6 KVNC   (2.4 KVNC below the nominal 80M)
+realized curve total = 81 999 997.54 KVNC   (2.46 KVNC below the nominal 82M)
 ```
 
 The shortfall is repeated truncation, not a policy reserve. Consequently the
@@ -347,7 +347,7 @@ distribution. This is a *pace* bound. `MAX_SUPPLY` remains the hard ceiling.
 | Curve total | **80_000_000 KVNC** |
 
 ```text
-era = floor(height / 2_000_000)
+era = floor(height / 2_050_000)
 s(era) = floor(s(era-1) * 3/4)   with s(0) = 10 KVNC
 ```
 

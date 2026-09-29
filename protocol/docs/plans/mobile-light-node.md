@@ -44,7 +44,7 @@
 >    re-stating when slots land.
 >
 > Unchanged: RFC-006 tokenomics (**MAX_SUPPLY 90.2M KVNC**, s₀ **10
-> KVNC/block**, era **2 000 000**, **α 3/4**, maturity **100**, fee **75%
+> KVNC/block**, era **2 050 000**, **α 3/4**, maturity **100**, fee **75%
 > burned / 25% producer**) and GHOSTDAG **k=3**.
 
 Continues Stage-3 slices 1–3 (hybrid consensus → enforcement → FFI). Baseline:

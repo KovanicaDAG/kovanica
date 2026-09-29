@@ -16,7 +16,6 @@
 ```sh
 export KOVANICA_LISTEN=0.0.0.0:9000
 export KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000
-export KOVANICA_POW=1
 export KOVANICA_MINE=0
 export KOVANICA_MINE_SECS=120
 export KOVANICA_FAUCET=0
@@ -27,12 +26,12 @@ export KOVANICA_NETWORK=kovanica-testnet
 ```
 
 ### 1.2 Miner Node
-**Use case:** Produce blocks for block rewards (subsidy + 25% fees).
+**Use case:** Sign blocks in PoA authority slots for block rewards
+(subsidy + 25% fees). Requires this node's authority key.
 
 ```sh
 export KOVANICA_LISTEN=0.0.0.0:9000
 export KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000
-export KOVANICA_POW=1
 export KOVANICA_MINE=1
 export KOVANICA_MINE_SECS=60          # Target ~1 block/minute
 export KOVANICA_FAUCET=0
@@ -49,7 +48,6 @@ export KOVANICA_NETWORK=kovanica-testnet
 # Primary seed (seed.kovanica.online)
 export KOVANICA_LISTEN=0.0.0.0:9000
 export KOVANICA_PEERS=seed2.kovanica.online:9000
-export KOVANICA_POW=1
 export KOVANICA_MINE=1
 export KOVANICA_MINE_SECS=60
 export KOVANICA_FAUCET=1
@@ -61,7 +59,6 @@ export KOVANICA_NETWORK=kovanica-testnet
 # Secondary seed (seed2.kovanica.online)
 export KOVANICA_LISTEN=0.0.0.0:9000
 export KOVANICA_PEERS=seed.kovanica.online:9000
-export KOVANICA_POW=1
 export KOVANICA_MINE=0
 export KOVANICA_FAUCET=0
 export KOVANICA_ALLOW_RESET=0
@@ -91,7 +88,6 @@ export KOVANICA_NETWORK=kovanica-testnet
 |----------|------|---------|-------------|
 | `KOVANICA_LISTEN` | string | `0.0.0.0:9000` | P2P bind address (also tries `[::]:9000`) |
 | `KOVANICA_PEERS` | string | `seed.kovanica.online:9000` | Comma-separated bootstrap peers |
-| `KOVANICA_POW` | bool | `1` | Enable consensus PoW enforcement |
 | `KOVANICA_MINE` | bool | `0` | Enable auto-mining (produce blocks) |
 | `KOVANICA_MINE_SECS` | integer | `120` | Mining interval in seconds (when `MINE=1`) |
 | `KOVANICA_FAUCET` | bool | `0` | Enable faucet endpoint (seed-only) |
@@ -140,7 +136,8 @@ export KOVANICA_NETWORK=kovanica-testnet
 
 ### 3.5 Defaults
 - Default participant configuration keeps `MINE=0`, `FAUCET=0`, `OPERATOR=0`.
-- Default `KOVANICA_POW=1` (consensus PoW enforced).
+- Consensus is proof-of-authority: there is no proof-of-work, no difficulty
+  retarget, and no `KOVANICA_POW` variable -- the node never reads it.
 
 ---
 
@@ -201,7 +198,6 @@ WantedBy=multi-user.target
 ```ini
 KOVANICA_LISTEN=0.0.0.0:9000
 KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000
-KOVANICA_POW=1
 KOVANICA_MINE=0
 KOVANICA_MINE_SECS=120
 KOVANICA_FAUCET=0

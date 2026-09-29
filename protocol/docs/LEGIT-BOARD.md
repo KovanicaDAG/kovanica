@@ -28,7 +28,7 @@ security and status rows re-pointed at the ratified PoA-only target.
 >   deleted; it becomes authority-operator material.
 >
 > **Not affected:** RFC-006 tokenomics — MAX_SUPPLY 90.2M KVNC, s₀ 10
-> KVNC/block, era 2 000 000, α 3/4, maturity 100, fee 75% burned / 25%
+> KVNC/block, era 2 050 000, α 3/4, maturity 100, fee 75% burned / 25%
 > producer — and GHOSTDAG **k=3**. A tokenomics row on this board does not
 > need editing for PoA.
 
