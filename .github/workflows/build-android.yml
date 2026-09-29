@@ -41,6 +41,14 @@ jobs:
         with:
           ndk-version: r27c
           cache-key: ${{ runner.os }}-android-ndk-r27c
+          # The action's default `packages` is `tools platform-tools`, but the
+          # obsolete `tools` package was removed from Google's SDK repository.
+          # sdkmanager then exits 1 with "Failed to find package 'tools'" and
+          # the action throws before any of our code compiles. An empty string
+          # skips the extra package install entirely. We do not need
+          # platform-tools: this job only builds an AAR via cargo-ndk, which
+          # needs the NDK (installed above via ndk-version) and nothing else.
+          packages: ''
 
       - name: Cache cargo
         uses: actions/cache@v4
