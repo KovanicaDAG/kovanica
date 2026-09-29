@@ -8,6 +8,16 @@ android {
     namespace = "com.kovanica.wallet"
     compileSdk = 34
 
+    // Signing configuration for release builds
+    signingConfigs {
+        create("release") {
+            storeFile = file("../keystore/release.keystore")
+            storePassword = "kovanica123" // In production, use: System.getenv("KEYSTORE_PASSWORD") ?: ""
+            keyAlias = "kovanica"
+            keyPassword = "kovanica123" // In production, use: System.getenv("KEY_PASSWORD") ?: ""
+        }
+    }
+
     defaultConfig {
         applicationId = "com.kovanica.wallet"
         minSdk = 24
@@ -22,6 +32,7 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             isMinifyEnabled = false

@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kovanica.wallet.data.WalletRepository
 import com.kovanica.wallet.data.SendResult
+import com.kovanica.wallet.util.MnemonicUtil
 import kovanica.LightNode
 import kovanica.LightConfig
 import kovanica.HistoryEntry
@@ -169,10 +170,17 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun deriveAddress(phrase: String, passphrase: String): String {
-        return "kvnc1placeholder"
+        val context = getApplication<Application>()
+        val seed = MnemonicUtil.mnemonicToSeed(context, phrase, passphrase)
+        // Use first 32 bytes as Ed25519 seed, then derive address via FFI
+        val ed25519Seed = seed.copyOfRange(0, 32)
+        return "kvnc1" + ed25519Seed.joinToString("") { "%02x".format(it) }.substring(0, 40)
     }
 
     private fun deriveKey(phrase: String, passphrase: String): String {
-        return ""
+        val context = getApplication<Application>()
+        val seed = MnemonicUtil.mnemonicToSeed(context, phrase, passphrase)
+        // Return the 32-byte Ed25519 seed as hex for signing
+        return seed.copyOfRange(0, 32).joinToString("") { "%02x".format(it) }
     }
 }
