@@ -6,7 +6,7 @@
 ### Current Status (2026-09-20)
 - ✅ **seed1** (primary): Hostinger VPS `145.223.116.178`, `kovanica-explorer` unit, mining 1 block/60s, 191 blocks
 - ✅ **seed2** (secondary): Hostinger KVM2 VPS `76.13.250.65` (`srv1991525`), `kovanica-seed2` unit, mining 1 block/60s, 1782 blocks
-- 🔴 **seed3**: AWS `15.228.170.29` — **Retired** (SSH key no longer authorized)
+- 🔴 **seed3**: **Retired and decommissioned 2026-09-21** — host unreachable as of 2026-09-29
 - 🔄 **P2P connectivity**: Verified — both seeds list each other in `/api/p2p` peers
 - 🔄 **Block production**: Active on both seeds (~1 block/60s each)
 - 🔄 **Prometheus scrape**: Active — seed1 (local :9090), seed2 (direct 76.13.250.65:9090), explorer (local :8080)
@@ -20,7 +20,7 @@
 |------|------|----------|--------|
 | `seed.kovanica.online` | Hostinger VPS | Core team | ✅ Live |
 | `seed2.kovanica.online` | Hostinger KVM2 VPS | Core team | ✅ Live (IP `76.13.250.65`, `srv1991525`) |
-| `seed3.kovanica.online` | AWS `15.228.170.29` | Core team | 🔴 Retired (SSH key no longer authorized) |
+| `seed3.kovanica.online` | — (decommissioned) | Core team | 🔴 Retired 2026-09-21; host unreachable. Its DNS A record still resolves to a non-node host — do not dial it. |
 
 ### Target: ≥3 Independent Operators
 - **Geographic diversity**: ≥2 continents (currently EU only)

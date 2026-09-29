@@ -117,7 +117,7 @@ verifies genesis match against the primary seed.
 | `seed.kovanica.online` | AAAA | `2a02:4780:41:1f43::1` | DNS only |
 | `seed2.kovanica.online` | A | `76.13.250.65` | DNS only (Hostinger KVM2 VPS) |
 | `seed1.kovanica.online` | CNAME → `seed2.kovanica.online` | Hostinger KVM2 secondary | DNS only (legacy alias) |
-| ~~`seed3.kovanica.online`~~ | — | — | **DECOMMISSIONED 2026-09-21**: instance stopped (was AWS `15.228.170.29`, retired 2026-09-17) **and the DNS record deleted** — now NXDOMAIN. Any `KOVANICA_PEERS` entry still naming it is a dead dial; drop it. |
+| ~~`seed3.kovanica.online`~~ | — | — | **DECOMMISSIONED 2026-09-21**: instance stopped (was AWS, retired 2026-09-17). ⚠️ The A record was **not** actually deleted — as of 2026-09-29 `seed3.kovanica.online` still resolves to `187.7.27.139`, which is **not running a kovanica node** (TCP 9000 closed). Any `KOVANICA_PEERS` entry naming seed3 is a dead dial; drop it and delete the DNS record. |
 | `explorer/www/app/wallet/trader/bot/dash/kovi` | A | `145.223.116.178` | proxied |
 | `opencode` | A | `145.223.116.178` | DNS only |
 
@@ -157,9 +157,11 @@ verifies genesis match against the primary seed.
   (**direct scrape** — port open, no tunnel needed). Metrics ports stay
   firewalled.
 - The old SSH tunnel unit `kovanica-tunnel-seed3` (`127.0.0.1:19090` → retired
-  seed3 `15.228.170.29:9090`) was **disabled 2026-09-20** (failing
+  seed3 `:9090`) was **disabled 2026-09-20** (failing
   `activating (auto-restart)` loop, exit 255) — obsolete because seed2 is
-  scraped directly. Not renamed; not re-enabled.
+  scraped directly. Not renamed; not re-enabled. The unit file and the
+  commented-out seed3 scrape job were **removed entirely 2026-09-29** now that
+  the target host is confirmed gone.
 - Rules: `/etc/prometheus/alerting_rules.yml` (repo copy is source of truth;
   keep `humanizeBytes`-style non-existent template functions out — promtool
   rejects them and the whole file fails to load). 15 alerts + 9 recording rules.
@@ -331,8 +333,9 @@ Roadmap naming: the off-box node shipped 2026-08-24 was **seed3** — AWS EC2
 mining on; later tried Elastic IP + `c7i.large`). `[HISTORICAL — PoW era]` The secondary seed in the
 **live set** is **seed2** — a separate **Hostinger KVM2 VPS** (`srv1991525`),
 DNS `A seed2.kovanica.online` (grey-cloud) → `76.13.250.65`, systemd
-`kovanica-seed2` (P2P :9000). Seed3 (AWS `15.228.170.29`) is **retired**:
-its PEM is no longer authorized, and metrics scraping bypasses it entirely
+`kovanica-seed2` (P2P :9000). The old seed3 AWS box is **retired and
+decommissioned 2026-09-21** (host unreachable as of 2026-09-29): its PEM is
+no longer authorized, and metrics scraping bypasses it entirely
 (seed2 is scraped directly).
 
 ## 8. Seed backup & restore (A8)

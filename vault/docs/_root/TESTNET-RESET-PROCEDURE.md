@@ -34,8 +34,8 @@
 > **Naming note:** docs call the primary *seed1*, but its live systemd unit on the
 > VPS is `kovanica-explorer` (P2P `:9000`, HTTP `127.0.0.1:8080`). The VPS
 > additionally runs `kovanica-seed1` (`:9002`/`:28080`) and `kovanica-seed2`
-> (`:9001`/`:18080`) units. `seed3` is **retired** (AWS `15.228.170.29`,
-> 2026-09-17) — never deploy to `seed3.kovanica.online`.
+> (`:9001`/`:18080`) units. `seed3` is **retired and decommissioned 2026-09-21**
+> (host unreachable as of 2026-09-29) — never deploy to `seed3.kovanica.online`.
 
 **Deploy simultaneously** to minimize fork window.
 

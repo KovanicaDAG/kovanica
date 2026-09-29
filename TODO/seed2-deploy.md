@@ -2,8 +2,9 @@
 
 **Status**: ✅ **Done — superseded** (2026-09-20). "seed2" is the **Hostinger
 KVM2 VPS `srv1991525`** (`76.13.250.65`; `kovanica-seed2` unit; DNS
-`seed2.kovanica.online`). The separate AWS box `seed3` (`15.228.170.29`,
-`kovanica-seed3` unit) is **retired** (creds kept at `/root/seeds/seed3`).
+`seed2.kovanica.online`). The separate old AWS box (`seed3` unit) is
+**retired and decommissioned 2026-09-21** — host unreachable as of 2026-09-29
+(do not deploy to it).
 The old plan below (dedicated VPS on a third provider) is **cancelled** —
 seed2 is VPS #2, not a new third-provider box; a true third provider remains
 an open future item.

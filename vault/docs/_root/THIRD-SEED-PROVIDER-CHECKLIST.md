@@ -1,9 +1,11 @@
 # Third Seed Provider Checklist (C3 Follow-up)
 
 > ⛔ **SUPERSEDED / CLOSED 2026-09-21 — do not provision from this doc.**
-> The third seed (`seed3.kovanica.online`, AWS `15.228.170.29`) was provisioned
+> The third seed (`seed3.kovanica.online`, old AWS box) was provisioned
 > from this checklist and has since been **fully decommissioned**: the instance
-> was stopped and the **DNS record deleted** (NXDOMAIN). Geo/ASN diversity is
+> was stopped 2026-09-21 and is **unreachable** as of 2026-09-29. ⚠️ The DNS A
+> record was **not** deleted as previously claimed — `seed3.kovanica.online`
+> still resolves to a host that is not running a node. Geo/ASN diversity is
 > still an open goal, but any new third seed must start from a fresh plan
 > (provider diversity across EU/NA/APAC is unresolved, and seed1+seed2 remain
 > co-located on Hostinger AS47583). Kept for historical reference only.
