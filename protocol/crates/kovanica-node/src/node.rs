@@ -525,7 +525,15 @@ pub struct Node {
 }
 
 /// RFC-006 emission era length (blocks).
-pub const HALVING_ERA: u64 = 2_000_000;
+///
+/// Re-export of [`DEFAULT_HALVING_ERA`], which is an alias of the canonical
+/// `RFC006_ERA_LENGTH` in `kovanica-state`. This used to be a hardcoded
+/// `2_000_000`, which silently decoupled from the RFC constant when the era
+/// length moved — two era lengths live in one crate, and only the real
+/// issuance path tracked the canonical one. Kept as a re-export rather than
+/// deleted because it is part of this crate's public surface, but it can no
+/// longer drift.
+pub use kovanica_state::DEFAULT_HALVING_ERA as HALVING_ERA;
 /// Floor: `max(1, subsidy / 500_000)`.
 pub const MIN_FEE_DIVISOR: u64 = 500_000;
 

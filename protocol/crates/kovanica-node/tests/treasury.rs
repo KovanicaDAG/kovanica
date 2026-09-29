@@ -22,14 +22,34 @@ use kovanica_state::{
 /// One KVNC in atoms.
 const K: u16 = 3;
 
-/// The live kovanica-testnet genesis block id (RFC-006, placeholder treasury).
-/// Verified against `GET https://explorer.kovanica.online/api/head` — the
-/// placeholder derivation MUST reproduce this hash exactly (no testnet reset).
+/// The placeholder-treasury genesis **with no PoA authority set** — i.e. what
+/// [`Node::genesis`] derives. ⚠️ This is deliberately NOT "whatever
+/// `/api/head` returns", and it is NOT the post-reset testnet genesis either.
+///
+/// Two different derivations are easy to conflate here:
+///   * `Node::genesis` passes `authority_set: None` → the value pinned below.
+///   * `Node::genesis_with_poa` folds a PoA authority set into the genesis, so
+///     it yields a *different* id from the same allocation. That is the path
+///     `kovanica-ffi`'s `LightNode` takes, which is why its parity test cannot
+///     share this constant.
+///
+/// So this constant is a **regression pin on the RFC-006 allocation and the
+/// block-id hashing**: if either the tranche count, the premine, or
+/// `Block::compute_id` changes, this test fails loudly instead of silently
+/// orphaning every block id. It previously carried the pre-reset hash
+/// `9565fc20…` and had been `#[ignore]`d since PoA M1 — meaning it guarded
+/// nothing for weeks. Two changes have since landed (the PoA authority-signature
+/// flag byte, and treasury 10 × 1M → 8 × 1M), so the derivation is final and
+/// the test is re-enabled.
+///
+/// It will need updating again once RFC-POA-Migration §0.9's authority-key
+/// ceremony produces the real testnet keys, because the live genesis will then
+/// carry them. Do not silently retune it to make a failure go away.
 const LIVE_TESTNET_GENESIS: &str =
-    "9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97";
+    "7d9a921a7891ca41e7a7e94c0f2048aecc3ddeaf7a7096f0776aff1c76b26e9c";
 
 // ---------------------------------------------------------------------------
-// 1. Genesis with treasury emits premine + 10 vault tranches
+// 1. Genesis with treasury emits premine + RFC006_TREASURY_TRANCHES vault tranches
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -212,16 +232,16 @@ fn treasury_keys_are_deterministic_placeholders() {
     }
 }
 
-/// The placeholder-treasury genesis MUST reproduce the live testnet genesis
-/// hash (9565fc20…) — the whole point of keeping the OLD placeholder
-/// derivation. A divergence here means a testnet reset.
+/// The placeholder-treasury genesis — with **no PoA authority set**, see the
+/// note on `LIVE_TESTNET_GENESIS` — must reproduce the pinned id exactly. A
+/// divergence means the RFC-006 allocation or the block-id hashing changed,
+/// which moves every block id in the chain.
 ///
-/// ⚠️ PoA (RFC-POA-Migration) M1: `Block::compute_id` now hashes the
-/// authority-signature flag byte, so the genesis id changed. The live testnet
-/// has not reset yet — this test is `#[ignore]`d until the PoA testnet reset
-/// (M3) and `LIVE_TESTNET_GENESIS` is updated.
+/// This test was `#[ignore]`d from PoA M1 until now and therefore guarded
+/// nothing for weeks. It is re-enabled because both relevant changes (the PoA
+/// authority-signature flag byte and treasury 10 × 1M → 8 × 1M) are already in
+/// this tree, making the derivation final.
 #[test]
-#[ignore = "PoA M1 changed all block ids; update LIVE_TESTNET_GENESIS after the PoA testnet reset"]
 fn genesis_with_placeholder_treasury_matches_live_testnet_genesis() {
     let mut node = Node::new();
     let (genesis_id, _founder) = node

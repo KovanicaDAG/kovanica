@@ -29,11 +29,11 @@
 | **Native token** | KVNC (8 decimals) |
 | **1 KVNC** | 100,000,000 atoms (`ATOM`) |
 | **Genesis subsidy (s₀)** | 10 KVNC/block = 1,000,000,000 atoms |
-| **Era length (E)** | 2,000,000 blocks |
+| **Era length (E)** | 2,050,000 blocks |
 | **Decay (α)** | 3/4 per era (geometric, integer floor) |
-| **Curve emission** | 80M KVNC |
+| **Curve emission** | 82M KVNC |
 | **Founder premine** | 0.2M KVNC (genesis coinbase) |
-| **Treasury** | 10M KVNC (10 x 1M RFC-005 vaults) |
+| **Treasury** | 8M KVNC (8 x 1M RFC-005 vaults) |
 | **MAX_SUPPLY** | 90.2M KVNC = 90,200,000,000,000,000 atoms |
 | **Coinbase maturity** | 100 blocks |
 | **Fee split** | 75% burned / 25% to producer |

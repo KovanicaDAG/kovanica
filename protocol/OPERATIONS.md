@@ -24,7 +24,7 @@
 > **What is *not* changing.** RFC-006 tokenomics is untouched by the PoA
 > removal (the emission curve is height-indexed, not work-indexed, and
 > `cumulative_minted` is capped in `apply_block`): **MAX_SUPPLY 90.2M KVNC**,
-> genesis subsidy **s₀ 10 KVNC / block**, era length **2 000 000** blocks,
+> genesis subsidy **s₀ 10 KVNC / block**, era length **2 050 000** blocks,
 > decay **α 3/4 per era**, coinbase maturity **100 blocks**, fee split
 > **75% burned / 25% to producer**. GHOSTDAG stays at **k=3**; the ledger stays
 > UTXO; signatures stay Ed25519. Block *pace* will change (authorities produce
@@ -62,7 +62,7 @@ Current network: genesis `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac
 parameters: genesis subsidy **10 KVNC**, era **2 000 000** blocks, per-era
 decay **×3/4** (geometric, total ≈80M), **MAX_SUPPLY 90.2M KVNC**, coinbase
 maturity **100 blocks**, fee split **75% burned / 25% producer**, treasury
-**10 × 1M KVNC** vault tranches in genesis (tranche k unlocks at
+**8 × 1M KVNC** vault tranches in genesis (tranche k unlocks at
 `k × 31 536 000` blocks; placeholder keys are testnet-only and publicly
 derivable by design — production must pass a real secret seed via key
 ceremony). The pre-RFC-006 chain (genesis `596874eac2…`, subsidy 200 KVNC)
