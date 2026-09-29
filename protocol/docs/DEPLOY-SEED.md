@@ -100,7 +100,6 @@ Environment=KOVANICA_MINE_SECS=60
 Environment=KOVANICA_FAUCET=1
 Environment=KOVANICA_ALLOW_RESET=0
 Environment=KOVANICA_OPERATOR=1
-Environment=KOVANICA_POW=1
 Environment=KOVANICA_DATA=/root/kovanica-data
 Environment=KOVANICA_NETWORK=kovanica-testnet
 ExecStart=/usr/local/bin/kovanica-node explorer 127.0.0.1:8080
@@ -130,7 +129,6 @@ Environment=KOVANICA_MINE=0
 Environment=KOVANICA_FAUCET=0
 Environment=KOVANICA_ALLOW_RESET=0
 Environment=KOVANICA_OPERATOR=0
-Environment=KOVANICA_POW=1
 Environment=KOVANICA_DATA=/var/lib/kovanica-seed2
 Environment=KOVANICA_NETWORK=kovanica-testnet
 ExecStart=/usr/local/bin/kovanica-node explorer 127.0.0.1:18080

@@ -20,7 +20,7 @@ Replace **both** hybrid PoW+VRF block admission *and* the staked-VRF secondary p
 - **Ratified:** 2026-09-25 by maintainer decision
 - **Implementation status:** `[TARGET]` — ratified, not yet implemented
 - **Consensus impact:** **consensus-breaking (hard fork)** — block admission changes, so a genesis reset is mandatory (§0.6)
-- **Tokenomics unchanged:** MAX_SUPPLY 90.2M KVNC, s₀ 10 KVNC/block, era 2,000,000, α 3/4, maturity 100, fee split 75% burned / 25% producer
+- **Tokenomics unchanged:** MAX_SUPPLY 90.2M KVNC, s₀ 10 KVNC/block, era 2,050,000, α 3/4, maturity 100, fee split 75% burned / 25% producer
 
 ### What is removed (full surface, §0.1)
 - PoW: `Dag::set_proof_of_work`, `pow` module, `KOVANICA_POW`, mining loop, `KOVANICA_MINE`, `KOVANICA_MINE_SECS`, `protocol/mine-kvnc.sh`

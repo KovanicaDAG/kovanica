@@ -27,7 +27,7 @@ Guidance for AI assistants (and humans) working in the **kovanica-protocol** rep
 > >   `apply_block` (`ledger.rs` ~1617: reject if
 > >   `cumulative_minted + claimed_native > MAX_SUPPLY`) — neither depends on who
 > >   produced a block or how. MAX_SUPPLY **90.2M KVNC**, s₀ **10 KVNC/block**,
-> >   era **2,000,000 blocks**, α **3/4**, maturity **100 blocks**, fee split
+> >   era **2,050,000 blocks**, α **3/4**, maturity **100 blocks**, fee split
 > >   **75% burned / 25% producer**, GHOSTDAG **k=3**, UTXO, Ed25519,
 > >   **1 KVNC = 100_000_000 atoms** — all unchanged. What changes is the
 > >   *pace*: fixed `SLOT_DURATION_MS` (default 3000), no retarget, no gap-fill
@@ -576,7 +576,7 @@ rather than a fork.
   exempt. Pruning must retain UTXO creation heights for ≥ `COINBASE_MATURITY`
   blocks.
 - **Fees**: floor `max(1, subsidy / 500_000)` atoms/byte — **2000 atoms/byte at
-  genesis**, 1500 at height 2 000 000, never below 1. Decays with the subsidy.
+  genesis**, 1500 at height 2 050 000, never below 1. Decays with the subsidy.
   Paid in **native KVNC only** (RFC-002 non-native assets cannot pay fees).
   Producer takes `fees / 4`, the remaining 75% is burned. Because
   `fees - fees/4` is **not additive**, cumulative burn is tracked as an explicit

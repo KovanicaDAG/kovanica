@@ -14,10 +14,17 @@
 > > and `KOVANICA_SLOT_DURATION` (see the table in §3). `KOVANICA_CONSENSUS`
 > > **already defaults to `poa` when unset** (`consensus_mode_from_env()`).
 > >
-> > `[CURRENT]` All of the PoW/mining env vars below are still honoured by the code
-> > as of this writing, so the commands in this guide work *today* — against the
-> > **pre-reset PoW testnet**. They are annotated, not removed, so you can follow
-> > them if you are reproducing the current chain.
+> > `[CURRENT]` The commands in this guide work *today* — against the **pre-reset
+> > PoW testnet**. They are annotated, not removed, so you can follow them if you
+> > are reproducing the current chain.
+> >
+> > ⚠️ **`KOVANICA_POW` is inert.** It is not read anywhere in the node, so
+> > setting it to `0` or `1` changes nothing in either era — the `KOVANICA_POW=1`
+> > still shown in the `[CURRENT] pre-reset` examples below is a historical
+> > snapshot, not a live switch. The legacy PoW admission path is still
+> > reachable, but via **`KOVANICA_CONSENSUS=pow`** (see §3), not via
+> > `KOVANICA_POW`. `KOVANICA_MINE` / `KOVANICA_MINE_SECS` *are* still read, as
+> > deprecated fallbacks for `KOVANICA_PRODUCE` / `KOVANICA_PRODUCE_SECS`.
 > >
 > > ⚠️ **The testnet reset is mandatory, not routine.** A PoA chain cannot be
 > > reconciled with a PoW chain: under PoA every block must carry
@@ -28,7 +35,7 @@
 > > `TESTNET-RESET-POLICY.md`.
 > >
 > > **Tokenomics are unaffected.** MAX_SUPPLY **90.2M KVNC**, s₀
-> > **10 KVNC/block**, era **2,000,000 blocks**, α **3/4**, maturity **100
+> > **10 KVNC/block**, era **2,050,000 blocks**, α **3/4**, maturity **100
 > > blocks**, fee split **75% burned / 25% producer**, GHOSTDAG **k=3**, UTXO,
 > > Ed25519, **1 KVNC = 100_000_000 atoms**. The curve is height-indexed and
 > > `cumulative_minted` is capped in `apply_block`, so supply does not depend on
@@ -165,7 +172,7 @@ All config via environment variables:
 | `KOVANICA_AUTHORITIES` | *(unset → testnet placeholder; mainnet refuses to boot)* | PoA genesis authority set, comma-separated 64-hex Ed25519 public keys | current |
 | `KOVANICA_AUTHORITY_THRESHOLD` | strict majority | Signatures required to execute an `AuthorityUpdateTx` | current |
 | `KOVANICA_SLOT_DURATION` | `3000` (ms) | PoA slot length (`SLOT_DURATION_MS`) | current |
-| `KOVANICA_POW` | `1` (testnet) | Enable proof-of-work mining | **`[CURRENT]` legacy / `[TARGET]`-removed** |
+| `KOVANICA_POW` | *(no effect)* | **Inert — the node never reads it.** PoW admission is selected by `KOVANICA_CONSENSUS=pow` | **removed (unread)** |
 | `KOVANICA_MINE` | `1` (explorer profile) | Auto-mine empty blocks | **`[TARGET]`-removed** |
 | `KOVANICA_MINE_SECS` | `60` | Target block interval when mining | **`[TARGET]`-removed** |
 | `KOVANICA_FAUCET` | `0` | Enable faucet (testnet explorer only) | current |

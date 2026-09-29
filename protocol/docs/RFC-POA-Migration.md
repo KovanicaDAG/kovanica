@@ -7,7 +7,7 @@ chain and a PoA chain cannot be reconciled and a genesis reset is mandatory
 (§0.6). It is **not** a `consensus-safe` change, and must not be described as
 one. **What does *not* change:** GHOSTDAG **k=3**, the pure **UTXO** ledger,
 **Ed25519** signing, and every RFC-006 tokenomics constant — MAX_SUPPLY 90.2M
-KVNC, s₀ 10 KVNC/block, era 2,000,000, α 3/4, maturity 100, fee split 75%
+KVNC, s₀ 10 KVNC/block, era 2,050,000, α 3/4, maturity 100, fee split 75%
 burned / 25% producer.  
 **KVP:** KVP-201 (authority set + slot round-robin + authority signature)  
 **Related:** RFC-001..RFC-006 (all shipped features preserved), RFC-007/KVP-106 (NFT, client-only), DeFi/RWA (post-PoA)  
@@ -366,7 +366,7 @@ rows 1–6.
 authority's slot produces **no block and therefore no coinbase**. Emission
 *pace* is therefore directly coupled to authority liveness. Totals are
 unaffected: the curve is height-indexed, so a skipped slot does not shift the
-schedule or the cap, and MAX_SUPPLY 90.2M KVNC, s₀ 10 KVNC/block, era 2,000,000,
+schedule or the cap, and MAX_SUPPLY 90.2M KVNC, s₀ 10 KVNC/block, era 2,050,000,
 α 3/4, maturity 100 and the 75%/25% fee split all hold (§0.4).
 
 **The open question is the policy, not the arithmetic:** whether coupling

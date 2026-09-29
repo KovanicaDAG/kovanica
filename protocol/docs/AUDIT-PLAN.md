@@ -66,7 +66,7 @@ consequences of the nominal-work pin.
 ### 0.4 `max(1, subsidy / 500_000)` and RFC-006 are unaffected
 
 Whatever the consensus model, the RFC-006 constants do not move: MAX_SUPPLY
-**90.2M KVNC**, s₀ **10 KVNC/block**, era **2,000,000 blocks**, α **3/4**,
+**90.2M KVNC**, s₀ **10 KVNC/block**, era **2,050,000 blocks**, α **3/4**,
 maturity **100 blocks**, fee split **75% burned / 25% producer**, GHOSTDAG **k=3**,
 UTXO, Ed25519, **1 KVNC = 100_000_000 atoms**. The curve is height-indexed and
 `cumulative_minted` is capped in `apply_block`, so supply math is independent of

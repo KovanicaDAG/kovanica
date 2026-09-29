@@ -78,7 +78,7 @@ end-state after PoW removal (RFC-POA-Migration §0.1).
 **Tokenomics are untouched by the PoA-only decision.** The emission curve is
 height-indexed and `cumulative_minted` is hard-capped at `MAX_SUPPLY` in
 `apply_block`, so neither depends on who produced a block. MAX_SUPPLY
-**90.2M KVNC**, s₀ **10 KVNC/block**, era **2,000,000 blocks**, α **3/4**,
+**90.2M KVNC**, s₀ **10 KVNC/block**, era **2,050,000 blocks**, α **3/4**,
 maturity **100 blocks**, fee split **75% burned / 25% producer**,
 **1 KVNC = 100_000_000 atoms** — all unchanged. Only the wall-clock *pace*
 changes (fixed slot clock, no retarget, no gap-fill); the cap does not.

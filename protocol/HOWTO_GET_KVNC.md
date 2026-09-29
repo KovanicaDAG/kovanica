@@ -227,7 +227,7 @@ is **height-indexed** (`subsidy_at`) and `cumulative_minted` is hard-capped at
 depends on who produced a block or how. Unchanged:
 
 - MAX_SUPPLY **90.2M KVNC**
-- Genesis subsidy s₀ **10 KVNC/block**, era **2,000,000 blocks**, α **3/4** per era
+- Genesis subsidy s₀ **10 KVNC/block**, era **2,050,000 blocks**, α **3/4** per era
 - Coinbase maturity **100 blocks**
 - Fee split **75% burned / 25% producer**
 - **1 KVNC = 100_000_000 atoms**
