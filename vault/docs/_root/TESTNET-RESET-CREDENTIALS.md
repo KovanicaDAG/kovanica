@@ -14,7 +14,7 @@
 |------|----------|-----|----------|--------|--------|----------|-------|
 | **seed1** | `seed.kovanica.online` | `145.223.116.178` | Hostinger | Germany (DE) | Yes (60s) | `root` | **This machine** |
 | **seed2** | `seed2.kovanica.online` | `76.13.250.65` | Hostinger KVM2 VPS (`srv1991525`) | Lithuania (LT) | Yes (60s) | `root` | Key at `/root/seeds/seed2/keykovanica` |
-| **seed3** | `seed3.kovanica.online` | `15.228.170.29` | AWS | — (retired) | Yes (60s) | `ubuntu` | Creds at `/root/seeds/seed3/` (PEM rejected 2026-09-20) |
+| **seed3** | `seed3.kovanica.online` | — (retired) | AWS | — (retired) | n/a | — | **DECOMMISSIONED 2026-09-21** — instance stopped; DNS now points at a host that is not running a node. Do not use. |
 
 ---
 
@@ -37,18 +37,25 @@ journalctl -u kovanica-seed2 -f
 ssh -i /root/seeds/seed2/keykovanica root@76.13.250.65 "uptime"
 ```
 
-### Seed3 (AWS EC2 — retired)
-```bash
-# Private key: /root/seeds/seed3/kovanica-seed3.pem
-# User: ubuntu
-# Host: 15.228.170.29
-# STATUS 2026-09-20: host reachable but PEM no longer authorized (Permission denied).
+### Seed3 (AWS EC2 — RETIRED AND DECOMMISSIONED — DO NOT RUN)
 
-# Test (expected to fail):
-ssh -i /root/seeds/seed3/kovanica-seed3.pem ubuntu@15.228.170.29 "uptime"
+> **This host no longer exists.** The instance was retired 2026-09-17 and
+> decommissioned 2026-09-21. As of 2026-09-29 both port 22 and port 9090 are
+> closed/filtered — there is nothing listening and the PEM is no longer
+> authorized (it was already rejected with `Permission denied` on 2026-09-20).
+> The commands below are kept **only as a historical record**. They are
+> deliberately left as inert text, not runnable commands.
+>
+> The live topology is `seed.kovanica.online:9000` + `seed2.kovanica.online:9000`
+> only. Both are documented above. **Do not attempt to re-provision or dial
+> seed3 without a new host decision** — a relaunch needs a real provider and
+> a fresh Cloudflare A record.
 
-# systemd unit on the box is kovanica-seed3 (retired; no longer in the live set)
-ssh -i /root/seeds/seed3/kovanica-seed3.pem ubuntu@15.228.170.29 "systemctl status kovanica-seed2"
+```text
+# RETIRED 2026-09-17, DECOMMISSIONED 2026-09-21. Host unreachable as of 2026-09-29.
+# The ssh commands formerly shown here are removed: they targeted a dead host.
+# Historical access path (no longer valid): ubuntu@15.228.170.29 via
+# /root/seeds/seed3/kovanica-seed3.pem — key revoked 2026-09-20.
 ```
 
 ---
@@ -74,19 +81,15 @@ sudo systemctl restart kovanica-seed2
   --binary ./target/release/kovanica-node \
   --identity-file /root/seeds/seed2/keykovanica
 
-# Seed3 (AWS — RETIRED; skip unless re-provisioning)
-# ./scripts/deploy-seed-prebuilt.sh ubuntu@15.228.170.29 \
-#   --name seed2 \
-#   --mine \
-#   --mine-secs 60 \
-#   --binary ./target/release/kovanica-node \
-#   --identity-file /root/seeds/seed3/kovanica-seed3.pem
+# Seed3 (AWS — RETIRED AND DECOMMISSIONED 2026-09-21; do not run)
+# The command formerly shown here targeted a dead host and has been removed.
+# Re-provisioning seed3 requires a new host decision first.
 ```
 
 **Note**: seed2 = Hostinger KVM2 VPS `srv1991525` (systemd unit
-`kovanica-seed2` on that box, P2P :9000). seed3 (AWS `15.228.170.29`) is
-retired — do not deploy to it. Confirmed live topology 2026-09-20:
-`seed.kovanica.online:9000` + `seed2.kovanica.online:9000` only.
+`kovanica-seed2` on that box, P2P :9000). The old seed3 AWS box is
+retired and decommissioned — do not deploy to it. Confirmed live topology
+2026-09-29: `seed.kovanica.online:9000` + `seed2.kovanica.online:9000` only.
 
 ---
 
@@ -130,7 +133,7 @@ ssh -i ${SEED2_KEY_PATH} ${SEED2_USER}@76.13.250.65 "uptime"
 | `seed.kovanica.online` | A | `145.223.116.178` | DNS only |
 | `seed.kovanica.online` | AAAA | `2a02:4780:41:1f43::1` | DNS only |
 | `seed2.kovanica.online` | A | `76.13.250.65` | DNS only |
-| `seed3.kovanica.online` | A | `15.228.170.29` | DNS only |
+| ~~`seed3.kovanica.online`~~ | A | `187.7.27.139` | DNS only — ⚠️ **retired**: this A record still resolves, but the host is **not running a kovanica node** (TCP 9000 closed). Do not add it to `KOVANICA_PEERS`. Remove the record when seed3 is formally wound down. |
 
 ---
 
