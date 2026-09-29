@@ -1294,9 +1294,12 @@ teaches us it needs.
    Shipped: `dns_seed.rs` (injectable `DnsResolver`, dedup + fallback),
    `dht.rs` Kademlia (XOR metric, k-buckets) with relay tags 0x20–0x23,
    Mesh integration, and `tests/dht_discovery.rs` Tiers 1–5 green.
-   The live DNS-seed hostnames are `seed` (primary, Hostinger VPS) and `seed2`
-   (Hostinger KVM2 VPS `srv1991525`; `seed3`/AWS is retired but still
-   resolves); `deploy-seed.sh` defaults new seeds to
+   The live DNS-seed hostnames are `seed` (primary, Hostinger VPS
+   `145.223.116.178`) and `seed2` (Hostinger KVM2 VPS `76.13.250.65`,
+   `srv1991525`); `seed3` is a **new** VPS (`187.7.27.139`, `srv2013143`) — its
+   node is not yet running (TCP 9000 closed), and its DNS A record must be
+   re-pointed to `187.7.27.139` and left **DNS-only / grey-cloud** before it can
+   serve as a seed. `deploy-seed.sh` defaults new seeds to
    `KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000`.
    Remaining wiring: the node binary's default `KOVANICA_PEERS` still names only
    `seed.kovanica.online:9000`; new-install defaults now use seed+seed2
@@ -1331,11 +1334,12 @@ teaches us it needs.
      written for a PoW testnet; under PoA-only (§0) a soak is a *multi-authority*
      soak, and the existing testnet chain must be reset first (mandatory, §0.6).
    - 24/7 testnet with multiple independent seed operators
-     (seed = Hostinger VPS, unit `kovanica-explorer`; **seed2 = Hostinger KVM2
-     VPS `76.13.250.65`** (`srv1991525`) — live since 2026-08-24, mining on,
-     genesis verified, DNS `seed2.kovanica.online`; `seed3.kovanica.online`
-     (AWS) retired) — `[CURRENT]`-state description of the *pre-reset* PoW
-     testnet; those hosts will need re-genesis under PoA.
+     (seed = Hostinger VPS `145.223.116.178`, unit `kovanica-explorer`;
+     **seed2 = Hostinger KVM2 VPS `76.13.250.65`** (`srv1991525`) — live since
+     2026-08-24, mining on, genesis verified, DNS `seed2.kovanica.online`;
+     **seed3 = new VPS `187.7.27.139`** (`srv2013143`) — provisioned, node NOT yet
+     running, TCP 9000 closed, no fail2ban) — `[CURRENT]`-state description of
+     the *pre-reset* PoW testnet; those hosts will need re-genesis under PoA.
    - Measure: orphan rate, propagation latency, fork rate, disk growth
      (both seeds expose `/metrics`; `alerting_rules.yml` ready to arm)
    - Tune: `k`, finality depth, payload pruning depth, difficulty window

@@ -348,7 +348,13 @@ mod tests {
     #[test]
     fn test_dns_seed_config_default() {
         let config = DnsSeedConfig::default();
-        // `seed3` was retired 2026-09-17; the default policy is `seed` + `seed2`
+        // The original AWS `seed3` was retired 2026-09-17. A new seed3 VPS
+        // (187.7.27.139) is provisioned but deliberately NOT in the default
+        // list: its node is not running, and its A record still resolves to
+        // Cloudflare proxy IPs, which cannot pass TCP 9000. Adding it here
+        // would hand every bootstrapping node a dead dial. It joins the
+        // default list when the record is re-pointed DNS-only and the node
+        // serves 9000 (see OPERATIONS.md §7 / TESTNET-SOAK §7).
         // (see OPERATIONS.md). Assert the exact seeds so silent drift is caught.
         assert_eq!(
             config.seeds,

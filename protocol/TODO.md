@@ -128,7 +128,7 @@ Branch hygiene: every merged feature branch deleted; one archive tag
 - **Wire tags**: 0x20 (Ping), 0x21 (Pong), 0x22 (FindNode), 0x23 (Nodes)
 
 ### DNS Seed Resolver
-- **Seeds**: `seed.kovanica.online`, `seed2.kovanica.online` (`seed3` retired 2026-09-17)
+- **Seeds**: `seed.kovanica.online`, `seed2.kovanica.online` (the original AWS `seed3` was retired 2026-09-17; a new VPS at `187.7.27.139` is provisioned but **not yet in the default list** — pending DNS re-point as grey-cloud + node start, tracked in TESTNET-SOAK §7)
 - **Port**: 9000 (default)
 - **Fallbacks**: `127.0.0.1:9000`, `[::1]:9000`
 - **Injectable trait**: `DnsResolver` with `StdDnsResolver` and `MockDnsResolver`

@@ -5,7 +5,7 @@
 > (The vault copy was archived to `Obsidian-Vault/KovanicaDAG/_archive/` on
 > 2026-09-05 — this file is the only live copy.)
 
-*Updated: 2026-09-21 (seed3 decommissioned incl. DNS; see §1/§3)*
+*Updated: 2026-09-29 (old AWS seed3 retired; a NEW seed3 VPS at `187.7.27.139` is provisioned but not yet in service — see §1/§3/§7)*
 
 > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
 > Proof-of-Work is being **removed**, not merely disabled. Items marked
@@ -117,7 +117,7 @@ verifies genesis match against the primary seed.
 | `seed.kovanica.online` | AAAA | `2a02:4780:41:1f43::1` | DNS only |
 | `seed2.kovanica.online` | A | `76.13.250.65` | DNS only (Hostinger KVM2 VPS) |
 | `seed1.kovanica.online` | CNAME → `seed2.kovanica.online` | Hostinger KVM2 secondary | DNS only (legacy alias) |
-| ~~`seed3.kovanica.online`~~ | — | — | **DECOMMISSIONED 2026-09-21**: instance stopped (was AWS, retired 2026-09-17). ⚠️ The A record was **not** actually deleted — as of 2026-09-29 `seed3.kovanica.online` still resolves to `187.7.27.139`, which is **not running a kovanica node** (TCP 9000 closed). Any `KOVANICA_PEERS` entry naming seed3 is a dead dial; drop it and delete the DNS record. |
+| `seed3.kovanica.online` | A | `187.7.27.139` (new VPS, `srv2013143`) | **DNS only — PENDING.** The old AWS instance was decommissioned 2026-09-21, but its A record was **never deleted** and was never re-pointed at the new box. As of 2026-09-29 the name still resolves to **Cloudflare proxy IPs** (`104.21.87.177` / `172.67.170.125`) — orange-cloud cannot pass TCP 9000, so the name is a dead dial. Re-point to `187.7.27.139` as **DNS only (grey-cloud)** before listing seed3 in any `KOVANICA_PEERS` set. |
 | `explorer/www/app/wallet/trader/bot/dash/kovi` | A | `145.223.116.178` | proxied |
 | `opencode` | A | `145.223.116.178` | DNS only |
 
@@ -334,9 +334,21 @@ mining on; later tried Elastic IP + `c7i.large`). `[HISTORICAL — PoW era]` The
 **live set** is **seed2** — a separate **Hostinger KVM2 VPS** (`srv1991525`),
 DNS `A seed2.kovanica.online` (grey-cloud) → `76.13.250.65`, systemd
 `kovanica-seed2` (P2P :9000). The old seed3 AWS box is **retired and
-decommissioned 2026-09-21** (host unreachable as of 2026-09-29): its PEM is
+decommissioned 2026-09-21**: its PEM is
 no longer authorized, and metrics scraping bypasses it entirely
 (seed2 is scraped directly).
+
+**seed3 is now a different machine — a new VPS, not a resurrection of the AWS
+box.** `srv2013143` at `187.7.27.139`, reachable by key via
+`/root/.ssh/seed3_deploy_key`. As of 2026-09-29 it runs **no kovanica node**
+(0 processes, nothing listening on TCP 9000) and has **no fail2ban**. Its
+`seed3.kovanica.online` A record still resolves to Cloudflare proxy IPs, so the
+name does not reach it. To bring it into service: (1) re-point
+`seed3.kovanica.online` → `187.7.27.139` as **DNS only / grey-cloud**; (2)
+start and enable the node; (3) only then add it to `KOVANICA_PEERS` and the
+default DNS-seed list in `kovanica-node` (`dns_seed.rs`, asserted by
+`test_dns_seed_config_default`). Steps (1) and (2) are **operator actions** and
+have deliberately not been taken unprompted.
 
 ## 8. Seed backup & restore (A8)
 
