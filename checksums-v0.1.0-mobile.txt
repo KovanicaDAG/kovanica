@@ -2,23 +2,35 @@
 # Generated: 2026-09-30
 # Tag: v0.1.0-mobile  (re-cut onto main after the PR #91 fix, 478abbc)
 #
+# Verify after downloading the release assets:
+#   sha256sum -c checksums-v0.1.0-mobile.txt
+#
+# These names are the published release asset names, so the file works in your
+# download folder as-is. GitHub rewrites the space in the Windows installer to
+# a dot: the build-tree path is
+#   .../bundle/nsis/Kovanica Console_0.1.0_x64-setup.exe
+# and it publishes as Kovanica.Console_0.1.0_x64-setup.exe. The digest is
+# unaffected by that rename.
+#
 # The tag was first cut at caeab4e, which shipped Android builds carrying the
-# key-derivation defect fixed in PR #91. The two Android digests below changed
-# as a result. The four desktop bundles are byte-identical to the original cut:
-# the fix touches no console code, and re-digesting them here reproduces their
-# previous values exactly.
+# key-derivation defect fixed in PR #91. The two Android digests changed as a
+# result. The four desktop bundles are byte-identical to the original cut --
+# the fix touches no console code -- which the regeneration asserted rather
+# than assumed. Every digest here was re-checked by downloading the published
+# assets, not only by hashing the local build tree.
 
-# Android
-10ad81eb810a4a3fb367692975decd429860ad5a2aa931f62f3181329860f360  mobile/android/app/build/outputs/apk/debug/app-debug.apk
+# Android  (rebuilt from 478abbc: the original build derived the wrong key,
+#           so uninstall it before installing these)
+10ad81eb810a4a3fb367692975decd429860ad5a2aa931f62f3181329860f360  app-debug.apk
 
-644393afa2cae24f986a345a23643cf72d0be1b2e6a8c1f5d8a97219a3abd5bf  mobile/android/app/build/outputs/apk/release/app-release.apk
+644393afa2cae24f986a345a23643cf72d0be1b2e6a8c1f5d8a97219a3abd5bf  app-release.apk
 
 # Linux Tauri
-efc01a5a6737fcf1fadfaa8146c5a7e8c688db41b0cf9f14549ba23a22574b23  mobile/console/kovanica/src-tauri/target/release/bundle/appimage/kovanica-console_0.1.0_amd64.AppImage
+efc01a5a6737fcf1fadfaa8146c5a7e8c688db41b0cf9f14549ba23a22574b23  kovanica-console_0.1.0_amd64.AppImage
 
-511c5ba8d4dcd79b0c456f0226d9ac1368fdda72f15109d789950861cfff78c8  mobile/console/kovanica/src-tauri/target/release/bundle/deb/kovanica-console_0.1.0_amd64.deb
+511c5ba8d4dcd79b0c456f0226d9ac1368fdda72f15109d789950861cfff78c8  kovanica-console_0.1.0_amd64.deb
 
-87f896bb419b289c235485c6ee01e6da0de0d8635c5abb9352b81fd0c9a630be  mobile/console/kovanica/src-tauri/target/release/bundle/rpm/kovanica-console-0.1.0-1.x86_64.rpm
+87f896bb419b289c235485c6ee01e6da0de0d8635c5abb9352b81fd0c9a630be  kovanica-console-0.1.0-1.x86_64.rpm
 
 # Windows Tauri
-16dde466972bf7251aa8ca2e2ae3d711c461d44295427eb2267c6a612bd4ca3e  mobile/console/kovanica/src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/Kovanica Console_0.1.0_x64-setup.exe
+16dde466972bf7251aa8ca2e2ae3d711c461d44295427eb2267c6a612bd4ca3e  Kovanica.Console_0.1.0_x64-setup.exe
