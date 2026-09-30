@@ -6,7 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kovanica.wallet.data.WalletRepository
 import com.kovanica.wallet.data.SendResult
-import com.kovanica.wallet.util.MnemonicUtil
+import com.kovanica.lightnode.ui.util.Bip39
+import com.kovanica.lightnode.ui.util.KovanicaKeys
 import kovanica.LightNode
 import kovanica.LightConfig
 import kovanica.HistoryEntry
@@ -41,6 +42,9 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
     private var repository: WalletRepository? = null
     private var lightNode: LightNode? = null
     private var cachedSigningKey: String = ""
+
+    /** Backs [deriveAddress] / [deriveKey]; needs app context for the wordlist. */
+    private val bip39 by lazy { Bip39(getApplication<Application>()) }
 
     fun initializeWallet(phrase: String, passphrase: String = "") {
         viewModelScope.launch {
@@ -169,18 +173,9 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun deriveAddress(phrase: String, passphrase: String): String {
-        val context = getApplication<Application>()
-        val seed = MnemonicUtil.mnemonicToSeed(context, phrase, passphrase)
-        // Use first 32 bytes as Ed25519 seed, then derive address via FFI
-        val ed25519Seed = seed.copyOfRange(0, 32)
-        return "kvnc1" + ed25519Seed.joinToString("") { "%02x".format(it) }.substring(0, 40)
-    }
+    private fun deriveAddress(phrase: String, passphrase: String): String =
+        KovanicaKeys.addressFromMnemonic(phrase, passphrase, bip39 = bip39).kvnc
 
-    private fun deriveKey(phrase: String, passphrase: String): String {
-        val context = getApplication<Application>()
-        val seed = MnemonicUtil.mnemonicToSeed(context, phrase, passphrase)
-        // Return the 32-byte Ed25519 seed as hex for signing
-        return seed.copyOfRange(0, 32).joinToString("") { "%02x".format(it) }
-    }
+    private fun deriveKey(phrase: String, passphrase: String): String =
+        KovanicaKeys.signingKeyHex(phrase, passphrase, bip39 = bip39)
 }

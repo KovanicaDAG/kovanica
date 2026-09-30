@@ -12,6 +12,7 @@ import com.kovanica.lightnode.data.formatKvnc
 import com.kovanica.lightnode.ui.prefs.WalletPrefs
 import com.kovanica.lightnode.ui.util.Bip39
 import com.kovanica.lightnode.ui.util.KovanicaAddress
+import com.kovanica.lightnode.ui.util.KovanicaKeys
 import com.kovanica.lightnode.work.SyncWorkScheduler
 import java.math.BigDecimal
 import java.math.BigInteger
@@ -470,7 +471,7 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
 
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
             val seed = withContext(Dispatchers.Default) {
-                bip39.mnemonicToEd25519Seed(mnemonic)
+                KovanicaKeys.deriveSigningKey(bip39.mnemonicToSeed(mnemonic))
             }
             /*// walletRepository.setValidatorSeedAndEnable(seed)
                 .onSuccess {

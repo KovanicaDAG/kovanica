@@ -9,6 +9,7 @@ import kovanica.CoinJoinPrepared
 import kovanica.SendReceipt
 import com.kovanica.lightnode.ui.util.Bip39
 import com.kovanica.lightnode.ui.util.KovanicaAddress
+import com.kovanica.lightnode.ui.util.KovanicaKeys
 
 /**
  * Wallet-level operations: seed derivation, transfers, bonding, staking
@@ -26,11 +27,14 @@ class WalletRepository(
 
     /**
      * Derive the wallet address from a BIP39 mnemonic.
+     *
+     * Goes through [KovanicaKeys] so this agrees with the CLI, the node and
+     * the FFI. Do not shortcut to the raw BIP-39 material: the derivation
+     * path is part of the address, and skipping it moves the whole balance.
      */
     suspend fun deriveAddress(mnemonic: String): KovanicaAddress.Address =
         withContext(Dispatchers.Default) {
-            val seed = bip39.mnemonicToEd25519Seed(mnemonic)
-            KovanicaAddress.fromSeed(seed)
+            KovanicaKeys.addressFromMnemonic(mnemonic, bip39 = bip39)
         }
 
     /**
@@ -56,13 +60,10 @@ class WalletRepository(
      * TODO: Not yet exposed in FFI
      */
     /*suspend fun bondStake(mnemonic: String, amountAtoms: ULong): Result<String> {
-        val seed = withContext(Dispatchers.Default) {
-            bip39.mnemonicToEd25519Seed(mnemonic)
-        }
         val secretHex = withContext(Dispatchers.Default) {
-            seed.joinToString("") { "%02x".format(it) }
+            mnemonicToSecretHex(mnemonic)
         }
-        return lightNode.setValidatorSeed(seed).fold(
+        return lightNode.setValidatorSeed(secretHex).fold(
             onSuccess = { lightNode.bondStakeFromSecret(secretHex, amountAtoms) },
             onFailure = { Result.failure(it) },
         )
@@ -123,10 +124,8 @@ class WalletRepository(
         )
     }
 
-    private fun mnemonicToSecretHex(mnemonic: String): String {
-        val seed = bip39.mnemonicToEd25519Seed(mnemonic)
-        return seed.joinToString("") { "%02x".format(it) }
-    }
+    private fun mnemonicToSecretHex(mnemonic: String): String =
+        KovanicaKeys.signingKeyHex(mnemonic, bip39 = bip39)
 
     // ------------------------------------------------------------------
     // CoinJoin (node-level batched spends)

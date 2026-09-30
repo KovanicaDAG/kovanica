@@ -189,19 +189,41 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_15.4.app
 
-      - name: Install CocoaPods
-        run: gem install cocoapods
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # The app links the Rust light node and compiles its generated Swift
+      # bindings, so the framework must exist before xcodegen runs. This is
+      # also the build that catches an FFI surface change without a matching
+      # bindings regeneration.
+      - name: Build the light-node xcframework
+        run: ./protocol/crates/kovanica-ffi/build-apple.sh
+
+      - name: Verify committed Swift bindings match the Rust surface
+        run: |
+          set -euo pipefail
+          cd protocol
+          cargo run -p kovanica-ffi --bin uniffi-bindgen -- generate \
+            --library target/release/libkovanica_ffi.so \
+            --language swift --out-dir /tmp/bindgen-swift
+          diff -r -x README.md /tmp/bindgen-swift crates/kovanica-ffi/bindings/swift
+
+      - name: Generate the Xcode project
+        run: |
+          cd mobile/ios
+          xcodegen generate --spec xcodegen.yml
 
       - name: Build iOS App
         run: |
           cd mobile/ios
-          xcodebuild -scheme KovanicaWallet -configuration Release -destination generic/platform=iOS -quiet
+          xcodebuild -scheme KovanicaWallet -configuration Release \
+            -destination generic/platform=iOS -derivedDataPath build -quiet
 
       - name: Upload iOS Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: kovanica-wallet-ios
-          path: mobile/ios/build/Release-iphoneos/*.app
+          path: mobile/ios/build/Build/Products/Release-iphoneos/*.app
           retention-days: 30
 
   # Web Console Build & Deploy
@@ -279,14 +301,23 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # The Rust workspaces are `protocol/` (dag, state, node, wallet, ffi,
+      # …) and `sdk/`. The repo root has no Cargo.toml, so every step has to
+      # name its manifest explicitly.
       - name: Run cargo check
-        run: cargo check --workspace
+        run: |
+          cargo check --locked --manifest-path protocol/Cargo.toml --workspace --all-targets
+          cargo check --locked --manifest-path sdk/Cargo.toml --workspace
 
       - name: Run cargo clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: |
+          cargo clippy --locked --manifest-path protocol/Cargo.toml --workspace --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path sdk/Cargo.toml --workspace --all-targets -- -D warnings
 
       - name: Run cargo test
-        run: cargo test --workspace
+        run: |
+          cargo test --locked --manifest-path protocol/Cargo.toml --workspace
+          cargo test --locked --manifest-path sdk/Cargo.toml --workspace
 
   # Release
   release:

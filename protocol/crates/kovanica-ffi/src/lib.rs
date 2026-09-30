@@ -18,6 +18,8 @@
 
 uniffi::setup_scaffolding!("kovanica");
 
+mod deriv;
 mod light_node;
 
+pub use deriv::*;
 pub use light_node::*;
