@@ -2,7 +2,14 @@
 
 **Release Date**: 2026-09-30
 **Git Tag**: `v0.1.0-mobile`
-**Commit**: `571e24e`
+**Commit**: `478abbc`
+
+> **Re-tagged.** This tag was first cut at `caeab4e`, which shipped wallet builds
+> that derived the wrong key. The binaries below were rebuilt from `478abbc`,
+> the merge commit for PR #91; this tag now points at that tree on `main`. See [Key Derivation Fix](#-key-derivation-fix)
+> below. The Linux and Windows binaries are unchanged — the fix touches no
+> desktop console code — so only the two Android APKs differ from the original
+> cut. `checksums-v0.1.0-mobile.txt` was regenerated to match.
 
 ---
 
@@ -31,6 +38,59 @@ This is the first mobile apps release for the Kovanica Protocol, delivering nati
 - Same feature parity planned as Android
 
 ---
+
+## 🔑 Key Derivation Fix
+
+**If you installed the original `v0.1.0-mobile` Android build, delete it and
+install this one.** The original build derived the wrong key and could not
+spend.
+
+### What was wrong
+
+Wallet key derivation in Kovanica is a frozen rule: a key stretch followed by
+the fully-hardened SLIP-0010 ed25519 path `m/44'/3007'/0'/0'/i'`. The light node
+receives the 32-byte child of that path — never a phrase, never the raw stretch.
+
+The Android build was instead passing the **first 32 bytes of the stretched
+material**, skipping the SLIP-0010 step entirely. The consequence was not a
+subtle display bug: the app showed an address that the ledger does not credit,
+reported a zero balance, and any send would have targeted a keypair holding no
+outputs. The iOS skeleton had the same class of problem, fabricating an address
+by encoding the recovery phrase itself.
+
+Two root causes, both fixed:
+
+1. **The FFI exposed no derivation at all**, so each client was left to
+   re-implement a cryptographic rule. Two clients re-implemented it; two
+   disagreed with each other and with Rust.
+2. **The one place that was correct had a sibling that truncated**, and the
+   truncation was easy to miss because it type-checked.
+
+### What changed
+
+- `protocol/crates/kovanica-ffi/src/deriv.rs` now exposes derivation, delegating
+  to `kovanica-wallet` — the existing Rust authority. There is still exactly one
+  implementation of the rule.
+- All three Android call sites derive through it. The truncated path is deleted
+  and its entry point is marked deprecated, so it cannot be reintroduced by
+  accident.
+- The iOS wallet derives through the same FFI. Its fabricated address is gone,
+  and if derivation ever fails the app now refuses to open rather than showing
+  an address that holds nothing.
+- The passphrase is honoured rather than ignored on both clients. The same
+  phrase under a different passphrase is a different account, and dropping it
+  showed an empty address instead of an error.
+
+### Verification
+
+The same vectors are now pinned in four places, so a divergence shows up as a
+failing test rather than a wallet holding the wrong coins: the Rust
+known-answer suite, the FFI boundary test, the Android unit test, and the iOS
+unit test. The vectors use a zero-entropy phrase; they are public test data, not
+keys.
+
+This change is **client-side only**. No consensus, UTXO, emission, or validation
+rule was touched, and existing chain state is unaffected.
 
 ## 🔧 Technical Improvements
 

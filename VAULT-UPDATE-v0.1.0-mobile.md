@@ -2,7 +2,12 @@
 
 **Date**: 2026-09-30
 **Tag**: `v0.1.0-mobile`
-**Commit**: `571e24e`
+**Commit**: `478abbc`
+
+> The tag was first cut at `caeab4e`, which shipped Android builds carrying the
+> key-derivation defect fixed in PR #91. The APKs were rebuilt from `478abbc`,
+> the merge commit for that PR, and the tag re-cut onto that tree. The four Tauri binaries are unchanged — the fix touches no
+> desktop console code — and their digests still match the original cut.
 
 ---
 
@@ -131,10 +136,13 @@ Resolution:
 ## Deployment Checklist
 
 - [x] Push tag to remote: `git push kovanica main v0.1.0-mobile` ✅
+- [x] Merge PR #91 (key-derivation fix) into main — merge commit `478abbc` ✅
+- [x] Re-cut `v0.1.0-mobile` onto main after `478abbc`, rebuild both APKs, regenerate
+      `checksums-v0.1.0-mobile.txt` ✅
 - [ ] Configure GitHub Secrets for CI/CD
 - [ ] Test Android release APK on physical device
-- [ ] Build iOS on macOS: `./protocol/crates/kovanica-ffi/build-apple.sh` then `cd mobile/ios && xcodegen generate && xcodebuild -scheme KovanicaWallet -configuration Release -destination generic/platform=iOS` (PR #90: the framework step is mandatory; see BUILD.md)
-- [ ] Compile-test the Swift derivation (`KovanicaKeysTests`) on macOS — it is not compiler-verified on the build host (PR #90)
+- [ ] Build iOS on macOS: `./protocol/crates/kovanica-ffi/build-apple.sh` then `cd mobile/ios && xcodegen generate && xcodebuild -scheme KovanicaWallet -configuration Release -destination generic/platform=iOS` (PR #91: the framework step is mandatory; see BUILD.md)
+- [ ] Compile-test the Swift derivation (`KovanicaKeysTests`) on macOS — it is not compiler-verified on the build host (PR #91)
 - [ ] Deploy web consoles to VPS:
   ```bash
   cd /opt/kovanica/mobile/console/kovanica && pm2 start ecosystem.config.js

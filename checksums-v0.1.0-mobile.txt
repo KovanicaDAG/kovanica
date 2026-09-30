@@ -1,14 +1,23 @@
-# Kovanica Mobile Apps v0.1.0 — SHA256 Checksums
+# Kovanica Mobile Apps v0.1.0 - SHA256 Checksums
 # Generated: 2026-09-30
-# Tag: v0.1.0-mobile
+# Tag: v0.1.0-mobile  (re-cut onto main after the PR #91 fix, 478abbc)
+#
+# The tag was first cut at caeab4e, which shipped Android builds carrying the
+# key-derivation defect fixed in PR #91. The two Android digests below changed
+# as a result. The four desktop bundles are byte-identical to the original cut:
+# the fix touches no console code, and re-digesting them here reproduces their
+# previous values exactly.
 
 # Android
-7b40fb9153a20bd435934557c8b701b36f095066ea4378dace92d2b880311e13  mobile/android/app/build/outputs/apk/debug/app-debug.apk
-5f68f3f154b25063739602477250ab1b870a4aa28db2066c296e0426fc443f3f  mobile/android/app/build/outputs/apk/release/app-release.apk
+10ad81eb810a4a3fb367692975decd429860ad5a2aa931f62f3181329860f360  mobile/android/app/build/outputs/apk/debug/app-debug.apk
+
+644393afa2cae24f986a345a23643cf72d0be1b2e6a8c1f5d8a97219a3abd5bf  mobile/android/app/build/outputs/apk/release/app-release.apk
 
 # Linux Tauri
 efc01a5a6737fcf1fadfaa8146c5a7e8c688db41b0cf9f14549ba23a22574b23  mobile/console/kovanica/src-tauri/target/release/bundle/appimage/kovanica-console_0.1.0_amd64.AppImage
+
 511c5ba8d4dcd79b0c456f0226d9ac1368fdda72f15109d789950861cfff78c8  mobile/console/kovanica/src-tauri/target/release/bundle/deb/kovanica-console_0.1.0_amd64.deb
+
 87f896bb419b289c235485c6ee01e6da0de0d8635c5abb9352b81fd0c9a630be  mobile/console/kovanica/src-tauri/target/release/bundle/rpm/kovanica-console-0.1.0-1.x86_64.rpm
 
 # Windows Tauri
