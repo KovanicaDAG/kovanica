@@ -66,11 +66,35 @@
 ### iOS Wallet (SwiftUI Skeleton)
 - **Source**: `mobile/ios/KovanicaWallet/` (10 Swift files)
 - **Screens (8)**: ContentView, HomeView, SendView, ReceiveView, WalletSetupView, SettingsView, Theme, Models, WalletViewModel, KovanicaWalletApp
-- **Build Config**: `mobile/ios/Package.swift` (SPM), `mobile/ios/xcodegen.yml`, `mobile/ios/KovanicaWallet/Info.plist`
+- **Build Config**: `mobile/ios/xcodegen.yml` (**single** build definition), `mobile/ios/KovanicaWallet/Info.plist`
 - **Build Guide**: `mobile/ios/BUILD.md`
-- **Status**: Requires macOS + Xcode 15.4+ to build
-- **Dependencies**: KeychainSwift, BIP39Swift, SwiftCrypto (via SPM)
-- **FFI Integration**: Needs UniFFI-generated Swift bindings from Rust `kovanica` crate
+- **Status**: Requires macOS + Xcode 15.4+ to build. No `.xcodeproj` is committed — run `xcodegen generate`.
+- **Dependencies**: `kovanica.xcframework` (built by `protocol/crates/kovanica-ffi/build-apple.sh`), KeychainSwift (via SPM)
+- **Build order**: `build-apple.sh` → `xcodegen generate` → `xcodebuild`. The first step is mandatory; without the framework the build fails at link time.
+- **Note**: `mobile/ios/Package.swift` was **removed** in PR #90 — it would have needed the generated bindings both compiled into the app target (as xcodegen does) and imported as a module, so two build definitions would each carry their own FFI wiring. The mnemonic-handling Swift packages were dropped for the same reason; see the derivation note below.
+
+---
+
+## Key Derivation — Client Correctness (PR #90)
+
+**Classification: client-only.** No GHOSTDAG, UTXO, emission, fee, or validation rule is affected. A node never derives an address from a phrase; it receives a 32-byte signing key and does no derivation.
+
+Both mobile wallets derived addresses by **truncating the stretched key material to its first 32 bytes** and skipping SLIP-0010, against a rule that has exactly one implementation (Rust, `protocol/crates/kovanica-wallet`, path `m/44'/3007'/0'/0'/i'`). The FFI exposed no mnemonic→key function at all, which is why each client re-derived — and both got it wrong.
+
+The light-node FFI's `keypair_from_secret` requires exactly 32 bytes and does `KeyPair::from_seed`, i.e. it expects the **SLIP-0010 child**. Android passed the truncated stretch, so every send would have targeted a keypair owning no UTXOs, and funds sent to the address the app displayed were unreachable. iOS produced a base64 of the phrase behind a `kvnc1` prefix — not an address — and ignored the passphrase, so a protected phrase resolved silently to an empty account instead of erroring.
+
+Resolution:
+- `protocol/crates/kovanica-ffi/src/deriv.rs` (new) delegates to `kovanica-wallet`; nothing is reimplemented. Exports `deriveAccountFromMnemonic`, `deriveAddressFromMnemonic`, `deriveSigningSecretFromMnemonic`, `accountFromSigningSecret`, `addressFromSigningSecret`, `mnemonicIsValid`, `slip10DerivationPath`, `slip44CoinType`.
+- Android `KovanicaKeys` (Kotlin SLIP-0010) wired into all call sites; the truncating seed helper is deprecated with a pointer to the correct call.
+- iOS `KovanicaKeys` wraps the FFI. A failed derivation leaves the wallet **closed** rather than showing a placeholder. `send()` reports the gap instead of claiming a transaction was prepared.
+- The same zero-entropy vectors are pinned in four places — `kovanica-wallet/tests/slip10_vectors.rs`, `kovanica-ffi/tests/ffi_deriv.rs`, `KovanicaKeysTest.kt`, `KovanicaKeysTests.swift`. A client regression now fails a client test instead of producing an empty wallet.
+
+**Carried forward from PR #90:**
+- The bindings drift guard was **already failing**: `LightNode.fetch_stake_proof` existed in Rust and was never regenerated. Both languages regenerated; CI now diffs them.
+- The iOS CI job could never have passed — it ran `xcodebuild` against a project that was never generated, with no FFI framework. It now runs `build-apple.sh` → drift check → `xcodegen generate` → `xcodebuild`.
+- The signing key is held in memory for the duration of derivation only; never written to `UserDefaults`, a plist, or a log. Key custody moves to the Keychain with the change that wires signing.
+
+**Verification**: `cargo test -p kovanica-ffi -p kovanica-wallet` all green, `cargo clippy --workspace --all-targets -D warnings` clean, `./gradlew :app:testDebugUnitTest` 9/9, `./gradlew assembleDebug assembleRelease` successful. The Swift is **not** compiler-verified — no Swift toolchain on the build host; the new iOS CI job is what will run it.
 
 ---
 
@@ -109,7 +133,8 @@
 - [x] Push tag to remote: `git push kovanica main v0.1.0-mobile` ✅
 - [ ] Configure GitHub Secrets for CI/CD
 - [ ] Test Android release APK on physical device
-- [ ] Build iOS on macOS: `cd mobile/ios && xcodegen generate && xcodebuild -scheme KovanicaWallet -configuration Release`
+- [ ] Build iOS on macOS: `./protocol/crates/kovanica-ffi/build-apple.sh` then `cd mobile/ios && xcodegen generate && xcodebuild -scheme KovanicaWallet -configuration Release -destination generic/platform=iOS` (PR #90: the framework step is mandatory; see BUILD.md)
+- [ ] Compile-test the Swift derivation (`KovanicaKeysTests`) on macOS — it is not compiler-verified on the build host (PR #90)
 - [ ] Deploy web consoles to VPS:
   ```bash
   cd /opt/kovanica/mobile/console/kovanica && pm2 start ecosystem.config.js
