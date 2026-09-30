@@ -280,6 +280,36 @@ jobs:
             pm2 save
 
   # Rust Core Tests
+  # Key-derivation known-answer tests for the iOS wallet, run on Linux.
+  swift-derivation-kat:
+    name: Swift Derivation KAT
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: protocol/target
+          key: swift-kat-${{ hashFiles('protocol/Cargo.lock') }}
+
+      # The derivation rule is frozen and shared with the ledger, so it is
+      # asserted on every push here rather than only on the macOS runner. This
+      # is the check that catches a client deriving an address the chain does
+      # not credit — a wallet that would show a permanent zero balance.
+      - name: Install Swift
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y swiftlang
+
+      - name: Derivation known-answer tests
+        run: ./mobile/ios/run-swift-kat.sh
+
   rust-tests:
     name: Rust Core Tests
     runs-on: ubuntu-latest
