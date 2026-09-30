@@ -17,8 +17,15 @@ crate-type = ["lib", "staticlib", "cdylib"]
 kovanica-dag = { path = "../kovanica-dag" }
 kovanica-state = { path = "../kovanica-state" }
 kovanica-node = { path = "../kovanica-node" }
+kovanica-wallet = { path = "../kovanica-wallet" }
+anyhow.workspace = true
 ed25519-dalek = { workspace = true }
 hex.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
 uniffi.workspace = true
+
+[dev-dependencies]
+# The zero-entropy known-answer phrase is built from entropy bytes, so no
+# mnemonic appears in the derivation tests.
+bip39 = { workspace = true, features = ["std"] }

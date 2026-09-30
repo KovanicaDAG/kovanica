@@ -1267,12 +1267,15 @@ dependencies = [
 name = "kovanica-ffi"
 version = "0.4.0"
 dependencies = [
+ "anyhow",
  "bincode",
+ "bip39",
  "ed25519-dalek",
  "hex",
  "kovanica-dag",
  "kovanica-node",
  "kovanica-state",
+ "kovanica-wallet",
  "thiserror 2.0.20",
  "uniffi",
 ]

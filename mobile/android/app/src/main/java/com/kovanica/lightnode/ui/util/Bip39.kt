@@ -114,21 +114,17 @@ class Bip39(context: Context) {
      * Convert a mnemonic to a 64-byte BIP39 seed. The caller is responsible
      * for clearing the returned array from memory when it is no longer needed.
      */
-    fun mnemonicToSeed(mnemonic: String, passphrase: String = ""): ByteArray {
-        val password = PBEParametersGenerator.PKCS5PasswordToUTF8Bytes(
-            mnemonic.trim().toCharArray()
-        )
-        val salt = ("mnemonic" + passphrase).toByteArray(Charsets.UTF_8)
-        val generator = PKCS5S2ParametersGenerator(SHA512Digest())
-        generator.init(password, salt, PBKDF2_ITERATIONS)
-        val params = generator.generateDerivedMacParameters(512) as KeyParameter
-        return params.key
-    }
+    fun mnemonicToSeed(mnemonic: String, passphrase: String = ""): ByteArray =
+        seedFromMnemonic(mnemonic, passphrase)
 
     /**
-     * Convenience: return the first 32 bytes of the BIP39 seed, suitable as
-     * an Ed25519 secret seed for the Kovanica FFI.
+     * Deprecated. Not a Kovanica signing key: skips SLIP-0010, so the address
+     * disagrees with the CLI, node and FFI. See [KovanicaKeys.deriveSigningKey].
      */
+    @Deprecated(
+        "Skips SLIP-0010. Use KovanicaKeys.deriveSigningKey instead.",
+        ReplaceWith("KovanicaKeys.deriveSigningKey(mnemonicToSeed(mnemonic, passphrase))"),
+    )
     fun mnemonicToEd25519Seed(mnemonic: String, passphrase: String = ""): ByteArray {
         return mnemonicToSeed(mnemonic, passphrase).copyOfRange(0, 32)
     }
@@ -136,5 +132,23 @@ class Bip39(context: Context) {
     companion object {
         private const val WORD_LIST_SIZE = 2048
         private const val PBKDF2_ITERATIONS = 2048
+        private const val SEED_BITS = 512
+
+        /**
+         * PBKDF2-HMAC-SHA512 stretch, 64 bytes out. Static and [Context]-free
+         * because it never touches the word list, which lets the
+         * known-answer tests cover the whole phrase-to-address chain.
+         */
+        @JvmStatic
+        fun seedFromMnemonic(mnemonic: String, passphrase: String = ""): ByteArray {
+            val password = PBEParametersGenerator.PKCS5PasswordToUTF8Bytes(
+                mnemonic.trim().toCharArray()
+            )
+            val salt = ("mnemonic" + passphrase).toByteArray(Charsets.UTF_8)
+            val generator = PKCS5S2ParametersGenerator(SHA512Digest())
+            generator.init(password, salt, PBKDF2_ITERATIONS)
+            val params = generator.generateDerivedMacParameters(SEED_BITS) as KeyParameter
+            return params.key
+        }
     }
 }

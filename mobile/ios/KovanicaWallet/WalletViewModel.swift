@@ -16,15 +16,34 @@ class WalletViewModel: ObservableObject {
     private let apiBase = "https://explorer.kovanica.online"
     private var cancellables = Set<AnyCancellable>()
 
+    /// Restore (or create) the wallet from a recovery phrase.
+    ///
+    /// Derivation is delegated to the Rust authority via the light-node FFI
+    /// (`KovanicaKeys`), so the address on screen is the one the ledger
+    /// credits. The passphrase is honoured, not ignored — dropping it would
+    /// show a permanently empty address instead of an error.
+    ///
+    /// The signing key goes out of scope here: this build has no send path,
+    /// and custody moves to the Keychain in the change that wires signing.
     func initializeWallet(phrase: String, passphrase: String) {
         isLoading = true
         errorMessage = nil
 
-        // Derive address from phrase (simplified - would use BIP39 in production)
-        let address = deriveAddress(from: phrase)
+        let account: KovanicaKeys.Account
+        do {
+            account = try KovanicaKeys.account(fromMnemonic: phrase, passphrase: passphrase)
+        } catch {
+            // No address, no wallet. Never fall back to a placeholder: a wallet
+            // showing an address that holds nothing is worse than one that
+            // refuses to open.
+            errorMessage = error.localizedDescription
+            isWalletReady = false
+            isLoading = false
+            return
+        }
 
         walletData = WalletData(
-            address: address,
+            address: account.address,
             balance: "0",
             chainHeight: 0,
             blockCount: 0,
@@ -76,12 +95,20 @@ class WalletViewModel: ObservableObject {
         }
     }
 
+    /// Send KVNC to `address`.
+    ///
+    /// Not yet wired: signing and submission need a `LightNode` from the FFI,
+    /// which needs the network's PoA authority set before its genesis matches
+    /// the chain (RFC-POA §0.9 blocker B1). Until that lands this reports the
+    /// gap instead of claiming a transaction was prepared — a send screen that
+    /// says "done" when nothing was broadcast is the worst failure mode here.
     func send(to address: String, amount: String) async {
         isLoading = true
         defer { isLoading = false }
 
-        // In production: prepare → sign → submit
-        sendResult = "Transaction prepared (signing required)"
+        sendResult = nil
+        errorMessage = "Sending is not available in this build: it needs a synced light node, "
+            + "which this app does not run. Your funds are untouched."
     }
 
     func loadHistory() async {
@@ -90,12 +117,6 @@ class WalletViewModel: ObservableObject {
     }
 
     // MARK: - Private
-
-    private func deriveAddress(from phrase: String) -> String {
-        // Simplified - would use BIP39 + Ed25519 in production
-        let hash = phrase.data(using: .utf8)?.base64EncodedString() ?? ""
-        return "kvnc1" + String(hash.prefix(38))
-    }
 
     private func fetchHead() async throws -> HeadData {
         guard let url = URL(string: "\(apiBase)/api/head") else {
