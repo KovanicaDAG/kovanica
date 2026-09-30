@@ -6,7 +6,20 @@ sidecars. Do not `git -C` them.
 ## Multi-surface topology
 
 All web surfaces are served from a single Vite build (`/root/kovanica-web/.output/`)
-via PM2 on `127.0.0.1:3000`. Caddy terminates TLS and reverse-proxies to it.
+via PM2 on `127.0.0.1:3010`. nginx terminates TLS and reverse-proxies to it.
+Caddy is not the live edge. Live map as of 2026-09-30:
+
+| Hostname | Upstream |
+|----------|----------|
+| `kovanica.online`, `testnet`, `mainnet` | `127.0.0.1:3010` |
+| `explorer` `/api/`, `api.kovanica.online` | `127.0.0.1:8080` (node) |
+| `explorer` `/` | `127.0.0.1:3010` |
+| `dash.kovanica.online` | `127.0.0.1:3001` (developer dashboard) |
+| `docs.kovanica.online` | `127.0.0.1:3010` |
+
+`kovanica-seed1.service` and `kovanica-seed2.service` are disabled on this host.
+They both tried to bind `127.0.0.1:8080`, which `kovanica-explorer` already owns.
+seed2 and seed3 run on their own machines.
 
 | Domain | Surface | Description |
 |--------|---------|-------------|
