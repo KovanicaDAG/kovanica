@@ -9,6 +9,15 @@
 # per-crate .gitignore files existed.
 target/
 
+# JS dependencies and build output. Unanchored for the same reason as
+# `target/`: `mobile/console/*` had no rule for either, so 7,568
+# node_modules files and 4 Vite dist artifacts were committed (2026-09-30).
+# `node_modules` is written WITHOUT a trailing slash on purpose: the slash form
+# only matches real directories, and mobile/console/shared/node_modules is a
+# symlink into the enterprise workspace, which git would otherwise track.
+node_modules
+dist/
+
 # Runtime data (unversioned content inside data/ handled by data/.gitignore)
 *.log
 .dev.log
