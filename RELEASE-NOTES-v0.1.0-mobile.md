@@ -6,10 +6,11 @@
 
 > **Re-tagged.** This tag was first cut at `caeab4e`, which shipped wallet builds
 > that derived the wrong key. The binaries below were rebuilt from `478abbc`,
-> the merge commit for PR #91; this tag now points at that tree on `main`. See [Key Derivation Fix](#-key-derivation-fix)
-> below. The Linux and Windows binaries are unchanged — the fix touches no
-> desktop console code — so only the two Android APKs differ from the original
-> cut. `checksums-v0.1.0-mobile.txt` was regenerated to match.
+> the merge commit for PR #91; this tag now points at that tree on `main`. See
+> [Key Derivation Fix](#-key-derivation-fix) below. The Linux and Windows
+> binaries are unchanged — the fix touches no desktop console code — so only the
+> two Android APKs differ from the original cut.
+> `checksums-v0.1.0-mobile.txt` was regenerated to match.
 
 ---
 
