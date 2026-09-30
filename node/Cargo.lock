@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "kovanica-dag"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "blake3",
  "curve25519-dalek",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "kovanica-node"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arbitrary",
  "base64 0.22.1",
@@ -503,6 +503,7 @@ dependencies = [
  "hex",
  "kovanica-dag",
  "kovanica-state",
+ "kovanica-types",
  "kovanica-wallet",
  "metrics",
  "metrics-exporter-prometheus",
@@ -526,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "kovanica-state"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "blake3",
  "curve25519-dalek",
@@ -537,8 +538,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-types"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "blake3",
+ "hex",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "kovanica-wallet"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bip39",
