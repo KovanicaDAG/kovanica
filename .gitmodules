@@ -1,9 +1,0 @@
-[submodule "deploy/testnet"]
-	path = deploy/testnet
-	url = git@github.com:KovanicaDAG/kovanica-testnet.git
-[submodule "deploy/mainnet"]
-	path = deploy/mainnet
-	url = git@github.com:KovanicaDAG/kovanica-mainnet.git
-[submodule "deploy/developing"]
-	path = deploy/developing
-	url = git@github.com:KovanicaDAG/kovanica-devnet.git
