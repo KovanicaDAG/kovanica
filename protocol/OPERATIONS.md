@@ -116,8 +116,21 @@ verifies genesis match against the primary seed.
 | `seed.kovanica.online` | A | `145.223.116.178` | DNS only |
 | `seed.kovanica.online` | AAAA | `2a02:4780:41:1f43::1` | DNS only |
 | `seed2.kovanica.online` | A | `76.13.250.65` | DNS only (Hostinger KVM2 VPS) |
+| `seed2.kovanica.online` | AAAA | `2a02:4780:c:778::1` | DNS only |
 | `seed1.kovanica.online` | CNAME → `seed2.kovanica.online` | Hostinger KVM2 secondary | DNS only (legacy alias) |
-| `seed3.kovanica.online` | A | `187.7.27.139` (new VPS, `srv2013143`) | **DNS only — PENDING.** The old AWS instance was decommissioned 2026-09-21, but its A record was **never deleted** and was never re-pointed at the new box. As of 2026-09-29 the name still resolves to **Cloudflare proxy IPs** (`104.21.87.177` / `172.67.170.125`) — orange-cloud cannot pass TCP 9000, so the name is a dead dial. Re-point to `187.7.27.139` as **DNS only (grey-cloud)** before listing seed3 in any `KOVANICA_PEERS` set. |
+| `seed3.kovanica.online` | A | `187.7.27.139` (new VPS, `srv2013143`) | DNS only — **LIVE, re-pointed.** ⚠️ This row was previously "PENDING": the old AWS instance was decommissioned 2026-09-21 and its A record was left dangling on the Cloudflare proxy IPs (`104.21.87.177` / `172.67.170.125`), which cannot pass TCP 9000. As of **2026-10-01** the record has been re-pointed at the new box and is **grey-cloud** — the name resolves to `187.7.27.139` and no longer returns proxy IPs. Verify with `dig +short A seed3.kovanica.online` before listing seed3 in a `KOVANICA_PEERS` set. |
+| `seed3.kovanica.online` | AAAA | `2a02:4780:f:602c::1` | DNS only |
+
+**Seed → box identity.** The three seeds are three independent machines, all
+operated by the same owner: seed1 = `145.223.116.178` (`srv1745734`), seed2 =
+`76.13.250.65` (`srv1991525`), seed3 = `187.7.27.139` (`srv2013143`).
+
+⚠️ **seed3 carries a routed `/48`, not a single host address.** `eth0` holds
+`2a02:4780:f:602c::1/48` with a default route via `2a02:4780:f::1`, so the v6 P2P
+listener is routable from outside. When adding firewall or `ufw` scope rules for
+seed3, **match the specific address** — never the whole `/48`, which would
+blackhole the rest of the allocation. (The other two seeds are single `/64`-style
+host addresses.)
 | `explorer/www/app/wallet/trader/bot/dash/kovi` | A | `145.223.116.178` | proxied |
 | `opencode` | A | `145.223.116.178` | DNS only |
 

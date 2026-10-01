@@ -219,9 +219,9 @@ git push origin main
 
 | Seed | IP | SSH Pass (Current) | SSH Pass (Rotated) |
 |------|-----|-------------------|-------------------|
-| seed1 | 145.223.116.178 | `1234567890` | NOT ROTATED |
-| seed2 | 76.13.250.65 | `1234567890` | `krgdk0s9fbLv=zurbVBaJ+_zYF8rgg` |
-| seed3 | 187.7.27.139 | `KVNCprotocol@DAGy1` | `q8pv3yO7Z^iUTCgEPJtVgovNcOv7WB` |
+| seed1 | 145.223.116.178 | `[REDACTED]` | NOT ROTATED |
+| seed2 | 76.13.250.65 | `[REDACTED]` | `[REDACTED]` |
+| seed3 | 187.7.27.139 | `[REDACTED]` | `[REDACTED]` |
 
 **Authority Keys:** `/root/kovanica-testnet/authority-keys/` (all 0600)
 
