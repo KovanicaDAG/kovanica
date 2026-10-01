@@ -7,7 +7,7 @@ SEED 1 — GENESIS AUTHORITY (seed1)
 ================================================================================
 IP Address:              145.223.116.178
 SSH User:                root
-SSH Password (current):  1234567890
+SSH Password (current):  [REDACTED]
 SSH Password (rotated):  NOT ROTATED (see note below)
 Hostname:                seed1
 P2P Port:                9000 (plaintext TCP)
@@ -67,8 +67,8 @@ SEED 2 — VALIDATOR (seed2)
 ================================================================================
 IP Address:              76.13.250.65
 SSH User:                root
-SSH Password (current):  1234567890
-SSH Password (rotated):  krgdk0s9fbLv=zurbVBaJ+_zYF8rgg (from .seed-pw-rotation-backup)
+SSH Password (current):  [REDACTED]
+SSH Password (rotated):  [REDACTED] (from .seed-pw-rotation-backup)
 Hostname:                seed2
 P2P Port:                9001 (plaintext TCP)
 HTTP API Port:           8082
@@ -113,8 +113,8 @@ SEED 3 — VALIDATOR (seed3)
 ================================================================================
 IP Address:              187.7.27.139
 SSH User:                root
-SSH Password (current):  KVNCprotocol@DAGy1
-SSH Password (rotated):  q8pv3yO7Z^iUTCgEPJtVgovNcOv7WB (from .seed-pw-rotation-backup)
+SSH Password (current):  [REDACTED]
+SSH Password (rotated):  [REDACTED] (from .seed-pw-rotation-backup)
 Hostname:                seed3
 P2P Port:                9002 (plaintext TCP)
 HTTP API Port:           8083
@@ -277,9 +277,9 @@ PASSWORD ROTATION HISTORY
 File: /root/secrets/.seed-pw-rotation-backup
 Rotated: 2026-09-29T05:20:09+02:00 by key-auth automation
 
-Seed1: NOT ROTATED (still uses 1234567890)
-Seed2: ROTATED → krgdk0s9fbLv=zurbVBaJ+_zYF8rgg
-Seed3: ROTATED → q8pv3yO7Z^iUTCgEPJtVgovNcOv7WB
+Seed1: NOT ROTATED (still uses [REDACTED])
+Seed2: ROTATED → [REDACTED]
+Seed3: ROTATED → [REDACTED]
 
 Stale Pre-Rotation File: /root/secrets/stale/seed1-poa.env.pre-rotation (blocked by guards)
 
