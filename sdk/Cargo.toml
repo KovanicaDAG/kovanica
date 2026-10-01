@@ -10,6 +10,7 @@ members = [
     "crates/kovanica-airdrop",
     "crates/kovanica-bridge",
     "crates/kovanica-merchant",
+    "crates/kovanica-relayer",
     "crates/kovanica-sdk",
     "bindings/kovanica-wasm",
 ]
@@ -35,6 +36,11 @@ kovanica-keys  = { path = "crates/kovanica-keys",  version = "0.1.0-alpha.1" }
 kovanica-tx    = { path = "crates/kovanica-tx",    version = "0.1.0-alpha.1" }
 kovanica-rpc   = { path = "crates/kovanica-rpc",   version = "0.1.0-alpha.1" }
 kovanica-fee   = { path = "crates/kovanica-fee",   version = "0.1.0-alpha.1" }
+kovanica-dex   = { path = "crates/kovanica-dex",   version = "0.4.0" }
+kovanica-airdrop = { path = "crates/kovanica-airdrop", version = "0.4.0" }
+kovanica-bridge  = { path = "crates/kovanica-bridge",  version = "0.4.0" }
+kovanica-merchant = { path = "crates/kovanica-merchant", version = "0.4.0" }
+kovanica-relayer = { path = "crates/kovanica-relayer", version = "0.4.0" }
 
 # External — pin carefully; freeze before 1.0.0
 serde      = { version = "1", features = ["derive"] }
@@ -54,6 +60,12 @@ tokio      = { version = "1", features = ["rt-multi-thread", "macros"] }
 async-trait = "0.1"
 bs58       = "0.5"
 blake3     = "1"
+tracing    = { version = "0.1", features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tungstenite = { version = "0.24", features = ["native-tls"] }
+url        = "2"
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = { version = "0.3", features = ["futures-sink", "futures-io"] }
 
 [profile.release]
 lto = true
