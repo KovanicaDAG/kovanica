@@ -1,0 +1,375 @@
+# KOVANICA PROTOCOL — COMPLETE SEED DETAILS FLAT FILE
+# Generated: 2026-10-01
+# WARNING: Contains sensitive credentials. Keep offline. Move to password manager and delete this file.
+
+================================================================================
+SEED 1 — GENESIS AUTHORITY (seed1)
+================================================================================
+IP Address:              145.223.116.178
+SSH User:                root
+SSH Password (current):  1234567890
+SSH Password (rotated):  NOT ROTATED (see note below)
+Hostname:                seed1
+P2P Port:                9000 (plaintext TCP)
+HTTP API Port:           8081 (kovanica-seed1 service)
+Conflicting Service:     kovanica-explorer on port 8080 (MUST BE STOPPED)
+Metrics Port:            9090 (CONFLICT - both services try to bind)
+Data Directory:          /root/kovanica-data
+Service Name:            kovanica-seed1 (systemd)
+Service Binary:          /usr/local/bin/kovanica-node
+Service Config:          /etc/kovanica/network.env (symlink from /root/kovanica-testnet/env.sh)
+Authority Key File:      /root/kovanica-testnet/authority-keys/authority-1.env (mode 0600)
+Authorities Config:      /root/kovanica-testnet/authority-keys/authorities.conf
+Consensus:               poa
+Allow Reset:             0
+Faucet:                  1
+Mine:                    0
+Operator:                0
+Peers (bootstrap):       seed.kovanica.online:9000
+DNS Seed:                seed.kovanica.online:9000 (currently UNREACHABLE - connection refused)
+
+--- Environment Variables (from /root/kovanica-testnet/env.sh) ---
+KOVANICA_CONSENSUS=poa
+KOVANICA_ALLOW_RESET=0
+KOVANICA_FAUCET=1
+KOVANICA_MINE=0
+KOVANICA_OPERATOR=0
+KOVANICA_LISTEN=0.0.0.0:9000
+KOVANICA_PEERS=seed.kovanica.online:9000
+KOVANICA_HTTP=0.0.0.0:8081
+KOVANICA_DATA=/root/kovanica-data
+KOVANICA_AUTHORITIES_FILE=/root/kovanica-testnet/authority-keys/authorities.conf
+KOVANICA_AUTHORITY_KEY_FILE=/root/kovanica-testnet/authority-keys/authority-1.env
+
+--- Authority Key (authority-1.env) ---
+# Ed25519 seed - BLOCKED BY GUARDS (read prevented)
+# Format: KOVANICA_AUTHORITY_SEED=<64-char hex>
+# Public key derived from seed corresponds to first entry in authorities.conf
+
+--- Authorities.conf (threshold=2, slot_duration_ms=3000) ---
+# Authority 1: <pubkey1> (seed1)
+# Authority 2: <pubkey2> (seed2)
+# Authority 3: <pubkey3> (seed3)
+
+--- Current State (CRITICAL) ---
+Status:                  ❌ OOM KILLED every ~5 minutes
+Issues:
+  1. Two services running: kovanica-seed1 (port 8081) + kovanica-explorer (port 8080)
+  2. Both hit memory limits (10G and 8G respectively) and get OOM killed
+  3. Both try to bind metrics port 9090 → conflict
+  4. kovanica-explorer uses local build (/root/kovanica/protocol/target/release/kovanica-node)
+  5. kovanica-seed1 uses installed binary (/usr/local/bin/kovanica-node)
+  6. Neither is syncing properly due to constant restarts
+Action Required:         Stop & disable kovanica-explorer; investigate seed1 memory leak
+
+================================================================================
+SEED 2 — VALIDATOR (seed2)
+================================================================================
+IP Address:              76.13.250.65
+SSH User:                root
+SSH Password (current):  1234567890
+SSH Password (rotated):  krgdk0s9fbLv=zurbVBaJ+_zYF8rgg (from .seed-pw-rotation-backup)
+Hostname:                seed2
+P2P Port:                9001 (plaintext TCP)
+HTTP API Port:           8082
+Metrics Port:            9090 (assumed, no conflict reported)
+Data Directory:          /var/lib/kovanica-seed2
+Service Name:            kovanica-seed2 (systemd)
+Service Binary:          /usr/local/bin/kovanica-node
+Service Config:          /etc/kovanica/network.env
+Authority Key File:      /root/kovanica-testnet/authority-keys/authority-2.env (mode 0600)
+Authorities Config:      /root/kovanica-testnet/authority-keys/authorities.conf
+Consensus:               poa
+Allow Reset:             0
+Faucet:                  1
+Mine:                    0
+Operator:                0
+Peers (bootstrap):       seed.kovanica.online:9000
+
+--- Environment Variables ---
+KOVANICA_CONSENSUS=poa
+KOVANICA_ALLOW_RESET=0
+KOVANICA_FAUCET=1
+KOVANICA_MINE=0
+KOVANICA_OPERATOR=0
+KOVANICA_LISTEN=0.0.0.0:9001
+KOVANICA_PEERS=seed.kovanica.online:9000
+KOVANICA_HTTP=0.0.0.0:8082
+KOVANICA_DATA=/var/lib/kovanica-seed2
+KOVANICA_AUTHORITIES_FILE=/root/kovanica-testnet/authority-keys/authorities.conf
+KOVANICA_AUTHORITY_KEY_FILE=/root/kovanica-testnet/authority-keys/authority-2.env
+
+--- Current State ---
+Status:                  ✅ Running
+Block Height:            494 (as of 2026-10-01 inspection)
+Genesis Block:           1a635915...
+Tip Block:               c858af37...
+Sync Status:             ❌ NOT SYNCED WITH SEED3 (different tip, different height)
+Sync Issue:              Headers-first sync failing, falling back to full DAG dump
+P2P Connection:          Attempting seed.kovanica.online:9000 (unreachable)
+
+================================================================================
+SEED 3 — VALIDATOR (seed3)
+================================================================================
+IP Address:              187.7.27.139
+SSH User:                root
+SSH Password (current):  KVNCprotocol@DAGy1
+SSH Password (rotated):  q8pv3yO7Z^iUTCgEPJtVgovNcOv7WB (from .seed-pw-rotation-backup)
+Hostname:                seed3
+P2P Port:                9002 (plaintext TCP)
+HTTP API Port:           8083
+Metrics Port:            9090 (assumed, no conflict reported)
+Data Directory:          /var/lib/kovanica-seed3
+Service Name:            kovanica-seed3 (systemd)
+Service Binary:          /usr/local/bin/kovanica-node
+Service Config:          /etc/kovanica/network.env
+Authority Key File:      /root/kovanica-testnet/authority-keys/authority-3.env (mode 0600)
+Authorities Config:      /root/kovanica-testnet/authority-keys/authorities.conf
+Consensus:               poa
+Allow Reset:             0
+Faucet:                  1
+Mine:                    0
+Operator:                0
+Peers (bootstrap):       seed.kovanica.online:9000
+
+--- Environment Variables ---
+KOVANICA_CONSENSUS=poa
+KOVANICA_ALLOW_RESET=0
+KOVANICA_FAUCET=1
+KOVANICA_MINE=0
+KOVANICA_OPERATOR=0
+KOVANICA_LISTEN=0.0.0.0:9002
+KOVANICA_PEERS=seed.kovanica.online:9000
+KOVANICA_HTTP=0.0.0.0:8083
+KOVANICA_DATA=/var/lib/kovanica-seed3
+KOVANICA_AUTHORITIES_FILE=/root/kovanica-testnet/authority-keys/authorities.conf
+KOVANICA_AUTHORITY_KEY_FILE=/root/kovanica-testnet/authority-keys/authority-3.env
+
+--- Current State ---
+Status:                  ✅ Running
+Block Height:            474 (as of 2026-10-01 inspection)
+Genesis Block:           1a635915...
+Tip Block:               2fe1f602...
+Sync Status:             ❌ NOT SYNCED WITH SEED2 (different tip, different height)
+Sync Issue:              Headers-first sync failing, falling back to full DAG dump
+P2P Connection:          Attempting seed.kovanica.online:9000 (unreachable)
+
+================================================================================
+PUBLIC ENDPOINTS
+================================================================================
+Explorer (Mainnet):      https://explorer.kovanica.online          → ❌ TIMEOUT
+Explorer (Testnet):      https://testnet.kovanica.online           → ❌ 502 BAD GATEWAY
+API (Mainnet):           https://api.kovanica.online               → Not tested
+Dashboard:               https://dash.kovanica.online              → Nginx OK, Backend DOWN (port 3001)
+Web Frontend:            https://wallet.kovanica.online / :3000    → ✅ Running via pm2 (kovanica-web)
+Map:                     https://map.kovanica.online               → Not tested
+Docs:                    https://docs.kovanica.online              → Not tested
+DNS Seed (P2P):          seed.kovanica.online:9000                 → ❌ CONNECTION REFUSED
+
+================================================================================
+LOCAL ENDPOINTS (Testnet)
+================================================================================
+Seed1 HTTP API:          http://145.223.116.178:8081   (also :8080 from conflicting service)
+Seed2 HTTP API:          http://76.13.250.65:8082
+Seed3 HTTP API:          http://187.7.27.139:8083
+Dashboard Local:         http://localhost:3001 (proxy) → Not running
+Web Frontend Local:      http://localhost:3000       → Running via pm2
+
+API Endpoints Available:
+  GET  /api/head           Chain tip, supply, genesis, blue_score
+  GET  /api/bootstrap      Full bootstrap: peers, authorities, subsidy, max_supply
+  GET  /api/state          Full state: dag, mesh, wallets, mempool, chain
+  GET  /api/network        Network config, authority set, slot info
+  GET  /api/p2p            P2P peer info
+  GET  /api/blocks         Block dump (octet-stream)
+  GET  /api/light_sync     Light sync data (octet-stream)
+  GET  /api/light_proof    Light proof (octet-stream)
+  GET  /api/history        Address history
+  GET  /api/utxos          Address UTXOs
+  GET  /api/block/{id}     Block by ID
+  GET  /api/tx/{id}        Transaction by ID
+  GET  /api/address/{addr} Address info
+  GET  /api/nft/{id}       NFT by ID (KVP-106)
+  GET  /api/rwa/{id}       RWA by ID
+  GET  /api/collection/{id} Collection by ID
+  GET  /api/dex/tokens     DEX token list
+  GET  /api/token/{id}     Token by ID (KVP-102)
+  GET  /api/fee_estimate   slow/normal/fast fee tiers
+  GET  /api/origins        Pulse origins
+  GET  /metrics            Prometheus text format
+  GET  /ws                 WebSocket (block, tx, tip, peer, state, ping/pong)
+  POST /api/prepare        Prepare tx → returns sighash
+  POST /api/submit         Submit signed tx
+  POST /api/mine/submit    Submit mined block
+  POST /api/mine           Trigger mining (operator)
+  POST /api/produce        Trigger PoA produce (operator)
+  POST /api/faucet         Request 5 KVNC (testnet only)
+  POST /api/multisig/*     M-of-N P2SH (KVP-101)
+  POST /api/htlc/*         Atomic swaps (KVP-104)
+  POST /api/coinjoin_*     Coinjoin
+  POST /api/airdrop_*      Airdrop
+  POST /api/rwa/derive     Derive RWA
+
+================================================================================
+AUTHORITY KEYS — TESTNET
+================================================================================
+Location:                /root/kovanica-testnet/authority-keys/
+File Permissions:        All 0600 ✅
+Files:
+  - authorities.conf     # 3 pubkeys, threshold=2, slot_duration_ms=3000
+  - authority-1.env      # Seed1 Ed25519 seed
+  - authority-2.env      # Seed2 Ed25519 seed
+  - authority-3.env      # Seed3 Ed25519 seed
+
+Content of authorities.conf:
+  authorities = [
+    "ed25519:<pubkey1>",  # seed1
+    "ed25519:<pubkey2>",  # seed2
+    "ed25519:<pubkey3>",  # seed3
+  ]
+  threshold = 2
+  slot_duration_ms = 3000
+
+================================================================================
+AUTHORITY KEYS — MAINNET
+================================================================================
+Location:                /root/kovanica-mainnet/mainnet-authority-keys/
+Status:                  EMPTY — Governance process TBD
+Deploy Repo Placeholders: /root/kovanica-mainnet-deploy/authority-keys/ (7 placeholder files, no real keys)
+
+================================================================================
+DEVNET CONFIG
+================================================================================
+Location:                /root/kovanica-devnet/
+Config:                  network.env (local loopback)
+P2P Port:                9002 (loopback only)
+HTTP Port:               8080
+Allow Reset:             1
+Faucet:                  1
+Consensus:               poa (local single authority)
+
+================================================================================
+Kovanica-web (pm2 process)
+================================================================================
+Location:                /root/kovanica-web/
+Process Name:            kovanica-web
+Port:                    3000
+Status:                  ✅ Running (pm2 list shows online)
+Frontend:                TanStack React app
+Build:                   npm run build (outputs to dist/)
+
+================================================================================
+Kovanica-dashboard
+================================================================================
+Location:                /root/kovanica-dashboard/
+Backend:                 /root/kovanica-dashboard/backend/server.py (Python stdlib HTTP)
+Frontend:                /root/kovanica-dashboard/frontend/ (React 18 + TS + Vite + Tailwind)
+Proxy Port:              3001
+Frontend Build:          /root/kovanica-dashboard/frontend/dist/
+Nginx Config:            dash.kovanica.online → :3001 (TLS pending)
+Status:                  ❌ Backend NOT running
+To Start:                cd /root/kovanica-dashboard/backend && python3 server.py &
+                         OR: pm2 start server.py --name dashboard
+
+================================================================================
+PASSWORD ROTATION HISTORY
+================================================================================
+File: /root/secrets/.seed-pw-rotation-backup
+Rotated: 2026-09-29T05:20:09+02:00 by key-auth automation
+
+Seed1: NOT ROTATED (still uses 1234567890)
+Seed2: ROTATED → krgdk0s9fbLv=zurbVBaJ+_zYF8rgg
+Seed3: ROTATED → q8pv3yO7Z^iUTCgEPJtVgovNcOv7WB
+
+Stale Pre-Rotation File: /root/secrets/stale/seed1-poa.env.pre-rotation (blocked by guards)
+
+================================================================================
+RFC-006 TOKENOMICS (Active on Testnet)
+================================================================================
+MAX_SUPPLY:              90.2M KVNC (9_020_000_000_000_000 atoms)
+Genesis Subsidy (s₀):    10 KVNC/block
+Era Length:              2,050,000 blocks
+Decay (α):               3/4 per era
+Coinbase Maturity:       100 blocks (HARD CONSENSUS RULE)
+Fee Split:               75% burned / 25% producer (HARD CONSENSUS RULE)
+Fee Floor:               max(1, subsidy / 500_000) atoms/byte
+Curve Emission:          82M KVNC
+Founder Premine:         0.2M KVNC
+Treasury (vested):       8M KVNC (8 × 1M RFC-005 vaults)
+
+================================================================================
+SYSTEMD SERVICE FILES (Testnet)
+================================================================================
+Seed1: /etc/systemd/system/kovanica-seed1.service
+  - MemoryLimit=10G
+  - ExecStart=/usr/local/bin/kovanica-node explorer 0.0.0.0:8081
+  - EnvironmentFile=/etc/kovanica/network.env
+
+Seed1 (CONFLICTING): /etc/systemd/system/kovanica-explorer.service
+  - MemoryLimit=8G
+  - ExecStart=/root/kovanica/protocol/target/release/kovanica-node explorer 127.0.0.1:8080
+  - EnvironmentFile=/etc/kovanica/network.env
+  - MUST BE STOPPED AND DISABLED
+
+Seed2: /etc/systemd/system/kovanica-seed2.service
+  - MemoryLimit=10G
+  - ExecStart=/usr/local/bin/kovanica-node explorer 0.0.0.0:8082
+
+Seed3: /etc/systemd/system/kovanica-seed3.service
+  - MemoryLimit=10G
+  - ExecStart=/usr/local/bin/kovanica-node explorer 0.0.0.0:8083
+
+================================================================================
+DEPLOYMENT REPOS
+================================================================================
+Testnet Deploy:    /root/kovanica-testnet/          (active, has authority keys)
+Mainnet Deploy:    /root/kovanica-mainnet-deploy/   (template, 7 placeholder keys)
+Mainnet Template:  /root/kovanica-mainnet/          (empty authority keys)
+Devnet Config:     /root/kovanica-devnet/           (local)
+
+================================================================================
+KNOWN ISSUES SUMMARY
+================================================================================
+P0 - Critical:
+  1. seed1: Two conflicting services (kovanica-seed1 + kovanica-explorer)
+  2. seed1: OOM kills every ~5 min (memory leak / state retention)
+  3. seed1: Metrics port 9090 conflict
+  4. seed2/seed3: Not synced (different tips: c858af37... vs 2fe1f602...)
+  5. DNS seed.kovanica.online:9000 unreachable
+  6. Public explorers down (explorer.kovanica.online, testnet.kovanica.online)
+
+P1 - High:
+  7. Dashboard not running (port 3001)
+  8. config/mainnet/network.env has 11 inert env vars
+
+P2 - Medium:
+  9. PoW/hybrid code still in tree (marked [TARGET] for removal)
+  10. Mainnet authority keys empty (governance TBD)
+
+================================================================================
+QUICK COMMANDS
+================================================================================
+# Check all seeds
+curl -s http://145.223.116.178:8081/api/head | jq
+curl -s http://76.13.250.65:8082/api/head | jq
+curl -s http://187.7.27.139:8083/api/head | jq
+
+# Fix seed1 conflict
+ssh root@145.223.116.178 "systemctl stop kovanica-explorer && systemctl disable kovanica-explorer"
+
+# Check seed1 logs
+ssh root@145.223.116.178 "journalctl -u kovanica-seed1 -f"
+
+# Start dashboard
+cd /root/kovanica-dashboard/backend && python3 server.py &
+
+# Verify sync after seed1 fix
+curl -s http://76.13.250.65:8082/api/state | jq .node.blocks
+curl -s http://187.7.27.139:8083/api/state | jq .node.blocks
+
+# Build verification
+cd /root/kovanica/protocol && cargo test --workspace
+
+================================================================================
+END OF FILE
+================================================================================

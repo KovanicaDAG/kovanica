@@ -15,7 +15,7 @@
 >   PoW-era chain; the baselines must be **re-captured** post-transition.
 >
 > Not affected: RFC-006 tokenomics (**MAX_SUPPLY 90.2M KVNC**, s₀ **10
-> KVNC/block**, era **2 000 000**, **α 3/4**, maturity **100**, fee **75%
+> KVNC/block**, era **2 050 000**, **α 3/4**, maturity **100**, fee **75%
 > burned / 25% producer**) and GHOSTDAG **k=3** are untouched by the removal.
 
 ## Current Session: Public Mirror Pipeline & seed3 (2026-08-24)
@@ -128,7 +128,7 @@ Branch hygiene: every merged feature branch deleted; one archive tag
 - **Wire tags**: 0x20 (Ping), 0x21 (Pong), 0x22 (FindNode), 0x23 (Nodes)
 
 ### DNS Seed Resolver
-- **Seeds**: `seed.kovanica.online`, `seed2.kovanica.online` (`seed3` retired 2026-09-17)
+- **Seeds**: `seed.kovanica.online`, `seed2.kovanica.online` (the original AWS `seed3` was retired 2026-09-17; a new VPS at `187.7.27.139` is provisioned but **not yet in the default list** — pending DNS re-point as grey-cloud + node start, tracked in TESTNET-SOAK §7)
 - **Port**: 9000 (default)
 - **Fallbacks**: `127.0.0.1:9000`, `[::1]:9000`
 - **Injectable trait**: `DnsResolver` with `StdDnsResolver` and `MockDnsResolver`

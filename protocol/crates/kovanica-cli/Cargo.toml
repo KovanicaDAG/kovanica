@@ -24,6 +24,8 @@ getrandom.workspace = true
 anyhow.workspace = true
 blake3.workspace = true
 kovanica-state = { path = "../kovanica-state" }
+kovanica-airdrop = { path = "../../../sdk/crates/kovanica-airdrop" }
+kovanica-types = { path = "../../../sdk/crates/kovanica-types" }
 # Single source of truth for key derivation: the node uses this too, so one
 # mnemonic can never resolve to two different addresses.
 kovanica-wallet = { path = "../kovanica-wallet" }

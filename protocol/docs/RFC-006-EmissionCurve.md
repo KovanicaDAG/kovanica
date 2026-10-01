@@ -58,12 +58,12 @@ Design goals, in order:
 | Parameter | Value | Code |
 |-----------|-------|------|
 | Genesis subsidy \(s_0\) | **10 KVNC** / block | `RFC006_GENESIS_SUBSIDY` |
-| Era length \(E\) | **2_000_000** blocks | `RFC006_ERA_LENGTH` |
+| Era length \(E\) | **2_050_000** blocks | `RFC006_ERA_LENGTH` |
 | Decay \(\alpha\) | **3/4** per era (integer floor) | — |
 | Nominal curve total | **80 000 000 KVNC** | — |
 
 ```text
-era   = height / 2_000_000
+era   = height / 2_050_000
 s(0)  = 10 KVNC
 s(e)  = floor(s(e-1) * 3 / 4)
 subsidy_at(height) = s(era),  and 0 for era >= 256
@@ -89,20 +89,30 @@ Worked values (confirmed against `supply-calc_subsidyAt`):
 Summing `s(e) · E` over all 256 eras with integer flooring at every step yields
 
 ```text
-realized curve total = 79 999 997.6 KVNC   (2.4 KVNC below the nominal 80M)
+realized curve total = 81 999 997.54 KVNC   (2.46 KVNC below the nominal 82M)
 ```
 
 The shortfall is repeated truncation, not a policy reserve. Consequently the
 honest emission ceiling is
 
 ```text
-0.2M premine + 10M treasury + 79 999 997.6 curve = 90 199 997.8 KVNC
+0.2M premine + 8M treasury + 79 999 997.6 curve = 88 199 997.8 KVNC
 ```
 
-i.e. **~2.2 KVNC below `MAX_SUPPLY`**. The cap is a backstop that honest
-subsidy can never reach; it exists to reject *malformed or over-claiming*
-coinbases (§4), not to truncate the curve. Docs that quote a flat "80M curve"
-are quoting the asymptotic limit.
+i.e. **~2.0M KVNC below `MAX_SUPPLY`** (2 000 002.2 KVNC exactly, of which
+2 000 000 is the treasury cut and 2.2 is the pre-existing truncation shortfall).
+The cap is a backstop that honest subsidy can never reach; it exists to reject
+*malformed or over-claiming* coinbases (§4), not to truncate the curve. Docs that
+quote a flat "82M curve" are quoting the asymptotic limit.
+
+The freed 2M was **reallocated to the curve**: treasury was cut from 10 × 1M to
+8 × 1M on 2026-09-29, and the curve rose from 80M to 82M to match. Curve emission
+is derived from `s0`, era length and α, so the 2M was absorbed by moving the era
+length `E` from 2_000_000 to **2_050_000** — chosen over `s0` or α because `s0` is
+the most widely-quoted tokenomics number and also feeds the fee floor
+(`subsidy / 500_000`) and `/api/head`. The only residual gap is the 2.46 KVNC lost
+to per-era integer flooring. `MAX_SUPPLY` remains a **ceiling, never a target**:
+do not top up to close it, and do not lower the cap either.
 
 ---
 
@@ -111,8 +121,8 @@ are quoting the asymptotic limit.
 | Component | Amount | Mechanism |
 |-----------|--------|-----------|
 | Founder premine | 0.2M KVNC | Genesis coinbase (P2PK), `RFC006_PREMINE` |
-| Treasury | 10M KVNC | 10 × 1M RFC-005 vaults at genesis |
-| Curve emission | 80M KVNC (nominal) | Block subsidies |
+| Treasury | 8M KVNC | 8 × 1M RFC-005 vaults at genesis |
+| Curve emission | 82M KVNC (nominal) | Block subsidies |
 | **MAX_SUPPLY** | **90.2M KVNC** = `9_020_000_000_000_000` atoms | enforced per-view |
 
 ### 4.1 Enforcement
@@ -332,12 +342,12 @@ distribution. This is a *pace* bound. `MAX_SUPPLY` remains the hard ceiling.
 | Parameter | Value |
 |-----------|--------|
 | Genesis subsidy \(s_0\) | **10 KVNC** per block |
-| Era length \(E\) | **2_000_000** blocks |
+| Era length \(E\) | **2_050_000** blocks |
 | Decay \(\alpha\) | **3/4** per era (integer floor) |
 | Curve total | **80_000_000 KVNC** |
 
 ```text
-era = floor(height / 2_000_000)
+era = floor(height / 2_050_000)
 s(era) = floor(s(era-1) * 3/4)   with s(0) = 10 KVNC
 ```
 
@@ -346,8 +356,8 @@ s(era) = floor(s(era-1) * 3/4)   with s(0) = 10 KVNC
 | Component | Amount | Mechanism |
 |-----------|--------|-----------|
 | Founder premine | 0.2M KVNC | Genesis coinbase (P2PK) |
-| Treasury | 10M KVNC | 10 × 1M RFC-005 vaults at genesis |
-| Curve emission | 80M KVNC | Block subsidies |
+| Treasury | 8M KVNC | 8 × 1M RFC-005 vaults at genesis |
+| Curve emission | 82M KVNC | Block subsidies |
 | **MAX_SUPPLY** | **90.2M KVNC** | Enforced via `native_minted` |
 
 Treasury tranche *k* (1..=10) unlocks at height `k * 31_536_000`.

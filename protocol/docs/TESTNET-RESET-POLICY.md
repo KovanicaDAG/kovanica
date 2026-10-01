@@ -123,7 +123,7 @@ reset trigger.
 | RFC-006 tokenomics constants | ✅ | 90.2M cap, s₀=10 KVNC, era 2M, α=¾, maturity 100, fee 75/25 — frozen. **Unaffected by the PoA-only decision:** the curve is height-indexed and `cumulative_minted` is capped in `apply_block` |
 | PoA authority set | ⚠️ `[TARGET]` | Re-established at the new genesis. Mainnet refuses to boot without an explicit `KOVANICA_AUTHORITIES`. Testnet falls back to the deterministic placeholder set from `AUTHORITY_PLACEHOLDER_BASE = 9001` (publicly derivable, testnet-only) — **but gate 1 above requires replacing that with ceremony keys, and the new genesis must commit those.** Once the real set is committed, the node records the set commitment to `$KOVANICA_DATA/<node>.authorities` and refuses to boot under a different set, so the placeholder→real transition needs a data-dir wipe (i.e. part of this reset, not after it) |
 | Pre-reset balances | ❌ | Wiped at activation forks (RFC-006 wiped all pre-fork balances; the PoA transition will too) |
-| Treasury vaults | ⚠️ | Re-created from the RFC-006 genesis (10 × 1M vaults) |
+| Treasury vaults | ⚠️ | Re-created from the RFC-006 genesis (8 × 1M vaults) |
 | Node data dirs (`KOVANICA_DATA`) | ❌ | Must be deleted before first sync on the new genesis |
 
 ## 3. Reset procedure (operator-only)

@@ -614,6 +614,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-airdrop"
+version = "0.4.0"
+dependencies = [
+ "blake3",
+ "kovanica-types",
+ "serde",
+]
+
+[[package]]
+name = "kovanica-bridge"
+version = "0.4.0"
+dependencies = [
+ "blake3",
+ "kovanica-tx",
+ "kovanica-types",
+ "rand 0.8.8",
+ "serde",
+]
+
+[[package]]
+name = "kovanica-dex"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "blake3",
+ "kovanica-keys",
+ "kovanica-tx",
+ "kovanica-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "kovanica-fee"
 version = "0.1.0-alpha.1"
 dependencies = [
@@ -640,6 +674,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-merchant"
+version = "0.4.0"
+dependencies = [
+ "blake3",
+ "kovanica-airdrop",
+ "kovanica-bridge",
+ "kovanica-tx",
+ "kovanica-types",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "kovanica-rpc"
 version = "0.1.0-alpha.1"
 dependencies = [
@@ -658,6 +705,7 @@ name = "kovanica-sdk"
 version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
+ "kovanica-airdrop",
  "kovanica-fee",
  "kovanica-keys",
  "kovanica-rpc",
@@ -1430,6 +1478,18 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
+
+[[package]]
+name = "uuid"
+version = "1.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "serde_core",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "version_check"

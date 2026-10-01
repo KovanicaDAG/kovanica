@@ -3,7 +3,7 @@
 //! Four groups, all deterministic:
 //!
 //! * **(a) emission curve** — the subsidy decays geometrically by ×3/4 per era
-//!   (Monero/Kaspa-style smooth tail), the closed-form sum is 80M KVNC, and
+//!   (Monero/Kaspa-style smooth tail), the closed-form sum is 82M KVNC, and
 //!   the curve terminates after 256 eras;
 //! * **(b) supply cap** — cumulative native issuance may never exceed
 //!   [`MAX_SUPPLY`] (Bitcoin's `MAX_MONEY` analogue), enforced per-view so two
@@ -64,9 +64,9 @@ fn emission_decays_geometrically_by_three_quarters_per_era() {
 }
 
 #[test]
-fn emission_closed_form_total_is_80m_kvnc() {
+fn emission_closed_form_total_is_82m_kvnc() {
     // Closed form of the geometric series: 4 × genesis_subsidy × era.
-    let expected: u128 = 4 * (10 * ATOM) as u128 * ERA as u128; // 80M KVNC
+    let expected: u128 = 4 * (10 * ATOM) as u128 * ERA as u128; // 82M KVNC
     let mut total: u128 = 0;
     for era in 0..256u64 {
         let subsidy = SCHEDULE.subsidy_at(era * ERA) as u128;

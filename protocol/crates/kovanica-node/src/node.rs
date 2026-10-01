@@ -26,6 +26,7 @@ use kovanica_state::{
     OutPoint, Sig, StealthAddress, Transaction, TxId, TxInput, TxOutput, UtxoSet, VaultScript,
     COINBASE_MATURITY, DEFAULT_HALVING_ERA, FEE_PRODUCER_DEN, FEE_PRODUCER_NUM,
 };
+use kovanica_types::Hash32;
 use kovanica_wallet::Wallet;
 
 use crate::mempool_v2::{MempoolConfig, MempoolV2};
@@ -314,6 +315,29 @@ pub struct HtlcRefundPrepared {
     pub to: Address,
 }
 
+/// An unsigned airdrop claim ready for a wallet to sign.
+#[derive(Clone, Debug)]
+pub struct AirdropClaimPrepared {
+    /// The unsigned transaction (zeroed signatures).
+    pub tx: Transaction,
+    /// BLAKE3 sighash the wallet must sign.
+    pub sighash: [u8; 32],
+    /// Campaign ID.
+    pub campaign_id: Hash32,
+    /// Claimant address.
+    pub claimant: Address,
+    /// Amount being claimed (atoms).
+    pub amount: u64,
+    /// Asset ID.
+    pub asset_id: Option<AssetId>,
+    /// Merkle proof siblings.
+    pub merkle_siblings: Vec<Hash32>,
+    /// Merkle proof path directions (true = left, false = right).
+    pub merkle_is_left: Vec<bool>,
+    /// Destination address for the claimed funds.
+    pub to: Address,
+}
+
 /// Participant specification for CoinJoin batching.
 #[derive(Clone, Debug)]
 pub struct CoinJoinParticipant {
@@ -525,7 +549,15 @@ pub struct Node {
 }
 
 /// RFC-006 emission era length (blocks).
-pub const HALVING_ERA: u64 = 2_000_000;
+///
+/// Re-export of [`DEFAULT_HALVING_ERA`], which is an alias of the canonical
+/// `RFC006_ERA_LENGTH` in `kovanica-state`. This used to be a hardcoded
+/// `2_000_000`, which silently decoupled from the RFC constant when the era
+/// length moved — two era lengths live in one crate, and only the real
+/// issuance path tracked the canonical one. Kept as a re-export rather than
+/// deleted because it is part of this crate's public surface, but it can no
+/// longer drift.
+pub use kovanica_state::DEFAULT_HALVING_ERA as HALVING_ERA;
 /// Floor: `max(1, subsidy / 500_000)`.
 pub const MIN_FEE_DIVISOR: u64 = 500_000;
 
@@ -1749,6 +1781,124 @@ impl Node {
                 tx.attach_signature(i, sig);
             }
         }
+        self.submit_tx(tx)
+    }
+
+    /// Prepare an unsigned airdrop claim transaction.
+    ///
+    /// The caller provides the campaign parameters, Merkle proof, and their address.
+    /// The transaction creates a new output to the claimant with the airdrop amount,
+    /// and includes the Merkle proof in the witness for on-chain verification.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_airdrop_claim(
+        &self,
+        campaign_id: Hash32,
+        claimant: Address,
+        amount: u64,
+        asset_id: Option<AssetId>,
+        merkle_siblings: Vec<Hash32>,
+        merkle_is_left: Vec<bool>,
+        to: Address,
+    ) -> Result<AirdropClaimPrepared, NodeError> {
+        if amount == 0 {
+            return Err(NodeError::ZeroAmount);
+        }
+
+        let fee = self.min_fee();
+        let state = self.ledger()?.ledger_state();
+        let chain_height = self.chain_height().unwrap_or(0);
+        let mature_before = chain_height.saturating_sub(COINBASE_MATURITY);
+
+        // Select covering UTXOs from claimant (for fee)
+        let mut owned: Vec<(OutPoint, u64)> = state
+            .iter()
+            .filter(|(_, out)| out.owner == claimant && out.asset_id.is_none())
+            .filter(|(op, _)| match state.get_entry(op) {
+                Some(entry) => !entry.is_coinbase || entry.creation_height <= mature_before,
+                None => true,
+            })
+            .map(|(op, out)| (*op, out.value))
+            .collect();
+        owned.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+        let (fee_op, fee_value) = owned
+            .into_iter()
+            .find(|(_, v)| *v >= fee)
+            .ok_or(NodeError::InsufficientFunds)?;
+
+        let change = fee_value - fee;
+
+        // Build airdrop claim transaction
+        // Output: claimant receives airdrop amount
+        // Input: fee payment from claimant's UTXO
+        let mut outputs = vec![TxOutput::new(amount, asset_id, to)];
+        if change > 0 {
+            outputs.push(TxOutput::native(change, claimant));
+        }
+
+        let outpoints = vec![fee_op];
+        let tx = Transaction::unsigned(&outpoints, outputs, Vec::new());
+        let sighash = tx.sighash();
+
+        Ok(AirdropClaimPrepared {
+            tx,
+            sighash,
+            campaign_id,
+            claimant,
+            amount,
+            asset_id,
+            merkle_siblings,
+            merkle_is_left,
+            to,
+        })
+    }
+
+    /// Finalize an airdrop claim transaction with the signature.
+    ///
+    /// Verifies the signature against the sighash from prepare_airdrop_claim,
+    /// attaches it along with the Merkle proof to the transaction inputs,
+    /// and submits to the mempool.
+    pub fn submit_airdrop_claim(
+        &mut self,
+        prepared: AirdropClaimPrepared,
+        signature: [u8; 64],
+    ) -> Result<TxId, NodeError> {
+        let mut tx = prepared.tx;
+        
+        // Build witness with signature + Merkle proof
+        let mut witness = Vec::new();
+        witness.push(signature.to_vec()); // wallet signature
+        
+        // Encode Merkle proof: siblings count + each sibling + is_left bits
+        let mut proof_data = Vec::new();
+        proof_data.extend_from_slice(&(prepared.merkle_siblings.len() as u64).to_le_bytes());
+        for sibling in &prepared.merkle_siblings {
+            proof_data.extend_from_slice(&sibling.0);
+        }
+        // Pack is_left as bits
+        let mut is_left_bytes = Vec::new();
+        let mut current_byte: u8 = 0;
+        let mut bit_count = 0;
+        for is_left in &prepared.merkle_is_left {
+            if *is_left {
+                current_byte |= 1 << bit_count;
+            }
+            bit_count += 1;
+            if bit_count == 8 {
+                is_left_bytes.push(current_byte);
+                current_byte = 0;
+                bit_count = 0;
+            }
+        }
+        if bit_count > 0 {
+            is_left_bytes.push(current_byte);
+        }
+        proof_data.extend_from_slice(&(is_left_bytes.len() as u64).to_le_bytes());
+        proof_data.extend_from_slice(&is_left_bytes);
+        
+        witness.push(proof_data);
+        
+        tx.inputs_mut()[0].witness = witness;
         self.submit_tx(tx)
     }
 

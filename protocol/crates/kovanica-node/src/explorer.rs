@@ -39,7 +39,7 @@ use crate::p2p::Mesh;
 const ATOM: u64 = 100_000_000;
 /// RFC-006 genesis subsidy: 10 KVNC/block.
 const GENESIS_SUBSIDY: u64 = 10 * ATOM;
-/// RFC-006 founder premine: 0.2M KVNC (+ 10M treasury vaults in coinbase).
+/// RFC-006 founder premine: 0.2M KVNC (+ 8M treasury vaults in coinbase).
 const GENESIS_PREMINE: u64 = 200_000 * ATOM;
 /// Founder actor seed used by `genesis_node()` (deterministic keys).
 const FOUNDER_SEED: u64 = 1;
@@ -516,6 +516,29 @@ pub struct Explorer {
     pub origins: HashMap<String, u64>,
     /// Peers that answered our last sync attempt (live connectivity).
     pub live_peers: HashSet<String>,
+    /// Last sync error observed per peer, used to log a peer-sync failure only
+    /// when it *changes*.
+    ///
+    /// Sync runs on a timer (`ticks % 250`), so a peer that is permanently
+    /// unreachable — a retired bootstrap seed, a peer behind a dead port — would
+    /// otherwise reprint an identical error every ~10s forever. Keying on the
+    /// error text collapses that to one line per distinct failure while still
+    /// surfacing a *new* failure the moment it appears. Without this the
+    /// outbound path failed completely silently: [`Explorer::sync_peers`] used
+    /// to take a `log: bool` that every steady-state caller passed as `false`,
+    /// and its `Err` arm was gated behind that flag, so a node that could reach
+    /// nothing looked identical to a node that was fully synced.
+    pub peer_sync_errors: HashMap<String, String>,
+    /// Rotating start offset into [`Explorer::peers`] for the outbound sync pass.
+    ///
+    /// Peers are dialled sequentially with a per-peer timeout, so a peer that is
+    /// first in the list is always dialled first and always pays its full
+    /// timeout before any other peer is attempted. A permanently dead entry at
+    /// the head of the list therefore delays every live peer by a full timeout
+    /// on every pass. Advancing the cursor by one peer per pass means a dead
+    /// peer is only ever first on every Nth pass, so it can no longer
+    /// deterministically starve the peers behind it.
+    peer_sync_cursor: usize,
     pub ws_clients: Arc<Mutex<Vec<Arc<Mutex<TcpStream>>>>>,
     /// DHT routing table for the explorer's alpha node.
     pub dht_table: Option<RoutingTable>,
@@ -554,6 +577,8 @@ impl Explorer {
             peers: Vec::new(),
             origins: HashMap::new(),
             live_peers: HashSet::new(),
+            peer_sync_errors: HashMap::new(),
+            peer_sync_cursor: 0,
             ws_clients: Arc::new(Mutex::new(Vec::new())),
             dht_table: None,
             dht_node_id: None,
@@ -698,7 +723,16 @@ impl Explorer {
                         eprintln!("kovanica p2p headers-first served {peer}");
                         persist_all(&mut self.mesh);
                     }
-                    Err(_e) => {
+                    Err(e) => {
+                        // Surface why the efficient path did not serve this
+                        // peer. This arm used to bind `_e` and discard it, which
+                        // made a persistently broken handshake look exactly like
+                        // a normal full-dump exchange in the logs — the reason a
+                        // live seed could be stuck on the fallback path with no
+                        // indication of the cause.
+                        eprintln!(
+                            "kovanica p2p headers-first serve {peer} failed: {e}; falling back to full dump"
+                        );
                         // Fall back to legacy full-dump exchange
                         stream.set_nonblocking(false).unwrap();
                         match serve_exchange(&mut stream, n, Duration::from_millis(800)) {
@@ -719,18 +753,43 @@ impl Explorer {
             }
         }
         if !self.peers.is_empty() && self.ticks % 250 == 0 {
-            self.sync_peers(Duration::from_millis(800), false);
+            self.sync_peers(Duration::from_millis(800));
         }
     }
 
-    fn sync_peers(&mut self, timeout: Duration, log: bool) {
+    /// Dial order for this pass: every peer exactly once, starting at `cursor`.
+    ///
+    /// Peers are dialled sequentially with a per-peer timeout, so the first
+    /// entry in the list always pays its timeout before anything else is
+    /// attempted. A permanently dead entry therefore front-runs the whole list
+    /// on every pass unless the start point moves. Returns a rotation of
+    /// `peers` (same multiset, same relative order) — never a subset, so a pass
+    /// can never silently skip a live peer. Empty input yields empty output.
+    fn dial_order(&self, peers: &[String]) -> Vec<String> {
+        if peers.is_empty() {
+            return Vec::new();
+        }
+        let start = self.peer_sync_cursor % peers.len();
+        peers[start..]
+            .iter()
+            .chain(peers[..start].iter())
+            .cloned()
+            .collect()
+    }
+
+    fn sync_peers(&mut self, timeout: Duration) {
         let peers = self.peers.clone();
         if peers.is_empty() {
             return;
         }
+        // Rotate the dial order (see [`Explorer::dial_order`]) and advance the
+        // cursor for next pass. Computed before `node_mut` so the cursor update
+        // does not fight the mesh borrow.
+        let order = self.dial_order(&peers);
+        self.peer_sync_cursor = (self.peer_sync_cursor + 1) % order.len();
         let mut answered: HashSet<String> = HashSet::new();
         if let Some(n) = self.mesh.node_mut("alpha") {
-            for addr in peers {
+            for addr in order {
                 // Try headers-first sync first (more efficient)
                 match sync_headers_first(&addr, n, timeout) {
                     Ok(stats) if stats.bodies_applied > 0 => {
@@ -762,11 +821,19 @@ impl Explorer {
                     Ok(_) => {
                         // Reachable, just nothing new to apply.
                         answered.insert(addr.clone());
+                        self.peer_sync_errors.remove(&addr);
                     }
                     Err(e) => {
-                        // Fall back to legacy full-dump pull
-                        if log {
-                            eprintln!("kovanica p2p headers-first failed {addr}: {e}, falling back to full dump");
+                        // Log on *change* only: sync runs on a timer, so a dead
+                        // peer would otherwise reprint forever. Previously this
+                        // arm was gated behind `log`, which `tick_p2p` never
+                        // sets, so every outbound sync failure was invisible.
+                        let msg = e.to_string();
+                        if self.peer_sync_errors.get(&addr) != Some(&msg) {
+                            eprintln!(
+                                "kovanica p2p headers-first failed {addr}: {e}, falling back to full dump"
+                            );
+                            self.peer_sync_errors.insert(addr.clone(), msg);
                         }
                         match pull_blocks_timeout(&addr, n, timeout) {
                             Ok(k) if k > 0 => {
@@ -774,9 +841,16 @@ impl Explorer {
                                     "kovanica p2p pulled {k} records from {addr} (full dump)"
                                 );
                                 answered.insert(addr.clone());
+                                self.peer_sync_errors.remove(&addr);
                             }
                             Ok(_) => {}
-                            Err(_) => {}
+                            Err(fe) => {
+                                let fmsg = format!("headers-first: {e}; full dump: {fe}");
+                                if self.peer_sync_errors.get(&addr) != Some(&fmsg) {
+                                    eprintln!("kovanica p2p peer {addr} unreachable: {fe}");
+                                    self.peer_sync_errors.insert(addr.clone(), fmsg);
+                                }
+                            }
                         }
                     }
                 }
@@ -846,6 +920,8 @@ impl Explorer {
             peers,
             origins: load_origins(),
             live_peers: HashSet::new(),
+            peer_sync_errors: HashMap::new(),
+            peer_sync_cursor: 0,
             ws_clients: Arc::new(Mutex::new(Vec::new())),
             dht_table: None,
             dht_node_id: Some(node_id),
@@ -853,7 +929,7 @@ impl Explorer {
             last_dht_bootstrap: 0,
             last_dht_replenish: 0,
         };
-        app.sync_peers(Duration::from_secs(3), true);
+        app.sync_peers(Duration::from_secs(3));
         Ok(app)
     }
 
@@ -2254,6 +2330,41 @@ pub fn handle(app: &mut Explorer, mut stream: TcpStream) -> std::io::Result<()> 
             }
         }
     }
+    if method == "GET" && path == "/api/dex/tokens" {
+        match dex_tokens_json(app, &query) {
+            Ok(body) => return respond(&mut stream, 200, "application/json", body.as_bytes()),
+            Err(e) => {
+                return respond(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    err_json(&e).as_bytes(),
+                )
+            }
+        }
+    }
+    if method == "GET" && path.starts_with("/api/token/") {
+        let asset_id_str = path.trim_start_matches("/api/token/");
+        match token_detail_json(app, asset_id_str, &query) {
+            Ok(body) => return respond(&mut stream, 200, "application/json", body.as_bytes()),
+            Err(e) if e == "token not found" || e == "asset is an NFT, not a fungible token" => {
+                return respond(
+                    &mut stream,
+                    404,
+                    "application/json",
+                    err_json(&e).as_bytes(),
+                );
+            }
+            Err(e) => {
+                return respond(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    err_json(&e).as_bytes(),
+                )
+            }
+        }
+    }
     if method == "GET" && path == "/api/fee_estimate" {
         match fee_estimate_json(app, &query) {
             Ok(body) => return respond(&mut stream, 200, "application/json", body.as_bytes()),
@@ -3470,6 +3581,46 @@ fn dispatch(
             app.mesh.drain(8);
             return Ok(format!("{{\"ok\":true,\"tx\":{}}}", jstr(&id.to_string())));
         }
+        "airdrop/prepare-claim" => {
+            let campaign_id = kovanica_types::Hash32(parse_hash(q.get("campaign_id").ok_or("campaign_id required")?)?);
+            let claimant = parse_addr(q.get("claimant").ok_or("claimant required")?)?;
+            let amount = parse_u64(q, "amount", 0)?;
+            let asset_id = crate::node::asset_id_from_wire(q.get("asset_id").map(String::as_str))?;
+            let merkle_siblings_bytes = parse_hash_array(q.get("merkle_siblings").ok_or("merkle_siblings required")?)?;
+            let merkle_siblings: Vec<kovanica_types::Hash32> = merkle_siblings_bytes.into_iter().map(kovanica_types::Hash32).collect();
+            let merkle_is_left = parse_bool_array(q.get("merkle_is_left").ok_or("merkle_is_left required")?)?;
+            let to = parse_addr(q.get("to").ok_or("to address required")?)?;
+            let n = app.mesh.node(&node).ok_or("unknown node")?;
+            let p = n
+                .prepare_airdrop_claim(campaign_id, claimant, amount, asset_id, merkle_siblings, merkle_is_left, to)
+                .map_err(|e| e.to_string())?;
+            return Ok(format!(
+                "{{\"ok\":true,\"sighash\":{},\"campaign_id\":{},\"claimant\":{},\"amount\":{},\"asset_id\":{}}}",
+                jstr(&hex::encode(p.sighash)),
+                jstr(&p.campaign_id.to_string()),
+                jstr(&p.claimant.to_kvnc()),
+                p.amount,
+                jstr(&crate::node::asset_id_to_wire(p.asset_id))
+            ));
+        }
+        "airdrop/finalize-claim" => {
+            let campaign_id = kovanica_types::Hash32(parse_hash(q.get("campaign_id").ok_or("campaign_id required")?)?);
+            let claimant = parse_addr(q.get("claimant").ok_or("claimant required")?)?;
+            let amount = parse_u64(q, "amount", 0)?;
+            let asset_id = crate::node::asset_id_from_wire(q.get("asset_id").map(String::as_str))?;
+            let merkle_siblings_bytes = parse_hash_array(q.get("merkle_siblings").ok_or("merkle_siblings required")?)?;
+            let merkle_siblings: Vec<kovanica_types::Hash32> = merkle_siblings_bytes.into_iter().map(kovanica_types::Hash32).collect();
+            let merkle_is_left = parse_bool_array(q.get("merkle_is_left").ok_or("merkle_is_left required")?)?;
+            let to = parse_addr(q.get("to").ok_or("to address required")?)?;
+            let sig = parse_sig(q.get("sig").ok_or("sig required")?)?;
+            let n = app.mesh.node_mut(&node).ok_or("unknown node")?;
+            let p = n
+                .prepare_airdrop_claim(campaign_id, claimant, amount, asset_id, merkle_siblings, merkle_is_left, to)
+                .map_err(|e| e.to_string())?;
+            let id = n.submit_airdrop_claim(p, sig).map_err(|e| e.to_string())?;
+            app.mesh.drain(8);
+            return Ok(format!("{{\"ok\":true,\"tx\":{}}}", jstr(&id.to_string())));
+        }
         "faucet" => {
             if !app.faucet {
                 return Err("faucet disabled".into());
@@ -3868,6 +4019,195 @@ fn collection_detail_json(
         jstr(&hex::encode(collection_id)),
         jarr(assets.into_iter())
     ))
+}
+
+/// DEX token listing: returns all fungible tokens (non-NFT, non-RWA) from asset registry.
+/// GET /api/dex/tokens
+fn dex_tokens_json(
+    app: &Explorer,
+    q: &std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    let node_name = q
+        .get("node")
+        .cloned()
+        .unwrap_or_else(|| app.selected.clone());
+    let n = app.mesh.node(&node_name).ok_or("unknown node")?;
+    let ledger = n.ledger().map_err(|e| e.to_string())?;
+    let asset_registry = ledger.asset_registry();
+    let state = ledger.ledger_state();
+
+    // Optional search query
+    let search = q.get("search").map(|s| s.to_lowercase());
+
+    // Find all fungible tokens (not NFT, not RWA, not native)
+    let mut tokens = Vec::new();
+    for (asset_id, entry) in asset_registry {
+        // Skip native KVNC
+        if asset_id.is_native() {
+            continue;
+        }
+        // Skip NFTs
+        if entry.is_nft() {
+            continue;
+        }
+        // Skip RWAs (check kind - no RWA kind in current AssetKind, but keep for future)
+        if entry.kind != kovanica_state::AssetKind::Fungible {
+            continue;
+        }
+
+        // Apply search filter
+        if let Some(ref search) = search {
+            let name = entry.metadata_hash.map(hex::encode).unwrap_or_default();
+            // Note: metadata isn't directly available in registry, but we can check if name matches
+            if !name.to_lowercase().contains(search) {
+                continue;
+            }
+        }
+
+        // Find current supply (sum of all UTXOs with this asset)
+        let mut total_supply: u64 = 0;
+        for (_, out) in state.iter() {
+            if out.asset_id == Some(*asset_id) {
+                total_supply = total_supply.saturating_add(out.value);
+            }
+        }
+
+        // Find a sample holder for owner info
+        let mut holder = None;
+        for (_, out) in state.iter() {
+            if out.asset_id == Some(*asset_id) {
+                holder = Some(out.owner);
+                break;
+            }
+        }
+
+        let meta_hash = entry.metadata_hash.map(hex::encode);
+        let meta_hash_json = meta_hash
+            .as_deref()
+            .map(jstr)
+            .unwrap_or_else(|| "null".to_string());
+        let holder_json = holder
+            .map(|a| jstr(&a.to_kvnc()))
+            .unwrap_or_else(|| "null".to_string());
+
+        tokens.push(format!(
+            "{{\"asset_id\":{},\"total_supply\":{},\"metadata_hash\":{},\"holder\":{}}}",
+            jstr(&asset_id.to_hex()),
+            total_supply,
+            meta_hash_json,
+            holder_json
+        ));
+    }
+
+    Ok(format!("{{\"tokens\":{}}}", jarr(tokens.into_iter())))
+}
+
+/// Token detail: returns registry entry + supply + holders for a fungible token.
+/// GET /api/token/<asset_id>
+fn token_detail_json(
+    app: &Explorer,
+    asset_id_str: &str,
+    q: &std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    let node_name = q
+        .get("node")
+        .cloned()
+        .unwrap_or_else(|| app.selected.clone());
+    let n = app.mesh.node(&node_name).ok_or("unknown node")?;
+    let ledger = n.ledger().map_err(|e| e.to_string())?;
+    let asset_registry = ledger.asset_registry();
+    let state = ledger.ledger_state();
+
+    // Parse asset_id from hex
+    let asset_id_bytes =
+        hex::decode(asset_id_str.trim()).map_err(|_| "asset_id is not hex".to_string())?;
+    if asset_id_bytes.len() != 32 {
+        return Err("asset_id must be 32 bytes (64 hex chars)".to_string());
+    }
+    let mut asset_id_arr = [0u8; 32];
+    asset_id_arr.copy_from_slice(&asset_id_bytes);
+    let asset_id = kovanica_state::AssetId::from_bytes(asset_id_arr);
+
+    // Skip native KVNC
+    if asset_id.is_native() {
+        return Err("use /api/head for native KVNC info".to_string());
+    }
+
+    // Get registry entry
+    let entry = asset_registry.get(&asset_id).ok_or("token not found")?;
+    if entry.is_nft() {
+        return Err("asset is an NFT, not a fungible token".to_string());
+    }
+    if entry.kind != kovanica_state::AssetKind::Fungible {
+        return Err("asset is an RWA, not a fungible token".to_string());
+    }
+
+    // Calculate total supply from UTXOs
+    let mut total_supply: u64 = 0;
+    let mut holders: Vec<TokenHolder> = Vec::new();
+    for (_op, out) in state.iter() {
+        if out.asset_id == Some(asset_id) {
+            total_supply = total_supply.saturating_add(out.value);
+            // Track unique holders with their balances
+            let mut found = false;
+            for h in &mut holders {
+                if h.address == out.owner {
+                    h.balance = h.balance.saturating_add(out.value);
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                holders.push(TokenHolder {
+                    address: out.owner,
+                    balance: out.value,
+                });
+            }
+        }
+    }
+
+    // Sort holders by balance descending
+    holders.sort_by_key(|a| std::cmp::Reverse(a.balance));
+
+    let meta_hash = entry.metadata_hash.map(hex::encode);
+    let meta_hash_json = meta_hash
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let coll_id = entry.collection_id.map(hex::encode);
+    let coll_id_json = coll_id
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+    let creator = entry.creator.map(hex::encode);
+    let creator_json = creator
+        .as_deref()
+        .map(jstr)
+        .unwrap_or_else(|| "null".to_string());
+
+    let holders_json = holders
+        .into_iter()
+        .map(|h| format!("{{\"address\":{},\"balance\":{}}}", jstr(&h.address.to_kvnc()), h.balance))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    Ok(format!(
+        "{{\"asset_id\":{},\"kind\":\"token\",\"max_supply\":{},\"minted\":{},\"total_supply\":{},\"metadata_hash\":{},\"collection_id\":{},\"creator\":{},\"holders\":[{}]}}",
+        jstr(&asset_id.to_hex()),
+        entry.max_supply,
+        entry.minted,
+        total_supply,
+        meta_hash_json,
+        coll_id_json,
+        creator_json,
+        holders_json
+    ))
+}
+
+/// Helper struct for token holder tracking
+struct TokenHolder {
+    address: kovanica_state::Address,
+    balance: u64,
 }
 
 /// Derive RWA asset_id from issuer key and parameters (KVP-106).
@@ -4419,6 +4759,28 @@ fn parse_hash(s: &str) -> Result<[u8; 32], String> {
         .map_err(|_| "hash must be 32 bytes (64 hex chars)".to_string())
 }
 
+/// Parse JSON array of hex hashes: ["hash1", "hash2", ...]
+fn parse_hash_array(s: &str) -> Result<Vec<[u8; 32]>, String> {
+    let v: Vec<String> = serde_json::from_str(s).map_err(|_| "invalid hash array JSON")?;
+    let mut result = Vec::new();
+    for h in v {
+        let bytes = hex::decode(h.trim()).map_err(|_| "hash is not hex")?;
+        if bytes.len() != 32 {
+            return Err("hash must be 32 bytes".into());
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        result.push(arr);
+    }
+    Ok(result)
+}
+
+/// Parse JSON array of booleans: [true, false, true, ...]
+fn parse_bool_array(s: &str) -> Result<Vec<bool>, String> {
+    let v: Vec<bool> = serde_json::from_str(s).map_err(|_| "invalid bool array JSON")?;
+    Ok(v)
+}
+
 /// Parse arbitrary hex to bytes.
 fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
     hex::decode(s.trim()).map_err(|_| "not valid hex".to_string())
@@ -4773,6 +5135,67 @@ mod tests {
         mesh.node_mut(name).expect("node exists").set_now_ms(1);
     }
 
+    /// A dead peer at the head of the list must not front-run the live peers on
+    /// every pass.
+    ///
+    /// `sync_peers` dials sequentially with a per-peer timeout, so a peer that
+    /// is first in the list always pays a full timeout before any other peer is
+    /// reached. Live testnet had exactly that shape — `seed.kovanica.online`
+    /// (dead) at the head of a list whose live peers were behind it — so every
+    /// sync pass spent its budget on the corpse before touching a live node.
+    /// The cursor advances one slot per pass, so a dead peer is first only on
+    /// every Nth pass.
+    #[test]
+    fn dial_order_rotates_so_no_peer_is_always_first() {
+        let mut app = Explorer::boot();
+        let peers: Vec<String> = ["dead:9000", "live-a:9000", "live-b:9000"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut starts = Vec::new();
+        for _ in 0..3 {
+            starts.push(app.dial_order(&peers)[0].clone());
+            // Same advance the sync pass performs.
+            app.peer_sync_cursor = (app.peer_sync_cursor + 1) % peers.len();
+        }
+        assert_eq!(
+            starts,
+            vec!["dead:9000", "live-a:9000", "live-b:9000"],
+            "each peer must get a turn at the head across three passes"
+        );
+    }
+
+    /// Rotation is a permutation, never a filter: a pass that started at a
+    /// non-zero cursor must still visit every peer, and wrap-around at the end
+    /// of the cursor cycle must not drop the tail of the list.
+    #[test]
+    fn dial_order_is_a_permutation_at_every_cursor_position() {
+        let mut app = Explorer::boot();
+        let peers: Vec<String> = ["a:9000", "b:9000", "c:9000", "d:9000"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        for cursor in 0..peers.len() {
+            app.peer_sync_cursor = cursor;
+            let order = app.dial_order(&peers);
+            assert_eq!(order.len(), peers.len(), "cursor {cursor} lost a peer");
+            let mut sorted_order = order.clone();
+            sorted_order.sort();
+            let mut sorted_peers = peers.clone();
+            sorted_peers.sort();
+            assert_eq!(
+                sorted_order, sorted_peers,
+                "cursor {cursor} changed the set"
+            );
+        }
+        // A stale cursor left over from a longer peer list must not panic or
+        // slice out of bounds.
+        app.peer_sync_cursor = 9;
+        assert_eq!(app.dial_order(&peers).len(), peers.len());
+        assert!(app.dial_order(&[]).is_empty());
+    }
+
     #[test]
     fn snapshot_has_three_nodes_and_genesis() {
         let app = Explorer::boot();
@@ -4799,11 +5222,18 @@ mod tests {
         // while `poa_enabled` tracks whether this node's ledger has it on.
         assert_eq!(n["admission"].as_str().unwrap(), "poa");
         assert!(n["poa_enabled"].as_bool().unwrap());
-        // One genesis node: 200,000 KVNC premine + 10×1,000,000 KVNC treasury
-        // = 10,200,000 KVNC = 1,020,000,000,000,000 atoms.
-        assert_eq!(n["supply"].as_u64().unwrap(), 1_020_000_000_000_000);
+        // One genesis node: 200,000 KVNC premine + 8×1,000,000 KVNC treasury
+        // = 8,200,000 KVNC = 820,000,000,000,000 atoms. (Was 10 tranches /
+        // 10,200,000 KVNC before the 2026-09-29 reduction to 8.)
+        assert_eq!(n["supply"].as_u64().unwrap(), 820_000_000_000_000);
         assert_eq!(n["subsidy"].as_u64().unwrap(), 1_000_000_000);
-        assert_eq!(n["halving_era"].as_u64().unwrap(), 2_000_000);
+        // Derived, not hardcoded: this field tracks RFC006_ERA_LENGTH, which is
+        // 2_050_000. It previously read 2_000_000 and had to be hand-edited on
+        // every era change.
+        assert_eq!(
+            n["halving_era"].as_u64().unwrap(),
+            kovanica_state::RFC006_ERA_LENGTH
+        );
         assert_eq!(n["min_fee"].as_u64().unwrap(), 2000);
         assert_eq!(n["max_supply"].as_u64().unwrap(), 9_020_000_000_000_000);
         assert_eq!(n["issuance"].as_u64().unwrap(), 1_000_000_000);
@@ -4931,12 +5361,17 @@ mod tests {
 
     #[test]
     fn issuance_geometric_each_era() {
-        // era length HALVING_ERA (2_000_000); alpha = 3/4
+        // Heights are DERIVED from the era length, never hardcoded. This test
+        // used to assert at 1_999_999 / 2_000_000 / 4_000_000, which meant it
+        // kept passing after the era length changed underneath it — the
+        // assertion was checking a stale constant rather than behaviour.
+        use kovanica_state::RFC006_ERA_LENGTH;
+        let era = RFC006_ERA_LENGTH;
         assert_eq!(Node::issuance_at(10 * ATOM, 0), 10 * ATOM);
-        assert_eq!(Node::issuance_at(10 * ATOM, 1_999_999), 10 * ATOM);
-        assert_eq!(Node::issuance_at(10 * ATOM, 2_000_000), 10 * ATOM * 3 / 4);
+        assert_eq!(Node::issuance_at(10 * ATOM, era - 1), 10 * ATOM);
+        assert_eq!(Node::issuance_at(10 * ATOM, era), 10 * ATOM * 3 / 4);
         assert_eq!(
-            Node::issuance_at(10 * ATOM, 4_000_000),
+            Node::issuance_at(10 * ATOM, 2 * era),
             10 * ATOM * 3 / 4 * 3 / 4
         );
     }

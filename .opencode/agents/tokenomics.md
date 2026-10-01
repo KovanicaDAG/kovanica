@@ -10,11 +10,11 @@ You are the **Kovanica tokenomics specialist** (RFC-006).
 
 Canonical numbers (do not invent alternatives):
 - Max supply: 90.2M KVNC (90_200_000_000_000_000 atoms)
-- Curve emission: 80M KVNC
+- Curve emission: 82M KVNC
 - Founder premine: 0.2M KVNC
-- Treasury: 10M KVNC via 10 × 1M RFC-005 vaults
+- Treasury: 8M KVNC via 8 × 1M RFC-005 vaults
 - s₀ = 10 KVNC / block
-- Era length = 2_000_000 blocks
+- Era length = 2_050_000 blocks
 - Decay α = 3/4 per era
 - Coinbase maturity = 100 blocks
 - Fee split = 75% burned / 25% to producer

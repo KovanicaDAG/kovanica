@@ -109,11 +109,59 @@
 
 ---
 
-## 8. Version History
+## 8. Legal Foundation — Next Steps
+
+### 8.1 Entity options
+
+| Option | Jurisdiction | Cost | Timeline | Pros | Cons |
+|--------|-------------|------|----------|------|------|
+| **Foundation** | Switzerland (CHE) | ~$10k | 3-6 months | Credible, non-profit, token-agnostic | Expensive, complex |
+| **Foundation** | Cayman Islands | ~$15k | 3-6 months | Tax-neutral, crypto-friendly | Expensive, complex |
+| **LLC** | Wyoming (USA) | ~$500 | 1-2 weeks | Cheap, fast, US-based | Less credible for token projects |
+| **DAO LLC** | Marshall Islands | ~$1k | 2-4 weeks | DAO-friendly, flexible | Less established |
+| **Association** | Estonia | ~$500 | 2-4 weeks | EU-based, e-Residency | Limited token experience |
+
+### 8.2 Recommended path
+
+**Phase 1 (now → Q1 2027):**
+- [ ] Form Wyoming LLC or Marshall Islands DAO LLC as interim entity
+- [ ] Open bank account for the entity
+- [ ] Establish basic governance (multi-sig, operating agreement)
+
+**Phase 2 (Q2 2027 → mainnet):**
+- [ ] Form Switzerland or Cayman Foundation
+- [ ] Transfer IP and assets to Foundation
+- [ ] Establish token holder governance
+- [ ] Hire legal counsel for token classification
+
+**Phase 3 (mainnet+):**
+- [ ] Token listing on exchanges
+- [ ] Compliance with relevant jurisdictions
+- [ ] Insurance and audits
+
+### 8.3 Immediate actions
+
+1. **Decide on entity type** — LLC vs Foundation vs DAO LLC
+2. **Choose jurisdiction** — Wyoming, Marshall Islands, Estonia, Switzerland
+3. **Prepare documents** — Operating agreement, governance structure
+4. **Open bank account** — For receiving funds and paying contributors
+5. **Trademark** — File for "Kovanica" trademark in key jurisdictions
+
+### 8.4 Governance
+
+- **Multi-sig wallet** — 3-of-5 or 4-of-7 for treasury
+- **Operating agreement** — Decision-making process, dispute resolution
+- **Token holder voting** — For protocol upgrades and treasury spending
+- **Transparency** — Regular financial reports, public treasury
+
+---
+
+## 9. Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | 2026-09-16 | Initial draft |
+| 0.2 | 2026-09-29 | Added legal foundation next steps |
 
 ---
 

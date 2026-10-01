@@ -27,7 +27,7 @@ Guidance for AI assistants (and humans) working in the **kovanica-protocol** rep
 > >   `apply_block` (`ledger.rs` ~1617: reject if
 > >   `cumulative_minted + claimed_native > MAX_SUPPLY`) — neither depends on who
 > >   produced a block or how. MAX_SUPPLY **90.2M KVNC**, s₀ **10 KVNC/block**,
-> >   era **2,000,000 blocks**, α **3/4**, maturity **100 blocks**, fee split
+> >   era **2,050,000 blocks**, α **3/4**, maturity **100 blocks**, fee split
 > >   **75% burned / 25% producer**, GHOSTDAG **k=3**, UTXO, Ed25519,
 > >   **1 KVNC = 100_000_000 atoms** — all unchanged. What changes is the
 > >   *pace*: fixed `SLOT_DURATION_MS` (default 3000), no retarget, no gap-fill
@@ -529,22 +529,31 @@ gated — see "Activation" below, which is the reason it needed a genesis reset
 rather than a fork.
 
 - **Constants** (`ledger.rs`): `ATOM = 100_000_000` (1 KVNC = 1e8 atoms),
-  `RFC006_GENESIS_SUBSIDY = 10 * ATOM`, `RFC006_ERA_LENGTH = 2_000_000`,
+  `RFC006_GENESIS_SUBSIDY = 10 * ATOM`, `RFC006_ERA_LENGTH = 2_050_000`,
   `MAX_SUPPLY = 90_200_000 * ATOM`, `RFC006_PREMINE = 200_000 * ATOM`,
-  `RFC006_TREASURY_TOTAL = 10_000_000 * ATOM` (10 × 1M tranches),
+  `RFC006_TREASURY_TOTAL` (derived: `RFC006_TREASURY_TRANCHE * RFC006_TREASURY_TRANCHES` = 8 × 1M tranches),
   `COINBASE_MATURITY = 100`, `FEE_PRODUCER_NUM/DEN = 1/4`.
-- **Emission** (`HalvingSchedule::subsidy_at`): `era = height / 2_000_000`,
+- **Emission** (`HalvingSchedule::subsidy_at`): `era = height / 2_050_000`,
   `s(0) = 10 KVNC`, `s(e) = floor(s(e-1) * 3/4)`, **0 for era ≥ 256**. The type
   name `HalvingSchedule` is retained for API stability — the decay is
   **geometric (α = 3/4), not a binary halving**. Do not infer halving semantics
   from the name. (`DEFAULT_HALVING_ERA` is an alias; prefer
   `HalvingSchedule::rfc006()`.)
-- **The 80M curve total is asymptotic, not exact.** Summing `s(e) · E` with
-  integer flooring at each step realizes **79 999 997.6 KVNC**, so the honest
-  emission ceiling is `0.2M + 10M + 79 999 997.6` = **90 199 997.8 KVNC**,
-  ~2.2 KVNC *under* `MAX_SUPPLY`. The cap is a backstop against over-claiming
-  coinbases, never a curve truncation. Docs quoting a flat "80M curve" are
+- **The 82M curve total is asymptotic, not exact.** Summing `s(e) · E` with
+  integer flooring at each step realizes **81 999 997.54 KVNC**, so the honest
+  emission ceiling is `0.2M + 8M + 81 999 997.54` = **90 199 997.54 KVNC**,
+  just 2.46 KVNC *under* `MAX_SUPPLY`. The cap is a backstop against over-claiming
+  coinbases, never a curve truncation. Docs quoting a flat "82M curve" are
   quoting the asymptotic limit.
+- **The freed 2M was reallocated to the curve, not stranded.** Treasury went
+  from 10 × 1M to 8 × 1M (2026-09-29). Curve emission is derived from `s0`, era
+  length and α — there is no curve-total constant — so the 2M was absorbed by
+  moving `RFC006_ERA_LENGTH` from 2_000_000 to 2_050_000, taking the curve from
+  80M to 82M. That input was chosen over `s0` or α because `s0` is the most
+  widely-quoted tokenomics number and also feeds the RFC-006 fee floor
+  (`subsidy / 500_000`) and `/api/head`. The only residual gap is the 2.46 KVNC
+  integer-floor shortfall above. `MAX_SUPPLY` stays a **ceiling, never a
+  target** — do not "top up" to close it, and do not lower `MAX_SUPPLY` either.
 - **Activation — the odd one out.** `TOKENOMICS_ACTIVATION_SCORE = 0` is a
   **documented marker only**: the curve, cap, maturity, and fee split are
   **unconditional hard rules active from genesis**. There is no pre-activation
@@ -567,13 +576,13 @@ rather than a fork.
   exempt. Pruning must retain UTXO creation heights for ≥ `COINBASE_MATURITY`
   blocks.
 - **Fees**: floor `max(1, subsidy / 500_000)` atoms/byte — **2000 atoms/byte at
-  genesis**, 1500 at height 2 000 000, never below 1. Decays with the subsidy.
+  genesis**, 1500 at height 2 050 000, never below 1. Decays with the subsidy.
   Paid in **native KVNC only** (RFC-002 non-native assets cannot pay fees).
   Producer takes `fees / 4`, the remaining 75% is burned. Because
   `fees - fees/4` is **not additive**, cumulative burn is tracked as an explicit
   per-block sum (`Ledger::fees_burned`, carried in each block's view) rather than
   recomputed as `total - total/4`, which drifts from the true sum.
-- **Treasury**: 10 × 1M RFC-005 vault tranches; tranche *k* (1..=10) unlocks at
+- **Treasury**: 8 × 1M RFC-005 vault tranches; tranche *k* (1..=8) unlocks at
   `k * BLOCKS_PER_YEAR` (`31_536_000`, one tranche/year at 1 block/s), enforced
   by the RFC-005 absolute lock. ⚠️ Owner keys are **testnet placeholders**
   (`KeyPair::from_u64(TREASURY_SEED_BASE + k)` — publicly derivable by design).
@@ -992,7 +1001,7 @@ deterministic + adversarial tests per the conventions above.
     by `ledger.rs`, `lib.rs` and the `node.rs` unbond path — there is no
     remaining consumer. Delete with the rest of the hybrid surface; do not
     retain it "in case it is useful later".
-  - ⚠️ **This is NOT RFC-005.** Vault/CSV and the 10 × 1M KVNC treasury
+  - ⚠️ **This is NOT RFC-005.** Vault/CSV and the 8 × 1M KVNC treasury
     tranches do **not** touch the stake registry — `vault.rs` has zero stake
     references. Do not "clean up" vault code alongside this.
   - `kovanica-state::stake`: bond/unbond via tag conventions on ordinary
@@ -1294,9 +1303,12 @@ teaches us it needs.
    Shipped: `dns_seed.rs` (injectable `DnsResolver`, dedup + fallback),
    `dht.rs` Kademlia (XOR metric, k-buckets) with relay tags 0x20–0x23,
    Mesh integration, and `tests/dht_discovery.rs` Tiers 1–5 green.
-   The live DNS-seed hostnames are `seed` (primary, Hostinger VPS) and `seed2`
-   (Hostinger KVM2 VPS `srv1991525`; `seed3`/AWS is retired but still
-   resolves); `deploy-seed.sh` defaults new seeds to
+   The live DNS-seed hostnames are `seed` (primary, Hostinger VPS
+   `145.223.116.178`) and `seed2` (Hostinger KVM2 VPS `76.13.250.65`,
+   `srv1991525`); `seed3` is a **new** VPS (`187.7.27.139`, `srv2013143`) — its
+   node is not yet running (TCP 9000 closed), and its DNS A record must be
+   re-pointed to `187.7.27.139` and left **DNS-only / grey-cloud** before it can
+   serve as a seed. `deploy-seed.sh` defaults new seeds to
    `KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000`.
    Remaining wiring: the node binary's default `KOVANICA_PEERS` still names only
    `seed.kovanica.online:9000`; new-install defaults now use seed+seed2
@@ -1331,11 +1343,12 @@ teaches us it needs.
      written for a PoW testnet; under PoA-only (§0) a soak is a *multi-authority*
      soak, and the existing testnet chain must be reset first (mandatory, §0.6).
    - 24/7 testnet with multiple independent seed operators
-     (seed = Hostinger VPS, unit `kovanica-explorer`; **seed2 = Hostinger KVM2
-     VPS `76.13.250.65`** (`srv1991525`) — live since 2026-08-24, mining on,
-     genesis verified, DNS `seed2.kovanica.online`; `seed3.kovanica.online`
-     (AWS) retired) — `[CURRENT]`-state description of the *pre-reset* PoW
-     testnet; those hosts will need re-genesis under PoA.
+     (seed = Hostinger VPS `145.223.116.178`, unit `kovanica-explorer`;
+     **seed2 = Hostinger KVM2 VPS `76.13.250.65`** (`srv1991525`) — live since
+     2026-08-24, mining on, genesis verified, DNS `seed2.kovanica.online`;
+     **seed3 = new VPS `187.7.27.139`** (`srv2013143`) — provisioned, node NOT yet
+     running, TCP 9000 closed, no fail2ban) — `[CURRENT]`-state description of
+     the *pre-reset* PoW testnet; those hosts will need re-genesis under PoA.
    - Measure: orphan rate, propagation latency, fork rate, disk growth
      (both seeds expose `/metrics`; `alerting_rules.yml` ready to arm)
    - Tune: `k`, finality depth, payload pruning depth, difficulty window

@@ -13,7 +13,7 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 > > is hard-capped inside `apply_block` (`kovanica-state/src/ledger.rs`), which
 > > rejects any block where `cumulative_minted + claimed_native > MAX_SUPPLY`.
 > > Neither depends on who produced a block or how. MAX_SUPPLY **90.2M KVNC**, s₀
-> > **10 KVNC/block**, era **2,000,000 blocks**, α **3/4**, maturity **100
+> > **10 KVNC/block**, era **2,050,000 blocks**, α **3/4**, maturity **100
 > > blocks**, fee split **75% burned / 25% producer**, GHOSTDAG **k=3**, UTXO,
 > > Ed25519, **1 KVNC = 100_000_000 atoms** — all unchanged.
 > >
@@ -32,8 +32,8 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 | Wallet | https://wallet.kovanica.online |
 | Node source | https://github.com/KovanicaDAG/kovanica-node |
 | Network | `kovanica-testnet` |
-| Premine | **0.2M KVNC** (founder) + **10M** treasury vaults |
-| Subsidy | **10 KVNC / block** at genesis, geometric decay α=3/4 every **2 000 000** blocks |
+| Premine | **0.2M KVNC** (founder) + **8M** treasury vaults |
+| Subsidy | **10 KVNC / block** at genesis, geometric decay α=3/4 every **2 050 000** blocks |
 | Max supply | **90.2M KVNC** hard cap |
 | Coinbase maturity | **100 blocks** |
 | Fee | Floor `max(1, subsidy/500_000)` atoms/byte; **75% burned / 25% producer** |
@@ -45,7 +45,7 @@ Public BlockDAG testnet. Native token **KVNC** (8 decimals).
 | Slot duration | `[CURRENT]` `KOVANICA_SLOT_DURATION`, default 3000 ms · no gap-fill |
 | P2P | **TCP only** `KOVANICA_LISTEN` (default `0.0.0.0:9000`) |
 | Bootstrap | DNS-only `seed.kovanica.online:9000` (not the Cloudflare hostname) |
-| Seeds | `seed.kovanica.online:9000` (primary) · `seed2.kovanica.online:9000` (secondary, Hostinger KVM2 VPS) · `seed3` retired |
+| Seeds | `seed.kovanica.online:9000` (primary) · `seed2.kovanica.online:9000` (secondary, Hostinger KVM2 VPS) · `seed3` = new VPS `187.7.27.139`, provisioned but not yet in service |
 
 Live genesis and tip: `GET https://explorer.kovanica.online/api/head`  
 P2P status on a running node: `GET /api/p2p`  
@@ -72,7 +72,7 @@ There is no second network path. libp2p / 30333 was removed.
 `explorer.kovanica.online` is orange-cloud. TCP 9000 never reaches the seed
 through that name. Grey-cloud `seed.kovanica.online` (or the origin IP) is the
 peer address clones should dial. The primary seed dials its sibling
-(`seed2.kovanica.online:9000`; `seed3` retired 2026-09-17).
+(`seed2.kovanica.online:9000`; the original AWS `seed3` was retired 2026-09-17 and replaced by a new VPS on `187.7.27.139`, pending DNS re-point + node start).
 
 
 ## Tokenomics (RFC-006)
@@ -82,8 +82,8 @@ peer address clones should dial. The primary seed dials its sibling
 - **Hard cap** 90.2M KVNC enforced via cumulative `native_minted`.
 - **Coinbase maturity 100 blocks** — early spends rejected (`CoinbaseImmature`).
 - Fee split: 75% burned, 25% claimable by block producer.
-- Curve emission: 80M KVNC over geometric eras (s₀=10 KVNC, E=2M, α=3/4).
-- Treasury: 10 × 1M RFC-005 time-lock vaults (placeholder keys are
+- Curve emission: 82M KVNC over geometric eras (s₀=10 KVNC, E=2.05M, α=3/4).
+- Treasury: 8 × 1M RFC-005 time-lock vaults (placeholder keys are
   **testnet-only and publicly derivable by design**; production must pass a
   real secret seed via key ceremony).
 - Activation was a **consensus fork** — all pre-RFC-006 balances were wiped.

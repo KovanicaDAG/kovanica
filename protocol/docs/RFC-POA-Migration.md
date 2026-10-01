@@ -7,7 +7,7 @@ chain and a PoA chain cannot be reconciled and a genesis reset is mandatory
 (§0.6). It is **not** a `consensus-safe` change, and must not be described as
 one. **What does *not* change:** GHOSTDAG **k=3**, the pure **UTXO** ledger,
 **Ed25519** signing, and every RFC-006 tokenomics constant — MAX_SUPPLY 90.2M
-KVNC, s₀ 10 KVNC/block, era 2,000,000, α 3/4, maturity 100, fee split 75%
+KVNC, s₀ 10 KVNC/block, era 2,050,000, α 3/4, maturity 100, fee split 75%
 burned / 25% producer.  
 **KVP:** KVP-201 (authority set + slot round-robin + authority signature)  
 **Related:** RFC-001..RFC-006 (all shipped features preserved), RFC-007/KVP-106 (NFT, client-only), DeFi/RWA (post-PoA)  
@@ -143,7 +143,7 @@ PoA-only migration and remain hard consensus rules:
 |----------|-------|--------|
 | `MAX_SUPPLY` | **90.2M KVNC** (`90_200_000 * ATOM`) | `ledger.rs` ~177 |
 | Genesis subsidy s₀ | **10 KVNC / block** (`RFC006_GENESIS_SUBSIDY`) | `ledger.rs` ~174 |
-| Era length | **2,000,000 blocks** (`RFC006_ERA_LENGTH`) | `ledger.rs` ~175 |
+| Era length | **2,050,000 blocks** (`RFC006_ERA_LENGTH`) | `ledger.rs` ~175 |
 | Decay α | **3/4 per era** | `subsidy_at`, `ledger.rs` ~148 |
 | Coinbase maturity | **100 blocks** (`COINBASE_MATURITY`) | `ledger.rs` ~189 |
 | Fee split | **75% burned / 25% producer** (`FEE_PRODUCER_NUM=1`, `FEE_PRODUCER_DEN=4`) | `ledger.rs` ~191 |
@@ -158,8 +158,8 @@ and nothing to retarget — the clock is a fixed `SLOT_DURATION_MS` (default
 `3000`) and there is **no gap-fill**: an offline authority simply yields an
 empty slot, and the next scheduled authority continues on schedule. So the PoA
 migration changes the *pace* of emission in wall-clock terms, **not its
-cumulative cap**. 90.2M KVNC is 90.2M KVNC before and after. The 80M KVNC curve /
-0.2M premine / 10M treasury allocation is likewise untouched.
+cumulative cap**. 90.2M KVNC is 90.2M KVNC before and after. The 82M KVNC curve /
+0.2M premine / 8M treasury allocation is likewise untouched.
 
 ### 0.5 Governance consequence: admission becomes permissioned
 
@@ -302,7 +302,7 @@ it is a maintenance liability, not an option.
 easy-to-get-wrong consequence, so it was verified directly rather than inferred:
 `crates/kovanica-state/src/vault.rs` contains **zero** references to `stake`,
 `bond`, `unbond`, `vrf`, or `Freeze`. RFC-005 vaults, CSV time-locks, and the
-10 × 1M KVNC treasury tranches do **not** depend on the stake registry and are
+8 × 1M KVNC treasury tranches do **not** depend on the stake registry and are
 **not** part of this removal. Their keys (`TREASURY_SEED_BASE`) are a
 *separate* concern from authority signing keys (§0.7.2).
 
@@ -366,7 +366,7 @@ rows 1–6.
 authority's slot produces **no block and therefore no coinbase**. Emission
 *pace* is therefore directly coupled to authority liveness. Totals are
 unaffected: the curve is height-indexed, so a skipped slot does not shift the
-schedule or the cap, and MAX_SUPPLY 90.2M KVNC, s₀ 10 KVNC/block, era 2,000,000,
+schedule or the cap, and MAX_SUPPLY 90.2M KVNC, s₀ 10 KVNC/block, era 2,050,000,
 α 3/4, maturity 100 and the 75%/25% fee split all hold (§0.4).
 
 **The open question is the policy, not the arithmetic:** whether coupling

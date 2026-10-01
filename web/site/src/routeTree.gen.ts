@@ -20,6 +20,7 @@ import { Route as MultiAssetRouteImport } from './routes/multi-asset'
 import { Route as MultisigRouteImport } from './routes/multisig'
 import { Route as NetworkRouteImport } from './routes/network'
 import { Route as NftRouteImport } from './routes/nft'
+import { Route as PlaygroundRouteImport } from './routes/playground'
 import { Route as PoolRouteImport } from './routes/pool'
 import { Route as RoadmapRouteImport } from './routes/roadmap'
 import { Route as StealthRouteImport } from './routes/stealth'
@@ -27,9 +28,14 @@ import { Route as VaultsRouteImport } from './routes/vaults'
 import { Route as WalletRouteImport } from './routes/wallet'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as DownloadSplatRouteImport } from './routes/download/$'
+import { Route as PlaygroundApiConsoleRouteImport } from './routes/playground/api-console'
+import { Route as PlaygroundSnippetsRouteImport } from './routes/playground/snippets'
+import { Route as WalletAirdropsRouteImport } from './routes/wallet/airdrops'
 import { Route as WalletAtomicSwapRouteImport } from './routes/wallet/atomic-swap'
 import { Route as WalletCoinjoinRouteImport } from './routes/wallet/coinjoin'
+import { Route as WalletDexRouteImport } from './routes/wallet/dex'
 import { Route as WalletRwaIssueRouteImport } from './routes/wallet/rwa-issue'
+import { Route as WalletTokenListingsRouteImport } from './routes/wallet/token-listings'
 import { Route as ExplorerRwaAssetIdRouteImport } from './routes/explorer/rwa.$assetId'
 import { Route as WalletCollectionCollectionIdRouteImport } from './routes/wallet/collection.$collectionId'
 import { Route as WalletNftAssetIdRouteImport } from './routes/wallet/nft.$assetId'
@@ -89,6 +95,11 @@ const NftRoute = NftRouteImport.update({
   path: '/nft',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlaygroundRoute = PlaygroundRouteImport.update({
+  id: '/playground',
+  path: '/playground',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PoolRoute = PoolRouteImport.update({
   id: '/pool',
   path: '/pool',
@@ -124,6 +135,21 @@ const DownloadSplatRoute = DownloadSplatRouteImport.update({
   path: '/download/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlaygroundApiConsoleRoute = PlaygroundApiConsoleRouteImport.update({
+  id: '/api-console',
+  path: '/api-console',
+  getParentRoute: () => PlaygroundRoute,
+} as any)
+const PlaygroundSnippetsRoute = PlaygroundSnippetsRouteImport.update({
+  id: '/snippets',
+  path: '/snippets',
+  getParentRoute: () => PlaygroundRoute,
+} as any)
+const WalletAirdropsRoute = WalletAirdropsRouteImport.update({
+  id: '/airdrops',
+  path: '/airdrops',
+  getParentRoute: () => WalletRoute,
+} as any)
 const WalletAtomicSwapRoute = WalletAtomicSwapRouteImport.update({
   id: '/atomic-swap',
   path: '/atomic-swap',
@@ -134,9 +160,19 @@ const WalletCoinjoinRoute = WalletCoinjoinRouteImport.update({
   path: '/coinjoin',
   getParentRoute: () => WalletRoute,
 } as any)
+const WalletDexRoute = WalletDexRouteImport.update({
+  id: '/dex',
+  path: '/dex',
+  getParentRoute: () => WalletRoute,
+} as any)
 const WalletRwaIssueRoute = WalletRwaIssueRouteImport.update({
   id: '/rwa-issue',
   path: '/rwa-issue',
+  getParentRoute: () => WalletRoute,
+} as any)
+const WalletTokenListingsRoute = WalletTokenListingsRouteImport.update({
+  id: '/token-listings',
+  path: '/token-listings',
   getParentRoute: () => WalletRoute,
 } as any)
 const ExplorerRwaAssetIdRoute = ExplorerRwaAssetIdRouteImport.update({
@@ -168,6 +204,7 @@ export interface FileRoutesByFullPath {
   '/multisig': typeof MultisigRoute
   '/network': typeof NetworkRoute
   '/nft': typeof NftRoute
+  '/playground': typeof PlaygroundRouteWithChildren
   '/pool': typeof PoolRoute
   '/roadmap': typeof RoadmapRoute
   '/stealth': typeof StealthRoute
@@ -175,9 +212,14 @@ export interface FileRoutesByFullPath {
   '/wallet': typeof WalletRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/download/$': typeof DownloadSplatRoute
+  '/playground/api-console': typeof PlaygroundApiConsoleRoute
+  '/playground/snippets': typeof PlaygroundSnippetsRoute
+  '/wallet/airdrops': typeof WalletAirdropsRoute
   '/wallet/atomic-swap': typeof WalletAtomicSwapRoute
   '/wallet/coinjoin': typeof WalletCoinjoinRoute
+  '/wallet/dex': typeof WalletDexRoute
   '/wallet/rwa-issue': typeof WalletRwaIssueRoute
+  '/wallet/token-listings': typeof WalletTokenListingsRoute
   '/explorer/rwa/$assetId': typeof ExplorerRwaAssetIdRoute
   '/wallet/collection/$collectionId': typeof WalletCollectionCollectionIdRoute
   '/wallet/nft/$assetId': typeof WalletNftAssetIdRoute
@@ -194,6 +236,7 @@ export interface FileRoutesByTo {
   '/multisig': typeof MultisigRoute
   '/network': typeof NetworkRoute
   '/nft': typeof NftRoute
+  '/playground': typeof PlaygroundRouteWithChildren
   '/pool': typeof PoolRoute
   '/roadmap': typeof RoadmapRoute
   '/stealth': typeof StealthRoute
@@ -201,9 +244,14 @@ export interface FileRoutesByTo {
   '/wallet': typeof WalletRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/download/$': typeof DownloadSplatRoute
+  '/playground/api-console': typeof PlaygroundApiConsoleRoute
+  '/playground/snippets': typeof PlaygroundSnippetsRoute
+  '/wallet/airdrops': typeof WalletAirdropsRoute
   '/wallet/atomic-swap': typeof WalletAtomicSwapRoute
   '/wallet/coinjoin': typeof WalletCoinjoinRoute
+  '/wallet/dex': typeof WalletDexRoute
   '/wallet/rwa-issue': typeof WalletRwaIssueRoute
+  '/wallet/token-listings': typeof WalletTokenListingsRoute
   '/explorer/rwa/$assetId': typeof ExplorerRwaAssetIdRoute
   '/wallet/collection/$collectionId': typeof WalletCollectionCollectionIdRoute
   '/wallet/nft/$assetId': typeof WalletNftAssetIdRoute
@@ -221,6 +269,7 @@ export interface FileRoutesById {
   '/multisig': typeof MultisigRoute
   '/network': typeof NetworkRoute
   '/nft': typeof NftRoute
+  '/playground': typeof PlaygroundRouteWithChildren
   '/pool': typeof PoolRoute
   '/roadmap': typeof RoadmapRoute
   '/stealth': typeof StealthRoute
@@ -228,9 +277,14 @@ export interface FileRoutesById {
   '/wallet': typeof WalletRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/download/$': typeof DownloadSplatRoute
+  '/playground/api-console': typeof PlaygroundApiConsoleRoute
+  '/playground/snippets': typeof PlaygroundSnippetsRoute
+  '/wallet/airdrops': typeof WalletAirdropsRoute
   '/wallet/atomic-swap': typeof WalletAtomicSwapRoute
   '/wallet/coinjoin': typeof WalletCoinjoinRoute
+  '/wallet/dex': typeof WalletDexRoute
   '/wallet/rwa-issue': typeof WalletRwaIssueRoute
+  '/wallet/token-listings': typeof WalletTokenListingsRoute
   '/explorer/rwa/$assetId': typeof ExplorerRwaAssetIdRoute
   '/wallet/collection/$collectionId': typeof WalletCollectionCollectionIdRoute
   '/wallet/nft/$assetId': typeof WalletNftAssetIdRoute
@@ -249,6 +303,7 @@ export interface FileRouteTypes {
     | '/multisig'
     | '/network'
     | '/nft'
+    | '/playground'
     | '/pool'
     | '/roadmap'
     | '/stealth'
@@ -256,9 +311,14 @@ export interface FileRouteTypes {
     | '/wallet'
     | '/api/$'
     | '/download/$'
+    | '/playground/api-console'
+    | '/playground/snippets'
+    | '/wallet/airdrops'
     | '/wallet/atomic-swap'
     | '/wallet/coinjoin'
+    | '/wallet/dex'
     | '/wallet/rwa-issue'
+    | '/wallet/token-listings'
     | '/explorer/rwa/$assetId'
     | '/wallet/collection/$collectionId'
     | '/wallet/nft/$assetId'
@@ -275,6 +335,7 @@ export interface FileRouteTypes {
     | '/multisig'
     | '/network'
     | '/nft'
+    | '/playground'
     | '/pool'
     | '/roadmap'
     | '/stealth'
@@ -282,9 +343,14 @@ export interface FileRouteTypes {
     | '/wallet'
     | '/api/$'
     | '/download/$'
+    | '/playground/api-console'
+    | '/playground/snippets'
+    | '/wallet/airdrops'
     | '/wallet/atomic-swap'
     | '/wallet/coinjoin'
+    | '/wallet/dex'
     | '/wallet/rwa-issue'
+    | '/wallet/token-listings'
     | '/explorer/rwa/$assetId'
     | '/wallet/collection/$collectionId'
     | '/wallet/nft/$assetId'
@@ -301,6 +367,7 @@ export interface FileRouteTypes {
     | '/multisig'
     | '/network'
     | '/nft'
+    | '/playground'
     | '/pool'
     | '/roadmap'
     | '/stealth'
@@ -308,9 +375,14 @@ export interface FileRouteTypes {
     | '/wallet'
     | '/api/$'
     | '/download/$'
+    | '/playground/api-console'
+    | '/playground/snippets'
+    | '/wallet/airdrops'
     | '/wallet/atomic-swap'
     | '/wallet/coinjoin'
+    | '/wallet/dex'
     | '/wallet/rwa-issue'
+    | '/wallet/token-listings'
     | '/explorer/rwa/$assetId'
     | '/wallet/collection/$collectionId'
     | '/wallet/nft/$assetId'
@@ -328,6 +400,7 @@ export interface RootRouteChildren {
   MultisigRoute: typeof MultisigRoute
   NetworkRoute: typeof NetworkRoute
   NftRoute: typeof NftRoute
+  PlaygroundRoute: typeof PlaygroundRouteWithChildren
   PoolRoute: typeof PoolRoute
   RoadmapRoute: typeof RoadmapRoute
   StealthRoute: typeof StealthRoute
@@ -416,6 +489,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof NftRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/playground': {
+      id: '/playground'
+      path: '/playground'
+      fullPath: '/playground'
+      preLoaderRoute: typeof PlaygroundRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/pool': {
       id: '/pool'
       path: '/pool'
@@ -465,6 +545,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DownloadSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/playground/api-console': {
+      id: '/playground/api-console'
+      path: '/api-console'
+      fullPath: '/playground/api-console'
+      preLoaderRoute: typeof PlaygroundApiConsoleRouteImport
+      parentRoute: typeof PlaygroundRoute
+    }
+    '/playground/snippets': {
+      id: '/playground/snippets'
+      path: '/snippets'
+      fullPath: '/playground/snippets'
+      preLoaderRoute: typeof PlaygroundSnippetsRouteImport
+      parentRoute: typeof PlaygroundRoute
+    }
+    '/wallet/airdrops': {
+      id: '/wallet/airdrops'
+      path: '/airdrops'
+      fullPath: '/wallet/airdrops'
+      preLoaderRoute: typeof WalletAirdropsRouteImport
+      parentRoute: typeof WalletRoute
+    }
     '/wallet/atomic-swap': {
       id: '/wallet/atomic-swap'
       path: '/atomic-swap'
@@ -479,11 +580,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WalletCoinjoinRouteImport
       parentRoute: typeof WalletRoute
     }
+    '/wallet/dex': {
+      id: '/wallet/dex'
+      path: '/dex'
+      fullPath: '/wallet/dex'
+      preLoaderRoute: typeof WalletDexRouteImport
+      parentRoute: typeof WalletRoute
+    }
     '/wallet/rwa-issue': {
       id: '/wallet/rwa-issue'
       path: '/rwa-issue'
       fullPath: '/wallet/rwa-issue'
       preLoaderRoute: typeof WalletRwaIssueRouteImport
+      parentRoute: typeof WalletRoute
+    }
+    '/wallet/token-listings': {
+      id: '/wallet/token-listings'
+      path: '/token-listings'
+      fullPath: '/wallet/token-listings'
+      preLoaderRoute: typeof WalletTokenListingsRouteImport
       parentRoute: typeof WalletRoute
     }
     '/explorer/rwa/$assetId': {
@@ -522,18 +637,38 @@ const ExplorerRouteWithChildren = ExplorerRoute._addFileChildren(
   ExplorerRouteChildren,
 )
 
+interface PlaygroundRouteChildren {
+  PlaygroundApiConsoleRoute: typeof PlaygroundApiConsoleRoute
+  PlaygroundSnippetsRoute: typeof PlaygroundSnippetsRoute
+}
+
+const PlaygroundRouteChildren: PlaygroundRouteChildren = {
+  PlaygroundApiConsoleRoute: PlaygroundApiConsoleRoute,
+  PlaygroundSnippetsRoute: PlaygroundSnippetsRoute,
+}
+
+const PlaygroundRouteWithChildren = PlaygroundRoute._addFileChildren(
+  PlaygroundRouteChildren,
+)
+
 interface WalletRouteChildren {
+  WalletAirdropsRoute: typeof WalletAirdropsRoute
   WalletAtomicSwapRoute: typeof WalletAtomicSwapRoute
   WalletCoinjoinRoute: typeof WalletCoinjoinRoute
+  WalletDexRoute: typeof WalletDexRoute
   WalletRwaIssueRoute: typeof WalletRwaIssueRoute
+  WalletTokenListingsRoute: typeof WalletTokenListingsRoute
   WalletCollectionCollectionIdRoute: typeof WalletCollectionCollectionIdRoute
   WalletNftAssetIdRoute: typeof WalletNftAssetIdRoute
 }
 
 const WalletRouteChildren: WalletRouteChildren = {
+  WalletAirdropsRoute: WalletAirdropsRoute,
   WalletAtomicSwapRoute: WalletAtomicSwapRoute,
   WalletCoinjoinRoute: WalletCoinjoinRoute,
+  WalletDexRoute: WalletDexRoute,
   WalletRwaIssueRoute: WalletRwaIssueRoute,
+  WalletTokenListingsRoute: WalletTokenListingsRoute,
   WalletCollectionCollectionIdRoute: WalletCollectionCollectionIdRoute,
   WalletNftAssetIdRoute: WalletNftAssetIdRoute,
 }
@@ -553,6 +688,7 @@ const rootRouteChildren: RootRouteChildren = {
   MultisigRoute: MultisigRoute,
   NetworkRoute: NetworkRoute,
   NftRoute: NftRoute,
+  PlaygroundRoute: PlaygroundRouteWithChildren,
   PoolRoute: PoolRoute,
   RoadmapRoute: RoadmapRoute,
   StealthRoute: StealthRoute,

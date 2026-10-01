@@ -84,11 +84,18 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    RowWithSwitch(
-                        label = "Reveal seed phrase",
-                        checked = state.revealSeed,
-                        onCheckedChange = viewModel::revealSeed,
-                    )
+                    androidx.compose.foundation.layout.Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Reveal seed phrase",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Switch(checked = state.revealSeed, onCheckedChange = viewModel::revealSeed)
+                    }
                     if (state.revealSeed) {
                         Text(
                             text = state.mnemonic,
@@ -130,25 +137,5 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(24.dp))
         }
-    }
-}
-
-@Composable
-private fun RowWithSwitch(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    androidx.compose.foundation.layout.Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

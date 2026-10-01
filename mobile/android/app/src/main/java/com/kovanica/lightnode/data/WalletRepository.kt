@@ -3,12 +3,13 @@ package com.kovanica.lightnode.data
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import uniffi.kovanica.CoinJoinOutput
-import uniffi.kovanica.CoinJoinParticipant
-import uniffi.kovanica.CoinJoinPrepared
-import uniffi.kovanica.SendReceipt
+import kovanica.CoinJoinOutput
+import kovanica.CoinJoinParticipant
+import kovanica.CoinJoinPrepared
+import kovanica.SendReceipt
 import com.kovanica.lightnode.ui.util.Bip39
 import com.kovanica.lightnode.ui.util.KovanicaAddress
+import com.kovanica.lightnode.ui.util.KovanicaKeys
 
 /**
  * Wallet-level operations: seed derivation, transfers, bonding, staking
@@ -26,11 +27,14 @@ class WalletRepository(
 
     /**
      * Derive the wallet address from a BIP39 mnemonic.
+     *
+     * Goes through [KovanicaKeys] so this agrees with the CLI, the node and
+     * the FFI. Do not shortcut to the raw BIP-39 material: the derivation
+     * path is part of the address, and skipping it moves the whole balance.
      */
     suspend fun deriveAddress(mnemonic: String): KovanicaAddress.Address =
         withContext(Dispatchers.Default) {
-            val seed = bip39.mnemonicToEd25519Seed(mnemonic)
-            KovanicaAddress.fromSeed(seed)
+            KovanicaKeys.addressFromMnemonic(mnemonic, bip39 = bip39)
         }
 
     /**
@@ -53,15 +57,13 @@ class WalletRepository(
      * The wallet's Ed25519 seed is reused as the VRF validator seed, and the
      * bond transaction spends from / returns change to the wallet address
      * derived from that same seed.
+     * TODO: Not yet exposed in FFI
      */
-    suspend fun bondStake(mnemonic: String, amountAtoms: ULong): Result<String> {
-        val seed = withContext(Dispatchers.Default) {
-            bip39.mnemonicToEd25519Seed(mnemonic)
-        }
+    /*suspend fun bondStake(mnemonic: String, amountAtoms: ULong): Result<String> {
         val secretHex = withContext(Dispatchers.Default) {
-            seed.joinToString("") { "%02x".format(it) }
+            mnemonicToSecretHex(mnemonic)
         }
-        return lightNode.setValidatorSeed(seed).fold(
+        return lightNode.setValidatorSeed(secretHex).fold(
             onSuccess = { lightNode.bondStakeFromSecret(secretHex, amountAtoms) },
             onFailure = { Result.failure(it) },
         )
@@ -70,6 +72,7 @@ class WalletRepository(
     /**
      * Unbond matured stake back to the wallet address derived from the
      * mnemonic.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun unbond(mnemonic: String, amountAtoms: ULong): Result<SendReceipt> {
         val secretHex = withContext(Dispatchers.Default) {
@@ -81,13 +84,14 @@ class WalletRepository(
     /**
      * Set the 32-byte validator [seed] and enable hybrid admission with
      * sensible v0.1 defaults.
+     * TODO: Not yet exposed in FFI
      */
     suspend fun setValidatorSeedAndEnable(seed: ByteArray): Result<Unit> {
         return lightNode.setValidatorSeed(seed).fold(
             onSuccess = { lightNode.enableHybrid() },
             onFailure = { Result.failure(it) },
         )
-    }
+    }*/
 
     /**
      * Produce a block and, if one is produced, export it as a wire-format blob
@@ -120,10 +124,8 @@ class WalletRepository(
         )
     }
 
-    private fun mnemonicToSecretHex(mnemonic: String): String {
-        val seed = bip39.mnemonicToEd25519Seed(mnemonic)
-        return seed.joinToString("") { "%02x".format(it) }
-    }
+    private fun mnemonicToSecretHex(mnemonic: String): String =
+        KovanicaKeys.signingKeyHex(mnemonic, bip39 = bip39)
 
     // ------------------------------------------------------------------
     // CoinJoin (node-level batched spends)

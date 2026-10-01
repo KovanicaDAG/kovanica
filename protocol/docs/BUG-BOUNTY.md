@@ -66,7 +66,7 @@ asked to make it rather than the bug pool asked to fix it.
 ### 0.4 Unchanged by the migration
 
 RFC-006 supply math does not move: MAX_SUPPLY **90.2M KVNC**, s₀
-**10 KVNC/block**, era **2,000,000 blocks**, α **3/4**, maturity **100 blocks**,
+**10 KVNC/block**, era **2,050,000 blocks**, α **3/4**, maturity **100 blocks**,
 fee split **75% burned / 25% producer**, GHOSTDAG **k=3**, UTXO, Ed25519,
 **1 KVNC = 100_000_000 atoms**. The curve is height-indexed and
 `cumulative_minted` is capped in `apply_block`, so the cap bug class in §2

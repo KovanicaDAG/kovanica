@@ -20,7 +20,7 @@ superseded by the ratified PoA-only decision.
 >
 > Unchanged: GHOSTDAG **k=3**, UTXO + Ed25519 spends, 1 KVNC = 10⁸ atoms, and
 > every RFC-006 tokenomics figure — MAX_SUPPLY **90.2M KVNC**, s₀ **10
-> KVNC/block**, era **2 000 000**, **α 3/4**, maturity **100**, fee **75%
+> KVNC/block**, era **2 050 000**, **α 3/4**, maturity **100**, fee **75%
 > burned / 25% to producer**.
 
 The name *kovanica* is Serbo-Croatian for a coin / mint.

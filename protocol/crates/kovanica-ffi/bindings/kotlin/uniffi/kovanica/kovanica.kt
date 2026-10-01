@@ -673,6 +673,22 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
+    external fun uniffi_kovanica_ffi_checksum_func_account_from_signing_secret(
+    ): Int
+    external fun uniffi_kovanica_ffi_checksum_func_address_from_signing_secret(
+    ): Int
+    external fun uniffi_kovanica_ffi_checksum_func_derive_account_from_mnemonic(
+    ): Int
+    external fun uniffi_kovanica_ffi_checksum_func_derive_address_from_mnemonic(
+    ): Int
+    external fun uniffi_kovanica_ffi_checksum_func_derive_signing_secret_from_mnemonic(
+    ): Int
+    external fun uniffi_kovanica_ffi_checksum_func_mnemonic_is_valid(
+    ): Int
+    external fun uniffi_kovanica_ffi_checksum_func_slip10_derivation_path(
+    ): Int
+    external fun uniffi_kovanica_ffi_checksum_func_slip44_coin_type(
+    ): Int
     external fun uniffi_kovanica_ffi_checksum_method_lightnode_balance_of_address(
     ): Int
     external fun uniffi_kovanica_ffi_checksum_method_lightnode_balance_of_asset(
@@ -720,6 +736,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kovanica_ffi_checksum_method_lightnode_export_light_sync_from(
     ): Int
     external fun uniffi_kovanica_ffi_checksum_method_lightnode_fetch_epoch_authority_set(
+    ): Int
+    external fun uniffi_kovanica_ffi_checksum_method_lightnode_fetch_stake_proof(
     ): Int
     external fun uniffi_kovanica_ffi_checksum_method_lightnode_filter_matches(
     ): Int
@@ -857,6 +875,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_ffi_fn_method_lightnode_fetch_epoch_authority_set(`ptr`: Long,`epoch`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kovanica_ffi_fn_method_lightnode_fetch_stake_proof(`ptr`: Long,`slot`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_ffi_fn_method_lightnode_filter_matches(`ptr`: Long,`filterBlob`: RustBuffer.ByValue,`address`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_kovanica_ffi_fn_method_lightnode_filter_matches_any(`ptr`: Long,`filterBlob`: RustBuffer.ByValue,`addresses`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -919,6 +939,22 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_kovanica_ffi_fn_method_lightnode_verify_tx_proof(`ptr`: Long,`proofBlob`: RustBuffer.ByValue,`blockIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_kovanica_ffi_fn_func_account_from_signing_secret(`signingSecretHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_ffi_fn_func_address_from_signing_secret(`signingSecretHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_ffi_fn_func_derive_account_from_mnemonic(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`addressIndex`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_ffi_fn_func_derive_address_from_mnemonic(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`addressIndex`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_ffi_fn_func_derive_signing_secret_from_mnemonic(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`addressIndex`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_ffi_fn_func_mnemonic_is_valid(`phrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_kovanica_ffi_fn_func_slip10_derivation_path(`addressIndex`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_ffi_fn_func_slip44_coin_type(uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
     external fun ffi_kovanica_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_kovanica_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1038,6 +1074,30 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if (lib.uniffi_kovanica_ffi_checksum_func_account_from_signing_secret() != 52348) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_ffi_checksum_func_address_from_signing_secret() != 2076) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_ffi_checksum_func_derive_account_from_mnemonic() != 49482) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_ffi_checksum_func_derive_address_from_mnemonic() != 21641) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_ffi_checksum_func_derive_signing_secret_from_mnemonic() != 51737) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_ffi_checksum_func_mnemonic_is_valid() != 45833) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_ffi_checksum_func_slip10_derivation_path() != 40996) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_ffi_checksum_func_slip44_coin_type() != 44922) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kovanica_ffi_checksum_method_lightnode_balance_of_address() != 13509) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1107,7 +1167,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_ffi_checksum_method_lightnode_export_light_sync_from() != 29986) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_ffi_checksum_method_lightnode_fetch_epoch_authority_set() != 59310) {
+    if (lib.uniffi_kovanica_ffi_checksum_method_lightnode_fetch_epoch_authority_set() != 57004) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_ffi_checksum_method_lightnode_fetch_stake_proof() != 31241) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_ffi_checksum_method_lightnode_filter_matches() != 44042) {
@@ -1826,11 +1889,16 @@ public interface LightNodeInterface {
     fun `exportLightSyncFrom`(`fromIdHex`: kotlin.String): kotlin.ByteArray
     
     /**
-     * Fetch the full authority set for an epoch.
-     * Returns lines of "pubkey_hex weight" (weight is always 1: PoA is
-     * equal-weight, KVP-201). See docs/RFC-009-StakeWeightedPoA.md.
+     * Fetch the full authority stake set for an epoch.
+     * Returns lines of "pubkey_hex stake_atoms".
      */
     fun `fetchEpochAuthoritySet`(`epoch`: kotlin.ULong): kotlin.String
+    
+    /**
+     * Fetch the stake merkle proof for a slot from the node.
+     * Returns the proof as a hex-encoded bincode blob.
+     */
+    fun `fetchStakeProof`(`slot`: kotlin.ULong): kotlin.String
     
     /**
      * Whether `address` MIGHT appear in the filtered block (Golomb-Rice
@@ -2650,9 +2718,8 @@ open class LightNode: Disposable, AutoCloseable, LightNodeInterface
 
     
     /**
-     * Fetch the full authority set for an epoch.
-     * Returns lines of "pubkey_hex weight" (weight is always 1: PoA is
-     * equal-weight, KVP-201). See docs/RFC-009-StakeWeightedPoA.md.
+     * Fetch the full authority stake set for an epoch.
+     * Returns lines of "pubkey_hex stake_atoms".
      */
     @Throws(LightNodeException::class)override fun `fetchEpochAuthoritySet`(`epoch`: kotlin.ULong): kotlin.String {
             return FfiConverterString.lift(
@@ -2662,6 +2729,25 @@ open class LightNode: Disposable, AutoCloseable, LightNodeInterface
         it,
         
         FfiConverterULong.lower(`epoch`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Fetch the stake merkle proof for a slot from the node.
+     * Returns the proof as a hex-encoded bincode blob.
+     */
+    @Throws(LightNodeException::class)override fun `fetchStakeProof`(`slot`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(LightNodeException) { _status ->
+    UniffiLib.uniffi_kovanica_ffi_fn_method_lightnode_fetch_stake_proof(
+        it,
+        
+        FfiConverterULong.lower(`slot`),_status)
 }
     }
     )
@@ -3613,6 +3699,80 @@ public object FfiConverterTypeCoinJoinPrepared: FfiConverterRustBuffer<CoinJoinP
 
 
 /**
+ * One derived account: what a wallet needs to show an address, watch it, and
+ * sign for it.
+ */
+data class DerivedAccount (
+    /**
+     * The receive address, rendered `kvnc…dag` (base58 over `0x00 ‖ pubkey`).
+     */
+    var `address`: kotlin.String
+    , 
+    /**
+     * The raw 32-byte Ed25519 public key, lowercase hex — the SPV watch key.
+     */
+    var `publicKeyHex`: kotlin.String
+    , 
+    /**
+     * The raw 32-byte Ed25519 signing key, lowercase hex: the value every
+     * `LightNode::send_*` expects in `signing_secret_hex`. Hand it straight to
+     * the signer; do not log it.
+     */
+    var `signingSecretHex`: kotlin.String
+    , 
+    /**
+     * The path this account came from, e.g. `m/44'/3007'/0'/0'/0'`.
+     */
+    var `derivationPath`: kotlin.String
+    , 
+    /**
+     * The address index used (the `i` in the path).
+     */
+    var `addressIndex`: kotlin.UInt
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDerivedAccount: FfiConverterRustBuffer<DerivedAccount> {
+    override fun read(buf: ByteBuffer): DerivedAccount {
+        return DerivedAccount(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DerivedAccount) = (
+            FfiConverterString.allocationSize(value.`address`) +
+            FfiConverterString.allocationSize(value.`publicKeyHex`) +
+            FfiConverterString.allocationSize(value.`signingSecretHex`) +
+            FfiConverterString.allocationSize(value.`derivationPath`) +
+            FfiConverterUInt.allocationSize(value.`addressIndex`)
+    )
+
+    override fun write(value: DerivedAccount, buf: ByteBuffer) {
+            FfiConverterString.write(value.`address`, buf)
+            FfiConverterString.write(value.`publicKeyHex`, buf)
+            FfiConverterString.write(value.`signingSecretHex`, buf)
+            FfiConverterString.write(value.`derivationPath`, buf)
+            FfiConverterUInt.write(value.`addressIndex`, buf)
+    }
+}
+
+
+
+/**
  * One reconstructed history event for an address.
  *
  * Entries come back in canonical (linearized) block order; a send's change
@@ -4124,6 +4284,98 @@ public object FfiConverterTypeVaultInfo: FfiConverterRustBuffer<VaultInfo> {
             FfiConverterString.write(value.`outpointTx`, buf)
             FfiConverterUInt.write(value.`outpointIndex`, buf)
     }
+}
+
+
+
+
+
+/**
+ * Failure modes of the derivation helpers.
+ */
+sealed class DerivationException: kotlin.Exception() {
+    
+    /**
+     * The recovery phrase failed word-list, word-count, or checksum validation.
+     */
+    class InvalidMnemonic(
+        
+        val `msg`: kotlin.String
+        ) : DerivationException() {
+        override val message
+            get() = "msg=${ `msg` }"
+    }
+    
+    /**
+     * A raw secret was not 32 bytes of hex.
+     */
+    class BadSecretLength(
+        
+        val `got`: kotlin.UInt
+        ) : DerivationException() {
+        override val message
+            get() = "got=${ `got` }"
+    }
+    
+
+    
+
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<DerivationException> {
+        override fun lift(error_buf: RustBuffer.ByValue): DerivationException = FfiConverterTypeDerivationError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDerivationError : FfiConverterRustBuffer<DerivationException> {
+    override fun read(buf: ByteBuffer): DerivationException {
+        
+
+        return when(buf.getInt()) {
+            1 -> DerivationException.InvalidMnemonic(
+                FfiConverterString.read(buf),
+                )
+            2 -> DerivationException.BadSecretLength(
+                FfiConverterUInt.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: DerivationException): ULong {
+        return when(value) {
+            is DerivationException.InvalidMnemonic -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`msg`)
+            )
+            is DerivationException.BadSecretLength -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterUInt.allocationSize(value.`got`)
+            )
+        }
+    }
+
+    override fun write(value: DerivationException, buf: ByteBuffer) {
+        when(value) {
+            is DerivationException.InvalidMnemonic -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`msg`, buf)
+                Unit
+            }
+            is DerivationException.BadSecretLength -> {
+                buf.putInt(2)
+                FfiConverterUInt.write(value.`got`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
 }
 
 
@@ -4665,4 +4917,139 @@ public object FfiConverterSequenceTypeMultisigSpendOutput: FfiConverterRustBuffe
         }
     }
 }
+        /**
+         * Derive the account owning a raw 32-byte Ed25519 key.
+         *
+         * This is the no-derivation path (`m` only), used by genesis and by a raw-seed
+         * key file. It must agree with [`derive_account_from_mnemonic`] for the
+         * matching material — a disagreement here would be the original bug in a new
+         * place.
+         */
+    @Throws(DerivationException::class) fun `accountFromSigningSecret`(`signingSecretHex`: kotlin.String): DerivedAccount {
+            return FfiConverterTypeDerivedAccount.lift(
+    uniffiRustCallWithError(DerivationException) { _status ->
+    UniffiLib.uniffi_kovanica_ffi_fn_func_account_from_signing_secret(
+    
+        
+        FfiConverterString.lower(`signingSecretHex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The address owning a raw 32-byte Ed25519 key (lowercase hex).
+         */
+    @Throws(DerivationException::class) fun `addressFromSigningSecret`(`signingSecretHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(DerivationException) { _status ->
+    UniffiLib.uniffi_kovanica_ffi_fn_func_address_from_signing_secret(
+    
+        
+        FfiConverterString.lower(`signingSecretHex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Derive the account at `address_index` from a recovery phrase.
+         *
+         * `passphrase` is the optional "25th word" and may be empty. It is honoured,
+         * not ignored: the same phrase under a different passphrase is a *different
+         * account*, so dropping it would show a balance-less address instead of an
+         * error.
+         */
+    @Throws(DerivationException::class) fun `deriveAccountFromMnemonic`(`mnemonic`: kotlin.String, `passphrase`: kotlin.String, `addressIndex`: kotlin.UInt): DerivedAccount {
+            return FfiConverterTypeDerivedAccount.lift(
+    uniffiRustCallWithError(DerivationException) { _status ->
+    UniffiLib.uniffi_kovanica_ffi_fn_func_derive_account_from_mnemonic(
+    
+        
+        FfiConverterString.lower(`mnemonic`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterUInt.lower(`addressIndex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Just the receive address for a recovery phrase, at `address_index`.
+         */
+    @Throws(DerivationException::class) fun `deriveAddressFromMnemonic`(`mnemonic`: kotlin.String, `passphrase`: kotlin.String, `addressIndex`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(DerivationException) { _status ->
+    UniffiLib.uniffi_kovanica_ffi_fn_func_derive_address_from_mnemonic(
+    
+        
+        FfiConverterString.lower(`mnemonic`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterUInt.lower(`addressIndex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Just the 32-byte signing key (lowercase hex) for a recovery phrase, at
+         * `address_index`.
+         */
+    @Throws(DerivationException::class) fun `deriveSigningSecretFromMnemonic`(`mnemonic`: kotlin.String, `passphrase`: kotlin.String, `addressIndex`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(DerivationException) { _status ->
+    UniffiLib.uniffi_kovanica_ffi_fn_func_derive_signing_secret_from_mnemonic(
+    
+        
+        FfiConverterString.lower(`mnemonic`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterUInt.lower(`addressIndex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Whether `phrase` is a well-formed recovery phrase (word list, word count, and
+         * checksum). Purely local — call it first so the user gets "that word is
+         * wrong" instead of a derived-and-wrong address.
+         */ fun `mnemonicIsValid`(`phrase`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kovanica_ffi_fn_func_mnemonic_is_valid(
+    
+        
+        FfiConverterString.lower(`phrase`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The frozen derivation path, for a client that wants to display it.
+         */ fun `slip10DerivationPath`(`addressIndex`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kovanica_ffi_fn_func_slip10_derivation_path(
+    
+        
+        FfiConverterUInt.lower(`addressIndex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The frozen SLIP-44 coin type (3007), so a client need not hard-code it.
+         */ fun `slip44CoinType`(): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kovanica_ffi_fn_func_slip44_coin_type(
+    
+        _status)
+}
+    )
+    }
+    
+
 

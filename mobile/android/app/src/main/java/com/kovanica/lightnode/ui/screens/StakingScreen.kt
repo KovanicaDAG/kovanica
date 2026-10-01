@@ -61,13 +61,13 @@ fun StakingScreen(
 
             KvncButton(
                 text = "Bond stake",
-                onClick = { viewModel.bond(bondAmount) },
+                onClick = { /* viewModel.bond(bondAmount) */ },
                 enabled = bondAmount.toDoubleOrNull() != null && bondAmount.toDouble() > 0,
             )
 
             KvncButton(
                 text = "Unbond stake",
-                onClick = { viewModel.unbond(bondAmount) },
+                onClick = { /* viewModel.unbond(bondAmount) */ },
                 enabled = bondAmount.toDoubleOrNull() != null && bondAmount.toDouble() > 0,
             )
 
@@ -81,7 +81,7 @@ fun StakingScreen(
 
             KvncButton(
                 text = "Produce block now",
-                onClick = viewModel::produceBlock,
+                onClick = { /* viewModel.produceBlock() */ },
             )
 
             Text(

@@ -5,7 +5,7 @@
 > (The vault copy was archived to `Obsidian-Vault/KovanicaDAG/_archive/` on
 > 2026-09-05 — this file is the only live copy.)
 
-*Updated: 2026-09-21 (seed3 decommissioned incl. DNS; see §1/§3)*
+*Updated: 2026-09-29 (old AWS seed3 retired; a NEW seed3 VPS at `187.7.27.139` is provisioned but not yet in service — see §1/§3/§7)*
 
 > **Consensus decision (ratified 2026-09-25): Kovanica is PoA-only.**
 > Proof-of-Work is being **removed**, not merely disabled. Items marked
@@ -24,7 +24,7 @@
 > **What is *not* changing.** RFC-006 tokenomics is untouched by the PoA
 > removal (the emission curve is height-indexed, not work-indexed, and
 > `cumulative_minted` is capped in `apply_block`): **MAX_SUPPLY 90.2M KVNC**,
-> genesis subsidy **s₀ 10 KVNC / block**, era length **2 000 000** blocks,
+> genesis subsidy **s₀ 10 KVNC / block**, era length **2 050 000** blocks,
 > decay **α 3/4 per era**, coinbase maturity **100 blocks**, fee split
 > **75% burned / 25% to producer**. GHOSTDAG stays at **k=3**; the ledger stays
 > UTXO; signatures stay Ed25519. Block *pace* will change (authorities produce
@@ -59,10 +59,10 @@
 
 Current network: genesis `9565fc20cb465eec0198a65c07da6b825e4211c4060d581a2c7dac6c96bafc97`
 (RFC-006 chain; verified against `GET /api/head` 2026-09-14). RFC-006
-parameters: genesis subsidy **10 KVNC**, era **2 000 000** blocks, per-era
-decay **×3/4** (geometric, total ≈80M), **MAX_SUPPLY 90.2M KVNC**, coinbase
+parameters: genesis subsidy **10 KVNC**, era **2 050 000** blocks, per-era
+decay **×3/4** (geometric, total ≈82M), **MAX_SUPPLY 90.2M KVNC**, coinbase
 maturity **100 blocks**, fee split **75% burned / 25% producer**, treasury
-**10 × 1M KVNC** vault tranches in genesis (tranche k unlocks at
+**8 × 1M KVNC** vault tranches in genesis (tranche k unlocks at
 `k × 31 536 000` blocks; placeholder keys are testnet-only and publicly
 derivable by design — production must pass a real secret seed via key
 ceremony). The pre-RFC-006 chain (genesis `596874eac2…`, subsidy 200 KVNC)
@@ -117,7 +117,7 @@ verifies genesis match against the primary seed.
 | `seed.kovanica.online` | AAAA | `2a02:4780:41:1f43::1` | DNS only |
 | `seed2.kovanica.online` | A | `76.13.250.65` | DNS only (Hostinger KVM2 VPS) |
 | `seed1.kovanica.online` | CNAME → `seed2.kovanica.online` | Hostinger KVM2 secondary | DNS only (legacy alias) |
-| ~~`seed3.kovanica.online`~~ | — | — | **DECOMMISSIONED 2026-09-21**: instance stopped (was AWS `15.228.170.29`, retired 2026-09-17) **and the DNS record deleted** — now NXDOMAIN. Any `KOVANICA_PEERS` entry still naming it is a dead dial; drop it. |
+| `seed3.kovanica.online` | A | `187.7.27.139` (new VPS, `srv2013143`) | **DNS only — PENDING.** The old AWS instance was decommissioned 2026-09-21, but its A record was **never deleted** and was never re-pointed at the new box. As of 2026-09-29 the name still resolves to **Cloudflare proxy IPs** (`104.21.87.177` / `172.67.170.125`) — orange-cloud cannot pass TCP 9000, so the name is a dead dial. Re-point to `187.7.27.139` as **DNS only (grey-cloud)** before listing seed3 in any `KOVANICA_PEERS` set. |
 | `explorer/www/app/wallet/trader/bot/dash/kovi` | A | `145.223.116.178` | proxied |
 | `opencode` | A | `145.223.116.178` | DNS only |
 
@@ -157,9 +157,11 @@ verifies genesis match against the primary seed.
   (**direct scrape** — port open, no tunnel needed). Metrics ports stay
   firewalled.
 - The old SSH tunnel unit `kovanica-tunnel-seed3` (`127.0.0.1:19090` → retired
-  seed3 `15.228.170.29:9090`) was **disabled 2026-09-20** (failing
+  seed3 `:9090`) was **disabled 2026-09-20** (failing
   `activating (auto-restart)` loop, exit 255) — obsolete because seed2 is
-  scraped directly. Not renamed; not re-enabled.
+  scraped directly. Not renamed; not re-enabled. The unit file and the
+  commented-out seed3 scrape job were **removed entirely 2026-09-29** now that
+  the target host is confirmed gone.
 - Rules: `/etc/prometheus/alerting_rules.yml` (repo copy is source of truth;
   keep `humanizeBytes`-style non-existent template functions out — promtool
   rejects them and the whole file fails to load). 15 alerts + 9 recording rules.
@@ -331,9 +333,22 @@ Roadmap naming: the off-box node shipped 2026-08-24 was **seed3** — AWS EC2
 mining on; later tried Elastic IP + `c7i.large`). `[HISTORICAL — PoW era]` The secondary seed in the
 **live set** is **seed2** — a separate **Hostinger KVM2 VPS** (`srv1991525`),
 DNS `A seed2.kovanica.online` (grey-cloud) → `76.13.250.65`, systemd
-`kovanica-seed2` (P2P :9000). Seed3 (AWS `15.228.170.29`) is **retired**:
-its PEM is no longer authorized, and metrics scraping bypasses it entirely
+`kovanica-seed2` (P2P :9000). The old seed3 AWS box is **retired and
+decommissioned 2026-09-21**: its PEM is
+no longer authorized, and metrics scraping bypasses it entirely
 (seed2 is scraped directly).
+
+**seed3 is now a different machine — a new VPS, not a resurrection of the AWS
+box.** `srv2013143` at `187.7.27.139`, reachable by key via
+`/root/.ssh/seed3_deploy_key`. As of 2026-09-29 it runs **no kovanica node**
+(0 processes, nothing listening on TCP 9000) and has **no fail2ban**. Its
+`seed3.kovanica.online` A record still resolves to Cloudflare proxy IPs, so the
+name does not reach it. To bring it into service: (1) re-point
+`seed3.kovanica.online` → `187.7.27.139` as **DNS only / grey-cloud**; (2)
+start and enable the node; (3) only then add it to `KOVANICA_PEERS` and the
+default DNS-seed list in `kovanica-node` (`dns_seed.rs`, asserted by
+`test_dns_seed_config_default`). Steps (1) and (2) are **operator actions** and
+have deliberately not been taken unprompted.
 
 ## 8. Seed backup & restore (A8)
 

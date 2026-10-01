@@ -486,13 +486,14 @@ impl Dag {
             })
             .map(|node| node.block.id())
             .collect();
-        eprintln!("PRUNE PAYLOADS: threshold={threshold} p={p} candidates={candidates:?}");
+        // No per-candidate logging here. This runs on every insert, including
+        // log replay at boot. Formatting the full candidate set pinned a CPU
+        // and grew the process until the cgroup OOM-killer fired, so the
+        // HTTP accept loop and the P2P bind never ran.
         for nid in candidates {
             let is_anc = self.is_ancestor(&nid, &p);
-            eprintln!("  candidate {nid} is_ancestor_of_p={is_anc}");
             if nid == p || is_anc {
                 if let Some(node) = self.nodes.get_mut(&nid) {
-                    eprintln!("    PRUNING {nid}");
                     node.block.prune_payload();
                 }
             }
