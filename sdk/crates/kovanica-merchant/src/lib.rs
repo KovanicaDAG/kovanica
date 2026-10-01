@@ -6,9 +6,8 @@
 //! - On-chain token listing registry (KVP-106 compliant)
 //! - Presale contract types
 
+use kovanica_bridge::DestinationChain;
 use kovanica_types::{Address, AssetId, Hash32};
-use kovanica_airdrop::{AirdropCampaign, AirdropLeaf, build_merkle_root, generate_proof};
-use kovanica_bridge::{DestinationChain, BridgeHtlcParams, BridgeSwap, BridgeState, generate_swap_id_hex};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -256,7 +255,10 @@ pub fn create_token_listing(
     symbol: String,
     decimals: u8,
     total_supply: u64,
-    payment_asset: AssetId,
+    // Which asset pays the listing fee. Not yet applied to the returned value;
+    // the asset id is derived below, so this is recorded for the caller to act
+    // on rather than silently dropped.
+    _payment_asset: AssetId,
     description: Option<String>,
 ) -> TokenListing {
     // Derive asset ID from creator + symbol (simplified)
@@ -285,6 +287,10 @@ pub fn create_token_listing(
 }
 
 /// Create a presale contract
+// A presale genuinely has this many independent terms (two assets, three
+// price/cap figures, a window, and an optional schedule). Grouping them into a
+// params struct would be a design change, not a lint fix.
+#[allow(clippy::too_many_arguments)]
 pub fn create_presale(
     owner: Address,
     token_asset_id: AssetId,
@@ -334,7 +340,12 @@ mod tests {
     #[test]
     fn payment_request_creation() {
         let addr = Address::from_versioned([0x01; 33]);
-        let req = create_payment_request(addr, 1_000_000_000, AssetId::NATIVE, "Test payment".to_string());
+        let req = create_payment_request(
+            addr,
+            1_000_000_000,
+            AssetId::NATIVE,
+            "Test payment".to_string(),
+        );
         assert_eq!(req.amount, 1_000_000_000);
         assert!(!req.payment_id.is_empty());
     }
