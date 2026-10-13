@@ -53,13 +53,18 @@ pub struct BlockManager {
     authority_stakes: RwLock<HashMap<AuthorityIndex, u64>>,
     /// Optional round watch receiver from consensus engine for current round tracking.
     round_receiver: RwLock<Option<watch::Receiver<Round>>>,
+    /// VRF public keys per authority (from committee), used to verify block proofs.
+    vrf_author_keys: RwLock<HashMap<AuthorityIndex, PublicKey>>,
+    /// Verified VRF outputs (round → author → hash), produced by block manager on valid blocks.
+    verified_vrf_outputs: RwLock<HashMap<Round, HashMap<AuthorityIndex, [u8; 32]>>>,
     /// Signing context (chain_id/epoch) for tx signing-hash checks.
     signing_ctx: kvnc_types::SigningContext,
+    /// VRF key derived from validator seed (optional; wire upgrade active when set).
+    vrf_keypair: RwLock<Option<kvnc_crypto::VRFKeyPair>>,
 }
 
 impl BlockManager {
     /// Create a new block manager.
-    // TODO(owner): source chain_id/epoch from node config
     pub fn new(dag_store: Arc<DagStore>, signing_ctx: kvnc_types::SigningContext) -> Self {
         Self {
             dag_store,
@@ -70,6 +75,9 @@ impl BlockManager {
             authority_stakes: RwLock::new(HashMap::new()),
             round_receiver: RwLock::new(None),
             signing_ctx,
+            vrf_keypair: RwLock::new(None),
+            vrf_author_keys: RwLock::new(HashMap::new()),
+            verified_vrf_outputs: RwLock::new(HashMap::new()),
         }
     }
 
@@ -83,9 +91,15 @@ impl BlockManager {
         *self.our_authority.write() = authority;
     }
 
-    /// Set our signing key.
+    /// Set our signing key (derives VRF secret from seed if available).
     pub fn set_signing_key(&self, key: SigningKey) {
-        *self.signing_key.write() = Some(key);
+        *self.signing_key.write() = Some(key.clone());
+        // Derive VRF secret deterministically from the Ed25519 seed
+        let seed_bytes: [u8; 32] = key.to_bytes().try_into().unwrap_or([0;32]);
+        let secret = kvnc_crypto::derive_vrf_secret_from_seed(&seed_bytes);
+        if let Ok(kp) = kvnc_crypto::VRFKeyPair::from_secret(secret) {
+            *self.vrf_keypair.write() = Some(kp);
+        }
     }
 
     /// Set the committee public keys used to authenticate block authors.
@@ -244,11 +258,24 @@ impl BlockManager {
     ) -> Result<StatementBlock, BlockManagerError> {
         // Compute digest
         let merkle_root = StatementBlock::compute_merkle_root(&transactions);
-        let digest = StatementBlock::compute_digest(
+        // Compute digest — include VRF statement only when we have a proof to attach
+        let mut statements = Vec::new();
+        if let Some(ref kp) = *self.vrf_keypair.read() {
+            let chain_id = self.signing_ctx.chain_id;
+            let input = format!("KVNC-VRF1-v1:{}:{}:{}:{}", chain_id, round, *self.our_authority.read(), 0u64);
+            let proof = kvnc_crypto::vrf_prove(kp, input.as_bytes());
+            statements = kvnc_crypto::encode_statements(&proof);
+        }
+        let digest = StatementBlock::compute_digest_statements(
             *self.our_authority.read(),
             round,
             &parents,
             &transactions,
+            if statements.len() >= 137 && &statements[..9] == b"KVNC-VRF1" {
+                Some(&statements)
+            } else {
+                None
+            },
         );
 
         Ok(StatementBlock {
@@ -256,8 +283,8 @@ impl BlockManager {
             round,
             parents,
             transactions,
-            statements: Vec::new(),        // Placeholder for votes
-            signature: Signature([0; 64]), // Will be filled by sign_block
+            statements,
+            signature: Signature([0; 64]),
             digest,
             merkle_root,
         })
@@ -312,16 +339,37 @@ impl BlockManager {
             self.validate_transaction(tx)?;
         }
 
-        let computed_digest = StatementBlock::compute_digest(
+        let computed_digest = StatementBlock::compute_digest_statements(
             block.author,
             block.round,
             &block.parents,
             &block.transactions,
+            if !block.statements.is_empty() {
+                Some(&block.statements)
+            } else {
+                None
+            },
         );
         if computed_digest != block.digest {
             return Err(BlockManagerError::InvalidBlock(
                 "Digest mismatch".to_string(),
             ));
+        }
+
+        // Wire-upgrade: verify VRF proof and record verified output when statements carry it.
+        if let Some(output) = kvnc_crypto::decode_statements(&block.statements) {
+            if let Some(vrf_pk) = self.vrf_author_keys.read().get(&block.author).copied() {
+                let input = format!("KVNC-VRF1-v1:{}:{}:{}:{}",
+                    self.signing_ctx.chain_id, block.round, block.author, 0u64);
+                if let Err(_) = kvnc_crypto::vrf_verify(&vrf_pk, input.as_bytes(), &output) {
+                    return Err(BlockManagerError::InvalidBlock(
+                        "VRF proof verification failed".to_string(),
+                    ));
+                }
+                // Record the verified output for leader selection
+                let mut out_map = self.verified_vrf_outputs.write();
+                out_map.entry(block.round).or_default().insert(block.author, output.hash);
+            }
         }
 
         // Verify merkle root matches transaction hashes

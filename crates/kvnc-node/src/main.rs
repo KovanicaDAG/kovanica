@@ -753,7 +753,7 @@ where
     });
 
     // Background task: periodically rebroadcast mempool transactions to peers
-    /// and re-queue stale in-flight transactions.
+    // and re-queue stale in-flight transactions.
     let mempool_for_rebroadcast = mempool.clone();
     let network_cmd_tx_for_rebroadcast = network_cmd_tx.clone();
     let mut shutdown_for_rebroadcast = shutdown_rx.clone();
@@ -1092,6 +1092,7 @@ async fn run_network(
 }
 
 /// Ingest events emitted by the network layer into the DAG store and mempool.
+#[allow(clippy::too_many_arguments)]
 async fn run_event_handler(
     mut network_events: mpsc::UnboundedReceiver<NetworkEvent>,
     dag_store: Arc<DagStore>,
@@ -1291,7 +1292,6 @@ fn handle_network_event(
                 StateSyncResponse::Snapshot(data) => {
                     debug!(%peer, size = data.len(), "received state snapshot");
                     // Import snapshot into state storage - write to temp file first
-                    use std::io::Write;
                     let temp_dir = std::env::temp_dir();
                     let temp_file = temp_dir.join(format!("kvnc_state_sync_{}_{}.bin", peer, uuid::Uuid::new_v4()));
                     if let Err(e) = std::fs::write(&temp_file, &data) {
@@ -1438,6 +1438,14 @@ impl DagStoreTrait for NodeDagStore {
 
     fn put_block(&self, block: &StatementBlock) -> Result<(), DagStoreError> {
         self.inner.put_block(block)
+    }
+
+    fn replace_block(
+        &self,
+        existing: &StatementBlock,
+        incoming: &StatementBlock,
+    ) -> Result<(), DagStoreError> {
+        self.inner.replace_block(existing, incoming)
     }
 
     fn find_parents(

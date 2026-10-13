@@ -317,6 +317,64 @@ impl DagStore {
         Ok(())
     }
 
+    /// Swap `existing` for `incoming` in one write transaction.
+    ///
+    /// Used only by the gated min-digest fork policy. Refuses unless both
+    /// blocks share author and round, the existing digest has no children,
+    /// the incoming digest is not already stored, and the round is not
+    /// decided. A refused call commits nothing.
+    pub fn replace_block(
+        &self,
+        existing: &StatementBlock,
+        incoming: &StatementBlock,
+    ) -> Result<(), DagStoreError> {
+        if existing.author != incoming.author || existing.round != incoming.round {
+            return Err(DagStoreError::NotFound(
+                "replace requires the same author and round".into(),
+            ));
+        }
+        if existing.digest == incoming.digest {
+            return self.put_block(incoming);
+        }
+
+        let txn = self.storage.begin_write()?;
+        {
+            let table = txn.open_table(tables::DECIDED_ROUNDS)?;
+            if table.get(existing.round)?.is_some() {
+                return Err(DagStoreError::NotFound(format!(
+                    "round {} is already decided",
+                    existing.round
+                )));
+            }
+        }
+        {
+            let table = txn.open_table(tables::DAG_BLOCKS)?;
+            if table.get(hash_to_bytes(&existing.digest))?.is_none() {
+                return Err(DagStoreError::NotFound(existing.digest.to_string()));
+            }
+            if table.get(hash_to_bytes(&incoming.digest))?.is_some() {
+                return Err(DagStoreError::NotFound(
+                    "incoming digest already stored".into(),
+                ));
+            }
+        }
+        if !self
+            .storage
+            .consensus()
+            .get_children(&txn, &existing.digest)?
+            .is_empty()
+        {
+            return Err(DagStoreError::NotFound(
+                "existing leader digest already has children".into(),
+            ));
+        }
+
+        self.delete_block_internal(&txn, &existing.digest)?;
+        self.storage.consensus().put_dag_block(&txn, incoming)?;
+        txn.commit()?;
+        Ok(())
+    }
+
     /// Mark a round as decided with a leader hash.
     pub fn mark_round_decided(
         &self,
@@ -821,6 +879,33 @@ mod tests {
         let storage = Storage::new(dir.path().join("dag.redb")).expect("storage");
         let store = DagStore::new(storage).expect("dag store");
         (dir, store)
+    }
+
+    #[test]
+    fn replace_block_swaps_undecided_leader_and_refuses_children() {
+        let (_dir, store) = store();
+        let first = make_block(0, 3, Vec::new(), "larger");
+        let second = make_block(0, 3, Vec::new(), "smaller");
+        store.put_block(&first).unwrap();
+        store.replace_block(&first, &second).unwrap();
+        assert!(!store.has_block(&first.digest).unwrap());
+        assert!(store.has_block(&second.digest).unwrap());
+        assert_eq!(
+            store
+                .get_block_by_author_round(0, 3)
+                .unwrap()
+                .expect("replaced leader")
+                .digest,
+            second.digest
+        );
+
+        let child = make_block(1, 4, vec![block_ref(&second)], "child");
+        store.put_block(&child).unwrap();
+        let third = make_block(0, 3, Vec::new(), "after-child");
+        let refused = store.replace_block(&second, &third);
+        assert!(refused.is_err(), "a referenced leader must not be swapped");
+        assert!(store.has_block(&second.digest).unwrap());
+        assert!(!store.has_block(&third.digest).unwrap());
     }
 
     // #2: prune_non_blue keeps protected leaders (decided + last committed)

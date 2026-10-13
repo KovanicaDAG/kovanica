@@ -154,7 +154,7 @@ Scrape `kvnc_node_block_height`, `kvnc_node_peer_count`, `kvnc_node_commit_laten
 |---|--------|------------|
 | 1 | Key exposure (client-side leak) | Encrypted keystore + client-only path |
 | 2 | Replay / nonce reuse | Strict sequential nonce in mempool + domain-separated hashes (`DOMAIN_TX`, `DOMAIN_BLOCK`) |
-| 3 | Consensus fork / equivocation | Deterministic tie-break: same-round/same-author fork currently **rejected** (first-valid digest wins); lexicographic-min-digest selection is a TODO before mainnet. Timeout skip on missing leader. |
+| 3 | Consensus fork / equivocation | Default: first-valid digest wins, a second digest is rejected. `use_min_digest_fork` (default off) may swap via `DagStore::replace_block` only while the round is undecided and the old digest has no children. Timeout skip on missing leader. |
 | 4 | Double-sign / slash | `StakingState::slash` (fixed % evidence tx) |
 | 5 | P2P eclipse / Sybil | DNS-only kvnc-native seeds (TBD; no third-party hosts); no orange-cloud peers |
 

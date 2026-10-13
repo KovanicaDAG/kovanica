@@ -57,7 +57,7 @@
 
 VRF keys are stored and copied onto the committee record. The live schedule does **not** use them: `ConsensusEngine` calls `CommitteeInfo::leader`, which is round-robin over authority index. `CommitteeInfo::stake_weighted_leader` and `kvnc_crypto::vrf_prove` have no caller on the commit path. `kvnc-types::Committee::leader_with_vrf` is a separate type the node does not schedule with.
 
-- [~] `Committee::leader_with_vrf` exists on `kvnc-types` (`committee.rs`). The consensus schedule uses `CommitteeInfo::leader` (round-robin), not this function and not `stake_weighted_leader`.
+- [~] `CommitteeInfo::leader_with_vrf` is wired behind `ConsensusConfig::use_vrf_leader` (default **off**). The flag bypasses the round-robin prefetch. With no verified outputs, selection matches round-robin. Live blocks still have no VRF proof, so the default schedule remains `CommitteeInfo::leader`.
 - [x] `Authority.vrf_public_key: Option<PublicKey>` — optional VRF key in committee authority (`kvnc-types/src/committee.rs:18`)
 - [x] `ValidatorInfo.vrf_public_key: Option<VrfPublicKey>` — optional VRF key in staking state (`kvnc-staking/src/lib.rs:311`)
 - [x] Genesis `genesis_validators.toml` supports optional `vrf_public_key` field (`kvnc-node/src/main.rs:1819`)
@@ -115,12 +115,12 @@ VRF keys are stored and copied onto the committee record. The live schedule does
 
 - [x] `WAVE_LENGTH`, `wave_of`, `offset_in_wave`, `is_leader_round`, `scheduled_leader_for_round`
 - [x] Deterministic leader selection (round-robin + stake-weighted)
-- [~] Timeout handling: `leader_timeout_ms` (fixed ms) + `register_skip`;**`timeout_factor` NE postoji**
+- [x] Timeout handling: non-zero `leader_timeout_ms` wins; otherwise `round_duration_ms * leader_timeout_factor` (default factor 2) + `register_skip`
 
 ## PHASE 4.4: Consensus Loop — `[~]` partial
 
 - [x] Round timer (`round_loop` + `interval(round_duration_ms)`)
-- [~] Fork handling: kod **odbija** fork (različit digest, isti round/author, `first-valid wins`); **ne bira** lexicographic min-digest; test potvrđuje rejection (engine.rs:1422-1484)
+- [~] Fork handling: default **odbija** drugi digest (first-valid). `use_min_digest_fork` (default off) zamjenjuje spremljeni blok samo ako `DagStore::replace_block` uspije i round nije decided. Live default je i dalje first-valid.
 
 ## PHASE 5.1: Core Mempool — `[x]` DONE
 
@@ -274,7 +274,7 @@ VRF keys are stored and copied onto the committee record. The live schedule does
 ## PHASE 17: Consensus Mechanics — `[x]` (fork `[~]`)
 
 - [x] Timeout handling (`leader_timeout_ms` + `register_skip`; **nema `timeout_factor`**)
-- [~] Fork handling — **odbija**, ne bira min-digest
+- [~] Fork handling — default **odbija**; min-digest je iza `use_min_digest_fork` (default off) + `DagStore::replace_block`
 - [x] Stake-weighted leader
 - [x] Batch sig verify na ingest (strict, `Err` na bad sig)
 - [x] Hash domain separation + merkle roots + **signature format v1** (`signing.rs`, `docs/SIGNATURE_FORMAT.md`)

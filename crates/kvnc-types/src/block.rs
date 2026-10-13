@@ -39,12 +39,25 @@ pub struct StatementBlock {
 }
 
 impl StatementBlock {
-    /// Compute the digest of the block (without signature).
+    /// Compute digest with optional VRF-authenticated statements.
+    /// Old calls (no statements / not VRF) yield exactly the previous digest.
     pub fn compute_digest(
         author: AuthorityIndex,
         round: Round,
         parents: &[BlockReference],
         transactions: &[Transaction],
+    ) -> Hash {
+        Self::compute_digest_statements(author, round, parents, transactions, None)
+    }
+
+    /// Digest that includes `statements` only when a VRF payload is present.
+    /// This is the wire-upgrade digest; old empty-statement blocks stay unchanged.
+    pub fn compute_digest_statements(
+        author: AuthorityIndex,
+        round: Round,
+        parents: &[BlockReference],
+        transactions: &[Transaction],
+        statements: Option<&[u8]>,
     ) -> Hash {
         let mut data = Vec::new();
         data.extend_from_slice(&author.to_le_bytes());
@@ -54,12 +67,16 @@ impl StatementBlock {
             data.extend_from_slice(&p.round.to_le_bytes());
             data.extend_from_slice(&p.digest.0);
         }
-        // Compute merkle root from transactions first, then include it.
         let merkle = Self::compute_merkle_root(transactions);
         data.extend_from_slice(&merkle.0);
-        // Transaction hashes for digest
         for tx in transactions {
             data.extend_from_slice(&tx.hash().0);
+        }
+        // Wire upgrade: only include statements when they carry the VRF blob.
+        if let Some(s) = statements {
+            if s.len() >= 137 && &s[..9] == b"KVNC-VRF1" {
+                data.extend_from_slice(s);
+            }
         }
         Hash::new_keyed(Hash::DOMAIN_BLOCK, &data)
     }
