@@ -133,4 +133,109 @@ mod tests {
             assert_eq!(signing_context(Some(id)).unwrap().chain_id, id);
         }
     }
+
+    /// Wire bytes the browser signer must reproduce. The spec key is
+    /// seed `07` × 32 (`docs/SIGNATURE_FORMAT.md` §4). Transfer is vector T1.
+    ///
+    /// `Signature` is serde `serialize_bytes`, so bincode prefixes it with a
+    /// u64 length. The other fixed arrays are raw bytes. Signing tags and
+    /// bincode variant indexes are not the same numbers.
+    #[test]
+    fn console_signer_wire_fixtures_match_the_node() {
+        use kvnc_types::SigningKey;
+
+        let seed = [0x07u8; 32];
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../packages/signer/fixtures/wire.json"))
+                .expect("wire fixture");
+        let signing_key = SigningKey::from_bytes(&seed);
+        let public_key = kvnc_types::PublicKey::from(signing_key.verifying_key());
+        let sender = Address::from_public_key(&public_key);
+        assert_eq!(
+            hex::encode(public_key.0),
+            fixture["publicKeyHex"].as_str().unwrap()
+        );
+        assert_eq!(sender.encode(), fixture["senderAddress"].as_str().unwrap());
+        assert_eq!(
+            Address([0x22; 32]).encode(),
+            fixture["recipientAddress"].as_str().unwrap()
+        );
+        assert_eq!(
+            crate::wallet::seed_to_mnemonic(&seed).unwrap(),
+            fixture["mnemonic"].as_str().unwrap()
+        );
+
+        let to = Address([0x22; 32]);
+        let cases = [
+            (
+                "transfer",
+                TransactionKind::Transfer {
+                    to,
+                    amount: 1_000_000,
+                },
+                5u64,
+                1000u64,
+            ),
+            ("stake", TransactionKind::Stake { amount: 77 }, 8, 9),
+            ("unstake", TransactionKind::Unstake { amount: 78 }, 9, 9),
+            (
+                "delegate",
+                TransactionKind::Delegate {
+                    validator: to,
+                    amount: 79,
+                },
+                10,
+                9,
+            ),
+            (
+                "claimNone",
+                TransactionKind::ClaimRewards { validator: None },
+                11,
+                9,
+            ),
+            (
+                "claimSome",
+                TransactionKind::ClaimRewards {
+                    validator: Some(to),
+                },
+                12,
+                9,
+            ),
+        ];
+
+        for entry in fixture["transactions"].as_array().unwrap() {
+            let name = entry["name"].as_str().unwrap();
+            let (label, kind, nonce, fee) = cases
+                .iter()
+                .find(|(label, ..)| *label == name)
+                .unwrap_or_else(|| panic!("unexpected fixture {name}"));
+            assert_eq!(entry["nonce"].as_u64().unwrap(), *nonce, "{name}");
+            assert_eq!(entry["fee"].as_u64().unwrap(), *fee, "{name}");
+            let tx = build_signed(&CTX, sender, *nonce, kind.clone(), *fee, &signing_key).unwrap();
+            assert_eq!(
+                tx.hash.to_hex(),
+                entry["signingHash"].as_str().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                hex::encode(tx.signature.0),
+                entry["signature"].as_str().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                encode_raw(&tx).unwrap(),
+                entry["rawHex"].as_str().unwrap(),
+                "{label}"
+            );
+            let decoded: Transaction =
+                bincode::deserialize(&hex::decode(entry["rawHex"].as_str().unwrap()).unwrap())
+                    .unwrap();
+            assert_eq!(decoded, tx, "{name}");
+            assert!(tx.verify_signature(&CTX), "{name}");
+        }
+        assert_eq!(
+            fixture["transactions"].as_array().unwrap().len(),
+            cases.len()
+        );
+    }
 }

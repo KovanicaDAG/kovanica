@@ -305,6 +305,92 @@ pub async fn rate_limit_middleware(
     next.run(request).await
 }
 
+/// Browser origins allowed to call the public RPC from Kovanica Console.
+///
+/// The same three strings are the faucet allowlist (`kvnc-faucet`). A request
+/// with no `Origin` (CLI, curl, node-to-node) is unchanged. Any other origin
+/// is rejected. There is no wildcard.
+pub const CONSOLE_ALLOWED_ORIGINS: &[&str] = &[
+    "https://console.kovanica.online",
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+];
+
+/// Routes a browser on the console is allowed to read. `/metrics` is left
+/// alone so a page cannot scrape it.
+const RPC_CORS_PATHS: &[&str] = &["/rpc", "/ws", "/health"];
+
+/// Return the canonical allowlist entry when `origin` matches one of them.
+pub fn console_origin(origin: &str) -> Option<&'static str> {
+    CONSOLE_ALLOWED_ORIGINS
+        .iter()
+        .copied()
+        .find(|allowed| *allowed == origin)
+}
+
+/// CORS for `POST /rpc`, `GET /ws`, `GET /health`, and their preflight.
+///
+/// Layer this outside the rate limiter so an `OPTIONS` preflight does not
+/// spend a token.
+pub async fn console_cors(request: Request, next: Next) -> Response {
+    apply_console_cors(RPC_CORS_PATHS, request, next).await
+}
+
+/// Shared CORS decision used by [`console_cors`]. `paths` are exact URI paths.
+pub async fn apply_console_cors(paths: &[&str], request: Request, next: Next) -> Response {
+    if !paths.contains(&request.uri().path()) {
+        return next.run(request).await;
+    }
+    let origin = request
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    let Some(origin) = origin else {
+        return next.run(request).await;
+    };
+    let Some(origin) = console_origin(origin) else {
+        let mut response = Response::new("origin not allowed".into());
+        *response.status_mut() = StatusCode::FORBIDDEN;
+        return response;
+    };
+    if request.method() == axum::http::Method::OPTIONS {
+        return preflight(origin);
+    }
+    let mut response = next.run(request).await;
+    allow_origin(response.headers_mut(), origin);
+    response
+}
+
+fn allow_origin(headers: &mut HeaderMap, origin: &'static str) {
+    headers.insert(
+        axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        axum::http::HeaderValue::from_static(origin),
+    );
+    headers.insert(
+        axum::http::header::VARY,
+        axum::http::HeaderValue::from_static("Origin"),
+    );
+}
+
+fn preflight(origin: &'static str) -> Response {
+    let mut response = Response::new("".into());
+    *response.status_mut() = StatusCode::NO_CONTENT;
+    allow_origin(response.headers_mut(), origin);
+    response.headers_mut().insert(
+        axum::http::header::ACCESS_CONTROL_ALLOW_METHODS,
+        axum::http::HeaderValue::from_static("GET, POST, OPTIONS"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS,
+        axum::http::HeaderValue::from_static("content-type"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::ACCESS_CONTROL_MAX_AGE,
+        axum::http::HeaderValue::from_static("600"),
+    );
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

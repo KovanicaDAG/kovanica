@@ -40,7 +40,8 @@ pub use health::{ComponentState, HealthSnapshot, NodeHealth};
 pub use openapi::{generate_openapi_spec, write_openapi_json, write_openapi_yaml};
 pub use rpc_methods::*;
 pub use rpc_middleware::{
-    rate_limit_middleware, AuthConfig, AuthError, RateLimitConfig, RateLimiterState, WRITE_METHODS,
+    console_cors, console_origin, rate_limit_middleware, AuthConfig, AuthError, RateLimitConfig,
+    RateLimiterState, CONSOLE_ALLOWED_ORIGINS, WRITE_METHODS,
 };
 
 /// Upper bound on how long one JSON-RPC call may run. A handler stuck on a
@@ -308,6 +309,9 @@ impl RpcServer {
             .layer(Extension(self.state.auth_config.clone()))
             .layer(Extension(self.state.peer_count.clone()))
             .layer(Extension(self.state.clone()))
+            // Outermost, so a browser preflight is answered before the
+            // rate limiter and before routing.
+            .layer(axum::middleware::from_fn(console_cors))
     }
 
     pub async fn start(self) -> Result<tokio::task::JoinHandle<()>, std::io::Error> {
@@ -755,6 +759,180 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(health.status(), StatusCode::OK);
+    }
+
+    const CONSOLE_ORIGIN: &str = "https://console.kovanica.online";
+
+    async fn send_origin(
+        router: Router,
+        method: &str,
+        path: &str,
+        origin: Option<&str>,
+        body: Option<&str>,
+    ) -> axum::response::Response {
+        let mut req = Request::builder().method(method).uri(path);
+        if let Some(origin) = origin {
+            req = req.header("origin", origin);
+        }
+        if body.is_some() {
+            req = req.header("content-type", "application/json");
+        }
+        router
+            .oneshot(
+                req.body(Body::from(body.unwrap_or("").to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("router responds")
+    }
+
+    #[tokio::test]
+    async fn console_origin_is_accepted_for_rpc_ws_and_health() {
+        let (_dir, server) = server(unlimited(), open_auth()).await;
+        let preflight = send_origin(
+            server.router(),
+            "OPTIONS",
+            "/rpc",
+            Some(CONSOLE_ORIGIN),
+            None,
+        )
+        .await;
+        assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            preflight
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap(),
+            CONSOLE_ORIGIN
+        );
+        assert_eq!(
+            preflight
+                .headers()
+                .get("access-control-allow-headers")
+                .unwrap(),
+            "content-type"
+        );
+        assert_eq!(
+            preflight
+                .headers()
+                .get("access-control-allow-methods")
+                .unwrap(),
+            "GET, POST, OPTIONS"
+        );
+
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"kvnc_blockNumber","params":[]}"#;
+        let response = send_origin(
+            server.router(),
+            "POST",
+            "/rpc",
+            Some("http://127.0.0.1:5173"),
+            Some(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap(),
+            "http://127.0.0.1:5173"
+        );
+
+        let health = send_origin(
+            server.router(),
+            "GET",
+            "/health",
+            Some("http://localhost:5173"),
+            None,
+        )
+        .await;
+        assert_eq!(health.status(), StatusCode::OK);
+        assert_eq!(
+            health.headers().get("access-control-allow-origin").unwrap(),
+            "http://localhost:5173"
+        );
+
+        // Not a real upgrade. The origin is allowed, so the request reaches
+        // the websocket handler instead of being rejected as a foreign page.
+        let ws = send_origin(server.router(), "GET", "/ws", Some(CONSOLE_ORIGIN), None).await;
+        assert_ne!(ws.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            ws.headers().get("access-control-allow-origin").unwrap(),
+            CONSOLE_ORIGIN
+        );
+    }
+
+    #[tokio::test]
+    async fn foreign_origin_is_rejected_and_metrics_stay_unshared() {
+        let (_dir, server) = server(unlimited(), open_auth()).await;
+        let denied = send_origin(
+            server.router(),
+            "POST",
+            "/rpc",
+            Some("https://evil.example"),
+            Some(r#"{"jsonrpc":"2.0","id":1,"method":"kvnc_blockNumber","params":[]}"#),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert!(denied
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+        let bytes = denied.into_body().collect().await.unwrap().to_bytes();
+        assert!(!bytes.windows(7).any(|w| w == b"jsonrpc"));
+
+        let ws = send_origin(
+            server.router(),
+            "GET",
+            "/ws",
+            Some("https://evil.example"),
+            None,
+        )
+        .await;
+        assert_eq!(ws.status(), StatusCode::FORBIDDEN);
+
+        let metrics = send_origin(
+            server.router(),
+            "GET",
+            "/metrics",
+            Some(CONSOLE_ORIGIN),
+            None,
+        )
+        .await;
+        assert_eq!(metrics.status(), StatusCode::OK);
+        assert!(metrics
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn preflight_does_not_spend_a_rate_limit_token() {
+        let rate = RateLimitConfig {
+            requests_per_minute: 1,
+            burst: 1,
+        };
+        let (_dir, server) = server(rate, open_auth()).await;
+        let first = send_origin(
+            server.router(),
+            "OPTIONS",
+            "/rpc",
+            Some(CONSOLE_ORIGIN),
+            None,
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::NO_CONTENT);
+        let second = send_origin(
+            server.router(),
+            "OPTIONS",
+            "/rpc",
+            Some(CONSOLE_ORIGIN),
+            None,
+        )
+        .await;
+        assert_eq!(second.status(), StatusCode::NO_CONTENT);
+        let (status, _) = call(server.router(), "kvnc_blockNumber", Value::Null, None).await;
+        assert_eq!(status, StatusCode::OK);
     }
 
     #[tokio::test(start_paused = true)]

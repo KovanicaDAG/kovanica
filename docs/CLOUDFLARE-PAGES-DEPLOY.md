@@ -22,8 +22,23 @@
 
 | Variable | Value | Type |
 |----------|-------|------|
-| `VITE_RPC_URL` | `https://testnet-rpc.kovanica.online` | Secret |
+| `VITE_RPC_URL` | `https://rpc-testnet.kovanica.online` | Secret |
 | `VITE_CHAIN_ID` | `2` | Plain |
+
+## Kovanica Console
+
+**Project Name:** `kvnc-console`
+**Domain:** `console.kovanica.online` (proxied CNAME to the Pages hostname)
+**Root Directory:** `packages/console`
+**Build Command:** `npm run build`
+**Build Output Directory:** `dist`
+**Node Version:** `20`
+
+One production build contains both networks. Testnet (`chain_id` 2, `https://rpc-testnet.kovanica.online/rpc`) is the live target. Mainnet (`chain_id` 1) is shown in the header switch and labeled Soon. It does not become the signing network until `MAINNET.enabled` is set to `true` in `packages/console/src/network.ts`. There is no RPC URL secret: the endpoints are public and pinned in that file. Preview deployments use the same table.
+
+`packages/console/public/_headers` is the Content-Security-Policy. `connect-src` allows only the testnet RPC, the mainnet RPC, their WebSocket endpoints, and the testnet faucet. `public/_redirects` sends client routes to `index.html`.
+
+The local node (`chain_id` 1337) is compiled out of production builds.
 
 ## Custom Domain
 
