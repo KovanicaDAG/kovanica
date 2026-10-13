@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "generate-validators"
 path = "examples/generate_validators.rs"
 
+[[bin]]
+name = "kvnc-bench"
+path = "src/bin/bench.rs"
+
 [dependencies]
 kvnc-types = { path = "../kvnc-types" }
 kvnc-crypto = { path = "../kvnc-crypto" }
