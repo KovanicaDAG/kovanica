@@ -107,6 +107,7 @@ fn execute_and_credit(subdag: &CommittedSubDag) -> (u64, Address) {
                 0,
                 Some(payout),
                 Some(PublicKey([i + 1; 32])),
+                None,
             )
             .expect("genesis validator");
         payouts.push(payout);

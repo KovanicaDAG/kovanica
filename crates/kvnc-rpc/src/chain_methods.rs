@@ -633,6 +633,7 @@ mod tests {
             index: 0,
             stake: MIN_VALIDATOR_STAKE,
             public_key: PublicKey([7u8; 32]),
+            vrf_public_key: None,
             address: Address([9u8; 32]),
             network_address: "127.0.0.1:9000".to_string(),
         };

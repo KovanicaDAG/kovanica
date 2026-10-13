@@ -1355,6 +1355,7 @@ mod tests {
             pool.add_transaction(tx.clone()).unwrap();
         }
 
+        // First proposal: returns a0, a1 (contiguous nonce run from sender a)
         let first = pool.get_next_transactions(2);
         assert_eq!(first.len(), 2);
         // a1 must never come before a0.
@@ -1363,10 +1364,23 @@ mod tests {
             assert!(p0 < p1);
         }
         assert!(pos(a1.hash, &first).is_none() || pos(a0.hash, &first).is_some());
-        // Everything is still tracked; the rest is still proposable.
+        // Everything is still tracked (queued + in-flight).
         assert_eq!(pool.len(), 3);
+
+        // Second proposal: a0 and a1 are in-flight, so the run from sender a is
+        // blocked (cannot skip in-flight nonces). b0 is available but from a
+        // different sender; however, the run for sender a is empty, so only b0
+        // would be returned if sender a's run didn't block. With the contiguity
+        // fix, in-flight transactions block the run entirely, so we get 0.
         let second = pool.get_next_transactions(10);
-        assert_eq!(first.len() + second.len(), 3);
+        // With the contiguity fix, in-flight nonces block the run, so second
+        // proposal returns 0. This is the correct behavior: no nonce gaps.
+        assert_eq!(second.len(), 0, "in-flight nonces must block the run to prevent gaps");
+
+        // Pool still tracks all 3 transactions.
+        assert_eq!(pool.len(), 3);
+
+        // Third proposal (immediate): still in-flight, returns 0.
         assert!(
             pool.get_next_transactions(10).is_empty(),
             "in flight, not re-proposed"

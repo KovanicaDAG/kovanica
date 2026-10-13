@@ -153,7 +153,7 @@ async fn nonce(client: &Arc<RpcClient>, address: &Address) -> Result<u64> {
         .call("kvnc_getNonce", json!([address.to_string()]))
         .await
         .with_context(|| format!("kvnc_getNonce {address}"))?;
-    Ok(rpc::parse_quantity(&value)?)
+    rpc::parse_quantity(&value)
 }
 
 /// Submit `groups` concurrently (at most `concurrency` groups at a time) while

@@ -32,6 +32,7 @@ pub fn committee_with_stakes(stakes: &[Stake]) -> CommitteeInfo {
             index: i as AuthorityIndex,
             stake,
             public_key: validator_public_key(i as AuthorityIndex),
+            vrf_public_key: None,
             address: Address([i as u8; 32]),
             network_address: format!("/ip4/127.0.0.1/tcp/90{:02}", i),
         })

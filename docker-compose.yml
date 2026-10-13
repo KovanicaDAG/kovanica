@@ -24,6 +24,8 @@ x-node: &node
     KVNC_MYSTICGHOST: "true"
     # Benchmark tuning: rebroadcast every 1s instead of default 30s for faster gossip
     KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS: "1"
+    # Benchmark tuning: in-flight timeout 5s instead of default 60s for faster requeue
+    KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "1"
     RUST_LOG: "info"
   # No config file: pure env + genesis file copied to data dir at start.
   # Each service mounts its own validator keystore + genesis_validators.toml.
