@@ -121,7 +121,7 @@ Storage (redb / pruning / snapshots)
 
 ### Minimal Next Steps
 - `/metrics` text exposition (HTTP TCP port, same as RPC or separate)
-- Grafana JSON dashboard (`ops/grafana/` — not yet created)
+- Grafana JSON dashboard (`ops/grafana/kvnc-overview.json`)
 - Alert rules YAML: `peer_drop`, `sync_stall`, `commit_lag`, `high_memory`
 - Structured logging (`tracing`) + optional `trace_id` per round
 
@@ -190,7 +190,7 @@ Current agent config lives in root `AGENTS.md`, `.opencode/agents/kvnc.md`, `ope
 
 ## Current Edit Notes (2026-10-13)
 
-- `use_mysticghost` default = true (experimental, Phase 15.5)
+- `use_mysticghost` default = false (`NodeConfig` and `ConsensusConfig`; `KVNC_MYSTICGHOST` overrides). When enabled, `UniversalCommitter` applies scoped GHOSTDAG colouring.
 - `init_genesis` extended with `founder_premine.hex` + `validators.json` support (Phase 14/16)
 - Storage / staking compile fixes applied; `TASKLIST.md` updated
 - Tokenomics locked (RFC-006 / `docs/TOKENOMICS.md`)

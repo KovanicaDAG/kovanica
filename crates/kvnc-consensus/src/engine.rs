@@ -154,10 +154,14 @@ pub struct ConsensusConfig {
     pub lookahead_rounds: u64,
     /// Maximum number of pending rounds to keep in memory.
     pub max_pending_rounds: u64,
-    /// Enable the experimental MysticGhost ordering path (default off).
+    /// Order committed waves with scoped GHOSTDAG (`k = 3`).
     ///
-    /// Scaffold only: nothing consumes this yet, so the flag has no
-    /// behavioural effect until the committer wiring lands.
+    /// Default off. `UniversalCommitter` reads this flag: when it is on, red
+    /// blocks are listed on `CommittedSubDag::non_blue` and are not executed.
+    /// When it is off, the linearizer path is used and `non_blue` stays empty.
+    /// The node sets it from configuration (`KVNC_MYSTICGHOST`).
+    ///
+    /// `committer_mysticghost` is an unused example wrapper. It is not this path.
     pub use_mysticghost: bool,
     /// Number of waves to keep before pruning old waves.
     /// Default: 100 waves.

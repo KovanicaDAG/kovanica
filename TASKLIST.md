@@ -53,9 +53,11 @@
 - [ ] BIP32-style HD derivation — **nema koda** (samo BIP-39 mnemonic import bez HD izvoda u CLI)
 - [x] VRF za leader selection — **ECVRF-ED25519-SHA512-Elligator2** via `ecvrf` crate (`kvnc-crypto/src/vrf.rs`: `VRFKeyPair`, `VRFOutput`, `vrf_prove`, `vrf_verify`, `vrf_hash_to_u64`; 7 testova prolaze)
 
-## PHASE 1.3 (VRF Wiring): Leader Selection Integration — `[x]` DONE
+## PHASE 1.3 (VRF Wiring): Leader Selection Integration — `[~]` partial
 
-- [x] `CommitteeInfo.leader_with_vrf(round, vrf_outputs)` — stake-weighted selection via `priority = vrf_hash * total_stake / stake` (`kvnc-types/src/committee.rs:78-120`)
+VRF keys are stored and copied onto the committee record. The live schedule does **not** use them: `ConsensusEngine` calls `CommitteeInfo::leader`, which is round-robin over authority index. `CommitteeInfo::stake_weighted_leader` and `kvnc_crypto::vrf_prove` have no caller on the commit path. `kvnc-types::Committee::leader_with_vrf` is a separate type the node does not schedule with.
+
+- [~] `Committee::leader_with_vrf` exists on `kvnc-types` (`committee.rs`). The consensus schedule uses `CommitteeInfo::leader` (round-robin), not this function and not `stake_weighted_leader`.
 - [x] `Authority.vrf_public_key: Option<PublicKey>` — optional VRF key in committee authority (`kvnc-types/src/committee.rs:18`)
 - [x] `ValidatorInfo.vrf_public_key: Option<VrfPublicKey>` — optional VRF key in staking state (`kvnc-staking/src/lib.rs:311`)
 - [x] Genesis `genesis_validators.toml` supports optional `vrf_public_key` field (`kvnc-node/src/main.rs:1819`)
@@ -63,7 +65,7 @@
 - [x] `StakingState.join_validator` accepts optional `vrf_public_key` parameter (`kvnc-staking/src/lib.rs:418`)
 - [x] Staking transaction types (`Stake`, `Delegate`) wire VRF public key into validator record (`kvnc-execution/src/lib.rs:604`)
 - [x] All tests updated for 6-argument `join_validator` signature
-- [x] Fallback: when no VRF outputs provided, `leader()` uses deterministic round-robin (`CommitteeInfo::leader`)
+- [x] `Committee::leader` with an empty VRF map falls back to round-robin. That fallback is what the engine runs, because it never supplies VRF outputs.
 
 ## PHASE 2.1: Block Store — `[x]` DONE
 
@@ -377,7 +379,7 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 | Item | Oznaka | Verdict nakon inspekcije |
 |---|---|---|
 | 1.2 BIP32 HD | `[ ]` | ✅ točno — nema koda (`grep bip32/derive_child` = 0) |
-| 1.2 VRF | `[x]` | ✅ **RJEŠENO 2026-10-13** — ECVRF-ED25519-SHA512-Elligator2 via `ecvrf` crate (`kvnc-crypto/src/vrf.rs`), stake-weighted leader selection (`kvnc-types/src/committee.rs:78-120`), genesis wiring (`kvnc-node/src/main.rs`), staking state wiring (`kvnc-staking/src/lib.rs`), staking tx wiring (`kvnc-execution/src/lib.rs`), 7 testova prolaze |
+| 1.2 / 1.3 VRF | `[~]` | Primitive, genesis field, and staking storage are in place (`kvnc-crypto/src/vrf.rs`, `ValidatorInfo.vrf_public_key`). The engine schedule is still `CommitteeInfo::leader` (round-robin). `stake_weighted_leader` and `vrf_prove` are not called from the round loop. |
 | 4.3/17 `timeout_factor` | `[~]` | ✅ točno — ne postoji; samo fixed `leader_timeout_ms` |
 | 4.4/17 Fork handling | `[~]` | ✅ točno — `process_block` **odbija** `Err("fork/equivocation")` (test `fork_first_valid_digest_wins_deterministic`); `committer.update_leader` ima min-digest tie-break ali je na ingest putu nedosegnut |
 | 8.2/25 Governance hooks | `[ ]` | ✅ točno — `kvnc-cli propose/vote → not_implemented` (`main.rs:304,310`); `docs/GOVERNANCE.md` = 38-line skeleton |
@@ -415,7 +417,7 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 ## Actual critical path (sljedeći koraci po prioritetu)
 
 1. ~~Fix `late_join_integration`~~ — **RJEŠENO (PR #54, 2026-10-12)**
-2. ~~**VRF za leader selection**~~ — **RJEŠENO 2026-10-13 (Phase 1.3)**: ECVRF-ED25519-SHA512-Elligator2, stake-weighted leader selection, genesis/staking/staking-tx wiring complete, 7 testova prolaze
+2. **VRF leader selection on the commit path** — keys and `vrf_prove` exist; `ConsensusEngine` still schedules with round-robin `CommitteeInfo::leader`. Do not switch the live testnet schedule without a coordinated upgrade.
 3. ~~**4-node quorum (docker-compose)**~~ — **RJEŠENO 2026-10-13**: 4-node verified running, height 2000+
 3. **Fix `live_vote_integration` harness** (`validators = [...]` schema vs parser koji traži `validator`) → dokaz 16.3 end-to-end
 4. **TPS benchmark** @2GB RAM — `kvnc-bench` binary exists, mempool/gossip bottleneck limits throughput; fix gossip propagation for multi-tx bursts

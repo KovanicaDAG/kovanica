@@ -33,7 +33,14 @@ use redb::{ReadableTable, TableDefinition, WriteTransaction};
 use thiserror::Error;
 use tracing::{debug, info};
 
+pub mod call_args;
 pub mod contracts;
+pub use call_args::{
+    encode_htlc_claim, encode_htlc_create, encode_htlc_refund, encode_multisig_confirm,
+    encode_multisig_create, encode_multisig_execute, encode_multisig_propose, encode_token_approve,
+    encode_token_burn, encode_token_create, encode_token_mint, encode_token_transfer,
+    encode_token_transfer_from, encode_vault_cancel, encode_vault_claim, encode_vault_create,
+};
 pub use contracts::{
     execute_contract_call, execute_contract_call_in_txn, is_entry_point, ContractEvent,
     ContractHost, ContractRunner, WasmCall, ENTRY_POINTS,

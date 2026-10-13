@@ -23,7 +23,7 @@
 data_dir = "./data"
 
 # P2P listen address: either `host:port` or a full libp2p multiaddr.
-listen_addr = "0.0.0.0:9000"
+listen_addr = "0.0.0.0:8000"
 
 # JSON-RPC bind address and port.
 rpc_addr = "127.0.0.1"
@@ -36,12 +36,13 @@ rpc_port = 8545
 bootnodes = []
 
 # Path to a validator signing key file containing a 32-byte hex seed.
-# When omitted, the node generates an ephemeral key (not suitable for
-# production, since block rewards are paid to a throwaway identity).
+# Required while run_validator is true (the default): the node refuses to
+# start without it. A read-only node (run_validator = false) may omit it.
 # validator_key = "/etc/kvnc/validator.key"
 
-# Target consensus round duration in milliseconds (2s block time).
-round_duration_ms = 2000
+# Target consensus round duration in milliseconds.
+# 4 s round → 12 s per committed leader (wave length 3).
+round_duration_ms = 4000
 
 # Maximum number of connected peers.
 max_peers = 50
