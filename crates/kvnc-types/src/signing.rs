@@ -28,6 +28,11 @@ pub mod chain_id {
 pub const VOTE_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/vote/v1");
 /// Domain tag (16 bytes, `0x00`-padded) of the transaction signing preimage v1.
 pub const TX_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/tx/v1");
+/// Domain tag (16 bytes, `0x00`-padded) of a post-execution commit seal.
+///
+/// Distinct from [`VOTE_DOMAIN_TAG`]. A seal covers the executed state and
+/// the MysticGhost roots; a vote covers only the leader block hash.
+pub const COMMIT_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/commit/v1");
 
 /// `DomainTag16(s)`: ASCII `s` right-padded with `0x00` to exactly 16 bytes.
 ///

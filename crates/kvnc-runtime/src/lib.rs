@@ -322,7 +322,7 @@ fn place_args(
     args: &[u8],
 ) -> Result<(i32, i32), RuntimeError> {
     if args.is_empty() {
-        // TODO: non-contract path — a module without `kvnc_alloc` can still
+        // Note: entry path — a module without `kvnc_alloc` can still
         // be invoked with an empty argument buffer (ptr=0, len=0). Modules
         // that need arguments must export the fixed `kvnc_alloc`/`kvnc_dealloc`
         // pair; the ABI defines no other host→guest copy mechanism.

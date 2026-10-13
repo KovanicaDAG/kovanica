@@ -90,6 +90,10 @@ impl StateStore {
             let _ = write_txn.open_table(crate::tables::CONTRACT_STORAGE)?;
             let _ = write_txn.open_table(crate::tables::STAKING_STATE)?;
             let _ = write_txn.open_table(crate::tables::STATE_ROOT)?;
+            let _ = write_txn.open_table(crate::tables::LEADER_HEADERS)?;
+            let _ = write_txn.open_table(crate::tables::COMMIT_SEALS)?;
+            let _ = write_txn.open_table(crate::tables::EXECUTED_TX_HASHES)?;
+            let _ = write_txn.open_table(crate::tables::LIGHT_SET)?;
         }
         write_txn.commit().map_err(StorageError::Commit)?;
         Ok(Self { pruning })
@@ -334,6 +338,50 @@ impl StateStore {
         Ok(())
     }
 
+    /// Store the light-node set. This is a separate table from staking state.
+    pub fn save_light_set(
+        &self,
+        txn: &WriteTransaction,
+        set: &kvnc_staking::LightSet,
+    ) -> Result<(), StateStoreError> {
+        let mut table = txn.open_table(crate::tables::LIGHT_SET)?;
+        table.insert("current", set.to_bytes()?)?;
+        Ok(())
+    }
+
+    /// Remove the light-node set row, if one was written.
+    pub fn clear_light_set(&self, txn: &WriteTransaction) -> Result<(), StateStoreError> {
+        let mut table = txn.open_table(crate::tables::LIGHT_SET)?;
+        table.remove("current")?;
+        Ok(())
+    }
+
+    /// Load the light-node set from a write transaction.
+    pub fn load_light_set_write(
+        &self,
+        txn: &WriteTransaction,
+    ) -> Result<Option<kvnc_staking::LightSet>, StateStoreError> {
+        let table = txn.open_table(crate::tables::LIGHT_SET)?;
+        let bytes = table.get("current")?.map(|guard| guard.value().to_vec());
+        match bytes {
+            Some(bytes) => Ok(Some(kvnc_staking::LightSet::from_bytes(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Load the light-node set from a read transaction.
+    pub fn load_light_set(
+        &self,
+        txn: &ReadTransaction,
+    ) -> Result<Option<kvnc_staking::LightSet>, StateStoreError> {
+        let table = txn.open_table(crate::tables::LIGHT_SET)?;
+        let bytes = table.get("current")?.map(|guard| guard.value().to_vec());
+        match bytes {
+            Some(bytes) => Ok(Some(kvnc_staking::LightSet::from_bytes(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Load the staking state.
     pub fn load_staking_state(
         &self,
@@ -349,6 +397,266 @@ impl StateStore {
     // ============================================================
     // State root operations (for snapshots/light clients)
     // ============================================================
+
+    /// Rebuild the account sparse Merkle from the accounts table and store
+    /// it as the state root at `committed_leader_height`.
+    ///
+    /// Only balance and nonce are committed. A row with both at zero is
+    /// skipped, so it matches an absent account. Call this at the end of a
+    /// committed-leader write, after every account mutation in that
+    /// transaction.
+    pub fn commit_account_smt(
+        &self,
+        txn: &WriteTransaction,
+        committed_leader_height: u64,
+    ) -> Result<kvnc_types::hash::Hash, StateStoreError> {
+        let mut tree = kvnc_types::AccountSmt::empty();
+        {
+            let table = txn.open_table(crate::tables::ACCOUNTS)?;
+            for entry in table.iter()? {
+                let (key, value) = entry?;
+                let account = Account::from_bytes(&value.value())?;
+                if account.balance == 0 && account.nonce == 0 {
+                    continue;
+                }
+                let mut address = [0u8; 32];
+                address.copy_from_slice(key.value().as_ref());
+                tree.insert(kvnc_types::Address(address), account.balance, account.nonce);
+            }
+        }
+        let root = tree.root();
+        self.save_state_root(txn, committed_leader_height, &root)?;
+        Ok(root)
+    }
+
+    /// Prove `address` against the accounts currently stored.
+    ///
+    /// The proof's root is the tree of those rows. It matches
+    /// [`Self::commit_account_smt`] when no account write happened since
+    /// that call.
+    pub fn prove_account(
+        &self,
+        txn: &ReadTransaction,
+        address: &kvnc_types::Address,
+    ) -> Result<kvnc_types::StateProof, StateStoreError> {
+        let mut tree = kvnc_types::AccountSmt::empty();
+        let mut found: Option<Account> = None;
+        {
+            let table = txn.open_table(crate::tables::ACCOUNTS)?;
+            for entry in table.iter()? {
+                let (key, value) = entry?;
+                let account = Account::from_bytes(&value.value())?;
+                let mut row_address = [0u8; 32];
+                row_address.copy_from_slice(key.value().as_ref());
+                if row_address == address.0 {
+                    found = Some(account.clone());
+                }
+                if account.balance == 0 && account.nonce == 0 {
+                    continue;
+                }
+                tree.insert(
+                    kvnc_types::Address(row_address),
+                    account.balance,
+                    account.nonce,
+                );
+            }
+        }
+        let (present, balance, nonce) = match found {
+            Some(account) if account.balance != 0 || account.nonce != 0 => {
+                (true, account.balance, account.nonce)
+            }
+            _ => (false, 0, 0),
+        };
+        let proof = tree.prove(address, balance, nonce, present);
+        Ok(kvnc_types::StateProof {
+            state_root: tree.root(),
+            address: *address,
+            balance,
+            nonce,
+            present,
+            siblings: proof.siblings.to_vec(),
+        })
+    }
+
+    /// Store the locally executed leader header.
+    ///
+    /// A header already stored at this height with a different hash is
+    /// replaced, and every seal at that height is deleted. The local
+    /// execution result is the one later seals must match.
+    pub fn save_leader_header(
+        &self,
+        txn: &WriteTransaction,
+        header: &kvnc_types::LeaderHeader,
+    ) -> Result<(), StateStoreError> {
+        let bytes = bincode::serialize(header)?;
+        let height = header.committed_height;
+        let new_hash = header.hash();
+        let replaced = {
+            let table = txn.open_table(crate::tables::LEADER_HEADERS)?;
+            let existing = table.get(height)?.map(|guard| guard.value().to_vec());
+            match existing {
+                Some(bytes) => {
+                    let old: kvnc_types::LeaderHeader = bincode::deserialize(&bytes)?;
+                    old.hash() != new_hash
+                }
+                None => false,
+            }
+        };
+        if replaced {
+            self.delete_seals_at(txn, height)?;
+        }
+        let mut table = txn.open_table(crate::tables::LEADER_HEADERS)?;
+        table.insert(height, bytes)?;
+        Ok(())
+    }
+
+    /// Leader header stored for `height`, if this node has executed it.
+    pub fn get_leader_header(
+        &self,
+        txn: &ReadTransaction,
+        height: u64,
+    ) -> Result<Option<kvnc_types::LeaderHeader>, StateStoreError> {
+        let table = txn.open_table(crate::tables::LEADER_HEADERS)?;
+        let bytes = table.get(height)?.map(|guard| guard.value().to_vec());
+        match bytes {
+            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Highest stored leader header. Keys are committed heights, so the
+    /// last row is the latest.
+    pub fn get_latest_leader_header(
+        &self,
+        txn: &ReadTransaction,
+    ) -> Result<Option<kvnc_types::LeaderHeader>, StateStoreError> {
+        let table = txn.open_table(crate::tables::LEADER_HEADERS)?;
+        let mut latest = None;
+        for entry in table.iter()? {
+            let (_height, value) = entry?;
+            let bytes = value.value().to_vec();
+            latest = Some(bincode::deserialize(&bytes)?);
+        }
+        Ok(latest)
+    }
+
+    /// Store one seal. A different signature already stored for the same
+    /// authority is left in place.
+    pub fn save_commit_seal(
+        &self,
+        txn: &WriteTransaction,
+        height: u64,
+        seal: &kvnc_types::CommitSeal,
+    ) -> Result<(), StateStoreError> {
+        let mut table = txn.open_table(crate::tables::COMMIT_SEALS)?;
+        let key = (height, seal.authority_index);
+        if table.get(key)?.is_some() {
+            return Ok(());
+        }
+        table.insert(key, seal.signature.0.to_vec())?;
+        Ok(())
+    }
+
+    /// Store `seal` only when the header at `height` hashes to `header_hash`.
+    pub fn save_seal_if_header(
+        &self,
+        txn: &WriteTransaction,
+        height: u64,
+        header_hash: &kvnc_types::hash::Hash,
+        seal: &kvnc_types::CommitSeal,
+    ) -> Result<bool, StateStoreError> {
+        let stored_hash = {
+            let table = txn.open_table(crate::tables::LEADER_HEADERS)?;
+            let bytes = table.get(height)?.map(|guard| guard.value().to_vec());
+            match bytes {
+                Some(bytes) => {
+                    let header: kvnc_types::LeaderHeader = bincode::deserialize(&bytes)?;
+                    Some(header.hash())
+                }
+                None => None,
+            }
+        };
+        if stored_hash.as_ref() != Some(header_hash) {
+            return Ok(false);
+        }
+        self.save_commit_seal(txn, height, seal)?;
+        Ok(true)
+    }
+
+    /// Seals stored for `height`, in authority-index order.
+    pub fn seals_for(
+        &self,
+        txn: &ReadTransaction,
+        height: u64,
+    ) -> Result<Vec<kvnc_types::CommitSeal>, StateStoreError> {
+        let table = txn.open_table(crate::tables::COMMIT_SEALS)?;
+        let mut seals = Vec::new();
+        for entry in table.range((height, 0u16)..=(height, u16::MAX))? {
+            let (key, value) = entry?;
+            let (_, index) = key.value();
+            let bytes = value.value().to_vec();
+            if bytes.len() != 64 {
+                return Err(StateStoreError::NotFound(format!(
+                    "commit seal at height {height} authority {index} has {} bytes",
+                    bytes.len()
+                )));
+            }
+            let mut signature = [0u8; 64];
+            signature.copy_from_slice(&bytes);
+            seals.push(kvnc_types::CommitSeal {
+                authority_index: index,
+                signature: kvnc_types::Signature(signature),
+            });
+        }
+        Ok(seals)
+    }
+
+    /// Replace the executed-transaction hash list for `height`.
+    pub fn save_executed_tx_hashes(
+        &self,
+        txn: &WriteTransaction,
+        height: u64,
+        hashes: &[kvnc_types::hash::Hash],
+    ) -> Result<(), StateStoreError> {
+        let bytes = bincode::serialize(hashes)?;
+        let mut table = txn.open_table(crate::tables::EXECUTED_TX_HASHES)?;
+        table.insert(height, bytes)?;
+        Ok(())
+    }
+
+    /// Executed-transaction hashes for `height`, if recorded.
+    pub fn get_executed_tx_hashes(
+        &self,
+        txn: &ReadTransaction,
+        height: u64,
+    ) -> Result<Option<Vec<kvnc_types::hash::Hash>>, StateStoreError> {
+        let table = txn.open_table(crate::tables::EXECUTED_TX_HASHES)?;
+        let bytes = table.get(height)?.map(|guard| guard.value().to_vec());
+        match bytes {
+            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn delete_seals_at(&self, txn: &WriteTransaction, height: u64) -> Result<(), StateStoreError> {
+        let keys: Vec<(u64, u16)> = {
+            let table = txn.open_table(crate::tables::COMMIT_SEALS)?;
+            let mut keys = Vec::new();
+            for entry in table.range((height, 0u16)..=(height, u16::MAX))? {
+                let (key, _) = entry?;
+                keys.push(key.value());
+            }
+            keys
+        };
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let mut table = txn.open_table(crate::tables::COMMIT_SEALS)?;
+        for key in keys {
+            table.remove(key)?;
+        }
+        Ok(())
+    }
 
     /// Save state root for a committed leader height.
     pub fn save_state_root(
@@ -734,5 +1042,152 @@ mod sub_balance_tests {
         assert_eq!(storage.state().sub_balance(&txn, &addr, 250).unwrap(), 0);
         txn.commit().unwrap();
         assert_eq!(balance(&storage, &addr), 0);
+    }
+}
+
+#[cfg(test)]
+mod account_smt_tests {
+    use super::*;
+    use crate::Storage;
+    use kvnc_types::Address;
+    use tempfile::tempdir;
+
+    #[test]
+    fn committed_root_matches_an_account_proof() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("smt.db")).unwrap();
+        let addr = Address([4; 32]);
+        let other = Address([8; 32]);
+        let root = {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .set_account(
+                    &txn,
+                    &addr,
+                    &Account {
+                        balance: 25,
+                        nonce: 2,
+                        code_hash: [9; 32],
+                        code: vec![1, 2, 3],
+                    },
+                )
+                .unwrap();
+            storage
+                .state()
+                .set_account(
+                    &txn,
+                    &other,
+                    &Account {
+                        balance: 0,
+                        nonce: 0,
+                        code_hash: [1; 32],
+                        code: vec![9],
+                    },
+                )
+                .unwrap();
+            let root = storage.state().commit_account_smt(&txn, 3).unwrap();
+            txn.commit().unwrap();
+            root
+        };
+        let txn = storage.begin_read().unwrap();
+        let proof = storage.state().prove_account(&txn, &addr).unwrap();
+        assert_eq!(proof.state_root, root);
+        assert!(proof.present);
+        assert_eq!(proof.balance, 25);
+        assert_eq!(proof.nonce, 2);
+        assert!(proof.verify());
+        let absent = storage.state().prove_account(&txn, &other).unwrap();
+        assert!(!absent.present);
+        assert_eq!(absent.state_root, root);
+        assert!(absent.verify());
+        let saved = storage.state().get_state_root(&txn, 3).unwrap();
+        assert_eq!(saved, Some(root));
+    }
+}
+
+#[cfg(test)]
+mod leader_header_tests {
+    use super::*;
+    use crate::Storage;
+    use kvnc_types::{CommitSeal, Hash, LeaderHeader, Signature};
+    use tempfile::tempdir;
+
+    fn header(height: u64, state: u8) -> LeaderHeader {
+        LeaderHeader {
+            committed_height: height,
+            leader_round: 3,
+            leader_digest: Hash::new([height as u8]),
+            leader_author: 0,
+            parent_leader_digest: Hash::zero(),
+            tx_merkle_root: Hash::zero(),
+            executed_tx_root: Hash::zero(),
+            non_blue_root: Hash::zero(),
+            blue_root: Hash::zero(),
+            mysticghost: false,
+            state_root: Hash::new([state]),
+            epoch: 0,
+            committee_hash: Hash::zero(),
+            timestamp: 0,
+        }
+    }
+
+    fn seal(index: u16, byte: u8) -> CommitSeal {
+        CommitSeal {
+            authority_index: index,
+            signature: Signature([byte; 64]),
+        }
+    }
+
+    #[test]
+    fn replacing_a_header_drops_seals_for_that_height() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("seals.db")).unwrap();
+        let first = header(1, 1);
+        let txn = storage.begin_write().unwrap();
+        storage.state().save_leader_header(&txn, &first).unwrap();
+        storage
+            .state()
+            .save_commit_seal(&txn, 1, &seal(0, 9))
+            .unwrap();
+        storage
+            .state()
+            .save_executed_tx_hashes(&txn, 1, &[Hash::new([3u8])])
+            .unwrap();
+        txn.commit().unwrap();
+
+        let second = header(1, 2);
+        assert_ne!(first.hash(), second.hash());
+        let txn = storage.begin_write().unwrap();
+        storage.state().save_leader_header(&txn, &second).unwrap();
+        let kept = storage
+            .state()
+            .save_seal_if_header(&txn, 1, &first.hash(), &seal(1, 4))
+            .unwrap();
+        assert!(!kept);
+        let stored = storage
+            .state()
+            .save_seal_if_header(&txn, 1, &second.hash(), &seal(1, 4))
+            .unwrap();
+        assert!(stored);
+        txn.commit().unwrap();
+
+        let txn = storage.begin_read().unwrap();
+        let loaded = storage.state().get_leader_header(&txn, 1).unwrap().unwrap();
+        assert_eq!(loaded.hash(), second.hash());
+        let seals = storage.state().seals_for(&txn, 1).unwrap();
+        assert_eq!(seals.len(), 1);
+        assert_eq!(seals[0].authority_index, 1);
+        let hashes = storage
+            .state()
+            .get_executed_tx_hashes(&txn, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(hashes, vec![Hash::new([3u8])]);
+        assert!(storage
+            .state()
+            .get_leader_header(&txn, 9)
+            .unwrap()
+            .is_none());
     }
 }

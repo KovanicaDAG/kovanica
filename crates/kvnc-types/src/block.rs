@@ -2,6 +2,7 @@
 
 use crate::crypto::Signature;
 use crate::hash::Hash;
+use crate::merkle::{self, MerkleProof};
 use crate::transaction::Transaction;
 use crate::{AuthorityIndex, Round};
 use serde::{Deserialize, Serialize};
@@ -84,48 +85,27 @@ impl StatementBlock {
     /// Binary Merkle root over the included transaction hashes.
     /// Empty transaction list yields a fixed zero hash.
     pub fn merkle_root(&self) -> Hash {
-        if self.transactions.is_empty() {
-            return Hash::zero();
-        }
-        let mut current: Vec<Hash> = self.transactions.iter().map(|tx| tx.hash()).collect();
-        while current.len() > 1 {
-            let mut next = Vec::with_capacity(current.len().div_ceil(2));
-            for chunk in current.chunks(2) {
-                if chunk.len() == 2 {
-                    let mut data = Vec::with_capacity(64);
-                    data.extend_from_slice(chunk[0].as_ref());
-                    data.extend_from_slice(chunk[1].as_ref());
-                    next.push(Hash::new_keyed(Hash::DOMAIN_MERKLE, &data));
-                } else {
-                    next.push(chunk[0]);
-                }
-            }
-            current = next;
-        }
-        current[0]
+        Self::compute_merkle_root(&self.transactions)
     }
 
     /// Compute merkle root from a slice of transactions (static).
     pub fn compute_merkle_root(transactions: &[Transaction]) -> Hash {
-        if transactions.is_empty() {
-            return Hash::zero();
-        }
-        let mut current: Vec<Hash> = transactions.iter().map(|tx| tx.hash()).collect();
-        while current.len() > 1 {
-            let mut next = Vec::with_capacity(current.len().div_ceil(2));
-            for chunk in current.chunks(2) {
-                if chunk.len() == 2 {
-                    let mut data = Vec::with_capacity(64);
-                    data.extend_from_slice(chunk[0].as_ref());
-                    data.extend_from_slice(chunk[1].as_ref());
-                    next.push(Hash::new_keyed(Hash::DOMAIN_MERKLE, &data));
-                } else {
-                    next.push(chunk[0]);
-                }
-            }
-            current = next;
-        }
-        current[0]
+        let leaves: Vec<Hash> = transactions.iter().map(|tx| tx.hash()).collect();
+        merkle::root(&leaves)
+    }
+
+    /// Inclusion proof for `transactions[index]` against [`Self::compute_merkle_root`].
+    ///
+    /// `None` when `index` is out of range. An empty block has no proof; its
+    /// root is the zero hash.
+    pub fn tx_inclusion_proof(&self, index: usize) -> Option<MerkleProof> {
+        let leaves: Vec<Hash> = self.transactions.iter().map(|tx| tx.hash()).collect();
+        merkle::proof(&leaves, index)
+    }
+
+    /// Check that `tx_hash` sits in `root` along `proof`.
+    pub fn verify_tx_inclusion(tx_hash: &Hash, proof: &MerkleProof, root: &Hash) -> bool {
+        merkle::verify(tx_hash, proof, root)
     }
 }
 
@@ -201,6 +181,9 @@ mod tests {
         let root = block.merkle_root();
         assert_ne!(root, Hash::zero());
         assert_eq!(block.merkle_root(), root);
+        let proof = block.tx_inclusion_proof(2).unwrap();
+        assert!(StatementBlock::verify_tx_inclusion(&h3, &proof, &root));
+        assert!(!StatementBlock::verify_tx_inclusion(&h1, &proof, &root));
     }
 
     #[test]

@@ -264,6 +264,16 @@ impl RpcServer {
             .await;
         self.register_stateful("kvnc_getCommittee", handle_get_committee)
             .await;
+        self.register_stateful("kvnc_getLeaderHeader", handle_get_leader_header)
+            .await;
+        self.register_stateful("kvnc_getCommitSeals", handle_get_commit_seals)
+            .await;
+        self.register_stateful("kvnc_getTxProof", handle_get_tx_proof)
+            .await;
+        self.register_stateful("kvnc_getAccountProof", handle_get_account_proof)
+            .await;
+        self.register_stateful("kvnc_getLightSet", handle_get_light_set)
+            .await;
     }
 
     /// Register a handler that needs access to the shared [`RpcState`].

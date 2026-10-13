@@ -33,7 +33,7 @@ pub enum AddressError {
 }
 
 /// 32-byte account address (raw Ed25519 public key).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub struct Address(pub [u8; 32]);
 
 impl Address {

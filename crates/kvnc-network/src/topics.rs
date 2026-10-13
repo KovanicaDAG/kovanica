@@ -17,8 +17,14 @@ pub const SYNC: &str = "sync";
 /// Topic carrying state sync requests (fast sync).
 pub const STATE_SYNC: &str = "state_sync";
 
+/// Topic carrying post-execution commit seals.
+///
+/// Consensus does not wait on this topic. Nodes that do not subscribe
+/// still commit. The topic is not peer-scored.
+pub const SEALS: &str = "seals";
+
 /// Every topic subscribed to at startup, in subscription order.
-pub const ALL: [&str; 5] = [BLOCKS, TRANSACTIONS, VOTES, SYNC, STATE_SYNC];
+pub const ALL: [&str; 6] = [BLOCKS, TRANSACTIONS, VOTES, SYNC, STATE_SYNC, SEALS];
 
 /// Topic handle for a topic name (round-trips through [`gossipsub::TopicHash`]).
 ///
@@ -38,7 +44,7 @@ mod tests {
         for name in ALL {
             assert!(seen.insert(name), "duplicate topic name: {name}");
         }
-        assert_eq!(ALL.len(), 5);
+        assert_eq!(ALL.len(), 6);
     }
 
     #[test]

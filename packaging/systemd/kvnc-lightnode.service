@@ -1,0 +1,23 @@
+# KVNC_LIGHT_PASSPHRASE belongs in /etc/kvnc-lightnode.env (mode 0600).
+# The process decrypts that passphrase once per run, then syncs and submits
+# one light-node witness per epoch. It is not a validator and it has no tray.
+
+[Unit]
+Description=Kovanica light node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kvnc
+Group=kvnc
+EnvironmentFile=-/etc/kvnc-lightnode.env
+ExecStart=/usr/local/bin/kvnc-lightnode --data-dir /var/lib/kvnc-lightnode run
+Restart=on-failure
+RestartSec=12
+NoNewPrivileges=true
+PrivateTmp=true
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

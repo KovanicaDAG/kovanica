@@ -146,6 +146,17 @@ pub mod tables {
     pub const STAKING_STATE: TableDefinition<&'static str, Vec<u8>> =
         TableDefinition::new("staking_state");
     pub const STATE_ROOT: TableDefinition<u64, [u8; 32]> = TableDefinition::new("state_root"); // committed_leader_height -> state_root
+    /// Committed-leader header (bincode), keyed by committed height.
+    pub const LEADER_HEADERS: TableDefinition<u64, Vec<u8>> =
+        TableDefinition::new("leader_headers");
+    /// One commit seal: `(committed height, authority index)` -> signature bytes.
+    pub const COMMIT_SEALS: TableDefinition<(u64, u16), Vec<u8>> =
+        TableDefinition::new("commit_seals");
+    /// Transaction hashes execution applied at a committed height, in order.
+    pub const EXECUTED_TX_HASHES: TableDefinition<u64, Vec<u8>> =
+        TableDefinition::new("executed_tx_hashes");
+    /// Light-node set (bincode). Not a field of `StakingState`.
+    pub const LIGHT_SET: TableDefinition<&'static str, Vec<u8>> = TableDefinition::new("light_set");
 
     // Consensus store tables
     pub const DAG_BLOCKS: TableDefinition<[u8; 32], Vec<u8>> = TableDefinition::new("dag_blocks"); // StatementBlock serialized

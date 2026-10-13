@@ -7,13 +7,16 @@ use crate::{
     state_sync::{StateSyncRequest, StateSyncResponse},
     sync::SyncRequest,
     topics,
-    validation::{AuthorityKeys, GossipValidator, Rejection, VoteVerifier},
+    validation::{
+        admit_seal, AuthorityKeys, GossipValidator, LocalHeaderHash, Rejection, SealAdmission,
+        VoteVerifier,
+    },
     NetworkConfig, NetworkEvent,
 };
 use futures::StreamExt;
 use kvnc_dag::DagStore;
 use kvnc_mempool::{Mempool, MempoolError};
-use kvnc_types::{StatementBlock, Transaction, Vote};
+use kvnc_types::{SealAnnouncement, StatementBlock, Transaction, Vote};
 use libp2p::{
     gossipsub::{self, MessageAcceptance},
     identify, kad, request_response,
@@ -85,6 +88,9 @@ pub struct NetworkService {
     /// Outstanding block sync requests, so a response can be matched to what
     /// we actually asked for.
     pending_block_requests: Mutex<HashMap<request_response::OutboundRequestId, BlockSyncRequest>>,
+    /// Executed leader-header hashes. Unset until the node installs one.
+    /// A seal is forwarded only when this index already has the same hash.
+    header_index: Mutex<Option<Arc<dyn LocalHeaderHash>>>,
 }
 
 /// State for one distinct, configured bootstrap address.
@@ -284,6 +290,7 @@ impl NetworkService {
                 bootstrap: Mutex::new(bootstrap),
                 validator: GossipValidator::default(),
                 pending_block_requests: Mutex::new(HashMap::new()),
+                header_index: Mutex::new(None),
             },
             event_rx,
         ))
@@ -357,6 +364,20 @@ impl NetworkService {
     pub fn broadcast_vote(&self, vote: &Vote) -> Result<(), NetworkError> {
         let payload = bincode::serialize(vote)?;
         self.publish(topics::VOTES, payload)
+    }
+
+    /// Broadcast one locally produced commit seal.
+    ///
+    /// Consensus does not call this. Execution does, after the header is stored.
+    pub fn broadcast_seal(&self, announcement: &SealAnnouncement) -> Result<(), NetworkError> {
+        let payload = bincode::serialize(announcement)?;
+        self.publish(topics::SEALS, payload)
+    }
+
+    /// Install the executed-header index used to decide whether a gossiped
+    /// seal may be forwarded.
+    pub fn set_header_index(&self, index: Arc<dyn LocalHeaderHash>) {
+        *lock(&self.header_index) = Some(index);
     }
 
     /// Install the committee public keys used to authenticate gossiped votes
@@ -618,6 +639,7 @@ impl NetworkService {
                     topics::TRANSACTIONS => self.on_transaction_message(&message.data),
                     topics::SYNC => self.on_sync_message(message.source, &message.data),
                     topics::VOTES => self.on_vote_message(message.source, &message.data),
+                    topics::SEALS => self.on_seal_message(message.source, &message.data),
                     other => {
                         debug!(topic = other, "message on unexpected topic");
                         Verdict::Ignore
@@ -1052,6 +1074,64 @@ impl NetworkService {
         debug!(%peer, leader_round = vote.leader_round, %vote.leader_hash, "vote received over gossip");
         self.emit(NetworkEvent::VoteReceived { peer, vote });
         Verdict::Accept
+    }
+
+    /// Decode a commit seal, check one signature, and deliver it only when
+    /// local execution already stored the same header.
+    ///
+    /// A valid seal for a header we have not executed is ignored: it is not
+    /// forwarded and the peer is not penalised. Consensus never waits on
+    /// this topic.
+    fn on_seal_message(&self, source: Option<PeerId>, payload: &[u8]) -> Verdict {
+        let announcement: SealAnnouncement = match bincode::deserialize(payload) {
+            Ok(announcement) => announcement,
+            Err(err) => {
+                warn!(%err, "dropping malformed commit seal");
+                return Verdict::reject("malformed commit seal");
+            }
+        };
+        let Some(peer) = source else {
+            warn!("dropping commit seal without an author");
+            return Verdict::reject("commit seal without author");
+        };
+        if !self.validator.is_configured() {
+            debug!("committee keys not set; commit seal dropped unforwarded");
+            return Verdict::Ignore;
+        }
+        let local_hash = lock(&self.header_index)
+            .as_ref()
+            .and_then(|index| index.local_header_hash(announcement.header.committed_height));
+        let ctx = self.mempool.signing_context();
+        match admit_seal(
+            &self.validator.authority_keys_snapshot(),
+            ctx.chain_id,
+            ctx.epoch,
+            &announcement,
+            local_hash,
+        ) {
+            SealAdmission::Accept => {
+                debug!(
+                    %peer,
+                    height = announcement.header.committed_height,
+                    authority = announcement.seal.authority_index,
+                    "commit seal matches local header"
+                );
+                self.emit(NetworkEvent::SealReceived { peer, announcement });
+                Verdict::Accept
+            }
+            SealAdmission::Ignore => {
+                debug!(
+                    %peer,
+                    height = announcement.header.committed_height,
+                    "commit seal ignored until local header matches"
+                );
+                Verdict::Ignore
+            }
+            SealAdmission::Reject(rejection) => {
+                warn!(%peer, %rejection, "rejected commit seal");
+                Verdict::rejected("commit seal", rejection)
+            }
+        }
     }
 
     /// Decode a sync-range request and announce it to the caller.

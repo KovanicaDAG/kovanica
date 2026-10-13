@@ -28,7 +28,6 @@ pub struct Dag {
 
 impl Dag {
     /// Create a new DAG with the given storage.
-    // TODO(owner): source chain_id/epoch from node config
     pub fn new(
         storage: Storage,
         signing_ctx: kvnc_types::SigningContext,

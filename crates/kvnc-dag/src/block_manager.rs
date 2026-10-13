@@ -95,7 +95,7 @@ impl BlockManager {
     pub fn set_signing_key(&self, key: SigningKey) {
         *self.signing_key.write() = Some(key.clone());
         // Derive VRF secret deterministically from the Ed25519 seed
-        let seed_bytes: [u8; 32] = key.to_bytes().try_into().unwrap_or([0;32]);
+        let seed_bytes: [u8; 32] = key.to_bytes().try_into().unwrap_or([0; 32]);
         let secret = kvnc_crypto::derive_vrf_secret_from_seed(&seed_bytes);
         if let Ok(kp) = kvnc_crypto::VRFKeyPair::from_secret(secret) {
             *self.vrf_keypair.write() = Some(kp);
@@ -192,6 +192,36 @@ impl BlockManager {
         Ok(signed_block)
     }
 
+    /// Propose a block that carries only this validator's VRF statement.
+    ///
+    /// The transaction pool is left untouched. The caller publishes this on
+    /// a decide round so the next leader round can see a complete output set.
+    pub fn propose_vrf_carrier(&self, round: Round) -> Result<StatementBlock, BlockManagerError> {
+        let author = *self.our_authority.read();
+        if self.vrf_keypair.read().is_none() || !self.vrf_author_keys.read().contains_key(&author) {
+            return Err(BlockManagerError::InvalidBlock(
+                "validator has no committee VRF key".into(),
+            ));
+        }
+        let parents = self.select_parents(round)?;
+        let block = self.create_block(round, parents, Vec::new())?;
+        let signed_block = self.sign_block(block)?;
+        self.dag_store.put_block(&signed_block)?;
+        Ok(signed_block)
+    }
+
+    /// Install the committee VRF keys used to verify block statements.
+    pub fn set_vrf_author_keys(&self, keys: HashMap<AuthorityIndex, PublicKey>) {
+        *self.vrf_author_keys.write() = keys;
+    }
+
+    /// Verified VRF outputs, keyed by the round of the block that carried them.
+    pub fn verified_vrf_outputs_snapshot(
+        &self,
+    ) -> HashMap<Round, HashMap<AuthorityIndex, [u8; 32]>> {
+        self.verified_vrf_outputs.read().clone()
+    }
+
     /// Select valid parent blocks from the most recent populated earlier round.
     /// Filters by: author in committee, stake > 0, valid signature (already validated on ingress).
     /// Returns up to committee_size parents (or a small default as fallback).
@@ -259,12 +289,26 @@ impl BlockManager {
         // Compute digest
         let merkle_root = StatementBlock::compute_merkle_root(&transactions);
         // Compute digest — include VRF statement only when we have a proof to attach
+        let author = *self.our_authority.read();
         let mut statements = Vec::new();
         if let Some(ref kp) = *self.vrf_keypair.read() {
             let chain_id = self.signing_ctx.chain_id;
-            let input = format!("KVNC-VRF1-v1:{}:{}:{}:{}", chain_id, round, *self.our_authority.read(), 0u64);
+            let input = format!("KVNC-VRF1-v1:{chain_id}:{round}:{author}:0");
             let proof = kvnc_crypto::vrf_prove(kp, input.as_bytes());
             statements = kvnc_crypto::encode_statements(&proof);
+        }
+        if statements.len() >= 137
+            && &statements[..9] == b"KVNC-VRF1"
+            && self.vrf_author_keys.read().contains_key(&author)
+        {
+            if let Some(output) = kvnc_crypto::decode_statements(&statements) {
+                self.verified_vrf_outputs
+                    .write()
+                    .entry(round)
+                    .or_default()
+                    .entry(author)
+                    .or_insert(output.hash);
+            }
         }
         let digest = StatementBlock::compute_digest_statements(
             *self.our_authority.read(),
@@ -359,8 +403,10 @@ impl BlockManager {
         // Wire-upgrade: verify VRF proof and record verified output when statements carry it.
         if let Some(output) = kvnc_crypto::decode_statements(&block.statements) {
             if let Some(vrf_pk) = self.vrf_author_keys.read().get(&block.author).copied() {
-                let input = format!("KVNC-VRF1-v1:{}:{}:{}:{}",
-                    self.signing_ctx.chain_id, block.round, block.author, 0u64);
+                let input = format!(
+                    "KVNC-VRF1-v1:{}:{}:{}:{}",
+                    self.signing_ctx.chain_id, block.round, block.author, 0u64
+                );
                 if let Err(_) = kvnc_crypto::vrf_verify(&vrf_pk, input.as_bytes(), &output) {
                     return Err(BlockManagerError::InvalidBlock(
                         "VRF proof verification failed".to_string(),
@@ -368,7 +414,10 @@ impl BlockManager {
                 }
                 // Record the verified output for leader selection
                 let mut out_map = self.verified_vrf_outputs.write();
-                out_map.entry(block.round).or_default().insert(block.author, output.hash);
+                out_map
+                    .entry(block.round)
+                    .or_default()
+                    .insert(block.author, output.hash);
             }
         }
 

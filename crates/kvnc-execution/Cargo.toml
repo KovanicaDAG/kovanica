@@ -11,6 +11,7 @@ kvnc-staking = { path = "../kvnc-staking" }
 kvnc-consensus = { path = "../kvnc-consensus" }
 kvnc-storage = { path = "../kvnc-storage" }
 kvnc-common = { path = "../kvnc-common" }
+kvnc-crypto = { path = "../kvnc-crypto" }
 kvnc-htlc = { path = "../kvnc-htlc" }
 kvnc-vault = { path = "../kvnc-vault" }
 kvnc-multisig = { path = "../kvnc-multisig" }
@@ -23,4 +24,3 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.8"
-kvnc-crypto = { path = "../kvnc-crypto" }

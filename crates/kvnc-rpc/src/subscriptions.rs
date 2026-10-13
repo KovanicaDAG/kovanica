@@ -13,6 +13,7 @@
 //! | `newCommittedLeader`       | Consensus commits a leader sub-DAG.                     |
 //! | `pendingTransactions`      | A transaction enters the mempool.                       |
 //! | `logs`                     | Transaction execution logs (receipts) emitted per committed sub-DAG. |
+//! | `newSealedHeader`          | A committed-leader header was stored, or a matching seal arrived. |
 //!
 //! Transaction execution logs (`logs`) are emitted for each committed sub-DAG
 //! and contain the transaction receipts (status, gas used, logs, etc.).
@@ -54,7 +55,7 @@ use tokio::sync::broadcast;
 use crate::chain_methods::{block_to_json, transaction_to_json};
 use crate::{JsonRpcErrorObject, JsonRpcRequest, JsonRpcResponse, RpcError};
 use kvnc_execution::TransactionReceipt;
-use kvnc_types::{CommittedSubDag, StatementBlock, Transaction};
+use kvnc_types::{CommitSeal, CommittedSubDag, LeaderHeader, StatementBlock, Transaction};
 
 /// Capacity of each broadcast channel. Slow consumers that fall further than
 /// this behind simply drop missed notifications (a `Lagged` receive error is
@@ -72,6 +73,8 @@ pub enum SubscriptionKind {
     PendingTransactions,
     /// Reserved placeholder. Accepted, but never emits (see module docs).
     Logs,
+    /// A locally executed leader header, with the seals stored for it.
+    NewSealedHeader,
 }
 
 impl SubscriptionKind {
@@ -82,6 +85,7 @@ impl SubscriptionKind {
             SubscriptionKind::NewCommittedLeader => "newCommittedLeader",
             SubscriptionKind::PendingTransactions => "pendingTransactions",
             SubscriptionKind::Logs => "logs",
+            SubscriptionKind::NewSealedHeader => "newSealedHeader",
         }
     }
 
@@ -96,6 +100,7 @@ impl SubscriptionKind {
                 Ok(SubscriptionKind::PendingTransactions)
             }
             "logs" => Ok(SubscriptionKind::Logs),
+            "newSealedHeader" | "new_sealed_header" => Ok(SubscriptionKind::NewSealedHeader),
             other => Err(format!("unsupported subscription: {other}")),
         }
     }
@@ -110,6 +115,7 @@ pub struct EventBus {
     committed_leaders: broadcast::Sender<Value>,
     pending_transactions: broadcast::Sender<Value>,
     logs: broadcast::Sender<Value>,
+    sealed_headers: broadcast::Sender<Value>,
 }
 
 impl Default for EventBus {
@@ -125,11 +131,13 @@ impl EventBus {
         let (committed_leaders, _) = broadcast::channel(CHANNEL_CAPACITY);
         let (pending_transactions, _) = broadcast::channel(CHANNEL_CAPACITY);
         let (logs, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let (sealed_headers, _) = broadcast::channel(CHANNEL_CAPACITY);
         Self {
             new_heads,
             committed_leaders,
             pending_transactions,
             logs,
+            sealed_headers,
         }
     }
 
@@ -140,6 +148,7 @@ impl EventBus {
             SubscriptionKind::NewCommittedLeader => self.committed_leaders.subscribe(),
             SubscriptionKind::PendingTransactions => self.pending_transactions.subscribe(),
             SubscriptionKind::Logs => self.logs.subscribe(),
+            SubscriptionKind::NewSealedHeader => self.sealed_headers.subscribe(),
         }
     }
 
@@ -171,6 +180,15 @@ impl EventBus {
     /// Broadcast a transaction execution log. No-op if nobody listens.
     pub fn publish_logs(&self, receipts: &[TransactionReceipt]) {
         let _ = self.logs.send(json!(receipts));
+    }
+
+    /// Broadcast a leader header and the seals stored for its height.
+    ///
+    /// No-op if nobody listens. Consensus does not wait on this event.
+    pub fn publish_sealed_header(&self, header: &LeaderHeader, seals: &[CommitSeal]) {
+        let _ = self
+            .sealed_headers
+            .send(crate::chain_methods::sealed_header_json(header, seals));
     }
 }
 
@@ -354,6 +372,9 @@ pub async fn serve_connection(socket: axum::extract::ws::WebSocket, state: crate
         .events
         .subscribe_receiver(SubscriptionKind::PendingTransactions);
     let mut logs = state.events.subscribe_receiver(SubscriptionKind::Logs);
+    let mut sealed_headers = state
+        .events
+        .subscribe_receiver(SubscriptionKind::NewSealedHeader);
 
     let (mut sender, mut receiver) = socket.split();
 
@@ -409,6 +430,12 @@ pub async fn serve_connection(socket: axum::extract::ws::WebSocket, state: crate
                     break;
                 }
             }
+            event = sealed_headers.recv() => {
+                let frames = notifications_for(&connection, SubscriptionKind::NewSealedHeader, event);
+                if send_frames(&mut sender, frames).await.is_err() {
+                    break;
+                }
+            }
         }
     }
 }
@@ -455,6 +482,10 @@ mod tests {
         assert_eq!(
             SubscriptionKind::parse("logs").unwrap(),
             SubscriptionKind::Logs
+        );
+        assert_eq!(
+            SubscriptionKind::parse("newSealedHeader").unwrap(),
+            SubscriptionKind::NewSealedHeader
         );
         assert!(SubscriptionKind::parse("blocks").is_err());
     }

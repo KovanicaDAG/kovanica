@@ -34,6 +34,16 @@ impl Hash {
     pub const DOMAIN_DIGEST: &'static [u8] = b"KVNC-DIGEST-v1";
     /// Domain tag for merkle tree pairing.
     pub const DOMAIN_MERKLE: &'static [u8] = b"KVNC-MERKLE-v1";
+    /// Domain tag for a committed-leader header.
+    pub const DOMAIN_HEADER: &'static [u8] = b"KVNC-HEADER-v1";
+    /// Domain tag for an account-tree leaf.
+    pub const DOMAIN_ACCOUNT: &'static [u8] = b"KVNC-ACCOUNT-v1";
+    /// Domain tag for an empty account-tree subtree.
+    pub const DOMAIN_ACCOUNT_EMPTY: &'static [u8] = b"KVNC-ACCT-EMPTY";
+    /// Domain tag for an account-tree internal node.
+    pub const DOMAIN_SMT: &'static [u8] = b"KVNC-SMT-v1";
+    /// Domain tag for the committee bound into a commit seal.
+    pub const DOMAIN_COMMITTEE: &'static [u8] = b"KVNC-COMMITTEE-v1";
 
     /// Zero hash (useful for genesis).
     pub fn zero() -> Self {

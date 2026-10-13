@@ -4,7 +4,10 @@
 #![deny(unsafe_code)]
 
 mod vrf;
-pub use vrf::{encode_statements, decode_statements, derive_vrf_secret_from_seed, vrf_hash_to_u64, vrf_prove, vrf_verify, VRFKeyPair, VRFOutput, VRFError};
+pub use vrf::{
+    decode_statements, derive_vrf_secret_from_seed, encode_statements, vrf_hash_to_u64, vrf_prove,
+    vrf_verify, VRFError, VRFKeyPair, VRFOutput,
+};
 
 use ed25519_dalek::Signature as DalekSignature;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
@@ -106,6 +109,69 @@ pub enum SigError {
     /// the given public key.
     #[error("vote signature verification failed")]
     VerificationFailed,
+}
+
+/// Verify one post-execution commit seal.
+///
+/// The message is [`kvnc_types::LeaderHeader::seal_message`]: domain
+/// `KUNA/commit/v1`, the caller's `chain_id`, and the header hash. The
+/// header hash covers the state root and the MysticGhost blue / non-blue
+/// roots. This does not check stake quorum; [`verify_commit_seals`] does.
+pub fn verify_commit_seal(
+    chain_id: u64,
+    header: &kvnc_types::LeaderHeader,
+    seal: &kvnc_types::CommitSeal,
+    pubkey: &PublicKey,
+) -> Result<(), SigError> {
+    let vk = VerifyingKey::from_bytes(&pubkey.0).map_err(|_| SigError::InvalidPublicKey)?;
+    let sig = DalekSignature::from_bytes(&seal.signature.0);
+    vk.verify_strict(&header.seal_message(chain_id), &sig)
+        .map_err(|_| SigError::VerificationFailed)
+}
+
+/// Verify a seal set: every signature, then the stake quorum.
+///
+/// `chain_id` is the verifier's own chain id. A seal signed for another
+/// network fails. Duplicate signers, unknown indexes, a linearizer header
+/// with a colouring root, and an epoch mismatch fail closed.
+pub fn verify_commit_seals(
+    chain_id: u64,
+    header: &kvnc_types::LeaderHeader,
+    seals: &[kvnc_types::CommitSeal],
+    committee: &kvnc_types::Committee,
+) -> Result<(), CommitSealError> {
+    for seal in seals {
+        let authority = committee
+            .get_by_index(seal.authority_index)
+            .ok_or(CommitSealError::UnknownAuthority)?;
+        verify_commit_seal(chain_id, header, seal, &authority.public_key).map_err(
+            |err| match err {
+                SigError::InvalidPublicKey => CommitSealError::InvalidPublicKey,
+                SigError::VerificationFailed => CommitSealError::Signature,
+            },
+        )?;
+    }
+    let indexes: Vec<kvnc_types::AuthorityIndex> =
+        seals.iter().map(|seal| seal.authority_index).collect();
+    kvnc_types::light_client::seal_quorum(header, &indexes, committee)
+        .map_err(CommitSealError::Structure)
+}
+
+/// Failure of [`verify_commit_seals`].
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum CommitSealError {
+    /// The signature bytes do not match the header on this chain.
+    #[error("commit seal signature verification failed")]
+    Signature,
+    /// The committee key is not a valid Ed25519 point.
+    #[error("invalid signer public key")]
+    InvalidPublicKey,
+    /// The signer index is not in the committee.
+    #[error("unknown seal authority")]
+    UnknownAuthority,
+    /// Stake, epoch, or colouring-flag check failed.
+    #[error("commit seal set rejected")]
+    Structure(kvnc_types::SealError),
 }
 
 /// Verify a consensus vote signature (signature format **v1**).
@@ -362,5 +428,92 @@ mod vote_sig_tests {
         tx_like.extend_from_slice(&vote.signature_data(&CTX)[16..]);
         vote.signature = sign(&sk, &tx_like);
         assert!(verify_vote_signature(&CTX, &vote, &pk).is_err());
+    }
+}
+
+#[cfg(test)]
+mod commit_seal_tests {
+    use super::*;
+    use kvnc_types::committee::{Authority, Committee};
+    use kvnc_types::{Address, CommitSeal, LeaderHeader};
+
+    fn authority(index: u16, public_key: PublicKey) -> Authority {
+        Authority {
+            index,
+            public_key,
+            vrf_public_key: None,
+            address: Address([index as u8; 32]),
+            stake: 1,
+            network_address: String::new(),
+        }
+    }
+
+    fn header() -> LeaderHeader {
+        LeaderHeader {
+            committed_height: 7,
+            leader_round: 9,
+            leader_digest: Hash::new(b"leader"),
+            leader_author: 0,
+            parent_leader_digest: Hash::zero(),
+            tx_merkle_root: Hash::zero(),
+            executed_tx_root: Hash::new(b"executed"),
+            non_blue_root: Hash::zero(),
+            blue_root: Hash::zero(),
+            mysticghost: false,
+            state_root: Hash::new(b"state"),
+            epoch: 0,
+            committee_hash: Hash::zero(),
+            timestamp: 11,
+        }
+    }
+
+    #[test]
+    fn three_of_four_seals_verify_and_two_do_not() {
+        let header = header();
+        let keys: Vec<_> = (0..4).map(|_| generate_keypair()).collect();
+        let committee = Committee::new(
+            0,
+            keys.iter()
+                .enumerate()
+                .map(|(i, (_, pk))| authority(i as u16, *pk))
+                .collect(),
+        );
+        let seals: Vec<CommitSeal> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, (sk, _))| CommitSeal {
+                authority_index: i as u16,
+                signature: sign(sk, &header.seal_message(1337)),
+            })
+            .collect();
+
+        assert!(verify_commit_seals(1337, &header, &seals[..3], &committee).is_ok());
+        assert_eq!(
+            verify_commit_seals(1337, &header, &seals[..2], &committee),
+            Err(CommitSealError::Structure(kvnc_types::SealError::Quorum))
+        );
+        assert_eq!(
+            verify_commit_seals(1, &header, &seals[..3], &committee),
+            Err(CommitSealError::Signature)
+        );
+    }
+
+    #[test]
+    fn mysticghost_root_is_covered_by_the_seal() {
+        let mut header = header();
+        header.mysticghost = true;
+        header.blue_root = Hash::new(b"blue");
+        let (sk, pk) = generate_keypair();
+        let committee = Committee::new(0, vec![authority(0, pk)]);
+        let seal = CommitSeal {
+            authority_index: 0,
+            signature: sign(&sk, &header.seal_message(2)),
+        };
+        assert!(verify_commit_seals(2, &header, &[seal.clone()], &committee).is_ok());
+        header.non_blue_root = Hash::new(b"red");
+        assert_eq!(
+            verify_commit_seals(2, &header, &[seal], &committee),
+            Err(CommitSealError::Signature)
+        );
     }
 }
