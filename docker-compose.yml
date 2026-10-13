@@ -12,9 +12,18 @@ x-node: &node
     KVNC_LISTEN_ADDR: "0.0.0.0:8000"
     KVNC_DATA_DIR: "/var/lib/kvnc"
     KVNC_MAX_PEERS: "8"
-    KVNC_ROUND_DURATION_MS: "1000"
+    # Trusted local devnet: default 60/min throttles the TPS bench, so allow an
+    # override (`0` disables rate limiting). Unset -> node default (60).
+    KVNC_RPC_RATE_LIMIT_PER_MIN: "${KVNC_RPC_RATE_LIMIT_PER_MIN:-0}"
+    # Trusted local devnet bound to 127.0.0.1: keep the bench/soak clients simple
+    # by allowing unauthenticated writes here. For anything reachable off-host,
+    # leave this unset and configure KVNC_RPC_WRITE_TOKENS instead.
+    KVNC_RPC_AUTH: "${KVNC_RPC_AUTH:-disable}"
+    KVNC_ROUND_DURATION_MS: "4000"
     KVNC_RUN_VALIDATOR: "true"
     KVNC_MYSTICGHOST: "true"
+    # Benchmark tuning: rebroadcast every 1s instead of default 30s for faster gossip
+    KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS: "1"
     RUST_LOG: "info"
   # No config file: pure env + genesis file copied to data dir at start.
   # Each service mounts its own validator keystore + genesis_validators.toml.

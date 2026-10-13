@@ -23,6 +23,20 @@ if [ ! -x "$BIN" ]; then
   exit 1
 fi
 
+# The container runs as the unprivileged `kvnc` user (uid/gid 10001) and bind
+# mounts preserve host ownership and permissions. Hand it ownership of both the
+# seed files (which must stay 0600 — the node rejects group/world-readable
+# keys) and the genesis file, otherwise the node cannot read them in-container.
+CONTAINER_UID_GID="${KVNC_CONTAINER_UID_GID:-10001:10001}"
+own_for_container() {
+  if chown "$CONTAINER_UID_GID" "$1" 2>/dev/null; then
+    :
+  else
+    echo "warning: could not chown $1 to $CONTAINER_UID_GID (need root);" >&2
+    echo "         the container (uid 10001) may be unable to read it." >&2
+  fi
+}
+
 mkdir -p "$OUTDIR"
 GENESIS="$OUTDIR/genesis_validators.toml"
 TMP="$(mktemp)"
@@ -42,8 +56,10 @@ for i in 1 2 3 4; do
     echo "-> generating validator $i seed -> $KEY"
     ( umask 077; head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n' > "$KEY"; printf '\n' >> "$KEY" )
   fi
+  chmod 600 "$KEY"
+  own_for_container "$KEY"
 
-  IDENTITY="$("$BIN" address --key-file "$KEY")"
+  IDENTITY="$("$BIN" address --allow-raw-hex --key-file "$KEY")"
   PK_HEX="$(printf '%s\n' "$IDENTITY" | awk -F': *' '/^Public key:/ {print $2}')"
   if [ -z "$PK_HEX" ]; then
     echo "error: could not derive identity from $KEY" >&2
@@ -61,6 +77,11 @@ done
 
 mv "$TMP" "$GENESIS"
 trap - EXIT
+
+# genesis_validators.toml holds only public keys, but the container user must be
+# able to read it; keep it 0600 owned by the container uid for consistency.
+chmod 600 "$GENESIS"
+own_for_container "$GENESIS"
 
 echo
 echo "wrote $GENESIS and $OUTDIR/val1..4.pem"

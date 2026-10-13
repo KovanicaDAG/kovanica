@@ -474,7 +474,7 @@ where
     let signing_ctx =
         kvnc_types::SigningContext::new(config.chain_id).with_epoch(committee.epoch());
     let mempool = Arc::new(Mempool::new(
-        MempoolConfig::default(),
+        build_mempool_config(),
         state_storage.clone(),
         signing_ctx,
     ));
@@ -744,6 +744,33 @@ where
                 }
                 _ = shutdown_for_metrics.changed() => {
                     if *shutdown_for_metrics.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Background task: periodically rebroadcast mempool transactions to peers
+    let mempool_for_rebroadcast = mempool.clone();
+    let network_cmd_tx_for_rebroadcast = network_cmd_tx.clone();
+    let mut shutdown_for_rebroadcast = shutdown_rx.clone();
+    let rebroadcast_task = tokio::spawn(async move {
+        info!("rebroadcast task started");
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let txs = mempool_for_rebroadcast.rebroadcast();
+                    if !txs.is_empty() {
+                        info!(count = txs.len(), "rebroadcast task sending transactions");
+                    }
+                    for tx in txs {
+                        let _ = network_cmd_tx_for_rebroadcast.send(NetworkCommand::BroadcastTransaction(tx));
+                    }
+                }
+                _ = shutdown_for_rebroadcast.changed() => {
+                    if *shutdown_for_rebroadcast.borrow() {
                         break;
                     }
                 }
@@ -1717,6 +1744,43 @@ fn build_committee(
     }
 
     Ok(CommitteeInfo::try_new(0, authorities)?)
+}
+
+/// Build the [`MempoolConfig`] from the node configuration and environment variables.
+fn build_mempool_config() -> MempoolConfig {
+    let mut config = MempoolConfig::default();
+
+    // Rebroadcast interval (seconds)
+    if let Ok(val) = std::env::var("KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS") {
+        if let Ok(secs) = val.parse::<u64>() {
+            config.rebroadcast_interval = Duration::from_secs(secs);
+            info!(interval_secs = secs, "mempool rebroadcast interval overridden from env");
+        } else {
+            warn!(val, "invalid KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS, using default");
+        }
+    }
+
+    // Minimum fee rate (atoms per byte)
+    if let Ok(val) = std::env::var("KVNC_MEMPOOL_MIN_FEE_RATE") {
+        if let Ok(rate) = val.parse::<u64>() {
+            config.min_fee_rate = rate;
+            info!(rate, "mempool min fee rate overridden from env");
+        } else {
+            warn!(val, "invalid KVNC_MEMPOOL_MIN_FEE_RATE, using default");
+        }
+    }
+
+    // Max transactions per sender
+    if let Ok(val) = std::env::var("KVNC_MEMPOOL_MAX_TXS_PER_SENDER") {
+        if let Ok(max) = val.parse::<usize>() {
+            config.max_txs_per_sender = max;
+            info!(max, "mempool max txs per sender overridden from env");
+        } else {
+            warn!(val, "invalid KVNC_MEMPOOL_MAX_TXS_PER_SENDER, using default");
+        }
+    }
+
+    config
 }
 
 /// Build the [`NetworkConfig`] from the node configuration.

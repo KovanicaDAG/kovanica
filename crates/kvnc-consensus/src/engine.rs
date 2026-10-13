@@ -188,7 +188,7 @@ impl Default for ConsensusConfig {
             max_pending_rounds: 100,
             use_mysticghost: false,
             prune_window_waves: 100,
-            leader_timeout_ms: 3000,
+            leader_timeout_ms: 8000,
             late_vote_window_rounds: kvnc_types::WAVE_LENGTH,
         }
     }
@@ -353,15 +353,11 @@ where
         let mut round_interval = interval(Duration::from_millis(self.config.round_duration_ms));
 
         while *self.running.read() {
-            // Timeout check: skip leader if no block after leader_timeout_ms
+            // Timeout check: skip leader if no block by the absolute deadline.
             {
                 let deadline_opt = *self.leader_deadline.read();
-                if let Some((round, instant)) = deadline_opt {
-                    if std::time::Instant::now()
-                        .duration_since(instant)
-                        .as_millis()
-                        >= self.config.leader_timeout_ms as u128
-                    {
+                if let Some((round, deadline)) = deadline_opt {
+                    if std::time::Instant::now() >= deadline {
                         if let Some(leader_author) = self.scheduled_leader_for_round(round) {
                             self.committer.register_skip(round, leader_author);
                         }
@@ -399,13 +395,14 @@ where
             // Try to commit any pending leaders
             self.try_commit_and_deliver()?;
 
-            // If we're the leader, propose a block and start timeout timer
+            // If we're the leader, propose a block (no timeout needed; we just proposed).
+            // Non-leaders: start an absolute deadline for the scheduled leader of this round.
             if is_leader {
                 self.propose_block(next_round).await?;
-                *self.leader_deadline.write() = Some((next_round, std::time::Instant::now()));
             } else if crate::is_leader_round(next_round) {
-                // Non-leader: start timeout for the scheduled leader of this round
-                *self.leader_deadline.write() = Some((next_round, std::time::Instant::now()));
+                let deadline = std::time::Instant::now()
+                    + Duration::from_millis(self.config.leader_timeout_ms);
+                *self.leader_deadline.write() = Some((next_round, deadline));
             }
 
             // If this is a vote round, produce a vote for the previous leader round

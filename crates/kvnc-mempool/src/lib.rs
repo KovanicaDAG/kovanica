@@ -523,9 +523,11 @@ impl Mempool {
                 expected = Some(nonce + 1);
                 match state.by_hash.get(hash) {
                     Some(e) if e.in_flight_since.is_some() => {
-                        if !run.is_empty() {
-                            break;
-                        }
+                        // In-flight transactions block the run: we cannot skip them
+                        // and continue with the next nonce, because that would create
+                        // a gap in the contiguous nonce sequence. The run must start
+                        // at the first non-in-flight nonce.
+                        break;
                     }
                     Some(_) => run.push_back(*hash),
                     None => break,
@@ -629,13 +631,17 @@ impl Mempool {
             return Vec::new();
         }
         *last_rebroadcast = Instant::now();
-        self.state
+        let txs = self.state
             .lock()
             .by_hash
             .values()
             .filter(|e| e.in_flight_since.is_none() && e.gossip)
             .map(|e| e.tx.clone())
-            .collect()
+            .collect::<Vec<_>>();
+        if !txs.is_empty() {
+            info!(count = txs.len(), "rebroadcasting transactions");
+        }
+        txs
     }
 
     /// Get mempool statistics.
