@@ -16,8 +16,15 @@
 
 #![deny(unsafe_code)]
 
+pub mod light;
+pub use light::{
+    distribute_escrow, split_block_reward, LightNode, LightSet, LightSetError, LightWitness,
+    SettleOutcome, LIGHT_REWARD_BPS, LIGHT_WITNESS_SLOTS, MAX_LIGHT_NODES, MIN_LIGHT_BOND,
+};
+
 use kvnc_types::{Address, PublicKey, Stake};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap as HashMap;
 use thiserror::Error;
 use tracing::info;
 
@@ -416,6 +423,9 @@ pub struct StakingState {
     pub committed_leader_height: u64,
     /// Total mining rewards issued so far.
     pub total_mining_issued: u64,
+    /// Cumulative mining rewards credited per recipient address.
+    #[serde(default)]
+    pub reward_totals: HashMap<Address, u64>,
     /// Unbonding queue: delegations being withdrawn.
     pub unbonding_queue: Vec<UnbondingEntry>,
     /// Treasury vesting state (None until genesis configures it).
@@ -430,6 +440,7 @@ impl StakingState {
             total_staked: 0,
             committed_leader_height: 0,
             total_mining_issued: 0,
+            reward_totals: HashMap::new(),
             unbonding_queue: Vec::new(),
             treasury: None,
         }
@@ -512,6 +523,12 @@ impl StakingState {
     pub fn payout_address_for(&self, authority_index: u16) -> Option<Address> {
         self.authority_validator(authority_index)
             .map(|v| v.payout_address)
+    }
+
+    /// Cumulative mining rewards credited to `address` so far (accounting only;
+    /// spendable balance updates are applied by the execution layer).
+    pub fn reward_total(&self, address: &Address) -> u64 {
+        self.reward_totals.get(address).copied().unwrap_or(0)
     }
 
     /// Total amount delegated to `validator` by delegators.
@@ -613,6 +630,13 @@ impl StakingState {
             .saturating_add(outcome.amount)
             .min(MINING_SUBSIDY_BUDGET);
 
+        // Per-recipient reward accounting
+        *self.reward_totals.entry(recipient).or_insert(0) = self
+            .reward_totals
+            .get(&recipient)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(outcome.amount);
         // Advance treasury vesting
         if let Some(ref mut treasury) = self.treasury {
             treasury.advance(self.committed_leader_height);
@@ -681,10 +705,14 @@ impl StakingState {
         let mut went_offline = Vec::new();
 
         for v in committee {
-            if leader_address.map_or(false, |addr| v.address == addr) {
+            if leader_address == Some(v.address) {
                 continue; // Leader succeeded, already handled by validator_online
             }
-            if let Some(v_mut) = self.validators.iter_mut().find(|validator| validator.address == v.address && validator.active) {
+            if let Some(v_mut) = self
+                .validators
+                .iter_mut()
+                .find(|validator| validator.address == v.address && validator.active)
+            {
                 v_mut.missed_leader_count = v_mut.missed_leader_count.saturating_add(1);
                 if v_mut.missed_leader_count >= MAX_MISSED_LEADERS_BEFORE_OFFLINE {
                     v_mut.active = false;
@@ -1206,7 +1234,7 @@ mod tests {
         assert_eq!(MIN_ACTIVE_VALIDATORS, 15);
         assert_eq!(MAX_ACTIVE_VALIDATORS, 21);
         assert_eq!(UNBONDING_ROUNDS, 100_000); // skeleton UNBONDING_PERIOD
-        // Supply book must close exactly.
+                                               // Supply book must close exactly.
         assert_eq!(
             FOUNDER_PREMINE + GENESIS_VALIDATOR_ALLOCATION + TREASURY_TOTAL + MINING_SUBSIDY_BUDGET,
             TOTAL_SUPPLY

@@ -17,8 +17,9 @@ use kvnc_storage::BlockStoreError;
 use kvnc_types::{
     block::StatementBlock,
     hash::Hash,
+    merkle::{self, MerkleProof, MerkleStep},
     transaction::{Transaction, TransactionKind},
-    Address,
+    Address, CommitSeal, LeaderHeader,
 };
 use serde_json::{json, Value};
 
@@ -183,6 +184,27 @@ fn kind_to_json(kind: &TransactionKind) -> Value {
             "method": method,
             "args": to_hex(args),
             "gas_limit": quantity(*gas_limit),
+        }),
+        TransactionKind::RegisterLightNode {
+            vrf_public_key,
+            stake,
+        } => json!({
+            "type": "register_light_node",
+            "vrfPublicKey": to_hex(vrf_public_key.as_bytes()),
+            "stake": quantity(*stake),
+        }),
+        TransactionKind::ExitLightNode => json!({
+            "type": "exit_light_node",
+        }),
+        TransactionKind::SubmitLightWitness {
+            epoch,
+            vrf_hash,
+            vrf_proof,
+        } => json!({
+            "type": "submit_light_witness",
+            "epoch": quantity(*epoch),
+            "vrfHash": to_hex(vrf_hash),
+            "vrfProof": to_hex(vrf_proof),
         }),
     }
 }
@@ -510,13 +532,9 @@ pub async fn handle_get_stake(params: Value, state: RpcState) -> Result<Value, R
 /// `kvnc_getRewards(address)` — cumulative rewards for an address.
 pub async fn handle_get_rewards(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let _address = parse_address(required(&args, 0, "address")?, "address")?;
-
-    // TODO: `StakingState` tracks only the aggregate `total_mining_issued`
-    // counter; per-address cumulative rewards are not recorded yet. Return 0
-    // until reward accounting is added to the staking state.
-    let _ = state;
-    Ok(quantity(0u128))
+    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let rewards = state.staking.read().await.reward_total(&address);
+    Ok(quantity(rewards as u128))
 }
 
 // ============================================================================
@@ -528,11 +546,12 @@ pub async fn handle_get_pending_transactions(
     _params: Value,
     state: RpcState,
 ) -> Result<Value, RpcError> {
-    // TODO: `Mempool` exposes `get(hash)`, `contains(hash)` and aggregate
-    // `stats()`, but no non-destructive listing of pending hashes. Return an
-    // empty list until such an accessor exists.
-    let _ = state;
-    Ok(Value::Array(Vec::new()))
+    let hashes = state.mempool.pending_hashes();
+    let mut out = Vec::with_capacity(hashes.len());
+    for h in hashes {
+        out.push(Value::String(format!("0x{}", hex::encode(h.0))));
+    }
+    Ok(Value::Array(out))
 }
 
 /// `kvnc_estimateFee()` — suggested fee rate in atoms per byte.
@@ -594,6 +613,273 @@ pub async fn handle_get_leader_schedule(params: Value, state: RpcState) -> Resul
     Ok(Value::Array(schedule))
 }
 
+/// JSON for a sealed leader header and the seals stored at its height.
+pub fn sealed_header_json(header: &LeaderHeader, seals: &[CommitSeal]) -> Value {
+    json!({
+        "header": leader_header_json(header),
+        "seals": seals.iter().map(seal_json).collect::<Vec<_>>(),
+    })
+}
+
+fn leader_header_json(header: &LeaderHeader) -> Value {
+    json!({
+        "committedHeight": quantity(header.committed_height),
+        "leaderRound": quantity(header.leader_round),
+        "leaderDigest": to_hex(header.leader_digest.as_ref()),
+        "leaderAuthor": header.leader_author,
+        "parentLeaderDigest": to_hex(header.parent_leader_digest.as_ref()),
+        "txMerkleRoot": to_hex(header.tx_merkle_root.as_ref()),
+        "executedTxRoot": to_hex(header.executed_tx_root.as_ref()),
+        "nonBlueRoot": to_hex(header.non_blue_root.as_ref()),
+        "blueRoot": to_hex(header.blue_root.as_ref()),
+        "mysticghost": header.mysticghost,
+        "stateRoot": to_hex(header.state_root.as_ref()),
+        "epoch": quantity(header.epoch),
+        "committeeHash": to_hex(header.committee_hash.as_ref()),
+        "timestamp": quantity(header.timestamp),
+        "hash": to_hex(header.hash().as_ref()),
+    })
+}
+
+fn seal_json(seal: &CommitSeal) -> Value {
+    json!({
+        "authorityIndex": seal.authority_index,
+        "signature": to_hex(seal.signature.as_bytes()),
+    })
+}
+
+fn proof_json(index: usize, proof: &MerkleProof) -> Value {
+    json!({
+        "index": quantity(index as u64),
+        "steps": proof.steps.iter().map(step_json).collect::<Vec<_>>(),
+    })
+}
+
+fn step_json(step: &MerkleStep) -> Value {
+    match step {
+        MerkleStep::Promote => json!({"type": "promote"}),
+        MerkleStep::Sibling { hash, is_left } => json!({
+            "type": "sibling",
+            "hash": to_hex(hash.as_ref()),
+            "isLeft": is_left,
+        }),
+    }
+}
+
+/// `kvnc_getLeaderHeader(height?)` — sealed header at `height`, or the latest.
+///
+/// Missing headers are JSON `null`. Historical headers are returned as stored.
+pub async fn handle_get_leader_header(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let txn = state.storage.begin_read().map_err(internal)?;
+    let header = if let Some(value) = args.first() {
+        let height = parse_u64(value, "height")?;
+        state
+            .storage
+            .state()
+            .get_leader_header(&txn, height)
+            .map_err(internal)?
+    } else {
+        state
+            .storage
+            .state()
+            .get_latest_leader_header(&txn)
+            .map_err(internal)?
+    };
+    Ok(header
+        .map(|header| leader_header_json(&header))
+        .unwrap_or(Value::Null))
+}
+
+/// `kvnc_getCommitSeals(height)` — seals stored for one committed height.
+pub async fn handle_get_commit_seals(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let height = parse_u64(required(&args, 0, "height")?, "height")?;
+    let txn = state.storage.begin_read().map_err(internal)?;
+    let header = state
+        .storage
+        .state()
+        .get_leader_header(&txn, height)
+        .map_err(internal)?;
+    let seals = state
+        .storage
+        .state()
+        .seals_for(&txn, height)
+        .map_err(internal)?;
+    Ok(json!({
+        "height": quantity(height),
+        "headerHash": header.as_ref().map(|header| to_hex(header.hash().as_ref())),
+        "seals": seals.iter().map(seal_json).collect::<Vec<_>>(),
+    }))
+}
+
+/// `kvnc_getTxProof(height, txHash)` — inclusion in the executed-tx root.
+///
+/// A leader-block proof is included when the leader block is still in the
+/// DAG and its stored merkle root matches the header.
+pub async fn handle_get_tx_proof(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let height = parse_u64(required(&args, 0, "height")?, "height")?;
+    let tx_hash = parse_hash(required(&args, 1, "txHash")?, "txHash")?;
+    let txn = state.storage.begin_read().map_err(internal)?;
+    let Some(header) = state
+        .storage
+        .state()
+        .get_leader_header(&txn, height)
+        .map_err(internal)?
+    else {
+        return Ok(Value::Null);
+    };
+    let hashes = state
+        .storage
+        .state()
+        .get_executed_tx_hashes(&txn, height)
+        .map_err(internal)?
+        .unwrap_or_default();
+    if merkle::root(&hashes) != header.executed_tx_root {
+        return Err(internal(
+            "executed transaction list does not match the header root",
+        ));
+    }
+    let executed = hashes
+        .iter()
+        .position(|hash| *hash == tx_hash)
+        .and_then(|index| merkle::proof(&hashes, index).map(|proof| proof_json(index, &proof)));
+    let leader = leader_tx_proof(&state, &header, &tx_hash);
+    Ok(json!({
+        "header": leader_header_json(&header),
+        "executed": executed,
+        "leader": leader,
+    }))
+}
+
+fn leader_tx_proof(state: &RpcState, header: &LeaderHeader, tx_hash: &Hash) -> Value {
+    let block = match state.consensus_store.get_block(&header.leader_digest) {
+        Ok(block) => block,
+        Err(_) => return Value::Null,
+    };
+    if block.merkle_root != header.tx_merkle_root {
+        return Value::Null;
+    }
+    let hashes: Vec<Hash> = block.transactions.iter().map(|tx| tx.hash).collect();
+    if merkle::root(&hashes) != header.tx_merkle_root {
+        return Value::Null;
+    }
+    let Some(index) = hashes.iter().position(|hash| hash == tx_hash) else {
+        return Value::Null;
+    };
+    let Some(proof) = merkle::proof(&hashes, index) else {
+        return Value::Null;
+    };
+    proof_json(index, &proof)
+}
+
+/// `kvnc_getAccountProof(address, height?)` — balance and nonce at the latest height.
+///
+/// Only the latest committed height is honest: older heights keep the root,
+/// not the account rows. A requested older height is rejected.
+pub async fn handle_get_account_proof(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let requested = match args.get(1) {
+        Some(value) => Some(parse_u64(value, "height")?),
+        None => None,
+    };
+    let txn = state.storage.begin_read().map_err(internal)?;
+    let Some((latest_height, saved_root)) = state
+        .storage
+        .state()
+        .get_latest_state_root(&txn)
+        .map_err(internal)?
+    else {
+        return Ok(Value::Null);
+    };
+    if let Some(height) = requested {
+        if height != latest_height {
+            return Err(RpcError::InvalidParams(format!(
+                "account proofs are served only at the latest committed height 0x{latest_height:x}"
+            )));
+        }
+    }
+    let proof = state
+        .storage
+        .state()
+        .prove_account(&txn, &address)
+        .map_err(internal)?;
+    if proof.state_root != saved_root {
+        return Err(internal(
+            "live account tree does not match the stored state root",
+        ));
+    }
+    if !proof.verify() {
+        return Err(internal("account proof did not verify against its root"));
+    }
+    Ok(json!({
+        "height": quantity(latest_height),
+        "stateRoot": to_hex(proof.state_root.as_ref()),
+        "address": address.to_string(),
+        "balance": quantity(proof.balance),
+        "nonce": quantity(proof.nonce),
+        "present": proof.present,
+        "siblings": proof.siblings.iter().map(|hash| to_hex(hash.as_ref())).collect::<Vec<_>>(),
+    }))
+}
+
+/// `kvnc_getLightSet()` — registered light nodes and the epoch beacon.
+///
+/// `rewardBps` is the live constant, which ships at 0. A committed leader's
+/// reward is unchanged while it stays 0.
+pub async fn handle_get_light_set(_params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let txn = state.storage.begin_read().map_err(internal)?;
+    let height = match state.storage.state().load_staking_state(&txn) {
+        Ok(staking) => staking.committed_leader_height,
+        Err(_) => 0,
+    };
+    let epoch = height / kvnc_staking::EPOCH_ROUNDS;
+    let Some(set) = state
+        .storage
+        .state()
+        .load_light_set(&txn)
+        .map_err(internal)?
+    else {
+        return Ok(json!({
+            "rewardBps": kvnc_staking::LIGHT_REWARD_BPS,
+            "epoch": quantity(epoch),
+            "beacon": Value::Null,
+            "nodes": [],
+        }));
+    };
+    let beacon = set.beacon(epoch).map(|hash| to_hex(hash.as_ref()));
+    let winners = set.winners(epoch);
+    let nodes: Vec<Value> = set
+        .nodes()
+        .iter()
+        .map(|node| {
+            let witnessed = set
+                .witnesses(epoch)
+                .iter()
+                .any(|witness| witness.address == node.address);
+            json!({
+                "address": node.address.to_string(),
+                "stake": quantity(node.stake),
+                "vrfPublicKey": to_hex(node.vrf_public_key.as_bytes()),
+                "effectiveEpoch": quantity(node.effective_epoch),
+                "exitEpoch": node.exit_epoch.map(quantity),
+                "active": node.effective_epoch <= epoch
+                    && node.exit_epoch.map(|end| epoch <= end).unwrap_or(true),
+                "witnessed": witnessed,
+                "selected": winners.contains(&node.address),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "rewardBps": kvnc_staking::LIGHT_REWARD_BPS,
+        "epoch": quantity(epoch),
+        "beacon": beacon,
+        "nodes": nodes,
+    }))
+}
+
 /// `kvnc_getCommittee()` — current consensus committee.
 pub async fn handle_get_committee(_params: Value, state: RpcState) -> Result<Value, RpcError> {
     let committee = &state.committee;
@@ -605,6 +891,7 @@ pub async fn handle_get_committee(_params: Value, state: RpcState) -> Result<Val
                 "index": a.index,
                 "address": a.address.to_string(),
                 "stake": quantity(a.stake),
+                "publicKey": to_hex(a.public_key.as_bytes()),
                 "network_address": a.network_address,
             })
         })
@@ -1003,5 +1290,90 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unknown, Value::Null);
+    }
+
+    #[tokio::test]
+    async fn light_reads_follow_the_latest_account_root() {
+        use kvnc_storage::state_store::Account;
+
+        let (_dir, storage) = open_storage();
+        let address = Address([4u8; 32]);
+        let tx_hash = Hash::new([9u8]);
+        let header = LeaderHeader {
+            committed_height: 2,
+            leader_round: 6,
+            leader_digest: Hash::new([2u8]),
+            leader_author: 0,
+            parent_leader_digest: Hash::zero(),
+            tx_merkle_root: Hash::zero(),
+            executed_tx_root: merkle::root(&[tx_hash]),
+            non_blue_root: Hash::zero(),
+            blue_root: Hash::zero(),
+            mysticghost: false,
+            state_root: Hash::zero(),
+            epoch: 0,
+            committee_hash: Hash::zero(),
+            timestamp: 0,
+        };
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .set_account(
+                    &txn,
+                    &address,
+                    &Account {
+                        balance: 5,
+                        nonce: 1,
+                        code_hash: [0; 32],
+                        code: Vec::new(),
+                    },
+                )
+                .unwrap();
+            let root = storage.state().commit_account_smt(&txn, 2).unwrap();
+            let mut header = header;
+            header.state_root = root;
+            storage.state().save_leader_header(&txn, &header).unwrap();
+            storage
+                .state()
+                .save_executed_tx_hashes(&txn, 2, &[tx_hash])
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let state = test_state(storage);
+        let got = handle_get_leader_header(json!([2]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(got["committedHeight"], json!("0x2"));
+        assert_eq!(got["timestamp"], json!("0x0"));
+        assert!(handle_get_leader_header(json!([9]), state.clone())
+            .await
+            .unwrap()
+            .is_null());
+        let seals = handle_get_commit_seals(json!([2]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(seals["seals"], json!([]));
+        let proof = handle_get_tx_proof(
+            json!([2, format!("0x{}", hex::encode(tx_hash.0))]),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(proof["executed"].is_object());
+        assert!(proof["leader"].is_null());
+        let account = handle_get_account_proof(json!([address.to_string()]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(account["height"], json!("0x2"));
+        assert_eq!(account["present"], json!(true));
+        assert_eq!(account["balance"], json!("0x5"));
+        let err = handle_get_account_proof(json!([address.to_string(), "0x1"]), state.clone())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("latest"));
+        let set = handle_get_light_set(Value::Null, state).await.unwrap();
+        assert_eq!(set["rewardBps"], json!(0));
+        assert_eq!(set["nodes"], json!([]));
     }
 }

@@ -1,7 +1,7 @@
 //! P2P networking layer (libp2p).
 //!
 //! The crate runs a [`libp2p::Swarm`] composed of gossipsub (topics `blocks`,
-//! `transactions`, `votes` and `sync`), Kademlia peer discovery, ping-based
+//! `transactions`, `votes`, `sync`, and `seals`), Kademlia peer discovery, ping-based
 //! liveness and identify, wrapped in [`NetworkService`]. Swarm activity is
 //! translated into a stream of [`NetworkEvent`]s for the rest of the node.
 
@@ -30,9 +30,12 @@ pub use scoring::PeerScoringConfig;
 pub use service::NetworkService;
 pub use state_sync::{StateSyncCodec, StateSyncRequest, StateSyncResponse, STATE_SYNC_PROTOCOL};
 pub use sync::SyncRequest;
-pub use validation::{AuthorityKeys, Ed25519VoteVerifier, Rejection, SigError, VoteVerifier};
+pub use validation::{
+    admit_seal, AuthorityKeys, Ed25519VoteVerifier, LocalHeaderHash, Rejection, SealAdmission,
+    SigError, VoteVerifier,
+};
 
-use kvnc_types::{block::StatementBlock, transaction::Transaction, Round, Vote};
+use kvnc_types::{block::StatementBlock, transaction::Transaction, Round, SealAnnouncement, Vote};
 use std::time::Duration;
 
 // Re-export libp2p types for downstream crates
@@ -93,6 +96,17 @@ pub enum NetworkEvent {
         peer: PeerId,
         /// The vote.
         vote: Vote,
+    },
+    /// A post-execution commit seal whose signature verified and whose
+    /// header hash matches the header this node already executed.
+    ///
+    /// Seals that arrive before local execution are not emitted. Consensus
+    /// does not consume this event.
+    SealReceived {
+        /// Peer that relayed the seal.
+        peer: PeerId,
+        /// Header plus one validator signature.
+        announcement: SealAnnouncement,
     },
 }
 

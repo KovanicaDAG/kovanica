@@ -5,7 +5,7 @@
 
 use kvnc_types::block::StatementBlock;
 use kvnc_types::hash::Hash;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 /// Output of a scoped colouring run.
 #[derive(Debug, Clone)]
@@ -21,53 +21,16 @@ pub struct ColouringResult {
 impl ColouringResult {
     /// Returns the blue blocks in a deterministic topological order
     /// induced by the selected-parent relation.
+    ///
+    /// Delegates to [`kvnc_types::colouring::ColouringResult::blue_ordered`]
+    /// so the committer and a light client share one order.
     pub fn blue_ordered(&self) -> Vec<Hash> {
-        // Kahn's algorithm on the selected-parent tree
-        let mut in_degree: HashMap<Hash, usize> = HashMap::new();
-        let mut children: HashMap<Hash, Vec<Hash>> = HashMap::new();
-
-        for &blue_hash in &self.blue {
-            in_degree.insert(blue_hash, 0);
-            children.insert(blue_hash, Vec::new());
+        kvnc_types::colouring::ColouringResult {
+            blue: self.blue.clone(),
+            selected_parent: self.selected_parent.clone(),
+            blue_score: self.blue_score.clone(),
         }
-
-        for (&blue_hash, &opt_parent) in &self.selected_parent {
-            if let Some(parent) = opt_parent {
-                if self.blue.iter().any(|h| h == &parent) {
-                    *in_degree.get_mut(&blue_hash).unwrap() += 1;
-                    children.get_mut(&parent).unwrap().push(blue_hash);
-                }
-            }
-        }
-
-        // Deterministic: sort roots and children by hash
-        let mut roots: Vec<Hash> = in_degree
-            .iter()
-            .filter(|(_, &deg)| deg == 0)
-            .map(|(h, _)| *h)
-            .collect();
-        roots.sort_by_key(|h| h.0);
-        for child_list in children.values_mut() {
-            child_list.sort_by_key(|h| h.0);
-        }
-
-        let mut queue: VecDeque<Hash> = roots.into();
-        let mut ordered = Vec::new();
-
-        while let Some(hash) = queue.pop_front() {
-            ordered.push(hash);
-            if let Some(child_list) = children.get(&hash) {
-                for child in child_list {
-                    let deg = in_degree.get_mut(child).unwrap();
-                    *deg -= 1;
-                    if *deg == 0 {
-                        queue.push_back(*child);
-                    }
-                }
-            }
-        }
-
-        ordered
+        .blue_ordered()
     }
 }
 
@@ -76,135 +39,29 @@ impl ColouringResult {
 /// `blocks` – the mergeset (and optionally previous tips already included)
 /// `k`      – must be 3 for the current safety claims
 /// `previous_tips` – tips of prior committed sub-dags (treated as already blue)
+///
+/// The algorithm is [`kvnc_types::colouring::colour_mergeset`]. This wrapper
+/// only adapts [`StatementBlock`] headers onto that function. `k != 3`
+/// panics, as the previous in-crate implementation did.
 pub fn colour_mergeset(
     blocks: &[StatementBlock],
     k: usize,
     previous_tips: &[Hash],
 ) -> ColouringResult {
-    assert_eq!(k, 3, "MysticGhost currently requires k = 3");
-
-    // Build set of all block hashes in the mergeset for O(1) lookup
-    let mut block_hashes = HashSet::with_capacity(blocks.len());
-    for block in blocks {
-        block_hashes.insert(block.digest);
-    }
-
-    // Build parents map: hash -> Vec<parent hashes that are in the subgraph or previous_tips>
-    let mut parents_in_subgraph: HashMap<Hash, Vec<Hash>> = HashMap::with_capacity(blocks.len());
-    for block in blocks {
-        let mut parent_hashes = Vec::new();
-        for parent_ref in &block.parents {
-            if block_hashes.contains(&parent_ref.digest)
-                || previous_tips.contains(&parent_ref.digest)
-            {
-                parent_hashes.push(parent_ref.digest);
-            }
-        }
-        parents_in_subgraph.insert(block.digest, parent_hashes);
-    }
-
-    // Sort blocks topologically by round (ascending), then by hash for deterministic tiebreak
-    let mut sorted_blocks = blocks.to_vec();
-    sorted_blocks.sort_by_key(|b| (b.round, b.digest.0));
-
-    // State for the GHOSTDAG algorithm
-    let mut already_blue: HashSet<Hash> = HashSet::new();
-    let mut past_cone: HashMap<Hash, HashSet<Hash>> = HashMap::new();
-    let mut blue_score: HashMap<Hash, u64> = HashMap::new();
-    let mut selected_parent: HashMap<Hash, Option<Hash>> = HashMap::new();
-    let mut blue: Vec<Hash> = Vec::new();
-
-    // Seed with previous_tips (they are pre-coloured blue with score 0)
-    for tip in previous_tips {
-        already_blue.insert(*tip);
-        let mut cone = HashSet::new();
-        cone.insert(*tip);
-        past_cone.insert(*tip, cone);
-        blue_score.insert(*tip, 0);
-        selected_parent.insert(*tip, None);
-        // Note: we don't add previous_tips to `blue` since they are not part of the current mergeset
-    }
-
-    // Process blocks in topological order
-    for block in &sorted_blocks {
-        let block_hash = block.digest;
-
-        // Find blue parents from the subgraph
-        let parent_hashes = parents_in_subgraph
-            .get(&block_hash)
-            .cloned()
-            .unwrap_or_default();
-        let blue_parents: Vec<Hash> = parent_hashes
-            .iter()
-            .filter(|h| already_blue.contains(h))
-            .copied()
-            .collect();
-
-        // Compute ancestors of this block among already-blue blocks.
-        // Since we maintain past_cone for each blue block, the blue ancestors
-        // are exactly the union of the past_cones of the blue parents.
-        let mut ancestors = HashSet::new();
-        for parent in &blue_parents {
-            if let Some(parent_cone) = past_cone.get(parent) {
-                ancestors.extend(parent_cone.iter().copied());
-            }
-        }
-
-        // Compute blue anticone: already-blue blocks that are incomparable with this block.
-        // Since we process in topological order, block_hash cannot be ancestor of any already-blue block.
-        // So we only need to check if any already-blue block is ancestor of this block.
-        let mut blue_anticone = Vec::new();
-        for &blue_hash in &already_blue {
-            // blue_hash is ancestor of block_hash iff blue_hash is in ancestors set
-            if !ancestors.contains(&blue_hash) {
-                blue_anticone.push(blue_hash);
-            }
-        }
-
-        if blue_anticone.len() <= k {
-            // Colour BLUE
-            already_blue.insert(block_hash);
-            blue.push(block_hash);
-
-            // Compute past cone: union of blue parents' past cones + self
-            let mut cone = HashSet::new();
-            cone.insert(block_hash);
-            for parent in &blue_parents {
-                if let Some(parent_cone) = past_cone.get(parent) {
-                    cone.extend(parent_cone.iter().copied());
-                }
-            }
-            past_cone.insert(block_hash, cone);
-
-            // Select parent: blue parent with highest blue_score, tie-break by hash
-            let best_parent = if blue_parents.is_empty() {
-                None
-            } else {
-                let mut best = blue_parents[0];
-                let mut best_score = blue_score[&best];
-                for parent in &blue_parents[1..] {
-                    let score = blue_score[parent];
-                    if score > best_score || (score == best_score && parent.0 < best.0) {
-                        best = *parent;
-                        best_score = score;
-                    }
-                }
-                Some(best)
-            };
-            selected_parent.insert(block_hash, best_parent);
-
-            // Blue score = parent's blue score + 1 (or 0 if no blue parent)
-            let score = best_parent.map(|p| blue_score[&p] + 1).unwrap_or(0);
-            blue_score.insert(block_hash, score);
-        } else {
-            // Colour RED: do nothing (not added to already_blue, no selected_parent, no blue_score)
-        }
-    }
-
+    let views: Vec<kvnc_types::colouring::ColourBlock> = blocks
+        .iter()
+        .map(|block| kvnc_types::colouring::ColourBlock {
+            digest: block.digest,
+            round: block.round,
+            parents: block.parents.iter().map(|parent| parent.digest).collect(),
+        })
+        .collect();
+    let result = kvnc_types::colouring::colour_mergeset(&views, k, previous_tips)
+        .expect("MysticGhost currently requires k = 3");
     ColouringResult {
-        blue,
-        selected_parent,
-        blue_score,
+        blue: result.blue,
+        selected_parent: result.selected_parent,
+        blue_score: result.blue_score,
     }
 }
 

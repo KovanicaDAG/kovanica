@@ -7,7 +7,7 @@
 //! - `hash` = 32-byte VRF hash output (DETERMINISTIC, used as randomness source)
 //! - `proof` = 96-byte VRF proof (NON-DETERMINISTIC, verifiable by anyone with the public key)
 
-use ecvrf::{keygen, prove, verify, VrfProof, VrfPk, VrfSk};
+use ecvrf::{keygen, prove, verify, VrfPk, VrfProof, VrfSk};
 use kvnc_types::crypto::PublicKey;
 use thiserror::Error;
 
@@ -59,8 +59,7 @@ impl VRFKeyPair {
 
     /// Create from raw secret key bytes (32-byte scalar)
     pub fn from_secret(secret: [u8; 32]) -> Result<Self, VRFError> {
-        let sk = VrfSk::from_bytes(&secret)
-            .map_err(|_| VRFError::InvalidSecretKey)?;
+        let sk = VrfSk::from_bytes(&secret).map_err(|_| VRFError::InvalidSecretKey)?;
         let pk = VrfPk::new(&sk);
         let mut public = [0u8; 32];
         public.copy_from_slice(&pk.to_bytes());
@@ -95,11 +94,13 @@ pub fn vrf_prove(keypair: &VRFKeyPair, input: &[u8]) -> VRFOutput {
 }
 
 /// Verify VRF output
-pub fn vrf_verify(public_key: &PublicKey, input: &[u8], output: &VRFOutput) -> Result<(), VRFError> {
-    let pk = VrfPk::from_bytes(&public_key.0)
-        .map_err(|_| VRFError::InvalidPublicKey)?;
-    let proof = VrfProof::from_bytes(&output.proof)
-        .map_err(|_| VRFError::InvalidProof)?;
+pub fn vrf_verify(
+    public_key: &PublicKey,
+    input: &[u8],
+    output: &VRFOutput,
+) -> Result<(), VRFError> {
+    let pk = VrfPk::from_bytes(&public_key.0).map_err(|_| VRFError::InvalidPublicKey)?;
+    let proof = VrfProof::from_bytes(&output.proof).map_err(|_| VRFError::InvalidProof)?;
     let valid = verify(input, &pk, &output.hash, &proof);
     if !valid {
         return Err(VRFError::VerificationFailed);
@@ -127,8 +128,7 @@ pub fn derive_vrf_secret_from_seed(seed: &[u8; 32]) -> [u8; 32] {
 /// Convert VRF hash to a u64 for leader selection (deterministic, uniform)
 pub fn vrf_hash_to_u64(hash: &[u8; 32]) -> u64 {
     u64::from_le_bytes([
-        hash[0], hash[1], hash[2], hash[3],
-        hash[4], hash[5], hash[6], hash[7],
+        hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7],
     ])
 }
 
@@ -184,14 +184,14 @@ mod tests {
         let kp = VRFKeyPair::generate();
         let input = b"test input for VRF";
         let output = vrf_prove(&kp, input);
-        
+
         // Verify with correct public key
         assert!(vrf_verify(&kp.public_key_typed(), input, &output).is_ok());
-        
+
         // Verify with wrong public key fails
         let other_kp = VRFKeyPair::generate();
         assert!(vrf_verify(&other_kp.public_key_typed(), input, &output).is_err());
-        
+
         // Verify with wrong input fails
         assert!(vrf_verify(&kp.public_key_typed(), b"wrong input", &output).is_err());
     }
@@ -219,7 +219,11 @@ mod tests {
         }
         // Chi-squared test: each bucket should have ~1000
         for c in counts {
-            assert!(c > 800 && c < 1200, "distribution not uniform: {:?}", counts);
+            assert!(
+                c > 800 && c < 1200,
+                "distribution not uniform: {:?}",
+                counts
+            );
         }
     }
 
@@ -229,7 +233,7 @@ mod tests {
         let kp2 = VRFKeyPair::from_secret(kp1.secret).unwrap();
         assert_eq!(kp1.secret, kp2.secret);
         assert_eq!(kp1.public, kp2.public);
-        
+
         let input = b"roundtrip test";
         let out1 = vrf_prove(&kp1, input);
         let out2 = vrf_prove(&kp2, input);

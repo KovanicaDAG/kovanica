@@ -965,8 +965,11 @@ pub struct WasmCall<'a> {
 pub struct ContractRunner {
     runtime: Runtime,
     /// Compiled modules keyed by `blake3(wasm)`.
-    /// TODO: persist across process restarts (currently per-runner, in
-    /// memory only).
+    ///
+    /// Intentionally in-memory only: wasmi 0.40 `Module` has no stable
+    /// serialization format, so a disk cache would have to store raw bytes
+    /// and recompile, which gives no benefit over the host OS page cache. Revisit
+    /// if compile time becomes a bottleneck.
     modules: HashMap<[u8; 32], kvnc_runtime::Module>,
 }
 

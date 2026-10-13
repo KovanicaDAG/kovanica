@@ -208,6 +208,9 @@ fn immediate_value(kind: &TransactionKind) -> u64 {
         TransactionKind::ClaimRewards { .. } => 0,
         TransactionKind::Deploy { .. } => 0,
         TransactionKind::Call { .. } => 0,
+        TransactionKind::RegisterLightNode { stake, .. } => *stake,
+        TransactionKind::ExitLightNode => 0,
+        TransactionKind::SubmitLightWitness { .. } => 0,
     }
 }
 
@@ -221,7 +224,6 @@ fn requires_fee(kind: &TransactionKind) -> bool {
 
 impl Mempool {
     /// Create a new mempool.
-    // TODO(owner): source chain_id/epoch from node config
     pub fn new(
         config: MempoolConfig,
         storage: Arc<Storage>,
@@ -259,6 +261,13 @@ impl Mempool {
     /// Check if a transaction exists in the mempool.
     pub fn contains(&self, hash: &Hash) -> bool {
         self.state.lock().by_hash.contains_key(hash)
+    }
+
+    /// Snapshot of the hashes of all transactions currently in the mempool.
+    /// Non-destructive: used by RPC and diagnostics. The set reflects the
+    /// queued + in-flight buckets, not the re-broadcast queue.
+    pub fn pending_hashes(&self) -> Vec<Hash> {
+        self.state.lock().by_hash.keys().copied().collect()
     }
 
     /// Add a transaction to the mempool. See the module docs for the rules.
@@ -631,7 +640,8 @@ impl Mempool {
             return Vec::new();
         }
         *last_rebroadcast = Instant::now();
-        let txs = self.state
+        let txs = self
+            .state
             .lock()
             .by_hash
             .values()
@@ -1384,7 +1394,11 @@ mod tests {
         let second = pool.get_next_transactions(10);
         // With the contiguity fix, in-flight nonces block the run, so second
         // proposal returns 0. This is the correct behavior: no nonce gaps.
-        assert_eq!(second.len(), 0, "in-flight nonces must block the run to prevent gaps");
+        assert_eq!(
+            second.len(),
+            0,
+            "in-flight nonces must block the run to prevent gaps"
+        );
 
         // Pool still tracks all 3 transactions.
         assert_eq!(pool.len(), 3);

@@ -21,14 +21,15 @@
 #![allow(clippy::result_large_err)]
 
 use kvnc_consensus::CommittedSubDag;
+use kvnc_crypto::{vrf_verify, VRFOutput};
 use kvnc_runtime::ExecutionConfig;
-use kvnc_staking::{RewardOutcome, StakingError, StakingState};
+use kvnc_staking::{LightSet, LightSetError, RewardOutcome, StakingError, StakingState};
 use kvnc_storage::{
     address_to_bytes, state_store::Account, tables, BincodeSerialize, StateStoreError, Storage,
     StorageError,
 };
 use kvnc_types::signing::{chain_id, SigningContext};
-use kvnc_types::{Address, Transaction, TransactionKind};
+use kvnc_types::{light_vrf_input, Address, Hash, PublicKey, Transaction, TransactionKind};
 use redb::{ReadableTable, TableDefinition, WriteTransaction};
 use thiserror::Error;
 use tracing::{debug, info};
@@ -150,11 +151,20 @@ pub struct ExecutionResult {
     pub circulating_supply: u64,
     /// Receipts for all executed transactions in this sub-DAG.
     pub receipts: Vec<TransactionReceipt>,
+    /// Account-tree root after this commit. `None` when the sub-DAG was
+    /// already executed and this call did not write state.
+    pub state_root: Option<kvnc_types::hash::Hash>,
 }
 
 /// Minimal execution context (will later hold the full account state / Merkle tree).
 pub struct ExecutionContext {
     pub staking: StakingState,
+    /// Basis points of `block_reward` placed in the light-node escrow.
+    ///
+    /// Production leaves this at [`kvnc_staking::LIGHT_REWARD_BPS`] (0).
+    /// A test may set another value. It is not persisted and it is not part
+    /// of a block, vote, or transaction hash.
+    pub light_reward_bps: u16,
     /// Contract runner for WASM execution (shared module cache).
     pub contract_runner: ContractRunner,
     /// Event publisher for transaction logs.
@@ -185,6 +195,7 @@ impl ExecutionContext {
     pub fn with_signing_context(ctx: SigningContext) -> Self {
         Self {
             staking: StakingState::new(),
+            light_reward_bps: kvnc_staking::LIGHT_REWARD_BPS,
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: ctx,
@@ -266,6 +277,7 @@ impl ExecutionContext {
                     txs_applied: 0,
                     circulating_supply: self.staking.circulating_supply(),
                     receipts: Vec::new(),
+                    state_root: None,
                 });
             }
         }
@@ -274,6 +286,7 @@ impl ExecutionContext {
         let mut receipts = Vec::new();
         let mut txs_applied = 0;
         let committed_height = self.staking.committed_leader_height;
+        self.note_light_beacon(&mut txn, storage, committed_height, subdag.leader.digest)?;
 
         for block in &subdag.blocks {
             for tx in &block.transactions {
@@ -295,8 +308,12 @@ impl ExecutionContext {
         // Split the reward: commission + the validator's own pro-rata share
         // go straight to its payout address; delegator shares accrue per
         // (delegator, validator) and are paid by ClaimRewards.
+        // `light_reward_bps` is 0 in production, so `leader_amount` is the
+        // full `block_reward` and `escrow_part` is 0.
+        let (leader_amount, escrow_part) =
+            kvnc_staking::split_block_reward(reward.amount, self.light_reward_bps);
         let shares =
-            candidate_staking.reward_share(leader.address, reward.amount, leader.commission_bps);
+            candidate_staking.reward_share(leader.address, leader_amount, leader.commission_bps);
         {
             let mut pending = txn.open_table(PENDING_REWARDS)?;
             for (addr, amount) in &shares {
@@ -327,6 +344,14 @@ impl ExecutionContext {
             let amount = candidate_staking.withdraw_unbonded(delegator, validator)?;
             storage.state().add_balance(&txn, &delegator, amount)?;
         }
+        self.pay_light_escrow(
+            &mut txn,
+            storage,
+            committed_height,
+            candidate_staking.committed_leader_height,
+            reward.recipient,
+            escrow_part,
+        )?;
         // Persist staking state (height, total_mining_issued, treasury vesting)
         storage
             .state()
@@ -345,7 +370,8 @@ impl ExecutionContext {
             .insert(committed_height, receipts_bytes)
             .map_err(StorageError::Storage)?;
 
-        // 5. Mark sub-DAG as executed
+        // 5. Account sparse Merkle over balance and nonce, then mark executed.
+        let state_root = storage.state().commit_account_smt(&txn, committed_height)?;
         txn.open_table(EXECUTED_SUBDAGS)
             .map_err(StorageError::Table)?
             .insert(subdag.leader.digest.0, 1)
@@ -382,6 +408,7 @@ impl ExecutionContext {
             txs_applied,
             circulating_supply: self.staking.circulating_supply(),
             receipts,
+            state_root: Some(state_root),
         })
     }
 
@@ -462,6 +489,7 @@ impl ExecutionContext {
         // the savepoint is an explicit undo journal.)
         let staking_savepoint = snapshot_staking(&self.staking);
         let undo = AccountUndo::capture(txn, &touched_accounts(tx))?;
+        let light_before = storage.state().load_light_set_write(txn)?;
 
         // Execute based on transaction kind
         let result = match &tx.kind {
@@ -500,6 +528,27 @@ impl ExecutionContext {
                 *gas_limit,
                 committed_height,
             ),
+            TransactionKind::RegisterLightNode {
+                vrf_public_key,
+                stake,
+            } => self.execute_register_light(
+                txn,
+                storage,
+                &tx.sender,
+                *vrf_public_key,
+                *stake,
+                committed_height,
+            ),
+            TransactionKind::ExitLightNode => {
+                self.execute_exit_light(txn, storage, &tx.sender, committed_height)
+            }
+            TransactionKind::SubmitLightWitness {
+                epoch,
+                vrf_hash,
+                vrf_proof,
+            } => {
+                self.execute_light_witness(txn, storage, &tx.sender, *epoch, *vrf_hash, *vrf_proof)
+            }
         };
 
         let (success, gas_used, error, events) = match result {
@@ -507,6 +556,7 @@ impl ExecutionContext {
             Err(e) => {
                 self.staking = staking_savepoint;
                 undo.restore(txn)?;
+                self.restore_light_set(txn, storage, &light_before)?;
                 (false, 0, Some(e.to_string()), Vec::new())
             }
         };
@@ -948,6 +998,154 @@ impl ExecutionContext {
 
         Ok(claimed)
     }
+
+    fn note_light_beacon(
+        &self,
+        txn: &mut WriteTransaction,
+        storage: &Storage,
+        height: u64,
+        leader_digest: Hash,
+    ) -> Result<(), ExecutionError> {
+        let Some(mut set) = storage.state().load_light_set_write(txn)? else {
+            return Ok(());
+        };
+        if height % kvnc_staking::EPOCH_ROUNDS == 0 {
+            set.note_beacon(height / kvnc_staking::EPOCH_ROUNDS, leader_digest);
+            storage.state().save_light_set(txn, &set)?;
+        }
+        Ok(())
+    }
+
+    fn pay_light_escrow(
+        &self,
+        txn: &mut WriteTransaction,
+        storage: &Storage,
+        committed_height: u64,
+        now_height: u64,
+        contributor: Address,
+        escrow_part: u64,
+    ) -> Result<(), ExecutionError> {
+        let loaded = storage.state().load_light_set_write(txn)?;
+        let Some(mut set) = (match loaded {
+            None if escrow_part == 0 => None,
+            None => Some(LightSet::default()),
+            Some(set) => Some(set),
+        }) else {
+            return Ok(());
+        };
+        let epoch = committed_height / kvnc_staking::EPOCH_ROUNDS;
+        if escrow_part > 0 {
+            set.add_escrow(epoch, contributor, escrow_part);
+        }
+        let mut credits = Vec::new();
+        if (committed_height + 1) % kvnc_staking::EPOCH_ROUNDS == 0 {
+            let settled = set.settle(epoch);
+            credits.extend(settled.winner_payouts);
+            credits.extend(settled.leader_refunds);
+        }
+        credits.extend(set.release_unbonded(now_height));
+        for (address, amount) in credits {
+            if amount > 0 {
+                storage.state().add_balance(txn, &address, amount)?;
+            }
+        }
+        storage.state().save_light_set(txn, &set)?;
+        Ok(())
+    }
+
+    fn restore_light_set(
+        &self,
+        txn: &mut WriteTransaction,
+        storage: &Storage,
+        before: &Option<LightSet>,
+    ) -> Result<(), ExecutionError> {
+        match before {
+            Some(set) => storage.state().save_light_set(txn, set)?,
+            None => storage.state().clear_light_set(txn)?,
+        }
+        Ok(())
+    }
+
+    fn execute_register_light(
+        &self,
+        txn: &mut WriteTransaction,
+        storage: &Storage,
+        from: &Address,
+        vrf_public_key: PublicKey,
+        stake: u64,
+        height: u64,
+    ) -> Result<Vec<ContractEvent>, ExecutionError> {
+        let account = storage.state().get_account_or_default_write(txn, from)?;
+        if account.balance < stake {
+            return Err(ExecutionError::Validation(
+                "Insufficient balance for light bond".into(),
+            ));
+        }
+        let mut set = storage
+            .state()
+            .load_light_set_write(txn)?
+            .unwrap_or_default();
+        set.register(*from, vrf_public_key, stake, height)
+            .map_err(light_set_error)?;
+        sub_balance_mapped(storage, txn, from, stake)?;
+        storage.state().save_light_set(txn, &set)?;
+        Ok(Vec::new())
+    }
+
+    fn execute_exit_light(
+        &self,
+        txn: &mut WriteTransaction,
+        storage: &Storage,
+        from: &Address,
+        height: u64,
+    ) -> Result<Vec<ContractEvent>, ExecutionError> {
+        let mut set = storage
+            .state()
+            .load_light_set_write(txn)?
+            .unwrap_or_default();
+        let (refund, _) = set.exit(*from, height).map_err(light_set_error)?;
+        if refund > 0 {
+            storage.state().add_balance(txn, from, refund)?;
+        }
+        storage.state().save_light_set(txn, &set)?;
+        Ok(Vec::new())
+    }
+
+    fn execute_light_witness(
+        &self,
+        txn: &mut WriteTransaction,
+        storage: &Storage,
+        from: &Address,
+        epoch: u64,
+        vrf_hash: [u8; 32],
+        vrf_proof: [u8; 96],
+    ) -> Result<Vec<ContractEvent>, ExecutionError> {
+        let mut set = storage
+            .state()
+            .load_light_set_write(txn)?
+            .unwrap_or_default();
+        let node = set
+            .nodes()
+            .iter()
+            .find(|node| node.address == *from)
+            .cloned()
+            .ok_or_else(|| ExecutionError::Validation("light node is not registered".into()))?;
+        let beacon = set
+            .beacon(epoch)
+            .ok_or_else(|| ExecutionError::Validation("light epoch has no beacon".into()))?;
+        let input = light_vrf_input(self.signing_ctx.chain_id, epoch, &beacon);
+        let output = VRFOutput::new(vrf_hash, vrf_proof);
+        vrf_verify(&node.vrf_public_key, &input, &output)
+            .map_err(|_| ExecutionError::Validation("light witness rejected".into()))?;
+        set.submit_witness(epoch, *from, vrf_hash, vrf_proof)
+            .map_err(light_set_error)?;
+        storage.state().save_light_set(txn, &set)?;
+        Ok(Vec::new())
+    }
+}
+
+fn light_set_error(err: LightSetError) -> ExecutionError {
+    ExecutionError::Validation(err.to_string())
 }
 
 /// Debit `amount` from `address` through `StateStore::sub_balance`
@@ -991,6 +1189,7 @@ fn snapshot_staking(s: &StakingState) -> StakingState {
         total_staked: s.total_staked,
         committed_leader_height: s.committed_leader_height,
         total_mining_issued: s.total_mining_issued,
+        reward_totals: s.reward_totals.clone(),
         treasury: s.treasury.clone(),
         unbonding_queue: s.unbonding_queue.clone(),
     }
@@ -1296,6 +1495,7 @@ mod tests {
         persist_initial_staking_state(&storage, &initial_staking);
         let mut ctx = ExecutionContext {
             staking: initial_staking,
+            light_reward_bps: kvnc_staking::LIGHT_REWARD_BPS,
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: TEST_CTX,
@@ -1339,12 +1539,14 @@ mod tests {
         let genesis_bytes = staking_state_bytes(&genesis);
         let mut context_a = ExecutionContext {
             staking: bincode::deserialize(&genesis_bytes).expect("genesis state a"),
+            light_reward_bps: kvnc_staking::LIGHT_REWARD_BPS,
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: TEST_CTX,
         };
         let mut context_b = ExecutionContext {
             staking: bincode::deserialize(&genesis_bytes).expect("genesis state b"),
+            light_reward_bps: kvnc_staking::LIGHT_REWARD_BPS,
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: TEST_CTX,
@@ -1568,6 +1770,7 @@ mod tests {
             let storage = Storage::new(&path).expect("storage");
             let mut context = ExecutionContext {
                 staking: genesis_staking_state(),
+                light_reward_bps: kvnc_staking::LIGHT_REWARD_BPS,
                 contract_runner: ContractRunner::new(),
                 log_publisher: None,
                 signing_ctx: TEST_CTX,
@@ -1585,6 +1788,7 @@ mod tests {
         let storage = Storage::new(&path).expect("reopened storage");
         let mut context = ExecutionContext {
             staking: load_staking_state(&storage),
+            light_reward_bps: kvnc_staking::LIGHT_REWARD_BPS,
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: TEST_CTX,
@@ -3094,5 +3298,195 @@ mod tests {
         let a = go();
         assert_eq!(a.2, 400);
         assert_eq!(a, go());
+    }
+
+    #[test]
+    fn zero_light_bps_pays_the_full_reward_including_delegation() {
+        assert_eq!(kvnc_staking::LIGHT_REWARD_BPS, 0);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+        let mut ctx = ExecutionContext::new();
+        let validator = Address([1u8; 32]);
+        let payout = Address([9u8; 32]);
+        let delegator = Address([5u8; 32]);
+        ctx.staking
+            .join_validator(
+                validator,
+                kvnc_staking::MIN_VALIDATOR_STAKE,
+                1_000,
+                Some(payout),
+                None,
+                None,
+            )
+            .unwrap();
+        ctx.staking
+            .delegate(delegator, validator, kvnc_staking::MIN_VALIDATOR_STAKE)
+            .unwrap();
+        let result = ctx
+            .execute_committed_subdag(&sample_committed_subdag(1, 0), &storage)
+            .unwrap();
+        let reward = result.reward.unwrap();
+        assert_eq!(reward.amount, kvnc_staking::block_reward(0));
+        let txn = storage.begin_read().unwrap();
+        let pending_table = txn.open_table(PENDING_REWARDS).unwrap();
+        let pending = pending_table
+            .get(reward_key(&delegator, &validator))
+            .unwrap()
+            .map(|guard| guard.value())
+            .unwrap_or(0);
+        drop(pending_table);
+        drop(txn);
+        let paid = read_balance(&storage, &payout);
+        assert_eq!(paid + pending, reward.amount);
+        assert!(pending > 0);
+        assert!(paid > 0);
+    }
+
+    #[test]
+    fn registration_activates_next_epoch_and_a_valid_witness_is_stored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+        let key = test_keypair(4);
+        let sender = address_of(&key);
+        let bond = kvnc_staking::MIN_LIGHT_BOND;
+        let mut ctx = setup_funded_sender(&storage, &sender, bond + 10);
+        let secret = kvnc_crypto::derive_vrf_secret_from_seed(&[9u8; 32]);
+        let vrf = kvnc_crypto::VRFKeyPair::from_secret(secret).unwrap();
+        let register = signed_tx(
+            &key,
+            TransactionKind::RegisterLightNode {
+                vrf_public_key: vrf.public_key_typed(),
+                stake: bond,
+            },
+            0,
+            1,
+        );
+        let registered = execute_single_tx(&mut ctx, &storage, register);
+        assert!(
+            registered.receipts[0].success,
+            "{:?}",
+            registered.receipts[0].error
+        );
+        assert_eq!(read_balance(&storage, &sender), 9);
+        let txn = storage.begin_read().unwrap();
+        let set = storage.state().load_light_set(&txn).unwrap().unwrap();
+        drop(txn);
+        assert_eq!(set.nodes()[0].effective_epoch, 1);
+        assert!(set.active_nodes(0).is_empty());
+
+        ctx.staking.committed_leader_height = kvnc_staking::EPOCH_ROUNDS;
+        let leader = sample_block_at(0, 9);
+        let input = light_vrf_input(chain_id::LOCAL, 1, &leader.digest);
+        let output = kvnc_crypto::vrf_prove(&vrf, &input);
+        let witness = signed_tx(
+            &key,
+            TransactionKind::SubmitLightWitness {
+                epoch: 1,
+                vrf_hash: output.hash,
+                vrf_proof: output.proof,
+            },
+            1,
+            1,
+        );
+        let mut block = sample_block_with_txs(0, vec![witness]);
+        block.round = 9;
+        let subdag = CommittedSubDag {
+            blocks: vec![block],
+            leader: leader.clone(),
+            leader_round: 9,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        let witnessed = ctx.execute_committed_subdag(&subdag, &storage).unwrap();
+        assert!(
+            witnessed.receipts[0].success,
+            "{:?}",
+            witnessed.receipts[0].error
+        );
+        let txn = storage.begin_read().unwrap();
+        let set = storage.state().load_light_set(&txn).unwrap().unwrap();
+        drop(txn);
+        assert_eq!(set.witnesses(1).len(), 1);
+        assert_eq!(set.winners(1), vec![sender]);
+
+        let mut bad = output.proof;
+        bad[0] ^= 0xff;
+        let rejected = signed_tx(
+            &key,
+            TransactionKind::SubmitLightWitness {
+                epoch: 1,
+                vrf_hash: output.hash,
+                vrf_proof: bad,
+            },
+            2,
+            1,
+        );
+        let mut bad_block = sample_block_with_txs(0, vec![rejected]);
+        bad_block.round = 10;
+        let rejected_result = ctx
+            .execute_committed_subdag(
+                &CommittedSubDag {
+                    blocks: vec![bad_block],
+                    leader: sample_block_at(0, 10),
+                    leader_round: 10,
+                    leader_author: 0,
+                    non_blue: Vec::new(),
+                },
+                &storage,
+            )
+            .unwrap();
+        assert!(!rejected_result.receipts[0].success);
+        let txn = storage.begin_read().unwrap();
+        let set = storage.state().load_light_set(&txn).unwrap().unwrap();
+        assert_eq!(set.witnesses(1).len(), 1);
+    }
+
+    #[test]
+    fn an_in_test_bps_override_conserves_block_reward() {
+        assert_eq!(kvnc_staking::LIGHT_REWARD_BPS, 0);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+        let mut ctx = ExecutionContext::new();
+        ctx.light_reward_bps = 2_000;
+        ctx.staking.committed_leader_height = kvnc_staking::EPOCH_ROUNDS - 1;
+        let payout = Address([9u8; 32]);
+        ctx.staking
+            .join_validator(
+                Address([1u8; 32]),
+                kvnc_staking::MIN_VALIDATOR_STAKE,
+                0,
+                Some(payout),
+                None,
+                None,
+            )
+            .unwrap();
+        let closing = ctx
+            .execute_committed_subdag(&sample_committed_subdag(1, 0), &storage)
+            .unwrap();
+        let closing_reward = closing.reward.unwrap().amount;
+        assert_eq!(read_balance(&storage, &payout), closing_reward);
+        let txn = storage.begin_read().unwrap();
+        let set = storage.state().load_light_set(&txn).unwrap().unwrap();
+        drop(txn);
+        assert!(set.escrow(0).is_empty());
+
+        let opening = ctx
+            .execute_committed_subdag(&sample_committed_subdag(2, 0), &storage)
+            .unwrap();
+        let opening_reward = opening.reward.unwrap().amount;
+        let (leader_side, escrow) = kvnc_staking::split_block_reward(opening_reward, 2_000);
+        assert_eq!(
+            read_balance(&storage, &payout),
+            closing_reward + leader_side
+        );
+        let txn = storage.begin_read().unwrap();
+        let set = storage.state().load_light_set(&txn).unwrap().unwrap();
+        drop(txn);
+        let stored: u64 = set.escrow(1).iter().map(|(_, amount)| *amount).sum();
+        assert_eq!(stored, escrow);
+        assert_eq!(
+            read_balance(&storage, &payout) + stored,
+            closing_reward + opening_reward
+        );
     }
 }

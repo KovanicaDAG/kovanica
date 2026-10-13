@@ -22,6 +22,7 @@
 mod config;
 mod non_blue;
 mod orphans;
+mod seals;
 
 use std::future::Future;
 use std::sync::{atomic::Ordering, Arc};
@@ -118,6 +119,12 @@ struct GenesisArgs {
     force: bool,
 }
 
+/// Local seal signing context plus the channel that gossips the seal.
+struct SealDuty {
+    ctx: seals::SealContext,
+    broadcast: mpsc::UnboundedSender<NetworkCommand>,
+}
+
 /// Outbound network commands handled by the network task.
 enum NetworkCommand {
     /// Gossip a newly produced block.
@@ -126,6 +133,8 @@ enum NetworkCommand {
     BroadcastVote(Vote),
     /// Gossip a transaction accepted into the local mempool via RPC.
     BroadcastTransaction(Transaction),
+    /// Gossip a commit seal produced after local execution.
+    BroadcastSeal(kvnc_types::SealAnnouncement),
     /// Request a block sync from a specific peer.
     RequestSync(PeerId, BlockSyncRequest),
     /// Ask the network task to stop.
@@ -225,8 +234,8 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
         .iter()
         .map(|v| (v.address, v.stake))
         .collect();
-    alloc_entries.sort_by_key(|a| a.0.0);
-    alloc_entries.dedup_by(|a, b| a.0.0 == b.0.0);
+    alloc_entries.sort_by_key(|a| a.0 .0);
+    alloc_entries.dedup_by(|a, b| a.0 .0 == b.0 .0);
     let alloc_shares = kvnc_staking::genesis_validator_shares(alloc_entries.len());
 
     // Serialize output JSON
@@ -532,6 +541,9 @@ where
             .map(|authority| (authority.index, authority.public_key))
             .collect(),
     );
+    network.set_header_index(Arc::new(seals::StateHeaderIndex {
+        storage: state_storage.clone(),
+    }));
     let network = Arc::new(network);
     let peer_count = network.peer_count_handle();
     let peer_count_for_rpc = peer_count.clone();
@@ -696,6 +708,25 @@ where
     // The consensus engine now handles block production internally with mempool transactions
     // No separate builder task needed
     let _builder_task = tokio::spawn(async {});
+    let seal_members: Vec<_> = committee
+        .authorities()
+        .iter()
+        .map(|authority| (authority.index, authority.public_key, authority.stake))
+        .collect();
+    let seal_duty = SealDuty {
+        ctx: seals::SealContext {
+            chain_id: signing_ctx.chain_id,
+            epoch: signing_ctx.epoch,
+            signer: if config.run_validator {
+                Some((our_authority, signing_key.clone()))
+            } else {
+                None
+            },
+            committee_hash: kvnc_types::committee_seal_hash(committee.epoch(), &seal_members),
+            mysticghost: config.use_mysticghost,
+        },
+        broadcast: network_cmd_tx.clone(),
+    };
     let exec_task = tokio::spawn(run_execution(
         exec_rx,
         state_storage.clone(),
@@ -711,6 +742,7 @@ where
         signing_ctx,
         shutdown_rx.clone(),
         node_health.clone(),
+        Some(seal_duty),
     ));
 
     let engine_for_task = engine.clone();
@@ -967,8 +999,8 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         use kvnc_storage::state_store::Account;
 
         let mut entries: Vec<(Address, u64)> = genesis_stakes.clone();
-        entries.sort_by_key(|a| a.0.0);
-        entries.dedup_by(|a, b| a.0.0 == b.0.0);
+        entries.sort_by_key(|a| a.0 .0);
+        entries.dedup_by(|a, b| a.0 .0 == b.0 .0);
         let n = entries.len();
         let shares = kvnc_staking::genesis_validator_shares(n);
         let state = state_storage.state();
@@ -1056,6 +1088,11 @@ async fn run_network(
                 Some(NetworkCommand::BroadcastTransaction(tx)) => {
                     if let Err(e) = service.broadcast_transaction(&tx) {
                         warn!(error = %e, "failed to broadcast transaction");
+                    }
+                }
+                Some(NetworkCommand::BroadcastSeal(announcement)) => {
+                    if let Err(e) = service.broadcast_seal(&announcement) {
+                        warn!(error = %e, "failed to broadcast commit seal");
                     }
                 }
                 Some(NetworkCommand::RequestSync(peer, request)) => {
@@ -1222,6 +1259,25 @@ fn handle_network_event(
                 events.publish_pending_transaction(&tx);
             }
         }
+        NetworkEvent::SealReceived { peer, announcement } => {
+            match seals::store_matching_seal(state_storage, &announcement) {
+                Ok(true) => {
+                    debug!(
+                        %peer,
+                        height = announcement.header.committed_height,
+                        authority = announcement.seal.authority_index,
+                        "stored commit seal"
+                    );
+                    publish_sealed(state_storage, events, &announcement.header);
+                }
+                Ok(false) => debug!(
+                    %peer,
+                    height = announcement.header.committed_height,
+                    "ignored commit seal; local header does not match"
+                ),
+                Err(e) => warn!(%peer, error = %e, "failed to store commit seal"),
+            }
+        }
         NetworkEvent::VoteReceived { peer, vote } => {
             debug!(%peer, leader_round = vote.leader_round, %vote.leader_hash, "processing received vote");
             // `process_vote` authenticates the vote against the committee key.
@@ -1293,7 +1349,11 @@ fn handle_network_event(
                     debug!(%peer, size = data.len(), "received state snapshot");
                     // Import snapshot into state storage - write to temp file first
                     let temp_dir = std::env::temp_dir();
-                    let temp_file = temp_dir.join(format!("kvnc_state_sync_{}_{}.bin", peer, uuid::Uuid::new_v4()));
+                    let temp_file = temp_dir.join(format!(
+                        "kvnc_state_sync_{}_{}.bin",
+                        peer,
+                        uuid::Uuid::new_v4()
+                    ));
                     if let Err(e) = std::fs::write(&temp_file, &data) {
                         error!(error = %e, "failed to write state snapshot to temp file");
                         return;
@@ -1329,6 +1389,24 @@ fn handle_network_event(
     }
 }
 
+/// Push the stored header and the seals gathered for it to subscribers.
+fn publish_sealed(storage: &Storage, events: &EventBus, header: &kvnc_types::LeaderHeader) {
+    let seals = match storage.begin_read() {
+        Ok(txn) => match storage.state().seals_for(&txn, header.committed_height) {
+            Ok(seals) => seals,
+            Err(e) => {
+                warn!(error = %e, "could not read commit seals for the sealed-header event");
+                return;
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "could not read commit seals for the sealed-header event");
+            return;
+        }
+    };
+    events.publish_sealed_header(header, &seals);
+}
+
 /// Execute committed sub-DAGs as they are produced by consensus.
 async fn run_execution(
     mut subdags: mpsc::UnboundedReceiver<kvnc_consensus::CommittedSubDag>,
@@ -1338,6 +1416,7 @@ async fn run_execution(
     signing_ctx: kvnc_types::SigningContext,
     mut shutdown: watch::Receiver<bool>,
     health: NodeHealth,
+    seal_duty: Option<SealDuty>,
 ) {
     // Execution verifies tx signatures with the node's configured chain id.
     let mut ctx = ExecutionContext::with_signing_context(signing_ctx);
@@ -1375,6 +1454,39 @@ async fn run_execution(
                             }
                         }
                         events.publish_committed_leader(&subdag);
+                        if let (Some(root), Some(reward), Some(duty)) = (
+                            result.state_root,
+                            result.reward.as_ref(),
+                            seal_duty.as_ref(),
+                        ) {
+                            // Idempotent replay leaves state_root empty, so a
+                            // restart does not sign the same header again.
+                            match seals::publish_local_seal(
+                                &state_storage,
+                                &duty.ctx,
+                                &subdag,
+                                reward.height,
+                                root,
+                            ) {
+                                Ok(local) => {
+                                    if let Some(announcement) = local.gossip {
+                                        if duty
+                                            .broadcast
+                                            .send(NetworkCommand::BroadcastSeal(announcement))
+                                            .is_err()
+                                        {
+                                            warn!("network command channel closed; commit seal not gossiped");
+                                        }
+                                    }
+                                    publish_sealed(&state_storage, &events, &local.header);
+                                }
+                                Err(e) => warn!(
+                                    error = %e,
+                                    round = subdag.leader_round,
+                                    "commit seal was not stored; consensus continues"
+                                ),
+                            }
+                        }
                         health.execution_progress(subdag.leader_round);
                     }
                     Err(e) => {
@@ -1781,7 +1893,10 @@ fn build_committee(
         };
 
         // VRF public key for leader selection (optional)
-        let vrf_public_key = validator.vrf_public_key.as_ref().map(|v| kvnc_types::PublicKey(v.0));
+        let vrf_public_key = validator
+            .vrf_public_key
+            .as_ref()
+            .map(|v| kvnc_types::PublicKey(v.0));
 
         let authority = AuthorityInfo {
             index: index as u16,
@@ -1809,9 +1924,15 @@ fn build_mempool_config() -> MempoolConfig {
     if let Ok(val) = std::env::var("KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS") {
         if let Ok(secs) = val.parse::<u64>() {
             config.rebroadcast_interval = Duration::from_secs(secs);
-            info!(interval_secs = secs, "mempool rebroadcast interval overridden from env");
+            info!(
+                interval_secs = secs,
+                "mempool rebroadcast interval overridden from env"
+            );
         } else {
-            warn!(val, "invalid KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS, using default");
+            warn!(
+                val,
+                "invalid KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS, using default"
+            );
         }
     }
 
@@ -1831,7 +1952,10 @@ fn build_mempool_config() -> MempoolConfig {
             config.max_txs_per_sender = max;
             info!(max, "mempool max txs per sender overridden from env");
         } else {
-            warn!(val, "invalid KVNC_MEMPOOL_MAX_TXS_PER_SENDER, using default");
+            warn!(
+                val,
+                "invalid KVNC_MEMPOOL_MAX_TXS_PER_SENDER, using default"
+            );
         }
     }
 
@@ -1839,9 +1963,15 @@ fn build_mempool_config() -> MempoolConfig {
     if let Ok(val) = std::env::var("KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS") {
         if let Ok(secs) = val.parse::<u64>() {
             config.in_flight_timeout = Duration::from_secs(secs);
-            info!(interval_secs = secs, "mempool in-flight timeout overridden from env");
+            info!(
+                interval_secs = secs,
+                "mempool in-flight timeout overridden from env"
+            );
         } else {
-            warn!(val, "invalid KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS, using default");
+            warn!(
+                val,
+                "invalid KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS, using default"
+            );
         }
     }
 
@@ -1984,8 +2114,7 @@ fn parse_public_key_hex(value: &str) -> Result<PublicKey> {
 
 /// Parse a 32-byte hex string into a [u8; 32] array.
 fn parse_hex_32(value: &str) -> Result<[u8; 32]> {
-    let bytes = hex::decode(value.trim())
-        .with_context(|| format!("invalid hex `{}`", value))?;
+    let bytes = hex::decode(value.trim()).with_context(|| format!("invalid hex `{}`", value))?;
     if bytes.len() != 32 {
         anyhow::bail!("expected 32 bytes, got {}", bytes.len());
     }
@@ -2603,6 +2732,7 @@ mod tests {
             kvnc_types::SigningContext::new(kvnc_types::signing::chain_id::LOCAL),
             shutdown_rx,
             NodeHealth::new(),
+            None,
         ));
 
         let leader_round = 3;
@@ -2730,6 +2860,7 @@ mod tests {
             non_blue::test_support::CTX,
             shutdown_rx,
             health.clone(),
+            None,
         )
         .await;
         assert_ne!(health.execution_state(), kvnc_rpc::ComponentState::Failed);
@@ -2835,6 +2966,7 @@ mod tests {
             CTX,
             shutdown_rx,
             health.clone(),
+            None,
         )
         .await;
         assert_ne!(health.execution_state(), kvnc_rpc::ComponentState::Failed);
@@ -2922,6 +3054,7 @@ mod tests {
             kvnc_types::SigningContext::new(kvnc_types::signing::chain_id::LOCAL),
             shutdown_rx,
             health.clone(),
+            None,
         )
         .await;
         assert_eq!(health.execution_state(), kvnc_rpc::ComponentState::Failed);

@@ -84,6 +84,68 @@ impl From<DalekSignature> for Signature {
     }
 }
 
+/// Serde adapter for a 96-byte ECVRF proof.
+///
+/// `[u8; 96]` is past the array size serde implements. The proof is stored
+/// as raw bytes, the same way [`Signature`] is.
+pub mod vrf_proof_bytes {
+    use serde::de::{SeqAccess, Visitor};
+    use serde::{Deserializer, Serializer};
+    use std::fmt;
+
+    /// Encode a 96-byte proof.
+    pub fn serialize<S>(proof: &[u8; 96], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(proof)
+    }
+
+    /// Decode a 96-byte proof from raw bytes or a sequence of bytes.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 96], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ProofVisitor;
+        impl<'de> Visitor<'de> for ProofVisitor {
+            type Value = [u8; 96];
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("96-byte ECVRF proof")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if value.len() != 96 {
+                    return Err(E::invalid_length(value.len(), &"96 bytes"));
+                }
+                let mut proof = [0u8; 96];
+                proof.copy_from_slice(value);
+                Ok(proof)
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut proof = [0u8; 96];
+                let mut seen = 0;
+                while seen < proof.len() {
+                    let Some(byte) = seq.next_element()? else {
+                        return Err(serde::de::Error::invalid_length(seen, &"96 bytes"));
+                    };
+                    proof[seen] = byte;
+                    seen += 1;
+                }
+                Ok(proof)
+            }
+        }
+        deserializer.deserialize_bytes(ProofVisitor)
+    }
+}
+
 impl Signature {
     /// Verify this signature over the given message using the provided public key.
     pub fn verify(&self, message: &[u8], public_key: &PublicKey) -> bool {
