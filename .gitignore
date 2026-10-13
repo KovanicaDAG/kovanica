@@ -16,6 +16,10 @@ Thumbs.db
 # Build artifacts
 *.wasm
 
+# Android UniFFI debug libraries. Rebuild with:
+# cargo build -p kvnc-light-ffi --target aarch64-linux-android
+apps/android/**/jniLibs/**/*.so
+
 # Environment
 .env
 .env.local

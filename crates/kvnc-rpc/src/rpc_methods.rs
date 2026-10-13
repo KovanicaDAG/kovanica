@@ -48,9 +48,9 @@ pub async fn handle_htlc_create(params: Value, _state: RpcState) -> Result<Value
     let p: HtlcCreateParams = serde_json::from_value(params)
         .map_err(|e| RpcError::InvalidParams(format!("htlc_create: {}", e)))?;
 
-    // TODO: Get contract address from config; for now use a default
+    // Contract RPCs are not wired to the node yet (NotImplemented); these
+    // placeholders are harmless and never reach execution.
     let contract: Address = [0u8; 32];
-    // TODO: Get caller from auth context; for now use a default
     let caller: Address = [0u8; 32];
     let height: Height = 0;
     let timestamp: Timestamp = 0;

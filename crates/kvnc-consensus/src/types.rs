@@ -201,6 +201,71 @@ impl CommitteeInfo {
         self.authorities[idx].index
     }
 
+    /// Stake-weighted VRF leader selection.
+    ///
+    /// `vrf_outputs` maps authority index → verified 32-byte VRF hash.
+    /// An authority is eligible only when it has both a committee VRF public
+    /// key and an output in the map. If no authority is eligible, this is
+    /// identical to [`Self::leader`] (round-robin). That fallback is the
+    /// pre-upgrade behaviour: live blocks do not yet carry a VRF proof, so
+    /// the engine must not invent a different leader.
+    ///
+    /// Priority is `hash_u128 * total_stake / stake` (lower wins), matching
+    /// `kvnc_types::Committee::leader_with_vrf`. Ties break to the lower
+    /// authority index.
+    pub fn leader_with_vrf(
+        &self,
+        round: Round,
+        vrf_outputs: &std::collections::HashMap<AuthorityIndex, [u8; 32]>,
+    ) -> AuthorityIndex {
+        if self.authorities.is_empty() {
+            return 0;
+        }
+
+        let mut best: Option<(AuthorityIndex, u128)> = None;
+        for authority in &self.authorities {
+            if authority.vrf_public_key.is_none() {
+                continue;
+            }
+            let Some(vrf_hash) = vrf_outputs.get(&authority.index) else {
+                continue;
+            };
+            let hash_u128 = u128::from_le_bytes([
+                vrf_hash[0],
+                vrf_hash[1],
+                vrf_hash[2],
+                vrf_hash[3],
+                vrf_hash[4],
+                vrf_hash[5],
+                vrf_hash[6],
+                vrf_hash[7],
+                vrf_hash[8],
+                vrf_hash[9],
+                vrf_hash[10],
+                vrf_hash[11],
+                vrf_hash[12],
+                vrf_hash[13],
+                vrf_hash[14],
+                vrf_hash[15],
+            ]);
+            let priority = hash_u128
+                .saturating_mul(self.total_stake.max(1) as u128)
+                .saturating_div(authority.stake.max(1) as u128);
+            let wins = match best {
+                None => true,
+                Some((idx, p)) => priority < p || (priority == p && authority.index < idx),
+            };
+            if wins {
+                best = Some((authority.index, priority));
+            }
+        }
+
+        if let Some((idx, _)) = best {
+            return idx;
+        }
+        self.leader(round)
+    }
+
     /// Deterministic stake-weighted leader selection.
     ///
     /// Uses `round` as a seed against total stake so the same
@@ -250,6 +315,33 @@ mod stake_weighted_tests {
             committee.stake_weighted_leader(42),
             committee.stake_weighted_leader(42)
         );
+    }
+
+    #[test]
+    fn leader_with_vrf_empty_map_matches_round_robin() {
+        let authorities = vec![info(0, 100), info(1, 200), info(2, 300)];
+        let committee = CommitteeInfo::try_new(0, authorities).unwrap();
+        let empty = std::collections::HashMap::new();
+        for round in [0_u64, 1, 2, 7, 42] {
+            assert_eq!(
+                committee.leader_with_vrf(round, &empty),
+                committee.leader(round),
+                "no verified VRF output must not change the scheduled leader"
+            );
+        }
+    }
+
+    #[test]
+    fn leader_with_vrf_prefers_lower_stake_weighted_hash() {
+        let mut low = info(0, 100);
+        let mut high = info(1, 100);
+        low.vrf_public_key = Some(PublicKey([1u8; 32]));
+        high.vrf_public_key = Some(PublicKey([2u8; 32]));
+        let committee = CommitteeInfo::try_new(0, vec![low, high]).unwrap();
+        let mut outputs = std::collections::HashMap::new();
+        outputs.insert(0, [0xff; 32]);
+        outputs.insert(1, [0x01; 32]);
+        assert_eq!(committee.leader_with_vrf(3, &outputs), 1);
     }
 
     #[test]

@@ -167,10 +167,10 @@ impl RangeAfter for HashMap<Round, LeaderInfo> {
 /// while lower-round blocks of the same history remain) can hide still-stored
 /// committed blocks behind the gap; they would then be re-delivered.
 ///
-/// TODO(follow-up): cache the committed set incrementally (e.g. keep an
-/// in-memory / persisted set updated on each durable commit, seeded once from
-/// the decided index on startup) instead of re-walking every earlier
-/// leader's history on each commit, which is O(sum of earlier histories).
+/// Note (follow-up): caching the committed set incrementally (in-memory or
+/// persisted) would avoid re-walking earlier leaders' histories on each
+/// commit (O(sum of earlier histories)); correctness currently relies on the
+/// deterministic decided-index walk above.
 pub fn uncommitted_history<D: DagStoreTrait + ?Sized>(
     dag_store: &D,
     leader: &StatementBlock,

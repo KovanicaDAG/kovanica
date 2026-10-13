@@ -14,14 +14,8 @@
 //!   signature must verify over the digest under the author's key.
 
 use kvnc_types::{
-    Address,
-    block::StatementBlock,
-    AuthorityIndex,
-    PublicKey,
-    SigningContext,
-    Vote,
-    Transaction,
-    transaction::TransactionKind,
+    block::StatementBlock, transaction::TransactionKind, Address, AuthorityIndex, Hash, PublicKey,
+    SealAnnouncement, SigningContext, Transaction, Vote,
 };
 use std::{
     collections::HashMap,
@@ -49,6 +43,10 @@ pub enum Rejection {
     TxBadSignature(Address),
     /// Transaction sender is not a known authority.
     UnknownSender(Address),
+    /// A linearizer header carried a colouring root.
+    ColouringFlag,
+    /// The seal's header epoch is not the verifier's epoch.
+    EpochMismatch,
 }
 
 impl fmt::Display for Rejection {
@@ -61,9 +59,71 @@ impl fmt::Display for Rejection {
                 write!(f, "block merkle root does not match its transactions")
             }
             Rejection::ZeroFee => write!(f, "transaction fee is zero but a fee is required"),
-            Rejection::TxBadSignature(addr) => write!(f, "transaction signature verification failed for {addr}"),
-            Rejection::UnknownSender(addr) => write!(f, "transaction sender {addr} is not a known authority"),
+            Rejection::TxBadSignature(addr) => {
+                write!(f, "transaction signature verification failed for {addr}")
+            }
+            Rejection::UnknownSender(addr) => {
+                write!(f, "transaction sender {addr} is not a known authority")
+            }
+            Rejection::ColouringFlag => write!(f, "linearizer header has a colouring root"),
+            Rejection::EpochMismatch => {
+                write!(f, "commit seal epoch does not match the local epoch")
+            }
         }
+    }
+}
+
+/// What the gossip edge should do with one commit seal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SealAdmission {
+    /// Signature is valid and the header hash matches local execution. Forward it.
+    Accept,
+    /// Signature is valid, but this node has no matching header yet. Do not
+    /// forward and do not penalise the peer.
+    Ignore,
+    /// The seal is not authentic.
+    Reject(Rejection),
+}
+
+/// Local executed-header lookup used before a seal is forwarded.
+///
+/// A node that has not executed the height returns `None`. The edge then
+/// ignores the seal instead of accepting a header it cannot check.
+pub trait LocalHeaderHash: Send + Sync {
+    /// Hash of the leader header this node stored at `committed_height`.
+    fn local_header_hash(&self, committed_height: u64) -> Option<Hash>;
+}
+
+/// Admit one seal at the gossip edge.
+///
+/// Invalid signatures are rejected. A valid seal is forwarded only when
+/// `local_header_hash` is `Some` and equal to `announcement.header.hash()`.
+/// Anything else is ignored so a seal cannot stick before local execution.
+pub fn admit_seal(
+    keys: &AuthorityKeys,
+    chain_id: u64,
+    epoch: u64,
+    announcement: &SealAnnouncement,
+    local_header_hash: Option<Hash>,
+) -> SealAdmission {
+    let header = &announcement.header;
+    if !header.colouring_roots_match_flag() {
+        return SealAdmission::Reject(Rejection::ColouringFlag);
+    }
+    if header.epoch != epoch {
+        return SealAdmission::Reject(Rejection::EpochMismatch);
+    }
+    let Some(key) = keys.get(&announcement.seal.authority_index) else {
+        return SealAdmission::Reject(Rejection::UnknownAuthority(
+            announcement.seal.authority_index,
+        ));
+    };
+    if kvnc_crypto::verify_commit_seal(chain_id, header, &announcement.seal, key).is_err() {
+        return SealAdmission::Reject(Rejection::BadSignature(announcement.seal.authority_index));
+    }
+    match local_header_hash {
+        Some(hash) if hash == header.hash() => SealAdmission::Accept,
+        _ => SealAdmission::Ignore,
     }
 }
 
@@ -181,6 +241,7 @@ impl Default for GossipValidator {
 }
 
 /// Stake and delegate are fee-free by design; everything else pays a fee.
+#[allow(dead_code)]
 fn requires_fee(kind: &TransactionKind) -> bool {
     !matches!(
         kind,
@@ -202,13 +263,16 @@ impl GossipValidator {
     /// Populates both the authority-indexed map (for votes/blocks) and the
     /// address-indexed map (for transactions).
     pub(crate) fn set_keys(&self, keys: AuthorityKeys) {
-        let mut auth_keys = self.authority_keys.write().unwrap_or_else(|e| e.into_inner());
+        let mut auth_keys = self
+            .authority_keys
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         *auth_keys = keys.clone();
 
         // Also populate the address-indexed map for transaction validation.
         let mut addr_keys = self.address_keys.write().unwrap_or_else(|e| e.into_inner());
         addr_keys.clear();
-        for (idx, pk) in &keys {
+        for pk in keys.values() {
             // We need the address for this authority index.
             // The address is derived from the public key.
             let addr = Address::from_public_key(pk);
@@ -225,6 +289,14 @@ impl GossipValidator {
             .is_empty()
     }
 
+    /// Copy of the committee keys. The set is at most a few dozen entries.
+    pub(crate) fn authority_keys_snapshot(&self) -> AuthorityKeys {
+        self.authority_keys
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     pub(crate) fn verify_vote(&self, vote: &Vote, ctx: &SigningContext) -> Result<(), Rejection> {
         let verifier = self
             .vote_verifier
@@ -233,14 +305,23 @@ impl GossipValidator {
             .clone();
         verify_vote_with(
             verifier.as_ref(),
-            &self.authority_keys.read().unwrap_or_else(|e| e.into_inner()),
+            &self
+                .authority_keys
+                .read()
+                .unwrap_or_else(|e| e.into_inner()),
             vote,
             ctx,
         )
     }
 
     pub(crate) fn verify_block(&self, block: &StatementBlock) -> Result<(), Rejection> {
-        verify_block(&self.authority_keys.read().unwrap_or_else(|e| e.into_inner()), block)
+        verify_block(
+            &self
+                .authority_keys
+                .read()
+                .unwrap_or_else(|e| e.into_inner()),
+            block,
+        )
     }
 
     /// Stateless transaction validation for gossip edge checks.
@@ -250,6 +331,7 @@ impl GossipValidator {
     /// intentionally stateless: it does not check nonce, balance, or
     /// mempool state — those are enforced at `on_transaction_message`
     /// after the message passes the gossip edge.
+    #[allow(dead_code)]
     pub(crate) fn verify_transaction(
         &self,
         tx: &Transaction,
@@ -517,6 +599,81 @@ mod tests {
         assert_eq!(
             validator.verify_vote(&vote, &TEST_CTX),
             Err(Rejection::BadSignature(0))
+        );
+    }
+
+    fn sample_header() -> kvnc_types::LeaderHeader {
+        kvnc_types::LeaderHeader {
+            committed_height: 4,
+            leader_round: 3,
+            leader_digest: Hash::new([9u8]),
+            leader_author: 0,
+            parent_leader_digest: Hash::zero(),
+            tx_merkle_root: Hash::zero(),
+            executed_tx_root: Hash::zero(),
+            non_blue_root: Hash::zero(),
+            blue_root: Hash::zero(),
+            mysticghost: false,
+            state_root: Hash::new([4u8]),
+            epoch: 0,
+            committee_hash: Hash::zero(),
+            timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn valid_seal_is_forwarded_only_when_the_local_header_matches() {
+        let (signers, keys) = committee(1);
+        let header = sample_header();
+        let signature = kvnc_crypto::sign(&signers[0], &header.seal_message(TEST_CTX.chain_id));
+        let announcement = kvnc_types::SealAnnouncement {
+            header: header.clone(),
+            seal: kvnc_types::CommitSeal {
+                authority_index: 0,
+                signature,
+            },
+        };
+        assert_eq!(
+            admit_seal(
+                &keys,
+                TEST_CTX.chain_id,
+                TEST_CTX.epoch,
+                &announcement,
+                None
+            ),
+            SealAdmission::Ignore
+        );
+        assert_eq!(
+            admit_seal(
+                &keys,
+                TEST_CTX.chain_id,
+                TEST_CTX.epoch,
+                &announcement,
+                Some(Hash::new([1u8]))
+            ),
+            SealAdmission::Ignore
+        );
+        assert_eq!(
+            admit_seal(
+                &keys,
+                TEST_CTX.chain_id,
+                TEST_CTX.epoch,
+                &announcement,
+                Some(header.hash())
+            ),
+            SealAdmission::Accept
+        );
+        let mut forged = announcement.clone();
+        forged.seal.signature = Signature([7; 64]);
+        assert_eq!(
+            admit_seal(
+                &keys,
+                TEST_CTX.chain_id,
+                TEST_CTX.epoch,
+                &forged,
+                Some(header.hash())
+            ),
+            SealAdmission::Reject(Rejection::BadSignature(0))
         );
     }
 }

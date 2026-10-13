@@ -464,8 +464,8 @@ where
             if is_leader {
                 self.propose_block(next_round).await?;
             } else if crate::is_leader_round(next_round) {
-                let deadline = std::time::Instant::now()
-                    + Duration::from_millis(self.leader_timeout_ms());
+                let deadline =
+                    std::time::Instant::now() + Duration::from_millis(self.leader_timeout_ms());
                 *self.leader_deadline.write() = Some((next_round, deadline));
             }
 
@@ -1087,9 +1087,9 @@ mod tests {
         ) -> Result<(), kvnc_dag::DagStoreError> {
             let mut blocks = self.blocks.write();
             let referenced = blocks.values().any(|b| {
-                b.parents.iter().any(|p| {
-                    p.digest == existing.digest || p.digest == incoming.digest
-                })
+                b.parents
+                    .iter()
+                    .any(|p| p.digest == existing.digest || p.digest == incoming.digest)
             });
             if referenced {
                 return Err(kvnc_dag::DagStoreError::NotFound(
@@ -1097,7 +1097,9 @@ mod tests {
                 ));
             }
             if !blocks.contains_key(&existing.digest) {
-                return Err(kvnc_dag::DagStoreError::NotFound(existing.digest.to_string()));
+                return Err(kvnc_dag::DagStoreError::NotFound(
+                    existing.digest.to_string(),
+                ));
             }
             blocks.remove(&existing.digest);
             blocks.insert(incoming.digest, incoming.clone());

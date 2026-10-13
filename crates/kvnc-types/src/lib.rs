@@ -6,28 +6,41 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod account_tree;
 pub mod address;
 pub mod block;
+pub mod colouring;
 pub mod commit;
 pub mod committee;
 pub mod crypto;
 pub mod error;
 pub mod hash;
 pub mod light_client;
+pub mod merkle;
 pub mod signing;
 pub mod transaction;
 pub mod vote;
 
+pub use account_tree::{
+    account_leaf_hash, account_root, verify_account_proof, AccountProof, AccountSmt,
+};
 pub use address::Address;
 pub use block::{Block, BlockReference, StatementBlock};
+pub use colouring::{
+    colour_mergeset, mysticghost_commitment, ColourBlock, ColourError, ColouringResult,
+    GhostCommitment,
+};
 pub use commit::CommittedSubDag;
 pub use committee::{Authority, Committee, Stake};
 pub use crypto::{PublicKey, Signature, SigningKey};
 pub use error::TypesError;
 pub use hash::Hash;
 pub use light_client::{
-    ColouringCertificate, LightClientCheckpoint, StateProof, WaveCommitCertificate,
+    committee_seal_hash, executed_tx_hashes, leader_header, light_vrf_input, light_vrf_priority,
+    verify_colouring, ColouringCertificate, CommitSeal, LeaderHeader, LightClientCheckpoint,
+    SealAnnouncement, SealError, StateProof, WaveCommitCertificate, LIGHT_VRF_DOMAIN,
 };
+pub use merkle::{MerkleProof, MerkleStep};
 pub use signing::SigningContext;
 pub use transaction::{Transaction, TransactionKind};
 pub use vote::Vote;

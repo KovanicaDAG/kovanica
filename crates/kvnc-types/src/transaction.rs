@@ -1,7 +1,7 @@
 //! Native transaction types.
 
 use crate::address::Address;
-use crate::crypto::Signature;
+use crate::crypto::{PublicKey, Signature};
 use crate::hash::Hash;
 use crate::signing::{SigningContext, TX_DOMAIN_TAG};
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,28 @@ pub enum TransactionKind {
         args: Vec<u8>,
         /// Gas limit for execution.
         gas_limit: u64,
+    },
+    /// Bond KUNA and register a light-node VRF key.
+    ///
+    /// This is not validator stake. It does not enter the committee.
+    /// The registration becomes active at the next epoch.
+    RegisterLightNode {
+        /// ECVRF public key used for the light-node lottery.
+        vrf_public_key: PublicKey,
+        /// Bond in atoms. The execution layer enforces the minimum.
+        stake: u64,
+    },
+    /// Leave the light-node set and start unbonding the bond.
+    ExitLightNode,
+    /// Submit an ECVRF witness for one light-node epoch.
+    SubmitLightWitness {
+        /// Epoch the witness is for (`committed_height / EPOCH_ROUNDS`).
+        epoch: u64,
+        /// 32-byte VRF hash.
+        vrf_hash: [u8; 32],
+        /// 96-byte VRF proof.
+        #[serde(with = "crate::crypto::vrf_proof_bytes")]
+        vrf_proof: [u8; 96],
     },
 }
 
@@ -144,6 +166,27 @@ impl Transaction {
                 data.extend_from_slice(&(args.len() as u64).to_le_bytes());
                 data.extend_from_slice(args);
                 data.extend_from_slice(&gas_limit.to_le_bytes());
+            }
+            TransactionKind::RegisterLightNode {
+                vrf_public_key,
+                stake,
+            } => {
+                data.push(7);
+                data.extend_from_slice(&vrf_public_key.0);
+                data.extend_from_slice(&stake.to_le_bytes());
+            }
+            TransactionKind::ExitLightNode => {
+                data.push(8);
+            }
+            TransactionKind::SubmitLightWitness {
+                epoch,
+                vrf_hash,
+                vrf_proof,
+            } => {
+                data.push(9);
+                data.extend_from_slice(&epoch.to_le_bytes());
+                data.extend_from_slice(vrf_hash);
+                data.extend_from_slice(vrf_proof);
             }
         }
         data.extend_from_slice(&self.fee.to_le_bytes());
@@ -285,6 +328,61 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn light_node_kinds_use_signing_tags_7_8_and_9() {
+        let vrf = crate::PublicKey([0x44; 32]);
+        let register = tx(
+            1,
+            TransactionKind::RegisterLightNode {
+                vrf_public_key: vrf,
+                stake: 100,
+            },
+            2,
+        );
+        let exit = tx(1, TransactionKind::ExitLightNode, 2);
+        let witness = tx(
+            1,
+            TransactionKind::SubmitLightWitness {
+                epoch: 4,
+                vrf_hash: [5u8; 32],
+                vrf_proof: [6u8; 96],
+            },
+            2,
+        );
+        assert_eq!(
+            register.signing_hash(&CTX),
+            preimage(1, 7, &register_body())
+        );
+        assert_eq!(exit.signing_hash(&CTX), preimage(1, 8, &[]));
+        assert_eq!(witness.signing_hash(&CTX), preimage(1, 9, &witness_body()));
+        assert_ne!(register.signing_hash(&CTX), exit.signing_hash(&CTX));
+
+        fn register_body() -> Vec<u8> {
+            let mut body = Vec::new();
+            body.extend_from_slice(&[0x44; 32]);
+            body.extend_from_slice(&100u64.to_le_bytes());
+            body
+        }
+        fn witness_body() -> Vec<u8> {
+            let mut body = Vec::new();
+            body.extend_from_slice(&4u64.to_le_bytes());
+            body.extend_from_slice(&[5u8; 32]);
+            body.extend_from_slice(&[6u8; 96]);
+            body
+        }
+        fn preimage(nonce: u64, tag: u8, body: &[u8]) -> Hash {
+            let mut data = Vec::new();
+            data.extend_from_slice(&TX_DOMAIN_TAG);
+            data.extend_from_slice(&CTX.chain_id.to_le_bytes());
+            data.extend_from_slice(&sender().0);
+            data.extend_from_slice(&nonce.to_le_bytes());
+            data.push(tag);
+            data.extend_from_slice(body);
+            data.extend_from_slice(&2u64.to_le_bytes());
+            Hash::new_keyed(Hash::DOMAIN_TX, &data)
+        }
+    }
+
     fn tx_and_vote_domains_are_disjoint() {
         assert_ne!(
             crate::signing::TX_DOMAIN_TAG,
