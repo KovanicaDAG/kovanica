@@ -18,7 +18,7 @@ kvnc je nezavisni, from-scratch Rust Layer-1:
 ### HARD RULES
 1. **NIKAD** ne uvozi, kopiraj, referenciraj ili miješaj kod/dizajn iz `kovanica-protocol` ili bilo kojeg starijeg Kovanica repozitorija.
 2. Sve promjene moraju biti konzistentne s postojećim crate-ovima i AGENTS.md.
-3. Tokenomics je zaključan (90.2M total, 200k premine, 8M treasury linear, 10 KVNC initial reward, 2.05M era, ×¾ decay).
+3. Tokenomics je zaključan (90.2M total, 200k premine, 8M treasury linear, 1M genesis validator allocation, 2.5 KUNA initial reward, 8.1M era, ×¾ decay).
 4. Preferiraj male, fokusirane, auditabilne promjene.
 5. Determinizam je sveti.
 

@@ -14,7 +14,7 @@ Referiraj `AUDIT_REPORT.md` (§2, §3, §4) i `docs/AUDIT-CHECKLIST.md`.
 
 | Područje | Status | Ključni dokaz (file / redak) |
 |---|---|---|
-| Tokenomics / cap | PASS | `docs/GOVERNANCE.md`; `crates/kvnc-staking/src/lib.rs:68` (`MIN_VALIDATOR_STAKE`); `engine.rs` (`leader_timeout_ms: 3000`, era 2 050 000) |
+| Tokenomics / cap | PASS | `docs/GOVERNANCE.md`; `crates/kvnc-staking/src/lib.rs:68` (`MIN_VALIDATOR_STAKE`); `engine.rs` (`leader_timeout_ms: 3000`, era 8 100 000, s₀ 2,5 KUNA) |
 | Konsenzus (Mysticeti, uncertified, wave=3, k=3) | PASS (struktura) | `crates/kvnc-consensus/src/engine.rs`; `crates/kvnc-dag/src/dag_store.rs` |
 | Izvođenje (Wasmi, determinističko) | PASS (kostur) | `docs/EXECUTION-GAS-SKELETON.md`; `crates/kvnc-execution/src/lib.rs` — **potrebna dublja revizija plin/metrike** |
 | Staking / valjani skup | PASS | `docs/A8.2-DELEGATION-SKELETON.md`; `crates/kvnc-staking/src/lib.rs` (`bond`/`unbond`/`commission_bps`/`UNBONDING_ROUNDS`) |

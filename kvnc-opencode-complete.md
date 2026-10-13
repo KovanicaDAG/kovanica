@@ -36,9 +36,9 @@ Jedan file koji sadrži sve što trebaš za rad s OpenCode-om na kvnc projektu.
 | Decimals                  | 9                                              |
 | Founder premine           | 200 000 KVNC                                   |
 | Treasury                  | 8 000 000 KVNC (1 M/year × 8 years, linear)    |
-| Mining subsidy budget     | ≈ 82 000 000 KVNC                              |
-| Initial block reward      | **10 KVNC** (paid to committed leader author)  |
-| Subsidy era length        | **2 050 000** committed leader blocks          |
+| Mining subsidy budget     | **81 000 000 KUNA**                              |
+| Initial block reward      | **2,5 KUNA** (paid to committed leader author)  |
+| Subsidy era length        | **8 100 000** committed leader blocks          |
 | Decay                     | **× 3/4** each era                             |
 | Active validators         | 15–21                                          |
 | Min validator stake       | 50 000 KVNC                                    |
@@ -196,7 +196,7 @@ kvnc je nezavisni, from-scratch Rust Layer-1:
 ### HARD RULES
 1. **NIKAD** ne uvozi, kopiraj, referenciraj ili miješaj kod/dizajn iz `kovanica-protocol` ili bilo kojeg starijeg Kovanica repozitorija.
 2. Sve promjene moraju biti konzistentne s postojećim crate-ovima i AGENTS.md.
-3. Tokenomics je zaključan (90.2M total, 200k premine, 8M treasury linear, 10 KVNC initial reward, 2.05M era, ×¾ decay).
+3. Tokenomics je zaključan (90.2M total, 200k premine, 1M genesis validatorska alokacija, 8M treasury linear, 2.5 KUNA initial reward, 8.1M era, ×¾ decay).
 4. Preferiraj male, fokusirane, auditabilne promjene.
 5. Determinizam je sveti.
 
@@ -238,7 +238,7 @@ Fokusiraš se isključivo na crate `kvnc-staking` i sve što je vezano uz:
 - Bond / unbond / unbonding period
 - Active set selection (15–21 validatori)
 - Min stake 50 000 KVNC
-- Leader rewards (10 KVNC initial, era 2.05M, decay ×¾)
+- Leader rewards (2.5 KUNA initial, era 8.1M, decay ×¾)
 - Treasury vesting (8M linear)
 - Commission + delegator support (ako se implementira)
 - Slashing hooks (čak i prazni)

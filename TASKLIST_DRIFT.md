@@ -22,7 +22,7 @@
 | 6.1 | 166 | `[~]` | `[~]` | Kademlia wired, mDNS absent — **accurate** |
 | 7.2 | 194 | `[~]` | `[~]` | Memory limits config read, limiter TODO — **accurate** |
 | 8.2 | 214 | `[x]` | `[x]` | Delegation: `delegate`, `unbond`, `withdraw_unbonded`, reward sharing — `kvnc-staking/src/lib.rs:470-652` |
-| 8.2 | 215 | `[x]` | `[x]` | Validator rotation: `rotate_epoch` at `EPOCH_ROUNDS` (2,050,000) — `lib.rs:429-435` + test |
+| 8.2 | 215 | `[x]` | `[x]` | Validator rotation: `rotate_epoch` at `EPOCH_ROUNDS` (7,200, decoupled from era) — `lib.rs:429-435` + test |
 | 8.2 | 216 | `[x]` | `[x]` | Slashing: `slash(DoubleSignEvidence)` 500 bps — `lib.rs:653-682` + test |
 | 8.3-8.8 | 220 | `[x]` | `[x]` | Tests exist: `delegate_unbond_wait_withdraw_and_slash_reduces_stake`, `epoch_rotation_at_subsidy_era_boundary`, `slash_is_deterministic_fixed_500bps` |
 | 9 | 234 | `[~]` | `[~]` | Genesis without full ceremony — **accurate** |

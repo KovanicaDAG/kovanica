@@ -24,9 +24,11 @@
   - `kvnc-rpc websocket_subscriptions` → **PASS**
   - `kvnc-node late_join_integration` → **PASS 5/5** — RIJEŠENO PR #54 (`late_vote_window_rounds` bound + ne glasa za odlučen round); prije fixa flaky (2/4 FAIL, `late node's first committed leader is unknown to node 0`); Test CI job zelen prvi put
   - `kvnc-node live_vote_integration` → **2 testa `#[ignore]`; padaju kad se forsiraju** (`Error: parsing genesis validators ... missing field validator` — harness piše `validators = [...]`, parser traži `validator` polje; infra problem, ne consensus bug)
-- Cargo warning-i (non-fatal, postoje u kodu): `kvnc-staking` slobodne stub funkcije `bond_validator`/`unbond_validator`/`set_commission` (dead code; prave impl su na `StakingState`); `kvnc-rpc` `rate_limit_middleware`/`auth_middleware` nisu korišteni (dead code); `kvnc-cli` lib+bin dualni target upozorenje; par unused importa u `kvnc-execution`/`kvnc-network`.
+- Cargo warning-i (non-fatal, postoje u kodu): `kvnc-cli` lib+bin dualni target upozorenje; par unused importa u `kvnc-execution`/`kvnc-network`. (Staking stub fn i RPC dead-code middleware su uklonjeni 2026-10-13; `rate_limit_middleware` je wire-an preko axum layer-a.)
 
-**Naming (zaključano, razriješeno 2026-10-10):** chain = **Kovanica**, native coin ticker = **KUNA** (9 decimals), code/binary/env prefiks = **kvnc**. Svi chain-facing ticker reference su sada KUNA: `README.md`, `AGENTS.md`, `docs/*`, signature domain tagovi (`KUNA/vote/v1`, `KUNA/tx/v1`), `Hash::DOMAIN_TX = "KUNA-TX-v1"`, konstanta `ONE_KUNA` (ex-`ONE_KVNC`), CLI, faucet. Brojke tokenomike nepromijenjene (90.2M cap, 9 decimals, 10 reward, 2_050_000 era, ×¾). Adresa ostaje `kvnc<hex>dag`.
+**Naming (zaključano, razriješeno 2026-10-10):** chain = **Kovanica**, native coin ticker = **KUNA** (9 decimals), code/binary/env prefiks = **kvnc**. Svi chain-facing ticker reference su sada KUNA: `README.md`, `AGENTS.md`, `docs/*`, signature domain tagovi (`KUNA/vote/v1`, `KUNA/tx/v1`), `Hash::DOMAIN_TX = "KUNA-TX-v1"`, konstanta `ONE_KUNA` (ex-`ONE_KVNC`), CLI, faucet. Adresa ostaje `kvnc<hex>dag`.
+
+**Tokenomics revidirano 2026-10-13 (odobreno od strane vlasnika):** s₀ **2,5 KUNA**, era **8 100 000** committed leader blocks, mining budget **81 000 000** KUNA, +nova **1 000 000** KUNA genesis validatorska alokacija (ravnomjerni split, dust deterministički), round **4 s** (leader 12 s), `EPOCH_ROUNDS = 7 200` (≈1 dan, decoupled od ere). Nepromijenjeno: 90.2M cap, 9 decimals, 200k premine, 8M treasury (1M/god × 8), ×¾ decay, min stake 50 000, 15–21 validatora. Detalji: `docs/TOKENOMICS.md`.
 
 **Seed/DNS (razriješeno 2026-10-10):** kvnc kod više ne referencira tuđu infrastrukturu. `NetworkConfig::default().bootstrap_nodes` i `NodeConfig::default().bootnodes` su prazni; seedovi idu preko `KVNC_BOOTNODES` / `[node] bootnodes`. 3+ kvnc-native DNS imena treba registrirati prije javnog testneta (`docs/SEED-DNS-AUDIT.md`). Kanonski P2P port: **8000**.
 
@@ -156,7 +158,7 @@
 
 ## PHASE 8.1 (kvnc-staking): Emission & Treasury — `[x]` DONE
 
-- [x] `block_reward()` / `cumulative_mining_issuance()` (geometrijski ×¾ po eri od 2_050_000; s₀=10; budget 82M)
+- [x] `block_reward()` / `cumulative_mining_issuance()` (geometrijski ×¾ po eri od 8_100_000; s₀=2,5; budget 81M)
 - [x] Treasury vesting (8M / 8 godina linear; `advance`/`expected_vested`/`claim`; cap 8M)
 - [x] `circulating_supply()` clamp na 90.2M
 - [x] Testovi: `canonical_values_match_skeleton`, `cumulative_issuance_never_exceeds_budget`, `leader_reward_goes_to_payout_address`, `genesis_state_has_15_validators_and_treasury`
@@ -166,7 +168,7 @@
 - [x] `StakingState::delegate` / `unbond` / `withdraw_unbonded` / `unbonding_ready` (UNBONDING_ROUNDS queue)
 - [x] `bond_validator` / `unbond_validator` / `set_commission` na `StakingState` (s pravim error tipovima: NotValidator, BelowMinimumStake, InvalidCommission)
 - [x] `reward_share` (commission bps + delegator share)
-- [x] `rotate_epoch` na `EPOCH_ROUNDS` (2_050_000)
+- [x] `rotate_epoch` na `EPOCH_ROUNDS` (7_200, ≈1 dan; decoupled od ere)
 - [x] `slash(DoubleSignEvidence)` fiksno 500 bps, test `slash_is_deterministic_fixed_500bps`
 - [ ] Governance hooks — **nema** (Phase 25)
 
