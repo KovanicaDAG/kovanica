@@ -142,7 +142,7 @@ docker build -t kvnc-node:local .
 # See ops/docker/ and docker-compose.yml for multi-node and entrypoint details.
 ```
 
-The image runs as a non-root user, exposes ports 9000 (P2P) and 8545 (RPC), and includes a healthcheck against `/health`.
+The image runs as a non-root user, exposes ports 8000 (P2P) and 8545 (RPC), and includes a healthcheck against `/health`.
 
 ### CLI Highlights
 
