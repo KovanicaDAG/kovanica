@@ -25,6 +25,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use kvnc_cli::wallet;
 use kvnc_types::{hash::Hash, Address, PublicKey, Signature, Transaction, TransactionKind};
 
+mod cors;
+
 /// Faucet configuration
 #[derive(Clone)]
 struct FaucetConfig {
@@ -172,7 +174,8 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/faucet", post(faucet_handler))
-        .with_state(state);
+        .with_state(state)
+        .layer(axum::middleware::from_fn(cors::faucet_cors));
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
     info!(addr = %cli.listen, "faucet server listening");

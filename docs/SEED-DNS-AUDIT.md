@@ -47,8 +47,22 @@
 
 | Record | Type | Value | Proxy | Notes |
 |--------|------|-------|-------|-------|
-| `rpc.kovanica.online` | CNAME | `<rpc-server-domain>` | **DNS-only (grey-cloud)** | Direct RPC, no HTTP proxy |
-| `rpc-testnet.kovanica.online` | CNAME | `<testnet-rpc-domain>` | DNS-only | Testnet RPC |
+| `rpc.kovanica.online` | CNAME | `<rpc-server-domain>` | **DNS-only (grey-cloud)** | Direct RPC, no HTTP proxy. Mainnet. Console chain id 1, not open yet. |
+| `rpc-testnet.kovanica.online` | CNAME | `<testnet-rpc-domain>` | DNS-only | Testnet RPC. This is the canonical testnet host (chain id 2). Do not add `testnet-rpc` or `testnet.kovanica.online`. |
+
+### console.kovanica.online
+
+| Record | Type | Value | Proxy | Notes |
+|--------|------|-------|-------|-------|
+| `console.kovanica.online` | CNAME | `<kvnc-console>.pages.dev` | **Proxied (orange-cloud)** | Kovanica Console (Cloudflare Pages project `kvnc-console`) |
+
+The console is the interactive site. The explorer stays read-only. Browser calls to the RPC need the node CORS allowlist (`https://console.kovanica.online`, plus `http://127.0.0.1:5173` and `http://localhost:5173` for local dev). The public RPC records stay grey-cloud, so Cloudflare will not add those headers.
+
+### faucet-testnet.kovanica.online
+
+| Record | Type | Value | Proxy | Notes |
+|--------|------|-------|-------|-------|
+| `faucet-testnet.kovanica.online` | CNAME | `<faucet-host>` | **DNS-only** | `kvnc-faucet` `POST /faucet`. Testnet only. Same browser origin allowlist as the RPC. |
 
 ### status.kovanica.online (Phase 23.3)
 
@@ -117,8 +131,10 @@ node_version: 20
 
 | Variable | Value |
 |----------|-------|
-| `VITE_RPC_URL` | `https://rpc.kovanica.online` (production) / `http://127.0.0.1:8545` (dev) |
+| `VITE_RPC_URL` | `https://rpc.kovanica.online` (explorer production) / `http://127.0.0.1:8545` (dev) |
 | `VITE_CHAIN_ID` | `2` (testnet) / `1` (mainnet) |
+
+The console does not use these variables. Its network table is `packages/console/src/network.ts`. Testnet RPC is `https://rpc-testnet.kovanica.online/rpc`.
 
 ### Custom Domain Setup
 
