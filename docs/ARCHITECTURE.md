@@ -196,3 +196,11 @@ Current agent config lives in root `AGENTS.md`, `.opencode/agents/kvnc.md`, `ope
 - Tokenomics locked (RFC-006 / `docs/TOKENOMICS.md`)
 - Repo cleanup: removed 17 obsolete/duplicate files and 4 private keys
 - All builds pass: `cargo check`, `clippy`, 394 unit tests
+## Latest code snapshot (2026-10-13)
+
+- `main`: `c4b2af4` (tui + console merged; local edits committed)
+- Workspace crates: 19 (`kvnc-*`); ~53k Rust LOC
+- TS packages: `packages/api-client`, `packages/console`, `packages/signer`, `packages/web`
+- Default P2P port: 8000; RPC: 8545; max peers: 50
+- Workspace tests: 503+ passing (partial run stopped during sustained-liveness)
+- Quarantined temp dirs cleaned; no `bot/*` remote branches remain

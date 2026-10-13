@@ -63,10 +63,33 @@ crates/
 ├── kvnc-staking
 ├── kvnc-node
 ├── kvnc-cli
-└── kvnc-rpc
+├── kvnc-rpc
+├── kvnc-common
+├── kvnc-htlc
+├── kvnc-vault
+├── kvnc-multisig
+├── kvnc-token
+└── kvnc-faucet
 ```
 
+Packages (TypeScript):
+- `packages/api-client`
+- `packages/console`
+- `packages/signer`
+- `packages/web`
+
 Contracts (već implementirani): HTLC, Vault, Multisig, Token + Host trait.
+
+## Snapshot (2026-10-13, main @ c4b2af4)
+
+- Workspace crates: 19
+- Rust source: ~53k LOC across 113 `.rs` files
+- TypeScript packages: 3 (`api-client`, `console`, `signer`) + `web`
+- Default P2P listen: `0.0.0.0:8000`
+- Default RPC bind: `127.0.0.1:8545`
+- Default round duration: 4000 ms (=> 12 s per committed leader)
+- Max peers: 50 (`config.example.toml`)
+- Workspace tests: 503+ passing in the latest partial `cargo test --workspace` run (`sustained_liveness` still running before timeout)
 
 ## Coding standards
 
