@@ -143,7 +143,7 @@ export function Wallet() {
           />
         </div>
         <p style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
-          Default local node: <code>http://127.0.0.1:8545</code> | Testnet: <code>https://testnet.kovanica.online/rpc</code> (when available)
+          Default local node: <code>http://127.0.0.1:8545</code> | Testnet: <code>https://rpc-testnet.kovanica.online/rpc</code>
         </p>
       </div>
     </div>
