@@ -153,9 +153,13 @@ genesis validators as evenly as integer atoms allow:
 - the shares sum to **exactly** `GENESIS_VALIDATOR_ALLOCATION`
 
 Because each share must back a `MIN_VALIDATOR_STAKE` (50 000 KUNA) self-stake,
-an even 1 000 000 KUNA split supports **at most 20 genesis validators**. Genesis
-fails fast if the requested set is larger (raise `GENESIS_VALIDATOR_ALLOCATION`
-to support more).
+an even 1 000 000 KUNA split supports **at most 20 genesis validators**.
+The minimum viable set is **5 validators** (each receives 200 000 KUNA, leaving
+150 000 KUNA liquid after the 50 000 KUNA self-stake).
+
+**Valid genesis validator count: 5–20 inclusive.** Genesis fails fast
+(`anyhow::bail!` in `init_genesis`) if the requested set is outside this range
+(raise `GENESIS_VALIDATOR_ALLOCATION` to support more).
 
 These values are cross-checked by the unit tests in `kvnc-staking`
 (`canonical_values_match_skeleton`, `genesis_validator_shares_sum_exactly_and_are_even`).

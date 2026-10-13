@@ -35,7 +35,7 @@ codebase/binary/env prefiks = **kvnc** (`kvnc-*` crate-ovi, `kvnc-node`, `KVNC_*
 | Decimals                  | 9                                              |
 | Founder premine           | 200 000 KUNA                                   |
 | Treasury                  | 8 000 000 KUNA (1 M/year × 8 years, linear)    |
-| Genesis validator alloc.  | 1 000 000 KUNA (ravnomjerno na genesis validatore) |
+| Genesis validator alloc.  | 1 000 000 KUNA (ravnomjerno na genesis validatore, **5–20 validators**) |
 | Mining subsidy budget     | **81 000 000 KUNA** (= 90.2M − 0.2M − 8M − 1M) |
 | Initial block reward      | **2,5 KUNA** (paid to committed leader author) |
 | Subsidy era length        | **8 100 000** committed leader blocks          |
