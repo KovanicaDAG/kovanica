@@ -11,6 +11,10 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+fn default_enabled() -> bool {
+    true
+}
+
 /// Runtime configuration for a KVNC node.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -33,8 +37,21 @@ pub struct NodeConfig {
     pub max_peers: usize,
     /// Genesis treasury address (32-byte hex). Defaults to the zero address.
     pub treasury_address: Option<String>,
-    /// Enable the experimental MysticGhost ordering path (default off).
+    /// Order committed waves with scoped GHOSTDAG.
+    ///
+    /// Default on. `KVNC_MYSTICGHOST=false` selects the linearizer path.
+    /// A live mesh must take this change together: colouring changes which
+    /// blocks a commit executes.
+    #[serde(default = "default_enabled")]
     pub use_mysticghost: bool,
+    /// Stake-weighted VRF leader election.
+    ///
+    /// Default on. The leader of round R is the VRF winner over verified
+    /// outputs from the previous decide round, and only when every authority
+    /// that has a VRF key published one. Otherwise the leader stays
+    /// round-robin. `KVNC_VRF_LEADER=false` forces round-robin.
+    #[serde(default = "default_enabled")]
+    pub use_vrf_leader: bool,
     /// Run as a validator (produce blocks, participate in consensus).
     /// When false, the node runs as an RPC/read-only node without consensus participation.
     pub run_validator: bool,
@@ -67,7 +84,8 @@ impl Default for NodeConfig {
             round_duration_ms: 4000,
             max_peers: 50,
             treasury_address: None,
-            use_mysticghost: false,
+            use_mysticghost: true,
+            use_vrf_leader: true,
             run_validator: true,
             rpc_rate_limit_per_min: 60,
             peer_scoring: kvnc_network::PeerScoringConfig::default(),
@@ -150,6 +168,13 @@ impl NodeConfig {
                 "1" | "true" | "yes" | "on" => self.use_mysticghost = true,
                 "0" | "false" | "no" | "off" => self.use_mysticghost = false,
                 _ => tracing::warn!(value = %v, "ignoring invalid KVNC_MYSTICGHOST"),
+            }
+        }
+        if let Ok(v) = std::env::var("KVNC_VRF_LEADER") {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.use_vrf_leader = true,
+                "0" | "false" | "no" | "off" => self.use_vrf_leader = false,
+                _ => tracing::warn!(value = %v, "ignoring invalid KVNC_VRF_LEADER"),
             }
         }
         if let Ok(v) = std::env::var("KVNC_RUN_VALIDATOR") {
@@ -288,10 +313,29 @@ treasury_address = "treasury-address-placeholder"
         assert_eq!(config.rpc_port, 8545);
         assert_eq!(config.max_peers, 50);
         assert_eq!(config.round_duration_ms, 4000);
+        assert!(config.use_mysticghost);
+        assert!(config.use_vrf_leader);
         assert!(
             config.bootnodes.is_empty(),
             "defaults must not hard-code third-party seed hosts"
         );
+    }
+
+    #[test]
+    fn omitted_toml_flags_stay_on_and_env_can_turn_them_off() {
+        let _guard = env_guard();
+        let config = NodeConfig::from_toml_str("rpc_port = 8545").expect("parse");
+        assert!(config.use_mysticghost);
+        assert!(config.use_vrf_leader);
+
+        std::env::set_var("KVNC_MYSTICGHOST", "false");
+        std::env::set_var("KVNC_VRF_LEADER", "off");
+        let mut config = NodeConfig::default();
+        config.apply_env_overrides();
+        std::env::remove_var("KVNC_MYSTICGHOST");
+        std::env::remove_var("KVNC_VRF_LEADER");
+        assert!(!config.use_mysticghost);
+        assert!(!config.use_vrf_leader);
     }
 
     #[test]

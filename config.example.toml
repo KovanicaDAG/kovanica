@@ -16,8 +16,13 @@
 #   rpc_rate_limit_per_min -> KVNC_RPC_RATE_LIMIT_PER_MIN
 
 # Extra env-only overrides without a TOML equivalent:
-#   KVNC_MYSTICGHOST    (true|false, default off)
 #   KVNC_RUN_VALIDATOR  (true|false, default on)
+#
+# MysticGhost colouring and VRF leader election default on. A live mesh has
+# to take both together. With no validator VRF keys, leader election stays
+# round-robin. KVNC_MYSTICGHOST=false or KVNC_VRF_LEADER=false turns one off.
+use_mysticghost = true
+use_vrf_leader = true
 
 # Directory where chain data is stored (consensus.redb + state.redb).
 data_dir = "./data"

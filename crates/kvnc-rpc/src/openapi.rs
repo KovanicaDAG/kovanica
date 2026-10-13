@@ -510,7 +510,7 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
             "PubSub",
             json!({
                 "type": "array",
-                "items": { "type": "string", "enum": ["newHeads", "newCommittedLeader", "pendingTransactions", "logs"] },
+                "items": { "type": "string", "enum": ["newHeads", "newCommittedLeader", "pendingTransactions", "logs", "newSealedHeader"] },
                 "minItems": 1,
                 "maxItems": 1
             }),

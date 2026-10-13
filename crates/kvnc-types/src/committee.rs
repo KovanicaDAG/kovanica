@@ -93,12 +93,24 @@ impl Committee {
                 // Priority = VRF hash / stake (lower = higher priority)
                 // Using u128 to avoid overflow: priority = hash_as_u128 * total_stake / stake
                 let hash_u128 = u128::from_le_bytes([
-                    vrf_hash[0], vrf_hash[1], vrf_hash[2], vrf_hash[3],
-                    vrf_hash[4], vrf_hash[5], vrf_hash[6], vrf_hash[7],
-                    vrf_hash[8], vrf_hash[9], vrf_hash[10], vrf_hash[11],
-                    vrf_hash[12], vrf_hash[13], vrf_hash[14], vrf_hash[15],
+                    vrf_hash[0],
+                    vrf_hash[1],
+                    vrf_hash[2],
+                    vrf_hash[3],
+                    vrf_hash[4],
+                    vrf_hash[5],
+                    vrf_hash[6],
+                    vrf_hash[7],
+                    vrf_hash[8],
+                    vrf_hash[9],
+                    vrf_hash[10],
+                    vrf_hash[11],
+                    vrf_hash[12],
+                    vrf_hash[13],
+                    vrf_hash[14],
+                    vrf_hash[15],
                 ]);
-                
+
                 let priority = hash_u128
                     .saturating_mul(self.total_stake as u128)
                     .saturating_div(authority.stake.max(1) as u128);

@@ -17,8 +17,11 @@ fn fast_config() -> ConsensusConfig {
         max_pending_rounds: 100,
         use_mysticghost: true,
         leader_timeout_ms: 3000,
+        leader_timeout_factor: 2,
         late_vote_window_rounds: kvnc_types::WAVE_LENGTH,
         prune_window_waves: 100,
+        use_vrf_leader: false,
+        use_min_digest_fork: false,
     }
 }
 
@@ -53,6 +56,8 @@ fn test_engine_config_defaults() {
     assert_eq!(config.round_duration_ms, 4000);
     assert_eq!(config.lookahead_rounds, 3);
     assert_eq!(config.max_pending_rounds, 100);
+    assert!(config.use_mysticghost);
+    assert!(config.use_vrf_leader);
 }
 
 #[test]

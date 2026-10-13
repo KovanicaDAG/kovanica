@@ -6,7 +6,9 @@
 
 use crate::metrics::{record_block_height, record_commit_latency, record_mergeset_size_metric};
 use crate::types::{CommitteeInfo, LeaderInfo, LeaderStatus};
-use crate::{committer::UniversalCommitter, is_leader_round, linearizer::Linearizer};
+use crate::{
+    committer::UniversalCommitter, is_leader_round, linearizer::Linearizer, offset_in_wave,
+};
 use kvnc_crypto::sign;
 use kvnc_mempool::Mempool;
 use kvnc_types::{
@@ -158,6 +160,26 @@ pub trait BlockManagerTrait: Send + Sync {
     ) -> Result<(), kvnc_dag::BlockManagerError>;
     fn our_authority(&self) -> kvnc_types::AuthorityIndex;
     fn set_signing_key(&self, key: kvnc_types::SigningKey);
+
+    /// Publish a transaction-free block that carries this validator's VRF
+    /// output. The default refuses. The engine calls it on decide rounds
+    /// when VRF leader election is on and the committee has VRF keys.
+    fn propose_vrf_carrier(
+        &self,
+        _round: kvnc_types::Round,
+    ) -> Result<kvnc_types::block::StatementBlock, kvnc_dag::BlockManagerError> {
+        Err(kvnc_dag::BlockManagerError::InvalidBlock(
+            "vrf carrier is not available".into(),
+        ))
+    }
+
+    /// VRF outputs this manager has already verified, keyed by block round
+    /// then authority. Empty when the manager does not check proofs.
+    fn verified_vrf_outputs(
+        &self,
+    ) -> HashMap<Round, HashMap<kvnc_types::AuthorityIndex, [u8; 32]>> {
+        HashMap::new()
+    }
 }
 
 /// Configuration for the consensus engine.
@@ -171,7 +193,7 @@ pub struct ConsensusConfig {
     pub max_pending_rounds: u64,
     /// Order committed waves with scoped GHOSTDAG (`k = 3`).
     ///
-    /// Default off. `UniversalCommitter` reads this flag: when it is on, red
+    /// Default on. `UniversalCommitter` reads this flag: when it is on, red
     /// blocks are listed on `CommittedSubDag::non_blue` and are not executed.
     /// When it is off, the linearizer path is used and `non_blue` stays empty.
     /// The node sets it from configuration (`KVNC_MYSTICGHOST`).
@@ -203,12 +225,12 @@ pub struct ConsensusConfig {
     /// its votes can still traverse the network and reach quorum.
     /// Default: one wave (`kvnc_types::WAVE_LENGTH`, 3 rounds).
     pub late_vote_window_rounds: Round,
-    /// Use stake-weighted VRF leader selection when verified outputs exist.
+    /// Use stake-weighted VRF leader selection when the previous decide round
+    /// has a verified output for every authority that published a VRF key.
     ///
-    /// Default off. Live blocks do not carry a VRF proof, so the engine passes
-    /// an empty output map and `CommitteeInfo::leader_with_vrf` falls back to
-    /// round-robin. Turning this on without a wire upgrade does not change
-    /// the scheduled leader. See `docs/rfcs/RFC-B1-B2-VRF-AND-MIN-DIGEST.md`.
+    /// Default on. An empty or partial set stays on round-robin, so a node
+    /// that has not seen every carrier does not elect a different leader from
+    /// a subset. `KVNC_VRF_LEADER=false` forces round-robin.
     pub use_vrf_leader: bool,
     /// Replace an undecided leader block when a later same-author digest is
     /// lexicographically smaller **and** the DAG store can swap it.
@@ -225,7 +247,7 @@ impl Default for ConsensusConfig {
             round_duration_ms: 4000, // 4 s round → 12 s per committed leader (wave = 3)
             lookahead_rounds: 3,
             max_pending_rounds: 100,
-            use_mysticghost: false,
+            use_mysticghost: true,
             prune_window_waves: 100,
             leader_timeout_ms: 0,
             leader_timeout_factor: 2,
@@ -249,6 +271,22 @@ pub struct ValidatorState {
     pub is_leader: bool,
     /// Whether we have proposed a block for the current round.
     pub proposed: bool,
+}
+
+/// Decide round whose verified VRF outputs elect `leader_round`.
+///
+/// Leader rounds are wave offset 0, so the previous round is the decide
+/// round of that wave. Round 0 has no previous round and stays round-robin.
+fn election_beacon(leader_round: Round) -> Option<Round> {
+    if !is_leader_round(leader_round) || leader_round == 0 {
+        return None;
+    }
+    let beacon = leader_round - 1;
+    if offset_in_wave(beacon) == 2 {
+        Some(beacon)
+    } else {
+        None
+    }
 }
 
 /// Main consensus engine.
@@ -362,9 +400,10 @@ where
 
     /// Record a VRF hash that the caller has already verified.
     ///
-    /// Does nothing to the live schedule unless `use_vrf_leader` is set.
-    /// Blocks do not carry a proof yet, so the node must not call this with
-    /// an unverified hash. See `docs/rfcs/RFC-B1-B2-VRF-AND-MIN-DIGEST.md`.
+    /// The hash is stored under the block round it was proved for. Leader
+    /// selection reads the previous decide round, and only when every
+    /// VRF-keyed authority is present. The node must not call this with an
+    /// unverified hash.
     pub fn record_verified_vrf_output(
         &self,
         round: Round,
@@ -375,7 +414,66 @@ where
             .write()
             .entry(round)
             .or_default()
-            .insert(author, hash);
+            .entry(author)
+            .or_insert(hash);
+    }
+
+    fn ingest_vrf_outputs(&self) {
+        let fresh = self.block_manager.read().verified_vrf_outputs();
+        if fresh.is_empty() {
+            return;
+        }
+        let mut stored = self.vrf_outputs.write();
+        for (round, authors) in fresh {
+            let slot = stored.entry(round).or_default();
+            for (author, hash) in authors {
+                slot.entry(author).or_insert(hash);
+            }
+        }
+    }
+
+    fn committee_has_vrf_keys(&self) -> bool {
+        self.committee
+            .authorities()
+            .iter()
+            .any(|authority| authority.vrf_public_key.is_some())
+    }
+
+    fn vrf_set_complete(&self, outputs: &HashMap<kvnc_types::AuthorityIndex, [u8; 32]>) -> bool {
+        let mut needed = 0u32;
+        for authority in self.committee.authorities() {
+            if authority.vrf_public_key.is_none() {
+                continue;
+            }
+            needed += 1;
+            if !outputs.contains_key(&authority.index) {
+                return false;
+            }
+        }
+        needed > 0
+    }
+
+    fn publish_vrf_carrier(&self, round: Round) {
+        let proposed = self.block_manager.read().propose_vrf_carrier(round);
+        match proposed {
+            Ok(block) => {
+                self.ingest_vrf_outputs();
+                info!(
+                    "Published VRF carrier {} at decide round {}",
+                    block.digest, round
+                );
+                if let Some(broadcaster) = self.block_broadcaster.read().as_ref() {
+                    broadcaster.broadcast_block(&block);
+                }
+            }
+            Err(err) => {
+                debug!(
+                    error = %err,
+                    round,
+                    "skipping VRF carrier"
+                );
+            }
+        }
     }
 
     /// Set the block broadcaster for gossiping proposed blocks.
@@ -447,6 +545,10 @@ where
                 let _ = tx.send(next_round);
             }
 
+            // Carriers from the previous decide round have to be in the map
+            // before this round picks a leader.
+            self.ingest_vrf_outputs();
+
             // Update our validator state
             let is_leader = self.is_leader_for_round(next_round);
             {
@@ -464,9 +566,19 @@ where
             if is_leader {
                 self.propose_block(next_round).await?;
             } else if crate::is_leader_round(next_round) {
-                let deadline = std::time::Instant::now()
-                    + Duration::from_millis(self.leader_timeout_ms());
+                let deadline =
+                    std::time::Instant::now() + Duration::from_millis(self.leader_timeout_ms());
                 *self.leader_deadline.write() = Some((next_round, deadline));
+            }
+
+            // Decide rounds are where every VRF-keyed authority publishes the
+            // output that elects the next leader. No transactions, and the
+            // block is not a leader slot.
+            if self.config.use_vrf_leader
+                && offset_in_wave(next_round) == 2
+                && self.committee_has_vrf_keys()
+            {
+                self.publish_vrf_carrier(next_round);
             }
 
             // If this is a vote round, produce a vote for the previous leader round
@@ -510,18 +622,22 @@ where
             return None;
         }
 
-        // The constructor prefetches round-robin for rounds 0..1000. That
-        // cache must not hide the VRF flag: when the flag is on, selection
-        // is stake-weighted over verified outputs, and an empty map is
-        // round-robin. See RFC B1.
+        // The constructor prefetches round-robin for rounds 0..1000. When
+        // the flag is on, a complete output set from the previous decide
+        // round replaces that prefetch. A missing output keeps round-robin
+        // for every authority, so a partial view cannot elect alone.
         if self.config.use_vrf_leader {
-            let outputs = self
-                .vrf_outputs
-                .read()
-                .get(&round)
-                .cloned()
-                .unwrap_or_default();
-            return Some(self.committee.leader_with_vrf(round, &outputs));
+            if let Some(beacon) = election_beacon(round) {
+                let outputs = self
+                    .vrf_outputs
+                    .read()
+                    .get(&beacon)
+                    .cloned()
+                    .unwrap_or_default();
+                if self.vrf_set_complete(&outputs) {
+                    return Some(self.committee.leader_with_vrf(round, &outputs));
+                }
+            }
         }
 
         Some(
@@ -544,11 +660,11 @@ where
             Vec::new()
         };
 
-        match self
+        let proposed = self
             .block_manager
             .read()
-            .propose_block_with_txs(round, transactions)
-        {
+            .propose_block_with_txs(round, transactions);
+        match proposed {
             Ok(block) => {
                 // Update committer with leader info
                 let leader_info = LeaderInfo {
@@ -569,6 +685,7 @@ where
                     round,
                     block.transactions.len()
                 );
+                self.ingest_vrf_outputs();
 
                 // Broadcast the block to the network
                 if let Some(broadcaster) = self.block_broadcaster.read().as_ref() {
@@ -786,6 +903,7 @@ where
 
         // Validate the block
         self.block_manager.read().process_block(block)?;
+        self.ingest_vrf_outputs();
 
         // Every valid block belongs in the DAG, but only the scheduled author
         // of an offset-zero round represents a leader slot. In particular,
@@ -1087,9 +1205,9 @@ mod tests {
         ) -> Result<(), kvnc_dag::DagStoreError> {
             let mut blocks = self.blocks.write();
             let referenced = blocks.values().any(|b| {
-                b.parents.iter().any(|p| {
-                    p.digest == existing.digest || p.digest == incoming.digest
-                })
+                b.parents
+                    .iter()
+                    .any(|p| p.digest == existing.digest || p.digest == incoming.digest)
             });
             if referenced {
                 return Err(kvnc_dag::DagStoreError::NotFound(
@@ -1097,7 +1215,9 @@ mod tests {
                 ));
             }
             if !blocks.contains_key(&existing.digest) {
-                return Err(kvnc_dag::DagStoreError::NotFound(existing.digest.to_string()));
+                return Err(kvnc_dag::DagStoreError::NotFound(
+                    existing.digest.to_string(),
+                ));
             }
             blocks.remove(&existing.digest);
             blocks.insert(incoming.digest, incoming.clone());
@@ -1711,7 +1831,13 @@ mod tests {
 
     #[test]
     fn fork_first_valid_digest_wins_deterministic() {
-        let (engine, dag, key) = test_engine(100);
+        let (engine, _dag, key) = test_engine_with(
+            100,
+            ConsensusConfig {
+                use_min_digest_fork: false,
+                ..ConsensusConfig::default()
+            },
+        );
         let digest_a = kvnc_types::StatementBlock::compute_digest(0, 3, &[], &[]);
         let block_a = kvnc_types::StatementBlock {
             author: 0,
@@ -1756,7 +1882,7 @@ mod tests {
     #[test]
     fn vrf_flag_without_outputs_matches_round_robin() {
         let (engine, _dag, _key) = test_engine(100);
-        assert!(!engine.config.use_vrf_leader);
+        assert!(engine.config.use_vrf_leader);
         let rr = engine.scheduled_leader_for_round(3);
         // Flag on, empty output map: still the round-robin leader.
         let mut flagged = engine.config.clone();
@@ -1828,10 +1954,16 @@ mod tests {
             None,
             TEST_CTX,
         );
-        // Round 3, two authorities: round-robin index is 1.
+        // Round 3, two authorities: round-robin index is 1. Outputs from
+        // decide round 2 elect it once both authorities are present.
         assert_eq!(engine.scheduled_leader_for_round(3), Some(1));
-        engine.record_verified_vrf_output(3, 0, [0x01; 32]);
-        engine.record_verified_vrf_output(3, 1, [0xff; 32]);
+        engine.record_verified_vrf_output(2, 0, [0x01; 32]);
+        assert_eq!(
+            engine.scheduled_leader_for_round(3),
+            Some(1),
+            "a partial VRF set must stay on round-robin"
+        );
+        engine.record_verified_vrf_output(2, 1, [0xff; 32]);
         assert_eq!(
             engine.scheduled_leader_for_round(3),
             Some(0),
