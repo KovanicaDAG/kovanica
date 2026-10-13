@@ -8,5 +8,6 @@ pub mod node;
 pub mod output;
 pub mod rpc;
 pub mod stake;
+pub mod tui;
 pub mod tx;
 pub mod wallet;
