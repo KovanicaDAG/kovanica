@@ -1,7 +1,10 @@
 //! Cryptographic operations for Kovanica.
-//! Signing, verification, key generation.
+//! Signing, verification, key generation, VRF.
 
 #![deny(unsafe_code)]
+
+mod vrf;
+pub use vrf::{vrf_hash_to_u64, vrf_prove, vrf_verify, VRFKeyPair, VRFOutput, VRFError};
 
 use ed25519_dalek::Signature as DalekSignature;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
