@@ -198,7 +198,7 @@ Current agent config lives in root `AGENTS.md`, `.opencode/agents/kvnc.md`, `ope
 - All builds pass: `cargo check`, `clippy`, 394 unit tests
 ## Latest code snapshot (2026-10-13)
 
-- `main`: `c4b2af4` (tui + console merged; local edits committed)
+- `main`: `98d88cc` (tui + console merged; local edits committed)
 - Workspace crates: 19 (`kvnc-*`); ~53k Rust LOC
 - TS packages: `packages/api-client`, `packages/console`, `packages/signer`, `packages/web`
 - Default P2P port: 8000; RPC: 8545; max peers: 50

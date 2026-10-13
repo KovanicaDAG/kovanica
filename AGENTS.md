@@ -80,7 +80,7 @@ Packages (TypeScript):
 
 Contracts (već implementirani): HTLC, Vault, Multisig, Token + Host trait.
 
-## Snapshot (2026-10-13, main @ c4b2af4)
+## Snapshot (2026-10-13, main @ 98d88cc)
 
 - Workspace crates: 19
 - Rust source: ~53k LOC across 113 `.rs` files
