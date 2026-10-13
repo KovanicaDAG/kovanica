@@ -148,13 +148,13 @@ The image runs as a non-root user, exposes ports 9000 (P2P) and 8545 (RPC), and 
 
 ```bash
 cargo run -p kvnc-cli -- --help
-# wallet: keygen, import, export, address, sign
+# wallet: keygen, import, export, address, sign, tui
 # chain: balance, status, transfer
 # staking: stake, unstake, delegate, claim-rewards
 # contracts: HTLC, Vault, Multisig, Token subcommands
 ```
 
-Keys are stored in an encrypted keystore (Argon2id + XChaCha20-Poly1305). The node never receives private seeds.
+Keys are stored in an encrypted keystore (Argon2id + XChaCha20-Poly1305). The node never receives private seeds. `kvnc tui` opens an interactive wallet for balances, transfers, and staking on that same local keystore.
 
 ## Architecture (High Level)
 

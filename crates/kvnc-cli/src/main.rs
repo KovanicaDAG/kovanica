@@ -1,6 +1,6 @@
 //! Kovanica (KUNA) command-line interface.
 //!
-//! Wallet operations (keygen/import/export/sign), node operations
+//! Wallet operations (keygen/import/export/sign/tui), node operations
 //! (status/balance/staking/governance) and contract subcommands
 //! (htlc/vault/multisig/token). All commands support `--json` for
 //! machine-readable output and `--rpc-url` to target a specific node.
@@ -18,7 +18,7 @@ use kvnc_cli::contracts::{
     ContractCommand, HtlcCommand, MultisigCommand, TokenCommand, VaultCommand,
 };
 use kvnc_cli::rpc::RpcClient;
-use kvnc_cli::{contracts, node, output, rpc, tx, wallet};
+use kvnc_cli::{contracts, node, output, rpc, tui, tx, wallet};
 use kvnc_types::transaction::TransactionKind;
 use kvnc_types::{crypto::PublicKey, crypto::SigningKey, Address};
 use zeroize::Zeroizing;
@@ -61,6 +61,12 @@ enum Commands {
     Address(AddressArgs),
     /// Sign a message offline and print the signature as hex
     Sign(SignArgs),
+    /// Open the interactive terminal wallet
+    Tui {
+        /// Keystore file path
+        #[arg(long, short, default_value = "keystore.json")]
+        keystore: PathBuf,
+    },
     /// Submit a native KUNA transfer
     Transfer(TransferArgs),
     /// Show chain/node status
@@ -320,7 +326,8 @@ struct CallArgs {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let json = cli.json;
-    let client = RpcClient::new(cli.rpc_url);
+    let rpc_url = cli.rpc_url;
+    let client = RpcClient::new(rpc_url.clone());
     let chain_id = match cli.chain_id {
         Some(id) => Some(id),
         None => match std::env::var("KVNC_CHAIN_ID") {
@@ -341,6 +348,14 @@ async fn main() -> Result<()> {
         Commands::Migrate(args) => cmd_migrate(args, json),
         Commands::Address(args) => cmd_address(args, json),
         Commands::Sign(args) => cmd_sign(args, json),
+        Commands::Tui { keystore } => {
+            tui::run(tui::TuiConfig {
+                rpc_url,
+                chain_id,
+                keystore,
+            })
+            .await
+        }
         Commands::Transfer(args) => cmd_transfer(&client, chain_id, args, json).await,
         Commands::Status | Commands::Info => node::status(&client, json).await,
         Commands::Balance { address } => node::balance(&client, &address, json).await,
@@ -782,8 +797,7 @@ async fn cmd_call(
     let args_bytes = {
         let json_val: serde_json::Value = serde_json::from_str(&args.args)
             .with_context(|| format!("--args must be valid JSON array, got: {}", args.args))?;
-        bincode::serialize(&json_val)
-            .with_context(|| "bincode serialization of args failed")?
+        bincode::serialize(&json_val).with_context(|| "bincode serialization of args failed")?
     };
 
     let (tx_hash, sender, nonce) = sign_and_submit_self(
