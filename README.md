@@ -1,219 +1,212 @@
 # Kovanica (kvnc)
 
-Kovanica is a Rust workspace for a DAG-based Layer-1 blockchain prototype. The project is designed around a Mysticeti-style uncertified DAG, a Wasmi-based execution layer, staking and validator logic, and a libp2p networking stack. The chain name is Kovanica and the native token is KUNA with 9 decimals.
+> A Rust-native DAG-based Layer-1 blockchain implementing Mysticeti-style uncertified consensus, account-based state with staking, and deterministic Wasmi contract execution.
 
-Status: prototype / pre-alpha. This repository is not production-ready, not audited, and not intended for a live mainnet deployment.
+**Status: pre-alpha.**  
+Not audited. Not for production use.  
+Interfaces, consensus parameters, and tokenomics constants may change without notice.
 
-## Scope and current state
+The chain is **Kovanica**. The native coin ticker is **KUNA** (9 decimals). All crates, binaries, environment variables, and protocol prefixes use the `kvnc` namespace.
 
-This repository contains a real Rust workspace and multiple crates, but it is still a development codebase with ongoing architecture and milestone work. The code and docs in the repo consistently describe the following:
+---
 
-- Consensus: Mysticeti-style, uncertified DAG with wave = 3
-- Execution: Wasmi deterministic WASM execution
-- State model: account-based runtime + staking + validator lifecycle
-- Networking: libp2p with gossipsub, Kademlia, identify, ping, sync modules
-- API: JSON-RPC server, WebSocket support, CLI wallet and staking commands
-- Contracts: HTLC, Vault, Multisig, Token, plus host infrastructure
+## Overview
 
-The repository includes both Rust crates and a small TypeScript package surface (`packages/*`).
+`kvnc` is a Cargo workspace that implements a complete full-node stack:
 
-## Repository layout
+- **Consensus**: Mysticeti-style uncertified DAG (wave length = 3) with direct/indirect commit rules, linearization, and an optional MysticGhost hybrid that applies GHOSTDAG \(k=3\) scoped colouring. Non-blue (red) blocks are returned to the mempool rather than pruned.
+- **State model**: Account-based (UTXO-free) with balances, nonces, contract code/storage, and a sorted key-value Merkle state root. Snapshots and pruning are supported.
+- **Staking & emission**: Proof-of-stake validators (target 15–21 active), delegation, unbonding queue, epoch rotation, fixed-percentage slashing, and a geometric emission schedule with treasury vesting.
+- **Execution**: Native transactions (transfer, stake, delegate, claim rewards, contract deploy/call) plus a Wasmi-based deterministic WASM runtime with gas metering and memory limits.
+- **Networking**: libp2p (TCP + Noise + Yamux, Gossipsub, Kademlia, Identify, Ping). Persistent peer identity, peer scoring, block/state sync, and orphan buffering.
+- **Interfaces**: JSON-RPC + WebSocket subscriptions, a full-featured CLI wallet, OpenAPI specification, and a TypeScript API client.
 
-At the root, the project is structured like this:
+The node is designed to run comfortably on modest hardware (target 2–4 GB RAM with aggressive DAG pruning).
 
-- `Cargo.toml` — workspace manifest
-- `config.example.toml` — sample node configuration
-- `docker-compose.yml` — multi-node local integration setup
-- `Dockerfile` — container build definition
-- `docs/` — design, architecture, tokenomics, and audit-related docs
-- `crates/` — workspace Rust crates
-- `packages/` — package-based frontend/client code
-- `ops/` — operations and deployment scripts
-- `brand-assets/` — branding assets
-- `fuzz/` — fuzzing targets
-- `AGENTS.md` — repo-specific agent instructions
-- `TASKLIST.md` — project roadmap / task tracking
+## Features
 
-## Workspace crates
+- **DAG ledger** with causal ordering, stake-filtered parent selection, and bounded parent round gap.
+- **Wave-based consensus** (leader / vote / decide) with quorum (2f+1) direct commits and path-based indirect commits.
+- **Stake-weighted leader selection** with optional ECVRF-ED25519-SHA512-Elligator2 VRF support and deterministic fallback.
+- **Account + staking model** including commission, reward sharing, unbonding, and treasury vesting.
+- **Deterministic contract execution** via Wasmi (fuel metering, memory caps, module cache) plus native typed contract APIs (HTLC, Vault, Multisig, Token).
+- **Verifiable state** with sorted-KV Merkle roots and snapshot/export support.
+- **P2P networking** with gossip for blocks, transactions, and votes; request/response sync; and orphan handling.
+- **JSON-RPC & WebSocket** covering chain, account, staking, mempool, consensus, and contract methods, plus subscriptions (newHeads, logs, pending transactions).
+- **CLI** for key management (encrypted keystore v2 with Argon2id + XChaCha20-Poly1305), transfers, staking operations, and contract interactions.
+- **Observability**: structured tracing (with per-round trace IDs), Prometheus metrics, and example Grafana dashboards.
+- **Docker & Compose**: multi-stage Dockerfile and a 4-node local quorum setup.
 
-The workspace manifest currently includes the following crates:
+## Tokenomics
 
-- `kvnc-types`
-- `kvnc-crypto`
-- `kvnc-storage`
-- `kvnc-dag`
-- `kvnc-consensus`
-- `kvnc-mempool`
-- `kvnc-network`
-- `kvnc-runtime`
-- `kvnc-execution`
-- `kvnc-staking`
-- `kvnc-node`
-- `kvnc-cli`
-- `kvnc-rpc`
-- `kvnc-common`
-- `kvnc-htlc`
-- `kvnc-vault`
-- `kvnc-multisig`
-- `kvnc-token`
-- `kvnc-faucet`
+Canonical constants (locked in `kvnc-staking` and documented in `docs/TOKENOMICS.md`):
 
-The repo also contains generated / package directories such as:
+| Parameter | Value |
+|-----------|-------|
+| Maximum supply | 90 200 000 KUNA |
+| Decimals | 9 (1 KUNA = 1 000 000 000 atoms) |
+| Founder premine | 200 000 KUNA |
+| Genesis validator allocation | 1 000 000 KUNA (split evenly across genesis validators; remainder distributed deterministically) |
+| Treasury | 8 000 000 KUNA (1 M per year × 8 years, linear vesting by committed-leader height) |
+| Mining subsidy budget | 81 000 000 KUNA |
+| Initial block reward | 2.5 KUNA (paid to the author of a committed leader block) |
+| Subsidy era length | 8 100 000 committed leaders |
+| Reward decay | × 3/4 per era |
+| Minimum validator stake | 50 000 KUNA |
+| Active validator range | 15–21 |
+| Unbonding period | 100 000 rounds |
+| Epoch length | 7 200 committed leaders (≈ 1 day at the design interval) |
+| Design round / leader interval | configurable (`round_duration_ms`); tokenomics comments assume 4 s rounds → 12 s per committed leader |
 
-- `packages/api-client`
-- `packages/web`
+Rewards, treasury vesting, and circulating-supply accounting are applied atomically inside the execution of each committed sub-DAG.
 
-## Main components
+## Repository Layout
 
-### 1) Consensus and DAG
+| Path | Purpose |
+|------|---------|
+| `crates/` | All Rust crates (see below) |
+| `crates/kvnc-node` | Full-node binary (`kvnc-node`) |
+| `crates/kvnc-cli` | CLI wallet and tooling (`kvnc-cli`) |
+| `docs/` | Architecture, tokenomics, contracts, signature format, ADRs, and operational notes |
+| `ops/` | Docker, Grafana, Prometheus, soak scripts |
+| `packages/` | TypeScript API client and web/explorer assets |
+| `brand-assets/` | Logos |
+| `config.example.toml` | Example node configuration |
+| `Dockerfile` / `docker-compose.yml` | Container build and local multi-node setup |
+| `TASKLIST.md` | Phased implementation status (code-verified) |
+| `.github/workflows/` | CI (fmt, clippy, test, audit, MSRV 1.90, docs) |
 
-The consensus layer is implemented in `kvnc-consensus` and `kvnc-dag`.
+### Core Crates
 
-The repository docs and code describe the system as a Mysticeti-style DAG with:
+| Crate | Responsibility |
+|-------|----------------|
+| `kvnc-types` | Core types (blocks, transactions, addresses `kvnc…dag`, hashes, votes, committee, signing context) |
+| `kvnc-crypto` | Ed25519, batch verification, VRF, keystore primitives |
+| `kvnc-storage` | redb-backed state, consensus, and account stores; Merkle roots; snapshots |
+| `kvnc-dag` | DAG store, block manager, mergesets, pruning |
+| `kvnc-consensus` | Committer, linearizer, engine, MysticGhost / GHOSTDAG colouring, metrics |
+| `kvnc-mempool` | Fee-rate priority pool, admission, eviction, rebroadcast |
+| `kvnc-network` | libp2p service, protocols, scoring, identity |
+| `kvnc-runtime` | Wasmi WASM engine and gas metering |
+| `kvnc-execution` | State-transition function, reward distribution, contract host |
+| `kvnc-staking` | Emission schedule, treasury, validator set, delegation, slashing |
+| `kvnc-rpc` | JSON-RPC server, WebSocket subscriptions, rate limiting |
+| `kvnc-common` | Shared events, WASM helpers, memory utilities |
+| `kvnc-htlc` / `kvnc-vault` / `kvnc-multisig` / `kvnc-token` | Native + WASM contract implementations |
+| `kvnc-faucet` | Rate-limited testnet faucet service |
+| `kvnc-cli` | Command-line wallet, staking, and contract tools |
 
-- leader blocks
-- committed sub-DAG logic
-- linearization / commit processing
-- vote verification and validation
-- state sync and block sync flows
+## Quick Start
 
-The network crate explicitly contains libp2p features including gossipsub, Kademlia, identify, ping, and custom sync protocols.
+### Requirements
 
-### 2) Execution and runtime
+- Rust stable (MSRV 1.90) and Cargo
+- (Optional) Docker and Docker Compose for the multi-node devnet
+- (Optional) `wasm32-unknown-unknown` target for full contract test coverage
 
-The runtime and execution layer uses Wasmi for deterministic WASM execution.
-
-Relevant components:
-
-- `kvnc-runtime` — Wasmi runtime integration
-- `kvnc-execution` — execution context, contract execution, state transitions
-- `kvnc-common` — shared helpers and runtime glue
-
-The repository also includes contract crates:
-
-- `kvnc-htlc`
-- `kvnc-vault`
-- `kvnc-multisig`
-- `kvnc-token`
-
-These are present as workspace crates, and the docs describe them as contract implementations with host trait support.
-
-### 3) Staking and token economics
-
-The staking crate is central to validator selection, rewards, treasury logic, and emission. The project documentation explicitly locks the tokenomics and states that they should not be modified without approval.
-
-The current locked parameters documented in the repo are:
-
-- Total supply: 90,200,000 KUNA
-- Decimals: 9
-- Founder premine: 200,000 KUNA
-- Treasury: 8,000,000 KUNA (1,000,000 per year for 8 years, linear)
-- Genesis validator allocation: 1,000,000 KUNA
-- Mining subsidy budget: 81,000,000 KUNA
-- Initial block reward: 2.5 KUNA
-- Subsidy era length: 8,100,000 committed leader blocks
-- Reward decay: × 3/4 each era
-- Round / leader interval: 4 s round, 12 s leader commit interval
-- Active validators: 15–21
-- Minimum validator stake: 50,000 KUNA
-
-The repo documents that new rewards are paid only on committed leader blocks and that the mining schedule is not intended to be changed casually.
-
-### 4) Network and node
-
-The node binary is `kvnc-node`, and the project includes a `kvnc-rpc` crate and a `kvnc-network` crate.
-
-Notable implementation details from the current repo:
-
-- `kvnc-network` uses libp2p
-- `kvnc-rpc` includes axum-based RPC endpoints and WebSocket support
-- `kvnc-node` wires together storage, consensus, network, execution, staking, and RPC
-- `config.example.toml` defines how a node is configured and how environment variables override config values
-
-### 5) CLI and tooling
-
-The CLI is `kvnc` and is shipped via `crates/kvnc-cli`.
-
-Features present in this repo include:
-
-- CLI wallet functions
-- staking operations
-- RPC client calls
-- contract commands
-- benchmarking helper binary
-- validator generation example
-
-The repo also contains `kvnc-faucet`, a rate-limited faucet service intended for testnet usage.
-
-## Build and test
-
-The repository is configured as a Cargo workspace.
-
-Typical commands:
+### Build and Test
 
 ```bash
+git clone https://github.com/KovanicaDAG/kvnc.git
+cd kvnc
 cargo build --workspace
 cargo test --workspace
 ```
 
-To run the node:
+CI runs `cargo fmt --check`, `clippy -D warnings`, full tests (including integration), `cargo audit`, documentation builds, and an MSRV check.
+
+### Run a Node
 
 ```bash
 cp config.example.toml config.toml
+# Edit config.toml or override via environment variables (KVNC_DATA_DIR, KVNC_LISTEN_ADDR, KVNC_RPC_PORT, KVNC_BOOTNODES, KVNC_VALIDATOR_KEY, …)
 cargo run -p kvnc-node -- --config config.toml
 ```
 
-The repository also contains a Docker setup:
+Key configuration points (see `config.example.toml` for the full list and environment-variable mappings):
+
+- `data_dir` — chain data (separate consensus and state redb files)
+- `listen_addr` — P2P listen address (default `0.0.0.0:9000`)
+- `rpc_addr` / `rpc_port` — JSON-RPC bind (default `127.0.0.1:8545`)
+- `bootnodes` — list of multiaddrs or DNS seeds (no hard-coded hosts; supply 3+ kvnc-native seeds)
+- `round_duration_ms` — target consensus round duration
+- `validator_key` — path to a 32-byte hex seed (ephemeral key generated if omitted)
+- `rpc_rate_limit_per_min` — per-IP token-bucket limit (burst derived as `max(1, rate/6)`)
+
+A `genesis` subcommand is available to produce a genesis JSON and optional validator key files from a validators list, treasury address, and founder address.
+
+### Docker
 
 ```bash
-docker compose up --build
+docker build -t kvnc-node:local .
+# See ops/docker/ and docker-compose.yml for multi-node and entrypoint details.
 ```
 
-## Documentation status
+The image runs as a non-root user, exposes ports 9000 (P2P) and 8545 (RPC), and includes a healthcheck against `/health`.
 
-The repo includes several docs, including:
+### CLI Highlights
 
-- `docs/ARCHITECTURE.md`
-- `docs/TOKENOMICS.md`
-- `docs/CONTRACTS.md`
-- `docs/GAS_SCHEDULE.md`
-- `docs/AUDIT-CHECKLIST.md`
-- `docs/SEED-DNS-AUDIT.md`
-- `docs/SIGNATURE_FORMAT.md`
-- `docs/design/...`
-- `docs/adr/...`
+```bash
+cargo run -p kvnc-cli -- --help
+# wallet: keygen, import, export, address, sign
+# chain: balance, status, transfer
+# staking: stake, unstake, delegate, claim-rewards
+# contracts: HTLC, Vault, Multisig, Token subcommands
+```
 
-These docs describe the intended architecture and current milestones. Some content still reflects future or phased roadmap items, so the project should be treated as an active prototype, not a finalized blockchain platform.
+Keys are stored in an encrypted keystore (Argon2id + XChaCha20-Poly1305). The node never receives private seeds.
 
-## Important truths to know
+## Architecture (High Level)
 
-This repository is not a copy or fork of another chain. The project explicitly states a requirement to remain independent and avoid mixing in code or design from `kovanica-protocol` or older Kovanica repositories.
+```
+Network (libp2p)
+    │
+    ▼
+Mempool ──────────────────────────────┐
+    │                                 │
+    ▼                                 │
+Block Producer (per validator)        │
+    │                                 │
+    ▼                                 │
+Consensus (Mysticeti DAG + optional   │
+           MysticGhost colouring)     │
+    │ produces CommittedSubDag        │
+    ▼                                 │
+Execution Layer ◄──────────────────────┘
+    │  native txs + WASM contracts
+    │  leader reward + treasury vesting
+    ▼
+State (accounts, staking, contracts)
+    │
+    ▼
+Storage (redb, pruning, snapshots)
+```
 
-The repo is intentionally designed toward a low-resource target and mentions comfortable operation on a 2–4 GB RAM VPS, but it is still a development codebase.
+See `docs/ARCHITECTURE.md`, `docs/TOKENOMICS.md`, `docs/CONTRACTS.md`, and `docs/SIGNATURE_FORMAT.md` for deeper detail. Signature domains use the `KUNA/…` tags; addresses follow the `kvnc<hex>dag` format with a Blake3 checksum.
 
-The project currently includes no root `LICENSE` file at the time of inspection, and the README should not claim a finalized licensing state unless the repository adds one.
+## Development Status
 
-## Risks and limitations
+Most foundation phases (types, crypto, storage, DAG, consensus core, execution, staking, node wiring, RPC, CLI wallet) are implemented and covered by unit and multi-node integration tests. Multi-node quorum, late-join, and sustained-liveness scenarios pass.
 
-Before using or depending on this code:
+Remaining work includes longer soak tests, light-client endpoints, full governance hooks, production seed DNS registration, and external audit. Consult `TASKLIST.md` for the authoritative, code-verified phase status.
 
-- it is not formally audited
-- it is not a production blockchain
-- consensus and execution details are still evolving
-- some roadmap items remain open
-- some implementation details are phase-based and may change
+## Security Notes
 
-## Summary
+- Pre-alpha software. Do not use with real value.
+- Not audited.
+- Consensus currently rejects same-round / same-author forks (first-valid wins); lexicographic min-digest selection is a known future improvement.
+- Client keys stay in the CLI/wallet; the node only ever sees public keys and signatures.
+- Domain-separated signing hashes and strict nonce checks mitigate replay.
+- Fixed-percentage double-sign slashing is implemented.
 
-This repository is a real Rust workspace for a Kovanica blockchain prototype with a DAG-based consensus model, Wasmi execution, staking, validators, libp2p networking, CLI tools, and contract crates. It is a serious engineering prototype, but it is not yet a live public network or a fully audited production system.
+## License
 
-For precise implementation details, the repository's canonical documents are:
+Apache-2.0
 
-- `AGENTS.md`
-- `docs/ARCHITECTURE.md`
-- `docs/TOKENOMICS.md`
-- `Cargo.toml`
-- `TASKLIST.md`
+## Contributing
 
-This README reflects the actual repository state as it exists in the checked-out code and docs.
+Contributions are welcome. Please open an issue or pull request against the `main` branch. Ensure `cargo fmt`, `clippy -D warnings`, and tests pass. See `AGENTS.md` and `.opencode/` for internal agent guidance used by the project.
 
+---
+
+*Generated from a full inspection of the `KovanicaDAG/kvnc` codebase. Ignore any prior README content.*
