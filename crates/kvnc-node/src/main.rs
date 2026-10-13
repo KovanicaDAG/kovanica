@@ -62,7 +62,8 @@ impl LogPublisher for EventLogPublisher {
     }
 }
 use kvnc_staking::{
-    StakingState, FOUNDER_PREMINE, MAX_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE, ONE_KUNA,
+    StakingState, FOUNDER_PREMINE, GENESIS_VALIDATOR_ALLOCATION, MAX_ACTIVE_VALIDATORS,
+    MIN_VALIDATOR_STAKE, ONE_KUNA,
 };
 use kvnc_storage::{StateStoreError, Storage};
 use kvnc_types::{
@@ -216,6 +217,18 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
         merkle_root: Hash::zero(),
     };
 
+    // Genesis validator allocation: shares are computed over the deduplicated,
+    // address-sorted validator set (same deterministic order the node uses at
+    // first run), so the JSON is a faithful preview of the minted balances.
+    let mut alloc_entries: Vec<(Address, u64)> = staking
+        .validators
+        .iter()
+        .map(|v| (v.address, v.stake))
+        .collect();
+    alloc_entries.sort_by_key(|a| a.0.0);
+    alloc_entries.dedup_by(|a, b| a.0.0 == b.0.0);
+    let alloc_shares = kvnc_staking::genesis_validator_shares(alloc_entries.len());
+
     // Serialize output JSON
     let output = serde_json::json!({
         "genesis_block": {
@@ -236,11 +249,22 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
             "founder_premine_atoms": FOUNDER_PREMINE,
             "founder_premine_kvnc": FOUNDER_PREMINE / ONE_KUNA,
             "founder_premine_kuna": FOUNDER_PREMINE / ONE_KUNA,
-            "validators": staking.validators.iter().map(|v| serde_json::json!({
-                "address_hex": hex::encode(v.address.0),
-                "stake": v.stake,
-                "public_key_hex": v.public_key.as_ref().map(|pk| hex::encode(pk.0)),
-            })).collect::<Vec<_>>(),
+            "genesis_validator_allocation_atoms": GENESIS_VALIDATOR_ALLOCATION,
+            "genesis_validator_allocation_kuna": GENESIS_VALIDATOR_ALLOCATION / ONE_KUNA,
+            "validators": staking.validators.iter().map(|v| {
+                let share = alloc_entries
+                    .iter()
+                    .position(|(a, _)| a.0 == v.address.0)
+                    .map(|i| alloc_shares[i])
+                    .unwrap_or(0);
+                serde_json::json!({
+                    "address_hex": hex::encode(v.address.0),
+                    "stake": v.stake,
+                    "genesis_share_atoms": share,
+                    "genesis_liquid_atoms": share.saturating_sub(v.stake),
+                    "public_key_hex": v.public_key.as_ref().map(|pk| hex::encode(pk.0)),
+                })
+            }).collect::<Vec<_>>(),
         },
         "validator_keys": validator_keys,
     });
@@ -814,6 +838,11 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     let mut staking = StakingState::new();
     staking.init_treasury(treasury);
 
+    // Genesis validator allocation: the set admitted here receives
+    // GENESIS_VALIDATOR_ALLOCATION, split evenly, and locks MIN_VALIDATOR_STAKE
+    // from that share. Collected while loading the genesis files below.
+    let mut genesis_stakes: Vec<(Address, u64)> = Vec::new();
+
     // Load full validator set from validators.json (Phase 14 ceremony) if present.
     let validators_json_path = config.data_dir.join("validators.json");
     if validators_json_path.exists() {
@@ -830,6 +859,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
                 .transpose()?;
             let stake = v.stake.unwrap_or(kvnc_staking::MIN_VALIDATOR_STAKE);
             staking.join_validator(address, stake, 0, Some(address), pk)?;
+            genesis_stakes.push((address, stake));
         }
         info!(count = validators_input.len(), "loaded validators.json");
     }
@@ -881,8 +911,53 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
                 None
             };
             staking.join_validator(address, v.stake, 0, Some(address), pk)?;
+            genesis_stakes.push((address, v.stake));
         }
         info!(count = count, "loaded genesis validator set");
+    }
+
+    // Mint the genesis validator allocation (exactly once, at genesis).
+    //
+    // Deterministic across nodes: validators are deduplicated and processed in
+    // ascending address order, so every node derives identical balances from
+    // the same genesis set. `genesis_validator_shares` assigns the integer
+    // remainder one atom at a time, so the shares sum to exactly
+    // GENESIS_VALIDATOR_ALLOCATION.
+    if !genesis_stakes.is_empty() {
+        use kvnc_storage::state_store::Account;
+
+        let mut entries: Vec<(Address, u64)> = genesis_stakes.clone();
+        entries.sort_by_key(|a| a.0.0);
+        entries.dedup_by(|a, b| a.0.0 == b.0.0);
+        let n = entries.len();
+        let shares = kvnc_staking::genesis_validator_shares(n);
+        let state = state_storage.state();
+
+        for ((address, stake), share) in entries.iter().zip(shares.iter()) {
+            if *share < *stake {
+                anyhow::bail!(
+                    "genesis validator allocation ({} KUNA) cannot back a {} KUNA stake \
+                     split across {} validators; at MIN_VALIDATOR_STAKE the allocation \
+                     supports at most {} validators",
+                    kvnc_staking::GENESIS_VALIDATOR_ALLOCATION / kvnc_staking::ONE_KUNA,
+                    stake / kvnc_staking::ONE_KUNA,
+                    n,
+                    kvnc_staking::GENESIS_VALIDATOR_ALLOCATION / kvnc_staking::MIN_VALIDATOR_STAKE,
+                );
+            }
+            let acct = Account {
+                balance: *share - *stake,
+                nonce: 0,
+                code_hash: [0; 32],
+                code: vec![],
+            };
+            state.set_account(&txn, address, &acct)?;
+        }
+        info!(
+            count = n,
+            allocated_kuna = kvnc_staking::GENESIS_VALIDATOR_ALLOCATION / kvnc_staking::ONE_KUNA,
+            "genesis validator allocation minted"
+        );
     }
 
     state_storage.state().save_staking_state(&txn, &staking)?;

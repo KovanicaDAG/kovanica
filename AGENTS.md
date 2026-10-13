@@ -27,20 +27,25 @@ codebase/binary/env prefiks = **kvnc** (`kvnc-*` crate-ovi, `kvnc-node`, `KVNC_*
 
 ## Tokenomics (zaključano)
 
+> Revidirano 2026-10-13: s₀=2,5 KUNA, era=8 100 000, budget=81M, +1M genesis validatorska alokacija, round 4 s (leader 12 s). Sve potvrđeno od strane vlasnika projekta.
+
 | Parameter                  | Value                                          |
 |---------------------------|------------------------------------------------|
 | Total supply              | **90 200 000 KUNA**                            |
 | Decimals                  | 9                                              |
 | Founder premine           | 200 000 KUNA                                   |
 | Treasury                  | 8 000 000 KUNA (1 M/year × 8 years, linear)    |
-| Mining subsidy budget     | ≈ 82 000 000 KUNA                              |
-| Initial block reward      | **10 KUNA** (paid to committed leader author)  |
-| Subsidy era length        | **2 050 000** committed leader blocks          |
+| Genesis validator alloc.  | 1 000 000 KUNA (ravnomjerno na genesis validatore) |
+| Mining subsidy budget     | **81 000 000 KUNA** (= 90.2M − 0.2M − 8M − 1M) |
+| Initial block reward      | **2,5 KUNA** (paid to committed leader author) |
+| Subsidy era length        | **8 100 000** committed leader blocks          |
 | Decay                     | **× 3/4** each era                             |
+| Round / leader interval   | round 4 s → committed leader svakih 12 s       |
+| Epoch (validator rotacija)| 7 200 leader blokova (≈1 dan), neovisno o eri   |
 | Active validators         | 15–21                                          |
 | Min validator stake       | 50 000 KUNA                                    |
 
-Reward se mint-a **samo** na committed leader (CommittedSubDag → StakingState::on_leader_committed).
+Reward se mint-a **samo** na committed leader (CommittedSubDag → StakingState::on_leader_committed). Genesis validatorima se alocira 1M KUNA (ravnomjerni split, dust deterministički), od čega svaki stake-a min 50 000 KUNA.
 
 ## Workspace structure (poštuj postojeće)
 

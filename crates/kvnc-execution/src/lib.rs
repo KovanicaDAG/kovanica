@@ -2626,9 +2626,9 @@ mod tests {
             )],
         );
         assert!(r[0].success);
-        // Reward of round 1 (10 KUNA) split 50/50 (commission 0).
-        assert_eq!(pending_reward(&storage, &me, &validator), 5 * K);
-        assert_eq!(read_balance(&storage, &payout), 5 * K);
+        // Reward of round 1 (2.5 KUNA) split 50/50 (commission 0).
+        assert_eq!(pending_reward(&storage, &me, &validator), 5 * K / 4);
+        assert_eq!(read_balance(&storage, &payout), 5 * K / 4);
         let before = read_balance(&storage, &me);
         let r = run(
             &mut ctx,
@@ -2642,17 +2642,20 @@ mod tests {
             )],
         );
         assert!(r[0].success, "{r:?}");
-        assert_eq!(read_balance(&storage, &me), before + 5 * K - 1000);
+        assert_eq!(read_balance(&storage, &me), before + 5 * K / 4 - 1000);
         // Round-2 reward accrued again after the claim tx.
-        assert_eq!(pending_reward(&storage, &me, &validator), 5 * K);
+        assert_eq!(pending_reward(&storage, &me, &validator), 5 * K / 4);
         // Commission is paid to the validator payout.
         ctx.staking
             .set_commission(validator, 2_000)
             .expect("commission");
         run(&mut ctx, &storage, 3, vec![]);
-        // 20% of 10 = 2, rest 8 split 4/4 → validator 6, delegator +4.
-        assert_eq!(read_balance(&storage, &payout), 5 * K + 5 * K + 6 * K);
-        assert_eq!(pending_reward(&storage, &me, &validator), 9 * K);
+        // 20% of 2.5 = 0.5, rest 2 split 1/1 → validator 1.5, delegator +1.
+        assert_eq!(
+            read_balance(&storage, &payout),
+            5 * K / 4 + 5 * K / 4 + 3 * K / 2
+        );
+        assert_eq!(pending_reward(&storage, &me, &validator), 9 * K / 4);
         // Claiming with nothing pending fails honestly.
         let k2 = test_keypair(2);
         let other = address_of(&k2);
