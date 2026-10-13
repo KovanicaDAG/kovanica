@@ -84,6 +84,17 @@ pub fn verify_block_signature(
     verify(public_key, digest.as_ref(), signature)
 }
 
+/// Convenience: verify transaction signature.
+pub fn verify_transaction_signature(
+    public_key: &PublicKey,
+    tx: &kvnc_types::transaction::Transaction,
+    ctx: &kvnc_types::SigningContext,
+) -> Result<(), CryptoError> {
+    let hash = tx.signing_hash(ctx);
+    let message = hash.as_ref();
+    verify(public_key, message, &tx.signature)
+}
+
 /// Errors returned by the vote signature API ([`verify_vote_signature`]).
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigError {

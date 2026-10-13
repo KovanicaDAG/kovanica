@@ -13,7 +13,16 @@
 //!   match the transactions, the author must be a committee member and the
 //!   signature must verify over the digest under the author's key.
 
-use kvnc_types::{block::StatementBlock, AuthorityIndex, PublicKey, SigningContext, Vote};
+use kvnc_types::{
+    Address,
+    block::StatementBlock,
+    AuthorityIndex,
+    PublicKey,
+    SigningContext,
+    Vote,
+    Transaction,
+    transaction::TransactionKind,
+};
 use std::{
     collections::HashMap,
     fmt,
@@ -34,6 +43,12 @@ pub enum Rejection {
     DigestMismatch,
     /// The block merkle root does not match its transactions.
     MerkleMismatch,
+    /// Transaction fee is zero but a fee is required.
+    ZeroFee,
+    /// Transaction signature verification failed.
+    TxBadSignature(Address),
+    /// Transaction sender is not a known authority.
+    UnknownSender(Address),
 }
 
 impl fmt::Display for Rejection {
@@ -45,6 +60,9 @@ impl fmt::Display for Rejection {
             Rejection::MerkleMismatch => {
                 write!(f, "block merkle root does not match its transactions")
             }
+            Rejection::ZeroFee => write!(f, "transaction fee is zero but a fee is required"),
+            Rejection::TxBadSignature(addr) => write!(f, "transaction signature verification failed for {addr}"),
+            Rejection::UnknownSender(addr) => write!(f, "transaction sender {addr} is not a known authority"),
         }
     }
 }
@@ -145,17 +163,29 @@ pub fn verify_block(keys: &AuthorityKeys, block: &StatementBlock) -> Result<(), 
 /// Until keys are configured nothing can be authenticated, so votes and
 /// blocks are neither delivered nor forwarded (fail closed).
 pub(crate) struct GossipValidator {
-    keys: RwLock<AuthorityKeys>,
+    /// Keys indexed by authority index (for votes and blocks).
+    authority_keys: RwLock<AuthorityKeys>,
+    /// Keys indexed by address (for transactions).
+    address_keys: RwLock<HashMap<Address, PublicKey>>,
     vote_verifier: RwLock<Arc<dyn VoteVerifier>>,
 }
 
 impl Default for GossipValidator {
     fn default() -> Self {
         Self {
-            keys: RwLock::new(AuthorityKeys::new()),
+            authority_keys: RwLock::new(AuthorityKeys::new()),
+            address_keys: RwLock::new(HashMap::new()),
             vote_verifier: RwLock::new(Arc::new(Ed25519VoteVerifier)),
         }
     }
+}
+
+/// Stake and delegate are fee-free by design; everything else pays a fee.
+fn requires_fee(kind: &TransactionKind) -> bool {
+    !matches!(
+        kind,
+        TransactionKind::Stake { .. } | TransactionKind::Delegate { .. }
+    )
 }
 
 impl GossipValidator {
@@ -168,14 +198,28 @@ impl GossipValidator {
     }
 
     /// Replace the committee keys.
+    ///
+    /// Populates both the authority-indexed map (for votes/blocks) and the
+    /// address-indexed map (for transactions).
     pub(crate) fn set_keys(&self, keys: AuthorityKeys) {
-        *self.keys.write().unwrap_or_else(|e| e.into_inner()) = keys;
+        let mut auth_keys = self.authority_keys.write().unwrap_or_else(|e| e.into_inner());
+        *auth_keys = keys.clone();
+
+        // Also populate the address-indexed map for transaction validation.
+        let mut addr_keys = self.address_keys.write().unwrap_or_else(|e| e.into_inner());
+        addr_keys.clear();
+        for (idx, pk) in &keys {
+            // We need the address for this authority index.
+            // The address is derived from the public key.
+            let addr = Address::from_public_key(pk);
+            addr_keys.insert(addr, *pk);
+        }
     }
 
     /// `true` once at least one committee key is configured.
     pub(crate) fn is_configured(&self) -> bool {
         !self
-            .keys
+            .authority_keys
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .is_empty()
@@ -189,14 +233,48 @@ impl GossipValidator {
             .clone();
         verify_vote_with(
             verifier.as_ref(),
-            &self.keys.read().unwrap_or_else(|e| e.into_inner()),
+            &self.authority_keys.read().unwrap_or_else(|e| e.into_inner()),
             vote,
             ctx,
         )
     }
 
     pub(crate) fn verify_block(&self, block: &StatementBlock) -> Result<(), Rejection> {
-        verify_block(&self.keys.read().unwrap_or_else(|e| e.into_inner()), block)
+        verify_block(&self.authority_keys.read().unwrap_or_else(|e| e.into_inner()), block)
+    }
+
+    /// Stateless transaction validation for gossip edge checks.
+    ///
+    /// Verifies the transaction is well-formed, has a valid signature,
+    /// correct hash binding, and (optionally) a non-zero fee. This is
+    /// intentionally stateless: it does not check nonce, balance, or
+    /// mempool state — those are enforced at `on_transaction_message`
+    /// after the message passes the gossip edge.
+    pub(crate) fn verify_transaction(
+        &self,
+        tx: &Transaction,
+        signing_ctx: &SigningContext,
+    ) -> Result<(), Rejection> {
+        // Verify hash binding
+        let expected_hash = tx.signing_hash(signing_ctx);
+        if tx.hash != expected_hash {
+            return Err(Rejection::DigestMismatch);
+        }
+
+        // Verify signature
+        let addr_keys = self.address_keys.read().unwrap_or_else(|e| e.into_inner());
+        let key = addr_keys
+            .get(&tx.sender)
+            .ok_or(Rejection::UnknownSender(tx.sender))?;
+        kvnc_crypto::verify_transaction_signature(key, tx, signing_ctx)
+            .map_err(|_| Rejection::TxBadSignature(tx.sender))?;
+
+        // Verify fee is non-zero for fee-paying transaction kinds
+        if requires_fee(&tx.kind) && tx.fee == 0 {
+            return Err(Rejection::ZeroFee);
+        }
+
+        Ok(())
     }
 }
 

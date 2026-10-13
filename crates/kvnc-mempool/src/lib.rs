@@ -166,7 +166,7 @@ impl PoolState {
     }
 
     /// Put in-flight entries older than `timeout` back in the queue.
-    fn requeue_stale(&mut self, now: Instant, timeout: Duration) -> usize {
+    pub fn requeue_stale(&mut self, now: Instant, timeout: Duration) -> usize {
         let stale: Vec<(Hash, u64)> = self
             .by_hash
             .iter()

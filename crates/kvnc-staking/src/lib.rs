@@ -19,6 +19,7 @@
 use kvnc_types::{Address, PublicKey, Stake};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::info;
 
 // ============================================================
 // Tokenomics constants (9 decimals)
@@ -109,6 +110,18 @@ pub const UNBONDING_ROUNDS: u64 = 100_000;
 /// Deliberately decoupled from `SUBSIDY_ERA_BLOCKS` so the active validator set
 /// keeps rotating frequently even though the subsidy era is long.
 pub const EPOCH_ROUNDS: u64 = 7_200;
+
+/// Maximum consecutive missed leader rounds before a validator is marked offline.
+///
+/// At 12 s/leader, 100 missed leaders = 20 minutes of missed blocks.
+/// This threshold balances liveness against transient network issues.
+pub const MAX_MISSED_LEADERS_BEFORE_OFFLINE: u64 = 100;
+
+/// Commission change cooldown in committed leader blocks.
+///
+/// At 12 s/leader, 7200 blocks = 24 hours. A validator can only change
+/// commission once per day to prevent gaming the system.
+pub const COMMISSION_CHANGE_COOLDOWN: u64 = EPOCH_ROUNDS; // 7_200 blocks ≈ 24h
 
 // ============================================================
 // Emission schedule (mining rewards)
@@ -312,6 +325,17 @@ pub struct ValidatorInfo {
     /// VRF public key for verifiable leader selection (optional).
     #[serde(default)]
     pub vrf_public_key: Option<VrfPublicKey>,
+    /// Consecutive missed leader rounds (for offline detection).
+    /// Reset to 0 when the validator produces a committed leader block.
+    #[serde(default)]
+    pub missed_leader_count: u64,
+    /// Last committed-leader height when this validator produced a leader block.
+    #[serde(default)]
+    pub last_online_height: u64,
+    /// Committed-leader height when commission was last changed.
+    /// Used to enforce a cooldown period before the next change.
+    #[serde(default)]
+    pub last_commission_change_height: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -378,6 +402,8 @@ pub enum StakingError {
     InvalidCommission,
     #[error("Remaining self-stake would be below MIN_VALIDATOR_STAKE")]
     BelowMinimumStake,
+    #[error("Commission change is on cooldown; try again later")]
+    CommissionCooldown,
 }
 
 /// Combined staking + emission + treasury state.
@@ -445,6 +471,9 @@ impl StakingState {
             payout_address: payout_address.unwrap_or(address),
             public_key,
             vrf_public_key,
+            missed_leader_count: 0,
+            last_online_height: self.committed_leader_height,
+            last_commission_change_height: self.committed_leader_height,
         });
         self.total_staked += stake;
         Ok(())
@@ -559,30 +588,13 @@ impl StakingState {
         Ok(())
     }
 
-    /// Set a validator's commission (basis points, `<= 10_000`).
-    pub fn set_commission(
-        &mut self,
-        address: Address,
-        commission_bps: u16,
-    ) -> Result<(), StakingError> {
-        if commission_bps > 10_000 {
-            return Err(StakingError::InvalidCommission);
-        }
-        let v = self
-            .validators
-            .iter_mut()
-            .find(|v| v.address == address)
-            .ok_or(StakingError::NotValidator)?;
-        v.commission_bps = commission_bps;
-        Ok(())
-    }
-
     /// Called by the execution layer when a leader block is committed.
     ///
     /// 1. Calculates the reward for the current `committed_leader_height`
     /// 2. Advances the height counter
     /// 3. Advances treasury vesting
-    /// 4. Returns the RewardOutcome so the caller can credit the balance
+    /// 4. Updates validator liveness (online/offline detection)
+    /// 5. Returns the RewardOutcome so the caller can credit the balance
     pub fn on_leader_committed(
         &mut self,
         leader_author: u16,
@@ -605,6 +617,10 @@ impl StakingState {
         if let Some(ref mut treasury) = self.treasury {
             treasury.advance(self.committed_leader_height);
         }
+
+        // Validator liveness: reset missed count for the leader, increment for others
+        self.validator_online(leader_author);
+        self.advance_validator_liveness(leader_author);
 
         Ok(outcome)
     }
@@ -638,6 +654,89 @@ impl StakingState {
         // Epoch rotation preserves validator set, unbonding queue, and treasury;
         // future phases may apply stake re-balancing or new admission here.
         epoch
+    }
+
+    /// Called when a validator produces a committed leader block.
+    /// Resets their missed leader count and updates last_online_height.
+    pub fn validator_online(&mut self, leader_author: u16) {
+        if let Some(v) = self.authority_validator(leader_author) {
+            let address = v.address;
+            if let Some(v_mut) = self.validators.iter_mut().find(|v| v.address == address) {
+                v_mut.missed_leader_count = 0;
+                v_mut.last_online_height = self.committed_leader_height;
+            }
+        }
+    }
+
+    /// Increment missed leader count for validators that didn't produce a block
+    /// at the given height. Returns the list of validators that went offline
+    /// (exceeded MAX_MISSED_LEADERS_BEFORE_OFFLINE).
+    ///
+    /// Should be called at each committed leader height after the leader reward
+    /// is applied. The `leader_author` is the one that succeeded; all other
+    /// active validators in the committee get their missed count incremented.
+    pub fn advance_validator_liveness(&mut self, leader_author: u16) -> Vec<Address> {
+        let committee: Vec<_> = self.committee_order().into_iter().cloned().collect();
+        let leader_address = self.authority_validator(leader_author).map(|v| v.address);
+        let mut went_offline = Vec::new();
+
+        for v in committee {
+            if leader_address.map_or(false, |addr| v.address == addr) {
+                continue; // Leader succeeded, already handled by validator_online
+            }
+            if let Some(v_mut) = self.validators.iter_mut().find(|validator| validator.address == v.address && validator.active) {
+                v_mut.missed_leader_count = v_mut.missed_leader_count.saturating_add(1);
+                if v_mut.missed_leader_count >= MAX_MISSED_LEADERS_BEFORE_OFFLINE {
+                    v_mut.active = false;
+                    went_offline.push(v.address);
+                    info!(
+                        validator = %v.address,
+                        missed = v_mut.missed_leader_count,
+                        "validator marked offline after excessive missed leaders"
+                    );
+                }
+            }
+        }
+        went_offline
+    }
+
+    /// Check if a commission change is allowed (cooldown period has passed).
+    /// Allows the first change from the initial commission (0) without cooldown.
+    pub fn can_change_commission(&self, validator: Address) -> bool {
+        let Some(v) = self.validators.iter().find(|v| v.address == validator) else {
+            return false;
+        };
+        // First change from initial commission (0) is always allowed
+        if v.commission_bps == 0 {
+            return true;
+        }
+        let elapsed = self
+            .committed_leader_height
+            .saturating_sub(v.last_commission_change_height);
+        elapsed >= COMMISSION_CHANGE_COOLDOWN
+    }
+
+    /// Set a validator's commission (basis points, `<= 10_000`).
+    /// Enforces a cooldown period between changes.
+    pub fn set_commission(
+        &mut self,
+        address: Address,
+        commission_bps: u16,
+    ) -> Result<(), StakingError> {
+        if commission_bps > 10_000 {
+            return Err(StakingError::InvalidCommission);
+        }
+        if !self.can_change_commission(address) {
+            return Err(StakingError::CommissionCooldown);
+        }
+        let v = self
+            .validators
+            .iter_mut()
+            .find(|v| v.address == address)
+            .ok_or(StakingError::NotValidator)?;
+        v.commission_bps = commission_bps;
+        v.last_commission_change_height = self.committed_leader_height;
+        Ok(())
     }
 
     /// Minimal genesis staking state (Phase 24.1): `min_validators` active
@@ -1437,6 +1536,10 @@ mod tests {
         assert!(st.set_commission(a(1), 10_001).is_err());
         st.set_commission(a(1), 1_000).unwrap();
         assert_eq!(st.validators[0].commission_bps, 1_000);
+        // Advance height past cooldown to allow another change
+        st.committed_leader_height = COMMISSION_CHANGE_COOLDOWN;
+        st.set_commission(a(1), 2_000).unwrap();
+        assert_eq!(st.validators[0].commission_bps, 2_000);
     }
 
     // Old behaviour: authority index was the insertion position.

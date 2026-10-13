@@ -689,6 +689,7 @@ where
         engine.clone(),
         network_cmd_tx.clone(),
         events.clone(),
+        state_storage.clone(),
         shutdown_rx.clone(),
     ));
 
@@ -752,6 +753,7 @@ where
     });
 
     // Background task: periodically rebroadcast mempool transactions to peers
+    /// and re-queue stale in-flight transactions.
     let mempool_for_rebroadcast = mempool.clone();
     let network_cmd_tx_for_rebroadcast = network_cmd_tx.clone();
     let mut shutdown_for_rebroadcast = shutdown_rx.clone();
@@ -761,6 +763,13 @@ where
         loop {
             tokio::select! {
                 _ = interval.tick() => {
+                    // Re-queue stale in-flight transactions first
+                    // Re-queue stale in-flight transactions first
+                    let requeued = (*mempool_for_rebroadcast).requeue_stale(Instant::now(), Duration::from_secs(1));
+                    if requeued > 0 {
+                        info!(requeued, "re-queued stale in-flight transactions");
+                    }
+                    // Then rebroadcast queued transactions
                     let txs = mempool_for_rebroadcast.rebroadcast();
                     if !txs.is_empty() {
                         info!(count = txs.len(), "rebroadcast task sending transactions");
@@ -1091,6 +1100,7 @@ async fn run_event_handler(
     engine: Arc<ConsensusEngine<NodeDagStore, NodeBlockManager>>,
     network_cmd_tx: mpsc::UnboundedSender<NetworkCommand>,
     events: EventBus,
+    state_storage: Arc<Storage>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
@@ -1107,6 +1117,7 @@ async fn run_event_handler(
                         events: &events,
                     },
                     &mut orphans,
+                    &state_storage,
                 ),
                 None => break,
             },
@@ -1188,6 +1199,7 @@ fn handle_network_event(
     engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>,
     io: &BlockIngest<'_>,
     orphans: &mut orphans::OrphanBuffer,
+    state_storage: &Arc<Storage>,
 ) {
     let (network_cmd_tx, events) = (io.network_cmd_tx, io.events);
     orphans.expire(std::time::Instant::now());
@@ -1279,7 +1291,33 @@ fn handle_network_event(
             match response {
                 StateSyncResponse::Snapshot(data) => {
                     debug!(%peer, size = data.len(), "received state snapshot");
-                    // TODO: Import snapshot into state storage
+                    // Import snapshot into state storage - write to temp file first
+                    use std::io::Write;
+                    let temp_dir = std::env::temp_dir();
+                    let temp_file = temp_dir.join(format!("kvnc_state_sync_{}_{}.bin", peer, uuid::Uuid::new_v4()));
+                    if let Err(e) = std::fs::write(&temp_file, &data) {
+                        error!(error = %e, "failed to write state snapshot to temp file");
+                        return;
+                    }
+                    let txn = match state_storage.begin_write() {
+                        Ok(txn) => txn,
+                        Err(e) => {
+                            let _ = std::fs::remove_file(&temp_file);
+                            error!(error = %e, "failed to begin write transaction for state sync import");
+                            return;
+                        }
+                    };
+                    if let Err(e) = state_storage.state().import_snapshot(&txn, &temp_file) {
+                        let _ = std::fs::remove_file(&temp_file);
+                        error!(error = %e, "failed to import state snapshot");
+                        return;
+                    }
+                    let _ = std::fs::remove_file(&temp_file);
+                    if let Err(e) = txn.commit() {
+                        error!(error = %e, "failed to commit state sync import");
+                        return;
+                    }
+                    info!(%peer, "state snapshot imported successfully");
                 }
                 StateSyncResponse::NotFound => {
                     debug!(%peer, "requested state snapshot not found on peer");
@@ -3104,6 +3142,9 @@ mod tests {
             payout_address: addr3,
             public_key: Some(pk3),
             vrf_public_key: None,
+            missed_leader_count: 0,
+            last_online_height: 0,
+            last_commission_change_height: 0,
         });
         staking.total_staked += 10_000 * ONE_KUNA;
 
@@ -3147,6 +3188,9 @@ mod tests {
                 payout_address: addr,
                 public_key: Some(pk),
                 vrf_public_key: None,
+                missed_leader_count: 0,
+                last_online_height: 0,
+                last_commission_change_height: 0,
             });
             staking.total_staked += 100_000 * ONE_KUNA;
         }
