@@ -3,6 +3,7 @@
 > **Ova verzija je 100% truth state — provjerena kod-inspekcijom + buildom na `main` @ `7fce41b` (2026-10-12).**
 > Prethodna verzija (s checkboxes) i `TASKLIST_DRIFT.md` (2026-10-08) su zastarjeli; ovaj dokument ih zamjenjuje.
 > **Revizija 2026-10-12:** late-join red #1 **RIJEŠEN** (PR #54); svi `[ ]`/`[~]` itemi ponovno provjereni protiv koda (vidi "Provjera neoznačenih itema" na dnu).
+> **Revizija 2026-10-13:** VRF Phase 1.3 **RIJEŠEN** — ECVRF-ED25519-SHA512-Elligator2, stake-weighted leader selection, genesis/staking/staking-tx wiring, 7 testova prolaze; TASKLIST.md ažuriran.
 
 **Legenda statusa**
 - `[x]` — implementirano i wired u production pathu (verificirano u kodu)
@@ -44,13 +45,25 @@
 - [x] Hash domain separation (BLOCK/TX/DIGEST/MERKLE) + `kvnc-types/src/signing.rs` — signature format v1: `chain_id` registry (mainnet 1, testnet 2, devnet 3, local 1337), `VOTE_DOMAIN_TAG`/`TX_DOMAIN_TAG` (16-byte, `KUNA/...`)
 - [x] `CommittedSubDag.non_blue` field (#13 contract) — red blocks vraćeni u mempool, ne prunaju se
 
-## PHASE 1.2 (kvnc-crypto): Primitives — `[~]` partial
+## PHASE 1.2 (kvnc-crypto): Primitives — `[x]` DONE
 
 - [x] Keypair persistence: Argon2id + XChaCha20-Poly1305 (`kvnc-cli/src/wallet.rs`, keystore v2 + v1→v2 migracija)
 - [x] `verify_batch` → `Err(VerificationFailed)` na nevalidan potpis (ne `Ok(false)`) + `tests/strict_vectors.rs` (strogi vektori)
 - [x] Strict sig verify svugdje (commit `bebe8c6`)
 - [ ] BIP32-style HD derivation — **nema koda** (samo BIP-39 mnemonic import bez HD izvoda u CLI)
-- [ ] VRF za leader selection — **nema koda**; koristi se deterministički stake-weighted
+- [x] VRF za leader selection — **ECVRF-ED25519-SHA512-Elligator2** via `ecvrf` crate (`kvnc-crypto/src/vrf.rs`: `VRFKeyPair`, `VRFOutput`, `vrf_prove`, `vrf_verify`, `vrf_hash_to_u64`; 7 testova prolaze)
+
+## PHASE 1.3 (VRF Wiring): Leader Selection Integration — `[x]` DONE
+
+- [x] `CommitteeInfo.leader_with_vrf(round, vrf_outputs)` — stake-weighted selection via `priority = vrf_hash * total_stake / stake` (`kvnc-types/src/committee.rs:78-120`)
+- [x] `Authority.vrf_public_key: Option<PublicKey>` — optional VRF key in committee authority (`kvnc-types/src/committee.rs:18`)
+- [x] `ValidatorInfo.vrf_public_key: Option<VrfPublicKey>` — optional VRF key in staking state (`kvnc-staking/src/lib.rs:311`)
+- [x] Genesis `genesis_validators.toml` supports optional `vrf_public_key` field (`kvnc-node/src/main.rs:1819`)
+- [x] `build_committee` reads VRF keys from staking state and builds committee with VRF pubkeys (`kvnc-node/src/main.rs:1739`)
+- [x] `StakingState.join_validator` accepts optional `vrf_public_key` parameter (`kvnc-staking/src/lib.rs:418`)
+- [x] Staking transaction types (`Stake`, `Delegate`) wire VRF public key into validator record (`kvnc-execution/src/lib.rs:604`)
+- [x] All tests updated for 6-argument `join_validator` signature
+- [x] Fallback: when no VRF outputs provided, `leader()` uses deterministic round-robin (`CommitteeInfo::leader`)
 
 ## PHASE 2.1: Block Store — `[x]` DONE
 
@@ -339,7 +352,7 @@
 - `docker-compose.yml` — 4 validator servisa, healthchecks, val1-4.pem (gitignored), `genesis_validators.toml`
 - `ops/docker/validators/generate.sh` + `build-genesis.sh`
 
-## Known reds / otvoreni problemi (rev. 2026-10-12)
+## Known reds / otvoreni problemi (rev. 2026-10-13)
 
 1. ~~**`late_join_integration` FAIL**~~ — **RJEŠENO 2026-10-12 (PR #54)**: `late_vote_window_rounds` (default `WAVE_LENGTH`=3) + `vote_for_leader` ne glasa za odlučen round + `UniversalCommitter::is_decided`; 5/5 PASS, Test CI zelen.
 2. **`live_vote_integration` 2 testa padaju** pod `--ignored` — harness piše `validators = [...]` umjesto schema koju parser traži (`validator` polje) → `missing field validator`; fix u test setupu (nije consensus bug)
@@ -349,15 +362,16 @@
 6. ~~**Ticker rename KVNC→KUNA** nedovršen~~ — **RJEŠENO 2026-10-10**: chain = Kovanica, coin ticker = KUNA; README/AGENTS/docs/kod usklađeni (`ONE_KUNA`, `KUNA-TX-v1`, domain tagovi).
 7. ~~**kvnc kod referencira `seed.kovanica.online`**~~ — **RJEŠENO 2026-10-10**: uklonjeno iz config/network defaultova i docs; seedovi prazni + `KVNC_BOOTNODES`; novi red: registrirati 3+ kvnc-native DNS imena prije testneta.
 8. **Protocol namespace nedosljednost** — tri prefiksa: `/kovanica/1.0.0` (identify) i `/kovanica/kad/1.0.0` (kad) vs `/kvanc/block-sync/1.0.0` i `/kvanc/state-sync/1.0.0` (typo `kvanc`, zaključan testom `audit_62_sync_protocol_is_kvanc`). Treba odluka o kanonskom prefiksu (`/kvnc/`).
+9. ~~**VRF za leader selection**~~ — **RJEŠENO 2026-10-13 (Phase 1.3)**: ECVRF-ED25519-SHA512-Elligator2 via `ecvrf` crate, stake-weighted leader selection, genesis wiring complete.
 
-## Provjera `[ ]` / `[~]` itema protiv koda (2026-10-12)
+## Provjera `[ ]` / `[~]` itema protiv koda (2026-10-13)
 
-Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio krivo označen kao gotov** (seed nodes), **2 opisa su bila netočna** (staking docs, api-client broj metoda) i **dodana je 1 nova nedosljednost** (protocol namespace). Ostali `[ ]`/`[~]` su potvrđeni točnima.
+Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio krivo označen kao gotov** (seed nodes), **2 opisa su bila netočna** (staking docs, api-client broj metoda) i **dodana je 1 nova nedosljednost** (protocol namespace). **VRF je riješen 2026-10-13 (Phase 1.3)**. Ostali `[ ]`/`[~]` su potvrđeni točnima.
 
 | Item | Oznaka | Verdict nakon inspekcije |
 |---|---|---|
 | 1.2 BIP32 HD | `[ ]` | ✅ točno — nema koda (`grep bip32/derive_child` = 0) |
-| 1.2 VRF | `[ ]` | ✅ točno — samo komentar "replace with VRF later" (`committee.rs:70`) |
+| 1.2 VRF | `[x]` | ✅ **RJEŠENO 2026-10-13** — ECVRF-ED25519-SHA512-Elligator2 via `ecvrf` crate (`kvnc-crypto/src/vrf.rs`), stake-weighted leader selection (`kvnc-types/src/committee.rs:78-120`), genesis wiring (`kvnc-node/src/main.rs`), staking state wiring (`kvnc-staking/src/lib.rs`), staking tx wiring (`kvnc-execution/src/lib.rs`), 7 testova prolaze |
 | 4.3/17 `timeout_factor` | `[~]` | ✅ točno — ne postoji; samo fixed `leader_timeout_ms` |
 | 4.4/17 Fork handling | `[~]` | ✅ točno — `process_block` **odbija** `Err("fork/equivocation")` (test `fork_first_valid_digest_wins_deterministic`); `committer.update_leader` ima min-digest tie-break ali je na ingest putu nedosegnut |
 | 8.2/25 Governance hooks | `[ ]` | ✅ točno — `kvnc-cli propose/vote → not_implemented` (`main.rs:304,310`); `docs/GOVERNANCE.md` = 38-line skeleton |
@@ -395,11 +409,12 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 ## Actual critical path (sljedeći koraci po prioritetu)
 
 1. ~~Fix `late_join_integration`~~ — **RJEŠENO (PR #54, 2026-10-12)**
-2. **Fix `live_vote_integration` harness** (`validators = [...]` schema vs parser koji traži `validator`) → dokaz 16.3 end-to-end
-3. **Plot 16.6**: pokrenuti docker-compose 4-node quorum kao ops task + 6h soak
-4. **TPS benchmark** @2GB RAM — `ops/bench/tps.sh` je skeleton (submit loop no-op); napisati pravi benchmark
-5. **Registrirati 3+ kvnc-native DNS seed imena** (chain identity; `docs/SEED-DNS-AUDIT.md`)
-6. **Odluka o kanonskom protocol prefiksu** (`/kvnc/` vs `/kvanc/` vs `/kovanica/`) — vidi red #8
-7. **Phase 20/21**: external security review; wired middleware cleanup
-8. **Phase 24**: testnet (faucet u CI, javni seed), mainnet checklist
-9. **Phase 25**: governance (nakon mainneta)
+2. ~~**VRF za leader selection**~~ — **RJEŠENO 2026-10-13 (Phase 1.3)**: ECVRF-ED25519-SHA512-Elligator2, stake-weighted leader selection, genesis/staking/staking-tx wiring complete, 7 testova prolaze
+3. **Fix `live_vote_integration` harness** (`validators = [...]` schema vs parser koji traži `validator`) → dokaz 16.3 end-to-end
+4. **Plot 16.6**: pokrenuti docker-compose 4-node quorum kao ops task + 6h soak
+5. **TPS benchmark** @2GB RAM — `ops/bench/tps.sh` je skeleton (submit loop no-op); napisati pravi benchmark
+6. **Registrirati 3+ kvnc-native DNS seed imena** (chain identity; `docs/SEED-DNS-AUDIT.md`)
+7. **Odluka o kanonskom protocol prefiksu** (`/kvnc/` vs `/kvanc/` vs `/kovanica/`) — vidi red #8
+8. **Phase 20/21**: external security review; wired middleware cleanup
+9. **Phase 24**: testnet (faucet u CI, javni seed), mainnet checklist
+10. **Phase 25**: governance (nakon mainneta)
