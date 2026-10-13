@@ -13,11 +13,11 @@ use std::{error::Error, time::Duration};
 const MAX_TRANSMIT_SIZE: usize = 1024 * 1024;
 
 /// Identify protocol version advertised to peers.
-const IDENTIFY_PROTOCOL: &str = "/kovanica/1.0.0";
+const IDENTIFY_PROTOCOL: &str = "/kvnc/1.0.0";
 
 /// Kademlia protocol name; peers speaking a different name are ignored by the
 /// DHT even if they share the transport.
-const KAD_PROTOCOL: &str = "/kovanica/kad/1.0.0";
+const KAD_PROTOCOL: &str = "/kvnc/kad/1.0.0";
 
 /// Composite libp2p behaviour: gossip, peer routing, liveness, identification and request-response.
 #[derive(NetworkBehaviour)]
@@ -192,6 +192,15 @@ pub(crate) fn build_swarm(config: &NetworkConfig) -> Result<Swarm<Behaviour>, Ne
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Canonical libp2p protocol namespace is `/kvnc/` (decided 2026-10-13);
+    /// this locks the identify + Kademlia prefixes so they cannot drift back to
+    /// `/kovanica/` or the old `/kvanc/` typo.
+    #[test]
+    fn protocol_namespace_is_kvnc() {
+        assert_eq!(IDENTIFY_PROTOCOL, "/kvnc/1.0.0");
+        assert_eq!(KAD_PROTOCOL, "/kvnc/kad/1.0.0");
+    }
 
     #[test]
     fn message_id_is_deterministic() {
