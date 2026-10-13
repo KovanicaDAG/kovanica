@@ -9,7 +9,7 @@ use libp2p::request_response::{OutboundRequestId, ResponseChannel};
 use serde::{Deserialize, Serialize};
 
 /// Protocol name for block sync request-response.
-pub const BLOCK_SYNC_PROTOCOL: &str = "/kvnc/block-sync/1.0.0";
+pub const BLOCK_SYNC_PROTOCOL: &str = "/kovanica/block-sync/1.0.0";
 
 /// Maximum response size (1 MiB): one block, same cap as a gossip frame.
 pub const MAX_RESPONSE_SIZE: usize = 1024 * 1024;

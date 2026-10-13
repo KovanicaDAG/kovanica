@@ -103,7 +103,7 @@ impl Committee {
                     .saturating_mul(self.total_stake as u128)
                     .saturating_div(authority.stake.max(1) as u128);
 
-                if best_authority.map_or(true, |(_, p)| priority < p) {
+                if best_authority.is_none_or(|(_, p)| priority < p) {
                     best_authority = Some((authority.index, priority));
                 }
             }

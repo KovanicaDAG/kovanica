@@ -50,7 +50,7 @@ fn test_engine_new_initial_state() {
 #[test]
 fn test_engine_config_defaults() {
     let config = ConsensusConfig::default();
-    assert_eq!(config.round_duration_ms, 2000);
+    assert_eq!(config.round_duration_ms, 4000);
     assert_eq!(config.lookahead_rounds, 3);
     assert_eq!(config.max_pending_rounds, 100);
 }

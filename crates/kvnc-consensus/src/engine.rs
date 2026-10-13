@@ -1141,6 +1141,7 @@ mod tests {
                 index: 0,
                 stake: 100,
                 public_key,
+                vrf_public_key: None,
                 address: Address::default(),
                 network_address: String::new(),
             }],
@@ -1627,6 +1628,7 @@ mod tests {
                 index: 0,
                 stake: 100,
                 public_key: kvnc_crypto::generate_keypair().1,
+                vrf_public_key: None,
                 address: kvnc_types::Address::default(),
                 network_address: String::new(),
             }],
@@ -1813,6 +1815,7 @@ mod tests {
             index: 0,
             stake: 1,
             public_key,
+            vrf_public_key: None,
             address: Address::default(),
             network_address: String::new(),
         }];
@@ -1821,6 +1824,7 @@ mod tests {
                 index: (i + 1) as AuthorityIndex,
                 stake: 1,
                 public_key: *pk,
+                vrf_public_key: None,
                 address: Address::default(),
                 network_address: String::new(),
             });
@@ -1919,6 +1923,7 @@ mod tests {
             index: 0,
             stake: 1,
             public_key,
+            vrf_public_key: None,
             address: Address::default(),
             network_address: String::new(),
         }];
@@ -1927,6 +1932,7 @@ mod tests {
                 index: (i + 1) as AuthorityIndex,
                 stake: 1,
                 public_key: *pk,
+                vrf_public_key: None,
                 address: Address::default(),
                 network_address: String::new(),
             });

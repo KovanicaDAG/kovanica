@@ -179,7 +179,7 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
             .transpose()?;
         let stake = v.stake.unwrap_or(MIN_VALIDATOR_STAKE);
         staking
-            .join_validator(address, stake, 0, Some(address), pk)
+            .join_validator(address, stake, 0, Some(address), pk, None)
             .with_context(|| format!("joining validator {}", v.address))?;
     }
 
@@ -755,7 +755,7 @@ where
     let mempool_for_rebroadcast = mempool.clone();
     let network_cmd_tx_for_rebroadcast = network_cmd_tx.clone();
     let mut shutdown_for_rebroadcast = shutdown_rx.clone();
-    let rebroadcast_task = tokio::spawn(async move {
+    let _rebroadcast_task = tokio::spawn(async move {
         info!("rebroadcast task started");
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
@@ -885,7 +885,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
                 .map(|s| parse_public_key_hex(s))
                 .transpose()?;
             let stake = v.stake.unwrap_or(kvnc_staking::MIN_VALIDATOR_STAKE);
-            staking.join_validator(address, stake, 0, Some(address), pk)?;
+            staking.join_validator(address, stake, 0, Some(address), pk, None)?;
             genesis_stakes.push((address, stake));
         }
         info!(count = validators_input.len(), "loaded validators.json");
@@ -937,7 +937,12 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
             } else {
                 None
             };
-            staking.join_validator(address, v.stake, 0, Some(address), pk)?;
+            let vrf_pk = if let Some(p) = v.vrf_public_key.as_ref() {
+                Some(kvnc_staking::VrfPublicKey::from_bytes(parse_hex_32(p)?))
+            } else {
+                None
+            };
+            staking.join_validator(address, v.stake, 0, Some(address), pk, vrf_pk)?;
             genesis_stakes.push((address, v.stake));
         }
         info!(count = count, "loaded genesis validator set");
@@ -1686,6 +1691,7 @@ fn build_committee(
             index: 0,
             stake: MIN_VALIDATOR_STAKE,
             public_key: *local_public_key,
+            vrf_public_key: None,
             address: *local_address,
             network_address: listen_addr.to_string(),
         };
@@ -1729,10 +1735,14 @@ fn build_committee(
             );
         };
 
+        // VRF public key for leader selection (optional)
+        let vrf_public_key = validator.vrf_public_key.as_ref().map(|v| kvnc_types::PublicKey(v.0));
+
         let authority = AuthorityInfo {
             index: index as u16,
             stake: validator.stake,
             public_key,
+            vrf_public_key,
             address: validator.address,
             network_address: listen_addr.to_string(),
         };
@@ -1780,6 +1790,16 @@ fn build_mempool_config() -> MempoolConfig {
         }
     }
 
+    // In-flight timeout (seconds)
+    if let Ok(val) = std::env::var("KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS") {
+        if let Ok(secs) = val.parse::<u64>() {
+            config.in_flight_timeout = Duration::from_secs(secs);
+            info!(interval_secs = secs, "mempool in-flight timeout overridden from env");
+        } else {
+            warn!(val, "invalid KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS, using default");
+        }
+    }
+
     config
 }
 
@@ -1811,6 +1831,7 @@ struct GenesisValidatorEntry {
     address: String,
     stake: u64,
     public_key: Option<String>,
+    vrf_public_key: Option<String>,
 }
 
 /// Top-level shape of `genesis_validators.toml` (`[[validator]]` array of tables).
@@ -1914,6 +1935,18 @@ fn parse_public_key_hex(value: &str) -> Result<PublicKey> {
     let mut pk = [0u8; 32];
     pk.copy_from_slice(&bytes);
     Ok(PublicKey(pk))
+}
+
+/// Parse a 32-byte hex string into a [u8; 32] array.
+fn parse_hex_32(value: &str) -> Result<[u8; 32]> {
+    let bytes = hex::decode(value.trim())
+        .with_context(|| format!("invalid hex `{}`", value))?;
+    if bytes.len() != 32 {
+        anyhow::bail!("expected 32 bytes, got {}", bytes.len());
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
 }
 
 /// Convert a `host:port` string or a full multiaddr into a [`Multiaddr`].
@@ -2479,6 +2512,7 @@ mod tests {
                 0,
                 Some(payout),
                 Some(public_key),
+                None,
             )
             .unwrap();
         let txn = state_storage.begin_write().unwrap();
@@ -2608,6 +2642,7 @@ mod tests {
                 0,
                 Some(Address([0xa1; 32])),
                 Some(PublicKey([0x22; 32])),
+                None,
             )
             .unwrap();
         let txn = state_storage.begin_write().unwrap();
@@ -2678,6 +2713,7 @@ mod tests {
                     0,
                     Some(Address([0xa0 + a; 32])),
                     Some(PublicKey([0x30 + a; 32])),
+                    None,
                 )
                 .unwrap();
         }
@@ -2796,6 +2832,7 @@ mod tests {
                 0,
                 Some(payout),
                 Some(PublicKey([0x22; 32])),
+                None,
             )
             .unwrap();
         let txn = state_storage.begin_write().unwrap();
@@ -2943,16 +2980,16 @@ mod tests {
 
         // Validator stakes: 100K, 80K, 120K, 60K KUNA (all above MIN_VALIDATOR_STAKE = 50K)
         staking
-            .join_validator(addr1, 100_000 * ONE_KUNA, 0, Some(addr1), Some(pk1))
+            .join_validator(addr1, 100_000 * ONE_KUNA, 0, Some(addr1), Some(pk1), None)
             .unwrap();
         staking
-            .join_validator(addr2, 80_000 * ONE_KUNA, 0, Some(addr2), Some(pk2))
+            .join_validator(addr2, 80_000 * ONE_KUNA, 0, Some(addr2), Some(pk2), None)
             .unwrap();
         staking
-            .join_validator(addr3, 120_000 * ONE_KUNA, 0, Some(addr3), Some(pk3))
+            .join_validator(addr3, 120_000 * ONE_KUNA, 0, Some(addr3), Some(pk3), None)
             .unwrap();
         staking
-            .join_validator(addr4, 60_000 * ONE_KUNA, 0, Some(addr4), Some(pk4))
+            .join_validator(addr4, 60_000 * ONE_KUNA, 0, Some(addr4), Some(pk4), None)
             .unwrap();
 
         // Save to storage
@@ -3046,11 +3083,11 @@ mod tests {
 
         // Active, sufficient stake
         staking
-            .join_validator(addr1, 100_000 * ONE_KUNA, 0, Some(addr1), Some(pk1))
+            .join_validator(addr1, 100_000 * ONE_KUNA, 0, Some(addr1), Some(pk1), None)
             .unwrap();
         // Inactive - should be skipped
         staking
-            .join_validator(addr2, 100_000 * ONE_KUNA, 0, Some(addr2), Some(pk2))
+            .join_validator(addr2, 100_000 * ONE_KUNA, 0, Some(addr2), Some(pk2), None)
             .unwrap();
         staking
             .validators
@@ -3066,6 +3103,7 @@ mod tests {
             active: true,
             payout_address: addr3,
             public_key: Some(pk3),
+            vrf_public_key: None,
         });
         staking.total_staked += 10_000 * ONE_KUNA;
 
@@ -3108,6 +3146,7 @@ mod tests {
                 active: true,
                 payout_address: addr,
                 public_key: Some(pk),
+                vrf_public_key: None,
             });
             staking.total_staked += 100_000 * ONE_KUNA;
         }

@@ -236,6 +236,7 @@ mod stake_weighted_tests {
             index,
             stake,
             public_key: PublicKey([index as u8; 32]),
+            vrf_public_key: None,
             address: kvnc_types::Address([index as u8; 32]),
             network_address: format!("/ip4/127.0.0.1/tcp/900{}", index),
         }
@@ -270,6 +271,7 @@ pub struct AuthorityInfo {
     pub index: AuthorityIndex,
     pub stake: Stake,
     pub public_key: kvnc_types::crypto::PublicKey,
+    pub vrf_public_key: Option<kvnc_types::crypto::PublicKey>,
     pub address: kvnc_types::Address,
     pub network_address: String,
 }

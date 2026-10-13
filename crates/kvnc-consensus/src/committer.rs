@@ -851,6 +851,7 @@ mod tests {
                 index,
                 stake: 1,
                 public_key: PublicKey([index as u8; 32]),
+                vrf_public_key: None,
                 address: Address([index as u8; 32]),
                 network_address: String::new(),
             })

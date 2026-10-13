@@ -81,6 +81,10 @@ enum Commands {
     Propose(ProposeArgs),
     /// Vote on a governance proposal (not yet supported by the node)
     Vote(VoteArgs),
+    /// Deploy a WASM contract
+    Deploy(DeployArgs),
+    /// Call a contract method
+    Call(CallArgs),
     /// HTLC atomic swaps (KVP-104)
     Htlc {
         #[command(subcommand)]
@@ -269,6 +273,49 @@ struct VoteArgs {
     approve: bool,
 }
 
+/// Arguments for `kvnc deploy` — deploy a WASM contract.
+#[derive(Args)]
+struct DeployArgs {
+    /// Path to the .wasm file
+    #[arg(long)]
+    wasm: PathBuf,
+    /// Gas limit for deployment (default: 5_000_000)
+    #[arg(long, default_value_t = 5_000_000)]
+    gas_limit: u64,
+    /// Keystore file path
+    #[arg(long, short, default_value = "keystore.json")]
+    keystore: PathBuf,
+    /// Fee in atoms (the mempool rejects zero-fee transactions)
+    #[arg(long, default_value_t = 1)]
+    fee: u64,
+}
+
+/// Arguments for `kvnc call` — call a contract method.
+#[derive(Args)]
+struct CallArgs {
+    /// Contract address (32-byte hex)
+    #[arg(long)]
+    contract: String,
+    /// Method name (e.g., htlc_create, token_transfer)
+    #[arg(long)]
+    method: String,
+    /// Arguments as JSON array (will be bincode encoded)
+    #[arg(long)]
+    args: String,
+    /// Native KUNA value to attach (base units)
+    #[arg(long, default_value_t = 0)]
+    value: u64,
+    /// Gas limit for execution
+    #[arg(long, default_value_t = 10_000_000)]
+    gas_limit: u64,
+    /// Keystore file path
+    #[arg(long, short, default_value = "keystore.json")]
+    keystore: PathBuf,
+    /// Fee in atoms (the mempool rejects zero-fee transactions)
+    #[arg(long, default_value_t = 1)]
+    fee: u64,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -313,6 +360,8 @@ async fn main() -> Result<()> {
             json!({ "proposal_id": args.proposal_id, "approve": args.approve }),
             json,
         ),
+        Commands::Deploy(args) => cmd_deploy(&client, chain_id, args, json).await,
+        Commands::Call(args) => cmd_call(&client, chain_id, args, json).await,
         Commands::Htlc { command } => {
             contracts::run(&client, ContractCommand::Htlc { command }, json).await
         }
@@ -673,6 +722,104 @@ async fn cmd_claim_rewards(
     } else {
         println!("  validator: all delegated validators");
     }
+    println!("  fee:       {} atoms", args.fee);
+    println!("  nonce:     {nonce}");
+    Ok(())
+}
+
+/// Deploy a WASM contract via a signed Deploy transaction.
+async fn cmd_deploy(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: DeployArgs,
+    json_output: bool,
+) -> Result<()> {
+    let wasm_bytes = std::fs::read(&args.wasm)
+        .with_context(|| format!("reading wasm file {}", args.wasm.display()))?;
+    if wasm_bytes.is_empty() {
+        anyhow::bail!("WASM file is empty");
+    }
+    let wasm_size = wasm_bytes.len();
+
+    let (tx_hash, sender, nonce) = sign_and_submit_self(
+        client,
+        chain_id,
+        &args.keystore,
+        TransactionKind::Deploy { code: wasm_bytes },
+        args.fee,
+    )
+    .await?;
+
+    if json_output {
+        return output::print_json(&json!({
+            "transactionHash": tx_hash,
+            "sender": sender.to_string(),
+            "wasm_size": wasm_size,
+            "gas_limit": args.gas_limit,
+            "fee": args.fee,
+            "nonce": nonce,
+        }));
+    }
+
+    println!("Submitted deploy transaction {tx_hash}");
+    println!("  from:      {}", sender);
+    println!("  wasm_size: {} bytes", wasm_size);
+    println!("  gas_limit: {}", args.gas_limit);
+    println!("  fee:       {} atoms", args.fee);
+    println!("  nonce:     {nonce}");
+    Ok(())
+}
+
+/// Call a contract method via a signed Call transaction.
+async fn cmd_call(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: CallArgs,
+    json_output: bool,
+) -> Result<()> {
+    let contract = wallet::parse_address(&args.contract, "contract")?;
+    let method = args.method.clone();
+    let args_bytes = {
+        let json_val: serde_json::Value = serde_json::from_str(&args.args)
+            .with_context(|| format!("--args must be valid JSON array, got: {}", args.args))?;
+        bincode::serialize(&json_val)
+            .with_context(|| "bincode serialization of args failed")?
+    };
+
+    let (tx_hash, sender, nonce) = sign_and_submit_self(
+        client,
+        chain_id,
+        &args.keystore,
+        TransactionKind::Call {
+            contract,
+            value: args.value,
+            method: args.method,
+            args: args_bytes,
+            gas_limit: args.gas_limit,
+        },
+        args.fee,
+    )
+    .await?;
+
+    if json_output {
+        return output::print_json(&json!({
+            "transactionHash": tx_hash,
+            "sender": sender.to_string(),
+            "contract": contract.to_string(),
+            "method": method,
+            "value": args.value,
+            "gas_limit": args.gas_limit,
+            "fee": args.fee,
+            "nonce": nonce,
+        }));
+    }
+
+    println!("Submitted call transaction {tx_hash}");
+    println!("  from:      {}", sender);
+    println!("  contract:  {}", contract);
+    println!("  method:    {}", method);
+    println!("  value:     {} atoms", args.value);
+    println!("  gas_limit: {}", args.gas_limit);
     println!("  fee:       {} atoms", args.fee);
     println!("  nonce:     {nonce}");
     Ok(())

@@ -309,6 +309,9 @@ pub struct ValidatorInfo {
     /// required for active validators in the committee).
     #[serde(default)]
     pub public_key: Option<PublicKey>,
+    /// VRF public key for verifiable leader selection (optional).
+    #[serde(default)]
+    pub vrf_public_key: Option<VrfPublicKey>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -320,6 +323,19 @@ pub struct Delegation {
 
 /// Fixed slash percentage (basis points); 500 bps = 5%.
 pub const SLASH_PCT_BPS: u16 = 500;
+
+/// VRF public key for verifiable leader selection (optional).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VrfPublicKey(pub [u8; 32]);
+
+impl VrfPublicKey {
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 /// Unbonding queue entry.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -406,6 +422,7 @@ impl StakingState {
         commission_bps: u16,
         payout_address: Option<Address>,
         public_key: Option<PublicKey>,
+        vrf_public_key: Option<VrfPublicKey>,
     ) -> Result<(), StakingError> {
         if stake < MIN_VALIDATOR_STAKE {
             return Err(StakingError::InsufficientStake);
@@ -427,6 +444,7 @@ impl StakingState {
             active: true,
             payout_address: payout_address.unwrap_or(address),
             public_key,
+            vrf_public_key,
         });
         self.total_staked += stake;
         Ok(())
@@ -637,7 +655,7 @@ impl StakingState {
             let byte = (i as u8 + 1) % 255; // avoid zero address collision
             let validator = Address([byte; 32]);
             state
-                .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None)
+                .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None, None)
                 .expect("genesis validator admission");
         }
         state
@@ -1039,7 +1057,7 @@ mod tests {
                 let validator = Address([address_byte; 32]);
                 let payout = Address([address_byte.wrapping_add(128); 32]);
                 state
-                    .join_validator(validator, MIN_VALIDATOR_STAKE, 0, Some(payout), None)
+                    .join_validator(validator, MIN_VALIDATOR_STAKE, 0, Some(payout), None, None)
                     .expect("generated validator setup is valid");
             }
 
@@ -1182,7 +1200,7 @@ mod tests {
         let validator = Address([1u8; 32]);
         let payout = Address([2u8; 32]);
         state
-            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, Some(payout), None)
+            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, Some(payout), None, None)
             .unwrap();
 
         let outcome = state.on_leader_committed(0).unwrap();
@@ -1206,7 +1224,7 @@ mod tests {
         let validator = Address([1u8; 32]);
         let delegator = Address([2u8; 32]);
         state
-            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None)
+            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
         let delegate_amount = 10_000 * ONE_KUNA;
         state
@@ -1232,7 +1250,7 @@ mod tests {
         // Slash reduces validator stake (fixed %) — fresh state for isolation
         let mut slash_state = StakingState::new();
         slash_state
-            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None)
+            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
         slash_state
             .delegate(delegator, validator, delegate_amount)
@@ -1265,7 +1283,7 @@ mod tests {
     fn unbonding_ready_sorted_deterministic() {
         let mut state = StakingState::new();
         state
-            .join_validator(Address([1u8; 32]), MIN_VALIDATOR_STAKE, 0, None, None)
+            .join_validator(Address([1u8; 32]), MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
         state
             .delegate(Address([2u8; 32]), Address([1u8; 32]), 5_000 * ONE_KUNA)
@@ -1288,7 +1306,7 @@ mod tests {
         let mut state = StakingState::new();
         let validator = Address([3u8; 32]);
         state
-            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None)
+            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
         let evidence = DoubleSignEvidence {
             validator,
@@ -1298,7 +1316,7 @@ mod tests {
         // Re-apply to fresh validator with same stake (simulated second occurrence)
         let mut state2 = StakingState::new();
         state2
-            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None)
+            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
         let total_second = state2.slash(evidence.clone()).unwrap();
         assert_eq!(
@@ -1349,7 +1367,7 @@ mod tests {
             let addr = Address([i + 1; 32]);
             let payout = Address([i + 11; 32]);
             state
-                .join_validator(addr, MIN_VALIDATOR_STAKE, 0, Some(payout), None)
+                .join_validator(addr, MIN_VALIDATOR_STAKE, 0, Some(payout), None, None)
                 .unwrap();
         }
 
@@ -1377,9 +1395,9 @@ mod tests {
     #[test]
     fn join_validator_rejects_duplicates() {
         let mut st = StakingState::new();
-        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None)
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
-        let err = st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None);
+        let err = st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None);
         assert!(matches!(err, Err(StakingError::ValidatorExists)));
         assert_eq!(st.validators.len(), 1);
         assert_eq!(st.total_staked, MIN_VALIDATOR_STAKE);
@@ -1388,7 +1406,7 @@ mod tests {
     #[test]
     fn bond_unbond_validator_uses_queue_and_unbonding_rounds() {
         let mut st = StakingState::new();
-        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None)
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
         st.bond_validator(a(1), 10 * ONE_KUNA).unwrap();
         assert_eq!(st.self_stake(a(1)), MIN_VALIDATOR_STAKE + 10 * ONE_KUNA);
@@ -1414,7 +1432,7 @@ mod tests {
     #[test]
     fn set_commission_validates() {
         let mut st = StakingState::new();
-        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None)
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
         assert!(st.set_commission(a(1), 10_001).is_err());
         st.set_commission(a(1), 1_000).unwrap();
@@ -1426,7 +1444,7 @@ mod tests {
     fn authority_index_maps_by_identity_not_position() {
         let mut st = StakingState::new();
         for b in [3u8, 1, 2] {
-            st.join_validator(a(b), MIN_VALIDATOR_STAKE, 0, Some(a(b + 10)), None)
+            st.join_validator(a(b), MIN_VALIDATOR_STAKE, 0, Some(a(b + 10)), None, None)
                 .unwrap();
         }
         assert_eq!(st.payout_address_for(0), Some(a(11)));
@@ -1440,7 +1458,7 @@ mod tests {
     #[test]
     fn reward_share_is_exact_and_pays_commission_and_delegators() {
         let mut st = StakingState::new();
-        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 1_000, None, None)
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 1_000, None, None, None)
             .unwrap();
         let alone = st.reward_share(a(1), 10 * ONE_KUNA, 1_000);
         assert_eq!(alone, vec![(a(1), 10 * ONE_KUNA)]);
@@ -1457,7 +1475,7 @@ mod tests {
     #[test]
     fn slash_cuts_delegated_stake_once() {
         let mut st = StakingState::new();
-        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None)
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
         st.delegate(a(5), a(1), 10_000 * ONE_KUNA).unwrap();
         let slashed = st
@@ -1508,7 +1526,7 @@ mod tests {
                 match o {
                     Op::Join(v) => {
                         if liquid >= u128::from(MIN_VALIDATOR_STAKE)
-                            && st.join_validator(a(v + 1), MIN_VALIDATOR_STAKE, 500, None, None).is_ok() {
+                            && st.join_validator(a(v + 1), MIN_VALIDATOR_STAKE, 500, None, None, None).is_ok() {
                             liquid -= u128::from(MIN_VALIDATOR_STAKE);
                         }
                     }

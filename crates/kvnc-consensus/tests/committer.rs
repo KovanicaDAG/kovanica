@@ -25,6 +25,7 @@ fn authority(index: AuthorityIndex, stake: u64, key_byte: u8) -> AuthorityInfo {
         index,
         stake,
         public_key: PublicKey([key_byte; 32]),
+        vrf_public_key: None,
         address: Address([key_byte; 32]),
         network_address: format!("127.0.0.1:{}", key_byte),
     }

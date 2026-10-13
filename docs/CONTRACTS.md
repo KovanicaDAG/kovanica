@@ -272,21 +272,11 @@ cargo build -p kvnc-token --target wasm32-unknown-unknown --release
 This requires the `wasm32-unknown-unknown` target
 (`rustup target add wasm32-unknown-unknown`).
 
-> **Known Lane 3a gap.** The `env` externs in `crates/kvnc-common/src/wasm.rs`
-> are declared without `#[link(wasm_import_module = "env")]`, so a plain
-> `cargo build --target wasm32-unknown-unknown` currently fails at **link** time
-> (`undefined symbol: kvnc_caller`, …) — rust-lld does not auto-import bare
-> externs. `cargo check --target wasm32-unknown-unknown` passes because check
-> does not link. Until the attribute is added to `kvnc-common`, build with:
->
-> ```sh
-> RUSTFLAGS="-C link-arg=--allow-undefined" \
->   cargo build -p kvnc-token --target wasm32-unknown-unknown --release
-> ```
->
-> which imports the undefined symbols from the default wasm module (`env`),
-> producing the exact import section this ABI requires. The
-> `wasmi_e2e_kvnc_token_wasm` test uses this workaround.
+> **Fixed (2026-10-13).** The `env` externs in `crates/kvnc-common/src/wasm.rs`
+> now declare `#[link(wasm_import_module = "env")]` on the imports module,
+> so a plain `cargo build --target wasm32-unknown-unknown` works correctly.
+> The previous workaround (`RUSTFLAGS="-C link-arg=--allow-undefined"`) is
+> no longer needed.
 
 ## 8. Module cache
 

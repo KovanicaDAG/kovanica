@@ -601,7 +601,7 @@ impl ExecutionContext {
             // Address == Ed25519 public key (unchanged address format).
             let pk = kvnc_types::PublicKey(from.0);
             self.staking
-                .join_validator(*from, amount, 0, None, Some(pk))?;
+                .join_validator(*from, amount, 0, None, Some(pk), None)?;
         }
         sub_balance_mapped(storage, txn, from, amount)?;
         Ok(vec![ContractEvent {
@@ -1154,6 +1154,7 @@ mod tests {
                     0,
                     Some(Address([i + 11; 32])),
                     None,
+                    None,
                 )
                 .expect("genesis validator");
         }
@@ -1206,6 +1207,7 @@ mod tests {
                 kvnc_staking::MIN_VALIDATOR_STAKE,
                 0,
                 Some(payout),
+                None,
                 None,
             )
             .expect("join validator");
@@ -1493,6 +1495,7 @@ mod tests {
                 0,
                 Some(payout),
                 None,
+                None,
             )
             .expect("join validator");
 
@@ -1624,6 +1627,7 @@ mod tests {
                 0,
                 Some(payout),
                 None,
+                None,
             )
             .expect("join validator");
 
@@ -1695,6 +1699,7 @@ mod tests {
                 0,
                 Some(payout),
                 None,
+                None,
             )
             .expect("join validator");
 
@@ -1754,6 +1759,7 @@ mod tests {
                 kvnc_staking::MIN_VALIDATOR_STAKE,
                 0,
                 Some(Address([4u8; 32])),
+                None,
                 None,
             )
             .expect("join validator");

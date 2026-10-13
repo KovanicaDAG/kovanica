@@ -506,6 +506,7 @@ mod tests {
             index: 0,
             stake: kvnc_staking::MIN_VALIDATOR_STAKE,
             public_key: kvnc_types::PublicKey([7u8; 32]),
+            vrf_public_key: None,
             address: kvnc_types::Address([9u8; 32]),
             network_address: "127.0.0.1:9000".to_string(),
         };
@@ -596,6 +597,7 @@ mod tests {
             index: 0,
             stake: kvnc_staking::MIN_VALIDATOR_STAKE,
             public_key: PublicKey([7u8; 32]),
+            vrf_public_key: None,
             address: Address([9u8; 32]),
             network_address: "127.0.0.1:9000".to_string(),
         };
