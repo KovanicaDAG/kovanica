@@ -1,11 +1,11 @@
 //! Example wrapper for MysticGhost ordering. Not called by the engine.
 //!
 //! The flag that changes commit output is [`crate::UniversalCommitter`]'s
-//! `use_mysticghost` (from [`crate::ConsensusConfig`], default off,
+//! `use_mysticghost` (from [`crate::ConsensusConfig`], default on,
 //! `KVNC_MYSTICGHOST` on the node). This module is a sketch of that seam.
 //! Nothing here runs unless a caller invokes
-//! [`commit_with_optional_mysticghost`] directly. With the flag off, the
-//! live committer stays on the linearizer path.
+//! [`commit_with_optional_mysticghost`] directly. The live committer reads
+//! the flag itself.
 
 use crate::ghostdag_scoped::ColouringResult;
 use crate::linearizer::Linearizer;

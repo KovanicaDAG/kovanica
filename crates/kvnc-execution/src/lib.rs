@@ -161,9 +161,9 @@ pub struct ExecutionContext {
     pub staking: StakingState,
     /// Basis points of `block_reward` placed in the light-node escrow.
     ///
-    /// Production leaves this at [`kvnc_staking::LIGHT_REWARD_BPS`] (0).
-    /// A test may set another value. It is not persisted and it is not part
-    /// of a block, vote, or transaction hash.
+    /// Production leaves this at [`kvnc_staking::LIGHT_REWARD_BPS`] (20%).
+    /// A test may set another value, including 0. It is not persisted and it
+    /// is not part of a block, vote, or transaction hash.
     pub light_reward_bps: u16,
     /// Contract runner for WASM execution (shared module cache).
     pub contract_runner: ContractRunner,
@@ -308,8 +308,9 @@ impl ExecutionContext {
         // Split the reward: commission + the validator's own pro-rata share
         // go straight to its payout address; delegator shares accrue per
         // (delegator, validator) and are paid by ClaimRewards.
-        // `light_reward_bps` is 0 in production, so `leader_amount` is the
-        // full `block_reward` and `escrow_part` is 0.
+        // Production escrows [`kvnc_staking::LIGHT_REWARD_BPS`] (20%). The
+        // leader side is what delegators share. Escrow is settled at epoch
+        // close. `leader_amount + escrow_part` equals `reward.amount`.
         let (leader_amount, escrow_part) =
             kvnc_staking::split_block_reward(reward.amount, self.light_reward_bps);
         let shares =
@@ -3301,8 +3302,8 @@ mod tests {
     }
 
     #[test]
-    fn zero_light_bps_pays_the_full_reward_including_delegation() {
-        assert_eq!(kvnc_staking::LIGHT_REWARD_BPS, 0);
+    fn live_light_bps_escrows_twenty_percent_and_conserves_the_reward() {
+        assert_eq!(kvnc_staking::LIGHT_REWARD_BPS, 2_000);
         let dir = tempfile::tempdir().expect("tempdir");
         let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
         let mut ctx = ExecutionContext::new();
@@ -3326,7 +3327,9 @@ mod tests {
             .execute_committed_subdag(&sample_committed_subdag(1, 0), &storage)
             .unwrap();
         let reward = result.reward.unwrap();
-        assert_eq!(reward.amount, kvnc_staking::block_reward(0));
+        let full = kvnc_staking::block_reward(0);
+        assert_eq!(reward.amount, full);
+        let (leader_side, escrow) = kvnc_staking::split_block_reward(full, 2_000);
         let txn = storage.begin_read().unwrap();
         let pending_table = txn.open_table(PENDING_REWARDS).unwrap();
         let pending = pending_table
@@ -3337,9 +3340,15 @@ mod tests {
         drop(pending_table);
         drop(txn);
         let paid = read_balance(&storage, &payout);
-        assert_eq!(paid + pending, reward.amount);
+        assert_eq!(paid + pending, leader_side);
         assert!(pending > 0);
         assert!(paid > 0);
+        let txn = storage.begin_read().unwrap();
+        let set = storage.state().load_light_set(&txn).unwrap().unwrap();
+        drop(txn);
+        let stored: u64 = set.escrow(0).iter().map(|(_, amount)| *amount).sum();
+        assert_eq!(stored, escrow);
+        assert_eq!(paid + pending + stored, full);
     }
 
     #[test]
@@ -3443,7 +3452,7 @@ mod tests {
 
     #[test]
     fn an_in_test_bps_override_conserves_block_reward() {
-        assert_eq!(kvnc_staking::LIGHT_REWARD_BPS, 0);
+        assert_eq!(kvnc_staking::LIGHT_REWARD_BPS, 2_000);
         let dir = tempfile::tempdir().expect("tempdir");
         let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
         let mut ctx = ExecutionContext::new();

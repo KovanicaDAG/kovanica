@@ -28,7 +28,7 @@ pub const LIGHT_TX_FEE: u64 = 1;
 /// One `kvnc_getLightSet` response.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LightView {
-    /// Live reward split. Ships at 0.
+    /// Live reward split in basis points, as reported by the full node.
     pub reward_bps: u64,
     /// `committed_height / EPOCH_ROUNDS` on the full node.
     pub epoch: u64,
@@ -153,7 +153,7 @@ pub fn status_lines(view: Option<&LightView>, address: &Address) -> Vec<String> 
     let Some(view) = view else {
         return vec![
             "bond: light set unavailable".to_owned(),
-            "reward basis points: 0".to_owned(),
+            "reward basis points: unavailable".to_owned(),
         ];
     };
     let mut lines = vec![
@@ -381,5 +381,9 @@ mod tests {
         let lines = status_lines(Some(&view), &address(1));
         assert!(lines.iter().any(|line| line == "bond: 100 atoms"));
         assert!(lines.iter().any(|line| line == "reward basis points: 0"));
+        let missing = status_lines(None, &address(1));
+        assert!(missing
+            .iter()
+            .any(|line| line == "reward basis points: unavailable"));
     }
 }

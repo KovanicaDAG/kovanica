@@ -3,9 +3,11 @@
 //! This state is not a field of [`crate::StakingState`]. Callers persist it
 //! in its own table. Light stake does not enter the validator committee.
 //!
-//! [`LIGHT_REWARD_BPS`] is 0. At 0, a committed leader's reward is unchanged.
-//! Tests pass a different basis-point value into [`split_block_reward`] and
-//! [`distribute_escrow`]; they do not change the constant.
+//! [`LIGHT_REWARD_BPS`] is 2_000 (20% of `block_reward`). The escrow is paid
+//! to light-node witnesses at epoch close. Unclaimed atoms return to the
+//! leaders who contributed them, so the atoms minted at a height still equal
+//! `block_reward`. Tests may pass 0 into [`split_block_reward`] to check the
+//! no-escrow path.
 
 use kvnc_types::{light_vrf_priority, Address, Hash, PublicKey};
 use serde::{Deserialize, Serialize};
@@ -15,9 +17,9 @@ use crate::{EPOCH_ROUNDS, ONE_KUNA, UNBONDING_ROUNDS};
 
 /// Fraction of `block_reward` escrowed for light nodes, in basis points.
 ///
-/// 0 keeps the live reward path unchanged. A non-zero value is an owner
-/// decision and is not the value this crate ships.
-pub const LIGHT_REWARD_BPS: u16 = 0;
+/// 2_000 is 20%. The leader side is the rest. The two sides sum to the
+/// scheduled reward, and dust from the division stays with the leader.
+pub const LIGHT_REWARD_BPS: u16 = 2_000;
 
 /// Minimum light-node bond: 100 KUNA.
 pub const MIN_LIGHT_BOND: u64 = 100 * ONE_KUNA;
@@ -127,8 +129,8 @@ impl SettleOutcome {
 /// Split `full` into `(leader_side, escrow)`.
 ///
 /// `bps` is clamped to 10_000. The truncated remainder stays on the leader
-/// side, and the two parts sum to `full`. [`LIGHT_REWARD_BPS`] is 0, so the
-/// live call is `(full, 0)`.
+/// side, and the two parts sum to `full`. The live call uses
+/// [`LIGHT_REWARD_BPS`] (20%).
 pub fn split_block_reward(full: u64, bps: u16) -> (u64, u64) {
     let bps = u128::from(bps.min(10_000));
     let escrow = (u128::from(full) * bps / 10_000) as u64;
@@ -567,8 +569,7 @@ mod tests {
     #[test]
     fn zero_bps_leaves_the_whole_reward_on_the_leader_side() {
         let full = block_reward(0);
-        let (leader_side, escrow) = split_block_reward(full, LIGHT_REWARD_BPS);
-        assert_eq!(LIGHT_REWARD_BPS, 0);
+        let (leader_side, escrow) = split_block_reward(full, 0);
         assert_eq!(escrow, 0);
         assert_eq!(leader_side, full);
         let mut staking = crate::StakingState::new();
@@ -581,6 +582,16 @@ mod tests {
         let shares = staking.reward_share(addr(1), leader_side, 1_000);
         let sum: u64 = shares.iter().map(|(_, amount)| *amount).sum();
         assert_eq!(sum, full);
+    }
+
+    #[test]
+    fn live_light_reward_bps_is_twenty_percent() {
+        assert_eq!(LIGHT_REWARD_BPS, 2_000);
+        let full = block_reward(0);
+        let (leader_side, escrow) = split_block_reward(full, LIGHT_REWARD_BPS);
+        assert_eq!(leader_side + escrow, full);
+        assert_eq!(escrow, full / 5);
+        assert_eq!(leader_side, full - escrow);
     }
 
     #[test]

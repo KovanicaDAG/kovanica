@@ -827,8 +827,7 @@ pub async fn handle_get_account_proof(params: Value, state: RpcState) -> Result<
 
 /// `kvnc_getLightSet()` — registered light nodes and the epoch beacon.
 ///
-/// `rewardBps` is the live constant, which ships at 0. A committed leader's
-/// reward is unchanged while it stays 0.
+/// `rewardBps` is [`kvnc_staking::LIGHT_REWARD_BPS`] (20% of `block_reward`).
 pub async fn handle_get_light_set(_params: Value, state: RpcState) -> Result<Value, RpcError> {
     let txn = state.storage.begin_read().map_err(internal)?;
     let height = match state.storage.state().load_staking_state(&txn) {
@@ -1373,7 +1372,8 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("latest"));
         let set = handle_get_light_set(Value::Null, state).await.unwrap();
-        assert_eq!(set["rewardBps"], json!(0));
+        assert_eq!(kvnc_staking::LIGHT_REWARD_BPS, 2_000);
+        assert_eq!(set["rewardBps"], json!(2_000));
         assert_eq!(set["nodes"], json!([]));
     }
 }
