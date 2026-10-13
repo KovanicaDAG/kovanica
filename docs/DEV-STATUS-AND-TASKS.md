@@ -1,14 +1,14 @@
 # kvnc — dev status & tasks
 
 Snapshot date: **2026-10-13**  
-Branch: **main** @ **c4b2af4**  
+Branch: **main** @ **98d88cc**  
 Source: full codebase inspection, targeted tests, and a partial full-workspace test run.
 
 ## What just landed
 
 - `tui` branch merged (`4be2ff4`) — interactive TUI wallet + amount parser + net helpers.
 - `console` branch merged (`29ba439`) — Kovanica Console, faucet CORS hardening, signer package, API client improvements, RPC middleware/write-method token checks.
-- Prior local edits committed (`c4b2af4`):
+- Prior local edits committed (`98d88cc`):
   - `config.example.toml`: P2P default `8000`, round `4000` ms, validator key requirement documented.
   - `crates/kvnc-execution/src/call_args.rs`: bincode argument encoders for native contract calls (HTLC, Vault, Multisig, Token).
   - Consensus docs/comments: MysticGhost is the `use_mysticghost` flag on `UniversalCommitter`, not the wrapper module.
@@ -38,7 +38,7 @@ Source: full codebase inspection, targeted tests, and a partial full-workspace t
 | Rust files | 113 |
 | Rust LOC | ~53k |
 | TS source files (excluding node_modules) | 40 across api-client/console/signer/web |
-| Git branch | main @ c4b2af4 |
+| Git branch | main @ 98d88cc |
 | Pushed to origin | yes |
 
 ## Network defaults
@@ -55,7 +55,7 @@ Source: full codebase inspection, targeted tests, and a partial full-workspace t
 
 1. Finish and stabilise the full `cargo test --workspace` run (notably `sustained_liveness_integration`) in CI.
 2. Regenerate/commit any missing lock files deliberately (root `package-lock.json` was removed as empty/stray; verify CI `npm ci` behaviour per package).
-3. Split the large local-edit commit `c4b2af4` if review requires smaller PRs; mapping is in the commit message.
+3. Split the large local-edit commit `98d88cc` if review requires smaller PRs; mapping is in the commit message.
 4. Decide whether `KVNC_MYSTICGHOST` stays default `false` for testnet; current docs/tests assume linearizer path.
 5. Update deployment scripts/Docker defaults to port 8000 if any still reference 9000 (grep done: README fixed, audit note remains intentional).
 6. Keep `TASKLIST.md` in lockstep with the VRF reality: primitives exist, but leader scheduling uses round-robin `CommitteeInfo::leader`, not `stake_weighted_leader`.
