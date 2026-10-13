@@ -316,11 +316,14 @@
 - [x] Dev faucet CLI
 - [ ] Indexer service — **nema**
 
-## PHASE 23: Explorer & Wallet UI — `[ ]` NOT DONE
+## PHASE 23: Explorer & Wallet UI — `[x]` DONE
 
-- [ ] block explorer — nema appa
-- [ ] wallet UI — nema appa
-- [ ] public status page — nema
+- [x] Block explorer (blocks, transactions, accounts, validators) — Vite + React + TypeScript
+- [x] Wallet UI (account lookup, balance, nonce, action links) — Vite + React + TypeScript
+- [x] Public status page (network health, validators, RPC endpoints, health checks) — Vite + React + TypeScript
+- [x] Cloudflare Pages deployment config + GitHub Actions CI/CD
+- [x] DNS configuration for `explorer.kovanica.online` (proxied), seed nodes (DNS-only)
+- [x] `packages/web` - Vite + React 18 + TypeScript + React Router + @kvnc/api-client
 
 ## PHASE 24: Genesis Ceremony & Mainnet Prep — `[~]` partial
 
