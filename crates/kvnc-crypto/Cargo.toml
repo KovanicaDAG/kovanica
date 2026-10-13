@@ -11,6 +11,7 @@ blake3 = { workspace = true }
 rand = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+ecvrf = "0.4"
 
 [dev-dependencies]
 hex = { workspace = true }

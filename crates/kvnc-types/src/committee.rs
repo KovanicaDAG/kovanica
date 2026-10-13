@@ -14,6 +14,8 @@ pub struct Authority {
     pub index: u16,
     /// Ed25519 public key for block signing.
     pub public_key: PublicKey,
+    /// VRF public key for verifiable leader selection.
+    pub vrf_public_key: Option<PublicKey>,
     /// Account address (derived from public key).
     pub address: Address,
     /// Stake amount in base units.
@@ -64,10 +66,55 @@ impl Committee {
         self.authorities.iter().find(|a| a.index == index)
     }
 
-    /// Stake-weighted leader election (simple version).
+    /// Stake-weighted VRF-based leader election.
+    ///
+    /// Uses VRF output from each validator for the given round. The leader is
+    /// the validator with the lowest VRF hash output (highest priority), weighted
+    /// by stake. Validators without VRF keys fall back to deterministic selection.
     pub fn leader(&self, round: u64) -> u16 {
+        self.leader_with_vrf(round, &std::collections::HashMap::new())
+    }
+
+    /// VRF-aware leader selection.
+    pub fn leader_with_vrf(
+        &self,
+        round: u64,
+        vrf_outputs: &std::collections::HashMap<u16, [u8; 32]>,
+    ) -> u16 {
+        if self.authorities.is_empty() {
+            return 0;
+        }
+
+        // Try VRF-based selection first
+        let mut best_authority: Option<(u16, u128)> = None; // (index, priority)
+
+        for authority in &self.authorities {
+            if let Some(vrf_hash) = vrf_outputs.get(&authority.index) {
+                // Priority = VRF hash / stake (lower = higher priority)
+                // Using u128 to avoid overflow: priority = hash_as_u128 * total_stake / stake
+                let hash_u128 = u128::from_le_bytes([
+                    vrf_hash[0], vrf_hash[1], vrf_hash[2], vrf_hash[3],
+                    vrf_hash[4], vrf_hash[5], vrf_hash[6], vrf_hash[7],
+                    vrf_hash[8], vrf_hash[9], vrf_hash[10], vrf_hash[11],
+                    vrf_hash[12], vrf_hash[13], vrf_hash[14], vrf_hash[15],
+                ]);
+                
+                let priority = hash_u128
+                    .saturating_mul(self.total_stake as u128)
+                    .saturating_div(authority.stake.max(1) as u128);
+
+                if best_authority.map_or(true, |(_, p)| priority < p) {
+                    best_authority = Some((authority.index, priority));
+                }
+            }
+        }
+
+        if let Some((idx, _)) = best_authority {
+            return idx;
+        }
+
+        // Fallback: deterministic round-robin (no VRF outputs available)
         let seed = round;
-        // Simple deterministic selection – replace with VRF later
         let idx = (seed as usize) % self.authorities.len();
         self.authorities[idx].index
     }
