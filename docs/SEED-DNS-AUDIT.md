@@ -1,38 +1,238 @@
-# Seed DNS — kvnc (Kovanica) status
+# KVNC Seed DNS & Explorer DNS Configuration
 
-Status: **OPEN — kvnc-native seed DNS not yet registered; no seed host is referenced in code.**
+> **Domain:** `kovanica.online` (owned by KVNC team)
+> **Status:** Active domain, needs DNS records for seed nodes and explorer
 
-## Rule (HARD RULE 1)
-kvnc is an independent chain. It must **never** hard-code, dial or document another project's
-infrastructure. Any `*.kovanica.online` seed reference that previously appeared in this repo was
-a cross-project leak and has been **removed from code, config defaults and docs**.
+---
 
-## Current code state (verified)
-- `kvnc-network::NetworkConfig::default()` → `bootstrap_nodes: Vec::new()` (no hard-coded seeds).
-- `kvnc_node::NodeConfig::default()` → `bootnodes: Vec::new()` (no hard-coded seeds).
-- Seeds are supplied at deploy time via `KVNC_BOOTNODES` (comma-separated `host:port`) or the
-  `[node] bootnodes` TOML key. Unit tests assert defaults stay empty.
-- P2P listen port: **8000** (`0.0.0.0:8000`) on all nodes; libp2p multiaddr form is
-  `/dns4/<seed-host>/tcp/8000/p2p/<peer-id>`.
-- Placeholders in docs/tests use the reserved `.invalid` TLD (`seed1.kvnc.invalid:8000`) so they
-  can never resolve accidentally.
+## 1. Seed Node DNS Records
 
-## TODO before public testnet (must be done by the operator)
-1. Register **3+ kvnc-native DNS names** (e.g. `seed1/2/3.<kvnc-domain>`) — new names, not reused
-   from any other project.
-2. Each name must resolve **A/AAAA directly to the seed origin IP** (grey-cloud / no CDN proxy);
-   libp2p uses TCP+Noise, so a TLS-terminating proxy is not usable.
-3. Publish each seed's real libp2p **PeerId** (derived from its persistent `node_key` file) — the
-   `/p2p/` component must match or the dial fails.
-4. Set `KVNC_BOOTNODES=seed1.<domain>:8000,seed2.<domain>:8000,seed3.<domain>:8000` on participants.
-5. Verify from a clean host: `nc -vz seed1.<domain> 8000` resolves to the origin IP, not a proxy.
+### Required: 3+ kvnc-native DNS names for P2P bootstrapping
 
-## Operator env safety (unchanged)
-`KVNC_ALLOW_RESET=0`, `KVNC_FAUCET=0`, `KVNC_OPERATOR=0`, `KVNC_MINE=0` on public-facing nodes, and
-`KVNC_DATA` must be preserved after the first genesis write.
+| Record | Type | Value | TTL | Notes |
+|--------|------|-------|-----|-------|
+| `seed1.kvnc.io` | A | `<bare-metal-IP-1>` | 300 | Primary seed, bare metal, no Cloudflare proxy |
+| `seed2.kvnc.io` | A | `<bare-metal-IP-2>` | 300 | Secondary seed, different ASN/DC |
+| `seed3.kvnc.io` | A | `<bare-metal-IP-3>` | 300 | Tertiary seed, different continent |
+| `seed4.kvnc.io` | A | `<bare-metal-IP-4>` | 300 | Optional 4th seed |
 
-## Note on the previous revision
-An earlier revision of this document reconciled a "port 8000 vs 9000" gap by querying
-`explorer.kovanica.online/api/bootstrap`, i.e. a different project's endpoint, and treated its
-P2P peers as kvnc's own. That was incorrect and is superseded by this revision. kvnc's canonical
-P2P port is a local decision: **8000**.
+**Critical:** These must be **DNS-only (grey-cloud)** records in Cloudflare — **no orange-cloud proxy**. P2P traffic is plaintext TCP on port 8000 and will not work through Cloudflare's HTTP proxy.
+
+### kovanica.online subdomain aliases (optional)
+
+| Record | Type | Value | Notes |
+|--------|------|-------|-------|
+| `seed1.kovanica.online` | CNAME | `seed1.kvnc.io` | Alias for branding |
+| `seed2.kovanica.online` | CNAME | `seed2.kvnc.io` | |
+| `seed3.kovanica.online` | CNAME | `seed3.kvnc.io` | |
+
+---
+
+## 2. Explorer & Public Services DNS
+
+### explorer.kovanica.online (Phase 23)
+
+| Record | Type | Value | Proxy | Notes |
+|--------|------|-------|-------|-------|
+| `explorer.kovanica.online` | CNAME | `<cloudflare-pages-domain>.pages.dev` | **Proxied (orange-cloud)** | Cloudflare Pages deployment |
+| `explorer` | CNAME | `<cloudflare-pages-domain>.pages.dev` | Proxied | Apex subdomain |
+
+### wallet.kovanica.online (Phase 23.2)
+
+| Record | Type | Value | Proxy | Notes |
+|--------|------|-------|-------|-------|
+| `wallet.kovanica.online` | CNAME | `<cloudflare-pages-domain>.pages.dev` | Proxied | Web wallet deployment |
+
+### rpc.kovanica.online (public RPC endpoint)
+
+| Record | Type | Value | Proxy | Notes |
+|--------|------|-------|-------|-------|
+| `rpc.kovanica.online` | CNAME | `<rpc-server-domain>` | **DNS-only (grey-cloud)** | Direct RPC, no HTTP proxy |
+| `rpc-testnet.kovanica.online` | CNAME | `<testnet-rpc-domain>` | DNS-only | Testnet RPC |
+
+### status.kovanica.online (Phase 23.3)
+
+| Record | Type | Value | Proxy | Notes |
+|--------|------|-------|-------|-------|
+| `status.kovanica.online` | CNAME | `<status-page-domain>` | Proxied | Status page (Cloudflare Pages or external) |
+
+---
+
+## 3. Cloudflare Configuration
+
+### Page Rules for explorer.kovanica.online
+
+| Pattern | Settings |
+|---------|----------|
+| `explorer.kovanica.online/*` | Cache Level: Standard, Edge Cache TTL: 30s, Always Online: On |
+| `explorer.kovanica.online/api/*` | Cache Level: Bypass, Security Level: Low |
+
+### WAF Rules
+
+| Rule | Action |
+|------|--------|
+| Block known malicious IPs (Threat Intelligence) | Block |
+| Rate limit `/rpc` to 100 req/min per IP | Challenge |
+| Allow all traffic from known validator IPs | Allow |
+
+### SSL/TLS
+
+| Setting | Value |
+|---------|-------|
+| SSL Mode | Full (Strict) |
+| Always Use HTTPS | On |
+| Minimum TLS Version | 1.2 |
+| Automatic HTTPS Rewrites | On |
+
+---
+
+## 4. DNS Verification Checklist
+
+Before testnet launch:
+
+- [ ] `dig +short seed1.kvnc.io` → returns bare metal IP (not Cloudflare IP)
+- [ ] `dig +short seed2.kvnc.io` → returns different ASN
+- [ ] `dig +short seed3.kvnc.io` → returns different continent
+- [ ] `nc -zv seed1.kvnc.io 8000` → connects successfully (plaintext TCP)
+- [ ] `curl -I https://explorer.kovanica.online` → returns 200, Cloudflare headers present
+- [ ] `curl -I https://explorer.kovanica.online/rpc` → 404 (no RPC on explorer)
+- [ ] SSL Labs grade: A+ for all subdomains
+- [ ] DNSSEC enabled on `kovanica.online`
+
+---
+
+## 5. Cloudflare Pages Deployment (explorer)
+
+### Build Configuration
+
+```yaml
+# Cloudflare Pages build settings
+build_command: npm run build
+build_output_directory: dist
+root_directory: packages/web
+node_version: 20
+```
+
+### Environment Variables
+
+| Variable | Value |
+|----------|-------|
+| `VITE_RPC_URL` | `https://rpc.kovanica.online` (production) / `http://127.0.0.1:8545` (dev) |
+| `VITE_CHAIN_ID` | `2` (testnet) / `1` (mainnet) |
+
+### Custom Domain Setup
+
+1. Add `explorer.kovanica.online` as custom domain in Cloudflare Pages
+2. Cloudflare automatically provisions SSL (Let's Encrypt or Cloudflare Universal SSL)
+3. DNS record created automatically (CNAME to `<project>.pages.dev`)
+4. Verify SSL certificate issuance
+
+---
+
+## 6. Seed Node Operator SOP
+
+### Hardware Requirements
+
+| Component | Spec |
+|-----------|------|
+| CPU | 4+ cores (ARM64 or x86_64) |
+| RAM | 8 GB minimum (16 GB recommended) |
+| Storage | 500 GB NVMe (OS + DB) |
+| Network | 1 Gbps unmetered, static IP |
+| OS | Ubuntu 22.04 LTS or Debian 12 |
+
+### Software Stack
+
+```bash
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+
+# Clone repo
+git clone https://github.com/KovanicaDAG/kvnc.git
+cd kvnc
+
+# Generate validator keys (offline, one-time)
+./ops/docker/validators/generate.sh
+
+# Run seed node (no validator key, no mining)
+docker compose -f docker-compose.seed.yml up -d
+```
+
+### docker-compose.seed.yml
+
+```yaml
+version: '3.8'
+services:
+  seed:
+    image: kvnc-node:local
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      KVNC_RUN_VALIDATOR: "false"
+      KVNC_LISTEN_ADDR: "0.0.0.0:8000"
+      KVNC_BOOTNODES: "seed2.kvnc.io:8000,seed3.kvnc.io:8000"
+      KVNC_MAX_PEERS: "50"
+      KVNC_RPC_AUTH: "disable"
+      KVNC_RPC_RATE_LIMIT_PER_MIN: "0"
+      RUST_LOG: "info"
+    volumes:
+      - seed-data:/var/lib/kvnc
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+volumes:
+  seed-data:
+```
+
+### Monitoring
+
+- Prometheus scrape: `http://<seed-ip>:9090/metrics`
+- Grafana dashboard: import `ops/grafana/kvnc-overview.json`
+- Alerting: peer_count < 2 for 5m → PagerDuty
+
+---
+
+## 7. Launch Sequence
+
+### Phase 1: Seed Nodes (T-2 weeks)
+1. [ ] Register `kvnc.io` domain (or use `kovanica.online` subdomains)
+2. [ ] Provision 3 bare-metal servers in different DCs/ASNs
+3. [ ] Deploy seed nodes with `docker-compose.seed.yml`
+4. [ ] Add DNS A records (DNS-only, no proxy)
+4. [ ] Verify P2P connectivity: `nc -zv seedN.kvnc.io 8000`
+5. [ ] Add seed nodes to `KVNC_BOOTNODES` in genesis config
+
+### Phase 2: Genesis Ceremony (T-1 week)
+1. [ ] Collect validator public keys + stakes via PR
+2. [ ] Run `kvnc-node genesis --validators validators.json --force`
+3. [ ] Distribute `genesis.json` + `genesis_validators.toml` to all participants
+3. [ ] Verify genesis hash matches across all nodes
+
+### Phase 3: Testnet Launch (T-0)
+1. [ ] Deploy explorer to Cloudflare Pages
+2. [ ] Add DNS records for `explorer.kovanica.online` (proxied)
+3. [ ] Deploy faucet CI job (GitHub Actions nightly)
+3. [ ] Announce testnet: seeds, faucet, explorer, RPC endpoints
+4. [ ] Monitor `#testnet` Discord channel for issues
+
+### Phase 4: Mainnet Preparation (T+4 weeks)
+1. [ ] External security audit
+2. [ ] Bug bounty program launch
+3. [ ] Mainnet freeze checklist (see `TESTNET-MAINNET.md`)
+3. [ ] Genesis ceremony for mainnet
+4. [ ] Mainnet launch
+
+---
+
+## 8. References
+
+- `docs/TESTNET-MAINNET.md` — full testnet/mainnet checklist
+- `docs/TOKENOMICS.md` — genesis allocation numbers
+- `ops/docker/validators/generate.sh` — key generation script
+- `ops/docker/` — docker compose files
+- `crates/kvnc-faucet/` — faucet crate
+- `ops/grafana/kvnc-overview.json` — Grafana dashboard
+- `ops/prometheus/alerts.yml` — alerting rules
