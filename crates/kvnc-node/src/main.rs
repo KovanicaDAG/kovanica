@@ -25,7 +25,7 @@ mod orphans;
 
 use std::future::Future;
 use std::sync::{atomic::Ordering, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -764,8 +764,7 @@ where
             tokio::select! {
                 _ = interval.tick() => {
                     // Re-queue stale in-flight transactions first
-                    // Re-queue stale in-flight transactions first
-                    let requeued = (*mempool_for_rebroadcast).requeue_stale(Instant::now(), Duration::from_secs(1));
+                    let requeued = mempool_for_rebroadcast.requeue_stale(Instant::now(), Duration::from_secs(1));
                     if requeued > 0 {
                         info!(requeued, "re-queued stale in-flight transactions");
                     }

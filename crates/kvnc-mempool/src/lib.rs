@@ -660,6 +660,15 @@ impl Mempool {
                 .collect(),
         }
     }
+
+    /// Re-queue transactions that have been in-flight longer than the
+    /// configured timeout back into the queued state, so they can be
+    /// proposed again by a future `get_next_transactions` call during
+    /// periodic rebroadcast.
+    pub fn requeue_stale(&self, now: Instant, _timeout: Duration) -> usize {
+        let mut state = self.state.lock();
+        state.requeue_stale(now, self.config.in_flight_timeout)
+    }
 }
 
 /// Mempool configuration.
