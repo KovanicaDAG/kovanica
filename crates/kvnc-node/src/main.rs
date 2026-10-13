@@ -630,6 +630,13 @@ where
             .map(|authority| (authority.index, authority.stake))
             .collect(),
     );
+    block_manager.set_vrf_author_keys(
+        committee
+            .authorities()
+            .iter()
+            .filter_map(|authority| authority.vrf_public_key.map(|key| (authority.index, key)))
+            .collect(),
+    );
 
     // Populate the global validator key registry for batch signature verification
     // The registry is indexed by authority index, so we need to ensure keys are in index order
@@ -646,6 +653,7 @@ where
         ConsensusConfig {
             round_duration_ms: config.round_duration_ms,
             use_mysticghost: config.use_mysticghost,
+            use_vrf_leader: config.use_vrf_leader,
             ..Default::default()
         },
         committee.clone(),
@@ -1648,6 +1656,16 @@ impl BlockManagerTrait for NodeBlockManager {
 
     fn set_signing_key(&self, key: SigningKey) {
         self.inner.set_signing_key(key);
+    }
+
+    fn propose_vrf_carrier(&self, round: Round) -> Result<StatementBlock, BlockManagerError> {
+        self.inner.propose_vrf_carrier(round)
+    }
+
+    fn verified_vrf_outputs(
+        &self,
+    ) -> std::collections::HashMap<Round, std::collections::HashMap<AuthorityIndex, [u8; 32]>> {
+        self.inner.verified_vrf_outputs_snapshot()
     }
 }
 

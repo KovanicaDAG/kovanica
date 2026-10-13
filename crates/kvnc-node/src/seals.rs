@@ -32,7 +32,7 @@ pub struct SealContext {
     pub signer: Option<(u16, SigningKey)>,
     /// [`kvnc_types::committee_seal_hash`] of the live committee.
     pub committee_hash: Hash,
-    /// Mirrors `ConsensusConfig::use_mysticghost`. Default off.
+    /// Mirrors `ConsensusConfig::use_mysticghost`. Default on.
     pub mysticghost: bool,
 }
 

@@ -116,7 +116,7 @@ impl RpcClient {
         Ok(Some(account_proof_from_json(&value)?))
     }
 
-    /// Light registration set. `rewardBps` stays 0 until the owner enables it.
+    /// Light registration set. `rewardBps` is the full node's live split.
     pub fn light_set(&self) -> Result<Value> {
         self.call("kvnc_getLightSet", json!([]))
     }

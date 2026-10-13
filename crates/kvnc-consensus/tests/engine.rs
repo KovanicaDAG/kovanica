@@ -56,6 +56,8 @@ fn test_engine_config_defaults() {
     assert_eq!(config.round_duration_ms, 4000);
     assert_eq!(config.lookahead_rounds, 3);
     assert_eq!(config.max_pending_rounds, 100);
+    assert!(config.use_mysticghost);
+    assert!(config.use_vrf_leader);
 }
 
 #[test]
