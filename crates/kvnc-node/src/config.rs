@@ -63,7 +63,8 @@ impl Default for NodeConfig {
             // infrastructure. Populate via `KVNC_BOOTNODES` or `[node] bootnodes`.
             bootnodes: Vec::new(),
             validator_key: None,
-            round_duration_ms: 2000,
+            // 4 s round → 12 s per committed leader (wave = 3 rounds).
+            round_duration_ms: 4000,
             max_peers: 50,
             treasury_address: None,
             use_mysticghost: false,
@@ -286,7 +287,7 @@ treasury_address = "treasury-address-placeholder"
         let config = NodeConfig::load(dir.path().join("does-not-exist.toml")).expect("defaults");
         assert_eq!(config.rpc_port, 8545);
         assert_eq!(config.max_peers, 50);
-        assert_eq!(config.round_duration_ms, 2000);
+        assert_eq!(config.round_duration_ms, 4000);
         assert!(
             config.bootnodes.is_empty(),
             "defaults must not hard-code third-party seed hosts"

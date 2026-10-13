@@ -84,13 +84,15 @@ Burst capacity is derived from the configured rate as `max(1, rate / 6)`.
 | --- | --- |
 | Maximum supply | 90,200,000 KUNA |
 | Founder premine | 200,000 KUNA |
-| Treasury | 8,000,000 KUNA |
-| Initial block reward | 10 KUNA |
-| Era length | 2,050,000 blocks |
+| Treasury | 8,000,000 KUNA (1M/year × 8 years, linear) |
+| Genesis validator allocation | 1,000,000 KUNA (split across genesis validators) |
+| Initial block reward | 2.5 KUNA |
+| Era length | 8,100,000 blocks |
 | Reward decay | x 3/4 per era |
-| Emitted through rewards | ~82,000,000 KUNA |
+| Emitted through rewards | 81,000,000 KUNA |
+| Round / leader interval | 4 s round → committed leader every 12 s |
 
-Emission per era is `era length x current reward`. Because the reward shrinks by a factor of 3/4 each era, total emission converges to 82M, and together with premine and treasury this gives the 90.2M cap.
+Emission per era is `era length x current reward`. Because the reward shrinks by a factor of 3/4 each era, total emission converges to 81M, and together with premine, treasury and the genesis validator allocation this gives the 90.2M cap.
 
 ## Roadmap
 

@@ -1,40 +1,50 @@
 # KUNA Tokenomics Specification
 
-**Version:** 0.1.0  
-**Status:** Locked for implementation
+**Version:** 0.2.0  
+**Status:** Locked for implementation (revised 2026-10-13)
 
 ---
 
 ## 1. Supply Overview
 
-| Allocation              | Amount (KUNA)   | % of Total | Notes                                      |
-|-------------------------|-----------------|------------|--------------------------------------------|
-| Mining subsidy          | ≈ 82 000 000    | ~90.9 %    | Emitted via block rewards                  |
-| Treasury                | 8 000 000       | ~8.9 %     | 1 M / year × 8 years, linear vesting       |
-| Founder premine         | 200 000         | ~0.2 %     | Unlocked at genesis                        |
-| **Total supply**        | **90 200 000**  | 100 %      | Hard cap                                   |
+| Allocation                  | Amount (KUNA)   | % of Total | Notes                                      |
+|-----------------------------|-----------------|------------|--------------------------------------------|
+| Mining subsidy              | 81 000 000      | 89.80 %    | Emitted via block rewards                  |
+| Treasury                    | 8 000 000       | 8.87 %     | 1 M / year × 8 years, linear vesting       |
+| Genesis validator allocation| 1 000 000       | 1.11 %     | Split evenly across genesis validators     |
+| Founder premine             | 200 000         | 0.22 %     | Unlocked at genesis                        |
+| **Total supply**            | **90 200 000**  | 100 %      | Hard cap                                   |
 
 Decimals: **9** (1 KUNA = 1 000 000 000 base units).
+
+The genesis validator allocation is minted **once** at genesis: 1 000 000 KUNA are
+split evenly across the genesis validator set. Each validator's share backs its
+`MIN_VALIDATOR_STAKE` (50 000 KUNA) self-stake; the remainder is liquid balance.
+See §7.2 for the deterministic split rule.
 
 ---
 
 ## 2. Block Reward Schedule
 
-- **Initial reward:** 10 KUNA  
-- **Decay:** × ¾ every **2 050 000** committed leader blocks  
+- **Initial reward:** 2.5 KUNA  
+- **Decay:** × ¾ every **8 100 000** committed leader blocks (one era)  
 - Reward is paid **only** to the author of a **committed leader block** in the DAG.
+- Round length is **4 s**; with a wave of 3, one leader commits every **12 s**
+  (`LEADER_INTERVAL_SECS = 12`). One era is therefore ≈ **3.08 years**.
 
 ### Approximate issuance per era
 
-| Era | Reward     | Era issuance | Cumulative mining |
-|-----|------------|--------------|-------------------|
-| 0   | 10 KUNA    | 20.50 M      | 20.50 M           |
-| 1   | 7.5 KUNA   | 15.375 M     | 35.875 M          |
-| 2   | 5.625 KUNA | 11.531 M     | 47.406 M          |
-| 3   | 4.21875    | 8.648 M      | 56.055 M          |
-| …   | …          | …            | → ≈ 82 M          |
+| Era | Reward       | Era issuance | Cumulative mining |
+|-----|--------------|--------------|-------------------|
+| 0   | 2.5 KUNA     | 20.25 M      | 20.25 M           |
+| 1   | 1.875 KUNA   | 15.1875 M    | 35.4375 M         |
+| 2   | 1.40625 KUNA | 11.390625 M  | 46.828125 M       |
+| 3   | 1.0546875    | 8.54296875 M | 55.37109375 M     |
+| …   | …            | …            | → 81 M            |
 
-After ~40 eras the remaining emission becomes negligible and the mining subsidy is effectively exhausted.
+The geometric series sums exactly to `s₀ × era × 1/(1 − ¾) = 2.5 × 8 100 000 × 4 = 81 M`.
+After ~40 eras the remaining emission becomes negligible and the mining subsidy
+is effectively exhausted (≈ 12.3 years for ~99 %).
 
 ---
 
@@ -56,7 +66,7 @@ This guarantees that only **finalized, ordered leader blocks** mint new tokens.
 
 - Total: **8 000 000 KUNA**
 - Schedule: **1 000 000 KUNA per year** for 8 years
-- Conversion: `BLOCKS_PER_YEAR = 15_768_000` (≈ 1 block / 2 s)
+- Conversion: `BLOCKS_PER_YEAR = 2 628 000` (≈ 1 committed leader / 12 s)
 - Vesting is advanced automatically on every committed leader.
 - The treasury address can `claim()` only the already-vested portion.
 
@@ -85,11 +95,13 @@ Rewards go to the validator’s configured `payout_address` (defaults to the sta
 
 ```
 circulating ≈ FOUNDER_PREMINE
+            + GENESIS_VALIDATOR_ALLOCATION
             + total_mining_issued
             + treasury.vested
 ```
 
-Capped at `TOTAL_SUPPLY`.
+Capped at `TOTAL_SUPPLY`. The genesis set circulating supply is therefore
+1 200 000 KUNA (premine + genesis allocation); treasury vests over time.
 
 ---
 
@@ -110,18 +122,43 @@ Capped at `TOTAL_SUPPLY`.
 | `DECIMALS` / `ONE_KUNA` | 9 decimals, 1 KUNA = 1 000 000 000 base units |
 | `TOTAL_SUPPLY` | 90 200 000 KUNA (hard cap) |
 | `FOUNDER_PREMINE` | 200 000 KUNA |
+| `GENESIS_VALIDATOR_ALLOCATION` | 1 000 000 KUNA |
 | `TREASURY_TOTAL` / `TREASURY_ANNUAL` / `TREASURY_YEARS` | 8 000 000 KUNA / 1 000 000 KUNA per year / 8 years (linear) |
-| `MINING_SUBSIDY_BUDGET` | 82 000 000 KUNA |
-| `INITIAL_BLOCK_REWARD` (s₀) | 10 KUNA per committed leader |
-| `SUBSIDY_ERA_BLOCKS` | 2 050 000 committed leaders per era |
+| `MINING_SUBSIDY_BUDGET` | 81 000 000 KUNA |
+| `INITIAL_BLOCK_REWARD` (s₀) | 2.5 KUNA per committed leader |
+| `SUBSIDY_ERA_BLOCKS` | 8 100 000 committed leaders per era |
 | `DECAY_NUM` / `DECAY_DEN` | × ¾ per era |
-| `BLOCKS_PER_YEAR` | 15 768 000 (treasury vesting conversion only) |
+| `LEADER_INTERVAL_SECS` | 12 (4 s round × wave 3) |
+| `BLOCKS_PER_YEAR` | 2 628 000 (treasury vesting conversion only) |
+| `EPOCH_ROUNDS` | 7 200 (≈ 1 day; validator rotation, decoupled from the era) |
 | `MIN_VALIDATOR_STAKE` | 50 000 KUNA |
 | `MIN_ACTIVE_VALIDATORS` / `MAX_ACTIVE_VALIDATORS` | 15 / 21 |
 | `UNBONDING_ROUNDS` | 100 000 rounds |
 
-These values are cross-checked against the tokenomics skeleton
-(`kvnc-skeleton/staking/src/lib.rs`) by the unit tests in `kvnc-staking`.
+`MINING_SUBSIDY_BUDGET` is derived, not hard-coded:
+
+```
+MINING_SUBSIDY_BUDGET = TOTAL_SUPPLY − FOUNDER_PREMINE − TREASURY_TOTAL
+                        − GENESIS_VALIDATOR_ALLOCATION
+                      = 90 200 000 − 200 000 − 8 000 000 − 1 000 000 = 81 000 000
+```
+
+### 7.2 Genesis validator allocation split
+
+`genesis_validator_shares(n)` splits `GENESIS_VALIDATOR_ALLOCATION` across `n`
+genesis validators as evenly as integer atoms allow:
+
+- `base = ALLOCATION / n`, `remainder = ALLOCATION % n`
+- the first `remainder` validators (sorted ascending by address) receive `base + 1`
+- the shares sum to **exactly** `GENESIS_VALIDATOR_ALLOCATION`
+
+Because each share must back a `MIN_VALIDATOR_STAKE` (50 000 KUNA) self-stake,
+an even 1 000 000 KUNA split supports **at most 20 genesis validators**. Genesis
+fails fast if the requested set is larger (raise `GENESIS_VALIDATOR_ALLOCATION`
+to support more).
+
+These values are cross-checked by the unit tests in `kvnc-staking`
+(`canonical_values_match_skeleton`, `genesis_validator_shares_sum_exactly_and_are_even`).
 
 ---
 

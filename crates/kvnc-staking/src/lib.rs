@@ -3,10 +3,11 @@
 //! Tokenomics (locked):
 //! - Total supply: 90_200_000 KUNA
 //! - Founder premine: 200_000 KUNA
+//! - Genesis validator allocation: 1_000_000 KUNA (split evenly, minted once)
 //! - Treasury: 8_000_000 KUNA (1M/year × 8 years) with linear vesting
-//! - Mining subsidy: ~82_000_000 KUNA
-//! - Initial block reward: 10 KUNA (paid to the author of a committed leader block)
-//! - Decay: × 3/4 every 2_050_000 blocks
+//! - Mining subsidy: 81_000_000 KUNA
+//! - Initial block reward: 2.5 KUNA (paid to the author of a committed leader block)
+//! - Decay: × 3/4 every 8_100_000 committed leaders
 //! - Active validators: 15–21
 //!
 //! All canonical numbers above are shared with the tokenomics skeleton
@@ -37,28 +38,45 @@ pub const TOTAL_SUPPLY: u64 = 90_200_000 * ONE_KUNA;
 /// Founder premine: 200_000 KUNA.
 pub const FOUNDER_PREMINE: u64 = 200_000 * ONE_KUNA;
 
+/// Genesis validator allocation: 1_000_000 KUNA.
+///
+/// Split evenly across the genesis validator set (see
+/// [`genesis_validator_shares`]) and minted exactly once, at genesis. Each
+/// validator locks `MIN_VALIDATOR_STAKE` from its share; the remainder stays
+/// liquid in its account.
+pub const GENESIS_VALIDATOR_ALLOCATION: u64 = 1_000_000 * ONE_KUNA;
+
 /// Treasury allocation: 8 × 1_000_000 KUNA over 8 years.
 pub const TREASURY_TOTAL: u64 = 8_000_000 * ONE_KUNA;
 pub const TREASURY_ANNUAL: u64 = 1_000_000 * ONE_KUNA;
 pub const TREASURY_YEARS: u32 = 8;
 
-/// Approximate number of blocks that correspond to one year.
-/// Used only for treasury vesting schedule (tunable later via governance).
-/// Assumption: ~1 block / 2s average → ~15_768_000 blocks/year.
-pub const BLOCKS_PER_YEAR: u64 = 15_768_000;
+/// Seconds between consecutive **committed leader** blocks.
+///
+/// One leader is committed per wave; a wave is `WAVE_LENGTH = 3` rounds and a
+/// round is targeted at 4 s, hence 12 s per committed leader.
+pub const LEADER_INTERVAL_SECS: u64 = 12;
 
-/// Mining subsidy budget (everything that is not premine or treasury).
-pub const MINING_SUBSIDY_BUDGET: u64 = TOTAL_SUPPLY - FOUNDER_PREMINE - TREASURY_TOTAL; // ~82M
+/// Number of committed-leader blocks that correspond to one year.
+///
+/// Used only for the treasury vesting schedule (tunable later via governance).
+/// `31_536_000 / 12 = 2_628_000`.
+pub const BLOCKS_PER_YEAR: u64 = 31_536_000 / LEADER_INTERVAL_SECS;
 
-/// Initial block reward: 10 KUNA.
+/// Mining subsidy budget: everything that is not premine, genesis validator
+/// allocation or treasury.
+pub const MINING_SUBSIDY_BUDGET: u64 =
+    TOTAL_SUPPLY - FOUNDER_PREMINE - TREASURY_TOTAL - GENESIS_VALIDATOR_ALLOCATION; // 81M
+
+/// Initial block reward: 2.5 KUNA.
 ///
 /// (Skeleton name: `INITIAL_REWARD` — same value.)
-pub const INITIAL_BLOCK_REWARD: u64 = 10 * ONE_KUNA;
+pub const INITIAL_BLOCK_REWARD: u64 = 5 * ONE_KUNA / 2;
 
-/// Subsidy era length in blocks (chosen so cumulative issuance ≈ 82M).
+/// Subsidy era length in committed leaders (chosen so cumulative issuance ≈ 81M).
 ///
-/// (Skeleton name: `ERA_LENGTH` — same value: 2_050_000.)
-pub const SUBSIDY_ERA_BLOCKS: u64 = 2_050_000;
+/// (Skeleton name: `ERA_LENGTH` — same value: 8_100_000.)
+pub const SUBSIDY_ERA_BLOCKS: u64 = 8_100_000;
 
 /// Decay factor numerator / denominator = 3/4.
 pub const DECAY_NUM: u64 = 3;
@@ -85,8 +103,12 @@ pub const MAX_ACTIVE_VALIDATORS: usize = 21;
 /// (Skeleton name: `UNBONDING_PERIOD` — same value: 100_000 rounds.)
 pub const UNBONDING_ROUNDS: u64 = 100_000;
 
-/// Epoch rotation length (same as subsidy era for simplicity, linked to commitment height).
-pub const EPOCH_ROUNDS: u64 = SUBSIDY_ERA_BLOCKS; // 2_050_000
+/// Epoch rotation length in committed leaders (≈ 1 day at 12 s/leader:
+/// `86_400 / 12 = 7_200`).
+///
+/// Deliberately decoupled from `SUBSIDY_ERA_BLOCKS` so the active validator set
+/// keeps rotating frequently even though the subsidy era is long.
+pub const EPOCH_ROUNDS: u64 = 7_200;
 
 // ============================================================
 // Emission schedule (mining rewards)
@@ -95,7 +117,7 @@ pub const EPOCH_ROUNDS: u64 = SUBSIDY_ERA_BLOCKS; // 2_050_000
 /// Returns the block reward (in base units) for a given **committed leader height**.
 ///
 /// In the DAG model the “height” is the sequential number of committed leader
-/// blocks (not the raw round number). Reward starts at 10 KUNA and is
+/// blocks (not the raw round number). Reward starts at 2.5 KUNA and is
 /// multiplied by 3/4 every SUBSIDY_ERA_BLOCKS committed leaders.
 pub fn block_reward(committed_leader_height: u64) -> u64 {
     let era = committed_leader_height / SUBSIDY_ERA_BLOCKS;
@@ -123,6 +145,33 @@ pub fn cumulative_mining_issuance(committed_leader_height: u64) -> u64 {
         reward = reward.saturating_mul(DECAY_NUM) / DECAY_DEN;
     }
     total.min(MINING_SUBSIDY_BUDGET)
+}
+
+/// Deterministically split [`GENESIS_VALIDATOR_ALLOCATION`] across `n` genesis
+/// validators.
+///
+/// Shares are equal except for the integer remainder, which is handed out one
+/// atom at a time to the first entries. The returned shares therefore sum to
+/// exactly `GENESIS_VALIDATOR_ALLOCATION`, which keeps the supply invariant
+/// exact even though `1_000_000 KUNA` is not divisible by `n` in atoms.
+/// Returns an empty vector when `n == 0`.
+pub fn genesis_validator_shares(n: usize) -> Vec<u64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let n = n as u64;
+    let base = GENESIS_VALIDATOR_ALLOCATION / n;
+    let mut remainder = GENESIS_VALIDATOR_ALLOCATION % n;
+    (0..n)
+        .map(|_| {
+            if remainder > 0 {
+                remainder -= 1;
+                base + 1
+            } else {
+                base
+            }
+        })
+        .collect()
 }
 
 // ============================================================
@@ -542,10 +591,12 @@ impl StakingState {
         Ok(outcome)
     }
 
-    /// Current circulating supply approximation (premine + mining issued + vested treasury).
+    /// Current circulating supply approximation (premine + genesis validator
+    /// allocation + mining issued + vested treasury).
     pub fn circulating_supply(&self) -> u64 {
         let treasury_vested = self.treasury.as_ref().map(|t| t.vested).unwrap_or(0);
         FOUNDER_PREMINE
+            .saturating_add(GENESIS_VALIDATOR_ALLOCATION)
             .saturating_add(self.total_mining_issued)
             .saturating_add(treasury_vested)
             .min(TOTAL_SUPPLY)
@@ -571,8 +622,12 @@ impl StakingState {
         epoch
     }
 
-    /// Minimal genesis staking state (Phase 24.1): 15 active validators at MIN_VALIDATOR_STAKE,
-    /// treasury configured, height 0. Used by genesis / testnet initialization.
+    /// Minimal genesis staking state (Phase 24.1): `min_validators` active
+    /// validators at `MIN_VALIDATOR_STAKE`, treasury configured, height 0.
+    /// Used by genesis / testnet initialization.
+    ///
+    /// This only sets up *staking* state; the matching account balances come
+    /// from [`genesis_validator_shares`], which the node applies at first run.
     pub fn genesis(min_validators: u32) -> Self {
         let mut state = Self::new();
         let treasury_addr = Address([0xFF; 32]); // fixed genesis treasury
@@ -837,25 +892,6 @@ impl StakingState {
     }
 }
 
-// ============================================================
-// Staking lifecycle skeleton (AGENTS.md B — bond/unbond/commission)
-// ============================================================
-/// Bond stake to become / remain an active validator (skeleton — needs storage integration).
-pub fn bond_validator(_address: Address, _amount: u64) -> Result<(), &'static str> {
-    // TODO: verify >= MIN_VALIDATOR_STAKE, update StakingState, emit event
-    Ok(())
-}
-/// Unbond after UNBONDING_ROUNDS (skeleton — needs storage + time mapping).
-pub fn unbond_validator(_address: Address) -> Result<(), &'static str> {
-    // TODO: enforce unbonding period, release to account
-    Ok(())
-}
-/// Commission rate (0-100%) for validator rewards (skeleton).
-pub fn set_commission(_address: Address, _percent: u8) -> Result<(), &'static str> {
-    // TODO: validate percent <= 100, save to staking state
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -869,15 +905,15 @@ mod tests {
     }
 
     #[test]
-    fn initial_reward_is_10_kuna() {
-        assert_eq!(block_reward(0), 10 * ONE_KUNA);
-        assert_eq!(block_reward(SUBSIDY_ERA_BLOCKS - 1), 10 * ONE_KUNA);
+    fn initial_reward_is_2_5_kuna() {
+        assert_eq!(block_reward(0), 5 * ONE_KUNA / 2);
+        assert_eq!(block_reward(SUBSIDY_ERA_BLOCKS - 1), 5 * ONE_KUNA / 2);
     }
 
     #[test]
     fn first_decay() {
         let r = block_reward(SUBSIDY_ERA_BLOCKS);
-        assert_eq!(r, 7_500_000_000); // 7.5 KUNA
+        assert_eq!(r, 1_875_000_000); // 1.875 KUNA = 2.5 × 3/4
     }
 
     #[test]
@@ -931,7 +967,7 @@ mod tests {
     /// The canonical `block_reward` above is `u64`; they must agree.
     fn skeleton_block_reward(committed_leader_height: u64) -> u64 {
         let era = committed_leader_height / SUBSIDY_ERA_BLOCKS;
-        let mut reward: u128 = 10 * 1_000_000_000;
+        let mut reward: u128 = 2_500_000_000; // 2.5 KUNA
         for _ in 0..era {
             reward = reward.saturating_mul(3) / 4;
             if reward == 0 {
@@ -954,7 +990,7 @@ mod tests {
     /// The property bounds the era count, so this u128 calculation cannot
     /// overflow and does not rely on the production constants or function.
     fn reference_block_reward(era: u64) -> u64 {
-        let mut reward = 10_000_000_000u128;
+        let mut reward = 2_500_000_000u128;
         for _ in 0..era {
             reward = reward * 3 / 4;
         }
@@ -1039,23 +1075,31 @@ mod tests {
         assert_eq!(ONE_KUNA, 1_000_000_000);
         assert_eq!(TOTAL_SUPPLY, 90_200_000 * ONE_KUNA);
         assert_eq!(FOUNDER_PREMINE, 200_000 * ONE_KUNA);
+        assert_eq!(GENESIS_VALIDATOR_ALLOCATION, 1_000_000 * ONE_KUNA);
         assert_eq!(TREASURY_TOTAL, 8_000_000 * ONE_KUNA);
         assert_eq!(TREASURY_ANNUAL, 1_000_000 * ONE_KUNA);
-        assert_eq!(MINING_SUBSIDY_BUDGET, 82_000_000 * ONE_KUNA);
-        assert_eq!(INITIAL_BLOCK_REWARD, 10 * ONE_KUNA); // skeleton INITIAL_REWARD
-        assert_eq!(SUBSIDY_ERA_BLOCKS, 2_050_000); // skeleton ERA_LENGTH
+        assert_eq!(MINING_SUBSIDY_BUDGET, 81_000_000 * ONE_KUNA);
+        assert_eq!(INITIAL_BLOCK_REWARD, 5 * ONE_KUNA / 2); // skeleton INITIAL_REWARD
+        assert_eq!(SUBSIDY_ERA_BLOCKS, 8_100_000); // skeleton ERA_LENGTH
         assert_eq!((DECAY_NUM, DECAY_DEN), (3, 4));
-        assert_eq!(BLOCKS_PER_YEAR, 15_768_000);
+        assert_eq!(BLOCKS_PER_YEAR, 2_628_000);
+        assert_eq!(LEADER_INTERVAL_SECS, 12);
+        assert_eq!(EPOCH_ROUNDS, 7_200);
         assert_eq!(MIN_VALIDATOR_STAKE, 50_000 * ONE_KUNA);
         assert_eq!(MIN_ACTIVE_VALIDATORS, 15);
         assert_eq!(MAX_ACTIVE_VALIDATORS, 21);
         assert_eq!(UNBONDING_ROUNDS, 100_000); // skeleton UNBONDING_PERIOD
+        // Supply book must close exactly.
+        assert_eq!(
+            FOUNDER_PREMINE + GENESIS_VALIDATOR_ALLOCATION + TREASURY_TOTAL + MINING_SUBSIDY_BUDGET,
+            TOTAL_SUPPLY
+        );
     }
 
     #[test]
     fn reward_schedule_matches_skeleton() {
-        // Era 0 → 10 KUNA, boundary of era 0 → 10 KUNA,
-        // era 1 → 7.5 KUNA after the 3/4 decay, plus later eras.
+        // Era 0 → 2.5 KUNA, boundary of era 0 → 2.5 KUNA,
+        // era 1 → 1.875 KUNA after the 3/4 decay, plus later eras.
         let heights = [
             0u64,
             SUBSIDY_ERA_BLOCKS - 1,
@@ -1066,8 +1110,8 @@ mod tests {
         for h in heights {
             assert_eq!(block_reward(h), skeleton_block_reward(h), "height {h}");
         }
-        assert_eq!(block_reward(0), 10 * ONE_KUNA);
-        assert_eq!(block_reward(SUBSIDY_ERA_BLOCKS), 7_500_000_000); // 7.5 KUNA
+        assert_eq!(block_reward(0), 5 * ONE_KUNA / 2);
+        assert_eq!(block_reward(SUBSIDY_ERA_BLOCKS), 1_875_000_000); // 1.875 KUNA
     }
 
     #[test]
@@ -1102,8 +1146,8 @@ mod tests {
         assert!(naive <= MINING_SUBSIDY_BUDGET);
 
         // Full schedule: sum each era's reward until it decays to zero.
-        // The geometric series 10 KUNA × 2_050_000 × 1/(1 − 3/4) equals
-        // exactly 82M KUNA; floor-truncation keeps the real sum just below.
+        // The geometric series 2.5 KUNA × 8_100_000 × 1/(1 − 3/4) equals
+        // exactly 81M KUNA; floor-truncation keeps the real sum just below.
         let mut naive_full = 0u64;
         let mut era = 0u64;
         loop {
@@ -1203,17 +1247,17 @@ mod tests {
     }
 
     #[test]
-    fn epoch_rotation_at_subsidy_era_boundary() {
+    fn epoch_rotation_at_epoch_boundary() {
         let mut state = StakingState::new();
         assert_eq!(state.rotate_epoch(), 0);
 
-        state.committed_leader_height = SUBSIDY_ERA_BLOCKS - 1;
+        state.committed_leader_height = EPOCH_ROUNDS - 1;
         assert_eq!(state.rotate_epoch(), 0);
 
-        state.committed_leader_height = SUBSIDY_ERA_BLOCKS;
+        state.committed_leader_height = EPOCH_ROUNDS;
         assert_eq!(state.rotate_epoch(), 1);
 
-        state.committed_leader_height = 2 * SUBSIDY_ERA_BLOCKS;
+        state.committed_leader_height = 2 * EPOCH_ROUNDS;
         assert_eq!(state.rotate_epoch(), 2);
     }
 
@@ -1278,6 +1322,22 @@ mod tests {
             state.total_staked,
             MIN_VALIDATOR_STAKE * MIN_ACTIVE_VALIDATORS as u64
         );
+    }
+
+    #[test]
+    fn genesis_validator_shares_sum_exactly_and_are_even() {
+        // 1 KUNA = 10^9 atoms, so 1M KUNA almost never divides evenly by n;
+        // the splitter must still conserve every atom.
+        for n in [1usize, 2, 3, 15, 21, 100] {
+            let shares = genesis_validator_shares(n);
+            assert_eq!(shares.len(), n);
+            let sum: u64 = shares.iter().sum();
+            assert_eq!(sum, GENESIS_VALIDATOR_ALLOCATION, "n={n}");
+            let max = *shares.iter().max().unwrap();
+            let min = *shares.iter().min().unwrap();
+            assert!(max - min <= 1, "shares differ by <= 1 atom (n={n})");
+        }
+        assert!(genesis_validator_shares(0).is_empty());
     }
 
     #[test]
@@ -1492,7 +1552,14 @@ mod tests {
                 }
                 let accounted = liquid + u128::from(st.total_staked) + queued + treasury;
                 prop_assert_eq!(accounted, u128::from(FOUNDER_PREMINE) + u128::from(st.total_mining_issued));
-                prop_assert!(accounted + u128::from(TREASURY_TOTAL) <= u128::from(TOTAL_SUPPLY));
+                // Every bucket of the supply book must fit under the cap:
+                // premine + mining + treasury + genesis allocation.
+                prop_assert!(
+                    accounted
+                        + u128::from(TREASURY_TOTAL)
+                        + u128::from(GENESIS_VALIDATOR_ALLOCATION)
+                        <= u128::from(TOTAL_SUPPLY)
+                );
             }
         }
     }

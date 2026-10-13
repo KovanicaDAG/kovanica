@@ -183,7 +183,7 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            round_duration_ms: 2000, // 2 seconds per round (target block time)
+            round_duration_ms: 4000, // 4 s round → 12 s per committed leader (wave = 3)
             lookahead_rounds: 3,
             max_pending_rounds: 100,
             use_mysticghost: false,
