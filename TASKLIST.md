@@ -311,7 +311,7 @@
 
 - [~] Genesis ceremony — `kvnc-node genesis` postoji (single-node inline), **nema ceremony orchestration toola/docs**
 - [x] Faucet
-- [x] Seed nodes 3+
+- [ ] Seed nodes 3+ — **nema registriranih** (vidi Phase 14); P2P port 8000
 - [ ] Explorer + validator onboarding docs — nema
 - [ ] Mainnet freeze checklist — nema
 - [ ] Mainnet launch + monitoring runbook — nema
