@@ -21,6 +21,8 @@ Scope: seed/DNS, staking skeleton, tokenomics invariants, consensus liveness, CL
 - Execution (Wasmi): skeleton verified (`docs/EXECUTION-GAS-SKELETON.md` + `crates/kvnc-execution/src/lib.rs`); determinism enforced by design. PASS (full metering deferred Phase 25).
 - Staking: `MIN_VALIDATOR_STAKE = 50_000 * ONE_KUNA` (§3 grep); `commission_bps` (basis points); `UnbondingEntry` with `UNBONDING_ROUNDS`; `bond/unbond/slash/withdraw` present. PASS.
 - Tokenomics: `max_supply = 90_200_000`; `s0 = 10`; `era = 2_050_000`; `decay = 3/4`; maturity 100; fee floor `max(1, subsidy / 500_000)`. PASS.
+
+> **Update 2026-10-13:** emission constants revised by project owner — `s0 = 2.5` KUNA, `era = 8_100_000`, `mining_budget = 81_000_000`, new `genesis_validator_allocation = 1_000_000` (see `docs/TOKENOMICS.md`). The audit above reflects the pre-revision values; invariants (decay ×¾, hard cap 90.2M, maturity 100) unchanged.
 - Crypto: Ed25519 (64-byte sig / 128 hex) used (`kvnc-crypto`); keys client-only; no seed/key passed to node. PASS.
 - P2P: `listen` / `peer` / `seed` code verified (`kvnc-network/src/service.rs`); gossip, ping, ban rules present. PASS (full Sybil/eclipse resistance requires external audit).
 - Node / RPC: `KVNC_RPC_AUTH=disable` documented for test only; production requires auth; no key/seed in env. PASS.

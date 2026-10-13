@@ -65,10 +65,12 @@ This file contains pure constants and functions that align emission + treasury w
 
 - Total supply 90 200 000 KUNA
 - 200 000 premine
+- 1 000 000 genesis validator allocation
 - 8 000 000 treasury (linear 1 M / year)
-- Initial reward 10 KUNA
-- Era length 2 050 000 committed leaders
+- Initial reward 2.5 KUNA
+- Era length 8 100 000 committed leaders
 - Decay × 3/4
+- Mining subsidy budget 81 000 000
 
 **Actions:**
 - Merge the constants and pure functions (`block_reward`, `treasury_vested`, `circulating_supply`, `StakingState` helpers) into the existing `kvnc-staking` crate.

@@ -176,16 +176,17 @@ Make joining and verifying the network cheap.
 
 | Parameter | Value |
 |-----------|--------|
-| Max supply | 90.2M KVNC |
-| Founder premine | 0.2M KVNC |
-| Treasury (vested) | 8M KVNC (linear over 8 years) |
-| Mining budget | ~82M KVNC |
-| Initial subsidy | 10 KVNC / committed leader |
-| Era length | 2,050,000 committed leaders |
+| Max supply | 90.2M KUNA |
+| Founder premine | 0.2M KUNA |
+| Genesis validator allocation | 1M KUNA |
+| Treasury (vested) | 8M KUNA (linear over 8 years) |
+| Mining budget | 81M KUNA |
+| Initial subsidy | 2.5 KUNA / committed leader |
+| Era length | 8,100,000 committed leaders |
 | Decay | ×¾ per era |
 | Decimals | 9 |
 | Active validators | 15–21 |
-| Min validator stake | 50,000 KVNC |
+| Min validator stake | 50,000 KUNA |
 
 Emission and treasury math are implemented and covered by tests. Delegation and slashing economics complete in Phase C.
 

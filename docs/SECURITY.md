@@ -37,4 +37,4 @@
 - Total: 90.2M KUNA (`9_020_000_000_000_000` atoms)
 - Decimals: 9
 - Founder premine: 200k KUNA; Treasury: 8M KUNA (linear 8yr)
-- Subsidy: 10 KUNA / 2.05M blocks; decay ×3/4; reward only on committed leader.
+- Subsidy: 2.5 KUNA / 8.1M blocks; decay ×3/4; reward only on committed leader.

@@ -29,9 +29,12 @@
 | Decimals                  | 9                                              |
 | Founder premine           | 200 000 KVNC                                   |
 | Treasury                  | 8 000 000 KVNC (1 M/year × 8 years, linear)    |
-| Mining subsidy budget     | ≈ 82 000 000 KVNC                              |
-| Initial block reward      | **10 KVNC** (paid to committed leader author)  |
-| Subsidy era length        | **2 050 000** committed leader blocks          |
+| Mining subsidy budget     | **81 000 000 KVNC** (= 90.2M − 0.2M − 8M − 1M)                    |
+| Initial block reward      | **2,5 KVNC** (paid to committed leader author)  |
+| Subsidy era length        | **8 100 000** committed leader blocks          |
+| Genesis validator alloc.  | 1 000 000 KVNC                                   |
+| Round / leader interval   | round 4 s → committed leader svakih 12 s        |
+| Epoch (validator rotacija)| 7 200 leader blokova (≈1 dan)                    |
 | Decay                     | **× 3/4** each era                             |
 | Active validators         | 15–21                                          |
 | Min validator stake       | 50 000 KVNC                                    |
