@@ -107,12 +107,52 @@ pub fn vrf_verify(public_key: &PublicKey, input: &[u8], output: &VRFOutput) -> R
     Ok(())
 }
 
+/// Derive a deterministic VRF secret from any 32-byte seed (e.g. validator Ed25519 seed).
+/// Uses blake3(seed || counter) and retries with incremented counter if scalar is invalid.
+pub fn derive_vrf_secret_from_seed(seed: &[u8; 32]) -> [u8; 32] {
+    use blake3::hash;
+    let mut counter: u32 = 0;
+    loop {
+        let mut input = Vec::with_capacity(36);
+        input.extend_from_slice(seed.as_slice());
+        input.extend_from_slice(&counter.to_le_bytes());
+        let derived = hash(&input).as_bytes()[..32].try_into().unwrap();
+        if VRFKeyPair::from_secret(derived).is_ok() {
+            return derived;
+        }
+        counter += 1;
+    }
+}
+
 /// Convert VRF hash to a u64 for leader selection (deterministic, uniform)
 pub fn vrf_hash_to_u64(hash: &[u8; 32]) -> u64 {
     u64::from_le_bytes([
         hash[0], hash[1], hash[2], hash[3],
         hash[4], hash[5], hash[6], hash[7],
     ])
+}
+
+/// Encode a VRF output into the `statements` payload (wire format).
+/// Magic prefix `KVNC-VRF1` (9 bytes) + 32-byte hash + 96-byte proof = 137 bytes.
+/// Old blocks with empty `statements` remain exactly as-is.
+pub fn encode_statements(output: &VRFOutput) -> Vec<u8> {
+    let mut v = Vec::with_capacity(137);
+    v.extend_from_slice(b"KVNC-VRF1");
+    v.extend_from_slice(&output.hash);
+    v.extend_from_slice(&output.proof);
+    v
+}
+
+/// Decode a VRF payload from `statements` if present; else None.
+pub fn decode_statements(data: &[u8]) -> Option<VRFOutput> {
+    if data.len() < 137 || &data[..9] != b"KVNC-VRF1" {
+        return None;
+    }
+    let mut hash = [0u8; 32];
+    let mut proof = [0u8; 96];
+    hash.copy_from_slice(&data[9..41]);
+    proof.copy_from_slice(&data[41..137]);
+    Some(VRFOutput::new(hash, proof))
 }
 
 /// Errors for VRF operations

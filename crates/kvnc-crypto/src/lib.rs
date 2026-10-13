@@ -4,7 +4,7 @@
 #![deny(unsafe_code)]
 
 mod vrf;
-pub use vrf::{vrf_hash_to_u64, vrf_prove, vrf_verify, VRFKeyPair, VRFOutput, VRFError};
+pub use vrf::{encode_statements, decode_statements, derive_vrf_secret_from_seed, vrf_hash_to_u64, vrf_prove, vrf_verify, VRFKeyPair, VRFOutput, VRFError};
 
 use ed25519_dalek::Signature as DalekSignature;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
