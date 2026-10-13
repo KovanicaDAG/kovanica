@@ -9,7 +9,7 @@ use libp2p::{request_response::Codec, StreamProtocol};
 use serde::{Deserialize, Serialize};
 
 /// Protocol name for state sync request-response.
-pub const STATE_SYNC_PROTOCOL: &str = "/kvanc/state-sync/1.0.0";
+pub const STATE_SYNC_PROTOCOL: &str = "/kvnc/state-sync/1.0.0";
 
 /// Maximum state sync request size.
 pub const MAX_STATE_SYNC_REQUEST_SIZE: usize = 1024;
@@ -196,6 +196,6 @@ mod tests {
     fn state_sync_codec_round_trip() {
         let _codec = StateSyncCodec;
         // Just verify the protocol constants
-        assert_eq!(STATE_SYNC_PROTOCOL, "/kvanc/state-sync/1.0.0");
+        assert_eq!(STATE_SYNC_PROTOCOL, "/kvnc/state-sync/1.0.0");
     }
 }

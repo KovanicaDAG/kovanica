@@ -1,11 +1,12 @@
 //! Minimal audit 6.2 test: block sync request-response + rate-limited enqueue.
 
-use kvnc_network::{BlockSyncRequest, BlockSyncResponse, BLOCK_SYNC_PROTOCOL};
+use kvnc_network::{BlockSyncRequest, BlockSyncResponse, BLOCK_SYNC_PROTOCOL, STATE_SYNC_PROTOCOL};
 use kvnc_types::hash::Hash;
 
 #[test]
-fn audit_62_sync_protocol_is_kvanc() {
-    assert_eq!(BLOCK_SYNC_PROTOCOL, "/kvanc/block-sync/1.0.0");
+fn audit_62_sync_protocol_is_kvnc() {
+    assert_eq!(BLOCK_SYNC_PROTOCOL, "/kvnc/block-sync/1.0.0");
+    assert_eq!(STATE_SYNC_PROTOCOL, "/kvnc/state-sync/1.0.0");
 }
 
 #[test]
