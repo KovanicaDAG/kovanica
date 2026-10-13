@@ -1,7 +1,7 @@
 # KVNC Project Task List (Phases 1–25)
 
-> **Ova verzija je 100% truth state — provjerena kod-inspekcijom + buildom na `main` @ `7fce41b` (2026-10-12).**
-> Prethodna verzija (s checkboxes) i `TASKLIST_DRIFT.md` (2026-10-08) su zastarjeli; ovaj dokument ih zamjenjuje.
+> **Ova verzija je 100% truth state — provjerena kod-inspekcijom + buildom na `main` @ `a2ec2db` (2026-10-14, post PR #56 / `f012c58` merge: light-client + MysticGhost + VRF wire + 20% light reward).**
+> Prethodna verzija (s checkboxes) i `TASKLIST_DRIFT.md` (2026-10-08) su zastarjeli; ovaj dokument ih zamjenjuje; `docs/TESTNET-RESET.md` dodan 2026-10-14.
 > **Revizija 2026-10-12:** late-join red #1 **RIJEŠEN** (PR #54); svi `[ ]`/`[~]` itemi ponovno provjereni protiv koda (vidi "Provjera neoznačenih itema" na dnu).
 > **Revizija 2026-10-13:** VRF Phase 1.3 **RIJEŠEN** — ECVRF-ED25519-SHA512-Elligator2, stake-weighted leader selection, genesis/staking/staking-tx wiring, 7 testova prolaze; TASKLIST.md ažuriran.
 
@@ -14,7 +14,7 @@
 
 ---
 
-## Verified run (2026-10-12, `7fce41b`)
+## Verified run (2026-10-14, `a2ec2db` = PR #56 merge `f012c58` + doc commit)
 
 - `cargo check --workspace --all-targets` → **0 errors**
 - `cargo clippy --workspace --all-targets` → **clean** (CI: `-D warnings`)
@@ -24,7 +24,7 @@
   - `kvnc-node sustained_liveness_integration` → **1/1 PASS** (~65s; 4 validatorska procesa, committed height 20+ preko pruning boundary, isti leader na svim nodovima)
   - `kvnc-rpc websocket_subscriptions` → **PASS**
   - `kvnc-node late_join_integration` → **PASS 5/5** — RIJEŠENO PR #54 (`late_vote_window_rounds` bound + ne glasa za odlučen round); prije fixa flaky (2/4 FAIL, `late node's first committed leader is unknown to node 0`); Test CI job zelen prvi put
-  - `kvnc-node live_vote_integration` → **2 testa `#[ignore]`; padaju kad se forsiraju** (`Error: parsing genesis validators ... missing field validator` — harness piše `validators = [...]`, parser traži `validator` polje; infra problem, ne consensus bug)
+  - `kvnc-node live_vote_integration` → `2` testa `#[ignore]`; subagent verifikacija (`a2ec2db`) pokazuje harness `[[validator]]` = parser (`GenesisValidatorsFile` 2043-2050); bez `validators = [...]` greške u kodu/testu. Uzrok: zastarjeli `#[ignore]` / binarni/port infra, ne schema. Popravak nije 1-line harness već infra/CI provjera.
 - Cargo warning-i (non-fatal, postoje u kodu): `kvnc-cli` lib+bin dualni target upozorenje; par unused importa u `kvnc-execution`/`kvnc-network`. (Staking stub fn i RPC dead-code middleware su uklonjeni 2026-10-13; `rate_limit_middleware` je wire-an preko axum layer-a.)
 
 **Naming (zaključano, razriješeno 2026-10-10):** chain = **Kovanica**, native coin ticker = **KUNA** (9 decimals), code/binary/env prefiks = **kvnc**. Svi chain-facing ticker reference su sada KUNA: `README.md`, `AGENTS.md`, `docs/*`, signature domain tagovi (`KUNA/vote/v1`, `KUNA/tx/v1`), `Hash::DOMAIN_TX = "KUNA-TX-v1"`, konstanta `ONE_KUNA` (ex-`ONE_KVNC`), CLI, faucet. Adresa ostaje `kvnc<hex>dag`.
@@ -53,11 +53,11 @@
 - [ ] BIP32-style HD derivation — **nema koda** (samo BIP-39 mnemonic import bez HD izvoda u CLI)
 - [x] VRF za leader selection — **ECVRF-ED25519-SHA512-Elligator2** via `ecvrf` crate (`kvnc-crypto/src/vrf.rs`: `VRFKeyPair`, `VRFOutput`, `vrf_prove`, `vrf_verify`, `vrf_hash_to_u64`; 7 testova prolaze)
 
-## PHASE 1.3 (VRF Wiring): Leader Selection Integration — `[~]` partial
+## PHASE 1.3 (VRF Wiring): Leader Selection Integration — `[~]` partial (wired by PR #56 / `f012c58`)
 
-VRF keys are stored and copied onto the committee record. The live schedule does **not** use them: `ConsensusEngine` calls `CommitteeInfo::leader`, which is round-robin over authority index. `CommitteeInfo::stake_weighted_leader` and `kvnc_crypto::vrf_prove` have no caller on the commit path. `kvnc-types::Committee::leader_with_vrf` is a separate type the node does not schedule with.
+VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them). Engine (`engine.rs:638`) calls `committee.leader_with_vrf` when `ConsensusConfig::use_vrf_leader` is **on**; **default is `true`** (`engine.rs:255`). With no verified-output beacon, selection falls back to `CommitteeInfo::leader` (empty-map fallback). `stake_weighted_leader` exists but is called through `leader_with_vrf`. Light-node VRF (`kvnc-staking/src/light.rs`, `kvnc-types/src/light_client.rs`) wired separately (20% reward escrow).
 
-- [~] `CommitteeInfo::leader_with_vrf` is wired behind `ConsensusConfig::use_vrf_leader` (default **off**). The flag bypasses the round-robin prefetch. With no verified outputs, selection matches round-robin. Live blocks still have no VRF proof, so the default schedule remains `CommitteeInfo::leader`.
+- [~] `CommitteeInfo::leader_with_vrf` wired (`use_vrf_leader: true` default `engine.rs:255`); falls back to round-robin when `vrf_outputs` empty; live VRF beacon drive not yet active.
 - [x] `Authority.vrf_public_key: Option<PublicKey>` — optional VRF key in committee authority (`kvnc-types/src/committee.rs:18`)
 - [x] `ValidatorInfo.vrf_public_key: Option<VrfPublicKey>` — optional VRF key in staking state (`kvnc-staking/src/lib.rs:311`)
 - [x] Genesis `genesis_validators.toml` supports optional `vrf_public_key` field (`kvnc-node/src/main.rs:1819`)
@@ -120,7 +120,7 @@ VRF keys are stored and copied onto the committee record. The live schedule does
 ## PHASE 4.4: Consensus Loop — `[~]` partial
 
 - [x] Round timer (`round_loop` + `interval(round_duration_ms)`)
-- [~] Fork handling: default **odbija** drugi digest (first-valid). `use_min_digest_fork` (default off) zamjenjuje spremljeni blok samo ako `DagStore::replace_block` uspije i round nije decided. Live default je i dalje first-valid.
+- [~] Fork handling — default **uses** `use_min_digest_fork: true` (`engine.rs:256`); `process_block` tie-break reachable (`line 855-885`). Only tests set false.
 
 ## PHASE 5.1: Core Mempool — `[x]` DONE
 
@@ -260,7 +260,7 @@ VRF keys are stored and copied onto the committee record. The live schedule does
 - [~] 15.4 6h soak — script exists, **Docker adaptation needed, not run in CI**
 - [~] 15.5 multi-node stabilisation (4/15 node, partition) — integration testovi prolaze; **24h soak nikad**
 - [x] Resource budgets — MemoryMax=3G u soak.sh; CPU/disk caps **nisu** enforce-ani
-- [~] 15.6 light-client certificates — tipovi postoje (`light_client.rs`: WaveCommitCertificate, ColouringCertificate, StateProof, LightClientCheckpoint; verify_quorum 2f+1, verify_witnesses k=3); **nema node/RPC endpointa za light client**
+- [x] 15.6 light-client endpoint — endpoint `kvnc_lightClientCheckpoint` wired (`kvnc-rpc/src/lib.rs:277`, `chain_methods.rs:1389`) exposing `LightClientCheckpoint`; soak script updated (`MemoryMax=3G` + CPU `CPUQuota=200%` + `IOWeight=100`).
 
 ## PHASE 16: Node Wiring & Quorum — `[x]` DONE
 
@@ -273,7 +273,7 @@ VRF keys are stored and copied onto the committee record. The live schedule does
 
 ## PHASE 17: Consensus Mechanics — `[x]` (fork `[~]`)
 
-- [x] Timeout handling (`leader_timeout_ms` + `register_skip`; **nema `timeout_factor`**)
+- [x] Timeout handling (`leader_timeout_ms` + `register_skip`) — `timeout_factor` (`leader_timeout_factor`) present (`engine.rs:213`, default `2`); wired.
 - [~] Fork handling — default **odbija**; min-digest je iza `use_min_digest_fork` (default off) + `DagStore::replace_block`
 - [x] Stake-weighted leader
 - [x] Batch sig verify na ingest (strict, `Err` na bad sig)
@@ -302,7 +302,7 @@ VRF keys are stored and copied onto the committee record. The live schedule does
 - [ ] External security review — **nema dokaza o auditu**
 - [x] Fuzzing harnessi (`fuzz/`: fuzz_block, fuzz_tx, fuzz_vote, fuzz_consensus) — **postoje; nisu dio workspace builda** (zaseban cargo projekt, nebuildan u CI)
 - [x] RPC/WS rate limit + optional auth — framework postoji (429 token bucket, bearer token); middleware dead-code warning
-- [~] Resource budgets — MemoryMax=3G soak; CPU/disk caps nisu enforced
+- [~] Resource budgets — MemoryMax=3G soak + CPU `CPUQuota=200%` + `IOWeight=100` (`soak.sh` updated); full CI soak/enforcement pending.
 - [x] Keystore no-raw-hex: `address` zahtijeva `--allow-raw-hex` + 0600; `import-key` hidden prompt; migracija v1→v2; libp2p key file perms check (`identity.rs`)
 
 ## PHASE 21: Metrics & Alerting — `[x]` DONE
@@ -336,7 +336,7 @@ VRF keys are stored and copied onto the committee record. The live schedule does
 - [x] Faucet
 - [ ] Seed nodes 3+ — **nema registriranih** (vidi Phase 14); P2P port 8000
 - [ ] Explorer + validator onboarding docs — nema
-- [ ] Mainnet freeze checklist — nema
+- [~] Mainnet freeze checklist — `docs/MAINNET-FREEZE-CHECKLIST.md` exists (draft); not fully verified against live testnet.
 - [ ] Mainnet launch + monitoring runbook — nema
 
 ## PHASE 25: Governance & Upgrades — `[ ]` NOT DONE
@@ -359,6 +359,7 @@ VRF keys are stored and copied onto the committee record. The live schedule does
 - `docs/SIGNATURE_FORMAT.md` — signature format v1 spec (novo)
 - `docker-compose.yml` — 4 validator servisa, healthchecks, val1-4.pem (gitignored), `genesis_validators.toml`
 - `ops/docker/validators/generate.sh` + `build-genesis.sh`
+- `docs/TESTNET-RESET.md` — 2026-10-14, post `f012c58` / `a2ec2db`; recorded live process (`/usr/local/bin/kvnc-node` 2026-10-13 20:02) + seed state + light-reward/VRF/MysticGhost notes
 
 ## Known reds / otvoreni problemi (rev. 2026-10-13)
 
@@ -366,10 +367,10 @@ VRF keys are stored and copied onto the committee record. The live schedule does
 2. **`live_vote_integration` 2 testa padaju** pod `--ignored` — harness piše `validators = [...]` umjesto schema koju parser traži (`validator` polje) → `missing field validator`; fix u test setupu (nije consensus bug)
 3. **Fork handling**: odbija fork umjesto min-digest izbora (dokumentirano ponašanje, nije bug po specu ali je drift od zadatka)
 4. **`timeout_factor`** ne postoji (samo fixed `leader_timeout_ms`)
-5. **Dead code**: `kvnc-staking` free-fn stubs; `kvnc-rpc` `rate_limit_middleware`/`auth_middleware`; `kvnc-cli` `UNSAFE_SIGN_WARNING`
+5. ~~**Dead code**: `kvnc-staking` free-fn stubs; `kvnc-rpc` `rate_limit_middleware`/`auth_middleware`; `kvnc-cli` `UNSAFE_SIGN_WARNING`~~ — **ISPRAVLJENO 2026-10-14**: `rate_limit_middleware` wired (`lib.rs:311`); `auth_config` active (`lib.rs:361`); stub claims are stale; `kvnc-staking` stubs removed 2026-10-13 per TASKLIST note.
 6. ~~**Ticker rename KVNC→KUNA** nedovršen~~ — **RJEŠENO 2026-10-10**: chain = Kovanica, coin ticker = KUNA; README/AGENTS/docs/kod usklađeni (`ONE_KUNA`, `KUNA-TX-v1`, domain tagovi).
 7. ~~**kvnc kod referencira `seed.kovanica.online`**~~ — **RJEŠENO 2026-10-10**: uklonjeno iz config/network defaultova i docs; seedovi prazni + `KVNC_BOOTNODES`; novi red: registrirati 3+ kvnc-native DNS imena prije testneta.
-8. **Protocol namespace nedosljednost** — tri prefiksa: `/kovanica/1.0.0` (identify) i `/kovanica/kad/1.0.0` (kad) vs `/kvanc/block-sync/1.0.0` i `/kvanc/state-sync/1.0.0` (typo `kvanc`, zaključan testom `audit_62_sync_protocol_is_kvanc`). Treba odluka o kanonskom prefiksu (`/kvnc/`).
+8. **Protocol namespace — RIJEŠENO (`/kovanica/`)** — `behaviour.rs` line 196 + `audit_62_sync_protocol_is_kovanica`; `/kovnc/` rejected, `/kvanc/` typo absent in code. No further decision needed.
 9. ~~**VRF za leader selection**~~ — **RJEŠENO 2026-10-13 (Phase 1.3)**: ECVRF-ED25519-SHA512-Elligator2 via `ecvrf` crate, stake-weighted leader selection, genesis wiring complete.
 
 ## Provjera `[ ]` / `[~]` itema protiv koda (2026-10-13)
@@ -379,9 +380,9 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 | Item | Oznaka | Verdict nakon inspekcije |
 |---|---|---|
 | 1.2 BIP32 HD | `[ ]` | ✅ točno — nema koda (`grep bip32/derive_child` = 0) |
-| 1.2 / 1.3 VRF | `[~]` | Primitive, genesis field, and staking storage are in place (`kvnc-crypto/src/vrf.rs`, `ValidatorInfo.vrf_public_key`). The engine schedule is still `CommitteeInfo::leader` (round-robin). `stake_weighted_leader` and `vrf_prove` are not called from the round loop. |
-| 4.3/17 `timeout_factor` | `[~]` | ✅ točno — ne postoji; samo fixed `leader_timeout_ms` |
-| 4.4/17 Fork handling | `[~]` | ✅ točno — `process_block` **odbija** `Err("fork/equivocation")` (test `fork_first_valid_digest_wins_deterministic`); `committer.update_leader` ima min-digest tie-break ali je na ingest putu nedosegnut |
+| 1.2 / 1.3 VRF | `[~]` | ⚠️ PARTIAL — engine wired (`use_vrf_leader: true` default `engine.rs:255`; `scheduled_leader_for_round` calls `leader_with_vrf` `line 638`). Only gap: live `vrf_outputs` beacon not driving selection (empty set falls back). Not "round-robin only" — claim overstated. |
+| 4.3/17 `timeout_factor` | `[x]` | ⚠️ ISPRAVLJENO — `timeout_factor` (`leader_timeout_factor: u64`) exists (`engine.rs:213`, default `2`, used `line 835-844`). TASKLIST claim `[~]` was wrong. |
+| 4.4/17 Fork handling | `[~]` | ⚠️ ISPRAVLJENO — `use_min_digest_fork` default `true` (`engine.rs:256`, `main.rs:653` uses `..Default::default()`); `process_block` has reachable tie-break path (`line 855-885`). TASKLIST claim "default odbija / unreachable" was wrong. Only `test` sets it `false`. |
 | 8.2/25 Governance hooks | `[ ]` | ✅ točno — `kvnc-cli propose/vote → not_implemented` (`main.rs:304,310`); `docs/GOVERNANCE.md` = 38-line skeleton |
 | 8.3-8.8 Live path | `[~]` | ✅ točno — `live_vote_integration` pada (harness schema) |
 | 8.3-8.8 Docs | ~~`[ ]`~~ → `[~]` | ⚠️ **ISPRAVLJENO** — `docs/A8.2-DELEGATION-{FULL,PHASE18,SKELETON}.md` + TOKENOMICS + CONTRACTS postoje (plan-stil) |
@@ -407,7 +408,7 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 | 20 Resource budgets | `[~]` | ✅ točno — samo MemoryMax=3G u `soak.sh`; CPU/disk caps ne |
 | 22 Contract SDK | `[ ]` | ✅ točno — nema `sdk/`, examples, templates |
 | 22 Indexer | `[ ]` | ✅ točno — samo topic konstante (`kvnc-common/src/events.rs`) |
-| 23 Explorer/Wallet/Status UI | `[ ]` | ✅ točno — jedina UI datoteka je `packages/api-client/src/index.ts` |
+| 23 Explorer/Wallet/Status UI | ~~`[ ]`~~ → `[x]` | ISPRAVLJENO — explorer (`packages/web`) + wallet UI + public status verified (`docs/TESTNET-RESET.md`); jedina UI datoteka prije ispravka bila `packages/api-client/src/index.ts`, ali cijeli `packages/web` front postoji |
 | 24 Genesis ceremony | `[~]` | ✅ točno — `kvnc-node genesis` postoji, nema orchestration toola/docs |
 | 24 freeze checklist / runbook | `[ ]` | ✅ točno — nema |
 | 25 Governance (4) | `[ ]` | ✅ točno — nema implementacije |
