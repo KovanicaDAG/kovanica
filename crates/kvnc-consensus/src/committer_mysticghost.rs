@@ -1,9 +1,11 @@
-//! Drop-in / wrapper committer that can use MysticGhost ordering.
+//! Example wrapper for MysticGhost ordering. Not called by the engine.
 //!
-//! Phase-1 scaffold: this module is intentionally **not wired** into
-//! [`crate::committer`] or [`crate::linearizer`] yet. Nothing here runs unless
-//! a caller explicitly uses it, so behaviour with the feature flag off is
-//! bit-identical to the pure-Mysticeti path.
+//! The flag that changes commit output is [`crate::UniversalCommitter`]'s
+//! `use_mysticghost` (from [`crate::ConsensusConfig`], default off,
+//! `KVNC_MYSTICGHOST` on the node). This module is a sketch of that seam.
+//! Nothing here runs unless a caller invokes
+//! [`commit_with_optional_mysticghost`] directly. With the flag off, the
+//! live committer stays on the linearizer path.
 
 use crate::ghostdag_scoped::ColouringResult;
 use crate::linearizer::Linearizer;

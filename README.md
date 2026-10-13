@@ -126,11 +126,11 @@ cargo run -p kvnc-node -- --config config.toml
 Key configuration points (see `config.example.toml` for the full list and environment-variable mappings):
 
 - `data_dir` — chain data (separate consensus and state redb files)
-- `listen_addr` — P2P listen address (default `0.0.0.0:9000`)
+- `listen_addr` — P2P listen address (default `0.0.0.0:8000`)
 - `rpc_addr` / `rpc_port` — JSON-RPC bind (default `127.0.0.1:8545`)
 - `bootnodes` — list of multiaddrs or DNS seeds (no hard-coded hosts; supply 3+ kvnc-native seeds)
 - `round_duration_ms` — target consensus round duration
-- `validator_key` — path to a 32-byte hex seed (ephemeral key generated if omitted)
+- `validator_key` — path to a 32-byte hex seed file (mode `0600`). Required when `run_validator` is true, which is the default. A read-only node may omit it.
 - `rpc_rate_limit_per_min` — per-IP token-bucket limit (burst derived as `max(1, rate/6)`)
 
 A `genesis` subcommand is available to produce a genesis JSON and optional validator key files from a validators list, treasury address, and founder address.

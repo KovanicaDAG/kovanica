@@ -373,11 +373,9 @@ async fn main() -> Result<()> {
     let total: usize = groups.iter().map(Vec::len).sum();
 
     let started = Instant::now();
-    let (accepted, rejected, first_error) =
-        submit_grouped(&client, groups, args.concurrency).await;
+    let (accepted, rejected, first_error) = submit_grouped(&client, groups, args.concurrency).await;
     let submit_elapsed = started.elapsed();
-    let committed =
-        wait_committed(&client, &targets, Duration::from_secs(args.wait_secs)).await?;
+    let committed = wait_committed(&client, &targets, Duration::from_secs(args.wait_secs)).await?;
 
     let elapsed = started.elapsed().as_secs_f64();
     let tps = if elapsed > 0.0 {
