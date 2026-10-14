@@ -14,25 +14,28 @@ The chain is **Kovanica**. The native coin ticker is **KUNA** (9 decimals). All 
 
 `kvnc` is a Cargo workspace that implements a complete full-node stack:
 
-- **Consensus**: Mysticeti-style uncertified DAG (wave length = 3) with direct/indirect commit rules, linearization, and an optional MysticGhost hybrid that applies GHOSTDAG \(k=3\) scoped colouring. Non-blue (red) blocks are returned to the mempool rather than pruned.
+- **Consensus**: Mysticeti-style uncertified DAG (wave length = 3) with direct/indirect commit rules, linearization, and **MysticGhost hybrid** that applies GHOSTDAG \(k=3\) scoped colouring. Non-blue (red) blocks are returned to the mempool rather than pruned.
 - **State model**: Account-based (UTXO-free) with balances, nonces, contract code/storage, and a sorted key-value Merkle state root. Snapshots and pruning are supported.
 - **Staking & emission**: Proof-of-stake validators (target 15–21 active), delegation, unbonding queue, epoch rotation, fixed-percentage slashing, and a geometric emission schedule with treasury vesting.
 - **Execution**: Native transactions (transfer, stake, delegate, claim rewards, contract deploy/call) plus a Wasmi-based deterministic WASM runtime with gas metering and memory limits.
 - **Networking**: libp2p (TCP + Noise + Yamux, Gossipsub, Kademlia, Identify, Ping). Persistent peer identity, peer scoring, block/state sync, and orphan buffering.
-- **Interfaces**: JSON-RPC + WebSocket subscriptions, a full-featured CLI wallet, OpenAPI specification, and a TypeScript API client.
+- **Interfaces**: JSON-RPC + WebSocket subscriptions, a full-featured CLI wallet, OpenAPI specification, a TypeScript API client, and **light-client checkpoints** (`kvnc_lightClientCheckpoint`).
 
 The node is designed to run comfortably on modest hardware (target 2–4 GB RAM with aggressive DAG pruning).
+
+**Testnet status (2026-10-14):** 3 seed nodes live, 4-validator quorum verified, sustained liveness test passes, late-join sync works, VRF-driven leader election active (quorum-based beacon).
 
 ## Features
 
 - **DAG ledger** with causal ordering, stake-filtered parent selection, and bounded parent round gap.
 - **Wave-based consensus** (leader / vote / decide) with quorum (2f+1) direct commits and path-based indirect commits.
-- **Stake-weighted leader selection** with optional ECVRF-ED25519-SHA512-Elligator2 VRF support and deterministic fallback.
-- **Account + staking model** including commission, reward sharing, unbonding, and treasury vesting.
+- **Stake-weighted leader selection** with **ECVRF-ED25519-SHA512-Elligator2 VRF support** (quorum-based beacon on decide rounds) and deterministic round-robin fallback.
+- **MysticGhost hybrid colouring** (GHOSTDAG k=3 mergeset + Mysticeti wave DAG) with non-blue blocks returned to mempool.
+- **Account + staking model** including commission, reward sharing, unbonding, treasury vesting, and genesis validator allocation (1M KUNA split evenly).
 - **Deterministic contract execution** via Wasmi (fuel metering, memory caps, module cache) plus native typed contract APIs (HTLC, Vault, Multisig, Token).
 - **Verifiable state** with sorted-KV Merkle roots and snapshot/export support.
 - **P2P networking** with gossip for blocks, transactions, and votes; request/response sync; and orphan handling.
-- **JSON-RPC & WebSocket** covering chain, account, staking, mempool, consensus, and contract methods, plus subscriptions (newHeads, logs, pending transactions).
+- **JSON-RPC & WebSocket** covering chain, account, staking, mempool, consensus, and contract methods, plus subscriptions (newHeads, logs, pending transactions) and **light-client checkpoints**.
 - **CLI** for key management (encrypted keystore v2 with Argon2id + XChaCha20-Poly1305), transfers, staking operations, and contract interactions.
 - **Observability**: structured tracing (with per-round trace IDs), Prometheus metrics, and example Grafana dashboards.
 - **Docker & Compose**: multi-stage Dockerfile and a 4-node local quorum setup.
@@ -66,7 +69,7 @@ Rewards, treasury vesting, and circulating-supply accounting are applied atomica
 |------|---------|
 | `crates/` | All Rust crates (see below) |
 | `crates/kvnc-node` | Full-node binary (`kvnc-node`) |
-| `crates/kvnc-cli` | CLI wallet and tooling (`kvnc-cli`) |
+| `crates/kvnc-cli` | CLI wallet and tooling (`kvnc-cli`, `kvnc`, `generate-validators`, `kvnc-bench`) |
 | `docs/` | Architecture, tokenomics, contracts, signature format, ADRs, and operational notes |
 | `ops/` | Docker, Grafana, Prometheus, soak scripts |
 | `packages/` | TypeScript API client and web/explorer assets |
@@ -82,6 +85,7 @@ Rewards, treasury vesting, and circulating-supply accounting are applied atomica
 |-------|----------------|
 | `kvnc-types` | Core types (blocks, transactions, addresses `kvnc…dag`, hashes, votes, committee, signing context) |
 | `kvnc-crypto` | Ed25519, batch verification, VRF, keystore primitives |
+| `kvnc-keystore` | Encrypted keystore v2 (Argon2id + XChaCha20-Poly1305), key management |
 | `kvnc-storage` | redb-backed state, consensus, and account stores; Merkle roots; snapshots |
 | `kvnc-dag` | DAG store, block manager, mergesets, pruning |
 | `kvnc-consensus` | Committer, linearizer, engine, MysticGhost / GHOSTDAG colouring, metrics |
@@ -95,6 +99,9 @@ Rewards, treasury vesting, and circulating-supply accounting are applied atomica
 | `kvnc-htlc` / `kvnc-vault` / `kvnc-multisig` / `kvnc-token` | Native + WASM contract implementations |
 | `kvnc-faucet` | Rate-limited testnet faucet service |
 | `kvnc-cli` | Command-line wallet, staking, and contract tools |
+| `kvnc-light` | Light-client types and verification logic |
+| `kvnc-lightnode` | Light-node protocol logic |
+| `kvnc-light-ffi` | FFI bindings for light-client (Kotlin/Swift/WASM) |
 
 ## Quick Start
 
@@ -119,7 +126,7 @@ CI runs `cargo fmt --check`, `clippy -D warnings`, full tests (including integra
 
 ```bash
 cp config.example.toml config.toml
-# Edit config.toml or override via environment variables (KVNC_DATA_DIR, KVNC_LISTEN_ADDR, KVNC_RPC_PORT, KVNC_BOOTNODES, KVNC_VALIDATOR_KEY, …)
+# Edit config.toml or override via environment variables (KVNC_DATA_DIR, KVNC_LISTEN_ADDR, KVNC_RPC_PORT, KVNC_BOOTNODES, KVNC_VALIDATOR_KEY, KVNC_RUN_VALIDATOR, KVNC_MYSTICGHOST, KVNC_VRF_LEADER, KVNC_ROUND_DURATION_MS, KVNC_MAX_PEERS, KVNC_TREASURY_ADDRESS, KVNC_RPC_RATE_LIMIT_PER_MIN)
 cargo run -p kvnc-node -- --config config.toml
 ```
 
@@ -132,6 +139,9 @@ Key configuration points (see `config.example.toml` for the full list and enviro
 - `round_duration_ms` — target consensus round duration
 - `validator_key` — path to a 32-byte hex seed file (mode `0600`). Required when `run_validator` is true, which is the default. A read-only node may omit it.
 - `rpc_rate_limit_per_min` — per-IP token-bucket limit (burst derived as `max(1, rate/6)`)
+- `use_mysticghost` — enable MysticGhost hybrid colouring (default `true`)
+- `use_vrf_leader` — enable VRF-driven leader election (default `true`)
+- `treasury_address` — genesis treasury address (32 bytes hex), only read on fresh genesis
 
 A `genesis` subcommand is available to produce a genesis JSON and optional validator key files from a validators list, treasury address, and founder address.
 
@@ -152,6 +162,11 @@ cargo run -p kvnc-cli -- --help
 # chain: balance, status, transfer
 # staking: stake, unstake, delegate, claim-rewards
 # contracts: HTLC, Vault, Multisig, Token subcommands
+
+# Additional binaries from kvnc-cli crate:
+cargo run -p kvnc-cli --bin kvnc -- --help        # short alias
+cargo run -p kvnc-cli --bin generate-validators -- --help  # genesis validator key generation
+cargo run -p kvnc-cli --bin kvnc-bench -- --help  # benchmarking tool
 ```
 
 Keys are stored in an encrypted keystore (Argon2id + XChaCha20-Poly1305). The node never receives private seeds. `kvnc tui` opens an interactive wallet for balances, transfers, and staking on that same local keystore.
@@ -168,7 +183,7 @@ Mempool ────────────────────────
 Block Producer (per validator)        │
     │                                 │
     ▼                                 │
-Consensus (Mysticeti DAG + optional   │
+Consensus (Mysticeti DAG +            │
            MysticGhost colouring)     │
     │ produces CommittedSubDag        │
     ▼                                 │
@@ -182,22 +197,30 @@ State (accounts, staking, contracts)
 Storage (redb, pruning, snapshots)
 ```
 
-See `docs/ARCHITECTURE.md`, `docs/TOKENOMICS.md`, `docs/CONTRACTS.md`, and `docs/SIGNATURE_FORMAT.md` for deeper detail. Signature domains use the `KUNA/…` tags; addresses follow the `kvnc<hex>dag` format with a Blake3 checksum.
+See `docs/ARCHITECTURE.md`, `docs/TOKENOMICS.md`, `docs/CONTRACTS.md`, and `docs/SIGNATURE_FORMAT.md` for deeper detail. Signature domains use the `KUNA/…` tags; addresses follow the `kvnc<hex>dag` format with a Blake3 checksum. Light-client types live in `kvnc-types/src/light_client.rs`; RPC endpoint is `kvnc_lightClientCheckpoint`.
 
 ## Development Status
 
-Most foundation phases (types, crypto, storage, DAG, consensus core, execution, staking, node wiring, RPC, CLI wallet) are implemented and covered by unit and multi-node integration tests. Multi-node quorum, late-join, and sustained-liveness scenarios pass.
+Most foundation phases (types, crypto, storage, DAG, consensus core, execution, staking, node wiring, RPC, CLI wallet) are implemented and covered by unit and multi-node integration tests. Multi-node quorum, late-join, sustained liveness, live vote→commit→execute, and VRF-driven leader election (quorum-based beacon on decide rounds) all pass.
 
-Remaining work includes longer soak tests, light-client endpoints, full governance hooks, production seed DNS registration, and external audit. Consult `TASKLIST.md` for the authoritative, code-verified phase status.
+**Verified (2026-10-14, `a2ec2db`):**
+- `cargo check --workspace --all-targets` → 0 errors
+- `cargo clippy --workspace --all-targets` → clean
+- `cargo test --workspace --lib` → all pass
+- Integration tests: multi-node quorum 3/3 PASS, sustained liveness 1/1 PASS, late-join 1/1 PASS, live vote 2/2 PASS, WS subscriptions PASS
+
+Remaining work includes longer soak tests (6h/24h), light-client state-backed checkpoints, full governance hooks, production seed DNS registration, and external audit. Consult `TASKLIST.md` for the authoritative, code-verified phase status.
 
 ## Security Notes
 
 - Pre-alpha software. Do not use with real value.
 - Not audited.
-- Consensus currently rejects same-round / same-author forks (first-valid wins); lexicographic min-digest selection is a known future improvement.
+- Consensus uses `use_min_digest_fork: true` by default (lexicographic min-digest tie-break on same-round/same-author forks).
+- VRF leader election defaults ON; with no validator VRF keys it falls back to stake-weighted round-robin.
+- MysticGhost hybrid colouring defaults ON; non-blue blocks are returned to mempool (not pruned).
 - Client keys stay in the CLI/wallet; the node only ever sees public keys and signatures.
 - Domain-separated signing hashes and strict nonce checks mitigate replay.
-- Fixed-percentage double-sign slashing is implemented.
+- Fixed-percentage double-sign slashing is implemented (500 bps).
 
 ## License
 
