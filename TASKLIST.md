@@ -418,7 +418,7 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 
 ## Actual critical path (sljedeći koraci po prioritetu)
 
-1. **TPS benchmark** @2GB RAM — mempool run logic **FIXED** (in-flight now treated as reserved prefix, runs continue after). Throughput still low (~0.02-0.08 tps) due to 12s commit latency (4s round × 3 for quorum) and mempool not consistently filling blocks. Next: investigate why blocks sometimes proposed with 0 txs despite mempool having transactions.
+1. **TPS benchmark** @2GB RAM — mempool critical fixes **DONE**: (a) run logic fixed (in-flight = reserved prefix), (b) requeue_stale timeout bug fixed, (c) in_flight_timeout 60s→15s, (d) leader skip returns in-flight txs to queue, (e) non-blue reinsert now gossips. Next: verify with benchmark test.
 2. **6h soak test** — **ADAPTED** `ops/soak/soak.sh` with pre-flight health checks (HTTP /health + kvnc_blockNumber RPC per node with unique IDs), configurable duration, fixed bash arithmetic. `docker-compose.yml` has cgroup v2 limits (MemoryMax=3G, CPUs=2.0). Verified working with short test runs.
 3. **Registrirati 3+ kvnc-native DNS seed imena za mainnet** (`docs/SEED-DNS-AUDIT.md`; domains: seed1/2/3.kvnc.io); testnet seeds use raw IPs
 4. **Odluka o kanonskom protocol prefiksu** — **`/kovanica/`** (odlučeno, implemented in network layer)
