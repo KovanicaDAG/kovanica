@@ -1,0 +1,17 @@
+[
+  {
+    "address": "8ed00d91ac0e3aca35fdc374a043dc44a424a3bc4b4071011dfa8153501b9dde",
+    "public_key": "8ed00d91ac0e3aca35fdc374a043dc44a424a3bc4b4071011dfa8153501b9dde",
+    "stake": 50000000000000
+  },
+  {
+    "address": "ec9d457c37e21d206d1aaf2206284d1df38815cf25a9c2b46b15fea7018e4722",
+    "public_key": "ec9d457c37e21d206d1aaf2206284d1df38815cf25a9c2b46b15fea7018e4722",
+    "stake": 50000000000000
+  },
+  {
+    "address": "5f62d5e97f0b90a8ceff02462649b0c51c21ca5c0b0616c775c869f914550498",
+    "public_key": "5f62d5e97f0b90a8ceff02462649b0c51c21ca5c0b0616c775c869f914550498",
+    "stake": 50000000000000
+  }
+]

@@ -199,11 +199,16 @@ pub fn verify_vote(
 /// The digest is recomputed first, so a valid signature cannot be replayed
 /// over modified transactions or parents.
 pub fn verify_block(keys: &AuthorityKeys, block: &StatementBlock) -> Result<(), Rejection> {
-    let digest = StatementBlock::compute_digest(
+    let digest = StatementBlock::compute_digest_statements(
         block.author,
         block.round,
         &block.parents,
         &block.transactions,
+        if block.statements.len() >= 137 && &block.statements[..9] == b"KVNC-VRF1" {
+            Some(&block.statements)
+        } else {
+            None
+        },
     );
     if digest != block.digest {
         return Err(Rejection::DigestMismatch);

@@ -274,6 +274,8 @@ impl RpcServer {
             .await;
         self.register_stateful("kvnc_getLightSet", handle_get_light_set)
             .await;
+        self.register_stateful("kvnc_lightClientCheckpoint", handle_light_client_checkpoint)
+            .await;
     }
 
     /// Register a handler that needs access to the shared [`RpcState`].
