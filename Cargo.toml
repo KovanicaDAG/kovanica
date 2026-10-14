@@ -23,6 +23,7 @@ members = [
     "crates/kvnc-vault",
     "crates/kvnc-multisig",
     "crates/kvnc-token",
+    "crates/kvnc-comms-core",
     "crates/kvnc-faucet",
 ]
 

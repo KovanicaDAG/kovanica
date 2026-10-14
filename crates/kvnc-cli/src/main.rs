@@ -18,7 +18,7 @@ use kvnc_cli::contracts::{
     ContractCommand, HtlcCommand, MultisigCommand, TokenCommand, VaultCommand,
 };
 use kvnc_cli::rpc::RpcClient;
-use kvnc_cli::{contracts, node, output, rpc, tui, tx, wallet};
+use kvnc_cli::{comms, contracts, node, output, rpc, tui, tx, wallet};
 use kvnc_types::transaction::TransactionKind;
 use kvnc_types::{crypto::PublicKey, crypto::SigningKey, Address};
 use zeroize::Zeroizing;
@@ -110,6 +110,11 @@ enum Commands {
     Token {
         #[command(subcommand)]
         command: TokenCommand,
+    },
+    /// Kovanica comms app control-plane helpers (identity derivation)
+    Comms {
+        #[command(subcommand)]
+        command: comms::CommsCommand,
     },
 }
 
@@ -389,6 +394,7 @@ async fn main() -> Result<()> {
         Commands::Token { command } => {
             contracts::run(&client, ContractCommand::Token { command }, json).await
         }
+        Commands::Comms { command } => comms::run(command, json),
     }
 }
 

@@ -236,13 +236,25 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
    **Fallback:** Matrix (`matrix-rust-sdk`) only if off-the-shelf E2E maturity outweighs relay
    incentives and the heavier federated homeserver ops.
 
-### Still open
-3. **Who runs relays** at launch — self-hosted, incentivized third parties, or both?
-4. **Plan/entitlement model:** native KUNA only, or a KVP-102 token per plan?
-5. **Name registry placement:** on-chain (ledger-safe) vs off-chain DNS-like resolver?
-6. **Fee model:** per-message fee vs stake-to-send vs hybrid?
-7. **Jurisdiction / regulatory** posture for telecom-adjacent features (eSIM/top-up).
-8. **Is any consensus change ever contemplated?** (Current answer: no.)
+### Locked (continued)
+3. **§8.3 Launch relay model → self-hosted first.** Only our relays in phase 1; open incentivized
+   third-party relays at M5.
+4. **§8.4 Plan/entitlement model → native KUNA only for MVP.** Add a KVP-102 token later only if needed.
+5. **§8.5 Name resolution → on-chain ledger-safe contract** (`kvnc-name-registry`): name → pubkey /
+   relay endpoints.
+6. **§8.6 Anti-spam / fee model → prepaid balance + free tier between mutual contacts.** HTLC-funded
+   prepaid balance; micro-fee per message beyond the free tier.
+7. **§8.7 Telecom / eSIM → deferred to post-MVP.** M7 stays in the plan; no action until M2/M5 lands.
+8. **§8.8 Consensus changes: none contemplated.** (Reaffirmed.)
+
+### M0 build decisions (locked)
+- **Layout:** `apps/desktop` (Tauri shell, React + Vite) + `crates/kvnc-comms-core` (shared Rust core)
+  + `packages/comms` (TS glue). New top-level `apps/` directory.
+- **Webview framework:** React 18 + Vite 5 + TypeScript (matches `@kvnc/web`, `@kvnc/console`).
+- **Headless harness:** `comms` subcommand added to `kvnc-cli`.
+- **Dev/test target:** local throwaway node (never the running `kvnc-node seed3`).
+- **Identity:** `comms_id = blake3(b"kvnc/comms/id" || pubkey)` — domain-separated, matches the
+  `kvnc-htlc`/`kvnc-token` prefix convention.
 
 ---
 
@@ -250,10 +262,13 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 
 - [x] First client form factor decided: **Tauri desktop** + CLI harness (§8.1).
 - [x] Messaging transport decided: **store-and-forward relay + OpenMLS** (§8.2).
-- [ ] Scaffold `apps/desktop` (Tauri) + extend `kvnc-cli` as the headless M0 harness.
-- [ ] Scaffold `packages/comms` (TS glue) with `src/index.ts`, wired to `@kvnc/api-client`.
-- [ ] Implement `packages/comms/src/identity.ts` (BLAKE3 `comms_id` from wallet pubkey) + tests.
-- [ ] Wire WS subscriptions from `kvnc-rpc/src/subscriptions.rs` into `packages/comms/src/rpc.ts`.
+- [x] Scaffold `apps/desktop` (Tauri v2 + React 18 + Vite 5) and the shared `crates/kvnc-comms-core`.
+- [x] Extend `kvnc-cli` with the headless M0 harness: `kvnc comms id --keystore <f> [--json]`.
+- [x] Scaffold `packages/comms` (TS glue) with `src/index.ts`, wired to `@kvnc/api-client`.
+- [x] Implement `packages/comms/src/identity.ts` + `kvnc-comms-core` (same BLAKE3 `comms_id`,
+      pinned by a shared known-answer vector) with tests on both sides.
+- [x] Wire the WS subscription helper from `kvnc-rpc/src/subscriptions.rs` into `packages/comms/src/rpc.ts`
+      (re-exported; live use lands with M1).
 - [ ] Prototype store-and-forward relay + OpenMLS envelope exchange (throwaway) to prove 1:1 transport before touching chain.
 - [ ] Draft `crates/kvnc-name-registry` contract spec (entry points, storage keys, error codes) matching `kvnc-token`/`kvnc-htlc` conventions.
 - [ ] Write HTLC top-up flow (`payments.ts`) against `kvnc-htlc` API; unit-test claim/refund.
