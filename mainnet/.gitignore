@@ -1,0 +1,6 @@
+# Runtime-generated files (not committed)
+node-data/consensus.redb
+node-data/state.redb
+node-data/p2p_node.key
+node-data/chain_id
+node-data/v.dat
