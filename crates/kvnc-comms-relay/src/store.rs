@@ -49,27 +49,33 @@ pub enum StoreError {
     RateLimited,
 }
 
-struct Stored {
-    to: String,
-    sent_at: u64,
-    /// Effective drop deadline: the envelope's `expiresAt` clamped to
-    /// `ingest_now + MAX_TTL_MS`. Kept separately because `expiresAt` is part
-    /// of the signing bytes and must never be rewritten by the relay.
-    expires_at: u64,
-    envelope: Envelope,
+#[derive(Clone, Debug)]
+pub struct Credit {
+    pub amount: u64,
+    pub expires_at: u64, // ms
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Inner {
     by_id: HashMap<String, Stored>,
     /// Per-recipient insertion-ordered ids (oldest first).
     queues: HashMap<String, Vec<String>>,
+    /// Prepaid credit per comms_id(to)
+    credits: HashMap<String, Credit>,
+}
+
+#[derive(Clone, Debug)]
+struct Stored {
+    to: String,
+    sent_at: u64,
+    expires_at: u64,
+    envelope: Envelope,
 }
 
 /// In-memory, process-local store of undelivered envelopes.
 ///
 /// Cheap to wrap in an `Arc`; all operations take a single mutex.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Store {
     inner: Mutex<Inner>,
 }
@@ -176,7 +182,8 @@ impl Store {
             .map(|(id, _)| id.clone())
             .collect();
         if expired.is_empty() {
-            return 0;
+            // still sweep credits
+            return self.credit_sweep(now);
         }
         let dead: std::collections::HashSet<&String> = expired.iter().collect();
         for id in &expired {
@@ -186,6 +193,7 @@ impl Store {
             queue.retain(|id| !dead.contains(id));
             !queue.is_empty()
         });
+        let _ = self.credit_sweep(now);
         expired.len()
     }
 
@@ -207,6 +215,80 @@ impl Store {
             .get(to)
             .map(Vec::len)
             .unwrap_or(0)
+    }
+
+    /// Add prepaid credit (atoms) to `to`. Returns new total amount.
+    pub fn credit_add(&self, to: &str, atoms: u64, now: u64) -> u64 {
+        if atoms == 0 {
+            return self.credit_balance(to, now);
+        }
+        let mut inner = self.inner.lock();
+        let credit_ttl = std::env::var("KVNC_RELAY_CREDIT_TTL_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(24 * 60 * 60 * 1000);
+        let max_credit = std::env::var("KVNC_RELAY_MAX_CREDIT_PER_ID")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(10_000_000);
+        let entry = inner.credits.entry(to.to_string()).or_insert(Credit {
+            amount: 0,
+            expires_at: now + credit_ttl,
+        });
+        if entry.expires_at <= now {
+            entry.amount = 0;
+            entry.expires_at = now + credit_ttl;
+        } else {
+            entry.expires_at = now + credit_ttl;
+        }
+        entry.amount = entry.amount.saturating_add(atoms).min(max_credit);
+        entry.amount
+    }
+
+    /// Deduct prepaid credit; returns true if sufficient unexpired credit exists.
+    pub fn credit_deduct(&self, to: &str, atoms: u64, now: u64) -> bool {
+        if atoms == 0 {
+            return true;
+        }
+        let mut inner = self.inner.lock();
+        let Some(entry) = inner.credits.get_mut(to) else {
+            return false;
+        };
+        if entry.expires_at <= now {
+            inner.credits.remove(to);
+            return false;
+        }
+        if entry.amount < atoms {
+            return false;
+        }
+        entry.amount -= atoms;
+        if entry.amount == 0 {
+            inner.credits.remove(to);
+        }
+        true
+    }
+
+    /// Sweep expired credits; returns number removed.
+    pub fn credit_sweep(&self, now: u64) -> usize {
+        let mut inner = self.inner.lock();
+        let mut removed = 0;
+        inner.credits.retain(|_, c| {
+            if c.expires_at <= now {
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        removed
+    }
+
+    pub fn credit_balance(&self, to: &str, now: u64) -> u64 {
+        let inner = self.inner.lock();
+        match inner.credits.get(to) {
+            Some(c) if c.expires_at > now => c.amount,
+            _ => 0,
+        }
     }
 }
 

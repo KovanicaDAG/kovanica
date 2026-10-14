@@ -9,3 +9,56 @@ export {
   subscriptionHead,
 } from "./rpc.js";
 export type { ChainHead, SubscriptionMethod } from "./rpc.js";
+export { powCompute, powVerify, type PowProof } from "./pow.js";
+export {
+  buildPaymentProof,
+  computeHtlcHashLock,
+  computeHtlcId,
+  buildHtlcCallArgs,
+  createHtlcTx,
+  encodeHtlcCreateRaw,
+  type PaymentProof,
+  type HtlcIdParams,
+  type CreateHtlcOptions,
+} from "./payments.js";
+export {
+  SignalChannel,
+  type SignalEvent,
+  type SignalOptions,
+  type SignalChannel as ISignalChannel,
+  type SignalListener,
+  type SignalType,
+  type WebRTCSignalPayload,
+} from "./rtc/signal.js";
+export {
+  PeerConnection,
+  type PeerOptions,
+  type PeerState,
+  type ErrorHandler,
+  type IceCandidateHandler,
+  type StateChangeHandler,
+  type TrackHandler,
+} from "./rtc/peer.js";
+export {
+  TurnManager,
+  type RelayControlKind,
+  type TurnAllocation,
+  type TurnConfig,
+  type TurnManager as ITurnManager,
+} from "./rtc/turn.js";
+export {
+  MockMlsBackend,
+  type GroupId,
+  type MemberId,
+  type Epoch,
+  type GroupMember,
+  type GroupState,
+  type MlsMsg,
+  type MlsBackend,
+} from "./group/mls.js";
+export {
+  MockSfu,
+  type SfuClient,
+  type SfuJoinOpts,
+  type SfuState,
+} from "./rtc/sfu.js";

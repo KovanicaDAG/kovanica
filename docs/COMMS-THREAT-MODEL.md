@@ -78,20 +78,37 @@ pubkey-based allow/deny list or reputation keyed on `from` is defeated by genera
 per message ("random wrapper keys"). **Pubkey-based anti-spam is therefore not achievable at the relay
 in M1.**
 
-**Mitigation present in M1 (only these).**
+**M2 state (implemented in M2).** Anti-spam uses a minimal combination ([`docs/COMMS-M2-INTERFACES.md`](COMMS-M2-INTERFACES.md)):
+- **Stateless PoW (primary gate for unauthenticated sends):** Hashcash-style PoW bound to the envelope
+  `id` (BLAKE3 over `nonce || envelope_id_bytes`). The `id` is
+  `BLAKE3(b"kvnc/comms/env-id/v1" || signing_bytes)` (M1 §3.4), so work is bound to that envelope and
+  cannot be reused across envelopes. Configuration: `KVNC_RELAY_POW_BITS` (default 20), with
+  `KVNC_RELAY_POW_TTL_MS` replay window for `(id, nonce)`.
+- **Prepaid credit (paid path):** Minimal in-memory per-`comms_id(to)` credit ledger funded by a
+  valid HTLC payment proof submitted via the envelope wrapper (no chain polling/RPC dependency in
+  M2). Credits are stored as `{ amount: u64, expires_at: u64 }` in memory only — **no PII** is
+  persisted with credits. Policies: `KVNC_RELAY_MIN_FEE_ATOMS`, `KVNC_RELAY_CREDIT_TTL_MS`,
+  `KVNC_RELAY_MAX_CREDIT_PER_ID`.
 
-- Per-IP rate limiting on the relay HTTP API (interfaces §4).
+**Mitigation present in M2 (minimal).**
+
+- **No per-IP rate limiting exists today;** defense-in-depth only (not primary). The primary
+  enforcement is PoW or prepaid credit.
 - Per-recipient quota: ≤ 1000 stored envelopes; overflow → `429 rate_limited` (interfaces §4).
 - TTL clamp: `expiresAt` clamped to `now + max_ttl` (14 d default, 30 d hard max); a background sweep
   drops expired envelopes (interfaces §4).
 - Client-side dedup by envelope `id` (interfaces §3.4) — correctness, not a spam defence.
+- Admission gate: require **PoW OR prepaid credit**; rejection → HTTP `429 rate_limited`
+  (`StoreError::RateLimited`) with wrapper submission preserving M1 `v=1` wire compatibility.
+- Rollout: `KVNC_RELAY_ALLOW_UNPAID` (dev true by default; prod must be false for M2 exit).
 
-**Residual risk: HIGH.** A sender with many IPs can flood a target and exhaust that recipient's
-1000-envelope quota, which is a denial of delivery for legitimate senders. There is **no economic
-cost** to send, and the content-blind relay cannot filter. See also §9 (unauthenticated ack).
+**Residual risk: HIGH.** Stateless PoW raises cost for unauthenticated bulk sends, and prepaid
+credit binds delivery to payment, but work must be done per envelope (id-bound). With cheap compute
+and many IPs, well-funded attackers may still generate PoW at scale; prepaid credit is effective
+against mass free spam but requires the HTLC-to-relay path. See also §9 (unauthenticated ack, PoW
+replay/insufficient bits).
 
-**Deferred.** Minimum per-message fee or stake-to-send, and a proof-of-work fallback for non-paying
-senders → **M2** (ledger-safe); bonded/reputed relay operators and streaming payment → **M5**.
+**Deferred.** Stake-to-send and bonded/reputed relay operators with streaming payment → **M5**.
 
 ---
 
@@ -190,8 +207,10 @@ only `to`, `from`, sizes and times (R10 risk)" (interfaces §2.4).
 - **No forward secrecy / no post-compromise security**, restated from §6: a later key compromise
   decrypts past messages.
 
-**Mitigation present in M1.** E2E encryption of content; bucket padding of length; no plaintext
-contact graph on-chain; opaque envelopes.
+**Mitigation present in M1/M2.** E2E encryption of content; bucket padding of length; no plaintext
+contact graph on-chain; opaque envelopes. **Mutual-contact free tier is client-only** (UX); the relay
+does not maintain a mutual-contact list or any PII for that tier. Free delivery is not enforced by the
+relay — the relay enforces paid/PoW policy globally (see §5 and [`COMMS-M2-INTERFACES.md`](COMMS-M2-INTERFACES.md) §1).
 
 **Residual risk: HIGH.** The relay learns who talks to whom and when. This is the dominant M1 privacy
 limitation.
@@ -210,6 +229,8 @@ resistant transports are **not in M1**; relay-side identity blinding and incenti
 | T-SQUAT | **Free name squatting.** Registration is first-come with no fee (D4), so names can be taken at no cost. | interfaces §6; RFC-008 §10 | Namespace squatting; no release incentive (ADV-7) | Accepted in M1; fee/policy deferred |
 | T-AVAIL | **Single-operator availability.** Phase 1 relays are self-hosted; there is no bonding or failover. | plan §8.3 | Relay outage or operator malice stops delivery (ADV-3) | Accepted in M1; decentralized bonded relays → M5 |
 | T-CORS | **Permissive CORS in the dev profile** is documented as dev-only and not for public deployment. | interfaces §4 | Browser-based abuse if misdeployed | Operational: do not deploy the dev profile publicly |
+| T-POW | **PoW cost/collisions.** Stateless PoW is bound to envelope `id` (BLAKE3 over `nonce || id_bytes`); replay of `(id,nonce)` is rejected within the TTL window, and insufficient bits are rejected. | [COMMS-M2-INTERFACES.md](COMMS-M2-INTERFACES.md) §2,§7 | Cheap compute may still allow bulk generation at scale | M2: fixed difficulty by policy, replay window, and admission gate (PoW OR prepaid credit); monitor/raise difficulty if needed |
+| T-PAY | **HTLC payment proof abuse.** Proof must match deterministic `htlc_id` (BLAKE3 of params), `hash_lock == BLAKE3(preimage)`, claimer equals relay, expiry valid, not replayed. Credits are in-memory per `comms_id(to)` with TTL/cap and **no PII** stored. | [COMMS-M2-INTERFACES.md](COMMS-M2-INTERFACES.md) §3,§6 | Replay of old proofs, wrong preimage, idempotent re-POST | M2: idempotency, replay prevention, expiry checks, credit sweep; no chain polling/RPC dependency |
 
 `GET /v1/inbox/{comms_id}` also has no auth, but `comms_id` is a 256-bit value; guessing it is
 infeasible, and reading it yields only ciphertext. The practical exposure is T-ACK (deletion), not

@@ -143,7 +143,9 @@ Effort: S ≤ 1 wk · M ≈ 2–4 wk · L ≥ 1 month (one dev, part-time assume
 - **Deliverables:**
   - `packages/comms/src/payments.ts` (HTLC create/claim/refund flow using `@kvnc/signer`)
   - Prepaid path reusing `crates/kvnc-htlc`; plan tokens via `crates/kvnc-token`
-  - Anti-spam policy module (min-fee / stake threshold)
+  - `packages/comms/src/pow.ts` (id-bound Hashcash PoW compute/verify: BLAKE3 over `nonce || envelope_id_bytes`)
+  - Relay payment proof handling in `crates/kvnc-comms-relay` (HTLC payment proof validation + in-memory prepaid credit ledger; no chain polling/RPC dependency)
+  - Anti-spam policy module (min-fee / stake threshold, PoW admission)
 - **Exit criteria:** unpaid flood rejected; paid message accepted; HTLC settlement + refund tests.
 - **Deps:** M1 · **Effort:** M
 
@@ -196,7 +198,7 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 
 | # | Risk | L | I | Mitigation | Owner lane |
 |---|---|---|---|---|---|
-| R1 | Sybil / spam without cost | H | H | Min per-msg fee or stake-to-send; relay-side rate limits; proof-of-work fallback for non-paying senders | client-wallet |
+| R1 | Sybil / spam without cost | H | H | Min per-msg fee or stake-to-send; PoW bound to envelope `id` (primary gate for unauthenticated sends); prepaid credit via HTLC payment proof (paid path); no per-IP rate limiting today (defense-in-depth only); `KVNC_RELAY_ALLOW_UNPAID` rollout | client-wallet |
 | R2 | Per-message payment UX friction | H | M | Prepaid balance (HTLC deposit); batch settlement; free tier between mutual contacts | client-wallet |
 | R3 | NAT traversal / relay cost | H | H | Paid TURN; ICE fallback chain; measure relay $/call | node-ops / infra |
 | R4 | Group E2E key management (MLS) complexity | M | H | Adopt MLS (RFC 9420) rather than roll-our-own; audit | security-audit |
@@ -243,7 +245,14 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 5. **§8.5 Name resolution → on-chain ledger-safe contract** (`kvnc-name-registry`): name → pubkey /
    relay endpoints.
 6. **§8.6 Anti-spam / fee model → prepaid balance + free tier between mutual contacts.** HTLC-funded
-   prepaid balance; micro-fee per message beyond the free tier.
+   prepaid balance; micro-fee per message beyond the free tier. **Client-enforced free tier; relay
+   enforces paid/PoW policy globally** ([`docs/COMMS-M2-INTERFACES.md`](COMMS-M2-INTERFACES.md) §1). The
+   relay does not maintain a mutual-contact list. For unauthenticated sends, the primary gate is
+   **stateless PoW bound to the envelope `id`**; paid sends use **prepaid credit funded by HTLC payment
+   proof** (minimal in-memory credit ledger, no PII). No per-IP rate limiting exists today
+   (defense-in-depth only). PoW configuration and relay env: `KVNC_RELAY_POW_BITS`,
+   `KVNC_RELAY_POW_TTL_MS`, `KVNC_RELAY_MIN_FEE_ATOMS`, `KVNC_RELAY_CLAIMER_ADDR`,
+   `KVNC_RELAY_CREDIT_TTL_MS`, `KVNC_RELAY_MAX_CREDIT_PER_ID`, `KVNC_RELAY_ALLOW_UNPAID`.
 7. **§8.7 Telecom / eSIM → deferred to post-MVP.** M7 stays in the plan; no action until M2/M5 lands.
 8. **§8.8 Consensus changes: none contemplated.** (Reaffirmed.)
 
