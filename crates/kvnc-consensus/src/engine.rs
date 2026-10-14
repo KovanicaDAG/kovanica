@@ -18,7 +18,7 @@ use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 use tokio::time::interval;
 use tracing::{debug, info, warn};
@@ -611,6 +611,17 @@ where
             };
             self.committer.update_leader(info);
             info!("Leader round {} skipped (timeout/fork)", round);
+
+            // Return the skipped leader's in-flight transactions to mempool queue
+            // so they can be re-proposed by the next leader
+            if let Some(mempool) = &self.mempool {
+                if let Some(authority) = self.committee.get_by_index(leader) {
+                    let returned = mempool.return_in_flight_for_sender(&authority.address, Instant::now());
+                    if returned > 0 {
+                        info!(leader = ?leader, address = %authority.address, returned, "returned in-flight transactions to queue after leader skip");
+                    }
+                }
+            }
         }
         // Try to commit after skip so downstream can progress
         self.try_commit_and_deliver()?;

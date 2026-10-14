@@ -1271,7 +1271,7 @@ mod tests {
         tx.hash = h;
 
         // Returned from a non-blue block (#13).
-        let report = state.mempool.reinsert_returned(vec![tx.clone()]);
+        let report = state.mempool.reinsert_returned(vec![tx.clone()], true);
         assert_eq!(report[0].outcome, kvnc_mempool::ReinsertOutcome::Accepted);
 
         let hash = json!([to_hex(&tx.hash.0)]);
