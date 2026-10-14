@@ -440,17 +440,23 @@ where
     }
 
     fn vrf_set_complete(&self, outputs: &HashMap<kvnc_types::AuthorityIndex, [u8; 32]>) -> bool {
-        let mut needed = 0u32;
+        let mut vrf_validators = 0u32;
+        let mut present = 0u32;
         for authority in self.committee.authorities() {
             if authority.vrf_public_key.is_none() {
                 continue;
             }
-            needed += 1;
-            if !outputs.contains_key(&authority.index) {
-                return false;
+            vrf_validators += 1;
+            if outputs.contains_key(&authority.index) {
+                present += 1;
             }
         }
-        needed > 0
+        if vrf_validators == 0 {
+            return false;
+        }
+        // Quorum: 2f+1 = floor(2*N/3) + 1 where N is number of VRF-keyed validators
+        let quorum = (vrf_validators * 2 / 3) + 1;
+        present >= quorum
     }
 
     fn publish_vrf_carrier(&self, round: Round) {
