@@ -797,14 +797,17 @@ where
     let mempool_for_rebroadcast = mempool.clone();
     let network_cmd_tx_for_rebroadcast = network_cmd_tx.clone();
     let mut shutdown_for_rebroadcast = shutdown_rx.clone();
+    // Use the mempool's configured in_flight_timeout for requeue_stale
+    let in_flight_timeout = mempool_for_rebroadcast.config().in_flight_timeout;
+    let rebroadcast_interval = mempool_for_rebroadcast.config().rebroadcast_interval;
     let _rebroadcast_task = tokio::spawn(async move {
         info!("rebroadcast task started");
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        let mut interval = tokio::time::interval(rebroadcast_interval);
         loop {
             tokio::select! {
                 _ = interval.tick() => {
                     // Re-queue stale in-flight transactions first
-                    let requeued = mempool_for_rebroadcast.requeue_stale(Instant::now(), Duration::from_secs(1));
+                    let requeued = mempool_for_rebroadcast.requeue_stale(Instant::now(), in_flight_timeout);
                     if requeued > 0 {
                         info!(requeued, "re-queued stale in-flight transactions");
                     }
@@ -958,6 +961,36 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
             };
             state.set_account(&txn, &founder, &acct)?;
             info!(address = %founder, "founder premine applied");
+        }
+    }
+
+    // Load pre-funded accounts from funded_accounts.toml if present.
+    let funded_accounts_path = config.data_dir.join("funded_accounts.toml");
+    if funded_accounts_path.exists() {
+        let text = std::fs::read_to_string(&funded_accounts_path).with_context(|| {
+            format!(
+                "reading funded accounts {}",
+                funded_accounts_path.display()
+            )
+        })?;
+        let funded: FundedAccountsFile = toml::from_str(&text).with_context(|| {
+            format!(
+                "parsing funded accounts {}",
+                funded_accounts_path.display()
+            )
+        })?;
+        let state = state_storage.state();
+        for entry in funded.account {
+            let address = parse_address_hex(Some(&entry.address))?;
+            use kvnc_storage::state_store::Account;
+            let acct = Account {
+                balance: entry.balance,
+                nonce: 0,
+                code_hash: [0; 32],
+                code: vec![],
+            };
+            state.set_account(&txn, &address, &acct)?;
+            info!(address = %address, balance = entry.balance, "funded account applied");
         }
     }
 
@@ -2047,6 +2080,27 @@ struct GenesisValidatorsFile {
     #[serde(default)]
     chain_id: Option<u64>,
     validator: Vec<GenesisValidatorEntry>,
+}
+
+/// Pre-funded account entry for genesis.
+#[derive(Debug, Deserialize)]
+struct FundedAccountEntry {
+    address: String,
+    balance: u64,
+}
+
+/// Top-level shape of `funded_accounts.toml` (`[[account]]` array of tables).
+///
+/// Example:
+///
+/// ```toml
+/// [[account]]
+/// address = "<32-byte hex>"
+/// balance = 1000000000000
+/// ```
+#[derive(Debug, Deserialize)]
+struct FundedAccountsFile {
+    account: Vec<FundedAccountEntry>,
 }
 
 /// Name of the per-data-dir marker recording the chain id the database was

@@ -418,10 +418,10 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 
 ## Actual critical path (sljedeći koraci po prioritetu)
 
-1. **TPS benchmark** @2GB RAM — `kvnc-bench` binary exists, mempool/gossip bottleneck limits throughput; fix gossip propagation for multi-tx bursts
-2. **6h soak test** — adapt `ops/soak/soak.sh` for Docker, run on 4-node devnet
+1. **TPS benchmark** @2GB RAM — mempool run logic **FIXED** (in-flight now treated as reserved prefix, runs continue after). Throughput still low (~0.02-0.08 tps) due to 12s commit latency (4s round × 3 for quorum) and mempool not consistently filling blocks. Next: investigate why blocks sometimes proposed with 0 txs despite mempool having transactions.
+2. **6h soak test** — **ADAPTED** `ops/soak/soak.sh` with pre-flight health checks (HTTP /health + kvnc_blockNumber RPC per node with unique IDs), configurable duration, fixed bash arithmetic. `docker-compose.yml` has cgroup v2 limits (MemoryMax=3G, CPUs=2.0). Verified working with short test runs.
 3. **Registrirati 3+ kvnc-native DNS seed imena za mainnet** (`docs/SEED-DNS-AUDIT.md`; domains: seed1/2/3.kvnc.io); testnet seeds use raw IPs
-4. **Odluka o kanonskom protocol prefiksu** — **`/kovanica/`** (odlučeno)
+4. **Odluka o kanonskom protocol prefiksu** — **`/kovanica/`** (odlučeno, implemented in network layer)
 5. **Phase 20/21**: external security review; wired middleware cleanup
 6. **Phase 24**: testnet (faucet u CI, validator onboarding docs), mainnet checklist
 7. **Phase 25**: governance (nakon mainneta)
