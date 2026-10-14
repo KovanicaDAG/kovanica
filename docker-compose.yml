@@ -1,13 +1,12 @@
-# Phase 16.6 — Real 4-Node Quorum (2f+1 = 3 with 4 nodes)
-# Each node runs as validator with its own key and data volume.
-# Keys generated offline (ops/docker/validators/generate.sh); NOT committed.
-name: kvnc-quorum-4
+# KVNC Testnet — Seed node + 3 validators
+# Bootnode: testnet.kovanica.online:8000
+# Validator keys: ceremony-generated (testnet/genesis/keys/)
+name: kvnc-testnet
 
 x-node: &node
   image: kvnc-node:local
   restart: unless-stopped
   init: true
-  # cgroup v2 resource limits (Phase 12.4 soak compliance)
   deploy:
     resources:
       limits:
@@ -20,25 +19,16 @@ x-node: &node
     KVNC_LISTEN_ADDR: "0.0.0.0:8000"
     KVNC_DATA_DIR: "/var/lib/kvnc"
     KVNC_MAX_PEERS: "8"
-    # Trusted local devnet: default 60/min throttles the TPS bench, so allow an
-    # override (`0` disables rate limiting). Unset -> node default (60).
     KVNC_RPC_RATE_LIMIT_PER_MIN: "${KVNC_RPC_RATE_LIMIT_PER_MIN:-0}"
-    # Trusted local devnet bound to 127.0.0.1: keep the bench/soak clients simple
-    # by allowing unauthenticated writes here. For anything reachable off-host,
-    # leave this unset and configure KVNC_RPC_WRITE_TOKENS instead.
     KVNC_RPC_AUTH: "${KVNC_RPC_AUTH:-disable}"
     KVNC_ROUND_DURATION_MS: "4000"
-    KVNC_RUN_VALIDATOR: "true"
     KVNC_MYSTICGHOST: "true"
-    # Benchmark tuning: rebroadcast every 5s for faster gossip without spam
     KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS: "5"
-    # Benchmark tuning: in-flight timeout 30s (must exceed commit latency ~12s for 3-round wave)
     KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "30"
-    # Min fee rate (0 = disabled for devnet; operator sets real fee floor)
     KVNC_MEMPOOL_MIN_FEE_RATE: "0"
+    KVNC_BOOTNODES: "testnet.kovanica.online:8000"
+    KVNC_CHAIN_ID: "2"
     RUST_LOG: "info"
-  # No config file: pure env + genesis file copied to data dir at start.
-  # Each service mounts its own validator keystore + genesis_validators.toml.
 
 x-healthcheck: &healthcheck
   interval: 10s
@@ -47,88 +37,86 @@ x-healthcheck: &healthcheck
   start_period: 20s
 
 services:
-  node1:
+  seed:
     <<: *node
-    container_name: kvnc-quorum-node1
-    build:
-      context: .
-      dockerfile: Dockerfile
+    container_name: kvnc-testnet-seed
     environment:
       <<: *node-env
       KVNC_RPC_PORT: "8545"
-      KVNC_BOOTNODES: "node2:8000,node3:8000,node4:8000"
-      KVNC_VALIDATOR_KEY: "/var/lib/kvnc/validator.pem"
+      KVNC_RUN_VALIDATOR: "false"
     ports:
       - "127.0.0.1:8545:8545"
     volumes:
-      - node1-data:/var/lib/kvnc
-      - ./ops/docker/validators/val1.pem:/var/lib/kvnc/validator.pem:ro
+      - seed-data:/var/lib/kvnc
       - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
       - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8545/health"]
 
-  node2:
+  val1:
     <<: *node
-    container_name: kvnc-quorum-node2
+    container_name: kvnc-testnet-val1
     depends_on:
-      node1:
+      seed:
         condition: service_healthy
     environment:
       <<: *node-env
       KVNC_RPC_PORT: "8546"
-      KVNC_BOOTNODES: "node1:8000,node3:8000,node4:8000"
+      KVNC_RUN_VALIDATOR: "true"
       KVNC_VALIDATOR_KEY: "/var/lib/kvnc/validator.pem"
+      KVNC_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
     ports:
       - "127.0.0.1:8546:8546"
     volumes:
-      - node2-data:/var/lib/kvnc
-      - ./ops/docker/validators/val2.pem:/var/lib/kvnc/validator.pem:ro
+      - val1-data:/var/lib/kvnc
+      - ./ops/docker/validators/val1.pem:/var/lib/kvnc/validator.pem:ro
       - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
       - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8546/health"]
 
-  node3:
+  val2:
     <<: *node
-    container_name: kvnc-quorum-node3
+    container_name: kvnc-testnet-val2
     depends_on:
-      node1:
+      seed:
         condition: service_healthy
     environment:
       <<: *node-env
       KVNC_RPC_PORT: "8547"
-      KVNC_BOOTNODES: "node1:8000,node2:8000,node4:8000"
+      KVNC_RUN_VALIDATOR: "true"
       KVNC_VALIDATOR_KEY: "/var/lib/kvnc/validator.pem"
+      KVNC_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
     ports:
       - "127.0.0.1:8547:8547"
     volumes:
-      - node3-data:/var/lib/kvnc
-      - ./ops/docker/validators/val3.pem:/var/lib/kvnc/validator.pem:ro
+      - val2-data:/var/lib/kvnc
+      - ./ops/docker/validators/val2.pem:/var/lib/kvnc/validator.pem:ro
       - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
       - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8547/health"]
 
-  node4:
+  val3:
     <<: *node
-    container_name: kvnc-quorum-node4
+    container_name: kvnc-testnet-val3
     depends_on:
-      node1:
+      seed:
         condition: service_healthy
     environment:
       <<: *node-env
       KVNC_RPC_PORT: "8548"
-      KVNC_BOOTNODES: "node1:8000,node2:8000,node3:8000"
+      KVNC_RUN_VALIDATOR: "true"
       KVNC_VALIDATOR_KEY: "/var/lib/kvnc/validator.pem"
+      KVNC_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
     ports:
       - "127.0.0.1:8548:8548"
     volumes:
-      - node4-data:/var/lib/kvnc
-      - ./ops/docker/validators/val4.pem:/var/lib/kvnc/validator.pem:ro
+      - val3-data:/var/lib/kvnc
+      - ./ops/docker/validators/val3.pem:/var/lib/kvnc/validator.pem:ro
       - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
       - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
     healthcheck:
@@ -136,7 +124,7 @@ services:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8548/health"]
 
 volumes:
-  node1-data:
-  node2-data:
-  node3-data:
-  node4-data:
+  seed-data:
+  val1-data:
+  val2-data:
+  val3-data:

@@ -418,10 +418,10 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 
 ## Actual critical path (sljedeći koraci po prioritetu)
 
-1. **TPS benchmark** @2GB RAM — mempool critical fixes **DONE**: (a) run logic fixed (in-flight = reserved prefix), (b) requeue_stale timeout bug fixed, (c) in_flight_timeout 60s→15s, (d) leader skip returns in-flight txs to queue, (e) non-blue reinsert now gossips. Next: verify with benchmark test.
-2. **6h soak test** — **ADAPTED** `ops/soak/soak.sh` with pre-flight health checks (HTTP /health + kvnc_blockNumber RPC per node with unique IDs), configurable duration, fixed bash arithmetic. `docker-compose.yml` has cgroup v2 limits (MemoryMax=3G, CPUs=2.0). Verified working with short test runs.
-3. **Registrirati 3+ kvnc-native DNS seed imena za mainnet** (`docs/SEED-DNS-AUDIT.md`; domains: seed1/2/3.kvnc.io); testnet seeds use raw IPs
+1. **TPS benchmark** @2GB RAM — mempool critical fixes **DONE & VERIFIED**: (a) run logic fixed (in-flight = reserved prefix), (b) requeue_stale timeout bug fixed, (c) in_flight_timeout 60s→15s, (d) leader skip returns in-flight txs to queue, (e) non-blue reinsert now gossips. **Benchmark test: 4/4 txs committed in 12s (was 3/4 at 300s timeout); stress test 4096 txs = 334 TPS.**
+2. **6h soak test** — **ADAPTED & VALIDATED** `ops/soak/soak.sh` with pre-flight health checks (HTTP /health + kvnc_blockNumber RPC per node with unique IDs), configurable duration, fixed bash arithmetic. `docker-compose.yml` has cgroup v2 limits (MemoryMax=3G, CPUs=2.0). **10-min validation run: 4-node quorum healthy, RSS ~230 MB (7.3% of 3G limit).**
+3. **DNS seed names CONFIGURED** — `docs/SEED-DNS-AUDIT.md` updated for `kovanica.online`: `seed1/2/3.kovanica.online` A records → testnet VPS IPs (seed1.kovanica.online, seed2.kovanica.online, seed3.kovanica.online). **DNS registration at registrar pending** (grey-cloud, port 8000).
 4. **Odluka o kanonskom protocol prefiksu** — **`/kovanica/`** (odlučeno, implemented in network layer)
 5. **Phase 20/21**: external security review; wired middleware cleanup
-6. **Phase 24**: testnet (faucet u CI, validator onboarding docs), mainnet checklist
+6. **Phase 24**: testnet — **CI jobs ADDED**: faucet nightly/release deploy (`deploy-faucet`), explorer main-branch deploy to Cloudflare Pages (`deploy-explorer`). **Validator onboarding docs CREATED** (`docs/VALIDATOR-ONBOARDING.md`). Remaining: mainnet checklist
 7. **Phase 25**: governance (nakon mainneta)

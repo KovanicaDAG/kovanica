@@ -171,8 +171,11 @@ impl BlockManager {
         // Pull from mempool feed (audit 3.2 close)
         let mut txs = self.get_next_transactions();
         txs.extend(transactions);
-        // Deterministic order + dedup for audit-safe consensus
-        txs.sort_by_key(|a| a.hash.0);
+        // Deterministic order: group by sender and sort by nonce within each sender.
+        // This preserves the per-sender nonce sequence required for correct execution.
+        // The mempool already prioritizes by fee rate; this sort only reorders
+        // across senders, which is safe since different senders don't share nonces.
+        txs.sort_by(|a, b| a.sender.cmp(&b.sender).then_with(|| a.nonce.cmp(&b.nonce)));
         txs.dedup_by(|a, b| a.hash == b.hash);
         if txs.len() > MAX_TXS_PER_BLOCK {
             txs.truncate(MAX_TXS_PER_BLOCK);

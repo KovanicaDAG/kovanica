@@ -7,24 +7,31 @@
 
 ## 1. Seed Node DNS Records
 
-### Required: 3+ kvnc-native DNS names for P2P bootstrapping
+### Simplified Architecture: One Seed Per Network
 
-| Record | Type | Value | TTL | Notes |
-|--------|------|-------|-----|-------|
-| `seed1.kvnc.io` | A | `<bare-metal-IP-1>` | 300 | Primary seed, bare metal, no Cloudflare proxy |
-| `seed2.kvnc.io` | A | `<bare-metal-IP-2>` | 300 | Secondary seed, different ASN/DC |
-| `seed3.kvnc.io` | A | `<bare-metal-IP-3>` | 300 | Tertiary seed, different continent |
-| `seed4.kvnc.io` | A | `<bare-metal-IP-4>` | 300 | Optional 4th seed |
+| Network | Record | Type | Value | TTL | Notes |
+|---------|--------|------|-------|-----|-------|
+| **Testnet** | `testnet.kovanica.online` | A | `seed1.kovanica.online` | 300 | Single testnet seed, VPS#1 |
+| **Mainnet** | `mainnet.kovanica.online` | A | `<mainnet-bare-metal-IP>` | 300 | Single mainnet seed, bare metal |
 
 **Critical:** These must be **DNS-only (grey-cloud)** records in Cloudflare — **no orange-cloud proxy**. P2P traffic is plaintext TCP on port 8000 and will not work through Cloudflare's HTTP proxy.
 
-### kovanica.online subdomain aliases (optional)
+### Legacy aliases (deprecated)
 
 | Record | Type | Value | Notes |
 |--------|------|-------|-------|
-| `seed1.kovanica.online` | CNAME | `seed1.kvnc.io` | Alias for branding |
-| `seed2.kovanica.online` | CNAME | `seed2.kvnc.io` | |
-| `seed3.kovanica.online` | CNAME | `seed3.kvnc.io` | |
+| `seed1.kovanica.online` | CNAME | `testnet.kovanica.online` | Deprecated alias |
+| `seed2.kovanica.online` | CNAME | `testnet.kovanica.online` | Deprecated alias |
+| `seed3.kovanica.online` | CNAME | `testnet.kovanica.online` | Deprecated alias |
+| `seed1.kvnc.io` | CNAME | `mainnet.kovanica.online` | Future mainnet branding |
+| `seed2.kvnc.io` | CNAME | `mainnet.kovanica.online` | |
+| `seed3.kvnc.io` | CNAME | `mainnet.kovanica.online` | |
+
+All validator and regular nodes should configure their `bootnodes` / `KVNC_BOOTNODES` to point to:
+- **Testnet**: `testnet.kovanica.online:8000`
+- **Mainnet**: `mainnet.kovanica.online:8000`
+
+The single seed node per network acts as the bootstrap entry point; all other nodes connect to it and then peer with each other via Kademlia/Gossipsub.
 
 ---
 
@@ -104,10 +111,10 @@ The console is the interactive site. The explorer stays read-only. Browser calls
 
 Before testnet launch:
 
-- [ ] `dig +short seed1.kvnc.io` → returns bare metal IP (not Cloudflare IP)
-- [ ] `dig +short seed2.kvnc.io` → returns different ASN
-- [ ] `dig +short seed3.kvnc.io` → returns different continent
-- [ ] `nc -zv seed1.kvnc.io 8000` → connects successfully (plaintext TCP)
+- [ ] `dig +short testnet.kovanica.online` → returns VPS#1 IP (seed1.kovanica.online, not Cloudflare IP)
+- [ ] `dig +short mainnet.kovanica.online` → returns mainnet bare metal IP
+- [ ] `nc -zv testnet.kovanica.online 8000` → connects successfully (plaintext TCP)
+- [ ] `nc -zv mainnet.kovanica.online 8000` → connects successfully (plaintext TCP)
 - [ ] `curl -I https://explorer.kovanica.online` → returns 200, Cloudflare headers present
 - [ ] `curl -I https://explorer.kovanica.online/rpc` → 404 (no RPC on explorer)
 - [ ] SSL Labs grade: A+ for all subdomains
@@ -214,12 +221,13 @@ volumes:
 ## 7. Launch Sequence
 
 ### Phase 1: Seed Nodes (T-2 weeks)
-1. [ ] Register `kvnc.io` domain (or use `kovanica.online` subdomains)
-2. [ ] Provision 3 bare-metal servers in different DCs/ASNs
-3. [ ] Deploy seed nodes with `docker-compose.seed.yml`
-4. [ ] Add DNS A records (DNS-only, no proxy)
-4. [ ] Verify P2P connectivity: `nc -zv seedN.kvnc.io 8000`
-5. [ ] Add seed nodes to `KVNC_BOOTNODES` in genesis config
+1. [ ] Domain `kovanica.online` already registered ✅
+2. [ ] Provision 1 bare-metal server for testnet seed (`testnet.kovanica.online`)
+3. [ ] Deploy testnet seed node with `docker-compose.seed.yml`
+4. [ ] Add DNS A record for `testnet.kovanica.online` (DNS-only, no proxy)
+5. [ ] Verify P2P connectivity: `nc -zv testnet.kovanica.online 8000`
+6. [ ] Add seed node to `KVNC_BOOTNODES` in genesis config
+7. [ ] For mainnet: provision 1 bare-metal server, add `mainnet.kovanica.online` A record
 
 ### Phase 2: Genesis Ceremony (T-1 week)
 1. [ ] Collect validator public keys + stakes via PR
