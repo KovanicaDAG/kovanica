@@ -3,6 +3,7 @@
 //! The `kvnc` binary (`src/main.rs`) and other tools such as `kvnc-faucet`
 //! and `generate-validators` consume these modules via `kvnc_cli::...`.
 
+pub mod comms;
 pub mod contracts;
 pub mod node;
 pub mod output;
