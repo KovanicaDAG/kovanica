@@ -2940,7 +2940,10 @@ mod tests {
             mempool.contains(&returned_tx.hash),
             "returned tx back in the pool"
         );
-        assert!(mempool.get_pending_propagation().is_empty(), "no gossip");
+        // Reinserted transactions are now gossiped
+        let pending = mempool.get_pending_propagation();
+        assert_eq!(pending.len(), 1, "reinserted tx should be gossiped");
+        assert_eq!(pending[0], returned_tx.hash);
     }
 
     /// #13 restart: a red block committed before a restart. After restart,

@@ -284,13 +284,14 @@ impl Mempool {
     /// sub-DAG (#13). Every transaction goes through the full v1 admission
     /// path of [`Mempool::add_transaction`] (size, fee, hash binding,
     /// signature, nonce, balance, per-sender and total pool limits), but is
-    /// never queued for gossip or re-broadcast, and the caller must not
-    /// penalise any peer for a rejection (there is no peer here).
+    /// never queued for gossip or re-broadcast by default (set `gossip=true`
+    /// to enable), and the caller must not penalise any peer for a rejection
+    /// (there is no peer here).
     ///
     /// Transactions are processed in `(sender, nonce)` order so a returned
     /// nonce chain re-enters gap-free. One report entry per input, in input
     /// order.
-    pub fn reinsert_returned(&self, txs: Vec<Transaction>) -> Vec<ReinsertReport> {
+    pub fn reinsert_returned(&self, txs: Vec<Transaction>, gossip: bool) -> Vec<ReinsertReport> {
         let mut order: Vec<usize> = (0..txs.len()).collect();
         order.sort_by_key(|&i| (txs[i].sender.0, txs[i].nonce));
         let mut outcomes: Vec<Option<ReinsertOutcome>> = vec![None; txs.len()];
@@ -299,7 +300,7 @@ impl Mempool {
             let outcome = if self.is_committed(&tx) {
                 ReinsertOutcome::AlreadyCommitted
             } else {
-                match self.admit(tx, false) {
+                match self.admit(tx, gossip) {
                     Ok(()) => ReinsertOutcome::Accepted,
                     Err(MempoolError::AlreadyExists) => ReinsertOutcome::Duplicate,
                     // Nonce consumed by a committed tx (this or a competing one).
@@ -714,9 +715,31 @@ impl Mempool {
     /// configured timeout back into the queued state, so they can be
     /// proposed again by a future `get_next_transactions` call during
     /// periodic rebroadcast.
-    pub fn requeue_stale(&self, now: Instant, _timeout: Duration) -> usize {
+    pub fn requeue_stale(&self, now: Instant, timeout: Duration) -> usize {
         let mut state = self.state.lock();
-        state.requeue_stale(now, self.config.in_flight_timeout)
+        state.requeue_stale(now, timeout)
+    }
+
+    /// Return in-flight transactions for a specific sender back to queued state.
+    /// Called when leader is skipped so their in-flight txs can be re-proposed.
+    pub fn return_in_flight_for_sender(&self, sender: &Address, _now: Instant) -> usize {
+        let mut state = self.state.lock();
+        let mut returned = 0;
+        // Find all in-flight entries for this sender
+        let stale: Vec<(Hash, u64)> = state
+            .by_hash
+            .iter()
+            .filter(|(_, e)| e.in_flight_since.is_some() && e.tx.sender == *sender)
+            .map(|(h, e)| (*h, e.fee_rate))
+            .collect();
+        for (hash, fee_rate) in &stale {
+            if let Some(entry) = state.by_hash.get_mut(hash) {
+                entry.in_flight_since = None;
+            }
+            state.enqueue(*hash, *fee_rate);
+            returned += 1;
+        }
+        returned
     }
 }
 
@@ -758,7 +781,7 @@ impl Default for MempoolConfig {
             min_fee_rate: 0,
             max_txs_per_sender: 64,
             replacement_fee_bump_percent: 10,
-            in_flight_timeout: Duration::from_secs(60),
+            in_flight_timeout: Duration::from_secs(15),
         }
     }
 }
@@ -1573,7 +1596,7 @@ mod tests {
             next.clone(),
             pooled.clone(),
             committed.clone(),
-        ]);
+        ], false);
         let outcomes: Vec<_> = report.iter().map(|r| r.outcome.clone()).collect();
         assert_eq!(report[0].hash, forged.hash);
         assert!(matches!(&outcomes[0], ReinsertOutcome::Invalid(r) if r.contains("signature")));
@@ -1596,7 +1619,7 @@ mod tests {
             .rev()
             .map(|n| transfer(&sk, sender, n, 1, 1_000))
             .collect();
-        let report = pool.reinsert_returned(txs);
+        let report = pool.reinsert_returned(txs, false);
         assert!(
             report
                 .iter()
@@ -1628,7 +1651,7 @@ mod tests {
             ..MempoolConfig::default()
         });
         let txs: Vec<_> = (0..3).map(|n| transfer(&sk, sender, n, 1, 1_000)).collect();
-        let report = pool.reinsert_returned(txs);
+        let report = pool.reinsert_returned(txs, false);
         assert_eq!(report[0].outcome, ReinsertOutcome::Accepted);
         assert_eq!(report[1].outcome, ReinsertOutcome::Accepted);
         assert!(
@@ -1644,7 +1667,7 @@ mod tests {
             max_mempool_size: size,
             ..MempoolConfig::default()
         });
-        let report = small.reinsert_returned(vec![first, transfer(&sk_b, b, 0, 1, 1_000)]);
+        let report = small.reinsert_returned(vec![first, transfer(&sk_b, b, 0, 1, 1_000)], false);
         let accepted = report
             .iter()
             .filter(|r| r.outcome == ReinsertOutcome::Accepted)

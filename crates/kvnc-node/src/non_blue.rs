@@ -52,14 +52,14 @@ pub struct ReturnedTxs {
 }
 
 impl ReturnedTxs {
-    /// Call after the sub-DAG's state is durably committed. No gossip and no
-    /// peer penalty: [`Mempool::reinsert_returned`] keeps them local.
+    /// Call after the sub-DAG's state is durably committed. With `gossip=true`,
+    /// reinserted transactions are propagated to peers.
     pub fn reinsert(&self, mempool: &Mempool, subdag: &CommittedSubDag) -> Vec<ReinsertReport> {
         let txs = self.source.non_blue_transactions(&self.dag, subdag);
         if txs.is_empty() {
             return Vec::new();
         }
-        let report = mempool.reinsert_returned(txs);
+        let report = mempool.reinsert_returned(txs, true);
         let accepted = report
             .iter()
             .filter(|r| r.outcome == ReinsertOutcome::Accepted)
@@ -212,6 +212,9 @@ mod tests {
         assert_eq!(report.len(), 1);
         assert_eq!(report[0].outcome, ReinsertOutcome::Accepted);
         assert!(mempool.contains(&red_only.hash));
-        assert!(mempool.get_pending_propagation().is_empty());
+        // Reinserted transactions are now gossiped
+        let pending = mempool.get_pending_propagation();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0], red_only.hash);
     }
 }
