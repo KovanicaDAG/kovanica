@@ -1,4 +1,4 @@
-# Kovanica (kvnc)
+# Kovanica (KUNA)
 
 > A Rust-native DAG-based Layer-1 blockchain implementing Mysticeti-style uncertified consensus, account-based state with staking, and deterministic Wasmi contract execution.
 
