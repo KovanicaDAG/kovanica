@@ -1,0 +1,251 @@
+# COMMS-APP-PLAN — Decentralized calls / video / messaging on Kovanica
+
+> Status: DRAFT (scaffold) · Scope owner: Kovanica project owner · Repo: `kvnc` · Target branch: `VPS3`
+> Chain: Kovanica · Native token: KUNA · Crate prefix: `kvnc-*`
+
+---
+
+## 1. Goal & non-goals
+
+### Goal
+A communications app (1:1 and small-group voice calls, video calls, text messaging) whose
+**identity, discovery, payments, spam resistance, and relay incentives** are anchored on the
+Kovanica L1, while **all real-time traffic and message content stays off-chain and end-to-end
+encrypted**.
+
+### Non-goals (things that will NEVER go on-chain)
+- Message payloads and media (audio/video, RTP).
+- Contact lists, presence, typing indicators, read receipts (metadata).
+- Group encryption keys / ratchet state.
+- Any bulk or streaming data.
+
+Kovanica is a **control plane**, never a **data plane**. A blockchain is the wrong transport for
+real-time media: per-unit fees, ~12 s committed-leader cadence, no bandwidth, and permanent public
+storage. Media and messages flow over WebRTC + an E2E messaging transport; the chain decides
+**who you are, what you pay, and who gets paid**.
+
+---
+
+## 2. Architecture
+
+```
+            ┌──────────────────────────── CONTROL PLANE (on Kovanica) ───────────────────────────┐
+            │                                                                                    │
+            │  Identity / DID        Name registry        Payment & escrow      Relay registry    │
+            │  (wallet pubkey →      (name → pubkeys,      (HTLC prepaid,         (staked node      │
+            │   self-certifying id)   relay endpoints)      per-msg fee/stake)    operators)        │
+            │                                                                                     │
+            │  Reused: kvnc-htlc            Reused: kvnc-token (plans)   Reused: kvnc-multisig,    │
+            │          kvnc-rpc (JSON-RPC + WS subs)                              kvnc-vault         │
+            │  NEW (proposed): name-registry contract, comms-escrow contract (see §3.3)             │
+            └────────────────────────────────────────────────────────────────────────────────────┘
+                       ▲ RPC/WS (read state, submit tx)                 ▲ RPC/WS (settlement)
+                       │                                                  │
+            ┌──────────┴──────────────────────────────────────────────────┴──────────────────────┐
+            │                          CLIENT (desktop / web / mobile)                            │
+            │  Wallet keys (@kvnc/signer, kvnc-light-ffi)                                          │
+            │  ┌─────────────┐   ┌──────────────────┐   ┌───────────────┐   ┌──────────────────┐   │
+            │  │ Identity    │   │ Messaging        │   │ Calling       │   │ Payments         │   │
+            │  │ module      │   │ (E2E: X25519 +   │   │ (WebRTC:      │   │ (HTLC prepaid,   │   │
+            │  │             │   │  AES-GCM / ratchet│  │  ICE/TURN)    │   │  plan tokens)    │   │
+            │  └─────────────┘   └──────────────────┘   └───────────────┘   └──────────────────┘   │
+            └────────────────────────────────────────────────────────────────────────────────────┘
+                       │ signaling + ciphertext (off-chain)        │ media (SRTP, off-chain)
+                       ▼                                            ▼
+            ┌────────────────────────────────────────────────────────────────────────────────────┐
+            │              DATA PLANE  (off-chain, E2E-encrypted, never stored on-chain)          │
+            │   Messaging relays (Matrix-style / libp2p)        WebRTC SFU / paid TURN relays     │
+            │   NW (proposed, justified):                             NW (external/infra)          │
+            │   packages/comms, crates/... (see §3.3)                                              │
+            └────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.1 Component inventory — REUSE vs NEW
+
+| Component | Reuse | New (proposed) | Notes |
+|---|---|---|---|
+| Wallet / signing / keys | `@kvnc/signer` (`ed25519.ts`, `keys.ts`, `tx.ts`, `address.ts`) | — | Client-side only; seeds never leave device |
+| Chain access | `@kvnc/api-client` (`index.ts`) | — | Plus WS subscriptions from `kvnc-rpc/src/subscriptions.rs` |
+| RPC spec | `kvnc-rpc/src/openapi.rs` (OpenAPI 3.1) | — | Keep client bindings generated from spec |
+| Prepaid / pay-for-service | `crates/kvnc-htlc` (escrow, `hash_lock`, claim/refund) | — | Native-balance escrow to relay/escrow addresses |
+| Plans / entitlements | `crates/kvnc-token` (fungible multi-asset) | — | One token instance per data plan |
+| Escrow / treasury rules | `crates/kvnc-multisig`, `crates/kvnc-vault` | — | Relay pools, discretionary payouts |
+| Mobile SDK | `crates/kvnc-light-ffi` (UniFFI) + `kvnc-lightnode` | — | ⚠ Argon2id 64 MiB runs on calling thread → never on UI thread |
+| Name registry | — | **NEW contract** `kvnc-name-registry` (WASM) | ledger-safe; name → pubkey/relay endpoints |
+| Comms escrow (per-msg / streaming) | HTLC covers most | **NEW contract** `kvnc-comms-escrow` (proposed) | Only if HTLC proves insufficient; justify first |
+| Client comms package | — | **NEW** `packages/comms` (TS) | Messaging + calling + payments glue |
+| Relays | — | **NEW infra**: messaging relay, TURN/SFU | Off-chain; incentivized via HTLC |
+
+> **New-crate justification rule (AGENTS.md #7):** each NEW crate above must have a one-paragraph
+> justification in its PR. Prefer extending `kvnc-token`/`kvnc-htlc` patterns before adding contracts.
+
+---
+
+## 3. Layer classification
+
+| Feature | Classification | Rationale |
+|---|---|---|
+| Comms identity (wallet pubkey → self-certifying id) | **client-only** | Derived locally; no state |
+| Message transport + E2E crypto | **client-only** | Off-chain, E2E encrypted |
+| Name registry contract | **ledger-safe** | New state, no consensus-rule change |
+| Relays / TURN / SFU | **client-only / infra** | Off-chain, no chain coupling |
+| WebRTC signaling | **client-only** | Transported over messaging channel |
+| Per-message fee / stake-to-send | **ledger-safe** | New escrow/stake tx flow |
+| Prepaid HTLC top-up | **ledger-safe** | Reuses `kvnc-htlc` |
+| Data-plan entitlement token | **ledger-safe** | Reuses `kvnc-token` |
+| Relay registry + bonding | **ledger-safe** | New registry state |
+| Relay payment settlement | **ledger-safe** | HTLC settlement |
+| Group key management (MLS) | **client-only** | Local ratchet state |
+| Mobile FFI packaging | **client-only** | SDK surface |
+| eSIM / top-up provisioning (§M7) | **ledger-safe payment leg + external** | Chain pays; SM-DP+ issues profile off-chain |
+
+**Nothing here is consensus-critical.** If any proposal requires a consensus-rule change, stop and
+escalate — it is out of scope for this app.
+
+---
+
+## 4. Phased milestones
+
+Effort: S ≤ 1 wk · M ≈ 2–4 wk · L ≥ 1 month (one dev, part-time assumed).
+
+### M0 — Foundation & identity (client-only)
+- **Scope:** client scaffold, wallet identity, chain connectivity.
+- **Deliverables:**
+  - `packages/comms/src/{index,identity,rpc}.ts`
+  - Identity: `comms_id = hash(pubkey)` (BLAKE3, matches `kvnc_common::hash` domain style)
+  - RPC wrapper over `@kvnc/api-client` + WS subscriptions
+  - `packages/comms/src/identity.test.ts`
+- **Exit criteria:** load wallet via `@kvnc/signer`, derive comms id, read chain head over RPC, tests pass.
+- **Deps:** none · **Effort:** S
+
+### M1 — 1:1 E2E text MVP (client-only + ledger-safe registry)
+- **Scope:** E2E 1:1 messaging over an off-chain relay; on-chain name resolution.
+- **Deliverables:**
+  - `packages/comms/src/{messaging,relay,e2e}.ts` (X25519 + AES-GCM; ratchet-lite or Signal protocol)
+  - Relay node (Matrix-style room server or libp2p gossipsub)
+  - `crates/kvnc-name-registry` (WASM contract): `register(name, pubkey, relay_endpoints)`, `resolve(name)`
+  - TS binding + `packages/comms/src/registry.ts`
+- **Exit criteria:** two clients exchange E2E messages via relay; resolve a peer by name from chain;
+  ciphertext only on the wire; integration round-trip test.
+- **Deps:** M0 · **Effort:** M
+
+### M2 — Payments & spam resistance (ledger-safe)
+- **Scope:** pay-to-send / stake-to-send; prepaid balance; plan entitlements.
+- **Deliverables:**
+  - `packages/comms/src/payments.ts` (HTLC create/claim/refund flow using `@kvnc/signer`)
+  - Prepaid path reusing `crates/kvnc-htlc`; plan tokens via `crates/kvnc-token`
+  - Anti-spam policy module (min-fee / stake threshold)
+- **Exit criteria:** unpaid flood rejected; paid message accepted; HTLC settlement + refund tests.
+- **Deps:** M1 · **Effort:** M
+
+### M3 — 1:1 voice calls (client-only)
+- **Scope:** WebRTC audio; signaling over the M1 channel; paid TURN.
+- **Deliverables:** `packages/comms/src/rtc/{signal,peer,turn}.ts`; TURN relay with HTLC-funded access.
+- **Exit criteria:** 1:1 audio call across NAT via paid TURN; **zero media on-chain**.
+- **Deps:** M1 (+ M2 for paid TURN) · **Effort:** M
+
+### M4 — Video + small group (client-only)
+- **Scope:** video calls; ≤ 4-party mesh or SFU; MLS (RFC 9420) group keys.
+- **Deliverables:** `packages/comms/src/rtc/sfu.ts`; `packages/comms/src/group/mls.ts`.
+- **Exit criteria:** 4-party video; group key rotates on join/leave; rekey test.
+- **Deps:** M3 · **Effort:** L
+
+### M5 — Relay incentives & decentralization (ledger-safe)
+- **Scope:** staked/bonded relay operators; HTLC streaming payment; reputation.
+- **Deliverables:** relay registry contract + `packages/comms/src/rewards.ts`.
+- **Exit criteria:** an independent relay earns via HTLC; app works with no single operator dependency.
+- **Deps:** M2, M3 · **Effort:** L
+
+### M6 — Mobile packaging & hardening (client-only)
+- **Scope:** iOS/Android via `kvnc-light-ffi` (UniFFI).
+- **Deliverables:** mobile bindings; off-UI-thread key ops (Argon2id 64 MiB constraint); push notifications.
+- **Exit criteria:** mobile build runs; no seed leaves device; key ops off UI thread.
+- **Deps:** M1–M4 · **Effort:** L
+
+### M7 — Top-up / eSIM integration (ledger-safe + external)
+- **Scope:** on-chain payment (HTLC) → external certified SM-DP+ releases eSIM activation code.
+- **Deliverables:** `packages/comms/src/topup.ts` + provider integration.
+- **Exit criteria:** end-to-end demo with a certified provider; profile issuance off-chain.
+- **Deps:** M2; external partner · **Effort:** M (+ partner timeline)
+
+---
+
+## 5. Dependency graph
+
+```
+M0 ──► M1 ──► M2 ──┬──► M3 ──► M4 ──┐
+                   │                 ├──► M6 (mobile)
+                   └──► M5 ──────────┘
+                    M2 ──► M7 (eSIM/top-up)
+```
+
+MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP.
+
+---
+
+## 6. Risk register
+
+| # | Risk | L | I | Mitigation | Owner lane |
+|---|---|---|---|---|---|
+| R1 | Sybil / spam without cost | H | H | Min per-msg fee or stake-to-send; relay-side rate limits; proof-of-work fallback for non-paying senders | client-wallet |
+| R2 | Per-message payment UX friction | H | M | Prepaid balance (HTLC deposit); batch settlement; free tier between mutual contacts | client-wallet |
+| R3 | NAT traversal / relay cost | H | H | Paid TURN; ICE fallback chain; measure relay $/call | node-ops / infra |
+| R4 | Group E2E key management (MLS) complexity | M | H | Adopt MLS (RFC 9420) rather than roll-our-own; audit | security-audit |
+| R5 | Relay incentivization economics | M | H | HTLC streaming pay; bonded relays; reputation; treasury bootstrap | project-plan |
+| R6 | Key/seed handling on mobile | M | H | `kvnc-light-ffi`; Argon2id 64 MiB off UI thread; zeroize; no seed export | security-audit |
+| R7 | Regulatory / telecom / eSIM (M7) | M | H | Partner with certified SM-DP+; chain = payment leg only | project-plan |
+| R8 | Chain throughput/latency misuse | M | M | Keep chain to control plane; never per-media-tick tx; 12 s cadence is fine for settlement | reviewer |
+| R9 | Mobile app-store crypto-payment policies | M | M | Separate "buy plan" flow; external purchase where required | project-plan |
+| R10 | Metadata privacy (who-talks-to-whom) | H | H | Sealed sender, no plaintext contact graph on-chain, relay blind to identities | security-audit |
+| R11 | On-chain discovery enumeration | M | M | Names via registry, pubkeys discoverable by design; avoid publishing contact graph | client-wallet |
+
+---
+
+## 7. MVP scope vs later
+
+**MVP (ship first):**
+- Desktop/CLI or web client (form factor TBD — §8).
+- 1:1 **text only**, E2E encrypted.
+- Identity from wallet keys; name resolution from chain.
+- Minimal pay-to-send / prepaid to prove spam resistance.
+
+**Later:** voice (M3) → video/group (M4) → relay incentives (M5) → mobile (M6) → eSIM/top-up (M7).
+
+---
+
+## 8. Open questions (decisions needed from owner)
+
+1. **First client form factor:** CLI/TUI (reuse console patterns) vs web (`packages/web`) vs mobile?
+2. **Messaging transport:** Matrix-style federated relay vs libp2p/custom gossipsub?
+3. **Who runs relays** at launch — self-hosted, incentivized third parties, or both?
+4. **Plan/entitlement model:** native KUNA only, or a KVP-102 token per plan?
+5. **Name registry placement:** on-chain (ledger-safe) vs off-chain DNS-like resolver?
+6. **Fee model:** per-message fee vs stake-to-send vs hybrid?
+7. **Jurisdiction / regulatory** posture for telecom-adjacent features (eSIM/top-up).
+8. **Is any consensus change ever contemplated?** (Current answer: no.)
+
+---
+
+## 9. TASKLIST — concrete first tasks
+
+- [ ] Decide first client form factor (§8.1) → unblocks M0 file layout.
+- [ ] Scaffold `packages/comms` (TS) with `src/index.ts`, wired to `@kvnc/api-client`.
+- [ ] Implement `packages/comms/src/identity.ts` (BLAKE3 `comms_id` from wallet pubkey) + tests.
+- [ ] Wire WS subscriptions from `kvnc-rpc/src/subscriptions.rs` into `packages/comms/src/rpc.ts`.
+- [ ] Prototype off-chain relay (throwaway) to prove 1:1 transport before touching chain.
+- [ ] Prototype E2E (`e2e.ts`) with `@kvnc/signer` keys; confirm signatures + key exchange.
+- [ ] Draft `crates/kvnc-name-registry` contract spec (entry points, storage keys, error codes) matching `kvnc-token`/`kvnc-htlc` conventions.
+- [ ] Write HTLC top-up flow (`payments.ts`) against `kvnc-htlc` API; unit-test claim/refund.
+- [ ] Produce a threat model doc (R1, R4, R6, R10) before any voice/video work.
+- [ ] Confirm branch policy: all of the above committed to `VPS3`.
+
+---
+
+## Appendix A — Assumptions
+
+- This repo (`/root/kvnc`) is **development only**; a `kvnc-node seed3` is running on this machine and
+  is not to be disturbed. All work commits to branch `VPS3`.
+- Independent codebase: no code/design imported from `kovanica-protocol` or other chains.
+- Tokenomics untouched. 2–4 GB RAM footprint target honored on client and node.
+- `kvnc` contracts (`kvnc-htlc`, `kvnc-token`) are WASM entry-point modules with bincode args/results;
+  new contracts follow the same ABI and error-packing conventions.
