@@ -27,6 +27,10 @@ pub const LOCAL_CHAIN_ID: u64 = chain_id::LOCAL;
 /// Reserved testnet id. It is not the live testnet.
 pub const TESTNET_CHAIN_ID: u64 = chain_id::TESTNET;
 
+/// Domain separation prefix for comms message signing.
+/// Matches `COMMS_MSG_DOMAIN` in the comms stack.
+pub const COMMS_MSG_DOMAIN: &[u8] = b"kvnc/comms/msg/v1";
+
 /// Why a light-client call failed.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum LightFfiError {
@@ -343,6 +347,54 @@ fn hex_hash(hash: &Hash) -> String {
     format!("0x{}", hex::encode(hash.0))
 }
 
+
+/// Get the public key hex from a keystore JSON without decrypting.
+/// This does not decrypt the seed.
+#[uniffi::export]
+pub fn wallet_pubkey_hex(keystore_json: String) -> Result<String, LightFfiError> {
+    let keystore = parse(keystore_json.as_bytes()).map_err(failed)?;
+    Ok(keystore.public_key.clone())
+}
+
+/// Derive comms identity hex from public key hex.
+#[uniffi::export]
+pub fn derive_comms_id(pubkey_hex: String) -> Result<String, LightFfiError> {
+    let trimmed = pubkey_hex.trim();
+    let stripped = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    let bytes = hex::decode(stripped).map_err(failed)?;
+    let key: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| failed("public key must be 32 bytes"))?;
+    Ok(kvnc_comms_core::comms_id(&key).to_hex())
+}
+
+/// Sign a detached message with domain separation.
+///
+/// **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+#[uniffi::export]
+pub fn sign_detached(
+    keystore_json: String,
+    passphrase: String,
+    message_hex: String,
+    domain: Option<String>,
+) -> Result<String, LightFfiError> {
+    let (sk, _) = open_signing_key(&keystore_json, &passphrase)?;
+    let msg_trim = message_hex.trim();
+    let msg_stripped = msg_trim.strip_prefix("0x").unwrap_or(msg_trim);
+    let msg_raw = hex::decode(msg_stripped).map_err(failed)?;
+    let d = match domain.as_deref() {
+        Some(dom) => dom.to_string(),
+        None => core::str::from_utf8(COMMS_MSG_DOMAIN)
+            .map_err(|_| failed("invalid domain"))?
+            .to_string(),
+    };
+    let mut to_sign = Vec::with_capacity(d.len() + msg_raw.len());
+    to_sign.extend_from_slice(d.as_bytes());
+    to_sign.extend_from_slice(&msg_raw);
+    let sig = kvnc_crypto::sign(&sk, &to_sign);
+    Ok(hex::encode(sig.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +531,43 @@ mod tests {
             String::new()
         )
         .is_err());
+    }
+
+    #[test]
+    fn wallet_pubkey_hex_roundtrip() {
+        let created = create_wallet("test-pass".to_string()).unwrap();
+        let pubkey = wallet_pubkey_hex(created.keystore_json.clone()).unwrap();
+        let clean = pubkey.trim().strip_prefix("0x").unwrap_or(&pubkey);
+        assert_eq!(clean.len(), 64);
+        assert!(hex::decode(clean).is_ok());
+    }
+
+    #[test]
+    fn derive_comms_id_zeros() {
+        // KAT from comms-core/TS: pubkey all ones (0x01)
+        let ones = "01".repeat(32);
+        let comms = derive_comms_id(ones.clone()).unwrap();
+        assert_eq!(
+            comms,
+            "6076cc6f05dbd8ad851ba6aa6b7e85c8dce112186e16d3e267663641d9fa9339"
+        );
+    }
+
+    #[test]
+    fn sign_detached_produces_128_hex_sig() {
+        let created = create_wallet("pw".to_string()).unwrap();
+        let msg = hex::encode(b"hello");
+        let sig = sign_detached(created.keystore_json, "pw".to_string(), msg, None).unwrap();
+        assert_eq!(sig.len(), 128);
+        assert!(hex::decode(&sig).is_ok());
+    }
+
+    #[test]
+    fn sign_detached_error_cases() {
+        let created = create_wallet("pw".to_string()).unwrap();
+        let bad = sign_detached(created.keystore_json.clone(), "pw".to_string(), "gg".to_string(), None);
+        assert!(bad.is_err());
+        let bad2 = sign_detached(created.keystore_json, "wrong".to_string(), hex::encode(b"hi"), None);
+        assert!(bad2.is_err());
     }
 }
