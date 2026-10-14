@@ -175,7 +175,14 @@ Effort: S ≤ 1 wk · M ≈ 2–4 wk · L ≥ 1 month (one dev, part-time assume
 
 ### M7 — Top-up / eSIM integration (ledger-safe + external)
 - **Scope:** on-chain payment (HTLC) → external certified SM-DP+ releases eSIM activation code.
-- **Deliverables:** `packages/comms/src/topup.ts` + provider integration.
+- **Deliverables:** `packages/comms/src/topup.ts` + `packages/comms/src/topup/{provider,mock}.ts`
+  (pluggable provider: `HttpTopupProvider` JSON-over-`/v1`, `MockTopupProvider`) + tests.
+- **Trust posture:** **(A)** client-controlled preimage, reveal-on-delivery. The client picks
+  `P` (32 bytes), funds an HTLC to the provider's claimer address with `H = BLAKE3(P)`, receives
+  the activation code on-chain-verified provisioning, then reveals `P`. Residual risks — a client
+  can receive the code and withhold `P`, or a provider can refuse to release after funding — are
+  bounded by the HTLC expiry (client refund) and the certified-partner relationship (R7). The
+  activation secret never goes on-chain.
 - **Exit criteria:** end-to-end demo with a certified provider; profile issuance off-chain.
 - **Deps:** M2; external partner · **Effort:** M (+ partner timeline)
 
@@ -283,6 +290,13 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 - [x] `crates/kvnc-name-registry` contract + spec (`docs/RFC-008-NAME-REGISTRY.md`), matching `kvnc-token`/`kvnc-htlc` conventions (no `ENTRY_POINTS` change required).
 - [ ] Write HTLC top-up flow (`payments.ts`) against `kvnc-htlc` API; unit-test claim/refund.
 - [x] Threat model doc produced: `docs/COMMS-THREAT-MODEL.md` (R1, R4, R6, R10).
+- [x] M7 top-up / eSIM client: `packages/comms/src/topup.ts` + `topup/{provider,mock}.ts` with
+      `topup.test.ts`. Trust posture **(A)** — client-controlled preimage, reveal-on-delivery; the
+      HTLC payment leg is **ledger-safe** (reuses M2 `payments.ts`), provider HTTP adapters are
+      client-only/external, eSIM issuance is external (off-chain).
+- [x] M7 doc note: `payments.ts` is **create-only** (no TS claim/refund builders) and M7 needs only
+      the HTLC create leg. M7 does **not** depend on the M2 `COMMS-M2-INTERFACES.md` §3 layout
+      mismatch (`amount_le(16)` in the doc vs. the 8-byte builder in `payments.ts`).
 - [x] Branch policy confirmed: all work committed to `VPS3`.
 
 ---

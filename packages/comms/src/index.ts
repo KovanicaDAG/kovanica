@@ -62,3 +62,41 @@ export {
   type SfuJoinOpts,
   type SfuState,
 } from "./rtc/sfu.js";
+export {
+  InMemoryOrderStore,
+  TopupClient,
+  TopupClientError,
+  validateQuote,
+  verifyHashLock,
+  type CreateOrderRequest,
+  type FundingProof,
+  type OrderStore,
+  type QuoteRequest,
+  type RevealProof,
+  type TopupClientOpts,
+  type TopupCurrency,
+  type TopupErrorCode,
+  type TopupOrder,
+  type TopupPolicy,
+  type TopupQuote,
+  type TopupRpc,
+  type TopupSignerKey,
+  type TopupStatus,
+  type WebhookEvent,
+} from "./topup.js";
+export {
+  HttpTopupProvider,
+  signWebhook,
+  verifyWebhookSignature,
+  type CallOpts,
+  type HeadersLike,
+  type HttpTopupProviderOpts,
+  type RetryPolicy,
+  type TopupProvider,
+} from "./topup/provider.js";
+export {
+  MockTopupProvider,
+  type MockFailure,
+  type MockMethod,
+  type MockTopupProviderOpts,
+} from "./topup/mock.js";
