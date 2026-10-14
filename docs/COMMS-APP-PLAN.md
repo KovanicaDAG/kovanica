@@ -2,6 +2,8 @@
 
 > Status: DRAFT (scaffold) · Scope owner: Kovanica project owner · Repo: `kvnc` · Target branch: `VPS3`
 > Chain: Kovanica · Native token: KUNA · Crate prefix: `kvnc-*`
+> **Decisions locked (§8.1–8.2):** first client = **Tauri desktop** (Rust core); messaging transport =
+> **minimal store-and-forward relay + OpenMLS (RFC 9420)**.
 
 ---
 
@@ -42,21 +44,20 @@ storage. Media and messages flow over WebRTC + an E2E messaging transport; the c
                        ▲ RPC/WS (read state, submit tx)                 ▲ RPC/WS (settlement)
                        │                                                  │
             ┌──────────┴──────────────────────────────────────────────────┴──────────────────────┐
-            │                          CLIENT (desktop / web / mobile)                            │
-            │  Wallet keys (@kvnc/signer, kvnc-light-ffi)                                          │
+            │                   CLIENT — Tauri desktop (Rust core)   [DECIDED]                     │
+            │  Wallet keys via kvnc-keystore / kvnc-light-ffi (native OS keystore; seeds stay on-box)│
             │  ┌─────────────┐   ┌──────────────────┐   ┌───────────────┐   ┌──────────────────┐   │
             │  │ Identity    │   │ Messaging        │   │ Calling       │   │ Payments         │   │
-            │  │ module      │   │ (E2E: X25519 +   │   │ (WebRTC:      │   │ (HTLC prepaid,   │   │
-            │  │             │   │  AES-GCM / ratchet│  │  ICE/TURN)    │   │  plan tokens)    │   │
+            │  │ module      │   │ E2E: OpenMLS     │   │ (WebRTC in    │   │ (HTLC prepaid,   │   │
+            │  │             │   │  (RFC 9420)      │   │  webview)     │   │  plan tokens)    │   │
             │  └─────────────┘   └──────────────────┘   └───────────────┘   └──────────────────┘   │
             └────────────────────────────────────────────────────────────────────────────────────┘
-                       │ signaling + ciphertext (off-chain)        │ media (SRTP, off-chain)
+                       │ signed ciphertext envelopes (off-chain)   │ media (SRTP, off-chain)
                        ▼                                            ▼
             ┌────────────────────────────────────────────────────────────────────────────────────┐
             │              DATA PLANE  (off-chain, E2E-encrypted, never stored on-chain)          │
-            │   Messaging relays (Matrix-style / libp2p)        WebRTC SFU / paid TURN relays     │
-            │   NW (proposed, justified):                             NW (external/infra)          │
-            │   packages/comms, crates/... (see §3.3)                                              │
+            │   Store-and-forward relays (Nostr-style opaque envelopes)  WebRTC SFU / TURN relays │
+            │   [DECIDED] minimal relay protocol, HTLC-paid              (paid via HTLC)           │
             └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,16 +66,18 @@ storage. Media and messages flow over WebRTC + an E2E messaging transport; the c
 | Component | Reuse | New (proposed) | Notes |
 |---|---|---|---|
 | Wallet / signing / keys | `@kvnc/signer` (`ed25519.ts`, `keys.ts`, `tx.ts`, `address.ts`) | — | Client-side only; seeds never leave device |
+| Desktop client shell | `kvnc-lightnode`, `kvnc-keystore`, `kvnc-light-ffi` | **NEW** Tauri app (`apps/desktop`) | **[DECIDED §8.1]** Rust core; native OS keystore |
 | Chain access | `@kvnc/api-client` (`index.ts`) | — | Plus WS subscriptions from `kvnc-rpc/src/subscriptions.rs` |
 | RPC spec | `kvnc-rpc/src/openapi.rs` (OpenAPI 3.1) | — | Keep client bindings generated from spec |
 | Prepaid / pay-for-service | `crates/kvnc-htlc` (escrow, `hash_lock`, claim/refund) | — | Native-balance escrow to relay/escrow addresses |
 | Plans / entitlements | `crates/kvnc-token` (fungible multi-asset) | — | One token instance per data plan |
 | Escrow / treasury rules | `crates/kvnc-multisig`, `crates/kvnc-vault` | — | Relay pools, discretionary payouts |
 | Mobile SDK | `crates/kvnc-light-ffi` (UniFFI) + `kvnc-lightnode` | — | ⚠ Argon2id 64 MiB runs on calling thread → never on UI thread |
+| E2E messaging crypto | — | **NEW** OpenMLS (RFC 9420, Rust) | **[DECIDED §8.2]** covers 1:1 + groups uniformly |
 | Name registry | — | **NEW contract** `kvnc-name-registry` (WASM) | ledger-safe; name → pubkey/relay endpoints |
 | Comms escrow (per-msg / streaming) | HTLC covers most | **NEW contract** `kvnc-comms-escrow` (proposed) | Only if HTLC proves insufficient; justify first |
-| Client comms package | — | **NEW** `packages/comms` (TS) | Messaging + calling + payments glue |
-| Relays | — | **NEW infra**: messaging relay, TURN/SFU | Off-chain; incentivized via HTLC |
+| Client comms package | — | **NEW** `packages/comms` (TS glue) + Rust core | Messaging + calling + payments glue |
+| Messaging relays | — | **NEW infra**: store-and-forward relay (Nostr-style, opaque signed envelopes) | Off-chain; HTLC pay-to-publish/relay |
 
 > **New-crate justification rule (AGENTS.md #7):** each NEW crate above must have a one-paragraph
 > justification in its PR. Prefer extending `kvnc-token`/`kvnc-htlc` patterns before adding contracts.
@@ -109,24 +112,30 @@ escalate — it is out of scope for this app.
 Effort: S ≤ 1 wk · M ≈ 2–4 wk · L ≥ 1 month (one dev, part-time assumed).
 
 ### M0 — Foundation & identity (client-only)
-- **Scope:** client scaffold, wallet identity, chain connectivity.
+- **Scope:** Tauri desktop shell + headless CLI harness, wallet identity, chain connectivity.
 - **Deliverables:**
-  - `packages/comms/src/{index,identity,rpc}.ts`
+  - `apps/desktop` Tauri shell (Rust core via `kvnc-lightnode` / `kvnc-keystore` / `kvnc-light-ffi`)
+  - Headless CLI harness (extend `kvnc-cli`) to exercise identity/transport/payments in CI, no GUI
+  - `packages/comms/src/{index,identity,rpc}.ts` (TS glue for the webview)
   - Identity: `comms_id = hash(pubkey)` (BLAKE3, matches `kvnc_common::hash` domain style)
   - RPC wrapper over `@kvnc/api-client` + WS subscriptions
   - `packages/comms/src/identity.test.ts`
-- **Exit criteria:** load wallet via `@kvnc/signer`, derive comms id, read chain head over RPC, tests pass.
+- **Exit criteria:** load wallet via native keystore, derive comms id, read chain head over RPC, tests pass;
+  CLI harness exercises the same path headlessly.
 - **Deps:** none · **Effort:** S
 
 ### M1 — 1:1 E2E text MVP (client-only + ledger-safe registry)
-- **Scope:** E2E 1:1 messaging over an off-chain relay; on-chain name resolution.
+- **Scope:** E2E 1:1 messaging over an off-chain store-and-forward relay; on-chain name resolution.
 - **Deliverables:**
-  - `packages/comms/src/{messaging,relay,e2e}.ts` (X25519 + AES-GCM; ratchet-lite or Signal protocol)
-  - Relay node (Matrix-style room server or libp2p gossipsub)
+  - Store-and-forward **relay** (Rust): accepts opaque, signed ciphertext envelopes keyed by `comms_id`,
+    delivers on reconnect, expires old envelopes. **[DECIDED §8.2]**
+  - E2E crypto module: **OpenMLS (RFC 9420)** integration (`crates/kvnc-comms-crypto` proposed) — one
+    scheme for 1:1 and groups.
+  - `packages/comms/src/{messaging,relay,envelope}.ts` (envelope framing + relay client)
   - `crates/kvnc-name-registry` (WASM contract): `register(name, pubkey, relay_endpoints)`, `resolve(name)`
   - TS binding + `packages/comms/src/registry.ts`
-- **Exit criteria:** two clients exchange E2E messages via relay; resolve a peer by name from chain;
-  ciphertext only on the wire; integration round-trip test.
+- **Exit criteria:** two clients exchange E2E messages via relay (offline recipient receives on reconnect);
+  resolve a peer by name from chain; ciphertext only on the wire; integration round-trip test.
 - **Deps:** M0 · **Effort:** M
 
 ### M2 — Payments & spam resistance (ledger-safe)
@@ -139,19 +148,19 @@ Effort: S ≤ 1 wk · M ≈ 2–4 wk · L ≥ 1 month (one dev, part-time assume
 - **Deps:** M1 · **Effort:** M
 
 ### M3 — 1:1 voice calls (client-only)
-- **Scope:** WebRTC audio; signaling over the M1 channel; paid TURN.
+- **Scope:** WebRTC audio inside the Tauri webview; signaling over the M1 relay channel; paid TURN.
 - **Deliverables:** `packages/comms/src/rtc/{signal,peer,turn}.ts`; TURN relay with HTLC-funded access.
 - **Exit criteria:** 1:1 audio call across NAT via paid TURN; **zero media on-chain**.
 - **Deps:** M1 (+ M2 for paid TURN) · **Effort:** M
 
 ### M4 — Video + small group (client-only)
-- **Scope:** video calls; ≤ 4-party mesh or SFU; MLS (RFC 9420) group keys.
-- **Deliverables:** `packages/comms/src/rtc/sfu.ts`; `packages/comms/src/group/mls.ts`.
+- **Scope:** video calls; ≤ 4-party mesh or SFU; group keys via the M1 OpenMLS module.
+- **Deliverables:** `packages/comms/src/rtc/sfu.ts`; `packages/comms/src/group/mls.ts` (thin wrapper on OpenMLS).
 - **Exit criteria:** 4-party video; group key rotates on join/leave; rekey test.
 - **Deps:** M3 · **Effort:** L
 
 ### M5 — Relay incentives & decentralization (ledger-safe)
-- **Scope:** staked/bonded relay operators; HTLC streaming payment; reputation.
+- **Scope:** staked/bonded store-and-forward relay operators; HTLC streaming payment; reputation.
 - **Deliverables:** relay registry contract + `packages/comms/src/rewards.ts`.
 - **Exit criteria:** an independent relay earns via HTLC; app works with no single operator dependency.
 - **Deps:** M2, M3 · **Effort:** L
@@ -204,8 +213,8 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 ## 7. MVP scope vs later
 
 **MVP (ship first):**
-- Desktop/CLI or web client (form factor TBD — §8).
-- 1:1 **text only**, E2E encrypted.
+- **Tauri desktop client** (§8.1) + a headless CLI harness.
+- 1:1 **text only**, E2E encrypted via **OpenMLS** over the store-and-forward relay (§8.2).
 - Identity from wallet keys; name resolution from chain.
 - Minimal pay-to-send / prepaid to prove spam resistance.
 
@@ -213,10 +222,21 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 
 ---
 
-## 8. Open questions (decisions needed from owner)
+## 8. Decisions & open questions
 
-1. **First client form factor:** CLI/TUI (reuse console patterns) vs web (`packages/web`) vs mobile?
-2. **Messaging transport:** Matrix-style federated relay vs libp2p/custom gossipsub?
+### Locked
+1. **First client form factor → Tauri desktop** (Rust core, native OS keystore), plus a headless CLI
+   harness for CI. *Rationale:* reuses `kvnc-lightnode` / `kvnc-keystore` / `kvnc-light-ffi` for
+   identity + signing, gives real key custody, WebRTC works in the webview for M3+, and the same core
+   is reused for mobile via UniFFI (M6) — while avoiding app-store friction early (R9).
+2. **Messaging transport → minimal store-and-forward relay + OpenMLS (RFC 9420)** for E2E (1:1 and
+   groups). *Rationale:* opaque relays are HTLC-incentivizable, `comms_id = hash(wallet pubkey)` is
+   wallet-native, offline delivery works, and one E2E scheme covers 1:1 + groups.
+   **Avoid** raw libp2p/gossipsub as the primary transport (no offline store-and-forward).
+   **Fallback:** Matrix (`matrix-rust-sdk`) only if off-the-shelf E2E maturity outweighs relay
+   incentives and the heavier federated homeserver ops.
+
+### Still open
 3. **Who runs relays** at launch — self-hosted, incentivized third parties, or both?
 4. **Plan/entitlement model:** native KUNA only, or a KVP-102 token per plan?
 5. **Name registry placement:** on-chain (ledger-safe) vs off-chain DNS-like resolver?
@@ -228,12 +248,13 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 
 ## 9. TASKLIST — concrete first tasks
 
-- [ ] Decide first client form factor (§8.1) → unblocks M0 file layout.
-- [ ] Scaffold `packages/comms` (TS) with `src/index.ts`, wired to `@kvnc/api-client`.
+- [x] First client form factor decided: **Tauri desktop** + CLI harness (§8.1).
+- [x] Messaging transport decided: **store-and-forward relay + OpenMLS** (§8.2).
+- [ ] Scaffold `apps/desktop` (Tauri) + extend `kvnc-cli` as the headless M0 harness.
+- [ ] Scaffold `packages/comms` (TS glue) with `src/index.ts`, wired to `@kvnc/api-client`.
 - [ ] Implement `packages/comms/src/identity.ts` (BLAKE3 `comms_id` from wallet pubkey) + tests.
 - [ ] Wire WS subscriptions from `kvnc-rpc/src/subscriptions.rs` into `packages/comms/src/rpc.ts`.
-- [ ] Prototype off-chain relay (throwaway) to prove 1:1 transport before touching chain.
-- [ ] Prototype E2E (`e2e.ts`) with `@kvnc/signer` keys; confirm signatures + key exchange.
+- [ ] Prototype store-and-forward relay + OpenMLS envelope exchange (throwaway) to prove 1:1 transport before touching chain.
 - [ ] Draft `crates/kvnc-name-registry` contract spec (entry points, storage keys, error codes) matching `kvnc-token`/`kvnc-htlc` conventions.
 - [ ] Write HTLC top-up flow (`payments.ts`) against `kvnc-htlc` API; unit-test claim/refund.
 - [ ] Produce a threat model doc (R1, R4, R6, R10) before any voice/video work.
