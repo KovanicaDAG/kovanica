@@ -15,6 +15,7 @@ kvnc-types = { path = "../kvnc-types" }
 kvnc-crypto = { path = "../kvnc-crypto" }
 kvnc-light = { path = "../kvnc-light" }
 kvnc-keystore = { path = "../kvnc-keystore" }
+kvnc-comms-core = { path = "../kvnc-comms-core" }
 uniffi = { version = "=0.32.0" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

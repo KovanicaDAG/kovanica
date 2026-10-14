@@ -954,6 +954,30 @@ public func FfiConverterTypeLightFfiError_lift(_ buf: RustBuffer) throws -> Ligh
 public func FfiConverterTypeLightFfiError_lower(_ value: LightFfiError) -> RustBuffer {
     return FfiConverterTypeLightFfiError.lower(value)
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
 /**
  * Check an account proof against a header this client already accepted.
  */
@@ -974,6 +998,17 @@ public func createWallet(passphrase: String)throws  -> CreatedWallet  {
         uniffiCallStatus in
     uniffi_kvnc_light_ffi_fn_func_create_wallet(
         FfiConverterString.lower(passphrase),uniffiCallStatus
+    )
+})
+}
+/**
+ * Derive comms identity hex from public key hex.
+ */
+public func deriveCommsId(pubkeyHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_derive_comms_id(
+        FfiConverterString.lower(pubkeyHex),uniffiCallStatus
     )
 })
 }
@@ -1017,6 +1052,22 @@ public func signBondRaw(keystoreJson: String, passphrase: String, chainId: UInt6
         FfiConverterUInt64.lower(stake),
         FfiConverterUInt64.lower(nonce),
         FfiConverterUInt64.lower(feeRate),uniffiCallStatus
+    )
+})
+}
+/**
+ * Sign a detached message with domain separation.
+ *
+ * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+ */
+public func signDetached(keystoreJson: String, passphrase: String, messageHex: String, domain: String?)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_sign_detached(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),
+        FfiConverterString.lower(messageHex),
+        FfiConverterOptionString.lower(domain),uniffiCallStatus
     )
 })
 }
@@ -1100,6 +1151,18 @@ public func walletAddress(keystoreJson: String)throws  -> String  {
     )
 })
 }
+/**
+ * Get the public key hex from a keystore JSON without decrypting.
+ * This does not decrypt the seed.
+ */
+public func walletPubkeyHex(keystoreJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_wallet_pubkey_hex(
+        FfiConverterString.lower(keystoreJson),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -1122,6 +1185,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kvnc_light_ffi_checksum_func_create_wallet() != 51597) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kvnc_light_ffi_checksum_func_derive_comms_id() != 61543) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kvnc_light_ffi_checksum_func_faucet_allowed() != 60656) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1129,6 +1195,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_sign_bond_raw() != 62969) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_sign_detached() != 800) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_sign_exit_raw() != 47615) {
@@ -1144,6 +1213,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_wallet_address() != 46382) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_wallet_pubkey_hex() != 7696) {
         return InitializationResult.apiChecksumMismatch
     }
 
