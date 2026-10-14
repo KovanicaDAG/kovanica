@@ -5,6 +5,10 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  schedule:
+    - cron: '0 2 * * *'  # Nightly at 02:00 UTC for faucet deployment
+  release:
+    types: [published]
 
 env:
   RUSTFLAGS: "-D warnings"
@@ -196,3 +200,62 @@ jobs:
               if [ -f "results/$c.md" ]; then cat "results/$c.md"; else echo "| \`$c\` | ⚪ no result | ⚪ no result | ⚪ no result |"; fi
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Testnet launch preparation jobs
+  # ---------------------------------------------------------------------------
+
+  deploy-faucet:
+    name: Deploy Faucet
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Build faucet
+        run: cargo build --release -p kvnc-faucet
+      - name: Deploy to testnet VPS
+        # TODO: Add deployment step with SSH/secrets
+        # Example:
+        # - uses: appleboy/ssh-action@v1
+        #   with:
+        #     host: ${{ secrets.FAUCET_VPS_HOST }}
+        #     username: ${{ secrets.FAUCET_VPS_USER }}
+        #     key: ${{ secrets.FAUCET_VPS_SSH_KEY }}
+        #     script: |
+        #       sudo systemctl stop kvnc-faucet
+        #       cp ./target/release/kvnc-faucet /usr/local/bin/kvnc-faucet
+        #       sudo systemctl start kvnc-faucet
+        run: echo "Deploy faucet to testnet VPS - configure SSH deployment with secrets"
+
+  deploy-explorer:
+    name: Deploy Explorer
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Build explorer
+        working-directory: packages/web
+        run: npm run build
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: kvnc-explorer
+          directory: packages/web/dist
+        env:
+          CLOUDFLARE_PAGES_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

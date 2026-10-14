@@ -1,0 +1,192 @@
+# KVNC External Security Audit — Scope Document
+
+**Version:** 1.0  
+**Date:** 2026-10-14  
+**Codebase:** `kvnc` (Mysticeti-style DAG, account-based, Wasmi execution)  
+**Commit:** `main` @ `98d88cc` (2026-10-13 snapshot)  
+**Crates:** 19 workspace members, ~53k LOC Rust
+
+---
+
+## 1. Executive Summary
+
+KVNC is a from-scratch Layer-1 blockchain with a Mysticeti-style uncertified DAG consensus (wave length = 3), account-based execution with staked validators (15–21 active, min 50,000 KUNA), and deterministic Wasmi WebAssembly smart contracts. Native token: **KUNA** (9 decimals, 90.2M total supply).
+
+This document defines the scope for an external security audit covering consensus-critical paths, cryptographic primitives, P2P networking, execution sandbox, staking/tokenomics, and RPC surface.
+
+---
+
+## 2. In-Scope Components
+
+### 2.1 Consensus — `kvnc-consensus` (CRITICAL)
+
+| Module | Risk | Description |
+|--------|------|-------------|
+| `mysticghost.rs` | **Critical** | Wave-based commit logic, VRF leader election (ecvrf), GHOSTDAG-scoped colouring (k=3), min-digest fork resolution, late-vote window bounds |
+| `engine.rs` | **Critical** | Round loop, leader timeout (adaptive `round_duration_ms * factor`), block proposal, vote production/processing, commit trigger serialization (`commit_trigger_lock`), duplicate proposal prevention |
+| `committer.rs` / `committer_mysticghost.rs` | **Critical** | Direct/indirect commit rules, 2f+1 quorum, decided-round cursor, skip persistence, non-blue tracking |
+| `ghostdag_scoped.rs` | **Critical** | Scoped GHOSTDAG (k=3) colouring of mergeset, blue-set ordering, previous-tip seeding |
+| `linearizer.rs` | **High** | Fallback topological sort when MysticGhost disabled or mergeset too large |
+| `types.rs` | **High** | `CommitteeInfo` (stake-weighted thresholds, leader schedule), `AuthorityInfo` (VRF keys), `CommitResult`, `CommittedSubDag` |
+
+**Specific consensus invariants to verify:**
+- No two honest nodes commit different leader blocks at the same height
+- Late-vote window (`late_vote_window_rounds = WAVE_LENGTH = 3`) prevents divergent commits from late-joining nodes
+- VRF leader election: quorum = `floor(2*N/3)+1` of VRF-keyed validators; partial set → round-robin
+- Min-digest fork: only replaces when store accepts swap AND round undecided
+- Skip registration persists in decided map with `LeaderStatus::Skip`
+- `mark_decided_and_commit_leader` atomicity (both or neither on crash)
+
+### 2.2 Mempool — `kvnc-mempool` (HIGH)
+
+| Area | Risk | Description |
+|------|------|-------------|
+| Admission pipeline | **High** | Size, gas, fee floor, hash-binding (`tx.hash == tx.signing_hash()`), Ed25519 strict verify, nonce window, per-sender limit, cumulative balance, RBF (10% bump), capacity eviction (strictly cheaper only) |
+| In-flight lifecycle | **High** | `get_next_transactions` → in-flight (15s timeout) → re-queue on timeout; `return_in_flight_for_sender` on leader skip |
+| Re-insertion (red blocks) | **High** | `reinsert_returned`: full re-admission, sorted by `(sender, nonce)`, no gossip by default, no peer penalty |
+| Fee policy | **Medium** | `min_fee_rate` default 0 (operator choice); stake/delegate fee-free |
+
+### 2.3 Network / P2P — `kvnc-network` (HIGH)
+
+| Component | Risk | Description |
+|-----------|------|-------------|
+| `service.rs` | **High** | `NetworkService` wrapping libp2p Swarm; gossipsub topics: `blocks`, `transactions`, `votes`, `sync`, `seals`; Kademlia + ping + identify |
+| `validation.rs` | **Critical** | Edge validation before gossip: block digest/merkle/author/signature; vote signature + committee membership + leader round/hash match; seal signature + header match |
+| `scoring.rs` | **High** | Peer scoring: topic mesh delivery, validation rejects, behaviour penalties; ban threshold |
+| `block_sync.rs` | **High** | Request-response block sync (protocol `/kvnc/block-sync/1`) |
+| `state_sync.rs` | **High** | Request-response state sync (protocol `/kvnc/state-sync/1`) |
+| `identity.rs` | **Medium** | Persistent node identity (Ed25519 transport key, `0600` file perms), no hard-coded bootstrap nodes |
+
+**Configuration defaults:** listen `/ip4/0.0.0.0/tcp/8000`, max 50 peers, ping 10s. Bootstrap nodes supplied at deploy via DNS names (no external project infra).
+
+### 2.4 Execution / WASM — `kvnc-execution` + `kvnc-runtime` (HIGH)
+
+| Component | Risk | Description |
+|-----------|------|-------------|
+| `contracts.rs` (execution) | **High** | Native contract dispatch (HTLC, Vault, Multisig, Token, LightNode), WASM via `ContractRunner`, commit-on-success semantics, gas metering |
+| `Runtime::execute` (runtime) | **High** | Wasmi fuel metering (`gas_limit` default 10M), memory limit (16 pages = 1 MiB), deterministic engine, argument/result buffer copy via `kvnc_alloc`/`kvnc_dealloc` |
+| Host ABI (`kvnc-common/wasm.rs`) | **High** | Fixed imports: `kvnc_caller`, `kvnc_contract_address`, `kvnc_block_height`, `kvnc_timestamp`, `kvnc_balance_of`, `kvnc_storage_get/set`, `kvnc_transfer`, `kvnc_emit_log`, `kvnc_alloc`, `kvnc_dealloc` |
+| Contract crates (`kvnc-htlc`, `kvnc-vault`, `kvnc-multisig`, `kvnc-token`, `kvnc-staking/light.rs`) | **High** | Entry points returning packed `i64` (negative = error code 0..11), all state via `Host` trait |
+
+**WASM threat model:** untrusted bytecode, gas exhaustion, memory exhaustion, host function reentrancy, trap handling, deterministic execution.
+
+### 2.5 Staking & Tokenomics — `kvnc-staking` (CRITICAL)
+
+| Area | Risk | Description |
+|------|------|-------------|
+| Emission schedule | **Critical** | `block_reward(height)`: 2.5 KUNA × (3/4)^era, era = 8.1M committed leaders; cumulative capped at 81M |
+| Genesis validator allocation | **Critical** | 1M KUNA split evenly (dust to first), min stake 50K KUNA locked |
+| Treasury vesting | **High** | 8M KUNA over 8 years (1M/year linear), `claim_treasury_vesting(committed_height)` |
+| Validator lifecycle | **High** | Bond/unbond (100k rounds), active set 15–21, commission (bps, change cooldown 7200 blocks), offline detection (100 missed leaders), slashing (500 bps = 5%) |
+| Delegation | **High** | Delegate/undelegate/claim rewards, pending rewards tracked separately from `StakingState` bincode format |
+| Light nodes | **Medium** | Separate escrow (20% of block reward = `LIGHT_REWARD_BPS`), witness submission, 100 slots, min bond 1K KUNA |
+
+**Supply invariants:** `TOTAL_SUPPLY = FOUNDER_PREMINE (0.2M) + GENESIS_VALIDATOR_ALLOCATION (1M) + TREASURY_TOTAL (8M) + MINING_SUBSIDY_BUDGET (81M) = 90.2M KUNA`
+
+### 2.6 Cryptography — `kvnc-crypto` (CRITICAL)
+
+| Primitive | Risk | Description |
+|-----------|------|-------------|
+| Ed25519 (dalek v2.1) | **Critical** | `sign`, `verify` (strict: rejects non-canonical S, weak/small-order keys), batch verify (strict per-item) |
+| ECVRF (ecvrf crate v0.4) | **Critical** | `vrf_prove`, `vrf_verify`, `derive_vrf_secret_from_seed`, `vrf_hash_to_u64` for leader election |
+| Vote signature format v1 | **Critical** | Domain `KUNA/vote/v1`, 74-byte encoding: `chain_id (LE) || epoch (LE) || voter (LE) || leader_round (LE) || leader_hash`; ctx built from LOCAL chain_id + committee epoch only |
+| Commit seal format | **High** | Domain `KUNA/commit/v1`, covers `LeaderHeader` (state root, blue/non-blue roots, epoch, committee_hash) |
+| Keystore v2 | **High** | Argon2id (64 MiB, 3 iter, 4 parallelism), XChaCha20-Poly1305, salt 16B, nonce 24B; v1 migration only |
+
+### 2.7 RPC / JSON-RPC — `kvnc-rpc` (MEDIUM)
+
+| Component | Risk | Description |
+|-----------|------|-------------|
+| `rpc_middleware.rs` | **Medium** | Rate limiting (token bucket per IP), auth (Bearer tokens), CORS, method classification (READ vs WRITE) |
+| `rpc_methods.rs` | **Medium** | `kvnc_sendRawTransaction`, `kvnc_getBlock`, `kvnc_call` (WASM simulation), staking/contract methods |
+| `subscriptions.rs` | **Low** | WebSocket event bus: `newBlock`, `newTransaction`, `vote`, `seal`, `health` |
+| Request timeout | **Low** | 10s global timeout per call |
+
+### 2.8 Keystore / Key Management — `kvnc-keystore` (HIGH)
+
+- Argon2id parameters fixed (memory-hard, not tunable by user)
+- Atomic write with `tempfile`, symlink refusal
+- V1 read-only migration path (explicit `replace_file` with validation)
+- Seed material never in cleartext on disk; `Zeroizing` for v1 secrets
+
+### 2.9 Node Integration — `kvnc-node` (MEDIUM)
+
+- Genesis/config loading, chain_id pinning to data dir
+- Committee build from staking state (active validators only, stake ≥ 50K)
+- Seal handling (local validators sign, non-validators store)
+- Recovery: committed sub-DAG replay from DAG store, execution idempotency via `execution_committed_subdags` table
+
+---
+
+## 3. Out of Scope
+
+- Frontend / wallet applications (`packages/`, `apps/`)
+- CLI/TUI (`kvnc-cli`) — only the signing logic is in-scope via `kvnc-crypto`/`kvnc-types`
+- Fuzzing harnesses (`fuzz/`)
+- Deployment / ops tooling (`ops/`)
+- Documentation
+
+---
+
+## 4. Highest-Risk Areas (Prioritized for Auditor Attention)
+
+| Rank | Area | Rationale |
+|------|------|-----------|
+| 1 | **Consensus engine commit logic** (`engine.rs` `try_commit_and_deliver`, `committer.rs`) | Safety/liveness of the entire chain; fork resolution, late votes, skip persistence |
+| 2 | **VRF leader election** (`mysticghost.rs`, `engine.rs` `scheduled_leader_for_round`) | Biasable leader selection → chain takeover; quorum threshold correctness |
+| 3 | **GHOSTDAG colouring** (`ghostdag_scoped.rs`) | k=3 correctness, mergeset bounds, previous-tip seeding |
+| 4 | **Vote signature verification** (`crypto.rs` `verify_vote_signature`) | Cross-chain/epoch replay, domain separation, strict verification |
+| 5 | **Mempool RBF + in-flight timeout** | Fee sniping, transaction censorship, DoS via nonce exhaustion |
+| 6 | **WASM gas/memory metering** | Out-of-gas handling, trap cleanup, host function reentrancy |
+| 7 | **Staking slashing + delegation accounting** | Double-counting, arithmetic overflow, unbonding race conditions |
+| 8 | **P2P validation + peer scoring** | Eclipse/Sybil, invalid message amplification, scoring manipulation |
+
+---
+
+## 5. Test Coverage Notes
+
+- Unit tests: 500+ passing across workspace
+- Integration tests: `sustained_liveness_integration`, `multi_node_integration`, `late_join_integration`
+- Property tests: `proptest` in `kvnc-consensus` (wave arithmetic, committer properties)
+- Fuzzing: Block, vote, transaction, consensus fuzzers (cargo-fuzz)
+- Known flaky: `red_block_transactions_return_to_mempool_after_restart` (gossip timing)
+
+---
+
+## 6. Recommended Audit Approach
+
+1. **Week 1–2:** Consensus (mysticghost, engine, committer, GHOSTDAG) + crypto (VRF, vote sigs)
+2. **Week 3:** Mempool + P2P validation/scoring + staking tokenomics
+3. **Week 4:** WASM runtime + contract host + RPC surface
+4. **Week 5:** Integration review, cross-component invariants, report writing
+
+---
+
+## 7. Contact / Repository
+
+- Repository: `https://github.com/your-org/kvnc` (private pre-audit)
+- Branch: `main`
+- Contact: [audit-contact@kvnc.example]
+- Build: `cargo build --workspace --release`
+- Test: `cargo test --workspace`
+
+---
+
+## 8. Version Pinning for Audit
+
+```toml
+# Key dependency versions (from Cargo.lock)
+ed25519-dalek = "2.1.0"
+ecvrf = "0.4.0"
+libp2p = "0.57.0"
+wasmi = "0.40.0"
+redb = "2.1.0"
+blake3 = "1.5.1"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+bincode = "1.3.3"  # unmaintained — consider migration
+```
+
+---
+
+*End of scope document. This document should be shared with the audit firm under NDA.*

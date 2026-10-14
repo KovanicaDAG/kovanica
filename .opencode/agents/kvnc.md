@@ -13,7 +13,7 @@ kvnc je nezavisni, from-scratch Rust Layer-1:
 - Account + staking model
 - 15–21 validatori, min stake 50 000 KVNC
 - Cilj: 2–4 GB RAM
-- Native token: KVNC (9 decimals)
+- Native token: KUNA (9 decimals)
 
 ### HARD RULES
 1. **NIKAD** ne uvozi, kopiraj, referenciraj ili miješaj kod/dizajn iz `kovanica-protocol` ili bilo kojeg starijeg Kovanica repozitorija.
