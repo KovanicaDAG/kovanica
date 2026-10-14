@@ -3,15 +3,18 @@
 # CPU cap: CPUQuota=200% / CPUShares=512 (cgroup v2 cpu.max / cpu.weight).
 # Disk/IO cap: IOWeight=100 (cgroup v2 io.weight) / docker-compose limit.
 # Logs RSS (KB) every 30 s; stops at 6 h (21600 s).
-# Logs RSS (KB) every 30 s; stops at 6 h (21600 s).
 # Works with Docker Compose: monitors all kvnc-quorum-node* containers via `docker stats`.
+# Pre-flight: verifies all 4 nodes are healthy and quorum is committing before starting soak.
 set -euo pipefail
 
-DURATION=${DURATION:-21600}  # 6h
+# Configuration
+DURATION=${DURATION:-21600}          # 6h default; override with --duration or DURATION=60 for quick test
 INTERVAL=${INTERVAL:-30}
 LOG=${LOG:-/tmp/soak-$(date +%s).log}
 CONTAINER_PREFIX=${CONTAINER_PREFIX:-kvnc-quorum-node}
-mkdir -p $(dirname "$LOG")
+RPC_PORTS=(8545 8546 8547 8548)      # Host ports for node1..4 RPC
+HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-120} # Seconds to wait for all nodes to become healthy
+mkdir -p "$(dirname "$LOG")"
 
 MEM_LIMIT=${MEM_LIMIT:-3G}
 echo "=== KVNC 6h soak Phase 12.4 (Docker) ===" | tee "$LOG"
@@ -42,13 +45,108 @@ get_total_rss_kb() {
     '
 }
 
+# Pre-flight: check a single node's /health endpoint
+check_node_health() {
+    local port=$1
+    local name=$2
+    local response
+    response=$(curl -fsS "http://127.0.0.1:${port}/health" 2>/dev/null) || return 1
+    # Check that status is "ok" (not "degraded")
+    echo "$response" | grep -q '"status":"ok"' || return 1
+    return 0
+}
+
+# Pre-flight: check block height via kvnc_blockNumber RPC
+check_block_height() {
+    local port=$1
+    local rpc_id=$2
+    local response
+    response=$(curl -fsS -X POST "http://127.0.0.1:${port}/rpc" \
+        -H "Content-Type: application/json" \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":${rpc_id},\"method\":\"kvnc_blockNumber\",\"params\":[]}" 2>/dev/null) || return 1
+    # Extract result (hex quantity string like "0x1a")
+    local height_hex
+    height_hex=$(echo "$response" | sed -n 's/.*"result":"\(0x[^"]*\)".*/\1/p')
+    [[ -n "$height_hex" ]] || return 1
+    # Convert to decimal
+    local height_dec
+    height_dec=$((height_hex))
+    echo "$height_dec"
+    return 0
+}
+
+# Pre-flight: wait for all 4 nodes to be healthy and committing
+preflight_check() {
+    echo "=== Pre-flight: waiting for quorum health (timeout ${HEALTH_TIMEOUT}s) ===" | tee -a "$LOG"
+    local start_wait=$(date +%s)
+    local all_healthy=0
+    
+    while true; do
+        local current_time=$(date +%s)
+        if [[ $((current_time - start_wait)) -ge HEALTH_TIMEOUT ]]; then
+            break
+        fi
+        local healthy_count=0
+        local heights=()
+        local all_heights_ok=1
+        
+        for i in {0..3}; do
+            local port=${RPC_PORTS[$i]}
+            local name="${CONTAINER_PREFIX}$((i+1))"
+            
+            if check_node_health "$port" "$name"; then
+                healthy_count=$((healthy_count + 1))
+                # Check block height - use unique RPC ID per node
+                local rpc_id=$((i + 1))
+                local height
+                if height=$(check_block_height "$port" "$rpc_id"); then
+                    heights+=("$height")
+                    if [[ $height -eq 0 ]]; then
+                        all_heights_ok=0
+                    fi
+                else
+                    all_heights_ok=0
+                fi
+            fi
+        done
+        
+        if [[ $healthy_count -eq 4 ]]; then
+            if [[ $all_heights_ok -eq 1 ]]; then
+                echo "All 4 nodes healthy and committing blocks: heights=${heights[*]}" | tee -a "$LOG"
+                all_healthy=1
+                break
+            else
+                echo "All 4 nodes healthy but some at height 0: heights=${heights[*]} (waiting for commits...)" | tee -a "$LOG"
+            fi
+        else
+            echo "Healthy nodes: $healthy_count/4 (waiting...)" | tee -a "$LOG"
+        fi
+        
+        sleep 5
+    done
+    
+    if [[ $all_healthy -eq 0 ]]; then
+        echo "ERROR: Pre-flight failed - quorum not healthy/committing within ${HEALTH_TIMEOUT}s" | tee -a "$LOG"
+        echo "Container status:" | tee -a "$LOG"
+        docker ps -a --filter "name=${CONTAINER_PREFIX}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | tee -a "$LOG"
+        exit 1
+    fi
+}
+
+# Run pre-flight check
+preflight_check
+
 echo "=== Soak monitoring ${CONTAINER_PREFIX}1..4 ===" | tee -a "$LOG"
 echo "start=$(date -Iseconds)" >> "$LOG"
 
 START_EPOCH=$(date +%s)
 MAX_RSS_KB=0
 
-while (( $(date +%s) - START_EPOCH < DURATION )); do
+while true; do
+        current_time=$(date +%s)
+        if [[ $((current_time - START_EPOCH)) -ge DURATION ]]; then
+            break
+        fi
     TS=$(date -Iseconds)
     RSS_KB=$(get_total_rss_kb)
     

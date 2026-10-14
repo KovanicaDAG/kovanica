@@ -13,15 +13,16 @@ FUNDER_KEYS=${FUNDER_KEYS:-}                # space-separated funder key files
 SENDERS=${SENDERS:-8}                       # number of derived bench senders
 TXS_PER_SENDER=${TXS_PER_SENDER:-16}        # transactions per sender (clamped to 64)
 CONCURRENCY=${CONCURRENCY:-64}              # max concurrent submissions
-FUND_AMOUNT=${FUND_AMOUNT:-1000000}         # atoms per funding tx (1 KUNA = 1e9 atoms)
+FUND_AMOUNT=${FUND_AMOUNT:-10000000000}     # atoms per funding tx (10 KUNA = 1e10 atoms)
 TX_AMOUNT=${TX_AMOUNT:-1}                   # transfer amount per tx (atoms)
-TX_FEE=${TX_FEE:-1}                         # fee per tx (atoms)
-WAIT_SECS=${WAIT_SECS:-120}                 # wait for commits (seconds)
+TX_FEE=${TX_FEE:-1000000}                   # fee per tx (atoms, ~0.001 KUNA for non-zero fee_rate)
+WAIT_SECS=${WAIT_SECS:-240}                 # wait for commits (seconds, must exceed commit latency)
+QUORUM_WAIT_SECS=${QUORUM_WAIT_SECS:-60}    # wait for quorum formation before bench
 BENCH_BIN=${BENCH_BIN:-./target/release/kvnc-bench}
 
-# Derived funder keys from docker compose (if not provided)
+# Derived funder keys from pre-funded accounts (if not provided)
 if [ -z "$FUNDER_KEYS" ]; then
-    FUNDER_KEYS=("/tmp/opencode/kvncbench/k1" "/tmp/opencode/kvncbench/k2" "/tmp/opencode/kvncbench/k3" "/tmp/opencode/kvncbench/k4")
+    FUNDER_KEYS=("/tmp/opencode/kvncbench/funded/sender0" "/tmp/opencode/kvncbench/funded/sender1" "/tmp/opencode/kvncbench/funded/sender2" "/tmp/opencode/kvncbench/funded/sender3" "/tmp/opencode/kvncbench/funded/sender4")
 else
     # Convert space-separated string to array
     read -ra FUNDER_KEYS <<< "$FUNDER_KEYS"
@@ -34,7 +35,7 @@ echo "duration=${DUR}s  rpc=${RPC_URL}  chain=${CHAIN_ID}"
 echo "funders=($FUNDER_KEYS)"
 echo "senders=${SENDERS}  txs_per_sender=${TXS_PER_SENDER}  concurrency=${CONCURRENCY}"
 echo "fund_amount=${FUND_AMOUNT}  tx_amount=${TX_AMOUNT}  tx_fee=${TX_FEE}"
-echo "wait=${WAIT_SECS}s"
+echo "wait=${WAIT_SECS}s  quorum_wait=${QUORUM_WAIT_SECS}s"
 echo "bench_binary=${BENCH_BIN}"
 
 # Verify bench binary exists
@@ -44,10 +45,21 @@ if [ ! -x "$BENCH_BIN" ]; then
     exit 1
 fi
 
+# Wait for quorum formation before starting benchmark
+echo "=== Waiting for 4-node quorum to form (${QUORUM_WAIT_SECS}s) ==="
+sleep "$QUORUM_WAIT_SECS"
+
+# Verify nodes are healthy and connected
+for i in 1 2 3 4; do
+    PORT=$((8544 + i))
+    echo "Checking node $i on port $PORT..."
+    curl -sf "http://127.0.0.1:$PORT/health" || echo "Node $i health check failed"
+done
+
 # Run benchmark
 OUT_FILE="/tmp/tps-$(date +%s).log"
 echo "=== KVNC TPS Benchmark $(date -Iseconds) ===" | tee "$OUT_FILE"
-echo "config: dur=${DUR} rpc=${RPC_URL} chain=${CHAIN_ID} senders=${SENDERS} txs_per_sender=${TXS_PER_SENDER} concurrency=${CONCURRENCY} fund_amount=${FUND_AMOUNT} tx_amount=${TX_AMOUNT} tx_fee=${TX_FEE} wait=${WAIT_SECS}" >> "$OUT_FILE"
+echo "config: dur=${DUR} rpc=${RPC_URL} chain=${CHAIN_ID} senders=${SENDERS} txs_per_sender=${TXS_PER_SENDER} concurrency=${CONCURRENCY} fund_amount=${FUND_AMOUNT} tx_amount=${TX_AMOUNT} tx_fee=${TX_FEE} wait=${WAIT_SECS} quorum_wait=${QUORUM_WAIT_SECS}" >> "$OUT_FILE"
 
 # Run the bench binary
 FUNDER_ARGS=()

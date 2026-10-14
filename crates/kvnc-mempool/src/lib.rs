@@ -238,6 +238,11 @@ impl Mempool {
         }
     }
 
+    /// Get a reference to the mempool configuration.
+    pub fn config(&self) -> &MempoolConfig {
+        &self.config
+    }
+
     /// Signing context this mempool verifies transactions under.
     pub fn signing_context(&self) -> kvnc_types::SigningContext {
         self.signing_ctx
@@ -516,26 +521,57 @@ impl Mempool {
         let mut state = self.state.lock();
         let requeued = state.requeue_stale(now, self.config.in_flight_timeout);
         if requeued > 0 {
-            debug!(requeued, "re-queued uncommitted in-flight transactions");
+            info!(requeued, "re-queued uncommitted in-flight transactions");
         }
+
+        // Debug: log mempool state
+        info!(
+            total_txs = state.by_hash.len(),
+            queued_txs = state.by_fee_rate.values().map(|q| q.len()).sum::<usize>(),
+            in_flight_txs = state.by_hash.values().filter(|e| e.in_flight_since.is_some()).count(),
+            senders = state.by_sender.len(),
+            "get_next_transactions called"
+        );
 
         // Per sender: the queued run that directly follows any in-flight
         // prefix, in nonce order.
         let mut runs: HashMap<Address, VecDeque<Hash>> = HashMap::new();
         for (sender, nonces) in &state.by_sender {
+            // First pass: find the highest in-flight nonce for this sender.
+            let mut highest_in_flight: Option<u64> = None;
+            for (nonce, hash) in nonces {
+                let entry_opt = state.by_hash.get(hash);
+                if entry_opt.is_some() {
+                    let e = entry_opt.unwrap();
+                    if e.in_flight_since.is_some() {
+                        highest_in_flight = Some(*nonce);
+                    }
+                }
+            }
+
+            // Second pass: build the run starting from (highest_in_flight + 1)
+            // for queued transactions only.
+            let run_start = match highest_in_flight {
+                Some(n) => n + 1,
+                None => 0,
+            };
             let mut run = VecDeque::new();
             let mut expected: Option<u64> = None;
             for (nonce, hash) in nonces {
-                if expected.is_some_and(|e| e != *nonce) {
-                    break;
+                if *nonce < run_start {
+                    continue; // Skip in-flight prefix
+                }
+                if expected.is_some() {
+                    let e = expected.unwrap();
+                    if e != *nonce {
+                        break; // True gap in queued transactions
+                    }
                 }
                 expected = Some(nonce + 1);
                 match state.by_hash.get(hash) {
                     Some(e) if e.in_flight_since.is_some() => {
-                        // In-flight transactions block the run: we cannot skip them
-                        // and continue with the next nonce, because that would create
-                        // a gap in the contiguous nonce sequence. The run must start
-                        // at the first non-in-flight nonce.
+                        // This shouldn't happen since we filtered by run_start,
+                        // but just in case: skip this nonce and stop.
                         break;
                     }
                     Some(_) => run.push_back(*hash),
@@ -543,7 +579,10 @@ impl Mempool {
                 }
             }
             if !run.is_empty() {
+                info!(%sender, run_len = run.len(), run_start, "built run for sender");
                 runs.insert(*sender, run);
+            } else {
+                info!(%sender, run_start, "no run built for sender (empty or no queued txs after in-flight prefix)");
             }
         }
 
@@ -1374,39 +1413,42 @@ mod tests {
             pool.add_transaction(tx.clone()).unwrap();
         }
 
-        // First proposal: returns a0, a1 (contiguous nonce run from sender a)
+        // First proposal: returns the two highest fee-rate transaction FRONTS.
+// Sender a has run [a0, a1] (front is a0), sender b has run [b0] (front is b0).
+// Fee rates: a0=10/size, b0=5000/size.
+// First pick: b0 (highest fee rate front) from sender b.
+// Second pick: a0 (next front) from sender a.
+// So first proposal returns [b0, a0] (ordered by fee rate).
+// a1 stays queued behind a0.
         let first = pool.get_next_transactions(2);
         assert_eq!(first.len(), 2);
-        // a1 must never come before a0.
-        let pos = |h: Hash, v: &[Transaction]| v.iter().position(|t| t.hash == h);
-        if let (Some(p0), Some(p1)) = (pos(a0.hash, &first), pos(a1.hash, &first)) {
-            assert!(p0 < p1);
-        }
-        assert!(pos(a1.hash, &first).is_none() || pos(a0.hash, &first).is_some());
+        // Both b0 and a0 should be in the first proposal (a1 is left queued behind a0).
+        let first_hashes: std::collections::HashSet<_> = first.iter().map(|t| t.hash).collect();
+        assert!(first_hashes.contains(&b0.hash), "b0 should be in first proposal");
+        assert!(first_hashes.contains(&a0.hash), "a0 should be in first proposal");
+        assert!(!first_hashes.contains(&a1.hash), "a1 should NOT be in first proposal (behind a0)");
         // Everything is still tracked (queued + in-flight).
         assert_eq!(pool.len(), 3);
 
-        // Second proposal: a0 and a1 are in-flight, so the run from sender a is
-        // blocked (cannot skip in-flight nonces). b0 is available but from a
-        // different sender; however, the run for sender a is empty, so only b0
-        // would be returned if sender a's run didn't block. With the contiguity
-        // fix, in-flight transactions block the run entirely, so we get 0.
+        // Second proposal: b0 and a0 are in-flight.
+        // Sender a has a1 at nonce 1 still queued (run now starts at nonce 1 after a0 is in-flight).
+        // Sender b has no more queued transactions.
+        // So second proposal should return a1.
         let second = pool.get_next_transactions(10);
-        // With the contiguity fix, in-flight nonces block the run, so second
-        // proposal returns 0. This is the correct behavior: no nonce gaps.
         assert_eq!(
             second.len(),
-            0,
-            "in-flight nonces must block the run to prevent gaps"
+            1,
+            "sender a's queued tx a1 should be returned after a0 is in-flight"
         );
+        assert_eq!(second[0].hash, a1.hash);
 
         // Pool still tracks all 3 transactions.
         assert_eq!(pool.len(), 3);
 
-        // Third proposal (immediate): still in-flight, returns 0.
+        // Third proposal (immediate): a0,a1,b0 are in-flight, returns 0.
         assert!(
             pool.get_next_transactions(10).is_empty(),
-            "in flight, not re-proposed"
+            "all in flight, not re-proposed"
         );
         assert_consistent(&pool);
     }

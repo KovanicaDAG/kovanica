@@ -7,6 +7,14 @@ x-node: &node
   image: kvnc-node:local
   restart: unless-stopped
   init: true
+  # cgroup v2 resource limits (Phase 12.4 soak compliance)
+  deploy:
+    resources:
+      limits:
+        memory: 3G
+        cpus: '2.0'
+      reservations:
+        memory: 1G
   environment: &node-env
     KVNC_RPC_ADDR: "0.0.0.0"
     KVNC_LISTEN_ADDR: "0.0.0.0:8000"
@@ -22,10 +30,12 @@ x-node: &node
     KVNC_ROUND_DURATION_MS: "4000"
     KVNC_RUN_VALIDATOR: "true"
     KVNC_MYSTICGHOST: "true"
-    # Benchmark tuning: rebroadcast every 1s instead of default 30s for faster gossip
-    KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS: "1"
-    # Benchmark tuning: in-flight timeout 5s instead of default 60s for faster requeue
-    KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "1"
+    # Benchmark tuning: rebroadcast every 5s for faster gossip without spam
+    KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS: "5"
+    # Benchmark tuning: in-flight timeout 30s (must exceed commit latency ~12s for 3-round wave)
+    KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "30"
+    # Min fee rate (0 = disabled for devnet; operator sets real fee floor)
+    KVNC_MEMPOOL_MIN_FEE_RATE: "0"
     RUST_LOG: "info"
   # No config file: pure env + genesis file copied to data dir at start.
   # Each service mounts its own validator keystore + genesis_validators.toml.
@@ -54,6 +64,7 @@ services:
       - node1-data:/var/lib/kvnc
       - ./ops/docker/validators/val1.pem:/var/lib/kvnc/validator.pem:ro
       - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8545/health"]
@@ -75,6 +86,7 @@ services:
       - node2-data:/var/lib/kvnc
       - ./ops/docker/validators/val2.pem:/var/lib/kvnc/validator.pem:ro
       - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8546/health"]
@@ -96,6 +108,7 @@ services:
       - node3-data:/var/lib/kvnc
       - ./ops/docker/validators/val3.pem:/var/lib/kvnc/validator.pem:ro
       - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8547/health"]
@@ -117,6 +130,7 @@ services:
       - node4-data:/var/lib/kvnc
       - ./ops/docker/validators/val4.pem:/var/lib/kvnc/validator.pem:ro
       - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8548/health"]
