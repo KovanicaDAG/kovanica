@@ -205,7 +205,7 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 | R7 | Regulatory / telecom / eSIM (M7) | M | H | Partner with certified SM-DP+; chain = payment leg only | project-plan |
 | R8 | Chain throughput/latency misuse | M | M | Keep chain to control plane; never per-media-tick tx; 12 s cadence is fine for settlement | reviewer |
 | R9 | Mobile app-store crypto-payment policies | M | M | Separate "buy plan" flow; external purchase where required | project-plan |
-| R10 | Metadata privacy (who-talks-to-whom) | H | H | Sealed sender, no plaintext contact graph on-chain, relay blind to identities | security-audit |
+| R10 | Metadata privacy (who-talks-to-whom) | H | H | Sealed sender, no plaintext contact graph on-chain; relay is content-blind but **not** identity-blind (routes on `to`) — see `COMMS-M1-INTERFACES.md` §9.5 | security-audit |
 | R11 | On-chain discovery enumeration | M | M | Names via registry, pubkeys discoverable by design; avoid publishing contact graph | client-wallet |
 
 ---
@@ -214,7 +214,7 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 
 **MVP (ship first):**
 - **Tauri desktop client** (§8.1) + a headless CLI harness.
-- 1:1 **text only**, E2E encrypted via **OpenMLS** over the store-and-forward relay (§8.2).
+- 1:1 **text only**, E2E encrypted (M1: X25519 + XChaCha20-Poly1305 sealed envelopes; MLS/OpenMLS reserved for groups at M4) over the store-and-forward relay (§8.2).
 - Identity from wallet keys; name resolution from chain.
 - Minimal pay-to-send / prepaid to prove spam resistance.
 
@@ -261,7 +261,7 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 ## 9. TASKLIST — concrete first tasks
 
 - [x] First client form factor decided: **Tauri desktop** + CLI harness (§8.1).
-- [x] Messaging transport decided: **store-and-forward relay + OpenMLS** (§8.2).
+- [x] Messaging transport decided: **store-and-forward relay + pluggable E2E** (M1: X25519 + XChaCha20-Poly1305 sealed envelopes; OpenMLS/MLS for groups at M4) (§8.2).
 - [x] Scaffold `apps/desktop` (Tauri v2 + React 18 + Vite 5) and the shared `crates/kvnc-comms-core`.
 - [x] Extend `kvnc-cli` with the headless M0 harness: `kvnc comms id --keystore <f> [--json]`.
 - [x] Scaffold `packages/comms` (TS glue) with `src/index.ts`, wired to `@kvnc/api-client`.
@@ -269,11 +269,12 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
       pinned by a shared known-answer vector) with tests on both sides.
 - [x] Wire the WS subscription helper from `kvnc-rpc/src/subscriptions.rs` into `packages/comms/src/rpc.ts`
       (re-exported; live use lands with M1).
-- [ ] Prototype store-and-forward relay + OpenMLS envelope exchange (throwaway) to prove 1:1 transport before touching chain.
-- [ ] Draft `crates/kvnc-name-registry` contract spec (entry points, storage keys, error codes) matching `kvnc-token`/`kvnc-htlc` conventions.
+- [x] Freeze the M1 cross-lane interface spec: `docs/COMMS-M1-INTERFACES.md` (encodings, crypto, envelope wire, relay HTTP API, registry semantics, §9 overrides).
+- [x] Store-and-forward relay + sealed-envelope exchange implemented and tested (`crates/kvnc-comms-crypto`, `crates/kvnc-comms-relay`; TS mirror in `packages/comms`, pinned by a cross-language KAT). OpenMLS deferred to M4.
+- [x] `crates/kvnc-name-registry` contract + spec (`docs/RFC-008-NAME-REGISTRY.md`), matching `kvnc-token`/`kvnc-htlc` conventions (no `ENTRY_POINTS` change required).
 - [ ] Write HTLC top-up flow (`payments.ts`) against `kvnc-htlc` API; unit-test claim/refund.
-- [ ] Produce a threat model doc (R1, R4, R6, R10) before any voice/video work.
-- [ ] Confirm branch policy: all of the above committed to `VPS3`.
+- [x] Threat model doc produced: `docs/COMMS-THREAT-MODEL.md` (R1, R4, R6, R10).
+- [x] Branch policy confirmed: all work committed to `VPS3`.
 
 ---
 

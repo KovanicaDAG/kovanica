@@ -1,0 +1,28 @@
+[package]
+name = "kvnc-name-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "On-chain comms name registry contract (ledger-safe; ABI mirrors kvnc-token)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["std"]
+std = ["kvnc-common/std"]
+
+[dependencies]
+kvnc-common = { path = "../kvnc-common" }
+serde = { workspace = true }
+bincode = { workspace = true }
+
+# Stretch e2e only: drive the compiled wasm artifact through the real wasmi
+# runtime (`tests/wasmi_e2e.rs`). Not needed for the crate's public API, the
+# MemHost unit tests, or a downstream deployment.
+[dev-dependencies]
+kvnc-execution = { path = "../kvnc-execution" }
+kvnc-runtime = { path = "../kvnc-runtime" }
+kvnc-storage = { path = "../kvnc-storage" }
+kvnc-types = { path = "../kvnc-types" }
+tempfile = "3.8"
