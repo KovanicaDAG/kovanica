@@ -67,13 +67,22 @@ function signingKind(kind: TxKind): Uint8Array {
     case "unstake":
       return concat([Uint8Array.of(2), u64le(kind.amount)]);
     case "call": {
-      const method = new TextEncoder().encode(kind.method);
+      const methodBytes = new TextEncoder().encode(kind.method);
+      if (methodBytes.length === 0) {
+        throw new Error("method must not be empty");
+      }
+      if (kind.value < 0n || kind.value > 0xffffffffffffffffn) {
+        throw new Error("value is out of u64 range");
+      }
+      if (kind.gasLimit < 0n || kind.gasLimit > 0xffffffffffffffffn) {
+        throw new Error("gasLimit is out of u64 range");
+      }
       return concat([
         Uint8Array.of(4),
         address(kind.contract, "contract"),
         u64le(kind.value),
-        u64le(BigInt(method.length)),
-        method,
+        u64le(BigInt(methodBytes.length)),
+        methodBytes,
         u64le(BigInt(kind.args.length)),
         kind.args,
         u64le(kind.gasLimit),
@@ -150,9 +159,31 @@ function wireKind(kind: TxKind): Uint8Array {
       // Serde Option is a u8 tag in bincode 1.3, not a u32 variant index.
       if (kind.validator === null) return concat([u32le(4), Uint8Array.of(0)]);
       return concat([u32le(4), Uint8Array.of(1), address(kind.validator, "validator")]);
-    case "call":
-      throw new Error("call transactions are not encoded in this release");
-  }
+    case "call": {
+      if (kind.contract.length !== 32) {
+        throw new Error("contract must be 32 bytes");
+      }
+      const methodBytes = new TextEncoder().encode(kind.method);
+      if (methodBytes.length === 0) {
+        throw new Error("method must not be empty");
+      }
+      if (kind.value < 0n || kind.value > 0xffffffffffffffffn) {
+        throw new Error("value is out of u64 range");
+      }
+      if (kind.gasLimit < 0n || kind.gasLimit > 0xffffffffffffffffn) {
+        throw new Error("gasLimit is out of u64 range");
+      }
+      return concat([
+        u32le(6),
+        address(kind.contract, "contract"),
+        u64le(kind.value),
+        u64le(BigInt(methodBytes.length)),
+        methodBytes,
+        u64le(BigInt(kind.args.length)),
+        kind.args,
+        u64le(kind.gasLimit),
+      ]);
+    }  }
 }
 
 /** Byte length of the bincode body. The fee is fixed-width, so it does not change the size. */

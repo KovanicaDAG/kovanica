@@ -1,16 +1,8 @@
-//! Kovanica comms relay (M1) — store-and-forward for opaque envelopes.
+//! Kovanica comms relay (M1 + M2) — store-and-forward for opaque envelopes.
 //!
-//! Spec: `docs/COMMS-M1-INTERFACES.md` §3 (envelope wire format v1) and §4
-//! (relay HTTP API v1). Layer: **client-only infrastructure** — the relay never
-//! receives plaintext, a key, or a seed. It validates shape, `id` consistency,
-//! size and TTL, then stores the opaque blob until the recipient `ack`s it.
-//!
-//! Modules:
-//! - [`envelope`] — §3.1 struct, §3.3 signing bytes, §3.4 id, seal+sign helper.
-//! - [`payload`]  — §3.2 compact-JSON zero padding / trimming.
-//! - [`store`]    — in-memory inbox: dedup, ordering, TTL clamp, quota, ack.
-//! - [`server`]   — §4 axum router + [`RelayServer`].
-//! - [`client`]   — reqwest [`RelayClient`].
+//! M1 spec: `docs/COMMS-M1-INTERFACES.md` §3 (§4 HTTP). M2 spec:
+//! `docs/COMMS-M2-INTERFACES.md` — PoW bound to envelope `id` and prepaid
+//! credit via HTLC payment proof. Wrapper submission preserves M1 `v=1` wire.
 
 #![deny(unsafe_code)]
 
@@ -28,7 +20,7 @@ pub use envelope::{
 pub use payload::{pad_payload, trim_payload, MAX_PAYLOAD, PAYLOAD_BUCKETS};
 pub use server::{router, RelayServer};
 pub use store::{
-    InsertOutcome, Store, StoreError, DEFAULT_INBOX_LIMIT, DEFAULT_TTL_MS, MAX_INBOX_LIMIT,
+    Credit, InsertOutcome, Store, StoreError, DEFAULT_INBOX_LIMIT, DEFAULT_TTL_MS, MAX_INBOX_LIMIT,
     MAX_PER_RECIPIENT, MAX_TTL_MS,
 };
 
@@ -36,6 +28,9 @@ pub use store::{
 /// so the envelope `alg` field and the cipher can never drift apart.
 pub use kvnc_comms_crypto::ALG_V1;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Errors raised while encoding, decoding, validating or signing an envelope.
@@ -86,9 +81,81 @@ pub enum EnvelopeError {
     Crypto(#[from] kvnc_comms_crypto::CryptoError),
 }
 
+/// M2: PoW proof bound to envelope `id` (Hashcash-style).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PowProof {
+    pub nonce: String, // hex
+    pub bits: u8,
+}
+
+/// M2: HTLC payment proof to fund prepaid credit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentProof {
+    pub htlc_id: String,
+    pub preimage: String, // base64 (or hex acceptable if parsed; store as string)
+    pub amount_atoms: u64,
+    pub expiry: u64,
+    #[serde(default)]
+    pub sender_addr: Option<String>,
+    pub claimer_addr: String,
+}
+
+/// M2: Submission wrapper to preserve M1 `v=1` envelope wire.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmissionWrapper {
+    pub envelope: Envelope,
+    #[serde(default)]
+    pub pow: Option<PowProof>,
+    #[serde(default)]
+    pub payment: Option<PaymentProof>,
+}
+
+/// Count leading zero bits in the first `bytes` of a byte slice.
+pub fn leading_zero_bits(h: &[u8]) -> u32 {
+    let mut bits = 0u32;
+    for &b in h.iter() {
+        match b {
+            0 => {
+                bits += 8;
+            }
+            v => {
+                bits += v.leading_zeros();
+                break;
+            }
+        }
+    }
+    bits
+}
+
+/// M2 PoW verify: `BLAKE3(nonce_bytes || id_bytes)` must have >= `bits` leading zero bits.
+pub fn pow_verify(id_hex: &str, nonce_hex: &str, bits: u8) -> bool {
+    if bits == 0 {
+        return false;
+    }
+    let id_bytes = match hex::decode(id_hex) {
+        Ok(v) if v.len() == 32 => v,
+        _ => return false,
+    };
+    let nonce_bytes = match hex::decode(nonce_hex) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let mut input = Vec::with_capacity(nonce_bytes.len() + id_bytes.len());
+    input.extend_from_slice(&nonce_bytes);
+    input.extend_from_slice(&id_bytes);
+    let h = kvnc_common::hash(&input);
+    (leading_zero_bits(&h) as u8) >= bits
+}
+
+/// Decode base64 string (standard) to bytes; empty string → empty vec.
+pub fn b64_decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    if s.is_empty() {
+        return Ok(Vec::new());
+    }
+    STANDARD.decode(s.as_bytes())
+}
+
 /// Wall-clock milliseconds since the Unix epoch.
-///
-/// Returns `0` if the system clock is before the epoch (never panics).
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

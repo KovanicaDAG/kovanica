@@ -16,6 +16,28 @@ import {
   envelopeToJSON,
 } from "./envelope.js";
 
+/** PoW proof for wrapper submission. */
+export interface PowProof {
+  nonce: string;
+  bits: number;
+}
+
+/** Payment proof for wrapper submission. */
+export interface PaymentProof {
+  htlcId: string;
+  preimage: string;
+  amountAtoms: bigint | number;
+  expiry: bigint | number;
+  senderAddr?: string;
+  claimerAddr: string;
+}
+
+export interface SubmissionWrapper {
+  envelope: EnvelopeJson;
+  pow?: PowProof;
+  payment?: PaymentProof;
+}
+
 /** Error slugs returned by the relay (§4). */
 export type RelayErrorCode = "bad_request" | "too_large" | "not_found" | "rate_limited" | "internal";
 
@@ -148,13 +170,19 @@ export class RelayClient {
    * `POST /v1/envelope` — submit one envelope. Accepts either the byte form
    * or the wire JSON. Idempotent: re-POSTing the same envelope is `200`/`201`.
    */
-  async postEnvelope(envelope: Envelope | EnvelopeJson): Promise<PostEnvelopeResult> {
-    const body = "sig" in envelope && envelope.sig instanceof Uint8Array
+  async postEnvelope(
+    envelope: Envelope | EnvelopeJson,
+    options?: { pow?: PowProof; payment?: PaymentProof },
+  ): Promise<PostEnvelopeResult> {
+    const envJson = "sig" in envelope && envelope.sig instanceof Uint8Array
       ? envelopeToJSON(envelope as Envelope)
       : (envelope as EnvelopeJson);
+    const body = options && (options.pow || options.payment)
+      ? ({ envelope: envJson, pow: options.pow, payment: options.payment } as SubmissionWrapper)
+      : envJson;
     const { status, json } = await this.send("POST", "/envelope", body);
     const record = (json ?? {}) as { ok?: unknown; id?: unknown };
-    const id = typeof record.id === "string" ? record.id : (body as EnvelopeJson).id;
+    const id = typeof record.id === "string" ? record.id : envJson.id;
     return { ok: record.ok !== false, id, status };
   }
 

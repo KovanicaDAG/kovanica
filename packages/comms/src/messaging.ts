@@ -59,7 +59,22 @@ export const PAYLOAD_BUCKETS = [256, 1024, 4096, 16384] as const;
 export const MAX_PAYLOAD_BYTES = 16384;
 
 /** Payload `kind` values understood by v1. Unknown kinds must be ignored. */
-export type PayloadKind = "text" | "ack" | "receipt";
+export type PayloadKind =
+  | "text"
+  | "ack"
+  | "receipt"
+  | "webrtc-signal"
+  | "group-invite"
+  | "group-join-ack"
+  | "group-leave"
+  | "group-commit"
+  | "group-member-update"
+  | "webrtc-group-signal"
+  | "webrtc-group-control"
+  | (string & {});
+
+/** Envelope payload kind (alias for compatibility with M3 naming). */
+export type EnvelopePayloadKind = PayloadKind;
 
 /** Compact-JSON plaintext payload carried inside `ct` (§3.2). */
 export interface Payload {
