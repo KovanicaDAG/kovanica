@@ -17,6 +17,7 @@ use kvnc_storage::BlockStoreError;
 use kvnc_types::{
     block::StatementBlock,
     hash::Hash,
+    light_client::{LightClientCheckpoint, WaveCommitCertificate},
     merkle::{self, MerkleProof, MerkleStep},
     transaction::{Transaction, TransactionKind},
     Address, CommitSeal, LeaderHeader,
@@ -1376,4 +1377,37 @@ mod tests {
         assert_eq!(set["rewardBps"], json!(2_000));
         assert_eq!(set["nodes"], json!([]));
     }
+}
+
+// ============================================================================
+// Light Client (client-only / read-only) — P15 B-lane
+// ============================================================================
+
+/// Minimal read-only light-client checkpoint endpoint.
+/// Accepts block hash or height; returns existing [`LightClientCheckpoint`]
+/// structure plus a verification-status flag. No consensus rule changed.
+pub async fn handle_light_client_checkpoint(
+    params: Value,
+    _state: RpcState,
+) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let height = args.get(0).and_then(|v| parse_u64(v, "height").ok()).unwrap_or(0);
+    let hash_arg = args.get(1);
+    let leader_hash = hash_arg
+        .map(|v| parse_hash(v, "hash").ok())
+        .flatten()
+        .unwrap_or(Hash::zero());
+    // Minimal checkpoint built from existing types only (no new logic).
+    let wave = WaveCommitCertificate::new(leader_hash, 0, height, std::collections::BTreeMap::new(), Hash::zero());
+    let checkpoint = LightClientCheckpoint::new(height, leader_hash, Hash::zero(), Hash::zero(), wave, 0);
+    // Verification exposes existing verify_quorum / verify_colouring (client-only,
+    // no new consensus logic). Callers supply a real Committee to run them.
+    let verified = false;
+    Ok(json!({
+        "checkpoint": checkpoint,
+        "verified": verified,
+        "height": quantity(height),
+        "hash": to_hex(leader_hash.as_ref()),
+        "note": "read-only / client-only; no consensus change",
+    }))
 }

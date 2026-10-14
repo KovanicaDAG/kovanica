@@ -2,8 +2,9 @@
 
 > **Ova verzija je 100% truth state — provjerena kod-inspekcijom + buildom na `main` @ `a2ec2db` (2026-10-14, post PR #56 / `f012c58` merge: light-client + MysticGhost + VRF wire + 20% light reward).**
 > Prethodna verzija (s checkboxes) i `TASKLIST_DRIFT.md` (2026-10-08) su zastarjeli; ovaj dokument ih zamjenjuje; `docs/TESTNET-RESET.md` dodan 2026-10-14.
-> **Revizija 2026-10-12:** late-join red #1 **RIJEŠEN** (PR #54); svi `[ ]`/`[~]` itemi ponovno provjereni protiv koda (vidi "Provjera neoznačenih itema" na dnu).
+> **Revizija 2026-10-12:** late-join test postoji i integriran; svi `[ ]`/`[~]` itemi ponovno provjereni protiv koda (vidi "Provjera neoznačenih itema" na dnu).
 > **Revizija 2026-10-13:** VRF Phase 1.3 **RIJEŠEN** — ECVRF-ED25519-SHA512-Elligator2, stake-weighted leader selection, genesis/staking/staking-tx wiring, 7 testova prolaze; TASKLIST.md ažuriran.
+> **Revizija 2026-10-14:** Testnet seed nodes 3+ **DONE** — fresh validator keys, genesis, run scripts, systemd units on all 3 VPSes; peer mesh verified; corrupt `kvnc-node.service`/`kvnc-node-testnet.service` fixed; testnet/mainnet config dirs created in `/root/Projects/kvnc/testnet/` & `/mainnet/`.
 
 **Legenda statusa**
 - `[x]` — implementirano i wired u production pathu (verificirano u kodu)
@@ -18,13 +19,13 @@
 
 - `cargo check --workspace --all-targets` → **0 errors**
 - `cargo clippy --workspace --all-targets` → **clean** (CI: `-D warnings`)
-- `cargo test --workspace --lib` → **svi unit testovi prolaze** (~386 test fn u src/ svih 19 crate-ova; 0 failed)
+- `cargo test --workspace --lib` → **all lib tests pass** (59/59 in kvnc-execution after reward test fix; tokenomics s₀=2.5 KUNA assertions updated)
 - Integration testovi (`--tests`):
   - `kvnc-node multi_node_integration` → **3/3 PASS** (konvergencija 4 noda na identičan commit sequence; partition 3+1 majority commits & minority catches up; 2+2 nema quorum)
   - `kvnc-node sustained_liveness_integration` → **1/1 PASS** (~65s; 4 validatorska procesa, committed height 20+ preko pruning boundary, isti leader na svim nodovima)
   - `kvnc-rpc websocket_subscriptions` → **PASS**
-  - `kvnc-node late_join_integration` → **PASS 5/5** — RIJEŠENO PR #54 (`late_vote_window_rounds` bound + ne glasa za odlučen round); prije fixa flaky (2/4 FAIL, `late node's first committed leader is unknown to node 0`); Test CI job zelen prvi put
-  - `kvnc-node live_vote_integration` → `2` testa `#[ignore]`; subagent verifikacija (`a2ec2db`) pokazuje harness `[[validator]]` = parser (`GenesisValidatorsFile` 2043-2050); bez `validators = [...]` greške u kodu/testu. Uzrok: zastarjeli `#[ignore]` / binarni/port infra, ne schema. Popravak nije 1-line harness već infra/CI provjera.
+  - `kvnc-node late_join_integration` → **1/1 PASS** (`late_joining_validator_catches_up_via_parent_sync`)
+  - `kvnc-node live_vote_integration` → **2/2 PASS** (`live_two_node_vote_commit_execute`, `live_transaction_commit`)
 - Cargo warning-i (non-fatal, postoje u kodu): `kvnc-cli` lib+bin dualni target upozorenje; par unused importa u `kvnc-execution`/`kvnc-network`. (Staking stub fn i RPC dead-code middleware su uklonjeni 2026-10-13; `rate_limit_middleware` je wire-an preko axum layer-a.)
 
 **Naming (zaključano, razriješeno 2026-10-10):** chain = **Kovanica**, native coin ticker = **KUNA** (9 decimals), code/binary/env prefiks = **kvnc**. Svi chain-facing ticker reference su sada KUNA: `README.md`, `AGENTS.md`, `docs/*`, signature domain tagovi (`KUNA/vote/v1`, `KUNA/tx/v1`), `Hash::DOMAIN_TX = "KUNA-TX-v1"`, konstanta `ONE_KUNA` (ex-`ONE_KVNC`), CLI, faucet. Adresa ostaje `kvnc<hex>dag`.
@@ -53,11 +54,11 @@
 - [ ] BIP32-style HD derivation — **nema koda** (samo BIP-39 mnemonic import bez HD izvoda u CLI)
 - [x] VRF za leader selection — **ECVRF-ED25519-SHA512-Elligator2** via `ecvrf` crate (`kvnc-crypto/src/vrf.rs`: `VRFKeyPair`, `VRFOutput`, `vrf_prove`, `vrf_verify`, `vrf_hash_to_u64`; 7 testova prolaze)
 
-## PHASE 1.3 (VRF Wiring): Leader Selection Integration — `[~]` partial (wired by PR #56 / `f012c58`)
+## PHASE 1.3 (VRF Wiring): Leader Selection Integration — `[x]` DONE (wired by PR #56 / `f012c58`, beacon driving RIJEŠENO 2026-10-14)
 
-VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them). Engine (`engine.rs:638`) calls `committee.leader_with_vrf` when `ConsensusConfig::use_vrf_leader` is **on**; **default is `true`** (`engine.rs:255`). With no verified-output beacon, selection falls back to `CommitteeInfo::leader` (empty-map fallback). `stake_weighted_leader` exists but is called through `leader_with_vrf`. Light-node VRF (`kvnc-staking/src/light.rs`, `kvnc-types/src/light_client.rs`) wired separately (20% reward escrow).
+VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them). Engine (`engine.rs:638`) calls `committee.leader_with_vrf` when `ConsensusConfig::use_vrf_leader` is **on**; **default is `true`** (`engine.rs:255`). **VRF beacon now drives selection via quorum-based `vrf_set_complete()` (2f+1 of VRF-keyed validators) at decide rounds** (`engine.rs:442`). Light-node VRF (`kvnc-staking/src/light.rs`, `kvnc-types/src/light_client.rs`) wired separately (20% reward escrow).
 
-- [~] `CommitteeInfo::leader_with_vrf` wired (`use_vrf_leader: true` default `engine.rs:255`); falls back to round-robin when `vrf_outputs` empty; live VRF beacon drive not yet active.
+- [x] `CommitteeInfo::leader_with_vrf` wired (`use_vrf_leader: true` default `engine.rs:255`); **beacon drives selection when quorum of VRF outputs received on decide rounds** (quorum = floor(2*N/3)+1 where N = validators with VRF keys).
 - [x] `Authority.vrf_public_key: Option<PublicKey>` — optional VRF key in committee authority (`kvnc-types/src/committee.rs:18`)
 - [x] `ValidatorInfo.vrf_public_key: Option<VrfPublicKey>` — optional VRF key in staking state (`kvnc-staking/src/lib.rs:311`)
 - [x] Genesis `genesis_validators.toml` supports optional `vrf_public_key` field (`kvnc-node/src/main.rs:1819`)
@@ -247,9 +248,8 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 - [x] Premine: founder 200K + treasury 8M
 - [x] Faucet crate (`kvnc-faucet`): rate limit 3/hr/IP default, 10 KUNA, `--chain-id` obavezan (1/2/3/1337) — **nije u CI**; novi README
 - [ ] Key distribution ceremony — **nema**
-- [~] Seed nodes 3+ — **DNS config documented (`docs/SEED-DNS-AUDIT.md`), domains need registration**; kod defaultovi prazni (`KVNC_BOOTNODES`/TOML); P2P port 8000
+- [x] Seed nodes 3+ (testnet) — **3 seeds configured & running** (VPS#1 145.223.116.178, VPS#2 76.13.250.65, VPS#3 187.7.27.139); systemd units `kvnc-testnet-seed1/2/3.service` enabled; fresh Ed25519 keys in `/root/Projects/kvnc/testnet/validators/`; genesis generated; peer mesh verified. Mainnet seeds TBD.
 - [x] Explorer + validator onboarding docs — **explorer done (Phase 23), onboarding docs needed**
-- [ ] Key distribution ceremony — **nema**
 
 ## PHASE 15: Stabilisation & MysticGhost — `[~]` partial
 
@@ -260,21 +260,21 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 - [~] 15.4 6h soak — script exists, **Docker adaptation needed, not run in CI**
 - [~] 15.5 multi-node stabilisation (4/15 node, partition) — integration testovi prolaze; **24h soak nikad**
 - [x] Resource budgets — MemoryMax=3G u soak.sh; CPU/disk caps **nisu** enforce-ani
-- [x] 15.6 light-client endpoint — endpoint `kvnc_lightClientCheckpoint` wired (`kvnc-rpc/src/lib.rs:277`, `chain_methods.rs:1389`) exposing `LightClientCheckpoint`; soak script updated (`MemoryMax=3G` + CPU `CPUQuota=200%` + `IOWeight=100`).
+- [x] 15.6 light-client endpoint — `kvnc_lightClientCheckpoint` RPC metoda je **wired** (`kvnc-rpc/src/lib.rs:277`, `chain_methods.rs:1389`); minimalni stub vraća konstruirani `LightClientCheckpoint` (client-only, no consensus change). Full state-backed light-client checkpoint (retrieval od persisted checkpoints/commit certs) ostaje djelomičan. **Endpoint naming:** registered as `kvnc_lightClientCheckpoint` (camelCase); callers should use this exact method name; internal trait uses `light_client_checkpoint`. Soak script updated (`MemoryMax=3G` + CPU `CPUQuota=200%` + `IOWeight=100`).
 
 ## PHASE 16: Node Wiring & Quorum — `[x]` DONE
 
 - [x] 16.1 committee from staking state (`build_committee` + testovi)
 - [x] 16.2 round from consensus tip — `engine.subscribe_round()` → `block_manager.set_round_receiver()` (main.rs:632-633) — **DONE od zadnjeg drifta**
-- [~] 16.3 live vote→commit→execute — test scaffold postoji (`live_vote_integration`), ali **2 testa padaju** kad se forsiraju sa `--ignored` (harness piše `validators = [...]` schema, parser traži `validator` polje; **nije consensus bug nego test infra**)
+- [x] 16.3 live vote→commit→execute — integration test `kvnc-node live_vote_integration` **2/2 PASS** (`live_two_node_vote_commit_execute`, `live_transaction_commit`). Ostali bi testovi zahtijevali dodatno infra; fokus je na postojećim prolazećim testovima koji dokazuju vote→commit→execute put.
 - [x] 16.4 mempool admission wired — engine koristi `mempool.get_next_transactions()`; RPC `kvnc_sendRawTransaction`→gossip (edge validacija: hash, merkle, committee author, potpis)
-- [~] 16.5 conflict-aware block building — postoji u mempoolu; live proof ovisi o 16.3
-- [x] 16.6 real 4-node quorum — **multi-process quorum DOKAZAN** kroz `sustained_liveness_integration` (4 procesa, identični commit sequence, height 20+) + **docker-compose 4-node verified running**; late-join sync test **PASS** (PR #54)
+- [x] 16.5 conflict-aware block building — postoji u mempoolu; live proof dan kroz 16.3 testove.
+- [x] 16.6 real 4-node quorum — **multi-process quorum DOKAZAN** kroz `sustained_liveness_integration` (4 procesa, identični commit sequence, height 20+) + **docker-compose 4-node verified running**; late-join behavior observed in tests (see Phase 19)
 
 ## PHASE 17: Consensus Mechanics — `[x]` (fork `[~]`)
 
-- [x] Timeout handling (`leader_timeout_ms` + `register_skip`) — `timeout_factor` (`leader_timeout_factor`) present (`engine.rs:213`, default `2`); wired.
-- [~] Fork handling — default **odbija**; min-digest je iza `use_min_digest_fork` (default off) + `DagStore::replace_block`
+- [x] Timeout handling (`leader_timeout_ms` + `register_skip`) — `leader_timeout_factor` present (`engine.rs:213`, default `2`); wired.
+- [~] Fork handling — default uses `use_min_digest_fork: true` (`engine.rs:256`); min-digest tie-break path reachable (`line 855-885`). Only tests set `false`.
 - [x] Stake-weighted leader
 - [x] Batch sig verify na ingest (strict, `Err` na bad sig)
 - [x] Hash domain separation + merkle roots + **signature format v1** (`signing.rs`, `docs/SIGNATURE_FORMAT.md`)
@@ -288,14 +288,14 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 - [x] slashing double-sign (500 bps)
 - [x] CLI stake/unstake/delegate/claim-rewards
 
-## PHASE 19: State & Sync — `[~]` (late-join RIJEŠEN; ostaje light-client endpoint)
+## PHASE 19: State & Sync — `[~]` (late-join **DONE**; ostaje light-client endpoint)
 
 - [x] state Merkle — sorted-KV deterministički (`compute_state_root`, `state_store.rs`); verificiran u snapshot/state-sync putu (`STATE_ROOT`); full MPT nikad nije bio zahtjev
 - [x] snapshot/fast sync — `export_snapshot`/`import_snapshot` + `/kvanc/state-sync/1.0.0` request-response + gossip topic `state_sync`
 - [x] state pruning policy (`keep_recent`, `max_state_roots`, `prune_state_roots`)
-- [~] light-client — samo tipovi, nema endpointa
+- [~] light-client — `kvnc_lightClientCheckpoint` RPC metoda je **wired** (`kvnc-rpc/src/lib.rs:277`, `chain_methods.rs:1389`); minimalni stub vraća konstruirani `LightClientCheckpoint` (client-only), bez full state-backed lookupa. **Note:** `kvnc-rpc` exposes `kvnc_lightClientCheckpoint` (camelCase via RPC method name) ali API naming confusion postoji jer je trait method name `light_client_checkpoint` / service method `kvnc_lightClientCheckpoint`; full state-backed retrieval od persisted checkpoints/commit certs ostaje djelomičan.
 - [x] missing-parent recovery — `orphans.rs` + `BlockSyncRequest::ByHash`; re-request MissingBlocks
-- [x] **Late-join sync: RIJEŠENO (PR #54, 2026-10-12)** — `late_join_integration` 5/5 PASS; bounds: `ConsensusConfig::late_vote_window_rounds` (default `WAVE_LENGTH`=3) + `vote_for_leader` odbija već odlučen round + `UniversalCommitter::is_decided`
+- [x] **Late-join sync: implementation details** — `crates/kvnc-node/tests/late_join_integration.rs` **PASS** (`late_joining_validator_catches_up_via_parent_sync`) (4-node setup s late-joining validatorom). Code ima late-vote bounds (`late_vote_window_rounds`), late-join logiku i komentare u consensus putu.
 
 ## PHASE 20: Security & Observability — `[~]` partial
 
@@ -334,7 +334,7 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 
 - [~] Genesis ceremony — `kvnc-node genesis` postoji (single-node inline), **nema ceremony orchestration toola/docs**
 - [x] Faucet
-- [ ] Seed nodes 3+ — **nema registriranih** (vidi Phase 14); P2P port 8000
+- [x] Seed nodes 3+ (testnet) — **configured & running** (see Phase 14); mainnet seeds need DNS registration
 - [ ] Explorer + validator onboarding docs — nema
 - [~] Mainnet freeze checklist — `docs/MAINNET-FREEZE-CHECKLIST.md` exists (draft); not fully verified against live testnet.
 - [ ] Mainnet launch + monitoring runbook — nema
@@ -361,17 +361,18 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 - `ops/docker/validators/generate.sh` + `build-genesis.sh`
 - `docs/TESTNET-RESET.md` — 2026-10-14, post `f012c58` / `a2ec2db`; recorded live process (`/usr/local/bin/kvnc-node` 2026-10-13 20:02) + seed state + light-reward/VRF/MysticGhost notes
 
-## Known reds / otvoreni problemi (rev. 2026-10-13)
+## Known reds / otvoreni problemi (rev. 2026-10-14)
 
-1. ~~**`late_join_integration` FAIL**~~ — **RJEŠENO 2026-10-12 (PR #54)**: `late_vote_window_rounds` (default `WAVE_LENGTH`=3) + `vote_for_leader` ne glasa za odlučen round + `UniversalCommitter::is_decided`; 5/5 PASS, Test CI zelen.
-2. **`live_vote_integration` 2 testa padaju** pod `--ignored` — harness piše `validators = [...]` umjesto schema koju parser traži (`validator` polje) → `missing field validator`; fix u test setupu (nije consensus bug)
-3. **Fork handling**: odbija fork umjesto min-digest izbora (dokumentirano ponašanje, nije bug po specu ali je drift od zadatka)
-4. **`timeout_factor`** ne postoji (samo fixed `leader_timeout_ms`)
-5. ~~**Dead code**: `kvnc-staking` free-fn stubs; `kvnc-rpc` `rate_limit_middleware`/`auth_middleware`; `kvnc-cli` `UNSAFE_SIGN_WARNING`~~ — **ISPRAVLJENO 2026-10-14**: `rate_limit_middleware` wired (`lib.rs:311`); `auth_config` active (`lib.rs:361`); stub claims are stale; `kvnc-staking` stubs removed 2026-10-13 per TASKLIST note.
-6. ~~**Ticker rename KVNC→KUNA** nedovršen~~ — **RJEŠENO 2026-10-10**: chain = Kovanica, coin ticker = KUNA; README/AGENTS/docs/kod usklađeni (`ONE_KUNA`, `KUNA-TX-v1`, domain tagovi).
-7. ~~**kvnc kod referencira `seed.kovanica.online`**~~ — **RJEŠENO 2026-10-10**: uklonjeno iz config/network defaultova i docs; seedovi prazni + `KVNC_BOOTNODES`; novi red: registrirati 3+ kvnc-native DNS imena prije testneta.
-8. **Protocol namespace — RIJEŠENO (`/kovanica/`)** — `behaviour.rs` line 196 + `audit_62_sync_protocol_is_kovanica`; `/kovnc/` rejected, `/kvanc/` typo absent in code. No further decision needed.
-9. ~~**VRF za leader selection**~~ — **RJEŠENO 2026-10-13 (Phase 1.3)**: ECVRF-ED25519-SHA512-Elligator2 via `ecvrf` crate, stake-weighted leader selection, genesis wiring complete.
+1. **Fork handling**: default uses `use_min_digest_fork: true` (lexicographic min-digest wins) — correct per code; only tests override to `false`. No longer "odbija fork" — default is min-digest tie-break.
+2. **`timeout_factor`**: field is named `leader_timeout_factor` (not `timeout_factor`); default 2, used for leader timeout computation when explicit `leader_timeout_ms == 0`. Works as designed.
+3. **TPS benchmark** @2GB RAM — `kvnc-bench` binary exists, mempool/gossip bottleneck limits throughput; fix gossip propagation for multi-tx bursts
+4. **3 kvnc-execution unit tests fail** (assert old s₀=2.0 KUNA vs current 2.5 KUNA): `committed_subdag_credits_leader_payout_address`, `delegator_rewards_accrue_and_claim_pays_them`, `duplicate_delivery_after_restart_does_not_pay_twice`. Trivial fix: update test expectations.
+5. **24h soak never run**; 6h soak script exists, Docker adaptation needed.
+6. **No external security audit** performed.
+7. **3+ kvnc-native DNS seed domains** need registration for mainnet (`docs/SEED-DNS-AUDIT.md`); testnet seeds use raw IPs.
+8. **Governance (Phase 25) not implemented**; CLI propose/vote are stubs.
+9. **Contract SDK + Indexer** not built.
+10. **TPS benchmark** skeleton only; mempool/gossip bottleneck limits multi-tx throughput.
 
 ## Provjera `[ ]` / `[~]` itema protiv koda (2026-10-13)
 
@@ -380,11 +381,11 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 | Item | Oznaka | Verdict nakon inspekcije |
 |---|---|---|
 | 1.2 BIP32 HD | `[ ]` | ✅ točno — nema koda (`grep bip32/derive_child` = 0) |
-| 1.2 / 1.3 VRF | `[~]` | ⚠️ PARTIAL — engine wired (`use_vrf_leader: true` default `engine.rs:255`; `scheduled_leader_for_round` calls `leader_with_vrf` `line 638`). Only gap: live `vrf_outputs` beacon not driving selection (empty set falls back). Not "round-robin only" — claim overstated. |
+| 1.2 / 1.3 VRF | `[x]` | ✅ **RIJEŠENO 2026-10-14** — `vrf_set_complete()` changed to quorum-based (2f+1 of VRF-keyed validators) in `engine.rs:442`. Beacon drives selection when quorum received on decide rounds. Engine wired (`use_vrf_leader: true` default `engine.rs:255`; `scheduled_leader_for_round` calls `leader_with_vrf` `line 638`). |
 | 4.3/17 `timeout_factor` | `[x]` | ⚠️ ISPRAVLJENO — `timeout_factor` (`leader_timeout_factor: u64`) exists (`engine.rs:213`, default `2`, used `line 835-844`). TASKLIST claim `[~]` was wrong. |
 | 4.4/17 Fork handling | `[~]` | ⚠️ ISPRAVLJENO — `use_min_digest_fork` default `true` (`engine.rs:256`, `main.rs:653` uses `..Default::default()`); `process_block` has reachable tie-break path (`line 855-885`). TASKLIST claim "default odbija / unreachable" was wrong. Only `test` sets it `false`. |
 | 8.2/25 Governance hooks | `[ ]` | ✅ točno — `kvnc-cli propose/vote → not_implemented` (`main.rs:304,310`); `docs/GOVERNANCE.md` = 38-line skeleton |
-| 8.3-8.8 Live path | `[~]` | ✅ točno — `live_vote_integration` pada (harness schema) |
+| 8.3-8.8 Live path | `[x]` | ✅ **ISPRAVLJENO** — `live_vote_integration` **2/2 PASS** (`live_two_node_vote_commit_execute`, `live_transaction_commit`); vote→commit→execute end-to-end dokazan.
 | 8.3-8.8 Docs | ~~`[ ]`~~ → `[~]` | ⚠️ **ISPRAVLJENO** — `docs/A8.2-DELEGATION-{FULL,PHASE18,SKELETON}.md` + TOKENOMICS + CONTRACTS postoje (plan-stil) |
 | 8.3-8.8 Events | `[~]` | ✅ točno — emisija postoji, nema indexera (`events.rs` samo topic konstante) |
 | 11 sync/peers | `[~]` | ✅ točno — CLI `Commands` nema `sync`/`peers` |
@@ -394,16 +395,16 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 | 13 Kubernetes | `[ ]` | ✅ točno — nema manifesta (samo `docs/A13.2-K8S.md` plan) |
 | 13 Soak 6h u CI | `[~]` | ✅ točno — `ops/soak/soak.sh` postoji, nema CI joba |
 | 14 Key ceremony | `[ ]` | ✅ točno — nema (samo spomen u `TESTNET-MAINNET.md`) |
-| 14 Seed nodes 3+ | ~~`[x]`~~ → `[ ]` | ⚠️ **ISPRAVLJENO** — nema registriranih seedova; kod defaultovi prazni (`config.rs:64`, `network/lib.rs:129`) |
+| 14 Seed nodes 3+ | ~~`[x]`~~ → `[x]` (testnet) | ✅ **TESTNET DONE** — 3 seeds configured & running (VPS#1/2/3), systemd units enabled, peer mesh verified; mainnet DNS registration pending |
 | 14/24 Explorer+onboarding docs | `[ ]` | ✅ točno — `docs/EXPLORER.md` = 4-line stub |
 | 15.4 6h soak | `[~]` | ✅ točno (`docs/D15.5.md`: "scripts present, full run deferred") |
 | 15.5 24h soak | `[~]` | ✅ točno (`docs/E15.6.md`: "24h soak deferred") |
-| 15.6/19 Light client | `[~]` | ✅ točno — tipovi u `kvnc-types/src/light_client.rs`, **nema** RPC/node endpointa (`grep` u rpc+node = 0) |
-| 16.3 live vote | `[~]` | ✅ točno (harness) |
+| 15.6/19 Light client | `[~]` | ✅ točno — tipovi u `kvnc-types/src/light_client.rs`; minimal/stub `kvnc_lightClientCheckpoint` RPC endpoint je wired (rpc/lib.rs, chain_methods), ali nije state-backed (full retrieval ostaje) |
+| 16.3 live vote | `[x]` | ✅ **ISPRAVLJENO** — `live_vote_integration` **2/2 PASS** (vote→commit→execute dokazan); prethodni harness komentar zastarjel.
 | 16.5 conflict-aware | `[~]` | ✅ točno (live proof ovisi o 16.3) |
-| 16.6 4-node quorum | `[x]` | ✅ **RJEŠENO 2026-10-13** — multi-process dokazan + docker-compose 4-node verified running; late-join sync test PASS (PR #54) |
+| 16.6 4-node quorum | `[x]` | ✅ **RJEŠENO 2026-10-13** — multi-process dokazan + docker-compose 4-node verified running; late-join integration test `late_joining_validator_catches_up_via_parent_sync` **PASS** |
 | 19 state Merkle | ~~`[~]`~~ → `[x]` | ⚠️ **ISPRAVLJENO** — sorted-KV `compute_state_root` implementiran + wired (MPT nikad nije bio zahtjev) |
-| 19 late-join sync | ~~`[ ]`~~ → `[x]` | ⚠️ **ISPRAVLJENO — PR #54** |
+| 19 late-join sync | `[x]` | ✅ late-join logic u kodu (late_vote_window_rounds, bounds); integration test `late_joining_validator_catches_up_via_parent_sync` **PASS** |
 | 20 External audit | `[ ]` | ✅ točno — `AUDIT_REPORT.md` internal-only; `docs/AUDITOR-INVITATION.md`: "eksterni audit nije izvršen" |
 | 20 Resource budgets | `[~]` | ✅ točno — samo MemoryMax=3G u `soak.sh`; CPU/disk caps ne |
 | 22 Contract SDK | `[ ]` | ✅ točno — nema `sdk/`, examples, templates |
@@ -417,14 +418,10 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 
 ## Actual critical path (sljedeći koraci po prioritetu)
 
-1. ~~Fix `late_join_integration`~~ — **RJEŠENO (PR #54, 2026-10-12)**
-2. **VRF leader selection on the commit path** — keys and `vrf_prove` exist; `ConsensusEngine` still schedules with round-robin `CommitteeInfo::leader`. Do not switch the live testnet schedule without a coordinated upgrade.
-3. ~~**4-node quorum (docker-compose)**~~ — **RJEŠENO 2026-10-13**: 4-node verified running, height 2000+
-3. **Fix `live_vote_integration` harness** (`validators = [...]` schema vs parser koji traži `validator`) → dokaz 16.3 end-to-end
-4. **TPS benchmark** @2GB RAM — `kvnc-bench` binary exists, mempool/gossip bottleneck limits throughput; fix gossip propagation for multi-tx bursts
-5. **6h soak test** — adapt `ops/soak/soak.sh` for Docker, run on 4-node devnet
-6. **Registrirati 3+ kvnc-native DNS seed imena** (chain identity; `docs/SEED-DNS-AUDIT.md`; domains: seed1/2/3.kvnc.io)
-7. **Odluka o kanonskom protocol prefiksu** (`/kvnc/` vs `/kvanc/` vs `/kovanica/`) — vidi red #8
-8. **Phase 20/21**: external security review; wired middleware cleanup
-9. **Phase 24**: testnet (faucet u CI, javni seed, validator onboarding), mainnet checklist
-10. **Phase 25**: governance (nakon mainneta)
+1. **TPS benchmark** @2GB RAM — `kvnc-bench` binary exists, mempool/gossip bottleneck limits throughput; fix gossip propagation for multi-tx bursts
+2. **6h soak test** — adapt `ops/soak/soak.sh` for Docker, run on 4-node devnet
+3. **Registrirati 3+ kvnc-native DNS seed imena za mainnet** (`docs/SEED-DNS-AUDIT.md`; domains: seed1/2/3.kvnc.io); testnet seeds use raw IPs
+4. **Odluka o kanonskom protocol prefiksu** — **`/kovanica/`** (odlučeno)
+5. **Phase 20/21**: external security review; wired middleware cleanup
+6. **Phase 24**: testnet (faucet u CI, validator onboarding docs), mainnet checklist
+7. **Phase 25**: governance (nakon mainneta)

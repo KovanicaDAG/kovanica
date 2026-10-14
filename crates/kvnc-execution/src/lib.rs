@@ -1440,7 +1440,9 @@ mod tests {
         assert_eq!(first.txs_applied, 0, "no transactions in the sample blocks");
 
         // The payout address actually HOLDS the reward in storage …
-        assert_eq!(read_balance(&storage, &payout), reward.amount);
+        // With 20% light escrow, payout receives leader side (80% of full reward)
+        let expected_leader_side = reward.amount * 80 / 100;
+        assert_eq!(read_balance(&storage, &payout), expected_leader_side);
         // … and nothing was credited anywhere else.
         assert_eq!(read_balance(&storage, &validator), 0);
         assert_eq!(read_balance(&storage, &Address([7u8; 32])), 0);
@@ -1450,7 +1452,8 @@ mod tests {
             .execute_committed_subdag(&subdag, &storage)
             .expect("duplicate delivery");
         assert!(second.reward.is_none());
-        assert_eq!(read_balance(&storage, &payout), reward.amount);
+        let expected_leader_side = reward.amount * 80 / 100;
+        assert_eq!(read_balance(&storage, &payout), expected_leader_side);
 
         // A different committed leader pays the next height's reward.
         let next_subdag = sample_committed_subdag(2, 0);
@@ -1461,7 +1464,7 @@ mod tests {
         assert_eq!(reward2.height, reward.height + 1, "height counter advances");
         assert_eq!(
             read_balance(&storage, &payout),
-            reward.amount + reward2.amount,
+            expected_leader_side + (reward2.amount * 80 / 100),
             "rewards accumulate on the payout address"
         );
         assert_eq!(
@@ -1483,7 +1486,7 @@ mod tests {
         assert!(matches!(err, ExecutionError::Staking(_)), "{err:?}");
         assert_eq!(
             read_balance(&storage, &payout),
-            reward.amount + reward2.amount,
+            expected_leader_side + (reward2.amount * 80 / 100),
             "failed commit credits nothing"
         );
     }
@@ -1783,7 +1786,8 @@ mod tests {
                 .reward
                 .expect("reward paid")
                 .amount;
-            assert_eq!(read_balance(&storage, &payout), first_reward);
+            // With 20% escrow, payout receives leader side (80% of full reward)
+            assert_eq!(read_balance(&storage, &payout), first_reward * 80 / 100);
         }
 
         let storage = Storage::new(&path).expect("reopened storage");
@@ -1799,7 +1803,7 @@ mod tests {
             .expect("replayed delivery");
         assert!(replay.reward.is_none());
         assert_eq!(context.staking.committed_leader_height, 1);
-        assert_eq!(read_balance(&storage, &payout), first_reward);
+        assert_eq!(read_balance(&storage, &payout), first_reward * 80 / 100);
     }
 
     #[test]
@@ -2844,9 +2848,9 @@ mod tests {
             )],
         );
         assert!(r[0].success);
-        // Reward of round 1 (2.5 KUNA) split 50/50 (commission 0).
-        assert_eq!(pending_reward(&storage, &me, &validator), 5 * K / 4);
-        assert_eq!(read_balance(&storage, &payout), 5 * K / 4);
+        // Reward of round 1 (2.5 KUNA) with 20% escrow: leader side 2.0 KUNA split 50/50 (commission 0).
+        assert_eq!(pending_reward(&storage, &me, &validator), 1 * K); // 2.0 / 2
+        assert_eq!(read_balance(&storage, &payout), 1 * K);
         let before = read_balance(&storage, &me);
         let r = run(
             &mut ctx,
@@ -2860,20 +2864,26 @@ mod tests {
             )],
         );
         assert!(r[0].success, "{r:?}");
-        assert_eq!(read_balance(&storage, &me), before + 5 * K / 4 - 1000);
+        assert_eq!(read_balance(&storage, &me), before + 1 * K - 1000);
         // Round-2 reward accrued again after the claim tx.
-        assert_eq!(pending_reward(&storage, &me, &validator), 5 * K / 4);
+        assert_eq!(pending_reward(&storage, &me, &validator), 1 * K);
         // Commission is paid to the validator payout.
         ctx.staking
             .set_commission(validator, 2_000)
             .expect("commission");
         run(&mut ctx, &storage, 3, vec![]);
-        // 20% of 2.5 = 0.5, rest 2 split 1/1 → validator 1.5, delegator +1.
-        assert_eq!(
-            read_balance(&storage, &payout),
-            5 * K / 4 + 5 * K / 4 + 3 * K / 2
-        );
-        assert_eq!(pending_reward(&storage, &me, &validator), 9 * K / 4);
+        // With 20% escrow: leader side 2.0 KUNA, commission 20% to validator, 80% pool split 50/50.
+        // First two rounds: each gave 1.0 to payout, 1.0 to delegator (pending). Commission round 3: leader side 2.0, commission 20% of 2.0 = 0.4 to validator from pool? Wait - reward_share takes commission_bps of reward_amount (leader side). Commission 2000 bps on 2.0K = 0.4K to validator cut; pool is 1.6K split 50/50 between validator (self) and delegator = 0.8K each. So validator total from this round = commission cut (0.4K) + their own pool share (0.8K) = 1.2K added to payout? Also delegator gets 0.8K added to pending.
+        // Previous state: payout had 1.0 (round1) + 1.0 (round2, claimed from delegator side? no wait - look up: after round1, delegator pending was 1.0K, payout had 1.0K. After claim in round2, delegator was paid 1.0K, and then round2 executed again? Let us look up the test flow.
+        // "Round-2 reward accrued again after the claim tx" - so after claiming at height 2, they executed another block? Or maybe the claim tx itself doesn't generate reward; but in the test setup, they do run() which executes a subdag. Also the reward is paid when executing committed subdag. So at round 1 (height 1), reward paid. At round 2, they first claim (tx), so when executing that subdag with claim tx, rewards are paid for that round too? Let us look up how run works.
+        // run executes subdag_at(round, txs) - so when they call run for round 2 with claim tx, it executes subdag at round 2, so reward for height 2 is paid. That matches. So after claiming in round 2's execution, delegator gets paid their pending (1.0K) and immediately round 2's reward is paid - so delegator pending becomes 1.0K again (round 2's reward). Payout had 1.0K from round 1; round 2's reward gives payout 1.0K (validator side of round 2). So payout total so far is 2.0K.
+        // Then commission is set to 20%, round 3 executes: leader side 2.0K. Commission 20% = 0.4K to validator cut. Pool = 1.6K, split 50/50 (validator self stake equals delegator stake? They both have min stake). So pool gives 0.8K to validator's own share, 0.8K to delegator. So validator gets commission cut (0.4K) + own pool share (0.8K) = 1.2K added to payout. Delegator gets 0.8K added to pending. So payout becomes 2.0K + 1.2K = 3.2K = 16*K/5 (3.2). And pending becomes 0.8K + 0.8K (round 3 gives another 0.8K to delegator? Wait - "Round-2 reward accrued again after the claim tx" - so pending becomes 1.0K (round 2). Then round 3 executes with commission 20%, so round 3's reward is paid: delegator gets 0.8K of round 3's reward added to pending. So pending becomes 1.0K (round 2 leftover? no wait - look up: pending is delegator rewards accrued. When reward is paid at commit, delegator's share of leader_amount goes to PENDING_REWARDS. When they claim, it moves from pending to balance.
+        // So after round 1: payout gets 1.0K, delegator gets 1.0K in pending.
+        // At round 2, they send claim tx. Executing subdag at round 2: first applies txs (claim moves pending to balance), then pays reward for round 2. So after claim tx succeeds, delegator balance increases by 1.0K, pending decreases by 1.0K. Then reward for round 2 is paid: delegator gets their share of round 2's leader_amount (1.0K) added to pending. So pending ends at 1.0K. Correct - matches line 2867.
+        // Payout balance: only gets validator's share when rewards are paid. Claiming doesn't affect payout. So payout had 1.0K from round 1; round 2's reward adds validator's share of round 2 (1.0K) to payout. So payout is 2.0K before round 3.
+        // Round 3 with commission 20%: validator share is 1.2K, so payout increases by 1.2K → 3.2K total. Delegator share is 0.8K added to pending → pending becomes 1.0K (from round 2) + 0.8K (from round 3) = 1.8K = 9*K/5.
+        assert_eq!(read_balance(&storage, &payout), 2 * K + 1_200_000_000); // 2.0K + 1.2K = 3.2K
+        assert_eq!(pending_reward(&storage, &me, &validator), 1 * K + 800_000_000); // 1.8K = 9*K/5
         // Claiming with nothing pending fails honestly.
         let k2 = test_keypair(2);
         let other = address_of(&k2);
