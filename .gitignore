@@ -54,3 +54,9 @@ data/*.redb
 
 # Phase 16.6 generated devnet genesis + seeds (regenerate with ops/docker/validators/generate.sh)
 ops/docker/validators/genesis_validators.toml
+
+# Android Gradle build cache (regenerated, never commit)
+apps/android/.gradle/
+
+# Guard: never track a full repo copy nested inside the repo
+/kvnc/
