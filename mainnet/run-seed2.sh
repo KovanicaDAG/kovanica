@@ -1,7 +1,7 @@
 #!/bin/bash
 export KOVANICA_DATA_DIR=/root/Projects/kvnc/mainnet/node-data
 export KOVANICA_LISTEN_ADDR=0.0.0.0:8000
-export KOVANICA_BOOTNODES=145.223.116.178:8000,178.7.27.139:8000
+export KOVANICA_BOOTNODES=145.223.116.178:8000,187.7.27.139:8000
 export KOVANICA_VALIDATOR_KEY=/root/Projects/kvnc/mainnet/validators/keys-out/validator2.key
 export KOVANICA_MINE=0
 export KOVANICA_FAUCET=0
