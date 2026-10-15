@@ -1097,6 +1097,46 @@ public func importWallet(mnemonic: String, passphrase: String)throws  -> Importe
 })
 }
 /**
+ * Decode a bincode 1.3 `NameEntry` read from a registry storage slot.
+ *
+ * Accepts `"0x"+hex` or bare hex (case-insensitive). The value is
+ * `owner[32] ‖ pubkey[32] ‖ u64le(count) ‖ count×(u64le(len) ‖ utf8)`.
+ * Returns compact JSON
+ * `{"owner":"<64hex>","pubkey":"<64hex>","relay_endpoints":["…"]}`.
+ *
+ * Truncated or malformed bytes are a [`LightFfiError`]. Callers must check for
+ * an empty slot (`""` / `"0x"`) **before** calling this — those are not
+ * special-cased here and decode to an error.
+ */
+public func registryDecodeEntry(valueHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_registry_decode_entry(
+        FfiConverterString.lower(valueHex),uniffiCallStatus
+    )
+})
+}
+/**
+ * Compute the contract-storage slot for a name-registry entry.
+ *
+ * `slot = BLAKE3(b"kvnc/v1/name/" ++ lowercase(name))`, returned as 64
+ * lowercase hex (**no** `0x` prefix). The prefix is taken from
+ * [`kvnc_name_registry::entry_key`] (single source of truth) and hashed with
+ * the canonical [`kvnc_common::hash`], exactly matching the host storage key
+ * the contract writes (`blake3(raw_key)`).
+ *
+ * Names are normalised-then-validated: 3..=32 bytes, only `[a-z0-9-]`, no
+ * leading/trailing `-`, no `--`. Invalid input is a [`LightFfiError`].
+ */
+public func registrySlotHex(name: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_registry_slot_hex(
+        FfiConverterString.lower(name),uniffiCallStatus
+    )
+})
+}
+/**
  * Sign a light-node bond. The stake does not enter the validator committee.
  */
 public func signBondRaw(keystoreJson: String, passphrase: String, chainId: UInt64, stake: UInt64, nonce: UInt64, feeRate: UInt64)throws  -> String  {
@@ -1258,6 +1298,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_import_wallet() != 32019) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_registry_decode_entry() != 8553) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_registry_slot_hex() != 5752) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_sign_bond_raw() != 62969) {

@@ -91,7 +91,11 @@ pub struct NameEntry {
 }
 
 /// Storage key for a (already normalised, lowercase) name.
-fn entry_key(name: &str) -> Vec<u8> {
+///
+/// Public so clients that read the raw contract-storage slot (`hash(entry_key)`)
+/// derive the **exact same** key as this contract — single source of truth for
+/// the `b"kvnc/v1/name/"` prefix. `name` must already be normalised lowercase.
+pub fn entry_key(name: &str) -> Vec<u8> {
     let mut key = Vec::with_capacity(KEY_PREFIX.len() + name.len());
     key.extend_from_slice(KEY_PREFIX);
     key.extend_from_slice(name.as_bytes());

@@ -1,14 +1,20 @@
 package io.kovanica.light
 
 import android.app.Activity
+import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -27,6 +33,10 @@ import kotlin.math.roundToInt
  * the relay only ever stores ciphertext. Crypto and HTTP run on one background thread
  * because Argon2id needs 64 MiB.
  *
+ * The screen also holds the contact book. Contacts are local data — no unlock needed —
+ * and a name can be looked up read-only from an on-chain registry when the user has set
+ * a contract address. Nothing in the registry path signs, registers or deploys anything.
+ *
  * The screen is laid out programmatically on purpose — this app has no `res/`.
  */
 class MessagesActivity : Activity() {
@@ -35,6 +45,8 @@ class MessagesActivity : Activity() {
 
     private lateinit var store: CommsStore
     private lateinit var status: TextView
+    private lateinit var scroll: ScrollView
+    private lateinit var composeCard: LinearLayout
     private lateinit var commsIdValue: TextView
     private lateinit var pubkeyValue: TextView
     private lateinit var relayField: EditText
@@ -42,6 +54,25 @@ class MessagesActivity : Activity() {
     private lateinit var recipientField: EditText
     private lateinit var messageField: EditText
     private lateinit var inbox: LinearLayout
+
+    // Contacts. The registry field, lookup result and manual-add fields all live inside
+    // the collapsible "Add" form so the list stays the visible part of the card.
+    private lateinit var registryState: TextView
+    private lateinit var registryField: EditText
+    private lateinit var contactList: LinearLayout
+    private lateinit var addForm: LinearLayout
+    private lateinit var addToggle: Button
+    private lateinit var lookupNameField: EditText
+    private lateinit var resolvedBlock: LinearLayout
+    private lateinit var manualPubkeyField: EditText
+    private lateinit var manualLabelField: EditText
+
+    /** Last successful name lookup, waiting for the user to confirm it with "Add". */
+    private var resolved: RegistryEntry? = null
+    private var resolvedName: String = ""
+
+    /** Pubkey of the row that is showing the inline remove confirmation, if any. */
+    private var pendingRemoval: String? = null
 
     /** Set once the keystore is unlocked; null until then. */
     private var client: CommsClient? = null
@@ -92,6 +123,18 @@ class MessagesActivity : Activity() {
             minLines = 3
             maxLines = 8
         }
+        registryField = field("Registry contract address", store.registryContract).apply {
+            typeface = Typeface.MONOSPACE
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
+        lookupNameField = field("Name to look up, e.g. alice").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
+        manualPubkeyField = field("Public key (64 hex)").apply {
+            typeface = Typeface.MONOSPACE
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
+        manualLabelField = field("Label, e.g. Bob")
 
         val identity = card().apply {
             addStack(sectionLabel("Identity"))
@@ -113,13 +156,33 @@ class MessagesActivity : Activity() {
         }
         root.addStack(unlock, 18)
 
-        val compose = card().apply {
+        registryState = TextView(this).apply {
+            textSize = 12f
+            setLineSpacing(0f, 1.3f)
+            setTextColor(MUTED)
+        }
+        val contactsCard = card().apply {
+            addStack(contactsHeader())
+            addStack(registryState, 4)
+            contactList = LinearLayout(this@MessagesActivity).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            addStack(contactList, 12)
+            addForm = addFormView()
+            addStack(addForm, 14)
+        }
+        root.addStack(contactsCard, 18)
+        registryField.addTextChangedListener(registryWatcher())
+        updateRegistryState()
+        renderContacts()
+
+        composeCard = card().apply {
             addStack(sectionLabel("New message"))
             addStack(recipientField, 2)
             addStack(messageField, 10)
             addStack(button("Send") { send() }, 12)
         }
-        root.addStack(compose, 18)
+        root.addStack(composeCard, 18)
 
         inbox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val inboxCard = card().apply {
@@ -133,7 +196,7 @@ class MessagesActivity : Activity() {
             isFillViewport = true
             setBackgroundColor(INK)
             addView(root)
-        })
+        }.also { scroll = it })
     }
 
     override fun onDestroy() {
@@ -223,6 +286,171 @@ class MessagesActivity : Activity() {
         }
     }
 
+    // --- contacts ------------------------------------------------------------------------
+
+    /** Load a contact into the compose field and bring that card into view. */
+    private fun useContact(contact: Contact) {
+        val pubkey = contact.pubkeyHex
+        recipientField.setText(pubkey)
+        recipientField.setSelection(pubkey.length)
+        recipientField.requestFocus()
+        val input = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+        scroll.post {
+            scroll.smoothScrollTo(0, maxOf(0, composeCard.top - dp(12)))
+            input?.showSoftInput(recipientField, InputMethodManager.SHOW_IMPLICIT)
+        }
+        val shown = contact.label.ifBlank { shortId(pubkey) }
+        setStatus("Recipient set to $shown. Write your message, then Send.", Tone.NEUTRAL)
+    }
+
+    /** Read-only name lookup against the configured registry contract. */
+    private fun lookUpName() {
+        val name = lookupNameField.text.toString().trim().lowercase(Locale.US)
+        val registry = registryField.text.toString().trim()
+        persistRegistry(registry)
+        validateName(name)?.let {
+            setStatus(it, Tone.ERROR)
+            return
+        }
+        if (registry.isEmpty()) {
+            setStatus(
+                "Name lookup needs a registry contract address. Paste it above, or add the contact by public key below.",
+                Tone.WARN,
+            )
+            return
+        }
+        val rpc = prefs().getString(KEY_RPC, DEFAULT_RPC) ?: DEFAULT_RPC
+        task("Looking up \"$name\"…", work = {
+            try {
+                LookupOutcome(RegistryClient(NodeClient(rpc), registry).resolve(name), null)
+            } catch (invalid: IllegalArgumentException) {
+                // resolve() rejects names that break the registry rules; say so plainly.
+                LookupOutcome(null, invalid.message ?: "That name isn't valid for this registry.")
+            } catch (exception: Exception) {
+                LookupOutcome(
+                    null,
+                    "Lookup failed — ${exception.message ?: "the node didn't answer"}",
+                )
+            }
+        }) { outcome ->
+            val error = outcome.error
+            val entry = outcome.entry
+            when {
+                error != null -> setStatus(error, Tone.ERROR)
+                entry == null -> setStatus(
+                    "No entry for \"$name\" on that registry. Check the spelling, or add the contact by public key below.",
+                    Tone.WARN,
+                )
+                else -> showResolved(name, entry)
+            }
+        }
+    }
+
+    /** Save the entry the user just looked up. */
+    private fun addResolved() {
+        val entry = resolved
+        if (entry == null) {
+            setStatus("Look up a name first.", Tone.WARN)
+            return
+        }
+        val name = resolvedName
+        val existing = store.label(entry.pubkeyHex)
+        store.upsertContact(
+            Contact(
+                pubkeyHex = entry.pubkeyHex,
+                label = name,
+                name = name,
+                relayEndpoints = entry.relayEndpoints,
+            ),
+        )
+        resolved = null
+        resolvedBlock.visibility = View.GONE
+        lookupNameField.setText("")
+        pendingRemoval = null
+        setAddFormVisible(false)
+        renderContacts()
+        setStatus(savedLine(existing, name), Tone.OK)
+    }
+
+    /** Save a contact straight from a raw public key, no registry needed. */
+    private fun addManual() {
+        val pubkey = normalizePubkey(manualPubkeyField.text.toString())
+        val label = manualLabelField.text.toString().trim()
+        if (pubkey.isEmpty()) {
+            setStatus("Enter the contact's public key (64 hex characters).", Tone.ERROR)
+            return
+        }
+        if (!PUBKEY_PATTERN.matches(pubkey)) {
+            setStatus("That doesn't look like a public key — it should be 64 hex characters.", Tone.ERROR)
+            return
+        }
+        if (label.isEmpty()) {
+            setStatus("Give the contact a label so you recognise them.", Tone.ERROR)
+            return
+        }
+        val existing = store.label(pubkey)
+        store.upsertContact(Contact(pubkeyHex = pubkey, label = label, name = null, relayEndpoints = null))
+        manualPubkeyField.setText("")
+        manualLabelField.setText("")
+        pendingRemoval = null
+        setAddFormVisible(false)
+        renderContacts()
+        setStatus(savedLine(existing, label), Tone.OK)
+    }
+
+    private fun removeContact(contact: Contact) {
+        store.removeContact(contact.pubkeyHex)
+        pendingRemoval = null
+        renderContacts()
+        setStatus("Removed ${contact.label.ifBlank { "contact" }}.", Tone.NEUTRAL)
+    }
+
+    private fun savedLine(existing: String?, label: String): String =
+        if (existing == null) "Saved \"$label\". Tap the contact to message them." else "Updated \"$label\"."
+
+    /** Mirrors the node-side name rules so an obviously bad name never leaves the phone. */
+    private fun validateName(name: String): String? {
+        if (name.isEmpty()) return "Type a name to look up, like \"alice\"."
+        if (!NAME_PATTERN.matches(name)) return "Names use lowercase letters, digits and dashes only."
+        if (name.startsWith("-") || name.endsWith("-")) return "Names can't start or end with a dash."
+        if (name.contains("--")) return "Names can't have two dashes in a row."
+        val bytes = name.toByteArray(Charsets.UTF_8).size
+        if (bytes < 3 || bytes > 32) return "Names are between 3 and 32 characters long."
+        return null
+    }
+
+    private fun toggleAddForm() {
+        setAddFormVisible(addForm.visibility != View.VISIBLE)
+    }
+
+    private fun setAddFormVisible(visible: Boolean) {
+        addForm.visibility = if (visible) View.VISIBLE else View.GONE
+        addToggle.text = if (visible) "Done" else "Add"
+        if (!visible) {
+            resolved = null
+            resolvedBlock.visibility = View.GONE
+        }
+    }
+
+    private fun persistRegistry(value: String) {
+        if (store.registryContract != value) {
+            store.setRegistryContract(value)
+        }
+    }
+
+    /** Keep the always-visible state line honest as the address is typed. */
+    private fun updateRegistryState() {
+        val value = registryField.text.toString().trim()
+        if (value.isEmpty()) {
+            registryState.text =
+                "Name lookup is off — no registry contract address set. Tap Add to save someone by public key."
+            registryState.setTextColor(MUTED)
+        } else {
+            registryState.text = "Name lookup on · ${shortId(value)}"
+            registryState.setTextColor(ACCENT)
+        }
+    }
+
     // --- rendering -----------------------------------------------------------------------
 
     private fun showIdentity(pubkey: String, commsId: String) {
@@ -281,6 +509,156 @@ class MessagesActivity : Activity() {
         }
     }
 
+    private fun renderContacts() {
+        contactList.removeAllViews()
+        val people = store.contacts()
+        if (people.isEmpty()) {
+            contactList.addStack(TextView(this).apply {
+                text = "No contacts yet. Tap Add to keep someone by name or public key."
+                setTextColor(MUTED)
+                textSize = 13f
+                setLineSpacing(0f, 1.25f)
+            })
+            return
+        }
+        people
+            .sortedBy { it.label.lowercase(Locale.US) }
+            .forEachIndexed { index, contact ->
+                contactList.addStack(contactRow(contact), if (index == 0) 0 else 8)
+            }
+    }
+
+    private fun contactRow(contact: Contact): LinearLayout {
+        val key = normalizePubkey(contact.pubkeyHex)
+        if (key == pendingRemoval) {
+            return removalRow(contact)
+        }
+        val label = contact.label.ifBlank { shortId(contact.pubkeyHex) }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = ripple(SURFACE_2, 14)
+            setPadding(dp(14), dp(12), dp(12), dp(12))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { useContact(contact) }
+            setOnLongClickListener {
+                pendingRemoval = key
+                renderContacts()
+                true
+            }
+
+            val top = LinearLayout(this@MessagesActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            top.addView(
+                TextView(this@MessagesActivity).apply {
+                    text = label
+                    setTextColor(TEXT)
+                    textSize = 15f
+                    typeface = Typeface.DEFAULT_BOLD
+                },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            )
+            // The handle only earns its place when it says something the label doesn't.
+            val handle = contact.name
+            if (!handle.isNullOrBlank() && handle != contact.label) {
+                top.addView(TextView(this@MessagesActivity).apply {
+                    text = "@$handle"
+                    setTextColor(ACCENT)
+                    typeface = Typeface.MONOSPACE
+                    textSize = 12f
+                    setPadding(dp(8), 0, dp(8), 0)
+                })
+            }
+            top.addView(TextView(this@MessagesActivity).apply {
+                text = "›"
+                setTextColor(MUTED)
+                textSize = 16f
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            })
+            addView(top)
+
+            addView(TextView(this@MessagesActivity).apply {
+                text = shortId(contact.pubkeyHex)
+                contentDescription = contact.pubkeyHex
+                setTextColor(MUTED)
+                typeface = Typeface.MONOSPACE
+                textSize = 12f
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+    }
+
+    private fun removalRow(contact: Contact): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(SURFACE_2, 14, BAD, 1)
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+        isClickable = true // swallow taps; only the two buttons act
+
+        addView(TextView(this@MessagesActivity).apply {
+            text = "Remove ${contact.label.ifBlank { shortId(contact.pubkeyHex) }}?"
+            setTextColor(TEXT)
+            textSize = 14f
+        })
+        val actions = LinearLayout(this@MessagesActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        actions.addView(
+            button("Remove", filled = false) { removeContact(contact) }.apply {
+                setTextColor(BAD)
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        actions.addView(
+            button("Keep", filled = false) {
+                pendingRemoval = null
+                renderContacts()
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(10)
+            },
+        )
+        addView(actions)
+    }
+
+    private fun showResolved(name: String, entry: RegistryEntry) {
+        resolved = entry
+        resolvedName = name
+        resolvedBlock.removeAllViews()
+        resolvedBlock.addStack(TextView(this).apply {
+            text = "RESOLVED"
+            setTextColor(ACCENT)
+            textSize = 11f
+            letterSpacing = 0.18f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, 0, 0, dp(10))
+        })
+        resolvedBlock.addStack(labelled("Name", monoValue("@$name")))
+        resolvedBlock.addStack(labelled("Public key", monoValue(entry.pubkeyHex)), 10)
+        resolvedBlock.addStack(labelled("Relay endpoints", endpointsView(entry.relayEndpoints)), 10)
+        resolvedBlock.addStack(button("Add \"$name\"") { addResolved() }, 12)
+        resolvedBlock.visibility = View.VISIBLE
+        setStatus("Found \"$name\". Check the key, then Add.", Tone.NEUTRAL)
+    }
+
+    private fun endpointsView(endpoints: List<String>): TextView = TextView(this).apply {
+        if (endpoints.isEmpty()) {
+            text = "None listed. Messages will use your own relay."
+            setTextColor(MUTED)
+            typeface = Typeface.DEFAULT
+            setTextIsSelectable(false)
+        } else {
+            text = endpoints.joinToString("\n")
+            setTextColor(TEXT)
+            typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+        }
+        textSize = 12f
+        setLineSpacing(0f, 1.3f)
+    }
+
     private fun bodyOf(payloadJson: String): String = try {
         JSONObject(payloadJson).optString("body").ifEmpty { payloadJson }
     } catch (_: Exception) {
@@ -291,6 +669,10 @@ class MessagesActivity : Activity() {
 
     private fun shortId(value: String): String =
         if (value.length > 16) "${value.take(8)}…${value.takeLast(6)}" else value
+
+    /** Match how `CommsStore` keys contacts: trimmed, lowercase, no `0x`. */
+    private fun normalizePubkey(raw: String): String =
+        raw.trim().removePrefix("0x").removePrefix("0X").lowercase(Locale.US)
 
     // --- status --------------------------------------------------------------------------
 
@@ -378,6 +760,76 @@ class MessagesActivity : Activity() {
         )
     }
 
+    private fun contactsHeader(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(
+            sectionLabel("Contacts", bottomPadDp = 0),
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        addToggle = button("Add", filled = false) { toggleAddForm() }
+        addView(
+            addToggle,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+    }
+
+    private fun addFormView(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        visibility = View.GONE
+
+        addStack(caption("Look up a registered name"))
+        addStack(registryField, 8)
+        addStack(nameRow(), 10)
+
+        resolvedBlock = LinearLayout(this@MessagesActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(SURFACE_2, 14, LINE, 1)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            visibility = View.GONE
+        }
+        addStack(resolvedBlock, 12)
+
+        addHairline(18, 18)
+
+        addStack(caption("Or add by public key"))
+        addStack(manualPubkeyField, 8)
+        addStack(manualLabelField, 8)
+        addStack(button("Add by public key", filled = false) { addManual() }, 12)
+    }
+
+    private fun nameRow(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(
+            lookupNameField,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        addView(
+            button("Look up", filled = false) { lookUpName() },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { leftMargin = dp(10) },
+        )
+    }
+
+    private fun caption(text: String): TextView = TextView(this).apply {
+        this.text = text
+        setTextColor(MUTED)
+        textSize = 12f
+    }
+
+    /** Amber press feedback for the contact rows, clipped to the rounded card. */
+    private fun ripple(fill: Int, radiusDp: Int): Drawable = RippleDrawable(
+        ColorStateList.valueOf(RIPPLE),
+        rounded(fill, radiusDp, LINE, 1),
+        null,
+    )
+
     private fun labelled(caption: String, value: TextView): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         addView(TextView(this@MessagesActivity).apply {
@@ -450,7 +902,28 @@ class MessagesActivity : Activity() {
         )
     }
 
+    /** A one-pixel separator with breathing room above and below. */
+    private fun ViewGroup.addHairline(top: Int, bottom: Int) {
+        addView(
+            View(this@MessagesActivity).apply { background = rounded(LINE, 1) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply {
+                topMargin = dp(top)
+                bottomMargin = dp(bottom)
+            },
+        )
+    }
+
     // --- io helpers ----------------------------------------------------------------------
+
+    /** Persist the registry address as it is typed and keep the state line in step. */
+    private fun registryWatcher(): TextWatcher = object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        override fun afterTextChanged(s: Editable?) {
+            updateRegistryState()
+            persistRegistry(registryField.text.toString().trim())
+        }
+    }
 
     private fun saveRelay(relay: String) {
         store.relayUrl = relay
@@ -470,6 +943,9 @@ class MessagesActivity : Activity() {
         val relayOk: Boolean,
     )
 
+    /** Either a resolved registry entry or a plain sentence for the status banner. */
+    private data class LookupOutcome(val entry: RegistryEntry?, val error: String?)
+
     companion object {
         // Ink-toned surface. Explicit so the screen reads the same on any device theme.
         private val INK = 0xFF0E1116.toInt()
@@ -485,5 +961,15 @@ class MessagesActivity : Activity() {
         private val GOOD_BG = 0x1A5BD6A0.toInt()
         private val BAD = 0xFFFF7B84.toInt()
         private val BAD_BG = 0x1AFF7B84.toInt()
+
+        /** Press tint for tappable contact rows: the accent at ~18% alpha. */
+        private val RIPPLE = 0x2EF0B429.toInt()
+
+        /** Node RPC address, set on the main screen under the same prefs key. */
+        private const val KEY_RPC = "rpc"
+        private const val DEFAULT_RPC = "http://10.0.2.2:8545"
+
+        private val PUBKEY_PATTERN = Regex("^[0-9a-f]{64}$")
+        private val NAME_PATTERN = Regex("^[a-z0-9-]+$")
     }
 }

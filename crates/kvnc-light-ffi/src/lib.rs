@@ -516,6 +516,77 @@ pub fn comms_verify_envelope(
     Ok(envelope.verify(&sender).is_ok())
 }
 
+/// Normalise (ASCII lowercase) then validate a registry name.
+///
+/// Mirrors `kvnc_name_registry::normalise_name` (spec §7.2): 3..=32 bytes,
+/// charset `[a-z0-9-]`, no leading/trailing `-`, no `--`. Returns the stored
+/// (lowercase) form.
+fn normalise_registry_name(name: &str) -> Result<String, LightFfiError> {
+    let lowered: String = name.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let bytes = lowered.as_bytes();
+    if bytes.len() < 3 || bytes.len() > 32 {
+        return Err(failed("name must be 3..=32 bytes"));
+    }
+    if !bytes
+        .iter()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+    {
+        return Err(failed("name may contain only [a-z0-9-]"));
+    }
+    if bytes.first() == Some(&b'-') || bytes.last() == Some(&b'-') {
+        return Err(failed("name must not start or end with '-'"));
+    }
+    if bytes.windows(2).any(|w| w == b"--") {
+        return Err(failed("name must not contain '--'"));
+    }
+    Ok(lowered)
+}
+
+/// Compute the contract-storage slot for a name-registry entry.
+///
+/// `slot = BLAKE3(b"kvnc/v1/name/" ++ lowercase(name))`, returned as 64
+/// lowercase hex (**no** `0x` prefix). The prefix is taken from
+/// [`kvnc_name_registry::entry_key`] (single source of truth) and hashed with
+/// the canonical [`kvnc_common::hash`], exactly matching the host storage key
+/// the contract writes (`blake3(raw_key)`).
+///
+/// Names are normalised-then-validated: 3..=32 bytes, only `[a-z0-9-]`, no
+/// leading/trailing `-`, no `--`. Invalid input is a [`LightFfiError`].
+#[uniffi::export]
+pub fn registry_slot_hex(name: String) -> Result<String, LightFfiError> {
+    let name = normalise_registry_name(&name)?;
+    let slot = kvnc_common::hash(&kvnc_name_registry::entry_key(&name));
+    Ok(hex::encode(slot))
+}
+
+/// Decode a bincode 1.3 `NameEntry` read from a registry storage slot.
+///
+/// Accepts `"0x"+hex` or bare hex (case-insensitive). The value is
+/// `owner[32] ‖ pubkey[32] ‖ u64le(count) ‖ count×(u64le(len) ‖ utf8)`.
+/// Returns compact JSON
+/// `{"owner":"<64hex>","pubkey":"<64hex>","relay_endpoints":["…"]}`.
+///
+/// Truncated or malformed bytes are a [`LightFfiError`]. Callers must check for
+/// an empty slot (`""` / `"0x"`) **before** calling this — those are not
+/// special-cased here and decode to an error.
+#[uniffi::export]
+pub fn registry_decode_entry(value_hex: String) -> Result<String, LightFfiError> {
+    let trimmed = value_hex.trim();
+    let stripped = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    let bytes = hex::decode(stripped).map_err(|_| failed("entry value is not valid hex"))?;
+    let entry: kvnc_name_registry::NameEntry = bincode::deserialize(&bytes).map_err(failed)?;
+    // Key order `owner, pubkey, relay_endpoints` — compact JSON, no whitespace.
+    let out = serde_json::json!({
+        "owner": hex::encode(entry.owner),
+        "pubkey": hex::encode(entry.pubkey),
+        "relay_endpoints": entry.relay_endpoints,
+    });
+    serde_json::to_string(&out).map_err(failed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -767,5 +838,125 @@ mod tests {
         // Malformed JSON is an error, not `false`.
         let zeros = "00".repeat(32);
         assert!(comms_verify_envelope("not json".to_string(), zeros).is_err());
+    }
+
+    /// §7.2 KAT: the slot is BLAKE3 of the contract's own raw storage key.
+    /// Expected values computed independently (raw `blake3(b"kvnc/v1/name/…")`),
+    /// matching the key `wasmi_e2e.rs` reads straight out of storage.
+    #[test]
+    fn registry_slot_hex_matches_contract_storage_key() {
+        assert_eq!(
+            registry_slot_hex("alice".to_string()).unwrap(),
+            "9a86b101401f2c4477d327e0ef510222296e27cb5f65da1f7a68cdf0d85db65c"
+        );
+        assert_eq!(
+            registry_slot_hex("BOB".to_string()).unwrap(),
+            "da4fd9d43a1014b06827bf80c50a1198c8be69579f1db836e99337847ab75f9c"
+        );
+
+        // Single source of truth: equals the contract key hashed with the
+        // canonical `kvnc_common::hash`, for any valid name.
+        for name in ["alice", "bob", "abc", "a-b-c", "abcdefghijklmnopqrstuvwxyz012345"] {
+            let expected = hex::encode(kvnc_common::hash(&kvnc_name_registry::entry_key(name)));
+            assert_eq!(registry_slot_hex(name.to_string()).unwrap(), expected);
+        }
+
+        // Output is 64 lowercase hex with no `0x`.
+        let slot = registry_slot_hex("alice".to_string()).unwrap();
+        assert_eq!(slot.len(), 64);
+        assert!(!slot.starts_with("0x"));
+        assert!(slot.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn registry_slot_hex_rejects_invalid_names() {
+        let bad = [
+            "ab",                            // too short
+            "abcdefghijklmnopqrstuvwxyz0123456", // 33 bytes → too long
+            "-alice",                        // leading hyphen
+            "alice-",                        // trailing hyphen
+            "al--ice",                       // consecutive hyphens
+            "al ice",                        // space
+            "ali.ce",                        // dot
+            "ali_ce",                        // underscore
+            "alïce",                         // non-ASCII
+            "",                              // empty
+        ];
+        for name in bad {
+            assert!(
+                registry_slot_hex(name.to_string()).is_err(),
+                "name {name:?} should be rejected"
+            );
+        }
+
+        // Mixed case normalises; boundary lengths are valid.
+        assert_eq!(
+            registry_slot_hex("Alice".to_string()).unwrap(),
+            registry_slot_hex("alice".to_string()).unwrap()
+        );
+        assert!(registry_slot_hex("abc".to_string()).is_ok());
+        assert!(registry_slot_hex("abcdefghijklmnopqrstuvwxyz012345".to_string()).is_ok());
+    }
+
+    /// §7.2 decode round-trip from raw `bincode::serialize(NameEntry)` bytes.
+    #[test]
+    fn registry_decode_entry_round_trip() {
+        let entry = kvnc_name_registry::NameEntry {
+            owner: [0x11; 32],
+            pubkey: [0xAB; 32],
+            relay_endpoints: vec![
+                "https://relay.example.com".to_string(),
+                "http://relay2.example.com".to_string(),
+            ],
+        };
+        let raw = bincode::serialize(&entry).unwrap();
+        let hexed = hex::encode(&raw);
+
+        // Bare hex and `0x`-prefixed (mixed case) decode identically.
+        let json = registry_decode_entry(hexed.clone()).unwrap();
+        assert_eq!(
+            json,
+            registry_decode_entry(format!("0x{hexed}")).unwrap()
+        );
+        assert_eq!(
+            json,
+            registry_decode_entry(format!("0X{}", hexed.to_uppercase())).unwrap()
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["owner"], "11".repeat(32));
+        assert_eq!(parsed["pubkey"], "ab".repeat(32));
+        assert_eq!(
+            parsed["relay_endpoints"],
+            serde_json::json!(["https://relay.example.com", "http://relay2.example.com"])
+        );
+    }
+
+    #[test]
+    fn registry_decode_entry_rejects_malformed() {
+        let entry = kvnc_name_registry::NameEntry {
+            owner: [0x11; 32],
+            pubkey: [0xAB; 32],
+            relay_endpoints: vec!["https://relay.example.com".to_string()],
+        };
+        let raw = bincode::serialize(&entry).unwrap();
+
+        // Truncated bytes.
+        assert!(registry_decode_entry(hex::encode(&raw[..raw.len() - 1])).is_err());
+        // Non-hex.
+        assert!(registry_decode_entry("zzzz".to_string()).is_err());
+        // Empty slot / `0x` are not special-cased here → error.
+        assert!(registry_decode_entry(String::new()).is_err());
+        assert!(registry_decode_entry("0x".to_string()).is_err());
+        // Structurally wrong (offset/len) — count claims an entry that isn't there.
+        let corrupt = bincode::serialize(&kvnc_name_registry::NameEntry {
+            owner: [0; 32],
+            pubkey: [0; 32],
+            relay_endpoints: vec!["https://x.example.com".to_string()],
+        })
+        .unwrap();
+        let mut truncated_after_count = corrupt[..64 + 8].to_vec();
+        truncated_after_count[64..72].copy_from_slice(&5u64.to_le_bytes()); // claim 5 endpoints
+        assert!(registry_decode_entry(hex::encode(&truncated_after_count)).is_err());
     }
 }

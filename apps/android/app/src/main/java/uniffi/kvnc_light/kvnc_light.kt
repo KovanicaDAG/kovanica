@@ -688,6 +688,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kvnc_light_ffi_checksum_func_import_wallet(
     ): Int
+    external fun uniffi_kvnc_light_ffi_checksum_func_registry_decode_entry(
+    ): Int
+    external fun uniffi_kvnc_light_ffi_checksum_func_registry_slot_hex(
+    ): Int
     external fun uniffi_kvnc_light_ffi_checksum_func_sign_bond_raw(
     ): Int
     external fun uniffi_kvnc_light_ffi_checksum_func_sign_detached(
@@ -732,6 +736,10 @@ internal object UniffiLib {
     external fun uniffi_kvnc_light_ffi_fn_func_faucet_allowed(`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_kvnc_light_ffi_fn_func_import_wallet(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kvnc_light_ffi_fn_func_registry_decode_entry(`valueHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kvnc_light_ffi_fn_func_registry_slot_hex(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kvnc_light_ffi_fn_func_sign_bond_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`stake`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -890,6 +898,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kvnc_light_ffi_checksum_func_import_wallet() != 32019) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kvnc_light_ffi_checksum_func_registry_decode_entry() != 8553) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kvnc_light_ffi_checksum_func_registry_slot_hex() != 5752) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kvnc_light_ffi_checksum_func_sign_bond_raw() != 62969) {
@@ -1583,6 +1597,54 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         
         FfiConverterString.lower(`mnemonic`),
         FfiConverterString.lower(`passphrase`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Decode a bincode 1.3 `NameEntry` read from a registry storage slot.
+         *
+         * Accepts `"0x"+hex` or bare hex (case-insensitive). The value is
+         * `owner[32] ‖ pubkey[32] ‖ u64le(count) ‖ count×(u64le(len) ‖ utf8)`.
+         * Returns compact JSON
+         * `{"owner":"<64hex>","pubkey":"<64hex>","relay_endpoints":["…"]}`.
+         *
+         * Truncated or malformed bytes are a [`LightFfiError`]. Callers must check for
+         * an empty slot (`""` / `"0x"`) **before** calling this — those are not
+         * special-cased here and decode to an error.
+         */
+    @Throws(LightFfiException::class) fun `registryDecodeEntry`(`valueHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kvnc_light_ffi_fn_func_registry_decode_entry(
+    
+        
+        FfiConverterString.lower(`valueHex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Compute the contract-storage slot for a name-registry entry.
+         *
+         * `slot = BLAKE3(b"kvnc/v1/name/" ++ lowercase(name))`, returned as 64
+         * lowercase hex (**no** `0x` prefix). The prefix is taken from
+         * [`kvnc_name_registry::entry_key`] (single source of truth) and hashed with
+         * the canonical [`kvnc_common::hash`], exactly matching the host storage key
+         * the contract writes (`blake3(raw_key)`).
+         *
+         * Names are normalised-then-validated: 3..=32 bytes, only `[a-z0-9-]`, no
+         * leading/trailing `-`, no `--`. Invalid input is a [`LightFfiError`].
+         */
+    @Throws(LightFfiException::class) fun `registrySlotHex`(`name`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kvnc_light_ffi_fn_func_registry_slot_hex(
+    
+        
+        FfiConverterString.lower(`name`),_status)
 }
     )
     }
