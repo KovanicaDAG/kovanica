@@ -17,5 +17,10 @@
             android:exported="false"
             android:label="Messages"
             android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
+            android:name=".ReceiveActivity"
+            android:exported="false"
+            android:label="Receive"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>

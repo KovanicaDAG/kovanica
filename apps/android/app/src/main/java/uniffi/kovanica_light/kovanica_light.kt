@@ -694,6 +694,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_sign_call_raw(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_sign_deploy_raw(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_detached(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_exit_raw(
@@ -742,6 +746,10 @@ internal object UniffiLib {
     external fun uniffi_kovanica_light_ffi_fn_func_registry_slot_hex(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_bond_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`stake`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_sign_call_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`contract`: RustBuffer.ByValue,`value`: Long,`method`: RustBuffer.ByValue,`argsHex`: RustBuffer.ByValue,`gasLimit`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_sign_deploy_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`codeHex`: RustBuffer.ByValue,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_detached(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`messageHex`: RustBuffer.ByValue,`domain`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -907,6 +915,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw() != 28793) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_call_raw() != 38764) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_deploy_raw() != 4049) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_detached() != 55302) {
@@ -1663,6 +1677,55 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         FfiConverterString.lower(`passphrase`),
         FfiConverterULong.lower(`chainId`),
         FfiConverterULong.lower(`stake`),
+        FfiConverterULong.lower(`nonce`),
+        FfiConverterULong.lower(`feeRate`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Sign a contract call. `args_hex` is bincode-encoded calldata (`0x` optional).
+         *
+         * `value` is the native KUNA (atoms) sent to the contract, `0` when unused.
+         * `fee_rate` is atoms per byte from `kovanica_estimateFee`.
+         */
+    @Throws(LightFfiException::class) fun `signCallRaw`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `chainId`: kotlin.ULong, `contract`: kotlin.String, `value`: kotlin.ULong, `method`: kotlin.String, `argsHex`: kotlin.String, `gasLimit`: kotlin.ULong, `nonce`: kotlin.ULong, `feeRate`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_sign_call_raw(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterULong.lower(`chainId`),
+        FfiConverterString.lower(`contract`),
+        FfiConverterULong.lower(`value`),
+        FfiConverterString.lower(`method`),
+        FfiConverterString.lower(`argsHex`),
+        FfiConverterULong.lower(`gasLimit`),
+        FfiConverterULong.lower(`nonce`),
+        FfiConverterULong.lower(`feeRate`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Sign a contract deploy. `code_hex` is the WASM bytecode (`0x` optional).
+         *
+         * `fee_rate` is atoms per byte from `kovanica_estimateFee`.
+         */
+    @Throws(LightFfiException::class) fun `signDeployRaw`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `chainId`: kotlin.ULong, `codeHex`: kotlin.String, `nonce`: kotlin.ULong, `feeRate`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_sign_deploy_raw(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterULong.lower(`chainId`),
+        FfiConverterString.lower(`codeHex`),
         FfiConverterULong.lower(`nonce`),
         FfiConverterULong.lower(`feeRate`),_status)
 }
