@@ -2,6 +2,9 @@
 
 This guide walks you through becoming a validator on the **Kovanica testnet** (chain ID: `2`).
 
+**Status:** Active — testnet onboarding guide (chain ID `2`).
+**Consensus impact:** none — client-only documentation; no consensus or ledger rule change.
+
 ---
 
 ## 1. Prerequisites
@@ -137,7 +140,7 @@ export KOVANICA_VALIDATOR_KEY_PASS="your-passphrase"
 
 ```bash
 # Get testnet KUNA from faucet first
-curl -X POST https://faucet.testnet.kovanica.io/faucet \
+curl -X POST https://faucet-testnet.kovanica.online/faucet \
   -H "Content-Type: application/json" \
   -d '{"address": "kvnc<your-address>dag"}'
 
@@ -286,9 +289,9 @@ Import `ops/monitoring/grafana-dashboard.json` for:
 | Parameter | Value |
 |-----------|-------|
 | **Chain ID** | `2` |
-| **RPC endpoint** | `http://<your-ip>:8545` (local) / `https://rpc.testnet.kovanica.io` (public) |
-| **Explorer** | `https://explorer.testnet.kovanica.io` |
-| **Faucet** | `https://faucet.testnet.kovanica.io` (3 req/hr/IP, 10 KUNA) |
+| **RPC endpoint** | `http://<your-ip>:8545` (local) / `https://rpc-testnet.kovanica.online` (public) |
+| **Explorer** | `https://explorer.kovanica.online` |
+| **Faucet** | `https://faucet-testnet.kovanica.online` (3 req/hr/IP, 10 KUNA) |
 | **Seed nodes** | `145.223.116.178:8000`, `76.13.250.65:8000`, `187.7.27.139:8000` |
 | **Genesis file** | Distributed by coordinators |
 
@@ -299,7 +302,7 @@ Import `ops/monitoring/grafana-dashboard.json` for:
 kovanica-cli faucet --address kvnc<your-address>dag --chain-id 2
 
 # Via HTTP
-curl -X POST https://faucet.testnet.kovanica.io/faucet \
+curl -X POST https://faucet-testnet.kovanica.online/faucet \
   -H "Content-Type: application/json" \
   -d '{"address": "kvnc<your-address>dag"}'
 ```
@@ -373,7 +376,7 @@ journalctl -u kovanica -f
 
 - **Testnet Discord**: `#kovanica-testnet-validators`
 - **GitHub Issues**: `github.com/kovanica/kovanica/issues`
-- **Docs**: `https://docs.kovanica.io`
+- **Docs**: `https://docs.kovanica.online`
 
 ---
 

@@ -5,7 +5,7 @@ Consensus impact: client-only / ledger-safe (freeze is operational, not consensu
 
 Pre-freeze gates (all must pass before tag / freeze):
 
-- [ ] Seed nodes 3+ registered (`seed1/2/3.kovanica.io`, grey-cloud TCP 8000). Verify `dig +short seedN.kovanica.io`; `nc -vz seedN.kovanica.io 8000`; `KOVANICA_BOOTNODES` populated at deploy time (do NOT hard-code in `config.rs`; keep defaults empty per safety rule).
+- [ ] Seed nodes 3+ registered (`seed1/2/3.kovanica.online`, grey-cloud TCP 8000). Verify `dig +short seedN.kovanica.online`; `nc -vz seedN.kovanica.online 8000`; `KOVANICA_BOOTNODES` populated at deploy time (do NOT hard-code in `config.rs`; keep defaults empty per safety rule).
 - [ ] Genesis ceremony completed: all validator pubkeys collected, `genesis_validators.toml` hash compared across validators, `kovanica-node genesis --force` executed on each validator, `genesis.json` + staking state produced; data-dir (`KOVANICA_DATA`) preserved (never wipe after first genesis write).
 - [ ] Genesis hash verified across all 5–20 genesis validators (`build_committee` output matches).
 - [ ] Chain id fixed (1337 for testnet; 1 for mainnet when launching). `KOVANICA_CHAIN_ID` set.
