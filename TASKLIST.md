@@ -470,7 +470,7 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 **Operativni drift (JOŠ NIJE riješeno):**
 - [ ] Deployani VPS systemd uniti su još `kvnc-*` i exportaju `KVNC_*`. Binarij s `KOVANICA_*` env imenima + stari uniti = **tihi config break**. Rename se mora deployati kao **jedna koordinirana** unit+script+binary promjena.
 - [ ] Fizički checkout direktorij `/root/Projects/kvnc` nije preimenovan → `mainnet/run-seed*.sh`, `run-seed1.sh`, `generate_validators.rs`, `docs/TESTNET-SEED-NODES.md` hardkodiraju `/root/Projects/kvnc`. Ako se dir preimenuje, ažurirati u istom commitu.
-- [ ] `.opencode/agents/` + `opencode.json` (agent key `kvnc` → `kovanica`) — zahtijeva restart sesije.
+- [x] `.opencode/agents/kovanica.md` + `opencode.json` (agent key `kovanica` / `kovanica-plan`) — preimenovano. **Zahtijeva restart OpenCodea** da se novi agent key učita.
 
 ### C. Otvoreni itemi (iz "Known reds", rev. 2026-10-15)
 
