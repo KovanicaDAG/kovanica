@@ -1,0 +1,79 @@
+# .github/workflows/soak.yml
+#
+# Kovanica long-running soak test.
+#
+# Brings up the docker-compose testnet stack, waits for it to be healthy and
+# committing, then exercises it for a configurable duration while sampling
+# /health + /metrics. Fails the job on the first stall or crash and uploads the
+# logs/diagnostics.
+#
+# Triggers: nightly schedule + manual workflow_dispatch ONLY. It never runs on
+# push/PR — a soak builds the node image and runs for minutes.
+#
+# Duration:
+#   * nightly default is 600 s (10 min) so the nightly job stays well inside the
+#     runner budget and still catches stalls/crashes.
+#   * pass a larger `duration` via workflow_dispatch for longer runs (bounded by
+#     the job `timeout-minutes` below).
+#   * the 24h soak (SOAK_SECS=86400) is a MANUAL/long-lived-runner setting: a
+#     GitHub-hosted job is capped at 6h, so run it on a machine you control:
+#       SOAK_SECS=86400 ./ops/soak/run-soak.sh
+#     See ops/soak/README.md.
+
+name: Soak
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Nightly at 03:00 UTC (offset from the CI nightly)
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Soak duration in seconds (CI default 600; 86400 = 24h needs a long-lived runner)'
+        required: false
+        default: '600'
+        type: string
+
+# Serialise soaks: a scheduled run and a manual run can never overlap, and an
+# in-progress soak is never cancelled by a newly queued one.
+concurrency:
+  group: soak
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    name: docker-compose soak
+    runs-on: ubuntu-latest
+    # Bounds the whole job (image build + warm-up + soak). GitHub-hosted jobs max
+    # out at 360 min; the runner itself always exits after SOAK_SECS, so this is
+    # just a hard ceiling.
+    timeout-minutes: 180
+    env:
+      SOAK_SECS: ${{ github.event.inputs.duration || '600' }}
+      OUT_DIR: ${{ github.workspace }}/soak-artifacts
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show docker versions
+        run: |
+          docker version
+          docker compose version
+
+      - name: Run soak
+        run: bash ops/soak/run-soak.sh --duration "$SOAK_SECS"
+
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-artifacts
+          path: soak-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -p kovanica-soak -f docker-compose.yml down -v || true
