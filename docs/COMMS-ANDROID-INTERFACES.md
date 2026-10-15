@@ -231,3 +231,122 @@ configured, lookup reports "not configured".
 Bump `apps/android/app/build.gradle.kts` to `versionCode 4` / `versionName "0.4.0"`; rebuild native lib +
 `assembleDebug assembleRelease bundleRelease`; re-sign the release APK **v2+v3**; publish a GitHub release
 `v0.4.0-android`. Orchestrator owns build/publish/version bump.
+
+---
+
+## §8 v0.5.0 — network switch (mainnet / testnet / local) + live chain data
+
+Goal: make the app usable against a real network. Today it has **no network concept** — only free-text
+`rpc` / `chainId` / `epoch` boxes defaulting to the emulator loopback, and the faucet button is mis-wired
+(it POSTs to `rpcBase + "/faucet"`, but the faucet is a **separate** process on `:8080`). This cut mirrors
+the in-repo precedent `packages/console/src/network.ts` (+ `session.tsx`). Client-only: **no consensus,
+ledger, node, or ops change**, and no transaction is added.
+
+### §8.1 Network model — new `Network.kt` (lane android-net)
+
+```kotlin
+data class Network(
+    val id: String,          // "mainnet" | "testnet" | "local"
+    val label: String,       // "Mainnet" | "Testnet" | "Local / dev"
+    val chainId: Long,       // 1 | 2 | 1337
+    val rpcUrl: String,      // full RPC base, WITH "/rpc" (NodeClient tolerates either form)
+    val faucetUrl: String?,  // full faucet URL, or null => no faucet on this network
+    val enabled: Boolean,
+    val soon: String? = null // shown instead of allowing selection when enabled == false
+)
+
+object Networks {
+    val MAINNET = Network("mainnet", "Mainnet", 1L,
+        "https://rpc.kovanica.online/rpc", null, enabled = false,
+        soon = "Mainnet is not open yet.")
+    val TESTNET = Network("testnet", "Testnet", 2L,
+        "https://rpc-testnet.kovanica.online/rpc",
+        "https://faucet-testnet.kovanica.online/faucet", enabled = true)
+    val LOCAL = Network("local", "Local / dev", 1337L,
+        "http://10.0.2.2:8545/rpc", "http://10.0.2.2:8080/faucet", enabled = true)
+    val ALL: List<Network> = listOf(MAINNET, TESTNET, LOCAL)
+    val DEFAULT: Network = LOCAL
+    fun byId(id: String?): Network? = ALL.firstOrNull { it.id == id }
+}
+```
+
+- **Chain-id truth:** mainnet `1`, testnet `2`, local `1337` — taken from the in-repo
+  `packages/console/src/network.ts` and `crates/kovanica-types/src/signing.rs`. (Note: `docs/TESTNET-SEED-NODES.md`
+  calls testnet `1337`; that discrepancy is a docs bug — the console and the type registry win.)
+- **Endpoint values are the in-repo console's and are UNVERIFIED for the `kovanica` chain.** They are defaults
+  only; every field stays editable, and the default selected network is **Local**.
+- Mainnet is **disabled** (`enabled = false`, `soon`) until audited/open — mirrors the console.
+
+### §8.2 Persistence (SharedPreferences file `"kvnc"`, same file the app already uses)
+
+- New key `network_id` (String; one of the ids above).
+- New key `faucet` (String; the effective faucet URL, editable).
+- Existing keys keep working and become the **effective, editable override values**: `rpc`, `chainId`,
+  `epoch`. Selecting a network writes `network_id` + prefills `rpc` / `chainId` / `faucet`.
+- No migration needed — old installs simply have no `network_id` and fall back to `Networks.DEFAULT`.
+- The FFI `faucet_allowed(chain_id)` needs **no change** (true for `2` and `1337`, false for `1`).
+
+Helper API (in `Network.kt`, lane android-net) so the UI lane never hand-rolls prefs:
+
+```kotlin
+object NetworkPrefs {
+    const val PREFS = "kvnc"
+    fun selectedId(ctx: Context): String                 // -> stored network_id, else Networks.DEFAULT.id
+    fun selected(ctx: Context): Network                  // -> Networks.byId(selectedId) ?: Networks.DEFAULT
+    fun select(ctx: Context, n: Network)                 // writes network_id, rpc, chainId, faucet
+    fun rpc(ctx: Context): String                        // effective (override) RPC
+    fun setRpc(ctx: Context, value: String)
+    fun chainId(ctx: Context): Long
+    fun setChainId(ctx: Context, value: Long)
+    fun epoch(ctx: Context): Long
+    fun setEpoch(ctx: Context, value: Long)
+    fun faucet(ctx: Context): String?                    // effective faucet URL ("" / absent -> null)
+    fun setFaucet(ctx: Context, value: String?)
+    fun effective(ctx: Context): Network                 // selected profile with rpc/chainId/faucet overrides applied
+}
+```
+Override keys (`rpc`, `chainId`, `epoch`, `faucet`) are read/written as strings in the same `"kvnc"` file
+the app already uses; `""` means "fall back to the selected network's value".
+
+### §8.3 `NodeClient.kt` changes (lane android-net)
+
+```kotlin
+class NodeClient(base: String, private val faucetUrl: String? = null) {
+    fun call(method: String, params: JSONArray): Any?
+    fun postFaucet(address: String): String   // POST faucetUrl; if blank -> IllegalStateException
+    fun blockNumber(): ULong                  // kovanica_blockNumber []          (implemented, ungated)
+    fun balance(address: String): ULong       // kovanica_getBalance [address]    (implemented, ungated)
+}
+```
+- **The faucet must no longer be derived from the RPC base.** `faucetBase` is removed. When the network has
+  no faucet URL the method fails loudly (`IllegalStateException`), and the UI hides the button anyway.
+- `blockNumber()` / `balance()` parse via the existing `parseQuantity(value: Any?)`.
+- Keep the existing JSON-RPC envelope (`{jsonrpc,method,params,id:1}`, 15s timeouts, `HttpURLConnection`).
+
+### §8.4 UI — `MainActivity.kt` (lane android-ui, @designer)
+
+Add, without removing existing features (wallet create/import, sync, balance, send, bond, witness, exit, messages):
+- **Network selector** at the top (Spinner): `Mainnet` / `Testnet` / `Local / dev`. Disabled entries are
+  shown but not selectable, with their `soon` text visible. Selecting one persists `network_id`, prefills
+  the RPC / chain-id / faucet fields, and shows a clear "switched to X" status.
+- **RPC** and **Faucet** text fields (editable, persisted). Faucet field is disabled/hidden when the
+  selected network has `faucetUrl == null`.
+- **Chain status panel**: a "Check connection" action calls `blockNumber()` and shows either
+  `Connected — height <n>` or the exact error; plus the wallet balance via `balance(address)` when a
+  keystore exists. Show the chain id in use.
+- **Faucet button** hidden when the selected network has no faucet (mainnet).
+- All network I/O stays on the existing `Executors.newSingleThreadExecutor()` + `runOnUiThread` pattern;
+  errors surface in the existing status text, never crash the UI thread.
+
+### §8.5 Non-goals (this cut)
+
+No in-app background header polling (single-header `sync()` is unchanged), no automatic wallet-header
+catch-up across gaps, no mainnet enablement, no node/ops/deployment change, no new RPC methods, no
+consensus change. Making the chain reachable in production (a public, off-loopback RPC + TLS + matching
+`chain_id`/genesis) is an **ops action requiring explicit approval** and is out of scope here.
+
+### §8.6 Build & release (this cut)
+
+Bump `apps/android/app/build.gradle.kts` to `versionCode 5` / `versionName "0.5.0"`; rebuild native lib +
+`assembleDebug assembleRelease bundleRelease`; re-sign the release APK **v2+v3**; publish a GitHub release
+`v0.5.0-android` (retire `v0.4.0-android`). Orchestrator owns build/publish/version bump.
