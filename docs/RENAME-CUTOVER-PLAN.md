@@ -143,6 +143,15 @@ the one on the running chain, the cutover forks or the new nodes reject the chai
 > is not silent — it fails closed. Practical consequence for D4: seed2 is already producing; what the
 > network lacks is *availability*, not configuration.
 
+> **Evidence (2026-10-15, read-only on seed2/seed3): the two generations name different validator sets.**
+> The old path signs with per-host keys `testnet/validators/v{1,2,3}.dat` (mode `0600`, three distinct
+> 65-byte blobs) against the genesis set in `testnet/node-data/genesis_validators.toml` (`aa7ec9c9…`,
+> `7173710d…`, `85043fd3…`, 50 000 KUNA each — identical on both hosts).
+> `/etc/kovanica/testnet-authorities.conf` instead declares `d1a14d2c…`, `a5e261ae…`, `a1affed9…` with
+> `KOVANICA_AUTHORITY_THRESHOLD=2` and `KOVANICA_SLOT_DURATION=3000`. The two key sets do not overlap,
+> so D3 is not academic: mixing the paths puts a node on a set the running chain does not recognise.
+> Option A must stay on the genesis set.
+
 **[OWNER] D4 — Window and blast radius.** The three seeds are the testnet's bootstrap set. Recommend
 seed3 first (already down → zero incremental risk), then seed2, then seed1 (dev box, deferred).
 
@@ -189,7 +198,10 @@ system nginx on 80/443). The public surface agrees: `https://explorer.kovanica.o
 2. Restoring the other two seeds is the higher-priority workstream; the rename is the smaller,
    reversible half.
 3. The 502 on the explorer means "verify against the network" steps must temporarily use per-host
-   loopback probes (`127.0.0.1:3001/api/head`, `/health`) instead of the public API.
+   loopback probes instead of the public API. The node's own HTTP surface is only `/rpc`, `/ws`,
+   `/health` and `/metrics` (`crates/kovanica-rpc/src/lib.rs:307-327`) — there is **no** `/api/*` route
+   in this tree, so `/api/head` belongs to the separate explorer service. Probe `/health`, plus the
+   JSON-RPC method `kovanica_blockNumber` via `POST /rpc`.
 
 ---
 
@@ -203,7 +215,9 @@ system nginx on 80/443). The public surface agrees: `https://explorer.kovanica.o
 3. Snapshot every data dir before touching it: `/root/Projects/kvnc/testnet/node-data` (old path) and
    `/var/lib/kovanica-testnet-seed{1,2,3}` (new path). Copy, do not move.
 4. Record the exact git SHA the deployed binaries were built from; build the cutover binary from a
-   **pinned, pushed** SHA (currently `main` = `0d1b114c`) and record its `sha256sum`.
+   **pinned, pushed** SHA (currently `main` = `d0a26b11`) and record its `sha256sum`. Build it from a
+   **clean worktree** at that SHA: the shared working tree currently carries 12 modified foreign-WIP
+   files, so an in-tree build would not correspond to any committed revision.
 5. Confirm the old units are `enabled` (they are) so rollback needs no re-configuration.
 
 ## 4. Phase 1 — build and stage artefacts (no host changes)
@@ -240,18 +254,22 @@ Verification after each host, before moving to the next:
 ```bash
 systemctl is-active kovanica-testnet-seed@N.service      # expect: active
 journalctl -u kovanica-testnet-seed@N.service -n 50      # expect: no replay-refusal / OOM
-curl -s http://127.0.0.1:3001/api/head | jq '.height, .chain_id'
-ss -ltnp | grep -E ':8000|:3001'                         # expect the P2P + loopback RPC binds
+curl -s http://127.0.0.1:8545/health | jq '.healthy, .peer_count, .execution'
+curl -s -X POST http://127.0.0.1:8545/rpc -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"kovanica_blockNumber","params":[]}'   # tip height
+ss -ltnp | grep -E ':8000|:8545'                         # expect the P2P + loopback RPC binds
 ```
 
-Then cross-check the public surface (`https://explorer.kovanica.online/api/head` and
-`/api/bootstrap`) to confirm the network is still advancing and the advertised peers/port are sane.
-**Port note:** this network runs P2P on **8000** (not 9000). Keep the live port from `/api/bootstrap`
-as the source of truth before hard-coding it anywhere.
+The node serves no `/api/*` route: `/rpc` (POST), `/ws`, `/health` and `/metrics` only
+(`crates/kovanica-rpc/src/lib.rs:307-327`). The public explorer (`https://explorer.kovanica.online`
+`/api/head`, `/api/bootstrap`) is a **separate service** and is currently returning 502, so cross-check
+it only as a secondary signal. **Port note:** this network runs P2P on **8000** (not 9000) and RPC on
+loopback **8545**; re-confirm with `ss -ltnp` before hard-coding either.
 
 ## 6. Phase 3 — post-cutover verification
 
-- all three seeds `active`, peer counts ≥ 2, tip advancing, `/api/head` height monotonic;
+- all three seeds `active`, peer counts ≥ 2, tip advancing, `kovanica_blockNumber` monotonic (via
+  `POST /rpc` — the node exposes no `/api/*` route);
 - `grep -rn 'KVNC_' /etc/systemd/system` → empty on every host (the drift in TASKLIST §B 471);
 - no unit references `/root/Projects/kvnc` any more, or the dependency is documented;
 - the old units remain `disabled` but present for one release cycle before deletion;
