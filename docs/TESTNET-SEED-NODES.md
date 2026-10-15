@@ -7,7 +7,7 @@
 
 ## Seed nodes
 
-<|end|> # | Hostname | IP | VPS | Validator key | Composer peers |
+| # | Hostname | IP | VPS | Validator key | Composer peers |
 |---|---|---|---|---|---|
 | 1 | seed1.kovanica.online | 145.223.116.178 | VPS#1 (this machine) | val1.pem | 3 |
 | 2 | seed2.kovanica.online | 76.13.250.65 | VPS#2 | val2.pem | 3 |
