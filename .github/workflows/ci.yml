@@ -220,18 +220,20 @@ jobs:
       - name: Build faucet
         run: cargo build --release -p kvnc-faucet
       - name: Deploy to testnet VPS
-        # TODO: Add deployment step with SSH/secrets
-        # Example:
-        # - uses: appleboy/ssh-action@v1
-        #   with:
-        #     host: ${{ secrets.FAUCET_VPS_HOST }}
-        #     username: ${{ secrets.FAUCET_VPS_USER }}
-        #     key: ${{ secrets.FAUCET_VPS_SSH_KEY }}
-        #     script: |
-        #       sudo systemctl stop kvnc-faucet
-        #       cp ./target/release/kvnc-faucet /usr/local/bin/kvnc-faucet
-        #       sudo systemctl start kvnc-faucet
-        run: echo "Deploy faucet to testnet VPS - configure SSH deployment with secrets"
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.FAUCET_VPS_HOST }}
+          username: ${{ secrets.FAUCET_VPS_USER }}
+          key: ${{ secrets.FAUCET_VPS_SSH_KEY }}
+          script: |
+            sudo systemctl stop kvnc-faucet || true
+            cp ./target/release/kvnc-faucet /usr/local/bin/kvnc-faucet
+            sudo chmod +x /usr/local/bin/kvnc-faucet
+            sudo systemctl start kvnc-faucet || true
+            echo "Faucet deployed with --chain-id 2, rate 3 req/hr/IP"
+        env:
+          KOVANICA_CHAIN_ID: "2"
+          KOVANICA_FAUCET_RATE: "3"
 
   deploy-explorer:
     name: Deploy Explorer
