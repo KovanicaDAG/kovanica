@@ -2,6 +2,7 @@
 
 > **Domain:** `kovanica.online` (owned by Kovanica team)
 > **Status:** Active domain, needs DNS records for seed nodes and explorer
+> **Consensus impact:** none — DNS / documentation operations only, no consensus or ledger rule change.
 
 ---
 
@@ -193,7 +194,7 @@ services:
     environment:
       KOVANICA_RUN_VALIDATOR: "false"
       KOVANICA_LISTEN_ADDR: "0.0.0.0:8000"
-      KOVANICA_BOOTNODES: "seed2.kovanica.io:8000,seed3.kovanica.io:8000"
+      KOVANICA_BOOTNODES: "seed2.kovanica.online:8000,seed3.kovanica.online:8000"
       KOVANICA_MAX_PEERS: "50"
       KOVANICA_RPC_AUTH: "disable"
       KOVANICA_RPC_RATE_LIMIT_PER_MIN: "0"

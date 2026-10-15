@@ -29,5 +29,5 @@ Gaps (verified by `nod-1`):
 
 Next actions (not done):
 - Create `ops/genesis/ceremony.sh` (calls `kovanica-node genesis --force` after hash-check pass).
-- Register seeds (`seed1/2/3.kovanica.io`) and set `KOVANICA_BOOTNODES`.
+- Register seeds (`seed1/2/3.kovanica.online`) and set `KOVANICA_BOOTNODES`.
 - After genesis + freeze checklist (`docs/MAINNET-FREEZE-CHECKLIST.md`), only then tag `mainnet-freeze`.
