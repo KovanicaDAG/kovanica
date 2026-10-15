@@ -436,14 +436,16 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 
 ## TODO — stvari za napraviti (rev. 2026-10-15)
 
-### A. `vps3` branch (`origin/vps3` @ `8620356`) — čeka odluku
+### A. `vps3` branch — ✅ MERGED (`origin/vps3` @ `62eb5533`, ušao kroz `origin/main`)
 
-- [ ] **Odluka: merge `vps3` → `main`?** Branch nosi comms app (M0–M7 sealed 1:1 envelopes + store-and-forward relay + name registry + video/group moduli + relay registry + rewards discovery), light-FFI detached signing, topup client/mock provider, android UniFFI binding fix. **146 fajlova, +15.5k / −3.7k.**
-- [ ] **Klasifikacija (potvrđeno kod-inspekcijom):** `kovanica-comms-core`, `kovanica-comms-crypto`, `kovanica-comms-relay`, `kovanica-name-registry` su **client-only / ledger-safe** (X25519 + XChaCha20-Poly1305 sealed envelopes). **Nema** izmjena u `kovanica-dag` / `kovanica-state` / subsidy / maturity / 90.2M cap / fee-floor. RFC-006 hard rules netaknute.
-  - ⚠️ Napomena: `vps3` je iz **pred-rename** ere — tamo se crate-ovi zovu `kvnc-comms-*` / `kvnc-name-registry`, a binding `uniffi/kvnc_light/`. Nakon mergea ih treba preimenovati u `kovanica-*` (vidi sekciju B).
-- [ ] **Rezolucija konflikata:** `.gitignore`, `Cargo.toml` (novi workspace članovi + deps `base64`, `x25519-dalek`, `chacha20poly1305`, `zeroize`), `apps/android/app/src/main/java/uniffi/kovanica_light/kovanica_light.kt`.
-- [ ] **Odluka o brisanju na `main`:** `testnet/genesis/genesis.json`, `testnet/validators.json`, `run-seed1.sh` — utječe na genesis/reset playbook (`KOVANICA_ALLOW_RESET`) i seed ops.
-- [ ] **Verifikacija nakon mergea:** `cargo check --workspace --all-targets` + `cargo clippy -p kovanica-comms-core -p kovanica-comms-crypto -p kovanica-comms-relay -p kovanica-name-registry`.
+Merge je izvršen kroz dva merge commita na `main`: `1571429e` (rename ⊕ VPS3) i `1ffa56f6` (android v0.5.0 + README refresh), oba pushed.
+
+- [x] **Odluka: merge `vps3` → `main`?** Branch nosi comms app (M0–M7 sealed 1:1 envelopes + store-and-forward relay + name registry + video/group moduli + relay registry + rewards discovery), light-FFI detached signing, topup client/mock provider, android UniFFI binding fix. **146 fajlova, +15.5k / −3.7k.**
+- [x] **Klasifikacija (potvrđeno kod-inspekcijom):** `kovanica-comms-core`, `kovanica-comms-crypto`, `kovanica-comms-relay`, `kovanica-name-registry` su **client-only / ledger-safe** (X25519 + XChaCha20-Poly1305 sealed envelopes). **Nema** izmjena u `kovanica-dag` / `kovanica-state` / subsidy / maturity / 90.2M cap / fee-floor. RFC-006 hard rules netaknute.
+  - ⚠️ Napomena: `vps3` je iz **pred-rename** ere — tamo se crate-ovi zovu `kvnc-comms-*` / `kvnc-name-registry`, a binding `uniffi/kvnc_light/`. Nakon mergea ih treba preimenovati u `kovanica-*` (vidi sekciju B). **✅ Preimenovano u mergeu.**
+- [x] **Rezolucija konflikata:** `.gitignore`, `Cargo.toml` (novi workspace članovi + deps `base64`, `x25519-dalek`, `chacha20poly1305`, `zeroize`), `apps/android/app/src/main/java/uniffi/kovanica_light/kovanica_light.kt`. **✅ 10 konflikata riješeno (3 `Cargo.toml` ručno, 7 „take theirs + re-apply rename"); UniFFI Kotlin/Swift bindinzi regenerirani (diff = samo checksum literali).**
+- [ ] **Odluka o brisanju na `main`:** `testnet/genesis/genesis.json`, `testnet/validators.json`, `run-seed1.sh` — utječe na genesis/reset playbook (`KOVANICA_ALLOW_RESET`) i seed ops. **(još čeka odluku vlasnika)**
+- [x] **Verifikacija nakon mergea:** `cargo check --workspace --all-targets` **EXIT=0**; `cargo clippy -p kovanica-comms-core -p kovanica-comms-crypto -p kovanica-comms-relay -p kovanica-name-registry --all-targets` **EXIT=0, 0 warninga na te 4 cratea** (preostali warningi su u dependency crate-ovima: `kovanica-types` 8, `kovanica-dag` 2, `kovanica-execution` 2, `kovanica-mempool` 2).
 
 ### B. Rename `kvnc` → `kovanica` — ✅ IZVRŠENO (branch `rename/kovanica`)
 
@@ -477,8 +479,23 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 - [ ] **24h soak** — nikad pokrenut; dodati CI job (`ops/soak/soak.sh` + docker adaptacija).
 - [ ] **3 `kovanica-execution` unit testa** (`committed_subdag_credits_leader_payout_address`, `delegator_rewards_accrue_and_claim_pays_them`, `duplicate_delivery_after_restart_does_not_pay_twice`) — očekivanja na starom s₀=2.0; uskladiti na 2.5 KUNA.
 - [ ] **TPS benchmark skeleton** — `ops/bench/tps.sh` submit loop je `: no-op`; implementirati pravi submit + mjerenje.
-- [ ] **Pre-existing test fail (NIJE od renamena):** `kovanica-node` `tests::red_block_transactions_return_to_mempool_after_restart` paničari na `assert!(mempool.get_pending_propagation().is_empty(), "no gossip")` (`crates/kovanica-node/src/main.rs:3070`). **Dokazano identično na `main` (131b119e)** — reproducirano u zasebnom worktreeu. Vjerojatno regresija iz `0c7de51e` ("mempool critical fixes for empty block proposals") — red tx-ovi se vraćaju u mempool ali ostaju queueani za gossip.
+- [x] **Pre-existing test fail (NIJE od renamena):** `kovanica-node` `tests::red_block_transactions_return_to_mempool_after_restart` paničari na `assert!(mempool.get_pending_propagation().is_empty(), "no gossip")` (`crates/kovanica-node/src/main.rs:3070`). **Dokazano identično na `main` (131b119e)** — reproducirano u zasebnom worktreeu. Vjerojatno regresija iz `0c7de51e` ("mempool critical fixes for empty block proposals") — red tx-ovi se vraćaju u mempool ali ostaju queueani za gossip.
+  - ✅ **Riješeno (test-only) na branchu `fix/rust-open-items` @ `2bee07e3`.** Potvrđeno (@oracle): assert je **zastario**, ne bug — od `0c7de51e` proizvodnja namjerno gossip-a vraćene red tx-ove (`non_blue.rs:62` → `reinsert_returned(txs, true)` → `admit(tx, true)` → `pending_propagation`). Taj commit je ažurirao Test A i `non_blue.rs` test, ali je propustio ovaj drugi `"no gossip"` assert. Zamijenjen s `HashSet<Hash>` usporedbom protiv `red_txs` (`"returned red txs are re-gossiped"`); sibling test i dalje prolazi. **Branch još nije mergean na `main`.**
 - [ ] **DNS seed registracija** — 3+ `kovanica`-native imena za mainnet (`docs/SEED-DNS-AUDIT.md`); trenutno raw IP / simplified arhitektura.
 - [ ] **Contract SDK + Indexer** — nema (Phase 22).
 - [ ] **Phase 25 governance** — stub (`propose`/`vote` → `not_implemented`).
 - [ ] **Light-client checkpoint** — `kovanica_lightClientCheckpoint` je wired ali minimalni stub (nije state-backed).
+
+### D. Zatvoreno u sesiji "close open items" (2026-10-15)
+
+- [x] **`packages/comms` 2 crvena vitesta** (`src/messaging.test.ts`, `src/topup.test.ts`, `hashes.sha512Sync not set`) — fix **`404cb850`** na `main`.
+  - Uzrok **nije** `@noble/curves` (on importa `sha512` direktno) nego **dupli `@noble/ed25519` install**: `packages/comms/node_modules/@noble/ed25519` vs `packages/signer/node_modules/@noble/ed25519`; hook je bio postavljen samo na signerovoj kopiji, pa su testovi koji uvoze `getPublicKey` s commsove kopije pucali već pri collectu.
+  - Fix: novi side-effect modul `packages/comms/src/ed25519.ts` (`ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m))`), importan na vrhu `messaging.ts`, `payments.ts`, `envelope.ts` (uklonjen i inline duplikat tamo). Samo ta 4 fajla.
+  - Verificirano: `Test Files 14 passed (14)` / `Tests 118 passed (118)`, `npx tsc --noEmit` čist.
+  - Otvoreno za kasnije (izvan dosega): ukloniti dupli `@noble/ed25519` root `overrides`/dedupe-om.
+- [x] **CLI fixture cross-check** (`kovanica-cli::tx::tests::console_signer_wire_fixtures_match_the_node`, panic `unexpected fixture call-value-zero`) — fix **`f6f318d9`** na `main`.
+  - `69baff8d` je **zamijenio** `claimSome` vektor s dva `call-*` vektora, a CLI `cases` array nije bio ažuriran. `cases` sada nosi `call-value-zero` (value 0) i `call-value-500` (value 500), oba nonce 6 / fee 10 → `fixture.len() == cases.len() == 7`.
+  - Verificirano: `cargo test -p kovanica-cli --lib` → **43 passed / 0 failed** (baseline 42/1). Nijedan assert nije oslabljen.
+  - ⚠️ **Coverage napomena:** fixture više ne nosi `claimSome` vektor, pa se `ClaimRewards{Some}` wire parity **više nigdje ne cross-checka**. Vraćanje zahtijeva regeneraciju `claimSome` vektora u `packages/signer/fixtures/wire.json`.
+- [x] **Rename `kvnc` → `kovanica` landan i pushan** — `main` = `1ffa56f6` ⊕ `1571429e` ⊕ `55d06c2c`; `origin/main` == `1ffa56f6` pri zadnjem pushu.
+- [ ] **NIJE odabrano u ovoj sesiji (ostaje otvoreno):** rebuild Android `.so` (očekivani cdylib je `kovanica_light_ffi`, lokalni `libkvnc_light_ffi.so` je drift) i VPS uniti + `/root/Projects/kvnc` rename (TASKLIST §B 471–472).
