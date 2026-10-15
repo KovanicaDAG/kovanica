@@ -15,8 +15,8 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["vite/client"],
     "paths": {
-      "@kvnc/signer": ["../signer/src/index.ts"],
-      "@kvnc/api-client": ["../api-client/src/index.ts"]
+      "@kovanica/signer": ["../signer/src/index.ts"],
+      "@kovanica/api-client": ["../api-client/src/index.ts"]
     }
   },
   "include": ["src"]

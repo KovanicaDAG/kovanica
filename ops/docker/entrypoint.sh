@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 #
-# KVNC node container entrypoint.
+# Kovanica node container entrypoint.
 #
 #   1. provision a persistent validator seed inside the data volume (unless the
-#      operator already points KVNC_VALIDATOR_KEY at their own file), and
+#      operator already points KOVANICA_VALIDATOR_KEY at their own file), and
 #   2. hand control to the node binary.
 #
 # Validator seeds are never baked into the image or the repository: they are
@@ -14,12 +14,12 @@ set -eu
 # A node only starts when explicitly asked to (the image default is --help).
 case "${1:-}" in
     --help|-h|--version|-V)
-        exec kvnc-node "$@"
+        exec kovanica-node "$@"
         ;;
 esac
 
-DATA_DIR="${KVNC_DATA_DIR:-/var/lib/kvnc}"
-KEY_FILE="${KVNC_VALIDATOR_KEY:-$DATA_DIR/validator.key}"
+DATA_DIR="${KOVANICA_DATA_DIR:-/var/lib/kovanica}"
+KEY_FILE="${KOVANICA_VALIDATOR_KEY:-$DATA_DIR/validator.key}"
 
 if [ ! -s "$KEY_FILE" ]; then
     install -d -m 700 "$(dirname "$KEY_FILE")"
@@ -31,7 +31,7 @@ if [ ! -s "$KEY_FILE" ]; then
 fi
 
 # Let the node pick up the seed file (its own key never leaves the volume).
-KVNC_VALIDATOR_KEY="$KEY_FILE"
-export KVNC_VALIDATOR_KEY
+KOVANICA_VALIDATOR_KEY="$KEY_FILE"
+export KOVANICA_VALIDATOR_KEY
 
-exec kvnc-node "$@"
+exec kovanica-node "$@"

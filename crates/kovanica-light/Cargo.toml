@@ -1,0 +1,11 @@
+[package]
+name = "kovanica-light"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Kovanica light-client verification (headers, seals, inclusion proofs)"
+
+[dependencies]
+kovanica-types = { path = "../kovanica-types" }
+kovanica-crypto = { path = "../kovanica-crypto" }
+thiserror = { workspace = true }

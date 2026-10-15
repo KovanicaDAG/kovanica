@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { formatKuna, seedToMnemonic } from "@kvnc/signer";
+import { formatKuna, seedToMnemonic } from "@kovanica/signer";
 
 import { decryptBackup, encryptBackup, type BackupFile } from "../backup";
 import { useSession } from "../session";
@@ -117,7 +117,7 @@ export function Account() {
       {phrase ? (
         <div className="card">
           <h2>Recovery phrase</h2>
-          <p>Write these 24 words down. They are the same phrase `kvnc import-key` accepts. This page will not show them again.</p>
+          <p>Write these 24 words down. They are the same phrase `kovanica import-key` accepts. This page will not show them again.</p>
           <ol className="phrase">
             {phrase.split(" ").map((word, index) => (
               <li key={`${index}-${word}`}>{word}</li>

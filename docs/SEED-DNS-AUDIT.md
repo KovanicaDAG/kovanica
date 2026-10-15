@@ -1,6 +1,6 @@
-# KVNC Seed DNS & Explorer DNS Configuration
+# Kovanica Seed DNS & Explorer DNS Configuration
 
-> **Domain:** `kovanica.online` (owned by KVNC team)
+> **Domain:** `kovanica.online` (owned by Kovanica team)
 > **Status:** Active domain, needs DNS records for seed nodes and explorer
 
 ---
@@ -23,11 +23,11 @@
 | `seed1.kovanica.online` | CNAME | `testnet.kovanica.online` | Deprecated alias |
 | `seed2.kovanica.online` | CNAME | `testnet.kovanica.online` | Deprecated alias |
 | `seed3.kovanica.online` | CNAME | `testnet.kovanica.online` | Deprecated alias |
-| `seed1.kvnc.io` | CNAME | `mainnet.kovanica.online` | Future mainnet branding |
-| `seed2.kvnc.io` | CNAME | `mainnet.kovanica.online` | |
-| `seed3.kvnc.io` | CNAME | `mainnet.kovanica.online` | |
+| `seed1.kovanica.io` | CNAME | `mainnet.kovanica.online` | Future mainnet branding |
+| `seed2.kovanica.io` | CNAME | `mainnet.kovanica.online` | |
+| `seed3.kovanica.io` | CNAME | `mainnet.kovanica.online` | |
 
-All validator and regular nodes should configure their `bootnodes` / `KVNC_BOOTNODES` to point to:
+All validator and regular nodes should configure their `bootnodes` / `KOVANICA_BOOTNODES` to point to:
 - **Testnet**: `testnet.kovanica.online:8000`
 - **Mainnet**: `mainnet.kovanica.online:8000`
 
@@ -61,7 +61,7 @@ The single seed node per network acts as the bootstrap entry point; all other no
 
 | Record | Type | Value | Proxy | Notes |
 |--------|------|-------|-------|-------|
-| `console.kovanica.online` | CNAME | `<kvnc-console>.pages.dev` | **Proxied (orange-cloud)** | Kovanica Console (Cloudflare Pages project `kvnc-console`) |
+| `console.kovanica.online` | CNAME | `<kovanica-console>.pages.dev` | **Proxied (orange-cloud)** | Kovanica Console (Cloudflare Pages project `kovanica-console`) |
 
 The console is the interactive site. The explorer stays read-only. Browser calls to the RPC need the node CORS allowlist (`https://console.kovanica.online`, plus `http://127.0.0.1:5173` and `http://localhost:5173` for local dev). The public RPC records stay grey-cloud, so Cloudflare will not add those headers.
 
@@ -69,7 +69,7 @@ The console is the interactive site. The explorer stays read-only. Browser calls
 
 | Record | Type | Value | Proxy | Notes |
 |--------|------|-------|-------|-------|
-| `faucet-testnet.kovanica.online` | CNAME | `<faucet-host>` | **DNS-only** | `kvnc-faucet` `POST /faucet`. Testnet only. Same browser origin allowlist as the RPC. |
+| `faucet-testnet.kovanica.online` | CNAME | `<faucet-host>` | **DNS-only** | `kovanica-faucet` `POST /faucet`. Testnet only. Same browser origin allowlist as the RPC. |
 
 ### status.kovanica.online (Phase 23.3)
 
@@ -171,8 +171,8 @@ The console does not use these variables. Its network table is `packages/console
 curl -fsSL https://get.docker.com | sh
 
 # Clone repo
-git clone https://github.com/KovanicaDAG/kvnc.git
-cd kvnc
+git clone https://github.com/KovanicaDAG/kovanica.git
+cd kovanica
 
 # Generate validator keys (offline, one-time)
 ./ops/docker/validators/generate.sh
@@ -187,19 +187,19 @@ docker compose -f docker-compose.seed.yml up -d
 version: '3.8'
 services:
   seed:
-    image: kvnc-node:local
+    image: kovanica-node:local
     restart: unless-stopped
     network_mode: host
     environment:
-      KVNC_RUN_VALIDATOR: "false"
-      KVNC_LISTEN_ADDR: "0.0.0.0:8000"
-      KVNC_BOOTNODES: "seed2.kvnc.io:8000,seed3.kvnc.io:8000"
-      KVNC_MAX_PEERS: "50"
-      KVNC_RPC_AUTH: "disable"
-      KVNC_RPC_RATE_LIMIT_PER_MIN: "0"
+      KOVANICA_RUN_VALIDATOR: "false"
+      KOVANICA_LISTEN_ADDR: "0.0.0.0:8000"
+      KOVANICA_BOOTNODES: "seed2.kovanica.io:8000,seed3.kovanica.io:8000"
+      KOVANICA_MAX_PEERS: "50"
+      KOVANICA_RPC_AUTH: "disable"
+      KOVANICA_RPC_RATE_LIMIT_PER_MIN: "0"
       RUST_LOG: "info"
     volumes:
-      - seed-data:/var/lib/kvnc
+      - seed-data:/var/lib/kovanica
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 30s
@@ -213,7 +213,7 @@ volumes:
 ### Monitoring
 
 - Prometheus scrape: `http://<seed-ip>:9090/metrics`
-- Grafana dashboard: import `ops/grafana/kvnc-overview.json`
+- Grafana dashboard: import `ops/grafana/kovanica-overview.json`
 - Alerting: peer_count < 2 for 5m → PagerDuty
 
 ---
@@ -226,12 +226,12 @@ volumes:
 3. [ ] Deploy testnet seed node with `docker-compose.seed.yml`
 4. [ ] Add DNS A record for `testnet.kovanica.online` (DNS-only, no proxy)
 5. [ ] Verify P2P connectivity: `nc -zv testnet.kovanica.online 8000`
-6. [ ] Add seed node to `KVNC_BOOTNODES` in genesis config
+6. [ ] Add seed node to `KOVANICA_BOOTNODES` in genesis config
 7. [ ] For mainnet: provision 1 bare-metal server, add `mainnet.kovanica.online` A record
 
 ### Phase 2: Genesis Ceremony (T-1 week)
 1. [ ] Collect validator public keys + stakes via PR
-2. [ ] Run `kvnc-node genesis --validators validators.json --force`
+2. [ ] Run `kovanica-node genesis --validators validators.json --force`
 3. [ ] Distribute `genesis.json` + `genesis_validators.toml` to all participants
 3. [ ] Verify genesis hash matches across all nodes
 
@@ -257,6 +257,6 @@ volumes:
 - `docs/TOKENOMICS.md` — genesis allocation numbers
 - `ops/docker/validators/generate.sh` — key generation script
 - `ops/docker/` — docker compose files
-- `crates/kvnc-faucet/` — faucet crate
-- `ops/grafana/kvnc-overview.json` — Grafana dashboard
+- `crates/kovanica-faucet/` — faucet crate
+- `ops/grafana/kovanica-overview.json` — Grafana dashboard
 - `ops/prometheus/alerts.yml` — alerting rules

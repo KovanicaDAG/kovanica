@@ -40,7 +40,7 @@ dist
 
 # Not needed by the image build (keeps the build context small)
 zips
-kvnc-next-steps
+kovanica-next-steps
 brand-assets
 docs
 *.JPG

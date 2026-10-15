@@ -1,8 +1,8 @@
-# KVNC External Security Audit — Scope Document
+# Kovanica External Security Audit — Scope Document
 
 **Version:** 1.0  
 **Date:** 2026-10-14  
-**Codebase:** `kvnc` (Mysticeti-style DAG, account-based, Wasmi execution)  
+**Codebase:** `kovanica` (Mysticeti-style DAG, account-based, Wasmi execution)  
 **Commit:** `main` @ `98d88cc` (2026-10-13 snapshot)  
 **Crates:** 19 workspace members, ~53k LOC Rust
 
@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-KVNC is a from-scratch Layer-1 blockchain with a Mysticeti-style uncertified DAG consensus (wave length = 3), account-based execution with staked validators (15–21 active, min 50,000 KUNA), and deterministic Wasmi WebAssembly smart contracts. Native token: **KUNA** (9 decimals, 90.2M total supply).
+Kovanica is a from-scratch Layer-1 blockchain with a Mysticeti-style uncertified DAG consensus (wave length = 3), account-based execution with staked validators (15–21 active, min 50,000 KUNA), and deterministic Wasmi WebAssembly smart contracts. Native token: **KUNA** (9 decimals, 90.2M total supply).
 
 This document defines the scope for an external security audit covering consensus-critical paths, cryptographic primitives, P2P networking, execution sandbox, staking/tokenomics, and RPC surface.
 
@@ -18,7 +18,7 @@ This document defines the scope for an external security audit covering consensu
 
 ## 2. In-Scope Components
 
-### 2.1 Consensus — `kvnc-consensus` (CRITICAL)
+### 2.1 Consensus — `kovanica-consensus` (CRITICAL)
 
 | Module | Risk | Description |
 |--------|------|-------------|
@@ -37,7 +37,7 @@ This document defines the scope for an external security audit covering consensu
 - Skip registration persists in decided map with `LeaderStatus::Skip`
 - `mark_decided_and_commit_leader` atomicity (both or neither on crash)
 
-### 2.2 Mempool — `kvnc-mempool` (HIGH)
+### 2.2 Mempool — `kovanica-mempool` (HIGH)
 
 | Area | Risk | Description |
 |------|------|-------------|
@@ -46,31 +46,31 @@ This document defines the scope for an external security audit covering consensu
 | Re-insertion (red blocks) | **High** | `reinsert_returned`: full re-admission, sorted by `(sender, nonce)`, no gossip by default, no peer penalty |
 | Fee policy | **Medium** | `min_fee_rate` default 0 (operator choice); stake/delegate fee-free |
 
-### 2.3 Network / P2P — `kvnc-network` (HIGH)
+### 2.3 Network / P2P — `kovanica-network` (HIGH)
 
 | Component | Risk | Description |
 |-----------|------|-------------|
 | `service.rs` | **High** | `NetworkService` wrapping libp2p Swarm; gossipsub topics: `blocks`, `transactions`, `votes`, `sync`, `seals`; Kademlia + ping + identify |
 | `validation.rs` | **Critical** | Edge validation before gossip: block digest/merkle/author/signature; vote signature + committee membership + leader round/hash match; seal signature + header match |
 | `scoring.rs` | **High** | Peer scoring: topic mesh delivery, validation rejects, behaviour penalties; ban threshold |
-| `block_sync.rs` | **High** | Request-response block sync (protocol `/kvnc/block-sync/1`) |
-| `state_sync.rs` | **High** | Request-response state sync (protocol `/kvnc/state-sync/1`) |
+| `block_sync.rs` | **High** | Request-response block sync (protocol `/kovanica/block-sync/1`) |
+| `state_sync.rs` | **High** | Request-response state sync (protocol `/kovanica/state-sync/1`) |
 | `identity.rs` | **Medium** | Persistent node identity (Ed25519 transport key, `0600` file perms), no hard-coded bootstrap nodes |
 
 **Configuration defaults:** listen `/ip4/0.0.0.0/tcp/8000`, max 50 peers, ping 10s. Bootstrap nodes supplied at deploy via DNS names (no external project infra).
 
-### 2.4 Execution / WASM — `kvnc-execution` + `kvnc-runtime` (HIGH)
+### 2.4 Execution / WASM — `kovanica-execution` + `kovanica-runtime` (HIGH)
 
 | Component | Risk | Description |
 |-----------|------|-------------|
 | `contracts.rs` (execution) | **High** | Native contract dispatch (HTLC, Vault, Multisig, Token, LightNode), WASM via `ContractRunner`, commit-on-success semantics, gas metering |
-| `Runtime::execute` (runtime) | **High** | Wasmi fuel metering (`gas_limit` default 10M), memory limit (16 pages = 1 MiB), deterministic engine, argument/result buffer copy via `kvnc_alloc`/`kvnc_dealloc` |
-| Host ABI (`kvnc-common/wasm.rs`) | **High** | Fixed imports: `kvnc_caller`, `kvnc_contract_address`, `kvnc_block_height`, `kvnc_timestamp`, `kvnc_balance_of`, `kvnc_storage_get/set`, `kvnc_transfer`, `kvnc_emit_log`, `kvnc_alloc`, `kvnc_dealloc` |
-| Contract crates (`kvnc-htlc`, `kvnc-vault`, `kvnc-multisig`, `kvnc-token`, `kvnc-staking/light.rs`) | **High** | Entry points returning packed `i64` (negative = error code 0..11), all state via `Host` trait |
+| `Runtime::execute` (runtime) | **High** | Wasmi fuel metering (`gas_limit` default 10M), memory limit (16 pages = 1 MiB), deterministic engine, argument/result buffer copy via `kovanica_alloc`/`kovanica_dealloc` |
+| Host ABI (`kovanica-common/wasm.rs`) | **High** | Fixed imports: `kovanica_caller`, `kovanica_contract_address`, `kovanica_block_height`, `kovanica_timestamp`, `kovanica_balance_of`, `kovanica_storage_get/set`, `kovanica_transfer`, `kovanica_emit_log`, `kovanica_alloc`, `kovanica_dealloc` |
+| Contract crates (`kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`, `kovanica-token`, `kovanica-staking/light.rs`) | **High** | Entry points returning packed `i64` (negative = error code 0..11), all state via `Host` trait |
 
 **WASM threat model:** untrusted bytecode, gas exhaustion, memory exhaustion, host function reentrancy, trap handling, deterministic execution.
 
-### 2.5 Staking & Tokenomics — `kvnc-staking` (CRITICAL)
+### 2.5 Staking & Tokenomics — `kovanica-staking` (CRITICAL)
 
 | Area | Risk | Description |
 |------|------|-------------|
@@ -83,7 +83,7 @@ This document defines the scope for an external security audit covering consensu
 
 **Supply invariants:** `TOTAL_SUPPLY = FOUNDER_PREMINE (0.2M) + GENESIS_VALIDATOR_ALLOCATION (1M) + TREASURY_TOTAL (8M) + MINING_SUBSIDY_BUDGET (81M) = 90.2M KUNA`
 
-### 2.6 Cryptography — `kvnc-crypto` (CRITICAL)
+### 2.6 Cryptography — `kovanica-crypto` (CRITICAL)
 
 | Primitive | Risk | Description |
 |-----------|------|-------------|
@@ -93,23 +93,23 @@ This document defines the scope for an external security audit covering consensu
 | Commit seal format | **High** | Domain `KUNA/commit/v1`, covers `LeaderHeader` (state root, blue/non-blue roots, epoch, committee_hash) |
 | Keystore v2 | **High** | Argon2id (64 MiB, 3 iter, 4 parallelism), XChaCha20-Poly1305, salt 16B, nonce 24B; v1 migration only |
 
-### 2.7 RPC / JSON-RPC — `kvnc-rpc` (MEDIUM)
+### 2.7 RPC / JSON-RPC — `kovanica-rpc` (MEDIUM)
 
 | Component | Risk | Description |
 |-----------|------|-------------|
 | `rpc_middleware.rs` | **Medium** | Rate limiting (token bucket per IP), auth (Bearer tokens), CORS, method classification (READ vs WRITE) |
-| `rpc_methods.rs` | **Medium** | `kvnc_sendRawTransaction`, `kvnc_getBlock`, `kvnc_call` (WASM simulation), staking/contract methods |
+| `rpc_methods.rs` | **Medium** | `kovanica_sendRawTransaction`, `kovanica_getBlock`, `kovanica_call` (WASM simulation), staking/contract methods |
 | `subscriptions.rs` | **Low** | WebSocket event bus: `newBlock`, `newTransaction`, `vote`, `seal`, `health` |
 | Request timeout | **Low** | 10s global timeout per call |
 
-### 2.8 Keystore / Key Management — `kvnc-keystore` (HIGH)
+### 2.8 Keystore / Key Management — `kovanica-keystore` (HIGH)
 
 - Argon2id parameters fixed (memory-hard, not tunable by user)
 - Atomic write with `tempfile`, symlink refusal
 - V1 read-only migration path (explicit `replace_file` with validation)
 - Seed material never in cleartext on disk; `Zeroizing` for v1 secrets
 
-### 2.9 Node Integration — `kvnc-node` (MEDIUM)
+### 2.9 Node Integration — `kovanica-node` (MEDIUM)
 
 - Genesis/config loading, chain_id pinning to data dir
 - Committee build from staking state (active validators only, stake ≥ 50K)
@@ -121,7 +121,7 @@ This document defines the scope for an external security audit covering consensu
 ## 3. Out of Scope
 
 - Frontend / wallet applications (`packages/`, `apps/`)
-- CLI/TUI (`kvnc-cli`) — only the signing logic is in-scope via `kvnc-crypto`/`kvnc-types`
+- CLI/TUI (`kovanica-cli`) — only the signing logic is in-scope via `kovanica-crypto`/`kovanica-types`
 - Fuzzing harnesses (`fuzz/`)
 - Deployment / ops tooling (`ops/`)
 - Documentation
@@ -147,7 +147,7 @@ This document defines the scope for an external security audit covering consensu
 
 - Unit tests: 500+ passing across workspace
 - Integration tests: `sustained_liveness_integration`, `multi_node_integration`, `late_join_integration`
-- Property tests: `proptest` in `kvnc-consensus` (wave arithmetic, committer properties)
+- Property tests: `proptest` in `kovanica-consensus` (wave arithmetic, committer properties)
 - Fuzzing: Block, vote, transaction, consensus fuzzers (cargo-fuzz)
 - Known flaky: `red_block_transactions_return_to_mempool_after_restart` (gossip timing)
 
@@ -164,9 +164,9 @@ This document defines the scope for an external security audit covering consensu
 
 ## 7. Contact / Repository
 
-- Repository: `https://github.com/your-org/kvnc` (private pre-audit)
+- Repository: `https://github.com/your-org/kovanica` (private pre-audit)
 - Branch: `main`
-- Contact: [audit-contact@kvnc.example]
+- Contact: [audit-contact@kovanica.example]
 - Build: `cargo build --workspace --release`
 - Test: `cargo test --workspace`
 

@@ -2,7 +2,7 @@
 # The real file is generated locally and gitignored:
 #   ops/docker/validators/generate.sh
 # A node's address is its raw Ed25519 public key, so address hex == public_key hex.
-# Stakes = MIN_VALIDATOR_STAKE = 50_000 KVNC (50_000_000_000_000 atoms).
+# Stakes = MIN_VALIDATOR_STAKE = 50_000 KUNA (50_000_000_000_000 atoms).
 [[validator]]
 address = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 stake = 50000000000000

@@ -9,7 +9,7 @@ It is not a network upgrade.
 
 ### Already in tree
 
-- `kvnc-crypto` implements ECVRF-ED25519 (`vrf_prove` / `vrf_verify`).
+- `kovanica-crypto` implements ECVRF-ED25519 (`vrf_prove` / `vrf_verify`).
 - `Authority` / `AuthorityInfo` already carry an optional `vrf_public_key`.
 - `Committee::leader_with_vrf` selects the lowest stake-weighted VRF hash when
   every authority in the map has an output, and otherwise falls back to

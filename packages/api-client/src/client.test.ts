@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { KvncRpcClient, subscriptionHead } from "./index.js";
+import { KovanicaRpcClient, subscriptionHead } from "./index.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -13,7 +13,7 @@ function jsonResponse(result: unknown, status = 200): Response {
   });
 }
 
-describe("KvncRpcClient", () => {
+describe("KovanicaRpcClient", () => {
   it("parses quantities and posts to /rpc", async () => {
     const bodies: unknown[] = [];
     vi.stubGlobal(
@@ -23,11 +23,11 @@ describe("KvncRpcClient", () => {
         return jsonResponse("0x2a");
       }),
     );
-    const client = new KvncRpcClient("http://127.0.0.1:8545/rpc");
+    const client = new KovanicaRpcClient("http://127.0.0.1:8545/rpc");
     await expect(client.getNonce("kvnctestdag")).resolves.toBe(42n);
     await expect(client.getStake("kvnctestdag")).resolves.toBe(42n);
     await expect(client.estimateFee()).resolves.toBe(42n);
-    expect(bodies[0]).toMatchObject({ method: "kvnc_getNonce", params: ["kvnctestdag"] });
+    expect(bodies[0]).toMatchObject({ method: "kovanica_getNonce", params: ["kvnctestdag"] });
   });
 
   it("returns null when a receipt is not in a block yet", async () => {
@@ -35,7 +35,7 @@ describe("KvncRpcClient", () => {
       "fetch",
       vi.fn(async () => jsonResponse(null)),
     );
-    const client = new KvncRpcClient("http://127.0.0.1:8545");
+    const client = new KovanicaRpcClient("http://127.0.0.1:8545");
     await expect(client.getTransactionReceipt("abc")).resolves.toBeNull();
   });
 
@@ -48,7 +48,7 @@ describe("KvncRpcClient", () => {
         return new Response(JSON.stringify({ status: "ok", peer_count: 4 }), { status: 200 });
       }),
     );
-    const client = new KvncRpcClient("https://rpc-testnet.kovanica.online/rpc");
+    const client = new KovanicaRpcClient("https://rpc-testnet.kovanica.online/rpc");
     await expect(client.health()).resolves.toEqual({ status: "ok", peerCount: 4 });
     expect(urls[0]).toBe("https://rpc-testnet.kovanica.online/health");
   });
@@ -62,7 +62,7 @@ describe("KvncRpcClient", () => {
         }),
       ),
     );
-    const client = new KvncRpcClient("http://127.0.0.1:8545/rpc");
+    const client = new KovanicaRpcClient("http://127.0.0.1:8545/rpc");
     await expect(client.blockNumber()).rejects.toThrow("nope");
   });
 });
@@ -72,7 +72,7 @@ describe("subscriptionHead", () => {
     expect(
       subscriptionHead({
         jsonrpc: "2.0",
-        method: "kvnc_subscription",
+        method: "kovanica_subscription",
         params: { subscription: "0x1", result: { round: "0x3" } },
       }),
     ).toEqual({ round: "0x3" });

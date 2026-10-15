@@ -6,7 +6,7 @@ const PREFIX = "kvnc";
 const SUFFIX = "dag";
 
 /**
- * Canonical address: `kvnc` + hex(32-byte public key || 4-byte BLAKE3 checksum) + `dag`.
+ * Canonical address: `kovanica` + hex(32-byte public key || 4-byte BLAKE3 checksum) + `dag`.
  * The checksum is the first 4 bytes of unkeyed BLAKE3 over the public key.
  */
 export function encodeAddress(publicKey: Uint8Array): string {
@@ -24,7 +24,7 @@ export function encodeAddress(publicKey: Uint8Array): string {
 export function decodeAddress(value: string): Uint8Array {
   const trimmed = value.trim();
   if (!trimmed.startsWith(PREFIX) || !trimmed.endsWith(SUFFIX)) {
-    throw new Error("address must start with kvnc and end with dag");
+    throw new Error("address must start with kovanica and end with dag");
   }
   const body = hexToBytes(trimmed.slice(PREFIX.length, -SUFFIX.length));
   if (body.length !== 36) {
@@ -41,7 +41,7 @@ export function decodeAddress(value: string): Uint8Array {
 
 /**
  * Accept a canonical address or a bare / `0x` 32-byte hex string.
- * Hex input skips the checksum, matching `Address::from_str` in kvnc-types.
+ * Hex input skips the checksum, matching `Address::from_str` in kovanica-types.
  */
 export function parseAddress(value: string): Uint8Array {
   const trimmed = value.trim();

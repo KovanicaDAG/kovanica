@@ -20,11 +20,11 @@ pub struct ExecutionConfig {
 |-----------|----------|-------|
 | Call base fee | 2,100 | Charged for every contract call (covers host setup, argument copy) |
 | Memory page | 3,000 | Per additional 64 KiB page beyond initial allocation |
-| Storage read | 200 | Per `kvnc_storage_get` call |
-| Storage write | 5,000 | Per `kvnc_storage_set` call (includes namespace hashing) |
-| Balance read | 100 | Per `kvnc_balance_of` call |
-| Native transfer | 1,500 | Per `kvnc_transfer` call |
-| Event emit | 500 | Per `kvnc_emit_event` call |
+| Storage read | 200 | Per `kovanica_storage_get` call |
+| Storage write | 5,000 | Per `kovanica_storage_set` call (includes namespace hashing) |
+| Balance read | 100 | Per `kovanica_balance_of` call |
+| Native transfer | 1,500 | Per `kovanica_transfer` call |
+| Event emit | 500 | Per `kovanica_emit_event` call |
 | Contract creation | 32,000 | `Deploy` transaction (code hash, account init) |
 
 ## 3. Host Function Gas Costs (env imports)
@@ -33,16 +33,16 @@ Each host function consumes fuel in addition to its base cost:
 
 | Host Function | Base Gas | Additional Per-Call Cost |
 |---------------|----------|--------------------------|
-| `kvnc_caller` | 0 | 50 |
-| `kvnc_contract_address` | 0 | 50 |
-| `kvnc_block_height` | 0 | 10 |
-| `kvnc_timestamp` | 0 | 10 |
-| `kvnc_balance_of` | 100 | 50 |
-| `kvnc_transfer` | 1,500 | 200 (includes balance checks) |
-| `kvnc_storage_get` (len=0) | 200 | 50 |
-| `kvnc_storage_get` (copy) | 200 | 50 + 2 per 32 bytes copied |
-| `kvnc_storage_set` | 5,000 | 100 + 2 per 32 bytes written |
-| `kvnc_emit_event` | 500 | 20 + 1 per byte of topic+data |
+| `kovanica_caller` | 0 | 50 |
+| `kovanica_contract_address` | 0 | 50 |
+| `kovanica_block_height` | 0 | 10 |
+| `kovanica_timestamp` | 0 | 10 |
+| `kovanica_balance_of` | 100 | 50 |
+| `kovanica_transfer` | 1,500 | 200 (includes balance checks) |
+| `kovanica_storage_get` (len=0) | 200 | 50 |
+| `kovanica_storage_get` (copy) | 200 | 50 + 2 per 32 bytes copied |
+| `kovanica_storage_set` | 5,000 | 100 + 2 per 32 bytes written |
+| `kovanica_emit_event` | 500 | 20 + 1 per byte of topic+data |
 
 ## 4. Wasmi Instruction Fuel (Instruction-Level)
 
@@ -70,9 +70,9 @@ Wasmi consumes fuel per WebAssembly instruction executed. The following table do
 ## 6. Determinism Guarantees
 
 - **Fuel is deterministic**: wasmi's fuel metering is instruction-accurate and deterministic across runs.
-- **No host non-determinism**: Host functions (`kvnc_*`) consume fixed fuel amounts; no `random` or `time` sources are available to contracts.
+- **No host non-determinism**: Host functions (`kovanica_*`) consume fixed fuel amounts; no `random` or `time` sources are available to contracts.
 - **Memory limit is hard**: `memory.grow` beyond `memory_limit_pages` traps deterministically.
-- **Argument/result copy**: Bounded by `MAX_BUFFER_BYTES` (64 MiB) in `kvnc-runtime`.
+- **Argument/result copy**: Bounded by `MAX_BUFFER_BYTES` (64 MiB) in `kovanica-runtime`.
 
 ## 7. Fee Calculation (On-Chain)
 
@@ -86,7 +86,7 @@ fee = gas_price * gas_used
 - `gas_used` is recorded in the receipt.
 - Minimum fee floor: `max(1, block_subsidy / 500_000)` atoms per byte of transaction (per tokenomics).
 
-## 8. Configuration Constants (kvnc-node / genesis)
+## 8. Configuration Constants (kovanica-node / genesis)
 
 ```toml
 # config.example.toml (or genesis config)
@@ -99,12 +99,12 @@ max_memory_limit_pages = 256             # 16 MiB cap
 
 ## 9. Testing Gas Costs
 
-Unit tests in `kvnc-runtime` verify:
+Unit tests in `kovanica-runtime` verify:
 - `low_gas_rejects_an_infinite_guest_loop` — fuel exhaustion traps
 - `memory_grow_is_limited_by_configured_page_cap` — memory cap enforced
 - `packed_contract_error_codes_are_decoded` — error packing deterministic
 
-E2E test in `kvnc-execution` (`wasmi_e2e_kvnc_token_wasm`):
+E2E test in `kovanica-execution` (`wasmi_e2e_kovanica_token_wasm`):
 - Native and wasm paths produce identical state transitions
 - Gas metering works across both paths
 

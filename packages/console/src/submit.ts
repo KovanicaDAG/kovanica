@@ -1,4 +1,4 @@
-import type { KvncRpcClient } from "@kvnc/api-client";
+import type { KovanicaRpcClient } from "@kovanica/api-client";
 import {
   encodeRawTransaction,
   feeForRate,
@@ -6,7 +6,7 @@ import {
   signTransaction,
   type AccountKey,
   type TxKind,
-} from "@kvnc/signer";
+} from "@kovanica/signer";
 
 import { rememberActivity } from "./activity";
 import type { Network } from "./network";
@@ -18,7 +18,7 @@ export interface Submitted {
 
 /** Read the nonce and fee rate, sign locally, and submit the raw transaction. */
 export async function submitTransaction(input: {
-  client: KvncRpcClient;
+  client: KovanicaRpcClient;
   network: Network;
   key: AccountKey;
   kind: TxKind;

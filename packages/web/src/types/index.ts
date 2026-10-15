@@ -1,4 +1,4 @@
-// KVNC Web App Types
+// Kovanica Web App Types
 
 export interface Block {
   hash: string;

@@ -31,18 +31,18 @@ export function StatusPage() {
         fetch(`${DEFAULT_RPC_URL}/rpc`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', method: 'kvnc_blockNumber', params: [], id: 1 }),
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'kovanica_blockNumber', params: [], id: 1 }),
         }),
         fetch(`${DEFAULT_RPC_URL}/health`),
         fetch(`${DEFAULT_RPC_URL}/rpc`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', method: 'kvnc_getPendingTransactions', params: [], id: 1 }),
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'kovanica_getPendingTransactions', params: [], id: 1 }),
         }),
         fetch(`${DEFAULT_RPC_URL}/rpc`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', method: 'kvnc_getValidators', params: [], id: 1 }),
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'kovanica_getValidators', params: [], id: 1 }),
         }),
       ])
 

@@ -1,26 +1,26 @@
-# KVNC node configuration example.
+# Kovanica node configuration example.
 #
 # Copy this file to `config.toml` (or pass a path with `--config <file>`) and
 # adjust as needed. Any value can be overridden by an environment variable, which
 # is the recommended approach for containers:
 #
-#   data_dir          -> KVNC_DATA_DIR
-#   listen_addr       -> KVNC_LISTEN_ADDR
-#   rpc_addr          -> KVNC_RPC_ADDR
-#   rpc_port          -> KVNC_RPC_PORT
-#   bootnodes         -> KVNC_BOOTNODES        (comma-separated list)
-#   validator_key     -> KVNC_VALIDATOR_KEY
-#   round_duration_ms -> KVNC_ROUND_DURATION_MS
-#   max_peers         -> KVNC_MAX_PEERS
-#   treasury_address  -> KVNC_TREASURY_ADDRESS
-#   rpc_rate_limit_per_min -> KVNC_RPC_RATE_LIMIT_PER_MIN
+#   data_dir          -> KOVANICA_DATA_DIR
+#   listen_addr       -> KOVANICA_LISTEN_ADDR
+#   rpc_addr          -> KOVANICA_RPC_ADDR
+#   rpc_port          -> KOVANICA_RPC_PORT
+#   bootnodes         -> KOVANICA_BOOTNODES        (comma-separated list)
+#   validator_key     -> KOVANICA_VALIDATOR_KEY
+#   round_duration_ms -> KOVANICA_ROUND_DURATION_MS
+#   max_peers         -> KOVANICA_MAX_PEERS
+#   treasury_address  -> KOVANICA_TREASURY_ADDRESS
+#   rpc_rate_limit_per_min -> KOVANICA_RPC_RATE_LIMIT_PER_MIN
 
 # Extra env-only overrides without a TOML equivalent:
-#   KVNC_RUN_VALIDATOR  (true|false, default on)
+#   KOVANICA_RUN_VALIDATOR  (true|false, default on)
 #
 # MysticGhost colouring and VRF leader election default on. A live mesh has
 # to take both together. With no validator VRF keys, leader election stays
-# round-robin. KVNC_MYSTICGHOST=false or KVNC_VRF_LEADER=false turns one off.
+# round-robin. KOVANICA_MYSTICGHOST=false or KOVANICA_VRF_LEADER=false turns one off.
 use_mysticghost = true
 use_vrf_leader = true
 
@@ -34,9 +34,9 @@ listen_addr = "0.0.0.0:8000"
 rpc_addr = "127.0.0.1"
 rpc_port = 8545
 
-# Bootstrap peers. DNS seed name(s) for the kvnc network; never point these at
+# Bootstrap peers. DNS seed name(s) for the kovanica network; never point these at
 # a Cloudflare-proxied (orange-cloud) hostname for TCP. No hosts are hard-coded
-# in the node — supply kvnc-native seeds here or via KVNC_BOOTNODES.
+# in the node — supply kovanica-native seeds here or via KOVANICA_BOOTNODES.
 #
 # Testnet:
 # bootnodes = ["testnet.kovanica.online:8000"]
@@ -48,7 +48,7 @@ bootnodes = []
 # Path to a validator signing key file containing a 32-byte hex seed.
 # Required while run_validator is true (the default): the node refuses to
 # start without it. A read-only node (run_validator = false) may omit it.
-# validator_key = "/etc/kvnc/validator.key"
+# validator_key = "/etc/kovanica/validator.key"
 
 # Target consensus round duration in milliseconds.
 # 4 s round → 12 s per committed leader (wave length 3).
