@@ -10,6 +10,8 @@
 
 mod json;
 
+use kovanica_comms_crypto::{e2e_aad, E2eCipher, Sealed, X25519Cipher, MAX_PLAINTEXT};
+use kovanica_comms_relay::{comms_id_bytes, comms_id_from_hex, comms_id_hex, Envelope};
 use kovanica_crypto::{derive_vrf_secret_from_seed, vrf_prove, VRFKeyPair};
 use kovanica_keystore::{parse, to_json};
 use kovanica_light::{
@@ -26,6 +28,10 @@ uniffi::setup_scaffolding!("kovanica_light");
 pub const LOCAL_CHAIN_ID: u64 = chain_id::LOCAL;
 /// Reserved testnet id. It is not the live testnet.
 pub const TESTNET_CHAIN_ID: u64 = chain_id::TESTNET;
+
+/// Domain separation prefix for comms message signing.
+/// Matches `COMMS_MSG_DOMAIN` in the comms stack.
+pub const COMMS_MSG_DOMAIN: &[u8] = b"kovanica/comms/msg/v1";
 
 /// Why a light-client call failed.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -343,6 +349,244 @@ fn hex_hash(hash: &Hash) -> String {
     format!("0x{}", hex::encode(hash.0))
 }
 
+
+/// Get the public key hex from a keystore JSON without decrypting.
+/// This does not decrypt the seed.
+#[uniffi::export]
+pub fn wallet_pubkey_hex(keystore_json: String) -> Result<String, LightFfiError> {
+    let keystore = parse(keystore_json.as_bytes()).map_err(failed)?;
+    Ok(keystore.public_key.clone())
+}
+
+/// Derive comms identity hex from public key hex.
+#[uniffi::export]
+pub fn derive_comms_id(pubkey_hex: String) -> Result<String, LightFfiError> {
+    let trimmed = pubkey_hex.trim();
+    let stripped = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    let bytes = hex::decode(stripped).map_err(failed)?;
+    let key: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| failed("public key must be 32 bytes"))?;
+    Ok(kovanica_comms_core::comms_id(&key).to_hex())
+}
+
+/// Sign a detached message with domain separation.
+///
+/// **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+#[uniffi::export]
+pub fn sign_detached(
+    keystore_json: String,
+    passphrase: String,
+    message_hex: String,
+    domain: Option<String>,
+) -> Result<String, LightFfiError> {
+    let (sk, _) = open_signing_key(&keystore_json, &passphrase)?;
+    let msg_trim = message_hex.trim();
+    let msg_stripped = msg_trim.strip_prefix("0x").unwrap_or(msg_trim);
+    let msg_raw = hex::decode(msg_stripped).map_err(failed)?;
+    let d = match domain.as_deref() {
+        Some(dom) => dom.to_string(),
+        None => core::str::from_utf8(COMMS_MSG_DOMAIN)
+            .map_err(|_| failed("invalid domain"))?
+            .to_string(),
+    };
+    let mut to_sign = Vec::with_capacity(d.len() + msg_raw.len());
+    to_sign.extend_from_slice(d.as_bytes());
+    to_sign.extend_from_slice(&msg_raw);
+    let sig = kovanica_crypto::sign(&sk, &to_sign);
+    Ok(hex::encode(sig.0))
+}
+
+/// Decode a 32-byte Ed25519 public key from hex (`0x` prefix optional).
+fn parse_comms_pubkey(value: &str, field: &str) -> Result<[u8; 32], LightFfiError> {
+    let trimmed = value.trim();
+    let stripped = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    let bytes = hex::decode(stripped).map_err(|_| failed(format!("{field} is not valid hex")))?;
+    bytes
+        .try_into()
+        .map_err(|_| failed(format!("{field} must be 32 bytes")))
+}
+
+/// Seal and sign a comms envelope for a recipient.
+///
+/// Decrypts the keystore to recover the sender seed, derives the comms ids, and
+/// calls [`kovanica_comms_relay::envelope::seal_and_sign`]. Returns the compact
+/// envelope JSON (wire shape `v,id,to,from,sentAt,expiresAt,alg,epk,nonce,ct,sig`).
+///
+/// **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+#[uniffi::export]
+pub fn comms_seal_envelope(
+    keystore_json: String,
+    passphrase: String,
+    recipient_pubkey_hex: String,
+    payload_json: String,
+    sent_at_ms: u64,
+    expires_at_ms: u64,
+) -> Result<String, LightFfiError> {
+    let (signing_key, _) = open_signing_key(&keystore_json, &passphrase)?;
+    let recipient = parse_comms_pubkey(&recipient_pubkey_hex, "recipient public key")?;
+    if payload_json.len() > MAX_PLAINTEXT {
+        return Err(failed("payload exceeds MAX_PLAINTEXT (16384)"));
+    }
+    let mut seed = signing_key.to_bytes();
+    let sealed = kovanica_comms_relay::envelope::seal_and_sign(
+        &seed,
+        &recipient,
+        payload_json.as_bytes(),
+        sent_at_ms,
+        expires_at_ms,
+    );
+    seed.zeroize();
+    let envelope = sealed.map_err(failed)?;
+    envelope.to_json().map_err(failed)
+}
+
+/// Open a comms envelope addressed to this keystore's comms id.
+///
+/// The envelope signature is **not** checked here (see [`comms_verify_envelope`]);
+/// only the recipient match and the AEAD are enforced. Returns the trimmed
+/// payload JSON exactly as sealed.
+///
+/// **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+#[uniffi::export]
+pub fn comms_open_envelope(
+    keystore_json: String,
+    passphrase: String,
+    envelope_json: String,
+) -> Result<String, LightFfiError> {
+    let (signing_key, _) = open_signing_key(&keystore_json, &passphrase)?;
+    let envelope = Envelope::from_json(envelope_json.as_bytes()).map_err(failed)?;
+
+    let my_pub = signing_key.verifying_key().to_bytes();
+    let my_id = comms_id_hex(&comms_id_bytes(&my_pub));
+    let to_id = comms_id_from_hex(&envelope.to).map_err(failed)?;
+    if to_id != comms_id_from_hex(&my_id).map_err(failed)? {
+        return Err(failed("envelope is not addressed to this keystore's comms id"));
+    }
+    let from_id = comms_id_from_hex(&envelope.from).map_err(failed)?;
+
+    let sealed = Sealed {
+        alg: envelope.alg.clone(),
+        epk: envelope
+            .epk
+            .clone()
+            .try_into()
+            .map_err(|_| failed("envelope epk must be 32 bytes"))?,
+        nonce: envelope
+            .nonce
+            .clone()
+            .try_into()
+            .map_err(|_| failed("envelope nonce must be 24 bytes"))?,
+        ct: envelope.ct.clone(),
+    };
+
+    let mut seed = signing_key.to_bytes();
+    let mut cipher = X25519Cipher::from_seed(&seed);
+    seed.zeroize();
+    let aad = e2e_aad(&to_id, &from_id);
+    let plain = cipher.open(&sealed, &aad).map_err(failed)?;
+
+    // Validate the padded payload is compact JSON (shared helper), then return
+    // the exact on-wire text so object key order is preserved.
+    kovanica_comms_relay::trim_payload(&plain).map_err(failed)?;
+    let end = plain
+        .iter()
+        .rposition(|b| *b != 0)
+        .map(|i| i + 1)
+        .ok_or_else(|| failed("envelope payload is empty"))?;
+    let text = core::str::from_utf8(&plain[..end]).map_err(failed)?;
+    Ok(text.to_string())
+}
+
+/// Verify an envelope against a claimed sender Ed25519 public key.
+///
+/// Checks the Ed25519 signature over [`Envelope::signing_bytes`] **and** that
+/// `from == comms_id(sender_pubkey)`. Returns `false` for any verification or
+/// shape failure; only malformed JSON or hex is an error.
+#[uniffi::export]
+pub fn comms_verify_envelope(
+    envelope_json: String,
+    sender_pubkey_hex: String,
+) -> Result<bool, LightFfiError> {
+    let envelope = Envelope::from_json(envelope_json.as_bytes()).map_err(failed)?;
+    let sender = parse_comms_pubkey(&sender_pubkey_hex, "sender public key")?;
+    Ok(envelope.verify(&sender).is_ok())
+}
+
+/// Normalise (ASCII lowercase) then validate a registry name.
+///
+/// Mirrors `kovanica_name_registry::normalise_name` (spec §7.2): 3..=32 bytes,
+/// charset `[a-z0-9-]`, no leading/trailing `-`, no `--`. Returns the stored
+/// (lowercase) form.
+fn normalise_registry_name(name: &str) -> Result<String, LightFfiError> {
+    let lowered: String = name.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let bytes = lowered.as_bytes();
+    if bytes.len() < 3 || bytes.len() > 32 {
+        return Err(failed("name must be 3..=32 bytes"));
+    }
+    if !bytes
+        .iter()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+    {
+        return Err(failed("name may contain only [a-z0-9-]"));
+    }
+    if bytes.first() == Some(&b'-') || bytes.last() == Some(&b'-') {
+        return Err(failed("name must not start or end with '-'"));
+    }
+    if bytes.windows(2).any(|w| w == b"--") {
+        return Err(failed("name must not contain '--'"));
+    }
+    Ok(lowered)
+}
+
+/// Compute the contract-storage slot for a name-registry entry.
+///
+/// `slot = BLAKE3(b"kvnc/v1/name/" ++ lowercase(name))`, returned as 64
+/// lowercase hex (**no** `0x` prefix). The prefix is taken from
+/// [`kovanica_name_registry::entry_key`] (single source of truth) and hashed with
+/// the canonical [`kovanica_common::hash`], exactly matching the host storage key
+/// the contract writes (`blake3(raw_key)`).
+///
+/// Names are normalised-then-validated: 3..=32 bytes, only `[a-z0-9-]`, no
+/// leading/trailing `-`, no `--`. Invalid input is a [`LightFfiError`].
+#[uniffi::export]
+pub fn registry_slot_hex(name: String) -> Result<String, LightFfiError> {
+    let name = normalise_registry_name(&name)?;
+    let slot = kovanica_common::hash(&kovanica_name_registry::entry_key(&name));
+    Ok(hex::encode(slot))
+}
+
+/// Decode a bincode 1.3 `NameEntry` read from a registry storage slot.
+///
+/// Accepts `"0x"+hex` or bare hex (case-insensitive). The value is
+/// `owner[32] ‖ pubkey[32] ‖ u64le(count) ‖ count×(u64le(len) ‖ utf8)`.
+/// Returns compact JSON
+/// `{"owner":"<64hex>","pubkey":"<64hex>","relay_endpoints":["…"]}`.
+///
+/// Truncated or malformed bytes are a [`LightFfiError`]. Callers must check for
+/// an empty slot (`""` / `"0x"`) **before** calling this — those are not
+/// special-cased here and decode to an error.
+#[uniffi::export]
+pub fn registry_decode_entry(value_hex: String) -> Result<String, LightFfiError> {
+    let trimmed = value_hex.trim();
+    let stripped = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    let bytes = hex::decode(stripped).map_err(|_| failed("entry value is not valid hex"))?;
+    let entry: kovanica_name_registry::NameEntry = bincode::deserialize(&bytes).map_err(failed)?;
+    // Key order `owner, pubkey, relay_endpoints` — compact JSON, no whitespace.
+    let out = serde_json::json!({
+        "owner": hex::encode(entry.owner),
+        "pubkey": hex::encode(entry.pubkey),
+        "relay_endpoints": entry.relay_endpoints,
+    });
+    serde_json::to_string(&out).map_err(failed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +723,240 @@ mod tests {
             String::new()
         )
         .is_err());
+    }
+
+    #[test]
+    fn wallet_pubkey_hex_roundtrip() {
+        let created = create_wallet("test-pass".to_string()).unwrap();
+        let pubkey = wallet_pubkey_hex(created.keystore_json.clone()).unwrap();
+        let clean = pubkey.trim().strip_prefix("0x").unwrap_or(&pubkey);
+        assert_eq!(clean.len(), 64);
+        assert!(hex::decode(clean).is_ok());
+    }
+
+    #[test]
+    fn derive_comms_id_zeros() {
+        // KAT from comms-core/TS: pubkey all ones (0x01)
+        let ones = "01".repeat(32);
+        let comms = derive_comms_id(ones.clone()).unwrap();
+        assert_eq!(
+            comms,
+            "6076cc6f05dbd8ad851ba6aa6b7e85c8dce112186e16d3e267663641d9fa9339"
+        );
+    }
+
+    #[test]
+    fn sign_detached_produces_128_hex_sig() {
+        let created = create_wallet("pw".to_string()).unwrap();
+        let msg = hex::encode(b"hello");
+        let sig = sign_detached(created.keystore_json, "pw".to_string(), msg, None).unwrap();
+        assert_eq!(sig.len(), 128);
+        assert!(hex::decode(&sig).is_ok());
+    }
+
+    #[test]
+    fn sign_detached_error_cases() {
+        let created = create_wallet("pw".to_string()).unwrap();
+        let bad = sign_detached(created.keystore_json.clone(), "pw".to_string(), "gg".to_string(), None);
+        assert!(bad.is_err());
+        let bad2 = sign_detached(created.keystore_json, "wrong".to_string(), hex::encode(b"hi"), None);
+        assert!(bad2.is_err());
+    }
+
+    /// §1 KAT: seal → open returns the exact original payload JSON.
+    #[test]
+    fn comms_seal_open_round_trip() {
+        let sender = create_wallet("sender-pw".to_string()).unwrap();
+        let recipient = create_wallet("recipient-pw".to_string()).unwrap();
+        let recipient_pub = wallet_pubkey_hex(recipient.keystore_json.clone()).unwrap();
+        let payload = r#"{"kind":"text","body":"hello kovanica","ts":1730000000000}"#;
+
+        let envelope_json = comms_seal_envelope(
+            sender.keystore_json,
+            "sender-pw".to_string(),
+            recipient_pub,
+            payload.to_string(),
+            1730000000000,
+            1730000000000 + 24 * 60 * 60 * 1000,
+        )
+        .unwrap();
+
+        // Envelope is the M1 wire shape and leaks no plaintext.
+        assert!(envelope_json.contains("\"v\":1"));
+        assert!(!envelope_json.contains("hello kovanica"));
+
+        let opened = comms_open_envelope(
+            recipient.keystore_json,
+            "recipient-pw".to_string(),
+            envelope_json,
+        )
+        .unwrap();
+        assert_eq!(opened, payload);
+    }
+
+    #[test]
+    fn comms_open_rejects_wrong_recipient() {
+        let sender = create_wallet("s".to_string()).unwrap();
+        let recipient = create_wallet("r".to_string()).unwrap();
+        let other = create_wallet("o".to_string()).unwrap();
+        let recipient_pub = wallet_pubkey_hex(recipient.keystore_json).unwrap();
+        let env = comms_seal_envelope(
+            sender.keystore_json,
+            "s".to_string(),
+            recipient_pub,
+            r#"{"kind":"text","body":"hi","ts":1}"#.to_string(),
+            1,
+            2,
+        )
+        .unwrap();
+        assert!(comms_open_envelope(other.keystore_json, "o".to_string(), env).is_err());
+    }
+
+    /// §1: `comms_verify_envelope` is true for the correct sender pubkey only.
+    #[test]
+    fn comms_verify_envelope_matches_sender() {
+        let sender = create_wallet("s".to_string()).unwrap();
+        let recipient = create_wallet("r".to_string()).unwrap();
+        let other = create_wallet("o".to_string()).unwrap();
+        let recipient_pub = wallet_pubkey_hex(recipient.keystore_json).unwrap();
+        let env = comms_seal_envelope(
+            sender.keystore_json.clone(),
+            "s".to_string(),
+            recipient_pub,
+            r#"{"kind":"text","body":"hi","ts":1}"#.to_string(),
+            1,
+            2,
+        )
+        .unwrap();
+
+        let sender_pub = wallet_pubkey_hex(sender.keystore_json).unwrap();
+        assert!(comms_verify_envelope(env.clone(), sender_pub).unwrap());
+
+        let other_pub = wallet_pubkey_hex(other.keystore_json).unwrap();
+        assert!(!comms_verify_envelope(env.clone(), other_pub).unwrap());
+
+        // Malformed JSON is an error, not `false`.
+        let zeros = "00".repeat(32);
+        assert!(comms_verify_envelope("not json".to_string(), zeros).is_err());
+    }
+
+    /// §7.2 KAT: the slot is BLAKE3 of the contract's own raw storage key.
+    /// Expected values computed independently (raw `blake3(b"kvnc/v1/name/…")`),
+    /// matching the key `wasmi_e2e.rs` reads straight out of storage.
+    #[test]
+    fn registry_slot_hex_matches_contract_storage_key() {
+        assert_eq!(
+            registry_slot_hex("alice".to_string()).unwrap(),
+            "9a86b101401f2c4477d327e0ef510222296e27cb5f65da1f7a68cdf0d85db65c"
+        );
+        assert_eq!(
+            registry_slot_hex("BOB".to_string()).unwrap(),
+            "da4fd9d43a1014b06827bf80c50a1198c8be69579f1db836e99337847ab75f9c"
+        );
+
+        // Single source of truth: equals the contract key hashed with the
+        // canonical `kovanica_common::hash`, for any valid name.
+        for name in ["alice", "bob", "abc", "a-b-c", "abcdefghijklmnopqrstuvwxyz012345"] {
+            let expected = hex::encode(kovanica_common::hash(&kovanica_name_registry::entry_key(name)));
+            assert_eq!(registry_slot_hex(name.to_string()).unwrap(), expected);
+        }
+
+        // Output is 64 lowercase hex with no `0x`.
+        let slot = registry_slot_hex("alice".to_string()).unwrap();
+        assert_eq!(slot.len(), 64);
+        assert!(!slot.starts_with("0x"));
+        assert!(slot.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn registry_slot_hex_rejects_invalid_names() {
+        let bad = [
+            "ab",                            // too short
+            "abcdefghijklmnopqrstuvwxyz0123456", // 33 bytes → too long
+            "-alice",                        // leading hyphen
+            "alice-",                        // trailing hyphen
+            "al--ice",                       // consecutive hyphens
+            "al ice",                        // space
+            "ali.ce",                        // dot
+            "ali_ce",                        // underscore
+            "alïce",                         // non-ASCII
+            "",                              // empty
+        ];
+        for name in bad {
+            assert!(
+                registry_slot_hex(name.to_string()).is_err(),
+                "name {name:?} should be rejected"
+            );
+        }
+
+        // Mixed case normalises; boundary lengths are valid.
+        assert_eq!(
+            registry_slot_hex("Alice".to_string()).unwrap(),
+            registry_slot_hex("alice".to_string()).unwrap()
+        );
+        assert!(registry_slot_hex("abc".to_string()).is_ok());
+        assert!(registry_slot_hex("abcdefghijklmnopqrstuvwxyz012345".to_string()).is_ok());
+    }
+
+    /// §7.2 decode round-trip from raw `bincode::serialize(NameEntry)` bytes.
+    #[test]
+    fn registry_decode_entry_round_trip() {
+        let entry = kovanica_name_registry::NameEntry {
+            owner: [0x11; 32],
+            pubkey: [0xAB; 32],
+            relay_endpoints: vec![
+                "https://relay.example.com".to_string(),
+                "http://relay2.example.com".to_string(),
+            ],
+        };
+        let raw = bincode::serialize(&entry).unwrap();
+        let hexed = hex::encode(&raw);
+
+        // Bare hex and `0x`-prefixed (mixed case) decode identically.
+        let json = registry_decode_entry(hexed.clone()).unwrap();
+        assert_eq!(
+            json,
+            registry_decode_entry(format!("0x{hexed}")).unwrap()
+        );
+        assert_eq!(
+            json,
+            registry_decode_entry(format!("0X{}", hexed.to_uppercase())).unwrap()
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["owner"], "11".repeat(32));
+        assert_eq!(parsed["pubkey"], "ab".repeat(32));
+        assert_eq!(
+            parsed["relay_endpoints"],
+            serde_json::json!(["https://relay.example.com", "http://relay2.example.com"])
+        );
+    }
+
+    #[test]
+    fn registry_decode_entry_rejects_malformed() {
+        let entry = kovanica_name_registry::NameEntry {
+            owner: [0x11; 32],
+            pubkey: [0xAB; 32],
+            relay_endpoints: vec!["https://relay.example.com".to_string()],
+        };
+        let raw = bincode::serialize(&entry).unwrap();
+
+        // Truncated bytes.
+        assert!(registry_decode_entry(hex::encode(&raw[..raw.len() - 1])).is_err());
+        // Non-hex.
+        assert!(registry_decode_entry("zzzz".to_string()).is_err());
+        // Empty slot / `0x` are not special-cased here → error.
+        assert!(registry_decode_entry(String::new()).is_err());
+        assert!(registry_decode_entry("0x".to_string()).is_err());
+        // Structurally wrong (offset/len) — count claims an entry that isn't there.
+        let corrupt = bincode::serialize(&kovanica_name_registry::NameEntry {
+            owner: [0; 32],
+            pubkey: [0; 32],
+            relay_endpoints: vec!["https://x.example.com".to_string()],
+        })
+        .unwrap();
+        let mut truncated_after_count = corrupt[..64 + 8].to_vec();
+        truncated_after_count[64..72].copy_from_slice(&5u64.to_le_bytes()); // claim 5 endpoints
+        assert!(registry_decode_entry(hex::encode(&truncated_after_count)).is_err());
     }
 }
