@@ -18,7 +18,7 @@ use kovanica_cli::contracts::{
     ContractCommand, HtlcCommand, MultisigCommand, TokenCommand, VaultCommand,
 };
 use kovanica_cli::rpc::RpcClient;
-use kovanica_cli::{contracts, node, output, rpc, tui, tx, wallet};
+use kovanica_cli::{comms, contracts, node, output, rpc, tui, tx, wallet};
 use kovanica_types::transaction::TransactionKind;
 use kovanica_types::{crypto::PublicKey, crypto::SigningKey, Address};
 use zeroize::Zeroizing;
@@ -110,6 +110,11 @@ enum Commands {
     Token {
         #[command(subcommand)]
         command: TokenCommand,
+    },
+    /// Kovanica comms app control-plane helpers (identity derivation)
+    Comms {
+        #[command(subcommand)]
+        command: comms::CommsCommand,
     },
 }
 
@@ -389,6 +394,7 @@ async fn main() -> Result<()> {
         Commands::Token { command } => {
             contracts::run(&client, ContractCommand::Token { command }, json).await
         }
+        Commands::Comms { command } => comms::run(command, json),
     }
 }
 

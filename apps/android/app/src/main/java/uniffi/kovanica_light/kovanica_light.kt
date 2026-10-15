@@ -672,15 +672,29 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
+    external fun uniffi_kovanica_light_ffi_checksum_func_comms_open_envelope(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_comms_seal_envelope(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_comms_verify_envelope(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_confirm_account(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_create_wallet(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_derive_comms_id(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_faucet_allowed(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_import_wallet(
     ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_registry_decode_entry(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_registry_slot_hex(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_sign_detached(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_exit_raw(
     ): Int
@@ -691,6 +705,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kovanica_light_ffi_checksum_func_verify_header(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_wallet_address(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_wallet_pubkey_hex(
     ): Int
     external fun ffi_kovanica_light_ffi_uniffi_contract_version(
     ): Int
@@ -705,15 +721,29 @@ internal object UniffiLib {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "kovanica_light"))
         
     }
+    external fun uniffi_kovanica_light_ffi_fn_func_comms_open_envelope(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`envelopeJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_comms_seal_envelope(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`recipientPubkeyHex`: RustBuffer.ByValue,`payloadJson`: RustBuffer.ByValue,`sentAtMs`: Long,`expiresAtMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_comms_verify_envelope(`envelopeJson`: RustBuffer.ByValue,`senderPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_confirm_account(`headerJson`: RustBuffer.ByValue,`proofJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_create_wallet(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_derive_comms_id(`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_faucet_allowed(`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_import_wallet(`mnemonic`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_registry_decode_entry(`valueHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_registry_slot_hex(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_bond_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`stake`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_sign_detached(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`messageHex`: RustBuffer.ByValue,`domain`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_exit_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -724,6 +754,8 @@ internal object UniffiLib {
     external fun uniffi_kovanica_light_ffi_fn_func_verify_header(`chainId`: Long,`epoch`: Long,`committeeJson`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,`sealsJson`: RustBuffer.ByValue,`parentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_wallet_address(`keystoreJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_wallet_pubkey_hex(`keystoreJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_kovanica_light_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -844,34 +876,58 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_confirm_account() != 58239) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_comms_open_envelope() != 21852) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_create_wallet() != 51597) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_comms_seal_envelope() != 1603) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_faucet_allowed() != 60656) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_comms_verify_envelope() != 36446) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_import_wallet() != 32019) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_confirm_account() != 55701) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw() != 62969) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_create_wallet() != 1575) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_exit_raw() != 47615) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_derive_comms_id() != 30377) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_transfer_raw() != 2280) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_faucet_allowed() != 38864) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_witness_raw() != 45963) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_import_wallet() != 17509) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_verify_header() != 29970) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_registry_decode_entry() != 1486) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_wallet_address() != 46382) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_registry_slot_hex() != 45968) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw() != 28793) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_detached() != 55302) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_exit_raw() != 27104) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_transfer_raw() != 35272) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_witness_raw() != 3162) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_verify_header() != 48525) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_wallet_address() != 54899) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_wallet_pubkey_hex() != 48954) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1365,6 +1421,107 @@ public object FfiConverterTypeLightFfiError : FfiConverterRustBuffer<LightFfiExc
     }
 
 }
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
+    override fun read(buf: ByteBuffer): kotlin.String? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterString.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.String?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterString.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.String?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterString.write(value, buf)
+        }
+    }
+}
+        /**
+         * Open a comms envelope addressed to this keystore's comms id.
+         *
+         * The envelope signature is **not** checked here (see [`comms_verify_envelope`]);
+         * only the recipient match and the AEAD are enforced. Returns the trimmed
+         * payload JSON exactly as sealed.
+         *
+         * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+         */
+    @Throws(LightFfiException::class) fun `commsOpenEnvelope`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `envelopeJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_comms_open_envelope(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterString.lower(`envelopeJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Seal and sign a comms envelope for a recipient.
+         *
+         * Decrypts the keystore to recover the sender seed, derives the comms ids, and
+         * calls [`kovanica_comms_relay::envelope::seal_and_sign`]. Returns the compact
+         * envelope JSON (wire shape `v,id,to,from,sentAt,expiresAt,alg,epk,nonce,ct,sig`).
+         *
+         * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+         */
+    @Throws(LightFfiException::class) fun `commsSealEnvelope`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `recipientPubkeyHex`: kotlin.String, `payloadJson`: kotlin.String, `sentAtMs`: kotlin.ULong, `expiresAtMs`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_comms_seal_envelope(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterString.lower(`recipientPubkeyHex`),
+        FfiConverterString.lower(`payloadJson`),
+        FfiConverterULong.lower(`sentAtMs`),
+        FfiConverterULong.lower(`expiresAtMs`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify an envelope against a claimed sender Ed25519 public key.
+         *
+         * Checks the Ed25519 signature over [`Envelope::signing_bytes`] **and** that
+         * `from == comms_id(sender_pubkey)`. Returns `false` for any verification or
+         * shape failure; only malformed JSON or hex is an error.
+         */
+    @Throws(LightFfiException::class) fun `commsVerifyEnvelope`(`envelopeJson`: kotlin.String, `senderPubkeyHex`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_comms_verify_envelope(
+    
+        
+        FfiConverterString.lower(`envelopeJson`),
+        FfiConverterString.lower(`senderPubkeyHex`),_status)
+}
+    )
+    }
+    
+
         /**
          * Check an account proof against a header this client already accepted.
          */
@@ -1391,6 +1548,21 @@ public object FfiConverterTypeLightFfiError : FfiConverterRustBuffer<LightFfiExc
     
         
         FfiConverterString.lower(`passphrase`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Derive comms identity hex from public key hex.
+         */
+    @Throws(LightFfiException::class) fun `deriveCommsId`(`pubkeyHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_derive_comms_id(
+    
+        
+        FfiConverterString.lower(`pubkeyHex`),_status)
 }
     )
     }
@@ -1431,6 +1603,54 @@ public object FfiConverterTypeLightFfiError : FfiConverterRustBuffer<LightFfiExc
     
 
         /**
+         * Decode a bincode 1.3 `NameEntry` read from a registry storage slot.
+         *
+         * Accepts `"0x"+hex` or bare hex (case-insensitive). The value is
+         * `owner[32] ‖ pubkey[32] ‖ u64le(count) ‖ count×(u64le(len) ‖ utf8)`.
+         * Returns compact JSON
+         * `{"owner":"<64hex>","pubkey":"<64hex>","relay_endpoints":["…"]}`.
+         *
+         * Truncated or malformed bytes are a [`LightFfiError`]. Callers must check for
+         * an empty slot (`""` / `"0x"`) **before** calling this — those are not
+         * special-cased here and decode to an error.
+         */
+    @Throws(LightFfiException::class) fun `registryDecodeEntry`(`valueHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_registry_decode_entry(
+    
+        
+        FfiConverterString.lower(`valueHex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Compute the contract-storage slot for a name-registry entry.
+         *
+         * `slot = BLAKE3(b"kvnc/v1/name/" ++ lowercase(name))`, returned as 64
+         * lowercase hex (**no** `0x` prefix). The prefix is taken from
+         * [`kovanica_name_registry::entry_key`] (single source of truth) and hashed with
+         * the canonical [`kovanica_common::hash`], exactly matching the host storage key
+         * the contract writes (`blake3(raw_key)`).
+         *
+         * Names are normalised-then-validated: 3..=32 bytes, only `[a-z0-9-]`, no
+         * leading/trailing `-`, no `--`. Invalid input is a [`LightFfiError`].
+         */
+    @Throws(LightFfiException::class) fun `registrySlotHex`(`name`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_registry_slot_hex(
+    
+        
+        FfiConverterString.lower(`name`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Sign a light-node bond. The stake does not enter the validator committee.
          */
     @Throws(LightFfiException::class) fun `signBondRaw`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `chainId`: kotlin.ULong, `stake`: kotlin.ULong, `nonce`: kotlin.ULong, `feeRate`: kotlin.ULong): kotlin.String {
@@ -1445,6 +1665,26 @@ public object FfiConverterTypeLightFfiError : FfiConverterRustBuffer<LightFfiExc
         FfiConverterULong.lower(`stake`),
         FfiConverterULong.lower(`nonce`),
         FfiConverterULong.lower(`feeRate`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Sign a detached message with domain separation.
+         *
+         * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+         */
+    @Throws(LightFfiException::class) fun `signDetached`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `messageHex`: kotlin.String, `domain`: kotlin.String?): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_sign_detached(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterString.lower(`messageHex`),
+        FfiConverterOptionalString.lower(`domain`),_status)
 }
     )
     }
@@ -1542,6 +1782,22 @@ public object FfiConverterTypeLightFfiError : FfiConverterRustBuffer<LightFfiExc
             return FfiConverterString.lift(
     uniffiRustCallWithError(LightFfiException) { _status ->
     UniffiLib.uniffi_kovanica_light_ffi_fn_func_wallet_address(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Get the public key hex from a keystore JSON without decrypting.
+         * This does not decrypt the seed.
+         */
+    @Throws(LightFfiException::class) fun `walletPubkeyHex`(`keystoreJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_wallet_pubkey_hex(
     
         
         FfiConverterString.lower(`keystoreJson`),_status)

@@ -12,5 +12,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".MessagesActivity"
+            android:exported="false"
+            android:label="Messages"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>

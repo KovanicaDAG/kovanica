@@ -30,6 +30,7 @@ kovanica-htlc = { path = "../kovanica-htlc" }
 kovanica-vault = { path = "../kovanica-vault" }
 kovanica-multisig = { path = "../kovanica-multisig" }
 kovanica-token = { path = "../kovanica-token" }
+kovanica-comms-core = { path = "../kovanica-comms-core" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
