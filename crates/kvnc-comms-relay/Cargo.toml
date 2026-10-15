@@ -12,12 +12,27 @@ path = "src/lib.rs"
 [[bin]]
 name = "kvnc-comms-relay"
 path = "src/bin/relay.rs"
+required-features = ["server"]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+required-features = ["server", "client"]
+
+[features]
+default = ["server", "client"]
+# The axum HTTP relay server (+ its tokio runtime). Needed by the `kvnc-comms-relay`
+# binary and the integration tests.
+server = ["dep:axum", "dep:tokio"]
+# The reqwest HTTP client used by desktop/CLI callers. Pulls native-tls (openssl),
+# so it must stay off the mobile/FFI path.
+client = ["dep:reqwest"]
 
 [dependencies]
 kvnc-comms-crypto = { path = "../kvnc-comms-crypto" }
 kvnc-common = { path = "../kvnc-common" }
-axum = { workspace = true }
-tokio = { workspace = true }
+axum = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
@@ -27,5 +42,5 @@ tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 ed25519-dalek = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, optional = true }
 parking_lot = { workspace = true }

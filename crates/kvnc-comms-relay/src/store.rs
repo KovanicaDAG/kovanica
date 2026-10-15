@@ -183,7 +183,7 @@ impl Store {
             .collect();
         if expired.is_empty() {
             // still sweep credits
-            return self.credit_sweep(now);
+            return Self::credit_sweep_locked(&mut inner, now);
         }
         let dead: std::collections::HashSet<&String> = expired.iter().collect();
         for id in &expired {
@@ -193,7 +193,7 @@ impl Store {
             queue.retain(|id| !dead.contains(id));
             !queue.is_empty()
         });
-        let _ = self.credit_sweep(now);
+        let _ = Self::credit_sweep_locked(&mut inner, now);
         expired.len()
     }
 
@@ -271,6 +271,11 @@ impl Store {
     /// Sweep expired credits; returns number removed.
     pub fn credit_sweep(&self, now: u64) -> usize {
         let mut inner = self.inner.lock();
+        Self::credit_sweep_locked(&mut inner, now)
+    }
+
+    /// Sweep expired credits while the caller already holds the store lock.
+    fn credit_sweep_locked(inner: &mut Inner, now: u64) -> usize {
         let mut removed = 0;
         inner.credits.retain(|_, c| {
             if c.expires_at <= now {

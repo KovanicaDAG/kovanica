@@ -243,6 +243,21 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureRes
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_OPEN_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_OPEN_ENVELOPE
+RustBuffer uniffi_kvnc_light_ffi_fn_func_comms_open_envelope(RustBuffer keystore_json, RustBuffer passphrase, RustBuffer envelope_json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_SEAL_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_SEAL_ENVELOPE
+RustBuffer uniffi_kvnc_light_ffi_fn_func_comms_seal_envelope(RustBuffer keystore_json, RustBuffer passphrase, RustBuffer recipient_pubkey_hex, RustBuffer payload_json, uint64_t sent_at_ms, uint64_t expires_at_ms, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_VERIFY_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_VERIFY_ENVELOPE
+int8_t uniffi_kvnc_light_ffi_fn_func_comms_verify_envelope(RustBuffer envelope_json, RustBuffer sender_pubkey_hex, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_CONFIRM_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_CONFIRM_ACCOUNT
 RustBuffer uniffi_kvnc_light_ffi_fn_func_confirm_account(RustBuffer header_json, RustBuffer proof_json, RustCallStatus *_Nonnull out_status
@@ -566,6 +581,24 @@ void ffi_kvnc_light_ffi_rust_future_free_void(uint64_t handle
 #ifndef UNIFFI_FFIDEF_FFI_KVNC_LIGHT_FFI_RUST_FUTURE_COMPLETE_VOID
 #define UNIFFI_FFIDEF_FFI_KVNC_LIGHT_FFI_RUST_FUTURE_COMPLETE_VOID
 void ffi_kvnc_light_ffi_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_OPEN_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_OPEN_ENVELOPE
+uint16_t uniffi_kvnc_light_ffi_checksum_func_comms_open_envelope(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_SEAL_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_SEAL_ENVELOPE
+uint16_t uniffi_kvnc_light_ffi_checksum_func_comms_seal_envelope(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_VERIFY_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_VERIFY_ENVELOPE
+uint16_t uniffi_kvnc_light_ffi_checksum_func_comms_verify_envelope(void
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_CONFIRM_ACCOUNT

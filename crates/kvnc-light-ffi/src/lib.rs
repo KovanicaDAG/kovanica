@@ -10,6 +10,8 @@
 
 mod json;
 
+use kvnc_comms_crypto::{e2e_aad, E2eCipher, Sealed, X25519Cipher, MAX_PLAINTEXT};
+use kvnc_comms_relay::{comms_id_bytes, comms_id_from_hex, comms_id_hex, Envelope};
 use kvnc_crypto::{derive_vrf_secret_from_seed, vrf_prove, VRFKeyPair};
 use kvnc_keystore::{parse, to_json};
 use kvnc_light::{
@@ -395,6 +397,125 @@ pub fn sign_detached(
     Ok(hex::encode(sig.0))
 }
 
+/// Decode a 32-byte Ed25519 public key from hex (`0x` prefix optional).
+fn parse_comms_pubkey(value: &str, field: &str) -> Result<[u8; 32], LightFfiError> {
+    let trimmed = value.trim();
+    let stripped = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    let bytes = hex::decode(stripped).map_err(|_| failed(format!("{field} is not valid hex")))?;
+    bytes
+        .try_into()
+        .map_err(|_| failed(format!("{field} must be 32 bytes")))
+}
+
+/// Seal and sign a comms envelope for a recipient.
+///
+/// Decrypts the keystore to recover the sender seed, derives the comms ids, and
+/// calls [`kvnc_comms_relay::envelope::seal_and_sign`]. Returns the compact
+/// envelope JSON (wire shape `v,id,to,from,sentAt,expiresAt,alg,epk,nonce,ct,sig`).
+///
+/// **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+#[uniffi::export]
+pub fn comms_seal_envelope(
+    keystore_json: String,
+    passphrase: String,
+    recipient_pubkey_hex: String,
+    payload_json: String,
+    sent_at_ms: u64,
+    expires_at_ms: u64,
+) -> Result<String, LightFfiError> {
+    let (signing_key, _) = open_signing_key(&keystore_json, &passphrase)?;
+    let recipient = parse_comms_pubkey(&recipient_pubkey_hex, "recipient public key")?;
+    if payload_json.len() > MAX_PLAINTEXT {
+        return Err(failed("payload exceeds MAX_PLAINTEXT (16384)"));
+    }
+    let mut seed = signing_key.to_bytes();
+    let sealed = kvnc_comms_relay::envelope::seal_and_sign(
+        &seed,
+        &recipient,
+        payload_json.as_bytes(),
+        sent_at_ms,
+        expires_at_ms,
+    );
+    seed.zeroize();
+    let envelope = sealed.map_err(failed)?;
+    envelope.to_json().map_err(failed)
+}
+
+/// Open a comms envelope addressed to this keystore's comms id.
+///
+/// The envelope signature is **not** checked here (see [`comms_verify_envelope`]);
+/// only the recipient match and the AEAD are enforced. Returns the trimmed
+/// payload JSON exactly as sealed.
+///
+/// **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+#[uniffi::export]
+pub fn comms_open_envelope(
+    keystore_json: String,
+    passphrase: String,
+    envelope_json: String,
+) -> Result<String, LightFfiError> {
+    let (signing_key, _) = open_signing_key(&keystore_json, &passphrase)?;
+    let envelope = Envelope::from_json(envelope_json.as_bytes()).map_err(failed)?;
+
+    let my_pub = signing_key.verifying_key().to_bytes();
+    let my_id = comms_id_hex(&comms_id_bytes(&my_pub));
+    let to_id = comms_id_from_hex(&envelope.to).map_err(failed)?;
+    if to_id != comms_id_from_hex(&my_id).map_err(failed)? {
+        return Err(failed("envelope is not addressed to this keystore's comms id"));
+    }
+    let from_id = comms_id_from_hex(&envelope.from).map_err(failed)?;
+
+    let sealed = Sealed {
+        alg: envelope.alg.clone(),
+        epk: envelope
+            .epk
+            .clone()
+            .try_into()
+            .map_err(|_| failed("envelope epk must be 32 bytes"))?,
+        nonce: envelope
+            .nonce
+            .clone()
+            .try_into()
+            .map_err(|_| failed("envelope nonce must be 24 bytes"))?,
+        ct: envelope.ct.clone(),
+    };
+
+    let mut seed = signing_key.to_bytes();
+    let mut cipher = X25519Cipher::from_seed(&seed);
+    seed.zeroize();
+    let aad = e2e_aad(&to_id, &from_id);
+    let plain = cipher.open(&sealed, &aad).map_err(failed)?;
+
+    // Validate the padded payload is compact JSON (shared helper), then return
+    // the exact on-wire text so object key order is preserved.
+    kvnc_comms_relay::trim_payload(&plain).map_err(failed)?;
+    let end = plain
+        .iter()
+        .rposition(|b| *b != 0)
+        .map(|i| i + 1)
+        .ok_or_else(|| failed("envelope payload is empty"))?;
+    let text = core::str::from_utf8(&plain[..end]).map_err(failed)?;
+    Ok(text.to_string())
+}
+
+/// Verify an envelope against a claimed sender Ed25519 public key.
+///
+/// Checks the Ed25519 signature over [`Envelope::signing_bytes`] **and** that
+/// `from == comms_id(sender_pubkey)`. Returns `false` for any verification or
+/// shape failure; only malformed JSON or hex is an error.
+#[uniffi::export]
+pub fn comms_verify_envelope(
+    envelope_json: String,
+    sender_pubkey_hex: String,
+) -> Result<bool, LightFfiError> {
+    let envelope = Envelope::from_json(envelope_json.as_bytes()).map_err(failed)?;
+    let sender = parse_comms_pubkey(&sender_pubkey_hex, "sender public key")?;
+    Ok(envelope.verify(&sender).is_ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,5 +690,82 @@ mod tests {
         assert!(bad.is_err());
         let bad2 = sign_detached(created.keystore_json, "wrong".to_string(), hex::encode(b"hi"), None);
         assert!(bad2.is_err());
+    }
+
+    /// §1 KAT: seal → open returns the exact original payload JSON.
+    #[test]
+    fn comms_seal_open_round_trip() {
+        let sender = create_wallet("sender-pw".to_string()).unwrap();
+        let recipient = create_wallet("recipient-pw".to_string()).unwrap();
+        let recipient_pub = wallet_pubkey_hex(recipient.keystore_json.clone()).unwrap();
+        let payload = r#"{"kind":"text","body":"hello kovanica","ts":1730000000000}"#;
+
+        let envelope_json = comms_seal_envelope(
+            sender.keystore_json,
+            "sender-pw".to_string(),
+            recipient_pub,
+            payload.to_string(),
+            1730000000000,
+            1730000000000 + 24 * 60 * 60 * 1000,
+        )
+        .unwrap();
+
+        // Envelope is the M1 wire shape and leaks no plaintext.
+        assert!(envelope_json.contains("\"v\":1"));
+        assert!(!envelope_json.contains("hello kovanica"));
+
+        let opened = comms_open_envelope(
+            recipient.keystore_json,
+            "recipient-pw".to_string(),
+            envelope_json,
+        )
+        .unwrap();
+        assert_eq!(opened, payload);
+    }
+
+    #[test]
+    fn comms_open_rejects_wrong_recipient() {
+        let sender = create_wallet("s".to_string()).unwrap();
+        let recipient = create_wallet("r".to_string()).unwrap();
+        let other = create_wallet("o".to_string()).unwrap();
+        let recipient_pub = wallet_pubkey_hex(recipient.keystore_json).unwrap();
+        let env = comms_seal_envelope(
+            sender.keystore_json,
+            "s".to_string(),
+            recipient_pub,
+            r#"{"kind":"text","body":"hi","ts":1}"#.to_string(),
+            1,
+            2,
+        )
+        .unwrap();
+        assert!(comms_open_envelope(other.keystore_json, "o".to_string(), env).is_err());
+    }
+
+    /// §1: `comms_verify_envelope` is true for the correct sender pubkey only.
+    #[test]
+    fn comms_verify_envelope_matches_sender() {
+        let sender = create_wallet("s".to_string()).unwrap();
+        let recipient = create_wallet("r".to_string()).unwrap();
+        let other = create_wallet("o".to_string()).unwrap();
+        let recipient_pub = wallet_pubkey_hex(recipient.keystore_json).unwrap();
+        let env = comms_seal_envelope(
+            sender.keystore_json.clone(),
+            "s".to_string(),
+            recipient_pub,
+            r#"{"kind":"text","body":"hi","ts":1}"#.to_string(),
+            1,
+            2,
+        )
+        .unwrap();
+
+        let sender_pub = wallet_pubkey_hex(sender.keystore_json).unwrap();
+        assert!(comms_verify_envelope(env.clone(), sender_pub).unwrap());
+
+        let other_pub = wallet_pubkey_hex(other.keystore_json).unwrap();
+        assert!(!comms_verify_envelope(env.clone(), other_pub).unwrap());
+
+        // Malformed JSON is an error, not `false`.
+        let zeros = "00".repeat(32);
+        assert!(comms_verify_envelope("not json".to_string(), zeros).is_err());
     }
 }

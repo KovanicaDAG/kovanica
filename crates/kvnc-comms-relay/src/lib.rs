@@ -6,18 +6,22 @@
 
 #![deny(unsafe_code)]
 
-pub mod client;
 pub mod envelope;
 pub mod payload;
+#[cfg(feature = "client")]
+pub mod client;
+#[cfg(feature = "server")]
 pub mod server;
 pub mod store;
 
+#[cfg(feature = "client")]
 pub use client::{ClientError, HealthResponse, RelayClient};
 pub use envelope::{
     comms_id_bytes, comms_id_from_hex, comms_id_hex, Envelope, ENVELOPE_VERSION, ENV_ID_DOMAIN,
     ENV_SIG_DOMAIN, MAX_CT, MAX_ENVELOPE_JSON,
 };
 pub use payload::{pad_payload, trim_payload, MAX_PAYLOAD, PAYLOAD_BUCKETS};
+#[cfg(feature = "server")]
 pub use server::{router, RelayServer};
 pub use store::{
     Credit, InsertOutcome, Store, StoreError, DEFAULT_INBOX_LIMIT, DEFAULT_TTL_MS, MAX_INBOX_LIMIT,
