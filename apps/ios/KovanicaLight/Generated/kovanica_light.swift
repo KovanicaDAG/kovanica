@@ -1153,6 +1153,47 @@ public func signBondRaw(keystoreJson: String, passphrase: String, chainId: UInt6
 })
 }
 /**
+ * Sign a contract call. `args_hex` is bincode-encoded calldata (`0x` optional).
+ *
+ * `value` is the native KUNA (atoms) sent to the contract, `0` when unused.
+ * `fee_rate` is atoms per byte from `kovanica_estimateFee`.
+ */
+public func signCallRaw(keystoreJson: String, passphrase: String, chainId: UInt64, contract: String, value: UInt64, method: String, argsHex: String, gasLimit: UInt64, nonce: UInt64, feeRate: UInt64)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_light_ffi_fn_func_sign_call_raw(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),
+        FfiConverterUInt64.lower(chainId),
+        FfiConverterString.lower(contract),
+        FfiConverterUInt64.lower(value),
+        FfiConverterString.lower(method),
+        FfiConverterString.lower(argsHex),
+        FfiConverterUInt64.lower(gasLimit),
+        FfiConverterUInt64.lower(nonce),
+        FfiConverterUInt64.lower(feeRate),uniffiCallStatus
+    )
+})
+}
+/**
+ * Sign a contract deploy. `code_hex` is the WASM bytecode (`0x` optional).
+ *
+ * `fee_rate` is atoms per byte from `kovanica_estimateFee`.
+ */
+public func signDeployRaw(keystoreJson: String, passphrase: String, chainId: UInt64, codeHex: String, nonce: UInt64, feeRate: UInt64)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_light_ffi_fn_func_sign_deploy_raw(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),
+        FfiConverterUInt64.lower(chainId),
+        FfiConverterString.lower(codeHex),
+        FfiConverterUInt64.lower(nonce),
+        FfiConverterUInt64.lower(feeRate),uniffiCallStatus
+    )
+})
+}
+/**
  * Sign a detached message with domain separation.
  *
  * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
@@ -1307,6 +1348,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw() != 28793) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kovanica_light_ffi_checksum_func_sign_call_raw() != 38764) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kovanica_light_ffi_checksum_func_sign_deploy_raw() != 4049) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_light_ffi_checksum_func_sign_detached() != 55302) {
