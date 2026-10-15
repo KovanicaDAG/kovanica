@@ -193,6 +193,14 @@ mod tests {
                 11,
                 9,
             ),
+            (
+                "claimSome",
+                TransactionKind::ClaimRewards {
+                    validator: Some(to),
+                },
+                12,
+                9,
+            ),
             // Call vectors T2/T3: contract `33`×32, method "transfer",
             // args 010203, gas_limit 100000, nonce 6, fee 10; only `value`
             // differs (0 vs 500). See `docs/SIGNATURE_FORMAT.md` §4.
