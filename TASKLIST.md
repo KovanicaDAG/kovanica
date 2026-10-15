@@ -469,9 +469,16 @@ Merge je izvršen kroz dva merge commita na `main`: `1571429e` (rename ⊕ VPS3)
 5. **Default putanje:** `/var/lib/kovanica`, `/etc/kovanica/validator.key`, `kovanica.toml`, `/tmp/kovanica-test-data`.
 6. **systemd/docker:** `User=kovanica`, `Group=kovanica`, `kovanica-lightnode.service`.
 
-**Operativni drift (JOŠ NIJE riješeno):**
+**Operativni drift (POTVRĐENO live auditom 2026-10-15, read-only SSH):**
 - [ ] Deployani VPS systemd uniti su još `kvnc-*` i exportaju `KVNC_*`. Binarij s `KOVANICA_*` env imenima + stari uniti = **tihi config break**. Rename se mora deployati kao **jedna koordinirana** unit+script+binary promjena.
+  - **Live nalazi (2026-10-15, read-only — ništa nije mijenjano):**
+    - **seed1** `145.223.116.178` — **ovo je isti stroj kao dev checkout** (`srv1745734`, machine-id `a1da8586…`). `kvnc-testnet-seed1.service` **enabled** (trenutno `inactive dead`); prisutni i `kvnc-node.service` i `kvnc-mainnet-seed1.service` (disabled). Svi `kovanica-*` uniti postoje ali su `disabled`/`indirect`. Pokrenuti node procesi: **9× `kvnc-node`** (5× `/root/Projects/kvnc/target/debug/kvnc-node`, 4× bare).
+    - **seed2** `76.13.250.65` (`srv1991525`): `kvnc-testnet-seed2.service` **enabled + active running** (nosi promet); `kovanica-testnet-seed@2.service` je u `activating auto-restart` → **crash-loop**. Pokrenut `/usr/local/bin/kvnc-node`.
+    - **seed3** `187.7.27.139` (`srv2013143`): `kvnc-testnet-seed3.service` **enabled** ali `inactive dead`; `kovanica-testnet-seed@3.service` također `dead` → **testnet seed3 ne radi**.
+  - Na sva tri hosta postoje i `/usr/local/bin/kovanica-node` (Oct 5) i `/usr/local/bin/kvnc-node` (Oct 13) — bira se nesukladno.
+  - Zaključak: drift **nije** "ništa nije preimenovano" — `kovanica-*` uniti postoje, ali promet i dalje nosi stari `kvnc-*` put. Prije rollouta treba riješiti i dva **live health problema**: seed2 crash-loop nove jedinice i seed3 koji je potpuno dole.
 - [ ] Fizički checkout direktorij `/root/Projects/kvnc` nije preimenovan → `mainnet/run-seed*.sh`, `run-seed1.sh`, `generate_validators.rs`, `docs/TESTNET-SEED-NODES.md` hardkodiraju `/root/Projects/kvnc`. Ako se dir preimenuje, ažurirati u istom commitu.
+  - **Odgođeno 2026-10-15 (odluka vlasnika):** rename nije izveden jer i ovaj i drugi OpenCode session (PID 2728100) drže cwd u tom direktoriju → dangleali bi oba. Putanje u skriptama **namjerno nisu mijenjane** (pokazivale bi na nepostojeći direktorij); dir i putanje se mijenjaju u istom, kasnijem commitu.
 - [x] `.opencode/agents/kovanica.md` + `opencode.json` (agent key `kovanica` / `kovanica-plan`) — preimenovano. **Zahtijeva restart OpenCodea** da se novi agent key učita.
 
 ### C. Otvoreni itemi (iz "Known reds", rev. 2026-10-15)
@@ -498,4 +505,7 @@ Merge je izvršen kroz dva merge commita na `main`: `1571429e` (rename ⊕ VPS3)
   - Verificirano: `cargo test -p kovanica-cli --lib` → **43 passed / 0 failed** (baseline 42/1). Nijedan assert nije oslabljen.
   - ⚠️ **Coverage napomena:** fixture više ne nosi `claimSome` vektor, pa se `ClaimRewards{Some}` wire parity **više nigdje ne cross-checka**. Vraćanje zahtijeva regeneraciju `claimSome` vektora u `packages/signer/fixtures/wire.json`.
 - [x] **Rename `kvnc` → `kovanica` landan i pushan** — `main` = `1ffa56f6` ⊕ `1571429e` ⊕ `55d06c2c`; `origin/main` == `1ffa56f6` pri zadnjem pushu.
-- [ ] **NIJE odabrano u ovoj sesiji (ostaje otvoreno):** rebuild Android `.so` (očekivani cdylib je `kovanica_light_ffi`, lokalni `libkvnc_light_ffi.so` je drift) i VPS uniti + `/root/Projects/kvnc` rename (TASKLIST §B 471–472).
+- [x] **Android `.so` rebuild** (izvedeno 2026-10-15, nakon "close open items"): `cargo ndk -t arm64-v8a -o apps/android/app/src/main/jniLibs build -p kovanica-light-ffi --release` iz **čistog** worktreea na `c08f4f69` (radi WIP-a u `kovanica-types`; `Cargo.lock` kopiran jer je untracked) → `libkovanica_light_ffi.so` (1.59 MB, ELF aarch64, Android 21, NDK r27, 40 `uniffi_kovanica_light_ffi_*` exporta, `NEEDED` samo `libdl`/`libc`). Stari `libkvnc_light_ffi.so` (26 MB, s debug_info) i suvišni `libkovanica_name_registry.so` (cargo-ndk kopira sve cdylibove; aplikacija ga ne učitava — `findLibraryName` vraća samo `kovanica_light_ffi`) su uklonjeni. `jniLibs/arm64-v8a/` sada sadrži **samo** `libkovanica_light_ffi.so`.
+- [x] **Bootnode typo fix** — `178.7.27.139` → `187.7.27.139` u `mainnet/run-seed1.sh`, `mainnet/run-seed2.sh`, `run-seed1.sh` (commit `e316d70a`); `mainnet/run-seed3.sh` je već bio ispravan.
+- ℹ️ **Tooling napomena:** `seed-lint` javlja lažni pozitiv "No `KOVANICA_DATA` path set" za `KOVANICA_DATA_DIR` (provjerava literal `KOVANICA_DATA=`). Kod je ispravan — `kovanica-node` čita `KOVANICA_DATA_DIR` (`crates/kovanica-node/src/config.rs:126`).
+- [ ] **Ostaje otvoreno:** VPS uniti / `KVNC_*` drift (§B 471 — sada potvrđen auditom, uz nove nalaze: seed2 crash-loop, seed3 down) i fizički `/root/Projects/kvnc` rename (§B 472 — odgođen dok su session-i aktivni).
