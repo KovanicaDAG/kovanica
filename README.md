@@ -6,20 +6,20 @@
 Not audited. Not for production use.  
 Interfaces, consensus parameters, and tokenomics constants may change without notice.
 
-The chain is **Kovanica**. The native coin ticker is **KUNA** (9 decimals). All crates, binaries, environment variables, and protocol prefixes use the `kvnc` namespace.
+The chain is **Kovanica**. The native coin ticker is **KUNA** (9 decimals). All crates, binaries, environment variables, and protocol prefixes use the `kovanica` namespace.
 
 ---
 
 ## Overview
 
-`kvnc` is a Cargo workspace that implements a complete full-node stack:
+`kovanica` is a Cargo workspace that implements a complete full-node stack:
 
 - **Consensus**: Mysticeti-style uncertified DAG (wave length = 3) with direct/indirect commit rules, linearization, and **MysticGhost hybrid** that applies GHOSTDAG \(k=3\) scoped colouring. Non-blue (red) blocks are returned to the mempool rather than pruned.
 - **State model**: Account-based (UTXO-free) with balances, nonces, contract code/storage, and a sorted key-value Merkle state root. Snapshots and pruning are supported.
 - **Staking & emission**: Proof-of-stake validators (target 15–21 active), delegation, unbonding queue, epoch rotation, fixed-percentage slashing, and a geometric emission schedule with treasury vesting.
 - **Execution**: Native transactions (transfer, stake, delegate, claim rewards, contract deploy/call) plus a Wasmi-based deterministic WASM runtime with gas metering and memory limits.
 - **Networking**: libp2p (TCP + Noise + Yamux, Gossipsub, Kademlia, Identify, Ping). Persistent peer identity, peer scoring, block/state sync, and orphan buffering.
-- **Interfaces**: JSON-RPC + WebSocket subscriptions, a full-featured CLI wallet, OpenAPI specification, a TypeScript API client, and **light-client checkpoints** (`kvnc_lightClientCheckpoint`).
+- **Interfaces**: JSON-RPC + WebSocket subscriptions, a full-featured CLI wallet, OpenAPI specification, a TypeScript API client, and **light-client checkpoints** (`kovanica_lightClientCheckpoint`).
 
 The node is designed to run comfortably on modest hardware (target 2–4 GB RAM with aggressive DAG pruning).
 
@@ -42,7 +42,7 @@ The node is designed to run comfortably on modest hardware (target 2–4 GB RAM 
 
 ## Tokenomics
 
-Canonical constants (locked in `kvnc-staking` and documented in `docs/TOKENOMICS.md`):
+Canonical constants (locked in `kovanica-staking` and documented in `docs/TOKENOMICS.md`):
 
 | Parameter | Value |
 |-----------|-------|
@@ -68,8 +68,8 @@ Rewards, treasury vesting, and circulating-supply accounting are applied atomica
 | Path | Purpose |
 |------|---------|
 | `crates/` | All Rust crates (see below) |
-| `crates/kvnc-node` | Full-node binary (`kvnc-node`) |
-| `crates/kvnc-cli` | CLI wallet and tooling (`kvnc-cli`, `kvnc`, `generate-validators`, `kvnc-bench`) |
+| `crates/kovanica-node` | Full-node binary (`kovanica-node`) |
+| `crates/kovanica-cli` | CLI wallet and tooling (`kovanica-cli`, `kovanica`, `generate-validators`, `kovanica-bench`) |
 | `docs/` | Architecture, tokenomics, contracts, signature format, ADRs, and operational notes |
 | `ops/` | Docker, Grafana, Prometheus, soak scripts |
 | `packages/` | TypeScript API client and web/explorer assets |
@@ -83,25 +83,25 @@ Rewards, treasury vesting, and circulating-supply accounting are applied atomica
 
 | Crate | Responsibility |
 |-------|----------------|
-| `kvnc-types` | Core types (blocks, transactions, addresses `kvnc…dag`, hashes, votes, committee, signing context) |
-| `kvnc-crypto` | Ed25519, batch verification, VRF, keystore primitives |
-| `kvnc-keystore` | Encrypted keystore v2 (Argon2id + XChaCha20-Poly1305), key management |
-| `kvnc-storage` | redb-backed state, consensus, and account stores; Merkle roots; snapshots |
-| `kvnc-dag` | DAG store, block manager, mergesets, pruning |
-| `kvnc-consensus` | Committer, linearizer, engine, MysticGhost / GHOSTDAG colouring, metrics |
-| `kvnc-mempool` | Fee-rate priority pool, admission, eviction, rebroadcast |
-| `kvnc-network` | libp2p service, protocols, scoring, identity |
-| `kvnc-runtime` | Wasmi WASM engine and gas metering |
-| `kvnc-execution` | State-transition function, reward distribution, contract host |
-| `kvnc-staking` | Emission schedule, treasury, validator set, delegation, slashing |
-| `kvnc-rpc` | JSON-RPC server, WebSocket subscriptions, rate limiting |
-| `kvnc-common` | Shared events, WASM helpers, memory utilities |
-| `kvnc-htlc` / `kvnc-vault` / `kvnc-multisig` / `kvnc-token` | Native + WASM contract implementations |
-| `kvnc-faucet` | Rate-limited testnet faucet service |
-| `kvnc-cli` | Command-line wallet, staking, and contract tools |
-| `kvnc-light` | Light-client types and verification logic |
-| `kvnc-lightnode` | Light-node protocol logic |
-| `kvnc-light-ffi` | FFI bindings for light-client (Kotlin/Swift/WASM) |
+| `kovanica-types` | Core types (blocks, transactions, addresses `kvnc…dag`, hashes, votes, committee, signing context) |
+| `kovanica-crypto` | Ed25519, batch verification, VRF, keystore primitives |
+| `kovanica-keystore` | Encrypted keystore v2 (Argon2id + XChaCha20-Poly1305), key management |
+| `kovanica-storage` | redb-backed state, consensus, and account stores; Merkle roots; snapshots |
+| `kovanica-dag` | DAG store, block manager, mergesets, pruning |
+| `kovanica-consensus` | Committer, linearizer, engine, MysticGhost / GHOSTDAG colouring, metrics |
+| `kovanica-mempool` | Fee-rate priority pool, admission, eviction, rebroadcast |
+| `kovanica-network` | libp2p service, protocols, scoring, identity |
+| `kovanica-runtime` | Wasmi WASM engine and gas metering |
+| `kovanica-execution` | State-transition function, reward distribution, contract host |
+| `kovanica-staking` | Emission schedule, treasury, validator set, delegation, slashing |
+| `kovanica-rpc` | JSON-RPC server, WebSocket subscriptions, rate limiting |
+| `kovanica-common` | Shared events, WASM helpers, memory utilities |
+| `kovanica-htlc` / `kovanica-vault` / `kovanica-multisig` / `kovanica-token` | Native + WASM contract implementations |
+| `kovanica-faucet` | Rate-limited testnet faucet service |
+| `kovanica-cli` | Command-line wallet, staking, and contract tools |
+| `kovanica-light` | Light-client types and verification logic |
+| `kovanica-lightnode` | Light-node protocol logic |
+| `kovanica-light-ffi` | FFI bindings for light-client (Kotlin/Swift/WASM) |
 
 ## Quick Start
 
@@ -114,8 +114,8 @@ Rewards, treasury vesting, and circulating-supply accounting are applied atomica
 ### Build and Test
 
 ```bash
-git clone https://github.com/KovanicaDAG/kvnc.git
-cd kvnc
+git clone https://github.com/KovanicaDAG/kovanica.git
+cd kovanica
 cargo build --workspace
 cargo test --workspace
 ```
@@ -126,8 +126,8 @@ CI runs `cargo fmt --check`, `clippy -D warnings`, full tests (including integra
 
 ```bash
 cp config.example.toml config.toml
-# Edit config.toml or override via environment variables (KVNC_DATA_DIR, KVNC_LISTEN_ADDR, KVNC_RPC_PORT, KVNC_BOOTNODES, KVNC_VALIDATOR_KEY, KVNC_RUN_VALIDATOR, KVNC_MYSTICGHOST, KVNC_VRF_LEADER, KVNC_ROUND_DURATION_MS, KVNC_MAX_PEERS, KVNC_TREASURY_ADDRESS, KVNC_RPC_RATE_LIMIT_PER_MIN)
-cargo run -p kvnc-node -- --config config.toml
+# Edit config.toml or override via environment variables (KOVANICA_DATA_DIR, KOVANICA_LISTEN_ADDR, KOVANICA_RPC_PORT, KOVANICA_BOOTNODES, KOVANICA_VALIDATOR_KEY, KOVANICA_RUN_VALIDATOR, KOVANICA_MYSTICGHOST, KOVANICA_VRF_LEADER, KOVANICA_ROUND_DURATION_MS, KOVANICA_MAX_PEERS, KOVANICA_TREASURY_ADDRESS, KOVANICA_RPC_RATE_LIMIT_PER_MIN)
+cargo run -p kovanica-node -- --config config.toml
 ```
 
 Key configuration points (see `config.example.toml` for the full list and environment-variable mappings):
@@ -135,7 +135,7 @@ Key configuration points (see `config.example.toml` for the full list and enviro
 - `data_dir` — chain data (separate consensus and state redb files)
 - `listen_addr` — P2P listen address (default `0.0.0.0:8000`)
 - `rpc_addr` / `rpc_port` — JSON-RPC bind (default `127.0.0.1:8545`)
-- `bootnodes` — list of multiaddrs or DNS seeds (no hard-coded hosts; supply 3+ kvnc-native seeds)
+- `bootnodes` — list of multiaddrs or DNS seeds (no hard-coded hosts; supply 3+ kovanica-native seeds)
 - `round_duration_ms` — target consensus round duration
 - `validator_key` — path to a 32-byte hex seed file (mode `0600`). Required when `run_validator` is true, which is the default. A read-only node may omit it.
 - `rpc_rate_limit_per_min` — per-IP token-bucket limit (burst derived as `max(1, rate/6)`)
@@ -148,7 +148,7 @@ A `genesis` subcommand is available to produce a genesis JSON and optional valid
 ### Docker
 
 ```bash
-docker build -t kvnc-node:local .
+docker build -t kovanica-node:local .
 # See ops/docker/ and docker-compose.yml for multi-node and entrypoint details.
 ```
 
@@ -157,19 +157,19 @@ The image runs as a non-root user, exposes ports 8000 (P2P) and 8545 (RPC), and 
 ### CLI Highlights
 
 ```bash
-cargo run -p kvnc-cli -- --help
+cargo run -p kovanica-cli -- --help
 # wallet: keygen, import, export, address, sign, tui
 # chain: balance, status, transfer
 # staking: stake, unstake, delegate, claim-rewards
 # contracts: HTLC, Vault, Multisig, Token subcommands
 
-# Additional binaries from kvnc-cli crate:
-cargo run -p kvnc-cli --bin kvnc -- --help        # short alias
-cargo run -p kvnc-cli --bin generate-validators -- --help  # genesis validator key generation
-cargo run -p kvnc-cli --bin kvnc-bench -- --help  # benchmarking tool
+# Additional binaries from kovanica-cli crate:
+cargo run -p kovanica-cli --bin kovanica -- --help        # short alias
+cargo run -p kovanica-cli --bin generate-validators -- --help  # genesis validator key generation
+cargo run -p kovanica-cli --bin kovanica-bench -- --help  # benchmarking tool
 ```
 
-Keys are stored in an encrypted keystore (Argon2id + XChaCha20-Poly1305). The node never receives private seeds. `kvnc tui` opens an interactive wallet for balances, transfers, and staking on that same local keystore.
+Keys are stored in an encrypted keystore (Argon2id + XChaCha20-Poly1305). The node never receives private seeds. `kovanica tui` opens an interactive wallet for balances, transfers, and staking on that same local keystore.
 
 ## Architecture (High Level)
 
@@ -197,7 +197,7 @@ State (accounts, staking, contracts)
 Storage (redb, pruning, snapshots)
 ```
 
-See `docs/ARCHITECTURE.md`, `docs/TOKENOMICS.md`, `docs/CONTRACTS.md`, and `docs/SIGNATURE_FORMAT.md` for deeper detail. Signature domains use the `KUNA/…` tags; addresses follow the `kvnc<hex>dag` format with a Blake3 checksum. Light-client types live in `kvnc-types/src/light_client.rs`; RPC endpoint is `kvnc_lightClientCheckpoint`.
+See `docs/ARCHITECTURE.md`, `docs/TOKENOMICS.md`, `docs/CONTRACTS.md`, and `docs/SIGNATURE_FORMAT.md` for deeper detail. Signature domains use the `KUNA/…` tags; addresses follow the `kvnc<hex>dag` format with a Blake3 checksum. Light-client types live in `kovanica-types/src/light_client.rs`; RPC endpoint is `kovanica_lightClientCheckpoint`.
 
 ## Development Status
 
@@ -232,4 +232,4 @@ Contributions are welcome. Please open an issue or pull request against the `mai
 
 ---
 
-*Generated from a full inspection of the `KovanicaDAG/kvnc` codebase. Ignore any prior README content.*
+*Generated from a full inspection of the `KovanicaDAG/kovanica` codebase. Ignore any prior README content.*

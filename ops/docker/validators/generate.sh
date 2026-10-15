@@ -6,28 +6,28 @@
 #   ops/docker/validators/genesis_validators.toml   (gitignored; regenerate, never commit)
 #
 # A node's address is its raw Ed25519 public key, so its address hex equals its
-# public-key hex; `kvnc address --key-file` derives both without ever echoing the
+# public-key hex; `kovanica address --key-file` derives both without ever echoing the
 # seed. Existing valN.pem files are reused, so re-running only rebuilds genesis.
 #
 # These are DEVNET keys. Never reuse them on public infrastructure.
 set -euo pipefail
 
-BIN="${KVNC_BIN:-./target/release/kvnc}"
+BIN="${KOVANICA_BIN:-./target/release/kovanica}"
 OUTDIR="${OUTDIR:-ops/docker/validators}"
-# MIN_VALIDATOR_STAKE = 50_000 KVNC = 50_000_000_000_000 atoms.
+# MIN_VALIDATOR_STAKE = 50_000 KUNA = 50_000_000_000_000 atoms.
 STAKE="${STAKE:-50000000000000}"
 
 if [ ! -x "$BIN" ]; then
-  echo "error: kvnc binary not found at '$BIN'." >&2
-  echo "       build it first: cargo build --release -p kvnc-cli" >&2
+  echo "error: kovanica binary not found at '$BIN'." >&2
+  echo "       build it first: cargo build --release -p kovanica-cli" >&2
   exit 1
 fi
 
-# The container runs as the unprivileged `kvnc` user (uid/gid 10001) and bind
+# The container runs as the unprivileged `kovanica` user (uid/gid 10001) and bind
 # mounts preserve host ownership and permissions. Hand it ownership of both the
 # seed files (which must stay 0600 — the node rejects group/world-readable
 # keys) and the genesis file, otherwise the node cannot read them in-container.
-CONTAINER_UID_GID="${KVNC_CONTAINER_UID_GID:-10001:10001}"
+CONTAINER_UID_GID="${KOVANICA_CONTAINER_UID_GID:-10001:10001}"
 own_for_container() {
   if chown "$CONTAINER_UID_GID" "$1" 2>/dev/null; then
     :
@@ -45,7 +45,7 @@ trap 'rm -f "$TMP"' EXIT
 {
   echo "# Phase 16.6 — 4-node validator set for genesis (generated $(date -u +%Y-%m-%dT%H:%M:%SZ))."
   echo "# DEVNET KEYS ONLY. Produced by ops/docker/validators/generate.sh; do not commit."
-  echo "# Stakes = MIN_VALIDATOR_STAKE = 50_000 KVNC = $STAKE atoms."
+  echo "# Stakes = MIN_VALIDATOR_STAKE = 50_000 KUNA = $STAKE atoms."
 } > "$TMP"
 
 for i in 1 2 3 4; do

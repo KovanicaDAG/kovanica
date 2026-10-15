@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Genesis ceremony script for KVNC testnet/mainnet
+# Genesis ceremony script for Kovanica testnet/mainnet
 # Usage: ./ops/genesis/ceremony.sh --network testnet --validators validators.json
 set -euo pipefail
 
@@ -31,7 +31,7 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
-echo "=== KVNC Genesis Ceremony ==="
+echo "=== Kovanica Genesis Ceremony ==="
 echo "Network: $NETWORK"
 echo "Validators: $VALIDATORS_FILE"
 echo "Output: $OUTPUT_DIR"
@@ -44,11 +44,11 @@ if $FORCE; then
     GENESIS_ARGS="$GENESIS_ARGS --force"
 fi
 
-cargo run --release -p kvnc-node -- genesis $GENESIS_ARGS
+cargo run --release -p kovanica-node -- genesis $GENESIS_ARGS
 
 # Step 2: Generate validator keys
 echo "[2/4] Generating validator keys..."
-cargo run --release -p kvnc-node -- genesis \
+cargo run --release -p kovanica-node -- genesis \
     --validators $VALIDATORS_FILE \
     --output $OUTPUT_DIR/genesis.json \
     --validator-keys-out "$OUTPUT_DIR/keys" \
@@ -57,7 +57,7 @@ cargo run --release -p kvnc-node -- genesis \
 # Step 3: Create genesis_validators.toml
 echo "[3/4] Creating genesis_validators.toml..."
 cat > "$OUTPUT_DIR/genesis_validators.toml" << EOF
-# KVNC $NETWORK genesis validators
+# Kovanica $NETWORK genesis validators
 # Generated: $(date -Iseconds)
 # Network: $NETWORK
 
@@ -85,7 +85,7 @@ else
 fi
 
 cat > "$OUTPUT_DIR/bootnodes.toml" << EOF
-# KVNC $NETWORK bootnodes
+# Kovanica $NETWORK bootnodes
 # All validators should use this seed
 bootnodes = ["$SEED"]
 EOF
@@ -100,6 +100,6 @@ echo "  $OUTPUT_DIR/keys/ (validator keys)"
 echo ""
 echo "Next steps:"
 echo "1. Distribute genesis.json to all validators"
-echo "2. Each validator places genesis.json in their KVNC_DATA_DIR"
+echo "2. Each validator places genesis.json in their KOVANICA_DATA_DIR"
 echo "3. Each validator configures bootnodes = [\"$SEED\"]"
 echo "4. Start all validators simultaneously"

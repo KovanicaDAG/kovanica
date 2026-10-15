@@ -10,5 +10,5 @@ Run:
 ```bash
 ./ops/bench/tps.sh
 ```
-Requires funded `BENCH_KEY` at `/tmp/kvnc-bench.pk` (or export BENCH_KEY_HEX).
+Requires funded `BENCH_KEY` at `/tmp/kovanica-bench.pk` (or export BENCH_KEY_HEX).
 No crate version change.

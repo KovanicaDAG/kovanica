@@ -1,5 +1,5 @@
 /**
- * Typed fetch client for a kvnc-node JSON-RPC endpoint.
+ * Typed fetch client for a kovanica-node JSON-RPC endpoint.
  *
  * The caller passes the full URL, including `/rpc`. A loopback node you
  * started yourself is `http://127.0.0.1:8545/rpc`. The console does not
@@ -10,7 +10,7 @@
  * (9 decimals).
  *
  * Signed contract calls are not built here. Argument bytes for
- * `TransactionKind::Call` come from `kvnc_execution::call_args` and must
+ * `TransactionKind::Call` come from `kovanica_execution::call_args` and must
  * match `ENTRY_POINTS`. The node's `htlc_*` / `vault_*` / `token_*` RPC
  * names execute inside the process with a fixed zero caller; they are not
  * this client.
@@ -93,7 +93,7 @@ export function parseQuantity(value: unknown): bigint {
   throw new Error(`expected a hex quantity, got ${typeof value}`);
 }
 
-export class KvncRpcClient {
+export class KovanicaRpcClient {
   /** @param url Full JSON-RPC URL, including `/rpc`. */
   constructor(private url: string) {
     if (url.length === 0) throw new Error("RPC URL is required");
@@ -113,26 +113,26 @@ export class KvncRpcClient {
   }
 
   async blockNumber(): Promise<bigint> {
-    return parseQuantity(await this.call<unknown>("kvnc_blockNumber"));
+    return parseQuantity(await this.call<unknown>("kovanica_blockNumber"));
   }
 
   getBlockByHash(hash: string, fullTransactions = false): Promise<BlockResponse | null> {
-    return this.call<BlockResponse | null>("kvnc_getBlockByHash", [hash, fullTransactions]);
+    return this.call<BlockResponse | null>("kovanica_getBlockByHash", [hash, fullTransactions]);
   }
 
   async getBalance(address: string): Promise<bigint> {
-    return parseQuantity(await this.call<unknown>("kvnc_getBalance", [address]));
+    return parseQuantity(await this.call<unknown>("kovanica_getBalance", [address]));
   }
 
   async getValidators(): Promise<ValidatorInfo[]> {
     const rows = await this.call<Array<Omit<ValidatorInfo, "stake"> & { stake: unknown }>>(
-      "kvnc_getValidators",
+      "kovanica_getValidators",
     );
     return rows.map((row) => ({ ...row, stake: parseQuantity(row.stake) }));
   }
 
   sendRawTransaction(rawHex: string): Promise<string> {
-    return this.call<string>("kvnc_sendRawTransaction", [rawHex]);
+    return this.call<string>("kovanica_sendRawTransaction", [rawHex]);
   }
 
   /**
@@ -140,19 +140,19 @@ export class KvncRpcClient {
    * non-destructive pending-hash listing yet.
    */
   getPendingTransactions(): Promise<string[]> {
-    return this.call<string[]>("kvnc_getPendingTransactions");
+    return this.call<string[]>("kovanica_getPendingTransactions");
   }
 
   async estimateFee(): Promise<bigint> {
-    return parseQuantity(await this.call<unknown>("kvnc_estimateFee"));
+    return parseQuantity(await this.call<unknown>("kovanica_estimateFee"));
   }
 
   async getNonce(address: string): Promise<bigint> {
-    return parseQuantity(await this.call<unknown>("kvnc_getNonce", [address]));
+    return parseQuantity(await this.call<unknown>("kovanica_getNonce", [address]));
   }
 
   async getStake(address: string): Promise<bigint> {
-    return parseQuantity(await this.call<unknown>("kvnc_getStake", [address]));
+    return parseQuantity(await this.call<unknown>("kovanica_getStake", [address]));
   }
 
   /**
@@ -160,22 +160,22 @@ export class KvncRpcClient {
    * because per-address reward accounting is not stored yet.
    */
   async getRewards(address: string): Promise<bigint> {
-    return parseQuantity(await this.call<unknown>("kvnc_getRewards", [address]));
+    return parseQuantity(await this.call<unknown>("kovanica_getRewards", [address]));
   }
 
   getBlockByNumber(number: bigint, fullTransactions = false): Promise<BlockResponse | null> {
-    return this.call<BlockResponse | null>("kvnc_getBlockByNumber", [
+    return this.call<BlockResponse | null>("kovanica_getBlockByNumber", [
       `0x${number.toString(16)}`,
       fullTransactions,
     ]);
   }
 
   async getTransactionByHash(hash: string): Promise<Record<string, unknown> | null> {
-    return this.call<Record<string, unknown> | null>("kvnc_getTransactionByHash", [hash]);
+    return this.call<Record<string, unknown> | null>("kovanica_getTransactionByHash", [hash]);
   }
 
   async getTransactionReceipt(hash: string): Promise<TransactionReceipt | null> {
-    const row = await this.call<RawReceipt | null>("kvnc_getTransactionReceipt", [hash]);
+    const row = await this.call<RawReceipt | null>("kovanica_getTransactionReceipt", [hash]);
     if (row == null) return null;
     return {
       transactionHash: row.transactionHash,
@@ -189,7 +189,7 @@ export class KvncRpcClient {
   }
 
   async getLeaderSchedule(count = 8): Promise<LeaderSlot[]> {
-    const rows = await this.call<RawLeader[]>( "kvnc_getLeaderSchedule", [count]);
+    const rows = await this.call<RawLeader[]>( "kovanica_getLeaderSchedule", [count]);
     return rows.map((row) => ({
       round: parseQuantity(row.round),
       leaderIndex: row.leader_index,
@@ -198,7 +198,7 @@ export class KvncRpcClient {
   }
 
   async getCommittee(): Promise<CommitteeMember[]> {
-    const rows = await this.call<RawMember[]>("kvnc_getCommittee");
+    const rows = await this.call<RawMember[]>("kovanica_getCommittee");
     return rows.map((row) => ({
       index: row.index,
       address: row.address,
@@ -273,7 +273,7 @@ interface RawMember {
 export function subscriptionHead(message: unknown): unknown | null {
   if (!message || typeof message !== "object") return null;
   const msg = message as { method?: string; params?: { result?: unknown } };
-  if (msg.method !== "kvnc_subscription") return null;
+  if (msg.method !== "kovanica_subscription") return null;
   return msg.params?.result ?? null;
 }
 

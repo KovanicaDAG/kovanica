@@ -11,22 +11,22 @@ import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
-import uniffi.kvnc_light.confirmAccount
-import uniffi.kvnc_light.createWallet
-import uniffi.kvnc_light.faucetAllowed
-import uniffi.kvnc_light.importWallet
-import uniffi.kvnc_light.signBondRaw
-import uniffi.kvnc_light.signExitRaw
-import uniffi.kvnc_light.signTransferRaw
-import uniffi.kvnc_light.signWitnessRaw
-import uniffi.kvnc_light.verifyHeader
-import uniffi.kvnc_light.walletAddress
+import uniffi.kovanica_light.confirmAccount
+import uniffi.kovanica_light.createWallet
+import uniffi.kovanica_light.faucetAllowed
+import uniffi.kovanica_light.importWallet
+import uniffi.kovanica_light.signBondRaw
+import uniffi.kovanica_light.signExitRaw
+import uniffi.kovanica_light.signTransferRaw
+import uniffi.kovanica_light.signWitnessRaw
+import uniffi.kovanica_light.verifyHeader
+import uniffi.kovanica_light.walletAddress
 import java.util.concurrent.Executors
 
 /**
  * Light client. Crypto runs on a background thread because Argon2id uses 64 MiB.
  * A gap since the last header starts a new checkpoint. The desktop
- * `kvnc-lightnode` follows every header and submits witnesses while the phone sleeps.
+ * `kovanica-lightnode` follows every header and submits witnesses while the phone sleeps.
  */
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
@@ -42,7 +42,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val prefs = getSharedPreferences("kvnc", MODE_PRIVATE)
+        val prefs = getSharedPreferences("kovanica", MODE_PRIVATE)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 32, 32, 32)
@@ -68,7 +68,7 @@ class MainActivity : Activity() {
         root.addView(amountField)
         root.addView(button("Send") { send() })
         root.addView(TextView(this).apply {
-            text = "Light node: a desktop kvnc-lightnode submits the witness while this phone is asleep. Open the app about once per day."
+            text = "Light node: a desktop kovanica-lightnode submits the witness while this phone is asleep. Open the app about once per day."
         })
         root.addView(button("Bond 100 KUNA") { bond() })
         root.addView(button("Submit witness") { witness() })
@@ -108,11 +108,11 @@ class MainActivity : Activity() {
         saveConfig()
         background("syncing") {
             val client = client()
-            val header = client.call("kvnc_getLeaderHeader", JSONArray()) as? JSONObject
+            val header = client.call("kovanica_getLeaderHeader", JSONArray()) as? JSONObject
                 ?: return@background "no sealed header yet"
             val height = parseQuantity(header.get("committedHeight"))
-            val seals = client.call("kvnc_getCommitSeals", JSONArray().put(hex(height)))
-            val committee = client.call("kvnc_getCommittee", JSONArray())
+            val seals = client.call("kovanica_getCommitSeals", JSONArray().put(hex(height)))
+            val committee = client.call("kovanica_getCommittee", JSONArray())
             val verified = verifyHeader(
                 chainId(),
                 epoch(),
@@ -133,7 +133,7 @@ class MainActivity : Activity() {
         background("reading balance") {
             val keystore = keystore()
             val address = walletAddress(keystore)
-            val proof = client().call("kvnc_getAccountProof", JSONArray().put(address))
+            val proof = client().call("kovanica_getAccountProof", JSONArray().put(address))
             if (proof == null) {
                 return@background "address $address\nbalance unverified (no account proof)"
             }
@@ -152,10 +152,10 @@ class MainActivity : Activity() {
             val keystore = keystore()
             val address = walletAddress(keystore)
             val node = client()
-            val nonce = parseQuantity(node.call("kvnc_getNonce", JSONArray().put(address)))
-            val rate = parseQuantity(node.call("kvnc_estimateFee", JSONArray()))
+            val nonce = parseQuantity(node.call("kovanica_getNonce", JSONArray().put(address)))
+            val rate = parseQuantity(node.call("kovanica_estimateFee", JSONArray()))
             val raw = signTransferRaw(keystore, passphrase, chainId(), to, amount, nonce, rate)
-            val hash = node.call("kvnc_sendRawTransaction", JSONArray().put(raw))
+            val hash = node.call("kovanica_sendRawTransaction", JSONArray().put(raw))
             "submitted $hash"
         }
     }
@@ -175,13 +175,13 @@ class MainActivity : Activity() {
         background("witness") {
             val keystore = keystore()
             val address = walletAddress(keystore)
-            val set = JSONObject(client().call("kvnc_getLightSet", JSONArray()).toString())
+            val set = JSONObject(client().call("kovanica_getLightSet", JSONArray()).toString())
             if (set.isNull("beacon")) {
                 return@background "epoch ${parseQuantity(set.get("epoch"))} has no beacon yet"
             }
             val node = client()
-            val nonce = parseQuantity(node.call("kvnc_getNonce", JSONArray().put(address)))
-            val rate = parseQuantity(node.call("kvnc_estimateFee", JSONArray()))
+            val nonce = parseQuantity(node.call("kovanica_getNonce", JSONArray().put(address)))
+            val rate = parseQuantity(node.call("kovanica_estimateFee", JSONArray()))
             val raw = signWitnessRaw(
                 keystore,
                 passphrase,
@@ -191,7 +191,7 @@ class MainActivity : Activity() {
                 nonce,
                 rate,
             )
-            val hash = node.call("kvnc_sendRawTransaction", JSONArray().put(raw))
+            val hash = node.call("kovanica_sendRawTransaction", JSONArray().put(raw))
             "witness submitted $hash\n${lightLine(set, address)}"
         }
     }
@@ -220,10 +220,10 @@ class MainActivity : Activity() {
         val keystore = keystore()
         val address = walletAddress(keystore)
         val node = client()
-        val nonce = parseQuantity(node.call("kvnc_getNonce", JSONArray().put(address)))
-        val rate = parseQuantity(node.call("kvnc_estimateFee", JSONArray()))
+        val nonce = parseQuantity(node.call("kovanica_getNonce", JSONArray().put(address)))
+        val rate = parseQuantity(node.call("kovanica_estimateFee", JSONArray()))
         val raw = sign(keystore, address, nonce, rate)
-        val hash = node.call("kvnc_sendRawTransaction", JSONArray().put(raw))
+        val hash = node.call("kovanica_sendRawTransaction", JSONArray().put(raw))
         return "$label submitted $hash"
     }
 
@@ -275,7 +275,7 @@ class MainActivity : Activity() {
     }
 
     private fun client() = NodeClient(rpcField.text.toString())
-    private fun prefs() = getSharedPreferences("kvnc", MODE_PRIVATE)
+    private fun prefs() = getSharedPreferences("kovanica", MODE_PRIVATE)
     private fun keystore(): String = prefs().getString("keystore", null) ?: error("create or import a wallet first")
     private fun chainId(): ULong = chainField.text.toString().toULong()
     private fun epoch(): ULong = epochField.text.toString().toULong()

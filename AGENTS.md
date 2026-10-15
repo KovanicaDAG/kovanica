@@ -1,11 +1,11 @@
-# kvnc – OpenCode Agent Instructions
+# kovanica – OpenCode Agent Instructions
 
 > **Project identity (NE MJEŠAJ S DRUGIM PROJEKTIMA)**
 
-**kvnc** is a clean, from-scratch Rust Layer-1 blockchain.
+**kovanica** is a clean, from-scratch Rust Layer-1 blockchain.
 
 **Naming (zaključano):** chain = **Kovanica**, native coin ticker = **KUNA** (9 decimals),
-codebase/binary/env prefiks = **kvnc** (`kvnc-*` crate-ovi, `kvnc-node`, `KVNC_*`). Adresa je
+codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-node`, `KOVANICA_*`). Adresa je
 `kvnc<hex>dag`. Nikad ne koristi `KVNC` kao naziv valute.
 
 | Layer              | Choice                                      |
@@ -51,25 +51,25 @@ Reward se mint-a **samo** na committed leader (CommittedSubDag → StakingState:
 
 ```
 crates/
-├── kvnc-types
-├── kvnc-crypto
-├── kvnc-storage
-├── kvnc-dag
-├── kvnc-consensus
-├── kvnc-mempool
-├── kvnc-network
-├── kvnc-runtime          # Wasmi
-├── kvnc-execution
-├── kvnc-staking
-├── kvnc-node
-├── kvnc-cli
-├── kvnc-rpc
-├── kvnc-common
-├── kvnc-htlc
-├── kvnc-vault
-├── kvnc-multisig
-├── kvnc-token
-└── kvnc-faucet
+├── kovanica-types
+├── kovanica-crypto
+├── kovanica-storage
+├── kovanica-dag
+├── kovanica-consensus
+├── kovanica-mempool
+├── kovanica-network
+├── kovanica-runtime          # Wasmi
+├── kovanica-execution
+├── kovanica-staking
+├── kovanica-node
+├── kovanica-cli
+├── kovanica-rpc
+├── kovanica-common
+├── kovanica-htlc
+├── kovanica-vault
+├── kovanica-multisig
+├── kovanica-token
+└── kovanica-faucet
 ```
 
 Packages (TypeScript):

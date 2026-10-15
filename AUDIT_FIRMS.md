@@ -1,4 +1,4 @@
-# Recommended Audit Firms for KVNC
+# Recommended Audit Firms for Kovanica
 
 Based on the codebase characteristics (Mysticeti-style DAG consensus, Wasmi WASM runtime, libp2p networking, Rust/Ed25519/ECVRF cryptography), the following firms have relevant expertise:
 
@@ -6,7 +6,7 @@ Based on the codebase characteristics (Mysticeti-style DAG consensus, Wasmi WASM
 
 ## Tier 1 — Deep Consensus + Cryptography + Rust Expertise
 
-| Firm | Relevant Experience | Why KVNC |
+| Firm | Relevant Experience | Why Kovanica |
 |------|---------------------|----------|
 | **Trail of Bits** | Rust (soroban, reth, foundry), DAG consensus (Avalanche, IOTA), WASM (wasmi, wasmtime), libp2p, VRF/threshold crypto | Best-in-class for Rust + consensus + WASM; published research on DAG safety |
 | **Sigma Prime** | Ethereum consensus (Lighthouse), libp2p, networking, Rust, formal verification | Deep libp2p & gossip expertise; Ethereum beacon chain experience transfers to DAG commit logic |
@@ -42,27 +42,27 @@ Based on the codebase characteristics (Mysticeti-style DAG consensus, Wasmi WASM
 ## Recommended Engagement Model
 
 ### Phase 1: Consensus + Crypto (4–6 weeks, 2–3 auditors)
-**Scope:** `kvnc-consensus`, `kvnc-crypto`, `kvnc-types` (consensus types)
+**Scope:** `kovanica-consensus`, `kovanica-crypto`, `kovanica-types` (consensus types)
 - Mysticeti commit logic, VRF leader election, GHOSTDAG k=3
 - Ed25519 strict verify, ECVRF, vote/commit seal domain separation
 - **Firms:** Trail of Bits, Sigma Prime, Zellic
 
 ### Phase 2: Mempool + P2P + Staking (3–4 weeks, 2 auditors)
-**Scope:** `kvnc-mempool`, `kvnc-network`, `kvnc-staking`
+**Scope:** `kovanica-mempool`, `kovanica-network`, `kovanica-staking`
 - Fee market, RBF, in-flight timeout, re-insertion
 - Gossipsub validation, peer scoring, block/state sync
 - Emission schedule, slashing, delegation, treasury
 - **Firms:** Sigma Prime (libp2p), Spearbit (modular team)
 
 ### Phase 3: WASM Runtime + Contracts + RPC (3–4 weeks, 2 auditors)
-**Scope:** `kvnc-execution`, `kvnc-runtime`, `kvnc-rpc`, contract crates
+**Scope:** `kovanica-execution`, `kovanica-runtime`, `kovanica-rpc`, contract crates
 - Wasmi fuel/memory metering, host ABI, trap handling
 - Native contract logic (HTLC, Vault, Multisig, Token, LightNode)
 - JSON-RPC rate limiting, auth, WS subscriptions
 - **Firms:** Trail of Bits (WASM), Zellic (runtime)
 
 ### Phase 4: Integration + Cross-Cutting (2 weeks, 1–2 auditors)
-**Scope:** `kvnc-node`, `kvnc-keystore`, cross-component invariants
+**Scope:** `kovanica-node`, `kovanica-keystore`, cross-component invariants
 - Genesis, recovery, committee build, chain_id pinning
 - Keystore Argon2id/XChaCha20, v1 migration
 - Supply accounting, execution idempotency
@@ -137,4 +137,4 @@ Based on the codebase characteristics (Mysticeti-style DAG consensus, Wasmi WASM
 
 ---
 
-*Document prepared for KVNC audit preparation — not for public distribution.*
+*Document prepared for Kovanica audit preparation — not for public distribution.*

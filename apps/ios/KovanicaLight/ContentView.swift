@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Light client screens. Argon2id runs off the main actor.
 /// A gap since the last sealed header starts a new checkpoint.
-/// Desktop `kvnc-lightnode` submits witnesses while the phone is asleep.
+/// Desktop `kovanica-lightnode` submits witnesses while the phone is asleep.
 struct ContentView: View {
     @AppStorage("rpc") private var rpc = "http://127.0.0.1:8545"
     @AppStorage("chainId") private var chainId = "1337"
@@ -41,7 +41,7 @@ struct ContentView: View {
                 TextField("Recipient", text: $recipient).textFieldStyle(.roundedBorder)
                 TextField("Amount (atoms)", text: $amount).textFieldStyle(.roundedBorder)
                 Button("Send") { run("sending", onSend) }
-                Text("Light node: a desktop kvnc-lightnode submits the witness while this phone is asleep. Open the app about once per day.")
+                Text("Light node: a desktop kovanica-lightnode submits the witness while this phone is asleep. Open the app about once per day.")
                 Button("Bond 100 KUNA") { run("bonding", onBond) }
                 Button("Submit witness") { run("witness", onWitness) }
                 Button("Exit light node") { run("exiting", onExit) }
@@ -68,13 +68,13 @@ struct ContentView: View {
     }
 
     private func onSync() throws -> Outcome {
-        let headerValue = try NodeClient.call(base: rpc, method: "kvnc_getLeaderHeader", params: [])
+        let headerValue = try NodeClient.call(base: rpc, method: "kovanica_getLeaderHeader", params: [])
         guard let headerObject = headerValue as? [String: Any] else {
             return Outcome(status: "no sealed header yet")
         }
         let height = try parseQuantity(headerObject["committedHeight"])
-        let seals = try NodeClient.call(base: rpc, method: "kvnc_getCommitSeals", params: [hex(height)])
-        let committee = try NodeClient.call(base: rpc, method: "kvnc_getCommittee", params: [])
+        let seals = try NodeClient.call(base: rpc, method: "kovanica_getCommitSeals", params: [hex(height)])
+        let committee = try NodeClient.call(base: rpc, method: "kovanica_getCommittee", params: [])
         let headerJSON = try json(headerObject)
         let verified = try verifyHeader(
             chainId: chainValue(),
@@ -92,7 +92,7 @@ struct ContentView: View {
 
     private func onBalance() throws -> Outcome {
         let address = try walletAddress(keystoreJson: requireKeystore())
-        let proof = try NodeClient.call(base: rpc, method: "kvnc_getAccountProof", params: [address])
+        let proof = try NodeClient.call(base: rpc, method: "kovanica_getAccountProof", params: [address])
         guard proof != nil else {
             return Outcome(status: "address \(address)\nbalance unverified (no account proof)")
         }
@@ -105,8 +105,8 @@ struct ContentView: View {
 
     private func onSend() throws -> Outcome {
         let address = try walletAddress(keystoreJson: requireKeystore())
-        let nonce = try parseQuantity(NodeClient.call(base: rpc, method: "kvnc_getNonce", params: [address]))
-        let rate = try parseQuantity(NodeClient.call(base: rpc, method: "kvnc_estimateFee", params: []))
+        let nonce = try parseQuantity(NodeClient.call(base: rpc, method: "kovanica_getNonce", params: [address]))
+        let rate = try parseQuantity(NodeClient.call(base: rpc, method: "kovanica_estimateFee", params: []))
         let raw = try signTransferRaw(
             keystoreJson: requireKeystore(),
             passphrase: passphrase,
@@ -116,7 +116,7 @@ struct ContentView: View {
             nonce: nonce,
             feeRate: rate
         )
-        let hash = try NodeClient.call(base: rpc, method: "kvnc_sendRawTransaction", params: [raw])
+        let hash = try NodeClient.call(base: rpc, method: "kovanica_sendRawTransaction", params: [raw])
         return Outcome(status: "submitted \(hash ?? "")")
     }
 
@@ -135,7 +135,7 @@ struct ContentView: View {
 
     private func onWitness() throws -> Outcome {
         let address = try walletAddress(keystoreJson: requireKeystore())
-        let set = try NodeClient.call(base: rpc, method: "kvnc_getLightSet", params: []) as? [String: Any] ?? [:]
+        let set = try NodeClient.call(base: rpc, method: "kovanica_getLightSet", params: []) as? [String: Any] ?? [:]
         guard let beacon = set["beacon"] as? String else {
             return Outcome(status: "epoch \(try parseQuantity(set["epoch"])) has no beacon yet")
         }
@@ -178,10 +178,10 @@ struct ContentView: View {
 
     private func signedRaw(sign: (UInt64, UInt64) throws -> String) throws -> String {
         let address = try walletAddress(keystoreJson: requireKeystore())
-        let nonce = try parseQuantity(NodeClient.call(base: rpc, method: "kvnc_getNonce", params: [address]))
-        let rate = try parseQuantity(NodeClient.call(base: rpc, method: "kvnc_estimateFee", params: []))
+        let nonce = try parseQuantity(NodeClient.call(base: rpc, method: "kovanica_getNonce", params: [address]))
+        let rate = try parseQuantity(NodeClient.call(base: rpc, method: "kovanica_estimateFee", params: []))
         let raw = try sign(nonce, rate)
-        let hash = try NodeClient.call(base: rpc, method: "kvnc_sendRawTransaction", params: [raw])
+        let hash = try NodeClient.call(base: rpc, method: "kovanica_sendRawTransaction", params: [raw])
         return "\(hash ?? "")"
     }
 

@@ -1,10 +1,10 @@
 # KUNA Contract Layer (Lane 3b)
 
-The four contract crates — `kvnc-htlc`, `kvnc-vault`, `kvnc-multisig`,
-`kvnc-token` — are ordinary Rust libraries with a **typed API** and, on
+The four contract crates — `kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`,
+`kovanica-token` — are ordinary Rust libraries with a **typed API** and, on
 `wasm32-unknown-unknown`, a fixed set of `extern "C"` **entry-point exports**.
 Lane 3b wires them into the real execution path through
-`kvnc-execution::contracts`; `kvnc-runtime` provides the gas-metered Wasmi
+`kovanica-execution::contracts`; `kovanica-runtime` provides the gas-metered Wasmi
 interpreter and the `env` host functions that back the ABI.
 
 Two paths share **one** host state model (`ContractHost`) and therefore one set
@@ -17,18 +17,18 @@ of commit semantics:
 
 Both bincode-encode arguments and results identically, so a wasm call and a
 native call over the same storage are byte-for-byte interchangeable
-(cross-path interop is covered by the `wasmi_e2e_kvnc_token_wasm` test).
+(cross-path interop is covered by the `wasmi_e2e_kovanica_token_wasm` test).
 
 > Canonical tokenomics constants (supply cap, maturity, fee split, treasury
 > vesting) live in [`docs/TOKENOMICS.md`](TOKENOMICS.md) §7.1 and
-> `crates/kvnc-staking/src/lib.rs`. This document does not duplicate them.
+> `crates/kovanica-staking/src/lib.rs`. This document does not duplicate them.
 
 Worked CLI flows for all four contracts live in
 [`docs/EXAMPLES.md`](EXAMPLES.md).
 
 ---
 
-## 1. Core types (`kvnc-common`)
+## 1. Core types (`kovanica-common`)
 
 | Type | Definition |
 |------|------------|
@@ -55,7 +55,7 @@ derived IDs, escrow addresses, and storage namespacing.
 ## 2. The `Host` trait
 
 Contracts never touch the ledger directly; every effect goes through
-`kvnc_common::Host`:
+`kovanica_common::Host`:
 
 ```rust
 pub trait Host {
@@ -80,16 +80,16 @@ so every `Host` implementation must report the executing contract's address.
 
 Implementations:
 
-- `MemHost` (`kvnc-common::mem`) — in-memory host over a shared
+- `MemHost` (`kovanica-common::mem`) — in-memory host over a shared
   `Rc<RefCell<…>>`; used for native unit tests.
-- `WasmHost` (`kvnc-common::wasm`, `wasm32` only) — forwards to the `env`
+- `WasmHost` (`kovanica-common::wasm`, `wasm32` only) — forwards to the `env`
   imports below.
-- `ContractHost` (`kvnc-execution::contracts`) — the production host over
-  `kvnc-storage` with a per-call overlay (see §5).
+- `ContractHost` (`kovanica-execution::contracts`) — the production host over
+  `kovanica-storage` with a per-call overlay (see §5).
 
 ## 3. Contract typed APIs
 
-### kvnc-htlc (KVP-104)
+### kovanica-htlc (KVP-104)
 
 | Function | Arguments | Result |
 |----------|-----------|--------|
@@ -102,7 +102,7 @@ Implementations:
 `claim` pays the designated claimer on a matching preimage before `expiry`;
 `refund` returns funds to the sender after `expiry`.
 
-### kvnc-vault (KVP-105)
+### kovanica-vault (KVP-105)
 
 | Function | Arguments | Result |
 |----------|-----------|--------|
@@ -120,7 +120,7 @@ enum VestingSchedule {
 }
 ```
 
-### kvnc-multisig (KVP-101)
+### kovanica-multisig (KVP-101)
 
 | Function | Arguments | Result |
 |----------|-----------|--------|
@@ -132,7 +132,7 @@ enum VestingSchedule {
 Singleton per contract address; the proposer auto-confirms; `execute` requires
 `threshold` confirmations and moves the native balance.
 
-### kvnc-token (KVP-102)
+### kovanica-token (KVP-102)
 
 | Function | Arguments | Result |
 |----------|-----------|--------|
@@ -149,7 +149,7 @@ balances.
 
 ## 4. Dispatch entry points (the 16 names)
 
-`kvnc-execution::contracts::ENTRY_POINTS` is the authoritative list. The native
+`kovanica-execution::contracts::ENTRY_POINTS` is the authoritative list. The native
 dispatcher, the wasm exports, and this table must stay in sync (enforced by the
 `dispatch_covers_all_16_entry_points` test). Arguments and results are
 **bincode 1.x** encodings of the tuples below.
@@ -175,7 +175,7 @@ dispatcher, the wasm exports, and this table must stay in sync (enforced by the
 
 ## 5. `ContractHost` semantics and storage layout
 
-`ContractHost` (in `kvnc-execution::contracts`) is created **per call** and
+`ContractHost` (in `kovanica-execution::contracts`) is created **per call** and
 holds:
 
 - an immutable context — contract address, caller, block height, timestamp;
@@ -192,7 +192,7 @@ touched accounts, and commits. On any `ContractError`, runtime error, or trap
 the host is dropped uncommitted: no storage write, no balance delta, and no
 event is persisted.
 
-**Native balances** use `kvnc_storage::state_store::Account.balance` (`u64`).
+**Native balances** use `kovanica_storage::state_store::Account.balance` (`u64`).
 An `Amount > u64::MAX` maps to `ContractError::Overflow`; a shortfall to
 `InsufficientBalance`. `balance_of` and `transfer` read/write through the
 overlay.
@@ -203,11 +203,11 @@ Contracts pass **raw, variable-length** keys. Current keys:
 
 | Contract | Key | Size |
 |----------|-----|------|
-| `kvnc-htlc` | `b"kvnc/v1/htlc/" ++ id` | 13 + 32 |
-| `kvnc-vault` | `b"kvnc/v1/vault/" ++ id` | 14 + 32 |
-| `kvnc-multisig` | `b"kvnc/v1/state"` (singleton) | 13 |
-| `kvnc-multisig` | `b"kvnc/v1/mtx/" ++ tx_id.to_le_bytes()` | 12 + 8 |
-| `kvnc-token` | `b"kvnc/v1/state"` (singleton) | 13 |
+| `kovanica-htlc` | `b"kvnc/v1/htlc/" ++ id` | 13 + 32 |
+| `kovanica-vault` | `b"kvnc/v1/vault/" ++ id` | 14 + 32 |
+| `kovanica-multisig` | `b"kvnc/v1/state"` (singleton) | 13 |
+| `kovanica-multisig` | `b"kvnc/v1/mtx/" ++ tx_id.to_le_bytes()` | 12 + 8 |
+| `kovanica-token` | `b"kvnc/v1/state"` (singleton) | 13 |
 
 ### Namespacing (fixed)
 
@@ -216,7 +216,7 @@ The redb `CONTRACT_STORAGE` table key is a fixed `([u8; 32], [u8; 32])` pair
 therefore derives the table key as:
 
 ```text
-table_key = blake3(raw_key)          // kvnc_common::hash
+table_key = blake3(raw_key)          // kovanica_common::hash
 ```
 
 `contract_addr` is the first tuple element, so two contracts can use the same
@@ -228,24 +228,24 @@ negligible (256-bit).
 ### Imports (module `"env"`)
 
 ```text
-kvnc_caller(out_ptr: i32)                            // writes 32 bytes
-kvnc_contract_address(out_ptr: i32)                  // writes 32 bytes
-kvnc_block_height() -> i64
-kvnc_timestamp() -> i64
-kvnc_balance_of(ptr: i32, len: i32) -> i64           // u64 balance as i64; -1 = error
-kvnc_transfer(fp, fl, tp, tl: i32, amount: i64) -> i32   // 0 = ok
-kvnc_storage_get(kp, kl, out_ptr: i32, out_cap: i32) -> i32
-kvnc_storage_set(kp, kl, vp, vl: i32) -> i32         // 0 = ok
-kvnc_emit_event(tp, tl, dp, dl: i32)
+kovanica_caller(out_ptr: i32)                            // writes 32 bytes
+kovanica_contract_address(out_ptr: i32)                  // writes 32 bytes
+kovanica_block_height() -> i64
+kovanica_timestamp() -> i64
+kovanica_balance_of(ptr: i32, len: i32) -> i64           // u64 balance as i64; -1 = error
+kovanica_transfer(fp, fl, tp, tl: i32, amount: i64) -> i32   // 0 = ok
+kovanica_storage_get(kp, kl, out_ptr: i32, out_cap: i32) -> i32
+kovanica_storage_set(kp, kl, vp, vl: i32) -> i32         // 0 = ok
+kovanica_emit_event(tp, tl, dp, dl: i32)
 ```
 
-`kvnc_storage_get` is two-step: `out_cap = 0` returns the needed length (or `-1`
+`kovanica_storage_get` is two-step: `out_cap = 0` returns the needed length (or `-1`
 when absent); a subsequent call with a sufficient `out_cap` returns the length,
 and a too-small `out_cap` returns `-2`.
 
 ### Exports
 
-- `kvnc_alloc(len: i32) -> i32` / `kvnc_dealloc(ptr: i32, len: i32)` — guest
+- `kovanica_alloc(len: i32) -> i32` / `kovanica_dealloc(ptr: i32, len: i32)` — guest
   allocator used by the host to place arguments and to release results.
 - The 16 entry points, each `(args_ptr: i32, args_len: i32) -> i64`.
 
@@ -258,21 +258,21 @@ error:    -(1 + ContractError::code())      // always within -12..=-1
 ```
 
 Arguments and results are bincode. Buffers with `out_len > 0` are
-guest-allocated; the host **must** call `kvnc_dealloc(ptr, len)` for both its
-argument buffer and the result buffer. `kvnc-runtime::Runtime::execute` decodes
+guest-allocated; the host **must** call `kovanica_dealloc(ptr, len)` for both its
+argument buffer and the result buffer. `kovanica-runtime::Runtime::execute` decodes
 the packed `i64`, maps `-12..=-1` to `RuntimeError::Contract(code)`, and enforces
 `ExecutionConfig::gas_limit` (fuel) and `memory_limit_pages` (store limiter).
 
 ## 7. Building a contract wasm
 
 ```sh
-cargo build -p kvnc-token --target wasm32-unknown-unknown --release
+cargo build -p kovanica-token --target wasm32-unknown-unknown --release
 ```
 
 This requires the `wasm32-unknown-unknown` target
 (`rustup target add wasm32-unknown-unknown`).
 
-> **Fixed (2026-10-13).** The `env` externs in `crates/kvnc-common/src/wasm.rs`
+> **Fixed (2026-10-13).** The `env` externs in `crates/kovanica-common/src/wasm.rs`
 > now declare `#[link(wasm_import_module = "env")]` on the imports module,
 > so a plain `cargo build --target wasm32-unknown-unknown` works correctly.
 > The previous workaround (`RUSTFLAGS="-C link-arg=--allow-undefined"`) is
@@ -287,8 +287,8 @@ process restarts is a `TODO` (see `contracts.rs`).
 ## 9. Event topics
 
 All contracts emit events through `Host::emit_event(topic, data)`. The
-canonical topics are the byte-string constants in `kvnc_common::events`
-(`crates/kvnc-common/src/events.rs`) — the indexer must match on these exact
+canonical topics are the byte-string constants in `kovanica_common::events`
+(`crates/kovanica-common/src/events.rs`) — the indexer must match on these exact
 bytes, and the emitted bytes must never change.
 
 | Topic | Emitted by | Data payload |
@@ -310,5 +310,5 @@ bytes, and the emitted bytes must never change.
 | `burn` | `Token::burn` | empty |
 
 The contract crates reference these constants directly (no byte-string
-literals at the call sites), and `kvnc-common` has a unit test guarding each
+literals at the call sites), and `kovanica-common` has a unit test guarding each
 constant against typos.

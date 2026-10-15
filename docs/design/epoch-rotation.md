@@ -5,7 +5,7 @@ Status: draft (Consensus). Code state: `origin/main` 8170a82.
 ## 1. Goal
 
 Make the committee epoch real. Today every committee is epoch 0
-(`kvnc-node/src/main.rs` builds `CommitteeInfo::try_new(0, ..)`), so the
+(`kovanica-node/src/main.rs` builds `CommitteeInfo::try_new(0, ..)`), so the
 `epoch` field of the v1 vote signing context (`SigningContext { chain_id, epoch }`,
 `docs/SIGNATURE_FORMAT.md`) never changes. We want:
 
@@ -15,7 +15,7 @@ Make the committee epoch real. Today every committee is epoch 0
   where the old committee is still authoritative, rejected everywhere else);
 - **Consensus as the single source of the current epoch** for the node, Network
   (gossip edge validation) and Execution (evidence verification). The types and
-  the pure context function live in `kvnc-types` (Foundation); Consensus fills
+  the pure context function live in `kovanica-types` (Foundation); Consensus fills
   the schedule.
 
 Non-goals: staking/reward logic for choosing the next committee (Execution),
@@ -25,16 +25,16 @@ state sync across epochs (`docs/STATE-SYNC.md`), key rotation inside an epoch.
 
 | Item | Where | Today |
 |---|---|---|
-| Committee + epoch | `kvnc-consensus/src/types.rs` `CommitteeInfo { epoch, authorities, .. }`, `epoch()` | set once at startup, always 0 |
-| Vote ctx | `kvnc-consensus/src/engine.rs` `vote_signing_ctx()` | `chain_id` from local ctx + `self.committee.epoch()`; never from the message |
+| Committee + epoch | `kovanica-consensus/src/types.rs` `CommitteeInfo { epoch, authorities, .. }`, `epoch()` | set once at startup, always 0 |
+| Vote ctx | `kovanica-consensus/src/engine.rs` `vote_signing_ctx()` | `chain_id` from local ctx + `self.committee.epoch()`; never from the message |
 | Own votes | engine `vote_for_leader` (round loop + late vote from `process_block`, #43) | exactly once per leader round via the in-memory `voted_rounds` |
 | Red blocks | `CommittedSubDag::non_blue`, `non_blue_refs` / `non_blue_transactions` (#47) | not executed as blocks; removed only by round pruning |
-| Vote bytes | `kvnc-types/src/vote.rs` `Vote::signature_data(ctx)` | 74 bytes, `KUNA/vote/v1` + chain_id + epoch + voter + leader_round + leader_hash. `Vote` itself has **no epoch field** |
-| Tx ctx | `kvnc-types/src/transaction.rs` | `chain_id` only; epoch is NOT part of tx hash (test `epoch_is_not_part_of_tx_hash`) |
-| Node ctx | `kvnc-node/src/main.rs:447` | `SigningContext::new(chain_id).with_epoch(committee.epoch())` |
-| Network edge | `kvnc-network/src/validation.rs` `VoteVerifier`, `AuthorityKeys` | one static key map, ctx injected at startup |
+| Vote bytes | `kovanica-types/src/vote.rs` `Vote::signature_data(ctx)` | 74 bytes, `KUNA/vote/v1` + chain_id + epoch + voter + leader_round + leader_hash. `Vote` itself has **no epoch field** |
+| Tx ctx | `kovanica-types/src/transaction.rs` | `chain_id` only; epoch is NOT part of tx hash (test `epoch_is_not_part_of_tx_hash`) |
+| Node ctx | `kovanica-node/src/main.rs:447` | `SigningContext::new(chain_id).with_epoch(committee.epoch())` |
+| Network edge | `kovanica-network/src/validation.rs` `VoteVerifier`, `AuthorityKeys` | one static key map, ctx injected at startup |
 | Leader schedule | `CommitteeInfo::leader(round)`, engine `leader_schedule` | round-robin over one committee |
-| Rounds | `kvnc-types` `WAVE_LENGTH = 3`, leader/vote/decide offsets | global round counter, not reset per epoch |
+| Rounds | `kovanica-types` `WAVE_LENGTH = 3`, leader/vote/decide offsets | global round counter, not reset per epoch |
 
 Consequence: the engine holds one immutable `CommitteeInfo`; there is no API to
 replace it, and Network has its own copy of the key map.
@@ -47,7 +47,7 @@ replace it, and Network has its own copy of the key map.
   defined by consensus output, not wall-clock: epoch `e` ends at the first
   committed leader whose round `>= end_round(e)`, where
   `end_round(e) = start_round(e) + EPOCH_LENGTH_ROUNDS` (a multiple of
-  `WAVE_LENGTH`; proposed constant in `kvnc-types`).
+  `WAVE_LENGTH`; proposed constant in `kovanica-types`).
 - The **closing commit** is the `CommittedSubDag` that crosses `end_round(e)`.
   It is delivered in epoch `e` and executed under epoch `e` rules.
 - The next committee `C(e+1)` must be fixed by state that is final **before**
@@ -58,13 +58,13 @@ replace it, and Network has its own copy of the key map.
   so `(round)` alone still identifies a slot and existing indices
   (`decided`, `prune_boundary`) need no epoch dimension.
 
-### 3.2 Source of truth: `EpochSchedule` (kvnc-types) filled by Consensus
+### 3.2 Source of truth: `EpochSchedule` (kovanica-types) filled by Consensus
 
 The schedule type and the context derivation are shared, pure and owned by
-Foundation in `kvnc-types`, so every crate computes the same context:
+Foundation in `kovanica-types`, so every crate computes the same context:
 
 ```text
-// kvnc-types (Foundation)
+// kovanica-types (Foundation)
 struct EpochEntry   { epoch: u64, start_round: Round, committee: Committee }
 struct EpochSchedule { entries: Vec<EpochEntry> }      // sorted, contiguous
 impl EpochSchedule {
@@ -156,40 +156,40 @@ wave belong to the leader's epoch.
 
 ## 4. Interface changes per crate
 
-- **kvnc-types (Foundation)**: `EpochEntry`, `EpochSchedule` (with
+- **kovanica-types (Foundation)**: `EpochEntry`, `EpochSchedule` (with
   `epoch_for_round`, `committee_for_round`) and the pure
   `signing_ctx_for_round(schedule, chain_id, round) -> Option<SigningContext>`;
   `EPOCH_LENGTH_ROUNDS`; `EpochChanged` event type. No change to `Vote` bytes
   or the v1 format.
-- **kvnc-consensus (Consensus)**: fills the schedule; the engine holds the
+- **kovanica-consensus (Consensus)**: fills the schedule; the engine holds the
   latest committed `EpochSchedule` instead of one `CommitteeInfo`; vote and
   block ctx via `signing_ctx_for_round`; emits `EpochChanged` after the
   durable commit; per-epoch leader schedule; committer quorum per round;
   removes the `TODO(owner)` at `engine.rs:240`; pending buffers for
   out-of-schedule votes/blocks.
-- **kvnc-dag (Consensus)**: new redb table `DAG_EPOCHS` (height → schedule
+- **kovanica-dag (Consensus)**: new redb table `DAG_EPOCHS` (height → schedule
   change). `mark_decided_and_commit_leader` gains an optional
   `schedule_change` that is written in the **same** transaction. A reader
   `schedule_at(height)` returns `S(h)`. The `BlockManager` key map and
   `select_parents` become per-round via `committee_for_round`.
-- **kvnc-network (Network)**: `AuthorityKeys` / `VoteVerifier` read the node's
+- **kovanica-network (Network)**: `AuthorityKeys` / `VoteVerifier` read the node's
   live `Arc<RwLock<EpochSchedule>>` and verify with `ctx(r)`. A round outside
   the schedule gives `Ignore` (no penalty, no relay). It keeps `C(e-1)` until
   `end_round(e-1)` is decided.
-- **kvnc-node (Network)**: owns the live `Arc<RwLock<EpochSchedule>>` (built
+- **kovanica-node (Network)**: owns the live `Arc<RwLock<EpochSchedule>>` (built
   from genesis plus `DAG_EPOCHS` on start), updates it on `EpochChanged`, and
   stops building ctx from a static committee (`main.rs:447`).
-- **kvnc-execution / staking (Execution)**: produce `C(e+1)` from committed
+- **kovanica-execution / staking (Execution)**: produce `C(e+1)` from committed
   state at least one wave before the boundary. `DoubleSignProof` (and any
   signed-evidence tx) verifies with `signing_ctx_for_round(S(h), ...)` for
   the sub-DAG height. Outside the schedule it fails deterministically, but the
   fee and nonce are still charged.
-- **kvnc-mempool (Network)**: none (tx ctx has no epoch); only remove the
+- **kovanica-mempool (Network)**: none (tx ctx has no epoch); only remove the
   `TODO(owner)` epoch note.
 
 ## 5. Migration
 
-1. Foundation lands `EpochSchedule` and `signing_ctx_for_round` in kvnc-types.
+1. Foundation lands `EpochSchedule` and `signing_ctx_for_round` in kovanica-types.
    It has a single entry `(epoch 0, start_round 0, genesis committee)`, and
    `signing_ctx_for_round` returns today's ctx for every round, so behaviour
    is identical.
@@ -231,7 +231,7 @@ No change to the v1 byte format, so no new signature version is needed.
 
 ## 7. Test plan
 
-- **Unit (kvnc-types, Foundation):** `signing_ctx_for_round` is pure and total
+- **Unit (kovanica-types, Foundation):** `signing_ctx_for_round` is pure and total
   over the schedule. It returns `None` outside the schedule, and boundary
   rounds map to the right epoch.
 - **Unit (consensus):**

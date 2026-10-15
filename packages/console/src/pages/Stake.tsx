@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { ValidatorInfo } from "@kvnc/api-client";
-import { feeForRate, formatKuna, parseAddress, parseKuna, type TxKind } from "@kvnc/signer";
+import type { ValidatorInfo } from "@kovanica/api-client";
+import { feeForRate, formatKuna, parseAddress, parseKuna, type TxKind } from "@kovanica/signer";
 
 import { ReviewSheet, type ReviewDetails } from "../components";
 import { useSession } from "../session";

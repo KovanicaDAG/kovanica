@@ -25,7 +25,7 @@ export function Explorer() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          method: 'kvnc_blockNumber',
+          method: 'kovanica_blockNumber',
           params: [],
           id: 1,
         }),
@@ -58,7 +58,7 @@ export function Explorer() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          method: 'kvnc_getBlockByNumber',
+          method: 'kovanica_getBlockByNumber',
           params: [height, true],
           id: 1,
         }),
