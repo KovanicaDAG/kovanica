@@ -194,12 +194,28 @@ mod tests {
                 9,
             ),
             (
-                "claimSome",
-                TransactionKind::ClaimRewards {
-                    validator: Some(to),
+                "call-value-zero",
+                TransactionKind::Call {
+                    contract: Address([0x33; 32]),
+                    value: 0,
+                    method: "transfer".to_string(),
+                    args: vec![0x01, 0x02, 0x03],
+                    gas_limit: 100_000,
                 },
-                12,
-                9,
+                6,
+                10,
+            ),
+            (
+                "call-value-500",
+                TransactionKind::Call {
+                    contract: Address([0x33; 32]),
+                    value: 500,
+                    method: "transfer".to_string(),
+                    args: vec![0x01, 0x02, 0x03],
+                    gas_limit: 100_000,
+                },
+                6,
+                10,
             ),
         ];
 
