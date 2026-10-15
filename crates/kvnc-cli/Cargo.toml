@@ -30,6 +30,7 @@ kvnc-htlc = { path = "../kvnc-htlc" }
 kvnc-vault = { path = "../kvnc-vault" }
 kvnc-multisig = { path = "../kvnc-multisig" }
 kvnc-token = { path = "../kvnc-token" }
+kvnc-comms-core = { path = "../kvnc-comms-core" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

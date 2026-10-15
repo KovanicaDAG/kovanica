@@ -243,6 +243,21 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureRes
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_OPEN_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_OPEN_ENVELOPE
+RustBuffer uniffi_kvnc_light_ffi_fn_func_comms_open_envelope(RustBuffer keystore_json, RustBuffer passphrase, RustBuffer envelope_json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_SEAL_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_SEAL_ENVELOPE
+RustBuffer uniffi_kvnc_light_ffi_fn_func_comms_seal_envelope(RustBuffer keystore_json, RustBuffer passphrase, RustBuffer recipient_pubkey_hex, RustBuffer payload_json, uint64_t sent_at_ms, uint64_t expires_at_ms, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_VERIFY_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_COMMS_VERIFY_ENVELOPE
+int8_t uniffi_kvnc_light_ffi_fn_func_comms_verify_envelope(RustBuffer envelope_json, RustBuffer sender_pubkey_hex, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_CONFIRM_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_CONFIRM_ACCOUNT
 RustBuffer uniffi_kvnc_light_ffi_fn_func_confirm_account(RustBuffer header_json, RustBuffer proof_json, RustCallStatus *_Nonnull out_status
@@ -251,6 +266,11 @@ RustBuffer uniffi_kvnc_light_ffi_fn_func_confirm_account(RustBuffer header_json,
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_CREATE_WALLET
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_CREATE_WALLET
 RustBuffer uniffi_kvnc_light_ffi_fn_func_create_wallet(RustBuffer passphrase, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_DERIVE_COMMS_ID
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_DERIVE_COMMS_ID
+RustBuffer uniffi_kvnc_light_ffi_fn_func_derive_comms_id(RustBuffer pubkey_hex, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_FAUCET_ALLOWED
@@ -263,9 +283,24 @@ int8_t uniffi_kvnc_light_ffi_fn_func_faucet_allowed(uint64_t chain_id, RustCallS
 RustBuffer uniffi_kvnc_light_ffi_fn_func_import_wallet(RustBuffer mnemonic, RustBuffer passphrase, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_REGISTRY_DECODE_ENTRY
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_REGISTRY_DECODE_ENTRY
+RustBuffer uniffi_kvnc_light_ffi_fn_func_registry_decode_entry(RustBuffer value_hex, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_REGISTRY_SLOT_HEX
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_REGISTRY_SLOT_HEX
+RustBuffer uniffi_kvnc_light_ffi_fn_func_registry_slot_hex(RustBuffer name, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_SIGN_BOND_RAW
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_SIGN_BOND_RAW
 RustBuffer uniffi_kvnc_light_ffi_fn_func_sign_bond_raw(RustBuffer keystore_json, RustBuffer passphrase, uint64_t chain_id, uint64_t stake, uint64_t nonce, uint64_t fee_rate, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_SIGN_DETACHED
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_SIGN_DETACHED
+RustBuffer uniffi_kvnc_light_ffi_fn_func_sign_detached(RustBuffer keystore_json, RustBuffer passphrase, RustBuffer message_hex, RustBuffer domain, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_SIGN_EXIT_RAW
@@ -291,6 +326,11 @@ RustBuffer uniffi_kvnc_light_ffi_fn_func_verify_header(uint64_t chain_id, uint64
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_WALLET_ADDRESS
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_WALLET_ADDRESS
 RustBuffer uniffi_kvnc_light_ffi_fn_func_wallet_address(RustBuffer keystore_json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_WALLET_PUBKEY_HEX
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_WALLET_PUBKEY_HEX
+RustBuffer uniffi_kvnc_light_ffi_fn_func_wallet_pubkey_hex(RustBuffer keystore_json, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_KVNC_LIGHT_FFI_RUSTBUFFER_ALLOC
@@ -553,6 +593,24 @@ void ffi_kvnc_light_ffi_rust_future_free_void(uint64_t handle
 void ffi_kvnc_light_ffi_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_OPEN_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_OPEN_ENVELOPE
+uint16_t uniffi_kvnc_light_ffi_checksum_func_comms_open_envelope(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_SEAL_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_SEAL_ENVELOPE
+uint16_t uniffi_kvnc_light_ffi_checksum_func_comms_seal_envelope(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_VERIFY_ENVELOPE
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_COMMS_VERIFY_ENVELOPE
+uint16_t uniffi_kvnc_light_ffi_checksum_func_comms_verify_envelope(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_CONFIRM_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_CONFIRM_ACCOUNT
 uint16_t uniffi_kvnc_light_ffi_checksum_func_confirm_account(void
@@ -562,6 +620,12 @@ uint16_t uniffi_kvnc_light_ffi_checksum_func_confirm_account(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_CREATE_WALLET
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_CREATE_WALLET
 uint16_t uniffi_kvnc_light_ffi_checksum_func_create_wallet(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_DERIVE_COMMS_ID
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_DERIVE_COMMS_ID
+uint16_t uniffi_kvnc_light_ffi_checksum_func_derive_comms_id(void
     
 );
 #endif
@@ -577,9 +641,27 @@ uint16_t uniffi_kvnc_light_ffi_checksum_func_import_wallet(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_DECODE_ENTRY
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_DECODE_ENTRY
+uint16_t uniffi_kvnc_light_ffi_checksum_func_registry_decode_entry(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_SLOT_HEX
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_SLOT_HEX
+uint16_t uniffi_kvnc_light_ffi_checksum_func_registry_slot_hex(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_SIGN_BOND_RAW
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_SIGN_BOND_RAW
 uint16_t uniffi_kvnc_light_ffi_checksum_func_sign_bond_raw(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_SIGN_DETACHED
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_SIGN_DETACHED
+uint16_t uniffi_kvnc_light_ffi_checksum_func_sign_detached(void
     
 );
 #endif
@@ -610,6 +692,12 @@ uint16_t uniffi_kvnc_light_ffi_checksum_func_verify_header(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_WALLET_ADDRESS
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_WALLET_ADDRESS
 uint16_t uniffi_kvnc_light_ffi_checksum_func_wallet_address(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_WALLET_PUBKEY_HEX
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_WALLET_PUBKEY_HEX
+uint16_t uniffi_kvnc_light_ffi_checksum_func_wallet_pubkey_hex(void
     
 );
 #endif

@@ -9,7 +9,7 @@ import { formatKuna, parseKuna } from "./amount.js";
 import { bytesToHex, hexToBytes } from "./bytes.js";
 import "./ed25519.js";
 import { keyFromMnemonic, seedToMnemonic } from "./keys.js";
-import { encodeRawTransaction, signTransaction, signingHash } from "./tx.js";
+import { encodeRawTransaction, rawTransactionSize, signTransaction, signingHash } from "./tx.js";
 import type { TxKind, UnsignedTx } from "./tx.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -62,6 +62,24 @@ function kindFor(name: string): TxKind {
       return { type: "claimRewards", validator: null };
     case "claimSome":
       return { type: "claimRewards", validator: recipient };
+    case "call-value-zero":
+      return {
+        type: "call",
+        contract: hexToBytes("33".repeat(32)),
+        value: 0n,
+        method: "transfer",
+        args: hexToBytes("010203"),
+        gasLimit: 100_000n,
+      };
+    case "call-value-500":
+      return {
+        type: "call",
+        contract: hexToBytes("33".repeat(32)),
+        value: 500n,
+        method: "transfer",
+        args: hexToBytes("010203"),
+        gasLimit: 100_000n,
+      };
     default:
       throw new Error(name);
   }
@@ -147,5 +165,64 @@ describe("addresses and amounts", () => {
     expect(bytesToHex(key.publicKey)).toBe(fixture.publicKeyHex);
     expect(key.address).toBe(fixture.senderAddress);
     await expect(keyFromMnemonic("abandon ".repeat(12).trim())).rejects.toThrow(/24/);
+  });
+
+  it("encodes call with exact wire bytes matching fixture", async () => {
+    const call = {
+      sender,
+      nonce: 6n,
+      fee: 10n,
+      kind: {
+        type: "call" as const,
+        contract: hexToBytes("33".repeat(32)),
+        value: 0n,
+        method: "transfer",
+        args: hexToBytes("010203"),
+        gasLimit: 100_000n,
+      },
+    };
+    const signed = await signTransaction(call, 2, seed);
+    const encoded = encodeRawTransaction(signed);
+    expect(encoded).toBe(fixture.transactions.find((r) => r.name === "call-value-zero")?.rawHex);
+  });
+
+  it("rawTransactionSize equals encoded length / 2 for call", async () => {
+    const tx = {
+      sender,
+      nonce: 1n,
+      fee: 123n,
+      kind: {
+        type: "call" as const,
+        contract: hexToBytes("44".repeat(32)),
+        value: 5n,
+        method: "fn",
+        args: new Uint8Array([9, 8, 7, 6, 5]),
+        gasLimit: 1_000_000n,
+      },
+    };
+    const signed = await signTransaction(tx, 2, seed);
+    const hex = encodeRawTransaction(signed);
+    const size = rawTransactionSize(tx);
+    expect(size).toBe(hex.length / 2);
+    expect(size).toBeGreaterThan(0);
+  });
+
+  it("rejects call with empty method and invalid contract/value/gas", () => {
+    const base = {
+      sender,
+      nonce: 1n,
+      fee: 1n,
+      kind: {
+        type: "call" as const,
+        contract: hexToBytes("44".repeat(32)),
+        value: 0n,
+        method: "x",
+        args: new Uint8Array(),
+        gasLimit: 100n,
+      },
+    };
+    expect(() => rawTransactionSize({ ...base, kind: { ...base.kind, method: "" } as any })).toThrow(/method/);
+    expect(() => rawTransactionSize({ ...base, kind: { ...base.kind, contract: new Uint8Array(31) } as any })).toThrow(/contract/);
+    expect(() => rawTransactionSize({ ...base, kind: { ...base.kind, contract: new Uint8Array(33) } as any })).toThrow(/contract/);
   });
 });
