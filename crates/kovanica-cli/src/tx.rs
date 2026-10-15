@@ -193,13 +193,32 @@ mod tests {
                 11,
                 9,
             ),
+            // Call vectors T2/T3: contract `33`×32, method "transfer",
+            // args 010203, gas_limit 100000, nonce 6, fee 10; only `value`
+            // differs (0 vs 500). See `docs/SIGNATURE_FORMAT.md` §4.
             (
-                "claimSome",
-                TransactionKind::ClaimRewards {
-                    validator: Some(to),
+                "call-value-zero",
+                TransactionKind::Call {
+                    contract: Address([0x33; 32]),
+                    value: 0,
+                    method: "transfer".to_string(),
+                    args: vec![1, 2, 3],
+                    gas_limit: 100_000,
                 },
-                12,
-                9,
+                6,
+                10,
+            ),
+            (
+                "call-value-500",
+                TransactionKind::Call {
+                    contract: Address([0x33; 32]),
+                    value: 500,
+                    method: "transfer".to_string(),
+                    args: vec![1, 2, 3],
+                    gas_limit: 100_000,
+                },
+                6,
+                10,
             ),
         ];
 

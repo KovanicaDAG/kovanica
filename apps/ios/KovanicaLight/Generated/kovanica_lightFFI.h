@@ -298,6 +298,16 @@ RustBuffer uniffi_kovanica_light_ffi_fn_func_registry_slot_hex(RustBuffer name, 
 RustBuffer uniffi_kovanica_light_ffi_fn_func_sign_bond_raw(RustBuffer keystore_json, RustBuffer passphrase, uint64_t chain_id, uint64_t stake, uint64_t nonce, uint64_t fee_rate, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_SIGN_CALL_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_SIGN_CALL_RAW
+RustBuffer uniffi_kovanica_light_ffi_fn_func_sign_call_raw(RustBuffer keystore_json, RustBuffer passphrase, uint64_t chain_id, RustBuffer contract, uint64_t value, RustBuffer method, RustBuffer args_hex, uint64_t gas_limit, uint64_t nonce, uint64_t fee_rate, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_SIGN_DEPLOY_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_SIGN_DEPLOY_RAW
+RustBuffer uniffi_kovanica_light_ffi_fn_func_sign_deploy_raw(RustBuffer keystore_json, RustBuffer passphrase, uint64_t chain_id, RustBuffer code_hex, uint64_t nonce, uint64_t fee_rate, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_SIGN_DETACHED
 #define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_SIGN_DETACHED
 RustBuffer uniffi_kovanica_light_ffi_fn_func_sign_detached(RustBuffer keystore_json, RustBuffer passphrase, RustBuffer message_hex, RustBuffer domain, RustCallStatus *_Nonnull out_status
@@ -656,6 +666,18 @@ uint16_t uniffi_kovanica_light_ffi_checksum_func_registry_slot_hex(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_SIGN_BOND_RAW
 #define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_SIGN_BOND_RAW
 uint16_t uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_SIGN_CALL_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_SIGN_CALL_RAW
+uint16_t uniffi_kovanica_light_ffi_checksum_func_sign_call_raw(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_SIGN_DEPLOY_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_SIGN_DEPLOY_RAW
+uint16_t uniffi_kovanica_light_ffi_checksum_func_sign_deploy_raw(void
     
 );
 #endif
