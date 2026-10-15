@@ -61,5 +61,8 @@ docker-compose.soak.yml
 # Android Gradle build cache (regenerated, never commit)
 apps/android/.gradle/
 
+# Android local SDK path (machine-specific, never commit)
+apps/android/local.properties
+
 # Guard: never track a full repo copy nested inside the repo
 /kvnc/
