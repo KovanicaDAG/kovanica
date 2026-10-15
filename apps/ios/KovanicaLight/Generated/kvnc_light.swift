@@ -979,6 +979,63 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     }
 }
 /**
+ * Open a comms envelope addressed to this keystore's comms id.
+ *
+ * The envelope signature is **not** checked here (see [`comms_verify_envelope`]);
+ * only the recipient match and the AEAD are enforced. Returns the trimmed
+ * payload JSON exactly as sealed.
+ *
+ * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+ */
+public func commsOpenEnvelope(keystoreJson: String, passphrase: String, envelopeJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_comms_open_envelope(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),
+        FfiConverterString.lower(envelopeJson),uniffiCallStatus
+    )
+})
+}
+/**
+ * Seal and sign a comms envelope for a recipient.
+ *
+ * Decrypts the keystore to recover the sender seed, derives the comms ids, and
+ * calls [`kvnc_comms_relay::envelope::seal_and_sign`]. Returns the compact
+ * envelope JSON (wire shape `v,id,to,from,sentAt,expiresAt,alg,epk,nonce,ct,sig`).
+ *
+ * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+ */
+public func commsSealEnvelope(keystoreJson: String, passphrase: String, recipientPubkeyHex: String, payloadJson: String, sentAtMs: UInt64, expiresAtMs: UInt64)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_comms_seal_envelope(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),
+        FfiConverterString.lower(recipientPubkeyHex),
+        FfiConverterString.lower(payloadJson),
+        FfiConverterUInt64.lower(sentAtMs),
+        FfiConverterUInt64.lower(expiresAtMs),uniffiCallStatus
+    )
+})
+}
+/**
+ * Verify an envelope against a claimed sender Ed25519 public key.
+ *
+ * Checks the Ed25519 signature over [`Envelope::signing_bytes`] **and** that
+ * `from == comms_id(sender_pubkey)`. Returns `false` for any verification or
+ * shape failure; only malformed JSON or hex is an error.
+ */
+public func commsVerifyEnvelope(envelopeJson: String, senderPubkeyHex: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_comms_verify_envelope(
+        FfiConverterString.lower(envelopeJson),
+        FfiConverterString.lower(senderPubkeyHex),uniffiCallStatus
+    )
+})
+}
+/**
  * Check an account proof against a header this client already accepted.
  */
 public func confirmAccount(headerJson: String, proofJson: String)throws  -> AccountSnapshot  {
@@ -1178,6 +1235,15 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_kvnc_light_ffi_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_comms_open_envelope() != 43408) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_comms_seal_envelope() != 30954) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_comms_verify_envelope() != 2670) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_confirm_account() != 58239) {
         return InitializationResult.apiChecksumMismatch

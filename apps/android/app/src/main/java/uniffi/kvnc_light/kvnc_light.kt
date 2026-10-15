@@ -672,6 +672,12 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
+    external fun uniffi_kvnc_light_ffi_checksum_func_comms_open_envelope(
+    ): Int
+    external fun uniffi_kvnc_light_ffi_checksum_func_comms_seal_envelope(
+    ): Int
+    external fun uniffi_kvnc_light_ffi_checksum_func_comms_verify_envelope(
+    ): Int
     external fun uniffi_kvnc_light_ffi_checksum_func_confirm_account(
     ): Int
     external fun uniffi_kvnc_light_ffi_checksum_func_create_wallet(
@@ -711,6 +717,12 @@ internal object UniffiLib {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "kvnc_light"))
         
     }
+    external fun uniffi_kvnc_light_ffi_fn_func_comms_open_envelope(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`envelopeJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kvnc_light_ffi_fn_func_comms_seal_envelope(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`recipientPubkeyHex`: RustBuffer.ByValue,`payloadJson`: RustBuffer.ByValue,`sentAtMs`: Long,`expiresAtMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kvnc_light_ffi_fn_func_comms_verify_envelope(`envelopeJson`: RustBuffer.ByValue,`senderPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_kvnc_light_ffi_fn_func_confirm_account(`headerJson`: RustBuffer.ByValue,`proofJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kvnc_light_ffi_fn_func_create_wallet(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -856,6 +868,15 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if (lib.uniffi_kvnc_light_ffi_checksum_func_comms_open_envelope() != 43408) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kvnc_light_ffi_checksum_func_comms_seal_envelope() != 30954) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kvnc_light_ffi_checksum_func_comms_verify_envelope() != 2670) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kvnc_light_ffi_checksum_func_confirm_account() != 58239) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1418,6 +1439,75 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         }
     }
 }
+        /**
+         * Open a comms envelope addressed to this keystore's comms id.
+         *
+         * The envelope signature is **not** checked here (see [`comms_verify_envelope`]);
+         * only the recipient match and the AEAD are enforced. Returns the trimmed
+         * payload JSON exactly as sealed.
+         *
+         * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+         */
+    @Throws(LightFfiException::class) fun `commsOpenEnvelope`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `envelopeJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kvnc_light_ffi_fn_func_comms_open_envelope(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterString.lower(`envelopeJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Seal and sign a comms envelope for a recipient.
+         *
+         * Decrypts the keystore to recover the sender seed, derives the comms ids, and
+         * calls [`kvnc_comms_relay::envelope::seal_and_sign`]. Returns the compact
+         * envelope JSON (wire shape `v,id,to,from,sentAt,expiresAt,alg,epk,nonce,ct,sig`).
+         *
+         * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+         */
+    @Throws(LightFfiException::class) fun `commsSealEnvelope`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `recipientPubkeyHex`: kotlin.String, `payloadJson`: kotlin.String, `sentAtMs`: kotlin.ULong, `expiresAtMs`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kvnc_light_ffi_fn_func_comms_seal_envelope(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterString.lower(`recipientPubkeyHex`),
+        FfiConverterString.lower(`payloadJson`),
+        FfiConverterULong.lower(`sentAtMs`),
+        FfiConverterULong.lower(`expiresAtMs`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify an envelope against a claimed sender Ed25519 public key.
+         *
+         * Checks the Ed25519 signature over [`Envelope::signing_bytes`] **and** that
+         * `from == comms_id(sender_pubkey)`. Returns `false` for any verification or
+         * shape failure; only malformed JSON or hex is an error.
+         */
+    @Throws(LightFfiException::class) fun `commsVerifyEnvelope`(`envelopeJson`: kotlin.String, `senderPubkeyHex`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kvnc_light_ffi_fn_func_comms_verify_envelope(
+    
+        
+        FfiConverterString.lower(`envelopeJson`),
+        FfiConverterString.lower(`senderPubkeyHex`),_status)
+}
+    )
+    }
+    
+
         /**
          * Check an account proof against a header this client already accepted.
          */

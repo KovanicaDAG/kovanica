@@ -1,6 +1,7 @@
 package io.kovanica.light
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
 import android.view.View
@@ -75,6 +76,7 @@ class MainActivity : Activity() {
         root.addView(button("Exit light node") { exitLight() })
         faucetButton = button("Testnet faucet") { faucet() }
         root.addView(faucetButton)
+        root.addView(button("Open Messages") { openMessages() })
         root.addView(status)
         setContentView(ScrollView(this).apply { addView(root) })
         refreshFaucet()
@@ -210,6 +212,10 @@ class MainActivity : Activity() {
             val address = walletAddress(keystore())
             client().postFaucet(address)
         }
+    }
+
+    private fun openMessages() {
+        startActivity(Intent(this, MessagesActivity::class.java))
     }
 
     private fun submit(
