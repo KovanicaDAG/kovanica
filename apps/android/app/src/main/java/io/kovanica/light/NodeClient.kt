@@ -5,14 +5,19 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Blocking JSON-RPC and faucet client. Call it off the UI thread. */
-class NodeClient(base: String) {
+/**
+ * Blocking JSON-RPC and faucet client. Call it off the UI thread.
+ *
+ * The faucet is a **separate** process from the RPC node, so its URL is passed
+ * explicitly via [faucetUrl] and is never derived from [base]. A blank faucet
+ * URL makes [postFaucet] fail loudly.
+ */
+class NodeClient(base: String, private val faucetUrl: String? = null) {
     private val rpcUrl: String = if (base.trimEnd('/').endsWith("/rpc")) {
         base.trimEnd('/')
     } else {
         base.trimEnd('/') + "/rpc"
     }
-    val faucetBase: String = base.trimEnd('/').removeSuffix("/rpc")
 
     fun call(method: String, params: JSONArray): Any? {
         val body = JSONObject()
@@ -32,8 +37,20 @@ class NodeClient(base: String) {
     }
 
     fun postFaucet(address: String): String {
+        val target = faucetUrl?.trim().orEmpty()
+        check(target.isNotEmpty()) { "no faucet configured for this network" }
         val body = JSONObject().put("address", address)
-        return post(faucetBase.trimEnd('/') + "/faucet", body.toString())
+        return post(target, body.toString())
+    }
+
+    /** Latest committed leader height (`kvnc_blockNumber`, no params). */
+    fun blockNumber(): ULong {
+        return parseQuantity(call("kvnc_blockNumber", JSONArray()))
+    }
+
+    /** Native KUNA balance in atoms for [address] (`kvnc_getBalance`). */
+    fun balance(address: String): ULong {
+        return parseQuantity(call("kvnc_getBalance", JSONArray().put(address)))
     }
 
     private fun post(url: String, body: String): String {
