@@ -35,7 +35,7 @@ export async function keyFromHexSeed(hex: string): Promise<AccountKey> {
 
 /**
  * 24-word English BIP-39 phrase. The entropy is the Ed25519 seed.
- * There is no BIP-39 passphrase and no HD derivation, matching `kvnc import-key`.
+ * There is no BIP-39 passphrase and no HD derivation, matching `kovanica import-key`.
  */
 export async function keyFromMnemonic(phrase: string): Promise<AccountKey> {
   const normalized = phrase.trim().toLowerCase().split(/\s+/).join(" ");
@@ -53,7 +53,7 @@ export async function keyFromMnemonic(phrase: string): Promise<AccountKey> {
   return keyFromSeed(entropy);
 }
 
-/** 24-word phrase for a seed, matching `kvnc export --format mnemonic`. */
+/** 24-word phrase for a seed, matching `kovanica export --format mnemonic`. */
 export function seedToMnemonic(seed: Uint8Array): string {
   if (seed.length !== 32) {
     throw new Error("seed must be 32 bytes");

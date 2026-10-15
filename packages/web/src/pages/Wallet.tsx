@@ -21,7 +21,7 @@ export function Wallet() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             jsonrpc: '2.0',
-            method: 'kvnc_getBalance',
+            method: 'kovanica_getBalance',
             params: [address],
             id: 1,
           }),
@@ -31,7 +31,7 @@ export function Wallet() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             jsonrpc: '2.0',
-            method: 'kvnc_getNonce',
+            method: 'kovanica_getNonce',
             params: [address],
             id: 1,
           }),
@@ -62,12 +62,12 @@ export function Wallet() {
       <div className="card" style={{ maxWidth: '600px' }}>
         <h3 style={{ marginBottom: '16px' }}>Account Lookup</h3>
         <div className="form-group">
-          <label className="form-label">KVNC Address</label>
+          <label className="form-label">Kovanica Address</label>
           <input
             type="text"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            placeholder="kvnc... or 0x... or bare hex"
+            placeholder="kovanica... or 0x... or bare hex"
             onKeyDown={(e) => e.key === 'Enter' && fetchAccount()}
           />
         </div>
@@ -124,7 +124,7 @@ export function Wallet() {
         </div>
         <p style={{ marginTop: '16px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
           Full wallet functionality (signing, transaction building) requires the{' '}
-          <code>kvnc-cli</code> tool or a connected wallet extension.
+          <code>kovanica-cli</code> tool or a connected wallet extension.
         </p>
       </div>
 

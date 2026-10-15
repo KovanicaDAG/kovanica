@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { feeForRate, formatKuna, parseAddress, parseKuna } from "@kvnc/signer";
+import { feeForRate, formatKuna, parseAddress, parseKuna } from "@kovanica/signer";
 
 import { ReviewSheet, type ReviewDetails } from "../components";
 import { useSession } from "../session";

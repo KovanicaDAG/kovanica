@@ -1,4 +1,4 @@
-# B — Treasury Proposal Skeleton (kvnc-staking)
+# B — Treasury Proposal Skeleton (kovanica-staking)
 
 Status: skeleton (client/ledger-safe), deferred to Phase 25.1 after Phase 18 stable.
 
@@ -33,5 +33,5 @@ pub enum ProposalStatus {
 
 ## References
 - `docs/GOVERNANCE.md` (Phase 25, treasury section)
-- `crates/kvnc-staking/src/lib.rs` (staking skeleton, `76e52db`)
+- `crates/kovanica-staking/src/lib.rs` (staking skeleton, `76e52db`)
 - `docs/A8.2-DELEGATION-SKELETON.md` (Phase 18 deferred)

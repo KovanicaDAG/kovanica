@@ -1,5 +1,5 @@
 {
-  "name": "@kvnc/console",
+  "name": "@kovanica/console",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@kvnc/api-client": "file:../api-client",
-    "@kvnc/signer": "file:../signer",
+    "@kovanica/api-client": "file:../api-client",
+    "@kovanica/signer": "file:../signer",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.0"

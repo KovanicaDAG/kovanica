@@ -1,37 +1,37 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/kvnc-types",
-    "crates/kvnc-crypto",
-    "crates/kvnc-storage",
-    "crates/kvnc-dag",
-    "crates/kvnc-consensus",
-    "crates/kvnc-mempool",
-    "crates/kvnc-network",
-    "crates/kvnc-runtime",
-    "crates/kvnc-execution",
-    "crates/kvnc-staking",
-    "crates/kvnc-node",
-    "crates/kvnc-cli",
-    "crates/kvnc-keystore",
-    "crates/kvnc-light",
-    "crates/kvnc-light-ffi",
-    "crates/kvnc-lightnode",
-    "crates/kvnc-rpc",
-    "crates/kvnc-common",
-    "crates/kvnc-htlc",
-    "crates/kvnc-vault",
-    "crates/kvnc-multisig",
-    "crates/kvnc-token",
-    "crates/kvnc-faucet",
+    "crates/kovanica-types",
+    "crates/kovanica-crypto",
+    "crates/kovanica-storage",
+    "crates/kovanica-dag",
+    "crates/kovanica-consensus",
+    "crates/kovanica-mempool",
+    "crates/kovanica-network",
+    "crates/kovanica-runtime",
+    "crates/kovanica-execution",
+    "crates/kovanica-staking",
+    "crates/kovanica-node",
+    "crates/kovanica-cli",
+    "crates/kovanica-keystore",
+    "crates/kovanica-light",
+    "crates/kovanica-light-ffi",
+    "crates/kovanica-lightnode",
+    "crates/kovanica-rpc",
+    "crates/kovanica-common",
+    "crates/kovanica-htlc",
+    "crates/kovanica-vault",
+    "crates/kovanica-multisig",
+    "crates/kovanica-token",
+    "crates/kovanica-faucet",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["KVNC Team"]
+authors = ["Kovanica Team"]
 license = "Apache-2.0"
-repository = "https://github.com/your-org/kvnc"
+repository = "https://github.com/your-org/kovanica"
 
 [workspace.dependencies]
 # Async

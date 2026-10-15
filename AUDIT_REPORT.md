@@ -1,4 +1,4 @@
-# KVNC External Security Audit Report
+# Kovanica External Security Audit Report
 
 **Audit Firm:** [FIRM NAME]  
 **Audit Period:** [START DATE] – [END DATE]  
@@ -43,12 +43,12 @@
 
 | ID | Component | Title | Status |
 |----|-----------|-------|--------|
-| KVNC-C-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
-| KVNC-C-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-C-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-C-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
 
-#### KVNC-C-001: [Title]
+#### KOVANICA-C-001: [Title]
 
-**Component:** [e.g., kvnc-consensus/mysticghost.rs]  
+**Component:** [e.g., kovanica-consensus/mysticghost.rs]  
 **CVSS:** [Score] ([Vector])  
 **Impact:** [Safety violation / Liveness failure / Fund loss / Chain halt]  
 
@@ -73,11 +73,11 @@
 
 | ID | Component | Title | Status |
 |----|-----------|-------|--------|
-| KVNC-H-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
-| KVNC-H-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
-| KVNC-H-003 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-H-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-H-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-H-003 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
 
-#### KVNC-H-001: [Title]
+#### KOVANICA-H-001: [Title]
 
 **Component:** [Component]  
 **CVSS:** [Score] ([Vector])  
@@ -104,12 +104,12 @@
 
 | ID | Component | Title | Status |
 |----|-----------|-------|--------|
-| KVNC-M-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
-| KVNC-M-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
-| KVNC-M-003 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
-| KVNC-M-004 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-M-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-M-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-M-003 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-M-004 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
 
-#### KVNC-M-001: [Title]
+#### KOVANICA-M-001: [Title]
 
 **Component:** [Component]  
 **CVSS:** [Score] ([Vector])  
@@ -130,8 +130,8 @@
 
 | ID | Component | Title | Status |
 |----|-----------|-------|--------|
-| KVNC-L-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
-| KVNC-L-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-L-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-L-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
 
 ---
 
@@ -139,8 +139,8 @@
 
 | ID | Component | Title | Status |
 |----|-----------|-------|--------|
-| KVNC-I-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
-| KVNC-I-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-I-001 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
+| KOVANICA-I-002 | [Component] | [Title] | [Open / Fixed / Mitigated / Won't Fix] |
 
 ---
 
@@ -148,15 +148,15 @@
 
 | Component | Files Reviewed | Findings | Coverage |
 |-----------|----------------|----------|----------|
-| `kvnc-consensus` (mysticghost, engine, committer, ghostdag_scoped) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
-| `kvnc-crypto` (Ed25519, ECVRF, vote sigs, commit seals) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
-| `kvnc-mempool` (admission, in-flight, re-insert, RBF) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
-| `kvnc-network` (gossipsub, validation, scoring, sync) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
-| `kvnc-execution` + `kvnc-runtime` (WASM, host ABI, gas) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
-| `kvnc-staking` (emission, vesting, validator lifecycle, delegation, slashing) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
-| `kvnc-keystore` (Argon2id, XChaCha20-Poly1305, v1 migration) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
-| `kvnc-rpc` (JSON-RPC, WS, rate limit, auth) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
-| `kvnc-node` (genesis, recovery, committee build) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
+| `kovanica-consensus` (mysticghost, engine, committer, ghostdag_scoped) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
+| `kovanica-crypto` (Ed25519, ECVRF, vote sigs, commit seals) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
+| `kovanica-mempool` (admission, in-flight, re-insert, RBF) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
+| `kovanica-network` (gossipsub, validation, scoring, sync) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
+| `kovanica-execution` + `kovanica-runtime` (WASM, host ABI, gas) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
+| `kovanica-staking` (emission, vesting, validator lifecycle, delegation, slashing) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
+| `kovanica-keystore` (Argon2id, XChaCha20-Poly1305, v1 migration) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
+| `kovanica-rpc` (JSON-RPC, WS, rate limit, auth) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
+| `kovanica-node` (genesis, recovery, committee build) | [X/Y] | C:[#] H:[#] M:[#] L:[#] | [%] |
 
 ---
 
@@ -237,12 +237,12 @@
 
 | Crate | Location | Purpose | Reviewed |
 |-------|----------|---------|----------|
-| `kvnc-multisig` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
-| `kvnc-token` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
-| `kvnc-vault` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
-| `kvnc-htlc` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
-| `kvnc-common/wasm.rs` | Host imports | WASM host FFI | [ ] |
-| `kvnc-light-ffi` | uniffi scaffolding | FFI bindings | [ ] |
+| `kovanica-multisig` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
+| `kovanica-token` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
+| `kovanica-vault` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
+| `kovanica-htlc` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
+| `kovanica-common/wasm.rs` | Host imports | WASM host FFI | [ ] |
+| `kovanica-light-ffi` | uniffi scaffolding | FFI bindings | [ ] |
 
 *All other crates: `#![deny(unsafe_code)]`*
 

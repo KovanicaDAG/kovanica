@@ -1,8 +1,8 @@
-# Cloudflare Pages Deployment Config for KVNC Web
+# Cloudflare Pages Deployment Config for Kovanica Web
 
 ## Project Settings
 
-**Project Name:** `kvnc-explorer`
+**Project Name:** `kovanica-explorer`
 **Production Branch:** `main`
 **Build Command:** `cd packages/web && npm run build`
 **Build Output Directory:** `packages/web/dist`
@@ -27,7 +27,7 @@
 
 ## Kovanica Console
 
-**Project Name:** `kvnc-console`
+**Project Name:** `kovanica-console`
 **Domain:** `console.kovanica.online` (proxied CNAME to the Pages hostname)
 **Root Directory:** `packages/console`
 **Build Command:** `npm run build`
@@ -96,7 +96,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: kvnc-explorer
+          projectName: kovanica-explorer
           directory: packages/web/dist
           branch: main
 ```
@@ -105,8 +105,8 @@ jobs:
 
 | Type | Name | Target | Proxy Status | TTL |
 |------|------|--------|--------------|-----|
-| CNAME | explorer | kvnc-explorer.pages.dev | Proxied (Orange) | Auto |
-| CNAME | explorer | kvnc-explorer.pages.dev | Proxied | Auto |
+| CNAME | explorer | kovanica-explorer.pages.dev | Proxied (Orange) | Auto |
+| CNAME | explorer | kovanica-explorer.pages.dev | Proxied | Auto |
 
 ## WAF Custom Rules
 

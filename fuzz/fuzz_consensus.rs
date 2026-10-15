@@ -1,10 +1,10 @@
 //! Fuzzing harness for consensus process_block
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use kvnc_consensus::{ConsensusConfig, ConsensusEngine};
-use kvnc_types::{block::StatementBlock, hash::Hash, AuthorityIndex, Round};
-use kvnc_dag::DagStore;
-use kvnc_storage::Storage;
+use kovanica_consensus::{ConsensusConfig, ConsensusEngine};
+use kovanica_types::{block::StatementBlock, hash::Hash, AuthorityIndex, Round};
+use kovanica_dag::DagStore;
+use kovanica_storage::Storage;
 use tempfile::tempdir;
 
 fuzz_target!(|data: &[u8]| {
@@ -14,14 +14,14 @@ fuzz_target!(|data: &[u8]| {
     let dag_store = DagStore::new(storage).unwrap();
     
     let config = ConsensusConfig::default();
-    let committee = kvnc_consensus::CommitteeInfo::try_new(1, vec![]).unwrap();
+    let committee = kovanica_consensus::CommitteeInfo::try_new(1, vec![]).unwrap();
     
     let mut engine = ConsensusEngine::new(
         config,
         committee,
-        kvnc_consensus::engine::NodeDagStore { inner: dag_store },
-        kvnc_consensus::engine::NodeBlockManager { inner: kvnc_dag::BlockManager::new(kvnc_dag::DagStore::new(kvnc_storage::Storage::new(tempdir().unwrap().path().join("dag2.redb")).unwrap()).unwrap()) },
-        kvnc_crypto::generate_keypair().0,
+        kovanica_consensus::engine::NodeDagStore { inner: dag_store },
+        kovanica_consensus::engine::NodeBlockManager { inner: kovanica_dag::BlockManager::new(kovanica_dag::DagStore::new(kovanica_storage::Storage::new(tempdir().unwrap().path().join("dag2.redb")).unwrap()).unwrap()) },
+        kovanica_crypto::generate_keypair().0,
         None,
     );
     

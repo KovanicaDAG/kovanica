@@ -2,6 +2,6 @@
 # Protocol crate version unchanged: 0.1.0 (workspace)
 # Ops scripts added: ops/bench/tps.sh, ops/soak/soak.sh
 NODE_OPS_VERSION=phase-12.4
-NODE_BINARY=kvnc-node (crate version 0.1.0, workspace)
+NODE_BINARY=kovanica-node (crate version 0.1.0, workspace)
 OPS_SCRIPTS=tps.sh (bench/60s), soak.sh (6h, MemoryMax=3G, RSS log 30s)
 LAST_UPDATED=2026-10-08

@@ -19,7 +19,7 @@ conditions in §3.5 hold.
 ## 2. Current state (grounded in code)
 
 - Rounds and waves: `WAVE_LENGTH = 3`, offsets leader / vote / decide
-  (`kvnc-consensus/src/lib.rs` `is_leader_round`, `is_vote_round`).
+  (`kovanica-consensus/src/lib.rs` `is_leader_round`, `is_vote_round`).
 - Proposing: engine `propose_block` runs only when `is_leader_for_round`
   (`engine.rs:417`); leader from `CommitteeInfo::leader(round)` or `leader_schedule`.
 - Votes: `vote_for_leader(leader_round)` signs a `Vote { leader_round, leader_hash, voter, signature }`
@@ -139,16 +139,16 @@ separate owner decision and PR (feature flag in `UniversalCommitter`).
 
 ## 5. Interface changes per crate
 
-- **kvnc-types (Foundation)**: none required for blocks (parents already a
+- **kovanica-types (Foundation)**: none required for blocks (parents already a
   list); maybe `BlockReference` ordering helper; later remove `Vote` (or keep for
   compatibility).
-- **kvnc-dag**: `validate_block` quorum/uniqueness checks; `select_parents`
+- **kovanica-dag**: `validate_block` quorum/uniqueness checks; `select_parents`
   returns all r-1 blocks (≥ quorum) + own chain; `DagStore` index
   `(round, author) → digest` with equivocation flag; mergeset re-tune.
-- **kvnc-consensus**: decision rule from DAG (`direct_decide(L)`, later
+- **kovanica-consensus**: decision rule from DAG (`direct_decide(L)`, later
   `indirect_decide(L)` behind a flag); engine proposes every round; remove vote
   accumulation from `LeaderInfo` once migrated.
-- **kvnc-node / network / mempool (Network)**: proposal timing, gossip,
+- **kovanica-node / network / mempool (Network)**: proposal timing, gossip,
   mempool partitioning.
 
 ## 6. Migration

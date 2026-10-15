@@ -3,15 +3,15 @@
 # because the binary does not speak the Service Control Manager protocol.
 #
 # Usage (Administrator PowerShell):
-#   .\install-service.ps1 -Exe C:\kvnc\kvnc-lightnode.exe
+#   .\install-service.ps1 -Exe C:\kovanica\kovanica-lightnode.exe
 #
-# Put the passphrase in the machine environment as KVNC_LIGHT_PASSPHRASE
+# Put the passphrase in the machine environment as KOVANICA_LIGHT_PASSPHRASE
 # before the task starts. The task runs as SYSTEM and inherits machine variables.
 
 param(
     [Parameter(Mandatory = $true)]
     [string]$Exe,
-    [string]$DataDir = "C:\ProgramData\kvnc-lightnode"
+    [string]$DataDir = "C:\ProgramData\kovanica-lightnode"
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,4 +23,4 @@ $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName "KovanicaLightNode" -Action $action -Trigger $trigger -Settings $settings -User "SYSTEM" -RunLevel Highest -Force | Out-Null
 Write-Output "Registered KovanicaLightNode. It runs `"$resolved --data-dir $DataDir run`" at startup."
-Write-Output "Set machine environment KVNC_LIGHT_PASSPHRASE so the witness can be signed. No tray is installed."
+Write-Output "Set machine environment KOVANICA_LIGHT_PASSPHRASE so the witness can be signed. No tray is installed."

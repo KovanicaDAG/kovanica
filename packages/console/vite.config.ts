@@ -7,8 +7,8 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      "@kvnc/signer": fileURLToPath(new URL("../signer/src/index.ts", import.meta.url)),
-      "@kvnc/api-client": fileURLToPath(new URL("../api-client/src/index.ts", import.meta.url)),
+      "@kovanica/signer": fileURLToPath(new URL("../signer/src/index.ts", import.meta.url)),
+      "@kovanica/api-client": fileURLToPath(new URL("../api-client/src/index.ts", import.meta.url)),
     },
   },
   server: {

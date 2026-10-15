@@ -6,14 +6,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { KvncRpcClient, subscribeNewHeads } from "@kvnc/api-client";
+import { KovanicaRpcClient, subscribeNewHeads } from "@kovanica/api-client";
 import {
   generateKey,
   keyFromHexSeed,
   keyFromMnemonic,
   keyFromSeed,
   type AccountKey,
-} from "@kvnc/signer";
+} from "@kovanica/signer";
 
 import {
   LOCAL,
@@ -39,7 +39,7 @@ interface Session {
   height: bigint | null;
   online: boolean;
   headTick: number;
-  client: KvncRpcClient;
+  client: KovanicaRpcClient;
 }
 
 const SessionContext = createContext<Session | null>(null);
@@ -67,7 +67,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [online, setOnline] = useState(false);
   const [headTick, setHeadTick] = useState(0);
 
-  const client = useMemo(() => new KvncRpcClient(network.rpcUrl), [network.rpcUrl]);
+  const client = useMemo(() => new KovanicaRpcClient(network.rpcUrl), [network.rpcUrl]);
 
   useEffect(() => {
     setKey((current) => {

@@ -1,5 +1,5 @@
 {
-  "name": "@kvnc/signer",
+  "name": "@kovanica/signer",
   "version": "0.0.1",
   "description": "Browser signer for Kovanica transactions (signature format v1)",
   "type": "module",

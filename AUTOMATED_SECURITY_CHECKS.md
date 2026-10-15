@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-14  
 **Commit:** `main` @ `98d88cc`  
-**Workspace:** `kvnc` (19 crates, ~53k LOC)
+**Workspace:** `kovanica` (19 crates, ~53k LOC)
 
 ---
 
@@ -55,27 +55,27 @@
 
 **Command:** `cargo clippy --workspace -- -D warnings`  
 **Exit Code:** 101 (clippy errors)  
-**Crates with Errors:** `kvnc-types` (8 errors)
+**Crates with Errors:** `kovanica-types` (8 errors)
 
 ### Errors (Blocking)
 
 | Crate | File | Line | Lint | Message |
 |-------|------|------|------|---------|
-| `kvnc-types` | `account_tree.rs` | 90 | `needless_range_loop` | Loop variable `level` used to index `siblings` |
-| `kvnc-types` | `account_tree.rs` | 119 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
-| `kvnc-types` | `account_tree.rs` | 195 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
-| `kvnc-types` | `account_tree.rs` | 206 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
-| `kvnc-types` | `colouring.rs` | 274 | `manual_contains` | Using `contains()` instead of `iter().any()` |
-| `kvnc-types` | `light_client.rs` | 91 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
-| `kvnc-types` | `merkle.rs` | 68 | `manual_is_multiple_of` | Manual implementation of `.is_multiple_of()` |
-| `kvnc-types` | `merkle.rs` | 113 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
+| `kovanica-types` | `account_tree.rs` | 90 | `needless_range_loop` | Loop variable `level` used to index `siblings` |
+| `kovanica-types` | `account_tree.rs` | 119 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
+| `kovanica-types` | `account_tree.rs` | 195 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
+| `kovanica-types` | `account_tree.rs` | 206 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
+| `kovanica-types` | `colouring.rs` | 274 | `manual_contains` | Using `contains()` instead of `iter().any()` |
+| `kovanica-types` | `light_client.rs` | 91 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
+| `kovanica-types` | `merkle.rs` | 68 | `manual_is_multiple_of` | Manual implementation of `.is_multiple_of()` |
+| `kovanica-types` | `merkle.rs` | 113 | `needless_borrows_for_generic_args` | Borrowed expression implements required traits |
 
 ### Warnings (Non-Blocking)
 
 | Crate | File | Line | Lint | Message |
 |-------|------|------|------|---------|
-| `kvnc-types` | `transaction.rs` | 331 | `duplicate_macro_attributes` | Duplicated attribute |
-| `kvnc-types` | `transaction.rs` | 386 | `dead_code` | Function `tx_and_vote_domains_are_disjoint` never used |
+| `kovanica-types` | `transaction.rs` | 331 | `duplicate_macro_attributes` | Duplicated attribute |
+| `kovanica-types` | `transaction.rs` | 386 | `dead_code` | Function `tx_and_vote_domains_are_disjoint` never used |
 
 **Assessment:** All errors are style/ergonomics lints — no correctness issues. Fixable with minor refactors.
 
@@ -94,19 +94,19 @@
 
 | Crate | Tests | Passed | Failed | Duration |
 |-------|-------|--------|--------|----------|
-| `kvnc-cli` | 47 | 47 | 0 | 2.35s |
-| `kvnc-common` | 1 | 1 | 0 | 0.00s |
-| `kvnc-consensus` | 100 | 100 | 0 | 0.06s |
-| `kvnc-network` | 70 | 70 | 0 | 4.35s |
-| `kvnc-node` | 46 | 45 | 1 | 0.35s |
-| `kvnc-dag` | ~30 | 30 | 0 | - |
-| `kvnc-mempool` | ~40 | 40 | 0 | - |
-| `kvnc-crypto` | ~20 | 20 | 0 | - |
-| `kvnc-staking` | ~25 | 25 | 0 | - |
-| `kvnc-execution` | ~15 | 15 | 0 | - |
-| `kvnc-runtime` | ~10 | 10 | 0 | - |
-| `kvnc-rpc` | ~20 | 20 | 0 | - |
-| `kvnc-keystore` | ~15 | 15 | 0 | - |
+| `kovanica-cli` | 47 | 47 | 0 | 2.35s |
+| `kovanica-common` | 1 | 1 | 0 | 0.00s |
+| `kovanica-consensus` | 100 | 100 | 0 | 0.06s |
+| `kovanica-network` | 70 | 70 | 0 | 4.35s |
+| `kovanica-node` | 46 | 45 | 1 | 0.35s |
+| `kovanica-dag` | ~30 | 30 | 0 | - |
+| `kovanica-mempool` | ~40 | 40 | 0 | - |
+| `kovanica-crypto` | ~20 | 20 | 0 | - |
+| `kovanica-staking` | ~25 | 25 | 0 | - |
+| `kovanica-execution` | ~15 | 15 | 0 | - |
+| `kovanica-runtime` | ~10 | 10 | 0 | - |
+| `kovanica-rpc` | ~20 | 20 | 0 | - |
+| `kovanica-keystore` | ~15 | 15 | 0 | - |
 | Others | ~50 | 50 | 0 | - |
 
 ### Failed Test
@@ -115,7 +115,7 @@
 test tests::red_block_transactions_return_to_mempool_after_restart ... FAILED
 
 thread 'tests::red_block_transactions_return_to_mempool_after_restart' panicked at 
-crates/kvnc-node/src/main.rs:3070:9:
+crates/kovanica-node/src/main.rs:3070:9:
 no gossip
 ```
 
@@ -131,12 +131,12 @@ no gossip
 
 | Crate | Count | Locations | Purpose |
 |-------|-------|-----------|---------|
-| `kvnc-multisig` | 6 | `args_slice` helper + 5 call sites | WASM host FFI pointer deref |
-| `kvnc-token` | 8 | `args_slice` helper + 7 call sites | WASM host FFI pointer deref |
-| `kvnc-vault` | 6 | `args_slice` helper + 5 call sites | WASM host FFI pointer deref |
-| `kvnc-htlc` | 5 | `args_slice` helper + 4 call sites | WASM host FFI pointer deref |
-| `kvnc-common/wasm.rs` | 8 | Host import macros | WASM host FFI imports |
-| `kvnc-light-ffi` | 1 | Scaffolding macro | uniffi FFI bindings |
+| `kovanica-multisig` | 6 | `args_slice` helper + 5 call sites | WASM host FFI pointer deref |
+| `kovanica-token` | 8 | `args_slice` helper + 7 call sites | WASM host FFI pointer deref |
+| `kovanica-vault` | 6 | `args_slice` helper + 5 call sites | WASM host FFI pointer deref |
+| `kovanica-htlc` | 5 | `args_slice` helper + 4 call sites | WASM host FFI pointer deref |
+| `kovanica-common/wasm.rs` | 8 | Host import macros | WASM host FFI imports |
+| `kovanica-light-ffi` | 1 | Scaffolding macro | uniffi FFI bindings |
 
 ### Safety Notes
 
@@ -156,7 +156,7 @@ no gossip
 2. **Upgrade `rustls`** → Requires `libp2p` upgrade (may need libp2p 0.58+)
 3. **Upgrade `rand` to 0.8+** → Workspace dependency, minimal breaking changes
 4. **Replace `bincode`** → Migrate to `bincode` v2 or `postcard` (already in workspace)
-5. **Fix clippy errors in `kvnc-types`** → 8 trivial fixes, 30 min work
+5. **Fix clippy errors in `kovanica-types`** → 8 trivial fixes, 30 min work
 6. **Investigate flaky test** → `red_block_transactions_return_to_mempool_after_restart`
 
 ### Acceptable for Audit
@@ -188,4 +188,4 @@ advisory-db: 1314 advisories (2026-10-14)
 
 ---
 
-*Generated by automated security check pipeline for KVNC audit preparation.*
+*Generated by automated security check pipeline for Kovanica audit preparation.*

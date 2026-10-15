@@ -1,7 +1,7 @@
 //! Fuzzing harness for Transaction deserialization
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use kvnc_types::Transaction;
+use kovanica_types::Transaction;
 use bincode;
 
 fuzz_target!(|data: &[u8]| {

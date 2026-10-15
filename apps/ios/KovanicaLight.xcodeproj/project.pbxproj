@@ -10,17 +10,17 @@
 		A10000000000000000000001 /* KovanicaLightApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* KovanicaLightApp.swift */; };
 		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ContentView.swift */; };
 		A10000000000000000000003 /* NodeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* NodeClient.swift */; };
-		A10000000000000000000004 /* kvnc_light.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* kvnc_light.swift */; };
-		A10000000000000000000005 /* kvnc_lightFFI.h in Headers */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* kvnc_lightFFI.h */; };
+		A10000000000000000000004 /* kovanica_light.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* kovanica_light.swift */; };
+		A10000000000000000000005 /* kovanica_lightFFI.h in Headers */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* kovanica_lightFFI.h */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A20000000000000000000001 /* KovanicaLightApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KovanicaLightApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* NodeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeClient.swift; sourceTree = "<group>"; };
-		A20000000000000000000004 /* kvnc_light.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = kvnc_light.swift; sourceTree = "<group>"; };
-		A20000000000000000000005 /* kvnc_lightFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = kvnc_lightFFI.h; sourceTree = "<group>"; };
-		A20000000000000000000006 /* kvnc_lightFFI.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = kvnc_lightFFI.modulemap; sourceTree = "<group>"; };
+		A20000000000000000000004 /* kovanica_light.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = kovanica_light.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* kovanica_lightFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = kovanica_lightFFI.h; sourceTree = "<group>"; };
+		A20000000000000000000006 /* kovanica_lightFFI.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = kovanica_lightFFI.modulemap; sourceTree = "<group>"; };
 		A30000000000000000000001 /* KovanicaLight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KovanicaLight.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -65,9 +65,9 @@
 		A50000000000000000000004 /* Generated */ = {
 			isa = PBXGroup;
 			children = (
-				A20000000000000000000004 /* kvnc_light.swift */,
-				A20000000000000000000005 /* kvnc_lightFFI.h */,
-				A20000000000000000000006 /* kvnc_lightFFI.modulemap */,
+				A20000000000000000000004 /* kovanica_light.swift */,
+				A20000000000000000000005 /* kovanica_lightFFI.h */,
+				A20000000000000000000006 /* kovanica_lightFFI.modulemap */,
 			);
 			path = Generated;
 			sourceTree = "<group>";
@@ -79,7 +79,7 @@
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000000000000000000005 /* kvnc_lightFFI.h in Headers */,
+				A10000000000000000000005 /* kovanica_lightFFI.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -142,7 +142,7 @@
 				A10000000000000000000001 /* KovanicaLightApp.swift in Sources */,
 				A10000000000000000000002 /* ContentView.swift in Sources */,
 				A10000000000000000000003 /* NodeClient.swift in Sources */,
-				A10000000000000000000004 /* kvnc_light.swift in Sources */,
+				A10000000000000000000004 /* kovanica_light.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { LeaderSlot } from "@kvnc/api-client";
-import { formatKuna } from "@kvnc/signer";
+import type { LeaderSlot } from "@kovanica/api-client";
+import { formatKuna } from "@kovanica/signer";
 
 import { shortAddress } from "../components";
 import { useSession } from "../session";
