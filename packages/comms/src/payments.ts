@@ -1,3 +1,7 @@
+// Side-effect: install the SHA-512 hook on this package's `@noble/ed25519`
+// before any synchronous Ed25519 call site runs (module init order matters).
+import "./ed25519.js";
+
 import { blake3 } from "@noble/hashes/blake3";
 import {
   encodeRawTransaction,

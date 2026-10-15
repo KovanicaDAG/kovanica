@@ -11,17 +11,15 @@
  * - `sentAt` / `expiresAt` are `u64` ms, little-endian inside signing bytes.
  */
 
+// Side-effect: install the SHA-512 hook on this package's `@noble/ed25519`.
+import "./ed25519.js";
+
 import * as ed from "@noble/ed25519";
 import { blake3 } from "@noble/hashes/blake3";
-import { sha512 } from "@noble/hashes/sha2";
 
 import { bytesToHex, hexToBytes } from "@kovanica/signer";
 
 import { ALG_V1, concat, u64le, type Sealed } from "./messaging.js";
-
-// @noble/ed25519 v2 asks the caller for SHA-512. Sync keeps signing free of a
-// dynamic import; same hook pattern as `packages/signer/src/ed25519.ts`.
-ed.etc.sha512Sync = (...messages: Uint8Array[]) => sha512(ed.etc.concatBytes(...messages));
 
 /** Wire version, always 1 (§3.1). */
 export const ENVELOPE_VERSION = 1 as const;
