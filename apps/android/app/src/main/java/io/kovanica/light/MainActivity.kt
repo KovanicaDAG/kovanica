@@ -37,6 +37,7 @@ import uniffi.kvnc_light.signTransferRaw
 import uniffi.kvnc_light.signWitnessRaw
 import uniffi.kvnc_light.verifyHeader
 import uniffi.kvnc_light.walletAddress
+import java.math.BigInteger
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -72,6 +73,38 @@ class MainActivity : Activity() {
     private lateinit var toField: EditText
     private lateinit var amountField: EditText
     private lateinit var faucetButton: Button
+
+    // Wallet overview (native KUNA hero).
+    private lateinit var overviewValue: TextView
+    private lateinit var overviewMeta: TextView
+    private lateinit var overviewAddress: TextView
+    private lateinit var receiveButton: Button
+
+    // Token watchlist (KVP-102 reads).
+    private lateinit var tokensState: TextView
+    private lateinit var tokenList: LinearLayout
+    private lateinit var addTokenForm: LinearLayout
+    private lateinit var addTokenToggle: Button
+    private lateinit var addTokenField: EditText
+    private lateinit var tokens: TokenStore
+
+    /** Contract addresses watched on the active network (lowercase 64-hex). */
+    private var watched: List<String> = emptyList()
+
+    /** Latest per-token read result; missing entries render as "not read yet". */
+    private var tokenReads: Map<String, TokenRead> = emptyMap()
+
+    /** True while a token read is in flight, so rows show a loading line. */
+    private var tokensLoading = false
+
+    /** Contract address whose inline token-send panel is open, if any. */
+    private var sendPanelFor: String? = null
+
+    /** Contract address awaiting an inline remove confirmation, if any. */
+    private var pendingTokenRemoval: String? = null
+
+    /** Wallet address in `kvnc…dag` form, once a wallet read has resolved it. */
+    private var walletAddressDisplay: String? = null
 
     /** The network the screen is bound to. Read from the IO thread too. */
     @Volatile
@@ -177,7 +210,7 @@ class MainActivity : Activity() {
         }
 
         val walletCard = card().apply {
-            addStack(sectionLabel("Wallet"))
+            addStack(sectionLabel("Create or import"))
             addStack(passField, 2)
             addStack(button("Create wallet") { onCreateWallet() }, 12)
             addStack(caption("Or import an existing wallet from its seed."), 16)
@@ -214,6 +247,9 @@ class MainActivity : Activity() {
             addStack(button("Open Messages", filled = false) { openMessages() }, 12)
         }
 
+        val overviewCard = walletOverviewCard()
+        val tokensCard = tokensCard()
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(24), dp(20), dp(36))
@@ -221,10 +257,12 @@ class MainActivity : Activity() {
             addStack(header())
             addView(rule(), LinearLayout.LayoutParams(dp(40), dp(3)).apply { topMargin = dp(14) })
             addStack(status, 18)
+            addStack(overviewCard, 18)
+            addStack(tokensCard, 18)
+            addStack(sendCard, 18)
             addStack(networkCard, 18)
             addStack(chainCard, 18)
             addStack(walletCard, 18)
-            addStack(sendCard, 18)
             addStack(lightCard, 18)
             addStack(messagesCard, 18)
         }
@@ -243,6 +281,12 @@ class MainActivity : Activity() {
         updateNetworkNote()
         refreshFaucet()
         resetChainPanel()
+        tokens = TokenStore(this)
+        watched = tokens.watched(current.id)
+        renderTokens()
+        renderOverview(
+            if (keystoreOrNull() == null) OverviewState.NoWallet else OverviewState.Idle,
+        )
         setStatus(startupMessage(), if (staleSoon == null) Tone.NEUTRAL else Tone.WARN)
     }
 
@@ -332,6 +376,17 @@ class MainActivity : Activity() {
         refreshFaucet()
         updateNetworkNote()
         resetChainPanel()
+        // Tokens are per-chain: swap the watchlist and drop reads from the old chain.
+        watched = tokens.watched(network.id)
+        tokenReads = emptyMap()
+        tokensLoading = false
+        sendPanelFor = null
+        pendingTokenRemoval = null
+        walletAddressDisplay = null
+        renderTokens()
+        renderOverview(
+            if (keystoreOrNull() == null) OverviewState.NoWallet else OverviewState.Idle,
+        )
         setStatus("Switched to ${network.label} — chain id ${network.chainId}.", Tone.OK)
     }
 
@@ -360,7 +415,13 @@ class MainActivity : Activity() {
 
     private fun onCreateWallet() {
         val passphrase = passField.text.toString()
-        background("Creating wallet — this takes a few seconds…") { _ ->
+        background(
+            label = "Creating wallet — this takes a few seconds…",
+            done = { line ->
+                pushStatus(line)
+                onWalletChanged()
+            },
+        ) { _ ->
             val created = createWallet(passphrase)
             prefs().edit().putString("keystore", created.keystoreJson).apply()
             ok(
@@ -377,7 +438,13 @@ class MainActivity : Activity() {
             setStatus("Paste the 24-word seed before importing.", Tone.ERROR)
             return
         }
-        background("Importing wallet…") { _ ->
+        background(
+            label = "Importing wallet…",
+            done = { line ->
+                pushStatus(line)
+                onWalletChanged()
+            },
+        ) { _ ->
             val imported = importWallet(seed, passphrase)
             prefs().edit().putString("keystore", imported.keystoreJson).apply()
             ok("Wallet imported.\naddress ${imported.address}")
@@ -535,6 +602,609 @@ class MainActivity : Activity() {
         startActivity(Intent(this, MessagesActivity::class.java))
     }
 
+    // --- wallet overview -----------------------------------------------------------------
+
+    /** The hero card: native KUNA balance, the address, and the Receive entry point. */
+    private fun walletOverviewCard(): LinearLayout = card().apply {
+        addStack(sectionLabel("Wallet"))
+        overviewValue = TextView(this@MainActivity).apply {
+            textSize = 34f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(TEXT)
+            setLineSpacing(0f, 1.05f)
+        }
+        addStack(overviewValue, 2)
+        overviewMeta = TextView(this@MainActivity).apply {
+            textSize = 12f
+            setTextColor(MUTED)
+            setLineSpacing(0f, 1.3f)
+        }
+        addStack(overviewMeta, 6)
+        overviewAddress = TextView(this@MainActivity).apply {
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            setTextColor(TEXT)
+            setTextIsSelectable(true)
+            setLineSpacing(0f, 1.3f)
+        }
+        addStack(overviewAddress, 12)
+
+        val actions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+        receiveButton = button("Receive") { openReceive() }
+        actions.addView(
+            receiveButton,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        actions.addView(
+            button("Refresh", filled = false) { refreshWallet() },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(10)
+            },
+        )
+        addStack(actions, 14)
+        addStack(
+            caption(
+                "Read live from the node you selected. This is native KUNA — KVP-102 tokens " +
+                    "live in their own contracts and show under Tokens.",
+            ),
+            12,
+        )
+    }
+
+    /** Live read of the native balance, plus every watched token, in one pass. */
+    private fun refreshWallet() {
+        persistFields()
+        val env = env()
+        val keystore = keystoreOrNull()
+        if (keystore == null) {
+            renderOverview(OverviewState.NoWallet)
+            setStatus("Create or import a wallet first — there's nothing to read yet.", Tone.WARN)
+            return
+        }
+        val contracts = watched
+        renderOverview(OverviewState.Loading)
+        tokensLoading = true
+        tokenReads = emptyMap()
+        renderTokens()
+        setStatus("Reading your wallet from ${env.network}…", Tone.NEUTRAL)
+        io.execute {
+            val snapshot = readWallet(env, keystore, contracts)
+            runOnUiThread {
+                walletAddressDisplay = snapshot.address
+                tokenReads = snapshot.reads
+                tokensLoading = false
+                renderOverview(snapshot.overview)
+                renderTokens()
+                val (line, tone) = overviewLine(snapshot.overview)
+                setStatus(line, tone)
+            }
+        }
+    }
+
+    /** Background half of [refreshWallet]; never throws. */
+    private fun readWallet(env: Env, keystore: String, contracts: List<String>): WalletSnapshot {
+        val display = try {
+            walletAddress(keystore)
+        } catch (error: Exception) {
+            return WalletSnapshot(
+                OverviewState.Failed(error.message ?: "the keystore couldn't be read"),
+                emptyMap(),
+                null,
+            )
+        }
+        val node = client(env)
+        val height = try {
+            node.blockNumber()
+        } catch (_: Exception) {
+            null
+        }
+        var atoms: ULong? = null
+        var failure: String? = null
+        try {
+            atoms = node.balance(display)
+        } catch (error: Exception) {
+            failure = error.message ?: "the node didn't answer"
+        }
+        val tokenClient = TokenClient(node)
+        val reads = LinkedHashMap<String, TokenRead>(contracts.size)
+        for (contract in contracts) {
+            reads[contract] = tokenClient.read(contract)
+        }
+        val overview = when {
+            failure != null -> OverviewState.Failed(failure!!)
+            atoms != null -> OverviewState.Ready(atoms!!, height)
+            else -> OverviewState.Failed("the node didn't answer")
+        }
+        return WalletSnapshot(overview, reads, display)
+    }
+
+    private fun overviewLine(state: OverviewState): Pair<String, Tone> = when (state) {
+        is OverviewState.Ready ->
+            "Balance read from ${current.label} — ${state.atoms} atoms." to Tone.OK
+        is OverviewState.Failed -> "Couldn't read the wallet: ${state.message}" to Tone.ERROR
+        OverviewState.NoWallet -> "No wallet on this phone yet." to Tone.WARN
+        OverviewState.Loading -> "Reading…" to Tone.NEUTRAL
+        OverviewState.Idle -> "Tap Refresh to read your balance." to Tone.NEUTRAL
+    }
+
+    private fun renderOverview(state: OverviewState) {
+        when (state) {
+            OverviewState.NoWallet -> {
+                hero("—", MUTED)
+                overviewMeta.text =
+                    "No wallet on this phone yet. Create or import one below to see a balance."
+                overviewMeta.setTextColor(MUTED)
+                showAddress(false)
+                setReceiveEnabled(false)
+            }
+            OverviewState.Idle -> {
+                hero("—", TEXT)
+                overviewMeta.text = "Tap Refresh to read your balance from ${current.label}."
+                overviewMeta.setTextColor(MUTED)
+                showAddress(walletAddressDisplay != null)
+                setReceiveEnabled(walletAddressDisplay != null)
+            }
+            OverviewState.Loading -> {
+                hero("…", TEXT)
+                overviewMeta.text = "Reading your balance from ${current.label}…"
+                overviewMeta.setTextColor(MUTED)
+                showAddress(walletAddressDisplay != null)
+                setReceiveEnabled(walletAddressDisplay != null)
+            }
+            is OverviewState.Ready -> {
+                hero("${Amounts.format(BigInteger(state.atoms.toString()), NATIVE_DECIMALS)} KUNA", TEXT)
+                val heightLine = state.height?.let { "height $it" } ?: "height unknown"
+                overviewMeta.text = "${state.atoms} atoms  ·  $heightLine  ·  ${current.label}"
+                overviewMeta.setTextColor(MUTED)
+                showAddress(true)
+                setReceiveEnabled(true)
+            }
+            is OverviewState.Failed -> {
+                hero("—", ACCENT)
+                overviewMeta.text = state.message
+                overviewMeta.setTextColor(ACCENT)
+                showAddress(walletAddressDisplay != null)
+                setReceiveEnabled(walletAddressDisplay != null)
+            }
+        }
+    }
+
+    private fun hero(text: String, color: Int) {
+        overviewValue.text = text
+        overviewValue.setTextColor(color)
+    }
+
+    private fun showAddress(visible: Boolean) {
+        overviewAddress.visibility = if (visible) View.VISIBLE else View.GONE
+        overviewAddress.text = walletAddressDisplay.orEmpty()
+        overviewAddress.contentDescription = walletAddressDisplay.orEmpty()
+    }
+
+    private fun setReceiveEnabled(enabled: Boolean) {
+        receiveButton.isEnabled = enabled
+        receiveButton.alpha = if (enabled) 1f else 0.5f
+    }
+
+    /** Re-read the wallet address from the local store after create/import. */
+    private fun onWalletChanged() {
+        val keystore = keystoreOrNull()
+        walletAddressDisplay = if (keystore == null) {
+            null
+        } else {
+            try {
+                walletAddress(keystore)
+            } catch (_: Exception) {
+                null
+            }
+        }
+        renderOverview(if (keystore == null) OverviewState.NoWallet else OverviewState.Idle)
+        renderTokens()
+    }
+
+    private fun openReceive() {
+        val address = walletAddressDisplay
+        if (address == null) {
+            setStatus("Create or import a wallet first — there's no address to receive at yet.", Tone.WARN)
+            return
+        }
+        startActivity(
+            Intent(this, ReceiveActivity::class.java)
+                .putExtra(ReceiveActivity.EXTRA_ADDRESS, address)
+                .putExtra(ReceiveActivity.EXTRA_NETWORK, current.label),
+        )
+    }
+
+    // --- tokens --------------------------------------------------------------------------
+
+    /** The token watchlist card: add form plus one row per watched contract. */
+    private fun tokensCard(): LinearLayout = card().apply {
+        addStack(tokensHeader())
+        tokensState = TextView(this@MainActivity).apply {
+            textSize = 12f
+            setTextColor(MUTED)
+            setLineSpacing(0f, 1.3f)
+        }
+        addStack(tokensState, 4)
+        tokenList = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        addStack(tokenList, 12)
+        addTokenForm = addTokenFormView()
+        addStack(addTokenForm, 14)
+    }
+
+    private fun tokensHeader(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(
+            TextView(this@MainActivity).apply {
+                text = "TOKENS"
+                setTextColor(MUTED)
+                textSize = 11f
+                letterSpacing = 0.18f
+                typeface = Typeface.DEFAULT_BOLD
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        addTokenToggle = button("Add", filled = false) { toggleAddToken() }
+        addView(
+            addTokenToggle,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+    }
+
+    private fun addTokenFormView(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        visibility = View.GONE
+        addStack(caption("Watch a KVP-102 token by its contract address."))
+        addTokenField = field("Contract address (kvnc…dag or 64 hex)", "", mono = true)
+        addStack(addTokenField, 8)
+        addStack(button("Add token") { addToken() }, 12)
+        addStack(
+            caption(
+                "Balances are read straight from the contract's own storage. Token amounts are " +
+                    "separate from your KUNA balance and never count towards it.",
+            ),
+            12,
+        )
+    }
+
+    private fun toggleAddToken() {
+        setAddTokenVisible(addTokenForm.visibility != View.VISIBLE)
+    }
+
+    private fun setAddTokenVisible(visible: Boolean) {
+        addTokenForm.visibility = if (visible) View.VISIBLE else View.GONE
+        addTokenToggle.text = if (visible) "Done" else "Add"
+    }
+
+    private fun addToken() {
+        val hex = KvncAddress.normalizeHex(addTokenField.text.toString())
+        if (hex == null) {
+            setStatus(
+                "That isn't a valid contract address — paste a kvnc…dag address or 64 hex characters.",
+                Tone.ERROR,
+            )
+            return
+        }
+        if (watched.contains(hex)) {
+            setStatus("That token is already on your list.", Tone.WARN)
+            return
+        }
+        tokens.add(current.id, hex)
+        addTokenField.setText("")
+        setAddTokenVisible(false)
+        sendPanelFor = null
+        pendingTokenRemoval = null
+        watched = tokens.watched(current.id)
+        renderTokens()
+        if (keystoreOrNull() == null) {
+            setStatus("Added ${KvncAddress.short(hex)}. Create or import a wallet to see your balance.", Tone.NEUTRAL)
+        } else {
+            setStatus("Added ${KvncAddress.short(hex)}. Reading it now…", Tone.NEUTRAL)
+            refreshWallet()
+        }
+    }
+
+    private fun removeToken(contract: String) {
+        tokens.remove(current.id, contract)
+        watched = tokens.watched(current.id)
+        tokenReads = tokenReads - contract
+        pendingTokenRemoval = null
+        if (sendPanelFor == contract) sendPanelFor = null
+        renderTokens()
+        setStatus("Stopped watching ${KvncAddress.short(contract)}.", Tone.NEUTRAL)
+    }
+
+    private fun renderTokens() {
+        tokenList.removeAllViews()
+        tokensState.text = when {
+            watched.isEmpty() ->
+                "No tokens watched on ${current.label}. Add one by its contract address."
+            watched.size == 1 -> "1 token watched on ${current.label}."
+            else -> "${watched.size} tokens watched on ${current.label}."
+        }
+        tokensState.setTextColor(MUTED)
+        if (watched.isEmpty()) {
+            tokenList.addStack(
+                caption(
+                    "Tokens are held by their own contracts, not in your KUNA balance. " +
+                        "Tap Add to watch one by address.",
+                ),
+                0,
+            )
+            return
+        }
+        watched.forEachIndexed { index, contract ->
+            tokenList.addStack(tokenRow(contract), if (index == 0) 0 else 10)
+        }
+    }
+
+    private fun tokenRow(contract: String): LinearLayout {
+        if (contract == pendingTokenRemoval) return tokenRemovalRow(contract)
+        val read = tokenReads[contract]
+        val info = (read as? TokenRead.Ok)?.info
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(SURFACE_2, 14, LINE, 1)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { toggleSendPanel(contract) }
+            setOnLongClickListener {
+                pendingTokenRemoval = contract
+                sendPanelFor = null
+                renderTokens()
+                true
+            }
+        }
+
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        top.addView(
+            TextView(this).apply {
+                text = when {
+                    info != null -> info.symbol
+                    read is TokenRead.NotAToken -> "Not a token"
+                    read is TokenRead.Unreadable -> "Unreadable"
+                    read is TokenRead.Failed -> "Unavailable"
+                    else -> "…"
+                }
+                setTextColor(if (info != null) TEXT else ACCENT)
+                textSize = 16f
+                typeface = Typeface.DEFAULT_BOLD
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        if (info != null && info.paused) top.addView(badge("PAUSED", ACCENT, ACCENT_BG))
+        row.addView(top)
+
+        if (info != null) {
+            if (info.name.isNotBlank() && info.name != info.symbol) {
+                row.addView(TextView(this).apply {
+                    text = info.name
+                    setTextColor(MUTED)
+                    textSize = 13f
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+            if (activeViewerHex() != null) {
+                row.addView(TextView(this).apply {
+                    text = balanceLine(info)
+                    setTextColor(TEXT)
+                    textSize = 22f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setPadding(0, dp(8), 0, 0)
+                })
+            } else {
+                row.addView(TextView(this).apply {
+                    text = "Create or import a wallet to see your balance of this token."
+                    setTextColor(ACCENT)
+                    textSize = 13f
+                    setLineSpacing(0f, 1.3f)
+                    setPadding(0, dp(8), 0, 0)
+                })
+            }
+            row.addView(TextView(this).apply {
+                text = detailLine(info)
+                setTextColor(MUTED)
+                textSize = 12f
+                setLineSpacing(0f, 1.3f)
+                setPadding(0, dp(6), 0, 0)
+            })
+        } else {
+            row.addView(TextView(this).apply {
+                text = when {
+                    tokensLoading -> "Reading…"
+                    read == null ->
+                        "Not read yet on this phone — tap Refresh to load this token's state."
+                    read is TokenRead.NotAToken ->
+                        "Nothing is deployed at this address on ${current.label}, or it holds no token state."
+                    read is TokenRead.Unreadable ->
+                        "This address holds something that isn't a KVP-102 token."
+                    read is TokenRead.Failed -> "Couldn't read it — ${read.message}"
+                    else -> ""
+                }
+                setTextColor(MUTED)
+                textSize = 13f
+                setLineSpacing(0f, 1.3f)
+                setPadding(0, dp(6), 0, 0)
+            })
+        }
+
+        row.addView(TextView(this).apply {
+            text = KvncAddress.short(contract)
+            contentDescription = contract
+            setTextColor(MUTED)
+            typeface = Typeface.MONOSPACE
+            textSize = 12f
+            setPadding(0, dp(10), 0, 0)
+        })
+
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        actions.addView(
+            button(
+                if (sendPanelFor == contract) "Close" else "Send",
+                filled = false,
+            ) { toggleSendPanel(contract) },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        actions.addView(
+            button("Stop watching", filled = false) {
+                pendingTokenRemoval = contract
+                sendPanelFor = null
+                renderTokens()
+            }.apply { setTextColor(BAD) },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { leftMargin = dp(10) },
+        )
+        row.addView(actions)
+
+        if (sendPanelFor == contract) row.addView(sendPanel(contract, info))
+
+        return row
+    }
+
+    /** This phone's wallet as canonical lowercase hex, or null when there's no wallet. */
+    private fun activeViewerHex(): String? =
+        walletAddressDisplay?.let { KvncAddress.normalizeHex(it) }
+
+    private fun balanceLine(info: TokenInfo): String {
+        val viewer = activeViewerHex() ?: return "—"
+        return "${Amounts.format(info.balanceOf(viewer), info.decimals)} ${info.symbol}"
+    }
+
+    private fun detailLine(info: TokenInfo): String {
+        val supply = Amounts.format(info.totalSupply, info.decimals)
+        return "${info.decimals} decimals  ·  supply $supply ${info.symbol}  ·  ${info.holders} holder" +
+            (if (info.holders == 1) "" else "s")
+    }
+
+    private fun toggleSendPanel(contract: String) {
+        sendPanelFor = if (sendPanelFor == contract) null else contract
+        renderTokens()
+    }
+
+    /**
+     * Inline token-send form. Send calls [TokenClient.sendTransfer], which
+     * encodes the `token_transfer` calldata, signs it through the light FFI's
+     * `signCallRaw` and submits it; the tx hash (or a clear error) lands in the
+     * status banner. This moves the token's own balances — never native KUNA.
+     */
+    private fun sendPanel(contract: String, info: TokenInfo?): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(SURFACE, 14, LINE, 1)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            val symbol = info?.symbol ?: "token"
+            addStack(
+                caption(
+                    "Sends $symbol held by this contract — this is a token transfer, not a KUNA payment.",
+                ),
+            )
+            val to = field("Recipient address", "", mono = true)
+            addStack(to, 10)
+            val amount = field("Amount (base units)", "1", mono = true)
+            addStack(amount, 8)
+            addStack(
+                button("Send $symbol") {
+                    attemptTokenSend(contract, to.text.toString(), amount.text.toString(), info)
+                },
+                12,
+            )
+            isClickable = true // swallow taps on the panel itself
+        }
+
+    private fun attemptTokenSend(contract: String, to: String, amountText: String, info: TokenInfo?) {
+        val toHex = KvncAddress.normalizeHex(to)
+        if (toHex == null) {
+            setStatus("Enter a valid recipient address.", Tone.ERROR)
+            return
+        }
+        val amount = amountText.trim().toBigIntegerOrNull()
+        if (amount == null || amount.signum() <= 0) {
+            setStatus("Enter an amount in the token's base units, like 1.", Tone.ERROR)
+            return
+        }
+        val keystore = keystoreOrNull()
+        if (keystore == null) {
+            setStatus("Create or import a wallet first.", Tone.ERROR)
+            return
+        }
+        // Snapshot the UI-only inputs before hopping to the IO thread.
+        val passphrase = passField.text.toString()
+        val decimals = info?.decimals ?: 0
+        val symbol = info?.symbol ?: "token"
+        val env = env()
+        background("Preparing token transfer…") { _ ->
+            val hash = TokenClient(client(env)).sendTransfer(
+                keystore,
+                passphrase,
+                env.chainId,
+                contract,
+                toHex,
+                amount,
+                decimals,
+            )
+            ok("$symbol transfer submitted — $hash")
+        }
+    }
+
+    private fun tokenRemovalRow(contract: String): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(SURFACE_2, 14, BAD, 1)
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+        isClickable = true // only the two buttons act
+        addView(TextView(this@MainActivity).apply {
+            text = "Stop watching ${KvncAddress.short(contract)}?\nThis only clears it from this phone."
+            setTextColor(TEXT)
+            textSize = 14f
+            setLineSpacing(0f, 1.3f)
+        })
+        val actions = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        actions.addView(
+            button("Stop watching", filled = false) { removeToken(contract) }
+                .apply { setTextColor(BAD) },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        actions.addView(
+            button("Keep", filled = false) {
+                pendingTokenRemoval = null
+                renderTokens()
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(10)
+            },
+        )
+        addView(actions)
+    }
+
+    private fun badge(text: String, foreground: Int, background: Int): TextView = TextView(this).apply {
+        this.text = text
+        setTextColor(foreground)
+        textSize = 10f
+        letterSpacing = 0.14f
+        typeface = Typeface.DEFAULT_BOLD
+        setPadding(dp(8), dp(3), dp(8), dp(3))
+        this.background = rounded(background, 8)
+    }
+
     /** Shared nonce/rate/sign/submit path for bond and exit. */
     private fun submit(
         env: Env,
@@ -641,6 +1311,25 @@ class MainActivity : Activity() {
     private enum class Tone { NEUTRAL, OK, WARN, ERROR }
 
     private data class Line(val text: String, val tone: Tone)
+
+    /**
+     * Native-balance panel state. `Idle` means a wallet exists but nothing has
+     * been read yet, so the screen never implies a balance it hasn't seen.
+     */
+    private sealed interface OverviewState {
+        data object NoWallet : OverviewState
+        data object Idle : OverviewState
+        data object Loading : OverviewState
+        data class Ready(val atoms: ULong, val height: ULong?) : OverviewState
+        data class Failed(val message: String) : OverviewState
+    }
+
+    /** Everything one wallet read produces, handed back to the UI thread as one unit. */
+    private data class WalletSnapshot(
+        val overview: OverviewState,
+        val reads: Map<String, TokenRead>,
+        val address: String?,
+    )
 
     private fun ok(text: String) = Line(text, Tone.OK)
 
@@ -879,22 +1568,25 @@ class MainActivity : Activity() {
         /** Matches `MIN_LIGHT_BOND` (100 KUNA, 9 decimals). */
         private val MIN_LIGHT_BOND: ULong = 100_000_000_000u
 
-        // Ink-toned surface. Explicit so the screen reads the same on any device theme.
-        private val INK = 0xFF0E1116.toInt()
-        private val SURFACE = 0xFF171C23.toInt()
-        private val SURFACE_2 = 0xFF1E242C.toInt()
-        private val LINE = 0xFF2A323C.toInt()
-        private val TEXT = 0xFFEDF1F6.toInt()
-        private val MUTED = 0xFF95A0AE.toInt()
-        private val ACCENT = 0xFFF0B429.toInt()
-        private val ACCENT_INK = 0xFF1A1E25.toInt()
-        private val ACCENT_BG = 0x1AF0B429.toInt()
-        private val GOOD = 0xFF5BD6A0.toInt()
-        private val GOOD_BG = 0x1A5BD6A0.toInt()
-        private val BAD = 0xFFFF7B84.toInt()
-        private val BAD_BG = 0x1AFF7B84.toInt()
+        /** KUNA has 9 decimals; token decimals come from each token's own state. */
+        private const val NATIVE_DECIMALS: Int = 9
+
+        // Palette lives in WalletUi so new surfaces cannot drift from the shipped theme.
+        private val INK = WalletUi.INK
+        private val SURFACE = WalletUi.SURFACE
+        private val SURFACE_2 = WalletUi.SURFACE_2
+        private val LINE = WalletUi.LINE
+        private val TEXT = WalletUi.TEXT
+        private val MUTED = WalletUi.MUTED
+        private val ACCENT = WalletUi.ACCENT
+        private val ACCENT_INK = WalletUi.ACCENT_INK
+        private val ACCENT_BG = WalletUi.ACCENT_BG
+        private val GOOD = WalletUi.GOOD
+        private val GOOD_BG = WalletUi.GOOD_BG
+        private val BAD = WalletUi.BAD
+        private val BAD_BG = WalletUi.BAD_BG
 
         /** Press tint for the network rows: the accent at about 18% alpha. */
-        private val RIPPLE = 0x2EF0B429.toInt()
+        private val RIPPLE = WalletUi.RIPPLE
     }
 }
