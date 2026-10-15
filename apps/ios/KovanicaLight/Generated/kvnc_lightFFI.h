@@ -283,6 +283,16 @@ int8_t uniffi_kvnc_light_ffi_fn_func_faucet_allowed(uint64_t chain_id, RustCallS
 RustBuffer uniffi_kvnc_light_ffi_fn_func_import_wallet(RustBuffer mnemonic, RustBuffer passphrase, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_REGISTRY_DECODE_ENTRY
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_REGISTRY_DECODE_ENTRY
+RustBuffer uniffi_kvnc_light_ffi_fn_func_registry_decode_entry(RustBuffer value_hex, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_REGISTRY_SLOT_HEX
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_REGISTRY_SLOT_HEX
+RustBuffer uniffi_kvnc_light_ffi_fn_func_registry_slot_hex(RustBuffer name, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_SIGN_BOND_RAW
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_FN_FUNC_SIGN_BOND_RAW
 RustBuffer uniffi_kvnc_light_ffi_fn_func_sign_bond_raw(RustBuffer keystore_json, RustBuffer passphrase, uint64_t chain_id, uint64_t stake, uint64_t nonce, uint64_t fee_rate, RustCallStatus *_Nonnull out_status
@@ -628,6 +638,18 @@ uint16_t uniffi_kvnc_light_ffi_checksum_func_faucet_allowed(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_IMPORT_WALLET
 #define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_IMPORT_WALLET
 uint16_t uniffi_kvnc_light_ffi_checksum_func_import_wallet(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_DECODE_ENTRY
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_DECODE_ENTRY
+uint16_t uniffi_kvnc_light_ffi_checksum_func_registry_decode_entry(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_SLOT_HEX
+#define UNIFFI_FFIDEF_UNIFFI_KVNC_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_SLOT_HEX
+uint16_t uniffi_kvnc_light_ffi_checksum_func_registry_slot_hex(void
     
 );
 #endif

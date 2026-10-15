@@ -142,3 +142,92 @@ GitHub release `v0.3.0-android` (replace `v0.2.0-android`). Orchestrator owns bu
 
 Group/MLS, video, TURN, registry name lookup from the app, payment/PoW submission from the app,
 push notifications, contact-graph privacy work. Forward secrecy remains out of scope (MLS at M4).
+
+---
+
+## §7 v0.4.0 additions — contacts + on-chain name lookup (read-only)
+
+Supersedes the "registry name lookup from the app" line in §6 for this cut. Everything here is
+**client-only and read-only**: no transaction is ever signed, nothing is registered, and the app never
+deploys a contract.
+
+### §7.1 How a name is resolved over RPC (normative)
+
+There is **no view / `name_resolve` RPC** — every contract-call RPC handler is `NotImplemented`. The only
+working read path is the raw contract-storage slot:
+
+1. `key = b"kvnc/v1/name/" ‖ ascii_lowercase(name)` (the contract's `entry_key`).
+2. `slot = BLAKE3(key)` → 32 bytes → `"0x" + hex(slot)` (the host stores under `blake3(raw_key)`).
+3. `POST /rpc` → `kvnc_getStorageAt`, `params = [contract_address, "0x"+hex(slot)]` (unauthenticated read;
+   `contract_address` is a `kvnc…dag` string or raw 32-byte hex).
+4. Result is `"0x" + hex(value)` where `value = bincode(NameEntry)`. **An absent key and a not-found name
+   both return `"0x"`** — they are indistinguishable; callers treat `"0x"` as "not found".
+
+`NameEntry` bincode 1.3 (fixed-int, LE): `owner[32] ‖ pubkey[32] ‖ u64le(count) ‖ count×(u64le(len) ‖ utf8)`.
+
+### §7.2 FFI additions — `crates/kvnc-light-ffi/src/lib.rs` (lane android-ffi)
+
+| Rust (new) | Kotlin (generated) |
+|---|---|
+| `registry_slot_hex(name: String) -> Result<String, LightFfiError>` | `registrySlotHex(name): String` |
+| `registry_decode_entry(value_hex: String) -> Result<String, LightFfiError>` | `registryDecodeEntry(valueHex): String` |
+
+- `registry_slot_hex`: lowercase the name, validate (3..=32 UTF-8 bytes, only `[a-z0-9-]`, no leading or
+  trailing `-`, no `--`), return **64 lowercase hex** (no `0x`). **Single source of truth:** depend on
+  `kvnc-name-registry` (`entry_key`) + `kvnc_common::hash` **iff** that does not drag heavy/incompatible
+  deps into the mobile cdylib; otherwise define the prefix as a local constant and add a Rust test
+  asserting the computed slot equals what the existing wasmi e2e path reads
+  (`crates/kvnc-name-registry/tests/wasmi_e2e.rs`).
+- `registry_decode_entry`: parse `"0x"+hex` (accept with/without `0x`, case-insensitive); return compact
+  JSON `{"owner":"<64hex>","pubkey":"<64hex>","relay_endpoints":["…"]}`. Malformed/truncated bytes → an
+  error. Callers check for `""`/`"0x"` **before** calling this.
+
+Tests: a slot KAT against the contract's own `entry_key`/`hash` value, plus a decode round-trip from raw
+`bincode::serialize(NameEntry)` bytes. Regenerate the Kotlin **and** Swift bindings (same bindgen command
+as §1).
+
+### §7.3 Kotlin modules (lane android-logic)
+
+New `RegistryClient.kt`:
+```kotlin
+data class RegistryEntry(val ownerHex: String, val pubkeyHex: String, val relayEndpoints: List<String>)
+
+class RegistryClient(private val node: NodeClient, private val contractAddress: String) {
+    fun resolve(name: String): RegistryEntry?   // null when unconfigured / not found / empty slot
+}
+```
+- `resolve` validates the name (mirror §7.2), computes `registrySlotHex(name)`, and calls
+  `node.call("kvnc_getStorageAt", JSONArray().put(contractAddress).put("0x" + slot))`.
+- Blank address, null/blank result, or `"0x"` → return `null`. Otherwise `registryDecodeEntry(result)` →
+  parse JSON → `RegistryEntry` (pubkey lowercased, no `0x`).
+
+`CommsStore.kt` — schema v2 (backward compatible):
+- New key `registry_contract` (String, default `""`).
+- `contacts` becomes `JSONObject`: `pubkeyHex -> {"label":String,"name":String?,"relay_endpoints":[String]?}`;
+  a legacy plain-String value is still read as `label` with no name/endpoints.
+- API: `registryContract: String` / `setRegistryContract(String)`; `contacts(): List<Contact>` with
+  `data class Contact(val pubkeyHex: String, val label: String, val name: String?, val relayEndpoints: List<String>?)`;
+  `upsertContact(contact: Contact)`; `removeContact(pubkeyHex: String)`; `label(pubkeyHex: String): String?`.
+
+### §7.4 UI (lane android-ui, @designer)
+
+Extend `MessagesActivity.kt` with a **Contacts** section (identity / relay / compose / inbox stay):
+- contact list (label, truncated pubkey, optional `@name`); tap a row → prefill the recipient field;
+- add-contact flow: name field + "Look up" → shows the resolved pubkey + relay endpoints → "Add"; also
+  allow adding by raw pubkey + label when the registry is not configured;
+- registry contract address field (persisted via `CommsStore`) with a clear "not configured" state so
+  lookup degrades gracefully;
+- errors surface in the existing status banner (invalid name, RPC failure, not found).
+
+### §7.5 Non-goals (unchanged + explicit)
+
+No name **registration**/transfer from the app (read-only lookup only), no reverse lookup / enumeration,
+no contract deployment from the app, no transactions. Deploying `kvnc-name-registry` to any network is an
+**operational action requiring explicit approval** and is out of scope; until a contract address is
+configured, lookup reports "not configured".
+
+### §7.6 Build & release (this cut)
+
+Bump `apps/android/app/build.gradle.kts` to `versionCode 4` / `versionName "0.4.0"`; rebuild native lib +
+`assembleDebug assembleRelease bundleRelease`; re-sign the release APK **v2+v3**; publish a GitHub release
+`v0.4.0-android`. Orchestrator owns build/publish/version bump.
