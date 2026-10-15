@@ -203,6 +203,57 @@ pub fn sign_transfer(
     )
 }
 
+/// Sign a contract call. `chain_id` is the caller's configured network.
+///
+/// `args` is the caller-encoded (bincode) calldata; `value` is the native
+/// KUNA (base units) sent to the contract, `0` when unused.
+pub fn sign_call(
+    chain_id: u64,
+    signing_key: &SigningKey,
+    sender: Address,
+    nonce: u64,
+    fee: u64,
+    contract: Address,
+    value: u64,
+    method: String,
+    args: Vec<u8>,
+    gas_limit: u64,
+) -> Transaction {
+    sign_kind(
+        chain_id,
+        signing_key,
+        sender,
+        nonce,
+        fee,
+        TransactionKind::Call {
+            contract,
+            value,
+            method,
+            args,
+            gas_limit,
+        },
+    )
+}
+
+/// Sign a contract deploy. `code` is the WASM bytecode.
+pub fn sign_deploy(
+    chain_id: u64,
+    signing_key: &SigningKey,
+    sender: Address,
+    nonce: u64,
+    fee: u64,
+    code: Vec<u8>,
+) -> Transaction {
+    sign_kind(
+        chain_id,
+        signing_key,
+        sender,
+        nonce,
+        fee,
+        TransactionKind::Deploy { code },
+    )
+}
+
 fn sign_kind(
     chain_id: u64,
     signing_key: &SigningKey,
@@ -379,6 +430,70 @@ mod tests {
         let mut header = header_for(&keys(4).1, 0, Hash::zero(), Hash::zero());
         header.executed_tx_root = leaf;
         assert!(verify_executed_tx(&header, &leaf, &proof));
+    }
+
+    #[test]
+    fn a_signed_call_round_trips_and_matches_the_spec_vectors() {
+        // Golden vectors T2/T3 from `docs/SIGNATURE_FORMAT.md` §4: key bytes `07`×32,
+        // chain_id = 2, nonce = 6, contract `33`×32, method "transfer",
+        // args = 010203, gas_limit = 100_000, fee = 10.
+        let signer = SigningKey::from_bytes(&[7u8; 32]);
+        let sender = Address::from_public_key(&PublicKey::from(signer.verifying_key()));
+        assert_eq!(
+            hex::encode(sender.0),
+            "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c"
+        );
+        let ctx = SigningContext::new(2);
+        let contract = Address([0x33; 32]);
+        let method = "transfer".to_string();
+        let args = vec![1u8, 2, 3];
+
+        // T2: value = 0.
+        let call = sign_call(
+            2, &signer, sender, 6, 10, contract, 0, method.clone(), args.clone(), 100_000,
+        );
+        assert!(call.verify_signature(&ctx));
+        assert!(!call.verify_signature(&SigningContext::new(3)));
+        assert_eq!(
+            call.hash.to_hex(),
+            "439e1830573896f46dc642cedb37605c1e478880f417f0cfae5126eaca48026a"
+        );
+        assert_eq!(
+            hex::encode(call.signature.0),
+            "0ff9438c1ea9e8a70e3b491d873c712e8e7d0339b637b00def16d42eea4eed3301454ef10f61b958bf37c95351a89f01270fe194ab8fa046b45373ee54e47f07"
+        );
+        assert!(matches!(
+            call.kind,
+            TransactionKind::Call { value: 0, ref method, gas_limit: 100_000, .. }
+                if method == "transfer"
+        ));
+
+        // T3: value = 500 changes the signed bytes.
+        let priced = sign_call(2, &signer, sender, 6, 10, contract, 500, method, args, 100_000);
+        assert!(priced.verify_signature(&ctx));
+        assert_eq!(
+            priced.hash.to_hex(),
+            "9b76e7fc940641c6e11226b537841ace9ceb000a3943f6b3923b3cf2c6f4f794"
+        );
+        assert_eq!(
+            hex::encode(priced.signature.0),
+            "ce4e4d5dcc49159d2b6f72faa3210fe4db5b040e93eadbe315a159afe61f32ff66fc0abf9591c902500a1ce4e02d3816dbae80b8f1721725f03ed52b119f6608"
+        );
+        assert_ne!(call.hash, priced.hash);
+    }
+
+    #[test]
+    fn a_signed_deploy_round_trips() {
+        let signer = SigningKey::from_bytes(&[9u8; 32]);
+        let sender = Address::from_public_key(&PublicKey::from(signer.verifying_key()));
+        let ctx = SigningContext::new(1337);
+        let deploy = sign_deploy(1337, &signer, sender, 3, 1, vec![0u8, 1, 2, 3]);
+        assert!(deploy.verify_signature(&ctx));
+        assert!(!deploy.verify_signature(&SigningContext::new(2)));
+        assert!(matches!(
+            deploy.kind,
+            TransactionKind::Deploy { ref code } if code == &[0u8, 1, 2, 3]
+        ));
     }
 
     #[test]
