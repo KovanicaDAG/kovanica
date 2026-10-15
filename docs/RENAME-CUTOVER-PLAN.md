@@ -107,9 +107,11 @@ Recommendation: do **A** first (it removes the silent-config-break drift and is 
 > (`kvnc-testnet-seedN.service` → `kovanica-testnet-seedN.service`) and their env/launcher, keeping
 > `/root/Projects/kvnc/testnet/node-data`, port 8000 and `validators/v2.dat`. The `kovanica-testnet-seed@`
 > template plus `/etc/kovanica/` + `/var/lib/kovanica-testnet-seedN` are **not** used by this rollout;
-> Option B stays as a separate scheduled migration with its own dry run. D2–D5 below still need answers
-> before Phase 2, and D2 is partly an Option-B-only concern (the rename-only path does not apply
-> `MemoryMax=3G`), though seed3 must still be restarted without an OOM.
+> Option B stays as a separate scheduled migration with its own dry run.
+
+> **D2–D5 are now decided too** (owner, 2026-10-15) — see the blockquotes below. D2 is partly an
+> Option-B-only concern (the rename-only path does not apply `MemoryMax=3G`), but seed3 must still come
+> back without an OOM.
 
 **[OWNER] D2 — Memory ceiling.** The new units cannot start at `MemoryMax=3G` (projected peak
 3 368 MiB and growing; pruning disabled per RFC-009). Options:
@@ -121,15 +123,73 @@ Recommendation: do **A** first (it removes the silent-config-break drift and is 
   - revisit pruning / RFC-009 — a design change, out of scope for a rollout.
   Recommendation: unblock with a raised ceiling **and** open a separate workstream for the durable fix.
 
+> **DECIDED — owner, 2026-10-15: raise `MemoryMax` to `5G` on the renamed units.** seed2 has 6 168 MB
+> free and its unused mainnet instance, so 5G fits today. This only buys time — the ceiling recurs as
+> the log grows, so the durable fix (pruning / RFC-009, or a snapshot-based resync) stays a separate
+> workstream and is not in this rollout.
+
 **[OWNER] D3 — Authority set / producer set.** Confirm that `/etc/kovanica/testnet-authorities.conf`
 and the `PRODUCE=1` flags describe the intended validator set. If the new authority set differs from
 the one on the running chain, the cutover forks or the new nodes reject the chain.
 
+> **DECIDED — owner, 2026-10-15: the seeds should be *producing* validators** (not the "seeds stay
+> non-producing" recommendation). Implementation notes for Option A — "producing" is already the code
+> default: `run_validator` defaults to `true` (`crates/kovanica-node/src/config.rs:96`) and the real gate
+> is a validator key, not a mine flag. `KVNC_MINE` / `KOVANICA_MINE` is read **nowhere** in the crates,
+> so the old launchers' `KVNC_MINE=0` was a no-op — which is precisely why seed2 proposes and votes
+> despite it. The renamed units must therefore set `KOVANICA_VALIDATOR_KEY` (read at `config.rs:156`,
+> validated at `config.rs:225-232`) to a `0600` seed file, or the renamed binary **refuses to start**
+> (`crates/kovanica-node/src/main.rs:2259`). This is stricter than the old path: a *partial* env rename
+> is not silent — it fails closed. Practical consequence for D4: seed2 is already producing; what the
+> network lacks is *availability*, not configuration.
+
 **[OWNER] D4 — Window and blast radius.** The three seeds are the testnet's bootstrap set. Recommend
 seed3 first (already down → zero incremental risk), then seed2, then seed1 (dev box, deferred).
 
+> **DECIDED — owner, 2026-10-15: accepted (seed3 → seed2 → seed1).** Seed1 goes last and stays deferred
+> while the concurrent OpenCode session holds the shared cwd.
+
 **[OWNER] D5 — What to do with the seed1 unmanaged processes and the pre-rename Docker cluster**
 (kill/recreate under the renamed compose, or leave alone).
+
+> **DECIDED — owner, 2026-10-15: leave them alone for now.** The 5 leaked `target/debug/kvnc-node`
+> harness processes and the 4-container pre-rename Docker cluster are out of scope for this rollout and
+> must **not** be killed as a side effect of the cutover. Revisit as its own item.
+
+---
+
+## 2.5 ⚠️ Prerequisite found 2026-10-15: the public testnet is stalled — and not because of the rename
+
+Read-only evidence collected the same day. **The network is not advancing today,** so Phase 3's
+"tip advancing / peers ≥ 2" acceptance criteria cannot be satisfied by a rename alone.
+
+**seed2 is running, alone, and has never committed anything.** The process is the *pre-rename*
+`/usr/local/bin/kvnc-node` (PID env still carries `KVNC_VALIDATOR_KEY` / `KVNC_*`), started ~Oct 14
+13:10:
+
+| Probe | Result |
+|---|---|
+| `curl 127.0.0.1:8545/health` | `peer_count: 0`, `executed_subdags: 0`, `last_executed_round: null`, `consensus: running` |
+| `ss -ltnp` | only `127.0.0.1:8545` + `0.0.0.0:8000` — **no established TCP on :8000, zero peers** |
+| journal | **5 414 × `Proposed block`**, **0 ×** `committed leader` / `executed subdag` / `commit rule` |
+| `state.redb` | 2 113 536 B, mtime **Oct 14 13:27** — untouched since startup |
+| `consensus.redb` | 6 844 416 B, mtime **Oct 15 07:13** — still growing |
+
+So the node proposes endlessly into its own DAG and never reaches the commit rule: it has **no quorum**.
+The other two genesis validators are unreachable — seed3 has no node process at all (OOM-killed Oct 08,
+then deactivated) and seed1 is not serving (nothing listening on 3000/3001/8080; `pm2 ls` empty; only
+system nginx on 80/443). The public surface agrees: `https://explorer.kovanica.online/api/head` and
+`/api/bootstrap` both return **HTTP 502**.
+
+**Therefore:**
+
+1. Option A (rename only) preserves the *current semantics* but does **not** fix the stall. The cutover
+   window should be combined with — or immediately preceded by — bringing the other validators up and
+   interconnected, otherwise Phase 3 cannot go green.
+2. Restoring the other two seeds is the higher-priority workstream; the rename is the smaller,
+   reversible half.
+3. The 502 on the explorer means "verify against the network" steps must temporarily use per-host
+   loopback probes (`127.0.0.1:3001/api/head`, `/health`) instead of the public API.
 
 ---
 
@@ -218,6 +278,8 @@ delete or overwrite either until the new path has been green for a full soak.
 | Unmanaged processes + pre-rename Docker cluster on seed1 | incompletely-documented traffic source | D5 |
 | Two docs disagree on the seed domain (`.io` vs `.online`) | operator confusion | fix in a docs-only commit |
 | `seed-lint` reports a false "no data path" on these scripts | masks real findings | tool nit: it greps for `KOVANICA_DATA=` while the node reads `KOVANICA_DATA_DIR` |
+| **Testnet is stalled right now: seed2 alone, 0 peers, 0 executed subdags, explorer 502** | the rollout cannot be validated; the network is not advancing | §2.5 — bring the other validators up first |
+| Renamed binary fails closed without `KOVANICA_VALIDATOR_KEY` | a partial env rename prevents the node from starting | intended behaviour; always ship env + `0600` key file together (§2 D3) |
 
 ---
 
