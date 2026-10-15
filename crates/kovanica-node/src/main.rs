@@ -3067,7 +3067,11 @@ mod tests {
                 assert!(!mempool.contains(&tx.hash), "blue tx {} re-pooled", tx.hash);
             }
         }
-        assert!(mempool.get_pending_propagation().is_empty(), "no gossip");
+        // Since 0c7de51e returned non-blue (red) txs are re-gossiped
+        // (gossip=true); see execution_hands_non_blue_transactions_to_mempool_after_commit.
+        let pending: std::collections::HashSet<Hash> =
+            mempool.get_pending_propagation().into_iter().collect();
+        assert_eq!(pending, red_txs, "returned red txs are re-gossiped");
     }
 
     #[tokio::test]
