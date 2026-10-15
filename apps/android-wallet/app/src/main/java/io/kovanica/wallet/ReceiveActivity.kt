@@ -5,14 +5,21 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import kotlin.math.roundToInt
 
 /**
@@ -83,6 +90,7 @@ class ReceiveActivity : Activity() {
                 contentDescription = address
             }
             addStack(addressText, 2)
+            addStack(qrBlock(address), 14)
             addStack(networkChip(network), 12)
             addStack(WalletUi.button(this@ReceiveActivity, "Copy address") { copyAddress() }, 14)
             addStack(
@@ -170,6 +178,64 @@ class ReceiveActivity : Activity() {
         )
     }
 
+    /**
+     * The address as a scannable QR code, centred in the card. A code is only as
+     * good as its contrast, so the modules are the plain black-on-white a camera
+     * expects rather than the app's ink palette.
+     */
+    private fun qrBlock(contents: String): View {
+        val size = dp(240)
+        val bitmap = try {
+            qrBitmap(contents, size)
+        } catch (error: Exception) {
+            return WalletUi.caption(this, "Couldn't draw a QR code on this device — use Copy or Share above.")
+        }
+        val image = ImageView(this).apply {
+            setImageBitmap(bitmap)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "QR code for your address"
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addStack(
+                LinearLayout(this@ReceiveActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER
+                    addView(image, LinearLayout.LayoutParams(size, size))
+                },
+                0,
+            )
+            addStack(
+                WalletUi.caption(
+                    this@ReceiveActivity,
+                    "Point a camera at this code to read your address — for example with Scan a " +
+                        "code on the send screen.",
+                ),
+                10,
+            )
+        }
+    }
+
+    /** Encode [contents] as a square QR bitmap, black modules on white. */
+    private fun qrBitmap(contents: String, sizePx: Int): Bitmap {
+        val hints = mapOf(
+            EncodeHintType.CHARACTER_SET to "UTF-8",
+            EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
+            EncodeHintType.MARGIN to 4,
+        )
+        val matrix = QRCodeWriter().encode(contents, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
+        val pixels = IntArray(sizePx * sizePx)
+        for (y in 0 until sizePx) {
+            val offset = y * sizePx
+            for (x in 0 until sizePx) {
+                pixels[offset + x] = if (matrix.get(x, y)) QR_DARK else QR_LIGHT
+            }
+        }
+        return Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888).apply {
+            setPixels(pixels, 0, sizePx, 0, 0, sizePx, sizePx)
+        }
+    }
+
     private fun header(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         addView(TextView(this@ReceiveActivity).apply {
@@ -210,5 +276,9 @@ class ReceiveActivity : Activity() {
     companion object {
         const val EXTRA_ADDRESS: String = "io.kovanica.wallet.RECEIVE_ADDRESS"
         const val EXTRA_NETWORK: String = "io.kovanica.wallet.RECEIVE_NETWORK"
+
+        /** Plain black-on-white module colours, for the best chance any camera reads the code. */
+        private val QR_DARK: Int = 0xFF000000.toInt()
+        private val QR_LIGHT: Int = 0xFFFFFFFF.toInt()
     }
 }
