@@ -257,6 +257,7 @@ class MainActivity : Activity() {
             addStack(header())
             addView(rule(), LinearLayout.LayoutParams(dp(40), dp(3)).apply { topMargin = dp(14) })
             addStack(status, 18)
+            addStack(guideCard(), 18)
             addStack(overviewCard, 18)
             addStack(tokensCard, 18)
             addStack(sendCard, 18)
@@ -600,6 +601,10 @@ class MainActivity : Activity() {
 
     private fun openMessages() {
         startActivity(Intent(this, MessagesActivity::class.java))
+    }
+
+    private fun openGuide() {
+        startActivity(Intent(this, HowToUseActivity::class.java))
     }
 
     // --- wallet overview -----------------------------------------------------------------
@@ -1412,6 +1417,58 @@ class MainActivity : Activity() {
     }
 
     private fun rule(): View = View(this).apply { background = rounded(ACCENT, 2) }
+
+    /**
+     * First-run pointer into the guide screen. The whole card is tappable, with the
+     * amber press tint used by the tappable rows on Messages.
+     */
+    private fun guideCard(): LinearLayout = card().apply {
+        isClickable = true
+        isFocusable = true
+        background = ripple(SURFACE, 18)
+        setOnClickListener { openGuide() }
+
+        val head = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(
+            TextView(this@MainActivity).apply {
+                text = "BEFORE YOU START"
+                setTextColor(MUTED)
+                textSize = 11f
+                letterSpacing = 0.18f
+                typeface = Typeface.DEFAULT_BOLD
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        head.addView(
+            TextView(this@MainActivity).apply {
+                text = "›"
+                setTextColor(ACCENT)
+                textSize = 24f
+                typeface = Typeface.DEFAULT_BOLD
+            },
+        )
+        addStack(head, 0)
+        addStack(
+            TextView(this@MainActivity).apply {
+                text = "How to use this app"
+                setTextColor(TEXT)
+                textSize = 18f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(8), 0, 0)
+            },
+            0,
+        )
+        addStack(
+            caption(
+                "A short walkthrough of every screen: network, wallet, receive, send, " +
+                    "tokens, and messages. Your keys stay on this phone.",
+            ),
+            8,
+        )
+    }
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL

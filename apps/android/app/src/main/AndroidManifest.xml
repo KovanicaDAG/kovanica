@@ -22,5 +22,10 @@
             android:exported="false"
             android:label="Receive"
             android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
+            android:name=".HowToUseActivity"
+            android:exported="false"
+            android:label="How to use"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>
