@@ -16,6 +16,10 @@
  * (`envelope.ts`), never by the AEAD (§2.4).
  */
 
+// Side-effect: install the SHA-512 hook on this package's `@noble/ed25519`
+// before any synchronous Ed25519 call site runs (module init order matters).
+import "./ed25519.js";
+
 import { xchacha20poly1305 } from "@noble/ciphers/chacha";
 import { edwardsToMontgomeryPriv, edwardsToMontgomeryPub, x25519 } from "@noble/curves/ed25519";
 import { blake3 } from "@noble/hashes/blake3";
