@@ -1,7 +1,8 @@
 //! `ConsensusEngine::process_vote` is the vote authentication boundary.
 //!
 //! Every test uses a 4-member equal-stake committee (quorum = 3) and a single
-//! registered leader block at round 3 (scheduled author: `3 % 4 = 3`).
+//! registered leader block at round 3 (scheduled author:
+//! `(3 / WAVE_LENGTH) % 4 = 1`).
 
 mod common;
 
@@ -18,10 +19,12 @@ fn setup() -> (
     UnboundedReceiver<CommittedSubDag>,
     StatementBlock,
 ) {
-    let (engine, _dag, _manager) = make_engine(0, committee(4), ConsensusConfig::default());
+    let members = committee(4);
+    let leader_author = members.leader(LEADER_ROUND);
+    let (engine, _dag, _manager) = make_engine(0, members, ConsensusConfig::default());
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     engine.set_commit_sender(sender);
-    let leader = make_block(3, LEADER_ROUND, Vec::new(), "vote-verification-leader");
+    let leader = make_block(leader_author, LEADER_ROUND, Vec::new(), "vote-verification-leader");
     engine
         .process_block(&leader)
         .expect("leader block accepted");

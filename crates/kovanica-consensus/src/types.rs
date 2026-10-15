@@ -191,13 +191,26 @@ impl CommitteeInfo {
         }
     }
 
-    /// Get the leader for a given round using deterministic round-robin selection.
+    /// Get the leader for a given round using deterministic rotation.
+    ///
+    /// Leaders are drawn one per *leader slot* (one per wave), walking the
+    /// authority list in index order as waves advance. The seed is therefore
+    /// `round / WAVE_LENGTH`, not the raw round.
+    ///
+    /// This matters because leader rounds are exactly the rounds where
+    /// `round % WAVE_LENGTH == 0`. Seeding from `round` collapsed to a single
+    /// permanent leader whenever `authorities.len()` divided `WAVE_LENGTH`:
+    /// with the 3-validator committee and `WAVE_LENGTH == 3` every leader round
+    /// satisfied `round % 3 == 0` and so always elected index 0, which stalled
+    /// commit liveness (no other authority could ever lead). Seeding from the
+    /// leader slot rotates for every committee size, including
+    /// `len == WAVE_LENGTH`.
     pub fn leader(&self, round: Round) -> AuthorityIndex {
         if self.authorities.is_empty() {
             return 0;
         }
-        // Simple deterministic selection based on round
-        let idx = (round as usize) % self.authorities.len();
+        let slot = round / kovanica_types::WAVE_LENGTH;
+        let idx = (slot as usize) % self.authorities.len();
         self.authorities[idx].index
     }
 

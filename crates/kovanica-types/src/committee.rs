@@ -125,9 +125,55 @@ impl Committee {
             return idx;
         }
 
-        // Fallback: deterministic round-robin (no VRF outputs available)
-        let seed = round;
-        let idx = (seed as usize) % self.authorities.len();
+        // Fallback: deterministic rotation one leader per wave (no VRF outputs
+        // available). Seeding from the leader slot (`round / WAVE_LENGTH`)
+        // instead of the raw round keeps consecutive leader rounds on
+        // different authorities for every committee size; seeding from the
+        // round degenerated to a single permanent leader whenever the
+        // committee size divided `WAVE_LENGTH` (e.g. a 3-validator committee
+        // with `WAVE_LENGTH == 3` always elected index 0).
+        let slot = round / crate::WAVE_LENGTH;
+        let idx = (slot as usize) % self.authorities.len();
         self.authorities[idx].index
+    }
+}
+
+#[cfg(test)]
+mod leader_rotation_tests {
+    use super::*;
+
+    fn authority(index: u16) -> Authority {
+        Authority {
+            index,
+            public_key: PublicKey([index as u8; 32]),
+            vrf_public_key: None,
+            address: Address([index as u8; 32]),
+            stake: 1,
+            network_address: format!("/ip4/127.0.0.1/tcp/90{index:02}"),
+        }
+    }
+
+    /// Regression for the 3-validator testnet: with `len == WAVE_LENGTH` the
+    /// old round-seeded fallback pinned every leader round to authority 0.
+    #[test]
+    fn committee_of_wave_length_size_rotates_leaders() {
+        let authorities: Vec<Authority> =
+            (0..crate::WAVE_LENGTH as u16).map(authority).collect();
+        let committee = Committee::new(0, authorities);
+        let leaders: Vec<u16> = (0..9u64)
+            .map(|wave| committee.leader(wave * crate::WAVE_LENGTH))
+            .collect();
+        assert_eq!(leaders, vec![0, 1, 2, 0, 1, 2, 0, 1, 2]);
+    }
+
+    #[test]
+    fn leader_is_deterministic_and_rotates_every_wave() {
+        let committee = Committee::new(0, (0..4).map(authority).collect());
+        for wave in 0..8u64 {
+            let current = committee.leader(wave * crate::WAVE_LENGTH);
+            assert_eq!(current, committee.leader(wave * crate::WAVE_LENGTH));
+            let next = committee.leader((wave + 1) * crate::WAVE_LENGTH);
+            assert_ne!(current, next, "wave {wave} must not repeat its leader");
+        }
     }
 }
