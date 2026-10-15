@@ -102,6 +102,15 @@ Block pruning is disabled (RFC-009), so replay memory grows with the chain.
 Recommendation: do **A** first (it removes the silent-config-break drift and is reversible), then treat
 **B** as a separate, scheduled migration with its own dry run. Do not mix them in one window.
 
+> **DECIDED — owner, 2026-10-15: Option A (rename only).** Only the rename half is in scope for this
+> rollout. Consequence: this rollout renames the *existing* wrapper units
+> (`kvnc-testnet-seedN.service` → `kovanica-testnet-seedN.service`) and their env/launcher, keeping
+> `/root/Projects/kvnc/testnet/node-data`, port 8000 and `validators/v2.dat`. The `kovanica-testnet-seed@`
+> template plus `/etc/kovanica/` + `/var/lib/kovanica-testnet-seedN` are **not** used by this rollout;
+> Option B stays as a separate scheduled migration with its own dry run. D2–D5 below still need answers
+> before Phase 2, and D2 is partly an Option-B-only concern (the rename-only path does not apply
+> `MemoryMax=3G`), though seed3 must still be restarted without an OOM.
+
 **[OWNER] D2 — Memory ceiling.** The new units cannot start at `MemoryMax=3G` (projected peak
 3 368 MiB and growing; pruning disabled per RFC-009). Options:
   - raise the ceiling (seed2 has 6 168 MB free and its mainnet instance is unused → 5G is feasible
