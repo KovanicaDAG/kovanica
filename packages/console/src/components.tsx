@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { formatKuna } from "@kvnc/signer";
+import { formatKuna } from "@kovanica/signer";
 
 import { rpcHost, type Network } from "./network";
 import { useSession } from "./session";

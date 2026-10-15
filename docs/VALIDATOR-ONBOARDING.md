@@ -1,6 +1,6 @@
-# KVNC Testnet Validator Onboarding Guide
+# Kovanica Testnet Validator Onboarding Guide
 
-This guide walks you through becoming a validator on the **KVNC testnet** (chain ID: `2`).
+This guide walks you through becoming a validator on the **Kovanica testnet** (chain ID: `2`).
 
 ---
 
@@ -23,9 +23,9 @@ This guide walks you through becoming a validator on the **KVNC testnet** (chain
 ### 2.1 Validator Identity Key (Ed25519)
 
 ```bash
-# Using kvnc-cli (recommended)
-cargo install --path crates/kvnc-cli
-kvnc-cli key generate --output validator.keystore
+# Using kovanica-cli (recommended)
+cargo install --path crates/kovanica-cli
+kovanica-cli key generate --output validator.keystore
 
 # Or manually with openssl
 openssl genpkey -algorithm ed25519 -out validator.key
@@ -37,15 +37,15 @@ The keystore file is encrypted with a passphrase. **Store the passphrase securel
 ### 2.2 VRF Key Pair (for leader selection)
 
 ```bash
-# Using kvnc-cli (VRF key generation included in key generate)
-kvnc-cli key generate --output validator.keystore --with-vrf
+# Using kovanica-cli (VRF key generation included in key generate)
+kovanica-cli key generate --output validator.keystore --with-vrf
 
 # The VRF public key will be embedded in the keystore
 # You can also extract it:
-kvnc-cli key inspect --keystore validator.keystore
+kovanica-cli key inspect --keystore validator.keystore
 ```
 
-> **Why VRF?** KVNC uses stake-weighted VRF leader selection (ECVRF-ED25519-SHA512-Elligator2 per RFC 9381). The VRF public key must be registered at genesis.
+> **Why VRF?** Kovanica uses stake-weighted VRF leader selection (ECVRF-ED25519-SHA512-Elligator2 per RFC 9381). The VRF public key must be registered at genesis.
 
 ---
 
@@ -78,10 +78,10 @@ You will receive:
 ### 4.1 Copy Example Config
 
 ```bash
-cp config.example.toml kvnc.toml
+cp config.example.toml kovanica.toml
 ```
 
-### 4.2 Edit `kvnc.toml` for Validator
+### 4.2 Edit `kovanica.toml` for Validator
 
 ```toml
 # Network
@@ -96,10 +96,10 @@ bootnodes = [
 # Validator
 run_validator = true                   # Enable block production
 validator_key = "/path/to/validator.keystore"
-validator_key_pass = "your-passphrase" # Or use KVNC_VALIDATOR_KEY_PASS env var
+validator_key_pass = "your-passphrase" # Or use KOVANICA_VALIDATOR_KEY_PASS env var
 
 # Data directory
-data_dir = "/var/lib/kvnc"
+data_dir = "/var/lib/kovanica"
 
 # Optional: enable faucet (only for seed nodes)
 # faucet = false
@@ -108,16 +108,16 @@ data_dir = "/var/lib/kvnc"
 ### 4.3 Environment Variables (Alternative to Config File)
 
 ```bash
-export KVNC_LISTEN=0.0.0.0:8000
-export KVNC_RPC=127.0.0.1:8545
-export KVNC_PEERS="seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"
-export KVNC_MINE=0                      # 1 only if you run a seed node
-export KVNC_FAUCET=0
-export KVNC_OPERATOR=0
-export KVNC_ALLOW_RESET=0
-export KVNC_DATA="/var/lib/kvnc"
-export KVNC_VALIDATOR_KEY="/path/to/validator.keystore"
-export KVNC_VALIDATOR_KEY_PASS="your-passphrase"
+export KOVANICA_LISTEN=0.0.0.0:8000
+export KOVANICA_RPC=127.0.0.1:8545
+export KOVANICA_PEERS="seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"
+export KOVANICA_MINE=0                      # 1 only if you run a seed node
+export KOVANICA_FAUCET=0
+export KOVANICA_OPERATOR=0
+export KOVANICA_ALLOW_RESET=0
+export KOVANICA_DATA="/var/lib/kovanica"
+export KOVANICA_VALIDATOR_KEY="/path/to/validator.keystore"
+export KOVANICA_VALIDATOR_KEY_PASS="your-passphrase"
 ```
 
 ---
@@ -137,12 +137,12 @@ export KVNC_VALIDATOR_KEY_PASS="your-passphrase"
 
 ```bash
 # Get testnet KUNA from faucet first
-curl -X POST https://faucet.testnet.kvnc.io/faucet \
+curl -X POST https://faucet.testnet.kovanica.io/faucet \
   -H "Content-Type: application/json" \
   -d '{"address": "kvnc<your-address>dag"}'
 
 # Stake
-kvnc-cli stake \
+kovanica-cli stake \
   --keystore /path/to/validator.keystore \
   --amount 50000000000000 \
   --chain-id 2 \
@@ -153,7 +153,7 @@ kvnc-cli stake \
 
 ```bash
 # Delegate to another validator
-kvnc-cli delegate \
+kovanica-cli delegate \
   --keystore /path/to/delegator.keystore \
   --validator <validator-address> \
   --amount 10000000000000 \
@@ -170,20 +170,20 @@ kvnc-cli delegate \
 # docker-compose.yml
 version: '3.8'
 services:
-  kvnc:
-    image: ghcr.io/kovanica/kvnc-node:latest
-    container_name: kvnc-validator
+  kovanica:
+    image: ghcr.io/kovanica/kovanica-node:latest
+    container_name: kovanica-validator
     restart: unless-stopped
     ports:
       - "8000:8000"          # P2P
       - "127.0.0.1:8545:8545" # RPC (localhost only)
     volumes:
-      - ./kvnc.toml:/kvnc.toml:ro
+      - ./kovanica.toml:/kovanica.toml:ro
       - ./validator.keystore:/validator.keystore:ro
-      - kvnc-data:/var/lib/kvnc
+      - kovanica-data:/var/lib/kovanica
     environment:
-      - KVNC_VALIDATOR_KEY=/validator.keystore
-      - KVNC_VALIDATOR_KEY_PASS=${VALIDATOR_PASS}
+      - KOVANICA_VALIDATOR_KEY=/validator.keystore
+      - KOVANICA_VALIDATOR_KEY_PASS=${VALIDATOR_PASS}
     deploy:
       resources:
         limits:
@@ -191,7 +191,7 @@ services:
           cpus: '2.0'
 
 volumes:
-  kvnc-data:
+  kovanica-data:
 ```
 
 ```bash
@@ -202,21 +202,21 @@ docker compose up -d
 ### Option B: Systemd Service
 
 ```ini
-# /etc/systemd/system/kvnc.service
+# /etc/systemd/system/kovanica.service
 [Unit]
-Description=KVNC Validator Node
+Description=Kovanica Validator Node
 After=network.target
 
 [Service]
 Type=simple
-User=kvnc
-WorkingDirectory=/opt/kvnc
-ExecStart=/opt/kvnc/kvnc-node --config /opt/kvnc/kvnc.toml
+User=kovanica
+WorkingDirectory=/opt/kovanica
+ExecStart=/opt/kovanica/kovanica-node --config /opt/kovanica/kovanica.toml
 Restart=on-failure
 RestartSec=10
 LimitNOFILE=65536
-Environment=KVNC_VALIDATOR_KEY=/opt/kvnc/validator.keystore
-Environment=KVNC_VALIDATOR_KEY_PASS=your-passphrase
+Environment=KOVANICA_VALIDATOR_KEY=/opt/kovanica/validator.keystore
+Environment=KOVANICA_VALIDATOR_KEY_PASS=your-passphrase
 
 # Resource limits (cgroup v2)
 MemoryMax=3G
@@ -229,17 +229,17 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now kvnc
+sudo systemctl enable --now kovanica
 ```
 
 ### Option C: Binary Directly
 
 ```bash
 # Build from source
-cargo build --release -p kvnc-node
+cargo build --release -p kovanica-node
 
 # Run
-./target/release/kvnc-node --config kvnc.toml
+./target/release/kovanica-node --config kovanica.toml
 ```
 
 ---
@@ -286,9 +286,9 @@ Import `ops/monitoring/grafana-dashboard.json` for:
 | Parameter | Value |
 |-----------|-------|
 | **Chain ID** | `2` |
-| **RPC endpoint** | `http://<your-ip>:8545` (local) / `https://rpc.testnet.kvnc.io` (public) |
-| **Explorer** | `https://explorer.testnet.kvnc.io` |
-| **Faucet** | `https://faucet.testnet.kvnc.io` (3 req/hr/IP, 10 KUNA) |
+| **RPC endpoint** | `http://<your-ip>:8545` (local) / `https://rpc.testnet.kovanica.io` (public) |
+| **Explorer** | `https://explorer.testnet.kovanica.io` |
+| **Faucet** | `https://faucet.testnet.kovanica.io` (3 req/hr/IP, 10 KUNA) |
 | **Seed nodes** | `seed1.kovanica.online:8000`, `seed2.kovanica.online:8000`, `seed3.kovanica.online:8000` |
 | **Genesis file** | Distributed by coordinators |
 
@@ -296,10 +296,10 @@ Import `ops/monitoring/grafana-dashboard.json` for:
 
 ```bash
 # Via CLI
-kvnc-cli faucet --address kvnc<your-address>dag --chain-id 2
+kovanica-cli faucet --address kvnc<your-address>dag --chain-id 2
 
 # Via HTTP
-curl -X POST https://faucet.testnet.kvnc.io/faucet \
+curl -X POST https://faucet.testnet.kovanica.io/faucet \
   -H "Content-Type: application/json" \
   -d '{"address": "kvnc<your-address>dag"}'
 ```
@@ -336,9 +336,9 @@ curl -X POST https://faucet.testnet.kvnc.io/faucet \
 
 | Check | Command |
 |-------|---------|
-| Am I in active set? | `curl -s http://127.0.0.1:8545/rpc -d '{"method":"kvnc_getValidators"}'` |
-| Is my stake ≥ 50K? | `kvnc-cli balance --address <your-address>` |
-| Is VRF key registered? | `kvnc-cli key inspect --keystore validator.keystore` |
+| Am I in active set? | `curl -s http://127.0.0.1:8545/rpc -d '{"method":"kovanica_getValidators"}'` |
+| Is my stake ≥ 50K? | `kovanica-cli balance --address <your-address>` |
+| Is VRF key registered? | `kovanica-cli key inspect --keystore validator.keystore` |
 | Is node leader this round? | Check `round` in `/health` vs your validator index |
 
 ---
@@ -352,28 +352,28 @@ curl -s http://127.0.0.1:8545/health | jq .
 # Check validator set
 curl -s -X POST http://127.0.0.1:8545/rpc \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"kvnc_getValidators","params":[],"id":1}' | jq .
+  -d '{"jsonrpc":"2.0","method":"kovanica_getValidators","params":[],"id":1}' | jq .
 
 # Check own balance
-kvnc-cli balance --address kvnc<your-address>dag --rpc-url http://127.0.0.1:8545
+kovanica-cli balance --address kvnc<your-address>dag --rpc-url http://127.0.0.1:8545
 
 # Check staking info
-kvnc-cli staking-info --address kvnc<your-address>dag --rpc-url http://127.0.0.1:8545
+kovanica-cli staking-info --address kvnc<your-address>dag --rpc-url http://127.0.0.1:8545
 
 # View logs (docker)
-docker logs -f kvnc-validator
+docker logs -f kovanica-validator
 
 # View logs (systemd)
-journalctl -u kvnc -f
+journalctl -u kovanica -f
 ```
 
 ---
 
 ## 11. Support
 
-- **Testnet Discord**: `#kvnc-testnet-validators`
-- **GitHub Issues**: `github.com/kovanica/kvnc/issues`
-- **Docs**: `https://docs.kvnc.io`
+- **Testnet Discord**: `#kovanica-testnet-validators`
+- **GitHub Issues**: `github.com/kovanica/kovanica/issues`
+- **Docs**: `https://docs.kovanica.io`
 
 ---
 

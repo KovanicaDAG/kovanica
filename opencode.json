@@ -12,7 +12,7 @@
         "external_directory": "deny"
       }
     },
-    "kvnc-plan": {
+    "kovanica-plan": {
       "description": "Read-only planer za kvnc – analizira i predlaže bez izmjena",
       "mode": "primary",
       "temperature": 0.1,

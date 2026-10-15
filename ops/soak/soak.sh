@@ -3,7 +3,7 @@
 # CPU cap: CPUQuota=200% / CPUShares=512 (cgroup v2 cpu.max / cpu.weight).
 # Disk/IO cap: IOWeight=100 (cgroup v2 io.weight) / docker-compose limit.
 # Logs RSS (KB) every 30 s; stops at 6 h (21600 s).
-# Works with Docker Compose: monitors all kvnc-quorum-node* containers via `docker stats`.
+# Works with Docker Compose: monitors all kovanica-quorum-node* containers via `docker stats`.
 # Pre-flight: verifies all 4 nodes are healthy and quorum is committing before starting soak.
 set -euo pipefail
 
@@ -11,13 +11,13 @@ set -euo pipefail
 DURATION=${DURATION:-21600}          # 6h default; override with --duration or DURATION=60 for quick test
 INTERVAL=${INTERVAL:-30}
 LOG=${LOG:-/tmp/soak-$(date +%s).log}
-CONTAINER_PREFIX=${CONTAINER_PREFIX:-kvnc-quorum-node}
+CONTAINER_PREFIX=${CONTAINER_PREFIX:-kovanica-quorum-node}
 RPC_PORTS=(8545 8546 8547 8548)      # Host ports for node1..4 RPC
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-120} # Seconds to wait for all nodes to become healthy
 mkdir -p "$(dirname "$LOG")"
 
 MEM_LIMIT=${MEM_LIMIT:-3G}
-echo "=== KVNC 6h soak Phase 12.4 (Docker) ===" | tee "$LOG"
+echo "=== Kovanica 6h soak Phase 12.4 (Docker) ===" | tee "$LOG"
 echo "mem_max=${MEM_LIMIT} cpu_quota=200% io_weight=100  interval=${INTERVAL}s  duration=${DURATION}s  container_prefix=${CONTAINER_PREFIX}" | tee -a "$LOG"
 echo "cgroup v2 caps confirmed: MemoryMax=3G CPUQuota=200% IOWeight=100 (client-only / safe)" | tee -a "$LOG"
 echo "start=$(date -Iseconds)" >> "$LOG"
@@ -56,14 +56,14 @@ check_node_health() {
     return 0
 }
 
-# Pre-flight: check block height via kvnc_blockNumber RPC
+# Pre-flight: check block height via kovanica_blockNumber RPC
 check_block_height() {
     local port=$1
     local rpc_id=$2
     local response
     response=$(curl -fsS -X POST "http://127.0.0.1:${port}/rpc" \
         -H "Content-Type: application/json" \
-        -d "{\"jsonrpc\":\"2.0\",\"id\":${rpc_id},\"method\":\"kvnc_blockNumber\",\"params\":[]}" 2>/dev/null) || return 1
+        -d "{\"jsonrpc\":\"2.0\",\"id\":${rpc_id},\"method\":\"kovanica_blockNumber\",\"params\":[]}" 2>/dev/null) || return 1
     # Extract result (hex quantity string like "0x1a")
     local height_hex
     height_hex=$(echo "$response" | sed -n 's/.*"result":"\(0x[^"]*\)".*/\1/p')

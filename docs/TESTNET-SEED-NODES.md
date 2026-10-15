@@ -1,4 +1,4 @@
-# Testnet seed nodes — kvnc L1
+# Testnet seed nodes — kovanica L1
 
 **Network:** testnet, chain_id 1337
 **Deployed:** 2026-10-13 (build c44f672, mempool requeue fix)
@@ -30,9 +30,9 @@ Mesh fully connected (3 nodes, each sees 2 peers), all executing.
 ### Start / stop
 ```
 # VPS#1 (this node)
-systemctl start kvnc-node.service  # or nohup /root/Projects/kvnc/run-seed1-wrapper.sh
+systemctl start kovanica-node.service  # or nohup /root/Projects/kvnc/run-seed1-wrapper.sh
 # below VPS via SSH
-systemctl start kvnc-node.service
+systemctl start kovanica-node.service
 ```
 
 ### Health checks
@@ -40,7 +40,7 @@ systemctl start kvnc-node.service
 curl -s http://127.0.0.1:8545/health
 curl -s -X POST http://127.0.0.1:8545/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"kvnc_blockNumber","params":[]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"kovanica_blockNumber","params":[]}'
 ```
 
 ### DNS
@@ -54,8 +54,8 @@ curl -s -X POST http://127.0.0.1:8545/rpc \
 - VPS#3: /root/Projects/kvnc/seed3.log
 
 ### Binaries
-- VPS#1: /usr/local/bin/kvnc-node (built from c44f672)
-- VPS#2, VPS#3: /usr/local/bin/kvnc-node (scp'd from VPS#1 build)
+- VPS#1: /usr/local/bin/kovanica-node (built from c44f672)
+- VPS#2, VPS#3: /usr/local/bin/kovanica-node (scp'd from VPS#1 build)
 
 ### Data dirs (all VPS)
 - /root/Projects/kvnc/node-data: contains genesis_validators.toml + v.dat (0600 seed)

@@ -1,4 +1,4 @@
-import { bytesToHex, hexToBytes, keyFromSeed } from "@kvnc/signer";
+import { bytesToHex, hexToBytes, keyFromSeed } from "@kovanica/signer";
 
 /** PBKDF2-SHA256 iterations. This file is not a CLI keystore. */
 export const BACKUP_ITERATIONS = 600_000;

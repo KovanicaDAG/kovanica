@@ -4,7 +4,7 @@
     "founder_address_hex": "0000000000000000000000000000000000000000000000000000000000000020",
     "founder_premine_atoms": 200000000000000,
     "founder_premine_kuna": 200000,
-    "founder_premine_kvnc": 200000,
+    "founder_premine_kovanica": 200000,
     "genesis_validator_allocation_atoms": 1000000000000000,
     "genesis_validator_allocation_kuna": 1000000,
     "treasury_address_bytes": "0000000000000000000000000000000000000000000000000000000000000010",

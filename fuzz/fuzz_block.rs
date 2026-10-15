@@ -1,7 +1,7 @@
 //! Fuzzing harness for StatementBlock deserialization
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use kvnc_types::block::StatementBlock;
+use kovanica_types::block::StatementBlock;
 use bincode;
 
 fuzz_target!(|data: &[u8]| {

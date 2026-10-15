@@ -13,6 +13,6 @@ Log output: `/tmp/soak-<epoch>.log`
 
 ## Usage
 ```bash
-NODE_PID=$(pgrep -f kvnc-node | head -1)
+NODE_PID=$(pgrep -f kovanica-node | head -1)
 ./ops/soak/soak.sh
 ```

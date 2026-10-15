@@ -1,15 +1,15 @@
-# KVNC Docker
+# Kovanica Docker
 
 ## Build the node image
 
 ```bash
-docker build -t kvnc-node:local .
+docker build -t kovanica-node:local .
 ```
 
-The image contains only the `kvnc-node` binary and a minimal `debian:bookworm-slim`
-runtime. It runs as the unprivileged `kvnc` user (uid/gid 10001), stores chain data
-under `/var/lib/kvnc` (declared `VOLUME`), and exposes P2P `8000` / JSON-RPC `8545`.
-A plain `docker run kvnc-node:local` prints `--help`; it never boots a node by
+The image contains only the `kovanica-node` binary and a minimal `debian:bookworm-slim`
+runtime. It runs as the unprivileged `kovanica` user (uid/gid 10001), stores chain data
+under `/var/lib/kovanica` (declared `VOLUME`), and exposes P2P `8000` / JSON-RPC `8545`.
+A plain `docker run kovanica-node:local` prints `--help`; it never boots a node by
 default.
 
 ## Run the local 4-node devnet
@@ -38,7 +38,7 @@ query it from inside the network, e.g.:
 docker compose exec node2 curl -s http://127.0.0.1:8546/health
 docker compose exec node2 curl -s -X POST http://127.0.0.1:8546/rpc \
   -H 'content-type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"kvnc_blockNumber","params":[]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"kovanica_blockNumber","params":[]}'
 ```
 
 or add a `ports:` mapping in `docker-compose.yml` and re-run `docker compose up -d`.
@@ -46,13 +46,13 @@ or add a `ports:` mapping in `docker-compose.yml` and re-run `docker compose up 
 ### Genesis and validator seeds
 
 - **No genesis file is required.** On a fresh data directory the node writes an
-  initial genesis state itself (`crates/kvnc-node/src/main.rs::init_genesis`).
+  initial genesis state itself (`crates/kovanica-node/src/main.rs::init_genesis`).
   `docker compose down -v` gives every node a fresh genesis; plain `down` keeps it.
 - **Validator seeds are never committed.** The image entrypoint
   (`ops/docker/entrypoint.sh`) generates a random 32-byte hex seed at
-  `/var/lib/kvnc/validator.key` on first boot and passes it to the node via
-  `KVNC_VALIDATOR_KEY`. The seed lives only in the node's data volume and survives
-  restarts. Point `KVNC_VALIDATOR_KEY` at your own file to override.
+  `/var/lib/kovanica/validator.key` on first boot and passes it to the node via
+  `KOVANICA_VALIDATOR_KEY`. The seed lives only in the node's data volume and survives
+  restarts. Point `KOVANICA_VALIDATOR_KEY` at your own file to override.
 - This repo's node has **no faucet and no `ALLOW_RESET`/mining toggles** to disable;
   it always runs the consensus loop as configured. Keep the host RPC binding on
   loopback (the compose file already does) and never expose this devnet publicly.
@@ -68,9 +68,9 @@ True multi-validator finality is a follow-up (RFC-006-era consensus work).
 ## Adding or removing a node
 
 1. Add a `nodeN` service to `docker-compose.yml` copied from `node2`, with a new
-   `KVNC_RPC_PORT`, its own `<nodeN>-data` volume, a distinct healthcheck URL, and
-   `KVNC_BOOTNODES` listing the existing nodes.
-2. Add the new node's `host:8000` to the other nodes' `KVNC_BOOTNODES` and `<nodeN>-data`
+   `KOVANICA_RPC_PORT`, its own `<nodeN>-data` volume, a distinct healthcheck URL, and
+   `KOVANICA_BOOTNODES` listing the existing nodes.
+2. Add the new node's `host:8000` to the other nodes' `KOVANICA_BOOTNODES` and `<nodeN>-data`
    to the `volumes:` section.
 3. `docker compose up -d`; scale down with `docker compose rm -sf nodeN` followed by
    removing its service and volume.

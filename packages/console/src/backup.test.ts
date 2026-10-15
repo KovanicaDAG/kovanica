@@ -1,4 +1,4 @@
-import { generateKey } from "@kvnc/signer";
+import { generateKey } from "@kovanica/signer";
 import { describe, expect, it } from "vitest";
 
 import { BACKUP_ITERATIONS, decryptBackup, encryptBackup } from "./backup";

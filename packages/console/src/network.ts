@@ -75,8 +75,8 @@ export function rpcHost(rpcUrl: string): string {
   return new URL(rpcUrl).host;
 }
 
-export const NETWORK_STORAGE_KEY = "kvnc.console.network";
+export const NETWORK_STORAGE_KEY = "kovanica.console.network";
 
 export function activityStorageKey(networkId: NetworkId): string {
-  return `kvnc.console.activity.${networkId}`;
+  return `kovanica.console.activity.${networkId}`;
 }

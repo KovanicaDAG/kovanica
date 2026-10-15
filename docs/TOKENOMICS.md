@@ -109,13 +109,13 @@ Capped at `TOTAL_SUPPLY`. The genesis set circulating supply is therefore
 
 | Component                    | Crate / Module                          |
 |-----------------------------|-----------------------------------------|
-| Constants & emission math   | `kvnc-staking`                          |
-| TreasuryState               | `kvnc-staking`                          |
-| `on_leader_committed`       | `kvnc-staking`                          |
-| Reward application on commit| `kvnc-execution::ExecutionContext`      |
-| CommittedSubDag             | `kvnc-consensus`                        |
+| Constants & emission math   | `kovanica-staking`                          |
+| TreasuryState               | `kovanica-staking`                          |
+| `on_leader_committed`       | `kovanica-staking`                          |
+| Reward application on commit| `kovanica-execution::ExecutionContext`      |
+| CommittedSubDag             | `kovanica-consensus`                        |
 
-### 7.1 Canonical constants (`crates/kvnc-staking/src/lib.rs`)
+### 7.1 Canonical constants (`crates/kovanica-staking/src/lib.rs`)
 
 | Constant | Canonical value |
 |----------|-----------------|
@@ -161,7 +161,7 @@ The minimum viable set is **5 validators** (each receives 200 000 KUNA, leaving
 (`anyhow::bail!` in `init_genesis`) if the requested set is outside this range
 (raise `GENESIS_VALIDATOR_ALLOCATION` to support more).
 
-These values are cross-checked by the unit tests in `kvnc-staking`
+These values are cross-checked by the unit tests in `kovanica-staking`
 (`canonical_values_match_skeleton`, `genesis_validator_shares_sum_exactly_and_are_even`).
 
 ---

@@ -42,14 +42,14 @@ Storage (redb / pruning / snapshots)
 
 | Crate            | Responsibility                                      |
 |------------------|-----------------------------------------------------|
-| kvnc-types       | Core data structures                                |
-| kvnc-crypto      | Signatures, hashing                                 |
-| kvnc-dag         | Causal DAG store                                    |
-| kvnc-consensus   | Commit rules, linearizer                            |
-| kvnc-staking     | Emission, treasury, validator set                   |
-| kvnc-runtime     | Wasmi WASM engine                                   |
-| kvnc-execution   | State transition + reward distribution              |
-| kvnc-node        | Binary that wires everything together               |
+| kovanica-types       | Core data structures                                |
+| kovanica-crypto      | Signatures, hashing                                 |
+| kovanica-dag         | Causal DAG store                                    |
+| kovanica-consensus   | Commit rules, linearizer                            |
+| kovanica-staking     | Emission, treasury, validator set                   |
+| kovanica-runtime     | Wasmi WASM engine                                   |
+| kovanica-execution   | State transition + reward distribution              |
+| kovanica-node        | Binary that wires everything together               |
 
 ## Resource targets
 
@@ -62,14 +62,14 @@ Storage (redb / pruning / snapshots)
 ## Deployment & Operations
 
 ### Docker Compose (Current Milestone)
-- `docker-compose.yml` defines `kvnc-quorum-4` — 4-node in-process cluster for integration tests.
+- `docker-compose.yml` defines `kovanica-quorum-4` — 4-node in-process cluster for integration tests.
 - Single-node validation via `ops/docker/` scripts.
 - Focus remains on P2P multi-node soak before K8s orchestration.
 
 ### K8s / Helm (Deferred — Post-Testnet)
 **Status**: deferred (see A13.2)
 **Exit criteria**:
-- Helm chart skeleton (`helm/` or `deploy/helm/`) with `StatefulSet` + `ConfigMap` for `kvnc-node`
+- Helm chart skeleton (`helm/` or `deploy/helm/`) with `StatefulSet` + `ConfigMap` for `kovanica-node`
 - Persistent volume claim mapped to `KOVANICA_DATA`
 - Liveness/readiness probes against `/api/head`
 
@@ -83,7 +83,7 @@ Storage (redb / pruning / snapshots)
 
 **24h Multi-node Soak** (E15.6):
 - Deferred; 6h soak covers baseline
-- Partition/recovery logic covered by deterministic in-process harness (`crates/kvnc-node/tests/multi_node_integration.rs`)
+- Partition/recovery logic covered by deterministic in-process harness (`crates/kovanica-node/tests/multi_node_integration.rs`)
 
 ---
 
@@ -93,7 +93,7 @@ Storage (redb / pruning / snapshots)
 |-----------|--------|----------|
 | TypeScript API client | Skeleton | `packages/api-client/src/index.ts` |
 | OpenAPI / JSON schema | Reference | `docs/RPC.md` |
-| Contract SDK (Rust + TS) | Contracts done; SDK helper open | `kvnc-htlc`, `kvnc-vault`, `kvnc-multisig` |
+| Contract SDK (Rust + TS) | Contracts done; SDK helper open | `kovanica-htlc`, `kovanica-vault`, `kovanica-multisig` |
 | Dev faucet CLI | Open (faucet service needed) | — |
 | Indexer skeleton | Open | `docs/INDEXER.md` (WS events → SQL) |
 
@@ -102,8 +102,8 @@ Storage (redb / pruning / snapshots)
 ## Execution / Gas (Phase C — Partial)
 
 ### Current State
-- Wasmi runtime: `kvnc-runtime` crate present
-- `gas_limit` / `gas_used` fields present in `kvnc-execution/src/lib.rs` (lines 107, 387)
+- Wasmi runtime: `kovanica-runtime` crate present
+- `gas_limit` / `gas_used` fields present in `kovanica-execution/src/lib.rs` (lines 107, 387)
 
 ### Missing (Before Mainnet)
 - ABI spec for contract calls
@@ -116,17 +116,17 @@ Storage (redb / pruning / snapshots)
 ## Observability (Phase 21)
 
 ### Done (Skeleton)
-- `kvnc-consensus/src/metrics.rs` — registry, `record_block_height`, `record_mergeset_size`, `record_rss_proxy`
+- `kovanica-consensus/src/metrics.rs` — registry, `record_block_height`, `record_mergeset_size`, `record_rss_proxy`
 - `prometheus-client = 0.25` in workspace Cargo.toml
 
 ### Minimal Next Steps
 - `/metrics` text exposition (HTTP TCP port, same as RPC or separate)
-- Grafana JSON dashboard (`ops/grafana/kvnc-overview.json`)
+- Grafana JSON dashboard (`ops/grafana/kovanica-overview.json`)
 - Alert rules YAML: `peer_drop`, `sync_stall`, `commit_lag`, `high_memory`
 - Structured logging (`tracing`) + optional `trace_id` per round
 
 ### Exit Criteria
-Scrape `kvnc_node_block_height`, `kvnc_node_peer_count`, `kvnc_node_commit_latency`, `kvnc_node_mergeset_size`; dashboard shows live commit rate.
+Scrape `kovanica_node_block_height`, `kovanica_node_peer_count`, `kovanica_node_commit_latency`, `kovanica_node_mergeset_size`; dashboard shows live commit rate.
 
 ---
 
@@ -144,7 +144,7 @@ Scrape `kvnc_node_block_height`, `kvnc_node_peer_count`, `kvnc_node_commit_laten
 ### Hard Rules (Layer Classification)
 - **Client-only**: keys stay in CLI / wallet; node never sees private seed
 - **No raw hex in docs**: keystore paths documented, never literal hex
-- **Encrypted keystore**: Argon2id + XChaCha20-Poly1305 (`kvnc-cli`)
+- **Encrypted keystore**: Argon2id + XChaCha20-Poly1305 (`kovanica-cli`)
 - **Rate limit**: RPC write methods (`sendRawTransaction`) require bearer token (testnet open-read)
 - **Memory budget**: hard cap `MemoryMax=3G` for 6h soak; RSS monitored
 
@@ -156,17 +156,17 @@ Scrape `kvnc_node_block_height`, `kvnc_node_peer_count`, `kvnc_node_commit_laten
 | 2 | Replay / nonce reuse | Strict sequential nonce in mempool + domain-separated hashes (`DOMAIN_TX`, `DOMAIN_BLOCK`) |
 | 3 | Consensus fork / equivocation | Default: first-valid digest wins, a second digest is rejected. `use_min_digest_fork` (default off) may swap via `DagStore::replace_block` only while the round is undecided and the old digest has no children. Timeout skip on missing leader. |
 | 4 | Double-sign / slash | `StakingState::slash` (fixed % evidence tx) |
-| 5 | P2P eclipse / Sybil | DNS-only kvnc-native seeds (TBD; no third-party hosts); no orange-cloud peers |
+| 5 | P2P eclipse / Sybil | DNS-only kovanica-native seeds (TBD; no third-party hosts); no orange-cloud peers |
 
 ### Fuzz Targets (Future)
-- `StatementBlock` deserialize (`kvnc-dag`)
-- `process_block` ingest (`kvnc-consensus`)
-- Mempool admission (`kvnc-mempool`)
+- `StatementBlock` deserialize (`kovanica-dag`)
+- `process_block` ingest (`kovanica-consensus`)
+- Mempool admission (`kovanica-mempool`)
 
 ### Keystore Verification Checklist
 - [ ] No literal hex in `README.md`, `AGENTS.md`, docs
-- [ ] `kvnc-cli` uses `keystore` subcommand (encrypted)
-- [ ] Node env never contains `KVNC_SEED` or `PRIVATE_KEY`
+- [ ] `kovanica-cli` uses `keystore` subcommand (encrypted)
+- [ ] Node env never contains `KOVANICA_SEED` or `PRIVATE_KEY`
 
 ### Tokenomics (Locked — Never Edited Without Approval)
 - Total: 90.2M KUNA (`9_020_000_000_000_000` atoms)
@@ -178,19 +178,19 @@ Scrape `kvnc_node_block_height`, `kvnc_node_peer_count`, `kvnc_node_commit_laten
 
 ## OpenCode Agent Setup (Internal)
 
-The `kvnc-opencode-setup/` package (now removed) provided:
-- Specialized `kvnc` agent with strict isolation from `kovanica-protocol`
-- `kvnc-plan` agent for planning-only workflows
-- Permissions: `kvnc` = edit+bash allow, `external_directory: deny`; `kvnc-plan` = edit deny, bash ask
+The `kovanica-opencode-setup/` package (now removed) provided:
+- Specialized `kovanica` agent with strict isolation from `kovanica-protocol`
+- `kovanica-plan` agent for planning-only workflows
+- Permissions: `kovanica` = edit+bash allow, `external_directory: deny`; `kovanica-plan` = edit deny, bash ask
 - Workflow: Ti → Grok (architect) → OpenCode (implement) → Grok (review)
 
-Current agent config lives in root `AGENTS.md`, `.opencode/agents/kvnc.md`, `opencode.json`.
+Current agent config lives in root `AGENTS.md`, `.opencode/agents/kovanica.md`, `opencode.json`.
 
 ---
 
 ## Current Edit Notes (2026-10-13)
 
-- `use_mysticghost` default = false (`NodeConfig` and `ConsensusConfig`; `KVNC_MYSTICGHOST` overrides). When enabled, `UniversalCommitter` applies scoped GHOSTDAG colouring.
+- `use_mysticghost` default = false (`NodeConfig` and `ConsensusConfig`; `KOVANICA_MYSTICGHOST` overrides). When enabled, `UniversalCommitter` applies scoped GHOSTDAG colouring.
 - `init_genesis` extended with `founder_premine.hex` + `validators.json` support (Phase 14/16)
 - Storage / staking compile fixes applied; `TASKLIST.md` updated
 - Tokenomics locked (RFC-006 / `docs/TOKENOMICS.md`)
@@ -199,7 +199,7 @@ Current agent config lives in root `AGENTS.md`, `.opencode/agents/kvnc.md`, `ope
 ## Latest code snapshot (2026-10-13)
 
 - `main`: `98d88cc` (tui + console merged; local edits committed)
-- Workspace crates: 19 (`kvnc-*`); ~53k Rust LOC
+- Workspace crates: 19 (`kovanica-*`); ~53k Rust LOC
 - TS packages: `packages/api-client`, `packages/console`, `packages/signer`, `packages/web`
 - Default P2P port: 8000; RPC: 8545; max peers: 50
 - Workspace tests: 503+ passing (partial run stopped during sustained-liveness)

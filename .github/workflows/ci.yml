@@ -40,8 +40,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Required by the wasmi contract e2e test (kvnc-execution), which
-          # builds kvnc-token for wasm32-unknown-unknown; without the target
+          # Required by the wasmi contract e2e test (kovanica-execution), which
+          # builds kovanica-token for wasm32-unknown-unknown; without the target
           # the test skips and the wasm path is never exercised in CI.
           targets: wasm32-unknown-unknown
       - name: Cache cargo
@@ -122,7 +122,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        crate: [kvnc-types, kvnc-crypto, kvnc-common, kvnc-cli]
+        crate: [kovanica-types, kovanica-crypto, kovanica-common, kovanica-cli]
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -196,7 +196,7 @@ jobs:
             echo
             echo "| crate | fmt | clippy | test |"
             echo "|---|---|---|---|"
-            for c in kvnc-types kvnc-crypto kvnc-common kvnc-cli; do
+            for c in kovanica-types kovanica-crypto kovanica-common kovanica-cli; do
               if [ -f "results/$c.md" ]; then cat "results/$c.md"; else echo "| \`$c\` | ⚪ no result | ⚪ no result | ⚪ no result |"; fi
             done
           } >> "$GITHUB_STEP_SUMMARY"
@@ -218,7 +218,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Build faucet
-        run: cargo build --release -p kvnc-faucet
+        run: cargo build --release -p kovanica-faucet
       - name: Deploy to testnet VPS
         uses: appleboy/ssh-action@v1
         with:
@@ -226,10 +226,10 @@ jobs:
           username: ${{ secrets.FAUCET_VPS_USER }}
           key: ${{ secrets.FAUCET_VPS_SSH_KEY }}
           script: |
-            sudo systemctl stop kvnc-faucet || true
-            cp ./target/release/kvnc-faucet /usr/local/bin/kvnc-faucet
-            sudo chmod +x /usr/local/bin/kvnc-faucet
-            sudo systemctl start kvnc-faucet || true
+            sudo systemctl stop kovanica-faucet || true
+            cp ./target/release/kovanica-faucet /usr/local/bin/kovanica-faucet
+            sudo chmod +x /usr/local/bin/kovanica-faucet
+            sudo systemctl start kovanica-faucet || true
             echo "Faucet deployed with --chain-id 2, rate 3 req/hr/IP"
         env:
           KOVANICA_CHAIN_ID: "2"
@@ -256,7 +256,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: kvnc-explorer
+          projectName: kovanica-explorer
           directory: packages/web/dist
         env:
           CLOUDFLARE_PAGES_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}

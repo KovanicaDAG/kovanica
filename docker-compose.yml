@@ -1,10 +1,10 @@
-# KVNC Testnet — Seed node + 3 validators
+# Kovanica Testnet — Seed node + 3 validators
 # Bootnode: testnet.kovanica.online:8000
 # Validator keys: ceremony-generated (testnet/genesis/keys/)
-name: kvnc-testnet
+name: kovanica-testnet
 
 x-node: &node
-  image: kvnc-node:local
+  image: kovanica-node:local
   restart: unless-stopped
   init: true
   deploy:
@@ -15,19 +15,19 @@ x-node: &node
       reservations:
         memory: 1G
   environment: &node-env
-    KVNC_RPC_ADDR: "0.0.0.0"
-    KVNC_LISTEN_ADDR: "0.0.0.0:8000"
-    KVNC_DATA_DIR: "/var/lib/kvnc"
-    KVNC_MAX_PEERS: "8"
-    KVNC_RPC_RATE_LIMIT_PER_MIN: "${KVNC_RPC_RATE_LIMIT_PER_MIN:-0}"
-    KVNC_RPC_AUTH: "${KVNC_RPC_AUTH:-disable}"
-    KVNC_ROUND_DURATION_MS: "4000"
-    KVNC_MYSTICGHOST: "true"
-    KVNC_MEMPOOL_REBROADCAST_INTERVAL_SECS: "5"
-    KVNC_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "30"
-    KVNC_MEMPOOL_MIN_FEE_RATE: "0"
-    KVNC_BOOTNODES: "testnet.kovanica.online:8000"
-    KVNC_CHAIN_ID: "2"
+    KOVANICA_RPC_ADDR: "0.0.0.0"
+    KOVANICA_LISTEN_ADDR: "0.0.0.0:8000"
+    KOVANICA_DATA_DIR: "/var/lib/kovanica"
+    KOVANICA_MAX_PEERS: "8"
+    KOVANICA_RPC_RATE_LIMIT_PER_MIN: "${KOVANICA_RPC_RATE_LIMIT_PER_MIN:-0}"
+    KOVANICA_RPC_AUTH: "${KOVANICA_RPC_AUTH:-disable}"
+    KOVANICA_ROUND_DURATION_MS: "4000"
+    KOVANICA_MYSTICGHOST: "true"
+    KOVANICA_MEMPOOL_REBROADCAST_INTERVAL_SECS: "5"
+    KOVANICA_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "30"
+    KOVANICA_MEMPOOL_MIN_FEE_RATE: "0"
+    KOVANICA_BOOTNODES: "testnet.kovanica.online:8000"
+    KOVANICA_CHAIN_ID: "2"
     RUST_LOG: "info"
 
 x-healthcheck: &healthcheck
@@ -39,86 +39,86 @@ x-healthcheck: &healthcheck
 services:
   seed:
     <<: *node
-    container_name: kvnc-testnet-seed
+    container_name: kovanica-testnet-seed
     environment:
       <<: *node-env
-      KVNC_RPC_PORT: "8545"
-      KVNC_RUN_VALIDATOR: "false"
+      KOVANICA_RPC_PORT: "8545"
+      KOVANICA_RUN_VALIDATOR: "false"
     ports:
       - "127.0.0.1:8545:8545"
     volumes:
-      - seed-data:/var/lib/kvnc
-      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
-      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
+      - seed-data:/var/lib/kovanica
+      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8545/health"]
 
   val1:
     <<: *node
-    container_name: kvnc-testnet-val1
+    container_name: kovanica-testnet-val1
     depends_on:
       seed:
         condition: service_healthy
     environment:
       <<: *node-env
-      KVNC_RPC_PORT: "8546"
-      KVNC_RUN_VALIDATOR: "true"
-      KVNC_VALIDATOR_KEY: "/var/lib/kvnc/validator.pem"
-      KVNC_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
+      KOVANICA_RPC_PORT: "8546"
+      KOVANICA_RUN_VALIDATOR: "true"
+      KOVANICA_VALIDATOR_KEY: "/var/lib/kovanica/validator.pem"
+      KOVANICA_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
     ports:
       - "127.0.0.1:8546:8546"
     volumes:
-      - val1-data:/var/lib/kvnc
-      - ./ops/docker/validators/val1.pem:/var/lib/kvnc/validator.pem:ro
-      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
-      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
+      - val1-data:/var/lib/kovanica
+      - ./ops/docker/validators/val1.pem:/var/lib/kovanica/validator.pem:ro
+      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8546/health"]
 
   val2:
     <<: *node
-    container_name: kvnc-testnet-val2
+    container_name: kovanica-testnet-val2
     depends_on:
       seed:
         condition: service_healthy
     environment:
       <<: *node-env
-      KVNC_RPC_PORT: "8547"
-      KVNC_RUN_VALIDATOR: "true"
-      KVNC_VALIDATOR_KEY: "/var/lib/kvnc/validator.pem"
-      KVNC_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
+      KOVANICA_RPC_PORT: "8547"
+      KOVANICA_RUN_VALIDATOR: "true"
+      KOVANICA_VALIDATOR_KEY: "/var/lib/kovanica/validator.pem"
+      KOVANICA_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
     ports:
       - "127.0.0.1:8547:8547"
     volumes:
-      - val2-data:/var/lib/kvnc
-      - ./ops/docker/validators/val2.pem:/var/lib/kvnc/validator.pem:ro
-      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
-      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
+      - val2-data:/var/lib/kovanica
+      - ./ops/docker/validators/val2.pem:/var/lib/kovanica/validator.pem:ro
+      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8547/health"]
 
   val3:
     <<: *node
-    container_name: kvnc-testnet-val3
+    container_name: kovanica-testnet-val3
     depends_on:
       seed:
         condition: service_healthy
     environment:
       <<: *node-env
-      KVNC_RPC_PORT: "8548"
-      KVNC_RUN_VALIDATOR: "true"
-      KVNC_VALIDATOR_KEY: "/var/lib/kvnc/validator.pem"
-      KVNC_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
+      KOVANICA_RPC_PORT: "8548"
+      KOVANICA_RUN_VALIDATOR: "true"
+      KOVANICA_VALIDATOR_KEY: "/var/lib/kovanica/validator.pem"
+      KOVANICA_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
     ports:
       - "127.0.0.1:8548:8548"
     volumes:
-      - val3-data:/var/lib/kvnc
-      - ./ops/docker/validators/val3.pem:/var/lib/kvnc/validator.pem:ro
-      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kvnc/genesis_validators.toml:ro
-      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kvnc/funded_accounts.toml:ro
+      - val3-data:/var/lib/kovanica
+      - ./ops/docker/validators/val3.pem:/var/lib/kovanica/validator.pem:ro
+      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8548/health"]

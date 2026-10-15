@@ -1,5 +1,5 @@
 # .github/workflows/web-deploy.yml
-# Cloudflare Pages Deployment for KVNC Explorer
+# Cloudflare Pages Deployment for Kovanica Explorer
 
 name: Deploy Web to Cloudflare Pages
 
@@ -47,7 +47,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: kvnc-explorer
+          projectName: kovanica-explorer
           directory: packages/web/dist
           branch: main
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}

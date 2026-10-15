@@ -1,4 +1,4 @@
-# kvnc — dev status & tasks
+# kovanica — dev status & tasks
 
 Snapshot date: **2026-10-13**  
 Branch: **main** @ **98d88cc**  
@@ -10,7 +10,7 @@ Source: full codebase inspection, targeted tests, and a partial full-workspace t
 - `console` branch merged (`29ba439`) — Kovanica Console, faucet CORS hardening, signer package, API client improvements, RPC middleware/write-method token checks.
 - Prior local edits committed (`98d88cc`):
   - `config.example.toml`: P2P default `8000`, round `4000` ms, validator key requirement documented.
-  - `crates/kvnc-execution/src/call_args.rs`: bincode argument encoders for native contract calls (HTLC, Vault, Multisig, Token).
+  - `crates/kovanica-execution/src/call_args.rs`: bincode argument encoders for native contract calls (HTLC, Vault, Multisig, Token).
   - Consensus docs/comments: MysticGhost is the `use_mysticghost` flag on `UniversalCommitter`, not the wrapper module.
   - TA/KS accuracy cleanup in `TASKLIST.md`.
   - `live_vote_integration.rs` rewritten as a non-ignored 2-node commit + transfer harness.
@@ -18,12 +18,12 @@ Source: full codebase inspection, targeted tests, and a partial full-workspace t
 ## Build / test evidence
 
 - Rust:
-  - `cargo check -p kvnc-cli -p kvnc-rpc -p kvnc-faucet` — ok
-  - `cargo check -p kvnc-execution -p kvnc-consensus -p kvnc-node` — ok (warnings only)
-  - `cargo test -p kvnc-cli` — 48 unit + 7 binary tests pass
-  - `cargo test -p kvnc-rpc` — 40 tests pass
-  - `cargo test -p kvnc-faucet` — 10 tests pass
-  - `cargo test -p kvnc-node --test live_vote_integration` — 2/2 tests pass
+  - `cargo check -p kovanica-cli -p kovanica-rpc -p kovanica-faucet` — ok
+  - `cargo check -p kovanica-execution -p kovanica-consensus -p kovanica-node` — ok (warnings only)
+  - `cargo test -p kovanica-cli` — 48 unit + 7 binary tests pass
+  - `cargo test -p kovanica-rpc` — 40 tests pass
+  - `cargo test -p kovanica-faucet` — 10 tests pass
+  - `cargo test -p kovanica-node --test live_vote_integration` — 2/2 tests pass
   - `cargo test --workspace` — in progress during the last run; **503+ passing** before timeout in `sustained_liveness_integration`
 - TypeScript:
   - `packages/console` tests — 6/6 pass; production build passes
@@ -56,10 +56,10 @@ Source: full codebase inspection, targeted tests, and a partial full-workspace t
 1. Finish and stabilise the full `cargo test --workspace` run (notably `sustained_liveness_integration`) in CI.
 2. Regenerate/commit any missing lock files deliberately (root `package-lock.json` was removed as empty/stray; verify CI `npm ci` behaviour per package).
 3. Split the large local-edit commit `98d88cc` if review requires smaller PRs; mapping is in the commit message.
-4. Decide whether `KVNC_MYSTICGHOST` stays default `false` for testnet; current docs/tests assume linearizer path.
+4. Decide whether `KOVANICA_MYSTICGHOST` stays default `false` for testnet; current docs/tests assume linearizer path.
 5. Update deployment scripts/Docker defaults to port 8000 if any still reference 9000 (grep done: README fixed, audit note remains intentional).
 6. Keep `TASKLIST.md` in lockstep with the VRF reality: primitives exist, but leader scheduling uses round-robin `CommitteeInfo::leader`, not `stake_weighted_leader`.
-7. Add coverage for `kvnc-execution::call_args` in contract integration tests.
+7. Add coverage for `kovanica-execution::call_args` in contract integration tests.
 8. Soak/chaos: re-run 4-node quorum after merge and confirm no regressions from console branch.
 9. Cleanup warnings: `std::io::Write` unused import in node main, doc comment on statement in main.
 

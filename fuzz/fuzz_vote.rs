@@ -1,7 +1,7 @@
 //! Fuzzing harness for Vote deserialization
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use kvnc_types::Vote;
+use kovanica_types::Vote;
 use bincode;
 
 fuzz_target!(|data: &[u8]| {

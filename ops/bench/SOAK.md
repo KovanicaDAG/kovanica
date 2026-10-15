@@ -12,4 +12,4 @@
 - Start: ___ KB
 - Peak: ___ KB (must stay <= 3,145,728 KB / 3G)
 - End: ___ KB
-- Note: GHOSTDAG k=3; 4-node topology; native KVNC only.
+- Note: GHOSTDAG k=3; 4-node topology; native KUNA only.

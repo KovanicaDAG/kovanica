@@ -166,7 +166,7 @@ export function rawTransactionSize(tx: UnsignedTx): number {
 }
 
 /**
- * Fee in atoms. `rate` is atoms per byte from `kvnc_estimateFee`.
+ * Fee in atoms. `rate` is atoms per byte from `kovanica_estimateFee`.
  * The mempool rejects a zero fee and a rate below its minimum.
  */
 export function feeForRate(tx: Omit<UnsignedTx, "fee">, rate: bigint): bigint {
