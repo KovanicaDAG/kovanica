@@ -64,5 +64,10 @@ apps/android/.gradle/
 # Android local SDK path (machine-specific, never commit)
 apps/android/local.properties
 
+# Android wallet module (mirrors the Light module's ignores)
+apps/android-wallet/**/jniLibs/**/*.so
+apps/android-wallet/.gradle/
+apps/android-wallet/local.properties
+
 # Guard: never track a full repo copy nested inside the repo
 /kovanica/
