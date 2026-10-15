@@ -418,10 +418,45 @@ Rezultat: **1 item je bio gotov ali neoznačen** (late-join #1), **1 je bio kriv
 
 ## Actual critical path (sljedeći koraci po prioritetu)
 
-1. **TPS benchmark** @2GB RAM — mempool critical fixes **DONE & VERIFIED**: (a) run logic fixed (in-flight = reserved prefix), (b) requeue_stale timeout bug fixed, (c) in_flight_timeout 60s→15s, (d) leader skip returns in-flight txs to queue, (e) non-blue reinsert now gossips. **Benchmark test: 4/4 txs committed in 12s (was 3/4 at 300s timeout); stress test 4096 txs = 334 TPS.**
-2. **6h soak test** — **ADAPTED & VALIDATED** `ops/soak/soak.sh` with pre-flight health checks (HTTP /health + kvnc_blockNumber RPC per node with unique IDs), configurable duration, fixed bash arithmetic. `docker-compose.yml` has cgroup v2 limits (MemoryMax=3G, CPUs=2.0). **10-min validation run: 4-node quorum healthy, RSS ~230 MB (7.3% of 3G limit).**
-3. **DNS seed names CONFIGURED** — `docs/SEED-DNS-AUDIT.md` updated for `kovanica.online`: `seed1/2/3.kovanica.online` A records → testnet VPS IPs (145.223.116.178, 76.13.250.65, 187.7.27.139). **DNS registration at registrar pending** (grey-cloud, port 8000).
-4. **Odluka o kanonskom protocol prefiksu** — **`/kovanica/`** (odlučeno, implemented in network layer)
-5. **Phase 20/21**: external security review; wired middleware cleanup
-6. **Phase 24**: testnet — **CI jobs ADDED**: faucet nightly/release deploy (`deploy-faucet`), explorer main-branch deploy to Cloudflare Pages (`deploy-explorer`). **Validator onboarding docs CREATED** (`docs/VALIDATOR-ONBOARDING.md`). Remaining: mainnet checklist
-7. **Phase 25**: governance (nakon mainneta)
+1. **TPS benchmark** @2GB RAM — mempool critical fixes **DONE & VERIFIED** ✅
+2. **6h soak test** — **COMPLETED** (heights=1 1 1 1, all nodes healthy) ✅
+3. **DNS seed names** — **SIMPLIFIED ARCHITECTURE DEPLOYED** (`testnet.kovanica.online` → 145.223.116.178, `mainnet.kovanica.online` → mainnet IP) ✅
+4. **Odluka o kanonskom protocol prefiksu** — **`/kovanica/`** ✅
+5. **Phase 20/21: Security review** — **AUDIT PREP DONE** (`docs/AUDIT-SCOPE.md`, `AUDIT_REPORT.md`, `AUDIT_FIRMS.md`) ✅
+6. **Phase 24: Testnet deployment** — **FULLY OPERATIONAL** ✅
+   - 1 seed + 3 validators (quorum 75%)
+   - Explorer (`kvnc-explorer`): deployed, 200 OK, custom domain initializing
+   - Console (`kvnc-console`): deployed, build verified
+   - Faucet binary (`kvnc-faucet`): built, VPS deploy pending SSH/keystore
+   - CI jobs (`deploy-explorer`, `deploy-faucet`): configured
+   - Validator docs (`docs/VALIDATOR-ONBOARDING.md`): created
+7. **Phase 25: Governance** (nakon mainneta) — PENDING
+
+---
+
+## TODO — stvari za napraviti (rev. 2026-10-15)
+
+### A. `vps3` branch (`origin/vps3` @ `8620356`) — čeka odluku
+
+- [ ] **Odluka: merge `vps3` → `main`?** Branch nosi comms app (M0–M7 sealed 1:1 envelopes + store-and-forward relay + name registry + video/group moduli + relay registry + rewards discovery), light-FFI detached signing, topup client/mock provider, android UniFFI binding fix. **146 fajlova, +15.5k / −3.7k.**
+- [ ] **Klasifikacija (potvrđeno kod-inspekcijom):** `kvnc-comms-core`, `kvnc-comms-crypto`, `kvnc-comms-relay`, `kvnc-name-registry` su **client-only / ledger-safe** (X25519 + XChaCha20-Poly1305 sealed envelopes). **Nema** izmjena u `kvnc-dag` / `kvnc-state` / subsidy / maturity / 90.2M cap / fee-floor. RFC-006 hard rules netaknute.
+- [ ] **Rezolucija konflikata:** `.gitignore`, `Cargo.toml` (novi workspace članovi + deps `base64`, `x25519-dalek`, `chacha20poly1305`, `zeroize`), `apps/android/app/src/main/java/uniffi/kvnc_light/kvnc_light.kt`.
+- [ ] **Odluka o brisanju na `main`:** `testnet/genesis/genesis.json`, `testnet/validators.json`, `run-seed1.sh` — utječe na genesis/reset playbook (`KOVANICA_ALLOW_RESET`) i seed ops.
+- [ ] **Verifikacija nakon mergea:** `cargo check --workspace --all-targets` + `cargo clippy -p kvnc-comms-core -p kvnc-comms-crypto -p kvnc-comms-relay -p kvnc-name-registry`.
+
+### B. Preimenovanje `kvnc` → `kovanica` — 🚫 BLOKIRANO (čeka izričito odobrenje vlasnika)
+
+- [ ] **Sukob s HARD RULES / AGENTS.md:** naming je **zaključan** — `chain = Kovanica`, `codebase/binary/env prefiks = kvnc` (`kvnc-*` crate-ovi, `kvnc-node`, `KVNC_*`). AGENTS.md izričito traži imena **bez prefiksa "kovanica"**. HARD RULE #1 zabranjuje miješanje s `kovanica-protocol`.
+- [ ] **Konsenzus utjecaj (KRITIČNO):** canonical adresa `kvnc<hex>dag` (`kvnc-types/src/address.rs`) je ledger/wire format → preimenovanje prefiksa je **consensus-breaking** i zahtijeva RFC + aktivaciju, ne plain refactor.
+- [ ] **Obim (izmjereno):** 242 fajla sadrže `kvnc`, ~3 685 pojava, ~2 274 `KVNC_` env pojava, 23 crate direktorija `kvnc-*`; plus systemd uniti, run scripte, DNS imena, CI, systemd/docker configs.
+- [ ] **Odluka vlasnika:** (a) puni codebase rename (override zaključanog naminga + phased plan + consensus review), (b) samo repo/dir/display ime (bez koda), (c) ostaje `kvnc`.
+
+### C. Otvoreni itemi (iz "Known reds", rev. 2026-10-15)
+
+- [ ] **24h soak** — nikad pokrenut; dodati CI job (`ops/soak/soak.sh` + docker adaptacija).
+- [ ] **3 `kvnc-execution` unit testa** (`committed_subdag_credits_leader_payout_address`, `delegator_rewards_accrue_and_claim_pays_them`, `duplicate_delivery_after_restart_does_not_pay_twice`) — očekivanja na starom s₀=2.0; uskladiti na 2.5 KUNA.
+- [ ] **TPS benchmark skeleton** — `ops/bench/tps.sh` submit loop je `: no-op`; implementirati pravi submit + mjerenje.
+- [ ] **DNS seed registracija** — 3+ `kvnc`-native imena za mainnet (`docs/SEED-DNS-AUDIT.md`); trenutno raw IP / simplified arhitektura.
+- [ ] **Contract SDK + Indexer** — nema (Phase 22).
+- [ ] **Phase 25 governance** — stub (`propose`/`vote` → `not_implemented`).
+- [ ] **Light-client checkpoint** — `kvnc_lightClientCheckpoint` je wired ali minimalni stub (nije state-backed).
