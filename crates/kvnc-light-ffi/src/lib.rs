@@ -15,8 +15,8 @@ use kvnc_comms_relay::{comms_id_bytes, comms_id_from_hex, comms_id_hex, Envelope
 use kvnc_crypto::{derive_vrf_secret_from_seed, vrf_prove, VRFKeyPair};
 use kvnc_keystore::{parse, to_json};
 use kvnc_light::{
-    sign_exit_light_node, sign_light_witness, sign_register_light_node, sign_transfer,
-    verify_account, verify_sealed_header,
+    sign_call, sign_deploy, sign_exit_light_node, sign_light_witness, sign_register_light_node,
+    sign_transfer, verify_account, verify_sealed_header,
 };
 use kvnc_types::signing::chain_id;
 use kvnc_types::{Address, Hash, SigningKey, Transaction};
@@ -226,6 +226,53 @@ pub fn sign_transfer_raw(
     })
 }
 
+/// Sign a contract call. `args_hex` is bincode-encoded calldata (`0x` optional).
+///
+/// `value` is the native KUNA (atoms) sent to the contract, `0` when unused.
+/// `fee_rate` is atoms per byte from `kvnc_estimateFee`.
+#[uniffi::export]
+pub fn sign_call_raw(
+    keystore_json: String,
+    passphrase: String,
+    chain_id: u64,
+    contract: String,
+    value: u64,
+    method: String,
+    args_hex: String,
+    gas_limit: u64,
+    nonce: u64,
+    fee_rate: u64,
+) -> Result<String, LightFfiError> {
+    let (signing_key, sender) = open_signing_key(&keystore_json, &passphrase)?;
+    let contract = parse_address(&contract)?;
+    let args = parse_hex_bytes(&args_hex, "args")?;
+    priced_raw(fee_rate, |fee| {
+        sign_call(
+            chain_id, &signing_key, sender, nonce, fee, contract, value, method.clone(),
+            args.clone(), gas_limit,
+        )
+    })
+}
+
+/// Sign a contract deploy. `code_hex` is the WASM bytecode (`0x` optional).
+///
+/// `fee_rate` is atoms per byte from `kvnc_estimateFee`.
+#[uniffi::export]
+pub fn sign_deploy_raw(
+    keystore_json: String,
+    passphrase: String,
+    chain_id: u64,
+    code_hex: String,
+    nonce: u64,
+    fee_rate: u64,
+) -> Result<String, LightFfiError> {
+    let (signing_key, sender) = open_signing_key(&keystore_json, &passphrase)?;
+    let code = parse_hex_bytes(&code_hex, "code")?;
+    priced_raw(fee_rate, |fee| {
+        sign_deploy(chain_id, &signing_key, sender, nonce, fee, code.clone())
+    })
+}
+
 /// Sign a light-node bond. The stake does not enter the validator committee.
 #[uniffi::export]
 pub fn sign_bond_raw(
@@ -336,6 +383,16 @@ fn parse_beacon(value: &str) -> Result<Hash, LightFfiError> {
         .try_into()
         .map_err(|_| failed("beacon must be 32 bytes"))?;
     Ok(Hash(bytes))
+}
+
+/// Decode a byte string from hex, `0x`/`0X` prefix optional and whitespace trimmed.
+fn parse_hex_bytes(value: &str, field: &str) -> Result<Vec<u8>, LightFfiError> {
+    let trimmed = value.trim();
+    let stripped = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    hex::decode(stripped).map_err(|_| failed(format!("{field} is not valid hex")))
 }
 
 fn priced_raw(fee_rate: u64, sign: impl Fn(u64) -> Transaction) -> Result<String, LightFfiError> {
@@ -958,5 +1015,79 @@ mod tests {
         let mut truncated_after_count = corrupt[..64 + 8].to_vec();
         truncated_after_count[64..72].copy_from_slice(&5u64.to_le_bytes()); // claim 5 endpoints
         assert!(registry_decode_entry(hex::encode(&truncated_after_count)).is_err());
+    }
+
+    /// `sign_call_raw` / `sign_deploy_raw` emit a bincode `Transaction` that
+    /// verifies under the configured chain id and carries the expected kind.
+    #[test]
+    fn sign_call_raw_and_sign_deploy_raw_round_trip() {
+        let created = create_wallet("pw".to_string()).unwrap();
+        let contract = Address([0x33; 32]).to_string();
+
+        let raw = sign_call_raw(
+            created.keystore_json.clone(),
+            "pw".to_string(),
+            LOCAL_CHAIN_ID,
+            contract,
+            500,
+            "transfer".to_string(),
+            "0x010203".to_string(),
+            100_000,
+            6,
+            10,
+        )
+        .unwrap();
+        assert!(raw.starts_with("0x"));
+        let bytes = hex::decode(raw.strip_prefix("0x").unwrap()).unwrap();
+        let tx: Transaction = bincode::deserialize(&bytes).unwrap();
+        assert!(tx.verify_signature(&kvnc_types::SigningContext::new(LOCAL_CHAIN_ID)));
+        assert!(!tx.verify_signature(&kvnc_types::SigningContext::new(2)));
+        assert!(matches!(
+            tx.kind,
+            kvnc_types::TransactionKind::Call {
+                value: 500,
+                ref method,
+                ref args,
+                gas_limit: 100_000,
+                ..
+            } if method == "transfer" && args == &[1u8, 2, 3]
+        ));
+
+        // Bare hex (no `0x`) is accepted for the deploy bytecode.
+        let raw_deploy = sign_deploy_raw(
+            created.keystore_json,
+            "pw".to_string(),
+            LOCAL_CHAIN_ID,
+            "00ff".to_string(),
+            7,
+            10,
+        )
+        .unwrap();
+        let bytes = hex::decode(raw_deploy.strip_prefix("0x").unwrap()).unwrap();
+        let deploy: Transaction = bincode::deserialize(&bytes).unwrap();
+        assert!(deploy.verify_signature(&kvnc_types::SigningContext::new(LOCAL_CHAIN_ID)));
+        assert!(matches!(
+            deploy.kind,
+            kvnc_types::TransactionKind::Deploy { ref code } if code == &[0x00, 0xff]
+        ));
+
+        // Malformed hex is an error, not a panic.
+        assert!(sign_call_raw(
+            created_wallet_json(),
+            "pw".to_string(),
+            LOCAL_CHAIN_ID,
+            Address([0x33; 32]).to_string(),
+            0,
+            "m".to_string(),
+            "zz".to_string(),
+            1,
+            0,
+            1,
+        )
+        .is_err());
+    }
+
+    fn created_wallet_json() -> String {
+        create_wallet("pw".to_string()).unwrap().keystore_json
     }
 }

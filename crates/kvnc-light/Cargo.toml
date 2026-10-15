@@ -9,3 +9,6 @@ description = "Kovanica light-client verification (headers, seals, inclusion pro
 kvnc-types = { path = "../kvnc-types" }
 kvnc-crypto = { path = "../kvnc-crypto" }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
