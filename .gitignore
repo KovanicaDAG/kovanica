@@ -57,3 +57,9 @@ ops/docker/validators/genesis_validators.toml
 
 # Local soak override (remaps node1 host RPC off 8545 to avoid the live testnet node)
 docker-compose.soak.yml
+
+# Android Gradle build cache (regenerated, never commit)
+apps/android/.gradle/
+
+# Guard: never track a full repo copy nested inside the repo
+/kvnc/

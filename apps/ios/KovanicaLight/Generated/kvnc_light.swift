@@ -954,6 +954,87 @@ public func FfiConverterTypeLightFfiError_lift(_ buf: RustBuffer) throws -> Ligh
 public func FfiConverterTypeLightFfiError_lower(_ value: LightFfiError) -> RustBuffer {
     return FfiConverterTypeLightFfiError.lower(value)
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+/**
+ * Open a comms envelope addressed to this keystore's comms id.
+ *
+ * The envelope signature is **not** checked here (see [`comms_verify_envelope`]);
+ * only the recipient match and the AEAD are enforced. Returns the trimmed
+ * payload JSON exactly as sealed.
+ *
+ * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+ */
+public func commsOpenEnvelope(keystoreJson: String, passphrase: String, envelopeJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_comms_open_envelope(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),
+        FfiConverterString.lower(envelopeJson),uniffiCallStatus
+    )
+})
+}
+/**
+ * Seal and sign a comms envelope for a recipient.
+ *
+ * Decrypts the keystore to recover the sender seed, derives the comms ids, and
+ * calls [`kvnc_comms_relay::envelope::seal_and_sign`]. Returns the compact
+ * envelope JSON (wire shape `v,id,to,from,sentAt,expiresAt,alg,epk,nonce,ct,sig`).
+ *
+ * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+ */
+public func commsSealEnvelope(keystoreJson: String, passphrase: String, recipientPubkeyHex: String, payloadJson: String, sentAtMs: UInt64, expiresAtMs: UInt64)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_comms_seal_envelope(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),
+        FfiConverterString.lower(recipientPubkeyHex),
+        FfiConverterString.lower(payloadJson),
+        FfiConverterUInt64.lower(sentAtMs),
+        FfiConverterUInt64.lower(expiresAtMs),uniffiCallStatus
+    )
+})
+}
+/**
+ * Verify an envelope against a claimed sender Ed25519 public key.
+ *
+ * Checks the Ed25519 signature over [`Envelope::signing_bytes`] **and** that
+ * `from == comms_id(sender_pubkey)`. Returns `false` for any verification or
+ * shape failure; only malformed JSON or hex is an error.
+ */
+public func commsVerifyEnvelope(envelopeJson: String, senderPubkeyHex: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_comms_verify_envelope(
+        FfiConverterString.lower(envelopeJson),
+        FfiConverterString.lower(senderPubkeyHex),uniffiCallStatus
+    )
+})
+}
 /**
  * Check an account proof against a header this client already accepted.
  */
@@ -974,6 +1055,17 @@ public func createWallet(passphrase: String)throws  -> CreatedWallet  {
         uniffiCallStatus in
     uniffi_kvnc_light_ffi_fn_func_create_wallet(
         FfiConverterString.lower(passphrase),uniffiCallStatus
+    )
+})
+}
+/**
+ * Derive comms identity hex from public key hex.
+ */
+public func deriveCommsId(pubkeyHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_derive_comms_id(
+        FfiConverterString.lower(pubkeyHex),uniffiCallStatus
     )
 })
 }
@@ -1005,6 +1097,46 @@ public func importWallet(mnemonic: String, passphrase: String)throws  -> Importe
 })
 }
 /**
+ * Decode a bincode 1.3 `NameEntry` read from a registry storage slot.
+ *
+ * Accepts `"0x"+hex` or bare hex (case-insensitive). The value is
+ * `owner[32] ‖ pubkey[32] ‖ u64le(count) ‖ count×(u64le(len) ‖ utf8)`.
+ * Returns compact JSON
+ * `{"owner":"<64hex>","pubkey":"<64hex>","relay_endpoints":["…"]}`.
+ *
+ * Truncated or malformed bytes are a [`LightFfiError`]. Callers must check for
+ * an empty slot (`""` / `"0x"`) **before** calling this — those are not
+ * special-cased here and decode to an error.
+ */
+public func registryDecodeEntry(valueHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_registry_decode_entry(
+        FfiConverterString.lower(valueHex),uniffiCallStatus
+    )
+})
+}
+/**
+ * Compute the contract-storage slot for a name-registry entry.
+ *
+ * `slot = BLAKE3(b"kvnc/v1/name/" ++ lowercase(name))`, returned as 64
+ * lowercase hex (**no** `0x` prefix). The prefix is taken from
+ * [`kvnc_name_registry::entry_key`] (single source of truth) and hashed with
+ * the canonical [`kvnc_common::hash`], exactly matching the host storage key
+ * the contract writes (`blake3(raw_key)`).
+ *
+ * Names are normalised-then-validated: 3..=32 bytes, only `[a-z0-9-]`, no
+ * leading/trailing `-`, no `--`. Invalid input is a [`LightFfiError`].
+ */
+public func registrySlotHex(name: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_registry_slot_hex(
+        FfiConverterString.lower(name),uniffiCallStatus
+    )
+})
+}
+/**
  * Sign a light-node bond. The stake does not enter the validator committee.
  */
 public func signBondRaw(keystoreJson: String, passphrase: String, chainId: UInt64, stake: UInt64, nonce: UInt64, feeRate: UInt64)throws  -> String  {
@@ -1017,6 +1149,22 @@ public func signBondRaw(keystoreJson: String, passphrase: String, chainId: UInt6
         FfiConverterUInt64.lower(stake),
         FfiConverterUInt64.lower(nonce),
         FfiConverterUInt64.lower(feeRate),uniffiCallStatus
+    )
+})
+}
+/**
+ * Sign a detached message with domain separation.
+ *
+ * **Note:** Runs off UI thread (decrypts the keystore; Argon2id may be expensive).
+ */
+public func signDetached(keystoreJson: String, passphrase: String, messageHex: String, domain: String?)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_sign_detached(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),
+        FfiConverterString.lower(messageHex),
+        FfiConverterOptionString.lower(domain),uniffiCallStatus
     )
 })
 }
@@ -1100,6 +1248,18 @@ public func walletAddress(keystoreJson: String)throws  -> String  {
     )
 })
 }
+/**
+ * Get the public key hex from a keystore JSON without decrypting.
+ * This does not decrypt the seed.
+ */
+public func walletPubkeyHex(keystoreJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kvnc_light_ffi_fn_func_wallet_pubkey_hex(
+        FfiConverterString.lower(keystoreJson),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -1116,10 +1276,22 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_kvnc_light_ffi_checksum_func_comms_open_envelope() != 43408) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_comms_seal_envelope() != 30954) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_comms_verify_envelope() != 2670) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kvnc_light_ffi_checksum_func_confirm_account() != 58239) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_create_wallet() != 51597) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_derive_comms_id() != 61543) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_faucet_allowed() != 60656) {
@@ -1128,7 +1300,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kvnc_light_ffi_checksum_func_import_wallet() != 32019) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kvnc_light_ffi_checksum_func_registry_decode_entry() != 8553) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_registry_slot_hex() != 5752) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kvnc_light_ffi_checksum_func_sign_bond_raw() != 62969) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_sign_detached() != 800) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_sign_exit_raw() != 47615) {
@@ -1144,6 +1325,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kvnc_light_ffi_checksum_func_wallet_address() != 46382) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kvnc_light_ffi_checksum_func_wallet_pubkey_hex() != 7696) {
         return InitializationResult.apiChecksumMismatch
     }
 

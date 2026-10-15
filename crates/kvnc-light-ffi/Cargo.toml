@@ -15,6 +15,14 @@ kvnc-types = { path = "../kvnc-types" }
 kvnc-crypto = { path = "../kvnc-crypto" }
 kvnc-light = { path = "../kvnc-light" }
 kvnc-keystore = { path = "../kvnc-keystore" }
+kvnc-comms-core = { path = "../kvnc-comms-core" }
+kvnc-comms-crypto = { path = "../kvnc-comms-crypto" }
+kvnc-comms-relay = { path = "../kvnc-comms-relay", default-features = false }
+# §7.2 registry slot: single source of truth for the contract storage key.
+# Both are mobile-safe (no std-only / network deps; `kvnc-common` pulls only
+# blake3, already in the tree via `kvnc-crypto`).
+kvnc-common = { path = "../kvnc-common" }
+kvnc-name-registry = { path = "../kvnc-name-registry" }
 uniffi = { version = "=0.32.0" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
