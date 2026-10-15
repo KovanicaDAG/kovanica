@@ -16,6 +16,10 @@ Thumbs.db
 # Build artifacts
 *.wasm
 
+# Bundled KVP-102 token contract, shipped inside both APKs — track it explicitly
+!apps/android/app/src/main/assets/kovanica_token.wasm
+!apps/android-wallet/app/src/main/assets/kovanica_token.wasm
+
 # Android UniFFI debug libraries. Rebuild with:
 # cargo build -p kovanica-light-ffi --target aarch64-linux-android
 apps/android/**/jniLibs/**/*.so

@@ -672,6 +672,8 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
+    external fun uniffi_kovanica_light_ffi_checksum_func_change_passphrase_raw(
+    ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_comms_open_envelope(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_comms_seal_envelope(
@@ -679,6 +681,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kovanica_light_ffi_checksum_func_comms_verify_envelope(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_confirm_account(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_contract_address_for_raw(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_create_wallet(
     ): Int
@@ -691,6 +695,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_kovanica_light_ffi_checksum_func_registry_decode_entry(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_registry_slot_hex(
+    ): Int
+    external fun uniffi_kovanica_light_ffi_checksum_func_reveal_mnemonic_raw(
     ): Int
     external fun uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw(
     ): Int
@@ -725,6 +731,8 @@ internal object UniffiLib {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "kovanica_light"))
         
     }
+    external fun uniffi_kovanica_light_ffi_fn_func_change_passphrase_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`newPassphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_comms_open_envelope(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`envelopeJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_comms_seal_envelope(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`recipientPubkeyHex`: RustBuffer.ByValue,`payloadJson`: RustBuffer.ByValue,`sentAtMs`: Long,`expiresAtMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -732,6 +740,8 @@ internal object UniffiLib {
     external fun uniffi_kovanica_light_ffi_fn_func_comms_verify_envelope(`envelopeJson`: RustBuffer.ByValue,`senderPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_confirm_account(`headerJson`: RustBuffer.ByValue,`proofJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_contract_address_for_raw(`senderHex`: RustBuffer.ByValue,`nonce`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_create_wallet(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -744,6 +754,8 @@ internal object UniffiLib {
     external fun uniffi_kovanica_light_ffi_fn_func_registry_decode_entry(`valueHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_registry_slot_hex(`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kovanica_light_ffi_fn_func_reveal_mnemonic_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_sign_bond_raw(`keystoreJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,`chainId`: Long,`stake`: Long,`nonce`: Long,`feeRate`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -884,6 +896,9 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_change_passphrase_raw() != 16537) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_comms_open_envelope() != 21852) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -894,6 +909,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_confirm_account() != 55701) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_contract_address_for_raw() != 23892) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_create_wallet() != 1575) {
@@ -912,6 +930,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_registry_slot_hex() != 45968) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_reveal_mnemonic_raw() != 40673) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw() != 28793) {
@@ -1468,6 +1489,29 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
     }
 }
         /**
+         * Re-encrypt the wallet under `new_passphrase`; returns the new keystore JSON.
+         *
+         * The seed is preserved, so the address does not change. On success the caller
+         * replaces its stored `keystore` value with the returned JSON.
+         *
+         * **Note:** Runs off the UI thread (decrypts and re-encrypts; Argon2id runs twice).
+         * A wrong `passphrase` is an error, never a panic.
+         */
+    @Throws(LightFfiException::class) fun `changePassphraseRaw`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String, `newPassphrase`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_change_passphrase_raw(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),
+        FfiConverterString.lower(`newPassphrase`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Open a comms envelope addressed to this keystore's comms id.
          *
          * The envelope signature is **not** checked here (see [`comms_verify_envelope`]);
@@ -1547,6 +1591,29 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         
         FfiConverterString.lower(`headerJson`),
         FfiConverterString.lower(`proofJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Derive the address a `Deploy` transaction will create on-chain, off-node.
+         *
+         * `sender_hex` is the `kvnc…dag` address or a bare / `0x`-prefixed 64-hex
+         * payload. `nonce` is the sender's account nonce **as it stands while the
+         * `Deploy` tx is being signed** (i.e. the `tx.nonce`); the `+1` the node bakes
+         * into the address is applied inside. Returns the bare 64-hex contract address.
+         *
+         * **Note:** Pure BLAKE3 — safe to call on the UI thread.
+         */
+    @Throws(LightFfiException::class) fun `contractAddressForRaw`(`senderHex`: kotlin.String, `nonce`: kotlin.ULong): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_contract_address_for_raw(
+    
+        
+        FfiConverterString.lower(`senderHex`),
+        FfiConverterULong.lower(`nonce`),_status)
 }
     )
     }
@@ -1659,6 +1726,25 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
     
         
         FfiConverterString.lower(`name`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Reveal the 24-word seed phrase for backup.
+         *
+         * **Note:** Runs off the UI thread (decrypts the keystore; Argon2id is expensive).
+         * A wrong passphrase is an error, never a panic.
+         */
+    @Throws(LightFfiException::class) fun `revealMnemonicRaw`(`keystoreJson`: kotlin.String, `passphrase`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(LightFfiException) { _status ->
+    UniffiLib.uniffi_kovanica_light_ffi_fn_func_reveal_mnemonic_raw(
+    
+        
+        FfiConverterString.lower(`keystoreJson`),
+        FfiConverterString.lower(`passphrase`),_status)
 }
     )
     }

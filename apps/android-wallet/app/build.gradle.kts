@@ -11,8 +11,8 @@ android {
         applicationId = "io.kovanica.wallet"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -22,6 +22,10 @@ android {
         release {
             isMinifyEnabled = false
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {
@@ -36,4 +40,5 @@ android {
 
 dependencies {
     implementation("net.java.dev.jna:jna:5.14.0@aar")
+    implementation(files("libs/core-3.5.4.jar"))
 }
