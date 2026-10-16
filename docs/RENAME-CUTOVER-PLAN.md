@@ -1,9 +1,15 @@
 # Testnet rename cutover + seed recovery — rollout plan
 
-Status: **PLAN ONLY. Nothing has been executed.** No host has been written to, restarted, or
-reconfigured. Every statement below is from a read-only audit performed 2026-10-15.
+Status: **PLAN for the cutover itself — the cutover has NOT run.** Every statement in §1–§8 is from a
+read-only audit performed 2026-10-15 unless marked otherwise. Two bounded, owner-authorised actions
+were executed on 2026-10-16 — see §9, which also supersedes several §1 / §2.5 figures.
 
 Owner sign-off gates are marked **[OWNER]**; each must be answered before its phase runs.
+
+> **Re-audited read-only across all three hosts on 2026-10-16.** Headline: the testnet is **no longer
+> stalled** — a self-contained three-validator network now runs on seed1 under Docker and commits every
+> ~12 s — but **none of the three seeds is connected to it**, and the bootnode the shipped compose
+> advertises (`testnet.kovanica.online:8000`) has **no listener**. Read §9 before acting on §1–§8.
 
 ---
 
@@ -305,3 +311,149 @@ delete or overwrite either until the new path has been green for a full soak.
 - Bootnode typo `178.7.27.139` → `187.7.27.139` in `run-seed1.sh`, `mainnet/run-seed1.sh`,
   `mainnet/run-seed2.sh` (commit `e316d70a`).
 - Android `libkovanica_light_ffi.so` rebuilt; stale `libkvnc_light_ffi.so` removed.
+
+---
+
+## 9. Update 2026-10-16 — re-audit, corrections, executed actions
+
+All of §9.1–§9.2 and §9.4 comes from a read-only sweep of all three hosts plus seed1's own Docker
+surface. No secret was read or printed. §9.3 lists the only two writes, both owner-authorised.
+
+### 9.1 Headline: the chain is advancing, and it does not need the three seeds
+
+The public RPC `https://rpc-testnet.kovanica.online/rpc` is nginx `location /rpc` →
+`http://127.0.0.1:8545/rpc` → docker-proxy → container `kovanica-testnet-seed`, i.e. it is served by
+**seed1 itself**. Measured:
+
+- 4/4 containers `Up (healthy)` — `kovanica-testnet-{seed,val1,val2,val3}`, image `kovanica-node:local`,
+  RPC published on loopback 8545 / 8546 / 8547 / 8548 only;
+- 3/3 validators `active: true`, 50 000 KUNA each; committed-leader rotation healthy (see 9.2);
+- `kovanica_blockNumber` = `0x40d` (1037) and advancing ≈ 12 s per committed leader;
+- no `ERROR` / `ConflictingDecision` / `engine stopped` / `stalled` in the recent journal of any node.
+
+The "single leader forever" defect behind the earlier stall was a **`u128` saturation in the
+VRF leader priority** (`hash × total_stake / stake` pinned every authority to `u128::MAX`, so the
+lowest committee index won every round and the others were eventually marked offline by
+`advance_validator_liveness`). Fixed with an exact 192-bit cross-multiplied comparison and merged to
+`main` (merge `d56ad8a4`, pushed as `b4b7eb65` and `e7e8d48d`), together with a round-counter resume
+on restart. **This is why §2.5's "the network is not advancing" is superseded.**
+
+Consequence: **Phase 3 cannot be "all three seeds green".** The live chain is carried by seed1's Docker
+cluster, not by the three seed hosts. Restate Phase 3 against `rpc-testnet.kovanica.online` (§9.6).
+
+### 9.2 Corrections to §1 and §2.5 (measured 2026-10-16)
+
+| Claim in this doc | 2026-10-16 measurement |
+|---|---|
+| seed2 new unit "crash-loop (restart **2131**)" | counter had reached **5 612**; the unit is now **stopped and disabled** (§9.3) |
+| §1 defect 1 — "4 Docker containers `kvnc-testnet-*`, image `kvnc-node:local`" | **stale**: the committed compose names them `kovanica-testnet-*` with image `kovanica-node:local` |
+| seed3 "OOM-killed Oct 08, restart 2749" | that is the **new** `@3` unit, whose journal is now empty. The **old** `kvnc-testnet-seed3` unit was **deliberately stopped on 2026-10-14 04:44** (`received SIGTERM` → `KVNC node stopped cleanly` → `Deactivated successfully`), not killed. |
+| §2.5 "seed2 … **0 peers**, never committed" | **still true**: `/health` → `peer_count: 0`, `executed_subdags: 0`, `last_executed_round: null`; since 2026-10-14 13:00 the journal holds **14 336 × `Proposed block`** and **0 × `committed leader`** |
+| D5 — "leave the 5 leaked `target/debug/kvnc-node` harness processes alone" | **superseded**: the owner authorised killing them on 2026-10-16; done (§9.3). The pre-rename Docker cluster is likewise no longer "pre-rename". |
+| §5 port note — "P2P on **8000** (not 9000)" | **confirmed**: `KOVANICA_LISTEN_ADDR=0.0.0.0:8000` in the running seed container. The `9000/tcp` in `docker ps` is only the image's EXPOSE, not the bind. |
+
+seed2's old node is healthy-looking but useless: it proposes every 12 s into its own DAG and never
+reaches the commit rule, because the other two genesis validators are unreachable.
+
+### 9.3 Executed 2026-10-16 (owner-authorised, bounded)
+
+1. **seed2 (`76.13.250.65`): `kovanica-testnet-seed@2.service` stopped and disabled.**
+   - before: `activating` / `auto-restart`, `NRestarts=5612`, failing every 30 s
+   - after: `inactive` / `dead`, `disabled`; the `multi-user.target.wants` symlink was removed
+   - the **old** `kvnc-testnet-seed2.service` was deliberately **not touched** — still `active`,
+     `MainPID 42897`
+   - rollback: `systemctl enable --now kovanica-testnet-seed@2.service` (it will fail again with the
+     replay refusal until D2's 5 G ceiling is actually applied)
+2. **seed1 (this host): 5 leaked harness processes killed.** PIDs `1917148`, `1920433`, `1934576`,
+   `1934854`, `1934996` — all `/root/Projects/kvnc/target/debug/kvnc-node`, `ppid 1`, ~2.5 days old,
+   SIGTERM'd. 10 loopback ports released (20130/20134, 23042/23046, 23066/23070, 24146/24150,
+   28202/28206). The Docker cluster was **not** touched; the devnet was verified healthy afterwards
+   (`0x40d` and 4/4 containers healthy).
+
+### 9.4 New findings not in §1–§8
+
+1. **The shipped compose advertises a dead bootnode.** `docker-compose.yml` sets
+   `KOVANICA_BOOTNODES: "testnet.kovanica.online:8000"` for the seed container and
+   `"testnet.kovanica.online:8000,seed:8000"` for the validators. But:
+   - `testnet.kovanica.online` → `145.223.116.178` (seed1, grey-cloud);
+   - the compose publishes **only** `127.0.0.1:8545–8548`; the container's own `0.0.0.0:8000` bind is
+     never published to the host, and `ss -ltnp` on seed1 shows **nothing** on 8000;
+   - there is **no nginx `stream` block** and no `conf.d` — nginx is HTTP-only on 80/443.
+
+   So every node launched from the committed compose is told to bootstrap from a port that has no
+   listener. In practice the Docker validators only ever connect via the compose-internal alias
+   `seed:8000`. Any third-party node following the documented bootnode cannot join.
+2. **`seed1.kovanica.online:8000` has no listener either**, for the same reason. Of the three
+   advertised DNS bootnodes, **only seed2** has a live P2P bind — and seed2 speaks the old
+   libp2p/gossipsub transport, which the renamed node cannot use.
+3. **The units and their env are not version-controlled.** There is **no** `*.service`, `*.env` or
+   `*.conf` anywhere under `deploy/`, `ops/` or `docs/`. Nothing in the repo produces
+   `/etc/kovanica/testnet-seed%i.env`, `testnet-authorities.conf` or `testnet-authority-%i.env`. The
+   template's own comment points at `deploy/testnet/configs/seed%i.env` — **that path does not exist in
+   the repo**. Until these are committed (key values supplied out-of-band), the migration cannot be
+   reviewed or reproduced and Phase 1 step 2 has no source of truth.
+4. **Template port bug.** `ExecStart=/usr/local/bin/kovanica-node explorer 127.0.0.1:3001` hard-codes
+   the HTTP port **3001** and never uses `%i`, even though the template exists precisely to vary per
+   instance (`ReadWritePaths=/var/lib/kovanica-testnet-seed%i` does use it). Two instances on one host
+   would collide on 3001. Intended shape is probably `127.0.0.1:30%i`, or the port should come from
+   `testnet-seed%i.env`.
+5. **`/etc/systemd/system` is already `KVNC_`-clean**, so §6's `grep -rn 'KVNC_' /etc/systemd/system`
+   acceptance check is a false-negative generator: the `KVNC_*` variables live in the **launcher
+   scripts** (`testnet/run-seedN.sh`), not the unit files. Extend the grep to those scripts.
+   Units that do reference the repo path today: `/etc/systemd/system/kvnc-node.service` and
+   `/etc/systemd/system/kvnc-testnet-seed2.service`.
+6. **There is at least a third legacy unit name in play**: `kvnc-node.service` (disabled, present on
+   both seed2 and seed3, also pointing at `/root/Projects/kvnc`). §1's two-generation inventory is
+   incomplete.
+7. **RFC-009 / pruning bites even at a 3.2 MB log.** The refusal projected ~3 368 MiB from
+   `/var/lib/kovanica-testnet-seed2/alpha.log`, which is 3.2 MB and was last written **2026-10-06**.
+   The new-path data dir on seed2 is stale and dirty — a wipe-and-resync candidate, not a migration
+   candidate. The ceiling will recur as the chain grows, so D2's 5 G only buys one growth cycle.
+8. **Memory headroom (for D2)**: seed2 = 7 935 MB total / 6 176 MB available / 8 191 MB swap;
+   `/var/lib` on `/` with 69 G free. A 5 G ceiling fits.
+9. **`docs/TESTNET-SEED-NODES.md` is now wrong on almost every line** — it claims "P2P TCP 8000,
+   libp2p swarm", `chain_id 1337`, "deployed 2026-10-13 (build c44f672)", all three seeds healthy with
+   `peer_count 2`, `systemctl start kovanica-node.service` (no such unit), data dir
+   `/root/Projects/kvnc/node-data` (the live path is `testnet/node-data`), binaries `kovanica-node`
+   (the running ones are `kvnc-node`), and validator keys `val{1,2,3}.pem` (seed2 actually reads
+   `testnet/validators/v2.dat`). Treat it as superseded.
+
+### 9.5 Revised remaining work (today's state; supersedes §5's ordering)
+
+- **Step 0 — name the objective.** The seeds' original job was to let new nodes bootstrap. RPC clients
+  are already served by seed1's Docker cluster, but **no reachable plaintext-TCP bootnode exists** for
+  a third-party node that wants to join. That gap — not the rename — is the thing worth closing.
+- **Step 1 — commit the units + env templates** (§9.4 defect 3). Nothing downstream is reviewable until
+  a source of truth exists in git.
+- **Step 2 — fix the template port** to a `%i`-derived value (§9.4 defect 4).
+- **Step 3 — decide what the seeds are for.** Note that Option A (rename-only, already decided) is about
+  *drift hygiene*: seed2's old node runs a different **transport** (libp2p on 8000) from the renamed
+  node (plaintext TCP on 8000), and does not share the renamed node's `/etc/kovanica` authority set, so
+  a pure rename will **not** connect the seeds to the live Docker chain. Only Option B does that, and it
+  needs D2 + D3 resolved per seed.
+- **Step 4 — seed3 first** (already down → zero incremental risk): apply the 5 G ceiling, wipe
+  `/var/lib/kovanica-testnet-seed3` if stale, start, then verify against the live chain. **D3 is still
+  unresolved and blocking**: `/etc/kovanica/testnet-authorities.conf` declares
+  `d1a14d2c… / a5e261ae… / a1affed9…` with `KOVANICA_AUTHORITY_THRESHOLD=2`, while the running chain's
+  genesis set is `aa7ec9c9… / 7173710d… / 85043fd3…`. The two sets do not overlap.
+- **Step 5 — seed2**: 5 G ceiling + wipe the stale `/var/lib/kovanica-testnet-seed2` (3.2 MB, Oct 6) +
+  start the new unit, leaving `kvnc-testnet-seed2` running for rollback. Remember the bootnode it is
+  configued with (`seed.kovanica.online:8000`, `seed3.kovanica.online:8000`) is not a listener
+  (§9.4 defects 1–2).
+- **Step 6 — seed1**: publish a TCP P2P port from the seed container if seed1 is to be a real bootnode;
+  today it advertises nothing. Fix the compose's `KOVANICA_BOOTNODES` in the same change. Defer while
+  the concurrent session holds the shared cwd.
+- **Step 7 — rewrite `docs/TESTNET-SEED-NODES.md`** (§9.4 defect 9).
+
+### 9.6 Acceptance criteria (revised)
+
+- `rpc-testnet.kovanica.online` `POST /rpc` → `kovanica_blockNumber` monotonically advancing
+  (**already true**);
+- at least one of seed1/2/3 accepts an **inbound plaintext-TCP P2P connection** from a node that is not
+  on the same Docker network, and its genesis/authority set matches the live chain;
+- the units + env templates exist in git, and `systemd-analyze verify` passes on each (`§4.4`);
+- `grep -rn 'KVNC_' /etc/systemd/system /root/Projects/kvnc/testnet` → empty (extended beyond §6's
+  unit-only check);
+- no unit or launcher script depends on `/root/Projects/kvnc` for its **code** path, or that dependency
+  is documented and versioned.
+
