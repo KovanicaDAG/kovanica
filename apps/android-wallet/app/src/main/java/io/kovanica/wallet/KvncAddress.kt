@@ -17,19 +17,30 @@ object KvncAddress {
     const val SUFFIX: String = "dag"
 
     private val HEX32 = Regex("^[0-9a-fA-F]{64}$")
+    private val HEX72 = Regex("^[0-9a-fA-F]{72}$")
 
     /**
      * Normalise an address typed by the user (or returned by the FFI) to a
-     * lowercase 64-hex string, or `null` when it is not a valid 32-byte
-     * address. A truncated or checksum-broken `kvnc…dag` string is rejected
-     * here rather than shipped to the node.
+     * lowercase 64-hex string, or `null` when it is not a usable 32-byte
+     * address. Accepted forms:
+     *
+     *  - a bare (or `0x`-prefixed) 64-hex public key;
+     *  - the app's own label form from [display], `kvnc<64hex>dag`;
+     *  - the canonical `kvnc<72hex>dag` form from `Address::encode` (the
+     *    32-byte key followed by its 4-byte blake3 checksum, 72 hex total).
+     *
+     * For a 72-hex payload only the first 64 hex (the key) are kept; the
+     * trailing checksum is **not** verified here — Kotlin has no blake3, and
+     * the node validates the key when the transaction is submitted. Anything
+     * else is rejected.
      */
     fun normalizeHex(raw: String?): String? {
         val value = raw?.trim().orEmpty()
         if (value.isEmpty()) return null
         val core = stripWrapper(value)
-        if (!HEX32.matches(core)) return null
-        return core.lowercase(Locale.US)
+        if (HEX32.matches(core)) return core.lowercase(Locale.US)
+        if (HEX72.matches(core)) return core.take(64).lowercase(Locale.US)
+        return null
     }
 
     /** True when [raw] is a usable address in any accepted form. */

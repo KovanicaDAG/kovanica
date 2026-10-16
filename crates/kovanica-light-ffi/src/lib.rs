@@ -15,8 +15,9 @@ use kovanica_comms_relay::{comms_id_bytes, comms_id_from_hex, comms_id_hex, Enve
 use kovanica_crypto::{derive_vrf_secret_from_seed, vrf_prove, VRFKeyPair};
 use kovanica_keystore::{parse, to_json};
 use kovanica_light::{
-    sign_call, sign_deploy, sign_exit_light_node, sign_light_witness, sign_register_light_node,
-    sign_transfer, verify_account, verify_sealed_header,
+    change_passphrase, contract_address_for, reveal_mnemonic, sign_call, sign_deploy,
+    sign_exit_light_node, sign_light_witness, sign_register_light_node, sign_transfer,
+    verify_account, verify_sealed_header,
 };
 use kovanica_types::signing::chain_id;
 use kovanica_types::{Address, Hash, SigningKey, Transaction};
@@ -413,6 +414,53 @@ fn hex_hash(hash: &Hash) -> String {
 pub fn wallet_pubkey_hex(keystore_json: String) -> Result<String, LightFfiError> {
     let keystore = parse(keystore_json.as_bytes()).map_err(failed)?;
     Ok(keystore.public_key.clone())
+}
+
+/// Reveal the 24-word seed phrase for backup.
+///
+/// **Note:** Runs off the UI thread (decrypts the keystore; Argon2id is expensive).
+/// A wrong passphrase is an error, never a panic.
+#[uniffi::export]
+pub fn reveal_mnemonic_raw(
+    keystore_json: String,
+    passphrase: String,
+) -> Result<String, LightFfiError> {
+    reveal_mnemonic(&keystore_json, &passphrase).map_err(failed)
+}
+
+/// Re-encrypt the wallet under `new_passphrase`; returns the new keystore JSON.
+///
+/// The seed is preserved, so the address does not change. On success the caller
+/// replaces its stored `keystore` value with the returned JSON.
+///
+/// **Note:** Runs off the UI thread (decrypts and re-encrypts; Argon2id runs twice).
+/// A wrong `passphrase` is an error, never a panic.
+#[uniffi::export]
+pub fn change_passphrase_raw(
+    keystore_json: String,
+    passphrase: String,
+    new_passphrase: String,
+) -> Result<String, LightFfiError> {
+    if new_passphrase.is_empty() {
+        return Err(failed("passphrase is empty"));
+    }
+    change_passphrase(&keystore_json, &passphrase, &new_passphrase).map_err(failed)
+}
+
+/// Derive the address a `Deploy` transaction will create on-chain, off-node.
+///
+/// `sender_hex` is the `kvnc…dag` address or a bare / `0x`-prefixed 64-hex
+/// payload. `nonce` is the sender's account nonce **as it stands while the
+/// `Deploy` tx is being signed** (i.e. the `tx.nonce`); the `+1` the node bakes
+/// into the address is applied inside. Returns the bare 64-hex contract address.
+///
+/// **Note:** Pure BLAKE3 — safe to call on the UI thread.
+#[uniffi::export]
+pub fn contract_address_for_raw(
+    sender_hex: String,
+    nonce: u64,
+) -> Result<String, LightFfiError> {
+    contract_address_for(&sender_hex, nonce).map_err(failed)
 }
 
 /// Derive comms identity hex from public key hex.
@@ -1089,5 +1137,55 @@ mod tests {
 
     fn created_wallet_json() -> String {
         create_wallet("pw".to_string()).unwrap().keystore_json
+    }
+
+    #[test]
+    fn reveal_mnemonic_round_trips_and_rejects_wrong_passphrase() {
+        let created = create_wallet("backup-pw".to_string()).unwrap();
+        let revealed =
+            reveal_mnemonic_raw(created.keystore_json.clone(), "backup-pw".to_string()).unwrap();
+        assert_eq!(revealed, created.mnemonic);
+        assert_eq!(revealed.split_whitespace().count(), 24);
+
+        // A wrong passphrase is an error, never a panic.
+        assert!(reveal_mnemonic_raw(created.keystore_json, "wrong-pw".to_string()).is_err());
+    }
+
+    #[test]
+    fn change_passphrase_switches_the_passphrase() {
+        let created = create_wallet("old-pw".to_string()).unwrap();
+
+        let updated = change_passphrase_raw(
+            created.keystore_json.clone(),
+            "old-pw".to_string(),
+            "new-pw".to_string(),
+        )
+        .unwrap();
+
+        // New passphrase unlocks the same seed; the old one no longer does.
+        assert_eq!(
+            reveal_mnemonic_raw(updated.clone(), "new-pw".to_string()).unwrap(),
+            created.mnemonic
+        );
+        assert!(reveal_mnemonic_raw(updated.clone(), "old-pw".to_string()).is_err());
+
+        // Same seed, so the address is unchanged.
+        assert_eq!(
+            wallet_address(updated).unwrap(),
+            wallet_address(created.keystore_json.clone()).unwrap()
+        );
+
+        // A wrong old passphrase fails and changes nothing.
+        assert!(change_passphrase_raw(
+            created.keystore_json,
+            "wrong-old".to_string(),
+            "another".to_string(),
+        )
+        .is_err());
+
+        // An empty new passphrase is rejected.
+        assert!(
+            change_passphrase_raw(created_wallet_json(), "pw".to_string(), String::new()).is_err()
+        );
     }
 }

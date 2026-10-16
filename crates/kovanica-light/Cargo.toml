@@ -8,6 +8,10 @@ description = "Kovanica light-client verification (headers, seals, inclusion pro
 [dependencies]
 kovanica-types = { path = "../kovanica-types" }
 kovanica-crypto = { path = "../kovanica-crypto" }
+kovanica-keystore = { path = "../kovanica-keystore" }
+# BLAKE3 is the canonical contract-address derivation hash (mirrors
+# `kovanica-common::hash`, which the node's deploy path calls).
+blake3 = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

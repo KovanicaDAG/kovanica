@@ -142,7 +142,7 @@ Workspace crate versions default to `0.2.0`; the table records the version each 
 | App | Identifier | Stack |
 |-----|------------|-------|
 | `apps/desktop` | `@kovanica/desktop` 0.1.0 | Tauri v2 + React comms client |
-| `apps/android` | `io.kovanica.light` (versionCode 5 / versionName 0.5.0, minSdk 24) | Kotlin + UniFFI light client |
+| `apps/android` | `io.kovanica.light` (versionCode 8 / versionName 0.7.0, minSdk 24) | Kotlin + UniFFI light client |
 | `apps/ios` | `KovanicaLight` | SwiftUI light client |
 
 ### Documentation
@@ -296,7 +296,7 @@ The light stack lets clients follow committed leader headers and seals without r
 - `kovanica-light` — verification of headers, commit seals, and inclusion proofs.
 - `kovanica-lightnode` — a light node that follows seals and submits transfers, with no consensus loop. Its CLI supports `transfer`, `bond` (bond KUNA and register the keystore's VRF key, default 100 KUNA), `exit`, and hourly witness submission. It is **not** a validator.
 - `kovanica-light-ffi` — UniFFI bindings consumed by the Android (Kotlin) and iOS (Swift) apps.
-- Apps: `apps/android` (`io.kovanica.light`, versionCode 5 / versionName 0.5.0, minSdk 24) and `apps/ios` (SwiftUI `KovanicaLight`), both driven by the generated UniFFI bindings.
+- Apps: `apps/android` (`io.kovanica.light`, versionCode 8 / versionName 0.7.0, minSdk 24) and `apps/ios` (SwiftUI `KovanicaLight`), both driven by the generated UniFFI bindings.
 
 Light nodes earn a **20% share** of the block reward (`LIGHT_REWARD_BPS = 2 000`), escrowed per epoch across `LIGHT_WITNESS_SLOTS = 32` winning witness slots, capped at `MAX_LIGHT_NODES = 4 096` identities, with a minimum bond of `MIN_LIGHT_BOND = 100 KUNA`. The light node reads its keystore passphrase from `KOVANICA_LIGHT_PASSPHRASE`; a systemd unit is provided in `packaging/systemd/kovanica-lightnode.service`.
 

@@ -1,6 +1,7 @@
 package io.kovanica.light
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -72,6 +73,8 @@ class MainActivity : Activity() {
     private lateinit var mnemonicField: EditText
     private lateinit var toField: EditText
     private lateinit var amountField: EditText
+    private lateinit var toValidation: TextView
+    private lateinit var amountPreview: TextView
     private lateinit var faucetButton: Button
 
     // Wallet overview (native KUNA hero).
@@ -87,6 +90,12 @@ class MainActivity : Activity() {
     private lateinit var addTokenToggle: Button
     private lateinit var addTokenField: EditText
     private lateinit var tokens: TokenStore
+
+    /** Local, per-network log of what this phone submitted (no history RPC exists). */
+    private lateinit var history: HistoryStore
+
+    /** Saved recipients, shared across networks (an address is chain-independent). */
+    private lateinit var addressBook: AddressBookStore
 
     /** Contract addresses watched on the active network (lowercase 64-hex). */
     private var watched: List<String> = emptyList()
@@ -221,8 +230,41 @@ class MainActivity : Activity() {
         val sendCard = card().apply {
             addStack(sectionLabel("Send KUNA"))
             addStack(toField, 2)
-            addStack(amountField, 8)
+            val recipientActions = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(
+                    button("Contacts", filled = false) { openAddressBook() },
+                    LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+                )
+                addView(
+                    button("Scan QR", filled = false) { openScanner() },
+                    LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        .apply { leftMargin = dp(10) },
+                )
+            }
+            addStack(recipientActions, 8)
+            toValidation = TextView(this@MainActivity).apply {
+                textSize = 12f
+                setLineSpacing(0f, 1.3f)
+                visibility = View.GONE
+            }
+            addStack(toValidation, 8)
+            addStack(amountField, 12)
+            amountPreview = TextView(this@MainActivity).apply {
+                textSize = 12f
+                typeface = Typeface.MONOSPACE
+                setTextColor(MUTED)
+                visibility = View.GONE
+            }
+            addStack(amountPreview, 8)
             addStack(button("Send") { send() }, 12)
+            addStack(
+                caption(
+                    "Amounts are in atoms — 1 KUNA is 1,000,000,000 atoms. Contacts fills the " +
+                        "field from your saved list; Scan QR reads an address from a code.",
+                ),
+                12,
+            )
         }
 
         val lightCard = card().apply {
@@ -257,6 +299,7 @@ class MainActivity : Activity() {
             addStack(header())
             addView(rule(), LinearLayout.LayoutParams(dp(40), dp(3)).apply { topMargin = dp(14) })
             addStack(status, 18)
+            addStack(guideCard(), 18)
             addStack(overviewCard, 18)
             addStack(tokensCard, 18)
             addStack(sendCard, 18)
@@ -265,6 +308,7 @@ class MainActivity : Activity() {
             addStack(walletCard, 18)
             addStack(lightCard, 18)
             addStack(messagesCard, 18)
+            addStack(moreCard(), 18)
         }
 
         setContentView(ScrollView(this).apply {
@@ -277,13 +321,19 @@ class MainActivity : Activity() {
         listOf(rpcField, chainField, epochField, faucetField).forEach {
             it.addTextChangedListener(fieldWatcher())
         }
+        toField.addTextChangedListener(recipientWatcher())
+        amountField.addTextChangedListener(amountWatcher())
         initNetworkSelection()
         updateNetworkNote()
         refreshFaucet()
         resetChainPanel()
         tokens = TokenStore(this)
+        history = HistoryStore(this)
+        addressBook = AddressBookStore(this)
         watched = tokens.watched(current.id)
         renderTokens()
+        renderRecipientCheck()
+        renderAmountPreview()
         renderOverview(
             if (keystoreOrNull() == null) OverviewState.NoWallet else OverviewState.Idle,
         )
@@ -298,6 +348,26 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refreshFaucet()
+        reloadWatchlist()
+    }
+
+    /**
+     * Pick up tokens added on another screen (for example Create token, which
+     * writes straight to [TokenStore]) and read them. The initial `onCreate`
+     * load is not enough on its own, since a screen we return from can change
+     * the watched list behind us.
+     */
+    private fun reloadWatchlist() {
+        val latest = tokens.watched(current.id)
+        if (latest == watched) return
+        watched = latest
+        sendPanelFor = null
+        pendingTokenRemoval = null
+        if (keystoreOrNull() == null) {
+            renderTokens()
+        } else {
+            refreshWallet()
+        }
     }
 
     // --- network switch ------------------------------------------------------------------
@@ -523,6 +593,11 @@ class MainActivity : Activity() {
         )
     }
 
+    /**
+     * Validate the recipient and amount, read the fee rate from the node, then
+     * show a review before anything is signed. The passphrase is captured on the
+     * UI thread and only reaches the signer once the user confirms.
+     */
     private fun send() {
         val to = toField.text.toString().trim()
         val amount = amountField.text.toString().trim().toULongOrNull()
@@ -531,18 +606,69 @@ class MainActivity : Activity() {
             setStatus("Enter the recipient address.", Tone.ERROR)
             return
         }
+        // Accept bare 64-hex or any `kvnc…dag` wrapper (the app's own
+        // `kvnc<64hex>dag` label form and the canonical `kvnc<72hex>dag`); the
+        // signer only accepts the 64-hex key. Mirrors `attemptTokenSend`.
+        val toHex = KvncAddress.normalizeHex(to)
+        if (toHex == null) {
+            setStatus("Enter a valid recipient address.", Tone.ERROR)
+            return
+        }
         if (amount == null) {
             setStatus("Amount must be a whole number of atoms, like 1.", Tone.ERROR)
             return
         }
+        if (amount == 0uL) {
+            setStatus("Amount must be more than zero.", Tone.ERROR)
+            return
+        }
+        setStatus("Checking the fee…", Tone.NEUTRAL)
+        val env = env()
+        io.execute {
+            val rate = try {
+                parseQuantity(client(env).call("kovanica_estimateFee", JSONArray()))
+            } catch (error: Exception) {
+                runOnUiThread {
+                    setStatus(error.message ?: "Couldn't read the fee from the node.", Tone.ERROR)
+                }
+                return@execute
+            }
+            runOnUiThread { reviewSend(toHex, amount, rate, passphrase) }
+        }
+    }
+
+    /** One confirmation between the form and the chain: recipient, amount, fee rate. */
+    private fun reviewSend(toHex: String, amount: ULong, rate: ULong, passphrase: String) {
+        val kuna = Amounts.format(BigInteger(amount.toString()), NATIVE_DECIMALS)
+        val known = addressBook.label(toHex)
+        val name = if (known == null) "" else "\nSaved as: $known"
+        AlertDialog.Builder(this)
+            .setTitle("Send KUNA?")
+            .setMessage(
+                "To: ${KvncAddress.short(toHex)}$name\n" +
+                    "Amount: $kuna KUNA\n" +
+                    "Fee rate: $rate atoms/byte",
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Send") { _, _ -> broadcastSend(toHex, amount, rate, passphrase) }
+            .show()
+    }
+
+    private fun broadcastSend(toHex: String, amount: ULong, rate: ULong, passphrase: String) {
         background("Sending…") { env ->
             val keystore = keystore()
             val address = walletAddress(keystore)
             val node = client(env)
             val nonce = parseQuantity(node.call("kovanica_getNonce", JSONArray().put(address)))
-            val rate = parseQuantity(node.call("kovanica_estimateFee", JSONArray()))
-            val raw = signTransferRaw(keystore, passphrase, env.chainId, to, amount, nonce, rate)
+            val raw = signTransferRaw(keystore, passphrase, env.chainId, toHex, amount, nonce, rate)
             val hash = node.call("kovanica_sendRawTransaction", JSONArray().put(raw))
+            record(
+                kind = HistoryEntry.KIND_SEND,
+                hash = hash,
+                to = toHex,
+                amount = Amounts.format(BigInteger(amount.toString()), NATIVE_DECIMALS),
+                symbol = NATIVE_SYMBOL,
+            )
             ok("Submitted — $hash")
         }
     }
@@ -550,7 +676,11 @@ class MainActivity : Activity() {
     private fun bond() {
         val passphrase = passField.text.toString()
         background("Bonding 100 KUNA…") { env ->
-            submit(env, "bond") { keystore, _, nonce, rate ->
+            submit(
+                env,
+                "bond",
+                amount = Amounts.format(BigInteger(MIN_LIGHT_BOND.toString()), NATIVE_DECIMALS),
+            ) { keystore, _, nonce, rate ->
                 signBondRaw(keystore, passphrase, env.chainId, MIN_LIGHT_BOND, nonce, rate)
             }
         }
@@ -578,6 +708,7 @@ class MainActivity : Activity() {
                 rate,
             )
             val hash = node.call("kovanica_sendRawTransaction", JSONArray().put(raw))
+            record(kind = HistoryEntry.KIND_WITNESS, hash = hash)
             ok("Witness submitted — $hash\n${lightLine(set, address)}")
         }
     }
@@ -594,12 +725,83 @@ class MainActivity : Activity() {
     private fun faucet() {
         background("Requesting faucet…") { env ->
             val address = walletAddress(keystore())
-            ok("Faucet: ${client(env).postFaucet(address)}")
+            val result = client(env).postFaucet(address)
+            HistoryStore.extractTxHash(result)?.let { hash ->
+                record(kind = HistoryEntry.KIND_FAUCET, hash = hash)
+            }
+            ok("Faucet: $result")
         }
     }
 
     private fun openMessages() {
         startActivity(Intent(this, MessagesActivity::class.java))
+    }
+
+    private fun openGuide() {
+        startActivity(Intent(this, HowToUseActivity::class.java))
+    }
+
+    private fun openHistory() {
+        startActivity(Intent(this, HistoryActivity::class.java))
+    }
+
+    private fun openSettings() {
+        startActivity(Intent(this, SettingsActivity::class.java))
+    }
+
+    /** Open the contact list as a picker; the chosen address comes back below. */
+    private fun openAddressBook() {
+        startActivityForResult(
+            Intent(this, AddressBookActivity::class.java)
+                .putExtra(AddressBookActivity.EXTRA_PICK, true),
+            REQUEST_PICK_CONTACT,
+        )
+    }
+
+    private fun openScanner() {
+        startActivityForResult(Intent(this, ScanActivity::class.java), REQUEST_SCAN_QR)
+    }
+
+    /**
+     * Open the KVP-102 token creator. A token is signed with this phone's wallet,
+     * so there is nothing to create until one exists — same gate as Receive.
+     */
+    private fun openCreateToken() {
+        if (keystoreOrNull() == null) {
+            setStatus("Create or import a wallet first — a token needs one to sign with.", Tone.WARN)
+            return
+        }
+        startActivity(Intent(this, CreateTokenActivity::class.java))
+    }
+
+    /**
+     * The classic result contract: this app carries no androidx, so the contacts
+     * picker and the QR scanner both hand their address back here.
+     */
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        when (requestCode) {
+            REQUEST_PICK_CONTACT -> {
+                val address = data?.getStringExtra(AddressBookActivity.EXTRA_RESULT_ADDRESS)
+                if (!address.isNullOrBlank()) {
+                    fillRecipient(address, "Recipient filled from your contacts.")
+                }
+            }
+            REQUEST_SCAN_QR -> {
+                val address = data?.getStringExtra(ScanActivity.EXTRA_RESULT_ADDRESS)
+                if (!address.isNullOrBlank()) {
+                    fillRecipient(address, "Address read from the code.")
+                }
+            }
+        }
+    }
+
+    private fun fillRecipient(address: String, message: String) {
+        toField.setText(address)
+        toField.setSelection(toField.text.length)
+        renderRecipientCheck()
+        setStatus(message, Tone.OK)
     }
 
     // --- wallet overview -----------------------------------------------------------------
@@ -819,6 +1021,7 @@ class MainActivity : Activity() {
     /** The token watchlist card: add form plus one row per watched contract. */
     private fun tokensCard(): LinearLayout = card().apply {
         addStack(tokensHeader())
+        addStack(button("Create token", filled = false) { openCreateToken() }, 10)
         tokensState = TextView(this@MainActivity).apply {
             textSize = 12f
             setTextColor(MUTED)
@@ -921,7 +1124,7 @@ class MainActivity : Activity() {
         tokenList.removeAllViews()
         tokensState.text = when {
             watched.isEmpty() ->
-                "No tokens watched on ${current.label}. Add one by its contract address."
+                "No tokens watched on ${current.label}. Add one by address, or create one."
             watched.size == 1 -> "1 token watched on ${current.label}."
             else -> "${watched.size} tokens watched on ${current.label}."
         }
@@ -930,7 +1133,7 @@ class MainActivity : Activity() {
             tokenList.addStack(
                 caption(
                     "Tokens are held by their own contracts, not in your KUNA balance. " +
-                        "Tap Add to watch one by address.",
+                        "Tap Add to watch one by address, or Create token to issue a new one.",
                 ),
                 0,
             )
@@ -1159,6 +1362,14 @@ class MainActivity : Activity() {
                 amount,
                 decimals,
             )
+            record(
+                kind = HistoryEntry.KIND_TOKEN_SEND,
+                hash = hash,
+                to = toHex,
+                contract = contract,
+                amount = Amounts.format(amount, decimals),
+                symbol = symbol,
+            )
             ok("$symbol transfer submitted — $hash")
         }
     }
@@ -1209,6 +1420,7 @@ class MainActivity : Activity() {
     private fun submit(
         env: Env,
         label: String,
+        amount: String? = null,
         sign: (keystore: String, address: String, nonce: ULong, rate: ULong) -> String,
     ): Line {
         val keystore = keystore()
@@ -1218,6 +1430,12 @@ class MainActivity : Activity() {
         val rate = parseQuantity(node.call("kovanica_estimateFee", JSONArray()))
         val raw = sign(keystore, address, nonce, rate)
         val hash = node.call("kovanica_sendRawTransaction", JSONArray().put(raw))
+        record(
+            kind = label,
+            hash = hash,
+            amount = amount,
+            symbol = if (amount == null) null else NATIVE_SYMBOL,
+        )
         return ok("$label submitted — $hash")
     }
 
@@ -1304,6 +1522,55 @@ class MainActivity : Activity() {
             refreshFaucet()
             chainMeta.text = chainPreview()
         }
+    }
+
+    /** Live check on the recipient: a clear yes or no as the address is typed or filled. */
+    private fun recipientWatcher(): TextWatcher = object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+
+        override fun afterTextChanged(s: Editable?) {
+            renderRecipientCheck()
+        }
+    }
+
+    /** Shows what the entered atoms add up to in KUNA, so the field means something readable. */
+    private fun amountWatcher(): TextWatcher = object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+
+        override fun afterTextChanged(s: Editable?) {
+            renderAmountPreview()
+        }
+    }
+
+    private fun renderRecipientCheck() {
+        val raw = toField.text.toString().trim()
+        when {
+            raw.isEmpty() -> toValidation.visibility = View.GONE
+            KvncAddress.isValid(raw) -> {
+                toValidation.text = "Looks like a valid address — ${KvncAddress.short(raw)}."
+                toValidation.setTextColor(GOOD)
+                toValidation.visibility = View.VISIBLE
+            }
+            else -> {
+                toValidation.text = "That is not a Kovanica address yet."
+                toValidation.setTextColor(BAD)
+                toValidation.visibility = View.VISIBLE
+            }
+        }
+    }
+
+    private fun renderAmountPreview() {
+        val atoms = amountField.text.toString().trim().toULongOrNull()
+        if (atoms == null) {
+            amountPreview.visibility = View.GONE
+            return
+        }
+        amountPreview.text = "= ${Amounts.format(BigInteger(atoms.toString()), NATIVE_DECIMALS)} KUNA"
+        amountPreview.visibility = View.VISIBLE
     }
 
     // --- rendering -----------------------------------------------------------------------
@@ -1396,7 +1663,7 @@ class MainActivity : Activity() {
             typeface = Typeface.DEFAULT_BOLD
         })
         addView(TextView(this@MainActivity).apply {
-            text = "Kovanica Light"
+            text = "Kovanica Lightnode"
             setTextColor(TEXT)
             textSize = 30f
             typeface = Typeface.DEFAULT_BOLD
@@ -1412,6 +1679,76 @@ class MainActivity : Activity() {
     }
 
     private fun rule(): View = View(this).apply { background = rounded(ACCENT, 2) }
+
+    /**
+     * First-run pointer into the guide screen. The whole card is tappable, with the
+     * amber press tint used by the tappable rows on Messages.
+     */
+    private fun guideCard(): LinearLayout = card().apply {
+        isClickable = true
+        isFocusable = true
+        background = ripple(SURFACE, 18)
+        setOnClickListener { openGuide() }
+
+        val head = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(
+            TextView(this@MainActivity).apply {
+                text = "BEFORE YOU START"
+                setTextColor(MUTED)
+                textSize = 11f
+                letterSpacing = 0.18f
+                typeface = Typeface.DEFAULT_BOLD
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        head.addView(
+            TextView(this@MainActivity).apply {
+                text = "›"
+                setTextColor(ACCENT)
+                textSize = 24f
+                typeface = Typeface.DEFAULT_BOLD
+            },
+        )
+        addStack(head, 0)
+        addStack(
+            TextView(this@MainActivity).apply {
+                text = "How to use this app"
+                setTextColor(TEXT)
+                textSize = 18f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(8), 0, 0)
+            },
+            0,
+        )
+        addStack(
+            caption(
+                "A short walkthrough of every screen: network, wallet, receive, send, " +
+                    "tokens, and messages. Your keys stay on this phone.",
+            ),
+            8,
+        )
+    }
+
+    /**
+     * Entry into Settings and the local transaction history. Two plain buttons so
+     * "what this phone sent" and "how to protect it" sit together, away from the
+     * day-to-day send and receive flow.
+     */
+    private fun moreCard(): LinearLayout = card().apply {
+        addStack(sectionLabel("More"))
+        addStack(
+            caption(
+                "History is a local record kept on this phone. Settings covers your seed " +
+                    "backup and the passphrase that protects it.",
+            ),
+            0,
+        )
+        addStack(button("Transaction history", filled = false) { openHistory() }, 12)
+        addStack(button("Settings", filled = false) { openSettings() }, 10)
+    }
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -1517,6 +1854,36 @@ class MainActivity : Activity() {
 
     private fun keystore(): String = keystoreOrNull() ?: error("Create or import a wallet first.")
 
+    /**
+     * Append one row to the local history for the active network. Called from the
+     * IO thread at each submission point; a blank hash is ignored so a failed send
+     * never leaves a mystery row behind.
+     */
+    private fun record(
+        kind: String,
+        hash: Any?,
+        to: String? = null,
+        contract: String? = null,
+        amount: String? = null,
+        symbol: String? = null,
+    ) {
+        val value = hash?.toString()?.trim().orEmpty()
+        if (value.isEmpty()) return
+        history.add(
+            current.id,
+            HistoryEntry(
+                kind = kind,
+                hash = value,
+                networkId = current.id,
+                timestampMs = System.currentTimeMillis(),
+                to = to,
+                contract = contract,
+                amount = amount,
+                symbol = symbol,
+            ),
+        )
+    }
+
     private fun hex(value: ULong) = "0x" + value.toString(16)
 
     /**
@@ -1571,6 +1938,9 @@ class MainActivity : Activity() {
         /** KUNA has 9 decimals; token decimals come from each token's own state. */
         private const val NATIVE_DECIMALS: Int = 9
 
+        /** Native ticker shown next to amounts in the local history. */
+        private const val NATIVE_SYMBOL: String = "KUNA"
+
         // Palette lives in WalletUi so new surfaces cannot drift from the shipped theme.
         private val INK = WalletUi.INK
         private val SURFACE = WalletUi.SURFACE
@@ -1588,5 +1958,9 @@ class MainActivity : Activity() {
 
         /** Press tint for the network rows: the accent at about 18% alpha. */
         private val RIPPLE = WalletUi.RIPPLE
+
+        /** Request codes for the send-card pickers, via the classic result contract. */
+        private const val REQUEST_PICK_CONTACT: Int = 1001
+        private const val REQUEST_SCAN_QR: Int = 1002
     }
 }
