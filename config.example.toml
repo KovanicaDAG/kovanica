@@ -17,6 +17,11 @@
 
 # Extra env-only overrides without a TOML equivalent:
 #   KOVANICA_RUN_VALIDATOR  (true|false, default on)
+#   KOVANICA_CHAIN_ID       (1 mainnet, 2 testnet, 3 devnet, 1337 local)
+#   KOVANICA_RPC_AUTH       (disable|on, default on)
+#   KOVANICA_RPC_WRITE_TOKENS
+#   KOVANICA_HEALTH_COMMIT_STALL_SECS (default 120; 0 disables the /health stall check)
+#   KOVANICA_VRF_LEADER     (true|false; TOML equivalent use_vrf_leader)
 #
 # MysticGhost colouring and VRF leader election default on. A live mesh has
 # to take both together. With no validator VRF keys, leader election stays

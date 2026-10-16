@@ -37,8 +37,9 @@ pub use error::TypesError;
 pub use hash::Hash;
 pub use light_client::{
     committee_seal_hash, executed_tx_hashes, leader_header, light_vrf_input, light_vrf_priority,
-    verify_colouring, ColouringCertificate, CommitSeal, LeaderHeader, LightClientCheckpoint,
-    SealAnnouncement, SealError, StateProof, WaveCommitCertificate, LIGHT_VRF_DOMAIN,
+    verify_colouring, vrf_hash_prefix, vrf_priority_cmp, ColouringCertificate, CommitSeal,
+    LeaderHeader, LightClientCheckpoint, SealAnnouncement, SealError, StateProof,
+    WaveCommitCertificate, LIGHT_VRF_DOMAIN,
 };
 pub use merkle::{MerkleProof, MerkleStep};
 pub use signing::SigningContext;
