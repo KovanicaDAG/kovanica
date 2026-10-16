@@ -32,6 +32,12 @@ pub enum LightError {
     /// MysticGhost roots do not match the supplied mergeset.
     #[error("mysticghost colouring does not match the header")]
     Colouring,
+    /// The keystore could not be parsed, decrypted, or re-encrypted.
+    #[error("keystore error: {0}")]
+    Keystore(String),
+    /// A sender address string could not be parsed.
+    #[error("invalid sender address: {0}")]
+    InvalidAddress(String),
 }
 
 /// Check one sealed header against the configured committee.
@@ -277,6 +283,72 @@ fn sign_kind(
     transaction
 }
 
+/// Decrypt a wallet and return its 24-word BIP-39 seed phrase for backup.
+///
+/// The caller is responsible for showing the phrase exactly once and never
+/// persisting it. A wrong `passphrase` is an error ([`LightError::Keystore`]),
+/// never a panic.
+pub fn reveal_mnemonic(keystore_json: &str, passphrase: &str) -> Result<String, LightError> {
+    let keystore = kovanica_keystore::parse(keystore_json.as_bytes()).map_err(keystore_failure)?;
+    let seed = kovanica_keystore::secret_seed(&keystore, Some(passphrase))
+        .map_err(keystore_failure)?;
+    kovanica_keystore::seed_to_mnemonic(&seed).map_err(keystore_failure)
+}
+
+/// Re-encrypt a wallet under `new_passphrase`, returning the new keystore JSON.
+///
+/// The caller replaces its stored keystore with the returned value. The seed is
+/// preserved, so the address does not change. A wrong `old_passphrase` is an
+/// error, never a panic.
+pub fn change_passphrase(
+    keystore_json: &str,
+    old_passphrase: &str,
+    new_passphrase: &str,
+) -> Result<String, LightError> {
+    let keystore = kovanica_keystore::parse(keystore_json.as_bytes()).map_err(keystore_failure)?;
+    let seed = kovanica_keystore::secret_seed(&keystore, Some(old_passphrase))
+        .map_err(keystore_failure)?;
+    let updated = kovanica_keystore::from_seed(&seed, new_passphrase).map_err(keystore_failure)?;
+    kovanica_keystore::to_json(&updated).map_err(keystore_failure)
+}
+
+fn keystore_failure(err: impl std::fmt::Display) -> LightError {
+    LightError::Keystore(err.to_string())
+}
+
+/// Derive the address a `Deploy` transaction from `sender` will create.
+///
+/// The node's deploy path (`kovanica-execution::execute_deploy`, and the
+/// matching branch of `touched_accounts`) hashes the sender's 32-byte address
+/// with the account nonce **after** it has been incremented for the transaction:
+///
+/// ```text
+/// contract = BLAKE3(sender.0 ‖ u64_le(tx.nonce + 1))
+/// ```
+///
+/// The increment runs before the deploy body executes, so the value a client
+/// holds while signing (the `tx.nonce`, which must equal the current account
+/// nonce) is exactly one less than the nonce baked into the address. Pass that
+/// signing-time nonce here; the `+1` is applied internally (via
+/// `saturating_add`, mirroring the node).
+///
+/// `sender` accepts the canonical `kvnc<hex>dag` display form (checksum
+/// verified) or a bare / `0x`-prefixed 64-hex payload. Returns the bare
+/// 64-hex contract address.
+pub fn contract_address_for(sender: &str, nonce: u64) -> Result<String, LightError> {
+    let sender: Address = sender
+        .parse()
+        .map_err(|e: kovanica_types::address::AddressError| {
+            LightError::InvalidAddress(e.to_string())
+        })?;
+    // Mirrors `kovanica-execution::touched_accounts`: sender bytes followed by
+    // the post-increment nonce, little-endian, then BLAKE3.
+    let mut material = Vec::with_capacity(40);
+    material.extend_from_slice(&sender.0);
+    material.extend_from_slice(&nonce.saturating_add(1).to_le_bytes());
+    Ok(Address(*blake3::hash(&material).as_bytes()).to_hex())
+}
+
 /// A seal announcement is only a convenience for tests and gossip decoding.
 pub fn announcement_seal(announcement: &SealAnnouncement) -> &CommitSeal {
     &announcement.seal
@@ -518,5 +590,81 @@ mod tests {
             witness.kind,
             TransactionKind::SubmitLightWitness { epoch: 3, .. }
         ));
+    }
+
+    #[test]
+    fn reveal_and_change_passphrase_round_trip() {
+        let seed = [7u8; 32];
+        let keystore = kovanica_keystore::from_seed(&seed, "old").unwrap();
+        let json = kovanica_keystore::to_json(&keystore).unwrap();
+
+        // Reveal returns exactly the words that encode the seed.
+        let revealed = reveal_mnemonic(&json, "old").unwrap();
+        assert_eq!(revealed, kovanica_keystore::seed_to_mnemonic(&seed).unwrap());
+        assert_eq!(revealed.split_whitespace().count(), 24);
+
+        // A wrong passphrase is an error, never a panic.
+        assert!(matches!(
+            reveal_mnemonic(&json, "nope").unwrap_err(),
+            LightError::Keystore(_)
+        ));
+
+        // Changing the passphrase keeps the seed but swaps the encryption key.
+        let updated = change_passphrase(&json, "old", "new").unwrap();
+        let reopened = kovanica_keystore::parse(updated.as_bytes()).unwrap();
+        assert_eq!(
+            &kovanica_keystore::secret_seed(&reopened, Some("new")).unwrap()[..],
+            &seed[..]
+        );
+        assert!(kovanica_keystore::secret_seed(&reopened, Some("old")).is_err());
+
+        // A wrong old passphrase fails cleanly.
+        assert!(change_passphrase(&json, "bad", "new").is_err());
+    }
+
+    #[test]
+    fn contract_address_reproduces_the_node_derivation() {
+        // The node derives the address in two places, both using `tx.nonce+1`
+        // and `kovanica_common::hash` (BLAKE3): `execute_deploy` (hashes the
+        // *post-increment* account nonce) and `touched_accounts` (encodes
+        // `tx.nonce.saturating_add(1)`). Reconstruct that byte layout here so the
+        // vector is independent of `contract_address_for`'s own body.
+        let sender = Address([0x11u8; 32]);
+
+        for nonce in [0u64, 1, 41, u64::MAX] {
+            let mut material = Vec::with_capacity(40);
+            material.extend_from_slice(&sender.0);
+            material.extend_from_slice(&nonce.saturating_add(1).to_le_bytes());
+            let expected = Address(*blake3::hash(&material).as_bytes()).to_hex();
+
+            // Bare hex form and canonical kvnc…dag form must both agree.
+            assert_eq!(contract_address_for(&sender.to_hex(), nonce).unwrap(), expected);
+            assert_eq!(contract_address_for(&sender.encode(), nonce).unwrap(), expected);
+        }
+
+        // 0x-prefixed input is accepted too.
+        assert_eq!(
+            contract_address_for(&format!("0x{}", sender.to_hex()), 41).unwrap(),
+            contract_address_for(&sender.to_hex(), 41).unwrap()
+        );
+
+        // A malformed sender is rejected, never a panic.
+        assert!(matches!(
+            contract_address_for("not-an-address", 0).unwrap_err(),
+            LightError::InvalidAddress(_)
+        ));
+
+        // Pinned vector: BLAKE3(0x11×32 ‖ u64_le(41 + 1))
+        //   = 806eaf0311f32e976df64184802ea7df85afa268c28978964ed1e3f120cc55bc
+        // Locks the byte layout so a future change to either the sender encoding,
+        // the `+1`, or the endianness is caught.
+        assert_eq!(
+            contract_address_for(
+                "1111111111111111111111111111111111111111111111111111111111111111",
+                41
+            )
+            .unwrap(),
+            "806eaf0311f32e976df64184802ea7df85afa268c28978964ed1e3f120cc55bc"
+        );
     }
 }
