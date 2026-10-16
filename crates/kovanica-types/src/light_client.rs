@@ -18,6 +18,7 @@ use crate::merkle;
 use crate::signing::COMMIT_DOMAIN_TAG;
 use crate::{Address, AuthorityIndex, Round, Stake};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 /// A committed-leader header.
@@ -421,13 +422,61 @@ pub fn light_vrf_input(chain_id: u64, epoch: u64, beacon: &Hash) -> Vec<u8> {
 /// Stake-weighted lottery priority. Lower wins.
 ///
 /// This is the same formula as validator VRF leader selection:
-/// `hash * total_stake / stake`, using the first 16 bytes of the VRF hash.
-pub fn light_vrf_priority(vrf_hash: &[u8; 32], stake: u64, total_stake: u64) -> u128 {
+/// `hash / stake`, using the first 16 bytes of the VRF hash.
+///
+/// `total_stake` is accepted for backwards compatibility. It was previously
+/// multiplied into the numerator, but that saturated: a VRF hash prefix is a
+/// full 128-bit value and `total_stake` is ~2^47, so `hash * total_stake`
+/// overflowed `u128` and every authority got the identical saturated priority.
+/// The factor is a common scale and does not affect the ordering, so it is no
+/// longer applied. Callers that need exact ordering between two priorities
+/// must use [`vrf_priority_cmp`], which compares without any floor division.
+pub fn light_vrf_priority(vrf_hash: &[u8; 32], stake: u64, _total_stake: u64) -> u128 {
+    vrf_hash_prefix(vrf_hash) / u128::from(stake.max(1))
+}
+
+/// The first 16 bytes of a VRF hash as a little-endian `u128`.
+///
+/// This is the canonical prefix used by both validator leader election and the
+/// light-node lottery.
+pub fn vrf_hash_prefix(vrf_hash: &[u8; 32]) -> u128 {
     let mut prefix = [0u8; 16];
     prefix.copy_from_slice(&vrf_hash[..16]);
     u128::from_le_bytes(prefix)
-        .saturating_mul(u128::from(total_stake))
-        .saturating_div(u128::from(stake.max(1)))
+}
+
+/// 128-bit × 64-bit product as a 192-bit big-endian limb array.
+///
+/// The product cannot be held in `u128`: a hash prefix uses all 128 bits and a
+/// stake reaches ~2^47 atoms, so the result needs 175 bits. Splitting into
+/// 64-bit limbs keeps every intermediate inside `u128`.
+#[inline]
+fn mul_u128_u64(n: u128, d: u64) -> [u64; 3] {
+    let lo = u128::from(n as u64) * u128::from(d);
+    let hi = (n >> 64) * u128::from(d);
+    let mid = hi + (lo >> 64);
+    [(mid >> 64) as u64, mid as u64, lo as u64]
+}
+
+/// Compare two stake-weighted VRF priorities exactly. Lower `hash / stake` wins.
+///
+/// `hash_a / stake_a` against `hash_b / stake_b` is decided by cross-multiplying
+/// into 192-bit products (`hash_a * stake_b` against `hash_b * stake_a`). No
+/// intermediate saturates, so the order is exact and deterministic — unlike a
+/// `u128` priority that overflows and collapses every authority to one value.
+///
+/// Returns [`Ordering::Less`] when `a` has the higher priority (smaller
+/// `hash / stake`), [`Ordering::Greater`] when `b` does, and
+/// [`Ordering::Equal`] when the two ratios are identical.
+pub fn vrf_priority_cmp(
+    hash_a: &[u8; 32],
+    stake_a: u64,
+    hash_b: &[u8; 32],
+    stake_b: u64,
+) -> Ordering {
+    let left = mul_u128_u64(vrf_hash_prefix(hash_a), stake_b.max(1));
+    let right = mul_u128_u64(vrf_hash_prefix(hash_b), stake_a.max(1));
+    left.cmp(&right)
 }
 
 /// Light client sync checkpoint.
@@ -693,5 +742,114 @@ mod tests {
         assert_eq!(checkpoint.height, 100);
         assert!(checkpoint.seals.is_empty());
         assert_eq!(checkpoint.timestamp, 1234567890);
+    }
+}
+
+#[cfg(test)]
+mod vrf_priority_tests {
+    use super::*;
+    use crate::committee::{Authority, Committee};
+    use crate::crypto::PublicKey;
+    use std::collections::HashMap;
+
+    /// The priority formula as it was computed before the overflow fix. Kept
+    /// only to document the regression: `hash * total_stake` saturated to
+    /// `u128::MAX`, so distinct hashes produced an identical priority.
+    fn saturating_priority(vrf_hash: &[u8; 32], stake: u64, total_stake: u64) -> u128 {
+        vrf_hash_prefix(vrf_hash)
+            .saturating_mul(u128::from(total_stake))
+            .saturating_div(u128::from(stake.max(1)))
+    }
+
+    #[test]
+    fn old_saturating_priority_collapsed_distinct_hashes() {
+        let a = [0x7fu8; 32];
+        let b = [0x11u8; 32];
+        let c = [0xe3u8; 32];
+        let stake = 50_000_000_000_000u64;
+        let total = 3 * stake;
+
+        let pa = saturating_priority(&a, stake, total);
+        let pb = saturating_priority(&b, stake, total);
+        let pc = saturating_priority(&c, stake, total);
+        assert_eq!(pa, pb, "old formula tied two distinct hashes");
+        assert_eq!(pb, pc, "old formula tied two distinct hashes");
+
+        // The exact comparator keeps them strictly ordered (b < a < c).
+        assert_eq!(vrf_priority_cmp(&b, stake, &a, stake), Ordering::Less);
+        assert_eq!(vrf_priority_cmp(&a, stake, &c, stake), Ordering::Less);
+        assert_eq!(vrf_priority_cmp(&a, stake, &b, stake), Ordering::Greater);
+    }
+
+    #[test]
+    fn priority_is_exact_beyond_u128() {
+        // [0xff; 32] has the largest possible 128-bit prefix. Cross-multiplying
+        // it by a stake needs 175 bits, which u128 cannot hold.
+        let max = [0xffu8; 32];
+        let tiny = [0x00u8; 32];
+        let huge_stake = 50_000_000_000_000u64;
+        assert_eq!(
+            vrf_priority_cmp(&tiny, huge_stake, &max, huge_stake),
+            Ordering::Less
+        );
+        assert_eq!(
+            vrf_priority_cmp(&max, 1, &tiny, u64::MAX),
+            Ordering::Greater,
+            "a max hash at stake 1 loses to a zero hash at any stake"
+        );
+    }
+
+    #[test]
+    fn priority_weights_by_stake() {
+        let hash = [0x40u8; 32];
+        // Equal hash, larger stake wins (lower hash/stake).
+        assert_eq!(vrf_priority_cmp(&hash, 200, &hash, 100), Ordering::Less);
+        assert_eq!(vrf_priority_cmp(&hash, 100, &hash, 200), Ordering::Greater);
+        assert_eq!(vrf_priority_cmp(&hash, 100, &hash, 100), Ordering::Equal);
+    }
+
+    #[test]
+    fn light_vrf_priority_keeps_ordering_without_total_stake() {
+        let a = [0x11u8; 32];
+        let b = [0x22u8; 32];
+        let stake = 50_000_000_000_000u64;
+        // The `total_stake` argument no longer matters; only `hash / stake`.
+        assert_eq!(
+            light_vrf_priority(&a, stake, 1),
+            light_vrf_priority(&a, stake, 3 * stake)
+        );
+        assert!(light_vrf_priority(&a, stake, 0) < light_vrf_priority(&b, stake, 0));
+    }
+
+    #[test]
+    fn committee_leader_with_vrf_rotates_for_equal_stakes() {
+        let authority = |index: u16| Authority {
+            index,
+            public_key: PublicKey([index as u8; 32]),
+            vrf_public_key: Some(PublicKey([index as u8; 32])),
+            address: crate::Address([index as u8; 32]),
+            stake: 50_000_000_000_000,
+            network_address: format!("/ip4/127.0.0.1/tcp/90{index:02}"),
+        };
+        let committee = Committee::new(0, (0..3).map(authority).collect());
+
+        // Hashes ordered so the winner is 1, then 2, then 0. Before the fix
+        // every priority saturated to the same value and index 0 always won.
+        let rounds: [(u64, [[u8; 32]; 3], u16); 3] = [
+            (3, [[0x30u8; 32], [0x10u8; 32], [0x20u8; 32]], 1),
+            (6, [[0x30u8; 32], [0x20u8; 32], [0x10u8; 32]], 2),
+            (9, [[0x10u8; 32], [0x20u8; 32], [0x30u8; 32]], 0),
+        ];
+        for (round, hashes, expected) in rounds {
+            let mut outputs = HashMap::new();
+            outputs.insert(0, hashes[0]);
+            outputs.insert(1, hashes[1]);
+            outputs.insert(2, hashes[2]);
+            assert_eq!(
+                committee.leader_with_vrf(round, &outputs),
+                expected,
+                "round {round}"
+            );
+        }
     }
 }

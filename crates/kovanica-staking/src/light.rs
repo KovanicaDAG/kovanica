@@ -9,7 +9,7 @@
 //! `block_reward`. Tests may pass 0 into [`split_block_reward`] to check the
 //! no-escrow path.
 
-use kovanica_types::{light_vrf_priority, Address, Hash, PublicKey};
+use kovanica_types::{Address, Hash, PublicKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -394,24 +394,31 @@ impl LightSet {
 
     /// Winning addresses for `epoch`, lowest priority first, at most 32.
     ///
-    /// The same witnesses always produce the same order.
+    /// The same witnesses always produce the same order. Priorities are
+    /// compared exactly by [`kovanica_types::vrf_priority_cmp`] (lower
+    /// `hash / stake` wins) rather than through a `u128` scalar that saturated
+    /// and left every witness tied on the same value. Addresses break ties.
     pub fn winners(&self, epoch: u64) -> Vec<Address> {
         let active = self.active_nodes(epoch);
-        let total: u64 = active.iter().map(|node| node.stake).sum();
         let Some(record) = self.epochs.iter().find(|record| record.epoch == epoch) else {
             return Vec::new();
         };
-        let mut ranked = Vec::new();
+        let mut ranked: Vec<(&LightWitness, u64)> = Vec::new();
         for witness in &record.witnesses {
             let Some(node) = active.iter().find(|node| node.address == witness.address) else {
                 continue;
             };
-            let priority = light_vrf_priority(&witness.vrf_hash, node.stake, total);
-            ranked.push((priority, witness.address));
+            ranked.push((witness, node.stake));
         }
-        ranked.sort_by(|left, right| left.0.cmp(&right.0).then(left.1 .0.cmp(&right.1 .0)));
+        ranked.sort_by(|left, right| {
+            kovanica_types::vrf_priority_cmp(&left.0.vrf_hash, left.1, &right.0.vrf_hash, right.1)
+                .then(left.0.address.0.cmp(&right.0.address.0))
+        });
         ranked.truncate(LIGHT_WITNESS_SLOTS);
-        ranked.into_iter().map(|(_, address)| address).collect()
+        ranked
+            .into_iter()
+            .map(|(witness, _)| witness.address)
+            .collect()
     }
 
     /// Pay the epoch escrow and mark it settled. A second call pays nothing.
@@ -555,15 +562,21 @@ mod tests {
         let second = set.winners(1);
         assert_eq!(first, second);
         assert_eq!(first.len(), 2);
-        let priority =
-            |hash: [u8; 32], stake: u64| light_vrf_priority(&hash, stake, MIN_LIGHT_BOND * 4);
-        let low = priority([1u8; 32], MIN_LIGHT_BOND * 3);
-        let high = priority([2u8; 32], MIN_LIGHT_BOND);
-        if low <= high {
-            assert_eq!(first[0], addr(2));
-        } else {
-            assert_eq!(first[0], addr(1));
-        }
+        // addr(2) posted a smaller hash with a larger bond, so it has the
+        // lower hash/stake priority and must rank first. Before the overflow
+        // fix both witnesses saturated to the same scalar and the order fell
+        // back to the address bytes.
+        assert_eq!(
+            kovanica_types::vrf_priority_cmp(
+                &[1u8; 32],
+                MIN_LIGHT_BOND * 3,
+                &[2u8; 32],
+                MIN_LIGHT_BOND,
+            ),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(first[0], addr(2));
+        assert_eq!(first[1], addr(1));
     }
 
     #[test]

@@ -191,13 +191,26 @@ impl CommitteeInfo {
         }
     }
 
-    /// Get the leader for a given round using deterministic round-robin selection.
+    /// Get the leader for a given round using deterministic rotation.
+    ///
+    /// Leaders are drawn one per *leader slot* (one per wave), walking the
+    /// authority list in index order as waves advance. The seed is therefore
+    /// `round / WAVE_LENGTH`, not the raw round.
+    ///
+    /// This matters because leader rounds are exactly the rounds where
+    /// `round % WAVE_LENGTH == 0`. Seeding from `round` collapsed to a single
+    /// permanent leader whenever `authorities.len()` divided `WAVE_LENGTH`:
+    /// with the 3-validator committee and `WAVE_LENGTH == 3` every leader round
+    /// satisfied `round % 3 == 0` and so always elected index 0, which stalled
+    /// commit liveness (no other authority could ever lead). Seeding from the
+    /// leader slot rotates for every committee size, including
+    /// `len == WAVE_LENGTH`.
     pub fn leader(&self, round: Round) -> AuthorityIndex {
         if self.authorities.is_empty() {
             return 0;
         }
-        // Simple deterministic selection based on round
-        let idx = (round as usize) % self.authorities.len();
+        let slot = round / kovanica_types::WAVE_LENGTH;
+        let idx = (slot as usize) % self.authorities.len();
         self.authorities[idx].index
     }
 
@@ -210,9 +223,11 @@ impl CommitteeInfo {
     /// pre-upgrade behaviour: live blocks do not yet carry a VRF proof, so
     /// the engine must not invent a different leader.
     ///
-    /// Priority is `hash_u128 * total_stake / stake` (lower wins), matching
-    /// `kovanica_types::Committee::leader_with_vrf`. Ties break to the lower
-    /// authority index.
+    /// Priority is the exact `hash / stake` ratio (lower wins), compared via
+    /// [`kovanica_types::vrf_priority_cmp`]. The previous implementation packed
+    /// it into a `u128` as `hash * total_stake / stake`, which saturated to the
+    /// same value for every authority and always elected the lowest index.
+    /// Ties break to the lower authority index.
     pub fn leader_with_vrf(
         &self,
         round: Round,
@@ -222,7 +237,7 @@ impl CommitteeInfo {
             return 0;
         }
 
-        let mut best: Option<(AuthorityIndex, u128)> = None;
+        let mut best: Option<(AuthorityIndex, [u8; 32], Stake)> = None;
         for authority in &self.authorities {
             if authority.vrf_public_key.is_none() {
                 continue;
@@ -230,37 +245,27 @@ impl CommitteeInfo {
             let Some(vrf_hash) = vrf_outputs.get(&authority.index) else {
                 continue;
             };
-            let hash_u128 = u128::from_le_bytes([
-                vrf_hash[0],
-                vrf_hash[1],
-                vrf_hash[2],
-                vrf_hash[3],
-                vrf_hash[4],
-                vrf_hash[5],
-                vrf_hash[6],
-                vrf_hash[7],
-                vrf_hash[8],
-                vrf_hash[9],
-                vrf_hash[10],
-                vrf_hash[11],
-                vrf_hash[12],
-                vrf_hash[13],
-                vrf_hash[14],
-                vrf_hash[15],
-            ]);
-            let priority = hash_u128
-                .saturating_mul(self.total_stake.max(1) as u128)
-                .saturating_div(authority.stake.max(1) as u128);
             let wins = match best {
                 None => true,
-                Some((idx, p)) => priority < p || (priority == p && authority.index < idx),
+                Some((index, best_hash, best_stake)) => {
+                    match kovanica_types::vrf_priority_cmp(
+                        vrf_hash,
+                        authority.stake,
+                        &best_hash,
+                        best_stake,
+                    ) {
+                        std::cmp::Ordering::Less => true,
+                        std::cmp::Ordering::Equal => authority.index < index,
+                        std::cmp::Ordering::Greater => false,
+                    }
+                }
             };
             if wins {
-                best = Some((authority.index, priority));
+                best = Some((authority.index, *vrf_hash, authority.stake));
             }
         }
 
-        if let Some((idx, _)) = best {
+        if let Some((idx, _, _)) = best {
             return idx;
         }
         self.leader(round)
@@ -342,6 +347,39 @@ mod stake_weighted_tests {
         outputs.insert(0, [0xff; 32]);
         outputs.insert(1, [0x01; 32]);
         assert_eq!(committee.leader_with_vrf(3, &outputs), 1);
+    }
+
+    /// Regression for the devnet stall: `hash * total_stake` saturated to
+    /// `u128::MAX`, so every authority got the same priority and index 0 was
+    /// elected for every round. With the exact comparison the validator with
+    /// the lowest `hash / stake` must win instead.
+    #[test]
+    fn leader_with_vrf_does_not_saturate_to_the_lowest_index() {
+        let mut authorities = Vec::new();
+        for index in 0..3u16 {
+            let mut authority = info(index, 50_000_000_000_000);
+            authority.vrf_public_key = Some(PublicKey([index as u8; 32]));
+            authorities.push(authority);
+        }
+        let committee = CommitteeInfo::try_new(0, authorities).unwrap();
+
+        // Hashes chosen so the winner is 1, then 2, then 0.
+        let cases: [(u64, [[u8; 32]; 3], AuthorityIndex); 3] = [
+            (3, [[0x30; 32], [0x10; 32], [0x20; 32]], 1),
+            (6, [[0x30; 32], [0x20; 32], [0x10; 32]], 2),
+            (9, [[0x10; 32], [0x20; 32], [0x30; 32]], 0),
+        ];
+        for (round, hashes, expected) in cases {
+            let mut outputs = std::collections::HashMap::new();
+            for index in 0..3u16 {
+                outputs.insert(index, hashes[index as usize]);
+            }
+            assert_eq!(
+                committee.leader_with_vrf(round, &outputs),
+                expected,
+                "round {round}"
+            );
+        }
     }
 
     #[test]

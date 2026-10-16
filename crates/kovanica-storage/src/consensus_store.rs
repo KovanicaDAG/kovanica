@@ -349,6 +349,26 @@ impl ConsensusStore {
         Ok(rounds)
     }
 
+    /// Highest round that still has at least one stored DAG block, if any.
+    ///
+    /// The consensus engine uses this to resume its round counter after a
+    /// restart: replaying from round 0 would re-propose rounds the store
+    /// already holds and abort on a conflicting decision. `None` means the
+    /// DAG is empty (a fresh chain legitimately starts at round 0).
+    pub fn max_dag_round(
+        &self,
+        txn: &ReadTransaction,
+    ) -> Result<Option<Round>, ConsensusStoreError> {
+        let table = txn.open_table(crate::tables::DAG_BY_ROUND)?;
+        match table.range((0u64, 0u16)..)?.next_back() {
+            Some(entry) => {
+                let (key, _) = entry?;
+                Ok(Some(key.value().0))
+            }
+            None => Ok(None),
+        }
+    }
+
     // ============================================================
     // Pruning
     // ============================================================

@@ -565,6 +565,9 @@ where
         RateLimitConfig::from_requests_per_minute(config.rpc_rate_limit_per_min);
     // Liveness of the execution worker and consensus engine, surfaced on /health.
     let node_health = NodeHealth::new();
+    // Commit-liveness: without this a stalled chain reports a false green,
+    // because consensus rounds and gossip keep flowing while nothing commits.
+    node_health.set_commit_stall_secs(config.health_commit_stall_secs);
     let auth_config = rpc_auth_config_from_env();
     // RPC-accepted transactions are forwarded to the network task.
     let (rpc_tx_gossip, mut rpc_tx_gossip_rx) = mpsc::unbounded_channel::<Transaction>();
@@ -1529,6 +1532,10 @@ async fn run_execution(
                             }
                         }
                         health.execution_progress(subdag.leader_round);
+                        // Commit liveness: the round loop and gossip keep
+                        // running even when the commit rule stalls, so only a
+                        // real commit proves the chain is progressing.
+                        health.commit_progress(subdag.leader_round);
                     }
                     Err(e) => {
                         error!(
@@ -1646,6 +1653,10 @@ impl DagStoreTrait for NodeDagStore {
 
     fn get_decided_rounds(&self, max_round: Round) -> Result<Vec<Round>, DagStoreError> {
         self.inner.get_decided_rounds(max_round)
+    }
+
+    fn max_stored_round(&self) -> Result<Option<Round>, DagStoreError> {
+        self.inner.max_dag_round()
     }
 
     fn prune_non_blue(
@@ -3306,17 +3317,30 @@ mod tests {
             );
         }
 
-        // Verify leader round-robin selection
-        // Round 0 -> index 0, Round 1 -> index 1, etc.
-        for round in 0..8 {
+        // Verify leader rotation: one leader per wave, cycling through the
+        // committee. Leader rounds are `round % WAVE_LENGTH == 0`; seeding the
+        // rotation from the wave (not the raw round) keeps every authority in
+        // play even when the committee size equals WAVE_LENGTH.
+        assert_eq!(kovanica_types::WAVE_LENGTH, 3);
+        for round in (0..24).step_by(kovanica_types::WAVE_LENGTH as usize) {
             let leader_idx = committee.leader(round);
-            let expected_idx = (round as usize) % 4;
+            let wave = round / kovanica_types::WAVE_LENGTH;
+            let expected_idx = (wave as usize) % 4;
             assert_eq!(
                 leader_idx, expected_idx as u16,
-                "leader for round {} should be index {} (round-robin)",
-                round, expected_idx
+                "leader for round {} (wave {}) should be index {}",
+                round, wave, expected_idx
             );
         }
+        // The degenerate case that stalled the 3-validator testnet: with a
+        // committee the size of WAVE_LENGTH, consecutive leaders must differ.
+        let wave_leaders: Vec<u16> = (0..kovanica_types::WAVE_LENGTH)
+            .map(|wave| committee.leader(wave * kovanica_types::WAVE_LENGTH))
+            .collect();
+        assert_ne!(
+            wave_leaders[0], wave_leaders[1],
+            "consecutive leaders must rotate for a WAVE_LENGTH-sized committee"
+        );
     }
 
     #[test]

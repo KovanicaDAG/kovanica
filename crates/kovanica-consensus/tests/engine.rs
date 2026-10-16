@@ -149,10 +149,15 @@ fn test_competing_author_blocks_commit_the_scheduled_leader_in_either_arrival_or
 
 #[test]
 fn test_engine_rejects_invalid_votes_without_counting_them() {
-    let (engine, _dag, manager) = make_engine(0, committee(3), ConsensusConfig::default());
+    // Round 3 is a leader slot. Only the block authored by the committee's
+    // scheduled leader can register, so derive the author instead of assuming
+    // one: the rotation is `leader = (round / WAVE_LENGTH) % committee_size`.
+    let members = committee(3);
+    let leader_author = members.leader(3);
+    let (engine, _dag, manager) = make_engine(0, members, ConsensusConfig::default());
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     engine.set_commit_sender(sender);
-    let block = common::make_block(0, 3, Vec::new(), "round-3-scheduled-leader");
+    let block = common::make_block(leader_author, 3, Vec::new(), "round-3-scheduled-leader");
     engine.process_block(&block).expect("process_block");
 
     let rejection = |vote: kovanica_types::Vote| match engine.process_vote(&vote) {

@@ -235,6 +235,15 @@ impl DagStore {
             .get_decided_rounds(&txn, max_round)?)
     }
 
+    /// Highest round that still has at least one stored DAG block.
+    ///
+    /// Returns `None` when the DAG is empty. Used by consensus to resume the
+    /// round counter after a restart instead of replaying from round 0.
+    pub fn max_dag_round(&self) -> Result<Option<Round>, DagStoreError> {
+        let txn = self.storage.begin_read()?;
+        Ok(self.storage.consensus().max_dag_round(&txn)?)
+    }
+
     /// Get ancestors of a block up to a certain round (for parent selection).
     pub fn get_ancestors(&self, hash: &Hash, min_round: Round) -> Result<Vec<Hash>, DagStoreError> {
         let mut ancestors = Vec::new();
@@ -879,6 +888,20 @@ mod tests {
         let storage = Storage::new(dir.path().join("dag.redb")).expect("storage");
         let store = DagStore::new(storage).expect("dag store");
         (dir, store)
+    }
+
+    #[test]
+    fn max_dag_round_reports_the_highest_stored_round_then_none_when_empty() {
+        let (_dir, store) = store();
+        assert_eq!(store.max_dag_round().unwrap(), None, "fresh store is empty");
+
+        store.put_block(&make_block(0, 3, Vec::new(), "r3")).unwrap();
+        assert_eq!(store.max_dag_round().unwrap(), Some(3));
+
+        // A deeper, differently authored round wins regardless of insertion order.
+        store.put_block(&make_block(1, 11, Vec::new(), "r11")).unwrap();
+        store.put_block(&make_block(0, 7, Vec::new(), "r7")).unwrap();
+        assert_eq!(store.max_dag_round().unwrap(), Some(11));
     }
 
     #[test]

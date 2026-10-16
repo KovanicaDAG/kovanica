@@ -54,7 +54,9 @@ struct SingleNodeRun {
 /// a leader round, then cast exactly a quorum of votes. Returns the sub-DAG
 /// delivered to the commit consumer.
 fn drive_single_node(use_mysticghost: bool) -> SingleNodeRun {
-    let (engine, dag, _manager) = make_engine(0, committee(4), engine_config(use_mysticghost));
+    let members = committee(4);
+    let leader_author = members.leader(3);
+    let (engine, dag, _manager) = make_engine(0, members, engine_config(use_mysticghost));
 
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     engine.set_commit_sender(sender);
@@ -62,11 +64,12 @@ fn drive_single_node(use_mysticghost: bool) -> SingleNodeRun {
     let g = genesis();
     engine.process_block(&g).expect("genesis accepted");
 
-    // WAVE_LENGTH = 3, so round 3 is a leader slot; CommitteeInfo::leader(3) = 3
-    // for a 4-member committee. Build the canonical causal chain.
+    // WAVE_LENGTH = 3, so round 3 is a leader slot; the scheduled author for a
+    // 4-member committee is `(3 / WAVE_LENGTH) % 4` = 1. Build the canonical
+    // causal chain.
     let b1 = make_block(1, 1, vec![block_ref(&g)], "b1");
     let b2 = make_block(2, 2, vec![block_ref(&b1)], "b2");
-    let leader = make_block(3, 3, vec![block_ref(&b2)], "leader-3");
+    let leader = make_block(leader_author, 3, vec![block_ref(&b2)], "leader-3");
     for block in [&b1, &b2, &leader] {
         engine.process_block(block).expect("accepted block");
     }
@@ -84,7 +87,7 @@ fn drive_single_node(use_mysticghost: bool) -> SingleNodeRun {
         .expect("committed sub-DAG delivered to the commit consumer");
     assert_eq!(subdag.leader.digest, leader.digest);
     assert_eq!(subdag.leader_round, 3);
-    assert_eq!(subdag.leader_author, 3);
+    assert_eq!(subdag.leader_author, leader_author);
 
     SingleNodeRun { subdag, dag }
 }

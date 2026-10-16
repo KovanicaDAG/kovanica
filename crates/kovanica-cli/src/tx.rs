@@ -265,4 +265,39 @@ mod tests {
             cases.len()
         );
     }
+
+    #[test]
+    fn register_light_node_roundtrips_through_bincode() {
+        use kovanica_types::crypto::PublicKey;
+        use kovanica_types::transaction::TransactionKind;
+
+        let (signing_key, public_key) = kovanica_crypto::generate_keypair();
+        let sender = Address::from_public_key(&public_key);
+        let vrf_pk = PublicKey([1u8; 32]);
+        let kind = TransactionKind::RegisterLightNode {
+            vrf_public_key: vrf_pk,
+            stake: 100_000_000_000,
+        };
+        let tx = build_signed(&CTX, sender, 0, kind, 1_000_000, &signing_key).unwrap();
+
+        let raw = encode_raw(&tx).unwrap();
+        let decoded: Transaction = bincode::deserialize(&hex::decode(raw).unwrap()).unwrap();
+
+        assert_eq!(decoded.sender, tx.sender);
+        assert_eq!(decoded.nonce, 0);
+        assert_eq!(decoded.fee, 1_000_000);
+        assert_eq!(decoded.hash, tx.hash);
+        assert_eq!(decoded.signature, tx.signature);
+
+        match decoded.kind {
+            TransactionKind::RegisterLightNode {
+                vrf_public_key,
+                stake,
+            } => {
+                assert_eq!(vrf_public_key, vrf_pk);
+                assert_eq!(stake, 100_000_000_000);
+            }
+            _ => panic!("wrong kind"),
+        }
+    }
 }
