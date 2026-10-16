@@ -1,5 +1,16 @@
-//! Sustained-liveness regression test: 4 real validator nodes must keep
+//! Sustained-liveness regression test: real validator nodes must keep
 //! committing long past the pruning boundary.
+//!
+//! Two topologies are exercised over the real binary (see the wrappers at the
+//! bottom of this file):
+//!
+//! * **4 validators** (quorum 3-of-4) — commits must survive the pruning
+//!   boundary;
+//! * **3 validators** (quorum 3-of-3) — the production testnet topology, and the
+//!   regression case for the permanent-leader stall. With `NODES == WAVE_LENGTH`
+//!   the old `leader(round) = round % N` bound every leader round to authority 0
+//!   forever, no 3-of-3 quorum could form, and the live testnet froze at
+//!   committed height 1 while still producing blocks and gossip.
 //!
 //! # Why this test exists
 //!
@@ -527,7 +538,7 @@ fn port_is_free(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
-/// Pick a random block of `2 * NODES` consecutive free ports (RPC block then
+/// Pick a random block of `2 * nodes` consecutive free ports (RPC block then
 /// P2P block) and return the two base ports.
 ///
 /// Random per run (seeded from time + pid, no extra dependency) so parallel
@@ -535,8 +546,8 @@ fn port_is_free(port: u16) -> bool {
 /// probed with bind-then-drop so a busy block is skipped. A small race remains
 /// between the probe and the node binding, which the random base makes
 /// unlikely.
-fn pick_free_ports() -> Result<(u16, u16)> {
-    let span = (2 * NODES) as u64;
+fn pick_free_ports(nodes: usize) -> Result<(u16, u16)> {
+    let span = (2 * nodes) as u64;
     let blocks = (PORT_RANGE_END - PORT_RANGE_START) as u64 / span;
     let mut seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -550,7 +561,7 @@ fn pick_free_ports() -> Result<(u16, u16)> {
         seed ^= seed << 17;
         let base = PORT_RANGE_START + ((seed % blocks) * span) as u16;
         if (0..span as u16).all(|offset| port_is_free(base + offset)) {
-            return Ok((base, base + NODES as u16));
+            return Ok((base, base + nodes as u16));
         }
     }
     bail!("no free block of {span} ports found in {PORT_RANGE_START}..{PORT_RANGE_END}")
@@ -634,11 +645,14 @@ fn build_genesis_toml(validators: &[(SigningKey, PublicKey, Address)]) -> String
 // The test
 // ---------------------------------------------------------------------------
 
-/// Boot four real validators and prove the commit loop keeps running well past
-/// the pruning boundary. See the module docs for the expected pre/post-fix
+/// Boot `nodes` real validators and prove the commit loop keeps running well
+/// past the pruning boundary. See the module docs for the expected pre/post-fix
 /// behaviour.
-#[tokio::test]
-async fn four_validators_sustain_commits_past_pruning_boundary() -> Result<()> {
+///
+/// Shared by two `#[tokio::test]` wrappers below: the 4-node quorum and the
+/// 3-node quorum (`NODES == WAVE_LENGTH`), which is the production testnet
+/// topology and the regression case for the permanent-leader stall.
+async fn run_validator_quorum(nodes: usize, target_height: u64) -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     let binary_path = node_binary_path();
@@ -661,9 +675,9 @@ async fn four_validators_sustain_commits_past_pruning_boundary() -> Result<()> {
         log_dir.display()
     );
 
-    // Four distinct validator identities.
-    let mut validators: Vec<(SigningKey, PublicKey, Address)> = Vec::with_capacity(NODES);
-    for _ in 0..NODES {
+    // `nodes` distinct validator identities.
+    let mut validators: Vec<(SigningKey, PublicKey, Address)> = Vec::with_capacity(nodes);
+    for _ in 0..nodes {
         let (sk, pk) = generate_keypair();
         let addr = Address::from_public_key(&pk);
         validators.push((sk, pk, addr));
@@ -674,17 +688,17 @@ async fn four_validators_sustain_commits_past_pruning_boundary() -> Result<()> {
 
     // Start nodes sequentially so each new node dials already-running peers;
     // the network layer also retries bootstrap dials, so late nodes converge.
-    let (rpc_base_port, p2p_base_port) = pick_free_ports()?;
+    let (rpc_base_port, p2p_base_port) = pick_free_ports(nodes)?;
     eprintln!(
         "[sustained_liveness] ports: rpc {rpc_base_port}-{}, p2p {p2p_base_port}-{}",
-        rpc_base_port + NODES as u16 - 1,
-        p2p_base_port + NODES as u16 - 1
+        rpc_base_port + nodes as u16 - 1,
+        p2p_base_port + nodes as u16 - 1
     );
-    let mut quorum: Vec<QuorumNode> = Vec::with_capacity(NODES);
+    let mut quorum: Vec<QuorumNode> = Vec::with_capacity(nodes);
     for (i, (sk, pk, addr)) in validators.iter().cloned().enumerate() {
         let rpc_port = rpc_base_port + i as u16;
         let p2p_port = p2p_base_port + i as u16;
-        let bootnodes = (0..NODES)
+        let bootnodes = (0..nodes)
             .filter(|j| *j != i)
             .map(|j| format!("127.0.0.1:{}", p2p_base_port + j as u16))
             .collect::<Vec<_>>();
@@ -712,31 +726,32 @@ async fn four_validators_sustain_commits_past_pruning_boundary() -> Result<()> {
     // cluster never links up at all).
     wait_for_peers(&client, &quorum, PEER_TIMEOUT_SECS).await;
 
-    let mut monotonic: Vec<Option<u64>> = vec![None; NODES];
+    let mut monotonic: Vec<Option<u64>> = vec![None; nodes];
 
     // --- Phase A: reach the sustained-liveness target -----------------------
-    // TODAY this times out with all four nodes stuck at height 4.
+    // TODAY this times out with all nodes stuck at height 4 (for the 3-node
+    // case the historical stall was at height 1: no leader but authority 0).
     let reached = wait_until(
         &client,
         &mut quorum,
         Duration::from_secs(REACH_TARGET_TIMEOUT_SECS),
         &mut monotonic,
-        |s| max_height(s) >= TARGET_HEIGHT,
+        |s| max_height(s) >= target_height,
     )
     .await
     .with_context(|| {
         format!(
-            "committed height did not reach {TARGET_HEIGHT} within \
+            "committed height did not reach {target_height} within \
              {REACH_TARGET_TIMEOUT_SECS}s (sustained-liveness stall)"
         )
     })?;
     info!(
         heights = ?reached,
-        target = TARGET_HEIGHT,
+        target = target_height,
         "target committed height reached"
     );
 
-    // --- Phase B: every node has committed at least TARGET_HEIGHT -----------
+    // --- Phase B: every node has committed at least target_height -----------
     // Nodes advance at slightly different times, so equal heights at one poll
     // instant are not required; the agreement check on committed leader hashes
     // at a fixed height happens after shutdown (see the final check).
@@ -745,16 +760,16 @@ async fn four_validators_sustain_commits_past_pruning_boundary() -> Result<()> {
         &mut quorum,
         Duration::from_secs(SETTLE_TIMEOUT_SECS),
         &mut monotonic,
-        |s| all_at_least(s, TARGET_HEIGHT),
+        |s| all_at_least(s, target_height),
     )
     .await
     .context("not every node reached the target committed height")?;
-    let base = *settled.iter().min().expect("NODES > 0");
+    let base = *settled.iter().min().expect("nodes > 0");
     assert!(
-        base >= TARGET_HEIGHT,
-        "min committed height {base} is below the target {TARGET_HEIGHT} ({settled:?})"
+        base >= target_height,
+        "min committed height {base} is below the target {target_height} ({settled:?})"
     );
-    info!(heights = ?settled, min = base, "all four nodes at/after the target");
+    info!(heights = ?settled, min = base, "all nodes at/after the target");
 
     // --- Phase C: keep committing past the target --------------------------
     // If pruning left `last_committed` dangling, the height freezes and this
@@ -771,7 +786,7 @@ async fn four_validators_sustain_commits_past_pruning_boundary() -> Result<()> {
         "no further commits on every node after reaching the target: the commit \
          loop stalled (suspected dangling last_committed after pruning)",
     )?;
-    let final_min = *grown.iter().min().expect("NODES > 0");
+    let final_min = *grown.iter().min().expect("nodes > 0");
     assert!(
         final_min > base,
         "committed height must keep growing on every node after the target \
@@ -793,8 +808,8 @@ async fn four_validators_sustain_commits_past_pruning_boundary() -> Result<()> {
     // --- Final: committed leader agreement at a fixed height ----------------
     // H = TARGET_HEIGHT <= base <= every node's height, so every node must
     // have a committed leader at H and they must all be the same block.
-    let fixed_height = TARGET_HEIGHT;
-    let mut leader_at_h: Vec<[u8; 32]> = Vec::with_capacity(NODES);
+    let fixed_height = target_height;
+    let mut leader_at_h: Vec<[u8; 32]> = Vec::with_capacity(nodes);
     for (i, node) in quorum.iter().enumerate() {
         let leaders = committed_leaders(node.data_dir.path())
             .with_context(|| format!("node {i}: read committed leaders"))?;
@@ -823,6 +838,27 @@ async fn four_validators_sustain_commits_past_pruning_boundary() -> Result<()> {
         log_dir.display()
     );
     Ok(())
+}
+
+/// Four validators (quorum 3-of-4): the commit loop must keep running well past
+/// the pruning boundary.
+#[tokio::test]
+async fn four_validators_sustain_commits_past_pruning_boundary() -> Result<()> {
+    run_validator_quorum(NODES, TARGET_HEIGHT).await
+}
+
+/// Three validators (quorum 3-of-3): the production testnet topology.
+///
+/// Regression test for the permanent-leader stall that froze the live testnet
+/// at committed height 1. With `NODES == WAVE_LENGTH == 3` the historical
+/// `leader(round) = round % N` mapped every leader round (`round % 3 == 0`) to
+/// authority 0, so authorities 1 and 2 never led, no vote ever formed a
+/// 3-of-3 quorum, and the chain could not advance. The wave-based mapping must
+/// rotate the leader (`(round / WAVE_LENGTH) % N`) and keep the chain
+/// committing past the pruning boundary.
+#[tokio::test]
+async fn three_validators_rotate_leaders_and_sustain_commits() -> Result<()> {
+    run_validator_quorum(3, TARGET_HEIGHT).await
 }
 
 /// Write a validator seed file readable only by the owner (the node refuses

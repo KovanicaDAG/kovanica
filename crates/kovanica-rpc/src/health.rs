@@ -16,6 +16,18 @@ use serde::Serialize;
 /// Maximum length of an error message exposed through `/health`.
 const MAX_ERROR_LEN: usize = 256;
 
+/// Default window, in seconds, after which a node that has not committed a new
+/// leader is reported unhealthy.
+///
+/// The round loop keeps advancing and gossip keeps flowing even when the
+/// commit rule has stalled, so component state alone produces a *false green*:
+/// a node can report `running`/`healthy` indefinitely while the chain never
+/// advances. With `KOVANICA_ROUND_DURATION_MS=4000` and `WAVE_LENGTH=3` a
+/// leader commits every ~12 s, so 120 s is ten missed leaders — well beyond
+/// normal jitter. The check is measured from node start until the first
+/// commit, so a node that has never committed is also caught.
+pub const DEFAULT_COMMIT_STALL_SECS: u64 = 120;
+
 /// Lifecycle state of a supervised component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,14 +57,40 @@ impl ComponentState {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Inner {
     execution_state: AtomicU8,
     executed_subdags: AtomicU64,
     last_executed_round: AtomicU64,
     last_execution_unix_ms: AtomicU64,
     consensus_state: AtomicU8,
+    /// Number of committed leaders observed by this node.
+    committed_leaders: AtomicU64,
+    /// Leader round of the most recent commit.
+    last_committed_round: AtomicU64,
+    /// Wall-clock time of the most recent commit. Seeded with the node start
+    /// time so "never committed yet" still has a measurable age.
+    last_commit_unix_ms: AtomicU64,
+    /// Commit-liveness window in seconds; `0` disables the check.
+    commit_stall_secs: AtomicU64,
     last_error: Mutex<Option<String>>,
+}
+
+impl Default for Inner {
+    fn default() -> Self {
+        Self {
+            execution_state: AtomicU8::new(ComponentState::Starting as u8),
+            executed_subdags: AtomicU64::new(0),
+            last_executed_round: AtomicU64::new(0),
+            last_execution_unix_ms: AtomicU64::new(0),
+            consensus_state: AtomicU8::new(ComponentState::Starting as u8),
+            committed_leaders: AtomicU64::new(0),
+            last_committed_round: AtomicU64::new(0),
+            last_commit_unix_ms: AtomicU64::new(now_ms()),
+            commit_stall_secs: AtomicU64::new(DEFAULT_COMMIT_STALL_SECS),
+            last_error: Mutex::new(None),
+        }
+    }
 }
 
 /// Cheaply clonable handle to the node's health state.
@@ -75,6 +113,19 @@ pub struct ExecutionHealth {
 #[derive(Debug, Clone, Serialize)]
 pub struct ConsensusHealth {
     pub state: ComponentState,
+    /// Committed leaders observed by this node.
+    pub committed_leaders: u64,
+    /// Leader round of the most recent commit, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_committed_round: Option<u64>,
+    /// Seconds since the last commit, or since node start when nothing has
+    /// committed yet. `None` when commit-liveness tracking is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seconds_since_last_commit: Option<u64>,
+    /// Window after which the absence of a new commit makes the node
+    /// unhealthy. `None` when commit-liveness tracking is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_stall_secs: Option<u64>,
 }
 
 /// Point-in-time view of the node's health.
@@ -152,6 +203,49 @@ impl NodeHealth {
         );
     }
 
+    /// Record a newly committed leader.
+    ///
+    /// This is the consensus-liveness signal: the round loop keeps advancing
+    /// and gossip keeps flowing even when the commit rule has stalled, so only
+    /// an actual commit proves the chain is making progress. Call it from the
+    /// commit/execution path, once per committed leader.
+    pub fn commit_progress(&self, leader_round: u64) {
+        let i = &self.inner;
+        i.committed_leaders.fetch_add(1, Ordering::Relaxed);
+        i.last_committed_round.store(leader_round, Ordering::Relaxed);
+        i.last_commit_unix_ms.store(now_ms(), Ordering::Relaxed);
+    }
+
+    /// Override the commit-liveness window.
+    ///
+    /// `secs` is the number of seconds without a new commit after which
+    /// [`Self::is_healthy`] returns `false`. `0` disables the check entirely
+    /// (useful for nodes that are deliberately not following the chain).
+    pub fn set_commit_stall_secs(&self, secs: u64) {
+        self.inner.commit_stall_secs.store(secs, Ordering::Relaxed);
+    }
+
+    /// Configured commit-liveness window; `0` means the check is disabled.
+    pub fn commit_stall_secs(&self) -> u64 {
+        self.inner.commit_stall_secs.load(Ordering::Relaxed)
+    }
+
+    /// Seconds since the last commit (or since node start when nothing has
+    /// committed yet).
+    pub fn seconds_since_last_commit(&self) -> u64 {
+        let last = self.inner.last_commit_unix_ms.load(Ordering::Relaxed);
+        if last == 0 {
+            return 0;
+        }
+        now_ms().saturating_sub(last) / 1000
+    }
+
+    /// `true` when no commit has been observed within the configured window.
+    fn commit_stalled(&self) -> bool {
+        let window = self.commit_stall_secs();
+        window > 0 && self.seconds_since_last_commit() > window
+    }
+
     /// The execution worker stopped because of an error.
     pub fn execution_failed(&self, error: &str) {
         self.set_error(&format!("execution: {error}"));
@@ -198,9 +292,12 @@ impl NodeHealth {
         ComponentState::from_u8(self.inner.consensus_state.load(Ordering::Relaxed))
     }
 
-    /// `false` once execution or consensus has stopped or failed.
+    /// `false` once execution or consensus has stopped or failed, or once the
+    /// node has gone too long without committing a new leader.
     pub fn is_healthy(&self) -> bool {
-        !self.execution_state().is_down() && !self.consensus_state().is_down()
+        !self.execution_state().is_down()
+            && !self.consensus_state().is_down()
+            && !self.commit_stalled()
     }
 
     /// Snapshot for `/health`.
@@ -208,6 +305,8 @@ impl NodeHealth {
         let i = &self.inner;
         let executed = i.executed_subdags.load(Ordering::Relaxed);
         let last_ms = i.last_execution_unix_ms.load(Ordering::Relaxed);
+        let committed_leaders = i.committed_leaders.load(Ordering::Relaxed);
+        let stall_window = self.commit_stall_secs();
         HealthSnapshot {
             healthy: self.is_healthy(),
             execution: ExecutionHealth {
@@ -220,6 +319,12 @@ impl NodeHealth {
             },
             consensus: ConsensusHealth {
                 state: self.consensus_state(),
+                committed_leaders,
+                last_committed_round: (committed_leaders > 0)
+                    .then(|| i.last_committed_round.load(Ordering::Relaxed)),
+                seconds_since_last_commit: (stall_window > 0)
+                    .then(|| self.seconds_since_last_commit()),
+                commit_stall_secs: (stall_window > 0).then_some(stall_window),
             },
             last_error: i
                 .last_error
@@ -248,6 +353,68 @@ mod tests {
         assert_eq!(s.execution.last_executed_round, Some(7));
         assert_eq!(s.consensus.state, ComponentState::Running);
         assert!(s.last_error.is_none());
+    }
+
+    /// A node whose components are all `running` but which has stopped
+    /// committing leaders must not report `healthy` (the false-green this
+    /// check exists to prevent).
+    #[test]
+    fn commit_stall_degrades_while_components_still_report_running() {
+        let h = NodeHealth::new();
+        h.execution_progress(3);
+        h.commit_progress(3);
+        h.consensus_running();
+        assert!(h.is_healthy());
+
+        let s = h.snapshot();
+        assert_eq!(s.consensus.committed_leaders, 1);
+        assert_eq!(s.consensus.last_committed_round, Some(3));
+        assert_eq!(s.consensus.commit_stall_secs, Some(DEFAULT_COMMIT_STALL_SECS));
+
+        // Shrink the window, then let time pass without committing.
+        h.set_commit_stall_secs(1);
+        std::thread::sleep(std::time::Duration::from_millis(2_100));
+
+        let s = h.snapshot();
+        assert_eq!(
+            s.consensus.state,
+            ComponentState::Running,
+            "component state alone still looks fine"
+        );
+        assert_eq!(s.execution.state, ComponentState::Running);
+        assert!(
+            s.consensus.seconds_since_last_commit.unwrap_or(0) > 1,
+            "no commit inside the window"
+        );
+        assert!(!s.healthy, "commit stall must degrade /health");
+        assert!(!h.is_healthy());
+
+        // A fresh commit clears the stall.
+        h.commit_progress(9);
+        assert!(h.is_healthy());
+        assert_eq!(h.snapshot().consensus.last_committed_round, Some(9));
+    }
+
+    #[test]
+    fn commit_liveness_can_be_disabled() {
+        let h = NodeHealth::new();
+        h.set_commit_stall_secs(0);
+        let s = h.snapshot();
+        assert!(s.healthy, "0 disables the check");
+        assert!(s.consensus.seconds_since_last_commit.is_none());
+        assert!(s.consensus.commit_stall_secs.is_none());
+    }
+
+    /// A node that has never committed still ages towards a stall, measured
+    /// from node start rather than from an unset timestamp.
+    #[test]
+    fn never_committed_node_ages_from_start() {
+        let h = NodeHealth::new();
+        h.set_commit_stall_secs(1);
+        assert!(h.is_healthy());
+        std::thread::sleep(std::time::Duration::from_millis(2_100));
+        assert!(!h.is_healthy(), "no commit since start must eventually degrade");
+        assert_eq!(h.snapshot().consensus.last_committed_round, None);
     }
 
     #[test]

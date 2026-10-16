@@ -161,17 +161,47 @@ fn test_committee_stake_weighted_thresholds() {
 }
 
 #[test]
-fn test_committee_leader_is_round_robin_and_deterministic() {
+fn test_committee_leader_rotates_one_per_wave_and_is_deterministic() {
     let c = committee(4);
-    // Leader is selected by round-robin over authority indices.
-    for round in 0..16u64 {
-        let expected = (round as usize % 4) as AuthorityIndex;
-        assert_eq!(c.leader(round), expected, "round {round}");
+    // One leader per wave: the leader slot advances every WAVE_LENGTH rounds,
+    // so consecutive leader rounds walk the committee in index order.
+    for wave in 0..16u64 {
+        let leader_round = wave * kovanica_types::WAVE_LENGTH;
+        let expected = (wave as usize % 4) as AuthorityIndex;
+        assert_eq!(c.leader(leader_round), expected, "leader round {leader_round}");
+    }
+    // Non-leader rounds resolve to the same leader as their wave.
+    let first_leader = c.leader(0);
+    for offset in 1..kovanica_types::WAVE_LENGTH {
+        assert_eq!(c.leader(offset), first_leader, "intra-wave round {offset}");
     }
     // Deterministic: same round -> same leader on repeated calls.
     for round in 0..32u64 {
         assert_eq!(c.leader(round), c.leader(round));
     }
+}
+
+/// Regression: a committee whose size equals `WAVE_LENGTH` used to elect one
+/// permanent leader forever. Leader rounds are exactly the rounds where
+/// `round % WAVE_LENGTH == 0`, so the old round-seeded fallback
+/// (`round % authorities.len()`) always selected authority 0 when
+/// `len == WAVE_LENGTH` — exactly the 3-validator testnet, where val2 led
+/// every commit round and no other validator could ever lead.
+#[test]
+fn test_committee_of_wave_length_size_rotates_leaders() {
+    let c = committee(kovanica_types::WAVE_LENGTH as u16);
+    let leaders: Vec<AuthorityIndex> = (0..9u64)
+        .map(|wave| c.leader(wave * kovanica_types::WAVE_LENGTH))
+        .collect();
+    assert_eq!(
+        leaders,
+        vec![0, 1, 2, 0, 1, 2, 0, 1, 2],
+        "leaders must rotate across the committee, not repeat one authority"
+    );
+    assert_ne!(
+        leaders[0], leaders[1],
+        "consecutive leader rounds must elect different authorities"
+    );
 }
 
 #[test]

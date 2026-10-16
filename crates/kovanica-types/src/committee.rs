@@ -76,6 +76,21 @@ impl Committee {
     }
 
     /// VRF-aware leader selection.
+    ///
+    /// `vrf_outputs` maps authority index → verified 32-byte VRF hash. The
+    /// authority with the lowest `hash / stake` wins. Ordering is exact:
+    /// priorities are cross-multiplied into 192-bit products by
+    /// [`crate::vrf_priority_cmp`] instead of being packed into a `u128`,
+    /// which saturated (`hash * total_stake` overflows) and collapsed every
+    /// authority to one value, pinning the leader to the lowest index.
+    ///
+    /// Authorities with no output fall back to nothing: if no authority has a
+    /// hash in `vrf_outputs`, this is identical to [`Self::leader`]
+    /// (round-robin). That fallback is the pre-upgrade behaviour: live blocks
+    /// do not yet carry a VRF proof, so the engine must not invent a different
+    /// leader.
+    ///
+    /// Ties break to the lower authority index.
     pub fn leader_with_vrf(
         &self,
         round: u64,
@@ -85,49 +100,81 @@ impl Committee {
             return 0;
         }
 
-        // Try VRF-based selection first
-        let mut best_authority: Option<(u16, u128)> = None; // (index, priority)
+        let mut best: Option<(u16, [u8; 32], Stake)> = None;
 
         for authority in &self.authorities {
-            if let Some(vrf_hash) = vrf_outputs.get(&authority.index) {
-                // Priority = VRF hash / stake (lower = higher priority)
-                // Using u128 to avoid overflow: priority = hash_as_u128 * total_stake / stake
-                let hash_u128 = u128::from_le_bytes([
-                    vrf_hash[0],
-                    vrf_hash[1],
-                    vrf_hash[2],
-                    vrf_hash[3],
-                    vrf_hash[4],
-                    vrf_hash[5],
-                    vrf_hash[6],
-                    vrf_hash[7],
-                    vrf_hash[8],
-                    vrf_hash[9],
-                    vrf_hash[10],
-                    vrf_hash[11],
-                    vrf_hash[12],
-                    vrf_hash[13],
-                    vrf_hash[14],
-                    vrf_hash[15],
-                ]);
-
-                let priority = hash_u128
-                    .saturating_mul(self.total_stake as u128)
-                    .saturating_div(authority.stake.max(1) as u128);
-
-                if best_authority.is_none_or(|(_, p)| priority < p) {
-                    best_authority = Some((authority.index, priority));
+            let Some(vrf_hash) = vrf_outputs.get(&authority.index) else {
+                continue;
+            };
+            let wins = match best {
+                None => true,
+                Some((index, best_hash, best_stake)) => {
+                    match crate::vrf_priority_cmp(vrf_hash, authority.stake, &best_hash, best_stake)
+                    {
+                        std::cmp::Ordering::Less => true,
+                        std::cmp::Ordering::Equal => authority.index < index,
+                        std::cmp::Ordering::Greater => false,
+                    }
                 }
+            };
+            if wins {
+                best = Some((authority.index, *vrf_hash, authority.stake));
             }
         }
 
-        if let Some((idx, _)) = best_authority {
+        if let Some((idx, _, _)) = best {
             return idx;
         }
 
-        // Fallback: deterministic round-robin (no VRF outputs available)
-        let seed = round;
-        let idx = (seed as usize) % self.authorities.len();
+        // Fallback: deterministic rotation one leader per wave (no VRF outputs
+        // available). Seeding from the leader slot (`round / WAVE_LENGTH`)
+        // instead of the raw round keeps consecutive leader rounds on
+        // different authorities for every committee size; seeding from the
+        // round degenerated to a single permanent leader whenever the
+        // committee size divided `WAVE_LENGTH` (e.g. a 3-validator committee
+        // with `WAVE_LENGTH == 3` always elected index 0).
+        let slot = round / crate::WAVE_LENGTH;
+        let idx = (slot as usize) % self.authorities.len();
         self.authorities[idx].index
+    }
+}
+
+#[cfg(test)]
+mod leader_rotation_tests {
+    use super::*;
+
+    fn authority(index: u16) -> Authority {
+        Authority {
+            index,
+            public_key: PublicKey([index as u8; 32]),
+            vrf_public_key: None,
+            address: Address([index as u8; 32]),
+            stake: 1,
+            network_address: format!("/ip4/127.0.0.1/tcp/90{index:02}"),
+        }
+    }
+
+    /// Regression for the 3-validator testnet: with `len == WAVE_LENGTH` the
+    /// old round-seeded fallback pinned every leader round to authority 0.
+    #[test]
+    fn committee_of_wave_length_size_rotates_leaders() {
+        let authorities: Vec<Authority> =
+            (0..crate::WAVE_LENGTH as u16).map(authority).collect();
+        let committee = Committee::new(0, authorities);
+        let leaders: Vec<u16> = (0..9u64)
+            .map(|wave| committee.leader(wave * crate::WAVE_LENGTH))
+            .collect();
+        assert_eq!(leaders, vec![0, 1, 2, 0, 1, 2, 0, 1, 2]);
+    }
+
+    #[test]
+    fn leader_is_deterministic_and_rotates_every_wave() {
+        let committee = Committee::new(0, (0..4).map(authority).collect());
+        for wave in 0..8u64 {
+            let current = committee.leader(wave * crate::WAVE_LENGTH);
+            assert_eq!(current, committee.leader(wave * crate::WAVE_LENGTH));
+            let next = committee.leader((wave + 1) * crate::WAVE_LENGTH);
+            assert_ne!(current, next, "wave {wave} must not repeat its leader");
+        }
     }
 }

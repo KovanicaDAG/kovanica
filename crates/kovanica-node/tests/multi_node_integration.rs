@@ -144,14 +144,17 @@ fn drain_all(nodes: &mut [Node]) {
 
 /// Build a canonical chain of blocks from round 0 through `max_round`.
 ///
-/// Round `r` is authored by `r % NODES`, so the scheduled leader slot of every
-/// leader round (`round % WAVE_LENGTH == 0`, `WAVE_LENGTH == 3`) is authored by
-/// the committee's designated leader. Each block references the previous one,
-/// producing fully connected causal history.
+/// Each round is authored by the committee's scheduled leader, so the engine
+/// registers the leader slot of every leader round (`round % WAVE_LENGTH == 0`,
+/// `WAVE_LENGTH == 3`) exactly as it does in production. The author comes from
+/// `CommitteeInfo::leader` — the same function the engine consults — so the
+/// chain builder can never drift from the leader rule again. Each block
+/// references the previous one, producing fully connected causal history.
 fn canonical_chain(max_round: Round) -> Vec<StatementBlock> {
+    let members = committee(NODES as u16);
     let mut chain = vec![genesis()]; // round 0, author 0
     for round in 1..=max_round {
-        let author = (round as usize % NODES) as AuthorityIndex;
+        let author = members.leader(round);
         let parent = block_ref(chain.last().expect("previous block exists"));
         let block = make_block(author, round, vec![parent], &format!("r{round}"));
         chain.push(block);
@@ -203,7 +206,8 @@ fn cast_votes(
 }
 
 /// The leader rounds committed by the canonical chain up to round 9. In a
-/// 4-authority committee `leader(r) = r % 4`, so these are authored by 3, 2, 1.
+/// 4-authority committee the scheduled leader of wave `w` is `w % 4`, so rounds
+/// 3, 6, 9 (waves 1, 2, 3) are authored by 1, 2, 3.
 const LEADER_ROUNDS: [Round; 3] = [3, 6, 9];
 
 /// Requirement 1: four fully-connected nodes converge on the same
@@ -254,7 +258,7 @@ fn four_nodes_converge_on_identical_commit_sequence() {
         assert_eq!(subdag.leader_round, expected_round);
         assert_eq!(
             subdag.leader_author,
-            (expected_round as usize % NODES) as AuthorityIndex
+            ((expected_round / kovanica_types::WAVE_LENGTH) as usize % NODES) as AuthorityIndex
         );
         assert_eq!(
             subdag.blocks.last().map(|b| b.digest),

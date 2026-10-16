@@ -58,6 +58,13 @@ pub struct NodeConfig {
     /// JSON-RPC rate limit, in requests per minute per client IP. `0` disables
     /// rate limiting. Overridable with `KOVANICA_RPC_RATE_LIMIT_PER_MIN`.
     pub rpc_rate_limit_per_min: u32,
+    /// Seconds without a new committed leader after which `/health` reports
+    /// `degraded` (HTTP 503). Prevents a *false green*: consensus keeps
+    /// advancing rounds and gossip while the commit rule has stalled, so
+    /// component state alone cannot detect a chain that never advances.
+    /// `0` disables the check. Overridable with
+    /// `KOVANICA_HEALTH_COMMIT_STALL_SECS`.
+    pub health_commit_stall_secs: u64,
     /// Chain id bound into every v1 signature (see `docs/SIGNATURE_FORMAT.md`):
     /// 1 mainnet, 2 testnet, 3 devnet, 1337 local. Must match the genesis
     /// chain id; the node refuses to start otherwise. For mainnet and testnet
@@ -88,6 +95,7 @@ impl Default for NodeConfig {
             use_vrf_leader: true,
             run_validator: true,
             rpc_rate_limit_per_min: 60,
+            health_commit_stall_secs: kovanica_rpc::health::DEFAULT_COMMIT_STALL_SECS,
             peer_scoring: kovanica_network::PeerScoringConfig::default(),
             chain_id: kovanica_types::signing::chain_id::LOCAL,
         }
@@ -188,6 +196,15 @@ impl NodeConfig {
             match v.trim().parse() {
                 Ok(id) => self.chain_id = id,
                 Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_CHAIN_ID"),
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_HEALTH_COMMIT_STALL_SECS") {
+            match v.trim().parse() {
+                Ok(secs) => self.health_commit_stall_secs = secs,
+                Err(_) => tracing::warn!(
+                    value = %v,
+                    "ignoring invalid KOVANICA_HEALTH_COMMIT_STALL_SECS"
+                ),
             }
         }
         if let Ok(v) = std::env::var("KOVANICA_RPC_RATE_LIMIT_PER_MIN") {

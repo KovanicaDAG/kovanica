@@ -124,6 +124,18 @@ pub trait DagStoreTrait: Send + Sync {
     fn get_decided_leaders(&self, round: Round) -> Result<Vec<Hash>, kovanica_dag::DagStoreError>;
     /// Get all decided rounds up to a maximum.
     fn get_decided_rounds(&self, max_round: Round) -> Result<Vec<Round>, kovanica_dag::DagStoreError>;
+    /// Highest round that still has at least one stored DAG block.
+    ///
+    /// The engine resumes its round counter from this value at `start()` so a
+    /// restart continues after the persisted DAG tip instead of replaying
+    /// rounds that are already stored (which aborts on
+    /// [`kovanica_dag::DagStoreError::ConflictingDecision`]).
+    ///
+    /// The default returns `None` — "start from round 0" — which is correct
+    /// for a fresh chain and keeps in-memory test doubles unchanged.
+    fn max_stored_round(&self) -> Result<Option<Round>, kovanica_dag::DagStoreError> {
+        Ok(None)
+    }
     /// Prune non-blue blocks from a committed wave.
     ///
     /// Deprecated (#13, variant A): the committer no longer calls this. Red
@@ -505,10 +517,44 @@ where
         self.block_manager
             .read()
             .set_signing_key(self.signing_key.clone());
+        self.resume_from_store()?;
         *self.running.write() = true;
 
         // Start the round loop
         self.round_loop().await
+    }
+
+    /// Seed the round counter from the persisted DAG tip.
+    ///
+    /// A restarted node must continue after the rounds it already holds.
+    /// Starting at round 0 makes it propose for decided rounds again, and
+    /// `mark_round_decided` then stops the whole engine with
+    /// [`kovanica_dag::DagStoreError::ConflictingDecision`] — the node could
+    /// never restart against a non-empty chain.
+    ///
+    /// An empty store keeps the counter at 0: a fresh chain starts at round 0
+    /// and the first loop iteration still advances to round 1.
+    fn resume_from_store(&self) -> Result<(), ConsensusError> {
+        let Some(tip) = self.dag_store.max_stored_round()? else {
+            return Ok(());
+        };
+        if tip == 0 {
+            return Ok(());
+        }
+
+        let mut current = self.current_round.write();
+        if *current >= tip {
+            // Already ahead (e.g. start() called twice); never move backwards.
+            return Ok(());
+        }
+        *current = tip;
+        self.state.write().current_round = tip;
+        info!(
+            stored_round = tip,
+            next_round = tip + 1,
+            "resuming consensus from the persisted DAG tip"
+        );
+        Ok(())
     }
 
     /// Stop the consensus engine.
@@ -734,12 +780,24 @@ where
     /// If the leader block is not known yet nothing is recorded, so a later
     /// call can still vote.
     fn vote_for_leader(&self, leader_round: Round) -> Result<bool, ConsensusError> {
-        // Never help certify a round this node already decided: the decision is
-        // final and the commit cursor will not revisit the round. A late vote
-        // for it would only let a lagging peer commit a round every
-        // already-decided node skipped, producing divergent committed
-        // sequences (see `late_join_integration`).
-        if self.committer.is_decided(leader_round) {
+        // A round is *final* once the commit cursor has moved past it: the
+        // decision walk starts above `last_decided_round` and will never
+        // revisit it, so a late vote could only let a lagging peer commit a
+        // round this node settled differently, producing divergent committed
+        // sequences (see `late_join_integration`). Refuse in that case.
+        //
+        // A `register_skip` decision is deliberately *provisional*: it records
+        // the Skip without advancing the cursor precisely so that a leader
+        // block arriving after a timeout can still be decided
+        // (`UniversalCommitter::try_commit_with_leader` re-examines decided
+        // rounds that have a live block-bearing leader). Refusing to vote on
+        // any decided round would defeat that and make a single timeout
+        // permanent: the round could never gather a quorum, the advance would
+        // never happen, and the chain would stall. So only refuse once the
+        // cursor has actually passed the round.
+        if self.committer.is_decided(leader_round)
+            && self.committer.last_decided_round() >= leader_round
+        {
             debug!(
                 "Leader round {} already decided locally; not voting",
                 leader_round
@@ -789,13 +847,24 @@ where
         self.committer
             .add_vote(leader_round, our_authority, leader_hash);
 
-        // Broadcast the vote
-        if let Some(broadcaster) = self.vote_broadcaster.read().as_ref() {
-            broadcaster.broadcast_vote(&vote);
-            info!(
-                "Broadcast vote for leader round {} (hash: {})",
-                leader_round, leader_hash
-            );
+        // Broadcast the vote. Log unconditionally: a vote we recorded locally
+        // but could not broadcast is exactly the state that stalls a quorum,
+        // and it must be visible at `info` level rather than silently skipped
+        // when no broadcaster is attached to this engine.
+        match self.vote_broadcaster.read().as_ref() {
+            Some(broadcaster) => {
+                broadcaster.broadcast_vote(&vote);
+                info!(
+                    "Broadcast vote for leader round {} (hash: {})",
+                    leader_round, leader_hash
+                );
+            }
+            None => {
+                warn!(
+                    "Recorded vote for leader round {} (hash: {}) but no vote broadcaster is attached",
+                    leader_round, leader_hash
+                );
+            }
         }
 
         // Try to commit after voting
@@ -1129,6 +1198,9 @@ mod tests {
         blocks: RwLock<HashMap<Hash, kovanica_types::StatementBlock>>,
         decisions: Mutex<Vec<(Round, Hash)>>,
         fail_next_decision_mark: std::sync::atomic::AtomicBool,
+        /// Stand-in for the highest persisted DAG round, driven by
+        /// `DagStoreTrait::max_stored_round`. `None` models an empty store.
+        stored_tip: RwLock<Option<Round>>,
     }
 
     impl DagStoreTrait for TestDag {
@@ -1315,6 +1387,10 @@ mod tests {
                 .filter(|(r, _)| *r <= max_round)
                 .map(|(r, _)| *r)
                 .collect())
+        }
+
+        fn max_stored_round(&self) -> Result<Option<Round>, kovanica_dag::DagStoreError> {
+            Ok(*self.stored_tip.read())
         }
 
         fn prune_non_blue(
@@ -1527,6 +1603,66 @@ mod tests {
         let public_key = PublicKey::from(key.verifying_key());
         kovanica_crypto::verify_block_signature(&public_key, &proposal.digest, &proposal.signature)
             .expect("proposal uses node-provided identity");
+    }
+
+    /// A restarted node must resume after the rounds it already holds.
+    ///
+    /// Before the fix the engine always began at round 0, re-proposed already
+    /// decided rounds, and `mark_round_decided` then aborted the entire engine
+    /// with `DagStoreError::ConflictingDecision` — the node could not restart
+    /// against a non-empty chain at all.
+    #[test]
+    fn resume_seeds_the_round_counter_from_the_persisted_dag_tip() {
+        let (engine, dag, _key) = test_engine(10);
+        *dag.stored_tip.write() = Some(9);
+        engine.resume_from_store().expect("resume succeeds");
+        assert_eq!(*engine.current_round.read(), 9);
+        assert_eq!(engine.state().current_round, 9);
+    }
+
+    #[test]
+    fn resume_keeps_round_zero_for_an_empty_store() {
+        let (engine, _dag, _key) = test_engine(10);
+        engine.resume_from_store().expect("resume succeeds");
+        assert_eq!(*engine.current_round.read(), 0);
+    }
+
+    #[test]
+    fn resume_never_moves_the_counter_backwards() {
+        let (engine, dag, _key) = test_engine(10);
+        *engine.current_round.write() = 100;
+        *dag.stored_tip.write() = Some(5);
+        engine.resume_from_store().expect("resume succeeds");
+        assert_eq!(*engine.current_round.read(), 100);
+    }
+
+    #[tokio::test]
+    async fn restarted_engine_does_not_replay_decided_rounds() {
+        let (engine, dag, _key) = test_engine(10);
+        *dag.stored_tip.write() = Some(9);
+        let engine = Arc::new(engine);
+        let running = engine.clone();
+        let task = tokio::spawn(async move { running.start().await });
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while dag.blocks.read().is_empty() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "engine did not propose after resuming from the persisted tip"
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        engine.stop();
+        task.await.unwrap().unwrap();
+
+        // Resuming at the round-9 tip makes round 12 the first leader slot.
+        // Restarting from 0 would have produced a proposal at round 3.
+        let rounds: Vec<Round> = dag.blocks.read().values().map(|b| b.round).collect();
+        assert!(!rounds.is_empty(), "expected at least one proposal");
+        assert!(
+            rounds.iter().all(|r| *r > 9),
+            "engine replayed already decided rounds: {rounds:?}"
+        );
     }
 
     #[tokio::test]
@@ -2482,42 +2618,112 @@ mod tests {
         );
     }
 
-    /// A round this node already decided is final: no vote may be cast for it,
-    /// even inside the window. Here the round was resolved by a timeout skip.
+    /// A timeout records a *provisional* skip. `register_skip` deliberately does
+    /// not advance `last_decided_round`, precisely so that a leader block which
+    /// arrives after the timeout can still be decided. A vote must therefore not
+    /// be refused merely because the round carries a provisional decision:
+    /// otherwise a single missed timeout disqualifies the round for ever, no
+    /// quorum can ever form, and the chain stalls while every component still
+    /// reports healthy. This is the regression test for that stall.
     #[test]
-    fn vote_is_refused_for_an_already_decided_round() {
+    fn provisional_skip_does_not_block_a_vote_once_the_leader_block_is_known() {
         let (committee, engine, sent) = late_vote_engine();
         let round: Round = 3;
         let author = committee.leader(round);
+        // The leader's block was delivered...
         engine
             .committer
             .update_leader(registered_leader(round, author, 3));
-        // The leader timeout resolved the round locally.
+        // ...but this node's leader-slot deadline expired anyway, so it recorded
+        // a skip for the round. `update_leader` never lets a hash-less skip
+        // erase a real block, so the block stays known.
         engine.committer.register_skip(round, author);
         assert!(engine.committer.is_decided(round));
+        assert_eq!(
+            engine.committer.last_decided_round(),
+            0,
+            "a provisional skip must not advance the decision cursor"
+        );
 
-        // Inside the window: only the decided guard can stop the vote.
         *engine.current_round.write() = round + 1;
         engine.vote_if_late(round).expect("no error");
-        assert!(
-            sent.lock().is_empty(),
-            "no vote may be cast for an already decided round"
-        );
-        assert!(!engine.vote_for_leader(round).expect("no error"));
-
-        // Control: an undecided round inside the window still gets a vote.
-        let live_round: Round = 6;
-        engine.committer.update_leader(registered_leader(
-            live_round,
-            committee.leader(live_round),
-            4,
-        ));
-        *engine.current_round.write() = live_round + 1;
-        engine.vote_if_late(live_round).expect("no error");
         assert_eq!(
             sent.lock().last().copied(),
-            Some(live_round),
-            "an undecided in-window round must still be voted for"
+            Some(round),
+            "a provisionally skipped round must still be voted for when its block is known"
+        );
+    }
+
+    /// The durable decision cursor is the finality boundary: once it has passed a
+    /// round, the decision walk never revisits that round, so a vote could only
+    /// let a lagging peer commit a round this node already settled differently.
+    /// A decided round at or below `last_decided_round` must be refused.
+    #[test]
+    fn vote_is_refused_once_the_decision_cursor_has_passed_the_round() {
+        let (engine, dag, _key) = test_engine(4000);
+        let round: Round = 3;
+        let author = engine.committee.leader(round);
+        let digest = kovanica_types::StatementBlock::compute_digest(author, round, &[], &[]);
+        let block = kovanica_types::StatementBlock {
+            author,
+            round,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_types::Signature([0; 64]),
+            digest,
+            merkle_root: Default::default(),
+        };
+        dag.put_block(&block).expect("block is stored");
+        engine.committer.update_leader(LeaderInfo {
+            round,
+            author,
+            block_hash: Some(digest),
+            status: LeaderStatus::Undecided,
+            votes: HashMap::new(),
+        });
+        // The single-authority test committee holds all the stake, so one vote
+        // is already a quorum and the round becomes durably decided.
+        engine.committer.add_vote(round, author, digest);
+        engine.try_commit_and_deliver().expect("commit succeeds");
+
+        assert_eq!(engine.committer.last_decided_round(), round);
+        assert!(engine.committer.is_decided(round));
+        assert!(
+            !engine.vote_for_leader(round).expect("no error"),
+            "a vote must be refused once the decision cursor has passed the round"
+        );
+    }
+
+    /// The relaxation above only removes the refusal for *provisional* skips. A
+    /// round whose leader block never arrived still has no hash to vote for and
+    /// must not be voted for, however it was decided.
+    #[test]
+    fn vote_is_not_cast_for_a_decided_round_with_no_known_leader_block() {
+        let (committee, engine, sent) = late_vote_engine();
+        let round: Round = 3;
+        let author = committee.leader(round);
+        engine.committer.register_skip(round, author);
+        assert!(engine.committer.is_decided(round));
+        assert!(
+            engine.committer.get_leader(round).is_some(),
+            "the skip is still recorded as the round's leader entry"
+        );
+        assert!(
+            engine
+                .committer
+                .get_leader(round)
+                .and_then(|leader| leader.block_hash)
+                .is_none(),
+            "a skip carries no leader hash"
+        );
+
+        *engine.current_round.write() = round + 1;
+        assert!(!engine.vote_for_leader(round).expect("no error"));
+        assert_eq!(
+            sent.lock().last().copied(),
+            None,
+            "a round with no known leader block must never be voted for"
         );
     }
 }
