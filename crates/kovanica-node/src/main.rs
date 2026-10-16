@@ -1655,6 +1655,10 @@ impl DagStoreTrait for NodeDagStore {
         self.inner.get_decided_rounds(max_round)
     }
 
+    fn max_stored_round(&self) -> Result<Option<Round>, DagStoreError> {
+        self.inner.max_dag_round()
+    }
+
     fn prune_non_blue(
         &self,
         blue_hashes: &[Hash],

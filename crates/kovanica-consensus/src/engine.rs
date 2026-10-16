@@ -124,6 +124,18 @@ pub trait DagStoreTrait: Send + Sync {
     fn get_decided_leaders(&self, round: Round) -> Result<Vec<Hash>, kovanica_dag::DagStoreError>;
     /// Get all decided rounds up to a maximum.
     fn get_decided_rounds(&self, max_round: Round) -> Result<Vec<Round>, kovanica_dag::DagStoreError>;
+    /// Highest round that still has at least one stored DAG block.
+    ///
+    /// The engine resumes its round counter from this value at `start()` so a
+    /// restart continues after the persisted DAG tip instead of replaying
+    /// rounds that are already stored (which aborts on
+    /// [`kovanica_dag::DagStoreError::ConflictingDecision`]).
+    ///
+    /// The default returns `None` — "start from round 0" — which is correct
+    /// for a fresh chain and keeps in-memory test doubles unchanged.
+    fn max_stored_round(&self) -> Result<Option<Round>, kovanica_dag::DagStoreError> {
+        Ok(None)
+    }
     /// Prune non-blue blocks from a committed wave.
     ///
     /// Deprecated (#13, variant A): the committer no longer calls this. Red
@@ -505,10 +517,44 @@ where
         self.block_manager
             .read()
             .set_signing_key(self.signing_key.clone());
+        self.resume_from_store()?;
         *self.running.write() = true;
 
         // Start the round loop
         self.round_loop().await
+    }
+
+    /// Seed the round counter from the persisted DAG tip.
+    ///
+    /// A restarted node must continue after the rounds it already holds.
+    /// Starting at round 0 makes it propose for decided rounds again, and
+    /// `mark_round_decided` then stops the whole engine with
+    /// [`kovanica_dag::DagStoreError::ConflictingDecision`] — the node could
+    /// never restart against a non-empty chain.
+    ///
+    /// An empty store keeps the counter at 0: a fresh chain starts at round 0
+    /// and the first loop iteration still advances to round 1.
+    fn resume_from_store(&self) -> Result<(), ConsensusError> {
+        let Some(tip) = self.dag_store.max_stored_round()? else {
+            return Ok(());
+        };
+        if tip == 0 {
+            return Ok(());
+        }
+
+        let mut current = self.current_round.write();
+        if *current >= tip {
+            // Already ahead (e.g. start() called twice); never move backwards.
+            return Ok(());
+        }
+        *current = tip;
+        self.state.write().current_round = tip;
+        info!(
+            stored_round = tip,
+            next_round = tip + 1,
+            "resuming consensus from the persisted DAG tip"
+        );
+        Ok(())
     }
 
     /// Stop the consensus engine.
@@ -1152,6 +1198,9 @@ mod tests {
         blocks: RwLock<HashMap<Hash, kovanica_types::StatementBlock>>,
         decisions: Mutex<Vec<(Round, Hash)>>,
         fail_next_decision_mark: std::sync::atomic::AtomicBool,
+        /// Stand-in for the highest persisted DAG round, driven by
+        /// `DagStoreTrait::max_stored_round`. `None` models an empty store.
+        stored_tip: RwLock<Option<Round>>,
     }
 
     impl DagStoreTrait for TestDag {
@@ -1338,6 +1387,10 @@ mod tests {
                 .filter(|(r, _)| *r <= max_round)
                 .map(|(r, _)| *r)
                 .collect())
+        }
+
+        fn max_stored_round(&self) -> Result<Option<Round>, kovanica_dag::DagStoreError> {
+            Ok(*self.stored_tip.read())
         }
 
         fn prune_non_blue(
@@ -1550,6 +1603,66 @@ mod tests {
         let public_key = PublicKey::from(key.verifying_key());
         kovanica_crypto::verify_block_signature(&public_key, &proposal.digest, &proposal.signature)
             .expect("proposal uses node-provided identity");
+    }
+
+    /// A restarted node must resume after the rounds it already holds.
+    ///
+    /// Before the fix the engine always began at round 0, re-proposed already
+    /// decided rounds, and `mark_round_decided` then aborted the entire engine
+    /// with `DagStoreError::ConflictingDecision` — the node could not restart
+    /// against a non-empty chain at all.
+    #[test]
+    fn resume_seeds_the_round_counter_from_the_persisted_dag_tip() {
+        let (engine, dag, _key) = test_engine(10);
+        *dag.stored_tip.write() = Some(9);
+        engine.resume_from_store().expect("resume succeeds");
+        assert_eq!(*engine.current_round.read(), 9);
+        assert_eq!(engine.state().current_round, 9);
+    }
+
+    #[test]
+    fn resume_keeps_round_zero_for_an_empty_store() {
+        let (engine, _dag, _key) = test_engine(10);
+        engine.resume_from_store().expect("resume succeeds");
+        assert_eq!(*engine.current_round.read(), 0);
+    }
+
+    #[test]
+    fn resume_never_moves_the_counter_backwards() {
+        let (engine, dag, _key) = test_engine(10);
+        *engine.current_round.write() = 100;
+        *dag.stored_tip.write() = Some(5);
+        engine.resume_from_store().expect("resume succeeds");
+        assert_eq!(*engine.current_round.read(), 100);
+    }
+
+    #[tokio::test]
+    async fn restarted_engine_does_not_replay_decided_rounds() {
+        let (engine, dag, _key) = test_engine(10);
+        *dag.stored_tip.write() = Some(9);
+        let engine = Arc::new(engine);
+        let running = engine.clone();
+        let task = tokio::spawn(async move { running.start().await });
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while dag.blocks.read().is_empty() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "engine did not propose after resuming from the persisted tip"
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        engine.stop();
+        task.await.unwrap().unwrap();
+
+        // Resuming at the round-9 tip makes round 12 the first leader slot.
+        // Restarting from 0 would have produced a proposal at round 3.
+        let rounds: Vec<Round> = dag.blocks.read().values().map(|b| b.round).collect();
+        assert!(!rounds.is_empty(), "expected at least one proposal");
+        assert!(
+            rounds.iter().all(|r| *r > 9),
+            "engine replayed already decided rounds: {rounds:?}"
+        );
     }
 
     #[tokio::test]
