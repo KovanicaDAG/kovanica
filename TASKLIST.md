@@ -5,6 +5,7 @@
 > **Revizija 2026-10-12:** late-join test postoji i integriran; svi `[ ]`/`[~]` itemi ponovno provjereni protiv koda (vidi "Provjera neoznačenih itema" na dnu).
 > **Revizija 2026-10-13:** VRF Phase 1.3 **RIJEŠEN** — ECVRF-ED25519-SHA512-Elligator2, stake-weighted leader selection, genesis/staking/staking-tx wiring, 7 testova prolaze; TASKLIST.md ažuriran.
 > **Revizija 2026-10-14:** Testnet seed nodes 3+ **DONE** — fresh validator keys, genesis, run scripts, systemd units on all 3 VPSes; peer mesh verified; corrupt `kovanica-node.service`/`kovanica-node-testnet.service` fixed; testnet/mainnet config dirs created in `/root/Projects/kvnc/testnet/` & `/mainnet/`.
+> **Revizija 2026-10-16 (mergeano na `main`):** **Leader-rotation stall RIJEŠEN.** Root cause bio je `u128` saturacija u VRF prioritetu (`hash * total_stake / stake` → `saturating_mul` → svi autoriteti `u128::MAX` → tie-break držao najniži indeks → 100% rundi jedan leader). Zamijenjeno egzaktnom 192-bitnom cross-multiplied usporedbom. Kaskada (non-leaderi skupljali `missed_leader_count` → `active=false` → committee pao na 1 → stall) time je uklonjena. Drugi, aditivni bug: engine nije nastavljao round counter iz perzistiranog DAG-a → restart na nepraznoj chaini → `ConflictingDecision`. Oba fixa su na `main` (+ `register-light-node` CLI).
 
 **Legenda statusa**
 - `[x]` — implementirano i wired u production pathu (verificirano u kodu)
@@ -230,9 +231,9 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 - [x] Unit testovi: svi prolaze (cargo test --workspace --lib green)
 - [x] Integration: multi-node 3/3 PASS, sustained liveness 1/1 PASS (4 procesa, height 20+), WS subscriptions PASS
 - [~] Property testovi: proptest prisutan (9 `proptest!` makroa u consensus tests) — nije comprehensive
-- [~] Load/stress TPS≥100 @2GB RAM — **bench binary exists (`kovanica-bench`), mempool/gossip bottleneck limits throughput**; single-tx works, multi-tx needs gossip fix
-- [ ] Multi-process quorum je dokazan kroz integration testove, ali **24h soak nije nikad pokrenut**
-- [ ] 6h soak test — script exists, needs Docker adaptation
+- [~] Load/stress TPS≥100 @2GB RAM — **bench binary exists and is wired** (`ops/bench/tps.sh` drives `kovanica-bench`); mempool/gossip bottleneck limits multi-tx throughput.
+- [~] 24h soak — **CI job added** (`.github/workflows/soak.yml` + `ops/soak/run-soak.sh`); schedule + dispatch, warm-up/stall/crash gate, artifacts; default 600s, 24h = `SOAK_SECS=86400` (manual/long-lived runner).
+- [ ] 6h soak test — script exists (`ops/soak/soak.sh`), needs Docker adaptation
 
 ## PHASE 13: DevOps & Orchestration — `[~]` partial
 
@@ -240,7 +241,7 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 - [ ] Kubernetes — **nema manifesta** (postoji `docs/A13.2-K8S.md` plan)
 - [x] Prometheus metrics + Grafana (11 panela `ops/grafana/kovanica-overview.json`) + alerting (11 pravila `ops/prometheus/alerts.yml`)
 - [~] Soak script (`ops/soak/soak.sh`): MemoryMax=3G cgroup v2, RSS monitoring svakih 30s, warn na 3G — **needs Docker adaptation**
-- [ ] CI integration for soak/bench (GitHub Actions)
+- [x] CI integration for soak — `.github/workflows/soak.yml` (nightly schedule + workflow_dispatch, 180m timeout, artifacts on always)
 
 ## PHASE 14: Genesis & Launch Prep — `[~]` partial
 
@@ -365,9 +366,9 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 
 1. **Fork handling**: default uses `use_min_digest_fork: true` (lexicographic min-digest wins) — correct per code; only tests override to `false`. No longer "odbija fork" — default is min-digest tie-break.
 2. **`timeout_factor`**: field is named `leader_timeout_factor` (not `timeout_factor`); default 2, used for leader timeout computation when explicit `leader_timeout_ms == 0`. Works as designed.
-3. **TPS benchmark** @2GB RAM — `kovanica-bench` binary exists, mempool/gossip bottleneck limits throughput; fix gossip propagation for multi-tx bursts
-4. **3 kovanica-execution unit tests fail** (assert old s₀=2.0 KUNA vs current 2.5 KUNA): `committed_subdag_credits_leader_payout_address`, `delegator_rewards_accrue_and_claim_pays_them`, `duplicate_delivery_after_restart_does_not_pay_twice`. Trivial fix: update test expectations.
-5. **24h soak never run**; 6h soak script exists, Docker adaptation needed.
+3. **TPS benchmark** @2GB RAM — `kovanica-bench` binary exists and is wired (`ops/bench/tps.sh` drives it); mempool/gossip bottleneck limits multi-tx throughput.
+4. **3 kovanica-execution unit tests** — **already aligned to s₀=2.5 KUNA**; `cargo test -p kovanica-execution --lib` → 59 passed.
+5. **24h soak** — CI job added: `.github/workflows/soak.yml` + `ops/soak/run-soak.sh` (schedule + dispatch, warm-up/stall/crash gate, artifacts). Default 600s; 24h = `SOAK_SECS=86400` (manual).
 6. **No external security audit** performed.
 7. **3+ kovanica-native DNS seed domains** need registration for mainnet (`docs/SEED-DNS-AUDIT.md`); testnet seeds use raw IPs.
 8. **Governance (Phase 25) not implemented**; CLI propose/vote are stubs.
@@ -481,13 +482,12 @@ Merge je izvršen kroz dva merge commita na `main`: `1571429e` (rename ⊕ VPS3)
   - **Odgođeno 2026-10-15 (odluka vlasnika):** rename nije izveden jer i ovaj i drugi OpenCode session (PID 2728100) drže cwd u tom direktoriju → dangleali bi oba. Putanje u skriptama **namjerno nisu mijenjane** (pokazivale bi na nepostojeći direktorij); dir i putanje se mijenjaju u istom, kasnijem commitu.
 - [x] `.opencode/agents/kovanica.md` + `opencode.json` (agent key `kovanica` / `kovanica-plan`) — preimenovano. **Zahtijeva restart OpenCodea** da se novi agent key učita.
 
-### C. Otvoreni itemi (iz "Known reds", rev. 2026-10-15)
+### C. Otvoreni itemi (iz "Known reds", rev. 2026-10-15 — **ažurirano 2026-10-15 post "fix all" sesijom**)
 
-- [ ] **24h soak** — nikad pokrenut; dodati CI job (`ops/soak/soak.sh` + docker adaptacija).
-- [ ] **3 `kovanica-execution` unit testa** (`committed_subdag_credits_leader_payout_address`, `delegator_rewards_accrue_and_claim_pays_them`, `duplicate_delivery_after_restart_does_not_pay_twice`) — očekivanja na starom s₀=2.0; uskladiti na 2.5 KUNA.
-- [ ] **TPS benchmark skeleton** — `ops/bench/tps.sh` submit loop je `: no-op`; implementirati pravi submit + mjerenje.
-- [x] **Pre-existing test fail (NIJE od renamena):** `kovanica-node` `tests::red_block_transactions_return_to_mempool_after_restart` paničari na `assert!(mempool.get_pending_propagation().is_empty(), "no gossip")` (`crates/kovanica-node/src/main.rs:3070`). **Dokazano identično na `main` (131b119e)** — reproducirano u zasebnom worktreeu. Vjerojatno regresija iz `0c7de51e` ("mempool critical fixes for empty block proposals") — red tx-ovi se vraćaju u mempool ali ostaju queueani za gossip.
-  - ✅ **Riješeno (test-only) na branchu `fix/rust-open-items` @ `2bee07e3`.** Potvrđeno (@oracle): assert je **zastario**, ne bug — od `0c7de51e` proizvodnja namjerno gossip-a vraćene red tx-ove (`non_blue.rs:62` → `reinsert_returned(txs, true)` → `admit(tx, true)` → `pending_propagation`). Taj commit je ažurirao Test A i `non_blue.rs` test, ali je propustio ovaj drugi `"no gossip"` assert. Zamijenjen s `HashSet<Hash>` usporedbom protiv `red_txs` (`"returned red txs are re-gossiped"`); sibling test i dalje prolazi. **Branch još nije mergean na `main`.**
+- [x] **24h soak** — CI job dodan: `.github/workflows/soak.yml` (schedule 03:00 UTC + workflow_dispatch, timeout 180m, artifacts `if: always()`), runner `ops/soak/run-soak.sh` (compose up --build, warm-up health/progress, soak loop sampling /health + /metrics, stall/crash gate, diagnostic collect). Default 600s; 24h = `SOAK_SECS=86400` (manual/long-lived runner).
+- [x] **3 `kovanica-execution` unit testa** — **već uskladeni na s₀=2.5 KUNA** (canonical source `kovanica-staking::INITIAL_BLOCK_REWARD = 5 * ONE_KUNA / 2` = 2.5 KUNA; tests 1–2 deriviraju dinamički, test 3 hardkodirani atom-vrijednosti su već 2.5-KUNA + 20% escrow). `cargo test -p kovanica-execution --lib` → **59 passed**.
+- [x] **TPS benchmark** — **već pravi implementacija** (`ops/bench/tps.sh` + `crates/kovanica-cli/src/bin/bench.rs`); submit loop nije `: no-op` — koristi `kovanica-bench` binary sa funding phase + nonce-ordered grouped submission + committed-nonce polling + `BENCH … tps=` summary. TASKLIST §C "skeleton" napomena bila zastarjela.
+- [x] **Pre-existing test fail (NIJE od renamena):** `kovanica-node` `tests::red_block_transactions_return_to_mempool_after_restart` — fix (`2bee07e3`) **mergean na `main`** (`231b835c`). Assert zamijenjen sa `HashSet<Hash>` usporedbom protiv `red_txs` (`"returned red txs are re-gossiped"`). Verificirano: `cargo test -p kovanica-node --bin kovanica-node` → **46 passed / 0 failed** (prije: 45 passed + 1 failed).
 - [ ] **DNS seed registracija** — 3+ `kovanica`-native imena za mainnet (`docs/SEED-DNS-AUDIT.md`); trenutno raw IP / simplified arhitektura.
 - [ ] **Contract SDK + Indexer** — nema (Phase 22).
 - [ ] **Phase 25 governance** — stub (`propose`/`vote` → `not_implemented`).
