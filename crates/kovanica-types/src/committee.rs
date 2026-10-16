@@ -76,6 +76,21 @@ impl Committee {
     }
 
     /// VRF-aware leader selection.
+    ///
+    /// `vrf_outputs` maps authority index → verified 32-byte VRF hash. The
+    /// authority with the lowest `hash / stake` wins. Ordering is exact:
+    /// priorities are cross-multiplied into 192-bit products by
+    /// [`crate::vrf_priority_cmp`] instead of being packed into a `u128`,
+    /// which saturated (`hash * total_stake` overflows) and collapsed every
+    /// authority to one value, pinning the leader to the lowest index.
+    ///
+    /// Authorities with no output fall back to nothing: if no authority has a
+    /// hash in `vrf_outputs`, this is identical to [`Self::leader`]
+    /// (round-robin). That fallback is the pre-upgrade behaviour: live blocks
+    /// do not yet carry a VRF proof, so the engine must not invent a different
+    /// leader.
+    ///
+    /// Ties break to the lower authority index.
     pub fn leader_with_vrf(
         &self,
         round: u64,
@@ -85,43 +100,29 @@ impl Committee {
             return 0;
         }
 
-        // Try VRF-based selection first
-        let mut best_authority: Option<(u16, u128)> = None; // (index, priority)
+        let mut best: Option<(u16, [u8; 32], Stake)> = None;
 
         for authority in &self.authorities {
-            if let Some(vrf_hash) = vrf_outputs.get(&authority.index) {
-                // Priority = VRF hash / stake (lower = higher priority)
-                // Using u128 to avoid overflow: priority = hash_as_u128 * total_stake / stake
-                let hash_u128 = u128::from_le_bytes([
-                    vrf_hash[0],
-                    vrf_hash[1],
-                    vrf_hash[2],
-                    vrf_hash[3],
-                    vrf_hash[4],
-                    vrf_hash[5],
-                    vrf_hash[6],
-                    vrf_hash[7],
-                    vrf_hash[8],
-                    vrf_hash[9],
-                    vrf_hash[10],
-                    vrf_hash[11],
-                    vrf_hash[12],
-                    vrf_hash[13],
-                    vrf_hash[14],
-                    vrf_hash[15],
-                ]);
-
-                let priority = hash_u128
-                    .saturating_mul(self.total_stake as u128)
-                    .saturating_div(authority.stake.max(1) as u128);
-
-                if best_authority.is_none_or(|(_, p)| priority < p) {
-                    best_authority = Some((authority.index, priority));
+            let Some(vrf_hash) = vrf_outputs.get(&authority.index) else {
+                continue;
+            };
+            let wins = match best {
+                None => true,
+                Some((index, best_hash, best_stake)) => {
+                    match crate::vrf_priority_cmp(vrf_hash, authority.stake, &best_hash, best_stake)
+                    {
+                        std::cmp::Ordering::Less => true,
+                        std::cmp::Ordering::Equal => authority.index < index,
+                        std::cmp::Ordering::Greater => false,
+                    }
                 }
+            };
+            if wins {
+                best = Some((authority.index, *vrf_hash, authority.stake));
             }
         }
 
-        if let Some((idx, _)) = best_authority {
+        if let Some((idx, _, _)) = best {
             return idx;
         }
 

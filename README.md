@@ -205,6 +205,7 @@ Additional environment variables read by the node:
 - `KOVANICA_RPC_AUTH` — set to `disable` to skip bearer-token auth on write methods
 - `KOVANICA_RPC_WRITE_TOKENS` — comma-separated bearer tokens accepted for RPC write methods
 - `KOVANICA_MEMPOOL_REBROADCAST_INTERVAL_SECS`, `KOVANICA_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS`, `KOVANICA_MEMPOOL_MIN_FEE_RATE`, `KOVANICA_MEMPOOL_MAX_TXS_PER_SENDER` — mempool tuning
+- `KOVANICA_HEALTH_COMMIT_STALL_SECS` — seconds without a new committed leader before `/health` reports `degraded` (HTTP 503); default `120`, `0` disables the check (see `kovanica_rpc::health::DEFAULT_COMMIT_STALL_SECS`)
 
 Chain-id registry: **mainnet = 1, testnet = 2, devnet = 3, local = 1337**.
 
