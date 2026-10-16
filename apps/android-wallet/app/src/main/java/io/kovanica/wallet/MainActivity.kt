@@ -502,16 +502,28 @@ class MainActivity : Activity() {
             val header = node.call("kovanica_getLeaderHeader", JSONArray()) as? JSONObject
                 ?: return@background warn("No sealed header yet on ${env.network}.")
             val height = parseQuantity(header.get("committedHeight"))
+            val epoch = header.opt("epoch")?.let { runCatching { parseQuantity(it) }.getOrNull() } ?: env.epoch
             val seals = node.call("kovanica_getCommitSeals", JSONArray().put(hex(height)))
             val committee = node.call("kovanica_getCommittee", JSONArray())
-            val verified = verifyHeader(
-                env.chainId,
-                env.epoch,
-                JSONArray(committee.toString()).toString(),
-                header.toString(),
-                JSONObject(seals.toString()).toString(),
-                parentJson(height),
-            )
+            val verified = try {
+                verifyHeader(
+                    env.chainId,
+                    epoch,
+                    JSONArray(committee.toString()).toString(),
+                    header.toString(),
+                    JSONObject(seals.toString()).toString(),
+                    parentJson(height),
+                )
+            } catch (error: Exception) {
+                val reason = error.message ?: error.toString()
+                val message = if (reason.contains("committee hash does not match")) {
+                    "This node's committee does not match the sealed header (epoch $epoch). " +
+                        "If the node restarted with a different validator set, its older headers can no longer be verified."
+                } else {
+                    reason
+                }
+                return@background Line(message, Tone.ERROR)
+            }
             prefs().edit()
                 .putString("header", header.toString())
                 .putString("height", verified.committedHeight.toString())

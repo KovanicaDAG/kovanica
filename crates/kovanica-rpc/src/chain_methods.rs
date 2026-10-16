@@ -880,10 +880,11 @@ pub async fn handle_get_light_set(_params: Value, state: RpcState) -> Result<Val
     }))
 }
 
-/// `kovanica_getCommittee()` — current consensus committee.
-pub async fn handle_get_committee(_params: Value, state: RpcState) -> Result<Value, RpcError> {
-    let committee = &state.committee;
-    let members: Vec<Value> = committee
+/// Serialise a committee's authorities into the member-row shape shared by
+/// [`handle_get_committee`] and [`handle_get_committee_info`]. Kept in one
+/// place so both methods stay byte-identical.
+fn committee_members_json(committee: &kovanica_consensus::CommitteeInfo) -> Vec<Value> {
+    committee
         .authorities()
         .iter()
         .map(|a| {
@@ -895,8 +896,47 @@ pub async fn handle_get_committee(_params: Value, state: RpcState) -> Result<Val
                 "network_address": a.network_address,
             })
         })
-        .collect();
-    Ok(Value::Array(members))
+        .collect::<Vec<Value>>()
+}
+
+/// `kovanica_getCommittee(epoch?)` — current consensus committee.
+///
+/// Returns a bare JSON array of member rows; the Android client parses the
+/// no-param response directly as a `JSONArray`, so that shape is preserved.
+/// Committee history is not retained by the node: when an optional `epoch`
+/// parameter is supplied and does not match the live committee epoch this
+/// returns an invalid-params error rather than silently answering with the
+/// wrong epoch's committee.
+pub async fn handle_get_committee(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let committee = &state.committee;
+    let args = params_vec(&params);
+    if let Some(requested) = args.first() {
+        let requested = parse_u64(requested, "epoch")?;
+        let current = committee.epoch();
+        if requested != current {
+            return Err(RpcError::InvalidParams(format!(
+                "committee history is not retained; only the current epoch ({current}) is available"
+            )));
+        }
+    }
+    Ok(Value::Array(committee_members_json(committee)))
+}
+
+/// `kovanica_getCommitteeInfo()` — current committee together with its epoch.
+///
+/// Object form of [`handle_get_committee`]: `{ epoch, members }`, where
+/// `members` is exactly the same row array. A light client needs the epoch to
+/// recompute `committee_seal_hash(epoch, members)` against a sealed leader
+/// header's `committee_hash`.
+pub async fn handle_get_committee_info(
+    _params: Value,
+    state: RpcState,
+) -> Result<Value, RpcError> {
+    let committee = &state.committee;
+    Ok(json!({
+        "epoch": quantity(committee.epoch()),
+        "members": committee_members_json(committee),
+    }))
 }
 
 #[cfg(test)]
@@ -1087,6 +1127,43 @@ mod tests {
             handle_estimate_fee(Value::Null, state).await.unwrap(),
             json!("0x1")
         );
+    }
+
+    #[tokio::test]
+    async fn committee_info_matches_committee_and_rejects_other_epochs() {
+        let (_dir, storage) = open_storage();
+        let state = test_state(storage);
+
+        // `kovanica_getCommitteeInfo` reports the live epoch (0 in the fixture)
+        // and the exact same member rows as the bare-array `kovanica_getCommittee`.
+        let info = handle_get_committee_info(Value::Null, state.clone())
+            .await
+            .unwrap();
+        assert_eq!(info["epoch"], json!("0x0"));
+        let members = info["members"].as_array().expect("members is an array");
+        assert_eq!(members.len(), 1);
+        assert_eq!(
+            members[0]["address"],
+            json!(Address([0x09; 32]).to_string())
+        );
+
+        let committee = handle_get_committee(Value::Null, state.clone())
+            .await
+            .unwrap();
+        assert_eq!(info["members"], committee);
+
+        // The epoch-matching parameter behaves like the no-param call.
+        let same = handle_get_committee(json!(["0x0"]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(same, committee);
+
+        // A different epoch is rejected instead of silently answering with the
+        // current committee (history is not retained).
+        assert!(matches!(
+            handle_get_committee(json!(["0x5"]), state.clone()).await,
+            Err(RpcError::InvalidParams(_))
+        ));
     }
 
     #[tokio::test]

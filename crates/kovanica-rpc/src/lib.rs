@@ -264,6 +264,8 @@ impl RpcServer {
             .await;
         self.register_stateful("kovanica_getCommittee", handle_get_committee)
             .await;
+        self.register_stateful("kovanica_getCommitteeInfo", handle_get_committee_info)
+            .await;
         self.register_stateful("kovanica_getLeaderHeader", handle_get_leader_header)
             .await;
         self.register_stateful("kovanica_getCommitSeals", handle_get_commit_seals)
