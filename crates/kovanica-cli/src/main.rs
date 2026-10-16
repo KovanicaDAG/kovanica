@@ -79,6 +79,8 @@ enum Commands {
     Stake(AmountArgs),
     /// Unstake KUNA (builds and submits a signed Unstake transaction)
     Unstake(AmountArgs),
+    /// Register a light node (bond + VRF key)
+    RegisterLightNode(RegisterLightNodeArgs),
     /// Delegate stake to a validator
     Delegate(DelegateArgs),
     /// Claim staking rewards
@@ -234,6 +236,23 @@ struct AmountArgs {
     fee: u64,
 }
 
+/// Arguments for `kovanica register-light-node`.
+#[derive(Args)]
+struct RegisterLightNodeArgs {
+    /// VRF public key (32-byte hex)
+    #[arg(long)]
+    vrf_public_key: String,
+    /// Bond amount in atoms (minimum 100 KUNA = 100_000_000_000)
+    #[arg(long)]
+    stake: u64,
+    /// Keystore file path
+    #[arg(long, short, default_value = "keystore.json")]
+    keystore: PathBuf,
+    /// Fee in atoms (the mempool rejects zero-fee transactions)
+    #[arg(long, default_value_t = 1)]
+    fee: u64,
+}
+
 /// Arguments for `kovanica delegate`.
 #[derive(Args)]
 struct DelegateArgs {
@@ -366,6 +385,9 @@ async fn main() -> Result<()> {
         Commands::Balance { address } => node::balance(&client, &address, json).await,
         Commands::Stake(args) => cmd_stake(&client, chain_id, args, json).await,
         Commands::Unstake(args) => cmd_unstake(&client, chain_id, args, json).await,
+        Commands::RegisterLightNode(args) => {
+            cmd_register_light_node(&client, chain_id, args, json).await
+        }
         Commands::Delegate(args) => cmd_delegate(&client, chain_id, args, json).await,
         Commands::ClaimRewards(args) => cmd_claim_rewards(&client, chain_id, args, json).await,
         Commands::Propose(args) => node::not_implemented(
@@ -665,6 +687,54 @@ async fn cmd_unstake(
     println!("  amount: {} atoms", args.amount);
     println!("  fee:    {} atoms", args.fee);
     println!("  nonce:  {nonce}");
+    Ok(())
+}
+
+async fn cmd_register_light_node(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: RegisterLightNodeArgs,
+    json_output: bool,
+) -> Result<()> {
+    let vrf_pk_bytes = hex::decode(&args.vrf_public_key)
+        .map_err(|_| anyhow::anyhow!("invalid vrf_public_key hex"))?;
+    if vrf_pk_bytes.len() != 32 {
+        return Err(anyhow::anyhow!(
+            "vrf_public_key must be 32 bytes (64 hex chars)"
+        ));
+    }
+    let mut vrf_pk = [0u8; 32];
+    vrf_pk.copy_from_slice(&vrf_pk_bytes);
+
+    let (tx_hash, sender, nonce) = sign_and_submit_self(
+        client,
+        chain_id,
+        &args.keystore,
+        TransactionKind::RegisterLightNode {
+            vrf_public_key: kovanica_types::crypto::PublicKey(vrf_pk),
+            stake: args.stake,
+        },
+        args.fee,
+    )
+    .await?;
+
+    if json_output {
+        return output::print_json(&json!({
+            "transactionHash": tx_hash,
+            "sender": sender.to_string(),
+            "vrfPublicKey": args.vrf_public_key,
+            "stake": args.stake,
+            "fee": args.fee,
+            "nonce": nonce,
+        }));
+    }
+
+    println!("Submitted transaction {tx_hash}");
+    println!("  from:         {}", sender);
+    println!("  vrfPublicKey: {}", args.vrf_public_key);
+    println!("  stake:        {} atoms", args.stake);
+    println!("  fee:          {} atoms", args.fee);
+    println!("  nonce:        {nonce}");
     Ok(())
 }
 
@@ -986,6 +1056,10 @@ fn prompt_keystore_password(keystore: &wallet::Keystore) -> Result<Option<Zeroiz
 fn prompt_password_if_encrypted(encrypted: bool) -> Result<Option<Zeroizing<String>>> {
     if !encrypted {
         return Ok(None);
+    }
+    // Allow password via env var for non-interactive use
+    if let Ok(pass) = std::env::var("KOVANICA_KEYSTORE_PASSWORD") {
+        return Ok(Some(Zeroizing::new(pass)));
     }
     Ok(Some(Zeroizing::new(rpassword::prompt_password(
         "Keystore passphrase: ",
