@@ -1,7 +1,7 @@
 package io.kovanica.comms
 
 import android.app.Activity
-import android.content.ComponentCallbacks2
+import android.app.ActivityManager
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -227,9 +227,24 @@ class MessagesActivity : Activity() {
         super.onDestroy()
     }
 
-    override fun onTrimMemory(level: Int) {
-        super.onTrimMemory(level)
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) lock()
+    override fun onStop() {
+        super.onStop()
+        if (isChangingConfigurations) return
+        window.decorView.post {
+            if (isDestroyed || isChangingConfigurations) return@post
+            if (!processInForeground()) lock()
+        }
+    }
+
+    /** True while any screen of this app is still in front of the user. */
+    private fun processInForeground(): Boolean {
+        val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val processes = manager.runningAppProcesses ?: return false
+        val pid = android.os.Process.myPid()
+        return processes.any {
+            it.pid == pid &&
+                it.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+        }
     }
 
     /** Forget the unlocked key and the typed passphrase when the app leaves the screen. */

@@ -1,8 +1,8 @@
 package io.kovanica.light
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.AlertDialog
-import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -368,9 +368,26 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    override fun onTrimMemory(level: Int) {
-        super.onTrimMemory(level)
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) clearSecrets()
+    override fun onStop() {
+        super.onStop()
+        if (isChangingConfigurations) return
+        // Opening Messages, Settings, or Receive also stops this screen.
+        // Wait one turn, then drop secrets only if the process left the foreground.
+        window.decorView.post {
+            if (isDestroyed || isChangingConfigurations) return@post
+            if (!processInForeground()) clearSecrets()
+        }
+    }
+
+    /** True while any screen of this app is still in front of the user. */
+    private fun processInForeground(): Boolean {
+        val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val processes = manager.runningAppProcesses ?: return false
+        val pid = android.os.Process.myPid()
+        return processes.any {
+            it.pid == pid &&
+                it.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+        }
     }
 
     /** Drop the passphrase and any pasted seed once the app leaves the screen. */
