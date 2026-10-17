@@ -53,7 +53,11 @@ pub fn comms_id_hex(id: &[u8; 32]) -> String {
 ///
 /// Rejects wrong length, uppercase, and non-hex input.
 pub fn comms_id_from_hex(s: &str) -> Result<[u8; 32], EnvelopeError> {
-    if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if s.len() != 64
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err(EnvelopeError::BadHex(format!(
             "comms id must be 64 lowercase hex characters (got {} chars)",
             s.len()
@@ -125,10 +129,7 @@ pub struct Envelope {
 impl Envelope {
     /// Decode the `to`/`from` comms ids, validating the hex form.
     fn decode_ids(&self) -> Result<([u8; 32], [u8; 32]), EnvelopeError> {
-        Ok((
-            comms_id_from_hex(&self.to)?,
-            comms_id_from_hex(&self.from)?,
-        ))
+        Ok((comms_id_from_hex(&self.to)?, comms_id_from_hex(&self.from)?))
     }
 
     /// The exact byte layout signed by the sender (§3.3).

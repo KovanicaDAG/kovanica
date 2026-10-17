@@ -123,7 +123,10 @@ pub trait DagStoreTrait: Send + Sync {
     /// Get decided leader hashes for a round.
     fn get_decided_leaders(&self, round: Round) -> Result<Vec<Hash>, kovanica_dag::DagStoreError>;
     /// Get all decided rounds up to a maximum.
-    fn get_decided_rounds(&self, max_round: Round) -> Result<Vec<Round>, kovanica_dag::DagStoreError>;
+    fn get_decided_rounds(
+        &self,
+        max_round: Round,
+    ) -> Result<Vec<Round>, kovanica_dag::DagStoreError>;
     /// Highest round that still has at least one stored DAG block.
     ///
     /// The engine resumes its round counter from this value at `start()` so a
@@ -451,7 +454,10 @@ where
             .any(|authority| authority.vrf_public_key.is_some())
     }
 
-    fn vrf_set_complete(&self, outputs: &HashMap<kovanica_types::AuthorityIndex, [u8; 32]>) -> bool {
+    fn vrf_set_complete(
+        &self,
+        outputs: &HashMap<kovanica_types::AuthorityIndex, [u8; 32]>,
+    ) -> bool {
         let mut vrf_validators = 0u32;
         let mut present = 0u32;
         for authority in self.committee.authorities() {
@@ -505,7 +511,10 @@ where
     }
 
     /// Deliver durable committed sub-DAGs to the execution pipeline.
-    pub fn set_commit_sender(&self, sender: mpsc::UnboundedSender<kovanica_types::CommittedSubDag>) {
+    pub fn set_commit_sender(
+        &self,
+        sender: mpsc::UnboundedSender<kovanica_types::CommittedSubDag>,
+    ) {
         *self.commit_sender.write() = Some(sender);
     }
 
@@ -662,7 +671,8 @@ where
             // so they can be re-proposed by the next leader
             if let Some(mempool) = &self.mempool {
                 if let Some(authority) = self.committee.get_by_index(leader) {
-                    let returned = mempool.return_in_flight_for_sender(&authority.address, Instant::now());
+                    let returned =
+                        mempool.return_in_flight_for_sender(&authority.address, Instant::now());
                     if returned > 0 {
                         info!(leader = ?leader, address = %authority.address, returned, "returned in-flight transactions to queue after leader skip");
                     }
@@ -1052,8 +1062,12 @@ where
         let Some(authority) = self.committee.get_by_index(voter) else {
             return Err(VoteRejection::UnknownVoter(voter).into());
         };
-        if kovanica_crypto::verify_vote_signature(&self.vote_signing_ctx(), vote, &authority.public_key)
-            .is_err()
+        if kovanica_crypto::verify_vote_signature(
+            &self.vote_signing_ctx(),
+            vote,
+            &authority.public_key,
+        )
+        .is_err()
         {
             return Err(VoteRejection::BadSignature(voter).into());
         }
@@ -1366,7 +1380,10 @@ mod tests {
                 .collect())
         }
 
-        fn get_decided_leaders(&self, round: Round) -> Result<Vec<Hash>, kovanica_dag::DagStoreError> {
+        fn get_decided_leaders(
+            &self,
+            round: Round,
+        ) -> Result<Vec<Hash>, kovanica_dag::DagStoreError> {
             Ok(self
                 .decisions
                 .lock()
@@ -2413,7 +2430,9 @@ mod tests {
     #[test]
     fn late_leader_block_gets_exactly_one_late_vote_and_commits() {
         let (key, public_key) = kovanica_crypto::generate_keypair();
-        let others: Vec<_> = (1..4).map(|_| kovanica_crypto::generate_keypair()).collect();
+        let others: Vec<_> = (1..4)
+            .map(|_| kovanica_crypto::generate_keypair())
+            .collect();
         let mut authorities = vec![AuthorityInfo {
             index: 0,
             stake: 1,
@@ -2466,7 +2485,8 @@ mod tests {
             // We are now 3 rounds past the leader round when it arrives.
             *engine.current_round.write() = leader_round + 3;
 
-            let digest = kovanica_types::StatementBlock::compute_digest(author, leader_round, &[], &[]);
+            let digest =
+                kovanica_types::StatementBlock::compute_digest(author, leader_round, &[], &[]);
             let block = kovanica_types::StatementBlock {
                 author,
                 round: leader_round,
@@ -2521,7 +2541,9 @@ mod tests {
         Arc<Mutex<Vec<Round>>>,
     ) {
         let (key, public_key) = kovanica_crypto::generate_keypair();
-        let others: Vec<_> = (1..4).map(|_| kovanica_crypto::generate_keypair()).collect();
+        let others: Vec<_> = (1..4)
+            .map(|_| kovanica_crypto::generate_keypair())
+            .collect();
         let mut authorities = vec![AuthorityInfo {
             index: 0,
             stake: 1,

@@ -401,8 +401,11 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
     }
 
     // kovanica_caller(out_ptr: i32) — writes 32 bytes.
-    define!("kovanica_caller", |mut caller: Caller<'_, ExecState<'_>>,
-                            out_ptr: i32|
+    define!("kovanica_caller", |mut caller: Caller<
+        '_,
+        ExecState<'_>,
+    >,
+                                out_ptr: i32|
      -> Result<(), wasmi::Error> {
         let addr = caller.data().host.caller();
         write_guest(&mut caller, out_ptr, &addr)
@@ -413,21 +416,25 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         '_,
         ExecState<'_>,
     >,
-                                      out_ptr: i32|
-     -> Result<(), wasmi::Error> {
+                                          out_ptr: i32|
+     -> Result<
+        (),
+        wasmi::Error,
+    > {
         let addr = caller.data().host.contract_address();
         write_guest(&mut caller, out_ptr, &addr)
     });
 
     // kovanica_block_height() -> i64
-    define!(
-        "kovanica_block_height",
-        |caller: Caller<'_, ExecState<'_>>| -> i64 {
-            // Values that do not fit the i64 host slot report -1; the guest
-            // treats negatives as 0 (see kovanica-common/src/wasm.rs notes).
-            i64::try_from(caller.data().host.block_height()).unwrap_or(-1)
-        }
-    );
+    define!("kovanica_block_height", |caller: Caller<
+        '_,
+        ExecState<'_>,
+    >|
+     -> i64 {
+        // Values that do not fit the i64 host slot report -1; the guest
+        // treats negatives as 0 (see kovanica-common/src/wasm.rs notes).
+        i64::try_from(caller.data().host.block_height()).unwrap_or(-1)
+    });
 
     // kovanica_timestamp() -> i64
     define!(
@@ -438,9 +445,12 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
     );
 
     // kovanica_balance_of(ptr: i32, len: i32) -> i64 — u64 balance as i64, -1 = error.
-    define!("kovanica_balance_of", |caller: Caller<'_, ExecState<'_>>,
-                                ptr: i32,
-                                len: i32|
+    define!("kovanica_balance_of", |caller: Caller<
+        '_,
+        ExecState<'_>,
+    >,
+                                    ptr: i32,
+                                    len: i32|
      -> Result<i64, wasmi::Error> {
         let addr = read_address(&caller, ptr, len)?;
         let balance = caller.data().host.balance_of(&addr);
@@ -450,15 +460,20 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
     });
 
     // kovanica_transfer(fp, fl, tp, tl: i32, amount: i64) -> i32 — 0 = ok.
-    define!("kovanica_transfer", |mut caller: Caller<'_, ExecState<'_>>,
-                              fp: i32,
-                              fl: i32,
-                              tp: i32,
-                              tl: i32,
-                              amount: i64|
+    define!("kovanica_transfer", |mut caller: Caller<
+        '_,
+        ExecState<'_>,
+    >,
+                                  fp: i32,
+                                  fl: i32,
+                                  tp: i32,
+                                  tl: i32,
+                                  amount: i64|
      -> Result<i32, wasmi::Error> {
         if amount < 0 {
-            return Ok(pack_contract_error(kovanica_common::ContractError::Overflow));
+            return Ok(pack_contract_error(
+                kovanica_common::ContractError::Overflow,
+            ));
         }
         let from = read_address(&caller, fp, fl)?;
         let to = read_address(&caller, tp, tl)?;
@@ -475,10 +490,10 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         '_,
         ExecState<'_>,
     >,
-                                 kp: i32,
-                                 kl: i32,
-                                 out_ptr: i32,
-                                 out_cap: i32|
+                                     kp: i32,
+                                     kl: i32,
+                                     out_ptr: i32,
+                                     out_cap: i32|
      -> Result<i32, wasmi::Error> {
         let key = read_guest(&caller, kp, kl)?;
         let Some(value) = caller.data().host.storage_get(&key) else {
@@ -504,10 +519,10 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         '_,
         ExecState<'_>,
     >,
-                                 kp: i32,
-                                 kl: i32,
-                                 vp: i32,
-                                 vl: i32|
+                                     kp: i32,
+                                     kl: i32,
+                                     vp: i32,
+                                     vl: i32|
      -> Result<i32, wasmi::Error> {
         let key = read_guest(&caller, kp, kl)?;
         let value = read_guest(&caller, vp, vl)?;
@@ -520,10 +535,10 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         '_,
         ExecState<'_>,
     >,
-                                tp: i32,
-                                tl: i32,
-                                dp: i32,
-                                dl: i32|
+                                    tp: i32,
+                                    tl: i32,
+                                    dp: i32,
+                                    dl: i32|
      -> Result<(), wasmi::Error> {
         let topic = read_guest(&caller, tp, tl)?;
         let data = read_guest(&caller, dp, dl)?;

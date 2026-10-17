@@ -96,8 +96,8 @@ mod tests {
 
     #[test]
     fn comms_id_accepts_explicit_keystore() {
-        let cli =
-            TestCli::try_parse_from(["kovanica", "comms", "id", "--keystore", "alice.json"]).unwrap();
+        let cli = TestCli::try_parse_from(["kovanica", "comms", "id", "--keystore", "alice.json"])
+            .unwrap();
         match cli.command {
             TestCommands::Comms {
                 command: CommsCommand::Id(args),

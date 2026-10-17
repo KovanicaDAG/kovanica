@@ -106,7 +106,8 @@ fn non_blue_refs_debug_asserts_genesis_is_never_red() {
     // Constructed case: genesis handed in as not blue.
     let g = canonical_genesis();
     let leader = make_block(3, 3, vec![block_ref(&g)], "leader");
-    let _ = kovanica_consensus::non_blue_refs(&[g, leader.clone()], &[leader.digest], &leader.digest);
+    let _ =
+        kovanica_consensus::non_blue_refs(&[g, leader.clone()], &[leader.digest], &leader.digest);
 }
 
 #[test]

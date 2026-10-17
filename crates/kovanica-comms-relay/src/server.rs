@@ -24,18 +24,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use parking_lot::Mutex;
-use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 use crate::envelope::{Envelope, MAX_CT, MAX_ENVELOPE_JSON};
-use crate::{
-    comms_id_from_hex, now_ms, pow_verify, SubmissionWrapper,
-};
 use crate::store::{Store, StoreError, DEFAULT_INBOX_LIMIT, MAX_INBOX_LIMIT};
+use crate::{comms_id_from_hex, now_ms, pow_verify, SubmissionWrapper};
 
 /// How often the background task sweeps expired envelopes.
 pub const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
@@ -148,13 +146,12 @@ fn now_ms_u64() -> u64 {
 /// `POST /v1/envelope` — validate and store an opaque envelope.
 async fn post_envelope(State(state): State<AppState>, body: Bytes) -> Response {
     if body.len() > MAX_ENVELOPE_JSON {
-        return too_large(format!(
-            "envelope json exceeds {MAX_ENVELOPE_JSON} bytes"
-        ));
+        return too_large(format!("envelope json exceeds {MAX_ENVELOPE_JSON} bytes"));
     }
 
     // Try to deserialize wrapper first, else bare envelope
-    let (envelope, pow_opt, payment_opt) = match serde_json::from_slice::<SubmissionWrapper>(&body) {
+    let (envelope, pow_opt, payment_opt) = match serde_json::from_slice::<SubmissionWrapper>(&body)
+    {
         Ok(w) => (w.envelope, w.pow, w.payment),
         Err(_) => match Envelope::from_json(&body) {
             Ok(envelope) => (envelope, None, None),
@@ -293,7 +290,10 @@ async fn post_envelope(State(state): State<AppState>, body: Bytes) -> Response {
     match state.store.insert(envelope, now) {
         Ok(_outcome) => (
             StatusCode::CREATED,
-            Json(PostEnvelopeResponse { ok: true, id: id_res }),
+            Json(PostEnvelopeResponse {
+                ok: true,
+                id: id_res,
+            }),
         )
             .into_response(),
         Err(StoreError::RateLimited) => rate_limited(),
@@ -320,13 +320,12 @@ async fn get_inbox(
     if comms_id_from_hex(&comms_id).is_err() {
         return bad_request("invalid comms id");
     }
-    let limit = query.limit.unwrap_or(DEFAULT_INBOX_LIMIT).min(MAX_INBOX_LIMIT);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_INBOX_LIMIT)
+        .min(MAX_INBOX_LIMIT);
     let envelopes = state.store.inbox(&comms_id, limit, query.since, now_ms());
-    (
-        StatusCode::OK,
-        Json(InboxResponse { envelopes }),
-    )
-        .into_response()
+    (StatusCode::OK, Json(InboxResponse { envelopes })).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -352,11 +351,7 @@ async fn post_ack(State(state): State<AppState>, Json(req): Json<AckRequest>) ->
         }
     }
     let deleted = state.store.ack(&req.to, &req.ids);
-    (
-        StatusCode::OK,
-        Json(AckResponse { ok: true, deleted }),
-    )
-        .into_response()
+    (StatusCode::OK, Json(AckResponse { ok: true, deleted })).into_response()
 }
 
 #[derive(Debug, Serialize)]

@@ -928,14 +928,53 @@ pub async fn handle_get_committee(params: Value, state: RpcState) -> Result<Valu
 /// `members` is exactly the same row array. A light client needs the epoch to
 /// recompute `committee_seal_hash(epoch, members)` against a sealed leader
 /// header's `committee_hash`.
-pub async fn handle_get_committee_info(
-    _params: Value,
-    state: RpcState,
-) -> Result<Value, RpcError> {
+pub async fn handle_get_committee_info(_params: Value, state: RpcState) -> Result<Value, RpcError> {
     let committee = &state.committee;
     Ok(json!({
         "epoch": quantity(committee.epoch()),
         "members": committee_members_json(committee),
+    }))
+}
+
+// ============================================================================
+// Light Client (client-only / read-only) — P15 B-lane
+// ============================================================================
+
+/// Minimal read-only light-client checkpoint endpoint.
+/// Accepts block hash or height; returns existing [`LightClientCheckpoint`]
+/// structure plus a verification-status flag. No consensus rule changed.
+pub async fn handle_light_client_checkpoint(
+    params: Value,
+    _state: RpcState,
+) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let height = args
+        .first()
+        .and_then(|v| parse_u64(v, "height").ok())
+        .unwrap_or(0);
+    let hash_arg = args.get(1);
+    let leader_hash = hash_arg
+        .and_then(|v| parse_hash(v, "hash").ok())
+        .unwrap_or(Hash::zero());
+    // Minimal checkpoint built from existing types only (no new logic).
+    let wave = WaveCommitCertificate::new(
+        leader_hash,
+        0,
+        height,
+        std::collections::BTreeMap::new(),
+        Hash::zero(),
+    );
+    let checkpoint =
+        LightClientCheckpoint::new(height, leader_hash, Hash::zero(), Hash::zero(), wave, 0);
+    // Verification exposes existing verify_quorum / verify_colouring (client-only,
+    // no new consensus logic). Callers supply a real Committee to run them.
+    let verified = false;
+    Ok(json!({
+        "checkpoint": checkpoint,
+        "verified": verified,
+        "height": quantity(height),
+        "hash": to_hex(leader_hash.as_ref()),
+        "note": "read-only / client-only; no consensus change",
     }))
 }
 
@@ -1349,7 +1388,10 @@ mod tests {
 
         // Returned from a non-blue block (#13).
         let report = state.mempool.reinsert_returned(vec![tx.clone()], true);
-        assert_eq!(report[0].outcome, kovanica_mempool::ReinsertOutcome::Accepted);
+        assert_eq!(
+            report[0].outcome,
+            kovanica_mempool::ReinsertOutcome::Accepted
+        );
 
         let hash = json!([to_hex(&tx.hash.0)]);
         let receipt = handle_get_transaction_receipt(hash.clone(), state.clone())
@@ -1454,37 +1496,4 @@ mod tests {
         assert_eq!(set["rewardBps"], json!(2_000));
         assert_eq!(set["nodes"], json!([]));
     }
-}
-
-// ============================================================================
-// Light Client (client-only / read-only) — P15 B-lane
-// ============================================================================
-
-/// Minimal read-only light-client checkpoint endpoint.
-/// Accepts block hash or height; returns existing [`LightClientCheckpoint`]
-/// structure plus a verification-status flag. No consensus rule changed.
-pub async fn handle_light_client_checkpoint(
-    params: Value,
-    _state: RpcState,
-) -> Result<Value, RpcError> {
-    let args = params_vec(&params);
-    let height = args.get(0).and_then(|v| parse_u64(v, "height").ok()).unwrap_or(0);
-    let hash_arg = args.get(1);
-    let leader_hash = hash_arg
-        .map(|v| parse_hash(v, "hash").ok())
-        .flatten()
-        .unwrap_or(Hash::zero());
-    // Minimal checkpoint built from existing types only (no new logic).
-    let wave = WaveCommitCertificate::new(leader_hash, 0, height, std::collections::BTreeMap::new(), Hash::zero());
-    let checkpoint = LightClientCheckpoint::new(height, leader_hash, Hash::zero(), Hash::zero(), wave, 0);
-    // Verification exposes existing verify_quorum / verify_colouring (client-only,
-    // no new consensus logic). Callers supply a real Committee to run them.
-    let verified = false;
-    Ok(json!({
-        "checkpoint": checkpoint,
-        "verified": verified,
-        "height": quantity(height),
-        "hash": to_hex(leader_hash.as_ref()),
-        "note": "read-only / client-only; no consensus change",
-    }))
 }

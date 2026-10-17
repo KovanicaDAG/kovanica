@@ -529,7 +529,11 @@ impl Mempool {
         info!(
             total_txs = state.by_hash.len(),
             queued_txs = state.by_fee_rate.values().map(|q| q.len()).sum::<usize>(),
-            in_flight_txs = state.by_hash.values().filter(|e| e.in_flight_since.is_some()).count(),
+            in_flight_txs = state
+                .by_hash
+                .values()
+                .filter(|e| e.in_flight_since.is_some())
+                .count(),
             senders = state.by_sender.len(),
             "get_next_transactions called"
         );
@@ -541,9 +545,7 @@ impl Mempool {
             // First pass: find the highest in-flight nonce for this sender.
             let mut highest_in_flight: Option<u64> = None;
             for (nonce, hash) in nonces {
-                let entry_opt = state.by_hash.get(hash);
-                if entry_opt.is_some() {
-                    let e = entry_opt.unwrap();
+                if let Some(e) = state.by_hash.get(hash) {
                     if e.in_flight_since.is_some() {
                         highest_in_flight = Some(*nonce);
                     }
@@ -562,8 +564,7 @@ impl Mempool {
                 if *nonce < run_start {
                     continue; // Skip in-flight prefix
                 }
-                if expected.is_some() {
-                    let e = expected.unwrap();
+                if let Some(e) = expected {
                     if e != *nonce {
                         break; // True gap in queued transactions
                     }
@@ -932,7 +933,10 @@ mod tests {
     }
 
     fn stress_storage_path() -> PathBuf {
-        std::env::temp_dir().join(format!("kovanica-mempool-stress-{}.redb", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "kovanica-mempool-stress-{}.redb",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -1437,19 +1441,28 @@ mod tests {
         }
 
         // First proposal: returns the two highest fee-rate transaction FRONTS.
-// Sender a has run [a0, a1] (front is a0), sender b has run [b0] (front is b0).
-// Fee rates: a0=10/size, b0=5000/size.
-// First pick: b0 (highest fee rate front) from sender b.
-// Second pick: a0 (next front) from sender a.
-// So first proposal returns [b0, a0] (ordered by fee rate).
-// a1 stays queued behind a0.
+        // Sender a has run [a0, a1] (front is a0), sender b has run [b0] (front is b0).
+        // Fee rates: a0=10/size, b0=5000/size.
+        // First pick: b0 (highest fee rate front) from sender b.
+        // Second pick: a0 (next front) from sender a.
+        // So first proposal returns [b0, a0] (ordered by fee rate).
+        // a1 stays queued behind a0.
         let first = pool.get_next_transactions(2);
         assert_eq!(first.len(), 2);
         // Both b0 and a0 should be in the first proposal (a1 is left queued behind a0).
         let first_hashes: std::collections::HashSet<_> = first.iter().map(|t| t.hash).collect();
-        assert!(first_hashes.contains(&b0.hash), "b0 should be in first proposal");
-        assert!(first_hashes.contains(&a0.hash), "a0 should be in first proposal");
-        assert!(!first_hashes.contains(&a1.hash), "a1 should NOT be in first proposal (behind a0)");
+        assert!(
+            first_hashes.contains(&b0.hash),
+            "b0 should be in first proposal"
+        );
+        assert!(
+            first_hashes.contains(&a0.hash),
+            "a0 should be in first proposal"
+        );
+        assert!(
+            !first_hashes.contains(&a1.hash),
+            "a1 should NOT be in first proposal (behind a0)"
+        );
         // Everything is still tracked (queued + in-flight).
         assert_eq!(pool.len(), 3);
 
@@ -1591,12 +1604,15 @@ mod tests {
         let mut forged = transfer(&sk, sender, 5, 1, 1_000);
         forged.signature = kovanica_types::Signature([9; 64]);
 
-        let report = pool.reinsert_returned(vec![
-            forged.clone(),
-            next.clone(),
-            pooled.clone(),
-            committed.clone(),
-        ], false);
+        let report = pool.reinsert_returned(
+            vec![
+                forged.clone(),
+                next.clone(),
+                pooled.clone(),
+                committed.clone(),
+            ],
+            false,
+        );
         let outcomes: Vec<_> = report.iter().map(|r| r.outcome.clone()).collect();
         assert_eq!(report[0].hash, forged.hash);
         assert!(matches!(&outcomes[0], ReinsertOutcome::Invalid(r) if r.contains("signature")));

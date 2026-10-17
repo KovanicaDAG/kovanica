@@ -567,7 +567,8 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
     // Create response schema with oneOf for all result types
     let mut response_variants = Vec::new();
     for (method, _, _, _, result_schema) in &methods {
-        let result_schema_name = format!("{}Result", method.replace("kovanica_", "").replace(".", ""));
+        let result_schema_name =
+            format!("{}Result", method.replace("kovanica_", "").replace(".", ""));
         // Add result schema to components
         spec.components
             .schemas

@@ -178,7 +178,10 @@ async fn submit_grouped(
             let mut rejected = 0usize;
             let mut first_error: Option<String> = None;
             for raw in group {
-                match client.call("kovanica_sendRawTransaction", json!([raw])).await {
+                match client
+                    .call("kovanica_sendRawTransaction", json!([raw]))
+                    .await
+                {
                     Ok(_) => accepted += 1,
                     Err(e) => {
                         rejected += 1;

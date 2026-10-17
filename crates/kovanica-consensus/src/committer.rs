@@ -1002,7 +1002,10 @@ mod tests {
                 .collect())
         }
 
-        fn get_decided_leaders(&self, round: Round) -> Result<Vec<Hash>, kovanica_dag::DagStoreError> {
+        fn get_decided_leaders(
+            &self,
+            round: Round,
+        ) -> Result<Vec<Hash>, kovanica_dag::DagStoreError> {
             Ok(self.decided.get(&round).cloned().unwrap_or_default())
         }
 

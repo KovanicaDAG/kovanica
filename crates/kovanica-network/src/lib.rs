@@ -35,7 +35,9 @@ pub use validation::{
     SigError, VoteVerifier,
 };
 
-use kovanica_types::{block::StatementBlock, transaction::Transaction, Round, SealAnnouncement, Vote};
+use kovanica_types::{
+    block::StatementBlock, transaction::Transaction, Round, SealAnnouncement, Vote,
+};
 use std::time::Duration;
 
 // Re-export libp2p types for downstream crates

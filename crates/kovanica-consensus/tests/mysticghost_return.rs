@@ -7,7 +7,9 @@ mod common;
 
 use common::{block_ref, committee, make_block};
 use kovanica_consensus::engine::DagStoreTrait;
-use kovanica_consensus::{non_blue_refs, non_blue_transactions, CommittedSubDag, UniversalCommitter};
+use kovanica_consensus::{
+    non_blue_refs, non_blue_transactions, CommittedSubDag, UniversalCommitter,
+};
 use kovanica_dag::{DagStore, DagStoreError};
 use kovanica_types::block::{BlockReference, StatementBlock};
 use kovanica_types::hash::Hash;
