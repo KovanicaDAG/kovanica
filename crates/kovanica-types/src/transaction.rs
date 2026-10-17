@@ -328,7 +328,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn light_node_kinds_use_signing_tags_7_8_and_9() {
         let vrf = crate::PublicKey([0x44; 32]);
         let register = tx(
@@ -383,6 +382,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn tx_and_vote_domains_are_disjoint() {
         assert_ne!(
             crate::signing::TX_DOMAIN_TAG,

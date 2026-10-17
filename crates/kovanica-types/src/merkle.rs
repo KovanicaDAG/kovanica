@@ -65,7 +65,11 @@ pub fn proof(leaves: &[Hash], index: usize) -> Option<MerkleProof> {
         if level.len() % 2 == 1 && idx == level.len() - 1 {
             steps.push(MerkleStep::Promote);
         } else {
-            let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
+            let sibling_idx = if idx.is_multiple_of(2) {
+                idx + 1
+            } else {
+                idx - 1
+            };
             steps.push(MerkleStep::Sibling {
                 hash: level[sibling_idx],
                 is_left: sibling_idx < idx,
@@ -110,7 +114,7 @@ fn pair(left: Hash, right: Hash) -> Hash {
     let mut data = [0u8; 64];
     data[..32].copy_from_slice(left.as_ref());
     data[32..].copy_from_slice(right.as_ref());
-    Hash::new_keyed(Hash::DOMAIN_MERKLE, &data)
+    Hash::new_keyed(Hash::DOMAIN_MERKLE, data)
 }
 
 #[cfg(test)]

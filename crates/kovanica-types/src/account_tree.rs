@@ -86,10 +86,8 @@ impl AccountSmt {
         nonce: u64,
         present: bool,
     ) -> AccountProof {
-        let mut siblings = [Hash::zero(); DEPTH];
-        for level in 0..DEPTH {
-            siblings[level] = self.sibling_hash(&address.0, level);
-        }
+        let siblings: [Hash; DEPTH] =
+            std::array::from_fn(|level| self.sibling_hash(&address.0, level));
         AccountProof {
             address: *address,
             balance,
@@ -116,7 +114,7 @@ pub fn account_leaf_hash(address: &Address, balance: u64, nonce: u64) -> Hash {
     data[..32].copy_from_slice(&address.0);
     data[32..40].copy_from_slice(&balance.to_le_bytes());
     data[40..48].copy_from_slice(&nonce.to_le_bytes());
-    Hash::new_keyed(Hash::DOMAIN_ACCOUNT, &data)
+    Hash::new_keyed(Hash::DOMAIN_ACCOUNT, data)
 }
 
 /// Check `proof` against `root`.
@@ -192,7 +190,7 @@ fn smt_pair(left: Hash, right: Hash) -> Hash {
     let mut data = [0u8; 64];
     data[..32].copy_from_slice(left.as_ref());
     data[32..].copy_from_slice(right.as_ref());
-    Hash::new_keyed(Hash::DOMAIN_SMT, &data)
+    Hash::new_keyed(Hash::DOMAIN_SMT, data)
 }
 
 fn empty_at(depth: usize) -> Hash {
@@ -203,7 +201,7 @@ fn empty_hashes() -> &'static [Hash; DEPTH + 1] {
     static CACHE: OnceLock<[Hash; DEPTH + 1]> = OnceLock::new();
     CACHE.get_or_init(|| {
         let mut hashes = [Hash::zero(); DEPTH + 1];
-        hashes[DEPTH] = Hash::new_keyed(Hash::DOMAIN_ACCOUNT_EMPTY, &[]);
+        hashes[DEPTH] = Hash::new_keyed(Hash::DOMAIN_ACCOUNT_EMPTY, []);
         for depth in (0..DEPTH).rev() {
             hashes[depth] = smt_pair(hashes[depth + 1], hashes[depth + 1]);
         }
