@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+[[rules]]
+id = "kovanica-raw-ed25519-secret"
+description = "64-hex secret key file"
+regex = '''(?m)^[0-9a-fA-F]{64}\s*$'''
+path = '''(\.dat|\.key)$'''
