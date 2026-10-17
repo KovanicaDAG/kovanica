@@ -74,7 +74,8 @@ pub fn verify_sealed_header(
             return Err(LightError::Parent);
         }
     }
-    kovanica_crypto::verify_commit_seals(chain_id, header, seals, committee).map_err(LightError::Seals)
+    kovanica_crypto::verify_commit_seals(chain_id, header, seals, committee)
+        .map_err(LightError::Seals)
 }
 
 /// Re-check MysticGhost roots when the caller has the mergeset.
@@ -165,6 +166,7 @@ pub fn sign_exit_light_node(
 }
 
 /// Sign one ECVRF witness for `epoch`.
+#[allow(clippy::too_many_arguments)]
 pub fn sign_light_witness(
     chain_id: u64,
     signing_key: &SigningKey,
@@ -213,6 +215,7 @@ pub fn sign_transfer(
 ///
 /// `args` is the caller-encoded (bincode) calldata; `value` is the native
 /// KUNA (base units) sent to the contract, `0` when unused.
+#[allow(clippy::too_many_arguments)]
 pub fn sign_call(
     chain_id: u64,
     signing_key: &SigningKey,
@@ -290,8 +293,8 @@ fn sign_kind(
 /// never a panic.
 pub fn reveal_mnemonic(keystore_json: &str, passphrase: &str) -> Result<String, LightError> {
     let keystore = kovanica_keystore::parse(keystore_json.as_bytes()).map_err(keystore_failure)?;
-    let seed = kovanica_keystore::secret_seed(&keystore, Some(passphrase))
-        .map_err(keystore_failure)?;
+    let seed =
+        kovanica_keystore::secret_seed(&keystore, Some(passphrase)).map_err(keystore_failure)?;
     kovanica_keystore::seed_to_mnemonic(&seed).map_err(keystore_failure)
 }
 
@@ -522,7 +525,16 @@ mod tests {
 
         // T2: value = 0.
         let call = sign_call(
-            2, &signer, sender, 6, 10, contract, 0, method.clone(), args.clone(), 100_000,
+            2,
+            &signer,
+            sender,
+            6,
+            10,
+            contract,
+            0,
+            method.clone(),
+            args.clone(),
+            100_000,
         );
         assert!(call.verify_signature(&ctx));
         assert!(!call.verify_signature(&SigningContext::new(3)));
@@ -541,7 +553,9 @@ mod tests {
         ));
 
         // T3: value = 500 changes the signed bytes.
-        let priced = sign_call(2, &signer, sender, 6, 10, contract, 500, method, args, 100_000);
+        let priced = sign_call(
+            2, &signer, sender, 6, 10, contract, 500, method, args, 100_000,
+        );
         assert!(priced.verify_signature(&ctx));
         assert_eq!(
             priced.hash.to_hex(),
@@ -600,7 +614,10 @@ mod tests {
 
         // Reveal returns exactly the words that encode the seed.
         let revealed = reveal_mnemonic(&json, "old").unwrap();
-        assert_eq!(revealed, kovanica_keystore::seed_to_mnemonic(&seed).unwrap());
+        assert_eq!(
+            revealed,
+            kovanica_keystore::seed_to_mnemonic(&seed).unwrap()
+        );
         assert_eq!(revealed.split_whitespace().count(), 24);
 
         // A wrong passphrase is an error, never a panic.
@@ -638,8 +655,14 @@ mod tests {
             let expected = Address(*blake3::hash(&material).as_bytes()).to_hex();
 
             // Bare hex form and canonical kvnc…dag form must both agree.
-            assert_eq!(contract_address_for(&sender.to_hex(), nonce).unwrap(), expected);
-            assert_eq!(contract_address_for(&sender.encode(), nonce).unwrap(), expected);
+            assert_eq!(
+                contract_address_for(&sender.to_hex(), nonce).unwrap(),
+                expected
+            );
+            assert_eq!(
+                contract_address_for(&sender.encode(), nonce).unwrap(),
+                expected
+            );
         }
 
         // 0x-prefixed input is accepted too.

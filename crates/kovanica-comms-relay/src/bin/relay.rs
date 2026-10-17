@@ -14,7 +14,8 @@ async fn main() -> anyhow::Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let bind = std::env::var("KOVANICA_RELAY_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
+    let bind =
+        std::env::var("KOVANICA_RELAY_BIND").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let addr: SocketAddr = bind
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid KOVANICA_RELAY_BIND {bind:?}: {e}"))?;

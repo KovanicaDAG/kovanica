@@ -490,7 +490,9 @@ mod commit_seal_tests {
         assert!(verify_commit_seals(1337, &header, &seals[..3], &committee).is_ok());
         assert_eq!(
             verify_commit_seals(1337, &header, &seals[..2], &committee),
-            Err(CommitSealError::Structure(kovanica_types::SealError::Quorum))
+            Err(CommitSealError::Structure(
+                kovanica_types::SealError::Quorum
+            ))
         );
         assert_eq!(
             verify_commit_seals(1, &header, &seals[..3], &committee),
@@ -509,7 +511,7 @@ mod commit_seal_tests {
             authority_index: 0,
             signature: sign(&sk, &header.seal_message(2)),
         };
-        assert!(verify_commit_seals(2, &header, &[seal.clone()], &committee).is_ok());
+        assert!(verify_commit_seals(2, &header, std::slice::from_ref(&seal), &committee).is_ok());
         header.non_blue_root = Hash::new(b"red");
         assert_eq!(
             verify_commit_seals(2, &header, &[seal], &committee),

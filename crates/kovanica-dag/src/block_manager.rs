@@ -95,7 +95,7 @@ impl BlockManager {
     pub fn set_signing_key(&self, key: SigningKey) {
         *self.signing_key.write() = Some(key.clone());
         // Derive VRF secret deterministically from the Ed25519 seed
-        let seed_bytes: [u8; 32] = key.to_bytes().try_into().unwrap_or([0; 32]);
+        let seed_bytes: [u8; 32] = key.to_bytes();
         let secret = kovanica_crypto::derive_vrf_secret_from_seed(&seed_bytes);
         if let Ok(kp) = kovanica_crypto::VRFKeyPair::from_secret(secret) {
             *self.vrf_keypair.write() = Some(kp);
@@ -410,7 +410,7 @@ impl BlockManager {
                     "KVNC-VRF1-v1:{}:{}:{}:{}",
                     self.signing_ctx.chain_id, block.round, block.author, 0u64
                 );
-                if let Err(_) = kovanica_crypto::vrf_verify(&vrf_pk, input.as_bytes(), &output) {
+                if kovanica_crypto::vrf_verify(&vrf_pk, input.as_bytes(), &output).is_err() {
                     return Err(BlockManagerError::InvalidBlock(
                         "VRF proof verification failed".to_string(),
                     ));
@@ -446,7 +446,10 @@ impl BlockManager {
 
     /// Validate a transaction's hash and basic structure.
     /// Full signature verification requires state access and is done in the mempool/execution layer.
-    fn validate_transaction(&self, tx: &kovanica_types::Transaction) -> Result<(), BlockManagerError> {
+    fn validate_transaction(
+        &self,
+        tx: &kovanica_types::Transaction,
+    ) -> Result<(), BlockManagerError> {
         // Verify cached hash matches domain-tagged signing hash (DOMAIN_TX)
         if tx.hash != tx.signing_hash(&self.signing_ctx) {
             return Err(BlockManagerError::InvalidBlock(

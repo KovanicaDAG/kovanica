@@ -4,7 +4,7 @@
 
 #![deny(unsafe_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -212,7 +212,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn sync_once(dir: &PathBuf, rpc_override: Option<&str>) -> Result<SyncOutcome> {
+fn sync_once(dir: &Path, rpc_override: Option<&str>) -> Result<SyncOutcome> {
     let cfg = LightConfig::load(dir)?;
     let rpc_url = rpc_override.unwrap_or(&cfg.rpc);
     let rpc = RpcClient::new(rpc_url)?;
@@ -230,7 +230,7 @@ fn print_outcome(outcome: &SyncOutcome) {
 }
 
 fn transfer(
-    dir: &PathBuf,
+    dir: &Path,
     rpc_override: Option<&str>,
     passphrase: &str,
     to: &str,

@@ -103,12 +103,19 @@ mod tests {
     fn id_is_64_lowercase_hex_characters() {
         let id = comms_id(&[7u8; PUBLIC_KEY_LEN]).to_hex();
         assert_eq!(id.len(), 64);
-        assert!(id.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)), "not lowercase hex: {id}");
+        assert!(
+            id.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "not lowercase hex: {id}"
+        );
     }
 
     #[test]
     fn distinct_keys_give_distinct_ids() {
-        assert_ne!(comms_id(&[0u8; PUBLIC_KEY_LEN]), comms_id(&[1u8; PUBLIC_KEY_LEN]));
+        assert_ne!(
+            comms_id(&[0u8; PUBLIC_KEY_LEN]),
+            comms_id(&[1u8; PUBLIC_KEY_LEN])
+        );
     }
 
     #[test]

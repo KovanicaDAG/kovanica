@@ -1,6 +1,8 @@
 //! Minimal audit 6.2 test: block sync request-response + rate-limited enqueue.
 
-use kovanica_network::{BlockSyncRequest, BlockSyncResponse, BLOCK_SYNC_PROTOCOL, STATE_SYNC_PROTOCOL};
+use kovanica_network::{
+    BlockSyncRequest, BlockSyncResponse, BLOCK_SYNC_PROTOCOL, STATE_SYNC_PROTOCOL,
+};
 use kovanica_types::hash::Hash;
 
 #[test]

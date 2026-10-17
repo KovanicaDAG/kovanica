@@ -24,7 +24,12 @@ fn setup() -> (
     let (engine, _dag, _manager) = make_engine(0, members, ConsensusConfig::default());
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     engine.set_commit_sender(sender);
-    let leader = make_block(leader_author, LEADER_ROUND, Vec::new(), "vote-verification-leader");
+    let leader = make_block(
+        leader_author,
+        LEADER_ROUND,
+        Vec::new(),
+        "vote-verification-leader",
+    );
     engine
         .process_block(&leader)
         .expect("leader block accepted");

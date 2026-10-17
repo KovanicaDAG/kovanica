@@ -209,12 +209,7 @@ impl Store {
 
     /// Number of stored envelopes for a single recipient.
     pub fn count_for(&self, to: &str) -> usize {
-        self.inner
-            .lock()
-            .queues
-            .get(to)
-            .map(Vec::len)
-            .unwrap_or(0)
+        self.inner.lock().queues.get(to).map(Vec::len).unwrap_or(0)
     }
 
     /// Add prepaid credit (atoms) to `to`. Returns new total amount.

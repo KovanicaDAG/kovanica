@@ -422,7 +422,10 @@ mod tests {
             auth.authorize("kovanica_sendRawTransaction", &bearer("s3cret")),
             Ok(())
         );
-        assert_eq!(auth.authorize("kovanica_getBalance", &HeaderMap::new()), Ok(()));
+        assert_eq!(
+            auth.authorize("kovanica_getBalance", &HeaderMap::new()),
+            Ok(())
+        );
     }
 
     #[test]

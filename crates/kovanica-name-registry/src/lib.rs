@@ -215,11 +215,7 @@ impl NameRegistry {
     }
 
     /// Transfer ownership of a name. `Unauthorized` unless the caller is owner.
-    pub fn transfer(
-        host: &mut impl Host,
-        name: String,
-        new_owner: Address,
-    ) -> ContractResult<()> {
+    pub fn transfer(host: &mut impl Host, name: String, new_owner: Address) -> ContractResult<()> {
         let name = normalise_name(&name)?;
 
         let key = entry_key(&name);
@@ -456,16 +452,16 @@ mod tests {
         h.set_caller(addr(A));
 
         let bad = [
-            "ab",                           // too short
+            "ab",                                // too short
             "abcdefghijklmnopqrstuvwxyz1234567", // 33 chars → too long
-            "-alice",                       // leading hyphen
-            "alice-",                       // trailing hyphen
-            "al--ice",                      // consecutive hyphens
-            "al ice",                       // space
-            "ali.ce",                       // dot
-            "ali_ce",                       // underscore
-            "alïce",                        // non-ASCII
-            "",                             // empty
+            "-alice",                            // leading hyphen
+            "alice-",                            // trailing hyphen
+            "al--ice",                           // consecutive hyphens
+            "al ice",                            // space
+            "ali.ce",                            // dot
+            "ali_ce",                            // underscore
+            "alïce",                             // non-ASCII
+            "",                                  // empty
         ];
         for name in bad {
             assert_eq!(
@@ -548,7 +544,10 @@ mod tests {
     #[test]
     fn resolve_unknown_is_not_found() {
         let h = host(A);
-        assert_eq!(NameRegistry::resolve(&h, "nobody"), Err(ContractError::NotFound));
+        assert_eq!(
+            NameRegistry::resolve(&h, "nobody"),
+            Err(ContractError::NotFound)
+        );
     }
 
     #[test]
@@ -618,8 +617,12 @@ mod tests {
             Err(ContractError::Unauthorized)
         );
         h.set_caller(addr(B));
-        NameRegistry::update_endpoints(&mut h, String::from("alice"), eps(&["https://b.example.com"]))
-            .unwrap();
+        NameRegistry::update_endpoints(
+            &mut h,
+            String::from("alice"),
+            eps(&["https://b.example.com"]),
+        )
+        .unwrap();
         assert_eq!(
             NameRegistry::resolve(&h, "alice").unwrap().relay_endpoints,
             eps(&["https://b.example.com"])
@@ -652,7 +655,10 @@ mod tests {
 
         // Fresh, isolated host sees nothing.
         let mut fresh = host(B);
-        assert_eq!(NameRegistry::resolve(&fresh, "alice"), Err(ContractError::NotFound));
+        assert_eq!(
+            NameRegistry::resolve(&fresh, "alice"),
+            Err(ContractError::NotFound)
+        );
         assert_eq!(
             NameRegistry::register(&mut fresh, String::from("alice"), addr(B), eps(&[])),
             Ok(())
@@ -665,7 +671,10 @@ mod tests {
         register(&mut h, "alice", A, &["https://a.example.com"]);
         register(&mut h, "bob", A, &["https://b.example.com"]);
 
-        assert_eq!(NameRegistry::resolve(&h, "alice").unwrap().pubkey, addr(0xAB));
+        assert_eq!(
+            NameRegistry::resolve(&h, "alice").unwrap().pubkey,
+            addr(0xAB)
+        );
         assert_eq!(NameRegistry::resolve(&h, "bob").unwrap().pubkey, addr(0xAB));
 
         // Only the two per-name keys exist — there is no enumerable name index.

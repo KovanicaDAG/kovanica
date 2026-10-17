@@ -61,7 +61,9 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use kovanica_common::events::{VAULT_CANCELLED, VAULT_CLAIMED, VAULT_CREATED};
-use kovanica_common::{hash, Address, Amount, ContractError, ContractResult, Height, Host, Timestamp};
+use kovanica_common::{
+    hash, Address, Amount, ContractError, ContractResult, Height, Host, Timestamp,
+};
 
 pub type VaultId = [u8; 32];
 

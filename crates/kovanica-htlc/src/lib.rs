@@ -62,7 +62,9 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use kovanica_common::events::{HTLC_CLAIMED, HTLC_CREATED, HTLC_REFUNDED};
-use kovanica_common::{hash, Address, Amount, ContractError, ContractResult, Hash, Host, Timestamp};
+use kovanica_common::{
+    hash, Address, Amount, ContractError, ContractResult, Hash, Host, Timestamp,
+};
 
 /// Unique swap identifier (BLAKE3-256 of the encoded create parameters).
 pub type SwapId = Hash;

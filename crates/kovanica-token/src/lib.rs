@@ -45,7 +45,9 @@ extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 
-use kovanica_common::events::{TOKEN_APPROVAL, TOKEN_BURN, TOKEN_CREATED, TOKEN_MINT, TOKEN_TRANSFER};
+use kovanica_common::events::{
+    TOKEN_APPROVAL, TOKEN_BURN, TOKEN_CREATED, TOKEN_MINT, TOKEN_TRANSFER,
+};
 use kovanica_common::{Address, Amount, ContractError, ContractResult, Host};
 
 /// Singleton state key (FIXED): one token instance per contract address.
