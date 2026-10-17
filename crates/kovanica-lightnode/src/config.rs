@@ -38,8 +38,9 @@ impl LightConfig {
     /// Load `config.json` from `dir`.
     pub fn load(dir: &Path) -> Result<Self> {
         let path = dir.join(CONFIG_FILE);
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("reading {} (run `kovanica-lightnode init`)", path.display()))?;
+        let text = fs::read_to_string(&path).with_context(|| {
+            format!("reading {} (run `kovanica-lightnode init`)", path.display())
+        })?;
         serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
     }
 

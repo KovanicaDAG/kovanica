@@ -227,10 +227,16 @@ impl RpcServer {
         // Transaction methods.
         self.register_stateful("kovanica_sendRawTransaction", handle_send_raw_transaction)
             .await;
-        self.register_stateful("kovanica_getTransactionReceipt", handle_get_transaction_receipt)
-            .await;
-        self.register_stateful("kovanica_getTransactionByHash", handle_get_transaction_by_hash)
-            .await;
+        self.register_stateful(
+            "kovanica_getTransactionReceipt",
+            handle_get_transaction_receipt,
+        )
+        .await;
+        self.register_stateful(
+            "kovanica_getTransactionByHash",
+            handle_get_transaction_by_hash,
+        )
+        .await;
 
         // Account methods.
         self.register_stateful("kovanica_getBalance", handle_get_balance)
@@ -276,8 +282,11 @@ impl RpcServer {
             .await;
         self.register_stateful("kovanica_getLightSet", handle_get_light_set)
             .await;
-        self.register_stateful("kovanica_lightClientCheckpoint", handle_light_client_checkpoint)
-            .await;
+        self.register_stateful(
+            "kovanica_lightClientCheckpoint",
+            handle_light_client_checkpoint,
+        )
+        .await;
     }
 
     /// Register a handler that needs access to the shared [`RpcState`].

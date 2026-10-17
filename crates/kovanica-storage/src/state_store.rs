@@ -421,7 +421,11 @@ impl StateStore {
                 }
                 let mut address = [0u8; 32];
                 address.copy_from_slice(key.value().as_ref());
-                tree.insert(kovanica_types::Address(address), account.balance, account.nonce);
+                tree.insert(
+                    kovanica_types::Address(address),
+                    account.balance,
+                    account.nonce,
+                );
             }
         }
         let root = tree.root();

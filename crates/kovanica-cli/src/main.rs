@@ -352,17 +352,16 @@ async fn main() -> Result<()> {
     let json = cli.json;
     let rpc_url = cli.rpc_url;
     let client = RpcClient::new(rpc_url.clone());
-    let chain_id = match cli.chain_id {
-        Some(id) => Some(id),
-        None => match std::env::var("KOVANICA_CHAIN_ID") {
-            Ok(v) => Some(
-                v.trim()
-                    .parse::<u64>()
-                    .map_err(|_| anyhow::anyhow!("KOVANICA_CHAIN_ID must be an unsigned integer"))?,
-            ),
-            Err(_) => None,
-        },
-    };
+    let chain_id =
+        match cli.chain_id {
+            Some(id) => Some(id),
+            None => match std::env::var("KOVANICA_CHAIN_ID") {
+                Ok(v) => Some(v.trim().parse::<u64>().map_err(|_| {
+                    anyhow::anyhow!("KOVANICA_CHAIN_ID must be an unsigned integer")
+                })?),
+                Err(_) => None,
+            },
+        };
 
     match cli.command {
         Commands::Keygen(args) => cmd_keygen(args, json),
@@ -564,7 +563,9 @@ async fn cmd_transfer(
     let transaction = tx::build_signed(&ctx, sender, nonce, kind, args.fee, &signing_key)?;
     let raw = tx::encode_raw(&transaction)?;
 
-    let result = client.call("kovanica_sendRawTransaction", json!([raw])).await?;
+    let result = client
+        .call("kovanica_sendRawTransaction", json!([raw]))
+        .await?;
     let tx_hash = result.as_str().unwrap_or_default().to_string();
 
     if json_output {
@@ -615,7 +616,9 @@ async fn sign_and_submit_self(
     let transaction = tx::build_signed(&ctx, sender, nonce, kind, fee, &signing_key)?;
     let raw = tx::encode_raw(&transaction)?;
 
-    let result = client.call("kovanica_sendRawTransaction", json!([raw])).await?;
+    let result = client
+        .call("kovanica_sendRawTransaction", json!([raw]))
+        .await?;
     let tx_hash = result.as_str().unwrap_or_default().to_string();
     Ok((tx_hash, sender, nonce))
 }
@@ -1100,7 +1103,14 @@ mod wallet_cli_security_tests {
         let recipient = "00".repeat(32);
         for args in [
             vec!["kovanica", "keygen", "--passphrase", "secret"],
-            vec!["kovanica", "sign", "--message", "hi", "--passphrase", "secret"],
+            vec![
+                "kovanica",
+                "sign",
+                "--message",
+                "hi",
+                "--passphrase",
+                "secret",
+            ],
             vec![
                 "kovanica",
                 "transfer",

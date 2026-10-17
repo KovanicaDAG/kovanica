@@ -168,7 +168,11 @@ fn test_committee_leader_rotates_one_per_wave_and_is_deterministic() {
     for wave in 0..16u64 {
         let leader_round = wave * kovanica_types::WAVE_LENGTH;
         let expected = (wave as usize % 4) as AuthorityIndex;
-        assert_eq!(c.leader(leader_round), expected, "leader round {leader_round}");
+        assert_eq!(
+            c.leader(leader_round),
+            expected,
+            "leader round {leader_round}"
+        );
     }
     // Non-leader rounds resolve to the same leader as their wave.
     let first_leader = c.leader(0);

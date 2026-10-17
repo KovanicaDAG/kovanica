@@ -971,16 +971,10 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     let funded_accounts_path = config.data_dir.join("funded_accounts.toml");
     if funded_accounts_path.exists() {
         let text = std::fs::read_to_string(&funded_accounts_path).with_context(|| {
-            format!(
-                "reading funded accounts {}",
-                funded_accounts_path.display()
-            )
+            format!("reading funded accounts {}", funded_accounts_path.display())
         })?;
         let funded: FundedAccountsFile = toml::from_str(&text).with_context(|| {
-            format!(
-                "parsing funded accounts {}",
-                funded_accounts_path.display()
-            )
+            format!("parsing funded accounts {}", funded_accounts_path.display())
         })?;
         let state = state_storage.state();
         for entry in funded.account {
@@ -1058,7 +1052,8 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
                     kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::ONE_KUNA,
                     stake / kovanica_staking::ONE_KUNA,
                     n,
-                    kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::MIN_VALIDATOR_STAKE,
+                    kovanica_staking::GENESIS_VALIDATOR_ALLOCATION
+                        / kovanica_staking::MIN_VALIDATOR_STAKE,
                 );
             }
             let acct = Account {
@@ -1071,7 +1066,8 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         }
         info!(
             count = n,
-            allocated_kuna = kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::ONE_KUNA,
+            allocated_kuna =
+                kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::ONE_KUNA,
             "genesis validator allocation minted"
         );
     }
@@ -1452,6 +1448,7 @@ fn publish_sealed(storage: &Storage, events: &EventBus, header: &kovanica_types:
 }
 
 /// Execute committed sub-DAGs as they are produced by consensus.
+#[allow(clippy::too_many_arguments)]
 async fn run_execution(
     mut subdags: mpsc::UnboundedReceiver<kovanica_consensus::CommittedSubDag>,
     state_storage: Arc<Storage>,
@@ -1813,7 +1810,9 @@ fn recover_committed_subdag_mysticghost(
     leader_round: Round,
     previous_tips: &[Hash],
 ) -> Result<kovanica_consensus::CommittedSubDag> {
-    use kovanica_consensus::mysticghost::{order_committed_wave, MysticGhostConfig, MysticGhostOrder};
+    use kovanica_consensus::mysticghost::{
+        order_committed_wave, MysticGhostConfig, MysticGhostOrder,
+    };
 
     // 1. Get mergeset hashes
     let mergeset_hashes = dag_store.mergeset(&leader_block.digest)?;
@@ -2529,7 +2528,9 @@ mod tests {
             "/ip4/127.0.0.1/tcp/8000"
         );
         assert_eq!(
-            to_multiaddr("seed1.kovanica.invalid:8000").unwrap().to_string(),
+            to_multiaddr("seed1.kovanica.invalid:8000")
+                .unwrap()
+                .to_string(),
             "/dns4/seed1.kovanica.invalid/tcp/8000"
         );
         assert_eq!(
@@ -2946,7 +2947,10 @@ mod tests {
             None,
         )
         .await;
-        assert_ne!(health.execution_state(), kovanica_rpc::ComponentState::Failed);
+        assert_ne!(
+            health.execution_state(),
+            kovanica_rpc::ComponentState::Failed
+        );
         assert!(
             mempool.contains(&returned_tx.hash),
             "returned tx back in the pool"
@@ -3055,7 +3059,10 @@ mod tests {
             None,
         )
         .await;
-        assert_ne!(health.execution_state(), kovanica_rpc::ComponentState::Failed);
+        assert_ne!(
+            health.execution_state(),
+            kovanica_rpc::ComponentState::Failed
+        );
 
         let red_txs: std::collections::HashSet<Hash> = subdag
             .non_blue
@@ -3147,7 +3154,10 @@ mod tests {
             None,
         )
         .await;
-        assert_eq!(health.execution_state(), kovanica_rpc::ComponentState::Failed);
+        assert_eq!(
+            health.execution_state(),
+            kovanica_rpc::ComponentState::Failed
+        );
         assert!(!health.is_healthy());
 
         let read = state_storage.begin_read().unwrap();

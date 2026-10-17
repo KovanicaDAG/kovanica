@@ -212,7 +212,8 @@ impl NodeHealth {
     pub fn commit_progress(&self, leader_round: u64) {
         let i = &self.inner;
         i.committed_leaders.fetch_add(1, Ordering::Relaxed);
-        i.last_committed_round.store(leader_round, Ordering::Relaxed);
+        i.last_committed_round
+            .store(leader_round, Ordering::Relaxed);
         i.last_commit_unix_ms.store(now_ms(), Ordering::Relaxed);
     }
 
@@ -369,7 +370,10 @@ mod tests {
         let s = h.snapshot();
         assert_eq!(s.consensus.committed_leaders, 1);
         assert_eq!(s.consensus.last_committed_round, Some(3));
-        assert_eq!(s.consensus.commit_stall_secs, Some(DEFAULT_COMMIT_STALL_SECS));
+        assert_eq!(
+            s.consensus.commit_stall_secs,
+            Some(DEFAULT_COMMIT_STALL_SECS)
+        );
 
         // Shrink the window, then let time pass without committing.
         h.set_commit_stall_secs(1);
@@ -413,7 +417,10 @@ mod tests {
         h.set_commit_stall_secs(1);
         assert!(h.is_healthy());
         std::thread::sleep(std::time::Duration::from_millis(2_100));
-        assert!(!h.is_healthy(), "no commit since start must eventually degrade");
+        assert!(
+            !h.is_healthy(),
+            "no commit since start must eventually degrade"
+        );
         assert_eq!(h.snapshot().consensus.last_committed_round, None);
     }
 

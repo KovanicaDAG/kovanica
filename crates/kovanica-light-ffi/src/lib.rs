@@ -232,6 +232,7 @@ pub fn sign_transfer_raw(
 /// `value` is the native KUNA (atoms) sent to the contract, `0` when unused.
 /// `fee_rate` is atoms per byte from `kovanica_estimateFee`.
 #[uniffi::export]
+#[allow(clippy::too_many_arguments)]
 pub fn sign_call_raw(
     keystore_json: String,
     passphrase: String,
@@ -249,8 +250,16 @@ pub fn sign_call_raw(
     let args = parse_hex_bytes(&args_hex, "args")?;
     priced_raw(fee_rate, |fee| {
         sign_call(
-            chain_id, &signing_key, sender, nonce, fee, contract, value, method.clone(),
-            args.clone(), gas_limit,
+            chain_id,
+            &signing_key,
+            sender,
+            nonce,
+            fee,
+            contract,
+            value,
+            method.clone(),
+            args.clone(),
+            gas_limit,
         )
     })
 }
@@ -364,7 +373,8 @@ fn open_signing_key(
 ) -> Result<(SigningKey, Address), LightFfiError> {
     let keystore = parse(keystore_json.as_bytes()).map_err(failed)?;
     let sender = kovanica_keystore::address(&keystore).map_err(failed)?;
-    let signing_key = kovanica_keystore::signing_key(&keystore, Some(passphrase)).map_err(failed)?;
+    let signing_key =
+        kovanica_keystore::signing_key(&keystore, Some(passphrase)).map_err(failed)?;
     Ok((signing_key, sender))
 }
 
@@ -406,7 +416,6 @@ fn priced_raw(fee_rate: u64, sign: impl Fn(u64) -> Transaction) -> Result<String
 fn hex_hash(hash: &Hash) -> String {
     format!("0x{}", hex::encode(hash.0))
 }
-
 
 /// Get the public key hex from a keystore JSON without decrypting.
 /// This does not decrypt the seed.
@@ -456,10 +465,7 @@ pub fn change_passphrase_raw(
 ///
 /// **Note:** Pure BLAKE3 — safe to call on the UI thread.
 #[uniffi::export]
-pub fn contract_address_for_raw(
-    sender_hex: String,
-    nonce: u64,
-) -> Result<String, LightFfiError> {
+pub fn contract_address_for_raw(sender_hex: String, nonce: u64) -> Result<String, LightFfiError> {
     contract_address_for(&sender_hex, nonce).map_err(failed)
 }
 
@@ -569,7 +575,9 @@ pub fn comms_open_envelope(
     let my_id = comms_id_hex(&comms_id_bytes(&my_pub));
     let to_id = comms_id_from_hex(&envelope.to).map_err(failed)?;
     if to_id != comms_id_from_hex(&my_id).map_err(failed)? {
-        return Err(failed("envelope is not addressed to this keystore's comms id"));
+        return Err(failed(
+            "envelope is not addressed to this keystore's comms id",
+        ));
     }
     let from_id = comms_id_from_hex(&envelope.from).map_err(failed)?;
 
@@ -862,9 +870,19 @@ mod tests {
     #[test]
     fn sign_detached_error_cases() {
         let created = create_wallet("pw".to_string()).unwrap();
-        let bad = sign_detached(created.keystore_json.clone(), "pw".to_string(), "gg".to_string(), None);
+        let bad = sign_detached(
+            created.keystore_json.clone(),
+            "pw".to_string(),
+            "gg".to_string(),
+            None,
+        );
         assert!(bad.is_err());
-        let bad2 = sign_detached(created.keystore_json, "wrong".to_string(), hex::encode(b"hi"), None);
+        let bad2 = sign_detached(
+            created.keystore_json,
+            "wrong".to_string(),
+            hex::encode(b"hi"),
+            None,
+        );
         assert!(bad2.is_err());
     }
 
@@ -961,8 +979,16 @@ mod tests {
 
         // Single source of truth: equals the contract key hashed with the
         // canonical `kovanica_common::hash`, for any valid name.
-        for name in ["alice", "bob", "abc", "a-b-c", "abcdefghijklmnopqrstuvwxyz012345"] {
-            let expected = hex::encode(kovanica_common::hash(&kovanica_name_registry::entry_key(name)));
+        for name in [
+            "alice",
+            "bob",
+            "abc",
+            "a-b-c",
+            "abcdefghijklmnopqrstuvwxyz012345",
+        ] {
+            let expected = hex::encode(kovanica_common::hash(&kovanica_name_registry::entry_key(
+                name,
+            )));
             assert_eq!(registry_slot_hex(name.to_string()).unwrap(), expected);
         }
 
@@ -970,22 +996,24 @@ mod tests {
         let slot = registry_slot_hex("alice".to_string()).unwrap();
         assert_eq!(slot.len(), 64);
         assert!(!slot.starts_with("0x"));
-        assert!(slot.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(slot
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]
     fn registry_slot_hex_rejects_invalid_names() {
         let bad = [
-            "ab",                            // too short
+            "ab",                                // too short
             "abcdefghijklmnopqrstuvwxyz0123456", // 33 bytes → too long
-            "-alice",                        // leading hyphen
-            "alice-",                        // trailing hyphen
-            "al--ice",                       // consecutive hyphens
-            "al ice",                        // space
-            "ali.ce",                        // dot
-            "ali_ce",                        // underscore
-            "alïce",                         // non-ASCII
-            "",                              // empty
+            "-alice",                            // leading hyphen
+            "alice-",                            // trailing hyphen
+            "al--ice",                           // consecutive hyphens
+            "al ice",                            // space
+            "ali.ce",                            // dot
+            "ali_ce",                            // underscore
+            "alïce",                             // non-ASCII
+            "",                                  // empty
         ];
         for name in bad {
             assert!(
@@ -1019,10 +1047,7 @@ mod tests {
 
         // Bare hex and `0x`-prefixed (mixed case) decode identically.
         let json = registry_decode_entry(hexed.clone()).unwrap();
-        assert_eq!(
-            json,
-            registry_decode_entry(format!("0x{hexed}")).unwrap()
-        );
+        assert_eq!(json, registry_decode_entry(format!("0x{hexed}")).unwrap());
         assert_eq!(
             json,
             registry_decode_entry(format!("0X{}", hexed.to_uppercase())).unwrap()

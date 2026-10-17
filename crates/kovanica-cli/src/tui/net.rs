@@ -154,7 +154,8 @@ pub(crate) async fn fetch_snapshot(client: &RpcClient, address: &Address) -> Res
             .call("kovanica_getStake", json!([encoded.clone()]))
             .await?,
     )?;
-    let rewards = rpc::parse_quantity(&client.call("kovanica_getRewards", json!([encoded])).await?)?;
+    let rewards =
+        rpc::parse_quantity(&client.call("kovanica_getRewards", json!([encoded])).await?)?;
     Ok(Snapshot {
         height,
         committee_size: committee.as_array().map(Vec::len).unwrap_or(0),
@@ -227,7 +228,9 @@ pub(crate) async fn submit(
         signing_key,
     )?;
     let raw = tx::encode_raw(&transaction)?;
-    let result = client.call("kovanica_sendRawTransaction", json!([raw])).await?;
+    let result = client
+        .call("kovanica_sendRawTransaction", json!([raw]))
+        .await?;
     Ok(result.as_str().unwrap_or("").to_string())
 }
 

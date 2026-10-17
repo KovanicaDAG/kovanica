@@ -86,12 +86,10 @@ impl RelayClient {
 
     /// `POST /v1/envelope`; returns the stored envelope `id`.
     pub async fn post_envelope(&self, envelope: &Envelope) -> Result<String, ClientError> {
-        let body = envelope.to_json_bytes().map_err(|e| {
-            ClientError::Status {
-                status: 0,
-                code: "local".to_string(),
-                message: e.to_string(),
-            }
+        let body = envelope.to_json_bytes().map_err(|e| ClientError::Status {
+            status: 0,
+            code: "local".to_string(),
+            message: e.to_string(),
         })?;
         let response = self
             .http
@@ -112,9 +110,7 @@ impl RelayClient {
         limit: Option<usize>,
         since: Option<u64>,
     ) -> Result<Vec<Envelope>, ClientError> {
-        let mut request = self
-            .http
-            .get(format!("{}/v1/inbox/{comms_id}", self.base));
+        let mut request = self.http.get(format!("{}/v1/inbox/{comms_id}", self.base));
         let mut params: Vec<(&str, String)> = Vec::new();
         if let Some(limit) = limit {
             params.push(("limit", limit.to_string()));

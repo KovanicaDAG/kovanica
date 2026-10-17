@@ -6,10 +6,10 @@
 
 #![deny(unsafe_code)]
 
-pub mod envelope;
-pub mod payload;
 #[cfg(feature = "client")]
 pub mod client;
+pub mod envelope;
+pub mod payload;
 #[cfg(feature = "server")]
 pub mod server;
 pub mod store;

@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use kovanica_storage::Storage;
-use kovanica_types::{CommitSeal, CommittedSubDag, Hash, LeaderHeader, SealAnnouncement, SigningKey};
+use kovanica_types::{
+    CommitSeal, CommittedSubDag, Hash, LeaderHeader, SealAnnouncement, SigningKey,
+};
 use tracing::warn;
 
 use kovanica_network::LocalHeaderHash;

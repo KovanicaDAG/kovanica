@@ -101,10 +101,9 @@ impl RpcClient {
     /// Submit a bincode transaction as `0x` hex. Returns the transaction hash hex.
     pub fn send_raw(&self, raw_hex: &str) -> Result<String> {
         let value = self.call("kovanica_sendRawTransaction", json!([raw_hex]))?;
-        value
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| anyhow!("kovanica_sendRawTransaction: expected a hash string, got {value}"))
+        value.as_str().map(str::to_owned).ok_or_else(|| {
+            anyhow!("kovanica_sendRawTransaction: expected a hash string, got {value}")
+        })
     }
 
     /// Latest account proof, or `None` when the node has no committed state root.

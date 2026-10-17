@@ -895,12 +895,18 @@ mod tests {
         let (_dir, store) = store();
         assert_eq!(store.max_dag_round().unwrap(), None, "fresh store is empty");
 
-        store.put_block(&make_block(0, 3, Vec::new(), "r3")).unwrap();
+        store
+            .put_block(&make_block(0, 3, Vec::new(), "r3"))
+            .unwrap();
         assert_eq!(store.max_dag_round().unwrap(), Some(3));
 
         // A deeper, differently authored round wins regardless of insertion order.
-        store.put_block(&make_block(1, 11, Vec::new(), "r11")).unwrap();
-        store.put_block(&make_block(0, 7, Vec::new(), "r7")).unwrap();
+        store
+            .put_block(&make_block(1, 11, Vec::new(), "r11"))
+            .unwrap();
+        store
+            .put_block(&make_block(0, 7, Vec::new(), "r7"))
+            .unwrap();
         assert_eq!(store.max_dag_round().unwrap(), Some(11));
     }
 

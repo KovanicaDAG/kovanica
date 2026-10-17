@@ -1010,7 +1010,7 @@ impl ExecutionContext {
         let Some(mut set) = storage.state().load_light_set_write(txn)? else {
             return Ok(());
         };
-        if height % kovanica_staking::EPOCH_ROUNDS == 0 {
+        if height.is_multiple_of(kovanica_staking::EPOCH_ROUNDS) {
             set.note_beacon(height / kovanica_staking::EPOCH_ROUNDS, leader_digest);
             storage.state().save_light_set(txn, &set)?;
         }
@@ -1039,7 +1039,7 @@ impl ExecutionContext {
             set.add_escrow(epoch, contributor, escrow_part);
         }
         let mut credits = Vec::new();
-        if (committed_height + 1) % kovanica_staking::EPOCH_ROUNDS == 0 {
+        if (committed_height + 1).is_multiple_of(kovanica_staking::EPOCH_ROUNDS) {
             let settled = set.settle(epoch);
             credits.extend(settled.winner_payouts);
             credits.extend(settled.leader_refunds);
@@ -2122,7 +2122,12 @@ mod tests {
         let staked_before = ctx.staking.total_staked;
         let delegations_before = ctx.staking.delegations.len();
 
-        let tx = delegate_tx(&key, Address([0xEE; 32]), 100 * kovanica_staking::ONE_KUNA, 0);
+        let tx = delegate_tx(
+            &key,
+            Address([0xEE; 32]),
+            100 * kovanica_staking::ONE_KUNA,
+            0,
+        );
         let result = execute_single_tx(&mut ctx, &storage, tx);
         let receipt = &result.receipts[0];
         assert!(!receipt.success, "receipt must report failure");
@@ -2157,7 +2162,12 @@ mod tests {
 
         let txs = vec![
             create_transfer_tx(&key, &recipient, amount, 0, fee),
-            delegate_tx(&key, Address([0xEE; 32]), 100 * kovanica_staking::ONE_KUNA, 1),
+            delegate_tx(
+                &key,
+                Address([0xEE; 32]),
+                100 * kovanica_staking::ONE_KUNA,
+                1,
+            ),
             create_transfer_tx(&key, &recipient, amount, 2, fee),
         ];
         let subdag = CommittedSubDag {
@@ -2849,8 +2859,8 @@ mod tests {
         );
         assert!(r[0].success);
         // Reward of round 1 (2.5 KUNA) with 20% escrow: leader side 2.0 KUNA split 50/50 (commission 0).
-        assert_eq!(pending_reward(&storage, &me, &validator), 1 * K); // 2.0 / 2
-        assert_eq!(read_balance(&storage, &payout), 1 * K);
+        assert_eq!(pending_reward(&storage, &me, &validator), K); // 2.0 / 2
+        assert_eq!(read_balance(&storage, &payout), K);
         let before = read_balance(&storage, &me);
         let r = run(
             &mut ctx,
@@ -2864,9 +2874,9 @@ mod tests {
             )],
         );
         assert!(r[0].success, "{r:?}");
-        assert_eq!(read_balance(&storage, &me), before + 1 * K - 1000);
+        assert_eq!(read_balance(&storage, &me), before + K - 1000);
         // Round-2 reward accrued again after the claim tx.
-        assert_eq!(pending_reward(&storage, &me, &validator), 1 * K);
+        assert_eq!(pending_reward(&storage, &me, &validator), K);
         // Commission is paid to the validator payout.
         ctx.staking
             .set_commission(validator, 2_000)
@@ -2883,8 +2893,8 @@ mod tests {
         // Payout balance: only gets validator's share when rewards are paid. Claiming doesn't affect payout. So payout had 1.0K from round 1; round 2's reward adds validator's share of round 2 (1.0K) to payout. So payout is 2.0K before round 3.
         // Round 3 with commission 20%: validator share is 1.2K, so payout increases by 1.2K → 3.2K total. Delegator share is 0.8K added to pending → pending becomes 1.0K (from round 2) + 0.8K (from round 3) = 1.8K = 9*K/5.
         assert_eq!(read_balance(&storage, &payout), 2 * K + 1_200_000_000); // 2.0K + 1.2K = 3.2K
-        assert_eq!(pending_reward(&storage, &me, &validator), 1 * K + 800_000_000); // 1.8K = 9*K/5
-        // Claiming with nothing pending fails honestly.
+        assert_eq!(pending_reward(&storage, &me, &validator), K + 800_000_000); // 1.8K = 9*K/5
+                                                                                // Claiming with nothing pending fails honestly.
         let k2 = test_keypair(2);
         let other = address_of(&k2);
         let txn = storage.begin_write().expect("w");

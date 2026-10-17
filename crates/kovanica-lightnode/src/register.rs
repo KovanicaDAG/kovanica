@@ -316,7 +316,7 @@ mod tests {
         LightView {
             reward_bps: 0,
             epoch: 4,
-            beacon: beacon.then(|| Hash([9u8; 32])),
+            beacon: beacon.then_some(Hash([9u8; 32])),
             nodes: vec![LightNodeView {
                 address: address(1),
                 stake: 100,

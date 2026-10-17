@@ -31,14 +31,19 @@ const KAT_ID: &str = concat!(
     "c5034efbba7b4590b37a6d2c5ad88c3d",
 );
 /// Ed25519 is deterministic, so the signature is a stable KAT as well.
-const KAT_SIG: &str = "SPDd52nG1EiZG/azO+dccZktmpCzkZTzPVgSWmDv+Sr7CM/N9Blb8i4DQzxsvnZjZmPi9+jCYAXjYd1NDcNIBQ==";
+const KAT_SIG: &str =
+    "SPDd52nG1EiZG/azO+dccZktmpCzkZTzPVgSWmDv+Sr7CM/N9Blb8i4DQzxsvnZjZmPi9+jCYAXjYd1NDcNIBQ==";
 
 fn sender_pub() -> PublicKey {
-    SigningKey::from_bytes(&SENDER_SEED).verifying_key().to_bytes()
+    SigningKey::from_bytes(&SENDER_SEED)
+        .verifying_key()
+        .to_bytes()
 }
 
 fn recipient_pub() -> PublicKey {
-    SigningKey::from_bytes(&RECIPIENT_SEED).verifying_key().to_bytes()
+    SigningKey::from_bytes(&RECIPIENT_SEED)
+        .verifying_key()
+        .to_bytes()
 }
 
 // ---------------------------------------------------------------------------
@@ -63,14 +68,27 @@ fn envelope_json_round_trip() {
     // Field names are exactly the §3.1 keys.
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     for key in [
-        "v", "id", "to", "from", "sentAt", "expiresAt", "alg", "epk", "nonce", "ct", "sig",
+        "v",
+        "id",
+        "to",
+        "from",
+        "sentAt",
+        "expiresAt",
+        "alg",
+        "epk",
+        "nonce",
+        "ct",
+        "sig",
     ] {
         assert!(value.get(key).is_some(), "missing key {key}");
     }
 
     // epk/nonce are base64 of 32/24 raw bytes.
     assert_eq!(
-        STANDARD.decode(value["epk"].as_str().unwrap()).unwrap().len(),
+        STANDARD
+            .decode(value["epk"].as_str().unwrap())
+            .unwrap()
+            .len(),
         32
     );
     assert_eq!(
