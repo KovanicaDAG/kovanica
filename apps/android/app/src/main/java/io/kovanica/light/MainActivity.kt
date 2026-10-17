@@ -964,8 +964,12 @@ class MainActivity : Activity() {
         addStack(sectionLabel("Balance"))
         val amountRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.BOTTOM
+            gravity = Gravity.CENTER_VERTICAL
         }
+        amountRow.addView(
+            WalletUi.kunaCoin(this@MainActivity, 40),
+            LinearLayout.LayoutParams(dp(40), dp(40)).apply { rightMargin = dp(12) },
+        )
         overviewValue = TextView(this@MainActivity).apply {
             textSize = 36f
             typeface = Typeface.DEFAULT_BOLD
@@ -1339,6 +1343,12 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val coin = if (info != null) {
+            WalletUi.tokenCoin(this, info.symbol, contract)
+        } else {
+            WalletUi.coinMark(this, "?", SURFACE, MUTED, description = "Token")
+        }
+        top.addView(coin, LinearLayout.LayoutParams(dp(36), dp(36)))
         top.addView(
             TextView(this).apply {
                 text = when {
@@ -1352,7 +1362,9 @@ class MainActivity : Activity() {
                 textSize = 16f
                 typeface = Typeface.DEFAULT_BOLD
             },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(10)
+            },
         )
         if (info != null && info.paused) top.addView(badge("PAUSED", ACCENT, ACCENT_BG))
         row.addView(top)

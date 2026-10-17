@@ -7,6 +7,7 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.text.InputType
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -21,8 +22,9 @@ import kotlin.math.roundToInt
  * private helpers from before; new wallet surfaces (this file, the receive
  * screen, the token rows) build from here so the palette cannot drift.
  *
- * Icon-free, XML-free, dependency-free — plain `android.widget.*` on the ink
- * surface the rest of the app already uses.
+ * XML-free and dependency-free — plain `android.widget.*` on the ink surface
+ * the rest of the app already uses. Coin marks are drawn here until the
+ * official KUNA artwork replaces the native disc.
  */
 object WalletUi {
     // Ink-toned surface. Explicit so the screen reads the same on any device theme.
@@ -68,6 +70,64 @@ object WalletUi {
         orientation = LinearLayout.VERTICAL
         background = rounded(ctx, SURFACE, 18, LINE, 1)
         setPadding(dp(ctx, 16), dp(ctx, 16), dp(ctx, 16), dp(ctx, 16))
+    }
+
+    /**
+     * Round coin mark. Native KUNA is the amber "K" disc from [kunaCoin].
+     * That disc is interim: the official KUNA artwork replaces it. A token
+     * uses [tokenCoin], the first two letters of its symbol on a colour
+     * chosen from the contract address.
+     */
+    fun coinMark(
+        ctx: Context,
+        letters: String,
+        fill: Int,
+        ink: Int = ACCENT_INK,
+        sizeDp: Int = 36,
+        description: String = letters,
+    ): TextView {
+        val mark = letters.trim().uppercase().filter { it.isLetterOrDigit() }.take(2).ifEmpty { "?" }
+        val size = dp(ctx, sizeDp)
+        return TextView(ctx).apply {
+            text = mark
+            contentDescription = description
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            textSize = if (mark.length > 1) 12f else 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ink)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(fill)
+            }
+            minWidth = size
+            minHeight = size
+        }
+    }
+
+    /** Interim native mark. Swap this view when the official KUNA logo lands. */
+    fun kunaCoin(ctx: Context, sizeDp: Int = 40): TextView =
+        coinMark(ctx, "K", ACCENT, ACCENT_INK, sizeDp, "KUNA")
+
+    /** Token mark. The same contract keeps the same fill. */
+    fun tokenCoin(ctx: Context, symbol: String, contract: String, sizeDp: Int = 36): TextView =
+        coinMark(ctx, symbol, tokenFill(contract), ACCENT_INK, sizeDp, symbol.ifBlank { "Token" })
+
+    private val TOKEN_FILLS = intArrayOf(
+        0xFF7EB6FF.toInt(),
+        0xFF5BD6A0.toInt(),
+        0xFFE39A4A.toInt(),
+        0xFFC9A0FF.toInt(),
+        0xFF4ECDC4.toInt(),
+        0xFFFF8FA3.toInt(),
+    )
+
+    /** Stable colour for a contract. Unreadable addresses fall back to a hash. */
+    fun tokenFill(contract: String): Int {
+        val hex = contract.trim().lowercase().removePrefix("0x")
+            .filter { it in '0'..'9' || it in 'a'..'f' }
+        val seed = hex.take(2).toIntOrNull(16) ?: contract.hashCode().and(0xFF)
+        return TOKEN_FILLS[seed % TOKEN_FILLS.size]
     }
 
     fun sectionLabel(ctx: Context, caption: String, bottomPadDp: Int = 10): TextView =

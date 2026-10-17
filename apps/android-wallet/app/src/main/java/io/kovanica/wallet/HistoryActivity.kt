@@ -147,13 +147,28 @@ class HistoryActivity : Activity() {
         )
         addView(head)
 
-        addView(TextView(this@HistoryActivity).apply {
-            text = amountLine(entry)
-            setTextColor(WalletUi.TEXT)
-            textSize = 18f
-            typeface = Typeface.DEFAULT_BOLD
+        val amountRow = LinearLayout(this@HistoryActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, 0)
-        })
+        }
+        amountRow.addView(
+            coinFor(entry),
+            LinearLayout.LayoutParams(dp(28), dp(28)),
+        )
+        amountRow.addView(
+            TextView(this@HistoryActivity).apply {
+                text = amountLine(entry)
+                setTextColor(WalletUi.TEXT)
+                textSize = 18f
+                typeface = Typeface.DEFAULT_BOLD
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { leftMargin = dp(10) },
+        )
+        addView(amountRow)
 
         counterpartyLine(entry)?.let { line ->
             addView(TextView(this@HistoryActivity).apply {
@@ -203,6 +218,15 @@ class HistoryActivity : Activity() {
     private fun kindColors(kind: String): Pair<Int, Int> = when (kind) {
         HistoryEntry.KIND_FAUCET -> WalletUi.GOOD to WalletUi.GOOD_BG
         else -> WalletUi.ACCENT to WalletUi.ACCENT_BG
+    }
+
+    private fun coinFor(entry: HistoryEntry): TextView {
+        val symbol = entry.symbol
+        return if (symbol.isNullOrBlank() || symbol.equals("KUNA", ignoreCase = true)) {
+            WalletUi.kunaCoin(this, 28)
+        } else {
+            WalletUi.tokenCoin(this, symbol, entry.contract ?: symbol, 28)
+        }
     }
 
     private fun amountLine(entry: HistoryEntry): String {
