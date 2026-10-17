@@ -1,6 +1,7 @@
 package io.kovanica.light
 
 import android.app.Activity
+import android.content.ComponentCallbacks2
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -202,6 +203,25 @@ class MessagesActivity : Activity() {
     override fun onDestroy() {
         io.shutdown()
         super.onDestroy()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) lock()
+    }
+
+    /** Forget the unlocked key and the typed passphrase when the app leaves the screen. */
+    private fun lock() {
+        client = null
+        if (::passField.isInitialized) passField.setText("")
+        if (::commsIdValue.isInitialized) {
+            commsIdValue.text = "Unlock to reveal"
+            commsIdValue.setTextColor(MUTED)
+        }
+        if (::pubkeyValue.isInitialized) {
+            pubkeyValue.text = "Unlock to reveal"
+            pubkeyValue.setTextColor(MUTED)
+        }
     }
 
     // --- actions -------------------------------------------------------------------------

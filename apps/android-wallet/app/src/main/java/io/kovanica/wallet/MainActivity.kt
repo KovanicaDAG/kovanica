@@ -2,6 +2,7 @@ package io.kovanica.wallet
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -320,6 +321,17 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) clearSecrets()
+    }
+
+    /** Drop the passphrase and any pasted seed once the app leaves the screen. */
+    private fun clearSecrets() {
+        if (::passField.isInitialized) passField.setText("")
+        if (::mnemonicField.isInitialized) mnemonicField.setText("")
+    }
+
     override fun onResume() {
         super.onResume()
         refreshFaucet()
@@ -487,6 +499,7 @@ class MainActivity : Activity() {
             label = "Importing wallet…",
             done = { line ->
                 pushStatus(line)
+                if (line.tone == Tone.OK) mnemonicField.setText("")
                 onWalletChanged()
             },
         ) { _ ->
@@ -1620,7 +1633,7 @@ class MainActivity : Activity() {
         addStack(
             caption(
                 "A short walkthrough of every screen: network, wallet, receive, send, " +
-                    "and tokens. Your keys stay on this phone.",
+                    "tokens, history, and settings. Your keys stay on this phone.",
             ),
             8,
         )

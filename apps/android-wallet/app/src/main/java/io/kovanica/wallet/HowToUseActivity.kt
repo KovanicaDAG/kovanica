@@ -45,7 +45,7 @@ class HowToUseActivity : Activity() {
             step(
                 number = 1,
                 title = "Pick your network",
-                body = "Open the network menu at the top of the home screen. Local / dev and " +
+                body = "Open the network menu at the top of the home screen. Local and " +
                     "Testnet are ready to use; Mainnet is listed but greyed out until it opens. " +
                     "The RPC endpoint, chain id, and faucet fill in automatically — you can edit " +
                     "them if you run your own node. Your choice is remembered for next time.",
@@ -106,9 +106,9 @@ class HowToUseActivity : Activity() {
             step(
                 number = 6,
                 title = "Get testnet KUNA",
-                body = "On a network that has a faucet, tap Request faucet to ask for test coins " +
-                    "at your address. The button only appears on those networks — Mainnet has " +
-                    "no faucet.",
+                body = "On the Send card, on a network that has a faucet, tap Request faucet to " +
+                    "ask for test coins at your address. The button only appears on those " +
+                    "networks — Mainnet has no faucet.",
             ),
             14,
         )
@@ -172,7 +172,7 @@ class HowToUseActivity : Activity() {
                 this@HowToUseActivity,
                 "This is a light client: it keeps your keys on the phone and reads the chain " +
                     "through a node you choose. Set a network, make a wallet, then send and " +
-                    "receive KUNA. The steps below follow the home screen top to bottom.",
+                    "receive KUNA. The steps below follow that order.",
             ),
             0,
         )

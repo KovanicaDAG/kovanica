@@ -15,7 +15,7 @@ import org.json.JSONObject
  *
  * Stored as a JSON array under `history_<networkId>` in the app's existing
  * `"kvnc"` SharedPreferences file, newest first, capped at [MAX_ENTRIES]. Keeping
- * it per network means a Testnet transfer never shows up under Local / dev.
+ * it per network means a Testnet transfer never shows up under Local.
  */
 class HistoryStore(context: Context) {
     private val prefs: SharedPreferences =

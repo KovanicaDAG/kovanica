@@ -2,6 +2,7 @@ package io.kovanica.light
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -22,6 +23,7 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
@@ -47,10 +49,11 @@ import kotlin.math.roundToInt
  * and every HTTP call shares one single-thread executor; results return to the UI with
  * `runOnUiThread`, and any failure lands in the status banner. The UI never blocks.
  *
- * The screen now carries the network switch (v0.5.0): a Mainnet / Testnet / Local spinner
- * backed by `NetworkPrefs`, editable RPC + faucet endpoints, and a live chain panel that
- * reads `NodeClient.blockNumber()` / `NodeClient.balance()`. A gap since the last header
- * starts a new checkpoint; the desktop `kovanica-lightnode` follows every header and submits
+ * Home is three tabs. Wallet is the balance, tokens, and send form. Node is the
+ * network, the sealed-header check, and the light-node bond. Account creates the
+ * wallet and opens messages, history, and settings. The passphrase field stays above
+ * the tabs because every signature uses it. A gap since the last header starts a new
+ * checkpoint; the desktop `kovanica-lightnode` follows every header and submits
  * witnesses while the phone sleeps.
  *
  * Laid out programmatically — this app has no `res/` and no Compose.
@@ -62,6 +65,7 @@ class MainActivity : Activity() {
     private lateinit var networkSpinner: Spinner
     private lateinit var networkNote: TextView
     private lateinit var networkSoon: TextView
+    private lateinit var networkChip: TextView
     private lateinit var chainState: TextView
     private lateinit var chainMeta: TextView
     private lateinit var rpcField: EditText
@@ -79,9 +83,17 @@ class MainActivity : Activity() {
 
     // Wallet overview (native KUNA hero).
     private lateinit var overviewValue: TextView
+    private lateinit var kunaSuffix: TextView
+    private lateinit var setupButton: Button
     private lateinit var overviewMeta: TextView
     private lateinit var overviewAddress: TextView
     private lateinit var receiveButton: Button
+    private lateinit var walletPage: View
+    private lateinit var nodePage: View
+    private lateinit var accountPage: View
+    private lateinit var tabWallet: TextView
+    private lateinit var tabNode: TextView
+    private lateinit var tabAccount: TextView
 
     // Token watchlist (KVP-102 reads).
     private lateinit var tokensState: TextView
@@ -136,6 +148,7 @@ class MainActivity : Activity() {
         actionBar?.hide()
         window.setBackgroundDrawable(ColorDrawable(INK))
         window.statusBarColor = INK
+        window.navigationBarColor = INK
 
         current = resolveStartupNetwork()
 
@@ -220,7 +233,10 @@ class MainActivity : Activity() {
 
         val walletCard = card().apply {
             addStack(sectionLabel("Create or import"))
-            addStack(passField, 2)
+            addStack(
+                caption("Uses the passphrase at the top. The seed stays on this phone."),
+                0,
+            )
             addStack(button("Create wallet") { onCreateWallet() }, 12)
             addStack(caption("Or import an existing wallet from its seed."), 16)
             addStack(mnemonicField, 8)
@@ -292,30 +308,37 @@ class MainActivity : Activity() {
         val overviewCard = walletOverviewCard()
         val tokensCard = tokensCard()
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(36))
-            setBackgroundColor(INK)
-            addStack(header())
-            addView(rule(), LinearLayout.LayoutParams(dp(40), dp(3)).apply { topMargin = dp(14) })
-            addStack(status, 18)
-            addStack(guideCard(), 18)
-            addStack(overviewCard, 18)
-            addStack(tokensCard, 18)
-            addStack(sendCard, 18)
-            addStack(networkCard, 18)
-            addStack(chainCard, 18)
-            addStack(walletCard, 18)
-            addStack(lightCard, 18)
-            addStack(messagesCard, 18)
-            addStack(moreCard(), 18)
+        walletPage = page(overviewCard, tokensCard, sendCard)
+        nodePage = page(networkCard, chainCard, lightCard)
+        accountPage = page(guideCard(), walletCard, messagesCard, moreCard())
+        val fill = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT,
+        )
+        val pages = FrameLayout(this).apply {
+            addView(walletPage, fill)
+            addView(nodePage, FrameLayout.LayoutParams(fill))
+            addView(accountPage, FrameLayout.LayoutParams(fill))
         }
 
-        setContentView(ScrollView(this).apply {
-            isFillViewport = true
+        val shell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(INK)
-            addView(root)
-        })
+            addView(header(), inset(top = 16))
+            addView(passField, inset(top = 14))
+            addView(status, inset(top = 10))
+            addView(
+                pages,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f,
+                ).apply { topMargin = dp(8) },
+            )
+            addView(tabBar())
+        }
+        setContentView(shell)
+        showTab(Tab.WALLET)
 
         // Watchers attach last, so the first prefill does not write back.
         listOf(rpcField, chainField, epochField, faucetField).forEach {
@@ -343,6 +366,17 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         io.shutdown()
         super.onDestroy()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) clearSecrets()
+    }
+
+    /** Drop the passphrase and any pasted seed once the app leaves the screen. */
+    private fun clearSecrets() {
+        if (::passField.isInitialized) passField.setText("")
+        if (::mnemonicField.isInitialized) mnemonicField.setText("")
     }
 
     override fun onResume() {
@@ -388,7 +422,7 @@ class MainActivity : Activity() {
             return "$soon\nStarted on ${current.label} — chain id ${current.chainId}."
         }
         return "${current.label} — chain id ${current.chainId}.\n" +
-            "Check the connection, then create or import a wallet."
+            "Wallet shows your balance. Account creates a wallet."
     }
 
     private fun spinner(): Spinner = Spinner(this).apply {
@@ -466,6 +500,7 @@ class MainActivity : Activity() {
     private fun updateNetworkNote() {
         val faucet = if (current.faucetUrl == null) "no faucet here" else "faucet available"
         networkNote.text = "${current.label}  ·  chain id ${current.chainId}  ·  $faucet"
+        networkChip.text = "${current.label} · ${current.chainId}"
         val locked = Networks.ALL.filter { !it.enabled }
         networkSoon.text = locked.joinToString("\n") { "${it.label}: ${it.soon ?: "not open yet"}" }
         networkSoon.visibility = if (locked.isEmpty()) View.GONE else View.VISIBLE
@@ -490,6 +525,7 @@ class MainActivity : Activity() {
             done = { line ->
                 pushStatus(line)
                 onWalletChanged()
+                if (line.tone == Tone.OK) showTab(Tab.WALLET)
             },
         ) { _ ->
             val created = createWallet(passphrase)
@@ -512,6 +548,10 @@ class MainActivity : Activity() {
             label = "Importing wallet…",
             done = { line ->
                 pushStatus(line)
+                if (line.tone == Tone.OK) {
+                    mnemonicField.setText("")
+                    showTab(Tab.WALLET)
+                }
                 onWalletChanged()
             },
         ) { _ ->
@@ -687,19 +727,87 @@ class MainActivity : Activity() {
 
     private fun bond() {
         val passphrase = passField.text.toString()
-        background("Bonding 100 KUNA…") { env ->
-            submit(
-                env,
-                "bond",
-                amount = Amounts.format(BigInteger(MIN_LIGHT_BOND.toString()), NATIVE_DECIMALS),
-            ) { keystore, _, nonce, rate ->
-                signBondRaw(keystore, passphrase, env.chainId, MIN_LIGHT_BOND, nonce, rate)
+        setStatus("Checking the fee…", Tone.NEUTRAL)
+        val env = env()
+        io.execute {
+            val rate = try {
+                parseQuantity(client(env).call("kovanica_estimateFee", JSONArray()))
+            } catch (error: Exception) {
+                runOnUiThread {
+                    setStatus(error.message ?: "Couldn't read the fee from the node.", Tone.ERROR)
+                }
+                return@execute
             }
+            runOnUiThread { reviewBond(rate, passphrase) }
         }
+    }
+
+    /** Confirm the 100 KUNA lock before the bond is signed. */
+    private fun reviewBond(rate: ULong, passphrase: String) {
+        val kuna = Amounts.format(BigInteger(MIN_LIGHT_BOND.toString()), NATIVE_DECIMALS)
+        AlertDialog.Builder(this)
+            .setTitle("Bond $kuna KUNA?")
+            .setMessage(
+                "This registers the phone as a light node and locks $kuna KUNA until you exit.\n" +
+                    "Fee rate: $rate atoms/byte",
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Bond") { _, _ ->
+                background("Bonding $kuna KUNA…") { env ->
+                    submit(
+                        env,
+                        "bond",
+                        amount = kuna,
+                    ) { keystore, _, nonce, fee ->
+                        signBondRaw(keystore, passphrase, env.chainId, MIN_LIGHT_BOND, nonce, fee)
+                    }
+                }
+            }
+            .show()
     }
 
     private fun witness() {
         val passphrase = passField.text.toString()
+        setStatus("Checking the light set…", Tone.NEUTRAL)
+        val env = env()
+        io.execute {
+            try {
+                val node = client(env)
+                val set = JSONObject(node.call("kovanica_getLightSet", JSONArray()).toString())
+                if (set.isNull("beacon")) {
+                    val epoch = parseQuantity(set.get("epoch"))
+                    runOnUiThread { setStatus("epoch $epoch has no beacon yet", Tone.WARN) }
+                    return@execute
+                }
+                val rate = parseQuantity(node.call("kovanica_estimateFee", JSONArray()))
+                val epoch = parseQuantity(set.get("epoch"))
+                val beacon = set.getString("beacon")
+                runOnUiThread { reviewWitness(epoch, beacon, rate, passphrase) }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    setStatus(error.message ?: error.toString(), Tone.ERROR)
+                }
+            }
+        }
+    }
+
+    /** Confirm the epoch beacon before the witness is signed. */
+    private fun reviewWitness(epoch: ULong, beacon: String, rate: ULong, passphrase: String) {
+        val shown = if (beacon.length <= 18) beacon else beacon.take(18) + "…"
+        AlertDialog.Builder(this)
+            .setTitle("Submit witness?")
+            .setMessage(
+                "Epoch: $epoch\n" +
+                    "Beacon: $shown\n" +
+                    "Fee rate: $rate atoms/byte\n\n" +
+                    "This signs a witness for the current epoch. It does not move your bond.",
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Submit") { _, _ -> broadcastWitness(epoch, beacon, passphrase) }
+            .show()
+    }
+
+    private fun broadcastWitness(epoch: ULong, beacon: String, passphrase: String) {
         background("Submitting witness…") { env ->
             val keystore = keystore()
             val address = walletAddress(keystore)
@@ -708,14 +816,19 @@ class MainActivity : Activity() {
             if (set.isNull("beacon")) {
                 return@background warn("epoch ${parseQuantity(set.get("epoch"))} has no beacon yet")
             }
+            val liveEpoch = parseQuantity(set.get("epoch"))
+            val liveBeacon = set.getString("beacon")
+            if (liveEpoch != epoch || liveBeacon != beacon) {
+                return@background warn("The epoch beacon changed. Submit the witness again.")
+            }
             val nonce = parseQuantity(node.call("kovanica_getNonce", JSONArray().put(address)))
             val rate = parseQuantity(node.call("kovanica_estimateFee", JSONArray()))
             val raw = signWitnessRaw(
                 keystore,
                 passphrase,
                 env.chainId,
-                parseQuantity(set.get("epoch")),
-                set.getString("beacon"),
+                liveEpoch,
+                liveBeacon,
                 nonce,
                 rate,
             )
@@ -727,11 +840,38 @@ class MainActivity : Activity() {
 
     private fun exitLight() {
         val passphrase = passField.text.toString()
-        background("Exiting light node…") { env ->
-            submit(env, "exit") { keystore, _, nonce, rate ->
-                signExitRaw(keystore, passphrase, env.chainId, nonce, rate)
+        setStatus("Checking the fee…", Tone.NEUTRAL)
+        val env = env()
+        io.execute {
+            val rate = try {
+                parseQuantity(client(env).call("kovanica_estimateFee", JSONArray()))
+            } catch (error: Exception) {
+                runOnUiThread {
+                    setStatus(error.message ?: "Couldn't read the fee from the node.", Tone.ERROR)
+                }
+                return@execute
             }
+            runOnUiThread { reviewExit(rate, passphrase) }
         }
+    }
+
+    /** Confirm the unbond before the exit is signed. */
+    private fun reviewExit(rate: ULong, passphrase: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Exit light node?")
+            .setMessage(
+                "This unbonds your light-node stake and returns it.\n" +
+                    "Fee rate: $rate atoms/byte",
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Exit") { _, _ ->
+                background("Exiting light node…") { env ->
+                    submit(env, "exit") { keystore, _, nonce, fee ->
+                        signExitRaw(keystore, passphrase, env.chainId, nonce, fee)
+                    }
+                }
+            }
+            .show()
     }
 
     private fun faucet() {
@@ -810,6 +950,7 @@ class MainActivity : Activity() {
     }
 
     private fun fillRecipient(address: String, message: String) {
+        showTab(Tab.WALLET)
         toField.setText(address)
         toField.setSelection(toField.text.length)
         renderRecipientCheck()
@@ -820,14 +961,28 @@ class MainActivity : Activity() {
 
     /** The hero card: native KUNA balance, the address, and the Receive entry point. */
     private fun walletOverviewCard(): LinearLayout = card().apply {
-        addStack(sectionLabel("Wallet"))
+        addStack(sectionLabel("Balance"))
+        val amountRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+        }
         overviewValue = TextView(this@MainActivity).apply {
-            textSize = 34f
+            textSize = 36f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(TEXT)
-            setLineSpacing(0f, 1.05f)
+            setLineSpacing(0f, 1.0f)
         }
-        addStack(overviewValue, 2)
+        amountRow.addView(overviewValue)
+        kunaSuffix = TextView(this@MainActivity).apply {
+            text = "KUNA"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ACCENT)
+            setPadding(dp(8), 0, 0, dp(6))
+            visibility = View.GONE
+        }
+        amountRow.addView(kunaSuffix)
+        addStack(amountRow, 2)
         overviewMeta = TextView(this@MainActivity).apply {
             textSize = 12f
             setTextColor(MUTED)
@@ -845,8 +1000,14 @@ class MainActivity : Activity() {
 
         val actions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
         receiveButton = button("Receive") { openReceive() }
+        setupButton = button("Set up wallet") { showTab(Tab.ACCOUNT) }
+        setupButton.visibility = View.GONE
         actions.addView(
             receiveButton,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        actions.addView(
+            setupButton,
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
         actions.addView(
@@ -857,10 +1018,7 @@ class MainActivity : Activity() {
         )
         addStack(actions, 14)
         addStack(
-            caption(
-                "Read live from the node you selected. This is native KUNA — KVP-102 tokens " +
-                    "live in their own contracts and show under Tokens.",
-            ),
+            caption("Native KUNA from the node you selected. Tokens are listed below."),
             12,
         )
     }
@@ -946,7 +1104,7 @@ class MainActivity : Activity() {
             OverviewState.NoWallet -> {
                 hero("—", MUTED)
                 overviewMeta.text =
-                    "No wallet on this phone yet. Create or import one below to see a balance."
+                    "No wallet on this phone yet. Set up a wallet to see a balance."
                 overviewMeta.setTextColor(MUTED)
                 showAddress(false)
                 setReceiveEnabled(false)
@@ -966,7 +1124,7 @@ class MainActivity : Activity() {
                 setReceiveEnabled(walletAddressDisplay != null)
             }
             is OverviewState.Ready -> {
-                hero("${Amounts.format(BigInteger(state.atoms.toString()), NATIVE_DECIMALS)} KUNA", TEXT)
+                hero(Amounts.format(BigInteger(state.atoms.toString()), NATIVE_DECIMALS), TEXT, unit = true)
                 val heightLine = state.height?.let { "height $it" } ?: "height unknown"
                 overviewMeta.text = "${state.atoms} atoms  ·  $heightLine  ·  ${current.label}"
                 overviewMeta.setTextColor(MUTED)
@@ -983,9 +1141,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun hero(text: String, color: Int) {
+    private fun hero(text: String, color: Int, unit: Boolean = false) {
         overviewValue.text = text
         overviewValue.setTextColor(color)
+        kunaSuffix.visibility = if (unit) View.VISIBLE else View.GONE
     }
 
     private fun showAddress(visible: Boolean) {
@@ -995,8 +1154,8 @@ class MainActivity : Activity() {
     }
 
     private fun setReceiveEnabled(enabled: Boolean) {
-        receiveButton.isEnabled = enabled
-        receiveButton.alpha = if (enabled) 1f else 0.5f
+        receiveButton.visibility = if (enabled) View.VISIBLE else View.GONE
+        setupButton.visibility = if (enabled) View.GONE else View.VISIBLE
     }
 
     /** Re-read the wallet address from the local store after create/import. */
@@ -1666,31 +1825,112 @@ class MainActivity : Activity() {
     // --- widgets -------------------------------------------------------------------------
 
     private fun header(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        addView(TextView(this@MainActivity).apply {
-            text = "Kovanica · LIGHT"
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        val titles = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        titles.addView(TextView(this@MainActivity).apply {
+            text = "KOVANICA"
             setTextColor(ACCENT)
             textSize = 11f
             letterSpacing = 0.22f
             typeface = Typeface.DEFAULT_BOLD
         })
-        addView(TextView(this@MainActivity).apply {
-            text = "Kovanica Lightnode"
+        titles.addView(TextView(this@MainActivity).apply {
+            text = "Lightnode"
             setTextColor(TEXT)
-            textSize = 30f
+            textSize = 22f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dp(2), 0, 0)
         })
-        addView(TextView(this@MainActivity).apply {
-            text = "Pick a network, check the chain, and move KUNA. Your keys stay on this phone."
-            setTextColor(MUTED)
-            textSize = 13f
-            setLineSpacing(0f, 1.3f)
-            setPadding(0, dp(8), 0, 0)
-        })
+        addView(titles, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        networkChip = TextView(this@MainActivity).apply {
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ACCENT)
+            background = rounded(ACCENT_BG, 20)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setOnClickListener { showTab(Tab.NODE) }
+        }
+        addView(networkChip)
     }
 
-    private fun rule(): View = View(this).apply { background = rounded(ACCENT, 2) }
+    /** One tab's scroll. Horizontal inset lives here so the tab bar can stay full width. */
+    private fun page(vararg children: View): ScrollView {
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), dp(28))
+            setBackgroundColor(INK)
+        }
+        children.forEachIndexed { index, child ->
+            column.addStack(child, if (index == 0) 8 else 16)
+        }
+        return ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(INK)
+            isVerticalScrollBarEnabled = false
+            addView(
+                column,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+    }
+
+    private fun tabBar(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(dp(12), dp(8), dp(12), dp(12))
+        setBackgroundColor(SURFACE)
+        tabWallet = tabButton("Wallet") { showTab(Tab.WALLET) }
+        tabNode = tabButton("Node") { showTab(Tab.NODE) }
+        tabAccount = tabButton("Account") { showTab(Tab.ACCOUNT) }
+        listOf(tabWallet, tabNode, tabAccount).forEach { tab ->
+            addView(
+                tab,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    leftMargin = dp(4)
+                    rightMargin = dp(4)
+                },
+            )
+        }
+    }
+
+    private fun tabButton(label: String, action: () -> Unit): TextView = TextView(this).apply {
+        text = label
+        textSize = 14f
+        typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER
+        setPadding(dp(8), dp(12), dp(8), dp(12))
+        setOnClickListener { action() }
+    }
+
+    private fun showTab(tab: Tab) {
+        walletPage.visibility = if (tab == Tab.WALLET) View.VISIBLE else View.GONE
+        nodePage.visibility = if (tab == Tab.NODE) View.VISIBLE else View.GONE
+        accountPage.visibility = if (tab == Tab.ACCOUNT) View.VISIBLE else View.GONE
+        styleTab(tabWallet, tab == Tab.WALLET)
+        styleTab(tabNode, tab == Tab.NODE)
+        styleTab(tabAccount, tab == Tab.ACCOUNT)
+    }
+
+    private fun styleTab(view: TextView, selected: Boolean) {
+        view.setTextColor(if (selected) ACCENT_INK else MUTED)
+        view.background = if (selected) rounded(ACCENT, 14) else ColorDrawable(Color.TRANSPARENT)
+    }
+
+    /** Horizontal inset for the chrome that sits above the pages. */
+    private fun inset(top: Int): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            topMargin = dp(top)
+            leftMargin = dp(20)
+            rightMargin = dp(20)
+        }
+
+    private enum class Tab { WALLET, NODE, ACCOUNT }
 
     /**
      * First-run pointer into the guide screen. The whole card is tappable, with the
@@ -1737,8 +1977,8 @@ class MainActivity : Activity() {
         )
         addStack(
             caption(
-                "A short walkthrough of every screen: network, wallet, receive, send, " +
-                    "tokens, and messages. Your keys stay on this phone.",
+                "Wallet is your balance and sends. Node is the chain and the light node. " +
+                    "Account creates the wallet and keeps the seed backup.",
             ),
             8,
         )
