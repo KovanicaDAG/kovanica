@@ -143,6 +143,7 @@ Workspace crate versions default to `0.2.0`; the table records the version each 
 |-----|------------|-------|
 | `apps/desktop` | `@kovanica/desktop` 0.1.0 | Tauri v2 + React comms client |
 | `apps/android` | `io.kovanica.light` (versionCode 8 / versionName 0.7.0, minSdk 24) | Kotlin + UniFFI light client |
+| `apps/android-comms` | `io.kovanica.comms` (versionCode 1 / versionName 0.1.0, minSdk 24) | Kotlin comms client: identity, sealed 1:1 messages, contacts |
 | `apps/ios` | `KovanicaLight` | SwiftUI light client |
 
 ### Documentation

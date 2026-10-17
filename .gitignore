@@ -73,6 +73,11 @@ apps/android-wallet/**/jniLibs/**/*.so
 apps/android-wallet/.gradle/
 apps/android-wallet/local.properties
 
+# Android comms module
+apps/android-comms/**/jniLibs/**/*.so
+apps/android-comms/.gradle/
+apps/android-comms/local.properties
+
 # Guard: never track a full repo copy nested inside the repo
 /kovanica/
 
