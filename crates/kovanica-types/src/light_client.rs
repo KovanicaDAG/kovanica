@@ -89,7 +89,7 @@ impl LeaderHeader {
 
     /// Domain-separated hash of [`Self::canonical_bytes`].
     pub fn hash(&self) -> Hash {
-        Hash::new_keyed(Hash::DOMAIN_HEADER, &self.canonical_bytes())
+        Hash::new_keyed(Hash::DOMAIN_HEADER, self.canonical_bytes())
     }
 
     /// Bytes a validator signs for this header on `chain_id`.

@@ -136,7 +136,11 @@ fn execute_and_credit(subdag: &CommittedSubDag) -> (u64, Address) {
         .get_account_or_default(&txn, &reward.recipient)
         .expect("account")
         .balance;
-    assert_eq!(balance, reward.amount, "reward persisted to the ledger");
+    // The leader side of the reward is credited now; the light-node share
+    // (`LIGHT_REWARD_BPS`) is escrowed until epoch close.
+    let (leader_side, _escrow) =
+        kovanica_staking::split_block_reward(reward.amount, kovanica_staking::LIGHT_REWARD_BPS);
+    assert_eq!(balance, leader_side, "reward persisted to the ledger");
 
     (balance, reward.recipient)
 }
@@ -172,7 +176,9 @@ fn single_node_commit_delivers_and_rewards_linearizer_path() {
 
     // (4) rewards credited and persisted on commit.
     let (balance, recipient) = execute_and_credit(&run.subdag);
-    assert_eq!(recipient, Address([103; 32]));
+    // Wave-seeded rotation (`(round / WAVE_LENGTH) % n`) makes authority 1
+    // the leader here; its payout address is 101.
+    assert_eq!(recipient, Address([101; 32]));
     assert!(balance > 0);
 }
 
@@ -201,7 +207,7 @@ fn single_node_commit_delivers_and_rewards_mysticghost_path() {
     let (_balance, recipient) = execute_and_credit(&run.subdag);
     assert_eq!(
         recipient,
-        Address([103; 32]),
-        "leader 3 has payout addr 103"
+        Address([101; 32]),
+        "leader 1 has payout addr 101"
     );
 }

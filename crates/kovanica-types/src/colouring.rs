@@ -271,7 +271,7 @@ pub fn mysticghost_commitment(
     let non_blue: Vec<Hash> = non_blue.into_iter().map(|b| b.digest).collect();
 
     let mut executed = blue_ordered.clone();
-    if !executed.iter().any(|h| *h == leader) {
+    if !executed.contains(&leader) {
         executed.push(leader);
     }
 

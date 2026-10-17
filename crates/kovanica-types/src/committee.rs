@@ -158,8 +158,7 @@ mod leader_rotation_tests {
     /// old round-seeded fallback pinned every leader round to authority 0.
     #[test]
     fn committee_of_wave_length_size_rotates_leaders() {
-        let authorities: Vec<Authority> =
-            (0..crate::WAVE_LENGTH as u16).map(authority).collect();
+        let authorities: Vec<Authority> = (0..crate::WAVE_LENGTH as u16).map(authority).collect();
         let committee = Committee::new(0, authorities);
         let leaders: Vec<u16> = (0..9u64)
             .map(|wave| committee.leader(wave * crate::WAVE_LENGTH))
