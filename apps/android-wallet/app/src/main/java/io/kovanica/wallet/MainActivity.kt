@@ -23,6 +23,7 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
@@ -45,11 +46,10 @@ import kotlin.math.roundToInt
  * and every HTTP call shares one single-thread executor; results return to the UI with
  * `runOnUiThread`, and any failure lands in the status banner. The UI never blocks.
  *
- * The screen carries the network switch (v0.5.0): a Mainnet / Testnet / Local spinner
- * backed by `NetworkPrefs`, editable RPC + faucet endpoints, and a live chain panel that
- * reads `NodeClient.blockNumber()` / `NodeClient.balance()`. The wallet screen also shows
- * the native KUNA balance, watches KVP-102 tokens by contract address, and signs sends
- * locally so keys stay on the phone.
+ * Home is three tabs. Wallet is the balance, tokens, and send form. Node is the
+ * network and the sealed-header check. Account creates the wallet and opens history
+ * and settings. The passphrase field stays above the tabs because every signature
+ * uses it.
  *
  * Laid out programmatically — this app has no `res/` and no Compose.
  */
@@ -60,6 +60,7 @@ class MainActivity : Activity() {
     private lateinit var networkSpinner: Spinner
     private lateinit var networkNote: TextView
     private lateinit var networkSoon: TextView
+    private lateinit var networkChip: TextView
     private lateinit var chainState: TextView
     private lateinit var chainMeta: TextView
     private lateinit var rpcField: EditText
@@ -77,9 +78,17 @@ class MainActivity : Activity() {
 
     // Wallet overview (native KUNA hero).
     private lateinit var overviewValue: TextView
+    private lateinit var kunaSuffix: TextView
+    private lateinit var setupButton: Button
     private lateinit var overviewMeta: TextView
     private lateinit var overviewAddress: TextView
     private lateinit var receiveButton: Button
+    private lateinit var walletPage: View
+    private lateinit var nodePage: View
+    private lateinit var accountPage: View
+    private lateinit var tabWallet: TextView
+    private lateinit var tabNode: TextView
+    private lateinit var tabAccount: TextView
 
     // Token watchlist (KVP-102 reads).
     private lateinit var tokensState: TextView
@@ -134,6 +143,7 @@ class MainActivity : Activity() {
         actionBar?.hide()
         window.setBackgroundDrawable(ColorDrawable(INK))
         window.statusBarColor = INK
+        window.navigationBarColor = INK
 
         current = resolveStartupNetwork()
 
@@ -218,7 +228,10 @@ class MainActivity : Activity() {
 
         val walletCard = card().apply {
             addStack(sectionLabel("Create or import"))
-            addStack(passField, 2)
+            addStack(
+                caption("Uses the passphrase at the top. The seed stays on this phone."),
+                0,
+            )
             addStack(button("Create wallet") { onCreateWallet() }, 12)
             addStack(caption("Or import an existing wallet from its seed."), 16)
             addStack(mnemonicField, 8)
@@ -270,28 +283,37 @@ class MainActivity : Activity() {
         val overviewCard = walletOverviewCard()
         val tokensCard = tokensCard()
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(36))
-            setBackgroundColor(INK)
-            addStack(header())
-            addView(rule(), LinearLayout.LayoutParams(dp(40), dp(3)).apply { topMargin = dp(14) })
-            addStack(status, 18)
-            addStack(guideCard(), 18)
-            addStack(overviewCard, 18)
-            addStack(tokensCard, 18)
-            addStack(sendCard, 18)
-            addStack(networkCard, 18)
-            addStack(chainCard, 18)
-            addStack(walletCard, 18)
-            addStack(moreCard(), 18)
+        walletPage = page(overviewCard, tokensCard, sendCard)
+        nodePage = page(networkCard, chainCard)
+        accountPage = page(guideCard(), walletCard, moreCard())
+        val fill = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT,
+        )
+        val pages = FrameLayout(this).apply {
+            addView(walletPage, fill)
+            addView(nodePage, FrameLayout.LayoutParams(fill))
+            addView(accountPage, FrameLayout.LayoutParams(fill))
         }
 
-        setContentView(ScrollView(this).apply {
-            isFillViewport = true
+        val shell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(INK)
-            addView(root)
-        })
+            addView(header(), inset(top = 16))
+            addView(passField, inset(top = 14))
+            addView(status, inset(top = 10))
+            addView(
+                pages,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f,
+                ).apply { topMargin = dp(8) },
+            )
+            addView(tabBar())
+        }
+        setContentView(shell)
+        showTab(Tab.WALLET)
 
         // Watchers attach last, so the first prefill does not write back.
         listOf(rpcField, chainField, epochField, faucetField).forEach {
@@ -453,6 +475,7 @@ class MainActivity : Activity() {
     private fun updateNetworkNote() {
         val faucet = if (current.faucetUrl == null) "no faucet here" else "faucet available"
         networkNote.text = "${current.label}  ·  chain id ${current.chainId}  ·  $faucet"
+        networkChip.text = "${current.label} · ${current.chainId}"
         val locked = Networks.ALL.filter { !it.enabled }
         networkSoon.text = locked.joinToString("\n") { "${it.label}: ${it.soon ?: "not open yet"}" }
         networkSoon.visibility = if (locked.isEmpty()) View.GONE else View.VISIBLE
@@ -477,6 +500,7 @@ class MainActivity : Activity() {
             done = { line ->
                 pushStatus(line)
                 onWalletChanged()
+                if (line.tone == Tone.OK) showTab(Tab.WALLET)
             },
         ) { _ ->
             val created = createWallet(passphrase)
@@ -499,7 +523,10 @@ class MainActivity : Activity() {
             label = "Importing wallet…",
             done = { line ->
                 pushStatus(line)
-                if (line.tone == Tone.OK) mnemonicField.setText("")
+                if (line.tone == Tone.OK) {
+                    mnemonicField.setText("")
+                    showTab(Tab.WALLET)
+                }
                 onWalletChanged()
             },
         ) { _ ->
@@ -683,14 +710,28 @@ class MainActivity : Activity() {
 
     /** The hero card: native KUNA balance, the address, and the Receive entry point. */
     private fun walletOverviewCard(): LinearLayout = card().apply {
-        addStack(sectionLabel("Wallet"))
+        addStack(sectionLabel("Balance"))
+        val amountRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+        }
         overviewValue = TextView(this@MainActivity).apply {
-            textSize = 34f
+            textSize = 36f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(TEXT)
-            setLineSpacing(0f, 1.05f)
+            setLineSpacing(0f, 1.0f)
         }
-        addStack(overviewValue, 2)
+        amountRow.addView(overviewValue)
+        kunaSuffix = TextView(this@MainActivity).apply {
+            text = "KUNA"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ACCENT)
+            setPadding(dp(8), 0, 0, dp(6))
+            visibility = View.GONE
+        }
+        amountRow.addView(kunaSuffix)
+        addStack(amountRow, 2)
         overviewMeta = TextView(this@MainActivity).apply {
             textSize = 12f
             setTextColor(MUTED)
@@ -708,8 +749,14 @@ class MainActivity : Activity() {
 
         val actions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
         receiveButton = button("Receive") { openReceive() }
+        setupButton = button("Set up wallet") { showTab(Tab.ACCOUNT) }
+        setupButton.visibility = View.GONE
         actions.addView(
             receiveButton,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        actions.addView(
+            setupButton,
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
         actions.addView(
@@ -720,10 +767,7 @@ class MainActivity : Activity() {
         )
         addStack(actions, 14)
         addStack(
-            caption(
-                "Read live from the node you selected. This is native KUNA — KVP-102 tokens " +
-                    "live in their own contracts and show under Tokens.",
-            ),
+            caption("Native KUNA from the node you selected. Tokens are listed below."),
             12,
         )
     }
@@ -809,7 +853,7 @@ class MainActivity : Activity() {
             OverviewState.NoWallet -> {
                 hero("—", MUTED)
                 overviewMeta.text =
-                    "No wallet on this phone yet. Create or import one below to see a balance."
+                    "No wallet on this phone yet. Set up a wallet to see a balance."
                 overviewMeta.setTextColor(MUTED)
                 showAddress(false)
                 setReceiveEnabled(false)
@@ -829,7 +873,7 @@ class MainActivity : Activity() {
                 setReceiveEnabled(walletAddressDisplay != null)
             }
             is OverviewState.Ready -> {
-                hero("${Amounts.format(BigInteger(state.atoms.toString()), NATIVE_DECIMALS)} KUNA", TEXT)
+                hero(Amounts.format(BigInteger(state.atoms.toString()), NATIVE_DECIMALS), TEXT, unit = true)
                 val heightLine = state.height?.let { "height $it" } ?: "height unknown"
                 overviewMeta.text = "${state.atoms} atoms  ·  $heightLine  ·  ${current.label}"
                 overviewMeta.setTextColor(MUTED)
@@ -846,9 +890,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun hero(text: String, color: Int) {
+    private fun hero(text: String, color: Int, unit: Boolean = false) {
         overviewValue.text = text
         overviewValue.setTextColor(color)
+        kunaSuffix.visibility = if (unit) View.VISIBLE else View.GONE
     }
 
     private fun showAddress(visible: Boolean) {
@@ -858,8 +903,8 @@ class MainActivity : Activity() {
     }
 
     private fun setReceiveEnabled(enabled: Boolean) {
-        receiveButton.isEnabled = enabled
-        receiveButton.alpha = if (enabled) 1f else 0.5f
+        receiveButton.visibility = if (enabled) View.VISIBLE else View.GONE
+        setupButton.visibility = if (enabled) View.GONE else View.VISIBLE
     }
 
     /** Re-read the wallet address from the local store after create/import. */
@@ -952,6 +997,7 @@ class MainActivity : Activity() {
     }
 
     private fun fillRecipient(address: String, message: String) {
+        showTab(Tab.WALLET)
         toField.setText(address)
         toField.setSelection(toField.text.length)
         renderRecipientCheck()
@@ -1561,31 +1607,112 @@ class MainActivity : Activity() {
     // --- widgets -------------------------------------------------------------------------
 
     private fun header(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        addView(TextView(this@MainActivity).apply {
-            text = "Kovanica · WALLET"
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        val titles = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        titles.addView(TextView(this@MainActivity).apply {
+            text = "KOVANICA"
             setTextColor(ACCENT)
             textSize = 11f
             letterSpacing = 0.22f
             typeface = Typeface.DEFAULT_BOLD
         })
-        addView(TextView(this@MainActivity).apply {
-            text = "Kovanica Wallet"
+        titles.addView(TextView(this@MainActivity).apply {
+            text = "Wallet"
             setTextColor(TEXT)
-            textSize = 30f
+            textSize = 22f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dp(2), 0, 0)
         })
-        addView(TextView(this@MainActivity).apply {
-            text = "Pick a network, check the chain, and move KUNA. Your keys stay on this phone."
-            setTextColor(MUTED)
-            textSize = 13f
-            setLineSpacing(0f, 1.3f)
-            setPadding(0, dp(8), 0, 0)
-        })
+        addView(titles, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        networkChip = TextView(this@MainActivity).apply {
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ACCENT)
+            background = rounded(ACCENT_BG, 20)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setOnClickListener { showTab(Tab.NODE) }
+        }
+        addView(networkChip)
     }
 
-    private fun rule(): View = View(this).apply { background = rounded(ACCENT, 2) }
+    /** One tab's scroll. Horizontal inset lives here so the tab bar can stay full width. */
+    private fun page(vararg children: View): ScrollView {
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), dp(28))
+            setBackgroundColor(INK)
+        }
+        children.forEachIndexed { index, child ->
+            column.addStack(child, if (index == 0) 8 else 16)
+        }
+        return ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(INK)
+            isVerticalScrollBarEnabled = false
+            addView(
+                column,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+    }
+
+    private fun tabBar(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(dp(12), dp(8), dp(12), dp(12))
+        setBackgroundColor(SURFACE)
+        tabWallet = tabButton("Wallet") { showTab(Tab.WALLET) }
+        tabNode = tabButton("Node") { showTab(Tab.NODE) }
+        tabAccount = tabButton("Account") { showTab(Tab.ACCOUNT) }
+        listOf(tabWallet, tabNode, tabAccount).forEach { tab ->
+            addView(
+                tab,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    leftMargin = dp(4)
+                    rightMargin = dp(4)
+                },
+            )
+        }
+    }
+
+    private fun tabButton(label: String, action: () -> Unit): TextView = TextView(this).apply {
+        text = label
+        textSize = 14f
+        typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER
+        setPadding(dp(8), dp(12), dp(8), dp(12))
+        setOnClickListener { action() }
+    }
+
+    private fun showTab(tab: Tab) {
+        walletPage.visibility = if (tab == Tab.WALLET) View.VISIBLE else View.GONE
+        nodePage.visibility = if (tab == Tab.NODE) View.VISIBLE else View.GONE
+        accountPage.visibility = if (tab == Tab.ACCOUNT) View.VISIBLE else View.GONE
+        styleTab(tabWallet, tab == Tab.WALLET)
+        styleTab(tabNode, tab == Tab.NODE)
+        styleTab(tabAccount, tab == Tab.ACCOUNT)
+    }
+
+    private fun styleTab(view: TextView, selected: Boolean) {
+        view.setTextColor(if (selected) ACCENT_INK else MUTED)
+        view.background = if (selected) rounded(ACCENT, 14) else ColorDrawable(Color.TRANSPARENT)
+    }
+
+    /** Horizontal inset for the chrome that sits above the pages. */
+    private fun inset(top: Int): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            topMargin = dp(top)
+            leftMargin = dp(20)
+            rightMargin = dp(20)
+        }
+
+    private enum class Tab { WALLET, NODE, ACCOUNT }
 
     /**
      * Entry into the in-app guide. A tappable card sitting above the day-to-day flow
@@ -1632,8 +1759,8 @@ class MainActivity : Activity() {
         )
         addStack(
             caption(
-                "A short walkthrough of every screen: network, wallet, receive, send, " +
-                    "tokens, history, and settings. Your keys stay on this phone.",
+                "Wallet is your balance and sends. Node is the chain. Account creates " +
+                    "the wallet and keeps the seed backup.",
             ),
             8,
         )

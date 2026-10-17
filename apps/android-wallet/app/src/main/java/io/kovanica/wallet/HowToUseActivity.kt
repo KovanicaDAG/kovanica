@@ -45,7 +45,7 @@ class HowToUseActivity : Activity() {
             step(
                 number = 1,
                 title = "Pick your network",
-                body = "Open the network menu at the top of the home screen. Local and " +
+                body = "Open the Node tab, or tap the network chip at the top right. Local and " +
                     "Testnet are ready to use; Mainnet is listed but greyed out until it opens. " +
                     "The RPC endpoint, chain id, and faucet fill in automatically — you can edit " +
                     "them if you run your own node. Your choice is remembered for next time.",
@@ -57,9 +57,9 @@ class HowToUseActivity : Activity() {
             step(
                 number = 2,
                 title = "Create or import a wallet",
-                body = "Type a passphrase, then tap Create wallet to make a new wallet, or paste " +
-                    "your 24-word seed and tap Import wallet. Your seed words and passphrase " +
-                    "stay on this phone and are never sent to a node.",
+                body = "On the Account tab, type a passphrase in the field at the top, then tap " +
+                    "Create wallet. Or paste your 24-word seed and tap Import wallet. Your seed " +
+                    "words and passphrase stay on this phone and are never sent to a node.",
                 tip = "When you create a wallet the seed is shown once. Write it down and keep " +
                     "it somewhere safe — it is the only way to recover your funds.",
             ),
@@ -70,10 +70,10 @@ class HowToUseActivity : Activity() {
             step(
                 number = 3,
                 title = "Check the connection",
-                body = "Tap Check connection to read the chain head and your balance straight " +
-                    "from the node you selected. Sync sealed header pulls the latest sealed " +
-                    "header, and Verified balance checks a node's answer against that header " +
-                    "before you trust it.",
+                body = "On the Node tab, tap Check connection to read the chain head and your " +
+                    "balance from the node you selected. Sync sealed header pulls the latest " +
+                    "sealed header, and Verified balance checks a node's answer against that " +
+                    "header before you trust it.",
             ),
             14,
         )
@@ -82,9 +82,9 @@ class HowToUseActivity : Activity() {
             step(
                 number = 4,
                 title = "Receive KUNA",
-                body = "Tap Receive to show your address and a QR code, then copy or share it. " +
-                    "Anyone can pay you at that address. Receiving is free and needs no " +
-                    "passphrase.",
+                body = "On the Wallet tab, tap Receive to show your address and a QR code, then " +
+                    "copy or share it. Anyone can pay you at that address. Receiving is free " +
+                    "and needs no passphrase.",
             ),
             14,
         )
@@ -93,11 +93,11 @@ class HowToUseActivity : Activity() {
             step(
                 number = 5,
                 title = "Send KUNA",
-                body = "Paste the recipient's address, enter the amount in atoms (1 KUNA is " +
-                    "1,000,000,000 atoms), and tap Send. Before anything is signed, a review " +
-                    "step shows the recipient, the amount, and the network fee. Confirm it, " +
-                    "and your passphrase unlocks the key on this phone to sign the transfer " +
-                    "locally.",
+                body = "On the Wallet tab, paste the recipient's address, enter the amount in " +
+                    "atoms (1 KUNA is 1,000,000,000 atoms), and tap Send. Before anything is " +
+                    "signed, a review step shows the recipient, the amount, and the network " +
+                    "fee. Confirm it, and the passphrase at the top unlocks the key on this " +
+                    "phone.",
             ),
             14,
         )
@@ -106,9 +106,9 @@ class HowToUseActivity : Activity() {
             step(
                 number = 6,
                 title = "Get testnet KUNA",
-                body = "On the Send card, on a network that has a faucet, tap Request faucet to " +
-                    "ask for test coins at your address. The button only appears on those " +
-                    "networks — Mainnet has no faucet.",
+                body = "On the Wallet tab, on the Send card, tap Request faucet on a network that " +
+                    "has a faucet. The button only appears on those networks — Mainnet has " +
+                    "no faucet.",
             ),
             14,
         )
@@ -118,8 +118,9 @@ class HowToUseActivity : Activity() {
                 number = 7,
                 title = "Watch and send tokens",
                 body = "Native KUNA lives in your balance; KVP-102 tokens live in their own " +
-                    "contracts. In the Tokens card, tap Add and paste a token's contract " +
-                    "address to watch it — the app reads the symbol, supply, and your balance " +
+                    "contracts. On the Wallet tab, in the Tokens card, tap Add and paste a " +
+                    "token's contract address to watch it — the app reads the symbol, supply, " +
+                    "and your balance " +
                     "straight from the contract. Tap Create token to deploy your own. Tap a " +
                     "token row to open its send panel and move tokens in the token's base " +
                     "units. Long-press a token, or tap Stop watching, to remove it — that only " +
@@ -134,10 +135,10 @@ class HowToUseActivity : Activity() {
             step(
                 number = 8,
                 title = "Check your transaction history",
-                body = "Tap Transaction history to see a local record of the transfers this " +
-                    "phone has sent, the coins it has received, and the faucet requests it " +
-                    "made. The log is kept on this phone, so it is there before the node " +
-                    "answers.",
+                body = "On the Account tab, tap Transaction history to see a local record of the " +
+                    "transfers this phone has sent, the coins it has received, and the faucet " +
+                    "requests it made. The log is kept on this phone, so it is there before " +
+                    "the node answers.",
             ),
             14,
         )
@@ -146,9 +147,9 @@ class HowToUseActivity : Activity() {
             step(
                 number = 9,
                 title = "Back up your seed in Settings",
-                body = "Tap Settings to manage the passphrase that unlocks this phone and to " +
-                    "back up your 24-word seed. Your seed is the only way to recover your " +
-                    "funds, so write it down and keep it offline.",
+                body = "On the Account tab, tap Settings to manage the passphrase that unlocks " +
+                    "this phone and to back up your 24-word seed. Your seed is the only way " +
+                    "to recover your funds, so write it down and keep it offline.",
             ),
             14,
         )
@@ -170,9 +171,9 @@ class HowToUseActivity : Activity() {
         addStack(
             WalletUi.caption(
                 this@HowToUseActivity,
-                "This is a light client: it keeps your keys on the phone and reads the chain " +
-                    "through a node you choose. Set a network, make a wallet, then send and " +
-                    "receive KUNA. The steps below follow that order.",
+                "This wallet keeps your keys on the phone and reads the chain through a " +
+                    "node you choose. Home has three tabs — Wallet, Node, and Account. The " +
+                    "passphrase at the top unlocks this phone and never leaves it.",
             ),
             0,
         )
