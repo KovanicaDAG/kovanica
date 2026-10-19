@@ -36,7 +36,6 @@ parking_lot = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
 libp2p = { workspace = true }
-uuid = { version = "1", features = ["v4", "serde"] }
 bincode = { workspace = true }
 
 [dev-dependencies]

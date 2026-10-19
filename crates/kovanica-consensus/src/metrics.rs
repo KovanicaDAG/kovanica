@@ -225,6 +225,100 @@ pub fn update_dag_blocks_in_memory(count: i64) {
     DAG_BLOCKS_IN_MEMORY.set(count);
 }
 
+// ---------------------------------------------------------------------------
+// JSON-RPC server metrics
+// ---------------------------------------------------------------------------
+
+/// Labels for RPC-level metrics.
+///
+/// `method` is always a bounded, compile-time method name taken from the RPC
+/// server's own registry (`"other"` for anything unrecognised). Nothing
+/// caller-supplied is ever used verbatim, so the number of series an RPC
+/// client can create is fixed at the number of registered methods — a request
+/// for an arbitrary method name cannot grow the cardinality.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct RpcMethodLabels {
+    pub method: &'static str,
+}
+
+/// Total JSON-RPC requests handled, by method.
+static RPC_REQUESTS_TOTAL: Lazy<Family<RpcMethodLabels, Counter>> = Lazy::new(|| {
+    let family = Family::<RpcMethodLabels, Counter>::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "rpc_requests_total",
+        "Total number of JSON-RPC requests handled, by method",
+        family.clone(),
+    );
+    family
+});
+
+/// Total JSON-RPC requests answered with a JSON-RPC error, by method.
+static RPC_ERRORS_TOTAL: Lazy<Family<RpcMethodLabels, Counter>> = Lazy::new(|| {
+    let family = Family::<RpcMethodLabels, Counter>::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "rpc_errors_total",
+        "Total number of JSON-RPC requests answered with an error, by method",
+        family.clone(),
+    );
+    family
+});
+
+/// JSON-RPC request latency in seconds, by method.
+static RPC_REQUEST_DURATION_SECONDS: Lazy<Family<RpcMethodLabels, Histogram>> = Lazy::new(|| {
+    let family = Family::<RpcMethodLabels, Histogram>::new_with_constructor(|| {
+        // ~1 ms .. ~16 s, doubling: covers the whole call range up to the
+        // 10 s request timeout without a bucket per millisecond.
+        let buckets: Vec<f64> =
+            prometheus_client::metrics::histogram::exponential_buckets(0.001, 2.0, 15).collect();
+        Histogram::new(buckets)
+    });
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register_with_unit(
+        "rpc_request_duration_seconds",
+        "JSON-RPC request latency in seconds, by method",
+        Unit::Seconds,
+        family.clone(),
+    );
+    family
+});
+
+/// Record one handled JSON-RPC request: increments the per-method request
+/// counter and observes its latency in seconds.
+///
+/// `method` must be a bounded label (see [`RpcMethodLabels`]); callers pass the
+/// handler's registered name, or `"other"` for an unknown method.
+pub fn observe_rpc_request(method: &'static str, duration_secs: f64) {
+    let labels = RpcMethodLabels { method };
+    RPC_REQUESTS_TOTAL.get_or_create(&labels).inc();
+    RPC_REQUEST_DURATION_SECONDS
+        .get_or_create(&labels)
+        .observe(duration_secs);
+}
+
+/// Record one JSON-RPC request that was answered with an error (bad version,
+/// unauthorized, unknown method, handler error or timeout).
+pub fn record_rpc_error(method: &'static str) {
+    RPC_ERRORS_TOTAL
+        .get_or_create(&RpcMethodLabels { method })
+        .inc();
+}
+
+/// Read the per-method request counter (diagnostics and tests).
+pub fn rpc_request_count(method: &'static str) -> u64 {
+    RPC_REQUESTS_TOTAL
+        .get_or_create(&RpcMethodLabels { method })
+        .get()
+}
+
+/// Read the per-method error counter (diagnostics and tests).
+pub fn rpc_error_count(method: &'static str) -> u64 {
+    RPC_ERRORS_TOTAL
+        .get_or_create(&RpcMethodLabels { method })
+        .get()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

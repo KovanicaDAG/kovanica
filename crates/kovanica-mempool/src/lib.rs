@@ -211,6 +211,8 @@ fn immediate_value(kind: &TransactionKind) -> u64 {
         TransactionKind::RegisterLightNode { stake, .. } => *stake,
         TransactionKind::ExitLightNode => 0,
         TransactionKind::SubmitLightWitness { .. } => 0,
+        TransactionKind::SetCommission { .. } => 0,
+        TransactionKind::ClaimTreasury { .. } => 0, // funds leave the treasury account, not the sender
     }
 }
 
@@ -751,7 +753,9 @@ pub struct MempoolConfig {
     pub max_mempool_size: usize,
     /// Maximum size of a single transaction in bytes.
     pub max_tx_size: usize,
-    /// Maximum gas limit for contract calls.
+    /// Maximum gas limit for contract calls. Defaults to
+    /// [`kovanica_types::MAX_TX_GAS_LIMIT`]; an operator's override is honoured
+    /// here, but the consensus path enforces the canonical cap independently.
     pub max_gas_limit: u64,
     /// Interval for rebroadcasting transactions.
     pub rebroadcast_interval: std::time::Duration,
@@ -777,7 +781,7 @@ impl Default for MempoolConfig {
         Self {
             max_mempool_size: 100 * 1024 * 1024, // 100 MB
             max_tx_size: 1024 * 1024,            // 1 MB
-            max_gas_limit: 10_000_000,
+            max_gas_limit: kovanica_types::MAX_TX_GAS_LIMIT,
             rebroadcast_interval: std::time::Duration::from_secs(30),
             min_fee_rate: 0,
             max_txs_per_sender: 64,

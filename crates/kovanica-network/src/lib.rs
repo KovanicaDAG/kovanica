@@ -23,12 +23,16 @@ pub mod validation;
 
 pub use block_sync::{
     BlockSyncRequest, BlockSyncRequestEvent, BlockSyncResponse, BlockSyncResponseEvent,
-    BLOCK_SYNC_PROTOCOL,
+    BLOCK_SYNC_PROTOCOL, BLOCK_SYNC_PROTOCOL_LEGACY,
 };
 pub use error::NetworkError;
 pub use scoring::PeerScoringConfig;
 pub use service::NetworkService;
-pub use state_sync::{StateSyncCodec, StateSyncRequest, StateSyncResponse, STATE_SYNC_PROTOCOL};
+pub use state_sync::{
+    ExportedSnapshot, SnapshotChunk, StateSnapshotSource, StateSyncCodec, StateSyncRequest,
+    StateSyncResponse, MAX_STATE_SYNC_CHUNK_BYTES, MAX_STATE_SYNC_SNAPSHOT_BYTES,
+    STATE_SYNC_PROTOCOL,
+};
 pub use sync::SyncRequest;
 pub use validation::{
     admit_seal, AuthorityKeys, Ed25519VoteVerifier, LocalHeaderHash, Rejection, SealAdmission,

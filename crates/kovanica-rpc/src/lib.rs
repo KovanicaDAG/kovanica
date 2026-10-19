@@ -17,7 +17,10 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use kovanica_consensus::{metrics::metrics_text, CommitteeInfo};
+use kovanica_consensus::{
+    metrics::{metrics_text, observe_rpc_request, record_rpc_error},
+    CommitteeInfo,
+};
 use kovanica_mempool::Mempool;
 use kovanica_staking::StakingState;
 use kovanica_storage::Storage;
@@ -369,19 +372,112 @@ async fn ws_handler(ws: WebSocketUpgrade, Extension(state): Extension<RpcState>)
     ws.on_upgrade(move |socket| subscriptions::serve_connection(socket, state))
 }
 
+/// Fixed set of JSON-RPC method names the default server registers.
+///
+/// It exists purely to keep the `method` label on the RPC metrics bounded: any
+/// name not listed here (an unknown method, or a handler registered only in a
+/// test) is reported under `"other"`, so a caller cannot grow metric
+/// cardinality by inventing method names. Adding a method to
+/// [`RpcServer::register_default_methods`] should add it here too; until it
+/// does, it is counted under `"other"`.
+const KNOWN_RPC_METHODS: &[&str] = &[
+    "htlc_create",
+    "htlc_claim",
+    "htlc_refund",
+    "vault_create",
+    "vault_claim",
+    "vault_cancel",
+    "multisig_create",
+    "multisig_propose",
+    "multisig_confirm",
+    "multisig_execute",
+    "token_create",
+    "token_transfer",
+    "token_mint",
+    "token_burn",
+    "token_balance",
+    "kovanica_blockNumber",
+    "kovanica_getBlockByHash",
+    "kovanica_getBlockByNumber",
+    "kovanica_sendRawTransaction",
+    "kovanica_getTransactionReceipt",
+    "kovanica_getTransactionByHash",
+    "kovanica_getBalance",
+    "kovanica_getNonce",
+    "kovanica_getCode",
+    "kovanica_getStorageAt",
+    "kovanica_getValidators",
+    "kovanica_getStake",
+    "kovanica_getRewards",
+    "kovanica_getPendingTransactions",
+    "kovanica_estimateFee",
+    "kovanica_getLeaderSchedule",
+    "kovanica_getCommittee",
+    "kovanica_getCommitteeInfo",
+    "kovanica_getLeaderHeader",
+    "kovanica_getCommitSeals",
+    "kovanica_getTxProof",
+    "kovanica_getAccountProof",
+    "kovanica_getLightSet",
+    "kovanica_lightClientCheckpoint",
+];
+
+/// Map a caller-supplied method name to a bounded metric label.
+///
+/// Returns the matching `&'static str` from [`KNOWN_RPC_METHODS`], or `"other"`
+/// for anything unrecognised, so the number of metric series stays fixed.
+fn bounded_method_label(method: &str) -> &'static str {
+    KNOWN_RPC_METHODS
+        .iter()
+        .copied()
+        .find(|known| *known == method)
+        .unwrap_or("other")
+}
+
+/// Dispatch a single JSON-RPC request and record its latency / outcome.
+///
+/// A thin metrics wrapper around [`dispatch_rpc`]: it timestamps the call,
+/// records the request (counter + latency histogram) with a bounded method
+/// label, and records an error under the same label whenever the response is a
+/// JSON-RPC error (bad version, unauthorized, unknown method, handler error or
+/// timeout). The metrics are additive and non-consensus.
 async fn rpc_handler(
     Extension(methods): Extension<Arc<RwLock<HashMap<String, RpcHandler>>>>,
     Extension(auth): Extension<Arc<AuthConfig>>,
     headers: HeaderMap,
     Json(request): Json<JsonRpcRequest>,
 ) -> Response {
+    let method_label = bounded_method_label(&request.method);
+    let started = std::time::Instant::now();
+
+    let (response, failed) = dispatch_rpc(methods, auth, headers, request).await;
+
+    observe_rpc_request(method_label, started.elapsed().as_secs_f64());
+    if failed {
+        record_rpc_error(method_label);
+    }
+    response
+}
+
+/// The body of [`rpc_handler`]: validate, authorize, look up the handler and
+/// run it under [`RPC_REQUEST_TIMEOUT`]. Returns the response plus whether it
+/// is a JSON-RPC error, so the caller can update the metrics.
+async fn dispatch_rpc(
+    methods: Arc<RwLock<HashMap<String, RpcHandler>>>,
+    auth: Arc<AuthConfig>,
+    headers: HeaderMap,
+    request: JsonRpcRequest,
+) -> (Response, bool) {
     let id = request.id.clone();
 
     // Validate JSON-RPC version
     if request.jsonrpc != "2.0" {
-        return build_error_response(
-            id,
-            RpcError::InvalidRequest("Invalid JSON-RPC version".into()),
+        return (
+            build_error_response(
+                id,
+                RpcError::InvalidRequest("Invalid JSON-RPC version".into()),
+            ),
+            true,
         );
     }
 
@@ -390,7 +486,7 @@ async fn rpc_handler(
         warn!(method = %request.method, error = %e, "unauthorized RPC write");
         let mut response = build_error_response(id, RpcError::Unauthorized(e.to_string()));
         *response.status_mut() = StatusCode::UNAUTHORIZED;
-        return response;
+        return (response, true);
     }
 
     // Get the method handler
@@ -402,18 +498,24 @@ async fn rpc_handler(
     let handler = match handler {
         Some(h) => h,
         None => {
-            return build_error_response(id, RpcError::MethodNotFound(request.method));
+            return (
+                build_error_response(id, RpcError::MethodNotFound(request.method)),
+                true,
+            );
         }
     };
 
     // Execute the handler, bounded in time.
     let params = request.params.unwrap_or(Value::Null);
     match tokio::time::timeout(RPC_REQUEST_TIMEOUT, handler(params)).await {
-        Ok(Ok(result)) => build_success_response(id, result),
-        Ok(Err(e)) => build_error_response(id, e),
+        Ok(Ok(result)) => (build_success_response(id, result), false),
+        Ok(Err(e)) => (build_error_response(id, e), true),
         Err(_) => {
             warn!(method = %request.method, "RPC call timed out");
-            build_error_response(id, RpcError::Timeout(RPC_REQUEST_TIMEOUT))
+            (
+                build_error_response(id, RpcError::Timeout(RPC_REQUEST_TIMEOUT)),
+                true,
+            )
         }
     }
 }
@@ -970,6 +1072,40 @@ mod tests {
         let (status, body) = call(server.router(), "test_hang", Value::Null, None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["error"]["code"], -32003, "{body}");
+    }
+
+    #[tokio::test]
+    async fn rpc_handler_records_per_method_metrics() {
+        let (_dir, server) = server(unlimited(), open_auth()).await;
+
+        // A known method increments its own request counter and is not an error.
+        let before = kovanica_consensus::metrics::rpc_request_count("kovanica_blockNumber");
+        let (status, body) = call(server.router(), "kovanica_blockNumber", Value::Null, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["error"].is_null(), "{body}");
+        let after = kovanica_consensus::metrics::rpc_request_count("kovanica_blockNumber");
+        assert!(
+            after > before,
+            "request counter must increment on a handled call ({before} -> {after})"
+        );
+
+        // An unknown method is labelled with the bounded `other` label and
+        // counted as an error. Counter reads only ever grow, so a concurrently
+        // running test cannot make this assertion flake in the wrong direction.
+        let before_err = kovanica_consensus::metrics::rpc_error_count("other");
+        let (_, body) = call(
+            server.router(),
+            "definitely_not_a_method",
+            Value::Null,
+            None,
+        )
+        .await;
+        assert_eq!(body["error"]["code"], -32601, "{body}");
+        let after_err = kovanica_consensus::metrics::rpc_error_count("other");
+        assert!(
+            after_err > before_err,
+            "an unknown method must be counted as an error ({before_err} -> {after_err})"
+        );
     }
 
     #[tokio::test]

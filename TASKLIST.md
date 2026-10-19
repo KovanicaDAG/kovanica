@@ -6,6 +6,14 @@
 > **Revizija 2026-10-13:** VRF Phase 1.3 **RIJEŠEN** — ECVRF-ED25519-SHA512-Elligator2, stake-weighted leader selection, genesis/staking/staking-tx wiring, 7 testova prolaze; TASKLIST.md ažuriran.
 > **Revizija 2026-10-14:** Testnet seed nodes 3+ **DONE** — fresh validator keys, genesis, run scripts, systemd units on all 3 VPSes; peer mesh verified; corrupt `kovanica-node.service`/`kovanica-node-testnet.service` fixed; testnet/mainnet config dirs created in `/root/Projects/kvnc/testnet/` & `/mainnet/`.
 > **Revizija 2026-10-16 (mergeano na `main`):** **Leader-rotation stall RIJEŠEN.** Root cause bio je `u128` saturacija u VRF prioritetu (`hash * total_stake / stake` → `saturating_mul` → svi autoriteti `u128::MAX` → tie-break držao najniži indeks → 100% rundi jedan leader). Zamijenjeno egzaktnom 192-bitnom cross-multiplied usporedbom. Kaskada (non-leaderi skupljali `missed_leader_count` → `active=false` → committee pao na 1 → stall) time je uklonjena. Drugi, aditivni bug: engine nije nastavljao round counter iz perzistiranog DAG-a → restart na nepraznoj chaini → `ConflictingDecision`. Oba fixa su na `main` (+ `register-light-node` CLI).
+> **Revizija 2026-10-19 (hardening sesija, područja 1–5, nekominano u vrijeme pisanja):** Workspace check/clippy/fmt + targeted testovi zeleni (network 84+3, storage 14, node bins 77, staking 41, execution 61, rpc 44, faucet 26). Ključno:
+> - **Area 1 (sync):** block-sync protocol `1.1.0` + legacy fallback; catch-up tracker (proaktivni pull po peer-connectu); OutboundFailure retry/alternate-peer + non-penalizing unknown-request + oldest-eviction (radi HIGH-2 self-ban); **state-sync export STVARNO serviran** (dotted: `StateSnapshotSource` trait, chunked 1 MiB / 64 MiB cap, protokol `2.0.0`) + **verified import** (magic-prefixed snapshot, recomputed state-root + height check, legacy odbijen na verified putu), trigger = `KOVANICA_STATE_SYNC_PEER` debug entry (rate-limit 1/10min/peer).
+> - **Area 1 (genesis):** persisted genesis digest + mismatch refusal (`KOVANICA_ALLOW_GENESIS_MISMATCH` override), genesis.json read-back, chain_id coverage, ceremony key-gen 0600/0700 + zeroize.
+> - **Area 2 (staking):** `TransactionKind::SetCommission` + `ClaimTreasury` (sighash 10/11) s execute + RPC (preko sendRawTransaction) + CLI (`set-commission`, `claim-treasury`); **epoch rotacija stvarno wiringana** (commit loop prati `last_epoch`, `build_committee` nosi truthful epoch); **MIN_ACTIVE=15 runtime floor** (`enforce_min_active` zvan iz bond + offline eviction).
+> - **Area 3 (gas):** `MAX_TX_GAS_LIMIT=10M` SSOT u `kovanica-types`; per-tx cap + per-block budget (80M) + proposal truncation **gated** na `GAS_HARDENING_ACTIVE_FROM_ROUND` (**inertno = u64::MAX na živom testnetu** → aktivirati na sljedećem genesis resetu na 0); compile gas floor `GAS_PER_MODULE_BYTE=8`; receipts popunjavaju **real `gas_used`**; RPC receipt vraća real status + gasUsed.
+> - **Area 4 (obs):** RPC metrike (`rpc_requests_total`/`rpc_errors_total`/`rpc_request_duration_seconds`, bounded labels). **Ostaje:** getLogs RPC + persist events/receipts.
+> - **Area 5:** faucet mainnet guard (`--allow-mainnet`), trusted-proxy XFF rate-limit, low-balance 503; `config.example.toml` dopunjen (mempool env keys, `[peer_scoring]`); docs/GAS_SCHEDULE usklađen (host-call costs = PLANNED).
+> - **Ostalo otvoreno:** host-call gas schedule, wasm entry-point gating, deploy bytecode validacija, TX_RECEIPT_BY_HASH pruning, sync status RPC, Area 5 config-validation command, chaos (process-kill/tc-netem).
 
 **Legenda statusa**
 - `[x]` — implementirano i wired u production pathu (verificirano u kodu)
@@ -183,9 +191,9 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 ## PHASE 8.2: Delegation & Governance — `[x]` (governance `[ ]`)
 
 - [x] `StakingState::delegate` / `unbond` / `withdraw_unbonded` / `unbonding_ready` (UNBONDING_ROUNDS queue)
-- [x] `bond_validator` / `unbond_validator` / `set_commission` na `StakingState` (s pravim error tipovima: NotValidator, BelowMinimumStake, InvalidCommission)
+- [x] `bond_validator` / `unbond_validator` / `set_commission` na `StakingState` (s pravim error tipovima: NotValidator, BelowMinimumStake, InvalidCommission) — **entry point dodan 2026-10-19**: `TransactionKind::SetCommission` + execute + RPC + CLI `set-commission` (prije samo testovi); isto `TransactionKind::ClaimTreasury` + CLI `claim-treasury`; **MIN_ACTIVE=15 runtime floor** (`enforce_min_active`)
 - [x] `reward_share` (commission bps + delegator share)
-- [x] `rotate_epoch` na `EPOCH_ROUNDS` (7_200, ≈1 dan; decoupled od ere)
+- [x] `rotate_epoch` na `EPOCH_ROUNDS` (7_200, ≈1 dan; decoupled od ere) — **wired u production 2026-10-19**: commit loop prati `last_epoch`, `build_committee` nosi truthful epoch (prije je bio NO-OP zvan samo iz testova)
 - [x] `slash(DoubleSignEvidence)` fiksno 500 bps, test `slash_is_deterministic_fixed_500bps`
 - [ ] Governance hooks — **nema** (Phase 25)
 
@@ -214,7 +222,7 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 - [x] Canonical addresses u response-ima
 - [x] `kovanica_blockNumber` = committed leader height
 - [x] OpenAPI 3.1 spec (oneOf diskriminator za sve metode) + write helpers
-- [x] Rate limit (token bucket 60/min burst 10, 429) + bearer token framework — **ali** `rate_limit_middleware`/`auth_middleware` su dead code (ne-wired); rate limit ide preko axum middleware sloja u `rpc/src/lib.rs:295`
+- [x] Rate limit (token bucket 60/min burst 10, 429) + bearer token framework; rate limit ide preko axum middleware sloja u `rpc/src/lib.rs` — **2026-10-19:** dodane **RPC metrike** (`rpc_requests_total` / `rpc_errors_total` / `rpc_request_duration_seconds`, bounded method labels, unit test)
 
 ## PHASE 11 (kovanica-cli): Wallet & Node Ops — `[~]` partial
 
@@ -247,7 +255,7 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 
 - [x] Genesis tool (u node-u, `main.rs`)
 - [x] Premine: founder 200K + treasury 8M
-- [x] Faucet crate (`kovanica-faucet`): rate limit 3/hr/IP default, 10 KUNA, `--chain-id` obavezan (1/2/3/1337) — **nije u CI**; novi README
+- [x] Faucet crate (`kovanica-faucet`): rate limit 3/hr/IP default, 10 KUNA, `--chain-id` obavezan (1/2/3/1337); **2026-10-19:** mainnet guard (chain_id 1 odbijen osim `--allow-mainnet`/`KOVANICA_FAUCET_ALLOW_MAINNET=1`), trusted-proxy XFF za rate-limit (fail-closed), low-balance 503 guard, README; **je u CI** (`deploy-faucet` job); novi README
 - [ ] Key distribution ceremony — **nema**
 - [x] Seed nodes 3+ (testnet) — **3 seeds configured & running** (VPS#1 seed1.kovanica.online, VPS#2 seed2.kovanica.online, VPS#3 seed3.kovanica.online); systemd units `kovanica-testnet-seed1/2/3.service` enabled; fresh Ed25519 keys in `/root/Projects/kvnc/testnet/validators/`; genesis generated; peer mesh verified. Mainnet seeds TBD.
 - [x] Explorer + validator onboarding docs — **explorer done (Phase 23), onboarding docs needed**
@@ -292,7 +300,7 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 ## PHASE 19: State & Sync — `[~]` (late-join **DONE**; ostaje light-client endpoint)
 
 - [x] state Merkle — sorted-KV deterministički (`compute_state_root`, `state_store.rs`); verificiran u snapshot/state-sync putu (`STATE_ROOT`); full MPT nikad nije bio zahtjev
-- [x] snapshot/fast sync — `export_snapshot`/`import_snapshot` + `/kvanc/state-sync/1.0.0` request-response + gossip topic `state_sync`
+- [x] snapshot/fast sync — `export_snapshot`/`import_snapshot` + **state-sync request/response STVARNO serviran** (`/kovanica/state-sync/2.0.0`, chunked 1 MiB / 64 MiB cap; raniji 1.0.0 handler je bio uvijek `NotFound`); verified import (magic envelope, recomputed state-root + height, legacy odbijen) + `KOVANICA_STATE_SYNC_PEER` debug trigger (1/10min/peer); gossip topic `state_sync` postoji
 - [x] state pruning policy (`keep_recent`, `max_state_roots`, `prune_state_roots`)
 - [~] light-client — `kovanica_lightClientCheckpoint` RPC metoda je **wired** (`kovanica-rpc/src/lib.rs:277`, `chain_methods.rs:1389`); minimalni stub vraća konstruirani `LightClientCheckpoint` (client-only), bez full state-backed lookupa. **Note:** `kovanica-rpc` exposes `kovanica_lightClientCheckpoint` (camelCase via RPC method name) ali API naming confusion postoji jer je trait method name `light_client_checkpoint` / service method `kovanica_lightClientCheckpoint`; full state-backed retrieval od persisted checkpoints/commit certs ostaje djelomičan.
 - [x] missing-parent recovery — `orphans.rs` + `BlockSyncRequest::ByHash`; re-request MissingBlocks

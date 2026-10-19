@@ -590,6 +590,7 @@ impl StakingState {
         }
         let v = &mut self.validators[v_idx];
         v.stake -= amount;
+        let deactivated = remaining == 0 && v.active;
         if remaining == 0 {
             v.active = false;
         }
@@ -602,6 +603,11 @@ impl StakingState {
                 .committed_leader_height
                 .saturating_add(UNBONDING_ROUNDS),
         });
+        // If this unbond deactivated a committee member, refill up to the
+        // MIN_ACTIVE floor from qualified inactive candidates.
+        if deactivated {
+            self.enforce_min_active(&[address]);
+        }
         Ok(())
     }
 
@@ -671,13 +677,26 @@ impl StakingState {
         Ok(claimed)
     }
 
-    /// Rotate epoch at `EPOCH_ROUNDS` boundary (linked to committed-leader height).
-    /// Returns the new epoch number (starts at 0, increments every `EPOCH_ROUNDS`).
-    pub fn rotate_epoch(&mut self) -> u64 {
-        let epoch = self.committed_leader_height / EPOCH_ROUNDS;
-        // Epoch rotation preserves validator set, unbonding queue, and treasury;
-        // future phases may apply stake re-balancing or new admission here.
-        epoch
+    /// Current epoch derived from committed-leader height (starts at 0,
+    /// increments every [`EPOCH_ROUNDS`]).
+    ///
+    /// Epoch is a pure function of committed height, so every node derives the
+    /// same value at the same height — no extra persisted counter needed.
+    pub fn current_epoch(&self) -> u64 {
+        self.committed_leader_height / EPOCH_ROUNDS
+    }
+
+    /// Rotate epoch at the `EPOCH_ROUNDS` boundary. Returns `(new_epoch,
+    /// rotated)` where `rotated` is true iff this call crossed a boundary
+    /// (i.e. the previous height was in a lower epoch).
+    ///
+    /// Rotation is idempotent within an epoch and does not mutate the
+    /// validator set, unbonding queue, or treasury. Callers use `rotated` to
+    /// trigger a committee rebuild at the boundary.
+    pub fn rotate_epoch(&mut self) -> (u64, bool) {
+        let epoch = self.current_epoch();
+        let rotated = epoch > 0 && self.committed_leader_height.is_multiple_of(EPOCH_ROUNDS);
+        (epoch, rotated)
     }
 
     /// Called when a validator produces a committed leader block.
@@ -725,7 +744,79 @@ impl StakingState {
                 }
             }
         }
+
+        // If offline evictions dropped the committee below the MIN_ACTIVE
+        // floor, refill deterministically from qualified inactive candidates.
+        // The evicted set is excluded so an eviction is not undone by its own
+        // refill (they stay offline until a later departure re-qualifies them).
+        if !went_offline.is_empty() {
+            self.enforce_min_active(&went_offline);
+        }
         went_offline
+    }
+
+    /// Number of validators that currently qualify for the committee (active
+    /// and `stake >= MIN_VALIDATOR_STAKE`), before the `MAX_ACTIVE_VALIDATORS`
+    /// cap. Used as the MIN_ACTIVE floor denominator.
+    pub fn committee_qualified_count(&self) -> usize {
+        self.validators
+            .iter()
+            .filter(|v| v.active && v.stake >= MIN_VALIDATOR_STAKE)
+            .count()
+    }
+
+    /// Enforce the [`MIN_ACTIVE_VALIDATORS`] floor after a validator departs
+    /// (full unbond / offline eviction).
+    ///
+    /// If the committee-qualified set would drop below the floor, qualified
+    /// inactive validators are re-activated deterministically to refill it:
+    /// - candidates are inactive validators with `stake >= MIN_VALIDATOR_STAKE`;
+    /// - ordered by stake desc, then address asc (mirrors committee tie-break);
+    /// - `exclude` is the just-departed validators (never re-activated here —
+    ///   otherwise an offline eviction would be undone by its own refill).
+    ///
+    /// Reactivated validators get `missed_leader_count` reset to 0 so they do
+    /// not immediately re-trip the offline check. No-op when the floor is
+    /// already satisfied or no qualified candidates exist. Purely
+    /// deterministic — no randomness, no reward/tokenomics change.
+    ///
+    /// Returns the reactivated validator addresses (may be empty).
+    pub fn enforce_min_active(&mut self, exclude: &[Address]) -> Vec<Address> {
+        let floor = MIN_ACTIVE_VALIDATORS as usize;
+        let mut reactivated = Vec::new();
+
+        // Only refill when we are actually below the floor.
+        while self.committee_qualified_count() < floor {
+            // Pick the best inactive candidate: stake desc, address asc.
+            let mut candidates: Vec<&ValidatorInfo> = self
+                .validators
+                .iter()
+                .filter(|v| {
+                    !v.active && v.stake >= MIN_VALIDATOR_STAKE && !exclude.contains(&v.address)
+                })
+                .collect();
+            candidates.sort_by(|a, b| {
+                b.stake
+                    .cmp(&a.stake)
+                    .then_with(|| a.address.0.cmp(&b.address.0))
+            });
+            let Some(&best) = candidates.first() else {
+                break; // no qualified candidates left
+            };
+            let addr = best.address;
+            if let Some(v) = self.validators.iter_mut().find(|v| v.address == addr) {
+                v.active = true;
+                v.missed_leader_count = 0;
+                reactivated.push(addr);
+                info!(
+                    validator = %addr,
+                    "MIN_ACTIVE floor: reactivated qualified validator"
+                );
+            } else {
+                break; // defensive; should not happen
+            }
+        }
+        reactivated
     }
 
     /// Check if a commission change is allowed (cooldown period has passed).
@@ -1394,16 +1485,20 @@ mod tests {
     #[test]
     fn epoch_rotation_at_epoch_boundary() {
         let mut state = StakingState::new();
-        assert_eq!(state.rotate_epoch(), 0);
+        assert_eq!(state.rotate_epoch(), (0, false));
 
         state.committed_leader_height = EPOCH_ROUNDS - 1;
-        assert_eq!(state.rotate_epoch(), 0);
+        assert_eq!(state.rotate_epoch(), (0, false));
 
         state.committed_leader_height = EPOCH_ROUNDS;
-        assert_eq!(state.rotate_epoch(), 1);
+        assert_eq!(state.rotate_epoch(), (1, true));
+
+        // Idempotent mid-epoch: same epoch, no further rotation.
+        state.committed_leader_height = EPOCH_ROUNDS + 1;
+        assert_eq!(state.rotate_epoch(), (1, false));
 
         state.committed_leader_height = 2 * EPOCH_ROUNDS;
-        assert_eq!(state.rotate_epoch(), 2);
+        assert_eq!(state.rotate_epoch(), (2, true));
     }
 
     #[test]
@@ -1554,6 +1649,137 @@ mod tests {
         st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
         assert!(!st.validators[0].active);
         assert_eq!(st.total_staked, 0);
+    }
+
+    #[test]
+    fn min_active_floor_refills_after_full_unbond() {
+        // 16 validators: 15 active at MIN + one inactive-but-qualified spare.
+        let mut st = StakingState::new();
+        for i in 1..=16u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        // Deactivate one (spare) manually, leaving 15 active = floor.
+        st.validators[15].active = false;
+        assert_eq!(st.committee_qualified_count(), 15);
+
+        // Full unbond of an active validator deactivates it → 14 < floor →
+        // the spare is re-activated deterministically.
+        st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
+        assert!(!st.validators[0].active);
+        assert_eq!(st.committee_qualified_count(), 15);
+        assert!(st.validators[15].active);
+    }
+
+    #[test]
+    fn min_active_floor_is_noop_when_already_satisfied() {
+        let mut st = StakingState::new();
+        for i in 1..=16u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        st.validators[15].active = false; // 15 active, one spare
+        let reactivated = st.enforce_min_active(&[]);
+        assert!(reactivated.is_empty(), "floor already met, nothing to do");
+        assert_eq!(st.committee_qualified_count(), 15);
+    }
+
+    #[test]
+    fn min_active_floor_noop_without_qualified_candidates() {
+        let mut st = StakingState::new();
+        for i in 1..=15u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        // Full unbond deactivates one → 14, but no inactive qualified spare.
+        st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
+        assert_eq!(st.committee_qualified_count(), 14);
+    }
+
+    #[test]
+    fn min_active_picks_highest_stake_then_lowest_address() {
+        // Two inactive spares: a(20) has 2× MIN, a(16) has MIN.
+        // The higher-stake one must be preferred; on a stake tie, lower address.
+        let mut st = StakingState::new();
+        for i in 1..=16u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        st.validators[15].active = false; // a(16), MIN stake
+                                          // Add a(20) with double stake, then deactivate it.
+        st.join_validator(a(20), 2 * MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        st.validators[16].active = false;
+        assert_eq!(st.committee_qualified_count(), 15);
+
+        // Drop below floor → a(20) (higher stake) must win over a(16).
+        st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
+        assert!(st.validators[16].active, "higher-stake spare reactivated");
+        assert!(
+            !st.validators[15].active,
+            "lower-stake spare stays inactive"
+        );
+
+        // Drop below floor again → now only a(16) is left; it gets picked.
+        st.unbond_validator(a(2), MIN_VALIDATOR_STAKE).unwrap();
+        assert!(st.validators[15].active, "last spare reactivated");
+    }
+
+    #[test]
+    fn offline_eviction_respects_min_active_floor() {
+        // 15 active + 1 offline spare. Evicting one active via missed-leader
+        // threshold must refill from the spare, excluding the evicted one.
+        let mut st = StakingState::new();
+        for i in 1..=16u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        st.validators[15].active = false; // spare
+        assert_eq!(st.committee_qualified_count(), 15);
+
+        // Drive validator a(1) (authority index 0) over the offline threshold.
+        // Leader is a(2) (index 1); every other active validator is incremented.
+        st.validators[0].missed_leader_count = MAX_MISSED_LEADERS_BEFORE_OFFLINE - 1;
+        let went_offline = st.advance_validator_liveness(1);
+        assert!(went_offline.contains(&a(1)));
+
+        // Floor refilled from the spare; evicted a(1) excluded (stays inactive).
+        assert_eq!(st.committee_qualified_count(), 15);
+        assert!(st.validators[15].active, "spare reactivated");
+        assert!(!st.validators[0].active, "evicted validator stays offline");
+    }
+
+    #[test]
+    fn reactivated_validator_missed_count_is_reset() {
+        let mut st = StakingState::new();
+        for i in 1..=16u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        st.validators[15].active = false;
+        st.validators[15].missed_leader_count = MAX_MISSED_LEADERS_BEFORE_OFFLINE; // dirty
+        st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
+        assert!(st.validators[15].active);
+        assert_eq!(st.validators[15].missed_leader_count, 0);
+    }
+
+    #[test]
+    fn rotate_epoch_reports_boundary_truthfully() {
+        let mut st = StakingState::new();
+        assert_eq!(st.current_epoch(), 0);
+        let (e, rotated) = st.rotate_epoch();
+        assert_eq!(e, 0);
+        assert!(!rotated);
+
+        st.committed_leader_height = EPOCH_ROUNDS;
+        let (e, rotated) = st.rotate_epoch();
+        assert_eq!(e, 1);
+        assert!(rotated, "boundary crossing must be reported");
+
+        st.committed_leader_height = EPOCH_ROUNDS + 5;
+        let (e, rotated) = st.rotate_epoch();
+        assert_eq!(e, 1);
+        assert!(!rotated, "mid-epoch call is not a boundary");
     }
 
     #[test]

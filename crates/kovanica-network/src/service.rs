@@ -4,7 +4,10 @@ use crate::{
     behaviour::{self, Behaviour},
     block_sync::{BlockSyncRequest, BlockSyncResponse},
     error::NetworkError,
-    state_sync::{StateSyncRequest, StateSyncResponse},
+    state_sync::{
+        ExportedSnapshot, SnapshotChunk, StateSnapshotSource, StateSyncRequest, StateSyncResponse,
+        MAX_STATE_SYNC_CHUNK_BYTES,
+    },
     sync::SyncRequest,
     topics,
     validation::{
@@ -26,7 +29,7 @@ use libp2p::{
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, MutexGuard, PoisonError,
     },
     time::{Duration, Instant},
@@ -45,9 +48,24 @@ const PING_FAILURE_LIMIT: u32 = 3;
 /// peer may relay before it is banned.
 const INVALID_BLOCK_FAILURE_LIMIT: u32 = 5;
 
-/// Upper bound on outstanding block sync requests we remember. Responses to
-/// requests we no longer track are dropped.
-const MAX_PENDING_BLOCK_REQUESTS: usize = 1024;
+/// Upper bound on outstanding block sync requests we remember. A response to a
+/// request we no longer track is ignored **without penalty** (see
+/// `NetworkService::handle_request_response_event`), and when this bound is
+/// reached the oldest entry is evicted (never the whole map), so an honest
+/// peer's own catch-up burst can never turn into a ban.
+///
+/// The bound covers the worst case comfortably: a catching-up peer pipelines
+/// `ByHash` fetches with a bounded in-flight window (see the node's
+/// `CATCH_UP_MAX_HASH_FETCHES`), so the true in-flight count per peer stays far
+/// below one 512-hash window, and a few peers catching up together stay under
+/// this total.
+const MAX_PENDING_BLOCK_REQUESTS: usize = 8192;
+
+/// How long a full state snapshot export is cached inside the service so a
+/// chunked state-sync transfer pays for one serialization instead of one per
+/// chunk request. Cleared implicitly by TTL and by the next export for a
+/// different target height.
+const STATE_SYNC_EXPORT_CACHE_TTL: Duration = Duration::from_secs(60);
 
 /// Keep bootstrap retries bounded and separated so stale seeds do not trigger
 /// a burst of simultaneous dials.
@@ -79,18 +97,34 @@ pub struct NetworkService {
     /// Addresses learned for a peer (from Kademlia), used to evict banned peers
     /// from the routing table.
     peer_addresses: Mutex<HashMap<PeerId, Vec<Multiaddr>>>,
-    /// Rate-limited block sync request timestamps per peer (audit 6.2).
-    sync_requests: Mutex<HashMap<PeerId, Instant>>,
     /// Bootstrap transport attempts survive cancellation/re-entry of `start`.
     bootstrap: Mutex<BootstrapMaintenance>,
     /// Committee keys for the edge checks on votes and blocks.
     validator: GossipValidator,
     /// Outstanding block sync requests, so a response can be matched to what
-    /// we actually asked for.
-    pending_block_requests: Mutex<HashMap<request_response::OutboundRequestId, BlockSyncRequest>>,
+    /// we actually asked for, and a failed request can be retried (bounded)
+    /// on the same or an alternate peer.
+    pending_block_requests: Mutex<PendingBlockRequests>,
+    /// Monotonic send order for pending block sync requests, used to evict the
+    /// oldest entry at the cap instead of clearing the whole map.
+    next_block_request_seq: AtomicU64,
     /// Executed leader-header hashes. Unset until the node installs one.
     /// A seal is forwarded only when this index already has the same hash.
     header_index: Mutex<Option<Arc<dyn LocalHeaderHash>>>,
+    /// Export side of the state sync protocol. Unset until the node installs
+    /// one; while unset, state sync requests are answered `NotFound`.
+    state_snapshot_source: Mutex<Option<Arc<dyn StateSnapshotSource>>>,
+    /// Short-lived cache of the last full snapshot export (see
+    /// [`STATE_SYNC_EXPORT_CACHE_TTL`]).
+    state_snapshot_cache: Mutex<Option<CachedSnapshotExport>>,
+}
+
+/// One cached full snapshot export served to chunked state sync requests.
+struct CachedSnapshotExport {
+    /// The export itself (height, state root, full bytes).
+    snapshot: ExportedSnapshot,
+    /// When the export was produced (TTL check).
+    built_at: Instant,
 }
 
 /// State for one distinct, configured bootstrap address.
@@ -226,8 +260,85 @@ impl BootstrapMaintenance {
     }
 }
 
+/// A block sync request we sent, with the context needed to match its
+/// response and to retry it after an [`request_response::OutboundFailure`].
+#[derive(Debug, Clone)]
+struct PendingBlockRequest {
+    /// The request exactly as sent.
+    request: BlockSyncRequest,
+    /// The peer we asked (the retry may target another one).
+    peer: PeerId,
+    /// How many sends have already been made for this request
+    /// (1 for the original send).
+    attempts: u8,
+    /// Monotonic send order; the smallest live value is evicted at the cap.
+    sequence: u64,
+}
+
+/// Outstanding block sync requests, keyed by the libp2p request id.
+type PendingBlockRequests = HashMap<request_response::OutboundRequestId, PendingBlockRequest>;
+
+/// Drop the oldest tracked request when the pending map is at the cap.
+///
+/// A late response to the evicted id is ignored without penalty (see
+/// `handle_request_response_event`), so evicting never blames a peer for our
+/// own backlog; it only frees a slot for the newest request.
+fn evict_oldest_pending(pending: &mut PendingBlockRequests) {
+    if let Some(oldest) = pending
+        .iter()
+        .min_by_key(|(_, request)| request.sequence)
+        .map(|(id, _)| *id)
+    {
+        pending.remove(&oldest);
+    }
+}
+
+/// Decide where (if anywhere) a failed block sync request may be re-sent.
+///
+/// `attempts` is how many sends were already made for the request:
+///
+/// * first failure → retry once on the same peer while it is still connected
+///   (otherwise fail over immediately);
+/// * second failure → exactly one alternate connected peer;
+/// * later failures → give up.
+///
+/// This caps a request at three sends total (original + retry + alternate),
+/// so a flapping peer or network can never turn into an unbounded retry loop.
+fn retry_peer(attempts: u8, failed: PeerId, connected: &HashSet<PeerId>) -> Option<PeerId> {
+    match attempts {
+        1 if connected.contains(&failed) => Some(failed),
+        1 | 2 => connected
+            .iter()
+            .copied()
+            .filter(|peer| *peer != failed)
+            .min(),
+        _ => None,
+    }
+}
+
 /// Maximum number of hashes accepted in a `MissingBlocks` sync response.
 const MAX_MISSING_BLOCKS: usize = 64;
+
+/// Slice one bounded chunk out of a full snapshot export.
+///
+/// An offset at or past the end of the export is an invalid request (the
+/// client asked for bytes that cannot exist), which keeps a peer from probing
+/// for arbitrary offsets and bounds every response to one chunk.
+fn slice_snapshot_chunk(snapshot: &ExportedSnapshot, offset: u64) -> StateSyncResponse {
+    let total_len = snapshot.bytes.len() as u64;
+    if offset >= total_len {
+        return StateSyncResponse::InvalidRequest;
+    }
+    let start = offset as usize;
+    let end = (start + MAX_STATE_SYNC_CHUNK_BYTES).min(snapshot.bytes.len());
+    StateSyncResponse::Chunk(SnapshotChunk {
+        height: snapshot.height,
+        state_root: snapshot.state_root,
+        total_len,
+        offset,
+        data: snapshot.bytes[start..end].to_vec(),
+    })
+}
 
 /// Outcome of validating one gossip message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,11 +397,13 @@ impl NetworkService {
                 ping_failures: Mutex::new(HashMap::new()),
                 invalid_block_failures: Mutex::new(HashMap::new()),
                 peer_addresses: Mutex::new(HashMap::new()),
-                sync_requests: Mutex::new(HashMap::new()),
                 bootstrap: Mutex::new(bootstrap),
                 validator: GossipValidator::default(),
                 pending_block_requests: Mutex::new(HashMap::new()),
+                next_block_request_seq: AtomicU64::new(0),
                 header_index: Mutex::new(None),
+                state_snapshot_source: Mutex::new(None),
+                state_snapshot_cache: Mutex::new(None),
             },
             event_rx,
         ))
@@ -400,6 +513,18 @@ impl NetworkService {
         self.validator.set_vote_verifier(verifier);
     }
 
+    /// Install the export side of the state sync protocol.
+    ///
+    /// Until this is called, inbound [`StateSyncRequest`]s are answered with
+    /// [`StateSyncResponse::NotFound`]. The service slices the export into
+    /// bounded chunks (at most [`MAX_STATE_SYNC_CHUNK_BYTES`] each) and caches
+    /// the full export for [`STATE_SYNC_EXPORT_CACHE_TTL`] so a chunked
+    /// transfer does not re-serialize the whole state per request.
+    pub fn set_state_snapshot_source(&self, source: Arc<dyn StateSnapshotSource>) {
+        *lock(&self.state_snapshot_source) = Some(source);
+        info!("state snapshot source installed");
+    }
+
     /// Our libp2p peer id (transport identity, not the validator key).
     pub fn local_peer_id(&self) -> PeerId {
         *self.swarm().local_peer_id()
@@ -500,48 +625,62 @@ impl NetworkService {
         peer: PeerId,
         request: BlockSyncRequest,
     ) -> Result<request_response::OutboundRequestId, NetworkError> {
+        Ok(self.send_block_sync(peer, request, 1))
+    }
+
+    /// Send a state sync request to a peer.
+    ///
+    /// Rate limiting (one transfer start per peer per interval) is the
+    /// initiator's responsibility: the node's state-sync session manager only
+    /// starts a fresh transfer when none is active, while chunk continuations
+    /// (`offset > 0`) ride on the active session. Responses arrive as
+    /// [`crate::NetworkEvent::StateSyncResponse`].
+    pub fn request_state_sync(
+        &self,
+        peer: PeerId,
+        request: StateSyncRequest,
+    ) -> Result<request_response::OutboundRequestId, NetworkError> {
+        Ok(self
+            .swarm()
+            .behaviour_mut()
+            .state_sync
+            .send_request(&peer, request))
+    }
+
+    /// Send a block sync request and remember it for response matching and
+    /// the bounded [`retry_peer`] failover. `attempts` is how many sends have
+    /// already been made for this request (1 for the original send).
+    fn send_block_sync(
+        &self,
+        peer: PeerId,
+        request: BlockSyncRequest,
+        attempts: u8,
+    ) -> request_response::OutboundRequestId {
         let mut swarm = self.swarm();
         let request_id = swarm
             .behaviour_mut()
             .block_sync
             .send_request(&peer, request.clone());
         drop(swarm);
+        let sequence = self.next_block_request_seq.fetch_add(1, Ordering::Relaxed);
         let mut pending = lock(&self.pending_block_requests);
         if pending.len() >= MAX_PENDING_BLOCK_REQUESTS {
             // Requests time out after 30 s; anything this old has failed and
-            // its failure event was lost. Start over rather than grow forever.
-            pending.clear();
+            // its failure event was lost. Evict only the single oldest entry:
+            // a late response to it is ignored without penalty, so we never
+            // need to blame a peer for our own backlog.
+            evict_oldest_pending(&mut pending);
         }
-        pending.insert(request_id, request);
-        Ok(request_id)
-    }
-
-    /// Process a block; when a parent is missing, enqueue a sync request.
-    /// Requests are rate-limited to 1 per peer per 500 ms (audit 6.2).
-    pub fn process_block(&self, block: &StatementBlock, peer: PeerId) -> Result<(), NetworkError> {
-        // Check for missing parents via DAG store
-        for parent in &block.parents {
-            if !self.dag_store.has_block(&parent.digest).unwrap_or(false) {
-                // Rate limit: allow at most 1 request per 500 ms per peer
-                let now = Instant::now();
-                let allowed = {
-                    let mut reqs = lock(&self.sync_requests);
-                    let last = reqs.get(&peer);
-                    let ok =
-                        last.is_none_or(|t| now.duration_since(*t) >= Duration::from_millis(500));
-                    if ok {
-                        reqs.insert(peer, now);
-                    }
-                    ok
-                };
-                if allowed {
-                    let request = BlockSyncRequest::ByHash(parent.digest);
-                    debug!(%peer, ?request, "missing parent -> enqueue sync request");
-                    self.request_block_sync(peer, request)?;
-                }
-            }
-        }
-        Ok(())
+        pending.insert(
+            request_id,
+            PendingBlockRequest {
+                request,
+                peer,
+                attempts,
+                sequence,
+            },
+        );
+        request_id
     }
 
     /// Forward an event to the caller. A dropped receiver only means nobody is
@@ -767,6 +906,78 @@ impl NetworkService {
         Ok(())
     }
 
+    /// Build the automatic response for a block sync request from the DAG store.
+    ///
+    /// Everything an untrusted peer can ask for is bounded: a `RoundRange`
+    /// covers at most [`BlockSyncRequest::MAX_RANGE_ROUNDS`] rounds and
+    /// returns at most [`BlockSyncResponse::MAX_RANGE_HASHES`] hashes, so one
+    /// request costs a bounded number of storage reads and one bounded
+    /// response (well under the 1 MiB frame cap).
+    fn build_block_sync_response(&self, request: &BlockSyncRequest) -> BlockSyncResponse {
+        match request {
+            BlockSyncRequest::ByHash(hash) => match self.dag_store.get_block(hash) {
+                Ok(block) => BlockSyncResponse::Block(block),
+                Err(_) => BlockSyncResponse::NotFound,
+            },
+            BlockSyncRequest::ByAuthorRound { author, round } => {
+                match self.dag_store.get_block_by_author_round(*author, *round) {
+                    Ok(Some(block)) => BlockSyncResponse::Block(block),
+                    Ok(None) => BlockSyncResponse::NotFound,
+                    Err(_) => BlockSyncResponse::InvalidRequest,
+                }
+            }
+            BlockSyncRequest::Status => {
+                // The advertised tip is only a fetch trigger for the
+                // requester; on a read error we simply claim "no tip", which
+                // can never make a healthy peer look behind.
+                let tip_round = match self.dag_store.max_dag_round() {
+                    Ok(Some(round)) => round,
+                    _ => 0,
+                };
+                BlockSyncResponse::Status { tip_round }
+            }
+            BlockSyncRequest::RoundRange { from, to } => {
+                if to < from || to - from >= BlockSyncRequest::MAX_RANGE_ROUNDS {
+                    return BlockSyncResponse::InvalidRequest;
+                }
+                // Never claim coverage of rounds beyond our own tip: a request
+                // entirely past the DAG end is refused, a window that straddles
+                // it is clamped to the tip. `up_to_round` then stays a round
+                // whose hashes are complete.
+                let tip = match self.dag_store.max_dag_round() {
+                    Ok(Some(tip)) => tip,
+                    Ok(None) | Err(_) => return BlockSyncResponse::InvalidRequest,
+                };
+                if *from > tip {
+                    return BlockSyncResponse::InvalidRequest;
+                }
+                let to = (*to).min(tip);
+                let mut hashes = Vec::new();
+                let mut up_to_round = None;
+                for round in *from..=to {
+                    let Ok(blocks) = self.dag_store.get_blocks_by_round(round) else {
+                        break;
+                    };
+                    // Stop *before* the round that would overflow the cap so
+                    // coverage stays contiguous (`up_to_round` is always a
+                    // round whose hashes are complete).
+                    if hashes.len() + blocks.len() > BlockSyncResponse::MAX_RANGE_HASHES {
+                        break;
+                    }
+                    hashes.extend(blocks.iter().map(|block| block.digest));
+                    up_to_round = Some(round);
+                }
+                match up_to_round {
+                    Some(up_to_round) => BlockSyncResponse::RoundHashes {
+                        up_to_round,
+                        hashes,
+                    },
+                    None => BlockSyncResponse::InvalidRequest,
+                }
+            }
+        }
+    }
+
     /// Handle request-response events (block sync).
     fn handle_request_response_event(
         &self,
@@ -784,20 +995,9 @@ impl NetworkService {
                     channel,
                 } => {
                     debug!(%peer, ?request, "block sync request received");
-                    // Automatically respond using the DAG store
-                    let response = match request {
-                        BlockSyncRequest::ByHash(hash) => match self.dag_store.get_block(&hash) {
-                            Ok(block) => BlockSyncResponse::Block(block),
-                            Err(_) => BlockSyncResponse::NotFound,
-                        },
-                        BlockSyncRequest::ByAuthorRound { author, round } => {
-                            match self.dag_store.get_block_by_author_round(author, round) {
-                                Ok(Some(block)) => BlockSyncResponse::Block(block),
-                                Ok(None) => BlockSyncResponse::NotFound,
-                                Err(_) => BlockSyncResponse::InvalidRequest,
-                            }
-                        }
-                    };
+                    // Automatically respond using the DAG store; every request
+                    // kind is bounded (see `build_block_sync_response`).
+                    let response = self.build_block_sync_response(&request);
                     let mut swarm = self.swarm();
                     if let Err(e) = swarm
                         .behaviour_mut()
@@ -812,8 +1012,17 @@ impl NetworkService {
                     response,
                 } => {
                     debug!(%peer, ?request_id, %response, "block sync response received");
-                    let expected = lock(&self.pending_block_requests).remove(&request_id);
-                    match self.check_block_sync_response(expected.as_ref(), &response) {
+                    // A response to a request we no longer track is not the
+                    // peer's fault: the pending map evicts oldest-first under a
+                    // burst and 30 s timeouts can drop a late reply. Ignore it
+                    // without any penalty (never `record_invalid_block_failure`)
+                    // so an honest peer's own catch-up burst cannot ban it.
+                    let Some(pending) = lock(&self.pending_block_requests).remove(&request_id)
+                    else {
+                        debug!(%peer, ?request_id, "ignoring response to an unknown block sync request");
+                        return Ok(());
+                    };
+                    match self.check_block_sync_response(Some(&pending.request), &response) {
                         Ok(()) => self.emit(NetworkEvent::BlockSyncResponse {
                             peer,
                             request_id,
@@ -832,13 +1041,44 @@ impl NetworkService {
                 error,
                 connection_id: _,
             } => {
-                lock(&self.pending_block_requests).remove(&request_id);
+                let failed = lock(&self.pending_block_requests).remove(&request_id);
                 warn!(%peer, ?request_id, %error, "block sync request failed");
-                self.emit(NetworkEvent::BlockSyncResponse {
-                    peer,
-                    request_id,
-                    response: BlockSyncResponse::InvalidRequest,
-                });
+                // A transport failure is not the peer calling the request
+                // invalid: retry the same request once on the same peer and,
+                // if that peer is unavailable, once on an alternate connected
+                // peer — then give up (never an unbounded retry loop).
+                let Some(pending) = failed else {
+                    // Unknown or already-expired request: nothing to retry.
+                    return Ok(());
+                };
+                let connected = lock(&self.connected).clone();
+                let next = retry_peer(pending.attempts, pending.peer, &connected);
+                match next {
+                    Some(target) => {
+                        let attempts = pending.attempts.saturating_add(1);
+                        let retried =
+                            self.send_block_sync(target, pending.request.clone(), attempts);
+                        debug!(
+                            %peer,
+                            %request_id,
+                            target = %target,
+                            new_request_id = %retried,
+                            attempts,
+                            "retrying failed block sync request"
+                        );
+                    }
+                    None => {
+                        // Retry budget exhausted (or no other peer): report the
+                        // request as "not obtained" — never as InvalidRequest,
+                        // which would blame the peer for a transport failure.
+                        debug!(%peer, ?request_id, "block sync request exhausted its retry budget");
+                        self.emit(NetworkEvent::BlockSyncResponse {
+                            peer: pending.peer,
+                            request_id,
+                            response: BlockSyncResponse::NotFound,
+                        });
+                    }
+                }
             }
             request_response::Event::InboundFailure {
                 peer,
@@ -873,6 +1113,8 @@ impl NetworkService {
                     BlockSyncRequest::ByAuthorRound { author, round } => {
                         block.author == *author && block.round == *round
                     }
+                    // A single block never answers a catch-up status/range request.
+                    BlockSyncRequest::Status | BlockSyncRequest::RoundRange { .. } => false,
                 };
                 if !matches {
                     return Err("returned block does not match the request".to_string());
@@ -887,8 +1129,81 @@ impl NetworkService {
                     hashes.len()
                 ))
             }
+            BlockSyncResponse::RoundHashes {
+                up_to_round,
+                hashes,
+            } => {
+                match expected {
+                    BlockSyncRequest::RoundRange { from, to } => {
+                        if hashes.len() > BlockSyncResponse::MAX_RANGE_HASHES {
+                            return Err(format!(
+                                "{} round hashes listed (max {})",
+                                hashes.len(),
+                                BlockSyncResponse::MAX_RANGE_HASHES
+                            ));
+                        }
+                        if !(*from..=*to).contains(up_to_round) {
+                            return Err(format!(
+                                "coverage round {up_to_round} outside requested range {from}..={to}"
+                            ));
+                        }
+                        // The hashes themselves are only fetch hints: each
+                        // block is re-requested by hash and validated when it
+                        // arrives, so no peer-supplied height/hash is trusted.
+                        Ok(())
+                    }
+                    _ => Err("round hashes in response to a non-range request".to_string()),
+                }
+            }
+            BlockSyncResponse::Status { .. } => match expected {
+                BlockSyncRequest::Status => Ok(()),
+                _ => Err("status in response to a non-status request".to_string()),
+            },
             _ => Ok(()),
         }
+    }
+
+    /// Build the bounded response for an inbound state sync request.
+    ///
+    /// With no snapshot source installed this answers `NotFound`. Otherwise
+    /// the full export is sliced into at most [`MAX_STATE_SYNC_CHUNK_BYTES`]
+    /// bytes starting at the requested offset; the export is cached for
+    /// [`STATE_SYNC_EXPORT_CACHE_TTL`] so a client walking chunk after chunk
+    /// pays for a single serialization. An offset at or past the end is an
+    /// `InvalidRequest` (the client asked for bytes that do not exist).
+    fn build_state_sync_response(&self, request: &StateSyncRequest) -> StateSyncResponse {
+        // Reuse the cached export when it is fresh and matches the requested
+        // target height.
+        let now = Instant::now();
+        {
+            let cache = lock(&self.state_snapshot_cache);
+            if let Some(cached) = cache.as_ref() {
+                let fresh =
+                    now.saturating_duration_since(cached.built_at) < STATE_SYNC_EXPORT_CACHE_TTL;
+                let matches = request.target_height.is_none()
+                    || request.target_height == Some(cached.snapshot.height);
+                if fresh && matches {
+                    return slice_snapshot_chunk(&cached.snapshot, request.offset);
+                }
+            }
+        }
+        let Some(source) = lock(&self.state_snapshot_source).clone() else {
+            return StateSyncResponse::NotFound;
+        };
+        let snapshot = match source.export_snapshot(request.target_height) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return StateSyncResponse::NotFound,
+            Err(reason) => {
+                warn!(%reason, "state snapshot export failed");
+                return StateSyncResponse::NotFound;
+            }
+        };
+        let response = slice_snapshot_chunk(&snapshot, request.offset);
+        *lock(&self.state_snapshot_cache) = Some(CachedSnapshotExport {
+            snapshot,
+            built_at: now,
+        });
+        response
     }
 
     /// Handle request-response events (state sync / fast sync).
@@ -908,8 +1223,10 @@ impl NetworkService {
                     channel,
                 } => {
                     debug!(%peer, ?request, "state sync request received");
-                    // For now, return NotFound - full implementation requires access to state storage
-                    let response = StateSyncResponse::NotFound;
+                    // Serve from the installed snapshot source; every request
+                    // is answered with at most one bounded chunk (see
+                    // `build_state_sync_response`).
+                    let response = self.build_state_sync_response(&request);
                     let mut swarm = self.swarm();
                     if let Err(e) = swarm
                         .behaviour_mut()
@@ -1925,5 +2242,499 @@ mod tests {
             })
             .expect("ping success handled");
         assert!(lock(&service.ping_failures).get(&peer).is_none());
+    }
+
+    // ---- block sync catch-up serving + retry/failover (#1, #2) ----
+
+    /// Catch-up responses are bounded and the DAG tip is reported honestly.
+    #[tokio::test]
+    async fn catch_up_serving_is_bounded_and_reports_the_tip() {
+        let (dir, service) = test_service();
+
+        // Empty DAG: tip 0 and nothing to serve.
+        assert_eq!(
+            service.build_block_sync_response(&BlockSyncRequest::Status),
+            BlockSyncResponse::Status { tip_round: 0 }
+        );
+        assert_eq!(
+            service.build_block_sync_response(&BlockSyncRequest::RoundRange { from: 1, to: 2 }),
+            BlockSyncResponse::InvalidRequest
+        );
+
+        // 25 rounds x 21 authors = 525 blocks, above the 512-hash response cap.
+        for round in 1..=25u64 {
+            for author in 0..21u16 {
+                let mut block = sample_block();
+                block.round = round;
+                block.author = author;
+                block.digest = Hash::new(format!("r{round}a{author}"));
+                service.dag_store.put_block(&block).expect("store block");
+            }
+        }
+        assert_eq!(
+            service.build_block_sync_response(&BlockSyncRequest::Status),
+            BlockSyncResponse::Status { tip_round: 25 }
+        );
+
+        match service.build_block_sync_response(&BlockSyncRequest::RoundRange { from: 1, to: 25 }) {
+            BlockSyncResponse::RoundHashes {
+                up_to_round,
+                hashes,
+            } => {
+                assert_eq!(up_to_round, 24, "coverage stops before the hash cap");
+                assert_eq!(hashes.len(), 24 * 21);
+                assert!(hashes.len() <= BlockSyncResponse::MAX_RANGE_HASHES);
+            }
+            other => panic!("expected truncated round hashes, got {other:?}"),
+        }
+
+        // Inverted and over-wide windows are refused, not served partially.
+        assert_eq!(
+            service.build_block_sync_response(&BlockSyncRequest::RoundRange { from: 9, to: 2 }),
+            BlockSyncResponse::InvalidRequest
+        );
+        assert_eq!(
+            service.build_block_sync_response(&BlockSyncRequest::RoundRange {
+                from: 1,
+                to: 1 + BlockSyncRequest::MAX_RANGE_ROUNDS,
+            }),
+            BlockSyncResponse::InvalidRequest
+        );
+
+        // A window that straddles the tip is clamped to the tip, and one
+        // entirely past it is refused.
+        match service.build_block_sync_response(&BlockSyncRequest::RoundRange { from: 20, to: 30 })
+        {
+            BlockSyncResponse::RoundHashes {
+                up_to_round,
+                hashes,
+            } => {
+                assert_eq!(up_to_round, 25);
+                assert_eq!(hashes.len(), 6 * 21);
+            }
+            other => panic!("expected a clamped range, got {other:?}"),
+        }
+        assert_eq!(
+            service.build_block_sync_response(&BlockSyncRequest::RoundRange { from: 26, to: 27 }),
+            BlockSyncResponse::InvalidRequest
+        );
+
+        let _ = dir;
+    }
+
+    /// A catch-up response must answer the request that was actually sent.
+    #[tokio::test]
+    async fn catch_up_edge_checks_reject_mismatched_responses() {
+        let (_dir, service) = test_service();
+        let range = BlockSyncRequest::RoundRange { from: 5, to: 9 };
+        let status = BlockSyncRequest::Status;
+
+        assert!(service
+            .check_block_sync_response(
+                Some(&range),
+                &BlockSyncResponse::RoundHashes {
+                    up_to_round: 9,
+                    hashes: Vec::new(),
+                },
+            )
+            .is_ok());
+        // Coverage round outside the requested window.
+        assert!(service
+            .check_block_sync_response(
+                Some(&range),
+                &BlockSyncResponse::RoundHashes {
+                    up_to_round: 12,
+                    hashes: Vec::new(),
+                },
+            )
+            .is_err());
+        // Above the hash cap.
+        assert!(service
+            .check_block_sync_response(
+                Some(&range),
+                &BlockSyncResponse::RoundHashes {
+                    up_to_round: 9,
+                    hashes: vec![Hash::zero(); BlockSyncResponse::MAX_RANGE_HASHES + 1],
+                },
+            )
+            .is_err());
+        // Round hashes never answer a non-range request.
+        assert!(service
+            .check_block_sync_response(
+                Some(&status),
+                &BlockSyncResponse::RoundHashes {
+                    up_to_round: 0,
+                    hashes: Vec::new(),
+                },
+            )
+            .is_err());
+        // Status only answers a status request.
+        assert!(service
+            .check_block_sync_response(Some(&range), &BlockSyncResponse::Status { tip_round: 3 })
+            .is_err());
+        assert!(service
+            .check_block_sync_response(Some(&status), &BlockSyncResponse::Status { tip_round: 3 })
+            .is_ok());
+        // A single block never answers a status/range request.
+        let block = BlockSyncResponse::Block(sample_block());
+        assert!(service
+            .check_block_sync_response(Some(&status), &block)
+            .is_err());
+        assert!(service
+            .check_block_sync_response(Some(&range), &block)
+            .is_err());
+    }
+
+    fn outbound_failure(
+        peer: PeerId,
+        request_id: request_response::OutboundRequestId,
+    ) -> request_response::Event<BlockSyncRequest, BlockSyncResponse> {
+        request_response::Event::OutboundFailure {
+            peer,
+            request_id,
+            error: request_response::OutboundFailure::Timeout,
+            connection_id: test_id(1),
+        }
+    }
+
+    /// A failed request retries once on the same peer, once on an alternate
+    /// peer, then gives up as NotFound — never an unbounded retry loop.
+    #[tokio::test]
+    async fn failed_block_sync_request_retries_fails_over_then_gives_up() {
+        let (_dir, service, mut events, _signers) = validating_service();
+        let failed_peer = PeerId::random();
+        let alternate_peer = PeerId::random();
+        lock(&service.connected).insert(failed_peer);
+        lock(&service.connected).insert(alternate_peer);
+
+        let first_id = service
+            .request_block_sync(failed_peer, BlockSyncRequest::ByHash(Hash::new("b")))
+            .expect("request queued");
+        assert_eq!(
+            lock(&service.pending_block_requests)
+                .get(&first_id)
+                .map(|pending| (pending.peer, pending.attempts)),
+            Some((failed_peer, 1))
+        );
+
+        // First failure: one retry on the same (still connected) peer.
+        service
+            .handle_request_response_event(outbound_failure(failed_peer, first_id))
+            .expect("handled");
+        let (second_id, retry) = {
+            let pending = lock(&service.pending_block_requests);
+            assert_eq!(pending.len(), 1, "the retry replaced the failed request");
+            let (&id, entry) = pending.iter().next().expect("retry pending");
+            (id, (entry.peer, entry.attempts))
+        };
+        assert_eq!(retry, (failed_peer, 2));
+
+        // Second failure: fail over to exactly one alternate connected peer.
+        service
+            .handle_request_response_event(outbound_failure(failed_peer, second_id))
+            .expect("handled");
+        let (third_id, failover) = {
+            let pending = lock(&service.pending_block_requests);
+            assert_eq!(pending.len(), 1, "the failover replaced the retry");
+            let (&id, entry) = pending.iter().next().expect("failover pending");
+            (id, (entry.peer, entry.attempts))
+        };
+        assert_eq!(failover, (alternate_peer, 3));
+
+        // Third failure: budget exhausted, reported as NotFound (not a bogus
+        // InvalidRequest) and no request is left pending.
+        service
+            .handle_request_response_event(outbound_failure(alternate_peer, third_id))
+            .expect("handled");
+        assert!(lock(&service.pending_block_requests).is_empty());
+        match events.try_recv().expect("give-up event emitted") {
+            NetworkEvent::BlockSyncResponse {
+                peer,
+                response: BlockSyncResponse::NotFound,
+                ..
+            } => assert_eq!(peer, alternate_peer),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    /// A failure for a request we never sent (or already resolved) is ignored.
+    #[tokio::test]
+    async fn failure_for_an_unknown_request_is_ignored() {
+        let (_dir, service, mut events, _signers) = validating_service();
+        let peer = PeerId::random();
+        lock(&service.connected).insert(peer);
+
+        // Fabricate a failure referencing an id we never issued: not in map.
+        let unknown = service
+            .request_block_sync(peer, BlockSyncRequest::Status)
+            .expect("request queued");
+        lock(&service.pending_block_requests).remove(&unknown);
+
+        service
+            .handle_request_response_event(outbound_failure(peer, unknown))
+            .expect("handled");
+        assert!(lock(&service.pending_block_requests).is_empty());
+        assert!(
+            events.try_recv().is_err(),
+            "no event for an unknown request"
+        );
+    }
+
+    fn response_event(
+        peer: PeerId,
+        request_id: request_response::OutboundRequestId,
+        response: BlockSyncResponse,
+    ) -> request_response::Event<BlockSyncRequest, BlockSyncResponse> {
+        request_response::Event::Message {
+            peer,
+            connection_id: test_id(1),
+            message: request_response::Message::Response {
+                request_id,
+                response,
+            },
+        }
+    }
+
+    /// A response to a request we no longer track (evicted at the cap, or a
+    /// late reply) must never count against the peer (audit HIGH-2a).
+    #[tokio::test]
+    async fn response_to_unknown_request_does_not_increment_ban_counter() {
+        let (_dir, service, mut events, _signers) = validating_service();
+        let peer = PeerId::random();
+        lock(&service.connected).insert(peer);
+
+        for i in 0..(INVALID_BLOCK_FAILURE_LIMIT + 3) {
+            let id = service
+                .request_block_sync(peer, BlockSyncRequest::Status)
+                .expect("request queued");
+            lock(&service.pending_block_requests).remove(&id);
+            service
+                .handle_request_response_event(response_event(
+                    peer,
+                    id,
+                    BlockSyncResponse::Status {
+                        tip_round: u64::from(i),
+                    },
+                ))
+                .expect("handled");
+        }
+        assert!(
+            lock(&service.invalid_block_failures).get(&peer).is_none(),
+            "unknown responses must never be counted against a peer"
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "unknown responses are dropped, not delivered"
+        );
+    }
+
+    /// At the pending-request cap the oldest entry is evicted (not the whole
+    /// map), and a late response to the evicted id is ignored (audit HIGH-2b).
+    #[tokio::test]
+    async fn pending_request_cap_evicts_the_oldest_without_banning() {
+        let (_dir, service, _events, _signers) = validating_service();
+        let peer = PeerId::random();
+        lock(&service.connected).insert(peer);
+
+        let mut ids = Vec::with_capacity(MAX_PENDING_BLOCK_REQUESTS + 1);
+        for _ in 0..MAX_PENDING_BLOCK_REQUESTS {
+            ids.push(
+                service
+                    .request_block_sync(peer, BlockSyncRequest::Status)
+                    .expect("queued"),
+            );
+        }
+        let newest = service
+            .request_block_sync(peer, BlockSyncRequest::Status)
+            .expect("queued");
+        {
+            let pending = lock(&service.pending_block_requests);
+            assert_eq!(pending.len(), MAX_PENDING_BLOCK_REQUESTS);
+            assert!(!pending.contains_key(&ids[0]), "oldest request evicted");
+            assert!(pending.contains_key(&newest), "newest request tracked");
+            assert!(pending.contains_key(&ids[ids.len() - 1]));
+        }
+        assert!(lock(&service.invalid_block_failures).get(&peer).is_none());
+
+        // A late response to the evicted id is ignored without penalty.
+        service
+            .handle_request_response_event(response_event(
+                peer,
+                ids[0],
+                BlockSyncResponse::Status { tip_round: 1 },
+            ))
+            .expect("handled");
+        assert!(lock(&service.invalid_block_failures).get(&peer).is_none());
+    }
+
+    /// A burst larger than the cap (two peers, repeated full 512-hash windows)
+    /// completes with no peer banned (audit HIGH-2c).
+    #[tokio::test]
+    async fn catch_up_burst_over_cap_bans_no_peer() {
+        let (_dir, service, _events, _signers) = validating_service();
+        let first = PeerId::random();
+        let second = PeerId::random();
+        lock(&service.connected).insert(first);
+        lock(&service.connected).insert(second);
+
+        // Two peers each firing a full 512-hash catch-up window plus a range
+        // request, repeated past the cap so eviction must kick in.
+        let mut all_ids = Vec::new();
+        for round in 0..9u32 {
+            for peer in [first, second] {
+                all_ids.push(
+                    service
+                        .request_block_sync(peer, BlockSyncRequest::RoundRange { from: 0, to: 31 })
+                        .expect("queued"),
+                );
+                for i in 0..BlockSyncResponse::MAX_RANGE_HASHES {
+                    all_ids.push(
+                        service
+                            .request_block_sync(
+                                peer,
+                                BlockSyncRequest::ByHash(Hash::new(format!("r{round}i{i}"))),
+                            )
+                            .expect("queued"),
+                    );
+                }
+            }
+        }
+        assert!(all_ids.len() > MAX_PENDING_BLOCK_REQUESTS);
+
+        let live: HashSet<_> = lock(&service.pending_block_requests)
+            .keys()
+            .copied()
+            .collect();
+        let evicted: Vec<_> = all_ids
+            .into_iter()
+            .filter(|id| !live.contains(id))
+            .collect();
+        assert!(
+            !evicted.is_empty(),
+            "the burst must have exercised eviction"
+        );
+
+        // Deliver a late response for every evicted id: none may ban a peer.
+        for id in evicted {
+            service
+                .handle_request_response_event(response_event(
+                    first,
+                    id,
+                    BlockSyncResponse::Status { tip_round: 3 },
+                ))
+                .expect("handled");
+        }
+        assert!(lock(&service.invalid_block_failures).get(&first).is_none());
+        assert!(lock(&service.invalid_block_failures).get(&second).is_none());
+        assert_eq!(
+            lock(&service.pending_block_requests).len(),
+            MAX_PENDING_BLOCK_REQUESTS
+        );
+    }
+
+    /// Deterministic export source for the state sync handler tests.
+    struct MockSnapshotSource {
+        snapshot: Option<ExportedSnapshot>,
+        fail: bool,
+        exports: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MockSnapshotSource {
+        fn with_bytes(bytes: Vec<u8>) -> Arc<Self> {
+            Arc::new(Self {
+                snapshot: Some(ExportedSnapshot {
+                    height: 77,
+                    state_root: [9u8; 32],
+                    bytes,
+                }),
+                fail: false,
+                exports: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+    }
+
+    impl StateSnapshotSource for MockSnapshotSource {
+        fn export_snapshot(
+            &self,
+            _target_height: Option<u64>,
+        ) -> Result<Option<ExportedSnapshot>, String> {
+            self.exports.fetch_add(1, Ordering::Relaxed);
+            if self.fail {
+                return Err("export failed".to_string());
+            }
+            Ok(self.snapshot.clone())
+        }
+    }
+
+    #[test]
+    fn state_sync_without_source_is_not_found() {
+        let (_dir, service) = test_service();
+        let response = service.build_state_sync_response(&StateSyncRequest::latest());
+        assert_eq!(response, StateSyncResponse::NotFound);
+    }
+
+    #[test]
+    fn state_sync_export_failure_is_not_found() {
+        let (_dir, service) = test_service();
+        service.set_state_snapshot_source(Arc::new(MockSnapshotSource {
+            snapshot: None,
+            fail: true,
+            exports: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let response = service.build_state_sync_response(&StateSyncRequest::latest());
+        assert_eq!(response, StateSyncResponse::NotFound);
+    }
+
+    #[test]
+    fn state_sync_serves_bounded_chunks() {
+        let (_dir, service) = test_service();
+        let total = MAX_STATE_SYNC_CHUNK_BYTES * 2 + 7;
+        let bytes: Vec<u8> = (0..total).map(|i| (i % 251) as u8).collect();
+        let source = MockSnapshotSource::with_bytes(bytes.clone());
+        service.set_state_snapshot_source(source.clone());
+
+        // First chunk: exactly the cap, metadata propagated.
+        let first = service.build_state_sync_response(&StateSyncRequest::latest());
+        let StateSyncResponse::Chunk(first) = first else {
+            panic!("expected a chunk, got {first}");
+        };
+        assert_eq!(first.offset, 0);
+        assert_eq!(first.data.len(), MAX_STATE_SYNC_CHUNK_BYTES);
+        assert_eq!(first.total_len, total as u64);
+        assert_eq!(first.height, 77);
+        assert_eq!(first.state_root, [9u8; 32]);
+        assert_eq!(&first.data[..], &bytes[..MAX_STATE_SYNC_CHUNK_BYTES]);
+
+        // Final partial chunk.
+        let last = service.build_state_sync_response(&StateSyncRequest::at_height_from(
+            77,
+            (MAX_STATE_SYNC_CHUNK_BYTES * 2) as u64,
+        ));
+        let StateSyncResponse::Chunk(last) = last else {
+            panic!("expected a chunk, got {last}");
+        };
+        assert_eq!(last.offset, (MAX_STATE_SYNC_CHUNK_BYTES * 2) as u64);
+        assert_eq!(last.data.len(), 7);
+
+        // An offset at or past the end cannot be served.
+        assert_eq!(
+            service.build_state_sync_response(&StateSyncRequest::at_height_from(77, total as u64)),
+            StateSyncResponse::InvalidRequest
+        );
+
+        // Two chunk requests must not re-serialize the whole state.
+        assert_eq!(source.exports.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn state_sync_rebuilds_export_when_target_height_changes() {
+        let (_dir, service) = test_service();
+        let source = MockSnapshotSource::with_bytes(vec![1u8; 16]);
+        service.set_state_snapshot_source(source.clone());
+        let _ = service.build_state_sync_response(&StateSyncRequest::latest());
+        // A specific height that the cached (latest) export does not match
+        // forces a fresh export.
+        let _ = service.build_state_sync_response(&StateSyncRequest::at_height(12345));
+        assert_eq!(source.exports.load(Ordering::Relaxed), 2);
     }
 }

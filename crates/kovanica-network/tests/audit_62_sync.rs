@@ -1,14 +1,16 @@
 //! Minimal audit 6.2 test: block sync request-response + rate-limited enqueue.
 
 use kovanica_network::{
-    BlockSyncRequest, BlockSyncResponse, BLOCK_SYNC_PROTOCOL, STATE_SYNC_PROTOCOL,
+    BlockSyncRequest, BlockSyncResponse, BLOCK_SYNC_PROTOCOL, BLOCK_SYNC_PROTOCOL_LEGACY,
+    STATE_SYNC_PROTOCOL,
 };
 use kovanica_types::hash::Hash;
 
 #[test]
 fn audit_62_sync_protocol_is_kovanica() {
-    assert_eq!(BLOCK_SYNC_PROTOCOL, "/kovanica/block-sync/1.0.0");
-    assert_eq!(STATE_SYNC_PROTOCOL, "/kovanica/state-sync/1.0.0");
+    assert_eq!(BLOCK_SYNC_PROTOCOL, "/kovanica/block-sync/1.1.0");
+    assert_eq!(BLOCK_SYNC_PROTOCOL_LEGACY, "/kovanica/block-sync/1.0.0");
+    assert_eq!(STATE_SYNC_PROTOCOL, "/kovanica/state-sync/2.0.0");
 }
 
 #[test]

@@ -4,6 +4,7 @@
 
 use crate::{address_to_bytes, BincodeSerialize, StorageError};
 use kovanica_staking::{Delegation, StakingState, TreasuryState, ValidatorInfo};
+use kovanica_types::hash::Hash;
 use kovanica_types::{Address, Stake};
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,12 @@ use thiserror::Error;
 pub enum StateStoreError {
     #[error("Account not found: {0}")]
     NotFound(String),
+    /// A snapshot payload could not be decoded (bad magic, bad bincode).
+    #[error("Snapshot format error: {0}")]
+    SnapshotFormat(String),
+    /// A snapshot failed verification and was not applied.
+    #[error("Snapshot verification failed: {0}")]
+    SnapshotVerify(String),
     /// A debit larger than the account balance; nothing was written.
     #[error("Insufficient balance: account {address} has {balance}, debit {amount}")]
     InsufficientBalance {
@@ -70,6 +77,40 @@ impl Default for PruningConfig {
     }
 }
 
+/// Magic prefix of the versioned snapshot byte format.
+pub const SNAPSHOT_MAGIC: [u8; 8] = *b"KVSNSP01";
+
+/// Current snapshot format version.
+pub const SNAPSHOT_VERSION: u32 = 1;
+
+/// Serialized state snapshot: every state table plus the height and state
+/// root it was taken at.
+///
+/// The framing is [`SNAPSHOT_MAGIC`] followed by `bincode` of this struct.
+/// Bytes without the magic are read as a legacy (pre-header) payload that
+/// decodes to the same tables with `version = 0`, `height = 0` and a zero
+/// state root, so an old file still imports through
+/// [`StateStore::import_snapshot`] while
+/// [`StateStore::import_verified_snapshot`] refuses it (there is nothing to
+/// verify).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct SnapshotData {
+    /// Format version; 0 means a legacy payload without the header.
+    pub version: u32,
+    /// Committed-leader height the snapshot reflects.
+    pub height: u64,
+    /// Sorted-KV Merkle root over the tables below.
+    pub state_root: [u8; 32],
+    /// Accounts table rows: address -> bincode(Account).
+    pub accounts: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Contract code table rows: code hash -> wasm bytes.
+    pub contract_code: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Contract storage rows: bincode((address, slot)) -> value.
+    pub contract_storage: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Staking state rows: key -> bincode(value).
+    pub staking_state: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
 /// State store for accounts, contracts, and staking.
 pub struct StateStore {
     pruning: PruningConfig,
@@ -94,6 +135,7 @@ impl StateStore {
             let _ = write_txn.open_table(crate::tables::COMMIT_SEALS)?;
             let _ = write_txn.open_table(crate::tables::EXECUTED_TX_HASHES)?;
             let _ = write_txn.open_table(crate::tables::LIGHT_SET)?;
+            let _ = write_txn.open_table(crate::tables::GENESIS_DIGEST)?;
         }
         write_txn.commit().map_err(StorageError::Commit)?;
         Ok(Self { pruning })
@@ -392,6 +434,35 @@ impl StateStore {
             .get("staking")?
             .ok_or_else(|| StateStoreError::NotFound("staking state".to_string()))?;
         Ok(StakingState::from_bytes(&value.value())?)
+    }
+
+    // ============================================================
+    // Genesis digest operations
+    // ============================================================
+
+    /// Persist the digest of the configured genesis contents.
+    ///
+    /// Idempotent: called at genesis time and, for data dirs created before
+    /// the digest existed, once on the next start. A mismatch is detected and
+    /// refused by the node, so the writer never overwrites an existing value
+    /// with a different one silently (the node checks before writing).
+    pub fn save_genesis_digest(
+        &self,
+        txn: &WriteTransaction,
+        digest: &Hash,
+    ) -> Result<(), StateStoreError> {
+        let mut table = txn.open_table(crate::tables::GENESIS_DIGEST)?;
+        table.insert("genesis", digest.0)?;
+        Ok(())
+    }
+
+    /// Load the persisted genesis digest, if one was written.
+    pub fn load_genesis_digest(
+        &self,
+        txn: &ReadTransaction,
+    ) -> Result<Option<Hash>, StateStoreError> {
+        let table = txn.open_table(crate::tables::GENESIS_DIGEST)?;
+        Ok(table.get("genesis")?.map(|v| Hash(v.value())))
     }
 
     // ============================================================
@@ -713,88 +784,22 @@ impl StateStore {
         &self,
         txn: &ReadTransaction,
     ) -> Result<kovanica_types::hash::Hash, StateStoreError> {
-        let mut entries: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
-
-        // Accounts table
-        {
-            let table = txn.open_table(crate::tables::ACCOUNTS)?;
-            for entry in table.iter()? {
-                let (key_bytes, value_bytes) = entry?;
-                let mut leaf_key = key_bytes.value().to_vec();
-                leaf_key.extend_from_slice(value_bytes.value().as_slice());
-                entries.insert(key_bytes.value().to_vec(), leaf_key);
-            }
-        }
-
-        // Contract code table
-        {
-            let table = txn.open_table(crate::tables::CONTRACT_CODE)?;
-            for entry in table.iter()? {
-                let (key_bytes, value_bytes) = entry?;
-                let mut leaf_key = b"code:".to_vec();
-                leaf_key.extend_from_slice(key_bytes.value().as_ref());
-                let mut combined = leaf_key.clone();
-                combined.extend_from_slice(value_bytes.value().as_slice());
-                entries.insert(leaf_key, combined);
-            }
-        }
-
-        // Contract storage table
-        {
-            let table = txn.open_table(crate::tables::CONTRACT_STORAGE)?;
-            for entry in table.iter()? {
-                let (key_pair_bytes, value_bytes) = entry?;
-                let key_pair: ([u8; 32], [u8; 32]) = bincode::deserialize(
-                    &bincode::serialize(&key_pair_bytes.value()).unwrap_or_default()[..],
-                )?;
-                let mut leaf_key = b"storage:".to_vec();
-                leaf_key.extend_from_slice(&key_pair.0);
-                leaf_key.extend_from_slice(&key_pair.1);
-                let mut combined = leaf_key.clone();
-                combined.extend_from_slice(value_bytes.value().as_slice());
-                entries.insert(leaf_key, combined);
-            }
-        }
-
-        // Staking state table
-        {
-            let table = txn.open_table(crate::tables::STAKING_STATE)?;
-            for entry in table.iter()? {
-                let (key_bytes, value_bytes) = entry?;
-                let mut leaf_key = b"staking:".to_vec();
-                leaf_key.extend_from_slice(key_bytes.value().as_bytes());
-                let mut combined = leaf_key.clone();
-                combined.extend_from_slice(value_bytes.value().as_slice());
-                entries.insert(leaf_key, combined);
-            }
-        }
-
-        let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(entries.len());
-        for (_, combined) in entries {
-            let hash = kovanica_types::hash::Hash::new(&combined);
-            leaves.push(hash.0);
-        }
-        Ok(kovanica_types::hash::Hash(merkle_root(leaves)))
+        let data = self.collect_snapshot_tables(txn)?;
+        snapshot_state_root(&data)
     }
 
-    /// Export a snapshot of all state data to a file using bincode.
-    pub fn export_snapshot<P: AsRef<std::path::Path>>(
+    /// Collect every state table into a [`SnapshotData`].
+    ///
+    /// Header fields (`version`, `height`, `state_root`) are left at their
+    /// defaults; callers that need them filled use [`Self::snapshot_bytes`].
+    /// Shared by [`Self::compute_state_root`] and snapshot export so both hash
+    /// exactly the same rows.
+    fn collect_snapshot_tables(
         &self,
         txn: &ReadTransaction,
-        path: P,
-    ) -> Result<(), StateStoreError> {
-        use std::fs::File;
-        use std::io::Write;
-
-        #[derive(Serialize, Deserialize, Debug, Default)]
-        struct SnapshotData {
-            accounts: Vec<(Vec<u8>, Vec<u8>)>,
-            contract_code: Vec<(Vec<u8>, Vec<u8>)>,
-            contract_storage: Vec<(Vec<u8>, Vec<u8>)>,
-            staking_state: Vec<(Vec<u8>, Vec<u8>)>,
-        }
-
+    ) -> Result<SnapshotData, StateStoreError> {
         let mut data = SnapshotData::default();
+
         {
             let table = txn.open_table(crate::tables::ACCOUNTS)?;
             for entry in table.iter()? {
@@ -814,7 +819,7 @@ impl StateStore {
             let table = txn.open_table(crate::tables::CONTRACT_STORAGE)?;
             for entry in table.iter()? {
                 let (k, v) = entry?;
-                let k_bytes = bincode::serialize(&k.value()).unwrap();
+                let k_bytes = bincode::serialize(&k.value())?;
                 data.contract_storage.push((k_bytes, v.value().to_vec()));
             }
         }
@@ -827,34 +832,81 @@ impl StateStore {
             }
         }
 
-        let bytes = bincode::serialize(&data)?;
-        let mut file = File::create(path.as_ref())
-            .map_err(|e| StateStoreError::NotFound(format!("snapshot file error: {e}")))?;
-        file.write_all(&bytes)
-            .map_err(|e| StateStoreError::NotFound(format!("snapshot write error: {e}")))?;
-        Ok(())
+        Ok(data)
     }
 
-    /// Restore a snapshot from a file. Requires a write transaction.
-    pub fn import_snapshot<P: AsRef<std::path::Path>>(
-        &self,
-        txn: &WriteTransaction,
-        path: P,
-    ) -> Result<(), StateStoreError> {
-        use std::fs;
+    /// Height the current state reflects: the newest saved state root, else
+    /// the newest committed leader header, else 0 on a fresh database.
+    ///
+    /// This is the height [`Self::snapshot_bytes`] stamps into the header.
+    pub fn snapshot_height(&self, txn: &ReadTransaction) -> Result<u64, StateStoreError> {
+        if let Some((height, _)) = self.get_latest_state_root(txn)? {
+            return Ok(height);
+        }
+        if let Some(header) = self.get_latest_leader_header(txn)? {
+            return Ok(header.committed_height);
+        }
+        Ok(0)
+    }
 
-        #[derive(Serialize, Deserialize, Debug, Default)]
-        struct SnapshotData {
+    /// Serialize the full state into the versioned snapshot byte format:
+    /// [`SNAPSHOT_MAGIC`] followed by `bincode(`[`SnapshotData`]`)` with the
+    /// height and state root filled in.
+    ///
+    /// Used by the file export and by the P2P state-sync export side.
+    pub fn snapshot_bytes(&self, txn: &ReadTransaction) -> Result<Vec<u8>, StateStoreError> {
+        let mut data = self.collect_snapshot_tables(txn)?;
+        data.version = SNAPSHOT_VERSION;
+        data.height = self.snapshot_height(txn)?;
+        data.state_root = snapshot_state_root(&data)?.0;
+        let mut bytes = Vec::with_capacity(SNAPSHOT_MAGIC.len() + 64);
+        bytes.extend_from_slice(&SNAPSHOT_MAGIC);
+        bytes.extend_from_slice(&bincode::serialize(&data)?);
+        Ok(bytes)
+    }
+
+    /// Decode snapshot bytes, accepting the versioned format and the legacy
+    /// header-less payload (returned with `version = 0`, `height = 0` and a
+    /// zero state root).
+    ///
+    /// Legacy payloads carry nothing to verify; they stay importable through
+    /// [`Self::import_snapshot`] but are refused by
+    /// [`Self::import_verified_snapshot`].
+    pub fn decode_snapshot(bytes: &[u8]) -> Result<SnapshotData, StateStoreError> {
+        if let Some(payload) = bytes.strip_prefix(SNAPSHOT_MAGIC.as_slice()) {
+            return bincode::deserialize(payload)
+                .map_err(|e| StateStoreError::SnapshotFormat(e.to_string()));
+        }
+
+        #[derive(Deserialize, Default)]
+        struct LegacySnapshotData {
             accounts: Vec<(Vec<u8>, Vec<u8>)>,
             contract_code: Vec<(Vec<u8>, Vec<u8>)>,
             contract_storage: Vec<(Vec<u8>, Vec<u8>)>,
             staking_state: Vec<(Vec<u8>, Vec<u8>)>,
         }
+        let legacy: LegacySnapshotData = bincode::deserialize(bytes)
+            .map_err(|e| StateStoreError::SnapshotFormat(e.to_string()))?;
+        Ok(SnapshotData {
+            version: 0,
+            height: 0,
+            state_root: [0u8; 32],
+            accounts: legacy.accounts,
+            contract_code: legacy.contract_code,
+            contract_storage: legacy.contract_storage,
+            staking_state: legacy.staking_state,
+        })
+    }
 
-        let bytes = fs::read(path.as_ref())
-            .map_err(|e| StateStoreError::NotFound(format!("snapshot read error: {e}")))?;
-        let data: SnapshotData = bincode::deserialize(&bytes)?;
-
+    /// Replace every state table with the snapshot's rows.
+    ///
+    /// Only ever called inside a write transaction; nothing is visible until
+    /// the caller commits, so a later failure leaves the old state intact.
+    fn apply_snapshot(
+        &self,
+        txn: &WriteTransaction,
+        data: &SnapshotData,
+    ) -> Result<(), StateStoreError> {
         {
             let table = txn.open_table(crate::tables::ACCOUNTS)?;
             let keys: Vec<[u8; 32]> = table
@@ -867,9 +919,9 @@ impl StateStore {
             for k in keys {
                 table.remove(k)?;
             }
-            for (k, v) in data.accounts {
-                let k32: [u8; 32] = k.try_into().unwrap_or([0; 32]);
-                table.insert(k32, v)?;
+            for (k, v) in &data.accounts {
+                let k32: [u8; 32] = k.as_slice().try_into().unwrap_or([0; 32]);
+                table.insert(k32, v.clone())?;
             }
         }
         {
@@ -884,9 +936,9 @@ impl StateStore {
             for k in keys {
                 table.remove(k)?;
             }
-            for (k, v) in data.contract_code {
-                let k32: [u8; 32] = k.try_into().unwrap_or([0; 32]);
-                table.insert(k32, v)?;
+            for (k, v) in &data.contract_code {
+                let k32: [u8; 32] = k.as_slice().try_into().unwrap_or([0; 32]);
+                table.insert(k32, v.clone())?;
             }
         }
         {
@@ -905,9 +957,9 @@ impl StateStore {
             for k in keys {
                 table.remove(k)?;
             }
-            for (k, v) in data.contract_storage {
-                let k_tuple: ([u8; 32], [u8; 32]) = bincode::deserialize(&k)?;
-                table.insert(k_tuple, v)?;
+            for (k, v) in &data.contract_storage {
+                let k_tuple: ([u8; 32], [u8; 32]) = bincode::deserialize(k)?;
+                table.insert(k_tuple, v.clone())?;
             }
         }
         {
@@ -922,11 +974,84 @@ impl StateStore {
             for k in keys {
                 table.remove(k.as_str())?;
             }
-            for (k, v) in data.staking_state {
-                table.insert("staking", v)?;
+            for (_k, v) in &data.staking_state {
+                table.insert("staking", v.clone())?;
             }
         }
         Ok(())
+    }
+
+    /// Decode, verify and apply a snapshot payload in one write transaction.
+    ///
+    /// Verification runs before anything is applied:
+    /// 1. the payload must be the versioned format (a legacy payload has no
+    ///    height/state root and is refused),
+    /// 2. the state root is recomputed over the received tables and must equal
+    ///    the root the snapshot header claims (catches a corrupted stream or a
+    ///    peer that tampered with the payload),
+    /// 3. `height` must not be below `min_height` (the caller's local
+    ///    committed height), so a snapshot can never roll state backwards.
+    ///
+    /// On any failure the error explains why and the caller must not commit
+    /// the transaction. Returns the applied committed-leader height.
+    pub fn import_verified_snapshot(
+        &self,
+        txn: &WriteTransaction,
+        bytes: &[u8],
+        min_height: u64,
+    ) -> Result<u64, StateStoreError> {
+        let data = Self::decode_snapshot(bytes)?;
+        if data.version == 0 {
+            return Err(StateStoreError::SnapshotVerify(
+                "legacy snapshot has no height/state root; refusing unverified import".to_string(),
+            ));
+        }
+        if data.height < min_height {
+            return Err(StateStoreError::SnapshotVerify(format!(
+                "snapshot height {} is below local height {min_height}; refusing rollback",
+                data.height
+            )));
+        }
+        let recomputed = snapshot_state_root(&data)?;
+        if recomputed.0 != data.state_root {
+            return Err(StateStoreError::SnapshotVerify(format!(
+                "state root mismatch: header {} != recomputed {}",
+                Hash(data.state_root).to_hex(),
+                recomputed.to_hex()
+            )));
+        }
+        self.apply_snapshot(txn, &data)?;
+        Ok(data.height)
+    }
+
+    /// Export a snapshot of all state data to a file using bincode.
+    pub fn export_snapshot<P: AsRef<std::path::Path>>(
+        &self,
+        txn: &ReadTransaction,
+        path: P,
+    ) -> Result<(), StateStoreError> {
+        let bytes = self.snapshot_bytes(txn)?;
+        std::fs::write(path.as_ref(), &bytes)
+            .map_err(|e| StateStoreError::NotFound(format!("snapshot write error: {e}")))?;
+        Ok(())
+    }
+
+    /// Restore a snapshot from a file. Requires a write transaction.
+    ///
+    /// Accepts both the versioned format written by
+    /// [`Self::export_snapshot`] and legacy header-less payloads. This is the
+    /// permissive path (no root/height check); use
+    /// [`Self::import_verified_snapshot`] for anything received over the
+    /// network.
+    pub fn import_snapshot<P: AsRef<std::path::Path>>(
+        &self,
+        txn: &WriteTransaction,
+        path: P,
+    ) -> Result<(), StateStoreError> {
+        let bytes = std::fs::read(path.as_ref())
+            .map_err(|e| StateStoreError::NotFound(format!("snapshot read error: {e}")))?;
+        let data = Self::decode_snapshot(&bytes)?;
+        self.apply_snapshot(txn, &data)
     }
 
     /// Prune old state roots beyond the configured retention.
@@ -962,6 +1087,57 @@ impl StateStore {
     pub fn pruning_config(&self) -> &PruningConfig {
         &self.pruning
     }
+}
+
+/// Deterministic sorted key-value Merkle root over a snapshot's tables.
+///
+/// The single source of truth for both
+/// [`StateStore::compute_state_root`] (which collects the live tables first)
+/// and snapshot verification: a snapshot is only applied when this value
+/// equals the root its header claims. Leaves are BLAKE3 hashes of
+/// `leaf_key || value`, folded in lexicographic leaf-key order so the result
+/// is independent of table iteration order.
+fn snapshot_state_root(data: &SnapshotData) -> Result<Hash, StateStoreError> {
+    let mut entries: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+
+    // Accounts: the raw address is the leaf key; leaf = address || account.
+    for (key, value) in &data.accounts {
+        let mut combined = key.clone();
+        combined.extend_from_slice(value);
+        entries.insert(key.clone(), combined);
+    }
+    // Contract code: leaf = "code:" || code_hash || code.
+    for (key, value) in &data.contract_code {
+        let mut leaf_key = b"code:".to_vec();
+        leaf_key.extend_from_slice(key);
+        let mut combined = leaf_key.clone();
+        combined.extend_from_slice(value);
+        entries.insert(leaf_key, combined);
+    }
+    // Contract storage: leaf = "storage:" || address || slot || value.
+    for (key, value) in &data.contract_storage {
+        let key_pair: ([u8; 32], [u8; 32]) = bincode::deserialize(key)?;
+        let mut leaf_key = b"storage:".to_vec();
+        leaf_key.extend_from_slice(&key_pair.0);
+        leaf_key.extend_from_slice(&key_pair.1);
+        let mut combined = leaf_key.clone();
+        combined.extend_from_slice(value);
+        entries.insert(leaf_key, combined);
+    }
+    // Staking: leaf = "staking:" || key || value.
+    for (key, value) in &data.staking_state {
+        let mut leaf_key = b"staking:".to_vec();
+        leaf_key.extend_from_slice(key);
+        let mut combined = leaf_key.clone();
+        combined.extend_from_slice(value);
+        entries.insert(leaf_key, combined);
+    }
+
+    let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(entries.len());
+    for (_, combined) in entries {
+        leaves.push(Hash::new(&combined).0);
+    }
+    Ok(Hash(merkle_root(leaves)))
 }
 
 /// Compute binary Merkle root from sorted leaf hashes.
@@ -1193,5 +1369,210 @@ mod leader_header_tests {
             .get_leader_header(&txn, 9)
             .unwrap()
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::Storage;
+    use kovanica_types::Address;
+    use tempfile::tempdir;
+
+    /// Fresh storage with one seeded account and (optionally) a saved state
+    /// root so [`StateStore::snapshot_height`] reports `height`.
+    fn seeded_storage(name: &str, height: Option<u64>) -> (tempfile::TempDir, Storage) {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join(name)).unwrap();
+        {
+            let txn = storage.begin_write().unwrap();
+            let acct = Account {
+                balance: 1234,
+                nonce: 2,
+                code_hash: [1; 32],
+                code: vec![9, 9, 9],
+            };
+            storage
+                .state()
+                .set_account(&txn, &Address([4; 32]), &acct)
+                .unwrap();
+            if let Some(height) = height {
+                storage
+                    .state()
+                    .save_state_root(&txn, height, &Hash::new(b"root"))
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        (dir, storage)
+    }
+
+    #[test]
+    fn snapshot_bytes_round_trip_and_verified_import() {
+        let (_src_dir, src) = seeded_storage("src.redb", Some(5));
+        let bytes = {
+            let txn = src.begin_read().unwrap();
+            src.state().snapshot_bytes(&txn).unwrap()
+        };
+        assert!(bytes.starts_with(&SNAPSHOT_MAGIC), "versioned framing");
+
+        let data = StateStore::decode_snapshot(&bytes).unwrap();
+        assert_eq!(data.version, SNAPSHOT_VERSION);
+        assert_eq!(data.height, 5, "header carries the snapshot height");
+        let txn = src.begin_read().unwrap();
+        let expected = src.state().compute_state_root(&txn).unwrap();
+        assert_eq!(
+            data.state_root, expected.0,
+            "header root equals the root over the live tables"
+        );
+
+        // Verified import into a fresh database.
+        let (_dst_dir, dst) = seeded_storage("dst.redb", None);
+        {
+            let txn = dst.begin_write().unwrap();
+            let height = dst
+                .state()
+                .import_verified_snapshot(&txn, &bytes, 0)
+                .expect("verified import");
+            assert_eq!(height, 5);
+            txn.commit().unwrap();
+        }
+        let txn = dst.begin_read().unwrap();
+        let restored = dst.state().get_account(&txn, &Address([4; 32])).unwrap();
+        assert_eq!(restored.balance, 1234);
+    }
+
+    #[test]
+    fn verified_import_rejects_tampered_tables() {
+        let (_src_dir, src) = seeded_storage("src.redb", None);
+        let bytes = {
+            let txn = src.begin_read().unwrap();
+            src.state().snapshot_bytes(&txn).unwrap()
+        };
+
+        // Change one account byte while keeping the claimed header root.
+        let mut data = StateStore::decode_snapshot(&bytes).unwrap();
+        data.accounts[0].1.push(0xee);
+        let mut tampered = SNAPSHOT_MAGIC.to_vec();
+        tampered.extend_from_slice(&bincode::serialize(&data).unwrap());
+
+        let (_dst_dir, dst) = seeded_storage("dst.redb", None);
+        // Distinct destination state so "nothing was applied" is observable
+        // (the seed alone matches the snapshot's account values).
+        {
+            let txn = dst.begin_write().unwrap();
+            dst.state()
+                .set_account(
+                    &txn,
+                    &Address([4; 32]),
+                    &Account {
+                        balance: 999,
+                        nonce: 7,
+                        code_hash: [2; 32],
+                        code: vec![1],
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let txn = dst.begin_write().unwrap();
+        let err = dst
+            .state()
+            .import_verified_snapshot(&txn, &tampered, 0)
+            .unwrap_err();
+        assert!(
+            matches!(err, StateStoreError::SnapshotVerify(_)),
+            "expected verification failure, got {err:?}"
+        );
+        drop(txn);
+
+        // Nothing was applied.
+        let txn = dst.begin_read().unwrap();
+        let acct = dst
+            .state()
+            .get_account_or_default(&txn, &Address([4; 32]))
+            .unwrap();
+        assert_eq!(acct.balance, 999, "tampered snapshot must not be applied");
+        assert_eq!(acct.nonce, 7, "tampered snapshot must not be applied");
+    }
+
+    #[test]
+    fn verified_import_rejects_height_regression() {
+        let (_src_dir, src) = seeded_storage("src.redb", None);
+        let mut bytes = {
+            let txn = src.begin_read().unwrap();
+            src.state().snapshot_bytes(&txn).unwrap()
+        };
+        let mut data = StateStore::decode_snapshot(&bytes).unwrap();
+        data.height = 3;
+        bytes = SNAPSHOT_MAGIC.to_vec();
+        bytes.extend_from_slice(&bincode::serialize(&data).unwrap());
+
+        let (_dst_dir, dst) = seeded_storage("dst.redb", None);
+        let txn = dst.begin_write().unwrap();
+        let err = dst
+            .state()
+            .import_verified_snapshot(&txn, &bytes, 10)
+            .unwrap_err();
+        assert!(
+            matches!(err, StateStoreError::SnapshotVerify(_)),
+            "expected verification failure, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_payload_imports_permissively_but_not_verified() {
+        // A legacy (pre-header) payload: the four raw tables, no magic.
+        let legacy_accounts = vec![(
+            vec![6u8; 32],
+            bincode::serialize(&Account {
+                balance: 77,
+                nonce: 0,
+                code_hash: [0; 32],
+                code: Vec::new(),
+            })
+            .unwrap(),
+        )];
+        let legacy = bincode::serialize(&(
+            legacy_accounts,
+            Vec::<(Vec<u8>, Vec<u8>)>::new(),
+            Vec::<(Vec<u8>, Vec<u8>)>::new(),
+            Vec::<(Vec<u8>, Vec<u8>)>::new(),
+        ))
+        .unwrap();
+
+        let decoded = StateStore::decode_snapshot(&legacy).unwrap();
+        assert_eq!(decoded.version, 0, "legacy payloads have no header");
+        assert_eq!(decoded.height, 0);
+        assert_eq!(decoded.state_root, [0u8; 32]);
+
+        let (_dir, storage) = seeded_storage("legacy.redb", None);
+        // Verified import refuses it: there is nothing to verify.
+        {
+            let txn = storage.begin_write().unwrap();
+            assert!(matches!(
+                storage
+                    .state()
+                    .import_verified_snapshot(&txn, &legacy, 0)
+                    .unwrap_err(),
+                StateStoreError::SnapshotVerify(_)
+            ));
+        }
+        // The permissive file path still imports it.
+        let path = _dir.path().join("legacy.snap");
+        std::fs::write(&path, &legacy).unwrap();
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .import_snapshot(&txn, &path)
+                .expect("legacy import");
+            txn.commit().unwrap();
+        }
+        let txn = storage.begin_read().unwrap();
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&[6u8; 32]);
+        let acct = storage.state().get_account(&txn, &Address(key)).unwrap();
+        assert_eq!(acct.balance, 77, "legacy payload must still import");
     }
 }

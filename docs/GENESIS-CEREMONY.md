@@ -1,33 +1,109 @@
-# Genesis Ceremony (draft — [DRAFT - needs human review])
+# Genesis Ceremony ([DRAFT - needs human review])
 
-Status: Phase 14 / Phase 24 — NOT DONE. Created 2026-10-14.
-Consensus impact: ledger-safe / client-only (genesis file is initial state; changes only at genesis, before chain start).
+Status: the wrapper script `ops/genesis/ceremony.sh` **exists** and is described
+below; the underlying `kovanica-node genesis` tool and the startup genesis
+guard are still being finished (see **Known gaps**).
+Consensus impact: ledger-safe / client-only — the genesis file only defines
+initial state, once, before the chain starts.
 
-Purpose: coordinate multi-validator genesis for `kovanica-node genesis` so all 5–20 validators agree on the initial `genesis_validators.toml`, staking allocations, treasury address, and chain-id.
+Purpose: coordinate a multi-validator genesis so that all 5–20 active
+validators agree on the validator set, staking allocations, treasury address,
+and chain id.
 
-Procedure:
+## Inputs
 
-1. **Validator selection** (manual, before ceremony): agree on 5–20 active validators; collect `public_key` + optional `vrf_public_key` + `stake` (min 50_000 KUNA per `MIN_VALIDATOR_STAKE`) from each validator operator.
-2. **Build `genesis_validators.toml`**: array-of-tables `[[validator]]` with `address`, `stake`, `public_key` (per parser `main.rs:2043-2050`). Use `docs/SEED-DNS-AUDIT.md` format only for reference — genesis file is separate.
-3. **Hash comparison**: each validator runs `sha256sum genesis_validators.toml`; compare digests across all parties (off-chain, out-of-band). Mismatch → rebuild, do NOT proceed.
-4. **Single-node genesis (current tool)**: `kovanica-node genesis --validators genesis_validators.toml --treasury-address <address> --founder-address <address> --validator-keys-out ./keys --force`. Writes `genesis.json` + staking state + `data_dir` DB.
-5. **Multi-node verification** (post-genesis): each validator starts `kovanica-node` with same `genesis.json`; confirm `/api/head` identical across all nodes before opening to peers.
-6. **Data preservation**: after first genesis write, set `KOVANICA_DATA` and never delete `data_dir` / `consensus.redb` / `state.redb`; only rebuild together (see `docs/TESTNET-RESET.md` line 5–6).
+- **`validators.json`** — a JSON array; each entry is
+  `{ "address": <32-byte hex>, "public_key": <hex?>, "stake": <atoms?> }`
+  (`address` required, `public_key` / `stake` optional at this layer).
+- **Treasury address** and **founder address** — both 32-byte hex. The founder
+  receives the 200,000 KUNA premine.
+- **Chain id** — `1` mainnet, `2` testnet, `3` devnet, `1337` local. A
+  `genesis_validators.toml` that declares `chain_id` must match the node's
+  configured chain id.
 
-Safety rules (from `AGENTS.md`):
-- No `KOVANICA_ALLOW_RESET=1` on public node.
-- `FAUCET=0`; seed nodes must NOT expose faucet.
-- Keep seed DNS grey-cloud (`seed.kovanica.online` removed already).
-- `P2P` plaintext TCP 8000; use `KOVANICA_BOOTNODES` at deploy, never hard-code.
+## Procedure (`ops/genesis/ceremony.sh`)
 
-Gaps (verified by `nod-1`):
-- No ceremony wrapper script (`ops/genesis/ceremony.sh` missing).
-- No `docs/TESTNET-MAINNET.md` (6-line stub missing per TASKLIST #416).
-- `docs/GENESIS-*.md` missing.
-- No multi-party `validators.json` build helper.
-- Single `run_genesis()` only — sufficient if ceremony is manual.
+Usage:
 
-Next actions (not done):
-- Create `ops/genesis/ceremony.sh` (calls `kovanica-node genesis --force` after hash-check pass).
-- Register seeds (`seed1/2/3.kovanica.online`) and set `KOVANICA_BOOTNODES`.
-- After genesis + freeze checklist (`docs/MAINNET-FREEZE-CHECKLIST.md`), only then tag `mainnet-freeze`.
+```sh
+./ops/genesis/ceremony.sh --network testnet --validators validators.json \
+    [--output ./genesis] [--force]
+```
+
+Flags: `--network` (default `testnet`), `--validators` (required, JSON file),
+`--output` (default `./genesis`), `--force` (overwrite existing outputs). The
+script is `set -euo pipefail` and fails early if `--validators` is missing.
+
+Steps it runs:
+
+1. **[1/4] Generate genesis** — `cargo run --release -p kovanica-node --
+   genesis --validators <file> --output <output>/genesis.json [--force]`.
+2. **[2/4] Generate validator keys** — the same `genesis` subcommand with
+   `--validator-keys-out <output>/keys`.
+3. **[3/4] Create `genesis_validators.toml`** — writes the file header and
+   lists the validator addresses/stakes it read out of `genesis.json`.
+4. **[4/4] Create `bootnodes.toml`** — a single `bootnodes = [...]` entry:
+   `testnet.kovanica.online:8000` for `--network testnet`, otherwise
+   `mainnet.kovanica.online:8000`.
+
+Outputs, in `--output`: `genesis.json`, `genesis_validators.toml`,
+`bootnodes.toml`, and `keys/` (validator key files).
+
+Next steps the script prints: distribute `genesis.json` to all validators,
+each validator places it in its data directory (`KOVANICA_DATA_DIR`), configures
+the bootnodes, and all validators start simultaneously.
+
+## `genesis_validators.toml` format
+
+```
+chain_id = 2            # optional; mandatory for mainnet (1) / testnet (2)
+
+[[validator]]
+address = "<32-byte hex>"
+stake = 50000000000000
+public_key = "<32-byte hex>"      # optional
+vrf_public_key = "<hex>"          # optional
+```
+
+`stake` is required per entry; the minimum is the validator min stake. On
+startup the node also looks for `validators.json`, `funded_accounts.toml`, and
+`founder_premine.hex` in the data directory.
+
+## Genesis digest guard (startup behaviour)
+
+On first start the node persists a digest of its genesis configuration in the
+data directory. On every later start it recomputes the digest and compares it
+against the persisted value:
+
+- **match** — startup proceeds;
+- **mismatch** — startup **refuses** with an error naming the genesis mismatch,
+  because the data directory was created for a different genesis;
+- an **override environment variable** forces startup past the mismatch for a
+  deliberate single-node migration. Never set it on a live mesh.
+
+## Data preservation
+
+After the first genesis write, set `KOVANICA_DATA_DIR` and **never delete** the
+data directory or its `consensus.redb` / `state.redb`. Rebuild only by wiping
+every node together (see `docs/TESTNET-RESET.md`).
+
+## Safety rules
+
+- No reset switch on a public node; the reset path is the manual wipe in
+  `docs/TESTNET-RESET.md`.
+- `FAUCET=0`; seed nodes must **not** expose a faucet.
+- Keep the seed DNS records grey-cloud.
+- P2P is plaintext TCP on port **8000**; set bootnodes via
+  `KOVANICA_BOOTNODES` (or the config), never hard-code peers into binaries.
+
+## Known gaps (not done)
+
+- `ceremony.sh` does not pass `--treasury-address` / `--founder-address`, which
+  the `genesis` subcommand currently requires; the script must be updated (or
+  the addresses added to the ceremony flow) before it runs end-to-end.
+- `ceremony.sh` step 3 writes only a header to `genesis_validators.toml`; it
+  does not yet emit the `[[validator]]` entries the node parses.
+- `ceremony.sh` drives the tool with `cargo run --release`, not a released,
+  checksummed binary.
+- No dedicated multi-party `validators.json` build helper (entries are
+  collected by hand and hashed out-of-band).

@@ -23,6 +23,13 @@
 #   KOVANICA_HEALTH_COMMIT_STALL_SECS (default 120; 0 disables the /health stall check)
 #   KOVANICA_VRF_LEADER     (true|false; TOML equivalent use_vrf_leader)
 #
+# Mempool tuning (env-only, no TOML equivalent; read by
+# `build_mempool_config` in the node):
+#   KOVANICA_MEMPOOL_REBROADCAST_INTERVAL_SECS (default 30)
+#   KOVANICA_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS    (default 15)
+#   KOVANICA_MEMPOOL_MIN_FEE_RATE              (default 0; atoms per byte)
+#   KOVANICA_MEMPOOL_MAX_TXS_PER_SENDER        (default 64)
+#
 # MysticGhost colouring and VRF leader election default on. A live mesh has
 # to take both together. With no validator VRF keys, leader election stays
 # round-robin. KOVANICA_MYSTICGHOST=false or KOVANICA_VRF_LEADER=false turns one off.
@@ -70,3 +77,26 @@ rpc_rate_limit_per_min = 60
 # Genesis treasury address as 32 bytes of hex. When omitted, the zero address is
 # used. Only read the first time the database is created (fresh genesis).
 # treasury_address = "<64 hex characters>"
+
+# Gossipsub peer scoring. Thresholds must be <= 0 and ordered
+# ban <= graylist <= publish <= gossip <= 0; the node refuses to start
+# otherwise. Defaults shown are safe for a small validator network.
+[peer_scoring]
+enabled = true
+gossip_threshold = -10.0
+publish_threshold = -50.0
+graylist_threshold = -80.0
+ban_threshold = -100.0
+invalid_message_weight = -10.0
+
+# Contract execution limits.
+#
+# NOTE: the node does not parse an `[execution]` table yet — it uses the
+# built-in constants below (kovanica-runtime `ExecutionConfig`,
+# kovanica-mempool `MempoolConfig`). The block is therefore documentation of
+# the current defaults; see docs/GAS_SCHEDULE.md.
+#
+# [execution]
+# default_gas_limit = 10000000          # per-call fuel cap (kovanica_types::MAX_TX_GAS_LIMIT)
+# default_memory_limit_pages = 16       # 1 MiB linear-memory cap (ExecutionConfig::default)
+# max_gas_limit = 10000000              # mempool admission cap (MempoolConfig::max_gas_limit)

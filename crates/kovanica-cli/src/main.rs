@@ -89,6 +89,10 @@ enum Commands {
     Propose(ProposeArgs),
     /// Vote on a governance proposal (not yet supported by the node)
     Vote(VoteArgs),
+    /// Set validator commission (basis points, 10000 = 100%)
+    SetCommission(SetCommissionArgs),
+    /// Claim vested treasury funds
+    ClaimTreasury(ClaimTreasuryArgs),
     /// Deploy a WASM contract
     Deploy(DeployArgs),
     /// Call a contract method
@@ -284,6 +288,37 @@ struct ClaimRewardsArgs {
     fee: u64,
 }
 
+/// Arguments for `kovanica set-commission`.
+#[derive(Args)]
+struct SetCommissionArgs {
+    /// Validator address (32-byte hex)
+    #[arg(long)]
+    validator: String,
+    /// Commission in basis points (10000 = 100%)
+    #[arg(long)]
+    commission_bps: u16,
+    /// Keystore file path
+    #[arg(long, short, default_value = "keystore.json")]
+    keystore: PathBuf,
+    /// Fee in atoms (the mempool rejects zero-fee transactions)
+    #[arg(long, default_value_t = 1)]
+    fee: u64,
+}
+
+/// Arguments for `kovanica claim-treasury`.
+#[derive(Args)]
+struct ClaimTreasuryArgs {
+    /// Amount in atoms
+    #[arg(long)]
+    amount: u64,
+    /// Keystore file path
+    #[arg(long, short, default_value = "keystore.json")]
+    keystore: PathBuf,
+    /// Fee in atoms (the mempool rejects zero-fee transactions)
+    #[arg(long, default_value_t = 1)]
+    fee: u64,
+}
+
 /// Arguments for `kovanica propose`.
 #[derive(Args)]
 struct ProposeArgs {
@@ -336,7 +371,7 @@ struct CallArgs {
     #[arg(long, default_value_t = 0)]
     value: u64,
     /// Gas limit for execution
-    #[arg(long, default_value_t = 10_000_000)]
+    #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
     gas_limit: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -389,6 +424,8 @@ async fn main() -> Result<()> {
         }
         Commands::Delegate(args) => cmd_delegate(&client, chain_id, args, json).await,
         Commands::ClaimRewards(args) => cmd_claim_rewards(&client, chain_id, args, json).await,
+        Commands::SetCommission(args) => cmd_set_commission(&client, chain_id, args, json).await,
+        Commands::ClaimTreasury(args) => cmd_claim_treasury(&client, chain_id, args, json).await,
         Commands::Propose(args) => node::not_implemented(
             "propose",
             "kovanica_propose",
@@ -818,6 +855,85 @@ async fn cmd_claim_rewards(
     }
     println!("  fee:       {} atoms", args.fee);
     println!("  nonce:     {nonce}");
+    Ok(())
+}
+
+/// Set the validator's commission via a signed SetCommission transaction.
+async fn cmd_set_commission(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: SetCommissionArgs,
+    json_output: bool,
+) -> Result<()> {
+    if args.commission_bps > 10_000 {
+        anyhow::bail!("commission_bps must be <= 10000 (100%)");
+    }
+    let validator = wallet::parse_address(&args.validator, "validator")?;
+    let (tx_hash, sender, nonce) = sign_and_submit_self(
+        client,
+        chain_id,
+        &args.keystore,
+        TransactionKind::SetCommission {
+            validator,
+            commission_bps: args.commission_bps,
+        },
+        args.fee,
+    )
+    .await?;
+
+    if json_output {
+        return output::print_json(&json!({
+            "transactionHash": tx_hash,
+            "sender": sender.to_string(),
+            "validator": validator.to_string(),
+            "commissionBps": args.commission_bps,
+            "fee": args.fee,
+            "nonce": nonce,
+        }));
+    }
+
+    println!("Submitted transaction {tx_hash}");
+    println!("  from:           {}", sender);
+    println!("  validator:      {}", validator);
+    println!("  commission_bps: {}", args.commission_bps);
+    println!("  fee:            {} atoms", args.fee);
+    println!("  nonce:          {nonce}");
+    Ok(())
+}
+
+/// Claim vested treasury funds via a signed ClaimTreasury transaction.
+async fn cmd_claim_treasury(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: ClaimTreasuryArgs,
+    json_output: bool,
+) -> Result<()> {
+    let (tx_hash, sender, nonce) = sign_and_submit_self(
+        client,
+        chain_id,
+        &args.keystore,
+        TransactionKind::ClaimTreasury {
+            amount: args.amount,
+        },
+        args.fee,
+    )
+    .await?;
+
+    if json_output {
+        return output::print_json(&json!({
+            "transactionHash": tx_hash,
+            "sender": sender.to_string(),
+            "amount": args.amount,
+            "fee": args.fee,
+            "nonce": nonce,
+        }));
+    }
+
+    println!("Submitted transaction {tx_hash}");
+    println!("  from:    {}", sender);
+    println!("  amount:  {} atoms", args.amount);
+    println!("  fee:     {} atoms", args.fee);
+    println!("  nonce:   {nonce}");
     Ok(())
 }
 

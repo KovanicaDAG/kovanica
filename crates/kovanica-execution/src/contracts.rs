@@ -1014,6 +1014,22 @@ impl ContractRunner {
         &mut self,
         call: WasmCall<'_>,
     ) -> Result<(Vec<u8>, Vec<ContractEvent>), ExecutionError> {
+        let mut gas_used = 0u64;
+        self.execute_wasm_call_with_gas(call, &mut gas_used)
+    }
+
+    /// Same as [`ContractRunner::execute_wasm_call`], but also reports the
+    /// fuel the wasmi store actually consumed into `gas_used`.
+    ///
+    /// The runtime writes `*gas_used` on every outcome where the interpreter
+    /// store was created — success, contract rejection, and out of gas (where
+    /// it equals `call.config.gas_limit`). Failures before the interpreter
+    /// starts (compilation, value attach) leave it at `0`.
+    pub fn execute_wasm_call_with_gas(
+        &mut self,
+        call: WasmCall<'_>,
+        gas_used: &mut u64,
+    ) -> Result<(Vec<u8>, Vec<ContractEvent>), ExecutionError> {
         let key = kovanica_common::hash(call.wasm);
         if !self.modules.contains_key(&key) {
             let module = self.runtime.compile(call.wasm)?;
@@ -1040,9 +1056,15 @@ impl ContractRunner {
         };
         host.attach_value(call.value)?;
         // Runtime errors propagate before `commit` — nothing is persisted.
-        let out = self
-            .runtime
-            .execute(module, call.entry, call.args, call.config, &mut host)?;
+        // `gas_used` was already written by the runtime on that path.
+        let out = self.runtime.execute_with_gas(
+            module,
+            call.entry,
+            call.args,
+            call.config,
+            &mut host,
+            gas_used,
+        )?;
         let events = host.commit()?;
         log_events(&events);
         Ok((out, events))

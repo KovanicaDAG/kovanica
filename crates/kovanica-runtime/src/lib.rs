@@ -67,6 +67,38 @@ pub enum RuntimeError {
     MissingExport(String),
 }
 
+/// Canonical per-transaction gas cap for `Call` transactions.
+///
+/// Re-exported from [`kovanica_types::MAX_TX_GAS_LIMIT`] (the single source of
+/// truth) so existing `kovanica_runtime::MAX_TX_GAS_LIMIT` paths keep working.
+/// `Call.gas_limit` is charged straight into wasmi's `Store::set_fuel`, so an
+/// uncapped value is unbounded per-transaction interpreter work; every
+/// admission path (mempool, block validation) rejects larger values.
+/// [`ExecutionConfig::default`] uses the same value.
+pub use kovanica_types::MAX_TX_GAS_LIMIT;
+
+/// Minimum interpreter gas a `Call` must carry, per byte of target module
+/// bytecode, for the call to be allowed to compile and instantiate the module.
+///
+/// Compiling a wasm module is host-side work that wasmi fuel does **not** pay
+/// for: a `Call` with a tiny `gas_limit` would still force a full
+/// `Module::compile()` of up to ~1 MiB. Charging a per-byte floor makes the
+/// requested gas proportional to the compile work, so a block whose total gas
+/// is bounded also bounds how many large modules it can force every validator
+/// to compile. The value is deliberately small enough that any deployable
+/// contract (bounded by the mempool's ~1 MiB transaction size) stays callable
+/// with a gas limit below [`MAX_TX_GAS_LIMIT`].
+pub const GAS_PER_MODULE_BYTE: u64 = 8;
+
+/// The minimum `gas_limit` a `Call` must carry for a target module of
+/// `byte_len` bytes (`byte_len * GAS_PER_MODULE_BYTE`, saturating).
+///
+/// See [`GAS_PER_MODULE_BYTE`] for the rationale. Deterministic: it depends
+/// only on the bytecode length.
+pub fn min_gas_for_module(byte_len: usize) -> u64 {
+    (byte_len as u64).saturating_mul(GAS_PER_MODULE_BYTE)
+}
+
 /// Configuration for a single contract execution.
 pub struct ExecutionConfig {
     pub gas_limit: u64,
@@ -76,7 +108,7 @@ pub struct ExecutionConfig {
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
-            gas_limit: 10_000_000,
+            gas_limit: MAX_TX_GAS_LIMIT,
             memory_limit_pages: 16, // 1 MiB
         }
     }
@@ -124,6 +156,9 @@ impl Runtime {
     /// Contract-level failures surface as [`RuntimeError::Contract`]; out of
     /// fuel as [`RuntimeError::OutOfGas`]; missing exports as
     /// [`RuntimeError::MissingExport`].
+    ///
+    /// Thin wrapper over [`Runtime::execute_with_gas`] that discards the
+    /// consumed-fuel report.
     pub fn execute(
         &self,
         module: &Module,
@@ -131,6 +166,31 @@ impl Runtime {
         args: &[u8],
         config: &ExecutionConfig,
         host: &mut dyn Host,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let mut gas_used = 0u64;
+        self.execute_with_gas(module, func_name, args, config, host, &mut gas_used)
+    }
+
+    /// Same as [`Runtime::execute`], but also reports the fuel actually
+    /// consumed by the wasmi store into `gas_used`.
+    ///
+    /// `*gas_used` is written as soon as the store exists, i.e. on **every**
+    /// interpreter outcome — success, contract rejection, out of gas. On out of
+    /// gas it equals `config.gas_limit` (the whole allotment is burnt; the
+    /// store's small deterministic unspent residue is not reported). Failures
+    /// before the interpreter starts (argument size check, fuel-metering setup)
+    /// leave it at `0`.
+    ///
+    /// Fuel consumption is deterministic: the same module, arguments and
+    /// host behaviour always burn the same amount.
+    pub fn execute_with_gas(
+        &self,
+        module: &Module,
+        func_name: &str,
+        args: &[u8],
+        config: &ExecutionConfig,
+        host: &mut dyn Host,
+        gas_used: &mut u64,
     ) -> Result<Vec<u8>, RuntimeError> {
         debug!(
             target: "kovanica-runtime",
@@ -156,10 +216,43 @@ impl Runtime {
             .set_fuel(config.gas_limit)
             .map_err(|e| RuntimeError::Execution(format!("fuel metering unavailable: {e}")))?;
 
+        let result = self.execute_inner(&mut store, module, func_name, args);
+
+        let remaining = store.get_fuel().unwrap_or(0);
+        *gas_used = config.gas_limit.saturating_sub(remaining);
+        if matches!(&result, Err(RuntimeError::OutOfGas)) {
+            // All provided gas is burnt when the call runs out: wasmi traps as
+            // soon as the next instruction cannot be paid for, which can leave
+            // a small, deterministic residue in the store. Reporting the whole
+            // limit matches the ledger convention that a failing call consumes
+            // its gas despite the body being rolled back.
+            *gas_used = config.gas_limit;
+        }
+        debug!(
+            target: "kovanica-runtime",
+            "contract call finished, {} fuel consumed",
+            gas_used
+        );
+        result
+    }
+
+    /// Interpreter body of [`Runtime::execute_with_gas`], running against an
+    /// already-created (fuelled, limited) store. Extracted so the caller can
+    /// read the store's remaining fuel after *any* outcome.
+    fn execute_inner(
+        &self,
+        store: &mut Store<ExecState<'_>>,
+        module: &Module,
+        func_name: &str,
+        args: &[u8],
+    ) -> Result<Vec<u8>, RuntimeError> {
+        // `store` is a `&mut` parameter used at many points below; each use
+        // reborrows explicitly (`&mut *store`) so no single call site moves
+        // the reference out from under the rest of the body.
         let linker = build_linker(&self.engine)?;
         let instance = linker
-            .instantiate(&mut store, module)
-            .and_then(|pre| pre.start(&mut store))
+            .instantiate(&mut *store, module)
+            .and_then(|pre| pre.start(&mut *store))
             .map_err(|e| {
                 if is_out_of_fuel(&e) {
                     RuntimeError::OutOfGas
@@ -169,30 +262,30 @@ impl Runtime {
             })?;
 
         let memory = instance
-            .get_export(&store, "memory")
+            .get_export(&mut *store, "memory")
             .and_then(Extern::into_memory)
             .ok_or_else(|| RuntimeError::MissingExport("memory".to_string()))?;
 
         // Copy the bincode argument buffer into guest memory.
-        let (args_ptr, args_len) = place_args(&mut store, &instance, &memory, args)?;
+        let (args_ptr, args_len) = place_args(&mut *store, &instance, &memory, args)?;
 
         let entry = instance
-            .get_typed_func::<(i32, i32), i64>(&store, func_name)
+            .get_typed_func::<(i32, i32), i64>(&mut *store, func_name)
             .map_err(|_| RuntimeError::MissingExport(func_name.to_string()))?;
 
-        let ret = match entry.call(&mut store, (args_ptr, args_len)) {
+        let ret = match entry.call(&mut *store, (args_ptr, args_len)) {
             Ok(ret) => ret,
             Err(e) => {
                 // Best-effort cleanup; the Store (and with it every guest
                 // allocation) is discarded right after this call anyway.
-                dealloc(&mut store, &instance, args_ptr, args_len);
+                dealloc(&mut *store, &instance, args_ptr, args_len);
                 return Err(map_call_error(e));
             }
         };
 
         // Packed return decode — see the module docs for the FIXED rule.
         if (-12..=-1).contains(&ret) {
-            dealloc(&mut store, &instance, args_ptr, args_len);
+            dealloc(&mut *store, &instance, args_ptr, args_len);
             return Err(RuntimeError::Contract((-1 - ret) as i32));
         }
 
@@ -200,30 +293,23 @@ impl Runtime {
         let out_len = (ret as u32) as usize;
         if out_len == 0 {
             // Null/empty result (e.g. `()` results) — nothing to read/free.
-            dealloc(&mut store, &instance, args_ptr, args_len);
+            dealloc(&mut *store, &instance, args_ptr, args_len);
             return Ok(Vec::new());
         }
-        if out_len > MAX_BUFFER_BYTES || out_ptr.saturating_add(out_len) > memory.data_size(&store)
+        if out_len > MAX_BUFFER_BYTES
+            || out_ptr.saturating_add(out_len) > memory.data_size(&mut *store)
         {
-            dealloc(&mut store, &instance, args_ptr, args_len);
+            dealloc(&mut *store, &instance, args_ptr, args_len);
             return Err(RuntimeError::Execution(format!(
                 "packed result out of bounds (ptr={out_ptr}, len={out_len})"
             )));
         }
         let mut out = vec![0u8; out_len];
         memory
-            .read(&store, out_ptr, &mut out)
+            .read(&mut *store, out_ptr, &mut out)
             .map_err(|e| RuntimeError::Execution(format!("result read out of bounds: {e}")))?;
-        dealloc(&mut store, &instance, out_ptr as i32, out_len as i32);
-        dealloc(&mut store, &instance, args_ptr, args_len);
-
-        if let Ok(remaining) = store.get_fuel() {
-            debug!(
-                target: "kovanica-runtime",
-                "contract call finished, {} fuel consumed",
-                config.gas_limit.saturating_sub(remaining)
-            );
-        }
+        dealloc(&mut *store, &instance, out_ptr as i32, out_len as i32);
+        dealloc(&mut *store, &instance, args_ptr, args_len);
         Ok(out)
     }
 }
@@ -791,6 +877,21 @@ mod tests {
     }
 
     #[test]
+    fn min_gas_for_module_scales_with_bytecode_size() {
+        assert_eq!(min_gas_for_module(0), 0);
+        assert_eq!(min_gas_for_module(1), GAS_PER_MODULE_BYTE);
+        assert_eq!(min_gas_for_module(1024), 1024 * GAS_PER_MODULE_BYTE);
+        // A deployable contract (bounded by the ~1 MiB mempool tx size) must
+        // stay callable within the per-transaction gas cap.
+        assert!(
+            min_gas_for_module(1024 * 1024) < MAX_TX_GAS_LIMIT,
+            "a 1 MiB module must remain callable below the per-tx gas cap"
+        );
+        // Saturating, never panics on absurd sizes.
+        assert_eq!(min_gas_for_module(usize::MAX), u64::MAX);
+    }
+
+    #[test]
     fn low_gas_rejects_an_infinite_guest_loop() {
         let body = [0, 0x03, 0x40, 0x0c, 0, 0x0b, 0x42, 0, 0x0b];
         let wasm = test_module(&body, ModuleOptions::default());
@@ -801,6 +902,46 @@ mod tests {
         let error = execute(&wasm, &[], &config, &mut TestHost::default())
             .expect_err("the loop must exhaust its fuel");
         assert!(matches!(error, RuntimeError::OutOfGas), "{error:?}");
+    }
+
+    #[test]
+    fn execute_with_gas_reports_consumed_fuel_on_success_and_out_of_gas() {
+        let runtime = Runtime::new();
+        let mut host = TestHost::default();
+
+        // Success: the entry point returns 0 (empty result) after burning a
+        // small, strictly positive amount of fuel.
+        let body = [0, 0x42, 0, 0x0b]; // i64.const 0; end
+        let wasm = test_module(&body, ModuleOptions::default());
+        let module = runtime.compile(&wasm).expect("compile");
+        let config = generous_config();
+        let mut gas_used = 0u64;
+        let out = runtime
+            .execute_with_gas(&module, "entry", &[], &config, &mut host, &mut gas_used)
+            .expect("trivial entry succeeds");
+        assert!(out.is_empty());
+        assert!(
+            gas_used > 0 && gas_used < config.gas_limit,
+            "success must report real fuel consumption, got {gas_used}"
+        );
+
+        // Out of gas: the full limit is consumed.
+        let loop_body = [0, 0x03, 0x40, 0x0c, 0, 0x0b, 0x42, 0, 0x0b];
+        let wasm = test_module(&loop_body, ModuleOptions::default());
+        let module = runtime.compile(&wasm).expect("compile");
+        let config = ExecutionConfig {
+            gas_limit: 100,
+            memory_limit_pages: 1,
+        };
+        let mut gas_used = 0u64;
+        let error = runtime
+            .execute_with_gas(&module, "entry", &[], &config, &mut host, &mut gas_used)
+            .expect_err("the loop must exhaust its fuel");
+        assert!(matches!(error, RuntimeError::OutOfGas), "{error:?}");
+        assert_eq!(
+            gas_used, config.gas_limit,
+            "out-of-gas consumes the entire fuel allotment"
+        );
     }
 
     #[test]

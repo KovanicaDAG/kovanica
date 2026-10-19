@@ -30,7 +30,9 @@ pub mod state_store;
 pub use block_store::{BlockStore, BlockStoreError};
 pub use consensus_store::{ConsensusStore, ConsensusStoreError};
 pub use state_store::{StateStore, StateStoreError};
-pub use tables::{ACCOUNTS, CONTRACT_CODE, CONTRACT_STORAGE, STAKING_STATE, STATE_ROOT};
+pub use tables::{
+    ACCOUNTS, CONTRACT_CODE, CONTRACT_STORAGE, GENESIS_DIGEST, STAKING_STATE, STATE_ROOT,
+};
 
 /// Main storage handle combining all stores.
 pub struct Storage {
@@ -157,6 +159,12 @@ pub mod tables {
         TableDefinition::new("executed_tx_hashes");
     /// Light-node set (bincode). Not a field of `StakingState`.
     pub const LIGHT_SET: TableDefinition<&'static str, Vec<u8>> = TableDefinition::new("light_set");
+    /// Persisted digest of the configured genesis contents. Written once at
+    /// genesis time (and on first start of a pre-existing data dir); every
+    /// later start recomputes the digest and refuses on mismatch unless
+    /// explicitly overridden. Key: `"genesis"`.
+    pub const GENESIS_DIGEST: TableDefinition<&'static str, [u8; 32]> =
+        TableDefinition::new("genesis_digest");
 
     // Consensus store tables
     pub const DAG_BLOCKS: TableDefinition<[u8; 32], Vec<u8>> = TableDefinition::new("dag_blocks"); // StatementBlock serialized
@@ -225,6 +233,41 @@ mod tests {
         let txn2 = db.begin_read().unwrap();
         let root2 = state.compute_state_root(&txn2).unwrap();
         assert_eq!(root1.0, root2.0, "state root must be deterministic");
+    }
+
+    #[test]
+    fn genesis_digest_roundtrips_and_is_idempotent() {
+        use kovanica_types::hash::Hash;
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("genesis.db")).unwrap();
+        let digest = Hash::new([7u8; 32]);
+
+        // Absent until written.
+        {
+            let read = storage.begin_read().unwrap();
+            assert!(storage
+                .state()
+                .load_genesis_digest(&read)
+                .unwrap()
+                .is_none());
+        }
+        // Write once.
+        {
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_genesis_digest(&txn, &digest).unwrap();
+            txn.commit().unwrap();
+        }
+        // Idempotent rewrite of the same value.
+        {
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_genesis_digest(&txn, &digest).unwrap();
+            txn.commit().unwrap();
+        }
+        let read = storage.begin_read().unwrap();
+        assert_eq!(
+            storage.state().load_genesis_digest(&read).unwrap(),
+            Some(digest)
+        );
     }
 
     #[test]

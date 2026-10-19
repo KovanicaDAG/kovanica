@@ -71,7 +71,7 @@ pub enum SubscriptionKind {
     NewCommittedLeader,
     /// A transaction entered the mempool.
     PendingTransactions,
-    /// Reserved placeholder. Accepted, but never emits (see module docs).
+    /// Transaction execution logs (receipts) emitted per committed sub-DAG.
     Logs,
     /// A locally executed leader header, with the seals stored for it.
     NewSealedHeader,

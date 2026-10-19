@@ -24,6 +24,7 @@ mod non_blue;
 mod orphans;
 mod seals;
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::{Duration, Instant};
@@ -48,7 +49,8 @@ use kovanica_execution::{LogPublisher, TransactionReceipt};
 use kovanica_mempool::{Mempool, MempoolConfig};
 use kovanica_network::{
     BlockSyncRequest, BlockSyncResponse, NetworkConfig, NetworkEvent, NetworkService,
-    StateSyncResponse,
+    SnapshotChunk, StateSnapshotSource, StateSyncRequest, StateSyncResponse,
+    MAX_STATE_SYNC_CHUNK_BYTES, MAX_STATE_SYNC_SNAPSHOT_BYTES,
 };
 use kovanica_rpc::{
     AuthConfig, EventBus, NodeHealth, RateLimitConfig, RateLimiterState, RpcServer, RpcState,
@@ -137,6 +139,8 @@ enum NetworkCommand {
     BroadcastSeal(kovanica_types::SealAnnouncement),
     /// Request a block sync from a specific peer.
     RequestSync(PeerId, BlockSyncRequest),
+    /// Request a state sync (chunked snapshot transfer) from a peer.
+    RequestStateSync(PeerId, StateSyncRequest),
     /// Ask the network task to stop.
     Shutdown,
 }
@@ -195,12 +199,17 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
     // Generate validator keys if output directory specified
     let mut validator_keys = Vec::new();
     if let Some(keys_dir) = &args.validator_keys_out {
-        fs::create_dir_all(keys_dir)?;
+        create_private_dir(std::path::Path::new(keys_dir))?;
         for (i, v) in staking.validators.iter().enumerate() {
             let (sk, pk) = kovanica_crypto::generate_keypair();
-            let seed = sk.to_bytes();
+            // The raw Ed25519 seed is secret material: keep the in-memory copy
+            // zeroized on drop and write the file `0600` below.
+            let seed = zeroize::Zeroizing::new(sk.to_bytes());
             let key_file = format!("{}/validator{}.key", keys_dir, i + 1);
-            fs::write(&key_file, hex::encode(seed))?;
+            write_private_file(
+                std::path::Path::new(&key_file),
+                hex::encode(seed.as_slice()).as_bytes(),
+            )?;
             validator_keys.push(serde_json::json!({
                 "index": i,
                 "address_hex": hex::encode(v.address.0),
@@ -292,6 +301,59 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
             .with_context(|| format!("writing genesis {}", args.output))?;
     }
     info!(file = %args.output, validators = staking.validators.len(), "genesis file written");
+    Ok(())
+}
+
+/// Create `dir` (and any missing parents) with owner-only permissions (`0700`).
+///
+/// Used for directories holding raw seed material. On non-unix platforms this
+/// falls back to a plain recursive create.
+fn create_private_dir(dir: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .with_context(|| format!("creating private directory {}", dir.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("creating private directory {}", dir.display()))?;
+    }
+    Ok(())
+}
+
+/// Write `contents` to `path` with owner-only permissions (`0600`), creating
+/// any missing parent directory as `0700`.
+///
+/// Seed material must never be group- or world-readable. On non-unix platforms
+/// the mode is not enforced (there is no equivalent), but the path is still
+/// created if missing.
+fn write_private_file(path: &std::path::Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            create_private_dir(parent)?;
+        }
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(contents)
+        .with_context(|| format!("writing {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing {}", path.display()))?;
     Ok(())
 }
 
@@ -451,6 +513,10 @@ where
     // ------------------------------------------------------------------
     init_genesis(&config, &dag_store, &state_storage)?;
 
+    // Guard against a data dir whose genesis does not match the configured
+    // genesis (fork / cross-chain contamination), and read back genesis.json.
+    verify_genesis_consistency(&config, &state_storage)?;
+
     // ------------------------------------------------------------------
     // 3. Mempool + validator identity
     // ------------------------------------------------------------------
@@ -542,6 +608,11 @@ where
             .collect(),
     );
     network.set_header_index(Arc::new(seals::StateHeaderIndex {
+        storage: state_storage.clone(),
+    }));
+    // Export side of the P2P state sync protocol: without this the service
+    // answers every state sync request with NotFound.
+    network.set_state_snapshot_source(Arc::new(NodeStateSnapshotSource {
         storage: state_storage.clone(),
     }));
     let network = Arc::new(network);
@@ -1073,6 +1144,15 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     }
 
     state_storage.state().save_staking_state(&txn, &staking)?;
+
+    // Persist the digest of the configured genesis so every later start can
+    // detect a data dir pointed at a different genesis (fork/contamination
+    // guard). Written in the same transaction as the genesis state.
+    let genesis_digest = genesis_config_digest(config)?;
+    state_storage
+        .state()
+        .save_genesis_digest(&txn, &genesis_digest)?;
+
     txn.commit()?;
 
     let digest = StatementBlock::compute_digest(0, 0, &[], &[]);
@@ -1088,6 +1168,275 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     };
     dag_store.put_block(&genesis)?;
     info!(digest = %genesis.digest, "genesis block created");
+    Ok(())
+}
+
+/// Env override that disables the genesis fork/contamination guard.
+///
+/// Set to `1` (or `true`/`yes`/`on`) only when deliberately pointing an
+/// existing data dir at a different genesis (e.g. an intentional reset on an
+/// isolated node). Every start with this set logs a warning.
+const ALLOW_GENESIS_MISMATCH_ENV: &str = "KOVANICA_ALLOW_GENESIS_MISMATCH";
+
+/// File name (inside `data_dir`) of the genesis ceremony artifact written by
+/// the `genesis` subcommand.
+const GENESIS_JSON_FILE: &str = "genesis.json";
+
+/// Domain separator for the persisted genesis digest. Bump only alongside a
+/// deliberate genesis-format change.
+const GENESIS_DIGEST_DOMAIN: &[u8] = b"KVNC-GENESIS-v1";
+
+/// Row `(address, stake, public_key, vrf_public_key)` used to order genesis
+/// validators deterministically in [`genesis_config_digest`].
+type GenesisValidatorDigestRow = ([u8; 32], u64, [u8; 32], [u8; 32]);
+
+/// True when a genesis-mismatch override string enables the guard bypass.
+///
+/// Pure so the accepted spellings can be tested without touching the
+/// process-global environment.
+fn parse_mismatch_override(value: Option<&str>) -> bool {
+    matches!(
+        value
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// True when the genesis mismatch guard is explicitly disabled.
+fn genesis_mismatch_allowed() -> bool {
+    parse_mismatch_override(std::env::var(ALLOW_GENESIS_MISMATCH_ENV).ok().as_deref())
+}
+
+/// The canonical genesis block digest, reused from the deterministic genesis
+/// block (`StatementBlock::compute_digest(0, 0, &[], &[])`) rather than
+/// re-derived.
+fn canonical_genesis_digest() -> Hash {
+    StatementBlock::compute_digest(0, kovanica_types::GENESIS_ROUND, &[], &[])
+}
+
+/// Deterministic digest over the *configured* genesis contents.
+///
+/// A pure function of the activation inputs: the canonical genesis block
+/// digest, the signed `chain_id`, the treasury address, and the genesis files
+/// present in `data_dir` (`validators.json`, `founder_premine.hex`,
+/// `funded_accounts.toml`, `genesis_validators.toml`). Addresses and public
+/// keys are parsed to canonical bytes so hex case cannot change the digest;
+/// entries are sorted so file order cannot either.
+///
+/// This reads the same inputs `init_genesis` derives genesis state from; it
+/// does not change any allocation, emission or supply value.
+fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
+    let mut data: Vec<u8> = Vec::new();
+
+    // Canonical genesis block digest.
+    data.extend_from_slice(&canonical_genesis_digest().0);
+    // Signed chain id. Binding it here means a chain-id change is caught even
+    // when `genesis_validators.toml` (the other chain-id source) is absent.
+    data.extend_from_slice(&config.chain_id.to_le_bytes());
+    // Treasury address.
+    data.extend_from_slice(&parse_address_hex(config.treasury_address.as_deref())?.0);
+
+    // validators.json (Phase 14 ceremony): array of {address, public_key?, stake?}.
+    let validators_json_path = config.data_dir.join("validators.json");
+    if validators_json_path.exists() {
+        data.push(b'V');
+        let text = std::fs::read_to_string(&validators_json_path)
+            .with_context(|| format!("reading {}", validators_json_path.display()))?;
+        let entries: Vec<GenesisValidatorInput> = serde_json::from_str(&text)
+            .with_context(|| format!("parsing {}", validators_json_path.display()))?;
+        let mut rows: Vec<([u8; 32], [u8; 32], u64)> = Vec::with_capacity(entries.len());
+        for v in entries {
+            let address = parse_address_hex(Some(&v.address))?;
+            let pk = match v.public_key.as_ref() {
+                Some(p) => parse_public_key_hex(p)?.0,
+                None => [0u8; 32],
+            };
+            rows.push((
+                address.0,
+                pk,
+                v.stake.unwrap_or(kovanica_staking::MIN_VALIDATOR_STAKE),
+            ));
+        }
+        rows.sort_unstable();
+        for (address, pk, stake) in rows {
+            data.extend_from_slice(&address);
+            data.extend_from_slice(&pk);
+            data.extend_from_slice(&stake.to_le_bytes());
+        }
+    }
+
+    // founder_premine.hex: the founder address that receives the premine.
+    let premine_path = config.data_dir.join("founder_premine.hex");
+    if premine_path.exists() {
+        data.push(b'F');
+        let hex = std::fs::read_to_string(&premine_path)
+            .with_context(|| format!("reading {}", premine_path.display()))?
+            .trim()
+            .to_string();
+        if !hex.is_empty() {
+            data.extend_from_slice(&parse_address_hex(Some(&hex))?.0);
+        }
+    }
+
+    // funded_accounts.toml.
+    let funded_path = config.data_dir.join("funded_accounts.toml");
+    if funded_path.exists() {
+        data.push(b'A');
+        let text = std::fs::read_to_string(&funded_path)
+            .with_context(|| format!("reading {}", funded_path.display()))?;
+        let funded: FundedAccountsFile =
+            toml::from_str(&text).with_context(|| format!("parsing {}", funded_path.display()))?;
+        let mut rows: Vec<([u8; 32], u64)> = Vec::with_capacity(funded.account.len());
+        for entry in funded.account {
+            rows.push((parse_address_hex(Some(&entry.address))?.0, entry.balance));
+        }
+        rows.sort_unstable();
+        for (address, balance) in rows {
+            data.extend_from_slice(&address);
+            data.extend_from_slice(&balance.to_le_bytes());
+        }
+    }
+
+    // genesis_validators.toml.
+    let genesis_validators_path = config.data_dir.join("genesis_validators.toml");
+    if genesis_validators_path.exists() {
+        data.push(b'G');
+        let text = std::fs::read_to_string(&genesis_validators_path)
+            .with_context(|| format!("reading {}", genesis_validators_path.display()))?;
+        let genesis: GenesisValidatorsFile = toml::from_str(&text)
+            .with_context(|| format!("parsing {}", genesis_validators_path.display()))?;
+        data.extend_from_slice(&genesis.chain_id.unwrap_or(0).to_le_bytes());
+        let mut rows: Vec<GenesisValidatorDigestRow> = Vec::with_capacity(genesis.validator.len());
+        for v in genesis.validator {
+            let address = parse_address_hex(Some(&v.address))?.0;
+            let pk = match v.public_key.as_ref() {
+                Some(p) => parse_public_key_hex(p)?.0,
+                None => [0u8; 32],
+            };
+            let vrf = match v.vrf_public_key.as_ref() {
+                Some(p) => parse_hex_32(p)?,
+                None => [0u8; 32],
+            };
+            rows.push((address, v.stake, pk, vrf));
+        }
+        rows.sort_unstable();
+        for (address, stake, pk, vrf) in rows {
+            data.extend_from_slice(&address);
+            data.extend_from_slice(&stake.to_le_bytes());
+            data.extend_from_slice(&pk);
+            data.extend_from_slice(&vrf);
+        }
+    }
+
+    Ok(Hash::new_keyed(GENESIS_DIGEST_DOMAIN, &data))
+}
+
+/// Verify the persisted genesis digest against `fresh`.
+///
+/// * Persisted digest equal to `fresh` → ok (no write).
+/// * Persisted digest different → refuse unless `allow_mismatch`.
+/// * No persisted digest (data dir predates the digest) → write it once, so
+///   existing data dirs migrate cleanly and later starts are guarded.
+fn verify_persisted_genesis_digest(
+    state_storage: &Storage,
+    fresh: &Hash,
+    allow_mismatch: bool,
+) -> Result<()> {
+    let persisted = {
+        let read = state_storage.begin_read()?;
+        state_storage.state().load_genesis_digest(&read)?
+    };
+    match persisted {
+        Some(stored) if stored != *fresh => {
+            if !allow_mismatch {
+                anyhow::bail!(
+                    "genesis digest mismatch: data dir was created for genesis {} but the \
+                     configured genesis is {}; refusing to start to avoid mixing chains \
+                     (set {ALLOW_GENESIS_MISMATCH_ENV}=1 to override)",
+                    stored.to_hex(),
+                    fresh.to_hex(),
+                );
+            }
+            warn!(
+                stored = %stored,
+                configured = %fresh,
+                "{ALLOW_GENESIS_MISMATCH_ENV} set: continuing despite genesis digest mismatch"
+            );
+        }
+        Some(_) => {}
+        None => {
+            let txn = state_storage.begin_write()?;
+            state_storage.state().save_genesis_digest(&txn, fresh)?;
+            txn.commit()?;
+            info!(digest = %fresh, "persisted genesis digest for existing data dir");
+        }
+    }
+    Ok(())
+}
+
+/// Read back `genesis.json` (if present) and verify its declared genesis-block
+/// digest matches the canonical genesis digest.
+///
+/// The ceremony writes this artifact but nothing used to read it; a stale or
+/// tampered copy is never silently rewritten. On mismatch the node refuses
+/// unless `allow_mismatch`.
+fn verify_genesis_json(config: &NodeConfig, canonical: &Hash, allow_mismatch: bool) -> Result<()> {
+    let path = config.data_dir.join(GENESIS_JSON_FILE);
+    if !path.exists() {
+        return Ok(());
+    }
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let declared = value
+        .get("genesis_block")
+        .and_then(|b| b.get("digest_hex"))
+        .and_then(|d| d.as_str());
+    let Some(declared) = declared else {
+        anyhow::bail!(
+            "genesis file {} has no `genesis_block.digest_hex`; refusing to start",
+            path.display()
+        );
+    };
+    if declared != canonical.to_hex().as_str() {
+        if !allow_mismatch {
+            anyhow::bail!(
+                "genesis file {} declares genesis block digest {} but the canonical genesis \
+                 digest is {}; refusing to start (set {ALLOW_GENESIS_MISMATCH_ENV}=1 to override)",
+                path.display(),
+                declared,
+                canonical.to_hex(),
+            );
+        }
+        warn!(
+            file = %path.display(),
+            declared,
+            canonical = %canonical.to_hex(),
+            "{ALLOW_GENESIS_MISMATCH_ENV} set: continuing despite genesis.json mismatch"
+        );
+    }
+    Ok(())
+}
+
+/// Startup guard: refuse to run a data dir whose persisted genesis does not
+/// match the configured genesis, or with a contradictory `genesis.json`.
+///
+/// This is the fork/cross-chain contamination guard. It runs on every start,
+/// independent of which genesis file happens to be present, and binds the
+/// signed `chain_id` so a chain-id change is caught even without
+/// `genesis_validators.toml`.
+fn verify_genesis_consistency(config: &NodeConfig, state_storage: &Storage) -> Result<()> {
+    let fresh = genesis_config_digest(config)?;
+    let allow_mismatch = genesis_mismatch_allowed();
+    if allow_mismatch {
+        warn!("{ALLOW_GENESIS_MISMATCH_ENV} set: genesis mismatch guard disabled for this start");
+    }
+    verify_persisted_genesis_digest(state_storage, &fresh, allow_mismatch)?;
+    verify_genesis_json(config, &canonical_genesis_digest(), allow_mismatch)?;
     Ok(())
 }
 
@@ -1140,6 +1489,11 @@ async fn run_network(
                         warn!(%peer, error = %e, "failed to request block sync");
                     }
                 }
+                Some(NetworkCommand::RequestStateSync(peer, request)) => {
+                    if let Err(e) = service.request_state_sync(peer, request) {
+                        warn!(%peer, error = %e, "failed to request state sync");
+                    }
+                }
                 Some(NetworkCommand::Shutdown) | None => {
                     info!("network task stopping");
                     break;
@@ -1181,6 +1535,8 @@ async fn run_event_handler(
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
+    let mut catch_up = CatchUpTracker::new();
+    let mut state_sync_sessions = StateSyncSessions::new();
     loop {
         tokio::select! {
             maybe = network_events.recv() => match maybe {
@@ -1194,6 +1550,8 @@ async fn run_event_handler(
                         events: &events,
                     },
                     &mut orphans,
+                    &mut catch_up,
+                    &mut state_sync_sessions,
                     &state_storage,
                 ),
                 None => break,
@@ -1269,17 +1627,710 @@ fn ingest_block(
     }
 }
 
+/// Inactivity timeout after which an idle catch-up session is dropped.
+const CATCH_UP_TTL: Duration = Duration::from_secs(60);
+/// Minimum interval between catch-up tick advances.
+const CATCH_UP_TICK: Duration = Duration::from_millis(500);
+/// Maximum number of range windows one session may request before giving up.
+const CATCH_UP_MAX_RANGES: usize = 512;
+/// Maximum by-hash fetches in flight per catch-up session. A 512-hash window is
+/// released through this bounded pipeline instead of all at once (audit HIGH-2c).
+const CATCH_UP_MAX_HASH_FETCHES: usize = 48;
+/// Maximum consecutive empty ("hole") windows a session may cross before it is
+/// dropped: bounds a peer that answers every range with an empty window while
+/// advancing its advertised tip (audit MEDIUM-5).
+const CATCH_UP_MAX_HOLE_WINDOWS: u32 = 4;
+
+/// How far a catch-up session with one peer has progressed.
+enum CatchUpPhase {
+    /// Tip probe sent, waiting for `BlockSyncResponse::Status`.
+    Probing,
+    /// Pulling rounds `next_from..=target` one window at a time.
+    CatchingUp {
+        /// Peer-advertised tip round; a fetch bound only, never trusted.
+        target: Round,
+        /// First round of the next window to request.
+        next_from: Round,
+        /// Whether a `RoundRange` request is awaiting its response.
+        in_flight: bool,
+        /// Set when the last window covered only empty rounds: keep going even
+        /// though the local tip cannot advance.
+        hole_mode: bool,
+    },
+}
+
+/// Per-peer catch-up state.
+struct CatchUpSession {
+    phase: CatchUpPhase,
+    /// Last time a message for this session arrived or was sent.
+    last_activity: Instant,
+    /// Local DAG tip at the last tick (progress gate).
+    last_local: Option<Round>,
+    /// Windows requested so far (budget).
+    ranges_done: usize,
+    /// By-hash fetches advertised by the last window but not yet issued (the
+    /// pipelining backlog, bounded by one [`BlockSyncResponse::MAX_RANGE_HASHES`]).
+    hash_backlog: std::collections::VecDeque<Hash>,
+    /// By-hash fetches issued but not yet answered (pipelining window usage).
+    inflight_hashes: usize,
+    /// Consecutive empty windows crossed (hole-mode amplification bound).
+    hole_windows: u32,
+}
+
+/// Bounded proactive catch-up: when a peer connects, ask for its DAG tip and,
+/// if it is ahead, pull the missing rounds through the existing
+/// `/kovanica/block-sync/1.1.0` protocol (one `RoundRange` window at a time,
+/// re-fetching every hash via `ByHash` so block validation is unchanged).
+///
+/// Every bound is explicit: one session per peer, at most
+/// [`BlockSyncRequest::MAX_RANGE_ROUNDS`] rounds per window, at most
+/// [`CATCH_UP_MAX_RANGES`] windows per session, a [`CATCH_UP_TTL`] inactivity
+/// timeout, one in-flight window per session, at most
+/// [`CATCH_UP_MAX_HASH_FETCHES`] by-hash fetches in flight (a 512-hash window
+/// is pipelined, never fired all at once), at most
+/// [`CATCH_UP_MAX_HOLE_WINDOWS`] consecutive empty windows, and windows only
+/// continue while the node is actually ingesting the fetched blocks (or
+/// crossing a bounded run of rounds the peer reported as empty). Ticks are
+/// driven by network events, so an idle swarm defers all catch-up work.
+struct CatchUpTracker {
+    sessions: std::collections::HashMap<PeerId, CatchUpSession>,
+    last_tick: Instant,
+}
+
+impl CatchUpTracker {
+    fn new() -> Self {
+        Self {
+            sessions: std::collections::HashMap::new(),
+            last_tick: Instant::now(),
+        }
+    }
+
+    /// Whether any session is active (ticks are skipped when idle).
+    fn is_active(&self) -> bool {
+        !self.sessions.is_empty()
+    }
+
+    /// Whether enough time has passed to advance the sessions.
+    fn tick_due(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.last_tick) >= CATCH_UP_TICK
+    }
+
+    /// Start probing a freshly connected peer's tip (one session per peer).
+    fn probe(
+        &mut self,
+        peer: PeerId,
+        now: Instant,
+        network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) {
+        if self.sessions.contains_key(&peer) {
+            return;
+        }
+        self.sessions.insert(
+            peer,
+            CatchUpSession {
+                phase: CatchUpPhase::Probing,
+                last_activity: now,
+                last_local: None,
+                ranges_done: 0,
+                hash_backlog: std::collections::VecDeque::new(),
+                inflight_hashes: 0,
+                hole_windows: 0,
+            },
+        );
+        if network_cmd_tx
+            .send(NetworkCommand::RequestSync(peer, BlockSyncRequest::Status))
+            .is_err()
+        {
+            self.sessions.remove(&peer);
+        }
+    }
+
+    /// Drop the session for a disconnected peer.
+    fn remove(&mut self, peer: PeerId) {
+        self.sessions.remove(&peer);
+    }
+
+    /// Handle the answer to a tip probe: start pulling windows if the peer is
+    /// ahead of us. A peer-supplied tip is a fetch trigger only.
+    fn on_status(
+        &mut self,
+        peer: PeerId,
+        tip_round: Round,
+        local_tip: Option<Round>,
+        now: Instant,
+        network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) {
+        let Some(mut session) = self.sessions.remove(&peer) else {
+            return;
+        };
+        if !matches!(session.phase, CatchUpPhase::Probing) {
+            // Stale status for a session already catching up: ignore.
+            self.sessions.insert(peer, session);
+            return;
+        }
+        // A storage error while reading our own tip means we cannot tell
+        // whether we are behind: stand down instead of fetching blindly.
+        let Some(local) = local_tip else {
+            return;
+        };
+        session.last_activity = now;
+        session.last_local = local_tip;
+        if tip_round <= local {
+            // Peer is not ahead of us: nothing to do.
+            return;
+        }
+        let from = local.saturating_add(1);
+        let to = from
+            .saturating_add(BlockSyncRequest::MAX_RANGE_ROUNDS - 1)
+            .min(tip_round);
+        session.phase = CatchUpPhase::CatchingUp {
+            target: tip_round,
+            next_from: from,
+            in_flight: true,
+            hole_mode: false,
+        };
+        session.ranges_done = 1;
+        if network_cmd_tx
+            .send(NetworkCommand::RequestSync(
+                peer,
+                BlockSyncRequest::RoundRange { from, to },
+            ))
+            .is_ok()
+        {
+            self.sessions.insert(peer, session);
+        }
+    }
+
+    /// Handle the answer to a range window: queue the advertised hashes into a
+    /// bounded by-hash pipeline (the same path missing parents use) and record
+    /// how far coverage reached so the next tick can continue.
+    ///
+    /// `window_empty` is whether the peer's window itself had no hashes (as
+    /// opposed to [`hashes`] being empty because every hash was already local),
+    /// which decides hole-mode continuation.
+    fn on_round_hashes(
+        &mut self,
+        peer: PeerId,
+        up_to_round: Round,
+        window_empty: bool,
+        hashes: &[Hash],
+        now: Instant,
+        network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) {
+        let Some(mut session) = self.sessions.remove(&peer) else {
+            return;
+        };
+        let target = match &session.phase {
+            CatchUpPhase::CatchingUp { target, .. } => *target,
+            CatchUpPhase::Probing => {
+                self.sessions.insert(peer, session);
+                return;
+            }
+        };
+        // Defensive: the network layer already caps this, but never iterate a
+        // hostile-length list.
+        if hashes.len() > BlockSyncResponse::MAX_RANGE_HASHES {
+            return;
+        }
+        session.last_activity = now;
+        // Each hash is re-requested by hash and validated like any other
+        // block; the peer's `up_to_round` only decides how far we continue.
+        // The backlog is drained through a bounded window (see
+        // `pump_hash_fetches`) instead of firing all of them at once.
+        session.hash_backlog.extend(hashes.iter().copied());
+        session.phase = CatchUpPhase::CatchingUp {
+            target,
+            next_from: up_to_round.saturating_add(1),
+            in_flight: false,
+            hole_mode: window_empty,
+        };
+        if window_empty {
+            session.hole_windows = session.hole_windows.saturating_add(1);
+        } else {
+            session.hole_windows = 0;
+        }
+        Self::pump_hash_fetches(peer, &mut session, network_cmd_tx);
+        self.sessions.insert(peer, session);
+    }
+
+    /// Release queued by-hash fetches while the session's in-flight window has
+    /// room. Bounds the burst one advertised window can create.
+    fn pump_hash_fetches(
+        peer: PeerId,
+        session: &mut CatchUpSession,
+        network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) {
+        while session.inflight_hashes < CATCH_UP_MAX_HASH_FETCHES {
+            let Some(hash) = session.hash_backlog.pop_front() else {
+                break;
+            };
+            if network_cmd_tx
+                .send(NetworkCommand::RequestSync(
+                    peer,
+                    BlockSyncRequest::ByHash(hash),
+                ))
+                .is_err()
+            {
+                // The command channel is gone (shutdown): requeue and stop.
+                session.hash_backlog.push_front(hash);
+                break;
+            }
+            session.inflight_hashes += 1;
+        }
+    }
+
+    /// Record that one by-hash fetch for `peer` completed or failed, freeing a
+    /// slot in the pipelining window and releasing more of the backlog.
+    fn on_hash_response(
+        &mut self,
+        peer: PeerId,
+        now: Instant,
+        network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) {
+        let Some(mut session) = self.sessions.remove(&peer) else {
+            return;
+        };
+        session.inflight_hashes = session.inflight_hashes.saturating_sub(1);
+        session.last_activity = now;
+        Self::pump_hash_fetches(peer, &mut session, network_cmd_tx);
+        self.sessions.insert(peer, session);
+    }
+
+    /// Advance every active session: expire idle ones, then send the next
+    /// window for sessions whose fetched blocks have been ingested (or that
+    /// are crossing an empty round) and that still have budget left.
+    fn tick(
+        &mut self,
+        now: Instant,
+        local_tip: Option<Round>,
+        network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) {
+        self.last_tick = now;
+        let mut drops: Vec<PeerId> = Vec::new();
+        let mut sends: Vec<(PeerId, Round, Round)> = Vec::new();
+        for (peer, session) in self.sessions.iter_mut() {
+            if now.saturating_duration_since(session.last_activity) >= CATCH_UP_TTL {
+                drops.push(*peer);
+                continue;
+            }
+            if let Some(local) = local_tip {
+                session.last_local = Some(local);
+            }
+            let (target, next_from, in_flight, hole_mode) = match &session.phase {
+                CatchUpPhase::CatchingUp {
+                    target,
+                    next_from,
+                    in_flight,
+                    hole_mode,
+                } => (*target, *next_from, *in_flight, *hole_mode),
+                CatchUpPhase::Probing => continue,
+            };
+            if in_flight {
+                continue;
+            }
+            if !session.hash_backlog.is_empty() {
+                // Still draining the previous window's by-hash pipeline: do not
+                // start another range window on top of it.
+                continue;
+            }
+            if next_from > target {
+                // Whole advertised range covered: session complete.
+                drops.push(*peer);
+                continue;
+            }
+            // A peer that answers with an empty window while advancing its
+            // advertised tip is the hole-mode amplification vector: cap the
+            // consecutive run instead of crossing windows forever (audit
+            // MEDIUM-5).
+            if hole_mode && session.hole_windows >= CATCH_UP_MAX_HOLE_WINDOWS {
+                drops.push(*peer);
+                continue;
+            }
+            // Continue only once the blocks we already fetched have actually
+            // been ingested (the local tip reached the window end), or when the
+            // window was empty (nothing to ingest, so the tip cannot move).
+            let progressed = session
+                .last_local
+                .is_some_and(|local| local.saturating_add(1) >= next_from);
+            if !progressed && !hole_mode {
+                continue;
+            }
+            if session.ranges_done >= CATCH_UP_MAX_RANGES {
+                drops.push(*peer);
+                continue;
+            }
+            let to = next_from
+                .saturating_add(BlockSyncRequest::MAX_RANGE_ROUNDS - 1)
+                .min(target);
+            session.phase = CatchUpPhase::CatchingUp {
+                target,
+                next_from,
+                in_flight: true,
+                hole_mode: false,
+            };
+            session.ranges_done += 1;
+            session.last_activity = now;
+            sends.push((*peer, next_from, to));
+        }
+        for peer in drops {
+            self.sessions.remove(&peer);
+        }
+        for (peer, from, to) in sends {
+            if network_cmd_tx
+                .send(NetworkCommand::RequestSync(
+                    peer,
+                    BlockSyncRequest::RoundRange { from, to },
+                ))
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
+}
+
+/// Local DAG tip round used as a fetch trigger: `Some(0)` for a fresh node
+/// with an empty DAG (behind any peer that has rounds), `None` when storage
+/// cannot be read (stand down rather than fetch blindly).
+fn local_dag_tip(dag_store: &DagStore) -> Option<Round> {
+    match dag_store.max_dag_round() {
+        Ok(Some(round)) => Some(round),
+        Ok(None) => Some(0),
+        Err(_) => None,
+    }
+}
+
+// ------------------------------------------------------------------
+// State sync (chunked snapshot fast-sync)
+// ------------------------------------------------------------------
+
+/// Debug entry point that arms a state sync trigger toward one peer.
+///
+/// When set to a libp2p peer id, the node pulls a full state snapshot from
+/// that peer the first time it connects (and again after the rate-limit
+/// interval). The trigger is deliberately manual instead of automatic: the
+/// import replaces *all* local state tables, this chain has no pruned-below-
+/// lowest-block signal that would make "I need a snapshot" objective, and a
+/// peer that can push a snapshot past local verification controls balances.
+/// The operator opts in by naming the peer; verification (state root +
+/// height) still runs before anything is applied.
+const STATE_SYNC_PEER_ENV: &str = "KOVANICA_STATE_SYNC_PEER";
+
+/// Minimum interval between state sync transfer starts toward the same peer.
+/// Chunk continuations of an active session are not gated by this.
+const STATE_SYNC_MIN_INTERVAL: Duration = Duration::from_secs(600);
+
+/// A transfer that stops progressing for this long is abandoned; a fresh
+/// start is then again subject to [`STATE_SYNC_MIN_INTERVAL`].
+const STATE_SYNC_SESSION_TTL: Duration = Duration::from_secs(300);
+
+/// Export side of the P2P state sync protocol, backed by the node's state
+/// storage. [`kovanica_network::NetworkService`] slices and caches the bytes;
+/// this only produces the full export for the height it actually holds.
+struct NodeStateSnapshotSource {
+    storage: Arc<Storage>,
+}
+
+impl StateSnapshotSource for NodeStateSnapshotSource {
+    fn export_snapshot(
+        &self,
+        target_height: Option<u64>,
+    ) -> Result<Option<kovanica_network::ExportedSnapshot>, String> {
+        let txn = self.storage.begin_read().map_err(|e| e.to_string())?;
+        let height = self
+            .storage
+            .state()
+            .snapshot_height(&txn)
+            .map_err(|e| e.to_string())?;
+        // This export always reflects the state this node currently holds; a
+        // request for any other height cannot be served.
+        if target_height.is_some_and(|target| target != height) {
+            return Ok(None);
+        }
+        let bytes = self
+            .storage
+            .state()
+            .snapshot_bytes(&txn)
+            .map_err(|e| e.to_string())?;
+        let state_root = kovanica_storage::StateStore::decode_snapshot(&bytes)
+            .map_err(|e| e.to_string())?
+            .state_root;
+        Ok(Some(kovanica_network::ExportedSnapshot {
+            height,
+            state_root,
+            bytes,
+        }))
+    }
+}
+
+/// One in-flight chunked state sync transfer toward a peer.
+struct StateSyncSession {
+    /// Height the transfer targeted (`None` = peer's latest at start).
+    target_height: Option<u64>,
+    /// Height claimed by the first chunk (consistency anchor; 0 = no chunk
+    /// received yet, so the transfer is not anchored).
+    height: u64,
+    /// State root claimed by the first chunk.
+    state_root: [u8; 32],
+    /// Total serialized length claimed by the first chunk.
+    total_len: u64,
+    /// Bytes received so far, in order.
+    received: Vec<u8>,
+    /// When the session last progressed (TTL check).
+    last_activity: Instant,
+}
+
+/// Initiator side of the state sync protocol: rate-limits transfer starts,
+/// reassembles bounded chunks and refuses inconsistent streams.
+struct StateSyncSessions {
+    /// Peer named by [`STATE_SYNC_PEER_ENV`]; transfers only start toward it.
+    debug_peer: Option<PeerId>,
+    /// Active transfers.
+    sessions: HashMap<PeerId, StateSyncSession>,
+    /// When a transfer toward a peer last started (rate limiting).
+    last_started: HashMap<PeerId, Instant>,
+}
+
+impl StateSyncSessions {
+    fn new() -> Self {
+        let debug_peer = std::env::var(STATE_SYNC_PEER_ENV).ok().and_then(|value| {
+            match value.trim().parse::<PeerId>() {
+                Ok(peer) => Some(peer),
+                Err(err) => {
+                    warn!(
+                        %err,
+                        "{STATE_SYNC_PEER_ENV} is not a valid peer id; state sync trigger disabled"
+                    );
+                    None
+                }
+            }
+        });
+        if debug_peer.is_some() {
+            info!("state sync debug trigger armed ({STATE_SYNC_PEER_ENV})");
+        }
+        Self::with_debug_peer(debug_peer)
+    }
+
+    fn with_debug_peer(debug_peer: Option<PeerId>) -> Self {
+        Self {
+            debug_peer,
+            sessions: HashMap::new(),
+            last_started: HashMap::new(),
+        }
+    }
+
+    /// Start a transfer toward `peer` if the debug entry point targets it and
+    /// the per-peer rate limit allows it.
+    fn maybe_start(
+        &mut self,
+        peer: PeerId,
+        now: Instant,
+        cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) {
+        if self.debug_peer != Some(peer) || self.sessions.contains_key(&peer) {
+            return;
+        }
+        if let Some(last) = self.last_started.get(&peer) {
+            if now.saturating_duration_since(*last) < STATE_SYNC_MIN_INTERVAL {
+                debug!(%peer, "state sync start rate-limited; skipping");
+                return;
+            }
+        }
+        self.last_started.insert(peer, now);
+        self.sessions.insert(
+            peer,
+            StateSyncSession {
+                target_height: None,
+                height: 0,
+                state_root: [0u8; 32],
+                total_len: 0,
+                received: Vec::new(),
+                last_activity: now,
+            },
+        );
+        debug!(%peer, "starting state sync (debug entry point)");
+        if cmd_tx
+            .send(NetworkCommand::RequestStateSync(
+                peer,
+                StateSyncRequest::latest(),
+            ))
+            .is_err()
+        {
+            debug!(%peer, "network command channel closed; state sync not started");
+        }
+    }
+
+    /// Ingest one chunk of a session.
+    ///
+    /// The first chunk anchors the transfer (height, state root, total
+    /// length); every later chunk must repeat that metadata, arrive in order
+    /// and stay within the frame bounds. Any violation abandons the whole
+    /// transfer. `Some(bytes)` is returned once the payload is complete.
+    fn on_chunk(&mut self, peer: PeerId, chunk: SnapshotChunk, now: Instant) -> Option<Vec<u8>> {
+        let Some(session) = self.sessions.get_mut(&peer) else {
+            debug!(%peer, offset = chunk.offset, "state sync chunk without an active session; dropped");
+            return None;
+        };
+        let within_frame = chunk.data.len() <= MAX_STATE_SYNC_CHUNK_BYTES
+            && chunk.offset.saturating_add(chunk.data.len() as u64) <= chunk.total_len;
+        if session.total_len == 0 {
+            // First chunk anchors the transfer.
+            if chunk.offset != 0
+                || chunk.total_len == 0
+                || chunk.total_len > MAX_STATE_SYNC_SNAPSHOT_BYTES
+                || !within_frame
+            {
+                warn!(%peer, total_len = chunk.total_len, "rejecting invalid first state sync chunk; abandoning transfer");
+                self.sessions.remove(&peer);
+                return None;
+            }
+            session.height = chunk.height;
+            session.state_root = chunk.state_root;
+            session.total_len = chunk.total_len;
+        } else {
+            let consistent = session.height == chunk.height
+                && session.state_root == chunk.state_root
+                && session.total_len == chunk.total_len;
+            let in_order = chunk.offset as usize == session.received.len();
+            if !consistent || !in_order || !within_frame {
+                warn!(%peer, offset = chunk.offset, received = session.received.len(), "inconsistent state sync chunk; abandoning transfer");
+                self.sessions.remove(&peer);
+                return None;
+            }
+        }
+        session.received.extend_from_slice(&chunk.data);
+        session.last_activity = now;
+        if session.received.len() as u64 == session.total_len {
+            let session = self.sessions.remove(&peer).expect("session present");
+            return Some(session.received);
+        }
+        None
+    }
+
+    /// Request the next chunk of an active transfer (no-op otherwise).
+    fn request_next(&mut self, peer: PeerId, cmd_tx: &mpsc::UnboundedSender<NetworkCommand>) {
+        let Some(session) = self.sessions.get(&peer) else {
+            return;
+        };
+        let offset = session.received.len() as u64;
+        let request = match session.target_height {
+            Some(target) => StateSyncRequest::at_height_from(target, offset),
+            None => StateSyncRequest {
+                target_height: None,
+                offset,
+            },
+        };
+        if cmd_tx
+            .send(NetworkCommand::RequestStateSync(peer, request))
+            .is_err()
+        {
+            debug!(%peer, "network command channel closed; state sync continuation not sent");
+        }
+    }
+
+    /// Forget a peer's session (completion, rejection or peer error).
+    fn drop_session(&mut self, peer: PeerId) {
+        self.sessions.remove(&peer);
+    }
+
+    /// Abandon transfers that stopped progressing.
+    fn expire(&mut self, now: Instant) {
+        let expired: Vec<PeerId> = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| {
+                now.saturating_duration_since(session.last_activity) >= STATE_SYNC_SESSION_TTL
+            })
+            .map(|(peer, _)| *peer)
+            .collect();
+        for peer in expired {
+            warn!(%peer, "state sync session expired before completion");
+            self.sessions.remove(&peer);
+        }
+    }
+}
+
+/// Verify and apply a fully reassembled state snapshot.
+///
+/// Nothing is applied unless [`kovanica_storage::StateStore::import_verified_snapshot`]
+/// accepts the payload: the state root recomputed from the received tables
+/// must equal the one the snapshot header claims, and the snapshot height
+/// must not be below the local committed height (no silent rollback). The
+/// write transaction commits only after verification succeeds, so a reject
+/// leaves local state untouched.
+fn apply_state_snapshot(state_storage: &Arc<Storage>, peer: PeerId, bytes: &[u8]) {
+    let min_height = match state_storage.begin_read() {
+        Ok(txn) => {
+            let state = state_storage.state();
+            let mut height = match state.get_latest_state_root(&txn) {
+                Ok(Some((height, _))) => height,
+                Ok(None) => 0,
+                Err(e) => {
+                    warn!(error = %e, "could not read local state root; refusing state snapshot");
+                    return;
+                }
+            };
+            match state.get_latest_leader_header(&txn) {
+                Ok(Some(header)) => height = height.max(header.committed_height),
+                Ok(None) => {}
+                Err(e) => {
+                    warn!(error = %e, "could not read local leader header; refusing state snapshot");
+                    return;
+                }
+            }
+            height
+        }
+        Err(e) => {
+            warn!(error = %e, "could not open read transaction; refusing state snapshot");
+            return;
+        }
+    };
+    let txn = match state_storage.begin_write() {
+        Ok(txn) => txn,
+        Err(e) => {
+            error!(error = %e, "failed to begin write transaction for state sync import");
+            return;
+        }
+    };
+    match state_storage
+        .state()
+        .import_verified_snapshot(&txn, bytes, min_height)
+    {
+        Ok(height) => {
+            if let Err(e) = txn.commit() {
+                error!(error = %e, "failed to commit state sync import");
+                return;
+            }
+            info!(%peer, height, min_height, "state snapshot verified and imported");
+        }
+        Err(e) => {
+            // The transaction is dropped uncommitted: local state is untouched.
+            error!(%peer, error = %e, "rejected state snapshot");
+        }
+    }
+}
+
 /// Handle a single [`NetworkEvent`].
+// 8 args: the state-sync session registry is a distinct concern from the
+// catch-up tracker; grouping them into a struct would obscure call sites.
+#[allow(clippy::too_many_arguments)]
 fn handle_network_event(
     event: NetworkEvent,
     mempool: &Mempool,
     engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>,
     io: &BlockIngest<'_>,
     orphans: &mut orphans::OrphanBuffer,
+    catch_up: &mut CatchUpTracker,
+    state_sync_sessions: &mut StateSyncSessions,
     state_storage: &Arc<Storage>,
 ) {
+    let now = Instant::now();
     let (network_cmd_tx, events) = (io.network_cmd_tx, io.events);
-    orphans.expire(std::time::Instant::now());
+    if catch_up.is_active() && catch_up.tick_due(now) {
+        catch_up.tick(now, local_dag_tip(io.dag_store), network_cmd_tx);
+    }
+    orphans.expire(now);
+    state_sync_sessions.expire(now);
     match event {
         NetworkEvent::BlockReceived { peer, block } => {
             // Hot-path validation (audit 3.1): verify signature before engine.process_block
@@ -1333,8 +2384,18 @@ fn handle_network_event(
                 Err(e) => warn!(%peer, %e, "rejected received vote"),
             }
         }
-        NetworkEvent::PeerConnected(peer) => info!(%peer, "peer connected"),
-        NetworkEvent::PeerDisconnected(peer) => info!(%peer, "peer disconnected"),
+        NetworkEvent::PeerConnected(peer) => {
+            info!(%peer, "peer connected");
+            // Proactive catch-up: probe the peer's tip and pull any missing
+            // range through the existing block-sync protocol.
+            catch_up.probe(peer, now, network_cmd_tx);
+            // Optional state sync (debug entry point only, rate-limited).
+            state_sync_sessions.maybe_start(peer, now, network_cmd_tx);
+        }
+        NetworkEvent::PeerDisconnected(peer) => {
+            info!(%peer, "peer disconnected");
+            catch_up.remove(peer);
+        }
         NetworkEvent::PeerDiscovered(peer, addr) => debug!(%peer, %addr, "peer discovered"),
         NetworkEvent::SyncRequest {
             peer,
@@ -1356,13 +2417,51 @@ fn handle_network_event(
                     // synced block is never written to the DAG directly.
                     // Missing parents are fetched recursively via the orphan
                     // buffer.
+                    catch_up.on_hash_response(peer, now, network_cmd_tx);
                     ingest_block(block, peer, engine, io, orphans);
                 }
                 BlockSyncResponse::NotFound => {
+                    catch_up.on_hash_response(peer, now, network_cmd_tx);
                     debug!(%peer, "requested block not found on peer");
                 }
                 BlockSyncResponse::InvalidRequest => {
+                    catch_up.on_hash_response(peer, now, network_cmd_tx);
                     warn!(%peer, "block sync request was invalid");
+                }
+                BlockSyncResponse::Status { tip_round } => {
+                    // A height advertisement is only a fetch trigger: it decides
+                    // whether we start pulling ranges, never what we accept —
+                    // every fetched block is still fully validated.
+                    catch_up.on_status(
+                        peer,
+                        tip_round,
+                        local_dag_tip(io.dag_store),
+                        now,
+                        network_cmd_tx,
+                    );
+                }
+                BlockSyncResponse::RoundHashes {
+                    up_to_round,
+                    hashes,
+                } => {
+                    // The peer reporting an actually-empty window is what drives
+                    // hole-mode continuation; a list that is empty only because
+                    // we already hold every hash must not.
+                    let window_empty = hashes.is_empty();
+                    // Skip hashes already present locally (audit LOW-10): no
+                    // point re-fetching a block we already have.
+                    let missing: Vec<Hash> = hashes
+                        .into_iter()
+                        .filter(|hash| !io.dag_store.has_block(hash).unwrap_or(true))
+                        .collect();
+                    catch_up.on_round_hashes(
+                        peer,
+                        up_to_round,
+                        window_empty,
+                        &missing,
+                        now,
+                        network_cmd_tx,
+                    );
                 }
                 BlockSyncResponse::MissingBlocks(hashes) => {
                     debug!(%peer, count = hashes.len(), "peer returned missing parent hashes");
@@ -1385,43 +2484,30 @@ fn handle_network_event(
         } => {
             debug!(%peer, ?response, "state sync response received");
             match response {
-                StateSyncResponse::Snapshot(data) => {
-                    debug!(%peer, size = data.len(), "received state snapshot");
-                    // Import snapshot into state storage - write to temp file first
-                    let temp_dir = std::env::temp_dir();
-                    let temp_file = temp_dir.join(format!(
-                        "kovanica_state_sync_{}_{}.bin",
-                        peer,
-                        uuid::Uuid::new_v4()
-                    ));
-                    if let Err(e) = std::fs::write(&temp_file, &data) {
-                        error!(error = %e, "failed to write state snapshot to temp file");
-                        return;
+                StateSyncResponse::Chunk(chunk) => {
+                    debug!(
+                        %peer,
+                        offset = chunk.offset,
+                        len = chunk.data.len(),
+                        total = chunk.total_len,
+                        height = chunk.height,
+                        "received state snapshot chunk"
+                    );
+                    match state_sync_sessions.on_chunk(peer, chunk, now) {
+                        // Transfer complete: verify (state root + height)
+                        // before applying; a reject never touches local state.
+                        Some(bytes) => apply_state_snapshot(state_storage, peer, &bytes),
+                        // Still incomplete and the session survived: ask for
+                        // the next chunk. Rejected sessions are already gone.
+                        None => state_sync_sessions.request_next(peer, network_cmd_tx),
                     }
-                    let txn = match state_storage.begin_write() {
-                        Ok(txn) => txn,
-                        Err(e) => {
-                            let _ = std::fs::remove_file(&temp_file);
-                            error!(error = %e, "failed to begin write transaction for state sync import");
-                            return;
-                        }
-                    };
-                    if let Err(e) = state_storage.state().import_snapshot(&txn, &temp_file) {
-                        let _ = std::fs::remove_file(&temp_file);
-                        error!(error = %e, "failed to import state snapshot");
-                        return;
-                    }
-                    let _ = std::fs::remove_file(&temp_file);
-                    if let Err(e) = txn.commit() {
-                        error!(error = %e, "failed to commit state sync import");
-                        return;
-                    }
-                    info!(%peer, "state snapshot imported successfully");
                 }
                 StateSyncResponse::NotFound => {
+                    state_sync_sessions.drop_session(peer);
                     debug!(%peer, "requested state snapshot not found on peer");
                 }
                 StateSyncResponse::InvalidRequest => {
+                    state_sync_sessions.drop_session(peer);
                     warn!(%peer, "state sync request was invalid");
                 }
             }
@@ -1470,6 +2556,10 @@ async fn run_execution(
         Err(e) => warn!(error = %e, "could not open read transaction for execution"),
     }
 
+    // Track epoch transitions so the node can observe boundaries as leaders
+    // commit. Epoch is derived from committed-leader height (deterministic).
+    let mut last_epoch: Option<u64> = None;
+
     loop {
         tokio::select! {
             maybe = subdags.recv() => match maybe {
@@ -1480,6 +2570,19 @@ async fn run_execution(
                             txs = result.txs_applied,
                             "executed committed sub-DAG"
                         );
+                        // Epoch rotation: detect a boundary crossing and log it.
+                        // The committee is rebuilt from staking state on the next
+                        // `build_committee`; live engine swap is gated separately.
+                        if let Some(prev) = last_epoch {
+                            if prev != result.epoch {
+                                info!(
+                                    from_epoch = prev,
+                                    to_epoch = result.epoch,
+                                    "epoch boundary crossed; committee epoch now truthful"
+                                );
+                            }
+                        }
+                        last_epoch = Some(result.epoch);
                         if let Some(non_blue::ExecPool { mempool, returned }) = &pool {
                             let committed: Vec<_> = subdag
                                 .blocks
@@ -1893,6 +2996,10 @@ fn build_committee(
 ) -> Result<CommitteeInfo> {
     let read = storage.begin_read()?;
     let staking_state = storage.state().load_staking_state(&read)?;
+    // Epoch is a pure function of committed-leader height — every node derives
+    // the same value at the same height, so the committee's epoch is truthful
+    // from startup rather than pinned to 0.
+    let epoch = staking_state.current_epoch();
 
     // Filter active validators with sufficient stake
     let mut active_validators: Vec<_> = staking_state
@@ -1913,7 +3020,7 @@ fn build_committee(
             address: *local_address,
             network_address: listen_addr.to_string(),
         };
-        return Ok(CommitteeInfo::try_new(0, vec![authority])?);
+        return Ok(CommitteeInfo::try_new(epoch, vec![authority])?);
     }
 
     // Sort by address for deterministic ordering across all nodes
@@ -1974,7 +3081,7 @@ fn build_committee(
         anyhow::bail!("no validators with registered public keys; committee cannot be empty");
     }
 
-    Ok(CommitteeInfo::try_new(0, authorities)?)
+    Ok(CommitteeInfo::try_new(epoch, authorities)?)
 }
 
 /// Build the [`MempoolConfig`] from the node configuration and environment variables.
@@ -2125,6 +3232,9 @@ const CHAIN_ID_MARKER: &str = "chain_id";
 ///   accept a genesis without `chain_id`.
 /// * `<data_dir>/chain_id` records the chain id the data dir was created for;
 ///   it must match on every later start. Written on first start.
+/// * `genesis.json`, if present, may carry a top-level `chain_id`; when it
+///   does, it must match. This check is independent of whether
+///   `genesis_validators.toml` exists.
 ///
 /// Any mismatch is a hard error: signing with the wrong chain id would
 /// produce votes/transactions no other node accepts (or replayable ones).
@@ -2161,6 +3271,28 @@ fn check_chain_id(config: &NodeConfig) -> Result<()> {
             }
         }
     }
+
+    // The genesis can also be present as the ceremony `genesis.json`. Check it
+    // whenever it exists (not only when `genesis_validators.toml` does), so a
+    // chain id declared there is honoured too. The persisted genesis digest
+    // (`verify_genesis_consistency`) additionally binds `chain_id` when no
+    // explicit id is declared anywhere.
+    let genesis_json_path = config.data_dir.join(GENESIS_JSON_FILE);
+    if genesis_json_path.exists() {
+        let text = std::fs::read_to_string(&genesis_json_path)
+            .with_context(|| format!("reading {}", genesis_json_path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&text)
+            .with_context(|| format!("parsing {}", genesis_json_path.display()))?;
+        if let Some(genesis_id) = value.get("chain_id").and_then(|v| v.as_u64()) {
+            if genesis_id != configured {
+                anyhow::bail!(
+                    "chain_id mismatch: config has {configured}, genesis {} has {genesis_id}; refusing to start",
+                    genesis_json_path.display()
+                );
+            }
+        }
+    }
+
     let marker = config.data_dir.join(CHAIN_ID_MARKER);
     if marker.exists() {
         let text = std::fs::read_to_string(&marker)
@@ -2437,6 +3569,219 @@ mod tests {
             "no storage opened before the chain id check"
         );
     }
+
+    #[test]
+    fn genesis_digest_is_deterministic_and_covers_chain_id_and_allocations() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = chain_id_config(dir.path(), 3);
+        let a = genesis_config_digest(&base).unwrap();
+        let b = genesis_config_digest(&base).unwrap();
+        assert_eq!(a, b, "digest must be deterministic");
+
+        let other_chain = chain_id_config(dir.path(), 1337);
+        assert_ne!(
+            a,
+            genesis_config_digest(&other_chain).unwrap(),
+            "chain id must be covered by the digest"
+        );
+
+        std::fs::write(
+            dir.path().join("funded_accounts.toml"),
+            format!(
+                "[[account]]\naddress = \"{}\"\nbalance = 1000\n",
+                "11".repeat(32)
+            ),
+        )
+        .unwrap();
+        assert_ne!(
+            a,
+            genesis_config_digest(&base).unwrap(),
+            "genesis allocations must be covered by the digest"
+        );
+    }
+
+    #[test]
+    fn genesis_digest_mismatch_refuses_and_override_allows() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+        let stored = Hash::new([1u8; 32]);
+        let fresh = Hash::new([2u8; 32]);
+        {
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_genesis_digest(&txn, &stored).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let err = verify_persisted_genesis_digest(&storage, &fresh, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains(&stored.to_hex()), "{msg}");
+        assert!(msg.contains(&fresh.to_hex()), "{msg}");
+        assert!(msg.contains(ALLOW_GENESIS_MISMATCH_ENV), "{msg}");
+
+        // The explicit override lets the node start despite the mismatch...
+        verify_persisted_genesis_digest(&storage, &fresh, true).expect("override allows");
+        // ...and the persisted value is left untouched.
+        let read = storage.begin_read().unwrap();
+        assert_eq!(
+            storage.state().load_genesis_digest(&read).unwrap(),
+            Some(stored)
+        );
+    }
+
+    #[test]
+    fn mismatch_override_spellings() {
+        for yes in ["1", "true", "TRUE", " yes ", "on"] {
+            assert!(parse_mismatch_override(Some(yes)), "{yes:?} should allow");
+        }
+        for no in ["", "0", "false", "off", "nope"] {
+            assert!(
+                !parse_mismatch_override(Some(no)),
+                "{no:?} should not allow"
+            );
+        }
+        assert!(!parse_mismatch_override(None));
+    }
+
+    #[tokio::test]
+    async fn node_refuses_to_start_on_genesis_digest_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        // Pre-create the state DB as if it had been created for a different
+        // genesis: chain state present, persisted digest different.
+        {
+            let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+            let mut staking = StakingState::new();
+            staking.init_treasury(Address([1; 32]));
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_staking_state(&txn, &staking).unwrap();
+            storage
+                .state()
+                .save_genesis_digest(&txn, &Hash::new([0xEE; 32]))
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let err = run_node(chain_id_config(dir.path(), 1337), std::future::pending())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("genesis digest mismatch"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn first_start_persists_digest_and_migrates_existing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+
+        // Simulate a data dir created before the digest existed: chain state
+        // present, no genesis digest.
+        let mut staking = StakingState::new();
+        staking.init_treasury(Address([9; 32]));
+        let txn = storage.begin_write().unwrap();
+        storage.state().save_staking_state(&txn, &staking).unwrap();
+        txn.commit().unwrap();
+        {
+            let read = storage.begin_read().unwrap();
+            assert!(storage
+                .state()
+                .load_genesis_digest(&read)
+                .unwrap()
+                .is_none());
+        }
+
+        let fresh = Hash::new([5u8; 32]);
+        // Migration: first start writes the digest once.
+        verify_persisted_genesis_digest(&storage, &fresh, false).unwrap();
+        {
+            let read = storage.begin_read().unwrap();
+            assert_eq!(
+                storage.state().load_genesis_digest(&read).unwrap(),
+                Some(fresh)
+            );
+        }
+        // Second start is a no-op and still succeeds.
+        verify_persisted_genesis_digest(&storage, &fresh, false).unwrap();
+    }
+
+    #[test]
+    fn genesis_json_tamper_is_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = chain_id_config(dir.path(), 1337);
+        let canonical = canonical_genesis_digest();
+
+        std::fs::write(
+            dir.path().join(GENESIS_JSON_FILE),
+            serde_json::to_string(&serde_json::json!({
+                "genesis_block": { "digest_hex": canonical.to_hex() }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        verify_genesis_json(&config, &canonical, false).expect("matching genesis.json");
+
+        std::fs::write(
+            dir.path().join(GENESIS_JSON_FILE),
+            serde_json::to_string(&serde_json::json!({
+                "genesis_block": { "digest_hex": Hash::new([9u8; 32]).to_hex() }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let err = verify_genesis_json(&config, &canonical, false).unwrap_err();
+        assert!(err.to_string().contains("canonical genesis"), "{err:#}");
+        // Same override applies.
+        verify_genesis_json(&config, &canonical, true).expect("override allows");
+    }
+
+    #[test]
+    fn check_chain_id_reads_genesis_json_chain_id() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(GENESIS_JSON_FILE),
+            serde_json::to_string(&serde_json::json!({ "chain_id": 3 })).unwrap(),
+        )
+        .unwrap();
+        let err = check_chain_id(&chain_id_config(dir.path(), 1337)).unwrap_err();
+        assert!(err.to_string().contains("chain_id mismatch"), "{err:#}");
+        check_chain_id(&chain_id_config(dir.path(), 3)).expect("matching genesis.json chain id");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ceremony_validator_key_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let validators = dir.path().join("validators.json");
+        std::fs::write(
+            &validators,
+            serde_json::to_string(&serde_json::json!([
+                { "address": "11".repeat(32) }
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        let keys_dir = dir.path().join("keys");
+        let output = dir.path().join("genesis.json");
+        let args = GenesisArgs {
+            validators: validators.to_string_lossy().into_owned(),
+            treasury_address: "22".repeat(32),
+            founder_address: "33".repeat(32),
+            output: output.to_string_lossy().into_owned(),
+            validator_keys_out: Some(keys_dir.to_string_lossy().into_owned()),
+            force: false,
+        };
+        run_genesis(args).expect("ceremony runs");
+
+        let key_file = keys_dir.join("validator1.key");
+        let file_mode = std::fs::metadata(&key_file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(file_mode, 0o600, "generated seed file must be 0600");
+        let dir_mode = std::fs::metadata(&keys_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "generated keys directory must be 0700");
+        let body = std::fs::read_to_string(&key_file).unwrap();
+        assert_eq!(body.len(), 64, "seed file holds 32 bytes of hex");
+        assert!(body.chars().all(|c| c.is_ascii_hexdigit()), "{body}");
+    }
+
     use kovanica_staking::{StakingState, MAX_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE, ONE_KUNA};
     use kovanica_storage::BincodeSerialize;
     use redb::{Database, TableDefinition};
@@ -3466,6 +4811,599 @@ mod tests {
             committee.size(),
             MAX_ACTIVE_VALIDATORS,
             "committee should be limited to MAX_ACTIVE_VALIDATORS"
+        );
+    }
+
+    // ---- proactive catch-up tracker (#1) ----
+
+    /// A DAG store holding one block per round `0..rounds` (author 0).
+    fn catch_up_dag(dir: &std::path::Path, rounds: Round) -> DagStore {
+        let dag = DagStore::new(Storage::new(dir.join("catch-up-dag.redb")).unwrap()).unwrap();
+        for round in 0..rounds {
+            let block = StatementBlock {
+                author: 0,
+                round,
+                parents: Vec::new(),
+                transactions: Vec::new(),
+                statements: Vec::new(),
+                signature: Signature([0u8; 64]),
+                digest: Hash::new(format!("catch-up-round-{round}")),
+                merkle_root: Default::default(),
+            };
+            dag.put_block(&block).unwrap();
+        }
+        dag
+    }
+
+    /// Pop the next queued sync command (panics if none is waiting).
+    fn next_sync(rx: &mut mpsc::UnboundedReceiver<NetworkCommand>) -> (PeerId, BlockSyncRequest) {
+        match rx.try_recv().expect("a sync command was queued") {
+            NetworkCommand::RequestSync(peer, request) => (peer, request),
+            _other => panic!("expected a RequestSync command"),
+        }
+    }
+
+    #[test]
+    fn catch_up_probe_asks_for_the_peer_tip_once() {
+        let mut tracker = CatchUpTracker::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let peer = PeerId::random();
+        let now = Instant::now();
+
+        tracker.probe(peer, now, &tx);
+        tracker.probe(peer, now, &tx);
+
+        let (got_peer, request) = next_sync(&mut rx);
+        assert_eq!(got_peer, peer);
+        assert!(matches!(request, BlockSyncRequest::Status));
+        assert!(rx.try_recv().is_err(), "one probe per peer");
+        assert!(tracker.is_active());
+    }
+
+    #[test]
+    fn catch_up_behind_peer_is_pulled_with_a_bounded_range_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let dag = catch_up_dag(dir.path(), 5);
+        let local = local_dag_tip(&dag).expect("local tip");
+        assert_eq!(local, 4);
+
+        let mut tracker = CatchUpTracker::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let peer = PeerId::random();
+        let now = Instant::now();
+
+        tracker.probe(peer, now, &tx);
+        let _ = next_sync(&mut rx);
+        tracker.on_status(peer, 100, Some(local), now, &tx);
+
+        let (got_peer, request) = next_sync(&mut rx);
+        assert_eq!(got_peer, peer);
+        match request {
+            BlockSyncRequest::RoundRange { from, to } => {
+                assert_eq!(from, local + 1);
+                assert!(to <= 100, "never request beyond the advertised tip");
+                assert!(to - from < BlockSyncRequest::MAX_RANGE_ROUNDS);
+            }
+            other => panic!("expected a bounded range request, got {other:?}"),
+        }
+        assert!(tracker.is_active());
+    }
+
+    #[test]
+    fn catch_up_peer_at_or_behind_the_local_tip_starts_nothing() {
+        let mut tracker = CatchUpTracker::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let peer = PeerId::random();
+        let now = Instant::now();
+
+        tracker.probe(peer, now, &tx);
+        let _ = next_sync(&mut rx);
+        tracker.on_status(peer, 4, Some(4), now, &tx);
+        assert!(!tracker.is_active(), "equal tip: no session");
+
+        tracker.probe(peer, now, &tx);
+        let _ = next_sync(&mut rx);
+        tracker.on_status(peer, 2, Some(9), now, &tx);
+        assert!(!tracker.is_active(), "peer behind: no session");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn catch_up_stands_down_when_the_local_tip_is_unreadable() {
+        let mut tracker = CatchUpTracker::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let peer = PeerId::random();
+        let now = Instant::now();
+
+        tracker.probe(peer, now, &tx);
+        let _ = next_sync(&mut rx);
+        tracker.on_status(peer, 100, None, now, &tx);
+        assert!(!tracker.is_active());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn local_dag_tip_treats_an_empty_dag_as_round_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = DagStore::new(Storage::new(dir.path().join("empty.redb")).unwrap()).unwrap();
+        assert_eq!(local_dag_tip(&empty), Some(0));
+
+        let dag = catch_up_dag(dir.path(), 3);
+        assert_eq!(local_dag_tip(&dag), Some(2));
+    }
+
+    /// Probe a fabricated peer, start a catch-up session and consume the first
+    /// range window. Returns the tracker, the peer and the window bounds.
+    fn catch_up_started(
+        tx: &mpsc::UnboundedSender<NetworkCommand>,
+        rx: &mut mpsc::UnboundedReceiver<NetworkCommand>,
+        target: Round,
+    ) -> (CatchUpTracker, PeerId, Round, Round) {
+        let mut tracker = CatchUpTracker::new();
+        let peer = PeerId::random();
+        let now = Instant::now();
+        tracker.probe(peer, now, tx);
+        let _ = next_sync(rx);
+        tracker.on_status(peer, target, Some(0), now, tx);
+        let (_, first) = next_sync(rx);
+        match first {
+            BlockSyncRequest::RoundRange { from, to } => (tracker, peer, from, to),
+            other => panic!("expected a range request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn catch_up_tick_does_not_advance_while_a_window_is_in_flight() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (mut tracker, _peer, _from, _to) = catch_up_started(&tx, &mut rx, 200);
+
+        tracker.tick(Instant::now() + CATCH_UP_TICK, Some(100), &tx);
+        assert!(rx.try_recv().is_err(), "no second request while in flight");
+    }
+
+    #[test]
+    fn catch_up_tick_waits_for_local_progress_before_the_next_window() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (mut tracker, peer, first_from, first_to) = catch_up_started(&tx, &mut rx, 200);
+        let now = Instant::now();
+
+        tracker.on_round_hashes(peer, first_to, false, &[Hash::new("h")], now, &tx);
+        let (_, by_hash) = next_sync(&mut rx);
+        assert!(matches!(by_hash, BlockSyncRequest::ByHash(_)));
+
+        // Local tip has not reached the window end: wait instead of running ahead.
+        tracker.tick(now + CATCH_UP_TICK, Some(first_to - 1), &tx);
+        assert!(rx.try_recv().is_err(), "must not run ahead of ingestion");
+
+        // Local tip reached the window end: continue with the next window.
+        tracker.tick(now + CATCH_UP_TICK * 2, Some(first_to), &tx);
+        let (_, next) = next_sync(&mut rx);
+        match next {
+            BlockSyncRequest::RoundRange { from, to } => {
+                assert_eq!(from, first_to + 1);
+                assert_eq!(from, first_from + BlockSyncRequest::MAX_RANGE_ROUNDS);
+                assert!(to <= 200);
+            }
+            other => panic!("expected a continuation range, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn catch_up_hole_mode_crosses_empty_rounds_without_local_progress() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (mut tracker, peer, _from, first_to) = catch_up_started(&tx, &mut rx, 200);
+        let now = Instant::now();
+
+        // The window covered only empty rounds: nothing to fetch, and the local
+        // tip cannot move, so the session must still continue.
+        tracker.on_round_hashes(peer, first_to, true, &[], now, &tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "empty window queues no hash fetches"
+        );
+
+        tracker.tick(now + CATCH_UP_TICK, Some(0), &tx);
+        let (_, next) = next_sync(&mut rx);
+        assert!(matches!(next, BlockSyncRequest::RoundRange { .. }));
+    }
+
+    /// A full 512-hash window is released through a bounded pipeline, and each
+    /// completed fetch frees a slot for the next hash (audit HIGH-2c).
+    #[test]
+    fn catch_up_hash_fetches_are_pipelined_with_a_bounded_window() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (mut tracker, peer, _from, first_to) = catch_up_started(&tx, &mut rx, 512);
+        let now = Instant::now();
+
+        let hashes: Vec<Hash> = (0..BlockSyncResponse::MAX_RANGE_HASHES)
+            .map(|i| Hash::new(format!("h{i}")))
+            .collect();
+        tracker.on_round_hashes(peer, first_to, false, &hashes, now, &tx);
+
+        // Only the bounded window is in flight, not all 512 at once.
+        let mut issued = 0usize;
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                NetworkCommand::RequestSync(_, BlockSyncRequest::ByHash(_)) => issued += 1,
+                _other => panic!("expected only by-hash fetches"),
+            }
+        }
+        assert_eq!(issued, CATCH_UP_MAX_HASH_FETCHES);
+        assert!(issued < BlockSyncResponse::MAX_RANGE_HASHES);
+
+        // One completion frees one slot and releases exactly one more fetch.
+        tracker.on_hash_response(peer, now, &tx);
+        let (_, next) = next_sync(&mut rx);
+        assert!(matches!(next, BlockSyncRequest::ByHash(_)));
+        assert!(rx.try_recv().is_err(), "only one slot was freed");
+    }
+
+    /// A peer cannot keep a session alive forever by answering every range with
+    /// an empty window while advancing its advertised tip (audit MEDIUM-5).
+    #[test]
+    fn catch_up_hole_mode_is_capped() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (mut tracker, peer, _from, mut to) = catch_up_started(&tx, &mut rx, 512);
+        let now = Instant::now();
+
+        let mut windows = 0u32;
+        while tracker.is_active() && windows < CATCH_UP_MAX_HOLE_WINDOWS + 2 {
+            tracker.on_round_hashes(peer, to, true, &[], now, &tx);
+            tracker.tick(now + CATCH_UP_TICK, Some(0), &tx);
+            let _ = rx.try_recv(); // drain any continuation range request
+            to = to.saturating_add(BlockSyncRequest::MAX_RANGE_ROUNDS);
+            windows += 1;
+        }
+        assert!(
+            !tracker.is_active(),
+            "hole mode must be bounded even without local progress"
+        );
+        assert!(windows <= CATCH_UP_MAX_HOLE_WINDOWS + 1);
+    }
+
+    /// A window is only continued once the previous window's by-hash pipeline
+    /// has drained, so windows cannot stack up unboundedly (audit HIGH-2c).
+    #[test]
+    fn catch_up_waits_for_the_hash_pipeline_before_the_next_window() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (mut tracker, peer, _from, first_to) = catch_up_started(&tx, &mut rx, 512);
+        let now = Instant::now();
+
+        let hashes: Vec<Hash> = (0..BlockSyncResponse::MAX_RANGE_HASHES)
+            .map(|i| Hash::new(format!("h{i}")))
+            .collect();
+        tracker.on_round_hashes(peer, first_to, false, &hashes, now, &tx);
+        while rx.try_recv().is_ok() {} // drop the first pipeline window
+
+        // Local tip looks progressed, but the backlog is still draining: the
+        // session must not start the next range window on top of it.
+        tracker.tick(now + CATCH_UP_TICK, Some(first_to), &tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "no next window while by-hash fetches are still queued"
+        );
+    }
+
+    #[test]
+    fn catch_up_session_completes_once_the_advertised_tip_is_covered() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (mut tracker, peer, _from, _to) = catch_up_started(&tx, &mut rx, 32);
+        let now = Instant::now();
+
+        tracker.on_round_hashes(peer, 32, true, &[], now, &tx);
+        assert!(tracker.is_active());
+        tracker.tick(now + CATCH_UP_TICK, Some(0), &tx);
+        assert!(!tracker.is_active(), "covered tip ends the session");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn catch_up_session_expires_after_the_inactivity_ttl() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (mut tracker, peer, _from, _to) = catch_up_started(&tx, &mut rx, 200);
+        let now = Instant::now();
+
+        tracker.sessions.get_mut(&peer).unwrap().last_activity = now
+            .checked_sub(CATCH_UP_TTL + Duration::from_secs(1))
+            .unwrap();
+        tracker.tick(now, Some(0), &tx);
+        assert!(!tracker.is_active(), "idle session expires");
+    }
+
+    #[test]
+    fn catch_up_session_gives_up_after_the_range_budget() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (mut tracker, peer, _from, first_to) = catch_up_started(&tx, &mut rx, 200);
+        let now = Instant::now();
+
+        tracker.on_round_hashes(peer, first_to, false, &[Hash::new("h")], now, &tx);
+        let session = tracker.sessions.get_mut(&peer).unwrap();
+        session.ranges_done = CATCH_UP_MAX_RANGES;
+        session.last_activity = now;
+
+        tracker.tick(now + CATCH_UP_TICK, Some(first_to), &tx);
+        assert!(!tracker.is_active(), "range budget is finite");
+    }
+
+    #[test]
+    fn catch_up_session_is_dropped_on_disconnect() {
+        let mut tracker = CatchUpTracker::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let peer = PeerId::random();
+
+        tracker.probe(peer, Instant::now(), &tx);
+        let _ = next_sync(&mut rx);
+        assert!(tracker.is_active());
+
+        tracker.remove(peer);
+        assert!(!tracker.is_active());
+    }
+
+    // ------------------------------------------------------------------
+    // State sync (chunked snapshot transfer)
+    // ------------------------------------------------------------------
+
+    fn state_sync_chunk(
+        offset: u64,
+        total_len: u64,
+        height: u64,
+        state_root: [u8; 32],
+        data: Vec<u8>,
+    ) -> SnapshotChunk {
+        SnapshotChunk {
+            height,
+            state_root,
+            total_len,
+            offset,
+            data,
+        }
+    }
+
+    #[test]
+    fn state_sync_maybe_start_only_targets_the_debug_peer() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let target = PeerId::random();
+        let mut sessions = StateSyncSessions::with_debug_peer(Some(target));
+
+        // A peer that is not the configured target never starts a transfer.
+        sessions.maybe_start(PeerId::random(), Instant::now(), &tx);
+        assert!(sessions.sessions.is_empty());
+        assert!(rx.try_recv().is_err());
+
+        // The configured target starts exactly one transfer.
+        sessions.maybe_start(target, Instant::now(), &tx);
+        assert!(sessions.sessions.contains_key(&target));
+        match rx.try_recv().expect("start command") {
+            NetworkCommand::RequestStateSync(peer, request) => {
+                assert_eq!(peer, target);
+                assert_eq!(request, StateSyncRequest::latest());
+            }
+            _ => panic!("expected state sync request"),
+        }
+    }
+
+    #[test]
+    fn state_sync_starts_are_rate_limited_per_peer() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let target = PeerId::random();
+        let mut sessions = StateSyncSessions::with_debug_peer(Some(target));
+        let start = Instant::now();
+
+        sessions.maybe_start(target, start, &tx);
+        let _ = rx.try_recv().expect("first start");
+        // Completing the session does not lift the rate limit.
+        let bytes = vec![1u8; 8];
+        let chunk = state_sync_chunk(0, 8, 3, [2u8; 32], bytes.clone());
+        assert_eq!(sessions.on_chunk(target, chunk, start), Some(bytes));
+        assert!(sessions.sessions.is_empty());
+
+        // Within the interval: no second start.
+        sessions.maybe_start(target, start + STATE_SYNC_MIN_INTERVAL / 2, &tx);
+        assert!(rx.try_recv().is_err(), "second start must be rate-limited");
+
+        // After the interval: allowed again.
+        sessions.maybe_start(target, start + STATE_SYNC_MIN_INTERVAL, &tx);
+        assert!(rx.try_recv().is_ok(), "start allowed after the interval");
+    }
+
+    #[test]
+    fn state_sync_reassembles_chunks_in_order() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let target = PeerId::random();
+        let mut sessions = StateSyncSessions::with_debug_peer(Some(target));
+        let now = Instant::now();
+        sessions.maybe_start(target, now, &tx);
+
+        let total: u64 = 12;
+        let root = [5u8; 32];
+        let first = sessions.on_chunk(
+            target,
+            state_sync_chunk(0, total, 9, root, vec![1u8; 8]),
+            now,
+        );
+        assert_eq!(first, None, "first chunk is not the whole payload");
+        let second = sessions.on_chunk(
+            target,
+            state_sync_chunk(8, total, 9, root, vec![2u8; 4]),
+            now,
+        );
+        assert_eq!(
+            second,
+            Some(vec![1u8; 8].into_iter().chain([2u8; 4]).collect())
+        );
+        assert!(sessions.sessions.is_empty(), "completed session is removed");
+    }
+
+    #[test]
+    fn state_sync_rejects_inconsistent_or_out_of_order_chunks() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let target = PeerId::random();
+        let mut sessions = StateSyncSessions::with_debug_peer(Some(target));
+        let now = Instant::now();
+
+        // The state root changing mid-transfer abandons the session.
+        sessions.maybe_start(target, now, &tx);
+        assert!(sessions
+            .on_chunk(
+                target,
+                state_sync_chunk(0, 16, 9, [1u8; 32], vec![1u8; 8]),
+                now
+            )
+            .is_none());
+        assert!(sessions
+            .on_chunk(
+                target,
+                state_sync_chunk(8, 16, 9, [2u8; 32], vec![2u8; 8]),
+                now
+            )
+            .is_none());
+        assert!(sessions.sessions.is_empty(), "tampered stream abandoned");
+
+        // An out-of-order chunk abandons the session.
+        sessions.maybe_start(target, now, &tx);
+        assert!(sessions
+            .on_chunk(
+                target,
+                state_sync_chunk(0, 16, 9, [1u8; 32], vec![1u8; 8]),
+                now
+            )
+            .is_none());
+        assert!(sessions
+            .on_chunk(
+                target,
+                state_sync_chunk(10, 16, 9, [1u8; 32], vec![2u8; 6]),
+                now
+            )
+            .is_none());
+        assert!(
+            sessions.sessions.is_empty(),
+            "out-of-order stream abandoned"
+        );
+    }
+
+    #[test]
+    fn state_sync_refuses_oversized_or_empty_claims() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let target = PeerId::random();
+        let mut sessions = StateSyncSessions::with_debug_peer(Some(target));
+        let now = Instant::now();
+
+        // A total length above the reassembly cap is refused before any byte
+        // is buffered.
+        sessions.maybe_start(target, now, &tx);
+        let oversized = MAX_STATE_SYNC_SNAPSHOT_BYTES + 1;
+        assert!(sessions
+            .on_chunk(
+                target,
+                state_sync_chunk(0, oversized, 9, [1u8; 32], vec![1u8; 4]),
+                now
+            )
+            .is_none());
+        assert!(sessions.sessions.is_empty(), "oversized claim abandoned");
+
+        // A zero-length claim is refused too.
+        sessions.maybe_start(target, now, &tx);
+        assert!(sessions
+            .on_chunk(target, state_sync_chunk(0, 0, 9, [1u8; 32], vec![]), now)
+            .is_none());
+        assert!(sessions.sessions.is_empty(), "empty claim abandoned");
+    }
+
+    /// Export a snapshot from a throwaway storage with one seeded account.
+    fn exported_snapshot_bytes() -> Vec<u8> {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("src.redb")).unwrap();
+        {
+            let txn = storage.begin_write().unwrap();
+            let acct = kovanica_storage::state_store::Account {
+                balance: 42,
+                nonce: 1,
+                code_hash: [0; 32],
+                code: Vec::new(),
+            };
+            storage
+                .state()
+                .set_account(&txn, &Address([7; 32]), &acct)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let txn = storage.begin_read().unwrap();
+        storage.state().snapshot_bytes(&txn).unwrap()
+    }
+
+    #[test]
+    fn apply_state_snapshot_imports_a_verified_payload() {
+        let bytes = exported_snapshot_bytes();
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+
+        apply_state_snapshot(&storage, PeerId::random(), &bytes);
+
+        let txn = storage.begin_read().unwrap();
+        let acct = storage
+            .state()
+            .get_account(&txn, &Address([7; 32]))
+            .unwrap();
+        assert_eq!(acct.balance, 42, "verified snapshot must be applied");
+    }
+
+    #[test]
+    fn apply_state_snapshot_rejects_tampered_payload() {
+        let bytes = exported_snapshot_bytes();
+        // Tamper with a table value while keeping the claimed header intact:
+        // the recomputed state root no longer matches.
+        let mut data = kovanica_storage::StateStore::decode_snapshot(&bytes).unwrap();
+        data.accounts[0].1.push(0xff);
+        let mut tampered = kovanica_storage::state_store::SNAPSHOT_MAGIC.to_vec();
+        tampered.extend_from_slice(&bincode::serialize(&data).unwrap());
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        apply_state_snapshot(&storage, PeerId::random(), &tampered);
+
+        let txn = storage.begin_read().unwrap();
+        assert!(
+            storage
+                .state()
+                .get_account_or_default(&txn, &Address([7; 32]))
+                .unwrap()
+                .balance
+                == 0,
+            "tampered snapshot must never be applied"
+        );
+    }
+
+    #[test]
+    fn apply_state_snapshot_rejects_height_regression() {
+        let mut bytes = exported_snapshot_bytes();
+        // Re-stamp the snapshot at a height below the caller's expectation.
+        let mut data = kovanica_storage::StateStore::decode_snapshot(&bytes).unwrap();
+        data.height = 3;
+        bytes = kovanica_storage::state_store::SNAPSHOT_MAGIC.to_vec();
+        bytes.extend_from_slice(&bincode::serialize(&data).unwrap());
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        // Local state is ahead of the snapshot: importing would roll back.
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_state_root(&txn, 10, &Hash::new(b"local"))
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        apply_state_snapshot(&storage, PeerId::random(), &bytes);
+
+        let txn = storage.begin_read().unwrap();
+        assert!(
+            storage
+                .state()
+                .get_account_or_default(&txn, &Address([7; 32]))
+                .unwrap()
+                .balance
+                == 0,
+            "a snapshot below local height must never be applied"
         );
     }
 }

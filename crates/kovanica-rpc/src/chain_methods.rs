@@ -207,6 +207,18 @@ fn kind_to_json(kind: &TransactionKind) -> Value {
             "vrfHash": to_hex(vrf_hash),
             "vrfProof": to_hex(vrf_proof),
         }),
+        TransactionKind::SetCommission {
+            validator,
+            commission_bps,
+        } => json!({
+            "type": "set_commission",
+            "validator": validator.to_string(),
+            "commission_bps": quantity(*commission_bps as u64),
+        }),
+        TransactionKind::ClaimTreasury { amount } => json!({
+            "type": "claim_treasury",
+            "amount": quantity(*amount),
+        }),
     }
 }
 
@@ -325,6 +337,17 @@ pub async fn handle_send_raw_transaction(
 }
 
 /// `kovanica_getTransactionReceipt(hash)` — receipt for a mined transaction.
+///
+/// Once the block carrying the transaction has been executed, the receipt
+/// reports the **real** outcome: `status`/`success` say whether the
+/// transaction body succeeded (a contract call can fail — e.g. out of gas —
+/// while fee and nonce are still charged) and `gasUsed` is the interpreter
+/// fuel the transaction actually burned (`0` for native kinds).
+///
+/// When the block is known but no receipt row exists yet — the transaction is
+/// in a block whose committed sub-DAG has not been executed, or the storage
+/// predates the per-hash receipt index — the pre-existing optimistic shape is
+/// preserved so clients that only need inclusion keep working.
 pub async fn handle_get_transaction_receipt(
     params: Value,
     state: RpcState,
@@ -332,30 +355,47 @@ pub async fn handle_get_transaction_receipt(
     let args = params_vec(&params);
     let hash = parse_hash(required(&args, 0, "transaction hash")?, "transaction hash")?;
 
-    let txn = state.storage.begin_read().map_err(internal)?;
-    let Some(block_hash) = state
-        .storage
-        .blocks()
-        .get_block_for_transaction(&txn, &hash)
-        .map_err(internal)?
-    else {
-        return Ok(Value::Null);
+    // Scoped so no read transaction is held while the receipt index is
+    // queried (and never across an await point).
+    let (block_hash, block_round, index) = {
+        let txn = state.storage.begin_read().map_err(internal)?;
+        let Some(block_hash) = state
+            .storage
+            .blocks()
+            .get_block_for_transaction(&txn, &hash)
+            .map_err(internal)?
+        else {
+            return Ok(Value::Null);
+        };
+
+        let block = state
+            .storage
+            .blocks()
+            .get_block(&txn, &block_hash)
+            .map_err(internal)?;
+        let index = block.transactions.iter().position(|t| t.hash == hash);
+        (block_hash, block.round, index)
     };
 
-    let block = state
-        .storage
-        .blocks()
-        .get_block(&txn, &block_hash)
-        .map_err(internal)?;
-    let index = block.transactions.iter().position(|t| t.hash == hash);
+    let receipt =
+        kovanica_execution::receipt_by_tx_hash(&state.storage, &hash).map_err(internal)?;
+    let (status, success, gas_used) = match receipt {
+        Some(receipt) => (
+            if receipt.success { "0x1" } else { "0x0" },
+            receipt.success,
+            quantity(receipt.gas_used),
+        ),
+        None => ("0x1", true, quantity(0u64)),
+    };
 
     Ok(json!({
         "transactionHash": to_hex(&hash.0),
         "blockHash": to_hex(&block_hash.0),
-        "blockNumber": quantity(block.round),
+        "blockNumber": quantity(block_round),
         "transactionIndex": index.map(|i| quantity(i as u64)).unwrap_or(Value::Null),
-        "status": "0x1",
-        "success": true,
+        "status": status,
+        "success": success,
+        "gasUsed": gas_used,
     }))
 }
 
@@ -1409,6 +1449,170 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unknown, Value::Null);
+    }
+
+    #[tokio::test]
+    async fn transaction_receipt_reports_real_status_and_gas() {
+        use kovanica_consensus::CommittedSubDag;
+        use kovanica_storage::state_store::Account;
+        use kovanica_types::block::BlockReference;
+        use kovanica_types::crypto::Signature;
+
+        let (_dir, storage) = open_storage();
+        let state = test_state(storage.clone());
+
+        let (sk, pk) = kovanica_crypto::generate_keypair();
+        let sender = Address::from_public_key(&pk);
+
+        // Fund the sender below the amount it will try to move.
+        let txn = storage.begin_write().unwrap();
+        storage
+            .state()
+            .set_account(
+                &txn,
+                &sender,
+                &Account {
+                    balance: 100_000,
+                    nonce: 0,
+                    code_hash: [0; 32],
+                    code: Vec::new(),
+                },
+            )
+            .unwrap();
+        txn.commit().unwrap();
+
+        // Signed transfer that must fail inside the body (overdraft).
+        let mut failing = Transaction {
+            sender,
+            nonce: 0,
+            kind: TransactionKind::Transfer {
+                to: Address([3u8; 32]),
+                amount: 200_000,
+            },
+            fee: 1,
+            signature: Signature([0; 64]),
+            hash: Hash::zero(),
+        };
+        let h = failing.signing_hash(&state.mempool.signing_context());
+        failing.signature = kovanica_crypto::sign(&sk, h.as_ref());
+        failing.hash = h;
+
+        // Store the block that carries it (round 1, no parents).
+        let block = StatementBlock {
+            author: 0,
+            round: 1,
+            parents: Vec::new(),
+            transactions: vec![failing.clone()],
+            statements: Vec::new(),
+            signature: Signature([0; 64]),
+            digest: StatementBlock::compute_digest(0, 1, &[], &[failing.clone()]),
+            merkle_root: StatementBlock::compute_merkle_root(&[failing.clone()]),
+        };
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .blocks()
+                .put_block(&txn, &block, &block.transactions)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Execute the committed sub-DAG carrying that block so a receipt is
+        // written for the transaction (leader author 0 is the joined validator).
+        let mut ctx = kovanica_execution::ExecutionContext::new();
+        ctx.staking
+            .join_validator(
+                Address([9u8; 32]),
+                MIN_VALIDATOR_STAKE,
+                0,
+                Some(Address([8u8; 32])),
+                None,
+                None,
+            )
+            .expect("join validator");
+        let leader = StatementBlock {
+            author: 0,
+            round: 1,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: Signature([0; 64]),
+            digest: StatementBlock::compute_digest(0, 1, &[], &[]),
+            merkle_root: Default::default(),
+        };
+        let subdag = CommittedSubDag {
+            leader,
+            blocks: vec![block.clone()],
+            leader_round: 1,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        let executed = ctx
+            .execute_committed_subdag(&subdag, &storage)
+            .expect("execute committed subdag");
+        assert!(
+            !executed.receipts[0].success,
+            "fixture transaction must fail: {:?}",
+            executed.receipts[0].error
+        );
+
+        // The RPC answer now carries the real outcome instead of a hard-coded
+        // success: failed body, native gas 0, same inclusion metadata.
+        let receipt =
+            handle_get_transaction_receipt(json!([to_hex(&failing.hash.0)]), state.clone())
+                .await
+                .unwrap();
+        assert_eq!(receipt["status"], json!("0x0"));
+        assert_eq!(receipt["success"], json!(false));
+        assert_eq!(receipt["gasUsed"], json!("0x0"));
+        assert_eq!(receipt["blockHash"], json!(to_hex(&block.digest.0)));
+        assert_eq!(receipt["transactionIndex"], json!("0x0"));
+
+        // Fallback: a transaction in a stored-but-not-executed block keeps the
+        // pre-existing optimistic shape (status 0x1, gasUsed 0).
+        let pending_tx = Transaction {
+            sender: Address([4u8; 32]),
+            nonce: 0,
+            kind: TransactionKind::Transfer {
+                to: Address([5u8; 32]),
+                amount: 1,
+            },
+            fee: 1,
+            signature: Signature([0; 64]),
+            hash: Hash::new(b"rpc-receipt-fallback"),
+        };
+        let parents = vec![BlockReference {
+            author: block.author,
+            round: block.round,
+            digest: block.digest,
+        }];
+        let digest =
+            StatementBlock::compute_digest(0, 2, &parents, std::slice::from_ref(&pending_tx));
+        let merkle_root = StatementBlock::compute_merkle_root(std::slice::from_ref(&pending_tx));
+        let pending_block = StatementBlock {
+            author: 0,
+            round: 2,
+            parents,
+            transactions: vec![pending_tx.clone()],
+            statements: Vec::new(),
+            signature: Signature([0; 64]),
+            digest,
+            merkle_root,
+        };
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .blocks()
+                .put_block(&txn, &pending_block, &pending_block.transactions)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let fallback = handle_get_transaction_receipt(json!([to_hex(&pending_tx.hash.0)]), state)
+            .await
+            .unwrap();
+        assert_eq!(fallback["status"], json!("0x1"));
+        assert_eq!(fallback["success"], json!(true));
+        assert_eq!(fallback["gasUsed"], json!("0x0"));
     }
 
     #[tokio::test]

@@ -54,6 +54,20 @@ const EXECUTED_SUBDAGS: TableDefinition<[u8; 32], u8> =
 /// Table for transaction receipts (committed_leader_height -> receipts).
 const TX_RECEIPTS: TableDefinition<u64, Vec<u8>> = TableDefinition::new("tx_receipts");
 
+/// Per-transaction receipt index (tx hash -> receipt), written alongside
+/// [`TX_RECEIPTS`] so `kovanica_getTransactionReceipt` can look up the real
+/// execution outcome without walking committed heights.
+///
+/// **Unbounded growth**: one row is added per executed transaction and nothing
+/// ever removes them, so this table — like [`TX_RECEIPTS`] — grows with the
+/// chain forever. It is only a lookup index for RPC; pruning it (e.g. keeping
+/// the last N committed heights) requires a height/age field that the receipt
+/// does not currently carry, so no prune helper is provided here. Operators
+/// should plan index pruning alongside the per-height history table before
+/// long-running storage becomes a concern.
+const TX_RECEIPT_BY_HASH: TableDefinition<[u8; 32], Vec<u8>> =
+    TableDefinition::new("tx_receipt_by_hash");
+
 /// Accrued, unclaimed delegator rewards: `delegator || validator` -> amount.
 /// Kept outside `StakingState` so its persisted (bincode) format is unchanged.
 const PENDING_REWARDS: TableDefinition<[u8; 64], u64> =
@@ -132,7 +146,11 @@ pub struct TransactionReceipt {
     pub tx_hash: kovanica_types::hash::Hash,
     /// Whether the transaction succeeded.
     pub success: bool,
-    /// Gas used (for WASM calls; 0 for native transfers).
+    /// Fuel actually consumed by the wasmi store for this transaction.
+    ///
+    /// `0` for native transaction kinds and for failures before the
+    /// interpreter starts; equals the call's `gas_limit` when the call ran
+    /// out of gas.
     pub gas_used: u64,
     /// Error message if failed.
     pub error: Option<String>,
@@ -154,6 +172,9 @@ pub struct ExecutionResult {
     /// Account-tree root after this commit. `None` when the sub-DAG was
     /// already executed and this call did not write state.
     pub state_root: Option<kovanica_types::hash::Hash>,
+    /// Epoch this commit landed in (derived from committed-leader height).
+    /// Callers compare against the prior epoch to detect boundaries.
+    pub epoch: u64,
 }
 
 /// Minimal execution context (will later hold the full account state / Merkle tree).
@@ -278,6 +299,7 @@ impl ExecutionContext {
                     circulating_supply: self.staking.circulating_supply(),
                     receipts: Vec::new(),
                     state_root: None,
+                    epoch: self.staking.current_epoch(),
                 });
             }
         }
@@ -288,9 +310,21 @@ impl ExecutionContext {
         let committed_height = self.staking.committed_leader_height;
         self.note_light_beacon(&mut txn, storage, committed_height, subdag.leader.digest)?;
 
+        // Gas-hardening activation: the per-call module-size gas floor applies
+        // only from `GAS_HARDENING_ACTIVE_FROM_ROUND` on, so a sub-DAG committed
+        // below it executes exactly as before (no ledger divergence while the
+        // network upgrades).
+        let gas_hardening_active = kovanica_types::gas_hardening_active_from(subdag.leader_round);
+
         for block in &subdag.blocks {
             for tx in &block.transactions {
-                let receipt = self.execute_transaction(tx, storage, &mut txn, committed_height)?;
+                let receipt = self.execute_transaction(
+                    tx,
+                    storage,
+                    &mut txn,
+                    committed_height,
+                    gas_hardening_active,
+                )?;
                 receipts.push(receipt);
                 txs_applied += 1;
             }
@@ -363,13 +397,27 @@ impl ExecutionContext {
             .increment_committed_leader_height(&txn)
             .map_err(StorageError::ConsensusStore)?;
 
-        // 4. Persist transaction receipts
+        // 4. Persist transaction receipts: the per-height history list plus a
+        // per-hash index so RPC can answer `kovanica_getTransactionReceipt`
+        // with the real status / gas without scanning heights.
         let receipts_bytes = bincode::serialize(&receipts)
             .map_err(|e| ExecutionError::Other(format!("receipt serialization: {e}")))?;
         txn.open_table(TX_RECEIPTS)
             .map_err(StorageError::Table)?
             .insert(committed_height, receipts_bytes)
             .map_err(StorageError::Storage)?;
+        {
+            let mut by_hash = txn
+                .open_table(TX_RECEIPT_BY_HASH)
+                .map_err(StorageError::Table)?;
+            for receipt in &receipts {
+                let bytes = bincode::serialize(receipt)
+                    .map_err(|e| ExecutionError::Other(format!("receipt serialization: {e}")))?;
+                by_hash
+                    .insert(receipt.tx_hash.0, bytes)
+                    .map_err(StorageError::Storage)?;
+            }
+        }
 
         // 5. Account sparse Merkle over balance and nonce, then mark executed.
         let state_root = storage.state().commit_account_smt(&txn, committed_height)?;
@@ -410,6 +458,7 @@ impl ExecutionContext {
             circulating_supply: self.staking.circulating_supply(),
             receipts,
             state_root: Some(state_root),
+            epoch: self.staking.current_epoch(),
         })
     }
 
@@ -421,6 +470,7 @@ impl ExecutionContext {
         storage: &Storage,
         txn: &mut WriteTransaction,
         committed_height: u64,
+        gas_hardening_active: bool,
     ) -> Result<TransactionReceipt, ExecutionError> {
         // Every transaction must carry a valid Ed25519 signature by its
         // sender over the signing hash. There is deliberately no bypass:
@@ -492,6 +542,13 @@ impl ExecutionContext {
         let undo = AccountUndo::capture(txn, &touched_accounts(tx))?;
         let light_before = storage.state().load_light_set_write(txn)?;
 
+        // Fuel actually burned by the interpreter for this transaction.
+        // Native kinds never touch it (0); `Call` fills it in through
+        // `execute_call`, including on out-of-gas, where it equals the
+        // transaction's `gas_limit`. Kept outside the match so the failure
+        // arm below can still report it after the body is rolled back.
+        let mut gas_used = 0u64;
+
         // Execute based on transaction kind
         let result = match &tx.kind {
             TransactionKind::Transfer { to, amount } => {
@@ -528,6 +585,8 @@ impl ExecutionContext {
                 args,
                 *gas_limit,
                 committed_height,
+                gas_hardening_active,
+                &mut gas_used,
             ),
             TransactionKind::RegisterLightNode {
                 vrf_public_key,
@@ -550,21 +609,30 @@ impl ExecutionContext {
             } => {
                 self.execute_light_witness(txn, storage, &tx.sender, *epoch, *vrf_hash, *vrf_proof)
             }
+            TransactionKind::SetCommission {
+                validator,
+                commission_bps,
+            } => self.execute_set_commission(txn, storage, &tx.sender, *validator, *commission_bps),
+            TransactionKind::ClaimTreasury { amount } => {
+                self.execute_claim_treasury(txn, storage, &tx.sender, *amount)
+            }
         };
 
-        let (success, gas_used, error, events) = match result {
-            Ok(events) => (true, 0, None, events),
+        let (success, error, events) = match result {
+            Ok(events) => (true, None, events),
             Err(e) => {
                 self.staking = staking_savepoint;
                 undo.restore(txn)?;
                 self.restore_light_set(txn, storage, &light_before)?;
-                (false, 0, Some(e.to_string()), Vec::new())
+                (false, Some(e.to_string()), Vec::new())
             }
         };
 
-        // For successful calls that used gas (WASM), we'd track gas_used here
-        // For now, native transactions use 0 gas
-
+        // Gas accounting: only `Call` transactions consume interpreter fuel,
+        // and `gas_used` was written by the runtime before `execute_call`
+        // returned — on failure (including out of gas) as well as on success.
+        // The body rollback above does not touch it: the fee and nonce
+        // charged before the savepoint stand either way.
         Ok(TransactionReceipt {
             tx_hash: tx.hash,
             success,
@@ -852,6 +920,18 @@ impl ExecutionContext {
     }
 
     /// Execute a contract call transaction.
+    ///
+    /// Reports the interpreter fuel consumed into `gas_used` (written by the
+    /// runtime on every outcome where the store was created — success,
+    /// contract rejection, out of gas). Failures before the interpreter
+    /// starts (missing contract, module-size gas floor, compilation, value
+    /// attach) leave it at `0`.
+    ///
+    /// When `gas_hardening_active` is set, the call must carry at least
+    /// `code.len() * kovanica_runtime::GAS_PER_MODULE_BYTE` gas: compiling a
+    /// large module is host-side work that wasmi fuel does not pay for, so the
+    /// floor makes the requested gas proportional to that work and rejects
+    /// tiny-gas calls to large modules **before** any compilation happens.
     #[allow(clippy::too_many_arguments)]
     fn execute_call(
         &mut self,
@@ -864,6 +944,8 @@ impl ExecutionContext {
         args: &[u8],
         gas_limit: u64,
         block_height: u64,
+        gas_hardening_active: bool,
+        gas_used: &mut u64,
     ) -> Result<Vec<ContractEvent>, ExecutionError> {
         // Check contract exists
         let contract_account = storage
@@ -875,6 +957,19 @@ impl ExecutionContext {
 
         // Get contract code
         let code = contract_account.code.clone();
+
+        // Module-size gas floor (activation-gated): reject a call whose gas
+        // cannot pay for compiling the target module, before `ContractRunner`
+        // compiles it. Deterministic — depends only on the bytecode length.
+        if gas_hardening_active {
+            let floor = kovanica_runtime::min_gas_for_module(code.len());
+            if gas_limit < floor {
+                return Err(ExecutionError::Validation(format!(
+                    "Call gas limit {gas_limit} below module-size floor {floor} for a {}-byte module",
+                    code.len()
+                )));
+            }
+        }
 
         // Execute via ContractRunner (WASM)
         let config = ExecutionConfig {
@@ -901,7 +996,9 @@ impl ExecutionContext {
             config: &config,
         };
 
-        let (_, events) = self.contract_runner.execute_wasm_call(wasm_call)?;
+        let (_, events) = self
+            .contract_runner
+            .execute_wasm_call_with_gas(wasm_call, gas_used)?;
 
         Ok(events)
     }
@@ -1143,10 +1240,123 @@ impl ExecutionContext {
         storage.state().save_light_set(txn, &set)?;
         Ok(Vec::new())
     }
+
+    fn execute_set_commission(
+        &mut self,
+        _txn: &mut WriteTransaction,
+        _storage: &Storage,
+        from: &Address,
+        validator: Address,
+        commission_bps: u16,
+    ) -> Result<Vec<ContractEvent>, ExecutionError> {
+        // Only the validator itself can change its commission.
+        if from != &validator {
+            return Err(ExecutionError::Validation(
+                "Only the validator can change its commission".to_string(),
+            ));
+        }
+        // Mutates `self.staking`; the outer sub-DAG flow persists the staking
+        // state after all transactions (and rolls this back via the per-tx
+        // staking savepoint if a later step of this body fails).
+        self.staking
+            .set_commission(validator, commission_bps)
+            .map_err(|e| ExecutionError::Validation(e.to_string()))?;
+        Ok(vec![ContractEvent {
+            topic: b"set_commission".to_vec(),
+            data: bincode::serialize(&(from, commission_bps))
+                .map_err(|e| ExecutionError::Other(e.to_string()))?,
+        }])
+    }
+
+    /// Claim vested treasury funds through a transaction.
+    ///
+    /// Permissionless trigger: the claimed amount is credited to the fixed
+    /// treasury address — never to the sender — so submitting this
+    /// transaction can only move funds from "vested but unclaimed" into the
+    /// treasury account. The claim is bounded by what has actually vested
+    /// (`treasury_claimable`). The sender only pays the fee.
+    fn execute_claim_treasury(
+        &mut self,
+        txn: &mut WriteTransaction,
+        storage: &Storage,
+        from: &Address,
+        amount: u64,
+    ) -> Result<Vec<ContractEvent>, ExecutionError> {
+        let _ = from;
+        let treasury_address = self
+            .staking
+            .treasury_address()
+            .ok_or_else(|| ExecutionError::Other("treasury not configured".into()))?;
+        if amount == 0 {
+            return Err(ExecutionError::Validation(
+                "Claim amount must be positive".to_string(),
+            ));
+        }
+        let claimable = self.staking.treasury_claimable();
+        if claimable == 0 {
+            return Err(ExecutionError::Validation(
+                "No treasury funds available to claim".to_string(),
+            ));
+        }
+        // Bounded by what has actually vested (claim_treasury clamps again).
+        let claimed = self.staking.claim_treasury(amount.min(claimable))?;
+        if claimed == 0 {
+            return Err(ExecutionError::Validation(
+                "No treasury funds claimed".to_string(),
+            ));
+        }
+        // Serialize the event before the write so the credit is the last
+        // fallible step: once `add_balance` succeeds the body succeeds, and
+        // the per-tx savepoint never has to roll back a treasury-address
+        // credit (that address is not part of `touched_accounts`).
+        let event = ContractEvent {
+            topic: b"claim_treasury".to_vec(),
+            data: bincode::serialize(&claimed).map_err(|e| ExecutionError::Other(e.to_string()))?,
+        };
+        // Credit the treasury address through the sub-DAG's open write
+        // transaction (single-writer rule). The claimed counter in
+        // `self.staking` is persisted with the rest of the staking state
+        // after the transaction loop.
+        storage
+            .state()
+            .add_balance(txn, &treasury_address, claimed)?;
+        Ok(vec![event])
+    }
 }
 
 fn light_set_error(err: LightSetError) -> ExecutionError {
     ExecutionError::Validation(err.to_string())
+}
+
+/// Look up a transaction receipt by transaction hash.
+///
+/// Reads the per-hash index written by
+/// [`ExecutionContext::execute_committed_subdag`] alongside the per-height
+/// [`TX_RECEIPTS`] list, so RPC can answer `kovanica_getTransactionReceipt`
+/// with the real status / `gas_used` without walking committed heights.
+///
+/// Returns `Ok(None)` when no receipt is indexed for `tx_hash` — the
+/// transaction was never executed, or it was executed on a storage that predates
+/// the index (the table is created lazily on first write, so an existing but
+/// empty table is indistinguishable from a missing one; both mean "no receipt").
+pub fn receipt_by_tx_hash(
+    storage: &Storage,
+    tx_hash: &Hash,
+) -> Result<Option<TransactionReceipt>, ExecutionError> {
+    let txn = storage.begin_read()?;
+    let table = match txn.open_table(TX_RECEIPT_BY_HASH) {
+        Ok(table) => table,
+        // Lazily-created table: nothing has been executed against this
+        // storage yet, so there is simply no receipt to return.
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(StorageError::Table(e).into()),
+    };
+    let Some(bytes) = table.get(tx_hash.0)? else {
+        return Ok(None);
+    };
+    let receipt: TransactionReceipt = bincode::deserialize(&bytes.value())
+        .map_err(|e| ExecutionError::Other(format!("receipt deserialization: {e}")))?;
+    Ok(Some(receipt))
 }
 
 /// Debit `amount` from `address` through `StateStore::sub_balance`
@@ -2413,6 +2623,164 @@ mod tests {
             .map(|v| u64::from_le_bytes(v.try_into().expect("8 bytes")))
     }
 
+    /// `probe_wasm()` padded to at least `target_len` bytes with an ignored wasm
+    /// custom section: the module still behaves exactly like `probe_wasm`, but
+    /// its bytecode is large enough to exercise the compile-cost gas floor.
+    fn big_probe_wasm(target_len: usize) -> Vec<u8> {
+        let mut w = probe_wasm();
+        // Custom-section framing overhead (id byte + LEB length + name).
+        let overhead = 8;
+        if target_len > w.len() + overhead {
+            let mut payload = Vec::new();
+            name(&mut payload, "pad");
+            payload.resize(target_len - w.len(), 0u8);
+            section(&mut w, 0, &payload);
+        }
+        assert!(w.len() >= target_len, "padding must reach the target size");
+        w
+    }
+
+    const BIG_CONTRACT: Address = Address([0xC2; 32]);
+
+    fn deploy_big_probe(storage: &Storage, target_len: usize) {
+        let txn = storage.begin_write().expect("write txn");
+        let code = big_probe_wasm(target_len);
+        storage
+            .state()
+            .set_account(
+                &txn,
+                &BIG_CONTRACT,
+                &Account {
+                    balance: 0,
+                    nonce: 0,
+                    code_hash: kovanica_common::hash(&code),
+                    code,
+                },
+            )
+            .expect("deploy big probe");
+        txn.commit().expect("commit");
+    }
+
+    fn big_probe_call(key: &SigningKey, nonce: u64, fee: u64, gas_limit: u64) -> Transaction {
+        let kind = TransactionKind::Call {
+            contract: BIG_CONTRACT,
+            value: 0,
+            method: "probe".to_string(),
+            args: Vec::new(),
+            gas_limit,
+        };
+        signed_tx(key, kind, nonce, fee)
+    }
+
+    /// Execute ten tiny-gas calls to a ~256 KiB module committed at `round`,
+    /// returning the receipts.
+    fn run_tiny_gas_big_calls(round: u64) -> Vec<TransactionReceipt> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("big.redb")).expect("storage");
+        let key = test_keypair(1);
+        let sender = address_of(&key);
+        let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+        deploy_big_probe(&storage, 256 * 1024);
+        let txs: Vec<Transaction> = (0..10)
+            .map(|nonce| big_probe_call(&key, nonce, 1, 1_000))
+            .collect();
+        let digest = StatementBlock::compute_digest(0, round, &[], &txs);
+        let block = StatementBlock {
+            author: 0,
+            round,
+            parents: Vec::new(),
+            transactions: txs,
+            statements: Vec::new(),
+            signature: Signature([0u8; 64]),
+            digest,
+            merkle_root: Default::default(),
+        };
+        let subdag = CommittedSubDag {
+            leader: sample_block_at(0, round),
+            blocks: vec![block],
+            leader_round: round,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        ctx.execute_committed_subdag(&subdag, &storage)
+            .expect("execute")
+            .receipts
+    }
+
+    /// Hand-assembled out-of-gas contract (entry `probe`): no imports, and the
+    /// entry point spins in an infinite `loop { br 0 }` so the wasmi store
+    /// always exhausts its fuel. Same entry body the runtime suite pins in
+    /// `low_gas_rejects_an_infinite_guest_loop`.
+    fn oog_wasm() -> Vec<u8> {
+        let mut w = b"\0asm\x01\0\0\0".to_vec();
+        let mut types = vec![3];
+        types.extend([0x60, 2, 0x7f, 0x7f, 1, 0x7e]); // 0 (i32,i32)->i64
+        types.extend([0x60, 1, 0x7f, 1, 0x7f]); // 1 i32->i32
+        types.extend([0x60, 2, 0x7f, 0x7f, 0]); // 2 (i32,i32)->()
+        section(&mut w, 1, &types);
+        // No imports, so the defined functions start at index 0.
+        section(&mut w, 3, &[3, 1, 2, 0]); // alloc, dealloc, entry
+        section(&mut w, 5, &[1, 0, 1]); // one memory, min 1 page
+        let mut exports = vec![4];
+        for (n, kind, idx) in [
+            ("memory", 2u8, 0u8),
+            ("kovanica_alloc", 0, 0),
+            ("kovanica_dealloc", 0, 1),
+            ("probe", 0, 2),
+        ] {
+            name(&mut exports, n);
+            exports.extend([kind, idx]);
+        }
+        section(&mut w, 7, &exports);
+
+        let mut alloc = vec![0, 0x41];
+        leb_i32(&mut alloc, 64);
+        alloc.push(0x0b);
+        let dealloc = vec![0, 0x0b];
+        // loop { br 0 } — burns fuel forever; i64.const 0 is unreachable but
+        // keeps the (i32,i32)->i64 signature valid.
+        let entry = vec![0, 0x03, 0x40, 0x0c, 0, 0x0b, 0x42, 0, 0x0b];
+        let mut code = vec![3];
+        for body in [&alloc, &dealloc, &entry] {
+            leb_u32(&mut code, body.len() as u32);
+            code.extend(body.iter());
+        }
+        section(&mut w, 10, &code);
+        w
+    }
+
+    const OOG_CONTRACT: Address = Address([0xC1; 32]);
+
+    fn deploy_oog(storage: &Storage) {
+        let txn = storage.begin_write().expect("write txn");
+        let code = oog_wasm();
+        storage
+            .state()
+            .set_account(
+                &txn,
+                &OOG_CONTRACT,
+                &Account {
+                    balance: 0,
+                    nonce: 0,
+                    code_hash: kovanica_common::hash(&code),
+                    code,
+                },
+            )
+            .expect("deploy oog contract");
+        txn.commit().expect("commit");
+    }
+
+    fn oog_call(key: &SigningKey, nonce: u64, fee: u64, gas_limit: u64) -> Transaction {
+        let kind = TransactionKind::Call {
+            contract: OOG_CONTRACT,
+            value: 0,
+            method: "probe".to_string(),
+            args: Vec::new(),
+            gas_limit,
+        };
+        signed_tx(key, kind, nonce, fee)
+    }
+
     /// Run `f` on a worker thread; fail (instead of hanging the suite) if it
     /// does not finish within 30 s. The old code deadlocked here.
     fn with_timeout<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -2507,6 +2875,170 @@ mod tests {
         assert_eq!(slot, None, "failed call must not write contract storage");
         assert_eq!(balance, 1_000_000 - 1000);
         assert_eq!(nonce, 1);
+    }
+
+    // Receipts carry the real interpreter fuel: a successful call reports a
+    // positive amount below its limit, while an out-of-gas call reports the
+    // full limit, keeps a failure status and still charges fee + nonce.
+    #[test]
+    fn receipts_report_real_gas_used_on_success_and_out_of_gas() {
+        let (ok_receipt, oog_receipt, indexed, balance, nonce) = with_timeout(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+            let key = test_keypair(1);
+            let sender = address_of(&key);
+            let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+            deploy_probe(&storage);
+            deploy_oog(&storage);
+            let txs = vec![
+                probe_call(&key, false, 0, 1000),
+                oog_call(&key, 1, 1000, 10_000),
+            ];
+            let subdag = CommittedSubDag {
+                leader: sample_block(0),
+                blocks: vec![sample_block_with_txs(0, txs)],
+                leader_round: 1,
+                leader_author: 0,
+                non_blue: Vec::new(),
+            };
+            let r = ctx
+                .execute_committed_subdag(&subdag, &storage)
+                .expect("execute");
+            let ok = r.receipts[0].clone();
+            let oog = r.receipts[1].clone();
+            let indexed = receipt_by_tx_hash(&storage, &oog.tx_hash).expect("receipt index");
+            (
+                ok,
+                oog,
+                indexed,
+                read_balance(&storage, &sender),
+                read_nonce(&storage, &sender),
+            )
+        });
+
+        assert!(ok_receipt.success, "{:?}", ok_receipt.error);
+        assert!(
+            ok_receipt.gas_used > 0 && ok_receipt.gas_used < 1_000_000,
+            "successful call must report real fuel, got {}",
+            ok_receipt.gas_used
+        );
+
+        assert!(!oog_receipt.success, "out of gas must fail the receipt");
+        assert!(
+            oog_receipt
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("Out of gas")),
+            "expected an out-of-gas error, got {:?}",
+            oog_receipt.error
+        );
+        assert_eq!(
+            oog_receipt.gas_used, 10_000,
+            "out of gas burns the entire limit"
+        );
+
+        // The per-hash index serves exactly the receipt RPC reads back.
+        let indexed = indexed.expect("OOG receipt must be indexed by tx hash");
+        assert_eq!(indexed.tx_hash, oog_receipt.tx_hash);
+        assert_eq!(indexed.success, oog_receipt.success);
+        assert_eq!(indexed.gas_used, oog_receipt.gas_used);
+        assert_eq!(indexed.error, oog_receipt.error);
+
+        // Fee and nonce stand even though the body was rolled back.
+        assert_eq!(balance, 1_000_000 - 2000);
+        assert_eq!(nonce, 2);
+    }
+
+    // MEDIUM-3: a `Call` with a tiny gas limit can no longer force a full
+    // compile of a large module. From activation on, ten such calls are
+    // rejected by the module-size gas floor *before* the interpreter (and
+    // therefore before compilation); below activation they still execute.
+    #[test]
+    fn big_bytecode_tiny_gas_calls_are_rejected_at_activation() {
+        let active_round = kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND;
+
+        // Below activation the floor is inert: the calls reach the interpreter
+        // (compile + run) and are never rejected for module size. This is the
+        // old behavior the gate preserves, so an un-updated node cannot diverge.
+        if let Some(below_round) = active_round.checked_sub(1) {
+            let below = with_timeout(move || run_tiny_gas_big_calls(below_round));
+            assert_eq!(below.len(), 10);
+            for receipt in &below {
+                assert!(
+                    receipt
+                        .error
+                        .as_deref()
+                        .is_none_or(|e| !e.contains("module-size floor")),
+                    "below activation the module-size floor must not fire: {receipt:?}"
+                );
+            }
+        }
+
+        // At/above activation every tiny-gas call to the large module is
+        // rejected up front, deterministically, with no interpreter work.
+        let active = with_timeout(move || run_tiny_gas_big_calls(active_round));
+        assert_eq!(active.len(), 10);
+        for (i, receipt) in active.iter().enumerate() {
+            assert!(!receipt.success, "call {i} must be rejected: {receipt:?}");
+            assert!(
+                receipt
+                    .error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("module-size floor")),
+                "call {i} expected a module-size floor rejection, got {:?}",
+                receipt.error
+            );
+            assert_eq!(
+                receipt.gas_used, 0,
+                "rejected before the interpreter starts, so no fuel is consumed"
+            );
+        }
+
+        // The same calls with enough gas to cover the floor are not rejected by
+        // it (they may still fail for other reasons, but not for module size).
+        let funded = with_timeout(move || {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("big.redb")).expect("storage");
+            let key = test_keypair(1);
+            let sender = address_of(&key);
+            let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+            let size = 256 * 1024;
+            deploy_big_probe(&storage, size);
+            // Floor for the *actual* deployed module length (padding framing
+            // makes it a few bytes larger than `size`).
+            let floor = kovanica_runtime::min_gas_for_module(big_probe_wasm(size).len());
+            let txs = vec![big_probe_call(&key, 0, 1, floor)];
+            let digest = StatementBlock::compute_digest(0, active_round, &[], &txs);
+            let block = StatementBlock {
+                author: 0,
+                round: active_round,
+                parents: Vec::new(),
+                transactions: txs,
+                statements: Vec::new(),
+                signature: Signature([0u8; 64]),
+                digest,
+                merkle_root: Default::default(),
+            };
+            let subdag = CommittedSubDag {
+                leader: sample_block_at(0, active_round),
+                blocks: vec![block],
+                leader_round: active_round,
+                leader_author: 0,
+                non_blue: Vec::new(),
+            };
+            ctx.execute_committed_subdag(&subdag, &storage)
+                .expect("execute")
+                .receipts
+        });
+        assert_eq!(funded.len(), 1);
+        assert!(
+            funded[0]
+                .error
+                .as_deref()
+                .is_none_or(|e| !e.contains("module-size floor")),
+            "a call funded to the floor must not be rejected for module size: {:?}",
+            funded[0].error
+        );
     }
 
     // Deterministic replay with successful and failing contract calls.

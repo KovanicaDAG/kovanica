@@ -155,12 +155,12 @@ pub(crate) fn build_swarm(config: &NetworkConfig) -> Result<Swarm<Behaviour>, Ne
                 key.public(),
             ));
 
-            // Block sync request-response protocol
+            // Block sync request-response protocol: advertise the catch-up
+            // (1.1.0) name first and the legacy (1.0.0) name as fallback, so
+            // current peers negotiate catch-up support while old peers still
+            // connect for the original sync variants.
             let block_sync = request_response::Behaviour::new(
-                [(
-                    libp2p::StreamProtocol::new(block_sync::BLOCK_SYNC_PROTOCOL),
-                    ProtocolSupport::Full,
-                )],
+                block_sync::block_sync_protocols(),
                 block_sync::block_sync_protocol(),
             );
 

@@ -1,22 +1,70 @@
-# Testnet reset after the light-client merge
+# Testnet reset procedure
 
-Recorded 2026-10-14. `main` is `f012c58` (merge of pull request #56).
+> This codebase has **no `reset` subcommand and no `KOVANICA_ALLOW_RESET`
+> switch**. A reset is performed by stopping the node, wiping its data
+> directory, and starting a build again. There is nothing to "apply": a fresh
+> `KOVANICA_DATA_DIR` starts a fresh chain under whatever rules the running
+> binary enforces.
 
-A reset changes the live mesh only when all three seeds are rebuilt from that commit and started again together. Restarting the binary that is running now starts a fresh chain under the old rules.
+## What a reset does and does not do
 
-## What is running
+A reset changes the live mesh only when **every** seed/validator in the mesh is
+rebuilt from the same commit and started again together. Restarting a single
+node on a rebuilt binary while the others keep running splits that node from
+the mesh.
 
-The live process is still `/usr/local/bin/kovanica-node`, built 2026-10-13 20:02, before the merge. On this machine its `consensus.redb` and `state.redb` are already deleted on disk. The process keeps those files open. `seed2` and `seed3` are still on that older build.
+- Chain height, balances, and the mempool are gone — the new chain starts at
+  genesis.
+- Consensus follows the running binary's rules. Under MysticGhost, commit
+  colouring is scoped GHOSTDAG, and each committed leader mints the block
+  reward. If no light nodes are bonded, the light escrow share returns to the
+  contributing leaders.
 
-`KOVANICA_ALLOW_RESET=0` does not apply this code. This node has no reset command.
+## Procedure
 
-## Fresh start of the merged binary
+1. **Agree and freeze.** Pick the commit that the whole mesh will run. Note
+   the chain id and genesis inputs; a reset with mismatched genesis inputs
+   will not converge.
+2. **Stop every node in the mesh.** The running process keeps
+   `consensus.redb` / `state.redb` open even if you delete them on disk, so
+   the process must be stopped before the wipe.
+3. **Wipe the data directory on every node.** The data directory is whatever
+   `data_dir` in the config points at (`./data` by default), overridable with
+   the `KOVANICA_DATA_DIR` environment variable. Delete that directory (it
+   holds `consensus.redb` and `state.redb`). Some older scripts still spell the
+   variable `KOVANICA_DATA`; the node reads **`KOVANICA_DATA_DIR`**.
+4. **Deploy the frozen build to every node** (same binary, same commit).
+5. **Start them together**, with matching bootnodes
+   (`KOVANICA_BOOTNODES`, or `bootnodes` in the config; default P2P listen is
+   `0.0.0.0:8000`).
+6. **Verify convergence** — compare head height / digest across all nodes
+   before re-opening the mesh to public traffic.
 
-Stop all three seeds, install a binary built from `f012c58` on each of them, wipe the chain databases, and start them together.
+## Genesis digest guard (startup behaviour)
 
-- MysticGhost is on, so commit colouring follows scoped GHOSTDAG.
-- Each committed leader still mints `block_reward`. Twenty percent sits in the light escrow until the epoch closes (7 200 leader blocks, about a day). With no light nodes bonded, that share returns to the leaders who contributed it.
-- VRF leader election is on, and the schedule stays round-robin. The genesis file under `/var/lib/kovanica` has no `vrf_public_key`, so nobody publishes a carrier and the election does not leave round-robin.
-- Chain id stays 1337. The light RPC methods are available. Old height, balances, and the mempool are gone.
+The node persists a digest of its genesis configuration in the data directory
+on first start. On later starts it recomputes that digest and compares it with
+the persisted value:
 
-One seed restarted alone splits from the other two. Nothing has been rebuilt or restarted for this note.
+- **match** — startup proceeds normally;
+- **mismatch** — startup **refuses** with a clear error naming the genesis
+  mismatch, because it means the data directory was created for a different
+  genesis than the one now configured (a silent start would fork);
+- an **override environment variable** exists to force startup past the
+  mismatch. Do not set it on a live mesh: it defeats exactly the guard that
+  stops two nodes from running diverged genesis state. It is only for a
+  deliberate single-node migration.
+
+If you see the mismatch error after a legitimate reset, the fix is the wipe in
+step 3 — not the override.
+
+## Historical note (2026-10-14)
+
+The note this document replaced described a live mesh where the running
+process was still an older `/usr/local/bin/kovanica-node` while
+`consensus.redb` and `state.redb` had already been deleted from disk, and
+where `seed2` / `seed3` were still on the older build. It correctly observed
+that `KOVANICA_ALLOW_RESET=0` does nothing — there is no such switch in this
+codebase. The correct remedy was, and remains, the manual procedure above:
+stop all nodes, wipe the data directories, deploy one build everywhere, start
+together.

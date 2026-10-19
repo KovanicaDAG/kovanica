@@ -65,5 +65,48 @@ pub const MAX_PARENT_ROUND_GAP: u64 = 300;
 /// Maximum number of transactions per block (tunable).
 pub const MAX_TXS_PER_BLOCK: usize = 10_000;
 
+/// Canonical per-transaction gas cap for `Call` transactions.
+///
+/// `Call.gas_limit` is charged as interpreter (wasmi) fuel, so an uncapped
+/// value is unbounded per-transaction work. This is the **single source of
+/// truth**: `kovanica-runtime` re-exports it, `kovanica-dag`'s block manager
+/// enforces it on the consensus path, and the mempool's default
+/// `MempoolConfig::max_gas_limit` is derived from it. Change it here only.
+pub const MAX_TX_GAS_LIMIT: u64 = 10_000_000;
+
+/// Round from which the gas-hardening consensus rules take effect.
+///
+/// Three new rules are gated on `block.round >= GAS_HARDENING_ACTIVE_FROM_ROUND`
+/// (below it every block validates and executes exactly as before):
+///
+/// 1. per-transaction `Call` gas cap ([`MAX_TX_GAS_LIMIT`]) in block-manager
+///    `validate_transaction`;
+/// 2. per-block gas budget in block-manager `validate_block_content`;
+/// 3. per-call module-size gas floor in the execution layer (`Call` gas must be
+///    at least `bytecode_len * kovanica_runtime::GAS_PER_MODULE_BYTE`).
+///
+/// Defaults to `u64::MAX` so the rules are **inert** on the currently running
+/// testnet: activating them on a live chain without a coordinated upgrade would
+/// fork it, because a node that has not yet been updated would still accept an
+/// over-cap block that an updated node rejects. Set to `0` at the next genesis /
+/// testnet reset, after every validator runs a build containing the hardening.
+pub const GAS_HARDENING_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+
+/// Whether the gas-hardening consensus rules apply to a block/leader at
+/// `round`.
+///
+/// Equivalent to `round >= GAS_HARDENING_ACTIVE_FROM_ROUND`. This is the single
+/// predicate every gate uses (block-manager proposal truncation and block
+/// validation, execution-time module-size floor), so the activation rule has
+/// exactly one definition.
+///
+/// The lint is allowed because the default activation round is `u64::MAX` (so
+/// the rules are inert on the running testnet); the comparison is deliberate,
+/// not an accident, and would move here should the constant ever be redefined.
+#[allow(clippy::absurd_extreme_comparisons)]
+pub fn gas_hardening_active_from(round: Round) -> bool {
+    round >= GAS_HARDENING_ACTIVE_FROM_ROUND
+}
+
 /// Genesis round.
 pub const GENESIS_ROUND: Round = 0;

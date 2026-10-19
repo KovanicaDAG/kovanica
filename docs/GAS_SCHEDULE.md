@@ -1,124 +1,185 @@
-# KUNA Gas Cost Schedule (Lane 3b)
+# KUNA Gas Cost Schedule
 
-> Deterministic WASM metering via wasmi fuel. This schedule defines the canonical gas costs for contract execution. All values are in **gas units** (1 fuel = 1 gas unit).
+> Deterministic WASM metering via wasmi fuel (`1 fuel = 1 gas unit`).
+> This document is reconciled against the current code. Anything that is not
+> yet implemented is marked **PLANNED** — do **not** treat those numbers as
+> live consensus rules.
 
-## 1. ExecutionConfig Parameters
+## 0. Status legend
 
-```rust
-pub struct ExecutionConfig {
-    pub gas_limit: u64,           // Maximum gas per call (default: 10,000,000)
-    pub memory_limit_pages: u32,  // Maximum linear memory pages (default: 16 = 1 MiB)
-}
-```
+| Marker | Meaning |
+|--------|---------|
+| **Implemented** | In the code on `main` today, and enforced where it says it is. |
+| **Gated** | Implemented but inert until `kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND` is reached (currently `u64::MAX`, so inert; set to `0` at the next genesis / testnet reset). |
+| **PLANNED** | Target design only. Not implemented anywhere in the repo. |
 
-- `gas_limit` maps directly to wasmi **fuel** (`Store::set_fuel`).
-- `memory_limit_pages` enforced by `StoreLimitsBuilder::memory_size()`.
+The host-call and base-cost tables below are **PLANNED**: today contracts pay
+only for the instructions they execute (wasmi fuel), not for host-call work.
 
-## 2. Base Costs (Intrinsic)
+## 1. Canonical constants
 
-| Operation | Gas Cost | Notes |
-|-----------|----------|-------|
-| Call base fee | 2,100 | Charged for every contract call (covers host setup, argument copy) |
-| Memory page | 3,000 | Per additional 64 KiB page beyond initial allocation |
-| Storage read | 200 | Per `kovanica_storage_get` call |
-| Storage write | 5,000 | Per `kovanica_storage_set` call (includes namespace hashing) |
-| Balance read | 100 | Per `kovanica_balance_of` call |
-| Native transfer | 1,500 | Per `kovanica_transfer` call |
-| Event emit | 500 | Per `kovanica_emit_event` call |
-| Contract creation | 32,000 | `Deploy` transaction (code hash, account init) |
+| Constant | Value | Where | Status |
+|----------|-------|-------|--------|
+| `kovanica_types::MAX_TX_GAS_LIMIT` | `10_000_000` | `crates/kovanica-types/src/lib.rs` | Implemented |
+| `kovanica_runtime::GAS_PER_MODULE_BYTE` | `8` | `crates/kovanica-runtime/src/lib.rs` | Implemented |
+| `kovanica_runtime::min_gas_for_module(byte_len)` | `byte_len * GAS_PER_MODULE_BYTE` (saturating) | `crates/kovanica-runtime/src/lib.rs` | Implemented |
+| Per-block gas budget (`BLOCK_GAS_BUDGET`) | `MAX_TX_GAS_LIMIT * 8` = `80_000_000` | `crates/kovanica-dag/src/block_manager.rs` (private const) | Gated |
+| `ExecutionConfig::default().gas_limit` | `MAX_TX_GAS_LIMIT` (`10_000_000`) | `crates/kovanica-runtime/src/lib.rs` | Implemented |
+| `ExecutionConfig::default().memory_limit_pages` | `16` (64 KiB pages = 1 MiB) | `crates/kovanica-runtime/src/lib.rs` | Implemented |
+| `MempoolConfig::max_gas_limit` | `MAX_TX_GAS_LIMIT` (`10_000_000`) | `crates/kovanica-mempool/src/lib.rs` | Implemented |
+| `MempoolConfig::min_fee_rate` | `0` (operator policy) | `crates/kovanica-mempool/src/lib.rs` | Implemented |
+| `kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND` | `u64::MAX` (inert) | `crates/kovanica-types/src/lib.rs` | Implemented |
 
-## 3. Host Function Gas Costs (env imports)
+`MAX_TX_GAS_LIMIT` is the **single source of truth** for the per-transaction
+cap: `kovanica-runtime` re-exports it, the mempool derives `max_gas_limit`
+from it, and `kovanica-dag`'s block manager enforces it on the consensus path.
+Change it in `kovanica-types` only.
 
-Each host function consumes fuel in addition to its base cost:
+> The earlier `max_gas_limit = 50_000_000` figure that used to appear here was
+> stale; the real cap is `10_000_000`.
 
-| Host Function | Base Gas | Additional Per-Call Cost |
-|---------------|----------|--------------------------|
+## 2. Gas units
+
+- `Call.gas_limit` is charged directly into wasmi's `Store::set_fuel`, so
+  `1 fuel == 1 gas unit`.
+- `gas_used` in `TransactionReceipt` is the fuel actually consumed
+  (`gas_limit - remaining_fuel`); on an out-of-gas trap the whole allotment is
+  reported as consumed.
+- Contracts that exceed their fuel budget trap with `RuntimeError::OutOfGas`.
+
+## 3. Implemented: wasmi instruction fuel
+
+**Implemented.** wasmi is built with `config.consume_fuel(true)`, and the store
+is fuelled from `ExecutionConfig::gas_limit`. The interpreter then charges fuel
+per executed WebAssembly instruction; the exact per-instruction schedule is
+defined by the pinned wasmi version, not by this repo, and is therefore not
+enumerated here. The budget is the total fuel a call may burn.
+
+**Gated — module-size floor.** Compiling a wasm module is host-side work that
+wasmi fuel does not pay for. Once hardening is active, a `Call` must carry at
+least `min_gas_for_module(bytecode_len)` = `bytecode_len * GAS_PER_MODULE_BYTE`
+so the requested gas is proportional to the compile work it forces every
+validator to do.
+
+**Gated — per-transaction cap and per-block budget.** Once hardening is active:
+
+- `kovanica-dag`'s `validate_transaction` rejects a `Call` with
+  `gas_limit > MAX_TX_GAS_LIMIT`;
+- `validate_block_content` rejects a block whose summed `Call` gas limits
+  exceed `BLOCK_GAS_BUDGET` (`MAX_TX_GAS_LIMIT * 8`).
+
+Below the activation round all three rules are skipped, so pre-activation
+blocks validate and execute exactly as before.
+
+## 4. Implemented: memory limits
+
+- `memory_limit_pages` is enforced through `StoreLimitsBuilder::memory_size()`,
+  which applies on both memory creation and `memory.grow`.
+- Default is 16 pages of 64 KiB = **1 MiB**.
+- Guest argument/result buffers are additionally bounded by
+  `MAX_BUFFER_BYTES` (64 MiB) in `kovanica-runtime`.
+
+## 5. Implemented: unused gas
+
+- **No refunds**: unused gas is not returned to the caller.
+- The receipt's `gas_used` reports fuel actually consumed.
+
+## 6. PLANNED: base / intrinsic costs
+
+> **PLANNED — not implemented.** These values are a target schedule only;
+> today the runtime charges no per-call base cost or per-operation cost beyond
+> wasmi instruction fuel. Do not build fee or DoS estimates on them.
+
+| Operation | Target gas cost | Notes |
+|-----------|-----------------|-------|
+| Call base fee | 2,100 | host setup, argument copy |
+| Memory page | 3,000 | per additional 64 KiB page (PLANNED; memory is currently capped, not charged) |
+| Storage read (`kovanica_storage_get`) | 200 | per call |
+| Storage write (`kovanica_storage_set`) | 5,000 | per call |
+| Balance read (`kovanica_balance_of`) | 100 | per call |
+| Native transfer (`kovanica_transfer`) | 1,500 | per call |
+| Event emit (`kovanica_emit_event`) | 500 | per call |
+| Contract creation (`Deploy`) | 32,000 | code hash, account init |
+
+## 7. PLANNED: host-function per-call costs
+
+> **PLANNED — not implemented.** The `env` host functions in
+> `kovanica-runtime` currently charge no explicit fuel; only the guest's own
+> instructions cost fuel.
+
+| Host function | Target base gas | Target per-call cost |
+|---------------|-----------------|----------------------|
 | `kovanica_caller` | 0 | 50 |
 | `kovanica_contract_address` | 0 | 50 |
 | `kovanica_block_height` | 0 | 10 |
 | `kovanica_timestamp` | 0 | 10 |
 | `kovanica_balance_of` | 100 | 50 |
-| `kovanica_transfer` | 1,500 | 200 (includes balance checks) |
-| `kovanica_storage_get` (len=0) | 200 | 50 |
-| `kovanica_storage_get` (copy) | 200 | 50 + 2 per 32 bytes copied |
-| `kovanica_storage_set` | 5,000 | 100 + 2 per 32 bytes written |
-| `kovanica_emit_event` | 500 | 20 + 1 per byte of topic+data |
+| `kovanica_transfer` | 1,500 | 200 |
+| `kovanica_storage_get` | 200 | 50 (+ 2 per 32 bytes copied) |
+| `kovanica_storage_set` | 5,000 | 100 (+ 2 per 32 bytes written) |
+| `kovanica_emit_event` | 500 | 20 (+ 1 per byte of topic+data) |
 
-## 4. Wasmi Instruction Fuel (Instruction-Level)
+## 8. PLANNED: fee model
 
-Wasmi consumes fuel per WebAssembly instruction executed. The following table documents the **canonical fuel costs** for the interpreter (these are wasmi internal constants, not configurable, but documented here for auditability):
+> **PLANNED — not implemented.** There is no `gas_price` / `gas_used`-derived
+> fee and no dynamic fee floor in the codebase today. Transaction `fee` is a
+> fixed atom amount set by the sender; the mempool enforces an
+> operator-configured `min_fee_rate` (default `0`, i.e. no floor) plus a
+> replacement bump.
 
-| Instruction Category | Fuel Cost | Examples |
-|---------------------|-----------|----------|
-| Numeric (i32/i64/f32/f64) | 1 | `i32.add`, `i64.mul`, `f32.div` |
-| Parametric (drop, select) | 1 | `drop`, `select` |
-| Variable (local/global get/set) | 2 | `local.get`, `global.set` |
-| Memory (load/store) | 5 | `i32.load`, `i64.store` |
-| Memory (size/grow) | 100 | `memory.size`, `memory.grow` |
-| Control (br/br_if/br_table) | 1 | `br`, `br_if` |
-| Call (call/call_indirect) | 10 | `call`, `call_indirect` |
-| Return | 1 | `return` |
-| Unreachable | 1 | `unreachable` |
-
-**Note**: These are wasmi's internal fuel costs. The `gas_limit` in `ExecutionConfig` sets the total fuel budget. Contracts that exceed the budget trap with `RuntimeError::OutOfGas`.
-
-## 5. Gas Refunds / Unused Gas
-
-- **No refunds**: Unused gas is not returned to the caller. This is intentional for simplicity and DoS resistance.
-- The `gas_used` field in `TransactionReceipt` reports `gas_limit - remaining_fuel` at call completion.
-
-## 6. Determinism Guarantees
-
-- **Fuel is deterministic**: wasmi's fuel metering is instruction-accurate and deterministic across runs.
-- **No host non-determinism**: Host functions (`kovanica_*`) consume fixed fuel amounts; no `random` or `time` sources are available to contracts.
-- **Memory limit is hard**: `memory.grow` beyond `memory_limit_pages` traps deterministically.
-- **Argument/result copy**: Bounded by `MAX_BUFFER_BYTES` (64 MiB) in `kovanica-runtime`.
-
-## 7. Fee Calculation (On-Chain)
-
-The **transaction fee** (paid in native KUNA) is separate from the **gas limit**:
+Target design (not live):
 
 ```
 fee = gas_price * gas_used
 ```
 
-- `gas_price` is set by the transaction sender (`Transaction.fee` / `gas_limit`).
-- `gas_used` is recorded in the receipt.
-- Minimum fee floor: `max(1, block_subsidy / 500_000)` atoms per byte of transaction (per tokenomics).
+with a minimum fee floor derived from the block subsidy. Neither term is
+implemented; `gas_used` is recorded in the receipt but is not yet priced.
 
-## 8. Configuration Constants (kovanica-node / genesis)
+## 9. Configuration
+
+`config.example.toml` documents the execution limits in a **commented-out**
+`[execution]` block; the node does not yet parse an `[execution]` table and
+uses the `ExecutionConfig` defaults above. The commented values are:
 
 ```toml
-# config.example.toml (or genesis config)
-[execution]
-default_gas_limit = 10_000_000
-default_memory_limit_pages = 16          # 1 MiB
-max_gas_limit = 50_000_000               # Cap per call
-max_memory_limit_pages = 256             # 16 MiB cap
+# [execution]
+# default_gas_limit = 10000000          # per-call fuel cap (kovanica_types::MAX_TX_GAS_LIMIT)
+# default_memory_limit_pages = 16       # 1 MiB linear-memory cap (ExecutionConfig::default)
+# max_gas_limit = 10000000              # mempool admission cap (MempoolConfig::max_gas_limit)
 ```
 
-## 9. Testing Gas Costs
+## 10. Testing
 
-Unit tests in `kovanica-runtime` verify:
+Unit tests in `kovanica-runtime`:
+
 - `low_gas_rejects_an_infinite_guest_loop` — fuel exhaustion traps
+- `execute_with_gas_reports_consumed_fuel_on_success_and_out_of_gas` — real
+  fuel accounting on both outcomes
 - `memory_grow_is_limited_by_configured_page_cap` — memory cap enforced
 - `packed_contract_error_codes_are_decoded` — error packing deterministic
 
+`kovanica-dag` (`block_manager`) has gas-hardening gate tests covering the
+per-transaction cap and the per-block budget at and below the activation
+round.
+
 E2E test in `kovanica-execution` (`wasmi_e2e_kovanica_token_wasm`):
-- Native and wasm paths produce identical state transitions
-- Gas metering works across both paths
 
-## 10. Future: Gas Cost Governance
+- native and wasm paths produce identical state transitions.
 
-Gas costs are **consensus-critical** once activated. Any change requires:
-1. RFC proposing the change
-2. Activation at a specific block height (via `init_genesis` or upgrade)
-3. Migration tooling if existing contracts are affected
+## 11. Governance
 
----
+Once the PLANNED costs become **Implemented**, they are consensus-critical:
+every validator must compute the same fee/gas outcome from the same
+transaction. Any change then requires:
 
-## Appendix: Fuel-to-Gas Conversion
+1. an RFC proposing the change;
+2. activation at a specific round via `GAS_HARDENING_ACTIVE_FROM_ROUND` (or a
+   hard fork);
+3. migration tooling if existing contracts are affected.
 
-In the current implementation, **1 wasmi fuel unit = 1 gas unit**. The `ExecutionConfig.gas_limit` is passed directly to `Store::set_fuel()`.
+## Appendix: fuel-to-gas conversion
 
-This 1:1 mapping may be adjusted via a multiplicative factor if wasmi's instruction costs prove too granular/coarse relative to desired economic parameters. Such a change would be a hard fork.
+In the current implementation `1 wasmi fuel unit = 1 gas unit`:
+`ExecutionConfig.gas_limit` is passed straight to `Store::set_fuel()`.
+Adjusting this ratio would be a hard fork.

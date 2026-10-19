@@ -23,9 +23,11 @@ use zeroize::Zeroizing;
 
 use ed25519_dalek::{Signer, SigningKey};
 use kovanica_cli::wallet;
+use kovanica_types::signing::chain_id;
 use kovanica_types::{hash::Hash, Address, PublicKey, Signature, Transaction, TransactionKind};
 
 mod cors;
+mod proxy;
 
 /// Faucet configuration
 #[derive(Clone)]
@@ -41,6 +43,12 @@ struct FaucetConfig {
     /// Network signing context (signature format v1): every dispensed
     /// transaction commits to this `chain_id`.
     signing_ctx: kovanica_types::SigningContext,
+    /// Reverse proxies whose `X-Forwarded-For` header may be trusted for
+    /// rate-limit keying. Empty means every request keys on the socket peer.
+    trusted_proxies: proxy::TrustedProxies,
+    /// Refuse to dispense when the faucet's own balance (in atoms) is below
+    /// this. `0` disables the check.
+    min_balance_atoms: u64,
 }
 
 /// Rate limiter state
@@ -114,6 +122,24 @@ struct Cli {
     /// (1 mainnet, 2 testnet, 3 devnet, 1337 local). No default on purpose.
     #[arg(long)]
     chain_id: u64,
+    /// Loud override required to run the faucet on MAINNET (chain_id 1).
+    /// Default behaviour is to refuse mainnet outright.
+    ///
+    /// Equivalent to setting `KOVANICA_FAUCET_ALLOW_MAINNET=1`.
+    #[arg(long)]
+    allow_mainnet: bool,
+    /// Comma-separated list of reverse-proxy IPs/CIDRs whose `X-Forwarded-For`
+    /// header is trusted for rate-limit keying (e.g. `10.0.0.0/8,127.0.0.1`).
+    ///
+    /// When unset (or the socket peer is not in the list) the socket peer IP is
+    /// used and `X-Forwarded-For` is ignored. Equivalent to
+    /// `KOVANICA_FAUCET_TRUSTED_PROXIES`.
+    #[arg(long)]
+    trusted_proxies: Option<String>,
+    /// Refuse requests when the faucet balance (in KUNA) is below this floor.
+    /// `0` (default) disables the low-balance guard.
+    #[arg(long, default_value = "0")]
+    min_balance_ku: u64,
     /// Node RPC URL
     #[arg(long, default_value = "http://127.0.0.1:8545")]
     rpc_url: String,
@@ -129,11 +155,32 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    if !kovanica_types::signing::chain_id::is_registered(cli.chain_id) {
-        anyhow::bail!(
-            "unknown chain id {}: expected 1 (mainnet), 2 (testnet), 3 (devnet) or 1337 (local)",
-            cli.chain_id
+
+    // MAINNET GUARD: never dispense real KUNA by accident. Running on chain_id 1
+    // requires an explicit, loudly-named override.
+    let allow_mainnet = cli.allow_mainnet || env_truthy(ALLOW_MAINNET_ENV);
+    ensure_chain_allowed(cli.chain_id, allow_mainnet)?;
+    if cli.chain_id == chain_id::MAINNET {
+        warn!(
+            chain_id = cli.chain_id,
+            "running the faucet on MAINNET with the explicit --allow-mainnet override: \
+             it will dispense REAL KUNA"
         );
+    }
+
+    // Trusted reverse proxies for X-Forwarded-For handling. A malformed entry
+    // fails startup rather than silently trusting (or not trusting) the wrong hosts.
+    let trusted_proxies_raw = cli
+        .trusted_proxies
+        .clone()
+        .or_else(|| std::env::var(TRUSTED_PROXIES_ENV).ok());
+    let trusted_proxies = match trusted_proxies_raw.as_deref() {
+        Some(list) => proxy::TrustedProxies::parse_list(list)
+            .with_context(|| format!("parsing trusted proxies `{list}`"))?,
+        None => proxy::TrustedProxies::default(),
+    };
+    if !trusted_proxies.is_empty() {
+        info!("trusting X-Forwarded-For from configured reverse proxies");
     }
 
     // Load faucet keystore
@@ -161,6 +208,8 @@ async fn main() -> Result<()> {
         max_requests_per_window: cli.max_requests,
         rpc_url: cli.rpc_url.clone(),
         signing_ctx: kovanica_types::SigningContext::new(cli.chain_id),
+        trusted_proxies,
+        min_balance_atoms: cli.min_balance_ku * 1_000_000_000, // KUNA to atoms
     };
 
     let state = Arc::new(FaucetState {
@@ -184,16 +233,61 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Env override that permits running the faucet on mainnet.
+const ALLOW_MAINNET_ENV: &str = "KOVANICA_FAUCET_ALLOW_MAINNET";
+
+/// Env override with the comma-separated trusted-proxy IP/CIDR list.
+const TRUSTED_PROXIES_ENV: &str = "KOVANICA_FAUCET_TRUSTED_PROXIES";
+
+/// Whether an environment variable holds an affirmative boolean value
+/// (`1`, `true`, `yes` or `on`, case-insensitive).
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// Validate the configured `chain_id`.
+///
+/// * unregistered ids are always refused;
+/// * `chain_id 1` (mainnet) is refused unless `allow_mainnet` was given
+///   explicitly — the faucet would otherwise dispense real KUNA.
+fn ensure_chain_allowed(chain_id: u64, allow_mainnet: bool) -> Result<()> {
+    if !kovanica_types::signing::chain_id::is_registered(chain_id) {
+        bail!(
+            "unknown chain id {}: expected 1 (mainnet), 2 (testnet), 3 (devnet) or 1337 (local)",
+            chain_id
+        );
+    }
+    if chain_id == chain_id::MAINNET && !allow_mainnet {
+        bail!(
+            "refusing to run the faucet on MAINNET (chain_id 1): it would dispense REAL KUNA. \
+             If this is intentional, pass --allow-mainnet or set {ALLOW_MAINNET_ENV}=1."
+        );
+    }
+    Ok(())
+}
+
 async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
 
 async fn faucet_handler(
     State(state): State<Arc<FaucetState>>,
-    axum::extract::ConnectInfo(ip): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<FaucetRequest>,
 ) -> impl IntoResponse {
-    let ip_str = ip.ip().to_string();
+    // Resolve the client IP for rate limiting. `X-Forwarded-For` is only
+    // honoured when the socket peer is a configured trusted proxy.
+    let forwarded_for = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    let ip = proxy::client_ip(peer.ip(), forwarded_for, &state.config.trusted_proxies);
+    let ip_str = ip.to_string();
 
     // Check rate limit
     if !state.rate_limiter.check_and_record(
@@ -243,6 +337,37 @@ async fn faucet_handler(
             }),
         )
             .into_response();
+    }
+
+    // Low-balance guard: refuse early when the faucet is running dry, so callers
+    // get a clear error instead of a transaction that fails on-chain.
+    if state.config.min_balance_atoms > 0 {
+        match get_balance(&state.client, &state.config.rpc_url, &state.faucet_address).await {
+            Ok(balance) if balance < state.config.min_balance_atoms => {
+                warn!(
+                    balance,
+                    threshold = state.config.min_balance_atoms,
+                    "faucet balance below minimum; refusing to dispense"
+                );
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(FaucetResponse {
+                        success: false,
+                        message: "Faucet is low on funds; try again later.".to_string(),
+                        tx_hash: None,
+                    }),
+                )
+                    .into_response();
+            }
+            Ok(balance) => {
+                tracing::debug!(balance, "faucet balance above minimum");
+            }
+            Err(e) => {
+                // A transient balance-read error must not take the faucet down;
+                // the nonce fetch below will surface a hard RPC outage anyway.
+                warn!("Failed to read faucet balance: {}", e);
+            }
+        }
     }
 
     // Get faucet nonce from RPC
@@ -352,6 +477,22 @@ async fn get_nonce(client: &reqwest::Client, rpc_url: &str, address: &Address) -
         .ok_or_else(|| anyhow::anyhow!("invalid nonce response"))?;
     let nonce = u64::from_str_radix(result.strip_prefix("0x").unwrap_or(result), 16)?;
     Ok(nonce)
+}
+
+async fn get_balance(client: &reqwest::Client, rpc_url: &str, address: &Address) -> Result<u64> {
+    let req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "kovanica_getBalance",
+        "params": [hex::encode(address.0)],
+        "id": 1
+    });
+    let resp: serde_json::Value = client.post(rpc_url).json(&req).send().await?.json().await?;
+    let result = resp
+        .get("result")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid balance response"))?;
+    let balance = u64::from_str_radix(result.strip_prefix("0x").unwrap_or(result), 16)?;
+    Ok(balance)
 }
 
 fn sign_transaction(
@@ -530,5 +671,55 @@ mod passphrase_tests {
             err.contains("--passphrase-file") && err.contains(PASSPHRASE_ENV),
             "{err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_chain_ids_are_always_refused() {
+        for id in [0, 4, 42, u64::MAX] {
+            let err = ensure_chain_allowed(id, true).unwrap_err().to_string();
+            assert!(err.contains("unknown chain id"), "{err}");
+        }
+    }
+
+    #[test]
+    fn mainnet_is_refused_without_the_explicit_override() {
+        let err = ensure_chain_allowed(chain_id::MAINNET, false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("MAINNET"), "{err}");
+        assert!(err.contains("--allow-mainnet"), "{err}");
+        assert!(err.contains(ALLOW_MAINNET_ENV), "{err}");
+    }
+
+    #[test]
+    fn mainnet_is_allowed_with_the_explicit_override() {
+        ensure_chain_allowed(chain_id::MAINNET, true).expect("explicit override permits mainnet");
+    }
+
+    #[test]
+    fn non_mainnet_networks_do_not_need_the_override() {
+        for id in [chain_id::TESTNET, chain_id::DEVNET, chain_id::LOCAL] {
+            ensure_chain_allowed(id, false).expect("non-mainnet chain is allowed");
+        }
+    }
+
+    #[test]
+    fn env_truthy_accepts_common_affirmatives() {
+        let name = "KOVANICA_FAUCET_TEST_TRUTHY_FLAG";
+        for truthy in ["1", "true", "TRUE", " yes ", "on"] {
+            std::env::set_var(name, truthy);
+            assert!(env_truthy(name), "{truthy:?} should be truthy");
+        }
+        for falsy in ["0", "false", "off", "", "maybe"] {
+            std::env::set_var(name, falsy);
+            assert!(!env_truthy(name), "{falsy:?} should not be truthy");
+        }
+        std::env::remove_var(name);
+        assert!(!env_truthy(name), "unset variable is falsy");
     }
 }

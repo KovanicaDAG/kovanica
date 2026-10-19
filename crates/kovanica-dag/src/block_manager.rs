@@ -10,7 +10,7 @@ use kovanica_types::{
     crypto::PublicKey,
     hash::Hash,
     transaction::Transaction,
-    AuthorityIndex, Round, Signature, SigningKey, MAX_TXS_PER_BLOCK,
+    AuthorityIndex, Round, Signature, SigningKey, MAX_TXS_PER_BLOCK, MAX_TX_GAS_LIMIT,
 };
 use parking_lot::RwLock;
 use std::collections::{HashMap, VecDeque};
@@ -21,6 +21,34 @@ use tracing::{debug, info, warn};
 
 /// bincode is used for transaction hash verification
 use bincode;
+
+/// Per-block gas budget: the sum of the `gas_limit` of every `Call`
+/// transaction in a block may not exceed this.
+///
+/// Chosen as `MAX_TX_GAS_LIMIT * 8` (= 80_000_000). `MAX_TXS_PER_BLOCK` alone
+/// does not bound interpreter work, because each pooled transaction carries its
+/// own `gas_limit`; this bounds the worst case a single block can force on every
+/// validator to eight maximal calls per committed round, while leaving ample
+/// room for the common case (native transactions consume no interpreter fuel).
+/// The cap and this budget are enforced only from
+/// [`kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND`] on — see
+/// `validate_block_content`.
+const BLOCK_GAS_BUDGET: u64 = MAX_TX_GAS_LIMIT * 8;
+
+/// The `gas_limit` a transaction asks the interpreter for, or `0` for native
+/// kinds (they never touch wasmi fuel).
+fn tx_gas_limit(tx: &kovanica_types::Transaction) -> u64 {
+    match &tx.kind {
+        kovanica_types::TransactionKind::Call { gas_limit, .. } => *gas_limit,
+        _ => 0,
+    }
+}
+
+/// Sum of the requested `Call` gas limits over `txs`, saturating.
+fn total_gas_limit<'a>(txs: impl IntoIterator<Item = &'a kovanica_types::Transaction>) -> u64 {
+    txs.into_iter()
+        .fold(0u64, |acc, tx| acc.saturating_add(tx_gas_limit(tx)))
+}
 
 /// Errors specific to block manager operations.
 #[derive(Error, Debug)]
@@ -179,6 +207,31 @@ impl BlockManager {
         txs.dedup_by(|a, b| a.hash == b.hash);
         if txs.len() > MAX_TXS_PER_BLOCK {
             txs.truncate(MAX_TXS_PER_BLOCK);
+        }
+        // Per-block gas budget: the sorted list is truncated at the first
+        // transaction that would push the cumulative `Call` gas over
+        // `BLOCK_GAS_BUDGET`. Because the list is ordered by (sender, nonce), a
+        // tail drop only removes whole senders or a suffix of one sender's
+        // nonces — never a gap in a per-sender nonce sequence.
+        //
+        // Activation-gated: below `GAS_HARDENING_ACTIVE_FROM_ROUND` the proposer
+        // behaves exactly as before (no truncation), so a node that has not been
+        // updated keeps proposing the same blocks.
+        if kovanica_types::gas_hardening_active_from(round) {
+            let mut gas_sum = 0u64;
+            let mut keep = txs.len();
+            for (index, tx) in txs.iter().enumerate() {
+                gas_sum = gas_sum.saturating_add(tx_gas_limit(tx));
+                if gas_sum > BLOCK_GAS_BUDGET {
+                    keep = index;
+                    break;
+                }
+            }
+            // The surplus is dropped from this proposal; its pool entries were
+            // already taken, so the sender re-broadcasts if it still wants them
+            // mined. Consensus never sees an over-budget block either way —
+            // `validate_block_content` rejects one.
+            txs.truncate(keep);
         }
         // Get parent blocks from previous round with stake/validity filtering
         let parents = self.select_parents(round)?;
@@ -381,9 +434,29 @@ impl BlockManager {
             ));
         }
 
+        // Gas-hardening activation gate. Both new block-validity rejections
+        // (per-block budget here, per-transaction cap in `validate_transaction`)
+        // apply only from `GAS_HARDENING_ACTIVE_FROM_ROUND`. Below it the block
+        // is validated exactly as before, so a huge-gas block still validates
+        // and a not-yet-updated node does not diverge from an updated one.
+        let gas_hardening_active = kovanica_types::gas_hardening_active_from(block.round);
+
+        // Per-block gas budget: `MAX_TXS_PER_BLOCK` bounds the count, this
+        // bounds the interpreter work. Checked before per-transaction
+        // validation so an over-budget block is rejected with the block-level
+        // reason rather than a per-transaction one.
+        if gas_hardening_active {
+            let block_gas = total_gas_limit(&block.transactions);
+            if block_gas > BLOCK_GAS_BUDGET {
+                return Err(BlockManagerError::InvalidBlock(format!(
+                    "block gas budget exceeded: {block_gas} > {BLOCK_GAS_BUDGET}"
+                )));
+            }
+        }
+
         // Validate each transaction's hash and basic structure
         for tx in &block.transactions {
-            self.validate_transaction(tx)?;
+            self.validate_transaction(tx, gas_hardening_active)?;
         }
 
         let computed_digest = StatementBlock::compute_digest_statements(
@@ -446,9 +519,15 @@ impl BlockManager {
 
     /// Validate a transaction's hash and basic structure.
     /// Full signature verification requires state access and is done in the mempool/execution layer.
+    ///
+    /// `gas_hardening_active` is derived from the containing block's round
+    /// (`block.round >= GAS_HARDENING_ACTIVE_FROM_ROUND`); the per-transaction
+    /// `Call` gas cap is enforced only when it is set, so pre-activation blocks
+    /// validate exactly as before.
     fn validate_transaction(
         &self,
         tx: &kovanica_types::Transaction,
+        gas_hardening_active: bool,
     ) -> Result<(), BlockManagerError> {
         // Verify cached hash matches domain-tagged signing hash (DOMAIN_TX)
         if tx.hash != tx.signing_hash(&self.signing_ctx) {
@@ -467,6 +546,21 @@ impl BlockManager {
             return Err(BlockManagerError::InvalidBlock(
                 "Transaction fee is zero".to_string(),
             ));
+        }
+
+        // Gas cap (activation-gated): `Call.gas_limit` is charged as interpreter
+        // fuel, so an uncapped value is unbounded per-transaction work. The
+        // mempool enforces the same cap on admission; this is the consensus
+        // backstop for transactions that arrive inside a block without ever
+        // passing through the pool.
+        if gas_hardening_active {
+            if let kovanica_types::TransactionKind::Call { gas_limit, .. } = &tx.kind {
+                if *gas_limit > MAX_TX_GAS_LIMIT {
+                    return Err(BlockManagerError::InvalidBlock(format!(
+                        "Transaction gas limit {gas_limit} exceeds maximum {MAX_TX_GAS_LIMIT}"
+                    )));
+                }
+            }
         }
 
         // Note: Signature verification requires the sender's public key, which is not
@@ -609,6 +703,7 @@ impl BlockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND;
     const TEST_CTX: kovanica_types::SigningContext =
         kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL);
     #[test]
@@ -1085,6 +1180,205 @@ mod tests {
         let block = manager.propose_block(1).expect("propose with fed tx");
         assert_eq!(block.transactions.len(), 1);
         assert_eq!(block.transactions[0].hash, tx_hash);
+    }
+
+    /// Signed `Call` transaction with a valid signing hash and a non-zero fee.
+    fn call_tx(nonce: u64, gas_limit: u64) -> Transaction {
+        use kovanica_types::transaction::TransactionKind;
+        let mut tx = Transaction {
+            sender: kovanica_types::address::Address([0x11; 32]),
+            nonce,
+            kind: TransactionKind::Call {
+                contract: kovanica_types::address::Address([0x22; 32]),
+                value: 0,
+                method: "probe".to_string(),
+                args: Vec::new(),
+                gas_limit,
+            },
+            fee: 1,
+            signature: Signature([0; 64]),
+            hash: Hash::zero(),
+        };
+        tx.hash = tx.signing_hash(&TEST_CTX);
+        tx
+    }
+
+    /// Block carrying `txs` for a given `round`, signed for the
+    /// committee-authenticated author 0.
+    fn gas_block_at(round: u64, txs: Vec<Transaction>, key: &SigningKey) -> StatementBlock {
+        let digest = StatementBlock::compute_digest(0, round, &[], &txs);
+        let merkle_root = StatementBlock::compute_merkle_root(&txs);
+        StatementBlock {
+            author: 0,
+            round,
+            parents: Vec::new(),
+            transactions: txs,
+            statements: Vec::new(),
+            signature: crypto::sign(key, digest.as_ref()),
+            digest,
+            merkle_root,
+        }
+    }
+
+    /// Round immediately below activation, or `None` when activation is at
+    /// genesis (round 0) and there is no pre-activation behavior to observe.
+    fn round_below_activation() -> Option<u64> {
+        GAS_HARDENING_ACTIVE_FROM_ROUND.checked_sub(1)
+    }
+
+    fn gas_txs(count: u64) -> Vec<Transaction> {
+        (0..count)
+            .map(|nonce| call_tx(nonce, MAX_TX_GAS_LIMIT))
+            .collect()
+    }
+
+    /// The activation gate controls the **block-validity** rejections: below
+    /// `GAS_HARDENING_ACTIVE_FROM_ROUND` a block carrying a transaction far
+    /// above the per-tx cap still validates (old behavior, no fork); from that
+    /// round on the same block is rejected.
+    #[test]
+    fn gas_hardening_gate_is_inert_below_and_enforced_at_activation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = kovanica_storage::Storage::new(dir.path().join("dag.redb")).unwrap();
+        let store = Arc::new(DagStore::new(storage).unwrap());
+        let manager = BlockManager::new(store, TEST_CTX);
+        let (key, public_key) = crypto::generate_keypair();
+        manager.set_authority_keys(HashMap::from([(0, public_key)]));
+
+        let huge = MAX_TX_GAS_LIMIT * 100;
+
+        // Below activation: both the per-tx cap and the per-block budget are
+        // inert, so a single huge-gas call still validates (and its total is
+        // itself far above `BLOCK_GAS_BUDGET`, proving the budget is skipped).
+        if let Some(below) = round_below_activation() {
+            assert!(huge > BLOCK_GAS_BUDGET);
+            let block = gas_block_at(below, vec![call_tx(0, huge)], &key);
+            manager
+                .validate_block_content(&block)
+                .expect("below activation a huge-gas block must still validate");
+        }
+
+        // At/above activation: the same transaction is rejected.
+        let at = GAS_HARDENING_ACTIVE_FROM_ROUND;
+        let block = gas_block_at(at, vec![call_tx(0, huge)], &key);
+        let err = manager
+            .validate_block_content(&block)
+            .expect_err("at activation a huge-gas block must be rejected");
+        assert!(
+            err.to_string().contains("gas budget"),
+            "expected a block-budget rejection, got: {err}"
+        );
+
+        // Per-transaction cap (budget not yet reached): one over the cap is
+        // rejected from activation on, while exactly the cap is accepted.
+        let over_cap = gas_block_at(at, vec![call_tx(0, MAX_TX_GAS_LIMIT + 1)], &key);
+        let err = manager
+            .validate_block_content(&over_cap)
+            .expect_err("at activation a transaction over the cap must be rejected");
+        assert!(
+            err.to_string().contains("exceeds maximum"),
+            "expected a per-transaction cap rejection, got: {err}"
+        );
+
+        let at_cap = gas_block_at(at, vec![call_tx(0, MAX_TX_GAS_LIMIT)], &key);
+        manager
+            .validate_block_content(&at_cap)
+            .expect("exactly at the per-tx cap is accepted once active");
+    }
+
+    // The per-block sum of `Call` gas limits is bounded once active: exactly
+    // the budget passes, one maximal transaction over is rejected with the
+    // block-level reason.
+    #[test]
+    fn validate_block_content_enforces_per_block_gas_budget_when_active() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = kovanica_storage::Storage::new(dir.path().join("dag.redb")).unwrap();
+        let store = Arc::new(DagStore::new(storage).unwrap());
+        let manager = BlockManager::new(store, TEST_CTX);
+        let (key, public_key) = crypto::generate_keypair();
+        manager.set_authority_keys(HashMap::from([(0, public_key)]));
+
+        assert_eq!(
+            BLOCK_GAS_BUDGET,
+            8 * MAX_TX_GAS_LIMIT,
+            "budget is defined as eight maximal transactions"
+        );
+
+        let at = GAS_HARDENING_ACTIVE_FROM_ROUND;
+        let at_budget = gas_block_at(at, gas_txs(8), &key);
+        manager
+            .validate_block_content(&at_budget)
+            .expect("spending exactly the per-block budget is accepted");
+
+        let over_budget = gas_block_at(at, gas_txs(9), &key);
+        let err = manager
+            .validate_block_content(&over_budget)
+            .expect_err("a block over the gas budget must be rejected");
+        assert!(err.to_string().contains("gas budget"), "unexpected: {err}");
+    }
+
+    // Proposal keeps the per-block gas budget only once active, by dropping a
+    // tail of the (sender, nonce)-sorted list (preserving every included nonce
+    // prefix). Below activation the proposer is unchanged and keeps all txs.
+    #[test]
+    fn propose_block_truncates_to_the_gas_budget_only_when_active() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = kovanica_storage::Storage::new(dir.path().join("dag.redb")).unwrap();
+        let store = Arc::new(DagStore::new(storage).unwrap());
+        let manager = BlockManager::new(store.clone(), TEST_CTX);
+        let (key, public_key) = crypto::generate_keypair();
+        manager.set_authority(0);
+        manager.set_authority_keys(HashMap::from([(0, public_key)]));
+        manager.set_authority_stakes(HashMap::from([(0, 100)]));
+        manager.set_signing_key(key);
+
+        // Store genesis so select_parents works for round 1.
+        let genesis = StatementBlock {
+            author: 0,
+            round: 0,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: Signature([0; 64]),
+            digest: StatementBlock::compute_digest(0, 0, &[], &[]),
+            merkle_root: Default::default(),
+        };
+        store.put_block(&genesis).unwrap();
+
+        // Below activation: no truncation (old behavior).
+        if let Some(below) = round_below_activation() {
+            manager.add_transactions(gas_txs(9));
+            let block = manager
+                .propose_block(below)
+                .expect("propose below activation");
+            assert_eq!(
+                block.transactions.len(),
+                9,
+                "below activation the proposer must not drop transactions"
+            );
+        }
+
+        // At/above activation: the ninth maximal call is dropped, the nonce
+        // prefix is preserved, and the proposal validates under the new rules.
+        let at = GAS_HARDENING_ACTIVE_FROM_ROUND;
+        manager.add_transactions(gas_txs(9));
+        let block = manager.propose_block(at).expect("propose at activation");
+
+        assert_eq!(
+            block.transactions.len(),
+            8,
+            "the ninth maximal call must be dropped"
+        );
+        assert_eq!(
+            total_gas_limit(&block.transactions),
+            BLOCK_GAS_BUDGET,
+            "the proposed block spends at most the budget"
+        );
+        let nonces: Vec<u64> = block.transactions.iter().map(|tx| tx.nonce).collect();
+        assert_eq!(nonces, (0..8).collect::<Vec<_>>(), "nonce prefix preserved");
+        manager
+            .validate_block_content(&block)
+            .expect("the proposed block must itself validate");
     }
 
     fn make_block(

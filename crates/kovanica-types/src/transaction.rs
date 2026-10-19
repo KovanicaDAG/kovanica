@@ -80,6 +80,18 @@ pub enum TransactionKind {
         #[serde(with = "crate::crypto::vrf_proof_bytes")]
         vrf_proof: [u8; 96],
     },
+    /// Set validator commission in basis points (10000 = 100%).
+    SetCommission {
+        /// Validator address.
+        validator: Address,
+        /// Commission in basis points.
+        commission_bps: u16,
+    },
+    /// Claim vested treasury funds to the treasury address.
+    ClaimTreasury {
+        /// Amount to claim in base units.
+        amount: u64,
+    },
 }
 
 /// Full signed transaction.
@@ -187,6 +199,18 @@ impl Transaction {
                 data.extend_from_slice(&epoch.to_le_bytes());
                 data.extend_from_slice(vrf_hash);
                 data.extend_from_slice(vrf_proof);
+            }
+            TransactionKind::SetCommission {
+                validator,
+                commission_bps,
+            } => {
+                data.push(10);
+                data.extend_from_slice(&validator.0);
+                data.extend_from_slice(&commission_bps.to_le_bytes());
+            }
+            TransactionKind::ClaimTreasury { amount } => {
+                data.push(11);
+                data.extend_from_slice(&amount.to_le_bytes());
             }
         }
         data.extend_from_slice(&self.fee.to_le_bytes());
