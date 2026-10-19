@@ -74,6 +74,45 @@ pub struct NodeConfig {
     /// Gossipsub peer scoring (`[peer_scoring]` table). Defaults are safe for
     /// a small validator network; see `kovanica_network::PeerScoringConfig`.
     pub peer_scoring: kovanica_network::PeerScoringConfig,
+
+    // ------------------------------------------------------------------
+    // Retention / pruning (opt-in: with every window unset the node never
+    // deletes chain data). Each window is relative to the current tip and is
+    // further clamped by the node's built-in safety margin, so an operator can
+    // only ever tighten history, never cross the light-client floor.
+    // ------------------------------------------------------------------
+    /// Keep this many rounds of block history below the block-store tip.
+    /// `None` (default) or `Some(0)` disables block pruning. Overridable with
+    /// `KOVANICA_RETENTION_BLOCKS_BELOW_TIP`.
+    #[serde(default)]
+    pub retain_blocks_below_tip: Option<u64>,
+    /// Keep state roots for this many committed heights below the tip.
+    /// `None` (default) or `Some(0)` disables state-root pruning. Overridable
+    /// with `KOVANICA_RETENTION_STATE_ROOTS_BELOW_HEIGHT`.
+    #[serde(default)]
+    pub retain_state_roots_below_height: Option<u64>,
+    /// Keep transaction receipts for this many committed heights below the
+    /// tip. `None` (default) or `Some(0)` disables receipt pruning.
+    /// Overridable with `KOVANICA_RETENTION_RECEIPTS_BELOW_HEIGHT`.
+    #[serde(default)]
+    pub retain_receipts_below_height: Option<u64>,
+    /// Seconds between retention maintenance passes. Only read when at least
+    /// one window above is enabled. Overridable with
+    /// `KOVANICA_RETENTION_INTERVAL_SECS`.
+    #[serde(default = "default_retention_interval")]
+    pub retention_interval_secs: u64,
+    /// Maximum rows removed per store per retention pass, so a single pass over
+    /// a long chain stays bounded. Overridable with `KOVANICA_RETENTION_BATCH`.
+    #[serde(default = "default_retention_batch")]
+    pub retention_batch: usize,
+}
+
+fn default_retention_interval() -> u64 {
+    300
+}
+
+fn default_retention_batch() -> usize {
+    10_000
 }
 
 impl Default for NodeConfig {
@@ -98,6 +137,32 @@ impl Default for NodeConfig {
             health_commit_stall_secs: kovanica_rpc::health::DEFAULT_COMMIT_STALL_SECS,
             peer_scoring: kovanica_network::PeerScoringConfig::default(),
             chain_id: kovanica_types::signing::chain_id::LOCAL,
+            // Pruning is opt-in: every retention window defaults to "keep
+            // everything" so an unconfigured node never deletes data.
+            retain_blocks_below_tip: None,
+            retain_state_roots_below_height: None,
+            retain_receipts_below_height: None,
+            retention_interval_secs: 300,
+            retention_batch: 10_000,
+        }
+    }
+}
+
+/// Parse a `KOVANICA_*` retention window: unset or empty means "leave as is",
+/// a valid integer overrides, and an invalid value is warned about and ignored.
+fn env_retention_window(var: &str) -> Option<u64> {
+    let Ok(raw) = std::env::var(var) else {
+        return None;
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    match raw.parse() {
+        Ok(value) => Some(value),
+        Err(_) => {
+            tracing::warn!(value = %raw, var, "ignoring invalid retention window");
+            None
         }
     }
 }
@@ -215,6 +280,42 @@ impl NodeConfig {
                 }
             }
         }
+        // Retention / pruning windows. Unset or empty leaves the file/default
+        // value untouched; `0` is accepted and means "keep everything".
+        if let Some(v) = env_retention_window("KOVANICA_RETENTION_BLOCKS_BELOW_TIP") {
+            self.retain_blocks_below_tip = Some(v);
+        }
+        if let Some(v) = env_retention_window("KOVANICA_RETENTION_STATE_ROOTS_BELOW_HEIGHT") {
+            self.retain_state_roots_below_height = Some(v);
+        }
+        if let Some(v) = env_retention_window("KOVANICA_RETENTION_RECEIPTS_BELOW_HEIGHT") {
+            self.retain_receipts_below_height = Some(v);
+        }
+        if let Ok(v) = std::env::var("KOVANICA_RETENTION_INTERVAL_SECS") {
+            match v.trim().parse() {
+                Ok(secs) => self.retention_interval_secs = secs,
+                Err(_) => tracing::warn!(
+                    value = %v,
+                    "ignoring invalid KOVANICA_RETENTION_INTERVAL_SECS"
+                ),
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_RETENTION_BATCH") {
+            match v.trim().parse() {
+                Ok(batch) => self.retention_batch = batch,
+                Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_RETENTION_BATCH"),
+            }
+        }
+    }
+
+    /// True when at least one retention window is configured.
+    ///
+    /// Pruning is opt-in: a window of `None` or `Some(0)` keeps everything, and
+    /// a node with no enabled window never runs the retention maintenance task.
+    pub fn retention_enabled(&self) -> bool {
+        self.retain_blocks_below_tip.is_some_and(|v| v > 0)
+            || self.retain_state_roots_below_height.is_some_and(|v| v > 0)
+            || self.retain_receipts_below_height.is_some_and(|v| v > 0)
     }
 
     /// Reject configurations the node cannot run safely with.
@@ -249,6 +350,18 @@ impl NodeConfig {
                 "chain_id {} is not registered (expected 1 mainnet, 2 testnet, 3 devnet or 1337 local)",
                 self.chain_id
             );
+        }
+        // Retention sanity: only meaningful when a window is enabled, and only
+        // guards against a pass that could never make progress or would spin.
+        if self.retention_enabled() {
+            if self.retention_interval_secs == 0 {
+                anyhow::bail!(
+                    "retention_interval_secs must be greater than 0 when retention is enabled"
+                );
+            }
+            if self.retention_batch == 0 {
+                anyhow::bail!("retention_batch must be greater than 0 when retention is enabled");
+            }
         }
         self.rpc_socket_addr()?;
         Ok(())
@@ -454,5 +567,108 @@ treasury_address = "treasury-address-placeholder"
                 .expect("parse");
         let err = bad.validate().expect_err("positive ban threshold");
         assert!(err.to_string().contains("peer_scoring"), "{err}");
+    }
+
+    #[test]
+    fn retention_defaults_to_keeping_everything() {
+        let config = NodeConfig::default();
+        assert_eq!(config.retain_blocks_below_tip, None);
+        assert_eq!(config.retain_state_roots_below_height, None);
+        assert_eq!(config.retain_receipts_below_height, None);
+        assert!(
+            !config.retention_enabled(),
+            "an unconfigured node must never prune"
+        );
+
+        // An explicit zero is accepted and still means "keep everything".
+        let zeroed = NodeConfig {
+            retain_blocks_below_tip: Some(0),
+            retain_state_roots_below_height: Some(0),
+            retain_receipts_below_height: Some(0),
+            ..NodeConfig::default()
+        };
+        assert!(!zeroed.retention_enabled());
+    }
+
+    #[test]
+    fn retention_windows_parse_from_toml() {
+        let config: NodeConfig = toml::from_str(
+            "run_validator = false\n\
+             retain_blocks_below_tip = 10\n\
+             retain_state_roots_below_height = 20\n\
+             retain_receipts_below_height = 30\n\
+             retention_interval_secs = 60\n\
+             retention_batch = 5\n",
+        )
+        .expect("parse");
+        assert_eq!(config.retain_blocks_below_tip, Some(10));
+        assert_eq!(config.retain_state_roots_below_height, Some(20));
+        assert_eq!(config.retain_receipts_below_height, Some(30));
+        assert_eq!(config.retention_interval_secs, 60);
+        assert_eq!(config.retention_batch, 5);
+        assert!(config.retention_enabled());
+        config.validate().expect("valid");
+    }
+
+    #[test]
+    fn retention_env_overrides_parse() {
+        let _guard = env_guard();
+        std::env::set_var("KOVANICA_RETENTION_BLOCKS_BELOW_TIP", "10");
+        std::env::set_var("KOVANICA_RETENTION_STATE_ROOTS_BELOW_HEIGHT", "20");
+        std::env::set_var("KOVANICA_RETENTION_RECEIPTS_BELOW_HEIGHT", "30");
+        std::env::set_var("KOVANICA_RETENTION_INTERVAL_SECS", "60");
+        std::env::set_var("KOVANICA_RETENTION_BATCH", "7");
+        let mut config = NodeConfig::default();
+        config.apply_env_overrides();
+        for var in [
+            "KOVANICA_RETENTION_BLOCKS_BELOW_TIP",
+            "KOVANICA_RETENTION_STATE_ROOTS_BELOW_HEIGHT",
+            "KOVANICA_RETENTION_RECEIPTS_BELOW_HEIGHT",
+            "KOVANICA_RETENTION_INTERVAL_SECS",
+            "KOVANICA_RETENTION_BATCH",
+        ] {
+            std::env::remove_var(var);
+        }
+        assert_eq!(config.retain_blocks_below_tip, Some(10));
+        assert_eq!(config.retain_state_roots_below_height, Some(20));
+        assert_eq!(config.retain_receipts_below_height, Some(30));
+        assert_eq!(config.retention_interval_secs, 60);
+        assert_eq!(config.retention_batch, 7);
+        assert!(config.retention_enabled());
+    }
+
+    #[test]
+    fn invalid_retention_env_is_ignored() {
+        let _guard = env_guard();
+        let mut config = NodeConfig {
+            retain_blocks_below_tip: Some(99),
+            ..NodeConfig::default()
+        };
+        std::env::set_var("KOVANICA_RETENTION_BLOCKS_BELOW_TIP", "not-a-number");
+        config.apply_env_overrides();
+        std::env::remove_var("KOVANICA_RETENTION_BLOCKS_BELOW_TIP");
+        assert_eq!(
+            config.retain_blocks_below_tip,
+            Some(99),
+            "an invalid override must not clobber the configured value"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_retention_interval_when_enabled() {
+        let mut config = NodeConfig {
+            run_validator: false,
+            retain_blocks_below_tip: Some(10),
+            retention_interval_secs: 0,
+            ..NodeConfig::default()
+        };
+        assert!(config.validate().is_err());
+
+        config.retention_interval_secs = 300;
+        config.retention_batch = 0;
+        assert!(config.validate().is_err());
+
+        config.retention_batch = 10_000;
+        config.validate().expect("sane retention config");
     }
 }

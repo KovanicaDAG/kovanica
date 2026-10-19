@@ -214,22 +214,53 @@ impl BlockStore {
     }
 
     /// Delete blocks below a certain round (pruning).
+    ///
+    /// Removes every stored block with `round < min_round`. Unbounded: for
+    /// periodic maintenance on a live node prefer [`Self::prune_below_limited`],
+    /// which caps the rows removed per write transaction.
     pub fn prune_below(
         &self,
         txn: &WriteTransaction,
         min_round: Round,
     ) -> Result<u64, BlockStoreError> {
-        let table = txn.open_table(crate::tables::BLOCK_HEIGHT)?;
-        let mut pruned = 0;
+        self.prune_below_limited(txn, min_round, usize::MAX)
+    }
 
-        // Collect rounds to prune first (can't modify while iterating)
+    /// Batched variant of [`Self::prune_below`].
+    ///
+    /// Deletes at most `max_blocks` blocks with `round < min_round`, oldest
+    /// (lowest round) first, then returns the number deleted. A single call
+    /// therefore keeps its write transaction short enough for a maintenance
+    /// tick; call again on the next tick to make further progress. `max_blocks
+    /// == 0` is a no-op.
+    pub fn prune_below_limited(
+        &self,
+        txn: &WriteTransaction,
+        min_round: Round,
+        max_blocks: usize,
+    ) -> Result<u64, BlockStoreError> {
+        if max_blocks == 0 {
+            return Ok(0);
+        }
+        // Collect rounds to prune first (can't modify while iterating). The
+        // range yields keys in ascending order, so the batch is the oldest
+        // blocks below `min_round`.
         let mut rounds_to_prune = Vec::new();
-        for entry in table.range(0..min_round)? {
-            let (round, block_hash) = entry?;
-            rounds_to_prune.push((round.value(), block_hash.value()));
+        {
+            let table = txn.open_table(crate::tables::BLOCK_HEIGHT)?;
+            for entry in table.range(0..min_round)? {
+                let (round, block_hash) = entry?;
+                rounds_to_prune.push((round.value(), block_hash.value()));
+                if rounds_to_prune.len() >= max_blocks {
+                    break;
+                }
+            }
         }
 
-        // Now delete
+        // Now delete. The `BLOCK_HEIGHT` read handle is closed above: redb
+        // refuses a second open of the same table inside one write transaction,
+        // so it must be re-opened per deletion.
+        let mut pruned = 0;
         for (round, block_hash) in rounds_to_prune {
             // Remove from blocks table
             {
@@ -258,5 +289,115 @@ impl BlockStore {
         }
 
         Ok(pruned)
+    }
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+    use kovanica_types::crypto::Signature;
+    use kovanica_types::AuthorityIndex;
+    use tempfile::tempdir;
+
+    /// A parentless block at `round` (digest recomputed so `put_block` accepts it).
+    fn block(round: Round) -> StatementBlock {
+        let author: AuthorityIndex = 0;
+        let parents: Vec<BlockReference> = Vec::new();
+        let transactions: Vec<Transaction> = Vec::new();
+        let digest = StatementBlock::compute_digest(author, round, &parents, &transactions);
+        StatementBlock {
+            author,
+            round,
+            parents,
+            transactions,
+            statements: Vec::new(),
+            signature: Signature([0u8; 64]),
+            digest,
+            merkle_root: Hash::new([0u8; 32]),
+        }
+    }
+
+    fn seed_rounds(store: &BlockStore, txn: &WriteTransaction, rounds: &[Round]) {
+        for &r in rounds {
+            store.put_block(txn, &block(r), &[]).expect("put_block");
+        }
+    }
+
+    #[test]
+    fn prune_below_deletes_only_rounds_below_the_boundary() {
+        let dir = tempdir().unwrap();
+        let db = redb::Database::create(dir.path().join("blocks.redb")).unwrap();
+        let store = BlockStore::new(&db).unwrap();
+
+        let txn = db.begin_write().unwrap();
+        seed_rounds(&store, &txn, &[1, 2, 3, 4, 5]);
+        txn.commit().unwrap();
+
+        let txn = db.begin_write().unwrap();
+        let pruned = store.prune_below(&txn, 4).unwrap();
+        txn.commit().unwrap();
+        assert_eq!(pruned, 3, "rounds 1,2,3 pruned");
+
+        let read = db.begin_read().unwrap();
+        assert!(store.get_block_by_height(&read, 3).unwrap().is_none());
+        assert!(
+            store.get_block_by_height(&read, 4).unwrap().is_some(),
+            "boundary round must survive"
+        );
+        assert!(
+            store.get_block_by_height(&read, 5).unwrap().is_some(),
+            "rounds above the boundary must survive"
+        );
+    }
+
+    #[test]
+    fn prune_below_limited_bounds_rows_per_call() {
+        let dir = tempdir().unwrap();
+        let db = redb::Database::create(dir.path().join("blocks.redb")).unwrap();
+        let store = BlockStore::new(&db).unwrap();
+
+        let txn = db.begin_write().unwrap();
+        seed_rounds(&store, &txn, &[1, 2, 3, 4, 5]);
+        txn.commit().unwrap();
+
+        // First call removes at most two of the three candidates.
+        let txn = db.begin_write().unwrap();
+        assert_eq!(store.prune_below_limited(&txn, 4, 2).unwrap(), 2);
+        txn.commit().unwrap();
+        {
+            let read = db.begin_read().unwrap();
+            assert!(store.get_block_by_height(&read, 1).unwrap().is_none());
+            assert!(store.get_block_by_height(&read, 2).unwrap().is_none());
+            assert!(
+                store.get_block_by_height(&read, 3).unwrap().is_some(),
+                "batch cap must leave the remainder for the next tick"
+            );
+        }
+
+        // A second call finishes the job; nothing below the boundary remains.
+        let txn = db.begin_write().unwrap();
+        assert_eq!(store.prune_below_limited(&txn, 4, 2).unwrap(), 1);
+        txn.commit().unwrap();
+        let read = db.begin_read().unwrap();
+        assert!(store.get_block_by_height(&read, 3).unwrap().is_none());
+        assert!(store.get_block_by_height(&read, 4).unwrap().is_some());
+    }
+
+    #[test]
+    fn prune_below_limited_zero_is_a_noop() {
+        let dir = tempdir().unwrap();
+        let db = redb::Database::create(dir.path().join("blocks.redb")).unwrap();
+        let store = BlockStore::new(&db).unwrap();
+
+        let txn = db.begin_write().unwrap();
+        seed_rounds(&store, &txn, &[1, 2]);
+        txn.commit().unwrap();
+
+        let txn = db.begin_write().unwrap();
+        assert_eq!(store.prune_below_limited(&txn, 10, 0).unwrap(), 0);
+        txn.commit().unwrap();
+        let read = db.begin_read().unwrap();
+        assert!(store.get_block_by_height(&read, 1).unwrap().is_some());
+        assert!(store.get_block_by_height(&read, 2).unwrap().is_some());
     }
 }

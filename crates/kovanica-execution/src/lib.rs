@@ -1464,6 +1464,85 @@ pub fn receipts_in_height_range(
     Ok(out)
 }
 
+/// Prune transaction receipts for every committed height strictly below
+/// `min_height`.
+///
+/// For each pruned height both indexes are updated together:
+/// * the per-height row is deleted from [`TX_RECEIPTS`];
+/// * every transaction in that row is deleted from [`TX_RECEIPT_BY_HASH`].
+///
+/// The per-height list is the authoritative source of which transaction hashes
+/// belong to a height (the receipt itself has no height field), so no separate
+/// height index is needed: pruning a height first reads its receipts, then
+/// removes their hashes.
+///
+/// At most `max_batch` **heights** are processed in one call (0 is a no-op), so
+/// a single invocation over a long chain stays bounded; call again on the next
+/// maintenance tick to make further progress. Returns the number of receipts
+/// removed from the per-hash index.
+///
+/// # RPC behaviour after pruning
+/// * [`receipt_by_tx_hash`] returns `Ok(None)` for a pruned transaction, so
+///   `kovanica_getTransactionReceipt` answers `null`;
+/// * [`receipts_in_height_range`] simply skips a missing height, so
+///   `kovanica_getLogs` returns the receipts that are still stored.
+///
+/// Pruning is irreversible: callers must pass a `min_height` that is safely
+/// below the committed tip (the node applies its own safety margin).
+pub fn prune_receipts_below(
+    storage: &Storage,
+    min_height: u64,
+    max_batch: usize,
+) -> Result<u64, ExecutionError> {
+    if max_batch == 0 {
+        return Ok(0);
+    }
+    let txn = storage.begin_write()?;
+
+    // Collect the heights to prune first (can't mutate while iterating). The
+    // range yields keys in ascending order, so the batch is the oldest heights.
+    let heights: Vec<u64> = {
+        let table = txn.open_table(TX_RECEIPTS).map_err(StorageError::Table)?;
+        let mut heights = Vec::new();
+        for row in table.range(0..min_height).map_err(StorageError::Storage)? {
+            let (key, _) = row.map_err(StorageError::Storage)?;
+            heights.push(key.value());
+            if heights.len() >= max_batch {
+                break;
+            }
+        }
+        heights
+    };
+
+    let mut removed = 0u64;
+    {
+        let mut receipts_table = txn.open_table(TX_RECEIPTS).map_err(StorageError::Table)?;
+        let mut by_hash = txn
+            .open_table(TX_RECEIPT_BY_HASH)
+            .map_err(StorageError::Table)?;
+        for height in heights {
+            if let Some(bytes) = receipts_table.get(height).map_err(StorageError::Storage)? {
+                let receipts: Vec<TransactionReceipt> = bincode::deserialize(&bytes.value())
+                    .map_err(|e| ExecutionError::Other(format!("receipt deserialization: {e}")))?;
+                for receipt in &receipts {
+                    if by_hash
+                        .remove(receipt.tx_hash.0)
+                        .map_err(StorageError::Storage)?
+                        .is_some()
+                    {
+                        removed += 1;
+                    }
+                }
+            }
+            receipts_table
+                .remove(height)
+                .map_err(StorageError::Storage)?;
+        }
+    }
+    txn.commit().map_err(StorageError::Commit)?;
+    Ok(removed)
+}
+
 /// Debit `amount` from `address` through `StateStore::sub_balance`
 /// (balance checked by the caller).
 ///
@@ -2266,6 +2345,123 @@ mod tests {
         assert!(receipts_in_height_range(&storage, 5, 1)
             .expect("scan")
             .is_empty());
+    }
+
+    #[test]
+    fn prune_receipts_removes_both_height_and_hash_index_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("prune.redb")).expect("storage");
+
+        let mut ctx = ExecutionContext::new();
+        let sender_key = test_keypair(21);
+        let sender = address_of(&sender_key);
+        let recipient = Address([2u8; 32]);
+        let validator = Address([3u8; 32]);
+        let payout = Address([4u8; 32]);
+
+        {
+            let txn = storage.begin_write().expect("write txn");
+            storage
+                .state()
+                .set_account(
+                    &txn,
+                    &sender,
+                    &Account {
+                        balance: 1000 * kovanica_staking::ONE_KUNA,
+                        nonce: 0,
+                        code_hash: [0u8; 32],
+                        code: Vec::new(),
+                    },
+                )
+                .expect("set_account");
+            txn.commit().expect("commit");
+        }
+        ctx.staking
+            .join_validator(
+                validator,
+                kovanica_staking::MIN_VALIDATOR_STAKE,
+                0,
+                Some(payout),
+                None,
+                None,
+            )
+            .expect("join validator");
+
+        // Two committed leaders, each carrying one transfer → receipts at
+        // committed heights 0 and 1.
+        let tx0 = create_transfer_tx(&sender_key, &recipient, 10, 0, 200);
+        let subdag0 = CommittedSubDag {
+            leader: sample_block_at(0, 1),
+            blocks: vec![sample_block_with_txs(0, vec![tx0.clone()])],
+            leader_round: 1,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        let r0 = ctx
+            .execute_committed_subdag(&subdag0, &storage)
+            .expect("first commit");
+        assert_eq!(r0.receipts.len(), 1);
+
+        let tx1 = create_transfer_tx(&sender_key, &recipient, 11, 1, 200);
+        let subdag1 = CommittedSubDag {
+            leader: sample_block_at(0, 2),
+            blocks: vec![sample_block_with_txs(0, vec![tx1.clone()])],
+            leader_round: 2,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        let r1 = ctx
+            .execute_committed_subdag(&subdag1, &storage)
+            .expect("second commit");
+        assert_eq!(r1.receipts.len(), 1);
+
+        // Both are indexed by hash and by height before pruning.
+        assert!(receipt_by_tx_hash(&storage, &tx0.hash)
+            .expect("lookup")
+            .is_some());
+        assert!(receipt_by_tx_hash(&storage, &tx1.hash)
+            .expect("lookup")
+            .is_some());
+        assert_eq!(
+            receipts_in_height_range(&storage, 0, 1)
+                .expect("scan")
+                .len(),
+            2
+        );
+
+        // Prune everything below height 1: only height 0's receipts go.
+        let removed = prune_receipts_below(&storage, 1, 100).expect("prune");
+        assert_eq!(removed, 1, "one receipt removed from the per-hash index");
+
+        assert!(
+            receipt_by_tx_hash(&storage, &tx0.hash)
+                .expect("lookup")
+                .is_none(),
+            "pruned transaction must no longer resolve"
+        );
+        assert!(
+            receipt_by_tx_hash(&storage, &tx1.hash)
+                .expect("lookup")
+                .is_some(),
+            "transaction at the retained height must survive"
+        );
+        let scanned = receipts_in_height_range(&storage, 0, 1).expect("scan");
+        assert_eq!(scanned.len(), 1, "the pruned height is simply skipped");
+        assert_eq!(scanned[0].0, 1);
+
+        // Zero batch is a no-op; a floor above the stored heights still prunes
+        // what is below it (height 1), because the floor is a "below" bound.
+        assert_eq!(prune_receipts_below(&storage, 5, 0).expect("no-op"), 0);
+        assert_eq!(prune_receipts_below(&storage, 5, 10).expect("prune"), 1);
+        assert!(receipt_by_tx_hash(&storage, &tx1.hash)
+            .expect("lookup")
+            .is_none());
+        assert!(
+            receipts_in_height_range(&storage, 0, 5)
+                .expect("scan")
+                .is_empty(),
+            "every height is now pruned"
+        );
     }
 
     #[test]

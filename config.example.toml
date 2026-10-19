@@ -14,6 +14,11 @@
 #   max_peers         -> KOVANICA_MAX_PEERS
 #   treasury_address  -> KOVANICA_TREASURY_ADDRESS
 #   rpc_rate_limit_per_min -> KOVANICA_RPC_RATE_LIMIT_PER_MIN
+#   retain_blocks_below_tip         -> KOVANICA_RETENTION_BLOCKS_BELOW_TIP
+#   retain_state_roots_below_height -> KOVANICA_RETENTION_STATE_ROOTS_BELOW_HEIGHT
+#   retain_receipts_below_height    -> KOVANICA_RETENTION_RECEIPTS_BELOW_HEIGHT
+#   retention_interval_secs         -> KOVANICA_RETENTION_INTERVAL_SECS
+#   retention_batch                 -> KOVANICA_RETENTION_BATCH
 
 # Extra env-only overrides without a TOML equivalent:
 #   KOVANICA_RUN_VALIDATOR  (true|false, default on)
@@ -77,6 +82,37 @@ rpc_rate_limit_per_min = 60
 # Genesis treasury address as 32 bytes of hex. When omitted, the zero address is
 # used. Only read the first time the database is created (fresh genesis).
 # treasury_address = "<64 hex characters>"
+
+# ---------------------------------------------------------------------------
+# Retention / pruning — OPT-IN, DEFAULT OFF.
+#
+# All three windows are commented out below: an unconfigured node keeps every
+# block, state root and transaction receipt it has ever seen. Setting a window
+# to `0` is equivalent to leaving it out ("keep everything"). The node reads
+# these keys and, while at least one is enabled, runs a retention pass on an
+# interval. Each pass deletes at most `retention_batch` rows per store so the
+# event loop is never blocked.
+#
+# Every window is additionally clamped to a built-in safety floor: nothing at or
+# above `committed_height - 1000` is ever deleted, no matter what is configured
+# here. A window larger than the available history deletes nothing.
+#
+#   retain_blocks_below_tip          -> KOVANICA_RETENTION_BLOCKS_BELOW_TIP
+#   retain_state_roots_below_height  -> KOVANICA_RETENTION_STATE_ROOTS_BELOW_HEIGHT
+#   retain_receipts_below_height     -> KOVANICA_RETENTION_RECEIPTS_BELOW_HEIGHT
+#   retention_interval_secs          -> KOVANICA_RETENTION_INTERVAL_SECS
+#   retention_batch                  -> KOVANICA_RETENTION_BATCH
+#
+# retain_* windows are measured in blocks below the current tip:
+#   retain_blocks_below_tip keeps that many rounds of block history,
+#   the two *_below_height windows keep that many committed heights of state
+#   roots / transaction receipts.
+#
+# retain_blocks_below_tip = 1000000
+# retain_state_roots_below_height = 1000000
+# retain_receipts_below_height = 1000000
+retention_interval_secs = 300
+retention_batch = 10000
 
 # Gossipsub peer scoring. Thresholds must be <= 0 and ordered
 # ban <= graylist <= publish <= gossip <= 0; the node refuses to start

@@ -1055,27 +1055,104 @@ impl StateStore {
     }
 
     /// Prune old state roots beyond the configured retention.
-    /// Keeps the most recent `max_state_roots` entries.
+    ///
+    /// Two independent floors are honoured, whichever keeps *more* history:
+    /// * `PruningConfig::max_state_roots` — keep the most recent N roots by
+    ///   count;
+    /// * `PruningConfig::keep_recent` — keep every root within this many
+    ///   heights of the newest stored root, regardless of count.
+    ///
+    /// `keep_recent` is the field a live node may need at least a light-client
+    /// reorg window for, so it is never allowed to drop a root that
+    /// `max_state_roots` alone would have kept.
     pub fn prune_state_roots(&self, txn: &WriteTransaction) -> Result<u64, StateStoreError> {
-        let mut table = txn.open_table(crate::tables::STATE_ROOT)?;
+        let table = txn.open_table(crate::tables::STATE_ROOT)?;
         let mut roots: Vec<u64> = table
             .iter()?
             .filter_map(|e| e.ok())
             .map(|(k, _)| k.value())
             .collect();
+        drop(table);
 
-        if roots.len() <= self.pruning.max_state_roots as usize {
+        let Some(latest) = roots.iter().copied().max() else {
             return Ok(0);
+        };
+        // Roots at or above this height are protected by `keep_recent`.
+        let recent_floor = latest.saturating_sub(self.pruning.keep_recent);
+
+        // Ascending order: index `len - max_state_roots` is the newest root the
+        // count cap would keep, so every earlier index is beyond the cap.
+        roots.sort_unstable();
+        let keep_from_index = roots
+            .len()
+            .saturating_sub(self.pruning.max_state_roots as usize);
+
+        let mut table = txn.open_table(crate::tables::STATE_ROOT)?;
+        let mut removed = 0u64;
+        for (index, height) in roots.iter().enumerate() {
+            let within_root_cap = index >= keep_from_index;
+            let within_recent = *height >= recent_floor;
+            if within_root_cap || within_recent {
+                continue;
+            }
+            if table.remove(*height)?.is_some() {
+                removed += 1;
+            }
         }
 
-        // Sort by height descending (newest first)
-        roots.sort_by_key(|h| std::cmp::Reverse(*h));
+        Ok(removed)
+    }
 
-        // Remove oldest entries beyond max_state_roots
-        let to_remove = &roots[self.pruning.max_state_roots as usize..];
+    /// Prune every state root strictly below `min_height`, bounded per call.
+    ///
+    /// Used by the node's opt-in retention maintenance: `min_height` is derived
+    /// from the committed tip minus the operator's retention window. Two limits
+    /// always apply on top of that:
+    /// * `PruningConfig::keep_recent` — never remove a root within this many
+    ///   heights of the newest stored root, even when `min_height` is larger
+    ///   (the configured window can tighten history, never loosen the
+    ///   light-client floor);
+    /// * `max_batch` — remove at most this many rows in one write transaction
+    ///   (0 is a no-op), so a tick over a long chain stays bounded.
+    ///
+    /// Returns the number of roots removed.
+    pub fn prune_state_roots_below(
+        &self,
+        txn: &WriteTransaction,
+        min_height: u64,
+        max_batch: usize,
+    ) -> Result<u64, StateStoreError> {
+        if max_batch == 0 {
+            return Ok(0);
+        }
+        let table = txn.open_table(crate::tables::STATE_ROOT)?;
+        let mut roots: Vec<u64> = table
+            .iter()?
+            .filter_map(|e| e.ok())
+            .map(|(k, _)| k.value())
+            .collect();
+        drop(table);
+
+        let Some(latest) = roots.iter().copied().max() else {
+            return Ok(0);
+        };
+        let recent_floor = latest.saturating_sub(self.pruning.keep_recent);
+        // The effective exclusive bound is the lower of the caller's height and
+        // the protected window, so `keep_recent` is always respected.
+        let bound = min_height.min(recent_floor);
+
+        roots.sort_unstable();
+        let mut table = txn.open_table(crate::tables::STATE_ROOT)?;
         let mut removed = 0u64;
-        for height in to_remove {
-            if table.remove(*height)?.is_some() {
+        for height in roots {
+            if removed as usize >= max_batch {
+                break;
+            }
+            if height >= bound {
+                // Ascending order: nothing later is removable either.
+                break;
+            }
+            if table.remove(height)?.is_some() {
                 removed += 1;
             }
         }
@@ -1574,5 +1651,140 @@ mod snapshot_tests {
         key.copy_from_slice(&[6u8; 32]);
         let acct = storage.state().get_account(&txn, &Address(key)).unwrap();
         assert_eq!(acct.balance, 77, "legacy payload must still import");
+    }
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+    use redb::Database;
+    use tempfile::tempdir;
+
+    /// A fresh database plus a state store with the supplied pruning config,
+    /// seeded with state roots at heights `1..=count`.
+    fn seeded(name: &str, pruning: PruningConfig, count: u64) -> (tempfile::TempDir, Database) {
+        let dir = tempdir().unwrap();
+        let db = Database::create(dir.path().join(name)).unwrap();
+        let store = StateStore::with_pruning(&db, pruning).unwrap();
+        let txn = db.begin_write().unwrap();
+        for height in 1..=count {
+            store
+                .save_state_root(&txn, height, &Hash::new(b"root"))
+                .unwrap();
+        }
+        txn.commit().unwrap();
+        (dir, db)
+    }
+
+    fn stored_heights(db: &Database) -> Vec<u64> {
+        let txn = db.begin_read().unwrap();
+        let table = txn.open_table(crate::tables::STATE_ROOT).unwrap();
+        let mut heights: Vec<u64> = table
+            .iter()
+            .unwrap()
+            .map(|e| e.unwrap().0.value())
+            .collect();
+        heights.sort_unstable();
+        heights
+    }
+
+    #[test]
+    fn keep_recent_is_honoured_even_with_no_count_cap() {
+        // max_state_roots = 0 would otherwise delete everything; keep_recent
+        // must protect the newest 5 heights.
+        let (_dir, db) = seeded(
+            "keep_recent.redb",
+            PruningConfig {
+                keep_recent: 5,
+                max_state_roots: 0,
+            },
+            20,
+        );
+        let store = StateStore::with_pruning(
+            &db,
+            PruningConfig {
+                keep_recent: 5,
+                max_state_roots: 0,
+            },
+        )
+        .unwrap();
+
+        let txn = db.begin_write().unwrap();
+        let removed = store.prune_state_roots(&txn).unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(removed, 14, "heights 1..=14 removed");
+        assert_eq!(stored_heights(&db), vec![15, 16, 17, 18, 19, 20]);
+    }
+
+    #[test]
+    fn prune_state_roots_still_honours_max_state_roots() {
+        // A zero `keep_recent` window leaves the count cap fully in charge.
+        let pruning = PruningConfig {
+            keep_recent: 0,
+            max_state_roots: 3,
+        };
+        let (_dir, db) = seeded("cap.redb", pruning.clone(), 10);
+        // The store is built before the write transaction below: redb holds one
+        // write lock per database at a time.
+        let store = StateStore::with_pruning(&db, pruning).unwrap();
+
+        let txn = db.begin_write().unwrap();
+        store.prune_state_roots(&txn).unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(stored_heights(&db), vec![8, 9, 10]);
+    }
+
+    #[test]
+    fn prune_state_roots_is_a_noop_on_an_empty_table() {
+        let pruning = PruningConfig::default();
+        let (_dir, db) = seeded("empty.redb", pruning.clone(), 0);
+        let store = StateStore::with_pruning(&db, pruning).unwrap();
+        let txn = db.begin_write().unwrap();
+        assert_eq!(store.prune_state_roots(&txn).unwrap(), 0);
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn prune_state_roots_below_never_crosses_keep_recent() {
+        let pruning = PruningConfig {
+            keep_recent: 5,
+            max_state_roots: 1000,
+        };
+        let (_dir, db) = seeded("below.redb", pruning.clone(), 20);
+        let store = StateStore::with_pruning(&db, pruning).unwrap();
+
+        // Caller asks to prune everything below 18, but keep_recent protects
+        // everything at height >= 15.
+        let txn = db.begin_write().unwrap();
+        let removed = store.prune_state_roots_below(&txn, 18, 1000).unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(removed, 14);
+        assert_eq!(stored_heights(&db), vec![15, 16, 17, 18, 19, 20]);
+    }
+
+    #[test]
+    fn prune_state_roots_below_bounds_rows_per_call() {
+        let pruning = PruningConfig {
+            keep_recent: 5,
+            max_state_roots: 2000,
+        };
+        let (_dir, db) = seeded("batch.redb", pruning.clone(), 20);
+        let store = StateStore::with_pruning(&db, pruning).unwrap();
+
+        let txn = db.begin_write().unwrap();
+        assert_eq!(store.prune_state_roots_below(&txn, 15, 3).unwrap(), 3);
+        txn.commit().unwrap();
+        assert_eq!(
+            stored_heights(&db),
+            (4..=20).collect::<Vec<u64>>(),
+            "only the three oldest heights are gone"
+        );
+
+        let txn = db.begin_write().unwrap();
+        assert_eq!(store.prune_state_roots_below(&txn, 15, 0).unwrap(), 0);
+        txn.commit().unwrap();
     }
 }

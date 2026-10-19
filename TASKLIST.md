@@ -23,6 +23,21 @@
 > - **Area 5 (ops): `kovanica-node --check-config` — DONE.** Validira config (file + `KOVANICA_*` override) i izlazi bez pokretanja nodea; exit 0 uz `config OK: ...`, non-zero + dijagnostika na grešku (npr. neregistrirani `chain_id`). Napomena: `run_validator` default je `true` (traži `validator_key`).
 > - **Novi gated režimi za genesis reset:** `GAS_HARDENING_ACTIVE_FROM_ROUND` i `CONTRACT_HARDENING_ACTIVE_FROM_ROUND` oba `u64::MAX` (inertno) → postaviti na `0` pri sljedećem genesis resetu kad svi validatori vrte novi build.
 
+> **Plan (korisnička uputa 2026-10-19) — redoslijed NAKON fix-22/23, prije svega ostalog.**
+> Svaki item = zaseban commit, s testom; `fmt`/`clippy`/testovi prije pusha. `[ ]` = nije napravljeno:
+> 1. **[ ] Epoha committeeja** — računaj je deterministički pri svakom commitu, ne samo pri pokretanju (ref. 849d172). Test: restartan node nakon promjene epohe potpisuje za istu epohu kao ostali.
+> 2. **[ ] Adrese `kvnc…dag`** — faucet i genesis moraju prihvaćati kvnc…dag adrese (36 bajtova s checksumom), uz postojeći 64-hex ključ.
+> 3. **[ ] `chain_id` 4 = testnet** — registriraj i ispravi testove koji ga tretiraju kao nevažeći.
+> 4. **[ ] `kovanica_syncStatus`** — bez autentikacije NE smije vraćati IP adrese peerova; dodaj i `localHeight`.
+> 5. **[ ] `kovanica_getLogs`** — niži limiti i timeout da ne blokira server.
+> 6. **[ ] MIN_ACTIVE=15 iza aktivacijskog prekidača** (default isključen); nikad ne vraćaj izbačene offline validatore u committee.
+> 7. **[ ] VRF determinizam lidera (C1)** — lider slota L iz VRF izlaza runde L-7 commitanih do L-6, izbor se trajno sprema, čeka se ako lider nije poznat, + simulacijski test.
+> 8. **[ ] Slashing** — spoji u produkcijski put noda.
+> 9. **[ ] Metrike `kovanica_*` (M1–M8)** za monitoring.
+>
+> **Tek onda:** P2P per-IP limit → compile gas → host-call gas schedule → byzantine testovi.
+> **Genesis reset flip** (`GAS_HARDENING_ACTIVE_FROM_ROUND` / `CONTRACT_HARDENING_ACTIVE_FROM_ROUND` → `0`) ostaje za reset na **chain 4**.
+
 **Legenda statusa**
 - `[x]` — implementirano i wired u production pathu (verificirano u kodu)
 - `[~]` — djelomično (kod postoji, ali nije potpuno wired / nije production-safe / test ne prolazi)

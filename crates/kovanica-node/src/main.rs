@@ -980,10 +980,80 @@ where
         }
     });
 
+    // ------------------------------------------------------------------
+    // 8. Retention maintenance (opt-in pruning; DEFAULT OFF)
+    // ------------------------------------------------------------------
+    // Every window is `None` unless the operator configured one, so a stock
+    // node never spawns this task and never deletes chain data. The existing
+    // DAG wave pruning inside `kovanica-consensus` (window = 100 waves) is
+    // untouched: that is consensus-internal history, not this path.
+    if config.retention_enabled() {
+        let retention = RetentionPlan {
+            blocks_below_tip: config.retain_blocks_below_tip,
+            state_roots_below_height: config.retain_state_roots_below_height,
+            receipts_below_height: config.retain_receipts_below_height,
+            batch: config.retention_batch,
+            margin: PRUNE_SAFETY_MARGIN,
+        };
+        let retention_secs = config.retention_interval_secs.max(1);
+        let storage = state_storage.clone();
+        let mut shutdown_for_retention = shutdown_rx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(retention_secs));
+            // Consume the immediate first tick: let consensus move a little
+            // before the first pass so the tip is fresh.
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        // Synchronous redb writes: keep them off the async
+                        // executor so a bounded pass cannot stall the loop.
+                        let storage = storage.clone();
+                        let plan = retention.clone();
+                        match tokio::task::spawn_blocking(move || {
+                            run_retention_pass(&storage, &plan)
+                        })
+                        .await
+                        {
+                            Ok(Ok(summary)) if !summary.is_empty() => {
+                                info!(target: "kovanica-node", summary = %summary, "retention pass removed data");
+                            }
+                            Ok(Ok(_)) => {
+                                debug!(target: "kovanica-node", "retention pass found nothing to remove");
+                            }
+                            Ok(Err(e)) => {
+                                warn!(target: "kovanica-node", error = %e, "retention pass failed");
+                            }
+                            Err(e) => {
+                                error!(target: "kovanica-node", error = %e, "retention pass panicked");
+                            }
+                        }
+                    }
+                    _ = shutdown_for_retention.changed() => {
+                        if *shutdown_for_retention.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+            info!("retention maintenance task stopped");
+        });
+        info!(
+            interval_secs = retention_secs,
+            batch = config.retention_batch,
+            "retention maintenance enabled (blocks_below_tip={:?} state_roots_below_height={:?} receipts_below_height={:?})",
+            config.retain_blocks_below_tip,
+            config.retain_state_roots_below_height,
+            config.retain_receipts_below_height,
+        );
+    } else {
+        info!("retention maintenance disabled: no retention window configured");
+    }
+
     info!("Kovanica node started");
 
     // ------------------------------------------------------------------
-    // 8. Run until shutdown, then stop everything
+    // 9. Run until shutdown, then stop everything
     // ------------------------------------------------------------------
     shutdown.await;
     info!("shutdown signal received; stopping node");
@@ -1047,6 +1117,135 @@ fn rpc_auth_config(disabled: bool, tokens: &str) -> AuthConfig {
 }
 
 /// Initialise genesis state if the database is fresh.
+/// Minimum number of committed heights a retention pass must leave below the
+/// committed tip, regardless of what the operator configured. RPC and
+/// light-client consumers keep asking for recent history, so retention never
+/// deletes anything newer than this.
+const PRUNE_SAFETY_MARGIN: u64 = 1000;
+
+/// One configured retention pass: the per-store windows, the per-call batch
+/// bound and the safety floor every window is clamped to.
+///
+/// Built from [`config::NodeConfig`] only when at least one window is enabled,
+/// so a stock node never runs retention at all.
+#[derive(Clone, Debug)]
+struct RetentionPlan {
+    /// Keep at most this many rounds below the block-store tip. `None` or `0`
+    /// disables block retention.
+    blocks_below_tip: Option<u64>,
+    /// Keep at most this many committed heights of state roots. `None` or `0`
+    /// disables state-root retention.
+    state_roots_below_height: Option<u64>,
+    /// Keep at most this many committed heights of transaction receipts.
+    /// `None` or `0` disables receipt retention.
+    receipts_below_height: Option<u64>,
+    /// Rows removed per store per pass, so one pass stays bounded.
+    batch: usize,
+    /// Depth below the committed tip that no window may cross.
+    margin: u64,
+}
+
+/// Exclusive floor below which a window's data may be deleted.
+///
+/// Returns `None` when the chain has not grown far enough past the safety
+/// margin for anything to be pruned safely yet; the caller then skips that
+/// window entirely.
+fn retention_floor(committed_height: u64, window: u64, margin: u64) -> Option<u64> {
+    committed_height.checked_sub(window.max(margin))
+}
+
+/// Run one bounded retention pass over `storage` and summarise what was removed.
+///
+/// Each configured window removes at most `plan.batch` rows of its store in this
+/// call, so a single pass never issues an unbounded write transaction. Nothing
+/// newer than the safety margin (`plan.margin`) is ever touched, and a window
+/// of `None`/`0` deletes nothing.
+///
+/// Runs on the blocking worker because it performs synchronous redb writes.
+/// Returns an empty summary when no rows were removed.
+fn run_retention_pass(storage: &Storage, plan: &RetentionPlan) -> Result<String> {
+    let mut summary: Vec<String> = Vec::new();
+
+    // Committed tip: the receipts and state-root windows are keyed by it.
+    let committed_height = {
+        let read = storage.begin_read()?;
+        storage
+            .consensus()
+            .get_committed_leader_height(&read)
+            .map_err(|e| anyhow::anyhow!("committed height: {e}"))?
+    };
+
+    // 1. Transaction receipts: drop the per-height row and every transaction's
+    //    by-hash entry together (kovanica-execution `prune_receipts_below`).
+    //    The by-hash index has no height column, so the per-height list is the
+    //    authoritative source of which hashes belong to the pruned range.
+    if let Some(window) = plan.receipts_below_height.filter(|w| *w > 0) {
+        if let Some(floor) =
+            retention_floor(committed_height, window, plan.margin).filter(|f| *f > 0)
+        {
+            let removed = kovanica_execution::prune_receipts_below(storage, floor, plan.batch)
+                .map_err(|e| anyhow::anyhow!("receipt prune: {e}"))?;
+            if removed > 0 {
+                summary.push(format!("receipts={removed}"));
+            }
+        }
+    }
+
+    // 2. State roots: bounded, height-driven pass that additionally honours the
+    //    state store's own `keep_recent` floor.
+    if let Some(window) = plan.state_roots_below_height.filter(|w| *w > 0) {
+        if let Some(floor) =
+            retention_floor(committed_height, window, plan.margin).filter(|f| *f > 0)
+        {
+            let txn = storage.begin_write()?;
+            let removed = storage
+                .state()
+                .prune_state_roots_below(&txn, floor, plan.batch)
+                .map_err(|e| anyhow::anyhow!("state-root prune: {e}"))?;
+            txn.commit().map_err(|e| anyhow::anyhow!("commit: {e}"))?;
+            if removed > 0 {
+                summary.push(format!("state_roots={removed}"));
+            }
+        }
+    }
+
+    // 3. Blocks: only rounds strictly below the settled history. Two
+    //    independent bounds are taken and the lower one wins, so neither the
+    //    operator's window nor a miscounted tip can reach committed rounds.
+    if let Some(window) = plan.blocks_below_tip.filter(|w| *w > 0) {
+        let (tip_round, committed) = {
+            let read = storage.begin_read()?;
+            let tip = storage
+                .blocks()
+                .get_latest_block(&read)
+                .map_err(|e| anyhow::anyhow!("block tip: {e}"))?
+                .map(|b| b.round);
+            (tip, committed_height)
+        };
+        // `committed_height` counts committed leaders ever, so any round below
+        // it is settled by construction — the safety floor doubles as a round
+        // bound.
+        if let Some(tip_round) = tip_round {
+            if let Some(by_commit) = retention_floor(committed, window, plan.margin) {
+                let floor = tip_round.saturating_sub(window).min(by_commit);
+                if floor > 0 {
+                    let txn = storage.begin_write()?;
+                    let removed = storage
+                        .blocks()
+                        .prune_below_limited(&txn, floor, plan.batch)
+                        .map_err(|e| anyhow::anyhow!("block prune: {e}"))?;
+                    txn.commit().map_err(|e| anyhow::anyhow!("commit: {e}"))?;
+                    if removed > 0 {
+                        summary.push(format!("blocks={removed}"));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(summary.join(" "))
+}
+
 fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Storage) -> Result<()> {
     let existing = {
         let read = state_storage.begin_read()?;
@@ -5537,5 +5736,269 @@ mod tests {
                 == 0,
             "a snapshot below local height must never be applied"
         );
+    }
+
+    /// A parentless block at `round` (digest recomputed so `put_block` accepts
+    /// it), used to seed the block store for the retention tests below.
+    fn retention_block(round: u64) -> StatementBlock {
+        let author: AuthorityIndex = 0;
+        let digest = StatementBlock::compute_digest(author, round, &[], &[]);
+        StatementBlock {
+            author,
+            round,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: Signature([0u8; 64]),
+            digest,
+            merkle_root: Hash::new([0u8; 32]),
+        }
+    }
+
+    fn count_state_roots(storage: &Storage) -> usize {
+        let read = storage.begin_read().unwrap();
+        let table = read
+            .open_table(kovanica_storage::tables::STATE_ROOT)
+            .unwrap();
+        use redb::ReadableTable;
+        table.iter().unwrap().count()
+    }
+
+    fn count_blocks(storage: &Storage) -> usize {
+        let read = storage.begin_read().unwrap();
+        let table = read
+            .open_table(kovanica_storage::tables::BLOCK_HEIGHT)
+            .unwrap();
+        use redb::ReadableTable;
+        table.iter().unwrap().count()
+    }
+
+    fn retention_plan(
+        blocks: Option<u64>,
+        state_roots: Option<u64>,
+        receipts: Option<u64>,
+        batch: usize,
+    ) -> RetentionPlan {
+        RetentionPlan {
+            blocks_below_tip: blocks,
+            state_roots_below_height: state_roots,
+            receipts_below_height: receipts,
+            batch,
+            margin: PRUNE_SAFETY_MARGIN,
+        }
+    }
+
+    #[test]
+    fn retention_floor_is_clamped_by_the_safety_margin() {
+        // Too little history to prune safely.
+        assert_eq!(retention_floor(0, 100, 1_000), None);
+        assert_eq!(retention_floor(500, 10, 1_000), None);
+        // The margin dominates a small window.
+        assert_eq!(retention_floor(5_000, 10, 1_000), Some(4_000));
+        // An empty/zero window is clamped to the margin too.
+        assert_eq!(retention_floor(5_000, 0, 1_000), Some(4_000));
+        // A window past the tip yields nothing rather than underflowing.
+        assert_eq!(retention_floor(5_000, 9_000, 1_000), None);
+        // The window can only ever tighten below the margin.
+        assert_eq!(retention_floor(50_000, 9_000, 1_000), Some(41_000));
+    }
+
+    #[test]
+    fn retention_pass_defaults_to_keeping_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("retention-off.redb")).unwrap();
+
+        const COMMITTED: u64 = 1_200;
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .consensus()
+                .set_committed_leader_height(&txn, COMMITTED)
+                .unwrap();
+            for h in 1..=COMMITTED {
+                storage
+                    .state()
+                    .save_state_root(&txn, h, &Hash::new(b"root"))
+                    .unwrap();
+                storage
+                    .blocks()
+                    .put_block(&txn, &retention_block(h), &[])
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        // No window configured: the pass must be a no-op.
+        assert_eq!(
+            run_retention_pass(&storage, &retention_plan(None, None, None, 100)).unwrap(),
+            "",
+            "an unconfigured node must never delete data"
+        );
+        assert_eq!(count_state_roots(&storage), COMMITTED as usize);
+        assert_eq!(count_blocks(&storage), COMMITTED as usize);
+        let read = storage.begin_read().unwrap();
+        assert!(
+            read.open_table(kovanica_storage::tables::STATE_ROOT)
+                .is_ok(),
+            "sanity"
+        );
+
+        // Enabling a window is what makes the pass delete, and it deletes in
+        // bounded batches: at most `batch` rows per store per pass.
+        for _ in 0..3 {
+            let summary = run_retention_pass(&storage, &retention_plan(Some(1_000), None, None, 5))
+                .expect("pass runs without panicking");
+            assert!(summary.contains("blocks=5"), "summary: {summary:?}");
+        }
+        assert_eq!(
+            count_blocks(&storage),
+            COMMITTED as usize - 15,
+            "three passes removed exactly `batch` rows each"
+        );
+        // State roots were not enabled: still untouched.
+        assert_eq!(count_state_roots(&storage), COMMITTED as usize);
+
+        // Nothing near the tip is ever touched: floor = 1200 - 1000 = 200.
+        let read = storage.begin_read().unwrap();
+        assert!(
+            storage
+                .blocks()
+                .get_block_by_height(&read, 1)
+                .unwrap()
+                .is_none(),
+            "the oldest rounds are pruned"
+        );
+        assert!(
+            storage
+                .blocks()
+                .get_block_by_height(&read, 16)
+                .unwrap()
+                .is_some(),
+            "only `batch` rows per pass go away"
+        );
+        assert!(
+            storage
+                .blocks()
+                .get_block_by_height(&read, 199)
+                .unwrap()
+                .is_some(),
+            "the safety floor is never crossed downward: rounds below it are pruned"
+        );
+        assert!(
+            storage
+                .blocks()
+                .get_block_by_height(&read, 200)
+                .unwrap()
+                .is_some(),
+            "the boundary round must survive"
+        );
+        assert!(
+            storage
+                .blocks()
+                .get_block_by_height(&read, COMMITTED)
+                .unwrap()
+                .is_some(),
+            "the tip must survive"
+        );
+    }
+
+    #[test]
+    fn retention_pass_clamps_blocks_to_the_committed_height() {
+        // The block store runs far ahead of the committed height (rounds
+        // advance faster than committed leaders), so the configured window alone
+        // would reach into rounds that are not settled yet. The committed-height
+        // safety bound must win and prune strictly below it.
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("retention-clamp.redb")).unwrap();
+
+        const COMMITTED: u64 = 1_100;
+        const TIP_ROUND: u64 = 5_000;
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .consensus()
+                .set_committed_leader_height(&txn, COMMITTED)
+                .unwrap();
+            for h in 1..=TIP_ROUND {
+                storage
+                    .blocks()
+                    .put_block(&txn, &retention_block(h), &[])
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        // window floor would be 5000 - 1000 = 4000 rounds, but the
+        // committed-height floor is 1100 - 1000 = 100 — and 100 wins.
+        let summary =
+            run_retention_pass(&storage, &retention_plan(Some(1_000), None, None, 10_000))
+                .expect("pass runs without panicking");
+        assert_eq!(summary, "blocks=99", "summary: {summary:?}");
+
+        let read = storage.begin_read().unwrap();
+        assert!(
+            storage
+                .blocks()
+                .get_block_by_height(&read, 99)
+                .unwrap()
+                .is_none(),
+            "rounds below the committed floor are pruned"
+        );
+        assert!(
+            storage
+                .blocks()
+                .get_block_by_height(&read, 100)
+                .unwrap()
+                .is_some(),
+            "the committed-height safety floor is the boundary"
+        );
+        assert!(
+            storage
+                .blocks()
+                .get_block_by_height(&read, 1_000)
+                .unwrap()
+                .is_some(),
+            "rounds the window would have pruned must survive"
+        );
+        assert!(
+            storage
+                .blocks()
+                .get_block_by_height(&read, TIP_ROUND)
+                .unwrap()
+                .is_some(),
+            "the tip must survive"
+        );
+    }
+
+    #[test]
+    fn retention_pass_refuses_windows_larger_than_the_chain() {
+        // "Keep 100_000 rounds" on a chain with 1_100 committed leaders is not
+        // a bug: it means "keep everything", so the pass must delete nothing
+        // rather than underflow or panic.
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("retention-huge.redb")).unwrap();
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .consensus()
+                .set_committed_leader_height(&txn, 1_100)
+                .unwrap();
+            for h in 1..=1_100u64 {
+                storage
+                    .blocks()
+                    .put_block(&txn, &retention_block(h), &[])
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        let summary = run_retention_pass(
+            &storage,
+            &retention_plan(Some(100_000), Some(100_000), Some(100_000), 10_000),
+        )
+        .expect("pass runs without panicking");
+        assert_eq!(summary, "", "summary: {summary:?}");
+        assert_eq!(count_blocks(&storage), 1_100);
+        assert_eq!(count_state_roots(&storage), 0);
     }
 }
