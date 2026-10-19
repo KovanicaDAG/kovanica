@@ -11,16 +11,18 @@ use serde::{Deserialize, Serialize};
 pub mod chain_id {
     /// Mainnet.
     pub const MAINNET: u64 = 1;
-    /// Public testnet.
+    /// Public testnet (legacy chain_id 2).
     pub const TESTNET: u64 = 2;
     /// Devnet.
     pub const DEVNET: u64 = 3;
     /// Local development network.
     pub const LOCAL: u64 = 1337;
+    /// Public testnet (new chain_id 4).
+    pub const TESTNET_V2: u64 = 4;
 
     /// Whether `id` is in the registry.
     pub fn is_registered(id: u64) -> bool {
-        matches!(id, MAINNET | TESTNET | DEVNET | LOCAL)
+        matches!(id, MAINNET | TESTNET | DEVNET | LOCAL | TESTNET_V2)
     }
 }
 
@@ -84,10 +86,9 @@ mod tests {
 
     #[test]
     fn registry() {
-        for id in [1, 2, 3, 1337] {
+        for id in [1, 2, 3, 4, 1337] {
             assert!(chain_id::is_registered(id));
         }
         assert!(!chain_id::is_registered(0));
-        assert!(!chain_id::is_registered(4));
     }
 }

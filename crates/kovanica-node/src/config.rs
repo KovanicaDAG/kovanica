@@ -535,14 +535,14 @@ treasury_address = "treasury-address-placeholder"
             ..NodeConfig::default()
         };
         assert_eq!(base.chain_id, 1337, "default is the local chain");
-        for id in [1, 2, 3, 1337] {
+        for id in [1, 2, 3, 4, 1337] {
             let c = NodeConfig {
                 chain_id: id,
                 ..base.clone()
             };
             c.validate().expect("registered chain id is valid");
         }
-        for id in [0, 4, 42, u64::MAX] {
+        for id in [0, 42, u64::MAX] {
             let c = NodeConfig {
                 chain_id: id,
                 ..base.clone()
