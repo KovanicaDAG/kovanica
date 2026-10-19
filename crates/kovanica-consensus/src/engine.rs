@@ -2428,6 +2428,28 @@ mod tests {
         assert!(receiver.try_recv().is_err());
     }
 
+    // LOCAL REVIEW TEST (Jarvis, 2026-10-19), not committed.
+    // B1 at engine level: an engine whose committee was built after the
+    // epoch boundary (committee epoch 1, i.e. restarted node) must accept a
+    // vote that a long-running node (committee epoch 0) signs for the same
+    // leader round.
+    #[tokio::test]
+    async fn b1_review_restarted_engine_accepts_vote_from_running_engine() {
+        let (engine, key, digest, _receiver) = engine_with_leader_at_epoch(); // committee epoch 5, round 3
+        let running_ctx = kovanica_types::SigningContext {
+            chain_id: TEST_CTX.chain_id,
+            epoch: 3 / kovanica_staking::EPOCH_ROUNDS,
+        };
+        let res = engine.process_vote(&vote_with_ctx(&key, &running_ctx, 3, digest));
+        assert!(
+            !matches!(
+                res,
+                Err(ConsensusError::VoteRejected(VoteRejection::BadSignature(_)))
+            ),
+            "restarted engine rejected a running engine's vote: {res:?}"
+        );
+    }
+
     #[tokio::test]
     async fn sig_v1_old_format_without_domain_tag_rejected() {
         let (engine, key, digest, mut receiver) = engine_with_leader_at_epoch();

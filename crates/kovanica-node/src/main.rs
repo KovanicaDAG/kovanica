@@ -867,21 +867,14 @@ where
     // The consensus engine now handles block production internally with mempool transactions
     // No separate builder task needed
     let _builder_task = tokio::spawn(async {});
-    let seal_members: Vec<_> = committee
-        .authorities()
-        .iter()
-        .map(|authority| (authority.index, authority.public_key, authority.stake))
-        .collect();
     let seal_duty = SealDuty {
         ctx: seals::SealContext {
             chain_id: signing_ctx.chain_id,
-            epoch: signing_ctx.epoch,
             signer: if config.run_validator {
                 Some((our_authority, signing_key.clone()))
             } else {
                 None
             },
-            committee_hash: kovanica_types::committee_seal_hash(committee.epoch(), &seal_members),
             mysticghost: config.use_mysticghost,
         },
         broadcast: network_cmd_tx.clone(),
@@ -6031,6 +6024,43 @@ mod b1_epoch_restart_repro {
         storage.state().save_staking_state(&txn, &staking).unwrap();
         txn.commit().unwrap();
         storage
+    }
+
+    // LOCAL REVIEW TEST (Jarvis, 2026-10-19), not committed.
+    // Seals and leader headers still use `committee.epoch()` (SealContext.epoch,
+    // committee_seal_hash, admit_seal EpochMismatch). A node restarted after
+    // the boundary must still agree on that epoch with a long-running node.
+    #[test]
+    fn b1_review_seal_epoch_matches_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys: Vec<_> = (0..3)
+            .map(|_| {
+                let (_sk, pk) = kovanica_crypto::generate_keypair();
+                (Address::from_public_key(&pk), pk)
+            })
+            .collect();
+
+        // Node A: fresh genesis (height 0)
+        let a = storage_at_height(dir.path(), "a.redb", &keys, 0);
+        // Node B: restarted after epoch boundary (height EPOCH_ROUNDS + 1)
+        let b = storage_at_height(dir.path(), "b.redb", &keys, EPOCH_ROUNDS + 1);
+
+        // For seals, epoch is derived from leader_round, not staking height.
+        // Both nodes must compute the same committee for the same seal_epoch.
+        let seal_epoch = 1; // leader_round in epoch 1 (e.g. EPOCH_ROUNDS + 1)
+        let read_a = a.begin_read().unwrap();
+        let staking_a = a.state().load_staking_state(&read_a).unwrap();
+        let read_b = b.begin_read().unwrap();
+        let staking_b = b.state().load_staking_state(&read_b).unwrap();
+        let ca = seals::build_committee_for_seal_epoch(&staking_a, seal_epoch).unwrap();
+        let cb = seals::build_committee_for_seal_epoch(&staking_b, seal_epoch).unwrap();
+        assert_eq!(
+            ca.epoch(),
+            cb.epoch(),
+            "seal/leader-header epoch split: running={} restarted={}",
+            ca.epoch(),
+            cb.epoch()
+        );
     }
 
     #[test]

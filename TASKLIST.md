@@ -25,7 +25,7 @@
 
 > **Plan (korisnička uputa 2026-10-19) — redoslijed NAKON fix-22/23, prije svega ostalog.**
 > Svaki item = zaseban commit, s testom; `fmt`/`clippy`/testovi prije pusha. `[ ]` = nije napravljeno:
-> 1. **[ ] Epoha committeeja** — računaj je deterministički pri svakom commitu, ne samo pri pokretanju (ref. 849d172). Test: restartan node nakon promjene epohe potpisuje za istu epohu kao ostali.
+> 1. **[x] Epoha committeeja** — računaj je deterministički pri svakom commitu, ne samo pri pokretanju (ref. 849d172). Test: restartan node nakon promjene epohe potpisuje za istu epohu kao ostali.
 > 2. **[ ] Adrese `kvnc…dag`** — faucet i genesis moraju prihvaćati kvnc…dag adrese (36 bajtova s checksumom), uz postojeći 64-hex ključ.
 > 3. **[ ] `chain_id` 4 = testnet** — registriraj i ispravi testove koji ga tretiraju kao nevažeći.
 > 4. **[ ] `kovanica_syncStatus`** — bez autentikacije NE smije vraćati IP adrese peerova; dodaj i `localHeight`.
@@ -34,6 +34,25 @@
 > 7. **[ ] VRF determinizam lidera (C1)** — lider slota L iz VRF izlaza runde L-7 commitanih do L-6, izbor se trajno sprema, čeka se ako lider nije poznat, + simulacijski test.
 > 8. **[ ] Slashing** — spoji u produkcijski put noda.
 > 9. **[ ] Metrike `kovanica_*` (M1–M8)** za monitoring.
+>
+> **Novi red (korisnička uputa 2026-10-19, nakon B1 i N1, prije VRF C1):**
+> 10. **[ ] Cargo.lock** — ukloni iz `.gitignore`, commitaj ga; dodaj `rust-toolchain.toml` s fiksnom Rust verzijom (wasmi gas identičan).
+> 11. **[ ] gitleaks** — dodaj u kvnc CI + pre-commit hook.
+> 12. **[ ] Consensus size limits** — limiti u bajtovima za blokove i transakcije, testovi da preveliki odbije.
+> 13. **[ ] chain_id 1/4: zamrzni round duration i VRF** — odbij env override na mainnet/testnet, dopusti samo local/dev.
+> 14. **[ ] Popravi komentarce** — `use_min_digest_fork`, `max_mergeset`: 2000 vs 1000.
+> 15. **[ ] VRF proof length** — 96 B vs 80 B (RFC 9381); dokumentiraj ili popravi varijantu.
+> 16. **[ ] Docs: unbonding** — ~13.9 dana, ne 1 epoha.
+>
+> **Toni-jeve protokolske odluke (2026-10-19, chain 4 reset):**
+> 17. **[ ] chain_id 1/4: hard reject env override** — round_duration, VRF, MysticGhost parametri; dopusti samo local/dev (chain_id 3, 1337).
+> 18. **[ ] MIN_ACTIVE=15: bez auto-popunjavanja** — ne ispuni ispod 15, NIKAD ne vrati offline/slashed validatore u committee; iza aktivacijskog switcha.
+> 19. **[ ] Hash domains: KVNC-* → KUNA-*** — dio chain 4 reseta.
+> 20. **[ ] Adrese po chain_id** — chain 4: kvnc...dag + 64-hex; chain 1 (mainnet): SAMO kvnc...dag.
+> 21. **[ ] funded_accounts.toml** — samo u chain 4 genesis; odbaci za chain 1.
+> 22. **[ ] chain 4: drop block-sync 1.0.0** — zadrži samo 1.1.0.
+> 23. **[ ] MIN_DELEGATION** — placeholder vrijednost, Toni popunjava kasnije.
+> 24. **[ ] Mainnet genesis guard** — 15–21 validatori (validacija u genesis ceremoniji).
 >
 > **Tek onda:** P2P per-IP limit → compile gas → host-call gas schedule → byzantine testovi.
 > **Genesis reset flip** (`GAS_HARDENING_ACTIVE_FROM_ROUND` / `CONTRACT_HARDENING_ACTIVE_FROM_ROUND` → `0`) ostaje za reset na **chain 4**.
