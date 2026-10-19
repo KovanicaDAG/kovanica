@@ -10,6 +10,7 @@ kovanica-crypto = { path = "../kovanica-crypto" }
 kovanica-dag = { path = "../kovanica-dag" }
 kovanica-storage = { path = "../kovanica-storage" }
 kovanica-mempool = { path = "../kovanica-mempool" }
+kovanica-staking = { path = "../kovanica-staking" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

@@ -850,7 +850,7 @@ where
         };
         vote.signature = sign(
             &self.signing_key,
-            &vote.signature_data(&self.vote_signing_ctx()),
+            &vote.signature_data(&self.vote_signing_ctx(leader_round)),
         );
 
         // Record the vote locally
@@ -915,13 +915,15 @@ where
     /// Signing context for votes (v1, domain tag `KUNA/vote/v1`).
     ///
     /// Built ONLY from local state: the node's configured `chain_id` and the
-    /// epoch of the local committee that is checking/casting the vote. Nothing
-    /// from the network message (or a caller-supplied epoch) is used, so a
-    /// vote signed for another chain or another epoch never verifies.
-    fn vote_signing_ctx(&self) -> kovanica_types::SigningContext {
+    /// epoch derived from the voted `leader_round` (pure function of round).
+    /// This ensures all nodes compute the SAME epoch for the same leader round,
+    /// regardless of local committee state. A vote signed for another chain
+    /// or epoch boundary never verifies.
+    fn vote_signing_ctx(&self, leader_round: Round) -> kovanica_types::SigningContext {
+        let epoch = leader_round / kovanica_staking::EPOCH_ROUNDS;
         kovanica_types::SigningContext {
             chain_id: self.signing_ctx.chain_id,
-            epoch: self.committee.epoch(),
+            epoch,
         }
     }
 
@@ -1063,7 +1065,7 @@ where
             return Err(VoteRejection::UnknownVoter(voter).into());
         };
         if kovanica_crypto::verify_vote_signature(
-            &self.vote_signing_ctx(),
+            &self.vote_signing_ctx(leader_round),
             vote,
             &authority.public_key,
         )
@@ -2351,10 +2353,38 @@ mod tests {
         (engine, key, digest, receiver)
     }
 
+    fn engine_with_leader_at_epoch_for_epoch(
+        epoch: u64,
+    ) -> (
+        ConsensusEngine<TestDag, TestBlockManager>,
+        kovanica_types::SigningKey,
+        Hash,
+        mpsc::UnboundedReceiver<kovanica_types::CommittedSubDag>,
+    ) {
+        let leader_round = epoch * kovanica_staking::EPOCH_ROUNDS;
+        let (engine, _dag, key) = test_engine_at_epoch(100, epoch);
+        let (sender, receiver) = mpsc::unbounded_channel();
+        engine.set_commit_sender(sender);
+        let digest = kovanica_types::StatementBlock::compute_digest(0, leader_round, &[], &[]);
+        let block = kovanica_types::StatementBlock {
+            author: 0,
+            round: leader_round,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+        engine.process_block(&block).unwrap();
+        (engine, key, digest, receiver)
+    }
+
     fn local_v1_ctx() -> kovanica_types::SigningContext {
+        // With new epoch derivation (leader_round / EPOCH_ROUNDS), round 3 -> epoch 0
         kovanica_types::SigningContext {
             chain_id: TEST_CTX.chain_id,
-            epoch: SIG_V1_EPOCH,
+            epoch: 3 / kovanica_staking::EPOCH_ROUNDS,
         }
     }
 
@@ -2383,15 +2413,16 @@ mod tests {
 
     #[tokio::test]
     async fn sig_v1_vote_for_other_epoch_rejected() {
-        let (engine, key, digest, mut receiver) = engine_with_leader_at_epoch();
-        // Signed for epoch 0 (e.g. the configured ctx default) while the
-        // local committee is at epoch 5.
+        // Create engine with committee at epoch 5, but leader round that maps to epoch 5
+        // With EPOCH_ROUNDS = 7200, round 36000 -> epoch 5
+        let (engine, key, digest, mut receiver) = engine_with_leader_at_epoch_for_epoch(5);
+        // Vote signed for epoch 0 (wrong epoch) while leader round maps to epoch 5
         let other_epoch = kovanica_types::SigningContext {
             chain_id: TEST_CTX.chain_id,
             epoch: 0,
         };
         assert!(matches!(
-            engine.process_vote(&vote_with_ctx(&key, &other_epoch, 3, digest)),
+            engine.process_vote(&vote_with_ctx(&key, &other_epoch, 36000, digest)),
             Err(ConsensusError::VoteRejected(VoteRejection::BadSignature(0)))
         ));
         assert!(receiver.try_recv().is_err());
@@ -2420,7 +2451,7 @@ mod tests {
     #[tokio::test]
     async fn sig_v1_own_vote_is_signed_with_committee_epoch() {
         let (engine, _key, _digest, _receiver) = engine_with_leader_at_epoch();
-        assert_eq!(engine.vote_signing_ctx(), local_v1_ctx());
+        assert_eq!(engine.vote_signing_ctx(3), local_v1_ctx());
     }
 
     // CI run #118: early-start nodes are rounds ahead, so a slow node's

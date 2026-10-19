@@ -6002,3 +6002,77 @@ mod tests {
         assert_eq!(count_state_roots(&storage), 0);
     }
 }
+
+// LOCAL REVIEW TEST (Jarvis, 2026-10-19) — not committed / not pushed.
+// B1 invariant: a validator restarted after an epoch boundary must still
+// produce votes that a long-running peer (started before the boundary)
+// accepts, otherwise one restart stalls an n=3 committee.
+#[cfg(test)]
+mod b1_epoch_restart_repro {
+    use super::*;
+    use kovanica_staking::{StakingState, EPOCH_ROUNDS, MIN_VALIDATOR_STAKE};
+
+    fn storage_at_height(
+        dir: &std::path::Path,
+        name: &str,
+        keys: &[(Address, PublicKey)],
+        height: u64,
+    ) -> Storage {
+        let storage = Storage::new(dir.join(name)).unwrap();
+        let mut staking = StakingState::new();
+        staking.init_treasury(Address([0xcc; 32]));
+        for (addr, pk) in keys {
+            staking
+                .join_validator(*addr, MIN_VALIDATOR_STAKE, 0, Some(*addr), Some(*pk), None)
+                .unwrap();
+        }
+        staking.committed_leader_height = height;
+        let txn = storage.begin_write().unwrap();
+        storage.state().save_staking_state(&txn, &staking).unwrap();
+        txn.commit().unwrap();
+        storage
+    }
+
+    #[test]
+    fn restart_after_epoch_boundary_keeps_votes_verifiable() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys: Vec<_> = (0..3)
+            .map(|_| {
+                let (sk, pk) = kovanica_crypto::generate_keypair();
+                (sk, Address::from_public_key(&pk), pk)
+            })
+            .collect();
+        let pubs: Vec<_> = keys.iter().map(|(_, a, p)| (*a, *p)).collect();
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+
+        // Node A started at genesis and is still running: committee built at height 0.
+        let a = storage_at_height(dir.path(), "a.redb", &pubs, 0);
+        let committee_a = build_committee(&a, &pubs[0].1, &pubs[0].0, "127.0.0.1:0").unwrap();
+        // Node B is restarted once the chain has passed the first epoch boundary.
+        let b = storage_at_height(dir.path(), "b.redb", &pubs, EPOCH_ROUNDS + 1);
+        let committee_b = build_committee(&b, &pubs[1].1, &pubs[1].0, "127.0.0.1:0").unwrap();
+
+        // B1 FIX: epoch is now derived from leader_round, NOT from local committee.
+        // Both nodes compute the SAME epoch for the same leader_round.
+        let leader_round = 3 * (EPOCH_ROUNDS + 1); // epoch 1
+        let epoch = leader_round / EPOCH_ROUNDS;
+        let ctx_a = kovanica_types::SigningContext::new(chain_id).with_epoch(epoch);
+        let ctx_b = kovanica_types::SigningContext::new(chain_id).with_epoch(epoch);
+
+        // B votes; A verifies with its own (local) context, as the engine does.
+        let mut vote = kovanica_types::Vote {
+            leader_round,
+            leader_hash: kovanica_types::hash::Hash([0x42; 32]),
+            voter: 1,
+            signature: kovanica_types::crypto::Signature([0u8; 64]),
+        };
+        vote.signature = kovanica_crypto::sign(&keys[1].0, &vote.signature_data(&ctx_b));
+        let verdict = kovanica_crypto::verify_vote_signature(&ctx_a, &vote, &pubs[1].1);
+        assert!(
+            verdict.is_ok(),
+            "B1: restarted node epoch={} vs running node epoch={} -> vote rejected ({verdict:?})",
+            committee_b.epoch(),
+            committee_a.epoch()
+        );
+    }
+}
