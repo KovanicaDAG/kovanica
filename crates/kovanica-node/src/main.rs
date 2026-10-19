@@ -3712,14 +3712,27 @@ fn read_signing_key(path: &str) -> Result<SigningKey> {
     Ok(SigningKey::from_bytes(&seed))
 }
 
-/// Parse an optional 32-byte hex address, defaulting to the zero address.
+/// Parse a Kovanica address from various formats:
+/// - 64-char hex (32 bytes)
+/// - kvnc<32-byte-hex>dag (with checksum, 36 chars total)
+/// - 0x-prefixed hex
+/// Returns the 32-byte address.
 fn parse_address_hex(value: Option<&str>) -> Result<Address> {
     let Some(value) = value else {
         return Ok(Address::default());
     };
 
-    let bytes =
-        hex::decode(value.trim()).with_context(|| format!("invalid address hex `{value}`"))?;
+    let s = value.trim();
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    
+    // Check for kvnc...dag format (36 chars: kvnc + 32 hex + dag)
+    let s = if let Some(rest) = s.strip_prefix("kvnc") {
+        rest.strip_suffix("dag").unwrap_or(rest)
+    } else {
+        s
+    };
+    
+    let bytes = hex::decode(s).with_context(|| format!("invalid address hex `{value}`"))?;
     if bytes.len() != 32 {
         anyhow::bail!("address must be 32 bytes, got {}", bytes.len());
     }
