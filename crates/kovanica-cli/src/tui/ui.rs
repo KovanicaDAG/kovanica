@@ -12,6 +12,7 @@ use ratatui::Frame;
 use crate::tui::amount::format_kuna;
 use crate::tui::app::{chain_title, FormFocus, FormKind, GateFocus, View, ViewScreen};
 use crate::tui::net::{Snapshot, ValidatorRow};
+use kovanica_types::signing::chain_id;
 
 pub(crate) fn draw(frame: &mut Frame, view_source: &crate::tui::app::App) {
     let view = view_source.view();
@@ -52,8 +53,8 @@ fn title_line(view: &View) -> Line<'static> {
 
 fn chain_style(chain_id: Option<u64>) -> Style {
     match chain_id {
-        Some(1) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        Some(2) => Style::default().fg(Color::Yellow),
+        Some(chain_id::MAINNET) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        Some(chain_id::TESTNET) | Some(chain_id::TESTNET_V2) => Style::default().fg(Color::Yellow),
         Some(_) => Style::default().fg(Color::Cyan),
         None => Style::default().fg(Color::DarkGray),
     }

@@ -22,7 +22,7 @@ pub use light::{
     SettleOutcome, LIGHT_REWARD_BPS, LIGHT_WITNESS_SLOTS, MAX_LIGHT_NODES, MIN_LIGHT_BOND,
 };
 
-use kovanica_types::{Address, PublicKey, Stake, min_active_floor_active_from};
+use kovanica_types::{min_active_floor_active_from, Address, PublicKey, Stake};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap as HashMap;
 use thiserror::Error;
@@ -1716,12 +1716,17 @@ mod tests {
 
         // Drop below floor → NO refill because gate is inert (default).
         st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
-        assert!(!st.validators[15].active, "spare NOT reactivated (gate inert)");
+        assert!(
+            !st.validators[15].active,
+            "spare NOT reactivated (gate inert)"
+        );
         assert!(!st.validators[16].active, "other spare stays inactive");
-        assert_eq!(st.committee_qualified_count(), 14, "floor not enforced when inert");
+        assert_eq!(
+            st.committee_qualified_count(),
+            14,
+            "floor not enforced when inert"
+        );
     }
-
-    
 
     #[test]
     fn offline_eviction_respects_min_active_floor_inert_by_default() {
@@ -1742,8 +1747,15 @@ mod tests {
         assert!(went_offline.contains(&a(1)));
 
         // Floor NOT refilled from the spare because gate is inert.
-        assert_eq!(st.committee_qualified_count(), 14, "floor not enforced when inert");
-        assert!(!st.validators[15].active, "spare NOT reactivated (gate inert)");
+        assert_eq!(
+            st.committee_qualified_count(),
+            14,
+            "floor not enforced when inert"
+        );
+        assert!(
+            !st.validators[15].active,
+            "spare NOT reactivated (gate inert)"
+        );
         assert!(!st.validators[0].active, "evicted validator stays offline");
     }
 
@@ -1757,8 +1769,14 @@ mod tests {
         st.validators[15].active = false;
         st.validators[15].missed_leader_count = MAX_MISSED_LEADERS_BEFORE_OFFLINE; // dirty
         st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
-        assert!(!st.validators[15].active, "spare NOT reactivated (gate inert)");
-        assert_eq!(st.validators[15].missed_leader_count, MAX_MISSED_LEADERS_BEFORE_OFFLINE);
+        assert!(
+            !st.validators[15].active,
+            "spare NOT reactivated (gate inert)"
+        );
+        assert_eq!(
+            st.validators[15].missed_leader_count,
+            MAX_MISSED_LEADERS_BEFORE_OFFLINE
+        );
     }
 
     #[test]

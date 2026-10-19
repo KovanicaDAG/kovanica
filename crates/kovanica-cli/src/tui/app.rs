@@ -1540,6 +1540,7 @@ pub(crate) fn chain_name(id: u64) -> &'static str {
         chain_id::LOCAL => "local",
         chain_id::DEVNET => "devnet",
         chain_id::TESTNET => "testnet",
+        chain_id::TESTNET_V2 => "testnet v2",
         chain_id::MAINNET => "mainnet",
         _ => "unregistered",
     }
@@ -1834,7 +1835,7 @@ mod tests {
         );
         assert_eq!(step_chain(Some(99), true), Some(chain_id::LOCAL));
         assert!(ensure_chain(None).unwrap_err().contains("no default"));
-        assert!(ensure_chain(Some(4)).is_err());
+        assert_eq!(ensure_chain(Some(4)).unwrap(), 4);
         assert_eq!(ensure_chain(Some(chain_id::LOCAL)).unwrap(), 1337);
         assert_eq!(chain_title(Some(chain_id::MAINNET)), "MAINNET (chain 1)");
     }

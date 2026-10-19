@@ -580,11 +580,11 @@ where
         .collect();
     kovanica_crypto::set_validator_keys_from_public(committee_keys);
 
-    // v1 signing context: chain id from config (verified against genesis),
-    // epoch from the committee. NOTE: the committee is currently always built
-    // for epoch 0 (no epoch rotation wired into the committee yet).
-    let signing_ctx =
-        kovanica_types::SigningContext::new(config.chain_id).with_epoch(committee.epoch());
+    // v1 signing context: chain id from config (verified against genesis).
+    // Epoch is derived per-leader-round as leader_round / EPOCH_ROUNDS
+    // (see `vote_signing_ctx` and `publish_local_seal`). The value here is a
+    // placeholder and NOT used for consensus decisions.
+    let signing_ctx = kovanica_types::SigningContext::new(config.chain_id).with_epoch(0);
     let mempool = Arc::new(Mempool::new(
         build_mempool_config(),
         state_storage.clone(),
@@ -3716,6 +3716,7 @@ fn read_signing_key(path: &str) -> Result<SigningKey> {
 /// - 64-char hex (32 bytes)
 /// - kvnc<32-byte-hex>dag (with checksum, 36 chars total)
 /// - 0x-prefixed hex
+///
 /// Returns the 32-byte address.
 fn parse_address_hex(value: Option<&str>) -> Result<Address> {
     let Some(value) = value else {
@@ -3724,14 +3725,14 @@ fn parse_address_hex(value: Option<&str>) -> Result<Address> {
 
     let s = value.trim();
     let s = s.strip_prefix("0x").unwrap_or(s);
-    
+
     // Check for kvnc...dag format (36 chars: kvnc + 32 hex + dag)
     let s = if let Some(rest) = s.strip_prefix("kvnc") {
         rest.strip_suffix("dag").unwrap_or(rest)
     } else {
         s
     };
-    
+
     let bytes = hex::decode(s).with_context(|| format!("invalid address hex `{value}`"))?;
     if bytes.len() != 32 {
         anyhow::bail!("address must be 32 bytes, got {}", bytes.len());

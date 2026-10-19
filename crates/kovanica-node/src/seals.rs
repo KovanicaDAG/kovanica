@@ -8,12 +8,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use kovanica_storage::Storage;
 use kovanica_consensus::{AuthorityInfo, CommitteeInfo};
-use kovanica_staking::{EPOCH_ROUNDS, MIN_VALIDATOR_STAKE, MAX_ACTIVE_VALIDATORS, StakingState};
+use kovanica_staking::{StakingState, EPOCH_ROUNDS, MAX_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE};
+use kovanica_storage::Storage;
 use kovanica_types::{
-    Address, AuthorityIndex, CommitSeal, CommittedSubDag, Hash,
-    LeaderHeader, PublicKey, SealAnnouncement, SigningKey,
+    CommitSeal, CommittedSubDag, Hash, LeaderHeader, SealAnnouncement, SigningKey,
 };
 use tracing::warn;
 
@@ -79,12 +78,9 @@ pub(crate) fn build_committee_for_seal_epoch(
 
     let mut authorities = Vec::with_capacity(top_validators.len());
     for (index, validator) in top_validators.iter().enumerate() {
-        let public_key = validator.public_key.ok_or_else(|| {
-            anyhow::anyhow!(
-                "validator {} missing public key",
-                validator.address
-            )
-        })?;
+        let public_key = validator
+            .public_key
+            .ok_or_else(|| anyhow::anyhow!("validator {} missing public key", validator.address))?;
 
         let vrf_public_key = validator
             .vrf_public_key
@@ -277,18 +273,25 @@ mod tests {
         let pk_bytes = key.verifying_key().to_bytes();
         let pk = kovanica_types::PublicKey(pk_bytes);
         let addr = kovanica_types::Address::from_public_key(&pk);
-        
+
         let mut staking = kovanica_staking::StakingState::new();
         staking.init_treasury(kovanica_types::Address([0xcc; 32]));
         staking
-            .join_validator(addr, kovanica_staking::MIN_VALIDATOR_STAKE, 0, Some(addr), Some(pk), None)
+            .join_validator(
+                addr,
+                kovanica_staking::MIN_VALIDATOR_STAKE,
+                0,
+                Some(addr),
+                Some(pk),
+                None,
+            )
             .unwrap();
         staking.committed_leader_height = 0;
-        
+
         let txn = storage.begin_write().unwrap();
         storage.state().save_staking_state(&txn, &staking).unwrap();
         txn.commit().unwrap();
-        
+
         (storage, key)
     }
 

@@ -18,13 +18,13 @@ use kovanica_types::{Address, Hash, SigningKey};
 /// There is no default: signing without knowing the network would either fail
 /// verification or, worse, produce a signature for the wrong network. The
 /// `chain_id` must be in the registry of `docs/SIGNATURE_FORMAT.md`
-/// (1 mainnet, 2 testnet, 3 devnet, 1337 local).
+/// (1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 1337 local).
 pub fn signing_context(chain_id: Option<u64>) -> Result<SigningContext> {
     let chain_id = chain_id.ok_or_else(|| {
-        anyhow!("--chain-id (or KOVANICA_CHAIN_ID) is required to sign transactions: 1 mainnet, 2 testnet, 3 devnet, 1337 local")
+        anyhow!("--chain-id (or KOVANICA_CHAIN_ID) is required to sign transactions: 1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 1337 local")
     })?;
     if !signing::chain_id::is_registered(chain_id) {
-        bail!("unknown chain id {chain_id}: expected 1 (mainnet), 2 (testnet), 3 (devnet) or 1337 (local)");
+        bail!("unknown chain id {chain_id}: expected 1 (mainnet), 2 (testnet), 3 (devnet), 4 (testnet v2) or 1337 (local)");
     }
     Ok(SigningContext::new(chain_id))
 }
@@ -128,8 +128,7 @@ mod tests {
     fn chain_id_is_required_and_must_be_registered() {
         assert!(signing_context(None).is_err());
         assert!(signing_context(Some(0)).is_err());
-        assert!(signing_context(Some(4)).is_err());
-        for id in [1, 2, 3, 1337] {
+        for id in [1, 2, 3, 4, 1337] {
             assert_eq!(signing_context(Some(id)).unwrap().chain_id, id);
         }
     }

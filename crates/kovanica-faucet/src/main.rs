@@ -680,7 +680,7 @@ mod guard_tests {
 
     #[test]
     fn unknown_chain_ids_are_always_refused() {
-        for id in [0, 4, 42, u64::MAX] {
+        for id in [0, 42, u64::MAX] {
             let err = ensure_chain_allowed(id, true).unwrap_err().to_string();
             assert!(err.contains("unknown chain id"), "{err}");
         }
