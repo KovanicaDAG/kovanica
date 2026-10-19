@@ -22,7 +22,7 @@ pub use light::{
     SettleOutcome, LIGHT_REWARD_BPS, LIGHT_WITNESS_SLOTS, MAX_LIGHT_NODES, MIN_LIGHT_BOND,
 };
 
-use kovanica_types::{Address, PublicKey, Stake};
+use kovanica_types::{Address, PublicKey, Stake, min_active_floor_active_from};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap as HashMap;
 use thiserror::Error;
@@ -604,8 +604,8 @@ impl StakingState {
                 .saturating_add(UNBONDING_ROUNDS),
         });
         // If this unbond deactivated a committee member, refill up to the
-        // MIN_ACTIVE floor from qualified inactive candidates.
-        if deactivated {
+        // MIN_ACTIVE floor from qualified inactive candidates (gated).
+        if deactivated && min_active_floor_active_from(self.committed_leader_height) {
             self.enforce_min_active(&[address]);
         }
         Ok(())
@@ -746,10 +746,10 @@ impl StakingState {
         }
 
         // If offline evictions dropped the committee below the MIN_ACTIVE
-        // floor, refill deterministically from qualified inactive candidates.
+        // floor, refill deterministically from qualified inactive candidates (gated).
         // The evicted set is excluded so an eviction is not undone by its own
         // refill (they stay offline until a later departure re-qualifies them).
-        if !went_offline.is_empty() {
+        if !went_offline.is_empty() && min_active_floor_active_from(self.committed_leader_height) {
             self.enforce_min_active(&went_offline);
         }
         went_offline
@@ -1652,19 +1652,21 @@ mod tests {
     }
 
     #[test]
-    fn min_active_floor_refills_after_full_unbond() {
+    fn min_active_floor_refills_after_full_unbond_when_gated() {
         // 16 validators: 15 active at MIN + one inactive-but-qualified spare.
+        // Activate the gate by setting height >= MIN_ACTIVE_FLOOR_ACTIVE_FROM_ROUND.
         let mut st = StakingState::new();
         for i in 1..=16u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
                 .unwrap();
         }
+        st.committed_leader_height = kovanica_types::MIN_ACTIVE_FLOOR_ACTIVE_FROM_ROUND;
         // Deactivate one (spare) manually, leaving 15 active = floor.
         st.validators[15].active = false;
         assert_eq!(st.committee_qualified_count(), 15);
 
         // Full unbond of an active validator deactivates it → 14 < floor →
-        // the spare is re-activated deterministically.
+        // the spare is re-activated deterministically (gate is active).
         st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
         assert!(!st.validators[0].active);
         assert_eq!(st.committee_qualified_count(), 15);
@@ -1697,38 +1699,34 @@ mod tests {
     }
 
     #[test]
-    fn min_active_picks_highest_stake_then_lowest_address() {
-        // Two inactive spares: a(20) has 2× MIN, a(16) has MIN.
-        // The higher-stake one must be preferred; on a stake tie, lower address.
+    fn min_active_floor_refills_after_full_unbond_inert_by_default() {
+        // With MIN_ACTIVE_FLOOR_ACTIVE_FROM_ROUND = u64::MAX (inert), no refill happens.
         let mut st = StakingState::new();
-        for i in 1..=16u8 {
+        for i in 1..=17u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
                 .unwrap();
         }
-        st.validators[15].active = false; // a(16), MIN stake
-                                          // Add a(20) with double stake, then deactivate it.
-        st.join_validator(a(20), 2 * MIN_VALIDATOR_STAKE, 0, None, None, None)
-            .unwrap();
+        // Deactivate 2 spares, leaving 15 active = floor.
+        st.validators[15].active = false;
         st.validators[16].active = false;
+        // 15 active, 2 inactive spares (a(16), a(17)). Both have same stake.
         assert_eq!(st.committee_qualified_count(), 15);
+        assert!(!st.validators[15].active);
+        assert!(!st.validators[16].active);
 
-        // Drop below floor → a(20) (higher stake) must win over a(16).
+        // Drop below floor → NO refill because gate is inert (default).
         st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
-        assert!(st.validators[16].active, "higher-stake spare reactivated");
-        assert!(
-            !st.validators[15].active,
-            "lower-stake spare stays inactive"
-        );
-
-        // Drop below floor again → now only a(16) is left; it gets picked.
-        st.unbond_validator(a(2), MIN_VALIDATOR_STAKE).unwrap();
-        assert!(st.validators[15].active, "last spare reactivated");
+        assert!(!st.validators[15].active, "spare NOT reactivated (gate inert)");
+        assert!(!st.validators[16].active, "other spare stays inactive");
+        assert_eq!(st.committee_qualified_count(), 14, "floor not enforced when inert");
     }
 
+    
+
     #[test]
-    fn offline_eviction_respects_min_active_floor() {
+    fn offline_eviction_respects_min_active_floor_inert_by_default() {
         // 15 active + 1 offline spare. Evicting one active via missed-leader
-        // threshold must refill from the spare, excluding the evicted one.
+        // threshold does NOT refill from the spare when gate is inert.
         let mut st = StakingState::new();
         for i in 1..=16u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
@@ -1743,14 +1741,14 @@ mod tests {
         let went_offline = st.advance_validator_liveness(1);
         assert!(went_offline.contains(&a(1)));
 
-        // Floor refilled from the spare; evicted a(1) excluded (stays inactive).
-        assert_eq!(st.committee_qualified_count(), 15);
-        assert!(st.validators[15].active, "spare reactivated");
+        // Floor NOT refilled from the spare because gate is inert.
+        assert_eq!(st.committee_qualified_count(), 14, "floor not enforced when inert");
+        assert!(!st.validators[15].active, "spare NOT reactivated (gate inert)");
         assert!(!st.validators[0].active, "evicted validator stays offline");
     }
 
     #[test]
-    fn reactivated_validator_missed_count_is_reset() {
+    fn reactivated_validator_missed_count_is_reset_inert_by_default() {
         let mut st = StakingState::new();
         for i in 1..=16u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
@@ -1759,8 +1757,8 @@ mod tests {
         st.validators[15].active = false;
         st.validators[15].missed_leader_count = MAX_MISSED_LEADERS_BEFORE_OFFLINE; // dirty
         st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
-        assert!(st.validators[15].active);
-        assert_eq!(st.validators[15].missed_leader_count, 0);
+        assert!(!st.validators[15].active, "spare NOT reactivated (gate inert)");
+        assert_eq!(st.validators[15].missed_leader_count, MAX_MISSED_LEADERS_BEFORE_OFFLINE);
     }
 
     #[test]
