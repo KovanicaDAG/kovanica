@@ -1,7 +1,7 @@
 # Chaos / fault-injection workflow
 #
 # This workflow is **opt-in only** — it is NOT triggered on PRs or pushes.
-# It runs on a schedule (nightly) and via manual `workflow_dispatch`.
+# It runs via manual `workflow_dispatch` only (no nightly cron).
 #
 # What it exercises:
 # 1. Mid-commit SIGKILL + restart convergence (chaos_kill_mid_commit test)
@@ -10,8 +10,7 @@
 # Requirements:
 # - GitHub-hosted runners generally DO NOT have `tc` (no CAP_NET_ADMIN).
 #   The netem step detects this and gracefully skips with a clear message.
-# - Requires the release binary to be built (debug build trips a debug_assert!
-#   on the restart path — see test docs).
+# - Uses DEBUG build (release build hides N1 debug_assert! on restart path — see test docs).
 # - Test is flaky by nature (real processes, real sockets, real timing).
 #   It is intentionally `@ignore`d and gated here.
 
@@ -28,14 +27,9 @@ on:
           - netem-partition
           - both
         default: "both"
-      use_release:
-        type: boolean
-        description: "Build and use release binary (required for kill-mid-commit)"
-        default: true
 
-  schedule:
-    # Nightly at 03:17 UTC — avoids peak CI load.
-    - cron: '17 3 * * *'
+permissions:
+  contents: read
 
 concurrency:
   group: chaos-${{ github.ref }}
@@ -43,8 +37,8 @@ concurrency:
 
 jobs:
   kill-mid-commit:
-    name: Mid-commit SIGKILL + restart
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.test_type == 'kill-mid-commit' || inputs.test_type == 'both') || github.event_name == 'schedule' }}
+    name: Mid-commit SIGKILL + restart (debug build)
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.test_type == 'kill-mid-commit' || inputs.test_type == 'both') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -68,13 +62,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build release binary
-        if: ${{ inputs.use_release || github.event_name == 'schedule' }}
-        run: cargo build --release -p kovanica-node
+      - name: Build debug binary
+        run: cargo build -p kovanica-node
 
       - name: Run kill-mid-commit test
         env:
-          KOVANICA_NODE_BINARY: ${{ github.workspace }}/target/release/kovanica-node
+          KOVANICA_NODE_BINARY: ${{ github.workspace }}/target/debug/kovanica-node
           RUST_BACKTRACE: 1
         run: |
           cargo test -p kovanica-node --test chaos_kill_mid_commit -- --ignored --nocapture
