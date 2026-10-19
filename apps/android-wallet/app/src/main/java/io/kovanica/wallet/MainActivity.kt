@@ -138,6 +138,13 @@ class MainActivity : Activity() {
     /** `soon` text for a disabled network carried over from an older install. */
     private var staleSoon: String? = null
 
+    /**
+     * Set when `libkovanica_light_ffi.so` cannot be loaded. JNA reports that as
+     * an [Error] from the first native call, which is `faucetAllowed()` during
+     * [onCreate]. The screen still has to open.
+     */
+    private var nativeFailure: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         actionBar?.hide()
@@ -409,6 +416,7 @@ class MainActivity : Activity() {
     }
 
     private fun startupMessage(): String {
+        nativeFailure?.let { return it }
         val soon = staleSoon
         if (soon != null) {
             return "$soon\nStarted on ${current.label} — chain id ${current.chainId}."
@@ -1621,12 +1629,12 @@ class MainActivity : Activity() {
 
     private fun refreshFaucet() {
         val configured = current.faucetUrl != null && faucetField.text.toString().trim().isNotEmpty()
-        val allowed = configured && try {
-            faucetAllowed(chainIdField())
-        } catch (_: Exception) {
-            false
-        }
-        faucetButton.visibility = if (allowed) View.VISIBLE else View.GONE
+        // `faucetAllowed` is the first JNI call. A stale .so makes JNA throw
+        // UnsatisfiedLinkError (an Error) while registering symbols. That must
+        // not escape onCreate.
+        val probe = StartupNative.faucetAllowed(configured) { faucetAllowed(chainIdField()) }
+        nativeFailure = probe.failure
+        faucetButton.visibility = if (probe.allowed) View.VISIBLE else View.GONE
         faucetField.isEnabled = current.faucetUrl != null
         faucetRow.visibility = if (current.faucetUrl == null) View.GONE else View.VISIBLE
     }
