@@ -692,6 +692,7 @@ impl ExecutionContext {
 
         // Emit transfer event
         let events = vec![ContractEvent {
+            address: *from,
             topic: kovanica_common::events::TOKEN_TRANSFER.to_vec(),
             data: bincode::serialize(&(from, &to, amount))
                 .map_err(|e| ExecutionError::Other(e.to_string()))?,
@@ -731,6 +732,7 @@ impl ExecutionContext {
         }
         sub_balance_mapped(storage, txn, from, amount)?;
         Ok(vec![ContractEvent {
+            address: *from,
             topic: b"stake".to_vec(),
             data: bincode::serialize(&(from, amount))
                 .map_err(|e| ExecutionError::Other(e.to_string()))?,
@@ -782,6 +784,7 @@ impl ExecutionContext {
             }
         }
         Ok(vec![ContractEvent {
+            address: *from,
             topic: b"unstake".to_vec(),
             data: bincode::serialize(&(from, amount))
                 .map_err(|e| ExecutionError::Other(e.to_string()))?,
@@ -815,6 +818,7 @@ impl ExecutionContext {
             })?;
         sub_balance_mapped(storage, txn, from, amount)?;
         Ok(vec![ContractEvent {
+            address: *from,
             topic: b"delegate".to_vec(),
             data: bincode::serialize(&(from, &validator, amount))
                 .map_err(|e| ExecutionError::Other(e.to_string()))?,
@@ -866,6 +870,7 @@ impl ExecutionContext {
             for (key, v, amt) in &claims {
                 table.remove(*key)?;
                 events.push(ContractEvent {
+                    address: *from,
                     topic: b"claim_rewards".to_vec(),
                     data: bincode::serialize(&(v, *amt))
                         .map_err(|e| ExecutionError::Other(e.to_string()))?,
@@ -911,6 +916,7 @@ impl ExecutionContext {
 
         // Emit deploy event
         let events = vec![ContractEvent {
+            address: contract_addr,
             topic: b"deploy".to_vec(),
             data: bincode::serialize(&(&contract_addr, &code_hash))
                 .map_err(|e| ExecutionError::Other(e.to_string()))?,
@@ -1262,6 +1268,7 @@ impl ExecutionContext {
             .set_commission(validator, commission_bps)
             .map_err(|e| ExecutionError::Validation(e.to_string()))?;
         Ok(vec![ContractEvent {
+            address: *from,
             topic: b"set_commission".to_vec(),
             data: bincode::serialize(&(from, commission_bps))
                 .map_err(|e| ExecutionError::Other(e.to_string()))?,
@@ -1310,6 +1317,7 @@ impl ExecutionContext {
         // the per-tx savepoint never has to roll back a treasury-address
         // credit (that address is not part of `touched_accounts`).
         let event = ContractEvent {
+            address: treasury_address,
             topic: b"claim_treasury".to_vec(),
             data: bincode::serialize(&claimed).map_err(|e| ExecutionError::Other(e.to_string()))?,
         };
@@ -1357,6 +1365,41 @@ pub fn receipt_by_tx_hash(
     let receipt: TransactionReceipt = bincode::deserialize(&bytes.value())
         .map_err(|e| ExecutionError::Other(format!("receipt deserialization: {e}")))?;
     Ok(Some(receipt))
+}
+
+/// Read every stored receipt in the committed-leader height range
+/// `from..=to` (inclusive), in ascending height order.
+///
+/// Backs `kovanica_getLogs`: the per-height [`TX_RECEIPTS`] list is scanned
+/// directly, so no extra topic index is needed. Heights with no stored
+/// receipts are skipped, so a query spanning blocks that were never executed
+/// (or that predate the index) simply returns what exists.
+///
+/// Returns an empty vector when `from > to` or when the table has not been
+/// created yet (nothing has been executed against this storage).
+pub fn receipts_in_height_range(
+    storage: &Storage,
+    from: u64,
+    to: u64,
+) -> Result<Vec<(u64, Vec<TransactionReceipt>)>, ExecutionError> {
+    if from > to {
+        return Ok(Vec::new());
+    }
+    let txn = storage.begin_read()?;
+    let table = match txn.open_table(TX_RECEIPTS) {
+        Ok(table) => table,
+        // Lazily-created table: nothing has been executed yet.
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+        Err(e) => return Err(StorageError::Table(e).into()),
+    };
+    let mut out = Vec::new();
+    for row in table.range(from..=to)? {
+        let (key, value) = row?;
+        let receipts: Vec<TransactionReceipt> = bincode::deserialize(&value.value())
+            .map_err(|e| ExecutionError::Other(format!("receipt deserialization: {e}")))?;
+        out.push((key.value(), receipts));
+    }
+    Ok(out)
 }
 
 /// Debit `amount` from `address` through `StateStore::sub_balance`
@@ -2086,6 +2129,81 @@ mod tests {
         // 1000 - 100 (transfer) - 1000 (fee) = -100, but fee is deducted first
         // Actually: 1000 - 1000 (fee) = 0, then transfer 100 fails due to insufficient balance
         // Let me fix the fee to be smaller
+    }
+
+    #[test]
+    fn receipts_index_supports_height_range_scans_with_event_addresses() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("test.redb")).expect("storage");
+
+        let mut ctx = ExecutionContext::new();
+        let sender_key = test_keypair(7);
+        let sender = address_of(&sender_key);
+        let recipient = Address([2u8; 32]);
+        let validator = Address([3u8; 32]);
+        let payout = Address([4u8; 32]);
+
+        let txn = storage.begin_write().expect("write txn");
+        storage
+            .state()
+            .set_account(
+                &txn,
+                &sender,
+                &Account {
+                    balance: 1000 * kovanica_staking::ONE_KUNA,
+                    nonce: 0,
+                    code_hash: [0u8; 32],
+                    code: Vec::new(),
+                },
+            )
+            .expect("set_account");
+        txn.commit().expect("commit");
+
+        ctx.staking
+            .join_validator(
+                validator,
+                kovanica_staking::MIN_VALIDATOR_STAKE,
+                0,
+                Some(payout),
+                None,
+                None,
+            )
+            .expect("join validator");
+
+        let tx = create_transfer_tx(&sender_key, &recipient, 10, 0, 200);
+        let subdag = CommittedSubDag {
+            leader: sample_block(0),
+            blocks: vec![sample_block_with_txs(0, vec![tx.clone()])],
+            leader_round: 1,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        let result = ctx
+            .execute_committed_subdag(&subdag, &storage)
+            .expect("execute");
+        assert!(result.receipts[0].success, "{:?}", result.receipts[0].error);
+
+        // The transfer event is attributed to the sender, so `getLogs` can
+        // address-filter it.
+        let event = &result.receipts[0].events[0];
+        assert_eq!(event.address, sender);
+        assert_eq!(event.topic, kovanica_common::events::TOKEN_TRANSFER);
+
+        // The per-height scan returns the stored receipt.
+        let scanned = receipts_in_height_range(&storage, 0, 5).expect("scan");
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].0, 0);
+        assert_eq!(scanned[0].1.len(), 1);
+        assert_eq!(scanned[0].1[0].tx_hash, tx.hash);
+        assert_eq!(scanned[0].1[0].events[0].address, sender);
+
+        // Heights with no receipts are skipped, and an inverted range is empty.
+        assert!(receipts_in_height_range(&storage, 1, 5)
+            .expect("scan")
+            .is_empty());
+        assert!(receipts_in_height_range(&storage, 5, 1)
+            .expect("scan")
+            .is_empty());
     }
 
     #[test]

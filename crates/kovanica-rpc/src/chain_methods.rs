@@ -34,6 +34,13 @@ pub const MAX_LEADER_SCHEDULE_LEN: u64 = 1024;
 /// Default suggested fee rate (atoms per byte) when the mempool is empty.
 const DEFAULT_FEE_RATE: u64 = 1;
 
+/// Largest number of committed-leader heights a single `kovanica_getLogs`
+/// call may scan. Keeps the query bounded (and cheap) on a long chain.
+pub const MAX_GET_LOGS_BLOCK_RANGE: u64 = 1000;
+
+/// Largest number of log entries a single `kovanica_getLogs` call may return.
+pub const MAX_GET_LOGS_RESULTS: usize = 10_000;
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -448,6 +455,212 @@ pub async fn handle_get_transaction_by_hash(
         map.insert("transactionIndex".into(), quantity(index as u64));
     }
     Ok(value)
+}
+
+// ============================================================================
+// Log query methods
+// ============================================================================
+
+/// `kovanica_getLogs(filter)` — query transaction logs (contract events).
+///
+/// The single `filter` argument mirrors the Ethereum JSON-RPC `eth_getLogs`
+/// shape:
+///
+/// - `fromBlock` / `toBlock`: `"latest"` (the default), `"earliest"`,
+///   `"pending"` or a hex quantity. These are **committed-leader heights** —
+///   the same counter `kovanica_blockNumber` returns and the value the
+///   per-height receipt list is keyed by.
+/// - `address`: an address or an array of addresses. A log matches when the
+///   event's emitting address is one of them.
+/// - `topics`: an array of positions, each `null` (wildcard), a topic string,
+///   or an array of alternatives (OR). Events carry a single topic, so only
+///   the first position can match.
+///
+/// The query is bounded: the requested range is limited to
+/// [`MAX_GET_LOGS_BLOCK_RANGE`] heights and the response to
+/// [`MAX_GET_LOGS_RESULTS`] logs; larger requests are rejected with an
+/// invalid-params error rather than scanning an unbounded amount of storage.
+/// Heights with no stored receipts are skipped, so a range spanning pruned or
+/// never-executed blocks returns what exists.
+pub async fn handle_get_logs(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let filter = args.into_iter().next().unwrap_or(Value::Null);
+    if !filter.is_object() && !filter.is_null() {
+        return Err(RpcError::InvalidParams(
+            "getLogs: filter must be an object".into(),
+        ));
+    }
+
+    // Same source as `kovanica_blockNumber`, so the range default and the
+    // `"latest"` tag agree with the height clients already track.
+    let latest = state
+        .consensus_store
+        .get_committed_leader_height()
+        .map_err(internal)?;
+
+    let from = match filter.get("fromBlock") {
+        Some(value) if !value.is_null() => parse_block_ref(value, latest, "fromBlock")?,
+        _ => latest,
+    };
+    let to = match filter.get("toBlock") {
+        Some(value) if !value.is_null() => parse_block_ref(value, latest, "toBlock")?,
+        _ => latest,
+    };
+
+    if from > to {
+        return Ok(json!([]));
+    }
+    if to - from + 1 > MAX_GET_LOGS_BLOCK_RANGE {
+        return Err(RpcError::InvalidParams(format!(
+            "getLogs: block range {} exceeds the maximum of {MAX_GET_LOGS_BLOCK_RANGE} blocks",
+            to - from + 1
+        )));
+    }
+
+    let addresses = parse_address_filter(filter.get("address"))?;
+    let topics = parse_topics_filter(filter.get("topics"))?;
+
+    let scanned =
+        kovanica_execution::receipts_in_height_range(&state.storage, from, to).map_err(internal)?;
+
+    let mut logs: Vec<Value> = Vec::new();
+    for (height, receipts) in scanned {
+        // `logIndex` is per block, matching the Ethereum convention.
+        let mut log_index: u64 = 0;
+        for (tx_index, receipt) in receipts.iter().enumerate() {
+            for event in &receipt.events {
+                if let Some(addresses) = &addresses {
+                    if !addresses.contains(&event.address) {
+                        continue;
+                    }
+                }
+                if !topics_match(&topics, &event.topic) {
+                    continue;
+                }
+                logs.push(json!({
+                    "address": event.address.to_string(),
+                    "topics": [to_hex(&event.topic)],
+                    "data": to_hex(&event.data),
+                    "blockNumber": quantity(height),
+                    "blockHash": Value::Null,
+                    "transactionHash": to_hex(&receipt.tx_hash.0),
+                    "transactionIndex": quantity(tx_index as u64),
+                    "logIndex": quantity(log_index),
+                    "removed": false,
+                }));
+                log_index += 1;
+                if logs.len() > MAX_GET_LOGS_RESULTS {
+                    return Err(RpcError::InvalidParams(format!(
+                        "getLogs: more than {MAX_GET_LOGS_RESULTS} logs match; narrow the block range or filters"
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(Value::Array(logs))
+}
+
+/// Resolve a block reference (`"latest"`, `"earliest"`, `"pending"`, a `0x`
+/// hex quantity or a number) to a committed-leader height.
+fn parse_block_ref(value: &Value, latest: u64, what: &str) -> Result<u64, RpcError> {
+    if let Some(tag) = value.as_str() {
+        match tag {
+            "latest" | "pending" | "safe" | "finalized" => return Ok(latest),
+            "earliest" => return Ok(0),
+            _ => {}
+        }
+    }
+    parse_u64(value, what)
+}
+
+/// Decode one log-topic element. `null` is a wildcard and yields `None`.
+///
+/// Accepts a `0x`-prefixed hex string (raw topic bytes) or a plain UTF-8
+/// string, so a caller can match either the raw bytes or the human-readable
+/// topic name (e.g. `"transfer"`).
+fn parse_topic(value: &Value, what: &str) -> Result<Option<Vec<u8>>, RpcError> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(raw) => match raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+            Some(hex_str) => hex::decode(hex_str)
+                .map(Some)
+                .map_err(|e| RpcError::InvalidParams(format!("{what}: invalid hex: {e}"))),
+            None => Ok(Some(raw.as_bytes().to_vec())),
+        },
+        _ => Err(RpcError::InvalidParams(format!(
+            "{what}: expected a topic string or null"
+        ))),
+    }
+}
+
+/// Parse the `address` filter: a single address, an array of addresses, or
+/// absent/null for "no address constraint".
+fn parse_address_filter(value: Option<&Value>) -> Result<Option<Vec<Address>>, RpcError> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(value @ Value::String(_)) => Ok(Some(vec![parse_address(value, "address")?])),
+        Some(Value::Array(items)) => Ok(Some(
+            items
+                .iter()
+                .map(|item| parse_address(item, "address"))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Some(_) => Err(RpcError::InvalidParams(
+            "address: expected an address or an array of addresses".into(),
+        )),
+    }
+}
+
+/// Parse the `topics` filter into per-position alternatives.
+fn parse_topics_filter(value: Option<&Value>) -> Result<Vec<Option<Vec<Vec<u8>>>>, RpcError> {
+    match value {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items.iter().map(parse_topic_position).collect(),
+        Some(_) => Err(RpcError::InvalidParams("topics: expected an array".into())),
+    }
+}
+
+/// Decode one position of the `topics` filter: `null` (wildcard), a single
+/// topic, or an array of alternatives (OR).
+fn parse_topic_position(value: &Value) -> Result<Option<Vec<Vec<u8>>>, RpcError> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Array(options) => {
+            let mut alternatives = Vec::with_capacity(options.len());
+            for option in options {
+                let Some(bytes) = parse_topic(option, "topics")? else {
+                    return Err(RpcError::InvalidParams(
+                        "topics: nested null is not allowed".into(),
+                    ));
+                };
+                alternatives.push(bytes);
+            }
+            Ok(Some(alternatives))
+        }
+        other => {
+            let bytes = parse_topic(other, "topics")?
+                .ok_or_else(|| RpcError::InvalidParams("topics: expected a topic".into()))?;
+            Ok(Some(vec![bytes]))
+        }
+    }
+}
+
+/// Whether an event's single topic satisfies the parsed `topics` filter.
+///
+/// An event carries exactly one topic, so a non-wildcard filter at any
+/// position beyond the first can never match.
+fn topics_match(filter: &[Option<Vec<Vec<u8>>>], topic: &[u8]) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    if filter.len() > 1 && filter[1..].iter().any(|position| position.is_some()) {
+        return false;
+    }
+    match &filter[0] {
+        None => true,
+        Some(options) => options.iter().any(|option| option.as_slice() == topic),
+    }
 }
 
 // ============================================================================
@@ -1128,6 +1341,59 @@ mod tests {
         assert!(params_vec(&Value::Null).is_empty());
     }
 
+    #[test]
+    fn get_logs_filter_helpers_parse_and_match() {
+        use kovanica_common::events;
+
+        // Block references: tags and quantities.
+        assert_eq!(parse_block_ref(&json!("latest"), 7, "b").unwrap(), 7);
+        assert_eq!(parse_block_ref(&json!("earliest"), 7, "b").unwrap(), 0);
+        assert_eq!(parse_block_ref(&json!("0x2a"), 0, "b").unwrap(), 42);
+        assert!(parse_block_ref(&json!("nope"), 0, "b").is_err());
+
+        // Address filter: single, list, absent, invalid.
+        assert!(parse_address_filter(None).unwrap().is_none());
+        assert_eq!(
+            parse_address_filter(Some(&json!(hex32(0x11))))
+                .unwrap()
+                .unwrap(),
+            vec![Address([0x11; 32])]
+        );
+        assert_eq!(
+            parse_address_filter(Some(&json!([hex32(0x11), hex32(0x22)])))
+                .unwrap()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(parse_address_filter(Some(&json!(5))).is_err());
+
+        // Topic matching: empty/None wildcard, exact, and out-of-range position.
+        assert!(topics_match(&[], events::TOKEN_TRANSFER));
+        assert!(topics_match(&[None], events::TOKEN_TRANSFER));
+        assert!(topics_match(
+            &[Some(vec![events::TOKEN_TRANSFER.to_vec()])],
+            events::TOKEN_TRANSFER
+        ));
+        assert!(!topics_match(
+            &[Some(vec![events::TOKEN_MINT.to_vec()])],
+            events::TOKEN_TRANSFER
+        ));
+        assert!(!topics_match(
+            &[None, Some(vec![b"x".to_vec()])],
+            events::TOKEN_TRANSFER
+        ));
+
+        // OR alternatives and hex decoding.
+        let or = parse_topics_filter(Some(&json!([["mint", "transfer"]]))).unwrap();
+        assert!(topics_match(&or, events::TOKEN_TRANSFER));
+        assert_eq!(
+            parse_topic(&json!("0x7472616e73666572"), "topics").unwrap(),
+            Some(b"transfer".to_vec())
+        );
+        assert!(parse_topic(&json!(5), "topics").is_err());
+    }
+
     #[tokio::test]
     async fn query_handlers_read_real_storage() {
         let (_dir, storage) = open_storage();
@@ -1613,6 +1879,165 @@ mod tests {
         assert_eq!(fallback["status"], json!("0x1"));
         assert_eq!(fallback["success"], json!(true));
         assert_eq!(fallback["gasUsed"], json!("0x0"));
+    }
+
+    #[tokio::test]
+    async fn get_logs_queries_receipts_and_enforces_bounds() {
+        use kovanica_storage::state_store::Account;
+        use kovanica_types::crypto::Signature;
+
+        let (_dir, storage) = open_storage();
+        let state = test_state(storage.clone());
+
+        let (sk, pk) = kovanica_crypto::generate_keypair();
+        let sender = Address::from_public_key(&pk);
+        let recipient = Address([0x33; 32]);
+
+        let txn = storage.begin_write().unwrap();
+        storage
+            .state()
+            .set_account(
+                &txn,
+                &sender,
+                &Account {
+                    balance: 1_000_000,
+                    nonce: 0,
+                    code_hash: [0; 32],
+                    code: Vec::new(),
+                },
+            )
+            .unwrap();
+        txn.commit().unwrap();
+
+        let mut tx = Transaction {
+            sender,
+            nonce: 0,
+            kind: TransactionKind::Transfer {
+                to: recipient,
+                amount: 10,
+            },
+            fee: 100,
+            signature: Signature([0; 64]),
+            hash: Hash::zero(),
+        };
+        let h = tx.signing_hash(&state.mempool.signing_context());
+        tx.signature = kovanica_crypto::sign(&sk, h.as_ref());
+        tx.hash = h;
+
+        // Execute the committed sub-DAG that carries it so a receipt is stored.
+        let mut ctx = kovanica_execution::ExecutionContext::new();
+        ctx.staking
+            .join_validator(
+                Address([9u8; 32]),
+                MIN_VALIDATOR_STAKE,
+                0,
+                Some(Address([8u8; 32])),
+                None,
+                None,
+            )
+            .expect("join validator");
+        let block = StatementBlock {
+            author: 0,
+            round: 1,
+            parents: Vec::new(),
+            transactions: vec![tx.clone()],
+            statements: Vec::new(),
+            signature: Signature([0; 64]),
+            digest: StatementBlock::compute_digest(0, 1, &[], std::slice::from_ref(&tx)),
+            merkle_root: StatementBlock::compute_merkle_root(std::slice::from_ref(&tx)),
+        };
+        let leader = StatementBlock {
+            author: 0,
+            round: 1,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: Signature([0; 64]),
+            digest: StatementBlock::compute_digest(0, 1, &[], &[]),
+            merkle_root: Default::default(),
+        };
+        let subdag = kovanica_consensus::CommittedSubDag {
+            leader,
+            blocks: vec![block],
+            leader_round: 1,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        let executed = ctx
+            .execute_committed_subdag(&subdag, &storage)
+            .expect("execute committed subdag");
+        assert!(
+            executed.receipts[0].success,
+            "{:?}",
+            executed.receipts[0].error
+        );
+
+        // Unfiltered range query returns the native transfer log.
+        let logs = handle_get_logs(
+            json!([{ "fromBlock": "0x0", "toBlock": "0x1" }]),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        let logs = logs.as_array().unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["address"], json!(sender.to_string()));
+        assert_eq!(
+            logs[0]["topics"],
+            json!([to_hex(kovanica_common::events::TOKEN_TRANSFER)])
+        );
+        assert_eq!(logs[0]["transactionHash"], json!(to_hex(&tx.hash.0)));
+        assert_eq!(logs[0]["logIndex"], json!("0x0"));
+        assert_eq!(logs[0]["removed"], json!(false));
+
+        // Address filter: the sender matches, a stranger does not.
+        let by_addr = handle_get_logs(
+            json!([{ "fromBlock": "0x0", "address": sender.to_string() }]),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_addr.as_array().unwrap().len(), 1);
+        let stranger = handle_get_logs(
+            json!([{ "fromBlock": "0x0", "address": hex32(0x77) }]),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(stranger.as_array().unwrap().is_empty());
+
+        // Topic filter: the plaintext topic matches, another one does not.
+        let by_topic = handle_get_logs(
+            json!([{ "fromBlock": "0x0", "topics": ["transfer"] }]),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_topic.as_array().unwrap().len(), 1);
+        let wrong = handle_get_logs(
+            json!([{ "fromBlock": "0x0", "topics": ["unstake"] }]),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(wrong.as_array().unwrap().is_empty());
+
+        // A range wider than the bound is rejected, not silently truncated.
+        let too_wide = handle_get_logs(
+            json!([{
+                "fromBlock": "0x0",
+                "toBlock": format!("0x{:x}", MAX_GET_LOGS_BLOCK_RANGE)
+            }]),
+            state.clone(),
+        )
+        .await;
+        assert!(matches!(too_wide, Err(RpcError::InvalidParams(_))));
+
+        // A malformed filter is rejected.
+        assert!(matches!(
+            handle_get_logs(json!([42]), state).await,
+            Err(RpcError::InvalidParams(_))
+        ));
     }
 
     #[tokio::test]

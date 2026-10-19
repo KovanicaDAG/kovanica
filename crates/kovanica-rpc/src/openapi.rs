@@ -229,6 +229,63 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
         }),
     );
 
+    spec.components.schemas.insert(
+        "GetLogsFilter".to_string(),
+        json!({
+            "type": "object",
+            "properties": {
+                "fromBlock": {
+                    "oneOf": [
+                        { "type": "string", "enum": ["latest", "earliest", "pending"] },
+                        { "$ref": "#/components/schemas/Quantity" }
+                    ],
+                    "description": "Start committed-leader height (default: latest)"
+                },
+                "toBlock": {
+                    "oneOf": [
+                        { "type": "string", "enum": ["latest", "earliest", "pending"] },
+                        { "$ref": "#/components/schemas/Quantity" }
+                    ],
+                    "description": "End committed-leader height (default: latest)"
+                },
+                "address": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/Address" },
+                        { "type": "array", "items": { "$ref": "#/components/schemas/Address" } }
+                    ]
+                },
+                "topics": {
+                    "type": "array",
+                    "items": {
+                        "oneOf": [
+                            { "type": "null" },
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                        ]
+                    }
+                }
+            }
+        }),
+    );
+
+    spec.components.schemas.insert(
+        "Log".to_string(),
+        json!({
+            "type": "object",
+            "properties": {
+                "address": { "$ref": "#/components/schemas/Address" },
+                "topics": { "type": "array", "items": { "type": "string", "pattern": "^0x[a-f0-9]*$" } },
+                "data": { "type": "string", "pattern": "^0x[a-f0-9]*$" },
+                "blockNumber": { "$ref": "#/components/schemas/Quantity" },
+                "blockHash": { "type": ["string", "null"] },
+                "transactionHash": { "$ref": "#/components/schemas/Hash" },
+                "transactionIndex": { "$ref": "#/components/schemas/Quantity" },
+                "logIndex": { "$ref": "#/components/schemas/Quantity" },
+                "removed": { "type": "boolean" }
+            }
+        }),
+    );
+
     // Define all RPC methods
     let methods = vec![
         (
@@ -322,6 +379,21 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
             }),
             json!({
                 "$ref": "#/components/schemas/Transaction"
+            }),
+        ),
+        (
+            "kovanica_getLogs",
+            "Query transaction logs by block range, address and topics",
+            "Transactions",
+            json!({
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/GetLogsFilter" },
+                "minItems": 1,
+                "maxItems": 1
+            }),
+            json!({
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/Log" }
             }),
         ),
         (

@@ -171,6 +171,14 @@ pub fn is_entry_point(name: &str) -> bool {
 /// everything else.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContractEvent {
+    /// Address the event is attributed to: the contract address for contract
+    /// calls (native typed or wasmi), or the involved account for native
+    /// ledger events. Exposed as the `address` field of `kovanica_getLogs`.
+    ///
+    /// This field is part of the persisted receipt layout (receipts are stored
+    /// with `bincode`), so it must not be reordered or removed without a
+    /// storage migration.
+    pub address: Address,
     /// Event topic (e.g. `b"htlc_claimed"`).
     pub topic: Vec<u8>,
     /// Event payload.
@@ -652,6 +660,7 @@ impl Host for ContractHost<'_> {
 
     fn emit_event(&mut self, topic: &[u8], data: &[u8]) {
         self.events.push(ContractEvent {
+            address: self.contract,
             topic: topic.to_vec(),
             data: data.to_vec(),
         });
