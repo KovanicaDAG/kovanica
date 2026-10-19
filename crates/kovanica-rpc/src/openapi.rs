@@ -286,6 +286,40 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
         }),
     );
 
+    spec.components.schemas.insert(
+        "SyncStatus".to_string(),
+        json!({
+            "type": "object",
+            "description": "Node sync / catch-up and peer status (kovanica_syncStatus)",
+            "properties": {
+                "localTipRound": { "type": ["integer", "null"], "description": "Local DAG tip round" },
+                "committedHeight": { "type": ["integer", "null"], "description": "Committed leader height" },
+                "catchingUp": { "type": "boolean" },
+                "catchUpTarget": { "type": ["integer", "null"], "description": "Peer-advertised tip being chased" },
+                "behindBy": { "type": ["integer", "null"], "description": "Rounds behind the catch-up target" },
+                "peerCount": { "type": "integer" },
+                "peers": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/SyncPeerStatus" }
+                }
+            },
+            "required": ["catchingUp", "peerCount", "peers"]
+        }),
+    );
+
+    spec.components.schemas.insert(
+        "SyncPeerStatus".to_string(),
+        json!({
+            "type": "object",
+            "properties": {
+                "peerId": { "type": "string" },
+                "listenAddr": { "type": ["string", "null"] },
+                "reportedTipRound": { "type": ["integer", "null"] }
+            },
+            "required": ["peerId"]
+        }),
+    );
+
     // Define all RPC methods
     let methods = vec![
         (
@@ -573,6 +607,18 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
             }),
             json!({
                 "$ref": "#/components/schemas/Quantity"
+            }),
+        ),
+        (
+            "kovanica_syncStatus",
+            "Get node sync / catch-up and peer status",
+            "Chain",
+            json!({
+                "type": "array",
+                "items": {}
+            }),
+            json!({
+                "$ref": "#/components/schemas/SyncStatus"
             }),
         ),
         // WebSocket subscription methods

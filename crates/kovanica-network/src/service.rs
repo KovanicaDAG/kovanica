@@ -117,6 +117,31 @@ pub struct NetworkService {
     /// Short-lived cache of the last full snapshot export (see
     /// [`STATE_SYNC_EXPORT_CACHE_TTL`]).
     state_snapshot_cache: Mutex<Option<CachedSnapshotExport>>,
+    /// Last DAG tip round each *connected* peer reported through a block-sync
+    /// [`BlockSyncResponse::Status`] answer, keyed by peer id.
+    ///
+    /// Purely informational: it backs [`NetworkService::peer_status_snapshot`]
+    /// (operator status surfaces). A reported tip is a fetch trigger, never a
+    /// validation input. The map is bounded by the number of connected peers
+    /// ([`NetworkConfig::max_peers`]) and its entry is dropped on disconnect
+    /// and on ban.
+    reported_tip: Mutex<HashMap<PeerId, u64>>,
+}
+
+/// Read-only snapshot of one connected peer, for status/RPC surfaces.
+///
+/// Carries only non-sensitive transport metadata: the libp2p peer id, a last
+/// known network address (when one was learned via Kademlia/identify) and the
+/// last DAG tip round the peer advertised through block-sync `Status`. It never
+/// exposes validator keys or any signing material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerStatus {
+    /// libp2p peer id (transport identity, not the validator key).
+    pub peer_id: PeerId,
+    /// Last known network address of the peer, if one was learned.
+    pub listen_addr: Option<String>,
+    /// Last DAG tip round the peer reported via block-sync `Status`, if any.
+    pub reported_tip_round: Option<u64>,
 }
 
 /// One cached full snapshot export served to chunked state sync requests.
@@ -404,6 +429,7 @@ impl NetworkService {
                 header_index: Mutex::new(None),
                 state_snapshot_source: Mutex::new(None),
                 state_snapshot_cache: Mutex::new(None),
+                reported_tip: Mutex::new(HashMap::new()),
             },
             event_rx,
         ))
@@ -546,6 +572,35 @@ impl NetworkService {
     /// distinct-peer bookkeeping changes.
     pub fn peer_count_handle(&self) -> Arc<AtomicUsize> {
         self.peer_count.clone()
+    }
+
+    /// Read-only snapshot of the connected peers and their last reported tip.
+    ///
+    /// One [`PeerStatus`] per connected peer, in a deterministic order (sorted
+    /// by peer id) so a status surface is stable across calls. The list is
+    /// inherently bounded by [`NetworkConfig::max_peers`] (only connected peers
+    /// are included). The address is only present when one was learned via
+    /// Kademlia/identify; the reported tip is only present once the peer has
+    /// answered a block-sync `Status` probe.
+    ///
+    /// This only reads existing bookkeeping; it changes no network behaviour.
+    pub fn peer_status_snapshot(&self) -> Vec<PeerStatus> {
+        let connected = lock(&self.connected);
+        let addresses = lock(&self.peer_addresses);
+        let reported = lock(&self.reported_tip);
+        let mut peers: Vec<PeerStatus> = connected
+            .iter()
+            .map(|peer_id| PeerStatus {
+                peer_id: *peer_id,
+                listen_addr: addresses
+                    .get(peer_id)
+                    .and_then(|addrs| addrs.first())
+                    .map(|addr| addr.to_string()),
+                reported_tip_round: reported.get(peer_id).copied(),
+            })
+            .collect();
+        peers.sort_by_key(|status| status.peer_id.to_string());
+        peers
     }
 
     /// Lock the swarm.
@@ -1023,11 +1078,28 @@ impl NetworkService {
                         return Ok(());
                     };
                     match self.check_block_sync_response(Some(&pending.request), &response) {
-                        Ok(()) => self.emit(NetworkEvent::BlockSyncResponse {
-                            peer,
-                            request_id,
-                            response,
-                        }),
+                        Ok(()) => {
+                            // Remember the peer's advertised tip for status
+                            // surfaces. Only connected peers are tracked, so the
+                            // map stays bounded by `max_peers`; a stale entry can
+                            // never outlive its connection (cleared on disconnect
+                            // and on ban).
+                            if let BlockSyncResponse::Status { tip_round } = &response {
+                                // Check connectivity first and release the
+                                // `connected` lock before taking `reported_tip`,
+                                // so the two locks are never nested (consistent
+                                // ordering with `peer_status_snapshot`).
+                                let is_connected = lock(&self.connected).contains(&peer);
+                                if is_connected {
+                                    lock(&self.reported_tip).insert(peer, *tip_round);
+                                }
+                            }
+                            self.emit(NetworkEvent::BlockSyncResponse {
+                                peer,
+                                request_id,
+                                response,
+                            })
+                        }
                         Err(reason) => {
                             warn!(%peer, ?request_id, %reason, "dropping invalid block sync response");
                             self.record_invalid_block_failure(peer, &reason);
@@ -1524,6 +1596,7 @@ impl NetworkService {
         if removed {
             lock(&self.ping_failures).remove(&peer);
             lock(&self.peer_addresses).remove(&peer);
+            lock(&self.reported_tip).remove(&peer);
             info!(%peer, "peer disconnected");
             self.emit(NetworkEvent::PeerDisconnected(peer));
         }
@@ -1534,6 +1607,7 @@ impl NetworkService {
     fn ban_peer(&self, peer: PeerId) {
         lock(&self.ping_failures).remove(&peer);
         lock(&self.invalid_block_failures).remove(&peer);
+        lock(&self.reported_tip).remove(&peer);
         let known: Vec<Multiaddr> = lock(&self.peer_addresses).remove(&peer).unwrap_or_default();
 
         let mut swarm = self.swarm();
@@ -2212,6 +2286,66 @@ mod tests {
             service.on_peer_disconnected(peer);
         }
         assert_eq!(service.peer_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn peer_status_snapshot_reports_tip_and_address_then_clears_on_disconnect() {
+        let (_dir, service) = test_service();
+        let peer = PeerId::random();
+        let other = PeerId::random();
+
+        service.on_peer_connected(peer).expect("connect");
+        service.on_peer_connected(other).expect("connect");
+
+        // Bookkeeping the status surface reads: one learned address and one
+        // reported tip. Only connected peers are included.
+        lock(&service.peer_addresses)
+            .insert(peer, vec!["/ip4/127.0.0.1/tcp/8000".parse().unwrap()]);
+        lock(&service.reported_tip).insert(peer, 42);
+
+        let snapshot = service.peer_status_snapshot();
+        assert_eq!(snapshot.len(), 2);
+        // Deterministic order (sorted by peer id string).
+        assert!(snapshot
+            .windows(2)
+            .all(|w| w[0].peer_id.to_string() <= w[1].peer_id.to_string()));
+
+        let with_tip = snapshot
+            .iter()
+            .find(|status| status.peer_id == peer)
+            .expect("peer present");
+        assert_eq!(with_tip.reported_tip_round, Some(42));
+        assert_eq!(
+            with_tip.listen_addr.as_deref(),
+            Some("/ip4/127.0.0.1/tcp/8000")
+        );
+
+        let without_tip = snapshot
+            .iter()
+            .find(|status| status.peer_id == other)
+            .expect("other present");
+        assert_eq!(without_tip.reported_tip_round, None);
+        assert_eq!(without_tip.listen_addr, None);
+
+        // Disconnect drops the peer (and its reported tip) from the snapshot.
+        service.on_peer_disconnected(peer);
+        let snapshot = service.peer_status_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].peer_id, other);
+        assert!(lock(&service.reported_tip).get(&peer).is_none());
+    }
+
+    #[tokio::test]
+    async fn banning_a_peer_drops_its_reported_tip() {
+        let (_dir, service) = test_service();
+        let peer = PeerId::random();
+
+        service.on_peer_connected(peer).expect("connect");
+        lock(&service.reported_tip).insert(peer, 7);
+        assert_eq!(lock(&service.reported_tip).get(&peer), Some(&7));
+
+        service.ban_peer(peer);
+        assert!(lock(&service.reported_tip).get(&peer).is_none());
     }
 
     #[tokio::test]

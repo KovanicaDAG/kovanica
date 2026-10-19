@@ -339,14 +339,16 @@ struct VoteArgs {
 }
 
 /// Arguments for `kovanica deploy` — deploy a WASM contract.
+///
+/// There is deliberately **no** `--gas-limit` here: `TransactionKind::Deploy`
+/// carries only the bytecode, and the node's `Deploy` path performs no
+/// interpreter execution (no wasmi fuel to cap). Only `kovanica call` has a
+/// gas limit, and that one is wired into `TransactionKind::Call { gas_limit }`.
 #[derive(Args)]
 struct DeployArgs {
     /// Path to the .wasm file
     #[arg(long)]
     wasm: PathBuf,
-    /// Gas limit for deployment (default: 5_000_000)
-    #[arg(long, default_value_t = 5_000_000)]
-    gas_limit: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
     keystore: PathBuf,
@@ -938,6 +940,12 @@ async fn cmd_claim_treasury(
 }
 
 /// Deploy a WASM contract via a signed Deploy transaction.
+///
+/// `TransactionKind::Deploy` carries only the bytecode — there is no gas field
+/// to set (deploy has no interpreter execution), so this command has no gas
+/// limit and prints none. From contract-hardening activation on, the node
+/// validates the bytecode and refuses to overwrite an existing contract at the
+/// derived address.
 async fn cmd_deploy(
     client: &RpcClient,
     chain_id: Option<u64>,
@@ -965,7 +973,6 @@ async fn cmd_deploy(
             "transactionHash": tx_hash,
             "sender": sender.to_string(),
             "wasm_size": wasm_size,
-            "gas_limit": args.gas_limit,
             "fee": args.fee,
             "nonce": nonce,
         }));
@@ -974,13 +981,16 @@ async fn cmd_deploy(
     println!("Submitted deploy transaction {tx_hash}");
     println!("  from:      {}", sender);
     println!("  wasm_size: {} bytes", wasm_size);
-    println!("  gas_limit: {}", args.gas_limit);
     println!("  fee:       {} atoms", args.fee);
     println!("  nonce:     {nonce}");
     Ok(())
 }
 
 /// Call a contract method via a signed Call transaction.
+///
+/// `--gas-limit` is carried into `TransactionKind::Call { gas_limit }` (it is
+/// part of the signed transaction and the node charges it as wasmi fuel), so
+/// unlike `deploy` this option is real, not cosmetic.
 async fn cmd_call(
     client: &RpcClient,
     chain_id: Option<u64>,
@@ -1371,6 +1381,55 @@ mod wallet_cli_security_tests {
                 assert_eq!(args.keystore, PathBuf::from("keystore.json"));
             }
             _ => panic!("expected unstake command"),
+        }
+    }
+
+    /// `kovanica deploy` must not advertise a gas limit: the `Deploy`
+    /// transaction carries no gas field (the node runs no interpreter for it),
+    /// so a `--gas-limit` flag would be misleading. `kovanica call` does own a
+    /// gas limit, and it is wired into `TransactionKind::Call { gas_limit }`.
+    #[test]
+    fn deploy_has_no_gas_limit_but_call_does() {
+        let cli = Cli::try_parse_from(["kovanica", "deploy", "--wasm", "c.wasm"]).unwrap();
+        match cli.command {
+            Commands::Deploy(args) => {
+                assert_eq!(args.wasm, PathBuf::from("c.wasm"));
+                assert_eq!(args.fee, 1);
+            }
+            _ => panic!("expected deploy command"),
+        }
+
+        // The misleading flag is gone: passing it is now an error, not a
+        // silently ignored option.
+        assert!(Cli::try_parse_from([
+            "kovanica",
+            "deploy",
+            "--wasm",
+            "c.wasm",
+            "--gas-limit",
+            "5"
+        ])
+        .is_err());
+
+        let cli = Cli::try_parse_from([
+            "kovanica",
+            "call",
+            "--contract",
+            &"11".repeat(32),
+            "--method",
+            "token_transfer",
+            "--args",
+            "[]",
+            "--gas-limit",
+            "77",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Call(args) => {
+                assert_eq!(args.gas_limit, 77);
+                assert_eq!(args.method, "token_transfer");
+            }
+            _ => panic!("expected call command"),
         }
     }
 }

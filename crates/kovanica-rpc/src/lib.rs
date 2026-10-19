@@ -145,6 +145,10 @@ pub struct RpcState {
     /// Outbound gossip for transactions accepted via `kovanica_sendRawTransaction`.
     /// `None` disables publishing (tests, RPC-only setups).
     pub tx_gossip: Option<TxGossipSender>,
+    /// Live sync / catch-up status source for the read-only `kovanica_syncStatus`
+    /// method. `None` disables it beyond a bare peer count (tests, RPC-only
+    /// setups).
+    pub sync_status: Option<SyncStatusSource>,
 }
 
 /// Channel the node drains to publish RPC-submitted transactions on gossip,
@@ -292,6 +296,10 @@ impl RpcServer {
             handle_light_client_checkpoint,
         )
         .await;
+
+        // Node sync / catch-up status (read-only).
+        self.register_stateful("kovanica_syncStatus", handle_sync_status)
+            .await;
     }
 
     /// Register a handler that needs access to the shared [`RpcState`].
@@ -423,6 +431,7 @@ const KNOWN_RPC_METHODS: &[&str] = &[
     "kovanica_getAccountProof",
     "kovanica_getLightSet",
     "kovanica_lightClientCheckpoint",
+    "kovanica_syncStatus",
 ];
 
 /// Map a caller-supplied method name to a bounded metric label.
@@ -658,6 +667,7 @@ mod tests {
             rate_limiter: Arc::new(RateLimiterState::new(RateLimitConfig::default())),
             auth_config: Arc::new(AuthConfig::default()),
             tx_gossip: None,
+            sync_status: None,
         };
         (dir, state)
     }
@@ -749,6 +759,7 @@ mod tests {
             auth_config: Arc::new(auth.clone()),
             health: NodeHealth::new(),
             tx_gossip: None,
+            sync_status: None,
         }
     }
 
@@ -1140,6 +1151,7 @@ mod tests {
                 auth_config: _,
                 health: _,
                 tx_gossip: _,
+                sync_status: _,
             } = s;
         };
     }

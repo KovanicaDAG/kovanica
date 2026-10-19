@@ -14,7 +14,14 @@
 > - **Area 4 (obs):** RPC metrike (`rpc_requests_total`/`rpc_errors_total`/`rpc_request_duration_seconds`, bounded labels); **`kovanica_getLogs` read-only RPC** nad perzistiranim receiptima (bounded `MAX_GET_LOGS_BLOCK_RANGE=1000` / `MAX_GET_LOGS_RESULTS=10_000`), `ContractEvent` dobio `address` (native = involvirani račun, contract = emitting contract); `TX_RECEIPTS` po visini služi kao range index (bez zasebnog topic indeksa).
 > - **Napomena (deploy):** dodavanje `address` u `ContractEvent` mijenja bincode layout perzistiranih receipta → node sa starom bazom ne može čitati stare receipt redove; potreban testnet reset (ili mikro-migracija). Isto vrijedi za snapshot magic (`KVSNSP01`).
 > - **Area 5:** faucet mainnet guard (`--allow-mainnet`), trusted-proxy XFF rate-limit, low-balance 503; `config.example.toml` dopunjen (mempool env keys, `[peer_scoring]`); docs/GAS_SCHEDULE usklađen (host-call costs = PLANNED).
-> - **Ostalo otvoreno:** host-call gas schedule, wasm entry-point gating, deploy bytecode validacija, TX_RECEIPT_BY_HASH pruning, sync status RPC, Area 5 config-validation command, chaos (process-kill/tc-netem).
+> - **Ostalo otvoreno:** host-call gas schedule, TX_RECEIPT_BY_HASH pruning, chaos (process-kill/tc-netem), deploy-time compile gas naplata.
+>
+> **Revizija 2026-10-19 (dio 2, hardening nastavak — svi `check`/`test`/`clippy`/`fmt` gateovi zeleni; commit + push na `main`):**
+> - **Area 3 (deploy/wasm hardening) — DONE, gated:** `CONTRACT_HARDENING_ACTIVE_FROM_ROUND = u64::MAX` (+ predikat `contract_hardening_active_from`) u `kovanica-types`. Kad je gate aktivan — deploy odbija **invalid bytecode** (`ContractRunner::validate_module` prije pohrane) i **overwrite postojećeg code-a**; wasm poziv odbija metodu koja nije u `ENTRY_POINTS` (`is_entry_point`). Kad gate nije aktivan → ponašanje bit-identično starom (bez forka živog testneta). Testovi: `invalid_bytecode_deploy_is_gated`, `deploy_overwrite_guard_is_gated`, `wasm_entry_point_is_gated`.
+> - **Area 3 (CLI):** uklonjen misleading `--gas-limit` na `kovanica deploy` (tx `Deploy { code }` nema gas polje); `kovanica call` ispravno prosljeđuje `gas_limit` u tx.
+> - **Area 1 (sync observability): `kovanica_syncStatus` read-only RPC — DONE.** Vraća `localTipRound`, `committedHeight`, `catchingUp`, `catchUpTarget`, `behindBy`, `peerCount`, `peers[{peerId, listenAddr?, reportedTipRound?}]` (bounded na `max_peers`; bez auth tokena). Tracker izložen kroz `Arc<Mutex<CatchUpTracker>>` + `SyncStatusSource` closure (rpc crate bez ovisnosti o node/network crateovima).
+> - **Area 5 (ops): `kovanica-node --check-config` — DONE.** Validira config (file + `KOVANICA_*` override) i izlazi bez pokretanja nodea; exit 0 uz `config OK: ...`, non-zero + dijagnostika na grešku (npr. neregistrirani `chain_id`). Napomena: `run_validator` default je `true` (traži `validator_key`).
+> - **Novi gated režimi za genesis reset:** `GAS_HARDENING_ACTIVE_FROM_ROUND` i `CONTRACT_HARDENING_ACTIVE_FROM_ROUND` oba `u64::MAX` (inertno) → postaviti na `0` pri sljedećem genesis resetu kad svi validatori vrte novi build.
 
 **Legenda statusa**
 - `[x]` — implementirano i wired u production pathu (verificirano u kodu)
@@ -222,6 +229,7 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 - [x] WS subscriptions (newHeads, newCommittedLeader, pendingTransactions, logs) — test prolazi
 - [x] Canonical addresses u response-ima
 - [x] `kovanica_blockNumber` = committed leader height
+- [x] **2026-10-19 — nove read-only RPC metode:** `kovanica_getLogs` (bounded range/results nad perzistiranim receiptima; `address`/`topics` filter) i `kovanica_syncStatus` (catch-up stanje + peer set, bounded na `max_peers`); oba u `KNOWN_RPC_METHODS`, bez auth tokena, + OpenAPI schemas
 - [x] OpenAPI 3.1 spec (oneOf diskriminator za sve metode) + write helpers
 - [x] Rate limit (token bucket 60/min burst 10, 429) + bearer token framework; rate limit ide preko axum middleware sloja u `rpc/src/lib.rs` — **2026-10-19:** dodane **RPC metrike** (`rpc_requests_total` / `rpc_errors_total` / `rpc_request_duration_seconds`, bounded method labels, unit test)
 

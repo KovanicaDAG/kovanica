@@ -29,6 +29,7 @@ only for the instructions they execute (wasmi fuel), not for host-call work.
 | `MempoolConfig::max_gas_limit` | `MAX_TX_GAS_LIMIT` (`10_000_000`) | `crates/kovanica-mempool/src/lib.rs` | Implemented |
 | `MempoolConfig::min_fee_rate` | `0` (operator policy) | `crates/kovanica-mempool/src/lib.rs` | Implemented |
 | `kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND` | `u64::MAX` (inert) | `crates/kovanica-types/src/lib.rs` | Implemented |
+| `kovanica_types::CONTRACT_HARDENING_ACTIVE_FROM_ROUND` | `u64::MAX` (inert) | `crates/kovanica-types/src/lib.rs` | Implemented |
 
 `MAX_TX_GAS_LIMIT` is the **single source of truth** for the per-transaction
 cap: `kovanica-runtime` re-exports it, the mempool derives `max_gas_limit`
@@ -70,6 +71,20 @@ validator to do.
 
 Below the activation round all three rules are skipped, so pre-activation
 blocks validate and execute exactly as before.
+
+**Gated — contract hardening (deploy / entry points).** From
+`CONTRACT_HARDENING_ACTIVE_FROM_ROUND` on (separate, also inert gate):
+
+- a `Deploy` is rejected unless its bytecode compiles as a valid wasm module
+  (the same wasmi engine the interpreter uses) **and** the derived contract
+  address holds no code; both checks run before any storage write;
+- a `Call` whose `method` is not one of the 16 `ENTRY_POINTS` is rejected
+  **before** the interpreter runs (so it charges no fuel and writes nothing).
+
+All checks are deterministic. A rejected deploy/call still charges fee and
+nonce, matching every other body failure. Below the activation round the checks
+are skipped, so an invalid deploy and any exported method remain callable
+exactly as before.
 
 ## 4. Implemented: memory limits
 

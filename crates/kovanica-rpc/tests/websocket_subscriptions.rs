@@ -55,6 +55,7 @@ fn test_state(storage: Arc<Storage>, events: EventBus) -> RpcState {
         rate_limiter: Arc::new(RateLimiterState::new(RateLimitConfig::default())),
         auth_config: Arc::new(AuthConfig::default()),
         tx_gossip: None,
+        sync_status: None,
     }
 }
 

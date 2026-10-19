@@ -22,7 +22,9 @@ use kovanica_types::{
     transaction::{Transaction, TransactionKind},
     Address, CommitSeal, LeaderHeader,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::{atomic::Ordering, Arc};
 
 /// Default number of rounds returned by `kovanica_getLeaderSchedule` when the
 /// caller does not specify a count.
@@ -1231,6 +1233,88 @@ pub async fn handle_light_client_checkpoint(
     }))
 }
 
+// ============================================================================
+// Sync / catch-up status (read-only)
+// ============================================================================
+
+/// One connected peer as reported by `kovanica_syncStatus`.
+///
+/// Carries only non-sensitive transport metadata: the libp2p peer id, a last
+/// known network address when one was learned, and the last DAG tip round the
+/// peer advertised. No validator key or signing material is ever included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncPeerStatus {
+    /// libp2p peer id (transport identity, not the validator key).
+    pub peer_id: String,
+    /// Last known network address of the peer, if one was learned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen_addr: Option<String>,
+    /// Last DAG tip round the peer reported, if it has answered a probe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_tip_round: Option<u64>,
+}
+
+/// Point-in-time sync / catch-up status of the node, returned by
+/// `kovanica_syncStatus`.
+///
+/// All counters are plain JSON integers (this is an operator status surface,
+/// like `/health`, not an Ethereum-compatible quantity endpoint). `None` means
+/// "not known right now": the local DAG tip is `None` only when storage could
+/// not be read, and `catch_up_target`/`behind_by` are `None` while the node is
+/// not actively catching up.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    /// Local DAG tip round (`max_dag_round`); `None` if storage cannot be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_tip_round: Option<u64>,
+    /// Latest committed leader height, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed_height: Option<u64>,
+    /// Whether the node is actively pulling a peer's rounds (a catch-up session
+    /// is in the `CatchingUp` phase; probing counts as not catching up).
+    pub catching_up: bool,
+    /// Highest peer-advertised tip round being chased, when catching up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catch_up_target: Option<u64>,
+    /// How many rounds behind the catch-up target the local tip is, when both
+    /// are known and the node is catching up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behind_by: Option<u64>,
+    /// Number of connected peers (equals `peers.len()`).
+    pub peer_count: usize,
+    /// Connected peers, bounded by the node's `max_peers`.
+    pub peers: Vec<SyncPeerStatus>,
+}
+
+/// Callable the node installs into [`RpcState`] to produce a fresh
+/// [`SyncStatus`] from its live catch-up tracker, DAG store and peer set.
+///
+/// A closure (rather than a concrete shared type) keeps `kovanica-rpc`
+/// independent of the node binary and the network crate while still reading
+/// live state at call time. `None` disables `kovanica_syncStatus` beyond a bare
+/// peer count (tests, RPC-only setups).
+pub type SyncStatusSource = Arc<dyn Fn() -> SyncStatus + Send + Sync>;
+
+/// `kovanica_syncStatus()` — read-only sync / catch-up and peer status.
+///
+/// Reports the local DAG tip, the committed height, whether the node is
+/// catching up (and how far behind), and the connected peers with their last
+/// reported tip rounds. No parameters; needs no auth token (read-only).
+pub async fn handle_sync_status(_params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let status = match &state.sync_status {
+        Some(source) => source(),
+        // Without an installed source still report the shared peer count so the
+        // method never fails outright.
+        None => SyncStatus {
+            peer_count: state.peer_count.load(Ordering::Relaxed),
+            ..SyncStatus::default()
+        },
+    };
+    serde_json::to_value(&status).map_err(internal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1274,6 +1358,7 @@ mod tests {
             )),
             auth_config: Arc::new(crate::AuthConfig::default()),
             tx_gossip: None,
+            sync_status: None,
         }
     }
 
@@ -2124,5 +2209,67 @@ mod tests {
         assert_eq!(kovanica_staking::LIGHT_REWARD_BPS, 2_000);
         assert_eq!(set["rewardBps"], json!(2_000));
         assert_eq!(set["nodes"], json!([]));
+    }
+
+    // ------------------------------------------------------------------
+    // kovanica_syncStatus
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn sync_status_without_a_source_reports_a_bare_peer_count() {
+        let (_dir, storage) = open_storage();
+        let mut state = test_state(storage);
+        state.peer_count = Arc::new(std::sync::atomic::AtomicUsize::new(3));
+
+        let got = handle_sync_status(Value::Null, state).await.unwrap();
+        assert_eq!(got["peerCount"], json!(3));
+        assert_eq!(got["catchingUp"], json!(false));
+        assert_eq!(got["peers"], json!([]));
+        // Absent optional fields are omitted rather than emitted as null.
+        assert!(got.get("catchUpTarget").is_none());
+        assert!(got.get("behindBy").is_none());
+    }
+
+    #[tokio::test]
+    async fn sync_status_reports_catch_up_and_peers() {
+        let (_dir, storage) = open_storage();
+        let mut state = test_state(storage);
+        state.sync_status = Some(Arc::new(|| SyncStatus {
+            local_tip_round: Some(120),
+            committed_height: Some(300),
+            catching_up: true,
+            catch_up_target: Some(200),
+            behind_by: Some(80),
+            peer_count: 2,
+            peers: vec![
+                SyncPeerStatus {
+                    peer_id: "12D3KooWpeer-a".to_string(),
+                    listen_addr: Some("/ip4/127.0.0.1/tcp/8000".to_string()),
+                    reported_tip_round: Some(200),
+                },
+                SyncPeerStatus {
+                    peer_id: "12D3KooWpeer-b".to_string(),
+                    listen_addr: None,
+                    reported_tip_round: None,
+                },
+            ],
+        }));
+
+        let got = handle_sync_status(Value::Null, state).await.unwrap();
+        assert_eq!(got["localTipRound"], json!(120));
+        assert_eq!(got["committedHeight"], json!(300));
+        assert_eq!(got["catchingUp"], json!(true));
+        assert_eq!(got["catchUpTarget"], json!(200));
+        assert_eq!(got["behindBy"], json!(80));
+        assert_eq!(got["peerCount"], json!(2));
+        assert_eq!(got["peers"][0]["peerId"], json!("12D3KooWpeer-a"));
+        assert_eq!(
+            got["peers"][0]["listenAddr"],
+            json!("/ip4/127.0.0.1/tcp/8000")
+        );
+        assert_eq!(got["peers"][0]["reportedTipRound"], json!(200));
+        // Peer b has no address / tip: those fields are omitted.
+        assert!(got["peers"][1].get("listenAddr").is_none());
+        assert!(got["peers"][1].get("reportedTipRound").is_none());
     }
 }

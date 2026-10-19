@@ -27,7 +27,7 @@ pub use block_sync::{
 };
 pub use error::NetworkError;
 pub use scoring::PeerScoringConfig;
-pub use service::NetworkService;
+pub use service::{NetworkService, PeerStatus};
 pub use state_sync::{
     ExportedSnapshot, SnapshotChunk, StateSnapshotSource, StateSyncCodec, StateSyncRequest,
     StateSyncResponse, MAX_STATE_SYNC_CHUNK_BYTES, MAX_STATE_SYNC_SNAPSHOT_BYTES,

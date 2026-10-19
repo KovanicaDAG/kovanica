@@ -108,5 +108,45 @@ pub fn gas_hardening_active_from(round: Round) -> bool {
     round >= GAS_HARDENING_ACTIVE_FROM_ROUND
 }
 
+/// Round from which the contract-hardening consensus rules take effect.
+///
+/// Three new rules are gated on `block.round >= CONTRACT_HARDENING_ACTIVE_FROM_ROUND`
+/// (below it every `Deploy`/`Call` validates and executes exactly as before,
+/// so an un-updated node never diverges):
+///
+/// 1. `Deploy` bytecode validation — a deploy whose `code` is not a valid wasm
+///    module (compiled with the same wasmi engine the interpreter uses,
+///    hosted in `kovanica-execution`) is rejected **before** any account/code
+///    row is written; fee and nonce are still charged, matching the existing
+///    failure accounting;
+/// 2. `Deploy` overwrite guard — a deploy that would replace the code of an
+///    account that already holds non-empty code is rejected;
+/// 3. wasm entry-point gating — a `Call` whose `method` is not one of the 16
+///    canonical `kovanica_execution::ENTRY_POINTS` is rejected before the
+///    interpreter runs (the native `dispatch_entry` path already gated these).
+///
+/// Defaults to `u64::MAX` so the rules are **inert** on the currently running
+/// testnet: activating them on a live chain without a coordinated upgrade would
+/// fork it, because a node that has not yet been updated would still accept a
+/// deploy/call that an updated node rejects. Set to `0` at the next genesis /
+/// testnet reset, after every validator runs a build containing the hardening.
+pub const CONTRACT_HARDENING_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+
+/// Whether the contract-hardening consensus rules apply to a block/leader at
+/// `round`.
+///
+/// Equivalent to `round >= CONTRACT_HARDENING_ACTIVE_FROM_ROUND`. This is the
+/// single predicate the execution layer uses for deploy bytecode validation,
+/// the deploy overwrite guard, and wasm entry-point gating, so the activation
+/// rule has exactly one definition.
+///
+/// The lint is allowed because the default activation round is `u64::MAX` (so
+/// the rules are inert on the running testnet); the comparison is deliberate,
+/// not an accident, and would move here should the constant ever be redefined.
+#[allow(clippy::absurd_extreme_comparisons)]
+pub fn contract_hardening_active_from(round: Round) -> bool {
+    round >= CONTRACT_HARDENING_ACTIVE_FROM_ROUND
+}
+
 /// Genesis round.
 pub const GENESIS_ROUND: Round = 0;

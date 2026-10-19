@@ -315,6 +315,13 @@ impl ExecutionContext {
         // below it executes exactly as before (no ledger divergence while the
         // network upgrades).
         let gas_hardening_active = kovanica_types::gas_hardening_active_from(subdag.leader_round);
+        // Contract-hardening activation: deploy bytecode validation, the
+        // deploy overwrite guard, and wasm entry-point gating apply only from
+        // `CONTRACT_HARDENING_ACTIVE_FROM_ROUND` on. Below it every deploy and
+        // call validates/executes exactly as before (no ledger divergence while
+        // the network upgrades).
+        let contract_hardening_active =
+            kovanica_types::contract_hardening_active_from(subdag.leader_round);
 
         for block in &subdag.blocks {
             for tx in &block.transactions {
@@ -324,6 +331,7 @@ impl ExecutionContext {
                     &mut txn,
                     committed_height,
                     gas_hardening_active,
+                    contract_hardening_active,
                 )?;
                 receipts.push(receipt);
                 txs_applied += 1;
@@ -471,6 +479,7 @@ impl ExecutionContext {
         txn: &mut WriteTransaction,
         committed_height: u64,
         gas_hardening_active: bool,
+        contract_hardening_active: bool,
     ) -> Result<TransactionReceipt, ExecutionError> {
         // Every transaction must carry a valid Ed25519 signature by its
         // sender over the signing hash. There is deliberately no bypass:
@@ -566,9 +575,13 @@ impl ExecutionContext {
             TransactionKind::ClaimRewards { validator } => {
                 self.execute_claim_rewards(txn, storage, &tx.sender, *validator)
             }
-            TransactionKind::Deploy { code } => {
-                self.execute_deploy(txn, storage, &tx.sender, code.clone())
-            }
+            TransactionKind::Deploy { code } => self.execute_deploy(
+                txn,
+                storage,
+                &tx.sender,
+                code.clone(),
+                contract_hardening_active,
+            ),
             TransactionKind::Call {
                 contract,
                 value,
@@ -586,6 +599,7 @@ impl ExecutionContext {
                 *gas_limit,
                 committed_height,
                 gas_hardening_active,
+                contract_hardening_active,
                 &mut gas_used,
             ),
             TransactionKind::RegisterLightNode {
@@ -882,12 +896,21 @@ impl ExecutionContext {
     }
 
     /// Execute a contract deployment transaction.
+    ///
+    /// When `contract_hardening_active` is set the bytecode is validated
+    /// (compiled with the same wasmi engine the interpreter uses) **before**
+    /// any state is written, and a deploy that would overwrite an account that
+    /// already holds code is rejected. Both checks are deterministic and run
+    /// before `deploy_contract`, so an invalid/overwriting deploy leaves no
+    /// code write. Fee and nonce were already charged by the per-transaction
+    /// savepoint in `execute_transaction`, matching every other body failure.
     fn execute_deploy(
         &mut self,
         txn: &mut WriteTransaction,
         storage: &Storage,
         from: &Address,
         code: Vec<u8>,
+        contract_hardening_active: bool,
     ) -> Result<Vec<ContractEvent>, ExecutionError> {
         if code.is_empty() {
             return Err(ExecutionError::Validation(
@@ -910,6 +933,28 @@ impl ExecutionContext {
         addr_bytes.extend_from_slice(&from.0);
         addr_bytes.extend_from_slice(&sender_account.nonce.to_le_bytes());
         let contract_addr = Address(kovanica_common::hash(&addr_bytes));
+
+        // Contract-hardening (activation-gated): validate the bytecode and
+        // refuse to overwrite an account that already holds code, before any
+        // storage write. Below activation both checks are skipped so the old
+        // (accept-anything) behavior is preserved bit-for-bit.
+        if contract_hardening_active {
+            // Overwrite guard first: it is a cheap account read and avoids
+            // compiling bytecode that will be rejected anyway.
+            let existing = storage
+                .state()
+                .get_account_or_default_write(txn, &contract_addr)?;
+            if !existing.code.is_empty() {
+                return Err(ExecutionError::Validation(
+                    "Contract address already has code".to_string(),
+                ));
+            }
+
+            // Deterministic bytecode validation, before any storage write.
+            self.contract_runner
+                .validate_module(&code)
+                .map_err(|_| ExecutionError::Validation("Invalid contract bytecode".to_string()))?;
+        }
 
         // Deploy contract code
         let code_hash = storage.state().deploy_contract(txn, &contract_addr, code)?;
@@ -938,6 +983,12 @@ impl ExecutionContext {
     /// large module is host-side work that wasmi fuel does not pay for, so the
     /// floor makes the requested gas proportional to that work and rejects
     /// tiny-gas calls to large modules **before** any compilation happens.
+    ///
+    /// When `contract_hardening_active` is set, `method` must be one of the 16
+    /// canonical [`ENTRY_POINTS`]; anything else is rejected before the
+    /// interpreter runs (the native `dispatch_entry` path already enforced
+    /// this). Below activation the check is skipped and any export the module
+    /// happens to define is callable, exactly as before.
     #[allow(clippy::too_many_arguments)]
     fn execute_call(
         &mut self,
@@ -951,6 +1002,7 @@ impl ExecutionContext {
         gas_limit: u64,
         block_height: u64,
         gas_hardening_active: bool,
+        contract_hardening_active: bool,
         gas_used: &mut u64,
     ) -> Result<Vec<ContractEvent>, ExecutionError> {
         // Check contract exists
@@ -975,6 +1027,16 @@ impl ExecutionContext {
                     code.len()
                 )));
             }
+        }
+
+        // Entry-point gating (activation-gated): only the 16 canonical entry
+        // points may be called. Checked before the interpreter starts, after
+        // the module-size floor so the gas floor still reports first for a
+        // tiny-gas call to a large module when both gates are active.
+        if contract_hardening_active && !contracts::is_entry_point(method) {
+            return Err(ExecutionError::Validation(format!(
+                "Unknown contract entry point: {method}"
+            )));
         }
 
         // Execute via ContractRunner (WASM)
@@ -2629,11 +2691,10 @@ mod tests {
         out.extend(n.as_bytes());
     }
 
-    /// Hand-assembled probe contract (entry `probe`): reads the caller's
-    /// native balance via `kovanica_balance_of`, stores it (i64 LE) under raw
-    /// key `[0]`, then succeeds if `args` is empty and fails (contract
-    /// error) otherwise — i.e. a failing call that already wrote its overlay.
-    fn probe_wasm() -> Vec<u8> {
+    /// `probe_wasm` with a different exported entry name: used to exercise the
+    /// activation-gated entry-point check, which inspects the *method* name
+    /// (`ENTRY_POINTS`), not the module's exports.
+    fn probe_wasm_named(entry_name: &str) -> Vec<u8> {
         let mut w = b"\0asm\x01\0\0\0".to_vec();
         let mut types = vec![5];
         types.extend([0x60, 2, 0x7f, 0x7f, 1, 0x7e]); // 0 (i32,i32)->i64
@@ -2660,7 +2721,7 @@ mod tests {
             ("memory", 2u8, 0u8),
             ("kovanica_alloc", 0, 3),
             ("kovanica_dealloc", 0, 4),
-            ("probe", 0, 5),
+            (entry_name, 0, 5),
         ] {
             name(&mut exports, n);
             exports.extend([kind, idx]);
@@ -2698,6 +2759,14 @@ mod tests {
         }
         section(&mut w, 10, &code);
         w
+    }
+
+    /// Hand-assembled probe contract (entry `probe`): reads the caller's
+    /// native balance via `kovanica_balance_of`, stores it (i64 LE) under raw
+    /// key `[0]`, then succeeds if `args` is empty and fails (contract
+    /// error) otherwise — i.e. a failing call that already wrote its overlay.
+    fn probe_wasm() -> Vec<u8> {
+        probe_wasm_named("probe")
     }
 
     const PROBE_CONTRACT: Address = Address([0xC0; 32]);
@@ -4167,5 +4236,254 @@ mod tests {
             read_balance(&storage, &payout) + stored,
             closing_reward + opening_reward
         );
+    }
+
+    // ---- contract hardening (deploy validation / overwrite / entry points) ----
+
+    /// The contract address `execute_deploy` derives for `sender`'s transaction
+    /// with `nonce`: `hash(sender || (nonce + 1) LE)` (the nonce is incremented
+    /// by the savepoint before the body derives the address).
+    fn deployed_address(sender: &Address, nonce: u64) -> Address {
+        let mut b = Vec::with_capacity(40);
+        b.extend_from_slice(&sender.0);
+        b.extend_from_slice(&nonce.saturating_add(1).to_le_bytes());
+        Address(kovanica_common::hash(&b))
+    }
+
+    fn read_account_code(storage: &Storage, address: &Address) -> Vec<u8> {
+        let txn = storage.begin_read().expect("read txn");
+        storage
+            .state()
+            .get_account_or_default(&txn, address)
+            .expect("account")
+            .code
+    }
+
+    fn set_raw_code(storage: &Storage, address: &Address, code: Vec<u8>) {
+        let txn = storage.begin_write().expect("write txn");
+        storage
+            .state()
+            .set_account(
+                &txn,
+                address,
+                &Account {
+                    balance: 0,
+                    nonce: 0,
+                    code_hash: kovanica_common::hash(&code),
+                    code,
+                },
+            )
+            .expect("set_account");
+        txn.commit().expect("commit");
+    }
+
+    // A `Deploy` carries bytecode the node never compiles (compilation happens
+    // on the first call). Below activation an invalid module is therefore
+    // stored successfully; from activation it is rejected before any write,
+    // with the fee/nonce still charged.
+    #[test]
+    fn invalid_bytecode_deploy_is_gated() {
+        let active_round = kovanica_types::CONTRACT_HARDENING_ACTIVE_FROM_ROUND;
+        let invalid = b"\x00asm\x01\0\0\0this is not a valid module".to_vec();
+
+        // Below activation: old behavior — accepted and stored verbatim.
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+            let key = test_keypair(1);
+            let sender = address_of(&key);
+            let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+            let tx = signed_tx(
+                &key,
+                TransactionKind::Deploy {
+                    code: invalid.clone(),
+                },
+                0,
+                1_000,
+            );
+            let receipts = run(&mut ctx, &storage, 1, vec![tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(
+                read_account_code(&storage, &deployed_address(&sender, 0)),
+                invalid
+            );
+        }
+
+        // At activation: rejected, no code write, fee + nonce still charged.
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+            let key = test_keypair(1);
+            let sender = address_of(&key);
+            let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+            let tx = signed_tx(
+                &key,
+                TransactionKind::Deploy {
+                    code: invalid.clone(),
+                },
+                0,
+                1_000,
+            );
+            let receipts = run(&mut ctx, &storage, active_round, vec![tx]);
+            assert!(!receipts[0].success);
+            assert!(
+                receipts[0]
+                    .error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("Invalid contract bytecode")),
+                "{:?}",
+                receipts[0].error
+            );
+            assert!(
+                read_account_code(&storage, &deployed_address(&sender, 0)).is_empty(),
+                "invalid deploy must not write code"
+            );
+            assert_eq!(read_balance(&storage, &sender), 1_000_000 - 1_000);
+            assert_eq!(read_nonce(&storage, &sender), 1);
+        }
+    }
+
+    // The overwrite guard only fires from activation; below it a deploy still
+    // replaces whatever code the derived address held.
+    #[test]
+    fn deploy_overwrite_guard_is_gated() {
+        let active_round = kovanica_types::CONTRACT_HARDENING_ACTIVE_FROM_ROUND;
+
+        // Below activation: the deploy overwrites the pre-seeded code.
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+            let key = test_keypair(1);
+            let sender = address_of(&key);
+            let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+            let target = deployed_address(&sender, 0);
+            set_raw_code(&storage, &target, b"pre-seeded code".to_vec());
+            let tx = signed_tx(
+                &key,
+                TransactionKind::Deploy {
+                    code: b"replacement".to_vec(),
+                },
+                0,
+                1_000,
+            );
+            let receipts = run(&mut ctx, &storage, 1, vec![tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(read_account_code(&storage, &target), b"replacement");
+        }
+
+        // At activation: rejected, and the pre-seeded code is left untouched.
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+            let key = test_keypair(1);
+            let sender = address_of(&key);
+            let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+            let target = deployed_address(&sender, 0);
+            set_raw_code(&storage, &target, b"pre-seeded code".to_vec());
+            // Valid wasm so only the overwrite guard (not the bytecode check)
+            // can reject it.
+            let tx = signed_tx(
+                &key,
+                TransactionKind::Deploy { code: probe_wasm() },
+                0,
+                1_000,
+            );
+            let receipts = run(&mut ctx, &storage, active_round, vec![tx]);
+            assert!(!receipts[0].success);
+            assert!(
+                receipts[0]
+                    .error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("Contract address already has code")),
+                "{:?}",
+                receipts[0].error
+            );
+            assert_eq!(read_account_code(&storage, &target), b"pre-seeded code");
+            assert_eq!(read_balance(&storage, &sender), 1_000_000 - 1_000);
+            assert_eq!(read_nonce(&storage, &sender), 1);
+        }
+    }
+
+    // Only the 16 canonical entry points are callable from activation on; below
+    // activation any export the module defines is callable (old behavior).
+    #[test]
+    fn wasm_entry_point_is_gated() {
+        let active_round = kovanica_types::CONTRACT_HARDENING_ACTIVE_FROM_ROUND;
+        const ALLOWED_CONTRACT: Address = Address([0xC3; 32]);
+
+        // gate OFF: the module's non-entry export "probe" still executes.
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+            let key = test_keypair(1);
+            let sender = address_of(&key);
+            let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+            deploy_probe(&storage);
+            let receipts = run(
+                &mut ctx,
+                &storage,
+                1,
+                vec![probe_call(&key, false, 0, 1_000)],
+            );
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(probe_slot(&storage), Some(1_000_000 - 1_000));
+        }
+
+        // gate ON: "probe" is not an entry point — rejected before the
+        // interpreter (no fuel, no storage write).
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+            let key = test_keypair(1);
+            let sender = address_of(&key);
+            let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+            deploy_probe(&storage);
+            let receipts = run(
+                &mut ctx,
+                &storage,
+                active_round,
+                vec![probe_call(&key, false, 0, 1_000)],
+            );
+            assert!(!receipts[0].success);
+            assert!(
+                receipts[0]
+                    .error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("Unknown contract entry point: probe")),
+                "{:?}",
+                receipts[0].error
+            );
+            assert_eq!(receipts[0].gas_used, 0, "rejected before the interpreter");
+            assert_eq!(probe_slot(&storage), None, "no storage write");
+        }
+
+        // gate ON: a canonical entry point is not rejected by the gate and the
+        // call runs to completion.
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+            let key = test_keypair(1);
+            let sender = address_of(&key);
+            let mut ctx = setup_funded_sender(&storage, &sender, 1_000_000);
+            set_raw_code(
+                &storage,
+                &ALLOWED_CONTRACT,
+                probe_wasm_named("token_transfer"),
+            );
+            let kind = TransactionKind::Call {
+                contract: ALLOWED_CONTRACT,
+                value: 0,
+                method: "token_transfer".to_string(),
+                args: Vec::new(),
+                gas_limit: 1_000_000,
+            };
+            let receipts = run(
+                &mut ctx,
+                &storage,
+                active_round,
+                vec![signed_tx(&key, kind, 0, 1_000)],
+            );
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+        }
     }
 }

@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kovanica_network::{Multiaddr, PeerId};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::Deserialize;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
@@ -54,6 +54,7 @@ use kovanica_network::{
 };
 use kovanica_rpc::{
     AuthConfig, EventBus, NodeHealth, RateLimitConfig, RateLimiterState, RpcServer, RpcState,
+    SyncPeerStatus, SyncStatus, SyncStatusSource,
 };
 
 /// Wrapper around EventBus to implement LogPublisher.
@@ -86,6 +87,12 @@ struct Args {
     /// Path to config file (used when running node)
     #[arg(short, long, default_value = "config.toml")]
     config: String,
+
+    /// Validate the configuration (file + `KOVANICA_*` env overrides) and exit
+    /// without starting the node. Exits non-zero with a diagnostic on a bad
+    /// config so operators can gate deploys on it.
+    #[arg(long)]
+    check_config: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -150,6 +157,9 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let args = Args::parse();
+    if args.check_config {
+        return run_check_config(&args.config);
+    }
     match args.command {
         Some(Commands::Genesis(g)) => {
             return run_genesis(g);
@@ -160,6 +170,33 @@ async fn main() -> Result<()> {
             run_node(config, shutdown_signal()).await
         }
     }
+}
+
+/// Validate the configuration file plus environment overrides and exit.
+///
+/// Mirrors the startup checks in [`run_node`] but performs no I/O beyond
+/// reading the config file, so it is safe to run from CI/deploy pipelines to
+/// fail fast on a misconfigured node.
+fn run_check_config(path: &str) -> Result<()> {
+    let config = NodeConfig::load(path)?;
+    config.validate().with_context(|| {
+        format!(
+            "configuration in {} is invalid (also check KOVANICA_* env overrides)",
+            path
+        )
+    })?;
+    println!(
+        "config OK: source={} chain_id={} data_dir={} listen_addr={} rpc={} round_duration_ms={} max_peers={} run_validator={}",
+        path,
+        config.chain_id,
+        config.data_dir.display(),
+        config.listen_addr,
+        config.rpc_socket_addr()?,
+        config.round_duration_ms,
+        config.max_peers,
+        config.run_validator,
+    );
+    Ok(())
 }
 
 /// Run the genesis ceremony: read validators.json, build staking state
@@ -655,6 +692,44 @@ where
             }
         });
     }
+    // Shared catch-up state: the network event loop drives it and the read-only
+    // `kovanica_syncStatus` RPC reads it. The tracker itself stays inside the
+    // node; the RPC layer only sees a snapshot built under this lock.
+    let catch_up_handle: Arc<Mutex<CatchUpTracker>> = Arc::new(Mutex::new(CatchUpTracker::new()));
+    let sync_status_source: SyncStatusSource = {
+        let catch_up = catch_up_handle.clone();
+        let dag_store = dag_store.clone();
+        let network = network.clone();
+        Arc::new(move || {
+            let (catching_up, catch_up_target) = catch_up.lock().summary();
+            let local_tip_round = local_dag_tip(&dag_store);
+            let committed_height = dag_store.get_committed_leader_height().ok();
+            let peers: Vec<SyncPeerStatus> = network
+                .peer_status_snapshot()
+                .into_iter()
+                .map(|peer| SyncPeerStatus {
+                    peer_id: peer.peer_id.to_string(),
+                    listen_addr: peer.listen_addr,
+                    reported_tip_round: peer.reported_tip_round,
+                })
+                .collect();
+            let peer_count = peers.len();
+            let behind_by = match (catching_up, catch_up_target, local_tip_round) {
+                (true, Some(target), Some(local)) => Some(target.saturating_sub(local)),
+                _ => None,
+            };
+            SyncStatus {
+                local_tip_round,
+                committed_height,
+                catching_up,
+                catch_up_target,
+                behind_by,
+                peer_count,
+                peers,
+            }
+        })
+    };
+
     let rpc_state = RpcState {
         tx_gossip: Some(rpc_tx_gossip),
         health: node_health.clone(),
@@ -667,6 +742,7 @@ where
         events: events.clone(),
         rate_limiter: Arc::new(RateLimiterState::new(rate_limit_config.clone())),
         auth_config: Arc::new(auth_config.clone()),
+        sync_status: Some(sync_status_source),
     };
     let rpc_server = RpcServer::new(
         rpc_socket,
@@ -784,6 +860,7 @@ where
         network_cmd_tx.clone(),
         events.clone(),
         state_storage.clone(),
+        catch_up_handle.clone(),
         shutdown_rx.clone(),
     ));
 
@@ -1532,28 +1609,34 @@ async fn run_event_handler(
     network_cmd_tx: mpsc::UnboundedSender<NetworkCommand>,
     events: EventBus,
     state_storage: Arc<Storage>,
+    catch_up: Arc<Mutex<CatchUpTracker>>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
-    let mut catch_up = CatchUpTracker::new();
     let mut state_sync_sessions = StateSyncSessions::new();
     loop {
         tokio::select! {
             maybe = network_events.recv() => match maybe {
-                Some(event) => handle_network_event(
-                    event,
-                    &mempool,
-                    &engine,
-                    &BlockIngest {
-                        dag_store: &dag_store,
-                        network_cmd_tx: &network_cmd_tx,
-                        events: &events,
-                    },
-                    &mut orphans,
-                    &mut catch_up,
-                    &mut state_sync_sessions,
-                    &state_storage,
-                ),
+                Some(event) => {
+                    // The catch-up tracker is shared with the read-only
+                    // `kovanica_syncStatus` RPC. The lock is held only for the
+                    // duration of this synchronous handler (no await inside).
+                    let mut catch_up_guard = catch_up.lock();
+                    handle_network_event(
+                        event,
+                        &mempool,
+                        &engine,
+                        &BlockIngest {
+                            dag_store: &dag_store,
+                            network_cmd_tx: &network_cmd_tx,
+                            events: &events,
+                        },
+                        &mut orphans,
+                        &mut catch_up_guard,
+                        &mut state_sync_sessions,
+                        &state_storage,
+                    );
+                }
                 None => break,
             },
             changed = shutdown.changed() => {
@@ -1708,6 +1791,20 @@ impl CatchUpTracker {
     /// Whether any session is active (ticks are skipped when idle).
     fn is_active(&self) -> bool {
         !self.sessions.is_empty()
+    }
+
+    /// Read-only summary for status surfaces: whether any session is actively
+    /// catching up (a [`CatchUpPhase::CatchingUp`] session exists; a lone
+    /// `Probing` session counts as "not catching up", so its target is `None`),
+    /// together with the highest peer-advertised tip being chased.
+    fn summary(&self) -> (bool, Option<Round>) {
+        let mut target: Option<Round> = None;
+        for session in self.sessions.values() {
+            if let CatchUpPhase::CatchingUp { target: t, .. } = &session.phase {
+                target = Some(target.map_or(*t, |current| current.max(*t)));
+            }
+        }
+        (target.is_some(), target)
     }
 
     /// Whether enough time has passed to advance the sessions.
@@ -4906,6 +5003,41 @@ mod tests {
         tracker.on_status(peer, 2, Some(9), now, &tx);
         assert!(!tracker.is_active(), "peer behind: no session");
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn catch_up_summary_tracks_probing_and_catching_up_phases() {
+        let mut tracker = CatchUpTracker::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        // Idle: not catching up, no target.
+        assert_eq!(tracker.summary(), (false, None));
+
+        // Probing (tip probe sent, no Status yet): still not catching up.
+        let peer = PeerId::random();
+        tracker.probe(peer, Instant::now(), &tx);
+        let _ = next_sync(&mut rx);
+        assert_eq!(tracker.summary(), (false, None));
+
+        // Status from an ahead peer starts a catching-up session: target set.
+        tracker.on_status(peer, 200, Some(100), Instant::now(), &tx);
+        let _ = next_sync(&mut rx);
+        let (catching_up, target) = tracker.summary();
+        assert!(catching_up);
+        assert_eq!(target, Some(200));
+
+        // The highest advertised tip wins when several sessions are active.
+        let second = PeerId::random();
+        tracker.probe(second, Instant::now(), &tx);
+        let _ = next_sync(&mut rx);
+        tracker.on_status(second, 350, Some(100), Instant::now(), &tx);
+        let _ = next_sync(&mut rx);
+        assert_eq!(tracker.summary(), (true, Some(350)));
+
+        // Once every session is gone the summary returns to idle.
+        tracker.remove(peer);
+        tracker.remove(second);
+        assert_eq!(tracker.summary(), (false, None));
     }
 
     #[test]

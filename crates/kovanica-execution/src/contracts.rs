@@ -1011,6 +1011,22 @@ impl ContractRunner {
         execute_contract_call(entry, contract, caller, height, timestamp, args, storage)
     }
 
+    /// Validate `wasm_bytes` by compiling them with the same wasmi engine the
+    /// interpreter uses, discarding the module.
+    ///
+    /// Deterministic: the same bytes always give the same result on every node
+    /// (the engine is fixed and compilation has no nondeterministic inputs), so
+    /// it is safe to gate a consensus rule on this outcome. The module cache is
+    /// deliberately not populated — a deployed contract that is never called
+    /// should not grow the in-memory cache, and a valid module still compiles
+    /// on its first call.
+    ///
+    /// Used by the activation-gated `Deploy` bytecode check in
+    /// [`crate::ExecutionContext`].
+    pub fn validate_module(&self, wasm_bytes: &[u8]) -> Result<(), kovanica_runtime::RuntimeError> {
+        self.runtime.compile(wasm_bytes).map(|_| ())
+    }
+
     /// Execute `call.entry` inside the wasm module via [`kovanica_runtime::Runtime`].
     ///
     /// Commit semantics match the native path: the [`ContractHost`] is

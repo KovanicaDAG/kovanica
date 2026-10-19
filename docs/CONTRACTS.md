@@ -173,7 +173,31 @@ dispatcher, the wasm exports, and this table must stay in sync (enforced by the
 | `token_mint` | `(Address, Amount)` | `()` |
 | `token_burn` | `(Amount,)` | `()` |
 
-## 5. `ContractHost` semantics and storage layout
+**Entry-point gating is activation-gated.** From
+`kovanica_types::CONTRACT_HARDENING_ACTIVE_FROM_ROUND` on (default `u64::MAX`,
+i.e. inert), a wasm `Call` whose `method` is not one of the 16 names above is
+rejected **before** the interpreter runs — the same set the native
+`dispatch_entry` path already enforced. Below the activation round the check is
+skipped and any export the deployed module defines is callable (the pre-gate
+behavior).
+
+## 4a. Deploy rules (activation-gated)
+
+A `Deploy` transaction carries only the bytecode; the node stores it without
+running it (compilation happens on the first `Call`). From
+`CONTRACT_HARDENING_ACTIVE_FROM_ROUND` on, `execute_deploy` additionally:
+
+- refuses a deploy whose `code` does not compile as a valid wasm module
+  (`ContractRunner::validate_module`, the same deterministic wasmi engine used
+  for execution);
+- refuses a deploy whose derived address (`hash(sender || (nonce + 1) LE)`)
+  already holds non-empty code.
+
+Both checks run **before** `deploy_contract`, so a rejected deploy writes no
+code. The transaction still charges its fee and consumes its nonce, matching
+every other body failure. Below the activation round both checks are skipped:
+the bytecode is stored verbatim and an existing account is overwritten, exactly
+as before.
 
 `ContractHost` (in `kovanica-execution::contracts`) is created **per call** and
 holds:
