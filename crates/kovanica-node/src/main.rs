@@ -709,7 +709,6 @@ where
                 .into_iter()
                 .map(|peer| SyncPeerStatus {
                     peer_id: peer.peer_id.to_string(),
-                    listen_addr: peer.listen_addr,
                     reported_tip_round: peer.reported_tip_round,
                 })
                 .collect();
@@ -721,6 +720,7 @@ where
             SyncStatus {
                 local_tip_round,
                 committed_height,
+                local_height: committed_height,
                 catching_up,
                 catch_up_target,
                 behind_by,

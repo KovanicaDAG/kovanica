@@ -1247,9 +1247,6 @@ pub async fn handle_light_client_checkpoint(
 pub struct SyncPeerStatus {
     /// libp2p peer id (transport identity, not the validator key).
     pub peer_id: String,
-    /// Last known network address of the peer, if one was learned.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub listen_addr: Option<String>,
     /// Last DAG tip round the peer reported, if it has answered a probe.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reported_tip_round: Option<u64>,
@@ -1272,6 +1269,9 @@ pub struct SyncStatus {
     /// Latest committed leader height, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub committed_height: Option<u64>,
+    /// Local committed height (alias for committed_height for clarity).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_height: Option<u64>,
     /// Whether the node is actively pulling a peer's rounds (a catch-up session
     /// is in the `CatchingUp` phase; probing counts as not catching up).
     pub catching_up: bool,
@@ -2237,6 +2237,7 @@ mod tests {
         state.sync_status = Some(Arc::new(|| SyncStatus {
             local_tip_round: Some(120),
             committed_height: Some(300),
+            local_height: Some(300),
             catching_up: true,
             catch_up_target: Some(200),
             behind_by: Some(80),
@@ -2244,12 +2245,10 @@ mod tests {
             peers: vec![
                 SyncPeerStatus {
                     peer_id: "12D3KooWpeer-a".to_string(),
-                    listen_addr: Some("/ip4/127.0.0.1/tcp/8000".to_string()),
                     reported_tip_round: Some(200),
                 },
                 SyncPeerStatus {
                     peer_id: "12D3KooWpeer-b".to_string(),
-                    listen_addr: None,
                     reported_tip_round: None,
                 },
             ],
@@ -2258,18 +2257,16 @@ mod tests {
         let got = handle_sync_status(Value::Null, state).await.unwrap();
         assert_eq!(got["localTipRound"], json!(120));
         assert_eq!(got["committedHeight"], json!(300));
+        assert_eq!(got["localHeight"], json!(300));
         assert_eq!(got["catchingUp"], json!(true));
         assert_eq!(got["catchUpTarget"], json!(200));
         assert_eq!(got["behindBy"], json!(80));
         assert_eq!(got["peerCount"], json!(2));
         assert_eq!(got["peers"][0]["peerId"], json!("12D3KooWpeer-a"));
-        assert_eq!(
-            got["peers"][0]["listenAddr"],
-            json!("/ip4/127.0.0.1/tcp/8000")
-        );
         assert_eq!(got["peers"][0]["reportedTipRound"], json!(200));
-        // Peer b has no address / tip: those fields are omitted.
-        assert!(got["peers"][1].get("listenAddr").is_none());
+        // Peer b has no tip: those fields are omitted.
         assert!(got["peers"][1].get("reportedTipRound").is_none());
+        // listenAddr should not be present
+        assert!(got["peers"][0].get("listenAddr").is_none());
     }
 }
