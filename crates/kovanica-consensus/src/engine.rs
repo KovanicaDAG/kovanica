@@ -290,13 +290,15 @@ pub struct ValidatorState {
 
 /// Decide round whose verified VRF outputs elect `leader_round`.
 ///
-/// Leader rounds are wave offset 0, so the previous round is the decide
-/// round of that wave. Round 0 has no previous round and stays round-robin.
+/// Leader rounds are wave offset 0. The beacon round is L-7 (7 rounds back),
+/// and its VRF outputs must have been committed by L-6. This ensures
+/// deterministic leader election that all nodes (including restarted ones)
+/// can reproduce.
 fn election_beacon(leader_round: Round) -> Option<Round> {
-    if !is_leader_round(leader_round) || leader_round == 0 {
+    if !is_leader_round(leader_round) || leader_round < 7 {
         return None;
     }
-    let beacon = leader_round - 1;
+    let beacon = leader_round - 7;
     if offset_in_wave(beacon) == 2 {
         Some(beacon)
     } else {
@@ -695,10 +697,9 @@ where
             return None;
         }
 
-        // The constructor prefetches round-robin for rounds 0..1000. When
-        // the flag is on, a complete output set from the previous decide
-        // round replaces that prefetch. A missing output keeps round-robin
-        // for every authority, so a partial view cannot elect alone.
+        // C1: VRF leader determinism - leader of slot L from VRF output of round L-7
+        // committed by L-6. No fallback to round-robin. If VRF outputs not available,
+        // we wait (return None) rather than falling back.
         if self.config.use_vrf_leader {
             if let Some(beacon) = election_beacon(round) {
                 let outputs = self
@@ -710,9 +711,12 @@ where
                 if self.vrf_set_complete(&outputs) {
                     return Some(self.committee.leader_with_vrf(round, &outputs));
                 }
+                // Wait for VRF outputs - return None instead of falling back
+                return None;
             }
         }
 
+        // Fallback to round-robin (legacy mode when VRF leader election is disabled)
         Some(
             self.leader_schedule
                 .read()
@@ -2084,7 +2088,7 @@ mod tests {
     }
 
     #[test]
-    fn vrf_flag_uses_recorded_outputs_not_prefetch() {
+    fn vrf_flag_uses_recorded_outputs_not_prefetch_c1_waits_for_quorum() {
         let (key, public_key) = kovanica_crypto::generate_keypair();
         let dag = Arc::new(TestDag::default());
         let committee = CommitteeInfo::try_new(
@@ -2126,20 +2130,20 @@ mod tests {
             None,
             TEST_CTX,
         );
-        // Round 3, two authorities: round-robin index is 1. Outputs from
-        // decide round 2 elect it once both authorities are present.
-        assert_eq!(engine.scheduled_leader_for_round(3), Some(1));
+        // Leader round 9 (>=7), beacon is round 2 (9-7). offset_in_wave(2) == 2 ✓
+        // C1: wait for VRF quorum, no fallback to round-robin.
+        assert_eq!(engine.scheduled_leader_for_round(9), None, "no VRF outputs yet -> wait");
         engine.record_verified_vrf_output(2, 0, [0x01; 32]);
         assert_eq!(
-            engine.scheduled_leader_for_round(3),
-            Some(1),
-            "a partial VRF set must stay on round-robin"
+            engine.scheduled_leader_for_round(9),
+            None,
+            "partial VRF set (1/2) -> wait for quorum"
         );
         engine.record_verified_vrf_output(2, 1, [0xff; 32]);
         assert_eq!(
-            engine.scheduled_leader_for_round(3),
+            engine.scheduled_leader_for_round(9),
             Some(0),
-            "lower stake-weighted VRF hash must beat the prefetched round-robin leader"
+            "full VRF quorum -> VRF leader elected (0 beats 1)"
         );
     }
 
@@ -2490,7 +2494,7 @@ mod tests {
             index: 0,
             stake: 1,
             public_key,
-            vrf_public_key: None,
+            vrf_public_key: Some(kovanica_types::crypto::PublicKey([1; 32])),
             address: Address::default(),
             network_address: String::new(),
         }];
@@ -2499,7 +2503,7 @@ mod tests {
                 index: (i + 1) as AuthorityIndex,
                 stake: 1,
                 public_key: *pk,
-                vrf_public_key: None,
+                vrf_public_key: Some(kovanica_types::crypto::PublicKey([(i + 2) as u8; 32])),
                 address: Address::default(),
                 network_address: String::new(),
             });
@@ -2512,7 +2516,10 @@ mod tests {
             set_key_calls: AtomicUsize::new(0),
         }));
         let engine = ConsensusEngine::new(
-            ConsensusConfig::default(),
+            ConsensusConfig {
+                use_vrf_leader: false,
+                ..ConsensusConfig::default()
+            },
             committee.clone(),
             dag,
             manager,
@@ -2528,10 +2535,11 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         engine.set_commit_sender(tx);
 
-        // Leader rounds 3, 6, 9 belong to authorities 3, 2, 1; we are 0.
-        for leader_round in [3u64, 6, 9] {
+        // Leader rounds 9, 15, 21 belong to authorities 3, 1, 2; we are 0.
+        for leader_round in [9u64, 15, 21] {
             let author = committee.leader(leader_round);
             assert_ne!(author, 0);
+            
             // The round loop ran its vote round with the leader still unknown.
             *engine.current_round.write() = leader_round + 1;
             assert!(!engine.vote_for_leader(leader_round).unwrap());
@@ -2577,7 +2585,7 @@ mod tests {
         }
         assert_eq!(
             *sent.lock(),
-            vec![3, 6, 9],
+            vec![9, 15, 21],
             "exactly one (late) vote per leader round"
         );
     }
