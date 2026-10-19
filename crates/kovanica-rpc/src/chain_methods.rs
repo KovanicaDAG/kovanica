@@ -38,10 +38,14 @@ const DEFAULT_FEE_RATE: u64 = 1;
 
 /// Largest number of committed-leader heights a single `kovanica_getLogs`
 /// call may scan. Keeps the query bounded (and cheap) on a long chain.
-pub const MAX_GET_LOGS_BLOCK_RANGE: u64 = 1000;
+pub const MAX_GET_LOGS_BLOCK_RANGE: u64 = 500;
 
 /// Largest number of log entries a single `kovanica_getLogs` call may return.
-pub const MAX_GET_LOGS_RESULTS: usize = 10_000;
+pub const MAX_GET_LOGS_RESULTS: usize = 2_000;
+
+/// Maximum time (in milliseconds) to spend scanning logs before returning
+/// a partial result. Prevents long-running queries from blocking the server.
+pub const MAX_GET_LOGS_SCAN_MS: u64 = 200;
 
 // ============================================================================
 // Helpers
@@ -526,7 +530,15 @@ pub async fn handle_get_logs(params: Value, state: RpcState) -> Result<Value, Rp
         kovanica_execution::receipts_in_height_range(&state.storage, from, to).map_err(internal)?;
 
     let mut logs: Vec<Value> = Vec::new();
+    let scan_start = std::time::Instant::now();
     for (height, receipts) in scanned {
+        // Timeout check to prevent long-running queries from blocking the server
+        if scan_start.elapsed().as_millis() > MAX_GET_LOGS_SCAN_MS as u128 {
+            return Err(RpcError::InvalidParams(format!(
+                "getLogs: scan timeout after {} ms; narrow the block range or filters",
+                MAX_GET_LOGS_SCAN_MS
+            )));
+        }
         // `logIndex` is per block, matching the Ethereum convention.
         let mut log_index: u64 = 0;
         for (tx_index, receipt) in receipts.iter().enumerate() {
