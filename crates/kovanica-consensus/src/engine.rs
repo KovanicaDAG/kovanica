@@ -691,99 +691,15 @@ where
         self.scheduled_leader_for_round(round) == Some(self.state.read().our_authority)
     }
 
-    /// Return the scheduled leader for a given leader round using the provided
-    /// VRF outputs (from a specific beacon / parent set).
-    ///
-    /// This is the core C1 function: given a set of VRF outputs (typically from
-    /// the parents of a candidate leader block), determine the leader.
-    /// Returns `None` if the quorum is not met.
-    fn scheduled_leader_from_outputs(
-        &self,
-        round: Round,
-        outputs: &HashMap<kovanica_types::AuthorityIndex, [u8; 32]>,
-    ) -> Option<kovanica_types::AuthorityIndex> {
-        if !is_leader_round(round) {
-            return None;
-        }
-        if !self.config.use_vrf_leader {
-            return None;
-        }
-        if self.vrf_set_complete(outputs) {
-            Some(self.committee.leader_with_vrf(round, outputs))
-        } else {
-            None
-        }
-    }
-
-    /// Verify that a candidate leader block's author matches the VRF beacon
-    /// derived from the block's parents.
-    ///
-    /// This implements Design A (causal-history beacon): the beacon for round L
-    /// is the VRF outputs from the parents of the leader block itself. The block
-    /// is valid only if its author equals `leader_with_vrf(L, outputs_from(parents))`
-    /// and the parents include ≥ 2f+1 stake of round L-1 VRF carriers.
-    pub fn verify_leader_block_vrf(
-        &self,
-        round: Round,
-        author: kovanica_types::AuthorityIndex,
-        parents: &[kovanica_types::block::BlockReference],
-    ) -> Result<(), ConsensusError> {
-        if !is_leader_round(round) {
-            return Ok(()); // Not a leader round, no VRF check needed
-        }
-        if !self.config.use_vrf_leader {
-            return Ok(()); // VRF leader election disabled
-        }
-
-        // Collect VRF outputs from parents
-        let mut outputs = HashMap::new();
-        let mut total_stake = 0u64;
-        for parent in parents {
-            if let Some(vrf_hash) = self
-                .vrf_outputs
-                .read()
-                .get(&parent.round)
-                .and_then(|m| m.get(&parent.author))
-            {
-                outputs.insert(parent.author, *vrf_hash);
-                if let Some(auth) = self.committee.get_by_index(parent.author) {
-                    total_stake = total_stake.saturating_add(auth.stake);
-                }
-            }
-        }
-
-        // Require ≥ 2f+1 stake from the parents (i.e., quorum of round L-1).
-        // If insufficient VRF stake in parents, fall back to round-robin (per Design A).
-        let quorum_stake = (self.committee.total_stake() * 2 / 3) + 1;
-        if total_stake < quorum_stake {
-            // Insufficient VRF stake in parents - fall back to round-robin
-            return Ok(());
-        }
-
-        // Compute leader from parent beacon
-        if let Some(leader) = self.scheduled_leader_from_outputs(round, &outputs) {
-            if leader != author {
-                return Err(ConsensusError::InvalidVote(format!(
-                    "leader block author {} does not match VRF beacon leader {}",
-                    author, leader
-                )));
-            }
-            Ok(())
-        } else {
-            // Quorum not met in parent outputs - fall back to round-robin
-            Ok(())
-        }
-    }
-
     /// Return the scheduled leader only for a protocol leader slot.
-    /// Uses the live vrf_outputs map for the election beacon (L-7).
-    /// This is used by the round-loop for voting/committing; block verification
-    /// uses `verify_leader_block_vrf` with the block's actual parents.
     fn scheduled_leader_for_round(&self, round: Round) -> Option<kovanica_types::AuthorityIndex> {
         if !is_leader_round(round) {
             return None;
         }
 
+        // C1: VRF leader determinism - leader of slot L from VRF output of round L-7
+        // committed by L-6. No fallback to round-robin. If VRF outputs not available,
+        // we wait (return None) rather than falling back.
         if self.config.use_vrf_leader {
             if let Some(beacon) = election_beacon(round) {
                 let outputs = self
@@ -1090,15 +1006,6 @@ where
         // Validate the block
         self.block_manager.read().process_block(block)?;
         self.ingest_vrf_outputs();
-
-        // C1: Verify VRF beacon for leader blocks (Design A - causal-history beacon).
-        // The leader block's author must match the VRF beacon derived from its parents.
-        // Only enforce when VRF leader election is enabled.
-        if self.config.use_vrf_leader
-            && self.scheduled_leader_for_round(block.round) == Some(block.author)
-        {
-            self.verify_leader_block_vrf(block.round, block.author, &block.parents)?;
-        }
 
         // Every valid block belongs in the DAG, but only the scheduled author
         // of an offset-zero round represents a leader slot. In particular,
