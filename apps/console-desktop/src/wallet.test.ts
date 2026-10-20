@@ -7,11 +7,14 @@ import {
   EMPTY_HISTORY,
   HISTORY_HEADING,
   LOCK_AFTER_MS,
+  LOCK_WARNING,
   MNEMONIC_WARNING,
+  WALLET_LOCK_WARNING_EVENT,
   WALLET_LOCKED_EVENT,
   clearedImportFields,
   idleLocked,
   needsMainnetConfirm,
+  phraseLockWarning,
   phraseOnScreen,
   reviewRows,
   secretsCleared,
@@ -70,6 +73,30 @@ describe("wallet form", () => {
     expect(enabled({ quote: mainnet, shownChainId: "1", confirmMainnet: true })).toBe(true);
     expect(needsMainnetConfirm("1")).toBe(true);
     expect(needsMainnetConfirm("4")).toBe(false);
+  });
+
+  it("warns before the phrase leaves the screen", () => {
+    expect(WALLET_LOCK_WARNING_EVENT).toBe("wallet-lock-warning");
+    expect(phraseLockWarning("one two three", true)).toBe(LOCK_WARNING);
+    expect(phraseLockWarning("one two three", false)).toBe("");
+    expect(phraseLockWarning("", true)).toBe("");
+    expect(LOCK_WARNING.includes("recovery phrase")).toBe(true);
+    expect(htmlSource.includes('id="mnemonic-lock-warning"')).toBe(true);
+    const warnAt = viewSource.indexOf("listen(WALLET_LOCK_WARNING_EVENT");
+    const lockAt = viewSource.indexOf("listen(WALLET_LOCKED_EVENT");
+    expect(warnAt).toBeGreaterThan(0);
+    expect(lockAt).toBeGreaterThan(warnAt);
+    const handler = viewSource.slice(warnAt, lockAt);
+    expect(handler.includes("paintLockWarning(true)")).toBe(true);
+    expect(handler.includes('mnemonicText.textContent = ""')).toBe(false);
+    expect(handler.includes('phrase = ""')).toBe(false);
+    const activity = viewSource.slice(
+      viewSource.indexOf("const noteActivity"),
+      viewSource.indexOf("document.addEventListener"),
+    );
+    expect(activity.includes("mnemonicLockWarning.hidden")).toBe(true);
+    expect(activity.includes("wallet_touch")).toBe(true);
+    expect(activity.includes("paintLockWarning(false)")).toBe(true);
   });
 
   it("clears secrets when the lock event arrives, before the next status poll", () => {

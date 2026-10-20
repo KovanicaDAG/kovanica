@@ -350,6 +350,10 @@ impl wallet::SessionNotify for EmitSession {
     fn wallet_locked(&self) {
         let _ = self.app.emit(wallet::WALLET_LOCKED_EVENT, ());
     }
+
+    fn wallet_lock_warning(&self) {
+        let _ = self.app.emit(wallet::WALLET_LOCK_WARNING_EVENT, ());
+    }
 }
 
 fn main() {
