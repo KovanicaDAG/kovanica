@@ -1,12 +1,13 @@
 //! Kovanica Console desktop shell.
 //!
 //! The webview only displays what this process returns. RPC calls, chain-id
-//! checks, and later key handling stay on this side of the bridge.
+//! checks, and key handling stay on this side of the bridge.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod amount;
 mod connection;
+mod wallet;
 
 use amount::{format_kuna_atoms, parse_kuna_atoms};
 
@@ -18,7 +19,16 @@ use connection::{
     NodeStatus, RPC_URL_ENV,
 };
 use serde::Serialize;
+use std::sync::Mutex;
+use std::time::Instant;
 use tauri::Manager;
+use tauri::State;
+use zeroize::Zeroizing;
+
+/// Process-local wallet session. The keystore file lives in the app data directory.
+struct WalletApp {
+    store: Mutex<wallet::WalletStore>,
+}
 
 /// Endpoint the screen should show and edit.
 #[derive(Debug, Serialize)]
@@ -88,6 +98,108 @@ fn format_kuna(atoms: String) -> Result<String, String> {
     Ok(format_kuna_atoms(atoms))
 }
 
+fn wallet_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|_| "Could not open the app data directory.".to_string())?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|_| "Could not open the app data directory.".to_string())?;
+    Ok(dir.join(wallet::KEYSTORE_FILE))
+}
+
+fn with_wallet<T>(
+    state: &State<'_, WalletApp>,
+    body: impl FnOnce(&mut wallet::WalletStore) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut store = state
+        .store
+        .lock()
+        .map_err(|_| "The wallet could not be opened.".to_string())?;
+    body(&mut store)
+}
+
+/// Whether a wallet file exists, and whether the session is open.
+#[tauri::command]
+fn wallet_status(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+) -> Result<wallet::WalletStatus, String> {
+    let path = wallet_file(&app)?;
+    with_wallet(&state, |store| store.status(&path, Instant::now()))
+}
+
+/// Create a key. The phrase is returned once.
+#[tauri::command]
+fn wallet_create(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    passphrase: String,
+) -> Result<wallet::NewWallet, String> {
+    let path = wallet_file(&app)?;
+    let passphrase = Zeroizing::new(passphrase);
+    with_wallet(&state, |store| {
+        store.create(&path, passphrase.as_str(), Instant::now())
+    })
+}
+
+/// Import a 24-word seed. The phrase is not returned.
+#[tauri::command]
+fn wallet_import(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    mnemonic: String,
+    passphrase: String,
+) -> Result<wallet::WalletStatus, String> {
+    let path = wallet_file(&app)?;
+    let mnemonic = Zeroizing::new(mnemonic);
+    let passphrase = Zeroizing::new(passphrase);
+    with_wallet(&state, |store| {
+        store.import(
+            &path,
+            mnemonic.as_str(),
+            passphrase.as_str(),
+            Instant::now(),
+        )
+    })
+}
+
+/// Open an existing wallet. A wrong password does not reveal the phrase.
+#[tauri::command]
+fn wallet_unlock(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    passphrase: String,
+) -> Result<wallet::WalletStatus, String> {
+    let path = wallet_file(&app)?;
+    let passphrase = Zeroizing::new(passphrase);
+    with_wallet(&state, |store| {
+        store.unlock(&path, passphrase.as_str(), Instant::now())
+    })
+}
+
+/// Drop the session.
+#[tauri::command]
+fn wallet_lock(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+) -> Result<wallet::WalletStatus, String> {
+    let path = wallet_file(&app)?;
+    with_wallet(&state, |store| {
+        store.lock();
+        store.status(&path, Instant::now())
+    })
+}
+
+/// Note that the user is still at the keyboard.
+#[tauri::command]
+fn wallet_touch(state: State<'_, WalletApp>) -> Result<(), String> {
+    with_wallet(&state, |store| {
+        store.touch(Instant::now());
+        Ok(())
+    })
+}
+
 fn parse_atom_string(text: &str) -> Result<u64, String> {
     let text = text.trim();
     if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -113,13 +225,22 @@ async fn node_status(app: tauri::AppHandle) -> Result<NodeStatus, String> {
 
 fn main() {
     tauri::Builder::default()
+        .manage(WalletApp {
+            store: Mutex::new(wallet::WalletStore::new()),
+        })
         .invoke_handler(tauri::generate_handler![
             connection_config,
             save_connection,
             reset_connection,
             node_status,
             parse_kuna,
-            format_kuna
+            format_kuna,
+            wallet_status,
+            wallet_create,
+            wallet_import,
+            wallet_unlock,
+            wallet_lock,
+            wallet_touch
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kovanica Console");

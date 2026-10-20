@@ -2230,6 +2230,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "kovanica-crypto",
+ "kovanica-keystore",
  "kovanica-light-ffi",
  "kovanica-types",
  "reqwest 0.12.28",
@@ -2239,6 +2240,7 @@ dependencies = [
  "tauri-build",
  "thiserror 1.0.69",
  "url",
+ "zeroize",
 ]
 
 [[package]]
