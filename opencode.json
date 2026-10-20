@@ -3,16 +3,24 @@
     "servers": {
       "linear": {
         "type": "local",
-        "command": ["npx", "-y", "@mseep/linear-mcp"],
+        "command": [
+          "npx",
+          "-y",
+          "@mseep/linear-mcp"
+        ],
         "environment": {
-          "LINEAR_API_KEY": "lin_api_YN1bq7fC0p1WhcJjH0CCISOxOIUuljr6EGobRmmZ"
+          "LINEAR_API_KEY": "{env:LINEAR_API_KEY}"
         }
       },
       "notion": {
         "type": "local",
-        "command": ["npx", "-y", "@notionhq/notion-mcp-server"],
+        "command": [
+          "npx",
+          "-y",
+          "@notionhq/notion-mcp-server"
+        ],
         "environment": {
-          "NOTION_TOKEN": "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"
+          "NOTION_TOKEN": "{env:NOTION_TOKEN}"
         }
       }
     }
