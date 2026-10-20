@@ -48,6 +48,9 @@ before the keystore is decrypted. The chain id in the transaction is the one
 the connection screen proved. This build pins no genesis committee, so the
 screen does not prove a chain id and the wallet will not sign.
 
+Balance and transfer history come from the node. Both are labelled
+"reported by node". The light client does not prove them.
+
 ## Run
 
 ```sh

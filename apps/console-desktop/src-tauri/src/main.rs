@@ -7,6 +7,7 @@
 
 mod amount;
 mod connection;
+mod history;
 mod transfer;
 mod wallet;
 
@@ -231,6 +232,46 @@ async fn wallet_quote(
     .map_err(|_| "The quote was interrupted.".to_string())?
 }
 
+/// Balance the node reported. It is not a light-client proof.
+#[tauri::command]
+async fn wallet_balance(app: tauri::AppHandle) -> Result<history::ReportedBalance, String> {
+    let url = current_url(&app)?;
+    let path = wallet_file(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url.clone()).map_err(|err| err.to_string())?;
+        let wallet = app.state::<WalletApp>();
+        let address = with_wallet(&wallet, |store| {
+            store
+                .status(&path, Instant::now())?
+                .address
+                .ok_or_else(|| "Create or import a wallet first.".to_string())
+        })?;
+        history::reported_balance(&rpc, &address)
+    })
+    .await
+    .map_err(|_| "The balance request was interrupted.".to_string())?
+}
+
+/// Transfers the node reported for this wallet. They are not proven.
+#[tauri::command]
+async fn wallet_history(app: tauri::AppHandle) -> Result<history::HistoryPage, String> {
+    let url = current_url(&app)?;
+    let path = wallet_file(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url.clone()).map_err(|err| err.to_string())?;
+        let wallet = app.state::<WalletApp>();
+        let address = with_wallet(&wallet, |store| {
+            store
+                .status(&path, Instant::now())?
+                .address
+                .ok_or_else(|| "Create or import a wallet first.".to_string())
+        })?;
+        history::reported_history(&rpc, &address)
+    })
+    .await
+    .map_err(|_| "The history request was interrupted.".to_string())?
+}
+
 /// Sign a quoted transfer. Chain 1 is refused until `confirm_mainnet` is set.
 #[tauri::command]
 async fn wallet_send(
@@ -307,7 +348,9 @@ fn main() {
             wallet_lock,
             wallet_touch,
             wallet_quote,
-            wallet_send
+            wallet_send,
+            wallet_balance,
+            wallet_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kovanica Console");
