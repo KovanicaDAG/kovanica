@@ -23,9 +23,9 @@ thiserror = "1"
 zeroize = "1"
 bincode = "1.3"
 hex = "0.4"
+kovanica-keystore = { path = "../../../crates/kovanica-keystore" }
 kovanica-light-ffi = { path = "../../../crates/kovanica-light-ffi" }
 kovanica-types = { path = "../../../crates/kovanica-types" }
 
 [dev-dependencies]
 kovanica-crypto = { path = "../../../crates/kovanica-crypto" }
-kovanica-keystore = { path = "../../../crates/kovanica-keystore" }

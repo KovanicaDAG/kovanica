@@ -1,8 +1,8 @@
 //! Local wallet file for Kovanica Console.
 //!
 //! The file is the v2 keystore JSON produced by `kovanica-light-ffi`, the same
-//! document the Android wallet stores. This module does not parse addresses
-//! or derive keys itself.
+//! document the Android wallet stores. `kovanica_keystore::parse` checks the
+//! parameters. This module does not derive keys itself.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -13,7 +13,6 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
 /// File name inside the app data directory.
@@ -426,21 +425,12 @@ fn path_exists(path: &Path) -> Result<bool, String> {
     }
 }
 
-/// Accept only the Android v2 document: Argon2id and XChaCha20-Poly1305.
+/// Accept a keystore only when `kovanica_keystore::parse` does.
 fn accept_keystore_json(json: &str) -> Result<String, String> {
-    let value: Value =
-        serde_json::from_str(json).map_err(|_| "Could not save the wallet.".to_string())?;
-    let ok = value.get("version").and_then(Value::as_u64) == Some(2)
-        && value.get("encrypted").and_then(Value::as_bool) == Some(true)
-        && value.get("cipher").and_then(Value::as_str) == Some("xchacha20poly1305")
-        && value.get("kdf").and_then(Value::as_str) == Some("argon2id")
-        && value.get("kdf_memory_kib").and_then(Value::as_u64) == Some(65_536)
-        && value.get("kdf_iterations").and_then(Value::as_u64) == Some(3)
-        && value.get("kdf_parallelism").and_then(Value::as_u64) == Some(4);
-    if !ok {
-        return Err("Could not save the wallet.".to_string());
-    }
-    kovanica_light_ffi::wallet_address(json.to_string())
+    let parsed = kovanica_keystore::parse(json.as_bytes())
+        .map_err(|_| "Could not save the wallet.".to_string())?;
+    kovanica_keystore::address(&parsed)
+        .map(|address| address.to_string())
         .map_err(|_| "Could not save the wallet.".to_string())
 }
 
@@ -510,6 +500,7 @@ pub(crate) fn read_keystore(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir =
@@ -736,5 +727,37 @@ mod tests {
         let locked = must(store.status(&path, now));
         assert_eq!(locked.phase, PHASE_LOCKED);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Produced by `kovanica_keystore::from_seed(&[0x5A; 32], "cross-check")`.
+    /// No Android device fixture is checked into this repo, so this vector
+    /// comes from the same keystore code the Android wallet reaches.
+    const CROSS_KEYSTORE_JSON: &str = r#"{"version":2,"address":"kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag","public_key":"0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0","encrypted":true,"secret_key":"21406ec83c99222e1a7262d80534b3cf334d5b213654c65efe8b5fb5ea70f8d2c78403778f0d09902a7c9a2b21c4b055","cipher":"xchacha20poly1305","kdf":"argon2id","kdf_memory_kib":65536,"kdf_iterations":3,"kdf_parallelism":4,"salt":"88e37fe15da91bf57bfa24181fc595d9","nonce":"1d6b4b4a95293d5a4bf31f16059f032a4acf0c9cf2674e42"}"#;
+
+    #[test]
+    fn a_fixed_keystore_vector_uses_keystore_validation() {
+        let body = include_str!("wallet.rs").split("mod tests").next().unwrap();
+        assert!(!body.contains("kdf_memory_kib"));
+        assert!(!body.contains("65_536"));
+        assert!(!body.contains("kdf_iterations"));
+
+        let address = must(accept_keystore_json(CROSS_KEYSTORE_JSON));
+        let parsed = kovanica_keystore::parse(CROSS_KEYSTORE_JSON.as_bytes()).unwrap();
+        assert_eq!(
+            kovanica_keystore::address(&parsed).unwrap().to_string(),
+            address
+        );
+        assert_eq!(
+            kovanica_keystore::secret_seed(&parsed, Some("cross-check"))
+                .unwrap()
+                .as_ref(),
+            &[0x5A; 32]
+        );
+
+        let mut tampered: Value = serde_json::from_str(CROSS_KEYSTORE_JSON).unwrap();
+        tampered["kdf_iterations"] = Value::from(1);
+        let bad = serde_json::to_string(&tampered).unwrap();
+        assert!(accept_keystore_json(&bad).is_err());
+        assert!(kovanica_keystore::parse(bad.as_bytes()).is_err());
     }
 }
