@@ -1,0 +1,3 @@
+# Encrypted console wallet test vector (seed 0x5A repeated, password cross-check).
+# generic-api-key matches the ciphertext, not a live key. Fingerprint from gitleaks 8.24.3.
+62f487532da42ada4cd656ea3de1d89db0bb8ea0:apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:735

@@ -3,16 +3,21 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import {
   EMPTY_HISTORY,
   HISTORY_HEADING,
   MNEMONIC_WARNING,
+  WALLET_LOCK_WARNING_EVENT,
+  WALLET_LOCKED_EVENT,
   clearedImportFields,
   needsMainnetConfirm,
+  phraseLockWarning,
   phraseOnScreen,
   reviewEnabled,
   reviewRows,
+  secretsCleared,
   sendEnabled,
   type QuoteView,
 } from "./wallet";
@@ -76,6 +81,7 @@ export function mountWallet(shownChainId: () => string | null): void {
   const importPhrase = required<HTMLTextAreaElement>("import-phrase");
   const importPassword = required<HTMLInputElement>("import-password");
   const importButton = required<HTMLButtonElement>("import-wallet");
+  const mnemonicLockWarning = required<HTMLParagraphElement>("mnemonic-lock-warning");
   const mnemonicWarning = required<HTMLParagraphElement>("mnemonic-warning");
   const mnemonicText = required<HTMLParagraphElement>("mnemonic-text");
   const doneButton = required<HTMLButtonElement>("mnemonic-done");
@@ -184,6 +190,26 @@ export function mountWallet(shownChainId: () => string | null): void {
     paintReview();
   }
 
+  function clearSecretFields(): void {
+    const cleared = secretsCleared();
+    phrase = cleared.phrase;
+    mnemonicText.textContent = cleared.phrase;
+    newPassword.value = cleared.password;
+    importPhrase.value = cleared.phrase;
+    importPassword.value = cleared.password;
+    unlockPassword.value = cleared.password;
+    mnemonicPanel.hidden = true;
+    quote = null;
+    paintReview();
+    paintLockWarning(false);
+  }
+
+  function paintLockWarning(warned: boolean): void {
+    const text = phraseLockWarning(phrase, warned);
+    mnemonicLockWarning.textContent = text;
+    mnemonicLockWarning.hidden = text === "";
+  }
+
   async function loadFigures(address: string): Promise<void> {
     const balance = await invoke<ReportedBalance>("wallet_balance");
     paintReadout(address, balance);
@@ -196,6 +222,7 @@ export function mountWallet(shownChainId: () => string | null): void {
     phase = status.phase;
     phrase = phraseOnScreen(phase, phrase);
     mnemonicText.textContent = phrase;
+    if (phrase === "") paintLockWarning(false);
     if (phrase !== "") {
       show("mnemonic");
       return;
@@ -224,6 +251,7 @@ export function mountWallet(shownChainId: () => string | null): void {
         newPassword.value = "";
         phrase = created.mnemonic;
         mnemonicText.textContent = phrase;
+        paintLockWarning(false);
         phase = "open";
         show("mnemonic");
       } catch (error) {
@@ -255,6 +283,7 @@ export function mountWallet(shownChainId: () => string | null): void {
   doneButton.addEventListener("click", () => {
     phrase = "";
     mnemonicText.textContent = "";
+    paintLockWarning(false);
     void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));
   });
 
@@ -345,12 +374,23 @@ export function mountWallet(shownChainId: () => string | null): void {
   let lastTouch = 0;
   const noteActivity = (): void => {
     const now = Date.now();
-    if (now - lastTouch < 5_000) return;
+    const warningVisible = !mnemonicLockWarning.hidden;
+    if (!warningVisible && now - lastTouch < 5_000) return;
     lastTouch = now;
+    if (warningVisible) paintLockWarning(false);
     void invoke("wallet_touch").catch(() => undefined);
   };
   document.addEventListener("input", noteActivity);
   document.addEventListener("click", noteActivity);
+
+  void listen(WALLET_LOCK_WARNING_EVENT, () => {
+    paintLockWarning(true);
+  }).catch(() => undefined);
+
+  void listen(WALLET_LOCKED_EVENT, () => {
+    clearSecretFields();
+    void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));
+  }).catch(() => undefined);
 
   window.setInterval(() => {
     void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));

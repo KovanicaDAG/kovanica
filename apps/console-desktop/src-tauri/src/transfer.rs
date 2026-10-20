@@ -254,6 +254,9 @@ fn parse_atoms(text: &str) -> Result<u64, String> {
 }
 
 fn transfer_matches(tx: &Transaction, quote: &TransferQuote) -> bool {
+    if tx.nonce.to_string() != quote.nonce {
+        return false;
+    }
     match &tx.kind {
         TransactionKind::Transfer { to, amount } => {
             to.to_string() == quote.recipient && amount.to_string() == quote.amount_atoms
@@ -669,5 +672,27 @@ mod tests {
         assert!(build_quote(Address([1; 32]), &format!(" {a} "), "1", 4, 0, 1).is_ok());
         assert!(build_quote(Address([1; 32]), &a.to_uppercase(), "1", 4, 0, 1).is_err());
         assert!(build_quote(Address([1; 32]), &a[..a.len() - 1], "1", 4, 0, 1).is_err());
+    }
+
+    #[test]
+    fn a_different_nonce_does_not_match_the_quote() {
+        let sender = Address([1; 32]);
+        let recipient = Address([3; 32]);
+        let quote = build_quote(sender, &recipient.to_string(), "1", 4, 7, 3).unwrap();
+        let amount: u64 = quote.amount_atoms.parse().unwrap();
+        let mut tx = Transaction {
+            sender,
+            nonce: 7,
+            kind: TransactionKind::Transfer {
+                to: recipient,
+                amount,
+            },
+            fee: 1,
+            signature: Signature([0u8; 64]),
+            hash: Hash::zero(),
+        };
+        assert!(transfer_matches(&tx, &quote));
+        tx.nonce = 8;
+        assert!(!transfer_matches(&tx, &quote));
     }
 }

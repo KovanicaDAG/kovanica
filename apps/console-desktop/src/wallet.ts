@@ -3,7 +3,14 @@
  * This module only decides what the form may show.
  */
 
-export const LOCK_AFTER_MS = 5 * 60 * 1000;
+/** Tauri event emitted when Rust drops the open session. */
+export const WALLET_LOCKED_EVENT = "wallet-locked";
+
+/** Tauri event emitted before the idle lock, while the session is still open. */
+export const WALLET_LOCK_WARNING_EVENT = "wallet-lock-warning";
+
+export const LOCK_WARNING =
+  "This wallet will lock soon. The recovery phrase will leave this screen. Finish writing it down. Click this screen if you are still here.";
 
 export const MNEMONIC_WARNING =
   "Anyone who reads this phrase can spend the KUNA. Write it down. This screen does not copy it.";
@@ -32,14 +39,22 @@ export interface ReviewRow {
   value: string;
 }
 
-/** True when the session should be treated as idle. */
-export function idleLocked(lastActiveMs: number, nowMs: number): boolean {
-  return nowMs - lastActiveMs >= LOCK_AFTER_MS;
+/** Phrase and password values after a lock. The screen applies these at once. */
+export function secretsCleared(): { phrase: string; password: string } {
+  return { phrase: "", password: "" };
 }
 
 /** Import fields are wiped after the attempt, including a failed one. */
 export function clearedImportFields(): { phrase: string; password: string } {
   return { phrase: "", password: "" };
+}
+
+/** Warning text while the phrase is still visible. An empty phrase shows nothing. */
+export function phraseLockWarning(phrase: string, warned: boolean): string {
+  if (phrase === "" || !warned) {
+    return "";
+  }
+  return LOCK_WARNING;
 }
 
 /** The phrase stays on screen only while the session is still open. */

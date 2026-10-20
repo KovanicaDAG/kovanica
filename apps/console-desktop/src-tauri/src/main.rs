@@ -23,6 +23,7 @@ use connection::{
 };
 use serde::Serialize;
 use std::time::Instant;
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
 use zeroize::Zeroizing;
@@ -184,17 +185,22 @@ fn wallet_unlock(
     })
 }
 
-/// Drop the session.
+/// Drop the session. The webview hears [`wallet::WALLET_LOCKED_EVENT`] at once.
 #[tauri::command]
 fn wallet_lock(
     app: tauri::AppHandle,
     state: State<'_, WalletApp>,
 ) -> Result<wallet::WalletStatus, String> {
     let path = wallet_file(&app)?;
-    with_wallet(&state, |store| {
-        store.lock();
-        store.status(&path, Instant::now())
-    })
+    let (was_open, status) = with_wallet(&state, |store| {
+        let was_open = store.lock();
+        let status = store.status(&path, Instant::now())?;
+        Ok((was_open, status))
+    })?;
+    if was_open {
+        let _ = app.emit(wallet::WALLET_LOCKED_EVENT, ());
+    }
+    Ok(status)
 }
 
 /// Note that the user is still at the keyboard.
@@ -335,11 +341,32 @@ async fn node_status(app: tauri::AppHandle) -> Result<NodeStatus, String> {
     .map_err(|err| err.to_string())
 }
 
+/// Forwards a session lock to the webview. The idle thread calls this.
+struct EmitSession {
+    app: tauri::AppHandle,
+}
+
+impl wallet::SessionNotify for EmitSession {
+    fn wallet_locked(&self) {
+        let _ = self.app.emit(wallet::WALLET_LOCKED_EVENT, ());
+    }
+
+    fn wallet_lock_warning(&self) {
+        let _ = self.app.emit(wallet::WALLET_LOCK_WARNING_EVENT, ());
+    }
+}
+
 fn main() {
-    let shared = Arc::new(wallet::WalletShared::new());
-    let idle = wallet::IdleLockThread::spawn(Arc::clone(&shared));
     tauri::Builder::default()
-        .manage(WalletApp { idle, shared })
+        .setup(|app| {
+            let shared = Arc::new(wallet::WalletShared::new());
+            let notify = Arc::new(EmitSession {
+                app: app.handle().clone(),
+            });
+            let idle = wallet::IdleLockThread::spawn_with(Arc::clone(&shared), notify);
+            app.manage(WalletApp { idle, shared });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             connection_config,
             save_connection,
