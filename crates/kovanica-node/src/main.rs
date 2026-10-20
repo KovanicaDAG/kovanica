@@ -563,19 +563,14 @@ where
     info!(validator = %validator_address, "validator identity ready");
 
     // Build the committee from active validators in StakingState, for the last
-    // committed leader round persisted in staking state (so the epoch is
-    // truthful from startup, not pinned to 0).
-    let startup_round = state_storage
-        .begin_read()
-        .ok()
-        .and_then(|txn| {
-            state_storage
-                .state()
-                .load_staking_state(&txn)
-                .ok()
-                .map(|s| s.committed_leader_height)
-        })
-        .unwrap_or(0);
+    // committed leader ROUND (not the committed-height counter, which is a
+    // different quantity: `committed_leader_height` counts committed leaders,
+    // while the epoch unit is derived from the DAG `leader_round`). The last
+    // stored leader header carries its own `leader_round`, so a node that
+    // restarts mid-height (e.g. round >= EPOCH_ROUNDS while height <
+    // EPOCH_ROUNDS) still derives the truthful, round-based epoch instead of a
+    // height-based one.
+    let startup_round = startup_round_from_storage(&state_storage);
     let committee = build_committee(
         &state_storage,
         &public_key,
@@ -914,6 +909,7 @@ where
         config.listen_addr.clone(),
         validator_address,
         public_key,
+        committee.epoch(),
     ));
 
     let engine_for_task = engine.clone();
@@ -2856,6 +2852,7 @@ async fn run_execution(
     listen_addr: String,
     validator_address: Address,
     public_key: PublicKey,
+    boot_epoch: u64,
 ) {
     // Execution verifies tx signatures with the node's configured chain id.
     let mut ctx = ExecutionContext::with_signing_context(signing_ctx);
@@ -2869,8 +2866,12 @@ async fn run_execution(
     }
 
     // Track epoch transitions so the node can observe boundaries as leaders
-    // commit. Epoch is derived from committed-leader height (deterministic).
-    let mut last_epoch: Option<u64> = None;
+    // commit. Epoch is derived from the committed leader round (deterministic).
+    // Seeded from the boot committee's epoch: without this the first committed
+    // sub-DAG would see `None`, skip the boundary check, and (if the node booted
+    // already past a boundary) leave the RPC committee pinned to the boot epoch
+    // until the NEXT boundary.
+    let mut last_epoch: Option<u64> = Some(boot_epoch);
 
     loop {
         tokio::select! {
@@ -3316,6 +3317,29 @@ fn recover_committed_subdag_mysticghost(
             Ok(kovanica_consensus::Linearizer::new().linearize(leader_block.clone(), history))
         }
     }
+}
+
+/// The leader round the node should treat as "now" at startup.
+///
+/// Reads the `leader_round` of the last stored leader header — the DAG round,
+/// which is the unit the epoch is derived from. Falls back to 0 when no header
+/// has been stored yet (fresh genesis). Deliberately NOT the
+/// `committed_leader_height` counter: that is a committed-leader count, and a
+/// node that restarts with round >= EPOCH_ROUNDS while that counter is still
+/// below EPOCH_ROUNDS would otherwise derive a height-based (wrong) epoch.
+fn startup_round_from_storage(storage: &Storage) -> u64 {
+    storage
+        .begin_read()
+        .ok()
+        .and_then(|txn| {
+            storage
+                .state()
+                .get_latest_leader_header(&txn)
+                .ok()
+                .flatten()
+                .map(|header| header.leader_round)
+        })
+        .unwrap_or(0)
 }
 
 /// Build the committee from active validators in StakingState for `round`.
@@ -4521,6 +4545,7 @@ mod tests {
             "127.0.0.1:8000".to_string(),
             validator_address,
             public_key,
+            0,
         ));
 
         let leader_round = 3;
@@ -4662,6 +4687,7 @@ mod tests {
             "127.0.0.1:8000".to_string(),
             validator_address,
             PublicKey([0x22; 32]),
+            0,
         )
         .await;
         assert_ne!(
@@ -4793,6 +4819,7 @@ mod tests {
             "127.0.0.1:8000".to_string(),
             Address([0x30; 32]),
             PublicKey([0x30; 32]),
+            0,
         )
         .await;
         assert_ne!(
@@ -4901,6 +4928,7 @@ mod tests {
             "127.0.0.1:8000".to_string(),
             validator_address,
             test_public_key,
+            0,
         )
         .await;
         assert_eq!(
@@ -6141,6 +6169,51 @@ mod b1_epoch_restart_repro {
         storage
     }
 
+    /// Like [`storage_at_height`], but ALSO persists a leader header whose
+    /// `leader_round` differs from the committed-height counter. This is what
+    /// lets a test restart the node with `height < round`, the case that
+    /// distinguishes the round-derived startup epoch from the old
+    /// height-derived one. The real startup path reads
+    /// `get_latest_leader_header().leader_round`.
+    fn storage_with_header(
+        dir: &std::path::Path,
+        name: &str,
+        keys: &[(Address, PublicKey)],
+        height: u64,
+        leader_round: u64,
+    ) -> Storage {
+        let storage = storage_at_height(dir, name, keys, height);
+        let subdag = kovanica_consensus::CommittedSubDag {
+            blocks: vec![],
+            leader: StatementBlock {
+                author: 0,
+                round: leader_round,
+                parents: vec![],
+                transactions: vec![],
+                statements: vec![],
+                signature: Signature([0u8; 64]),
+                digest: StatementBlock::compute_digest(0, leader_round, &[], &[]),
+                merkle_root: Default::default(),
+            },
+            leader_round,
+            leader_author: 0,
+            non_blue: vec![],
+        };
+        let header = kovanica_types::leader_header(
+            &subdag,
+            height,
+            Hash::zero(),
+            Hash::zero(),
+            kovanica_types::epoch_for_round(leader_round),
+            Hash::zero(),
+            false,
+        );
+        let txn = storage.begin_write().unwrap();
+        storage.state().save_leader_header(&txn, &header).unwrap();
+        txn.commit().unwrap();
+        storage
+    }
+
     // LOCAL REVIEW TEST (Jarvis, 2026-10-19), not committed.
     // Seals and leader headers still use `committee.epoch()` (SealContext.epoch,
     // committee_seal_hash, admit_seal EpochMismatch). A node restarted after
@@ -6227,10 +6300,11 @@ mod b1_epoch_restart_repro {
     /// epoch boundary builds the SAME committee epoch as a node that was running
     /// across the boundary.
     ///
-    /// Before this fix `build_committee` took the epoch from
-    /// `staking_state.current_epoch()` (a height-derived value) and the RPC
-    /// `getCommittee`/light-client seal paths disagreed with the round-derived
-    /// consensus epoch. Both must now equal `epoch_for_round(round)`.
+    /// The restart deliberately has `height < round`: the committed-height
+    /// counter stays below `EPOCH_ROUNDS` while the last leader header is
+    /// already past the boundary. A height-derived startup epoch would say
+    /// epoch 0; the real startup path must read `leader_round` off the stored
+    /// header and say epoch 1.
     #[test]
     fn b1_jarvis_build_committee_epoch_matches_after_restart() {
         let dir = tempfile::tempdir().unwrap();
@@ -6256,10 +6330,25 @@ mod b1_epoch_restart_repro {
         let running_committee =
             build_committee(&running, &pubs[0].1, &pubs[0].0, "127.0.0.1:0", round).unwrap();
 
-        // A node restarted at `round` (fresh process, same persisted state).
-        let restarted = storage_at_height(dir.path(), "restarted.redb", &pubs, round);
-        let restarted_committee =
-            build_committee(&restarted, &pubs[1].1, &pubs[1].0, "127.0.0.1:0", round).unwrap();
+        // A node restarted with height < round: the committed-height counter is
+        // still in epoch 0 while the last stored leader header is in epoch 1.
+        // The startup epoch must come from the header's `leader_round`.
+        let restarted_height = 5;
+        let restarted =
+            storage_with_header(dir.path(), "restarted.redb", &pubs, restarted_height, round);
+        let startup_round = startup_round_from_storage(&restarted);
+        assert_eq!(
+            startup_round, round,
+            "startup round must come from the stored header's leader_round, not the height"
+        );
+        let restarted_committee = build_committee(
+            &restarted,
+            &pubs[1].1,
+            &pubs[1].0,
+            "127.0.0.1:0",
+            startup_round,
+        )
+        .unwrap();
 
         assert_eq!(
             running_committee.epoch(),
@@ -6278,6 +6367,99 @@ mod b1_epoch_restart_repro {
             running_committee.epoch(),
             kovanica_types::epoch_for_round(round),
             "committee epoch and vote-signing epoch must share one unit"
+        );
+    }
+
+    /// E1 (PRO-E1) end-to-end: the epoch `getCommittee` serves must equal the
+    /// epoch a sealed leader header carries, at `leader_round = EPOCH_ROUNDS + 1`
+    /// and again after a restart through the REAL startup path.
+    ///
+    /// The RPC committee is built exactly as `run()` builds it: the round comes
+    /// from `startup_round_from_storage` (the stored header's `leader_round`),
+    /// not the committed-height counter. The header epoch comes from the real
+    /// producer `seals::publish_local_seal`. They must be the same epoch.
+    #[test]
+    fn e1_jarvis_rpc_committee_epoch_matches_sealed_header_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, pk) = kovanica_crypto::generate_keypair();
+        let addr = Address::from_public_key(&pk);
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+        let leader_round = EPOCH_ROUNDS + 1;
+        let expected_epoch = kovanica_types::epoch_for_round(leader_round);
+        assert_eq!(expected_epoch, 1, "EPOCH_ROUNDS + 1 must be epoch 1");
+
+        // Producer/restart storage: the committed-height counter is BELOW the
+        // boundary while the last stored header is past it. A height-derived
+        // startup epoch would answer 0; the real path must answer 1.
+        let height = 7;
+        assert!(height < EPOCH_ROUNDS, "height must lag the round here");
+        let storage =
+            storage_with_header(dir.path(), "rpc.redb", &[(addr, pk)], height, leader_round);
+
+        // `getCommittee`'s epoch is the boot committee epoch. Build it the way
+        // `run()` does, from the startup round read off the stored header.
+        let startup_round = startup_round_from_storage(&storage);
+        let rpc_committee =
+            build_committee(&storage, &pk, &addr, "127.0.0.1:0", startup_round).unwrap();
+        assert_eq!(
+            rpc_committee.epoch(),
+            expected_epoch,
+            "getCommittee epoch must be the round-derived epoch after restart"
+        );
+
+        // The sealed leader header's epoch, from the REAL production producer.
+        let subdag = kovanica_consensus::CommittedSubDag {
+            blocks: vec![],
+            leader: StatementBlock {
+                author: 0,
+                round: leader_round,
+                parents: vec![],
+                transactions: vec![],
+                statements: vec![],
+                signature: Signature([0u8; 64]),
+                digest: StatementBlock::compute_digest(0, leader_round, &[], &[]),
+                merkle_root: Default::default(),
+            },
+            leader_round,
+            leader_author: 0,
+            non_blue: vec![],
+        };
+        let ctx = seals::SealContext {
+            chain_id,
+            signer: Some((0, sk)),
+            mysticghost: false,
+        };
+        let announcement = seals::publish_local_seal(&storage, &ctx, &subdag, height, Hash::zero())
+            .unwrap()
+            .gossip
+            .expect("validator signs a seal");
+
+        assert_eq!(
+            rpc_committee.epoch(),
+            announcement.header.epoch,
+            "getCommittee epoch must equal the sealed header epoch"
+        );
+
+        // Restart again from the persisted state: same answer, same startup path.
+        let restarted = storage_with_header(
+            dir.path(),
+            "rpc-restart.redb",
+            &[(addr, pk)],
+            height,
+            leader_round,
+        );
+        let restarted_committee = build_committee(
+            &restarted,
+            &pk,
+            &addr,
+            "127.0.0.1:0",
+            startup_round_from_storage(&restarted),
+        )
+        .unwrap();
+        assert_eq!(
+            restarted_committee.epoch(),
+            announcement.header.epoch,
+            "getCommittee epoch must still equal the sealed header epoch after a restart"
         );
     }
 
