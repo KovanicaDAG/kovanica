@@ -5,6 +5,9 @@
 
 export const LOCK_AFTER_MS = 5 * 60 * 1000;
 
+/** Tauri event emitted when Rust drops the open session. */
+export const WALLET_LOCKED_EVENT = "wallet-locked";
+
 export const MNEMONIC_WARNING =
   "Anyone who reads this phrase can spend the KUNA. Write it down. This screen does not copy it.";
 
@@ -35,6 +38,11 @@ export interface ReviewRow {
 /** True when the session should be treated as idle. */
 export function idleLocked(lastActiveMs: number, nowMs: number): boolean {
   return nowMs - lastActiveMs >= LOCK_AFTER_MS;
+}
+
+/** Phrase and password values after a lock. The screen applies these at once. */
+export function secretsCleared(): { phrase: string; password: string } {
+  return { phrase: "", password: "" };
 }
 
 /** Import fields are wiped after the attempt, including a failed one. */

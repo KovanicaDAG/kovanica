@@ -8,11 +8,13 @@ import {
   HISTORY_HEADING,
   LOCK_AFTER_MS,
   MNEMONIC_WARNING,
+  WALLET_LOCKED_EVENT,
   clearedImportFields,
   idleLocked,
   needsMainnetConfirm,
   phraseOnScreen,
   reviewRows,
+  secretsCleared,
   sendEnabled,
   type QuoteView,
 } from "./wallet";
@@ -68,6 +70,25 @@ describe("wallet form", () => {
     expect(enabled({ quote: mainnet, shownChainId: "1", confirmMainnet: true })).toBe(true);
     expect(needsMainnetConfirm("1")).toBe(true);
     expect(needsMainnetConfirm("4")).toBe(false);
+  });
+
+  it("clears secrets when the lock event arrives, before the next status poll", () => {
+    expect(WALLET_LOCKED_EVENT).toBe("wallet-locked");
+    expect(secretsCleared()).toEqual({ phrase: "", password: "" });
+    const listenAt = viewSource.indexOf("listen(WALLET_LOCKED_EVENT");
+    expect(listenAt).toBeGreaterThan(0);
+    const handler = viewSource.slice(listenAt, viewSource.indexOf("setInterval"));
+    const clearAt = handler.indexOf("clearSecretFields()");
+    const refreshAt = handler.indexOf("refreshStatus");
+    expect(clearAt).toBeGreaterThan(0);
+    expect(refreshAt).toBeGreaterThan(clearAt);
+    const clearer = viewSource.slice(viewSource.indexOf("function clearSecretFields"), listenAt);
+    expect(clearer.includes("secretsCleared()")).toBe(true);
+    expect(clearer.includes("mnemonicText.textContent = cleared.phrase")).toBe(true);
+    expect(clearer.includes("importPhrase.value = cleared.phrase")).toBe(true);
+    expect(clearer.includes("newPassword.value = cleared.password")).toBe(true);
+    expect(clearer.includes("unlockPassword.value = cleared.password")).toBe(true);
+    expect(clearer.includes("mnemonicPanel.hidden = true")).toBe(true);
   });
 
   it("clears the recovery phrase from the screen when the session locks", () => {

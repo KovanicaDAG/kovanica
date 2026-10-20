@@ -3,16 +3,19 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import {
   EMPTY_HISTORY,
   HISTORY_HEADING,
   MNEMONIC_WARNING,
+  WALLET_LOCKED_EVENT,
   clearedImportFields,
   needsMainnetConfirm,
   phraseOnScreen,
   reviewEnabled,
   reviewRows,
+  secretsCleared,
   sendEnabled,
   type QuoteView,
 } from "./wallet";
@@ -184,6 +187,19 @@ export function mountWallet(shownChainId: () => string | null): void {
     paintReview();
   }
 
+  function clearSecretFields(): void {
+    const cleared = secretsCleared();
+    phrase = cleared.phrase;
+    mnemonicText.textContent = cleared.phrase;
+    newPassword.value = cleared.password;
+    importPhrase.value = cleared.phrase;
+    importPassword.value = cleared.password;
+    unlockPassword.value = cleared.password;
+    mnemonicPanel.hidden = true;
+    quote = null;
+    paintReview();
+  }
+
   async function loadFigures(address: string): Promise<void> {
     const balance = await invoke<ReportedBalance>("wallet_balance");
     paintReadout(address, balance);
@@ -351,6 +367,11 @@ export function mountWallet(shownChainId: () => string | null): void {
   };
   document.addEventListener("input", noteActivity);
   document.addEventListener("click", noteActivity);
+
+  void listen(WALLET_LOCKED_EVENT, () => {
+    clearSecretFields();
+    void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));
+  }).catch(() => undefined);
 
   window.setInterval(() => {
     void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));

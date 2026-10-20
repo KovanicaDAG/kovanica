@@ -21,8 +21,25 @@ pub const KEYSTORE_FILE: &str = "wallet.keystore.json";
 /// Lock the session after this long with no activity.
 pub const LOCK_AFTER: Duration = Duration::from_secs(5 * 60);
 
+/// Tauri event the webview listens for. The payload is empty.
+pub const WALLET_LOCKED_EVENT: &str = "wallet-locked";
+
 /// How long the idle thread sleeps when no session is open.
 const IDLE_PARK: Duration = Duration::from_secs(60);
+
+/// Tells the webview that the open session was dropped.
+pub trait SessionNotify: Send + Sync {
+    fn wallet_locked(&self);
+}
+
+/// No UI. Tests that do not care about the event use this.
+#[cfg(test)]
+struct SilentSession;
+
+#[cfg(test)]
+impl SessionNotify for SilentSession {
+    fn wallet_locked(&self) {}
+}
 
 const PHASE_ABSENT: &str = "absent";
 const PHASE_LOCKED: &str = "locked";
@@ -95,7 +112,7 @@ impl WalletShared {
 }
 
 /// Background lock. The session is cleared after [`LOCK_AFTER`] even when the
-/// webview never calls status again.
+/// webview never calls status again. A lock notifies the webview immediately.
 pub struct IdleLockThread {
     shared: Arc<WalletShared>,
     stop: Arc<AtomicBool>,
@@ -104,13 +121,19 @@ pub struct IdleLockThread {
 
 impl IdleLockThread {
     /// Start the idle thread. Drop joins it.
+    #[cfg(test)]
     pub fn spawn(shared: Arc<WalletShared>) -> Self {
+        Self::spawn_with(shared, Arc::new(SilentSession))
+    }
+
+    /// Start the idle thread and report each lock to `notify`.
+    pub fn spawn_with(shared: Arc<WalletShared>, notify: Arc<dyn SessionNotify>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_shared = Arc::clone(&shared);
         let thread_stop = Arc::clone(&stop);
         let join = std::thread::Builder::new()
             .name("kovanica-wallet-idle".into())
-            .spawn(move || idle_lock_loop(&thread_shared, &thread_stop))
+            .spawn(move || idle_lock_loop(&thread_shared, &thread_stop, notify.as_ref()))
             .expect("wallet idle lock thread");
         Self {
             shared,
@@ -136,11 +159,17 @@ impl Drop for IdleLockThread {
 }
 
 /// Sleep until the open session is idle, then clear it. A notify recomputes the wait.
-fn idle_lock_loop(shared: &WalletShared, stop: &AtomicBool) {
+fn idle_lock_loop(shared: &WalletShared, stop: &AtomicBool, notify: &dyn SessionNotify) {
     let mut store = shared.lock_store();
     while !stop.load(Ordering::SeqCst) {
         let now = Instant::now();
-        store.lock_if_idle(now);
+        let locked = store.lock_if_idle(now);
+        if locked {
+            drop(store);
+            notify.wallet_locked();
+            store = shared.lock_store();
+        }
+        let now = Instant::now();
         let wait = match store.idle_remaining(now) {
             Some(wait) if !wait.is_zero() => wait,
             Some(_) => Duration::from_millis(1),
@@ -287,8 +316,10 @@ impl WalletStore {
     }
 
     /// Drop the session. The file stays on disk.
-    pub fn lock(&mut self) {
-        self.open.take();
+    ///
+    /// Returns whether a session was open.
+    pub fn lock(&mut self) -> bool {
+        self.open.take().is_some()
     }
 
     /// Move the idle deadline of an open session.
@@ -302,7 +333,9 @@ impl WalletStore {
     }
 
     /// Lock when `now` is at least [`LOCK_AFTER`] after the last activity.
-    pub fn lock_if_idle(&mut self, now: Instant) {
+    ///
+    /// Returns whether this call cleared an open session.
+    pub fn lock_if_idle(&mut self, now: Instant) -> bool {
         let limit = self.lock_after;
         let idle = self
             .open
@@ -310,6 +343,9 @@ impl WalletStore {
             .is_some_and(|open| now.saturating_duration_since(open.last_active) >= limit);
         if idle {
             self.open.take();
+            true
+        } else {
+            false
         }
     }
 
@@ -501,6 +537,17 @@ pub(crate) fn read_keystore(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
     use serde_json::Value;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct RecordedLock {
+        locked: AtomicBool,
+    }
+
+    impl SessionNotify for RecordedLock {
+        fn wallet_locked(&self) {
+            self.locked.store(true, Ordering::SeqCst);
+        }
+    }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir =
@@ -799,5 +846,52 @@ mod tests {
         // touching after lock must not reopen
         store.touch(now + LOCK_AFTER + Duration::from_secs(1));
         assert!(store.open.is_none());
+    }
+
+    #[test]
+    fn lock_if_idle_reports_only_the_transition() {
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        assert!(!store.lock_if_idle(now));
+        assert!(!store.lock());
+        store.open_for_test("kvnc-event".into(), now);
+        assert!(store.lock());
+        store.open_for_test("kvnc-event".into(), now);
+        assert!(!store.lock_if_idle(now + LOCK_AFTER - Duration::from_millis(1)));
+        assert!(store.lock_if_idle(now + LOCK_AFTER));
+        assert!(!store.lock_if_idle(now + LOCK_AFTER));
+        assert!(!store.is_open_for_test());
+    }
+
+    #[test]
+    fn idle_thread_emits_a_lock_without_a_status_poll() {
+        let shared = Arc::new(WalletShared::new());
+        let recorded = Arc::new(RecordedLock {
+            locked: AtomicBool::new(false),
+        });
+        {
+            let mut store = shared.lock_store();
+            store.set_lock_after_for_test(Duration::from_millis(40));
+            store.open_for_test("kvnc-event".into(), Instant::now());
+        }
+        let idle = IdleLockThread::spawn_with(Arc::clone(&shared), recorded.clone());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && !recorded.locked.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(idle);
+        assert!(
+            recorded.locked.load(Ordering::SeqCst),
+            "idle thread did not emit a lock"
+        );
+        assert!(!shared.lock_store().is_open_for_test());
+    }
+
+    #[test]
+    fn the_lock_command_names_the_webview_event() {
+        assert_eq!(WALLET_LOCKED_EVENT, "wallet-locked");
+        let main = include_str!("main.rs");
+        assert!(main.contains("emit(wallet::WALLET_LOCKED_EVENT"));
+        assert!(main.contains("IdleLockThread::spawn_with"));
     }
 }
