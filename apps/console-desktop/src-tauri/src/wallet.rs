@@ -1073,17 +1073,23 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Produced by `kovanica_keystore::from_seed(&[0x5A; 32], "cross-check")`.
-    /// No Android device fixture is checked into this repo, so this vector
-    /// comes from the same keystore code the Android wallet reaches.
-    const CROSS_KEYSTORE_JSON: &str = r#"{"version":2,"address":"kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag","public_key":"0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0","encrypted":true,"secret_key":"21406ec83c99222e1a7262d80534b3cf334d5b213654c65efe8b5fb5ea70f8d2c78403778f0d09902a7c9a2b21c4b055","cipher":"xchacha20poly1305","kdf":"argon2id","kdf_memory_kib":65536,"kdf_iterations":3,"kdf_parallelism":4,"salt":"88e37fe15da91bf57bfa24181fc595d9","nonce":"1d6b4b4a95293d5a4bf31f16059f032a4acf0c9cf2674e42"}"#;
+    /// Encrypted keystore from `kovanica_keystore::from_seed(&[0x5A; 32], "cross-check")`.
+    ///
+    /// The ciphertext lives in `tests/fixtures`, not in this source file.
+    fn cross_keystore_json() -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cross-keystore.json");
+        fs::read_to_string(&path)
+            .expect("encrypted test vector fixture")
+            .trim()
+            .to_string()
+    }
 
     #[test]
     fn reveal_shows_the_phrase_again_after_the_session_is_gone() {
         let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
         let dir = temp_dir("reveal");
         let path = keystore_in(&dir);
-        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        fs::write(&path, cross_keystore_json()).unwrap();
         let mut store = WalletStore::new();
         let now = Instant::now();
 
@@ -1096,7 +1102,7 @@ mod tests {
         assert!(!err.contains("wrong-horse-marker"));
         assert!(!err.contains(&phrase));
         assert!(!store.is_open_for_test());
-        assert_eq!(fs::read(&path).unwrap(), CROSS_KEYSTORE_JSON.as_bytes());
+        assert_eq!(fs::read(&path).unwrap(), cross_keystore_json().as_bytes());
 
         let revealed = must(store.reveal(&path, "cross-check", now + reveal_backoff_after(1)));
         assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
@@ -1130,7 +1136,7 @@ mod tests {
         let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
         let dir = temp_dir("reveal-backoff");
         let path = keystore_in(&dir);
-        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        fs::write(&path, cross_keystore_json()).unwrap();
         let mut store = WalletStore::new();
         let now = Instant::now();
 
@@ -1153,7 +1159,7 @@ mod tests {
         assert!(!err.contains(&phrase));
         assert!(!store.is_open_for_test());
         assert_eq!(store.reveal_failures_for_test(), 1);
-        assert_eq!(fs::read(&path).unwrap(), CROSS_KEYSTORE_JSON.as_bytes());
+        assert_eq!(fs::read(&path).unwrap(), cross_keystore_json().as_bytes());
 
         let err = must_err(store.reveal(
             &path,
@@ -1193,8 +1199,8 @@ mod tests {
         assert!(!body.contains("65_536"));
         assert!(!body.contains("kdf_iterations"));
 
-        let address = must(accept_keystore_json(CROSS_KEYSTORE_JSON));
-        let parsed = kovanica_keystore::parse(CROSS_KEYSTORE_JSON.as_bytes()).unwrap();
+        let address = must(accept_keystore_json(&cross_keystore_json()));
+        let parsed = kovanica_keystore::parse(cross_keystore_json().as_bytes()).unwrap();
         assert_eq!(
             kovanica_keystore::address(&parsed).unwrap().to_string(),
             address
@@ -1206,7 +1212,7 @@ mod tests {
             &[0x5A; 32]
         );
 
-        let mut tampered: Value = serde_json::from_str(CROSS_KEYSTORE_JSON).unwrap();
+        let mut tampered: Value = serde_json::from_str(&cross_keystore_json()).unwrap();
         tampered["kdf_iterations"] = Value::from(1);
         let bad = serde_json::to_string(&tampered).unwrap();
         assert!(accept_keystore_json(&bad).is_err());
@@ -1296,7 +1302,7 @@ mod tests {
     fn manual_lock_emits_wallet_locked_when_a_session_closes() {
         let dir = temp_dir("manual-lock");
         let path = keystore_in(&dir);
-        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        fs::write(&path, cross_keystore_json()).unwrap();
         let mut store = WalletStore::new();
         let now = Instant::now();
         let address =
@@ -1368,20 +1374,27 @@ mod tests {
     }
 
     #[test]
-    fn the_encrypted_test_vector_is_ignored_by_gitleaks_fingerprint() {
+    fn the_encrypted_test_vector_fixture_loads_and_is_ignored() {
+        let loaded = cross_keystore_json();
+        let value: Value = serde_json::from_str(&loaded).expect("fixture json");
+        assert_eq!(value["version"], 2);
+        assert_eq!(value["encrypted"], true);
+        assert_eq!(value["cipher"], "xchacha20poly1305");
+        assert_eq!(value["kdf"], "argon2id");
+        assert_eq!(value["secret_key"].as_str().map(str::len), Some(96));
+        let body = include_str!("wallet.rs").split("mod tests").next().unwrap();
+        assert!(!body.contains("CROSS_KEYSTORE_JSON"));
+
         let ignore = include_str!("../../../../.gitleaksignore");
-        let fingerprint = "62f487532da42ada4cd656ea3de1d89db0bb8ea0:apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:735";
+        let historical = "62f487532da42ada4cd656ea3de1d89db0bb8ea0:apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:735";
         assert!(
-            ignore.lines().any(|line| line.trim() == fingerprint),
-            "gitleaks fingerprint for the encrypted test vector is missing"
+            ignore.lines().any(|line| line.trim() == historical),
+            "gitleaks fingerprint for the old encrypted test vector is missing"
         );
-        let line_no = include_str!("wallet.rs")
-            .lines()
-            .position(|line| line.contains("const CROSS_KEYSTORE_JSON:"))
-            .expect("encrypted test vector")
-            + 1;
-        let dir_fingerprint =
-            format!("apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:{line_no}");
+        let fixture = "apps/console-desktop/src-tauri/tests/fixtures/cross-keystore.json";
+        let line_no = loaded.lines().count();
+        assert_eq!(line_no, 1);
+        let dir_fingerprint = format!("{fixture}:generic-api-key:{line_no}");
         assert!(
             ignore.lines().any(|line| line.trim() == dir_fingerprint),
             "gitleaks directory fingerprint for the encrypted test vector is missing"
