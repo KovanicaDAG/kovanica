@@ -3473,20 +3473,34 @@ fn build_committee_for_round(
             // already assigns indices by address order; keep them as frozen.
             //
             // VRF keys: the snapshot carries each authority's VRF public key.
-            // Old snapshots (written before VRF keys were persisted) deserialize
-            // with vrf_public_key = None. We do NOT backfill from the current
-            // staking state because the VRF key may have changed since the
-            // snapshot was taken (fork risk). Committees without VRF keys use
-            // round-robin leader selection, which is the current behavior.
+            // For main-era unversioned rows, VRF keys are already present.
+            // For pre-83c8dcf 3-field tuples, vrf_public_key = None; backfill
+            // from the staking state (which is the frozen source at this epoch).
+            let staking = storage.state().load_staking_state(&read).ok();
             let authorities = members
                 .iter()
-                .map(|m| AuthorityInfo {
-                    index: m.index,
-                    stake: m.stake,
-                    public_key: m.public_key,
-                    vrf_public_key: m.vrf_public_key,
-                    address: Address::from_public_key(&m.public_key),
-                    network_address: listen_addr.to_string(),
+                .map(|m| {
+                    let vrf_public_key = m.vrf_public_key.or_else(|| {
+                        staking.as_ref().and_then(|st| {
+                            let addr = Address::from_public_key(&m.public_key);
+                            st.validators
+                                .iter()
+                                .find(|v| v.address == addr)
+                                .and_then(|v| {
+                                    v.vrf_public_key
+                                        .as_ref()
+                                        .map(|v| kovanica_types::PublicKey(v.0))
+                                })
+                        })
+                    });
+                    AuthorityInfo {
+                        index: m.index,
+                        stake: m.stake,
+                        public_key: m.public_key,
+                        vrf_public_key,
+                        address: Address::from_public_key(&m.public_key),
+                        network_address: listen_addr.to_string(),
+                    }
                 })
                 .collect::<Vec<_>>();
             if let Ok(committee) = CommitteeInfo::try_new(epoch, authorities) {
@@ -7645,6 +7659,242 @@ mod b1_epoch_restart_repro {
             old_leader, fresh_leader,
             "upgraded and fresh node must pick same leader: old={:?} fresh={:?} expected_index={}",
             old_leader, fresh_leader, expected_leader_index
+        );
+    }
+
+    // ---- Jarvis review tests (PR #68, commit 8105a8d) ----
+    fn jj_put_raw_snapshot(storage: &Storage, epoch: u64, bytes: Vec<u8>) {
+        let w = storage.begin_write().unwrap();
+        {
+            let mut t = w
+                .open_table(kovanica_storage::tables::EPOCH_COMMITTEE)
+                .unwrap();
+            t.insert(epoch, bytes).unwrap();
+        }
+        w.commit().unwrap();
+    }
+
+    #[test]
+    fn jj_snapshot_corruptions_are_errors() {
+        let members: Vec<kovanica_types::SealCommitteeSnapshotMember> = (0..4u16)
+            .map(|i| kovanica_types::SealCommitteeSnapshotMember {
+                index: i,
+                public_key: PublicKey([i as u8 + 10; 32]),
+                stake: MIN_VALIDATOR_STAKE,
+                vrf_public_key: if i % 2 == 0 {
+                    Some(PublicKey([i as u8 + 50; 32]))
+                } else {
+                    None
+                },
+            })
+            .collect();
+        let v1 = kovanica_types::encode_with_version(1, bincode::serialize(&members).unwrap());
+        let mut cases: Vec<(&str, Vec<u8>)> = vec![];
+        let mut c = v1.clone();
+        c[2 + 8 + 42] = 7;
+        cases.push(("option tag=7", c));
+        let mut c = v1.clone();
+        c.push(0);
+        cases.push(("trailing byte", c));
+        let mut c = v1.clone();
+        c[1] = 9;
+        cases.push(("version 9", c));
+        let mut c = v1.clone();
+        c[0] = 0x4A;
+        cases.push(("magic flipped", c));
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("c.redb")).unwrap();
+        for (k, (name, bytes)) in cases.into_iter().enumerate() {
+            jj_put_raw_snapshot(&storage, k as u64, bytes);
+            let r = storage.begin_read().unwrap();
+            let got = storage.state().get_epoch_committee(&r, k as u64);
+            println!(
+                "JARVIS snapshot {name}: {}",
+                match &got {
+                    Ok(Some(v)) => format!(
+                        "Ok({} members) idx0={} stake0={}",
+                        v.len(),
+                        v[0].index,
+                        v[0].stake
+                    ),
+                    Ok(None) => "None".into(),
+                    Err(e) => format!("Err({e})"),
+                }
+            );
+        }
+    }
+
+    // Proper upgraded-vs-fresh on a VRF-keyed chain: staking has VRF keys,
+    // upgraded dir has an OLD-format snapshot for the CURRENT epoch, fresh dir
+    // has none. Compare what the engine gets (vrf keys, main.rs set_vrf_author_keys)
+    // and the leader for rounds when the VRF output set is complete.
+    #[test]
+    fn jj_upgraded_vs_fresh_vrf_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys: Vec<(SigningKey, PublicKey, Address)> = (0..5)
+            .map(|_| {
+                let (sk, pk) = kovanica_crypto::generate_keypair();
+                (sk, pk, Address::from_public_key(&pk))
+            })
+            .collect();
+        let leader_round = EPOCH_ROUNDS + 6; // epoch 1, leader round (offset 0)
+        let epoch = kovanica_types::epoch_for_round(leader_round);
+        let mk = |name: &str, old_snap: bool| {
+            let storage = Storage::new(dir.path().join(name)).unwrap();
+            let mut st = StakingState::new();
+            st.init_treasury(Address([0xcc; 32]));
+            for (i, (_, pk, addr)) in keys.iter().enumerate() {
+                let vrf_secret = kovanica_crypto::derive_vrf_secret_from_seed(&[i as u8 + 1; 32]);
+                let vrf_keypair = kovanica_crypto::VRFKeyPair::from_secret(vrf_secret).unwrap();
+                let vrf_public = vrf_keypair.public_key_typed().0;
+                st.join_validator(
+                    *addr,
+                    MIN_VALIDATOR_STAKE,
+                    0,
+                    Some(*addr),
+                    Some(*pk),
+                    Some(kovanica_staking::VrfPublicKey(vrf_public)),
+                )
+                .unwrap();
+            }
+            st.committed_leader_height = leader_round / 3;
+            let w = storage.begin_write().unwrap();
+            storage.state().save_staking_state(&w, &st).unwrap();
+            w.commit().unwrap();
+            if old_snap {
+                let live =
+                    build_committee(&storage, &keys[0].1, &keys[0].2, "x", leader_round).unwrap();
+                let old: Vec<kovanica_types::SealCommitteeMember> = live
+                    .authorities()
+                    .iter()
+                    .map(|a| (a.index, a.public_key, a.stake))
+                    .collect();
+                jj_put_raw_snapshot(&storage, epoch, bincode::serialize(&old).unwrap());
+            }
+            storage
+        };
+        let up = mk("up.redb", true);
+        let fresh = mk("fresh.redb", false);
+        let cu = build_committee_for_round(&up, &keys[0].1, &keys[0].2, "x", leader_round).unwrap();
+        let cf =
+            build_committee_for_round(&fresh, &keys[0].1, &keys[0].2, "x", leader_round).unwrap();
+        let vu = cu
+            .authorities()
+            .iter()
+            .filter(|a| a.vrf_public_key.is_some())
+            .count();
+        let vf = cf
+            .authorities()
+            .iter()
+            .filter(|a| a.vrf_public_key.is_some())
+            .count();
+        println!("JARVIS VRF chain epoch {epoch}: upgraded vrf keys {vu}/5, fresh vrf keys {vf}/5");
+        // Engine model: fresh node with complete outputs -> leader_with_vrf; upgraded node has no
+        // VRF keys -> committee_has_vrf_keys()=false -> round-robin prefetch (cu.leader).
+        let mut diff = 0;
+        let mut total = 0;
+        let mut r = 1u64;
+        for w in 0..200u64 {
+            let round = EPOCH_ROUNDS + 3 * (w + 1);
+            let outputs: std::collections::HashMap<_, _> = cf
+                .authorities()
+                .iter()
+                .map(|a| {
+                    r = r
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    let mut h = [0u8; 32];
+                    h[..8].copy_from_slice(&r.to_le_bytes());
+                    h[8..16].copy_from_slice(&r.rotate_left(17).to_le_bytes());
+                    (a.index, h)
+                })
+                .collect();
+            let lf = cf.leader_with_vrf(round, &outputs);
+            let lu = if vu == 0 {
+                cu.leader(round)
+            } else {
+                cu.leader_with_vrf(round, &outputs)
+            };
+            total += 1;
+            if lf != lu {
+                diff += 1;
+            }
+        }
+        println!("JARVIS leader mismatch upgraded(RR) vs fresh(VRF): {diff}/{total} slots");
+        assert_eq!(
+            vu, vf,
+            "upgraded node silently loses VRF keys -> RR vs VRF fork"
+        );
+    }
+
+    // main (c8800ac..58100d6) writes UNVERSIONED Vec<SealCommitteeSnapshotMember>.
+    // PR treats every unprefixed row as the pre-83c8dcf tuple format.
+    #[test]
+    fn jj_main_era_unversioned_snapshot_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("m.redb")).unwrap();
+        for (k, n) in [1u16, 2, 4, 5].into_iter().enumerate() {
+            let members: Vec<kovanica_types::SealCommitteeSnapshotMember> = (0..n)
+                .map(|i| kovanica_types::SealCommitteeSnapshotMember {
+                    index: i,
+                    public_key: PublicKey([i as u8 + 10; 32]),
+                    stake: MIN_VALIDATOR_STAKE,
+                    vrf_public_key: Some(PublicKey([i as u8 + 50; 32])),
+                })
+                .collect();
+            jj_put_raw_snapshot(&storage, k as u64, bincode::serialize(&members).unwrap());
+            let r = storage.begin_read().unwrap();
+            let got = storage.state().get_epoch_committee(&r, k as u64);
+            let desc = match &got {
+                Ok(Some(v)) => format!(
+                    "Ok({} members, vrf {}/{}, equal={}, idx={:?}, stake_ok={})",
+                    v.len(),
+                    v.iter().filter(|m| m.vrf_public_key.is_some()).count(),
+                    v.len(),
+                    *v == members,
+                    v.iter().map(|m| m.index).collect::<Vec<_>>(),
+                    v.iter().all(|m| m.stake == MIN_VALIDATOR_STAKE)
+                ),
+                Ok(None) => "None".into(),
+                Err(e) => format!("Err({e})"),
+            };
+            println!("JARVIS main-era unversioned n={n}: {desc}");
+        }
+    }
+
+    #[test]
+    fn jj_main_era_row_seal_hash_and_rpc_committee() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("s.redb")).unwrap();
+        let members: Vec<kovanica_types::SealCommitteeSnapshotMember> = (0..4u16)
+            .map(|i| kovanica_types::SealCommitteeSnapshotMember {
+                index: i,
+                public_key: PublicKey([i as u8 + 10; 32]),
+                stake: MIN_VALIDATOR_STAKE,
+                vrf_public_key: Some(PublicKey([i as u8 + 50; 32])),
+            })
+            .collect();
+        let truth = kovanica_types::committee_seal_hash(
+            0,
+            &kovanica_types::snapshot_seal_members(&members),
+        );
+        jj_put_raw_snapshot(&storage, 0, bincode::serialize(&members).unwrap());
+        let pr = seals::freeze_epoch_committee_hash(&storage, 0, 5).unwrap();
+        println!(
+            "JARVIS main-era 4-member row: seal committee_hash main={} PR={} equal={}",
+            truth.to_hex(),
+            pr.to_hex(),
+            truth == pr
+        );
+        let r =
+            build_committee_for_round(&storage, &PublicKey([10; 32]), &Address([10; 32]), "x", 5);
+        println!(
+            "JARVIS build_committee_for_round on same row: {:?}",
+            r.as_ref().map(|c| c.size()).map_err(|e| e.to_string())
+        );
+        assert_eq!(
+            truth, pr,
+            "main-era snapshot row must give same seal committee hash"
         );
     }
 }
