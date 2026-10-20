@@ -37,6 +37,11 @@ export function idleLocked(lastActiveMs: number, nowMs: number): boolean {
   return nowMs - lastActiveMs >= LOCK_AFTER_MS;
 }
 
+/** Import fields are wiped after the attempt, including a failed one. */
+export function clearedImportFields(): { phrase: string; password: string } {
+  return { phrase: "", password: "" };
+}
+
 /** The phrase stays on screen only while the session is still open. */
 export function phraseOnScreen(phase: string, phrase: string): string {
   if (phase !== "open") {

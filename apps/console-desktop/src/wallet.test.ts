@@ -8,6 +8,7 @@ import {
   HISTORY_HEADING,
   LOCK_AFTER_MS,
   MNEMONIC_WARNING,
+  clearedImportFields,
   idleLocked,
   needsMainnetConfirm,
   phraseOnScreen,
@@ -87,6 +88,16 @@ describe("wallet form", () => {
       expect(text.includes("clipboard")).toBe(false);
       expect(text.includes("copyMnemonic")).toBe(false);
     }
+  });
+
+  it("clears import fields after a failed import", () => {
+    expect(clearedImportFields()).toEqual({ phrase: "", password: "" });
+    const handler = viewSource.slice(viewSource.indexOf("wallet_import"));
+    const finallyAt = handler.indexOf("finally");
+    expect(finallyAt).toBeGreaterThan(0);
+    expect(handler.indexOf("clearedImportFields()")).toBeGreaterThan(finallyAt);
+    expect(handler.includes('importPhrase.value = ""')).toBe(false);
+    expect(handler.includes('importPassword.value = ""')).toBe(false);
   });
 
   it("labels unproven figures and does not keep secrets in the page", () => {

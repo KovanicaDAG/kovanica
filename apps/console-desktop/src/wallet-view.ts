@@ -8,6 +8,7 @@ import {
   EMPTY_HISTORY,
   HISTORY_HEADING,
   MNEMONIC_WARNING,
+  clearedImportFields,
   needsMainnetConfirm,
   phraseOnScreen,
   reviewEnabled,
@@ -239,12 +240,14 @@ export function mountWallet(shownChainId: () => string | null): void {
           mnemonic: importPhrase.value,
           passphrase: importPassword.value,
         });
-        importPhrase.value = "";
-        importPassword.value = "";
         phrase = "";
         await refreshStatus();
       } catch (error) {
         showError(messageFrom(error));
+      } finally {
+        const cleared = clearedImportFields();
+        importPhrase.value = cleared.phrase;
+        importPassword.value = cleared.password;
       }
     })();
   });
