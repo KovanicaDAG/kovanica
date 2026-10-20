@@ -18,10 +18,12 @@ The endpoint comes from a setting saved in the app data directory, then from
 `KOVANICA_RPC_URL`, then from `https://rpc-testnet.kovanica.online/rpc`.
 
 The screen shows chain id, committed height, leader round, epoch, and peers.
-Chain id is the registered id whose commit seals verify through
-`kovanica-light-ffi`. A node that cannot be reached shows that error and
-clears the previous status. The shell has no shell plugin and no filesystem
-plugin. RPC calls stay in the Rust process.
+Chain id is proven only when commit seals verify through `kovanica-light-ffi`
+for one registered id and the committee matches a pinned genesis checkpoint
+for that id. This build pins none, so a seal that matches the node's own
+committee is labelled consistent but not proven. A node that cannot be reached
+shows that error and clears the previous status. The shell has no shell plugin
+and no filesystem plugin. RPC calls stay in the Rust process.
 
 ## Run
 

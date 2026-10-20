@@ -1,9 +1,11 @@
 //! RPC connection for Kovanica Console.
 //!
 //! The endpoint is a saved setting, otherwise `KOVANICA_RPC_URL`, otherwise
-//! the public testnet DNS name. Chain id is the registered id whose commit
-//! seals [`kovanica_light_ffi::verify_header`] accepts. Address bytes stay
-//! inside that crate and `kovanica-types`.
+//! the public testnet DNS name. Chain id is proven only when commit seals
+//! verify for one registered id and that id's committee matches a pinned
+//! genesis checkpoint. The pin table is empty until a real checkpoint is
+//! published. Address bytes stay inside `kovanica-light-ffi` and
+//! `kovanica-types`.
 
 use std::fs;
 use std::path::Path;
@@ -16,6 +18,13 @@ use url::{Host, Url};
 
 /// Public testnet JSON-RPC URL. A DNS name, never an address literal.
 pub const DEFAULT_RPC_URL: &str = "https://rpc-testnet.kovanica.online/rpc";
+
+/// Shown when seals verify against a pinned genesis committee.
+const PROVEN_BY_SEALS: &str = "Proven by commit seals.";
+
+/// Seals match the committee the node returned. That committee is not pinned.
+const SEALS_CONSISTENT_UNVERIFIED: &str =
+    "Seals consistent with the node's committee (committee not verified)";
 
 /// Environment variable that supplies the endpoint when nothing is saved.
 pub const RPC_URL_ENV: &str = "KOVANICA_RPC_URL";
@@ -49,7 +58,7 @@ pub struct PeerStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeStatus {
-    /// Registered chain id proven by commit seals.
+    /// Registered chain id when a pinned committee proves the seals.
     pub chain_id: Option<String>,
     /// Why `chain_id` is set, or why it is not.
     pub chain_note: String,
@@ -210,8 +219,37 @@ impl Rpc for HttpRpc {
     }
 }
 
+/// Genesis committee trusted for one chain id.
+///
+/// `committee_json` is the `kovanica_getCommittee` member array. A chain stays
+/// unproven until a checkpoint for it is published in [`pinned_committees`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedCommittee {
+    /// Registered chain id this checkpoint belongs to.
+    pub chain_id: u64,
+    /// Committee JSON. Parsed before compare, so whitespace and key order cannot widen a match.
+    pub committee_json: String,
+}
+
+/// Checkpoints shipped with this build. Empty until a real genesis committee is pinned.
+pub fn pinned_committees() -> &'static [PinnedCommittee] {
+    &[]
+}
+
 /// Read chain id, height, leader round, epoch, and peers.
+///
+/// Chain id is set only when [`pinned_committees`] contains this chain and
+/// the node returned that committee. A seal match against the node's own
+/// committee is not a proof.
 pub fn fetch_status(rpc: &impl Rpc, endpoint: &str) -> Result<NodeStatus, ConnError> {
+    fetch_status_with_pins(rpc, endpoint, pinned_committees())
+}
+
+fn fetch_status_with_pins(
+    rpc: &impl Rpc,
+    endpoint: &str,
+    pins: &[PinnedCommittee],
+) -> Result<NodeStatus, ConnError> {
     let height_value = rpc.call("kovanica_blockNumber", Value::Array(vec![]))?;
     let height = parse_qty(&height_value).map_err(|_| bad_payload(endpoint, "height"))?;
     let sync = rpc.call("kovanica_syncStatus", Value::Array(vec![]))?;
@@ -269,7 +307,10 @@ pub fn fetch_status(rpc: &impl Rpc, endpoint: &str) -> Result<NodeStatus, ConnEr
         &header.to_string(),
         &seals.to_string(),
     ) {
-        Ok(id) => (Some(id.to_string()), "Proven by commit seals.".to_string()),
+        Ok(id) if committee_is_pinned(id, &committee, pins) => {
+            (Some(id.to_string()), PROVEN_BY_SEALS.to_string())
+        }
+        Ok(_) => (None, SEALS_CONSISTENT_UNVERIFIED.to_string()),
         Err(ProveError::None) => (
             None,
             "Commit seals did not verify for a registered chain.".to_string(),
@@ -334,6 +375,40 @@ fn prove_chain_id(
         [id] => Ok(*id),
         [] => Err(ProveError::None),
         _ => Err(ProveError::Ambiguous),
+    }
+}
+
+/// True when every pin for `chain_id` is this committee, and there is at least one.
+fn committee_is_pinned(chain_id: u64, committee: &Value, pins: &[PinnedCommittee]) -> bool {
+    let mut matched = false;
+    for pin in pins.iter().filter(|pin| pin.chain_id == chain_id) {
+        let Ok(pinned) = serde_json::from_str::<Value>(&pin.committee_json) else {
+            return false;
+        };
+        if canonical_json(&pinned) != canonical_json(committee) {
+            return false;
+        }
+        matched = true;
+    }
+    matched
+}
+
+/// Object keys sorted, array order kept. Member index is the array position the pin names.
+fn canonical_json(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(canonical_json).collect()),
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut sorted = serde_json::Map::new();
+            for key in keys {
+                if let Some(child) = map.get(key) {
+                    sorted.insert(key.clone(), canonical_json(child));
+                }
+            }
+            Value::Object(sorted)
+        }
+        other => other.clone(),
     }
 }
 
@@ -667,10 +742,15 @@ mod tests {
     }
 
     #[test]
-    fn seals_prove_the_chain_that_signed_them() {
+    fn seals_without_a_pinned_committee_are_not_proven() {
+        assert!(
+            pinned_committees().is_empty(),
+            "this build must not ship a committee pin"
+        );
         let status = fetch_status(&Script::new(chain_id::TESTNET_V2), DEFAULT_RPC_URL).unwrap();
-        assert_eq!(status.chain_id.as_deref(), Some("4"));
-        assert_eq!(status.chain_note, "Proven by commit seals.");
+        assert_eq!(status.chain_id, None);
+        assert_eq!(status.chain_note, SEALS_CONSISTENT_UNVERIFIED);
+        assert_ne!(status.chain_note, PROVEN_BY_SEALS);
         assert_eq!(status.height, "16");
         assert_eq!(status.leader_round.as_deref(), Some("42"));
         assert_eq!(status.epoch.as_deref(), Some("7"));
@@ -680,7 +760,47 @@ mod tests {
         assert_eq!(status.peers[1].reported_tip_round, None);
 
         let mainnet = fetch_status(&Script::new(chain_id::MAINNET), DEFAULT_RPC_URL).unwrap();
-        assert_eq!(mainnet.chain_id.as_deref(), Some("1"));
+        assert_eq!(mainnet.chain_id, None);
+        assert_eq!(mainnet.chain_note, SEALS_CONSISTENT_UNVERIFIED);
+    }
+
+    #[test]
+    fn a_pinned_committee_proves_only_that_chain() {
+        let (committee, _, _) = sealed_fixture(chain_id::TESTNET_V2, true);
+        let pretty =
+            serde_json::to_string_pretty(&serde_json::from_str::<Value>(&committee).unwrap())
+                .unwrap();
+        assert_ne!(pretty, committee);
+        let pins = [PinnedCommittee {
+            chain_id: chain_id::TESTNET_V2,
+            committee_json: pretty,
+        }];
+        let status =
+            fetch_status_with_pins(&Script::new(chain_id::TESTNET_V2), DEFAULT_RPC_URL, &pins)
+                .unwrap();
+        assert_eq!(status.chain_id.as_deref(), Some("4"));
+        assert_eq!(status.chain_note, PROVEN_BY_SEALS);
+
+        let mainnet =
+            fetch_status_with_pins(&Script::new(chain_id::MAINNET), DEFAULT_RPC_URL, &pins)
+                .unwrap();
+        assert_eq!(mainnet.chain_id, None);
+        assert_eq!(mainnet.chain_note, SEALS_CONSISTENT_UNVERIFIED);
+
+        let mut forged: Value = serde_json::from_str(&committee).unwrap();
+        forged[0]["stake"] = json!("0x2");
+        let wrong_committee = [PinnedCommittee {
+            chain_id: chain_id::TESTNET_V2,
+            committee_json: forged.to_string(),
+        }];
+        let forged_status = fetch_status_with_pins(
+            &Script::new(chain_id::TESTNET_V2),
+            DEFAULT_RPC_URL,
+            &wrong_committee,
+        )
+        .unwrap();
+        assert_eq!(forged_status.chain_id, None);
+        assert_eq!(forged_status.chain_note, SEALS_CONSISTENT_UNVERIFIED);
     }
 
     #[test]
