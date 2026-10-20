@@ -704,6 +704,20 @@ mod tests {
     }
 
     #[test]
+    fn the_app_lockfile_is_not_ignored() {
+        let gitignore = include_str!("../.gitignore");
+        assert!(
+            !gitignore.lines().any(|line| {
+                let line = line.trim();
+                line == "/Cargo.lock" || line == "Cargo.lock"
+            }),
+            "src-tauri/Cargo.lock must stay tracked"
+        );
+        let lockfile = include_str!("../Cargo.lock");
+        assert!(lockfile.contains("name = \"kovanica-console\""));
+    }
+
+    #[test]
     fn default_endpoint_is_the_testnet_dns_name() {
         let url = Url::parse(DEFAULT_RPC_URL).unwrap();
         assert_eq!(url.scheme(), "https");
