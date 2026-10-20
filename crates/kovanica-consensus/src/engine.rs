@@ -920,7 +920,7 @@ where
     /// regardless of local committee state. A vote signed for another chain
     /// or epoch boundary never verifies.
     fn vote_signing_ctx(&self, leader_round: Round) -> kovanica_types::SigningContext {
-        let epoch = leader_round / kovanica_staking::EPOCH_ROUNDS;
+        let epoch = kovanica_types::epoch_for_round(leader_round);
         kovanica_types::SigningContext {
             chain_id: self.signing_ctx.chain_id,
             epoch,

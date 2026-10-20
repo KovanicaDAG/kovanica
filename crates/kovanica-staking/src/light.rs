@@ -13,7 +13,7 @@ use kovanica_types::{Address, Hash, PublicKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{EPOCH_ROUNDS, ONE_KUNA, UNBONDING_ROUNDS};
+use crate::{ONE_KUNA, UNBONDING_ROUNDS};
 
 /// Fraction of `block_reward` escrowed for light nodes, in basis points.
 ///
@@ -284,7 +284,7 @@ impl LightSet {
         if self.nodes.len() >= MAX_LIGHT_NODES {
             return Err(LightSetError::CapReached);
         }
-        let epoch = height / EPOCH_ROUNDS;
+        let epoch = kovanica_types::epoch_for_round(height);
         self.nodes.push(LightNode {
             address,
             vrf_public_key,
@@ -305,7 +305,7 @@ impl LightSet {
         address: Address,
         height: u64,
     ) -> Result<(u64, Option<u64>), LightSetError> {
-        let epoch = height / EPOCH_ROUNDS;
+        let epoch = kovanica_types::epoch_for_round(height);
         let index = self
             .nodes
             .iter()
@@ -503,7 +503,7 @@ fn node_is_active(node: &LightNode, epoch: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block_reward;
+    use crate::{block_reward, EPOCH_ROUNDS};
 
     fn addr(byte: u8) -> Address {
         Address([byte; 32])

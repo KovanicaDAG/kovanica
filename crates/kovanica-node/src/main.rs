@@ -562,12 +562,26 @@ where
     let validator_address = Address::from_public_key(&public_key);
     info!(validator = %validator_address, "validator identity ready");
 
-    // Build the committee from active validators in StakingState.
+    // Build the committee from active validators in StakingState, for the last
+    // committed leader round persisted in staking state (so the epoch is
+    // truthful from startup, not pinned to 0).
+    let startup_round = state_storage
+        .begin_read()
+        .ok()
+        .and_then(|txn| {
+            state_storage
+                .state()
+                .load_staking_state(&txn)
+                .ok()
+                .map(|s| s.committed_leader_height)
+        })
+        .unwrap_or(0);
     let committee = build_committee(
         &state_storage,
         &public_key,
         &validator_address,
         &config.listen_addr,
+        startup_round,
     )?;
 
     // Register committee public keys with the crypto batch verifier (used by the
@@ -2868,14 +2882,18 @@ async fn run_execution(
                             txs = result.txs_applied,
                             "executed committed sub-DAG"
                         );
-                        // Epoch rotation: detect a boundary crossing and log it.
-                        // The committee is rebuilt from staking state on the next
-                        // `build_committee`; live engine swap is gated separately.
+                        // E1: epoch is a pure function of the committed leader
+                        // round. Compute it via the ONE shared unit and rebuild
+                        // the RPC committee at the boundary so `getCommittee`
+                        // and the light-client seal paths always see the current
+                        // epoch's committee.
+                        let committed_epoch = kovanica_types::epoch_for_round(subdag.leader_round);
                         if let Some(prev) = last_epoch {
-                            if prev != result.epoch {
+                            if prev != committed_epoch {
                                 info!(
                                     from_epoch = prev,
-                                    to_epoch = result.epoch,
+                                    to_epoch = committed_epoch,
+                                    round = subdag.leader_round,
                                     "epoch boundary crossed; rebuilding committee for RPC"
                                 );
                                 match build_committee(
@@ -2883,6 +2901,7 @@ async fn run_execution(
                                     &public_key,
                                     &validator_address,
                                     &listen_addr,
+                                    subdag.leader_round,
                                 ) {
                                     Ok(new_committee) => {
                                         let mut guard = rpc_committee.write().await;
@@ -2894,7 +2913,7 @@ async fn run_execution(
                                 }
                             }
                         }
-                        last_epoch = Some(result.epoch);
+                        last_epoch = Some(committed_epoch);
                         if let Some(non_blue::ExecPool { mempool, returned }) = &pool {
                             let committed: Vec<_> = subdag
                                 .blocks
@@ -3299,19 +3318,28 @@ fn recover_committed_subdag_mysticghost(
     }
 }
 
-/// Build the committee from active validators in StakingState.
+/// Build the committee from active validators in StakingState for `round`.
+///
+/// E1: the committee's epoch is `epoch_for_round(round)` — the ONE shared
+/// round→epoch unit (consensus `vote_signing_ctx`, network seal edge, RPC
+/// light-client paths all use it). The epoch is therefore a pure function of
+/// the committed leader round, identically on every node and across a restart.
+/// Callers pass the round they are building for (genesis/startup uses the
+/// committed leader round in staking state; the epoch-boundary refresh passes
+/// the just-committed `subdag.leader_round`).
 fn build_committee(
     storage: &Storage,
     local_public_key: &PublicKey,
     local_address: &Address,
     listen_addr: &str,
+    round: Round,
 ) -> Result<CommitteeInfo> {
     let read = storage.begin_read()?;
     let staking_state = storage.state().load_staking_state(&read)?;
-    // Epoch is a pure function of committed-leader height — every node derives
-    // the same value at the same height, so the committee's epoch is truthful
-    // from startup rather than pinned to 0.
-    let epoch = staking_state.current_epoch();
+    // Epoch is a pure function of the round via the canonical helper — every
+    // node derives the same value for the same round, so the committee's epoch
+    // is truthful from startup and never pinned to a boot-time value.
+    let epoch = kovanica_types::epoch_for_round(round);
 
     // Filter active validators with sufficient stake
     let mut active_validators: Vec<_> = staking_state
@@ -4456,6 +4484,7 @@ mod tests {
             &public_key,
             &validator_address,
             "127.0.0.1:0",
+            0,
         )
         .expect("single-validator committee is valid");
         let block_manager = Arc::new(BlockManager::new(
@@ -4626,6 +4655,7 @@ mod tests {
                     &PublicKey([0x22; 32]),
                     &validator_address,
                     "127.0.0.1:8000",
+                    0,
                 )
                 .unwrap(),
             )),
@@ -4752,6 +4782,7 @@ mod tests {
                     &PublicKey([0x30; 32]),
                     &Address([0x30; 32]),
                     "127.0.0.1:8000",
+                    0,
                 )
                 .unwrap_or_else(|_| {
                     // Fall back to a committee built from the persisted state.
@@ -4847,6 +4878,7 @@ mod tests {
             &test_public_key,
             &validator_address,
             "127.0.0.1:8000",
+            0,
         )
         .unwrap();
         let (exec_tx, exec_rx) = mpsc::unbounded_channel();
@@ -5000,7 +5032,7 @@ mod tests {
         let local_addr = addr1;
 
         // Build committee
-        let committee = build_committee(&state_storage, &local_pk, &local_addr, "127.0.0.1:0")
+        let committee = build_committee(&state_storage, &local_pk, &local_addr, "127.0.0.1:0", 0)
             .expect("committee should be built successfully");
 
         // Verify committee has all 4 validators
@@ -5125,7 +5157,7 @@ mod tests {
             .unwrap();
         txn.commit().unwrap();
 
-        let committee = build_committee(&state_storage, &pk1, &addr1, "127.0.0.1:0")
+        let committee = build_committee(&state_storage, &pk1, &addr1, "127.0.0.1:0", 0)
             .expect("committee should be built with only active, sufficient-stake validators");
 
         assert_eq!(
@@ -5175,7 +5207,7 @@ mod tests {
         // Use first validator as local
         let (local_addr, local_pk) = validators[0];
 
-        let committee = build_committee(&state_storage, &local_pk, &local_addr, "127.0.0.1:0")
+        let committee = build_committee(&state_storage, &local_pk, &local_addr, "127.0.0.1:0", 0)
             .expect("committee should be built");
 
         // Should only have MAX_ACTIVE_VALIDATORS (21)
@@ -6158,12 +6190,13 @@ mod b1_epoch_restart_repro {
         let pubs: Vec<_> = keys.iter().map(|(_, a, p)| (*a, *p)).collect();
         let chain_id = kovanica_types::signing::chain_id::LOCAL;
 
-        // Node A started at genesis and is still running: committee built at height 0.
+        // Node A started at genesis and is still running: committee built at round 0.
         let a = storage_at_height(dir.path(), "a.redb", &pubs, 0);
-        let committee_a = build_committee(&a, &pubs[0].1, &pubs[0].0, "127.0.0.1:0").unwrap();
+        let committee_a = build_committee(&a, &pubs[0].1, &pubs[0].0, "127.0.0.1:0", 0).unwrap();
         // Node B is restarted once the chain has passed the first epoch boundary.
         let b = storage_at_height(dir.path(), "b.redb", &pubs, EPOCH_ROUNDS + 1);
-        let committee_b = build_committee(&b, &pubs[1].1, &pubs[1].0, "127.0.0.1:0").unwrap();
+        let committee_b =
+            build_committee(&b, &pubs[1].1, &pubs[1].0, "127.0.0.1:0", EPOCH_ROUNDS + 1).unwrap();
 
         // B1 FIX: epoch is now derived from leader_round, NOT from local committee.
         // Both nodes compute the SAME epoch for the same leader_round.
@@ -6186,6 +6219,65 @@ mod b1_epoch_restart_repro {
             "B1: restarted node epoch={} vs running node epoch={} -> vote rejected ({verdict:?})",
             committee_b.epoch(),
             committee_a.epoch()
+        );
+    }
+
+    /// E1 (PRO-E1) regression: the committee epoch is derived from the ROUND
+    /// via the one shared unit (`epoch_for_round`), so a node restarted past an
+    /// epoch boundary builds the SAME committee epoch as a node that was running
+    /// across the boundary.
+    ///
+    /// Before this fix `build_committee` took the epoch from
+    /// `staking_state.current_epoch()` (a height-derived value) and the RPC
+    /// `getCommittee`/light-client seal paths disagreed with the round-derived
+    /// consensus epoch. Both must now equal `epoch_for_round(round)`.
+    #[test]
+    fn b1_jarvis_build_committee_epoch_matches_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys: Vec<_> = (0..3)
+            .map(|_| {
+                let (sk, pk) = kovanica_crypto::generate_keypair();
+                (sk, Address::from_public_key(&pk), pk)
+            })
+            .collect();
+        let pubs: Vec<_> = keys.iter().map(|(_, a, p)| (*a, *p)).collect();
+
+        // The round past the first epoch boundary that both nodes agree on.
+        let round = EPOCH_ROUNDS + 1;
+        let expected_epoch = kovanica_types::epoch_for_round(round);
+        assert_eq!(
+            expected_epoch, 1,
+            "EPOCH_ROUNDS + 1 must be in epoch 1 for this regression"
+        );
+
+        // A node that has been running since genesis but is now at `round`
+        // builds its committee for that same round.
+        let running = storage_at_height(dir.path(), "running.redb", &pubs, round);
+        let running_committee =
+            build_committee(&running, &pubs[0].1, &pubs[0].0, "127.0.0.1:0", round).unwrap();
+
+        // A node restarted at `round` (fresh process, same persisted state).
+        let restarted = storage_at_height(dir.path(), "restarted.redb", &pubs, round);
+        let restarted_committee =
+            build_committee(&restarted, &pubs[1].1, &pubs[1].0, "127.0.0.1:0", round).unwrap();
+
+        assert_eq!(
+            running_committee.epoch(),
+            expected_epoch,
+            "committee epoch must be the canonical round-derived epoch"
+        );
+        assert_eq!(
+            restarted_committee.epoch(),
+            running_committee.epoch(),
+            "committee epoch must match after a restart at the same round"
+        );
+
+        // And the committee epoch agrees with the vote signing context for the
+        // SAME leader round (one unit everywhere).
+        assert_eq!(
+            running_committee.epoch(),
+            kovanica_types::epoch_for_round(round),
+            "committee epoch and vote-signing epoch must share one unit"
         );
     }
 

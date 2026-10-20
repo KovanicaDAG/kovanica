@@ -1102,7 +1102,10 @@ pub async fn handle_get_light_set(_params: Value, state: RpcState) -> Result<Val
         Ok(staking) => staking.committed_leader_height,
         Err(_) => 0,
     };
-    let epoch = height / kovanica_staking::EPOCH_ROUNDS;
+    // E1: `committed_leader_height` is the committed leader ROUND; derive the
+    // epoch with the one canonical round→epoch unit so light-client/set paths
+    // agree with the committee and the consensus signing context.
+    let epoch = kovanica_types::epoch_for_round(height);
     let Some(set) = state
         .storage
         .state()

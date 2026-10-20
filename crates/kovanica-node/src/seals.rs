@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use kovanica_consensus::{AuthorityInfo, CommitteeInfo};
-use kovanica_staking::{StakingState, EPOCH_ROUNDS, MAX_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE};
+use kovanica_staking::{StakingState, MAX_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE};
 use kovanica_storage::Storage;
 use kovanica_types::{
     CommitSeal, CommittedSubDag, Hash, LeaderHeader, SealAnnouncement, SigningKey,
@@ -136,9 +136,8 @@ pub fn publish_local_seal(
     state_root: Hash,
 ) -> Result<LocalSeal> {
     // Seal epoch MUST derive from leader_round (same as vote signing ctx)
-    // to avoid restart mismatch. Until live reconfiguration, use
-    // leader_round / EPOCH_ROUNDS like vote_signing_ctx.
-    let seal_epoch = subdag.leader_round / EPOCH_ROUNDS;
+    // to avoid restart mismatch. Use the ONE shared round→epoch unit.
+    let seal_epoch = kovanica_types::epoch_for_round(subdag.leader_round);
 
     // Compute committee hash for seal_epoch from current staking state
     let read = storage.begin_read()?;
