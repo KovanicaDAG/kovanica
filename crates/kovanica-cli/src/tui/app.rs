@@ -1563,7 +1563,7 @@ pub(crate) fn ensure_chain(id: Option<u64>) -> Result<u64, String> {
                     .to_string(),
             ),
             Some(id) => Err(format!(
-                "Chain {id} is not registered. Choose local (1337), devnet (3), testnet (2), or mainnet (1)."
+                "Chain {id} is not registered. Choose local (1337), devnet (3), testnet (2), testnet v2 (4), or mainnet (1)."
             )),
         },
     }

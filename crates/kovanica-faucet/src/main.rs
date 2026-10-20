@@ -450,17 +450,7 @@ async fn faucet_handler(
 }
 
 fn parse_address(s: &str) -> Result<Address> {
-    let s = s.trim();
-    let s = s.strip_prefix("0x").unwrap_or(s);
-    let s = s.strip_prefix("kvnc").unwrap_or(s);
-    let s = s.strip_suffix("dag").unwrap_or(s);
-    let bytes = hex::decode(s)?;
-    if bytes.len() != 32 {
-        anyhow::bail!("address must be 32 bytes");
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    Ok(Address(arr))
+    s.trim().parse::<Address>().context("invalid address")
 }
 
 async fn get_nonce(client: &reqwest::Client, rpc_url: &str, address: &Address) -> Result<u64> {
@@ -726,5 +716,44 @@ mod guard_tests {
         }
         std::env::remove_var(name);
         assert!(!env_truthy(name), "unset variable is falsy");
+    }
+
+    #[test]
+    fn parse_address_accepts_canonical_kvnc_dag_format() {
+        // A valid 32-byte public key (just for testing)
+        let pk_bytes = [1u8; 32];
+        let address = Address(pk_bytes);
+        let canonical = address.encode(); // kvnc<hex>dag with correct checksum
+        let parsed = parse_address(&canonical).expect("canonical format parses");
+        assert_eq!(parsed.to_hex(), address.to_hex());
+    }
+
+    #[test]
+    fn parse_address_rejects_invalid_canonical_checksum() {
+        // Create a valid address and then tamper with the checksum
+        let pk_bytes = [2u8; 32];
+        let address = Address(pk_bytes);
+        let canonical = address.encode(); // kvnc<hex>dag with correct checksum
+        // Tamper with the checksum (last 8 hex chars before "dag")
+        let mut bad_canonical = canonical.clone();
+        let checksum_start = bad_canonical.len() - "dag".len() - 8; // 8 hex chars = 4 bytes checksum
+        bad_canonical.replace_range(checksum_start..checksum_start + 2, "ff");
+        let err = parse_address(&bad_canonical).unwrap_err();
+        // The error wraps AddressError::ChecksumMismatch with "invalid address" context
+        assert!(err.to_string().contains("invalid address"), "got error: {}", err);
+    }
+
+    #[test]
+    fn parse_address_accepts_bare_hex_for_backward_compatibility() {
+        let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let address = parse_address(pk_hex).expect("bare hex parses");
+        assert_eq!(address.to_hex(), pk_hex);
+    }
+
+    #[test]
+    fn parse_address_accepts_0x_prefixed_hex() {
+        let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let address = parse_address(&format!("0x{}", pk_hex)).expect("0x-prefixed hex parses");
+        assert_eq!(address.to_hex(), pk_hex);
     }
 }

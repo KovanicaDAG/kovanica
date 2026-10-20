@@ -32,7 +32,7 @@ struct Cli {
     #[arg(long, global = true, default_value = "http://127.0.0.1:8545")]
     rpc_url: String,
 
-    /// Network `chain_id` committed to by every transaction signature (1 mainnet, 2 testnet, 3 devnet, 1337 local); falls back to the `KOVANICA_CHAIN_ID` environment variable.
+    /// Network `chain_id` committed to by every transaction signature (1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 1337 local); falls back to the `KOVANICA_CHAIN_ID` environment variable.
     /// Required by commands that sign transactions; there is deliberately no default.
     #[arg(long, global = true)]
     chain_id: Option<u64>,

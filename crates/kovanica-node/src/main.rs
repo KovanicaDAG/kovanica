@@ -3852,7 +3852,9 @@ fn read_signing_key(path: &str) -> Result<SigningKey> {
 
 /// Parse a Kovanica address from various formats:
 /// - 64-char hex (32 bytes)
-/// - kvnc<32-byte-hex>dag (with checksum, 36 chars total)
+/// Parse an address string in any of the supported formats:
+/// - `kvnc<32-byte-hex>dag` (canonical, with checksum verification)
+/// - bare 32-byte hex
 /// - 0x-prefixed hex
 ///
 /// Returns the 32-byte address.
@@ -3861,23 +3863,7 @@ fn parse_address_hex(value: Option<&str>) -> Result<Address> {
         return Ok(Address::default());
     };
 
-    let s = value.trim();
-    let s = s.strip_prefix("0x").unwrap_or(s);
-
-    // Check for kvnc...dag format (36 chars: kvnc + 32 hex + dag)
-    let s = if let Some(rest) = s.strip_prefix("kvnc") {
-        rest.strip_suffix("dag").unwrap_or(rest)
-    } else {
-        s
-    };
-
-    let bytes = hex::decode(s).with_context(|| format!("invalid address hex `{value}`"))?;
-    if bytes.len() != 32 {
-        anyhow::bail!("address must be 32 bytes, got {}", bytes.len());
-    }
-    let mut address = [0u8; 32];
-    address.copy_from_slice(&bytes);
-    Ok(Address(address))
+    value.trim().parse::<Address>().with_context(|| format!("invalid address `{value}`"))
 }
 
 #[cfg(test)]
@@ -3891,6 +3877,47 @@ mod tests {
         assert!(auth.require_auth_for_writes);
         assert!(rpc_auth_config(false, "").write_tokens.is_empty());
         assert!(!rpc_auth_config(true, "").require_auth_for_writes);
+    }
+
+    #[test]
+    fn parse_address_hex_accepts_canonical_kvnc_dag_format() {
+        let pk_bytes = [3u8; 32];
+        let address = Address(pk_bytes);
+        let canonical = address.encode(); // kvnc<hex>dag with correct checksum
+        let parsed = parse_address_hex(Some(&canonical)).expect("canonical format parses");
+        assert_eq!(parsed.to_hex(), address.to_hex());
+    }
+
+    #[test]
+    fn parse_address_hex_rejects_invalid_canonical_checksum() {
+        let pk_bytes = [4u8; 32];
+        let address = Address(pk_bytes);
+        let canonical = address.encode();
+        let mut bad_canonical = canonical.clone();
+        let checksum_start = bad_canonical.len() - "dag".len() - 8;
+        bad_canonical.replace_range(checksum_start..checksum_start + 2, "ff");
+        let err = parse_address_hex(Some(&bad_canonical)).unwrap_err();
+        assert!(err.to_string().contains("invalid address"), "got error: {}", err);
+    }
+
+    #[test]
+    fn parse_address_hex_accepts_bare_hex_for_backward_compatibility() {
+        let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let address = parse_address_hex(Some(pk_hex)).expect("bare hex parses");
+        assert_eq!(address.to_hex(), pk_hex);
+    }
+
+    #[test]
+    fn parse_address_hex_accepts_0x_prefixed_hex() {
+        let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let address = parse_address_hex(Some(&format!("0x{}", pk_hex))).expect("0x-prefixed hex parses");
+        assert_eq!(address.to_hex(), pk_hex);
+    }
+
+    #[test]
+    fn parse_address_hex_returns_default_for_none() {
+        let address = parse_address_hex(None).expect("None returns default address");
+        assert_eq!(address, Address::default());
     }
 
     fn chain_id_config(dir: &std::path::Path, chain_id: u64) -> NodeConfig {

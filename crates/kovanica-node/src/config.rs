@@ -347,7 +347,7 @@ impl NodeConfig {
             .map_err(|e| anyhow::anyhow!("peer_scoring: {e}"))?;
         if !kovanica_types::signing::chain_id::is_registered(self.chain_id) {
             anyhow::bail!(
-                "chain_id {} is not registered (expected 1 mainnet, 2 testnet, 3 devnet or 1337 local)",
+                "chain_id {} is not registered (expected 1 mainnet, 2 testnet, 3 devnet, 4 testnet v2 or 1337 local)",
                 self.chain_id
             );
         }
