@@ -2428,11 +2428,11 @@ mod tests {
         assert!(receiver.try_recv().is_err());
     }
 
-    // LOCAL REVIEW TEST (Jarvis, 2026-10-19), not committed.
     // B1 at engine level: an engine whose committee was built after the
     // epoch boundary (committee epoch 1, i.e. restarted node) must accept a
     // vote that a long-running node (committee epoch 0) signs for the same
     // leader round.
+    // Test from Jarvis review (2026-10-19).
     #[tokio::test]
     async fn b1_review_restarted_engine_accepts_vote_from_running_engine() {
         let (engine, key, digest, _receiver) = engine_with_leader_at_epoch(); // committee epoch 5, round 3

@@ -5,7 +5,9 @@
 use crate::{address_to_bytes, BincodeSerialize, StorageError};
 use kovanica_staking::{Delegation, StakingState, TreasuryState, ValidatorInfo};
 use kovanica_types::hash::Hash;
-use kovanica_types::{Address, Stake};
+use kovanica_types::{
+    decode_with_version, encode_with_version, Address, Stake, EPOCH_COMMITTEE_VERSION,
+};
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -721,11 +723,15 @@ impl StateStore {
     /// the VRF key is stored so a restarted node can rebuild the boot committee
     /// WITH its VRF keys (B3). `None` before the first seal of the epoch.
     ///
-    /// Compatibility: supports both the old format (Vec<SealCommitteeMember> i.e.
-    /// tuples of (index, key, stake)) and the new format
-    /// (Vec<SealCommitteeSnapshotMember> with optional vrf_public_key). Old rows
-    /// deserialize without VRF keys; the caller is expected to backfill from
-    /// staking state if needed.
+    /// Versioned encoding: magic byte (0x4B) + version (u8) + payload.
+    /// - Version 1: new format with SealCommitteeSnapshotMember (with optional vrf_public_key)
+    /// - No prefix: old untagged format (Vec<SealCommitteeMember> tuples)
+    /// - Unknown version: clear error
+    ///
+    /// Old rows deserialize with vrf_public_key = None; they are NOT backfilled
+    /// from the current staking state (the key may have changed since then).
+    /// The leader for those epochs follows the existing rule for committees
+    /// without VRF keys (round-robin).
     pub fn get_epoch_committee(
         &self,
         txn: &ReadTransaction,
@@ -742,34 +748,48 @@ impl StateStore {
         let bytes = table.get(epoch)?.map(|guard| guard.value().to_vec());
         match bytes {
             Some(bytes) => {
-                // Try new format first (Vec<SealCommitteeSnapshotMember>)
-                if let Ok(new_format) =
-                    bincode::deserialize::<Vec<kovanica_types::SealCommitteeSnapshotMember>>(&bytes)
-                {
-                    Ok(Some(new_format))
-                } else if let Ok(old_format) =
-                    bincode::deserialize::<Vec<kovanica_types::SealCommitteeMember>>(&bytes)
-                {
-                    // Old format: Vec<(AuthorityIndex, PublicKey, Stake)> -> convert
-                    let converted: Vec<kovanica_types::SealCommitteeSnapshotMember> = old_format
-                        .into_iter()
-                        .map(|(index, public_key, stake)| {
-                            kovanica_types::SealCommitteeSnapshotMember {
-                                index,
-                                public_key,
-                                stake,
-                                vrf_public_key: None,
-                            }
-                        })
-                        .collect();
-                    Ok(Some(converted))
-                } else {
-                    // Neither format worked - return the deserialization error
-                    Err(Box::new(bincode::ErrorKind::Custom(
-                        "failed to deserialize epoch committee: neither new nor old format matched"
-                            .to_string(),
-                    ))
-                    .into())
+                // Check for versioned encoding
+                match decode_with_version(&bytes) {
+                    Ok((EPOCH_COMMITTEE_VERSION, payload)) => {
+                        // New format: Vec<SealCommitteeSnapshotMember>
+                        let decoded: Vec<kovanica_types::SealCommitteeSnapshotMember> =
+                            bincode::deserialize(payload)?;
+                        Ok(Some(decoded))
+                    }
+                    Ok((v, _)) => {
+                        // Known magic but unknown version
+                        Err(Box::new(bincode::ErrorKind::Custom(format!(
+                            "epoch committee decode error: unknown version {}",
+                            v
+                        )))
+                        .into())
+                    }
+                    Err("no version prefix") => {
+                        // Old untagged format: Vec<SealCommitteeMember> -> convert
+                        let old_format: Vec<kovanica_types::SealCommitteeMember> =
+                            bincode::deserialize(&bytes)?;
+                        let converted: Vec<kovanica_types::SealCommitteeSnapshotMember> =
+                            old_format
+                                .into_iter()
+                                .map(|(index, public_key, stake)| {
+                                    kovanica_types::SealCommitteeSnapshotMember {
+                                        index,
+                                        public_key,
+                                        stake,
+                                        vrf_public_key: None,
+                                    }
+                                })
+                                .collect();
+                        Ok(Some(converted))
+                    }
+                    Err(e) => {
+                        // Truncated or other error
+                        Err(Box::new(bincode::ErrorKind::Custom(format!(
+                            "epoch committee decode error: {}",
+                            e
+                        )))
+                        .into())
+                    }
                 }
             }
             None => Ok(None),
@@ -782,6 +802,8 @@ impl StateStore {
     /// in place and the incoming `members` are ignored, so the very first seal
     /// of an epoch pins the committee every later seal and the RPC agree on.
     /// Returns the snapshot now in force for `epoch`.
+    ///
+    /// Writes with versioned encoding: magic byte (0x4B) + version (1) + payload.
     pub fn put_epoch_committee_if_absent(
         &self,
         txn: &WriteTransaction,
@@ -790,10 +812,49 @@ impl StateStore {
     ) -> Result<Vec<kovanica_types::SealCommitteeSnapshotMember>, StateStoreError> {
         let mut table = txn.open_table(crate::tables::EPOCH_COMMITTEE)?;
         if let Some(existing) = table.get(epoch)? {
-            return Ok(bincode::deserialize(&existing.value().to_vec())?);
+            // Decode existing with version handling
+            let existing_bytes = existing.value().to_vec();
+            let decoded = match decode_with_version(&existing_bytes) {
+                Ok((EPOCH_COMMITTEE_VERSION, payload)) => bincode::deserialize::<
+                    Vec<kovanica_types::SealCommitteeSnapshotMember>,
+                >(payload)?,
+                Ok((v, _)) => {
+                    // Known magic but unknown version
+                    return Err(Box::new(bincode::ErrorKind::Custom(format!(
+                        "epoch committee decode error: unknown version {}",
+                        v
+                    )))
+                    .into());
+                }
+                Err("no version prefix") => {
+                    // Old format stored - convert and return as new format
+                    let old: Vec<kovanica_types::SealCommitteeMember> =
+                        bincode::deserialize(&existing_bytes)?;
+                    old.into_iter()
+                        .map(|(index, public_key, stake)| {
+                            kovanica_types::SealCommitteeSnapshotMember {
+                                index,
+                                public_key,
+                                stake,
+                                vrf_public_key: None,
+                            }
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    return Err(Box::new(bincode::ErrorKind::Custom(format!(
+                        "epoch committee decode error: {}",
+                        e
+                    )))
+                    .into());
+                }
+            };
+            return Ok(decoded);
         }
-        let bytes = bincode::serialize(members)?;
-        table.insert(epoch, bytes)?;
+        // Write new format with version prefix
+        let payload = bincode::serialize(members)?;
+        let bytes = encode_with_version(EPOCH_COMMITTEE_VERSION, &payload);
+        table.insert(epoch, &bytes)?;
         Ok(members.to_vec())
     }
 

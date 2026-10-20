@@ -666,9 +666,9 @@ mod tests {
         );
     }
 
-    // LOCAL REVIEW TEST (Jarvis, 2026-10-20), not committed. B1c: a seal for a
-    // header after the first epoch boundary is admitted; a header whose epoch
-    // does not match leader_round / EPOCH_ROUNDS is rejected.
+    // B1c: a seal for a header after the first epoch boundary is admitted;
+    // a header whose epoch does not match leader_round / EPOCH_ROUNDS is rejected.
+    // Test from Jarvis review (2026-10-20).
     #[test]
     fn b1c_jarvis_seal_after_epoch_boundary_is_admitted() {
         let (signers, keys) = committee(1);

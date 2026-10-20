@@ -3472,37 +3472,21 @@ fn build_committee_for_round(
             // hashed, so the recomputed hash matches by construction. Staking
             // already assigns indices by address order; keep them as frozen.
             //
-            // B3: the snapshot also carries each authority's VRF public key, so
-            // a node that restarts after the first seal of an epoch rebuilds
-            // consensus WITH its VRF keys instead of `None`. A snapshot stored
-            // before VRF keys were persisted deserializes with `None`; backfill
-            // those from the staking record for that address so a VRF-keyed
-            // validator is never silently dropped to `None`.
-            let staking_for_backfill = if members.iter().any(|m| m.vrf_public_key.is_none()) {
-                storage.state().load_staking_state(&read).ok()
-            } else {
-                None
-            };
+            // VRF keys: the snapshot carries each authority's VRF public key.
+            // Old snapshots (written before VRF keys were persisted) deserialize
+            // with vrf_public_key = None. We do NOT backfill from the current
+            // staking state because the VRF key may have changed since the
+            // snapshot was taken (fork risk). Committees without VRF keys use
+            // round-robin leader selection, which is the current behavior.
             let authorities = members
                 .iter()
-                .map(|m| {
-                    let vrf_public_key = m.vrf_public_key.or_else(|| {
-                        staking_for_backfill.as_ref().and_then(|st| {
-                            st.validators
-                                .iter()
-                                .find(|v| v.address == Address::from_public_key(&m.public_key))
-                                .and_then(|v| v.vrf_public_key.as_ref())
-                                .map(|v| kovanica_types::PublicKey(v.0))
-                        })
-                    });
-                    AuthorityInfo {
-                        index: m.index,
-                        stake: m.stake,
-                        public_key: m.public_key,
-                        vrf_public_key,
-                        address: Address::from_public_key(&m.public_key),
-                        network_address: listen_addr.to_string(),
-                    }
+                .map(|m| AuthorityInfo {
+                    index: m.index,
+                    stake: m.stake,
+                    public_key: m.public_key,
+                    vrf_public_key: m.vrf_public_key,
+                    address: Address::from_public_key(&m.public_key),
+                    network_address: listen_addr.to_string(),
                 })
                 .collect::<Vec<_>>();
             if let Ok(committee) = CommitteeInfo::try_new(epoch, authorities) {
@@ -6206,10 +6190,10 @@ mod tests {
     }
 }
 
-// LOCAL REVIEW TEST (Jarvis, 2026-10-19) — not committed / not pushed.
 // B1 invariant: a validator restarted after an epoch boundary must still
 // produce votes that a long-running peer (started before the boundary)
 // accepts, otherwise one restart stalls an n=3 committee.
+// Tests from Jarvis review (2026-10-19).
 #[cfg(test)]
 mod b1_epoch_restart_repro {
     use super::*;
@@ -6281,10 +6265,10 @@ mod b1_epoch_restart_repro {
         storage
     }
 
-    // LOCAL REVIEW TEST (Jarvis, 2026-10-19), not committed.
     // Seals and leader headers still use `committee.epoch()` (SealContext.epoch,
     // committee_seal_hash, admit_seal EpochMismatch). A node restarted after
     // the boundary must still agree on that epoch with a long-running node.
+    // Test from Jarvis review (2026-10-19).
     #[test]
     fn b1_review_seal_epoch_matches_after_restart() {
         let dir = tempfile::tempdir().unwrap();
@@ -6549,9 +6533,9 @@ mod b1_epoch_restart_repro {
         }
     }
 
-    // LOCAL REVIEW TEST (Jarvis, 2026-10-20), not committed. E1 refresh path:
-    // run_execution rebuilds with subdag.leader_round; at round 7200 exactly
+    // E1 refresh path: run_execution rebuilds with subdag.leader_round; at round 7200 exactly
     // (boundary) the RPC committee must hash-match the sealed header.
+    // Test from Jarvis review (2026-10-20).
     #[test]
     fn e1_jarvis_refresh_committee_matches_header_at_boundary_round() {
         let dir = tempfile::tempdir().unwrap();
@@ -7428,10 +7412,9 @@ mod b1_epoch_restart_repro {
         assert_eq!(boot_addr, live_addr, "authority addresses must match");
     }
 
-    // LOCAL REVIEW TEST (Jarvis, c8800ac): an EPOCH_COMMITTEE row written by a
-    // pre-83c8dcf binary (Vec<(index, key, stake)>) must still read back, with
-    // vrf_public_key None, as the commit message claims ("older snapshot
-    // deserializes without VRF keys ... backfill").
+    // An EPOCH_COMMITTEE row written by a pre-83c8dcf binary (Vec<(index, key, stake)>)
+    // must still read back, with vrf_public_key = None.
+    // Test from Jarvis review (c8800ac).
     #[test]
     fn b3_jarvis_old_format_snapshot_still_reads() {
         let dir = tempfile::tempdir().unwrap();
@@ -7459,5 +7442,209 @@ mod b1_epoch_restart_repro {
         );
         let got = got.unwrap().unwrap();
         assert_eq!(kovanica_types::snapshot_seal_members(&got), old);
+    }
+
+    // Corrupted new-format EPOCH_COMMITTEE row (magic+version present, payload
+    // corrupted) must NOT be silently accepted as old format.
+    // Test from Jarvis review.
+    #[test]
+    fn jarvis_corrupt_new_snapshot_not_silently_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_sk, pk) = kovanica_crypto::generate_keypair();
+        let storage = Storage::new(dir.path().join("corrupt-snap.redb")).unwrap();
+        // Valid new-format snapshot
+        let valid = vec![kovanica_types::SealCommitteeSnapshotMember {
+            index: 0,
+            public_key: pk,
+            stake: MIN_VALIDATOR_STAKE,
+            vrf_public_key: Some(kovanica_crypto::generate_keypair().1),
+        }];
+        let payload = bincode::serialize(&valid).unwrap();
+        let bytes =
+            kovanica_types::encode_with_version(kovanica_types::EPOCH_COMMITTEE_VERSION, &payload);
+        // Truncate the payload so bincode fails to deserialize (missing bytes).
+        // This is a stronger corruption test than single-byte flips.
+        let mut bad = bytes.clone();
+        if bad.len() > 3 {
+            bad.truncate(bad.len() - 2);
+        }
+        {
+            let w = storage.begin_write().unwrap();
+            {
+                let mut t = w
+                    .open_table(kovanica_storage::tables::EPOCH_COMMITTEE)
+                    .unwrap();
+                t.insert(1u64, bad).unwrap();
+            }
+            w.commit().unwrap();
+        }
+        let r = storage.begin_read().unwrap();
+        let got = storage.state().get_epoch_committee(&r, 1);
+        assert!(
+            got.is_err(),
+            "corrupted new-format snapshot must fail: {:?}",
+            got
+        );
+    }
+
+    // Inspect a real old-format redb to verify round-trip.
+    // Test from Jarvis review.
+    #[test]
+    fn jarvis_inspect_real_old_redb() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_sk, pk) = kovanica_crypto::generate_keypair();
+        let (_sk2, pk2) = kovanica_crypto::generate_keypair();
+        let storage = Storage::new(dir.path().join("inspect-old.redb")).unwrap();
+        let old: Vec<kovanica_types::SealCommitteeMember> =
+            vec![(0, pk, MIN_VALIDATOR_STAKE), (1, pk2, MIN_VALIDATOR_STAKE)];
+        {
+            let w = storage.begin_write().unwrap();
+            {
+                let mut t = w
+                    .open_table(kovanica_storage::tables::EPOCH_COMMITTEE)
+                    .unwrap();
+                t.insert(1u64, bincode::serialize(&old).unwrap()).unwrap();
+            }
+            w.commit().unwrap();
+        }
+        // Read back through the public API
+        let r = storage.begin_read().unwrap();
+        let got = storage.state().get_epoch_committee(&r, 1).unwrap().unwrap();
+        // Verify the converted snapshot has the right fields
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].vrf_public_key, None);
+        assert_eq!(got[1].vrf_public_key, None);
+        // And the seal hash projection matches
+        assert_eq!(
+            kovanica_types::snapshot_seal_members(&got),
+            old,
+            "old snapshot seal projection must match"
+        );
+    }
+
+    // Upgraded node (old-format data dir) vs fresh node pick the same leader
+    // for the same epoch. Old snapshots have vrf_public_key = None, so both
+    // fall back to round-robin leader selection.
+    // Test from Jarvis review (P1 fix for B3).
+    #[test]
+    fn e1_jarvis_upgraded_vs_fresh_same_leader() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_sk1, pk1) = kovanica_crypto::generate_keypair();
+        let (_sk2, pk2) = kovanica_crypto::generate_keypair();
+        let (_sk3, pk3) = kovanica_crypto::generate_keypair();
+        let keys = [
+            (Address::from_public_key(&pk1), pk1),
+            (Address::from_public_key(&pk2), pk2),
+            (Address::from_public_key(&pk3), pk3),
+        ];
+        let leader_round = 3 * EPOCH_ROUNDS + 5; // epoch 1, after seal
+
+        // Create OLD data dir with pre-versioned EPOCH_COMMITTEE snapshot (no VRF keys)
+        let old_dir = dir.path().join("upgraded.redb");
+        {
+            let storage = Storage::new(&old_dir).unwrap();
+            let mut st = kovanica_staking::StakingState::new();
+            st.init_treasury(Address::from_public_key(&pk1));
+            for (addr, pk) in &keys {
+                st.join_validator(*addr, MIN_VALIDATOR_STAKE, 0, Some(*addr), Some(*pk), None)
+                    .unwrap();
+            }
+            st.committed_leader_height = leader_round;
+            let old_snap: Vec<kovanica_types::SealCommitteeMember> = vec![
+                (0, pk1, MIN_VALIDATOR_STAKE),
+                (1, pk2, MIN_VALIDATOR_STAKE),
+                (2, pk3, MIN_VALIDATOR_STAKE),
+            ];
+            {
+                let w = storage.begin_write().unwrap();
+                {
+                    let mut t = w
+                        .open_table(kovanica_storage::tables::EPOCH_COMMITTEE)
+                        .unwrap();
+                    t.insert(1u64, bincode::serialize(&old_snap).unwrap())
+                        .unwrap();
+                }
+                w.commit().unwrap();
+            }
+            // Also persist staking state (old format, no slashed)
+            let old_staking = bincode::serialize(&st).unwrap();
+            {
+                let w = storage.begin_write().unwrap();
+                {
+                    let mut t = w
+                        .open_table(kovanica_storage::tables::STAKING_STATE)
+                        .unwrap();
+                    t.insert("staking", &old_staking).unwrap();
+                }
+                w.commit().unwrap();
+            }
+        }
+
+        // Fresh node: new data dir, same initial staking, but NO EPOCH_COMMITTEE snapshot yet
+        let fresh_dir = dir.path().join("fresh.redb");
+        {
+            let storage = Storage::new(&fresh_dir).unwrap();
+            let mut st = kovanica_staking::StakingState::new();
+            st.init_treasury(Address::from_public_key(&pk1));
+            for (addr, pk) in &keys {
+                st.join_validator(*addr, MIN_VALIDATOR_STAKE, 0, Some(*addr), Some(*pk), None)
+                    .unwrap();
+            }
+            st.committed_leader_height = leader_round;
+            let new_staking = StakingState::to_bytes(&st).unwrap();
+            {
+                let w = storage.begin_write().unwrap();
+                {
+                    let mut t = w
+                        .open_table(kovanica_storage::tables::STAKING_STATE)
+                        .unwrap();
+                    t.insert("staking", &new_staking).unwrap();
+                }
+                w.commit().unwrap();
+            }
+        }
+
+        // Both nodes start and pick leaders for epoch 1
+        let epoch = kovanica_types::epoch_for_round(leader_round);
+        // Upgraded node: has old-format snapshot
+        let old_storage = Storage::new(&old_dir).unwrap();
+        let old_committee =
+            build_committee_for_round(&old_storage, &pk1, &keys[0].0, "127.0.0.1:0", leader_round)
+                .unwrap();
+        // Fresh node: no snapshot, builds from live staking (has VRF keys)
+        let fresh_storage = Storage::new(&fresh_dir).unwrap();
+        let fresh_committee = build_committee_for_round(
+            &fresh_storage,
+            &pk1,
+            &keys[0].0,
+            "127.0.0.1:0",
+            leader_round,
+        )
+        .unwrap();
+
+        // Both should have the same committee composition
+        let old_authorities: Vec<_> = old_committee.authorities().iter().collect();
+        let fresh_authorities: Vec<_> = fresh_committee.authorities().iter().collect();
+        assert_eq!(old_authorities.len(), fresh_authorities.len());
+        for (o, f) in old_authorities.iter().zip(fresh_authorities.iter()) {
+            assert_eq!(o.index, f.index);
+            assert_eq!(o.public_key, f.public_key);
+            assert_eq!(o.stake, f.stake);
+        }
+
+        // Leader selection: old committee has NO VRF keys -> round-robin
+        // Fresh committee HAS VRF keys -> VRF-based (but round-robin if VRF disabled)
+        // Since VRF leader election is currently reverted (round-robin), both
+        // should pick the same leader for the same round in the epoch.
+        // The round-robin leader for round `leader_round` in epoch 1 is:
+        //   leader_index = (leader_round - epoch * EPOCH_ROUNDS) % committee_size
+        let expected_leader_index = ((leader_round - epoch * EPOCH_ROUNDS) as usize) % 3;
+        let old_leader = old_committee.leader(leader_round);
+        let fresh_leader = fresh_committee.leader(leader_round);
+        assert_eq!(
+            old_leader, fresh_leader,
+            "upgraded and fresh node must pick same leader: old={:?} fresh={:?} expected_index={}",
+            old_leader, fresh_leader, expected_leader_index
+        );
     }
 }
