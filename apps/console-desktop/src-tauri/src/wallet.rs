@@ -33,6 +33,33 @@ pub const WALLET_LOCK_WARNING_EVENT: &str = "wallet-lock-warning";
 /// phrase is on screen would leave the seed and an open session unattended.
 pub const LOCK_WARNING_BEFORE: Duration = Duration::from_secs(30);
 
+/// Wait after the first wrong reveal password. Later failures double it.
+const REVEAL_BACKOFF_BASE: Duration = Duration::from_secs(1);
+
+/// Longest reveal lockout. The wait stops doubling here.
+const REVEAL_BACKOFF_MAX: Duration = Duration::from_secs(32);
+
+/// Largest shift that still fits in [`REVEAL_BACKOFF_MAX`].
+const REVEAL_BACKOFF_SHIFT_CAP: u32 = 5;
+
+/// Returned when a reveal is refused because earlier passwords were wrong.
+const REVEAL_BACKOFF_MESSAGE: &str = "Wait a moment before trying the password again.";
+
+/// How long a reveal stays refused after `failures` wrong passwords.
+///
+/// `failures` is the count after the latest real decrypt failure. Zero failures
+/// wait nothing. The first failure waits [`REVEAL_BACKOFF_BASE`]. Each further
+/// failure doubles that wait, up to [`REVEAL_BACKOFF_MAX`].
+fn reveal_backoff_after(failures: u32) -> Duration {
+    if failures == 0 {
+        return Duration::ZERO;
+    }
+    let shift = failures.saturating_sub(1).min(REVEAL_BACKOFF_SHIFT_CAP);
+    REVEAL_BACKOFF_BASE
+        .saturating_mul(1_u32 << shift)
+        .min(REVEAL_BACKOFF_MAX)
+}
+
 /// How long the idle thread sleeps when no session is open.
 const IDLE_PARK: Duration = Duration::from_secs(60);
 
@@ -120,6 +147,10 @@ pub struct WalletStore {
     lock_after: Duration,
     /// An idle lock has not yet been reported as `wallet-locked`.
     idle_lock_pending: bool,
+    /// Consecutive wrong reveal passwords since the last success.
+    reveal_failures: u32,
+    /// Instant before which another reveal is refused.
+    reveal_blocked_until: Option<Instant>,
 }
 
 /// Session plus the condvar the idle thread waits on.
@@ -279,6 +310,8 @@ impl WalletStore {
             open: None,
             lock_after: LOCK_AFTER,
             idle_lock_pending: false,
+            reveal_failures: 0,
+            reveal_blocked_until: None,
         }
     }
 
@@ -404,6 +437,11 @@ impl WalletStore {
     /// still holds the encrypted phrase, so this opens a new session and
     /// returns the same words. A wrong password returns no phrase and leaves
     /// the session locked.
+    ///
+    /// Wrong passwords are counted here, on the store. The next reveal is
+    /// refused until [`reveal_backoff_after`] has passed. Attempts inside that
+    /// window do not decrypt and do not extend the window. A correct password
+    /// after the window clears the count.
     pub fn reveal(
         &mut self,
         path: &Path,
@@ -414,9 +452,18 @@ impl WalletStore {
             return Err("Enter a password.".to_string());
         }
         let json = read_keystore(path)?;
+        if self.reveal_is_blocked(now) {
+            return Err(REVEAL_BACKOFF_MESSAGE.to_string());
+        }
         let mut phrase =
-            kovanica_light_ffi::reveal_mnemonic_raw(json.clone(), passphrase.to_string())
-                .map_err(|err| map_ffi_error(&err))?;
+            match kovanica_light_ffi::reveal_mnemonic_raw(json.clone(), passphrase.to_string()) {
+                Ok(phrase) => phrase,
+                Err(err) => {
+                    self.note_reveal_failure(now);
+                    return Err(map_ffi_error(&err));
+                }
+            };
+        self.clear_reveal_backoff();
         let address = match kovanica_light_ffi::wallet_address(json) {
             Ok(address) => address,
             Err(_) => {
@@ -434,6 +481,24 @@ impl WalletStore {
             address,
             mnemonic: std::mem::take(&mut phrase),
         })
+    }
+
+    /// True when `now` is still inside the reveal lockout.
+    fn reveal_is_blocked(&self, now: Instant) -> bool {
+        self.reveal_blocked_until.is_some_and(|until| now < until)
+    }
+
+    /// Record one wrong reveal password and start its lockout window.
+    fn note_reveal_failure(&mut self, now: Instant) {
+        self.reveal_failures = self.reveal_failures.saturating_add(1);
+        let delay = reveal_backoff_after(self.reveal_failures);
+        self.reveal_blocked_until = now.checked_add(delay);
+    }
+
+    /// A correct reveal password may be tried again immediately.
+    fn clear_reveal_backoff(&mut self) {
+        self.reveal_failures = 0;
+        self.reveal_blocked_until = None;
     }
 
     /// The open session, after an idle lock.
@@ -564,6 +629,18 @@ impl WalletStore {
     #[cfg(test)]
     pub(crate) fn last_active_for_test(&self) -> Option<Instant> {
         self.open.as_ref().map(|open| open.last_active)
+    }
+
+    /// Wrong reveal passwords since the last success.
+    #[cfg(test)]
+    fn reveal_failures_for_test(&self) -> u32 {
+        self.reveal_failures
+    }
+
+    /// When the reveal lockout ends, if one is active.
+    #[cfg(test)]
+    fn reveal_block_for_test(&self) -> Option<Instant> {
+        self.reveal_blocked_until
     }
 }
 
@@ -988,7 +1065,7 @@ mod tests {
         assert!(!store.is_open_for_test());
         assert_eq!(fs::read(&path).unwrap(), CROSS_KEYSTORE_JSON.as_bytes());
 
-        let revealed = must(store.reveal(&path, "cross-check", now));
+        let revealed = must(store.reveal(&path, "cross-check", now + reveal_backoff_after(1)));
         assert_eq!(revealed.mnemonic, phrase);
         assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
         assert_eq!(
@@ -1005,6 +1082,74 @@ mod tests {
         let locked = must(store.status(&path, now));
         assert_eq!(locked.phase, PHASE_LOCKED);
         assert!(!store.is_open_for_test());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wrong_reveal_passwords_are_throttled_until_the_window_ends() {
+        assert_eq!(reveal_backoff_after(0), Duration::ZERO);
+        assert_eq!(reveal_backoff_after(1), Duration::from_secs(1));
+        assert_eq!(reveal_backoff_after(2), Duration::from_secs(2));
+        assert_eq!(reveal_backoff_after(3), Duration::from_secs(4));
+        assert_eq!(reveal_backoff_after(6), REVEAL_BACKOFF_MAX);
+        assert_eq!(reveal_backoff_after(100), REVEAL_BACKOFF_MAX);
+
+        let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
+        let dir = temp_dir("reveal-backoff");
+        let path = keystore_in(&dir);
+        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+
+        let err = must_err(store.reveal(&path, "", now));
+        assert_eq!(err, "Enter a password.");
+        assert_eq!(store.reveal_failures_for_test(), 0);
+        assert!(store.reveal_block_for_test().is_none());
+
+        let err = must_err(store.reveal(&path, "wrong-horse-marker", now));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert!(!err.contains("wrong-horse-marker"));
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(store.reveal_failures_for_test(), 1);
+        let first_wait = reveal_backoff_after(1);
+        assert_eq!(store.reveal_block_for_test(), now.checked_add(first_wait));
+
+        let err = must_err(store.reveal(&path, "cross-check", now));
+        assert_eq!(err, REVEAL_BACKOFF_MESSAGE);
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(store.reveal_failures_for_test(), 1);
+        assert_eq!(fs::read(&path).unwrap(), CROSS_KEYSTORE_JSON.as_bytes());
+
+        let err = must_err(store.reveal(
+            &path,
+            "wrong-horse-marker",
+            now + first_wait - Duration::from_millis(1),
+        ));
+        assert_eq!(err, REVEAL_BACKOFF_MESSAGE);
+        assert_eq!(store.reveal_failures_for_test(), 1);
+
+        let second = now + first_wait;
+        let err = must_err(store.reveal(&path, "wrong-horse-marker", second));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert_eq!(store.reveal_failures_for_test(), 2);
+        let second_wait = reveal_backoff_after(2);
+        assert!(second_wait > first_wait);
+        assert_eq!(
+            store.reveal_block_for_test(),
+            second.checked_add(second_wait)
+        );
+
+        let err = must_err(store.reveal(&path, "cross-check", second));
+        assert_eq!(err, REVEAL_BACKOFF_MESSAGE);
+        assert!(!store.is_open_for_test());
+
+        let revealed = must(store.reveal(&path, "cross-check", second + second_wait));
+        assert_eq!(revealed.mnemonic, phrase);
+        assert!(store.is_open_for_test());
+        assert_eq!(store.reveal_failures_for_test(), 0);
+        assert!(store.reveal_block_for_test().is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
