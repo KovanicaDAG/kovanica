@@ -142,4 +142,84 @@ describe("recovery phrase on screen", () => {
     expect(document.querySelector("#mnemonic-text")?.textContent).toBe(PHRASE);
     expect(document.body.textContent).toContain(PHRASE);
   });
+
+  it("shows the recovery phrase from the unlocked screen after the password", async () => {
+    await showOpenWallet();
+    const password = document.querySelector<HTMLInputElement>("#open-password");
+    const show = document.querySelector<HTMLButtonElement>("#show-phrase-open");
+    if (!password || !show) {
+      throw new Error("The unlocked screen is missing the reveal controls.");
+    }
+    password.value = "typed-password";
+    show.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector("#mnemonic-text")?.textContent).toBe(PHRASE);
+    });
+    expect(document.querySelector<HTMLElement>("#wallet-mnemonic")?.hidden).toBe(false);
+    expect(password.value).toBe("");
+    expect(document.body.textContent).toContain(PHRASE);
+    const revealCalls = vi.mocked(invoke).mock.calls.filter((call) => call[0] === "wallet_reveal");
+    expect(revealCalls).toEqual([["wallet_reveal", { passphrase: "typed-password" }]]);
+  });
+
+  it("does not show the recovery phrase from the unlocked screen when the password is wrong", async () => {
+    await showOpenWallet();
+    const password = document.querySelector<HTMLInputElement>("#open-password");
+    const show = document.querySelector<HTMLButtonElement>("#show-phrase-open");
+    if (!password || !show) {
+      throw new Error("The unlocked screen is missing the reveal controls.");
+    }
+    password.value = "not-the-password";
+    show.click();
+    await vi.waitFor(() => {
+      const error = document.querySelector<HTMLElement>("#wallet-error");
+      expect(error?.hidden).toBe(false);
+      expect(error?.textContent).toBe("That password does not open this wallet.");
+    });
+    expect(password.value).toBe("");
+    expect(document.body.textContent ?? "").not.toContain(PHRASE);
+    expect(document.body.innerHTML).not.toContain(PHRASE);
+    expect(document.querySelector<HTMLElement>("#wallet-mnemonic")?.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>("#wallet-open")?.hidden).toBe(false);
+    const revealCalls = vi.mocked(invoke).mock.calls.filter((call) => call[0] === "wallet_reveal");
+    expect(revealCalls).toEqual([["wallet_reveal", { passphrase: "not-the-password" }]]);
+  });
 });
+
+function passphraseArg(args: unknown): string {
+  if (typeof args !== "object" || args === null || !("passphrase" in args)) {
+    return "";
+  }
+  const value = args.passphrase;
+  return typeof value === "string" ? value : "";
+}
+
+async function showOpenWallet(): Promise<void> {
+  document.body.innerHTML = pageMarkup();
+  vi.mocked(invoke).mockImplementation(async (cmd, args) => {
+    if (cmd === "wallet_status") {
+      return { phase: "open", address: "kvnc-open-address" };
+    }
+    if (cmd === "wallet_balance") {
+      return { atoms: "0", display: "0", label: "Balance (reported by node)" };
+    }
+    if (cmd === "wallet_history") {
+      return { label: "History (reported by node)", transfers: [] };
+    }
+    if (cmd === "wallet_touch") {
+      return null;
+    }
+    if (cmd === "wallet_reveal") {
+      if (passphraseArg(args) !== "typed-password") {
+        throw "That password does not open this wallet.";
+      }
+      return { address: "kvnc-open-address", mnemonic: PHRASE };
+    }
+    throw new Error(`unexpected command ${cmd}`);
+  });
+  mountWallet(() => null);
+  await vi.waitFor(() => {
+    expect(document.querySelector<HTMLElement>("#wallet-open")?.hidden).toBe(false);
+  });
+  expect(document.body.textContent ?? "").not.toContain(PHRASE);
+}

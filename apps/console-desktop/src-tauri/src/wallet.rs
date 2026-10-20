@@ -1339,6 +1339,50 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The unlocked screen uses the same reveal path. A wrong password returns
+    /// no phrase, counts toward the shared backoff, and leaves the session open.
+    #[test]
+    fn reveal_from_an_open_session_checks_the_passphrase() {
+        let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
+        let dir = temp_dir("reveal-open");
+        let path = keystore_in(&dir);
+        fs::write(&path, cross_keystore_json()).unwrap();
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+
+        let status = must(store.unlock(&path, "cross-check", now));
+        assert_eq!(status.phase, PHASE_OPEN);
+        assert!(store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 0);
+
+        let err = must_err(store.reveal(&path, "wrong-horse-marker", now));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert!(!err.contains("wrong-horse-marker"));
+        assert!(!err.contains(&phrase));
+        assert!(store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 1);
+        let wait = passphrase_backoff_after(1);
+        assert_eq!(store.passphrase_block_for_test(), now.checked_add(wait));
+
+        let err = must_err(store.reveal(&path, "cross-check", now));
+        assert_eq!(err, PASSPHRASE_BACKOFF_MESSAGE);
+        assert!(!err.contains(&phrase));
+        assert!(store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 1);
+
+        let revealed = must(store.reveal(&path, "cross-check", now + wait));
+        assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
+        assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
+        assert_eq!(
+            revealed.address,
+            "kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag"
+        );
+        assert!(store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 0);
+        assert!(store.passphrase_block_for_test().is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_fixed_keystore_vector_uses_keystore_validation() {
         let body = include_str!("wallet.rs").split("mod tests").next().unwrap();
