@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kovanica Console</title>
+  </head>
+  <body>
+    <main class="app">
+      <header class="top">
+        <div>
+          <h1>Kovanica Console</h1>
+          <p class="muted">0.1.0 · node status</p>
+        </div>
+      </header>
+
+      <section class="panel" aria-labelledby="connection-heading">
+        <h2 id="connection-heading">Connection</h2>
+        <label for="rpc">RPC endpoint</label>
+        <div class="row">
+          <input id="rpc" name="rpc" type="text" spellcheck="false" autocomplete="off" />
+          <button id="save" type="button">Save</button>
+          <button id="reset" type="button">Use default</button>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+        <p id="endpoint" class="muted"></p>
+        <p id="error" class="error" role="alert" hidden></p>
+      </section>
+
+      <section class="panel" aria-labelledby="node-heading">
+        <h2 id="node-heading">Node</h2>
+        <dl id="status" class="readout"></dl>
+        <ul id="peers" class="peers"></ul>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
