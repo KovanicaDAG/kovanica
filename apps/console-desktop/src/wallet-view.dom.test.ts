@@ -4,14 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
 import htmlSource from "../index.html?raw";
+import { WALLET_LOCKED_EVENT } from "./wallet";
 import { mountWallet } from "./wallet-view";
+
+const eventHandlers = vi.hoisted(() => new Map<string, () => void>());
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => undefined),
+  listen: vi.fn(async (event: string, handler: () => void) => {
+    eventHandlers.set(event, handler);
+    return () => {
+      eventHandlers.delete(event);
+    };
+  }),
 }));
 
 /** Shown on the screen, then removed. This is not a wallet seed. */
@@ -110,6 +118,7 @@ describe("recovery phrase on screen", () => {
       item.target.removeEventListener(item.type, item.listener);
     }
     added.length = 0;
+    eventHandlers.clear();
     document.body.innerHTML = "";
     vi.restoreAllMocks();
     vi.mocked(invoke).mockReset();
@@ -133,6 +142,35 @@ describe("recovery phrase on screen", () => {
       expect(document.querySelector("#mnemonic-text")?.textContent ?? "").toBe("");
     });
     assertPhraseGone();
+  });
+
+  it("leaves the phrase variable empty after lock when status still says open", async () => {
+    await showRecoveryPhrase();
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "wallet_status") {
+        return { phase: "open", address: "kvnc-screen-address" };
+      }
+      if (cmd === "wallet_balance") {
+        return { atoms: "0", display: "0", label: "Balance (reported by node)" };
+      }
+      if (cmd === "wallet_history") {
+        return { label: "History (reported by node)", transfers: [] };
+      }
+      if (cmd === "wallet_touch") {
+        return null;
+      }
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    const locked = eventHandlers.get(WALLET_LOCKED_EVENT);
+    if (!locked) {
+      throw new Error("The screen is not listening for the lock.");
+    }
+    locked();
+    await vi.waitFor(() => {
+      expect(document.querySelector<HTMLElement>("#wallet-open")?.hidden).toBe(false);
+    });
+    assertPhraseGone();
+    expect(document.querySelector<HTMLElement>("#wallet-mnemonic")?.hidden).toBe(true);
   });
 
   it("keeps the shown phrase when a visibility change leaves the document visible", async () => {

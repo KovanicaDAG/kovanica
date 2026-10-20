@@ -21,7 +21,6 @@ import {
   phraseAfterCover,
   phraseLockWarning,
   phraseOnScreen,
-  phraseVariableAfterLock,
   shouldCoverPhrase,
   reportListenFailure,
   revealedPhrase,
@@ -130,13 +129,13 @@ describe("wallet form", () => {
   });
 
   it("sets the phrase variable to empty when the wallet locks", () => {
-    expect(phraseVariableAfterLock()).toBeNull();
     expect(secretsCleared().phrase).toBe("");
     const clearer = viewSource.slice(
       viewSource.indexOf("function clearSecretFields"),
       viewSource.indexOf("function paintLockWarning"),
     );
-    expect(clearer.includes("phrase = phraseVariableAfterLock() ?? cleared.phrase")).toBe(true);
+    expect(clearer.includes("phrase = cleared.phrase")).toBe(true);
+    expect(clearer.includes("phraseVariableAfterLock")).toBe(false);
     expect(clearer.includes("mnemonicText.textContent = cleared.phrase")).toBe(true);
     const listenAt = viewSource.indexOf("listen(WALLET_LOCKED_EVENT");
     const handler = viewSource.slice(listenAt, viewSource.indexOf("setInterval"));
