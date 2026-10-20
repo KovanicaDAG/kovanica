@@ -2381,4 +2381,168 @@ mod tests {
         // Must not panic, must not OOM. Should fail cleanly on missing data.
         assert!(result.is_err());
     }
+
+    // ---- Jarvis review tests (PR #68, commit 8105a8d) ----
+    struct JRng(u64);
+    impl JRng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn addr(&mut self) -> Address {
+            let mut b = [0u8; 32];
+            for x in b.iter_mut() {
+                *x = self.next() as u8;
+            }
+            Address(b)
+        }
+    }
+    fn j_old_bytes(st: &StakingState) -> Vec<u8> {
+        let full = bincode::serialize(st).unwrap();
+        let vec_bytes = bincode::serialize(&st.validators).unwrap();
+        let mut old = vec_bytes[..8].to_vec();
+        for v in &st.validators {
+            let b = bincode::serialize(v).unwrap();
+            old.extend_from_slice(&b[..b.len() - 1]);
+        }
+        old.extend_from_slice(&full[vec_bytes.len()..]);
+        old
+    }
+    fn j_state(r: &mut JRng, n: usize, dels: usize, treasury: bool) -> StakingState {
+        let mut st = StakingState::new();
+        if treasury {
+            st.init_treasury(r.addr());
+        }
+        let mut vals = vec![];
+        for _ in 0..n {
+            let a = r.addr();
+            vals.push(a);
+            st.join_validator(
+                a,
+                MIN_VALIDATOR_STAKE + (r.next() % 1000) * ONE_KUNA,
+                (r.next() % 2000) as u16,
+                Some(a),
+                Some(PublicKey(a.0)),
+                Some(VrfPublicKey(r.addr().0)),
+            )
+            .unwrap();
+        }
+        for _ in 0..dels {
+            let v = vals[(r.next() as usize) % n];
+            st.delegations.push(Delegation {
+                delegator: r.addr(),
+                validator: v,
+                amount: r.next() % (1u64 << 50),
+            });
+        }
+        st.committed_leader_height = r.next() % 100_000;
+        st.total_mining_issued = r.next() % (1u64 << 55);
+        st
+    }
+    #[test]
+    fn jj_fuzz_old_new_corrupt() {
+        let mut r = JRng(0x9e3779b97f4a7c15);
+        let (mut total, mut wrong_old, mut wrong_unv, mut wrong_v1, mut corrupt_ok) =
+            (0, 0, 0, 0, 0);
+        for n in 1..=5usize {
+            for dels in [0usize, 1, 3] {
+                for t in [false, true] {
+                    for _ in 0..400 {
+                        let st = j_state(&mut r, n, dels, t);
+                        let want = bincode::serialize(&st).unwrap();
+                        total += 1;
+                        // legacy pre-c8800ac
+                        match StakingState::from_bytes(&j_old_bytes(&st)) {
+                            Ok(g) if bincode::serialize(&g).unwrap() == want => {}
+                            _ => wrong_old += 1,
+                        }
+                        // unversioned c8800ac/f3675d3 rows (with slashed)
+                        match StakingState::from_bytes(&want) {
+                            Ok(g) if bincode::serialize(&g).unwrap() == want => {}
+                            _ => wrong_unv += 1,
+                        }
+                        // v1
+                        let v1 = st.to_bytes().unwrap();
+                        match StakingState::from_bytes(&v1) {
+                            Ok(g) if bincode::serialize(&g).unwrap() == want => {}
+                            _ => wrong_v1 += 1,
+                        }
+                        // corruptions of v1: slashed byte of validator0 -> 2; truncate 3; append 1 byte; version 2; random byte flip
+                        let v0 = bincode::serialize(&st.validators[0]).unwrap().len();
+                        let mut c = v1.clone();
+                        c[2 + 8 + v0 - 1] = 2;
+                        if StakingState::from_bytes(&c).is_ok() {
+                            corrupt_ok += 1;
+                        }
+                        if StakingState::from_bytes(&v1[..v1.len() - 3]).is_ok() {
+                            corrupt_ok += 1;
+                        }
+                        let mut c = v1.clone();
+                        c.push(0);
+                        if StakingState::from_bytes(&c).is_ok() {
+                            corrupt_ok += 1;
+                        }
+                        let mut c = v1.clone();
+                        c[1] = 2;
+                        if StakingState::from_bytes(&c).is_ok() {
+                            corrupt_ok += 1;
+                        }
+                    }
+                }
+            }
+        }
+        println!(
+            "JARVIS fuzz total={total} wrong_old={wrong_old} wrong_unversioned={wrong_unv} wrong_v1={wrong_v1} corrupt_accepted={corrupt_ok}"
+        );
+        assert_eq!((wrong_old, wrong_unv, wrong_v1, corrupt_ok), (0, 0, 0, 0));
+    }
+    #[test]
+    fn jj_huge_len_no_abort() {
+        for len in [1u64 << 40, u64::MAX, 1u64 << 20] {
+            let mut bytes = bincode::serialize(&StakingState::new()).unwrap();
+            bytes[..8].copy_from_slice(&len.to_le_bytes());
+            assert!(StakingState::from_bytes(&bytes).is_err());
+        }
+        println!("JARVIS huge len: Err, no abort");
+    }
+    #[test]
+    fn jj_legacy_first_byte_collision() {
+        // Legacy/unversioned staking row starts with validators.len() as u64 LE.
+        // 75 validators => first byte 0x4B == SNAPSHOT_MAGIC.
+        let mut r = JRng(7);
+        let mut st = StakingState::new();
+        for _ in 0..75 {
+            let a = r.addr();
+            st.validators.push(ValidatorInfo {
+                address: a,
+                stake: MIN_VALIDATOR_STAKE,
+                commission_bps: 0,
+                active: false,
+                payout_address: a,
+                public_key: None,
+                vrf_public_key: None,
+                missed_leader_count: 0,
+                last_online_height: 0,
+                last_commission_change_height: 0,
+                slashed: false,
+            });
+        }
+        let unv = bincode::serialize(&st).unwrap();
+        println!(
+            "JARVIS collision: first byte {:#x}, second {:#x}; from_bytes(unversioned 75) = {:?}",
+            unv[0],
+            unv[1],
+            StakingState::from_bytes(&unv)
+                .map(|s| s.validators.len())
+                .map_err(|e| e.to_string())
+        );
+        println!(
+            "JARVIS collision: from_bytes(legacy 75) = {:?}",
+            StakingState::from_bytes(&j_old_bytes(&st))
+                .map(|s| s.validators.len())
+                .map_err(|e| e.to_string())
+        );
+    }
 }
