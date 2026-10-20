@@ -39,6 +39,14 @@ export function idleLocked(lastActiveMs: number, nowMs: number): boolean {
   return nowMs - lastActiveMs >= LOCK_AFTER_MS;
 }
 
+/** The phrase stays on screen only while the session is still open. */
+export function phraseOnScreen(phase: string, phrase: string): string {
+  if (phase !== "open") {
+    return "";
+  }
+  return phrase;
+}
+
 /** Write the phrase, then schedule an empty write. */
 export function copyMnemonic(
   text: string,

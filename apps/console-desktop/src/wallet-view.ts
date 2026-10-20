@@ -10,6 +10,7 @@ import {
   MNEMONIC_COPY_WARNING,
   copyMnemonic,
   needsMainnetConfirm,
+  phraseOnScreen,
   reviewEnabled,
   reviewRows,
   sendEnabled,
@@ -194,6 +195,8 @@ export function mountWallet(shownChainId: () => string | null): void {
   async function refreshStatus(): Promise<void> {
     const status = await invoke<WalletStatus>("wallet_status");
     phase = status.phase;
+    phrase = phraseOnScreen(phase, phrase);
+    mnemonicText.textContent = phrase;
     if (phrase !== "") {
       show("mnemonic");
       return;

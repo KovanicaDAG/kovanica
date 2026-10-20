@@ -12,6 +12,7 @@ import {
   copyMnemonic,
   idleLocked,
   needsMainnetConfirm,
+  phraseOnScreen,
   reviewRows,
   sendEnabled,
   type QuoteView,
@@ -67,6 +68,14 @@ describe("wallet form", () => {
     expect(enabled({ quote: mainnet, shownChainId: "1", confirmMainnet: true })).toBe(true);
     expect(needsMainnetConfirm("1")).toBe(true);
     expect(needsMainnetConfirm("4")).toBe(false);
+  });
+
+  it("clears the recovery phrase from the screen when the session locks", () => {
+    expect(phraseOnScreen("open", "one two three")).toBe("one two three");
+    expect(phraseOnScreen("locked", "one two three")).toBe("");
+    expect(phraseOnScreen("absent", "one two three")).toBe("");
+    expect(viewSource.includes("phrase = phraseOnScreen(phase, phrase)")).toBe(true);
+    expect(viewSource.includes("mnemonicText.textContent = phrase")).toBe(true);
   });
 
   it("locks after five minutes and clears a copied phrase after 30 seconds", () => {
