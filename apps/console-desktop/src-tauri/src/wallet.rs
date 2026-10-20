@@ -760,4 +760,44 @@ mod tests {
         assert!(accept_keystore_json(&bad).is_err());
         assert!(kovanica_keystore::parse(bad.as_bytes()).is_err());
     }
+
+    #[test]
+    fn jarvis_cross_keystore_core_to_desktop_and_back() {
+        let dir = temp_dir("jarvis-cross");
+        let path = keystore_in(&dir);
+        let ks = kovanica_keystore::from_seed(&[0x22; 32], "core-password").unwrap();
+        let addr = kovanica_keystore::address(&ks).unwrap().to_string();
+        let json = serde_json::to_string(&ks).unwrap();
+        fs::write(&path, json).unwrap();
+        let mut store = WalletStore::new();
+        let st = must(store.unlock(&path, "core-password", Instant::now()));
+        assert_eq!(st.address.as_deref(), Some(addr.as_str()));
+        assert!(store.unlock(&path, "nope", Instant::now()).is_err());
+        let _ = fs::remove_dir_all(&dir);
+
+        let dir = temp_dir("jarvis-cross2");
+        let path = keystore_in(&dir);
+        let mut store = WalletStore::new();
+        let created = must(store.create(&path, "desk-password", Instant::now()));
+        let parsed = kovanica_keystore::parse(&fs::read(&path).unwrap()).unwrap();
+        let sk = kovanica_keystore::signing_key(&parsed, Some("desk-password")).unwrap();
+        let seed = kovanica_keystore::seed_from_mnemonic(&created.mnemonic).unwrap();
+        assert_eq!(sk.to_bytes(), *seed);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn jarvis_idle_lock_drops_session_and_quote_path() {
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        store.open_for_test("x".into(), now);
+        assert!(store
+            .session(now + LOCK_AFTER - Duration::from_millis(1))
+            .is_ok());
+        assert!(store.session(now + LOCK_AFTER).is_err());
+        assert!(store.open.is_none());
+        // touching after lock must not reopen
+        store.touch(now + LOCK_AFTER + Duration::from_secs(1));
+        assert!(store.open.is_none());
+    }
 }

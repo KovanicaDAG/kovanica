@@ -593,4 +593,81 @@ mod tests {
         assert_eq!(store.last_active_for_test(), Some(now));
         assert!(store.has_quote());
     }
+
+    #[test]
+    fn jarvis_changed_form_or_chain_is_not_signed() {
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        let sender = Address([1; 32]);
+        let recipient = Address([3; 32]).to_string();
+        store.open_for_test(sender.to_string(), now);
+        let quote = build_quote(sender, &recipient, "1", 4, 7, 3).unwrap();
+        store.session(now).unwrap().quote = Some(quote);
+        let e = store
+            .send_prepared(
+                &PanicRpc,
+                Path::new("missing"),
+                &fresh_status(Some("4")),
+                draft(Some("4"), false, &recipient, "2"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(e, REVIEW_AGAIN);
+        let other = Address([4; 32]).to_string();
+        let e = store
+            .send_prepared(
+                &PanicRpc,
+                Path::new("missing"),
+                &fresh_status(Some("4")),
+                draft(Some("4"), false, &other, "1"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(e, REVIEW_AGAIN);
+        // node now proves chain 2 while screen still shows 4 -> mismatch, before nonce RPC
+        let e = store
+            .send_prepared(
+                &PanicRpc,
+                Path::new("missing"),
+                &fresh_status(Some("2")),
+                draft(Some("4"), false, &recipient, "1"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(e, CHAIN_MISMATCH);
+        // screen and node both switched to 2: quote for 4 is stale
+        let e = store
+            .send_prepared(
+                &PanicRpc,
+                Path::new("missing"),
+                &fresh_status(Some("2")),
+                draft(Some("2"), false, &recipient, "1"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(e, QUOTE_STALE);
+        assert!(!store.has_quote());
+    }
+
+    #[test]
+    fn jarvis_zero_amount_is_quoted() {
+        // Adapted: amount 0 is rejected before the quote, so this is no longer an observation.
+        let q = build_quote(
+            Address([1; 32]),
+            &Address([3; 32]).to_string(),
+            "0",
+            4,
+            0,
+            1,
+        );
+        assert!(q.is_err(), "zero amount quote ok={}", q.is_ok());
+    }
+
+    #[test]
+    fn jarvis_legacy_and_garbage_recipients() {
+        let a = Address([3; 32]).to_string();
+        assert!(build_quote(Address([1; 32]), &format!(" {a} "), "1", 4, 0, 1).is_ok());
+        assert!(build_quote(Address([1; 32]), &a.to_uppercase(), "1", 4, 0, 1).is_err());
+        assert!(build_quote(Address([1; 32]), &a[..a.len() - 1], "1", 4, 0, 1).is_err());
+    }
 }
