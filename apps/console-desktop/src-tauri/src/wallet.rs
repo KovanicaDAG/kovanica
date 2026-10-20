@@ -956,6 +956,16 @@ mod tests {
     }
 
     #[test]
+    fn the_encrypted_test_vector_is_ignored_by_gitleaks_fingerprint() {
+        let ignore = include_str!("../../../../.gitleaksignore");
+        let fingerprint = "62f487532da42ada4cd656ea3de1d89db0bb8ea0:apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:735";
+        assert!(
+            ignore.lines().any(|line| line.trim() == fingerprint),
+            "gitleaks fingerprint for the encrypted test vector is missing"
+        );
+    }
+
+    #[test]
     fn a_lock_warning_does_not_extend_the_idle_deadline() {
         let left = Duration::from_secs(5 * 60);
         let until_warning = next_idle_wait(Some(left), false);
