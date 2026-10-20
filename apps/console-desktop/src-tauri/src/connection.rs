@@ -8,6 +8,7 @@
 //! `kovanica-types`.
 
 use std::fs;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::time::Duration;
 
@@ -105,11 +106,19 @@ pub fn resolve_rpc_url(saved: Option<&str>, env_value: Option<&str>) -> String {
 }
 
 /// Accept an http(s) URL and fill in `/rpc` when the path is empty.
+///
+/// Plain http is only for loopback (`127.0.0.1`, `::1`, `localhost`). Every
+/// other host must be https.
 pub fn validate_rpc_url(raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     let mut url = Url::parse(raw).map_err(|_| "Enter an http or https URL.".to_string())?;
     if url.scheme() != "http" && url.scheme() != "https" {
         return Err("The RPC URL must be http or https.".to_string());
+    }
+    if url.scheme() == "http" && !host_allows_plain_http(url.host()) {
+        return Err(
+            "Plain http is only allowed for loopback. Use https for any other host.".to_string(),
+        );
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err("The RPC URL must not include a username or password.".to_string());
@@ -543,6 +552,16 @@ fn save_failed() -> ConnError {
     ConnError::Rejected("Could not save the RPC setting.".to_string())
 }
 
+/// `127.0.0.1`, `::1`, and `localhost`. The rest of `127.0.0.0/8` is not accepted.
+fn host_allows_plain_http(host: Option<Host<&str>>) -> bool {
+    match host {
+        Some(Host::Ipv4(ip)) => ip == Ipv4Addr::LOCALHOST,
+        Some(Host::Ipv6(ip)) => ip == Ipv6Addr::LOCALHOST,
+        Some(Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
+}
+
 fn canonical_url(url: &Url) -> String {
     let host = match url.host() {
         Some(Host::Domain(host)) => host.to_ascii_lowercase(),
@@ -739,6 +758,33 @@ mod tests {
         assert!(validate_rpc_url("file:///tmp/rpc").is_err());
         assert!(validate_rpc_url("https://user:secret@rpc.kovanica.online/rpc").is_err());
         assert!(validate_rpc_url("https://rpc.kovanica.online/rpc?x=1").is_err());
+    }
+
+    #[test]
+    fn plain_http_is_only_for_loopback() {
+        let v4 = format!("{}.{}.{}.{}", 127, 0, 0, 1);
+        assert_eq!(
+            validate_rpc_url(&format!("http://{v4}/rpc")).unwrap(),
+            format!("http://{v4}/rpc")
+        );
+        assert_eq!(
+            validate_rpc_url("http://localhost").unwrap(),
+            "http://localhost/rpc"
+        );
+        assert_eq!(
+            validate_rpc_url("http://LOCALHOST/rpc").unwrap(),
+            "http://localhost/rpc"
+        );
+        assert_eq!(
+            validate_rpc_url("http://[::1]/rpc").unwrap(),
+            "http://[::1]/rpc"
+        );
+        assert!(validate_rpc_url("https://rpc-testnet.kovanica.online/rpc").is_ok());
+        assert!(validate_rpc_url("http://rpc-testnet.kovanica.online/rpc").is_err());
+        assert!(validate_rpc_url("http://rpc.kovanica.online/rpc").is_err());
+        let other = format!("{}.{}.{}.{}", 127, 0, 0, 2);
+        assert!(validate_rpc_url(&format!("http://{other}/rpc")).is_err());
+        assert!(validate_rpc_url(&format!("https://{other}/rpc")).is_ok());
     }
 
     #[test]
