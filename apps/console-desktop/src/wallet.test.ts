@@ -14,9 +14,11 @@ import {
   WALLET_LOCKED_EVENT,
   clearedImportFields,
   needsMainnetConfirm,
+  ACTIVITY_EVENTS,
   phraseLockWarning,
   phraseOnScreen,
   revealedPhrase,
+  shouldNoteActivity,
   reviewRows,
   secretsCleared,
   sendEnabled,
@@ -147,6 +149,23 @@ describe("wallet form", () => {
     expect(phraseOnScreen("absent", "one two three")).toBe("");
     expect(viewSource.includes("phrase = phraseOnScreen(phase, phrase)")).toBe(true);
     expect(viewSource.includes("mnemonicText.textContent = phrase")).toBe(true);
+  });
+
+  it("counts a keydown as activity", () => {
+    expect(ACTIVITY_EVENTS).toContain("keydown");
+    expect(shouldNoteActivity({ now: 10_000, lastTouch: 0, warningVisible: false })).toBe(true);
+    expect(shouldNoteActivity({ now: 14_999, lastTouch: 10_000, warningVisible: false })).toBe(
+      false,
+    );
+    expect(shouldNoteActivity({ now: 15_000, lastTouch: 10_000, warningVisible: false })).toBe(
+      true,
+    );
+    expect(shouldNoteActivity({ now: 10_001, lastTouch: 10_000, warningVisible: true })).toBe(
+      true,
+    );
+    const registration = viewSource.slice(viewSource.indexOf("for (const eventName of ACTIVITY_EVENTS)"));
+    expect(registration.includes("document.addEventListener(eventName, noteActivity)")).toBe(true);
+    expect(viewSource.includes('addEventListener("keydown"')).toBe(false);
   });
 
   it("does not keep a second idle timer beside the Rust lock", () => {

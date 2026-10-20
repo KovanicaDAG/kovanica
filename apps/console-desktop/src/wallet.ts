@@ -72,6 +72,28 @@ export function phraseLockWarning(phrase: string, warned: boolean): string {
   return LOCK_WARNING;
 }
 
+/** DOM events that mean the user is still at this screen. */
+export const ACTIVITY_EVENTS = ["input", "click", "keydown"] as const;
+
+/** How often ordinary activity moves the idle deadline. A lock warning is immediate. */
+export const ACTIVITY_TOUCH_INTERVAL_MS = 5_000;
+
+/**
+ * Whether this activity should move the idle deadline.
+ * A visible lock warning is reported at once. Other activity is reported
+ * at most once per interval.
+ */
+export function shouldNoteActivity(input: {
+  now: number;
+  lastTouch: number;
+  warningVisible: boolean;
+}): boolean {
+  if (input.warningVisible) {
+    return true;
+  }
+  return input.now - input.lastTouch >= ACTIVITY_TOUCH_INTERVAL_MS;
+}
+
 /** The phrase stays on screen only while the session is still open. */
 export function phraseOnScreen(phase: string, phrase: string): string {
   if (phase !== "open") {

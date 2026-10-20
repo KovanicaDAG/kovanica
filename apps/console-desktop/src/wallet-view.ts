@@ -11,6 +11,7 @@ import {
   MNEMONIC_WARNING,
   PHRASE_STILL_IN_WALLET,
   SHOW_PHRASE_AGAIN,
+  ACTIVITY_EVENTS,
   WALLET_LOCK_WARNING_EVENT,
   WALLET_LOCKED_EVENT,
   clearedImportFields,
@@ -22,6 +23,7 @@ import {
   reviewRows,
   secretsCleared,
   sendEnabled,
+  shouldNoteActivity,
   type QuoteView,
 } from "./wallet";
 
@@ -402,13 +404,14 @@ export function mountWallet(shownChainId: () => string | null): void {
   const noteActivity = (): void => {
     const now = Date.now();
     const warningVisible = !mnemonicLockWarning.hidden;
-    if (!warningVisible && now - lastTouch < 5_000) return;
+    if (!shouldNoteActivity({ now, lastTouch, warningVisible })) return;
     lastTouch = now;
     if (warningVisible) paintLockWarning(false);
     void invoke("wallet_touch").catch(() => undefined);
   };
-  document.addEventListener("input", noteActivity);
-  document.addEventListener("click", noteActivity);
+  for (const eventName of ACTIVITY_EVENTS) {
+    document.addEventListener(eventName, noteActivity);
+  }
 
   void listen(WALLET_LOCK_WARNING_EVENT, () => {
     paintLockWarning(true);
