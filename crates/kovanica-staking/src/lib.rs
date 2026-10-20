@@ -494,6 +494,59 @@ impl StakingState {
         Ok(())
     }
 
+    /// Reactivate an existing, currently-inactive validator with an explicit
+    /// self-stake of `amount`.
+    ///
+    /// F7 (Toni's decision): there is NO automatic return to the active set —
+    /// an evicted/offline or fully-unbonded validator returns ONLY when it
+    /// explicitly submits a new stake transaction. This is that path.
+    ///
+    /// Rules:
+    /// * The address MUST already have a validator record; otherwise
+    ///   [`StakingError::NotValidator`] and the caller uses [`Self::join_validator`].
+    /// * A currently-`active` record is not re-activated here; that is a
+    ///   [`Self::bond_validator`] (top-up) call — returns
+    ///   [`StakingError::ValidatorExists`] to keep the two paths disjoint.
+    /// * The post-stake self-stake (`existing + amount`) MUST reach
+    ///   [`MIN_VALIDATOR_STAKE`]; a slashed record (whose stake fell below the
+    ///   minimum) therefore stays out until it is topped back up to the minimum,
+    ///   and is never silently reactivated with too little at stake.
+    /// * Reactivation counts toward [`MAX_ACTIVE_VALIDATORS`]; a full set
+    ///   returns [`StakingError::ValidatorSetFull`].
+    /// * `missed_leader_count` is reset so the reactivated validator starts a
+    ///   clean liveness window.
+    pub fn reactivate_validator(
+        &mut self,
+        address: Address,
+        amount: Stake,
+    ) -> Result<(), StakingError> {
+        if amount == 0 {
+            return Err(StakingError::InsufficientStake);
+        }
+        let v_idx = self
+            .validators
+            .iter()
+            .position(|v| v.address == address)
+            .ok_or(StakingError::NotValidator)?;
+        if self.validators[v_idx].active {
+            return Err(StakingError::ValidatorExists);
+        }
+        let topped_up = self.validators[v_idx].stake.saturating_add(amount);
+        if topped_up < MIN_VALIDATOR_STAKE {
+            return Err(StakingError::InsufficientStake);
+        }
+        if self.validators.iter().filter(|v| v.active).count() >= MAX_ACTIVE_VALIDATORS {
+            return Err(StakingError::ValidatorSetFull);
+        }
+        let v = &mut self.validators[v_idx];
+        v.stake = topped_up;
+        v.active = true;
+        v.missed_leader_count = 0;
+        v.last_online_height = self.committed_leader_height;
+        self.total_staked = self.total_staked.saturating_add(amount);
+        Ok(())
+    }
+
     /// Validators in consensus committee order: active with
     /// `stake >= MIN_VALIDATOR_STAKE`, top [`MAX_ACTIVE_VALIDATORS`] by stake
     /// (ties by address), then sorted by address. The position in this list
@@ -1611,11 +1664,11 @@ mod tests {
     }
 
     #[test]
-    fn full_unbond_leaves_no_reactivation_path_in_staking() {
+    fn full_unbond_needs_an_explicit_reactivation_to_return() {
         // Re-entry into the active set is NOT automatic: a full unbond
         // deactivates the validator and `join_validator` refuses to re-add an
-        // address that already has a (now-inactive) record, so reactivation
-        // cannot silently happen from inside staking.
+        // address that already has a (now-inactive) record. The explicit
+        // operator action is `reactivate_validator`, driven by a new stake tx.
         let mut st = StakingState::new();
         for i in 1..=15u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
@@ -1623,6 +1676,11 @@ mod tests {
         }
         st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
         assert!(!st.validators[0].active, "full unbond deactivates");
+        assert_eq!(
+            st.committee_order().len(),
+            14,
+            "unbonded validator leaves the set"
+        );
 
         // A plain re-join of the same address is refused: the record persists.
         assert!(
@@ -1634,7 +1692,19 @@ mod tests {
         );
         assert!(
             !st.validators[0].active,
-            "validator stays inactive: no automatic refill exists"
+            "validator stays inactive until an explicit reactivation"
+        );
+
+        // The explicit reactivation brings it back.
+        st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
+        assert!(
+            st.validators[0].active,
+            "explicit reactivation returns the validator"
+        );
+        assert_eq!(
+            st.committee_order().len(),
+            15,
+            "an explicit re-stake restores the full set"
         );
     }
 
@@ -1663,10 +1733,10 @@ mod tests {
     }
 
     #[test]
-    fn offline_eviction_is_terminal_without_an_explicit_rejoin_path() {
-        // An evicted validator is never resurrected silently, and staking
-        // offers no automatic path back: the inactive record persists and a
-        // duplicate join is refused.
+    fn offline_eviction_is_terminal_until_an_explicit_reactivation() {
+        // An evicted validator is never resurrected silently: the inactive
+        // record persists, a duplicate join is refused, and only the explicit
+        // `reactivate_validator` (a new stake tx) brings it back.
         let mut st = StakingState::new();
         for i in 1..=15u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
@@ -1693,6 +1763,94 @@ mod tests {
             Err(StakingError::ValidatorExists)
         ));
         assert!(!st.validators[0].active);
+
+        // The explicit re-stake returns it and clears the missed counter.
+        st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
+        assert!(
+            st.validators[0].active,
+            "explicit re-stake returns the validator"
+        );
+        assert_eq!(
+            st.validators[0].missed_leader_count, 0,
+            "reactivation resets the missed-leader counter"
+        );
+    }
+
+    #[test]
+    fn f7_jarvis_evicted_validator_can_restake_explicitly() {
+        // An evicted validator must return ONLY via an explicit re-stake, and
+        // that reactivation must survive a restart and an epoch rotation.
+        let mut st = StakingState::new();
+        for i in 1..=15u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+
+        // Evict a(1) via the missed-leader threshold.
+        st.validators[0].missed_leader_count = MAX_MISSED_LEADERS_BEFORE_OFFLINE - 1;
+        let went_offline = st.advance_validator_liveness(1);
+        assert!(went_offline.contains(&a(1)));
+        assert!(!st.validators[0].active);
+        assert_eq!(st.committee_order().len(), 14);
+
+        // Explicit re-stake at MIN brings it back.
+        st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
+        assert!(st.validators[0].active, "explicit re-stake reactivates");
+        assert_eq!(st.committee_order().len(), 15);
+        assert_eq!(st.validators[0].missed_leader_count, 0);
+
+        // Survives a restart (bincode roundtrip, the persisted form).
+        let bytes = bincode::serialize(&st).expect("serialize");
+        let mut restarted: StakingState = bincode::deserialize(&bytes).expect("deserialize");
+        assert!(
+            restarted.validators[0].active,
+            "reactivation survives a restart"
+        );
+        assert_eq!(restarted.committee_order().len(), 15);
+
+        // Survives an epoch rotation (which does not mutate the set).
+        restarted.committed_leader_height = EPOCH_ROUNDS;
+        let (epoch, rotated) = restarted.rotate_epoch();
+        assert_eq!(epoch, 1);
+        assert!(rotated);
+        assert!(
+            restarted.validators[0].active,
+            "reactivation survives an epoch rotation"
+        );
+        assert_eq!(restarted.committee_order().len(), 15);
+    }
+
+    #[test]
+    fn f7_jarvis_evicted_validator_stays_inactive_without_restake() {
+        // Without a re-stake an evicted validator must stay out across a
+        // restart and an epoch rotation: nothing auto-refills it.
+        let mut st = StakingState::new();
+        for i in 1..=15u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        st.validators[0].missed_leader_count = MAX_MISSED_LEADERS_BEFORE_OFFLINE - 1;
+        st.advance_validator_liveness(1);
+        assert!(!st.validators[0].active);
+
+        // Across a restart.
+        let bytes = bincode::serialize(&st).expect("serialize");
+        let mut restarted: StakingState = bincode::deserialize(&bytes).expect("deserialize");
+        assert!(
+            !restarted.validators[0].active,
+            "no re-stake: still inactive after restart"
+        );
+        assert_eq!(restarted.committee_order().len(), 14);
+
+        // Across an epoch rotation.
+        restarted.committed_leader_height = EPOCH_ROUNDS;
+        let (_epoch, rotated) = restarted.rotate_epoch();
+        assert!(rotated);
+        assert!(
+            !restarted.validators[0].active,
+            "no re-stake: still inactive after an epoch rotation"
+        );
+        assert_eq!(restarted.committee_order().len(), 14);
     }
 
     #[test]

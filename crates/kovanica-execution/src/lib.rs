@@ -715,9 +715,15 @@ impl ExecutionContext {
         Ok(events)
     }
 
-    /// Execute a stake transaction: register the sender as a validator
-    /// (`join_validator`, rejects duplicates) or, if it already is an active
-    /// validator, bond additional self-stake (`bond_validator`).
+    /// Execute a stake transaction.
+    ///
+    /// F7 (Toni's decision): an explicit Stake tx has three outcomes based on
+    /// the sender's existing validator record:
+    /// * record present and `active` → top up self-stake (`bond_validator`);
+    /// * record present but inactive (offline-evicted or fully unbonded) →
+    ///   reactivate with an explicit stake (`reactivate_validator`). This is the
+    ///   ONLY way an evicted validator returns — there is no automatic refill;
+    /// * no record at all → register a new validator (`join_validator`).
     fn execute_stake(
         &mut self,
         txn: &mut WriteTransaction,
@@ -731,18 +737,18 @@ impl ExecutionContext {
                 "Insufficient balance for stake".to_string(),
             ));
         }
-        let is_validator = self
-            .staking
-            .validators
-            .iter()
-            .any(|v| v.address == *from && v.active);
-        if is_validator {
-            self.staking.bond_validator(*from, amount)?;
-        } else {
+        let record = self.staking.validators.iter().find(|v| v.address == *from);
+        match record.map(|v| v.active) {
+            Some(true) => self.staking.bond_validator(*from, amount)?,
+            // Existing inactive record: reactivate by explicit stake, not a
+            // fresh join (join_validator would reject the duplicate address).
+            Some(false) => self.staking.reactivate_validator(*from, amount)?,
             // Address == Ed25519 public key (unchanged address format).
-            let pk = kovanica_types::PublicKey(from.0);
-            self.staking
-                .join_validator(*from, amount, 0, None, Some(pk), None)?;
+            None => {
+                let pk = kovanica_types::PublicKey(from.0);
+                self.staking
+                    .join_validator(*from, amount, 0, None, Some(pk), None)?;
+            }
         }
         sub_balance_mapped(storage, txn, from, amount)?;
         Ok(vec![ContractEvent {
@@ -3699,6 +3705,78 @@ mod tests {
         );
         assert!(!r[0].success);
         assert_eq!(read_balance(&storage, &other), 10 * K - 1000);
+    }
+
+    #[test]
+    fn explicit_stake_tx_reactivates_an_evicted_validator() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+        let key = test_keypair(1);
+        let me = address_of(&key);
+        let mut ctx = setup_funded_sender(&storage, &me, 200_000 * K);
+        let min = kovanica_staking::MIN_VALIDATOR_STAKE;
+
+        // Join as a validator.
+        let r = run(
+            &mut ctx,
+            &storage,
+            1,
+            vec![signed_tx(
+                &key,
+                TransactionKind::Stake { amount: min },
+                0,
+                1000,
+            )],
+        );
+        assert!(r.iter().all(|r| r.success), "{r:?}");
+        let idx = ctx
+            .staking
+            .validators
+            .iter()
+            .position(|v| v.address == me)
+            .expect("validator");
+
+        // Evict it via the missed-leader threshold (the same routine the engine
+        // calls): drive its missed count to one below the limit, then advance
+        // liveness with a leader other than itself.
+        ctx.staking.validators[idx].missed_leader_count =
+            kovanica_staking::MAX_MISSED_LEADERS_BEFORE_OFFLINE - 1;
+        let mine = ctx
+            .staking
+            .committee_order()
+            .iter()
+            .position(|v| v.address == me)
+            .map(|p| p as u16)
+            .expect("validator in committee");
+        let other_leader = if mine == 0 { 1 } else { 0 };
+        let went_offline = ctx.staking.advance_validator_liveness(other_leader);
+        assert!(went_offline.contains(&me), "validator must be evicted");
+        assert!(!ctx.staking.validators[idx].active);
+
+        // An explicit new Stake tx on the inactive (non-slashed) record must
+        // REACTIVATE it, not fail with ValidatorExists.
+        let r = run(
+            &mut ctx,
+            &storage,
+            2,
+            vec![signed_tx(
+                &key,
+                TransactionKind::Stake { amount: min },
+                1,
+                1000,
+            )],
+        );
+        assert!(
+            r.iter().all(|r| r.success),
+            "explicit re-stake must succeed: {r:?}"
+        );
+        let v = ctx
+            .staking
+            .validators
+            .iter()
+            .find(|v| v.address == me)
+            .expect("validator");
+        assert!(v.active, "explicit re-stake reactivates the validator");
     }
 
     #[test]
