@@ -571,7 +571,7 @@ where
     // EPOCH_ROUNDS) still derives the truthful, round-based epoch instead of a
     // height-based one.
     let startup_round = startup_round_from_storage(&state_storage);
-    let committee = build_committee(
+    let committee = build_committee_for_round(
         &state_storage,
         &public_key,
         &validator_address,
@@ -2897,7 +2897,7 @@ async fn run_execution(
                                     round = subdag.leader_round,
                                     "epoch boundary crossed; rebuilding committee for RPC"
                                 );
-                                match build_committee(
+                                match build_committee_for_round(
                                     &state_storage,
                                     &public_key,
                                     &validator_address,
@@ -3446,6 +3446,48 @@ fn build_committee(
     }
 
     Ok(CommitteeInfo::try_new(epoch, authorities)?)
+}
+
+/// Build the committee for `round` from the epoch's FROZEN seal snapshot when
+/// one exists, else from the live active set.
+///
+/// The seal producer freezes the committee on the first seal of an epoch (see
+/// `seals::freeze_epoch_committee_hash`). Rebuilding the RPC committee from
+/// that same snapshot is what makes `getCommittee`'s committee — and therefore
+/// a light client's `committee_seal_hash` recomputation — equal the sealed
+/// header's `committee_hash` even after a mid-epoch join/evict/unbond. When no
+/// snapshot exists yet (no seal produced in this epoch), fall back to
+/// [`build_committee`] from the live set.
+fn build_committee_for_round(
+    storage: &Storage,
+    local_public_key: &PublicKey,
+    local_address: &Address,
+    listen_addr: &str,
+    round: Round,
+) -> Result<CommitteeInfo> {
+    let epoch = kovanica_types::epoch_for_round(round);
+    if let Ok(read) = storage.begin_read() {
+        if let Ok(Some(members)) = storage.state().get_epoch_committee(&read, epoch) {
+            // Reuse the exact (index, public_key, stake) triples that were
+            // hashed, so the recomputed hash matches by construction. Staking
+            // already assigns indices by address order; keep them as frozen.
+            let authorities = members
+                .iter()
+                .map(|(index, public_key, stake)| AuthorityInfo {
+                    index: *index,
+                    stake: *stake,
+                    public_key: *public_key,
+                    vrf_public_key: None,
+                    address: Address::from_public_key(public_key),
+                    network_address: listen_addr.to_string(),
+                })
+                .collect::<Vec<_>>();
+            if let Ok(committee) = CommitteeInfo::try_new(epoch, authorities) {
+                return Ok(committee);
+            }
+        }
+    }
+    build_committee(storage, local_public_key, local_address, listen_addr, round)
 }
 
 /// Build the [`MempoolConfig`] from the node configuration and environment variables.
@@ -6585,5 +6627,312 @@ mod b1_epoch_restart_repro {
             kovanica_network::admit_seal(&keys, chain_id, &forged, Some(forged.header.hash()),),
             kovanica_network::SealAdmission::Reject(kovanica_network::Rejection::EpochMismatch)
         ));
+    }
+
+    /// Compute the seal hash of a committee the way a light client does:
+    /// `committee_seal_hash(epoch, members)` over its `(index, key, stake)` rows.
+    fn committee_hash_of(committee: &CommitteeInfo) -> Hash {
+        let members: Vec<_> = committee
+            .authorities()
+            .iter()
+            .map(|a| (a.index, a.public_key, a.stake))
+            .collect();
+        kovanica_types::committee_seal_hash(committee.epoch(), &members)
+    }
+
+    /// Build a `CommittedSubDag` for `leader_round` (no blocks), which is all
+    /// the seal producer needs to derive the epoch and hash.
+    fn subdag_at(leader_round: u64) -> kovanica_consensus::CommittedSubDag {
+        kovanica_consensus::CommittedSubDag {
+            blocks: vec![],
+            leader: StatementBlock {
+                author: 0,
+                round: leader_round,
+                parents: vec![],
+                transactions: vec![],
+                statements: vec![],
+                signature: Signature([0u8; 64]),
+                digest: StatementBlock::compute_digest(0, leader_round, &[], &[]),
+                merkle_root: Default::default(),
+            },
+            leader_round,
+            leader_author: 0,
+            non_blue: vec![],
+        }
+    }
+
+    /// P1 (option (a)): an active-set change inside an epoch must NOT change the
+    /// committee a light client recomputes for that epoch's sealed header.
+    ///
+    /// The first seal of the epoch freezes the committee; an eviction after that
+    /// must leave the RPC committee's `committee_seal_hash` equal to the sealed
+    /// header's `committee_hash`.
+    #[test]
+    fn e1_jarvis_mid_epoch_eviction_keeps_rpc_committee_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+        let leader_round = 3 * EPOCH_ROUNDS + 10; // epoch 3, mid-epoch
+        let epoch = kovanica_types::epoch_for_round(leader_round);
+
+        // Three validators so evicting one leaves a non-empty committee.
+        let keys: Vec<(SigningKey, PublicKey, Address)> = (0..3)
+            .map(|_| {
+                let (sk, pk) = kovanica_crypto::generate_keypair();
+                (sk, pk, Address::from_public_key(&pk))
+            })
+            .collect();
+        let stored: Vec<(Address, PublicKey)> = keys.iter().map(|(_, pk, a)| (*a, *pk)).collect();
+
+        let storage = storage_at_height(dir.path(), "mid-epoch.redb", &stored, leader_round);
+        let subdag = subdag_at(leader_round);
+        let ctx = seals::SealContext {
+            chain_id,
+            signer: Some((0, keys[0].0.clone())),
+            mysticghost: false,
+        };
+        let sealed =
+            seals::publish_local_seal(&storage, &ctx, &subdag, leader_round, Hash::zero()).unwrap();
+        let sealed_hash = sealed.header.committee_hash;
+
+        // `getCommittee`'s view for this epoch, rebuilt from the frozen snapshot.
+        let rpc_committee = build_committee_for_round(
+            &storage,
+            &keys[0].1,
+            &keys[0].2,
+            "127.0.0.1:0",
+            leader_round,
+        )
+        .unwrap();
+        assert_eq!(rpc_committee.epoch(), epoch);
+        assert_eq!(
+            committee_hash_of(&rpc_committee),
+            sealed_hash,
+            "before any change the RPC committee must hash to the sealed header"
+        );
+
+        // Now evict a validator mid-epoch (active -> false) and re-run the RPC
+        // rebuild for the SAME epoch. The frozen snapshot must keep the hash.
+        {
+            let mut staking = {
+                let read = storage.begin_read().unwrap();
+                storage.state().load_staking_state(&read).unwrap()
+            };
+            let victim = keys[1].2;
+            let v = staking
+                .validators
+                .iter_mut()
+                .find(|v| v.address == victim)
+                .unwrap();
+            v.active = false;
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_staking_state(&txn, &staking).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let after_evict = build_committee_for_round(
+            &storage,
+            &keys[0].1,
+            &keys[0].2,
+            "127.0.0.1:0",
+            leader_round,
+        )
+        .unwrap();
+        assert_eq!(
+            committee_hash_of(&after_evict),
+            sealed_hash,
+            "a mid-epoch eviction must not change the epoch's frozen committee hash"
+        );
+
+        // A later seal in the SAME epoch also hashes the frozen committee.
+        let sealed_later = seals::publish_local_seal(
+            &storage,
+            &ctx,
+            &subdag_at(leader_round + 1),
+            leader_round + 1,
+            Hash::zero(),
+        )
+        .unwrap();
+        assert_eq!(
+            sealed_later.header.committee_hash, sealed_hash,
+            "later seals in the epoch must reuse the frozen committee"
+        );
+    }
+
+    /// Item 3 case 1: start/restart — the RPC committee's `committee_seal_hash`
+    /// equals the sealed header's, through the real startup path.
+    #[test]
+    fn e1_jarvis_seal_hash_matches_at_startup_and_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, pk) = kovanica_crypto::generate_keypair();
+        let addr = Address::from_public_key(&pk);
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+        let leader_round = EPOCH_ROUNDS + 1;
+
+        let storage =
+            storage_with_header(dir.path(), "startup.redb", &[(addr, pk)], 5, leader_round);
+        let ctx = seals::SealContext {
+            chain_id,
+            signer: Some((0, sk)),
+            mysticghost: false,
+        };
+        let announcement =
+            seals::publish_local_seal(&storage, &ctx, &subdag_at(leader_round), 5, Hash::zero())
+                .unwrap()
+                .gossip
+                .expect("validator signs");
+
+        let committee = build_committee_for_round(
+            &storage,
+            &pk,
+            &addr,
+            "127.0.0.1:0",
+            startup_round_from_storage(&storage),
+        )
+        .unwrap();
+        assert_eq!(
+            committee_hash_of(&committee),
+            announcement.header.committee_hash
+        );
+
+        // Restart from persisted state: same startup path, same hash.
+        let restarted = storage_with_header(
+            dir.path(),
+            "startup-restart.redb",
+            &[(addr, pk)],
+            5,
+            leader_round,
+        );
+        let committee_restart = build_committee_for_round(
+            &restarted,
+            &pk,
+            &addr,
+            "127.0.0.1:0",
+            startup_round_from_storage(&restarted),
+        )
+        .unwrap();
+        assert_eq!(
+            committee_hash_of(&committee_restart),
+            announcement.header.committee_hash,
+            "restart must not change the epoch's seal hash"
+        );
+    }
+
+    /// Item 3 case 2: epoch boundary — a seal produced across a boundary hashes
+    /// a committee whose snapshot the RPC serves for that (new) epoch.
+    #[test]
+    fn e1_jarvis_seal_hash_matches_across_epoch_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, pk) = kovanica_crypto::generate_keypair();
+        let addr = Address::from_public_key(&pk);
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+        // Exactly at the boundary: round that starts epoch 1.
+        let boundary_round = EPOCH_ROUNDS;
+        assert_eq!(kovanica_types::epoch_for_round(boundary_round), 1);
+
+        let storage = storage_with_header(
+            dir.path(),
+            "boundary.redb",
+            &[(addr, pk)],
+            EPOCH_ROUNDS - 1,
+            boundary_round,
+        );
+        let ctx = seals::SealContext {
+            chain_id,
+            signer: Some((0, sk)),
+            mysticghost: false,
+        };
+        let announcement = seals::publish_local_seal(
+            &storage,
+            &ctx,
+            &subdag_at(boundary_round),
+            EPOCH_ROUNDS - 1,
+            Hash::zero(),
+        )
+        .unwrap()
+        .gossip
+        .expect("validator signs");
+
+        let committee =
+            build_committee_for_round(&storage, &pk, &addr, "127.0.0.1:0", boundary_round).unwrap();
+        assert_eq!(committee.epoch(), 1);
+        assert_eq!(
+            committee_hash_of(&committee),
+            announcement.header.committee_hash
+        );
+    }
+
+    /// Item 3 case 3 (== the distinct hash surface of the mid-epoch eviction):
+    /// a mid-epoch active-set change keeps the RPC committee's seal hash equal
+    /// to the sealed header's. This exercises the same invariant as
+    /// [`e1_jarvis_mid_epoch_eviction_keeps_rpc_committee_hash`] through the
+    /// `build_committee_for_round` RPC path only, so the three hash-surface
+    /// cases are each covered by their own test.
+    #[test]
+    fn e1_jarvis_seal_hash_matches_after_mid_epoch_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+        let leader_round = 5 * EPOCH_ROUNDS + 3;
+        let epoch = kovanica_types::epoch_for_round(leader_round);
+
+        let keys: Vec<(SigningKey, PublicKey, Address)> = (0..2)
+            .map(|_| {
+                let (sk, pk) = kovanica_crypto::generate_keypair();
+                (sk, pk, Address::from_public_key(&pk))
+            })
+            .collect();
+        let stored: Vec<(Address, PublicKey)> = keys.iter().map(|(_, pk, a)| (*a, *pk)).collect();
+
+        let storage = storage_at_height(dir.path(), "change.redb", &stored, leader_round);
+        let ctx = seals::SealContext {
+            chain_id,
+            signer: Some((0, keys[0].0.clone())),
+            mysticghost: false,
+        };
+        let announcement = seals::publish_local_seal(
+            &storage,
+            &ctx,
+            &subdag_at(leader_round),
+            leader_round,
+            Hash::zero(),
+        )
+        .unwrap();
+
+        // Add a brand-new validator mid-epoch: the frozen snapshot must win.
+        {
+            let mut staking = {
+                let read = storage.begin_read().unwrap();
+                storage.state().load_staking_state(&read).unwrap()
+            };
+            let (_, extra_pk) = kovanica_crypto::generate_keypair();
+            let extra_addr = Address::from_public_key(&extra_pk);
+            staking
+                .join_validator(
+                    extra_addr,
+                    MIN_VALIDATOR_STAKE,
+                    0,
+                    Some(extra_addr),
+                    Some(extra_pk),
+                    None,
+                )
+                .unwrap();
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_staking_state(&txn, &staking).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let committee = build_committee_for_round(
+            &storage,
+            &keys[0].1,
+            &keys[0].2,
+            "127.0.0.1:0",
+            leader_round,
+        )
+        .unwrap();
+        assert_eq!(committee.epoch(), epoch);
+        assert_eq!(
+            committee_hash_of(&committee),
+            announcement.header.committee_hash,
+            "a mid-epoch join must not change the epoch's frozen seal hash"
+        );
     }
 }

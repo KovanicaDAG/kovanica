@@ -154,6 +154,15 @@ pub mod tables {
     /// One commit seal: `(committed height, authority index)` -> signature bytes.
     pub const COMMIT_SEALS: TableDefinition<(u64, u16), Vec<u8>> =
         TableDefinition::new("commit_seals");
+    /// Frozen seal committee snapshot for an epoch (bincode `Vec<(AuthorityIndex,
+    /// PublicKey, Stake)>`), keyed by epoch number.
+    ///
+    /// The first seal produced in an epoch writes the snapshot; every later
+    /// seal in that epoch and the RPC `getCommittee` path read the SAME frozen
+    /// snapshot, so a mid-epoch join/evict/unbond cannot make the sealed
+    /// header's `committee_hash` disagree with the committee the RPC serves.
+    pub const EPOCH_COMMITTEE: TableDefinition<u64, Vec<u8>> =
+        TableDefinition::new("epoch_committee");
     /// Transaction hashes execution applied at a committed height, in order.
     pub const EXECUTED_TX_HASHES: TableDefinition<u64, Vec<u8>> =
         TableDefinition::new("executed_tx_hashes");

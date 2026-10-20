@@ -713,6 +713,52 @@ impl StateStore {
         }
     }
 
+    /// The frozen seal committee snapshot for `epoch`, if one was written.
+    ///
+    /// Each member is `(authority index, public key, stake)`, the exact triple
+    /// `kovanica_types::committee_seal_hash` hashes. `None` before the first
+    /// seal of the epoch.
+    pub fn get_epoch_committee(
+        &self,
+        txn: &ReadTransaction,
+        epoch: u64,
+    ) -> Result<Option<Vec<kovanica_types::SealCommitteeMember>>, StateStoreError> {
+        // redb creates tables lazily on first write, so on a database that has
+        // never sealed in this epoch the table does not exist yet. That is the
+        // "no snapshot" case, not an error.
+        let table = match txn.open_table(crate::tables::EPOCH_COMMITTEE) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let bytes = table.get(epoch)?.map(|guard| guard.value().to_vec());
+        match bytes {
+            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Freeze the seal committee snapshot for `epoch` if none exists yet.
+    ///
+    /// First writer wins: a snapshot already stored for `epoch` is left
+    /// in place and the incoming `members` are ignored, so the very first seal
+    /// of an epoch pins the committee every later seal and the RPC agree on.
+    /// Returns the snapshot now in force for `epoch`.
+    pub fn put_epoch_committee_if_absent(
+        &self,
+        txn: &WriteTransaction,
+        epoch: u64,
+        members: &[kovanica_types::SealCommitteeMember],
+    ) -> Result<Vec<kovanica_types::SealCommitteeMember>, StateStoreError> {
+        let mut table = txn.open_table(crate::tables::EPOCH_COMMITTEE)?;
+        if let Some(existing) = table.get(epoch)? {
+            return Ok(bincode::deserialize(&existing.value().to_vec())?);
+        }
+        let bytes = bincode::serialize(members)?;
+        table.insert(epoch, bytes)?;
+        Ok(members.to_vec())
+    }
+
     fn delete_seals_at(&self, txn: &WriteTransaction, height: u64) -> Result<(), StateStoreError> {
         let keys: Vec<(u64, u16)> = {
             let table = txn.open_table(crate::tables::COMMIT_SEALS)?;

@@ -139,16 +139,14 @@ pub fn publish_local_seal(
     // to avoid restart mismatch. Use the ONE shared round→epoch unit.
     let seal_epoch = kovanica_types::epoch_for_round(subdag.leader_round);
 
-    // Compute committee hash for seal_epoch from current staking state
-    let read = storage.begin_read()?;
-    let staking_state = storage.state().load_staking_state(&read)?;
-    let committee = build_committee_for_seal_epoch(&staking_state, seal_epoch)?;
-    let seal_members: Vec<_> = committee
-        .authorities()
-        .iter()
-        .map(|a| (a.index, a.public_key, a.stake))
-        .collect();
-    let committee_hash = kovanica_types::committee_seal_hash(seal_epoch, &seal_members);
+    // Freeze the seal committee for `seal_epoch`: the first seal of an epoch
+    // pins the committee snapshot, and every later seal in that epoch hashes
+    // the SAME snapshot (option (a), decision recorded in TASKLIST). Without
+    // this a mid-epoch join/evict/unbond would change the hashed set while the
+    // RPC committee still served the epoch-boundary snapshot, so the sealed
+    // header's `committee_hash` and the light-client recomputation would
+    // disagree.
+    let committee_hash = freeze_epoch_committee_hash(storage, seal_epoch, subdag.leader_round)?;
 
     let parent_leader_digest = parent_digest(storage, committed_height)?;
     let header = kovanica_types::leader_header(
@@ -185,6 +183,49 @@ pub fn publish_local_seal(
     };
     txn.commit()?;
     Ok(LocalSeal { header, gossip })
+}
+
+/// Freeze (or read) the seal committee for `seal_epoch` and return its hash.
+///
+/// The snapshot is the committee built from the current active validator set;
+/// it is written on the first call for an epoch and reused afterwards (first
+/// writer wins, see [`kovanica_storage::state_store::StateStore::put_epoch_committee_if_absent`]).
+/// Both the seal producer here and the RPC `getCommittee` path call this, so
+/// the committee a light client recomputes is exactly the one the sealed header
+/// was hashed against — even after a mid-epoch active-set change.
+///
+/// `round` is only used for diagnostics by callers; the epoch alone keys the
+/// snapshot.
+pub(crate) fn freeze_epoch_committee_hash(
+    storage: &Storage,
+    seal_epoch: u64,
+    round: u64,
+) -> Result<Hash> {
+    let _ = round;
+    // Already frozen for this epoch: reuse it verbatim.
+    {
+        let read = storage.begin_read()?;
+        if let Some(members) = storage.state().get_epoch_committee(&read, seal_epoch)? {
+            return Ok(kovanica_types::committee_seal_hash(seal_epoch, &members));
+        }
+    }
+    // First seal of this epoch: build the committee from the live active set,
+    // then write it as the frozen snapshot (first writer wins, so a concurrent
+    // writer's snapshot is the one kept).
+    let read = storage.begin_read()?;
+    let staking_state = storage.state().load_staking_state(&read)?;
+    let committee = build_committee_for_seal_epoch(&staking_state, seal_epoch)?;
+    let proposed: Vec<_> = committee
+        .authorities()
+        .iter()
+        .map(|a| (a.index, a.public_key, a.stake))
+        .collect();
+    let write = storage.begin_write()?;
+    let frozen = storage
+        .state()
+        .put_epoch_committee_if_absent(&write, seal_epoch, &proposed)?;
+    write.commit()?;
+    Ok(kovanica_types::committee_seal_hash(seal_epoch, &frozen))
 }
 
 /// Store a gossiped seal when it signs the header local execution saved.

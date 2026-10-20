@@ -168,12 +168,20 @@ pub fn leader_header(
     }
 }
 
+/// One row of a sealed committee: `(authority index, public key, stake)`.
+///
+/// Network addresses and VRF keys are deliberately absent — they are not part
+/// of [`committee_seal_hash`]. This alias is the canonical shape of the
+/// per-epoch committee snapshot (`EPOCH_COMMITTEE`) that `publish_local_seal`
+/// freezes and the RPC committee is rebuilt from, so both hash the same rows.
+pub type SealCommitteeMember = (AuthorityIndex, PublicKey, Stake);
+
 /// Hash of the committee a commit seal is bound to.
 ///
 /// Members are `(index, public key, stake)`. Network addresses and VRF
 /// keys are left out: they are not part of the seal. Input order does not
 /// matter; the hash sorts by authority index.
-pub fn committee_seal_hash(epoch: u64, members: &[(AuthorityIndex, PublicKey, Stake)]) -> Hash {
+pub fn committee_seal_hash(epoch: u64, members: &[SealCommitteeMember]) -> Hash {
     let mut members = members.to_vec();
     members.sort_by_key(|member| member.0);
     let mut data = Vec::with_capacity(8 + 4 + members.len() * (2 + 32 + 8));
