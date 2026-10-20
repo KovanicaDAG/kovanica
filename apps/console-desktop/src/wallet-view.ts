@@ -7,9 +7,10 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   EMPTY_HISTORY,
   HISTORY_HEADING,
-  MNEMONIC_COPY_WARNING,
-  copyMnemonic,
+  MNEMONIC_WARNING,
+  clearedImportFields,
   needsMainnetConfirm,
+  phraseOnScreen,
   reviewEnabled,
   reviewRows,
   sendEnabled,
@@ -77,7 +78,6 @@ export function mountWallet(shownChainId: () => string | null): void {
   const importButton = required<HTMLButtonElement>("import-wallet");
   const mnemonicWarning = required<HTMLParagraphElement>("mnemonic-warning");
   const mnemonicText = required<HTMLParagraphElement>("mnemonic-text");
-  const copyButton = required<HTMLButtonElement>("copy-mnemonic");
   const doneButton = required<HTMLButtonElement>("mnemonic-done");
   const lockedAddress = required<HTMLParagraphElement>("locked-address");
   const unlockPassword = required<HTMLInputElement>("unlock-password");
@@ -101,7 +101,7 @@ export function mountWallet(shownChainId: () => string | null): void {
   let phase = "absent";
   let quote: QuoteView | null = null;
 
-  mnemonicWarning.textContent = MNEMONIC_COPY_WARNING;
+  mnemonicWarning.textContent = MNEMONIC_WARNING;
   historyHeading.textContent = HISTORY_HEADING;
 
   function showError(message: string): void {
@@ -194,6 +194,8 @@ export function mountWallet(shownChainId: () => string | null): void {
   async function refreshStatus(): Promise<void> {
     const status = await invoke<WalletStatus>("wallet_status");
     phase = status.phase;
+    phrase = phraseOnScreen(phase, phrase);
+    mnemonicText.textContent = phrase;
     if (phrase !== "") {
       show("mnemonic");
       return;
@@ -238,27 +240,16 @@ export function mountWallet(shownChainId: () => string | null): void {
           mnemonic: importPhrase.value,
           passphrase: importPassword.value,
         });
-        importPhrase.value = "";
-        importPassword.value = "";
         phrase = "";
         await refreshStatus();
       } catch (error) {
         showError(messageFrom(error));
+      } finally {
+        const cleared = clearedImportFields();
+        importPhrase.value = cleared.phrase;
+        importPassword.value = cleared.password;
       }
     })();
-  });
-
-  copyButton.addEventListener("click", () => {
-    if (phrase === "") return;
-    copyMnemonic(
-      phrase,
-      (value) => {
-        void navigator.clipboard.writeText(value);
-      },
-      (ms, run) => {
-        window.setTimeout(run, ms);
-      },
-    );
   });
 
   doneButton.addEventListener("click", () => {

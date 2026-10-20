@@ -24,6 +24,7 @@ const REVIEW_AGAIN: &str = "Review the transfer again.";
 const QUOTE_STALE: &str = "The quote is out of date. Review the transfer again.";
 const BAD_RECIPIENT: &str = "That recipient is not a Kovanica address.";
 const SIGN_FAILED: &str = "The transfer could not be signed.";
+const ZERO_AMOUNT: &str = "Enter an amount greater than 0.";
 
 /// Values the screen showed when it asked for a quote or a signature.
 pub struct TransferDraft<'a> {
@@ -95,6 +96,9 @@ pub fn build_quote(
 ) -> Result<TransferQuote, String> {
     let recipient = canonical_recipient(draft_recipient)?;
     let amount = parse_kuna_atoms(draft_amount)?;
+    if amount == 0 {
+        return Err(ZERO_AMOUNT.to_string());
+    }
     let len = transfer_len(sender, recipient, amount, nonce)?;
     let fee = fee_rate.saturating_mul(len as u64).max(1);
     Ok(TransferQuote {
@@ -139,7 +143,6 @@ impl WalletStore {
         let nonce = read_nonce(rpc, &open.address)?;
         let rate = read_fee_rate(rpc)?;
         let quote = build_quote(sender, draft.recipient, draft.amount, chain, nonce, rate)?;
-        open.last_active = now;
         open.quote = Some(quote.clone());
         Ok(quote)
     }
@@ -206,7 +209,6 @@ impl WalletStore {
             .map_err(|err| err.to_string())?;
         let transaction_hash = accept_hash(&result)?;
         open.quote = None;
-        open.last_active = now;
         Ok(SendReceipt { transaction_hash })
     }
 }
@@ -301,6 +303,7 @@ mod tests {
     use super::*;
     use crate::connection::ConnError;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     fn fresh_status(chain: Option<&str>) -> NodeStatus {
         NodeStatus {
@@ -433,8 +436,33 @@ mod tests {
         assert_eq!(quote.fee_atoms, (2 * len as u64).to_string());
         assert_eq!(quote.amount_atoms, "1000000000");
         assert_eq!(quote.amount_display, "1");
-        let free = build_quote(sender, &recipient, "0", 4, 0, 0).unwrap();
+        let free = build_quote(sender, &recipient, "0.000000001", 4, 0, 0).unwrap();
         assert_eq!(free.fee_atoms, "1");
+    }
+
+    #[test]
+    fn a_zero_amount_is_rejected_before_a_quote() {
+        let sender = Address([1; 32]);
+        let recipient = Address([3; 32]).to_string();
+        for amount in ["0", "0.0", "0.000000000", " 0 "] {
+            let err = build_quote(sender, &recipient, amount, 4, 7, 1).unwrap_err();
+            assert_eq!(err, ZERO_AMOUNT, "{amount}");
+        }
+        assert!(build_quote(sender, &recipient, "0.000000001", 4, 7, 1).is_ok());
+
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        store.open_for_test(sender.to_string(), now);
+        let err = store
+            .quote_from_status(
+                &ScriptRpc::account(7, 1),
+                &fresh_status(Some("4")),
+                draft(Some("4"), false, &recipient, "0"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(err, ZERO_AMOUNT);
+        assert!(!store.has_quote());
     }
 
     #[test]
@@ -542,6 +570,104 @@ mod tests {
         assert!(!tx.verify_signature(&SigningContext::new(1)));
         assert!(transfer_matches(&tx, &quote));
         assert!(!store.has_quote());
+        assert_eq!(store.last_active_for_test(), Some(now));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quote_does_not_move_the_idle_deadline() {
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        let sender = Address([1; 32]);
+        store.open_for_test(sender.to_string(), now);
+        let recipient = Address([3; 32]).to_string();
+        let later = now + Duration::from_secs(30);
+        store
+            .quote_from_status(
+                &ScriptRpc::account(4, 1),
+                &fresh_status(Some("4")),
+                draft(Some("4"), false, &recipient, "1"),
+                later,
+            )
+            .expect("quote");
+        assert_eq!(store.last_active_for_test(), Some(now));
+        assert!(store.has_quote());
+    }
+
+    #[test]
+    fn jarvis_changed_form_or_chain_is_not_signed() {
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        let sender = Address([1; 32]);
+        let recipient = Address([3; 32]).to_string();
+        store.open_for_test(sender.to_string(), now);
+        let quote = build_quote(sender, &recipient, "1", 4, 7, 3).unwrap();
+        store.session(now).unwrap().quote = Some(quote);
+        let e = store
+            .send_prepared(
+                &PanicRpc,
+                Path::new("missing"),
+                &fresh_status(Some("4")),
+                draft(Some("4"), false, &recipient, "2"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(e, REVIEW_AGAIN);
+        let other = Address([4; 32]).to_string();
+        let e = store
+            .send_prepared(
+                &PanicRpc,
+                Path::new("missing"),
+                &fresh_status(Some("4")),
+                draft(Some("4"), false, &other, "1"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(e, REVIEW_AGAIN);
+        // node now proves chain 2 while screen still shows 4 -> mismatch, before nonce RPC
+        let e = store
+            .send_prepared(
+                &PanicRpc,
+                Path::new("missing"),
+                &fresh_status(Some("2")),
+                draft(Some("4"), false, &recipient, "1"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(e, CHAIN_MISMATCH);
+        // screen and node both switched to 2: quote for 4 is stale
+        let e = store
+            .send_prepared(
+                &PanicRpc,
+                Path::new("missing"),
+                &fresh_status(Some("2")),
+                draft(Some("2"), false, &recipient, "1"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(e, QUOTE_STALE);
+        assert!(!store.has_quote());
+    }
+
+    #[test]
+    fn jarvis_zero_amount_is_quoted() {
+        // Adapted: amount 0 is rejected before the quote, so this is no longer an observation.
+        let q = build_quote(
+            Address([1; 32]),
+            &Address([3; 32]).to_string(),
+            "0",
+            4,
+            0,
+            1,
+        );
+        assert!(q.is_err(), "zero amount quote ok={}", q.is_ok());
+    }
+
+    #[test]
+    fn jarvis_legacy_and_garbage_recipients() {
+        let a = Address([3; 32]).to_string();
+        assert!(build_quote(Address([1; 32]), &format!(" {a} "), "1", 4, 0, 1).is_ok());
+        assert!(build_quote(Address([1; 32]), &a.to_uppercase(), "1", 4, 0, 1).is_err());
+        assert!(build_quote(Address([1; 32]), &a[..a.len() - 1], "1", 4, 0, 1).is_err());
     }
 }

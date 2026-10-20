@@ -106,4 +106,36 @@ mod tests {
         assert!(parse_kuna_atoms("-1").is_err());
         assert!(parse_kuna_atoms("18446744073.709551616").is_err());
     }
+
+    #[test]
+    fn jarvis_amount_edge_cases() {
+        for bad in [
+            "",
+            " ",
+            ".",
+            "1,5",
+            "1 000",
+            "+1",
+            "-0",
+            "1e-9",
+            "0x10",
+            "1_000",
+            "\u{FF11}",
+            "1..2",
+            "NaN",
+            "Infinity",
+            "1.0000000000",
+            "18446744074",
+        ] {
+            assert!(parse_kuna_atoms(bad).is_err(), "accepted {bad:?}");
+        }
+        assert_eq!(parse_kuna_atoms(" 1.5 ").unwrap(), 1_500_000_000);
+        assert_eq!(parse_kuna_atoms(".5").unwrap(), 500_000_000);
+        assert_eq!(parse_kuna_atoms("5.").unwrap(), 5_000_000_000);
+        assert_eq!(
+            parse_kuna_atoms("000000000000000000000000000000000000000001").unwrap(),
+            1_000_000_000
+        );
+        assert!(parse_kuna_atoms(&"9".repeat(60)).is_err());
+    }
 }

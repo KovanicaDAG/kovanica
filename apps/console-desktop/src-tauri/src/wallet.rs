@@ -1,16 +1,18 @@
 //! Local wallet file for Kovanica Console.
 //!
 //! The file is the v2 keystore JSON produced by `kovanica-light-ffi`, the same
-//! document the Android wallet stores. This module does not parse addresses
-//! or derive keys itself.
+//! document the Android wallet stores. `kovanica_keystore::parse` checks the
+//! parameters. This module does not derive keys itself.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use serde_json::Value;
 use zeroize::{Zeroize, Zeroizing};
 
 /// File name inside the app data directory.
@@ -18,6 +20,9 @@ pub const KEYSTORE_FILE: &str = "wallet.keystore.json";
 
 /// Lock the session after this long with no activity.
 pub const LOCK_AFTER: Duration = Duration::from_secs(5 * 60);
+
+/// How long the idle thread sleeps when no session is open.
+const IDLE_PARK: Duration = Duration::from_secs(60);
 
 const PHASE_ABSENT: &str = "absent";
 const PHASE_LOCKED: &str = "locked";
@@ -61,12 +66,101 @@ impl Drop for OpenWallet {
 /// In-memory session. The keystore file is the only copy on disk.
 pub struct WalletStore {
     open: Option<OpenWallet>,
+    /// Idle limit for this store. Production uses [`LOCK_AFTER`].
+    lock_after: Duration,
+}
+
+/// Session plus the condvar the idle thread waits on.
+///
+/// The condvar is paired with [`WalletShared::store`]. Notify it after every
+/// change to the session so the idle thread recomputes its deadline.
+pub struct WalletShared {
+    pub store: Mutex<WalletStore>,
+    pub wake: Condvar,
+}
+
+impl WalletShared {
+    /// Empty session. The idle thread is started separately.
+    pub fn new() -> Self {
+        Self {
+            store: Mutex::new(WalletStore::new()),
+            wake: Condvar::new(),
+        }
+    }
+
+    /// Lock the session. A poisoned mutex still yields the store.
+    pub fn lock_store(&self) -> MutexGuard<'_, WalletStore> {
+        self.store.lock().unwrap_or_else(|err| err.into_inner())
+    }
+}
+
+/// Background lock. The session is cleared after [`LOCK_AFTER`] even when the
+/// webview never calls status again.
+pub struct IdleLockThread {
+    shared: Arc<WalletShared>,
+    stop: Arc<AtomicBool>,
+    join: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl IdleLockThread {
+    /// Start the idle thread. Drop joins it.
+    pub fn spawn(shared: Arc<WalletShared>) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_shared = Arc::clone(&shared);
+        let thread_stop = Arc::clone(&stop);
+        let join = std::thread::Builder::new()
+            .name("kovanica-wallet-idle".into())
+            .spawn(move || idle_lock_loop(&thread_shared, &thread_stop))
+            .expect("wallet idle lock thread");
+        Self {
+            shared,
+            stop,
+            join: Mutex::new(Some(join)),
+        }
+    }
+}
+
+impl Drop for IdleLockThread {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.shared.wake.notify_one();
+        if let Some(join) = self
+            .join
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+        {
+            let _ = join.join();
+        }
+    }
+}
+
+/// Sleep until the open session is idle, then clear it. A notify recomputes the wait.
+fn idle_lock_loop(shared: &WalletShared, stop: &AtomicBool) {
+    let mut store = shared.lock_store();
+    while !stop.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        store.lock_if_idle(now);
+        let wait = match store.idle_remaining(now) {
+            Some(wait) if !wait.is_zero() => wait,
+            Some(_) => Duration::from_millis(1),
+            None => IDLE_PARK,
+        };
+        let waited = shared.wake.wait_timeout(store, wait);
+        store = match waited {
+            Ok((guard, _)) => guard,
+            Err(poisoned) => poisoned.into_inner().0,
+        };
+    }
 }
 
 impl WalletStore {
     /// No session and no file handle.
     pub fn new() -> Self {
-        Self { open: None }
+        Self {
+            open: None,
+            lock_after: LOCK_AFTER,
+        }
     }
 
     /// Create a key. Refuses to replace or follow a file that is already there.
@@ -197,7 +291,10 @@ impl WalletStore {
         self.open.take();
     }
 
-    /// Record activity while the session is open.
+    /// Move the idle deadline of an open session.
+    ///
+    /// This is the only extension. Create, import, and unlock start a new
+    /// deadline. Status, quote, and send leave it where it is.
     pub fn touch(&mut self, now: Instant) {
         if let Some(open) = self.open.as_mut() {
             open.last_active = now;
@@ -206,13 +303,21 @@ impl WalletStore {
 
     /// Lock when `now` is at least [`LOCK_AFTER`] after the last activity.
     pub fn lock_if_idle(&mut self, now: Instant) {
+        let limit = self.lock_after;
         let idle = self
             .open
             .as_ref()
-            .is_some_and(|open| now.saturating_duration_since(open.last_active) >= LOCK_AFTER);
+            .is_some_and(|open| now.saturating_duration_since(open.last_active) >= limit);
         if idle {
             self.open.take();
         }
+    }
+
+    /// Time left before [`lock_if_idle`] clears the session.
+    pub fn idle_remaining(&self, now: Instant) -> Option<Duration> {
+        let open = self.open.as_ref()?;
+        let elapsed = now.saturating_duration_since(open.last_active);
+        Some(self.lock_after.saturating_sub(elapsed))
     }
 
     /// Phase and address. An idle session is locked first.
@@ -254,6 +359,24 @@ impl WalletStore {
     #[cfg(test)]
     pub(crate) fn has_quote(&self) -> bool {
         self.open.as_ref().is_some_and(|open| open.quote.is_some())
+    }
+
+    /// Shorten the idle limit. Production keeps [`LOCK_AFTER`].
+    #[cfg(test)]
+    pub(crate) fn set_lock_after_for_test(&mut self, lock_after: Duration) {
+        self.lock_after = lock_after;
+    }
+
+    /// True when a session is open. Does not apply the idle limit.
+    #[cfg(test)]
+    pub(crate) fn is_open_for_test(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Deadline anchor, when a session is open.
+    #[cfg(test)]
+    pub(crate) fn last_active_for_test(&self) -> Option<Instant> {
+        self.open.as_ref().map(|open| open.last_active)
     }
 }
 
@@ -302,21 +425,12 @@ fn path_exists(path: &Path) -> Result<bool, String> {
     }
 }
 
-/// Accept only the Android v2 document: Argon2id and XChaCha20-Poly1305.
+/// Accept a keystore only when `kovanica_keystore::parse` does.
 fn accept_keystore_json(json: &str) -> Result<String, String> {
-    let value: Value =
-        serde_json::from_str(json).map_err(|_| "Could not save the wallet.".to_string())?;
-    let ok = value.get("version").and_then(Value::as_u64) == Some(2)
-        && value.get("encrypted").and_then(Value::as_bool) == Some(true)
-        && value.get("cipher").and_then(Value::as_str) == Some("xchacha20poly1305")
-        && value.get("kdf").and_then(Value::as_str) == Some("argon2id")
-        && value.get("kdf_memory_kib").and_then(Value::as_u64) == Some(65_536)
-        && value.get("kdf_iterations").and_then(Value::as_u64) == Some(3)
-        && value.get("kdf_parallelism").and_then(Value::as_u64) == Some(4);
-    if !ok {
-        return Err("Could not save the wallet.".to_string());
-    }
-    kovanica_light_ffi::wallet_address(json.to_string())
+    let parsed = kovanica_keystore::parse(json.as_bytes())
+        .map_err(|_| "Could not save the wallet.".to_string())?;
+    kovanica_keystore::address(&parsed)
+        .map(|address| address.to_string())
         .map_err(|_| "Could not save the wallet.".to_string())
 }
 
@@ -386,6 +500,7 @@ pub(crate) fn read_keystore(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir =
@@ -545,6 +660,51 @@ mod tests {
     }
 
     #[test]
+    fn status_does_not_extend_idle_and_only_touch_does() {
+        let path = Path::new("missing-idle-wallet");
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        store.open_for_test("kvnc-idle".into(), now);
+        let later = now + Duration::from_secs(30);
+        let status = must(store.status(path, later));
+        assert_eq!(status.phase, PHASE_OPEN);
+        assert_eq!(store.last_active_for_test(), Some(now));
+        store.touch(later);
+        assert_eq!(store.last_active_for_test(), Some(later));
+        let still = must(store.status(path, later + LOCK_AFTER - Duration::from_secs(1)));
+        assert_eq!(still.phase, PHASE_OPEN);
+        assert!(store.session(later + LOCK_AFTER).is_err());
+        assert!(!store.is_open_for_test());
+        store.touch(later + LOCK_AFTER + Duration::from_secs(1));
+        assert!(store.last_active_for_test().is_none());
+        assert!(!store.is_open_for_test());
+    }
+
+    #[test]
+    fn idle_thread_clears_the_session_without_a_status_poll() {
+        let shared = Arc::new(WalletShared::new());
+        {
+            let mut store = shared.lock_store();
+            store.set_lock_after_for_test(Duration::from_millis(40));
+            store.open_for_test("kvnc-timer".into(), Instant::now());
+        }
+        let idle = IdleLockThread::spawn(Arc::clone(&shared));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut cleared = false;
+        while Instant::now() < deadline {
+            if !shared.lock_store().is_open_for_test() {
+                cleared = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(idle);
+        assert!(cleared, "idle thread left the session open");
+        shared.lock_store().touch(Instant::now());
+        assert!(!shared.lock_store().is_open_for_test());
+    }
+
+    #[test]
     fn import_round_trips_the_same_keystore_parser() {
         let phrase = kovanica_keystore::seed_to_mnemonic(&[0x11; 32]).unwrap();
         let dir = temp_dir("import");
@@ -567,5 +727,77 @@ mod tests {
         let locked = must(store.status(&path, now));
         assert_eq!(locked.phase, PHASE_LOCKED);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Produced by `kovanica_keystore::from_seed(&[0x5A; 32], "cross-check")`.
+    /// No Android device fixture is checked into this repo, so this vector
+    /// comes from the same keystore code the Android wallet reaches.
+    const CROSS_KEYSTORE_JSON: &str = r#"{"version":2,"address":"kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag","public_key":"0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0","encrypted":true,"secret_key":"21406ec83c99222e1a7262d80534b3cf334d5b213654c65efe8b5fb5ea70f8d2c78403778f0d09902a7c9a2b21c4b055","cipher":"xchacha20poly1305","kdf":"argon2id","kdf_memory_kib":65536,"kdf_iterations":3,"kdf_parallelism":4,"salt":"88e37fe15da91bf57bfa24181fc595d9","nonce":"1d6b4b4a95293d5a4bf31f16059f032a4acf0c9cf2674e42"}"#;
+
+    #[test]
+    fn a_fixed_keystore_vector_uses_keystore_validation() {
+        let body = include_str!("wallet.rs").split("mod tests").next().unwrap();
+        assert!(!body.contains("kdf_memory_kib"));
+        assert!(!body.contains("65_536"));
+        assert!(!body.contains("kdf_iterations"));
+
+        let address = must(accept_keystore_json(CROSS_KEYSTORE_JSON));
+        let parsed = kovanica_keystore::parse(CROSS_KEYSTORE_JSON.as_bytes()).unwrap();
+        assert_eq!(
+            kovanica_keystore::address(&parsed).unwrap().to_string(),
+            address
+        );
+        assert_eq!(
+            kovanica_keystore::secret_seed(&parsed, Some("cross-check"))
+                .unwrap()
+                .as_ref(),
+            &[0x5A; 32]
+        );
+
+        let mut tampered: Value = serde_json::from_str(CROSS_KEYSTORE_JSON).unwrap();
+        tampered["kdf_iterations"] = Value::from(1);
+        let bad = serde_json::to_string(&tampered).unwrap();
+        assert!(accept_keystore_json(&bad).is_err());
+        assert!(kovanica_keystore::parse(bad.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn jarvis_cross_keystore_core_to_desktop_and_back() {
+        let dir = temp_dir("jarvis-cross");
+        let path = keystore_in(&dir);
+        let ks = kovanica_keystore::from_seed(&[0x22; 32], "core-password").unwrap();
+        let addr = kovanica_keystore::address(&ks).unwrap().to_string();
+        let json = serde_json::to_string(&ks).unwrap();
+        fs::write(&path, json).unwrap();
+        let mut store = WalletStore::new();
+        let st = must(store.unlock(&path, "core-password", Instant::now()));
+        assert_eq!(st.address.as_deref(), Some(addr.as_str()));
+        assert!(store.unlock(&path, "nope", Instant::now()).is_err());
+        let _ = fs::remove_dir_all(&dir);
+
+        let dir = temp_dir("jarvis-cross2");
+        let path = keystore_in(&dir);
+        let mut store = WalletStore::new();
+        let created = must(store.create(&path, "desk-password", Instant::now()));
+        let parsed = kovanica_keystore::parse(&fs::read(&path).unwrap()).unwrap();
+        let sk = kovanica_keystore::signing_key(&parsed, Some("desk-password")).unwrap();
+        let seed = kovanica_keystore::seed_from_mnemonic(&created.mnemonic).unwrap();
+        assert_eq!(sk.to_bytes(), *seed);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn jarvis_idle_lock_drops_session_and_quote_path() {
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        store.open_for_test("x".into(), now);
+        assert!(store
+            .session(now + LOCK_AFTER - Duration::from_millis(1))
+            .is_ok());
+        assert!(store.session(now + LOCK_AFTER).is_err());
+        assert!(store.open.is_none());
+        // touching after lock must not reopen
+        store.touch(now + LOCK_AFTER + Duration::from_secs(1));
+        assert!(store.open.is_none());
     }
 }

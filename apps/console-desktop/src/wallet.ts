@@ -5,10 +5,8 @@
 
 export const LOCK_AFTER_MS = 5 * 60 * 1000;
 
-export const MNEMONIC_CLIPBOARD_MS = 30_000;
-
-export const MNEMONIC_COPY_WARNING =
-  "Anyone who reads this phrase can spend the KUNA. The clipboard clears in 30 seconds.";
+export const MNEMONIC_WARNING =
+  "Anyone who reads this phrase can spend the KUNA. Write it down. This screen does not copy it.";
 
 export const HISTORY_HEADING = "History (reported by node)";
 
@@ -39,16 +37,17 @@ export function idleLocked(lastActiveMs: number, nowMs: number): boolean {
   return nowMs - lastActiveMs >= LOCK_AFTER_MS;
 }
 
-/** Write the phrase, then schedule an empty write. */
-export function copyMnemonic(
-  text: string,
-  write: (value: string) => void,
-  later: (ms: number, run: () => void) => void,
-): void {
-  write(text);
-  later(MNEMONIC_CLIPBOARD_MS, () => {
-    write("");
-  });
+/** Import fields are wiped after the attempt, including a failed one. */
+export function clearedImportFields(): { phrase: string; password: string } {
+  return { phrase: "", password: "" };
+}
+
+/** The phrase stays on screen only while the session is still open. */
+export function phraseOnScreen(phase: string, phrase: string): string {
+  if (phase !== "open") {
+    return "";
+  }
+  return phrase;
 }
 
 /** Review needs a recipient and an amount. Rust parses both. */
@@ -91,6 +90,7 @@ export function reviewRows(quote: QuoteView): ReviewRow[] {
     },
     { label: "Fee", value: `${quote.feeDisplay} KUNA (${quote.feeAtoms} atoms)` },
     { label: "Chain id", value: quote.chainId },
+    { label: "Nonce", value: quote.nonce },
   ];
 }
 

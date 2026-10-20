@@ -802,6 +802,43 @@ mod tests {
     }
 
     #[test]
+    fn jarvis_http_loopback_edge_cases() {
+        assert_eq!(
+            validate_rpc_url("http://127.0.0.1:8545").unwrap(),
+            "http://127.0.0.1:8545/rpc"
+        );
+        assert_eq!(
+            validate_rpc_url("http://[::1]:8545/rpc").unwrap(),
+            "http://[::1]:8545/rpc"
+        );
+        assert_eq!(
+            validate_rpc_url("http://[0:0:0:0:0:0:0:1]/rpc").unwrap(),
+            "http://[::1]/rpc"
+        );
+        assert_eq!(
+            validate_rpc_url("https://127.0.0.1/rpc").unwrap(),
+            "https://127.0.0.1/rpc"
+        );
+        assert_eq!(
+            validate_rpc_url("http://LOCALHOST:9").unwrap(),
+            "http://localhost:9/rpc"
+        );
+        for blocked in [
+            "http://0.0.0.0/rpc",
+            "http://[::]/rpc",
+            "http://[::ffff:127.0.0.1]/rpc",
+            "http://127.0.0.1.example/rpc",
+            "http://localhost.localdomain/rpc",
+            "http://user:secret@127.0.0.1/rpc",
+            "http://127.0.0.1/rpc?x=1",
+            "http://127.0.0.1/rpc#frag",
+            "http://127.0.0.1@evil.example/rpc",
+        ] {
+            assert!(validate_rpc_url(blocked).is_err(), "accepted {blocked}");
+        }
+    }
+
+    #[test]
     fn saved_endpoint_roundtrip_drops_extra_fields() {
         let dir = temp_dir();
         let path = dir.join("rpc-endpoint.json");
@@ -957,6 +994,37 @@ mod tests {
     }
 
     #[test]
+    fn jarvis_validly_sealed_wrong_epoch_with_pin_is_not_proven() {
+        let epoch = 7;
+        assert_ne!(epoch, epoch_for_round(42));
+        let (committee, header, seals) =
+            sealed_fixture_for_epoch(chain_id::TESTNET_V2, true, epoch);
+        assert!(
+            kovanica_light_ffi::verify_header(
+                chain_id::TESTNET_V2,
+                epoch,
+                committee.clone(),
+                header,
+                seals,
+                String::new(),
+            )
+            .is_ok(),
+            "seals must verify for the header epoch"
+        );
+        let pins = [PinnedCommittee {
+            chain_id: chain_id::TESTNET_V2,
+            committee_json: committee,
+        }];
+        let status =
+            fetch_status_with_pins(&Script::with_signed_epoch(epoch), DEFAULT_RPC_URL, &pins)
+                .unwrap();
+        assert_eq!(status.chain_id, None);
+        assert_eq!(status.chain_note, HEADER_EPOCH_MISMATCH);
+        assert_eq!(status.leader_round.as_deref(), Some("42"));
+        assert_eq!(status.epoch.as_deref(), Some("7"));
+    }
+
+    #[test]
     fn a_missing_seal_does_not_invent_a_chain() {
         let status = fetch_status(&Script::unsigned(), DEFAULT_RPC_URL).unwrap();
         assert_eq!(status.chain_id, None);
@@ -1003,6 +1071,8 @@ mod tests {
         header_epoch: Option<u64>,
         committee_epoch: Option<u64>,
         committee_info: bool,
+        /// When set, the header is sealed for this epoch instead of `epoch_for_round(42)`.
+        signed_epoch: Option<u64>,
     }
 
     impl Script {
@@ -1015,6 +1085,14 @@ mod tests {
                 header_epoch: None,
                 committee_epoch: None,
                 committee_info: true,
+                signed_epoch: None,
+            }
+        }
+
+        fn with_signed_epoch(epoch: u64) -> Self {
+            Self {
+                signed_epoch: Some(epoch),
+                ..Self::new(chain_id::TESTNET_V2)
             }
         }
 
@@ -1084,7 +1162,9 @@ mod tests {
 
     impl Rpc for Script {
         fn call(&self, method: &str, _params: Value) -> Result<Value, ConnError> {
-            let (committee, header, seals) = sealed_fixture(self.chain, self.seals);
+            let epoch = self.signed_epoch.unwrap_or_else(|| epoch_for_round(42));
+            let (committee, header, seals) =
+                sealed_fixture_for_epoch(self.chain, self.seals, epoch);
             match method {
                 "kovanica_blockNumber" => Ok(self.block_number.clone()),
                 "kovanica_syncStatus" => Ok(json!({
@@ -1123,6 +1203,14 @@ mod tests {
     }
 
     fn sealed_fixture(chain: u64, with_seals: bool) -> (String, String, String) {
+        sealed_fixture_for_epoch(chain, with_seals, epoch_for_round(42))
+    }
+
+    fn sealed_fixture_for_epoch(
+        chain: u64,
+        with_seals: bool,
+        epoch: u64,
+    ) -> (String, String, String) {
         let mut signers = Vec::new();
         let mut members = Vec::new();
         let mut seal_rows = Vec::new();
@@ -1141,7 +1229,6 @@ mod tests {
         }
         let committee_json = Value::Array(members).to_string();
         let leader_round = 42;
-        let epoch = epoch_for_round(leader_round);
         let committee_hash = committee_seal_hash(epoch, &seal_rows);
         let digest = Hash::new([3u8]);
         let leader = StatementBlock {
