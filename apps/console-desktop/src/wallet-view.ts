@@ -21,7 +21,6 @@ import {
   phraseLockWarning,
   passphraseAfterFailedReveal,
   phraseOnScreen,
-  phraseVariableAfterLock,
   shouldCoverPhrase,
   reviewEnabled,
   revealedPhrase,
@@ -101,6 +100,9 @@ export function mountWallet(shownChainId: () => string | null): void {
   const unlockButton = required<HTMLButtonElement>("unlock-wallet");
   const showPhraseButton = required<HTMLButtonElement>("show-phrase");
   const readout = required<HTMLDListElement>("wallet-readout");
+  const openBackup = required<HTMLParagraphElement>("open-backup");
+  const openPassword = required<HTMLInputElement>("open-password");
+  const showPhraseOpenButton = required<HTMLButtonElement>("show-phrase-open");
   const lockButton = required<HTMLButtonElement>("lock-wallet");
   const refreshButton = required<HTMLButtonElement>("refresh-wallet");
   const recipient = required<HTMLInputElement>("recipient");
@@ -121,7 +123,9 @@ export function mountWallet(shownChainId: () => string | null): void {
 
   mnemonicWarning.textContent = MNEMONIC_WARNING;
   lockedBackup.textContent = PHRASE_STILL_IN_WALLET;
+  openBackup.textContent = PHRASE_STILL_IN_WALLET;
   showPhraseButton.textContent = SHOW_PHRASE_AGAIN;
+  showPhraseOpenButton.textContent = SHOW_PHRASE_AGAIN;
   historyHeading.textContent = HISTORY_HEADING;
 
   function showError(message: string): void {
@@ -206,12 +210,13 @@ export function mountWallet(shownChainId: () => string | null): void {
 
   function clearSecretFields(): void {
     const cleared = secretsCleared();
-    phrase = phraseVariableAfterLock() ?? cleared.phrase;
+    phrase = cleared.phrase;
     mnemonicText.textContent = cleared.phrase;
     newPassword.value = cleared.password;
     importPhrase.value = cleared.phrase;
     importPassword.value = cleared.password;
     unlockPassword.value = cleared.password;
+    openPassword.value = cleared.password;
     mnemonicPanel.hidden = true;
     quote = null;
     paintReview();
@@ -315,24 +320,32 @@ export function mountWallet(shownChainId: () => string | null): void {
   });
 
   showPhraseButton.addEventListener("click", () => {
+    revealFrom(unlockPassword);
+  });
+
+  function revealFrom(passwordInput: HTMLInputElement): void {
     void (async () => {
       clearError();
       try {
         const revealed = await invoke<NewWallet>("wallet_reveal", {
-          passphrase: unlockPassword.value,
+          passphrase: passwordInput.value,
         });
         const shown = revealedPhrase(revealed.mnemonic);
         phrase = shown.phrase;
-        unlockPassword.value = shown.password;
+        passwordInput.value = shown.password;
         mnemonicText.textContent = phrase;
         paintLockWarning(false);
         phase = "open";
         show("mnemonic");
       } catch (error) {
-        unlockPassword.value = passphraseAfterFailedReveal();
+        passwordInput.value = passphraseAfterFailedReveal();
         showError(messageFrom(error));
       }
     })();
+  }
+
+  showPhraseOpenButton.addEventListener("click", () => {
+    revealFrom(openPassword);
   });
 
   lockButton.addEventListener("click", () => {

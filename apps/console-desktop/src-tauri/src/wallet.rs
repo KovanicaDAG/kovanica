@@ -33,31 +33,32 @@ pub const WALLET_LOCK_WARNING_EVENT: &str = "wallet-lock-warning";
 /// phrase is on screen would leave the seed and an open session unattended.
 pub const LOCK_WARNING_BEFORE: Duration = Duration::from_secs(30);
 
-/// Wait after the first wrong reveal password. Later failures double it.
-const REVEAL_BACKOFF_BASE: Duration = Duration::from_secs(1);
+/// Wait after the first wrong unlock or reveal password. Later failures double it.
+const PASSPHRASE_BACKOFF_BASE: Duration = Duration::from_secs(1);
 
-/// Longest reveal lockout. The wait stops doubling here.
-const REVEAL_BACKOFF_MAX: Duration = Duration::from_secs(32);
+/// Longest unlock or reveal lockout. The wait stops doubling here.
+const PASSPHRASE_BACKOFF_MAX: Duration = Duration::from_secs(32);
 
-/// Largest shift that still fits in [`REVEAL_BACKOFF_MAX`].
-const REVEAL_BACKOFF_SHIFT_CAP: u32 = 5;
+/// Largest shift that still fits in [`PASSPHRASE_BACKOFF_MAX`].
+const PASSPHRASE_BACKOFF_SHIFT_CAP: u32 = 5;
 
-/// Returned when a reveal is refused because earlier passwords were wrong.
-const REVEAL_BACKOFF_MESSAGE: &str = "Wait a moment before trying the password again.";
+/// Returned when unlock or reveal is refused because earlier passwords were wrong.
+const PASSPHRASE_BACKOFF_MESSAGE: &str = "Wait a moment before trying the password again.";
 
-/// How long a reveal stays refused after `failures` wrong passwords.
+/// How long a password guess stays refused after `failures` wrong passwords.
 ///
-/// `failures` is the count after the latest real decrypt failure. Zero failures
-/// wait nothing. The first failure waits [`REVEAL_BACKOFF_BASE`]. Each further
-/// failure doubles that wait, up to [`REVEAL_BACKOFF_MAX`].
-fn reveal_backoff_after(failures: u32) -> Duration {
+/// `failures` is the count after the latest real decrypt failure, shared by
+/// [`WalletStore::unlock`] and [`WalletStore::reveal`]. Zero failures wait
+/// nothing. The first failure waits [`PASSPHRASE_BACKOFF_BASE`]. Each further
+/// failure doubles that wait, up to [`PASSPHRASE_BACKOFF_MAX`].
+fn passphrase_backoff_after(failures: u32) -> Duration {
     if failures == 0 {
         return Duration::ZERO;
     }
-    let shift = failures.saturating_sub(1).min(REVEAL_BACKOFF_SHIFT_CAP);
-    REVEAL_BACKOFF_BASE
+    let shift = failures.saturating_sub(1).min(PASSPHRASE_BACKOFF_SHIFT_CAP);
+    PASSPHRASE_BACKOFF_BASE
         .saturating_mul(1_u32 << shift)
-        .min(REVEAL_BACKOFF_MAX)
+        .min(PASSPHRASE_BACKOFF_MAX)
 }
 
 /// How long the idle thread sleeps when no session is open.
@@ -147,10 +148,10 @@ pub struct WalletStore {
     lock_after: Duration,
     /// An idle lock has not yet been reported as `wallet-locked`.
     idle_lock_pending: bool,
-    /// Consecutive wrong reveal passwords since the last success.
-    reveal_failures: u32,
-    /// Instant before which another reveal is refused.
-    reveal_blocked_until: Option<Instant>,
+    /// Consecutive wrong unlock or reveal passwords since the last success.
+    passphrase_failures: u32,
+    /// Instant before which another unlock or reveal is refused.
+    passphrase_blocked_until: Option<Instant>,
 }
 
 /// Session plus the condvar the idle thread waits on.
@@ -310,8 +311,8 @@ impl WalletStore {
             open: None,
             lock_after: LOCK_AFTER,
             idle_lock_pending: false,
-            reveal_failures: 0,
-            reveal_blocked_until: None,
+            passphrase_failures: 0,
+            passphrase_blocked_until: None,
         }
     }
 
@@ -402,6 +403,9 @@ impl WalletStore {
     }
 
     /// Check the password, then keep the session open. The phrase is wiped.
+    ///
+    /// A wrong password is counted with [`reveal`]. Guessing here does not
+    /// skip the backoff.
     pub fn unlock(
         &mut self,
         path: &Path,
@@ -412,9 +416,7 @@ impl WalletStore {
             return Err("Enter a password.".to_string());
         }
         let json = read_keystore(path)?;
-        let mut phrase =
-            kovanica_light_ffi::reveal_mnemonic_raw(json.clone(), passphrase.to_string())
-                .map_err(|err| map_ffi_error(&err))?;
+        let mut phrase = self.decrypt_with_shared_backoff(&json, passphrase, now)?;
         phrase.zeroize();
         let address = kovanica_light_ffi::wallet_address(json)
             .map_err(|_| "Could not read the wallet.".to_string())?;
@@ -435,13 +437,13 @@ impl WalletStore {
     ///
     /// A lock drops the on-screen copy and the open session. The keystore file
     /// still holds the encrypted phrase, so this opens a new session and
-    /// returns the same words. A wrong password returns no phrase and leaves
-    /// the session locked.
+    /// returns the same words. A wrong password returns no phrase. It does not
+    /// open a session, and it does not close one that is already open.
     ///
-    /// Wrong passwords are counted here, on the store. The next reveal is
-    /// refused until [`reveal_backoff_after`] has passed. Attempts inside that
-    /// window do not decrypt and do not extend the window. A correct password
-    /// after the window clears the count.
+    /// Wrong passwords share one counter with [`unlock`]. The next unlock or
+    /// reveal is refused until [`passphrase_backoff_after`] has passed.
+    /// Attempts inside that window do not decrypt and do not extend the window.
+    /// A correct password after the window clears the count.
     pub fn reveal(
         &mut self,
         path: &Path,
@@ -452,18 +454,7 @@ impl WalletStore {
             return Err("Enter a password.".to_string());
         }
         let json = read_keystore(path)?;
-        if self.reveal_is_blocked(now) {
-            return Err(REVEAL_BACKOFF_MESSAGE.to_string());
-        }
-        let mut phrase =
-            match kovanica_light_ffi::reveal_mnemonic_raw(json.clone(), passphrase.to_string()) {
-                Ok(phrase) => phrase,
-                Err(err) => {
-                    self.note_reveal_failure(now);
-                    return Err(map_ffi_error(&err));
-                }
-            };
-        self.clear_reveal_backoff();
+        let mut phrase = self.decrypt_with_shared_backoff(&json, passphrase, now)?;
         let address = match kovanica_light_ffi::wallet_address(json) {
             Ok(address) => address,
             Err(_) => {
@@ -483,22 +474,49 @@ impl WalletStore {
         })
     }
 
-    /// True when `now` is still inside the reveal lockout.
-    fn reveal_is_blocked(&self, now: Instant) -> bool {
-        self.reveal_blocked_until.is_some_and(|until| now < until)
+    /// Decrypt `json` for [`unlock`] and [`reveal`].
+    ///
+    /// Both calls share [`WalletStore::passphrase_failures`]. A wrong password
+    /// starts the lockout. A guess inside that window is refused before
+    /// decrypt. A correct password clears the count.
+    fn decrypt_with_shared_backoff(
+        &mut self,
+        json: &str,
+        passphrase: &str,
+        now: Instant,
+    ) -> Result<String, String> {
+        if self.passphrase_is_blocked(now) {
+            return Err(PASSPHRASE_BACKOFF_MESSAGE.to_string());
+        }
+        match kovanica_light_ffi::reveal_mnemonic_raw(json.to_owned(), passphrase.to_owned()) {
+            Ok(phrase) => {
+                self.clear_passphrase_backoff();
+                Ok(phrase)
+            }
+            Err(err) => {
+                self.note_passphrase_failure(now);
+                Err(map_ffi_error(&err))
+            }
+        }
     }
 
-    /// Record one wrong reveal password and start its lockout window.
-    fn note_reveal_failure(&mut self, now: Instant) {
-        self.reveal_failures = self.reveal_failures.saturating_add(1);
-        let delay = reveal_backoff_after(self.reveal_failures);
-        self.reveal_blocked_until = now.checked_add(delay);
+    /// True when `now` is still inside the shared passphrase lockout.
+    fn passphrase_is_blocked(&self, now: Instant) -> bool {
+        self.passphrase_blocked_until
+            .is_some_and(|until| now < until)
     }
 
-    /// A correct reveal password may be tried again immediately.
-    fn clear_reveal_backoff(&mut self) {
-        self.reveal_failures = 0;
-        self.reveal_blocked_until = None;
+    /// Record one wrong unlock or reveal password and start its lockout window.
+    fn note_passphrase_failure(&mut self, now: Instant) {
+        self.passphrase_failures = self.passphrase_failures.saturating_add(1);
+        let delay = passphrase_backoff_after(self.passphrase_failures);
+        self.passphrase_blocked_until = now.checked_add(delay);
+    }
+
+    /// A correct unlock or reveal password may be tried again immediately.
+    fn clear_passphrase_backoff(&mut self) {
+        self.passphrase_failures = 0;
+        self.passphrase_blocked_until = None;
     }
 
     /// The open session, after an idle lock.
@@ -631,16 +649,16 @@ impl WalletStore {
         self.open.as_ref().map(|open| open.last_active)
     }
 
-    /// Wrong reveal passwords since the last success.
+    /// Wrong unlock or reveal passwords since the last success.
     #[cfg(test)]
-    fn reveal_failures_for_test(&self) -> u32 {
-        self.reveal_failures
+    fn passphrase_failures_for_test(&self) -> u32 {
+        self.passphrase_failures
     }
 
-    /// When the reveal lockout ends, if one is active.
+    /// When the shared passphrase lockout ends, if one is active.
     #[cfg(test)]
-    fn reveal_block_for_test(&self) -> Option<Instant> {
-        self.reveal_blocked_until
+    fn passphrase_block_for_test(&self) -> Option<Instant> {
+        self.passphrase_blocked_until
     }
 }
 
@@ -1104,7 +1122,7 @@ mod tests {
         assert!(!store.is_open_for_test());
         assert_eq!(fs::read(&path).unwrap(), cross_keystore_json().as_bytes());
 
-        let revealed = must(store.reveal(&path, "cross-check", now + reveal_backoff_after(1)));
+        let revealed = must(store.reveal(&path, "cross-check", now + passphrase_backoff_after(1)));
         assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
         assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
         assert_eq!(
@@ -1126,12 +1144,12 @@ mod tests {
 
     #[test]
     fn wrong_reveal_passwords_are_throttled_until_the_window_ends() {
-        assert_eq!(reveal_backoff_after(0), Duration::ZERO);
-        assert_eq!(reveal_backoff_after(1), Duration::from_secs(1));
-        assert_eq!(reveal_backoff_after(2), Duration::from_secs(2));
-        assert_eq!(reveal_backoff_after(3), Duration::from_secs(4));
-        assert_eq!(reveal_backoff_after(6), REVEAL_BACKOFF_MAX);
-        assert_eq!(reveal_backoff_after(100), REVEAL_BACKOFF_MAX);
+        assert_eq!(passphrase_backoff_after(0), Duration::ZERO);
+        assert_eq!(passphrase_backoff_after(1), Duration::from_secs(1));
+        assert_eq!(passphrase_backoff_after(2), Duration::from_secs(2));
+        assert_eq!(passphrase_backoff_after(3), Duration::from_secs(4));
+        assert_eq!(passphrase_backoff_after(6), PASSPHRASE_BACKOFF_MAX);
+        assert_eq!(passphrase_backoff_after(100), PASSPHRASE_BACKOFF_MAX);
 
         let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
         let dir = temp_dir("reveal-backoff");
@@ -1142,23 +1160,26 @@ mod tests {
 
         let err = must_err(store.reveal(&path, "", now));
         assert_eq!(err, "Enter a password.");
-        assert_eq!(store.reveal_failures_for_test(), 0);
-        assert!(store.reveal_block_for_test().is_none());
+        assert_eq!(store.passphrase_failures_for_test(), 0);
+        assert!(store.passphrase_block_for_test().is_none());
 
         let err = must_err(store.reveal(&path, "wrong-horse-marker", now));
         assert_eq!(err, "That password does not open this wallet.");
         assert!(!err.contains("wrong-horse-marker"));
         assert!(!err.contains(&phrase));
         assert!(!store.is_open_for_test());
-        assert_eq!(store.reveal_failures_for_test(), 1);
-        let first_wait = reveal_backoff_after(1);
-        assert_eq!(store.reveal_block_for_test(), now.checked_add(first_wait));
+        assert_eq!(store.passphrase_failures_for_test(), 1);
+        let first_wait = passphrase_backoff_after(1);
+        assert_eq!(
+            store.passphrase_block_for_test(),
+            now.checked_add(first_wait)
+        );
 
         let err = must_err(store.reveal(&path, "cross-check", now));
-        assert_eq!(err, REVEAL_BACKOFF_MESSAGE);
+        assert_eq!(err, PASSPHRASE_BACKOFF_MESSAGE);
         assert!(!err.contains(&phrase));
         assert!(!store.is_open_for_test());
-        assert_eq!(store.reveal_failures_for_test(), 1);
+        assert_eq!(store.passphrase_failures_for_test(), 1);
         assert_eq!(fs::read(&path).unwrap(), cross_keystore_json().as_bytes());
 
         let err = must_err(store.reveal(
@@ -1166,29 +1187,199 @@ mod tests {
             "wrong-horse-marker",
             now + first_wait - Duration::from_millis(1),
         ));
-        assert_eq!(err, REVEAL_BACKOFF_MESSAGE);
-        assert_eq!(store.reveal_failures_for_test(), 1);
+        assert_eq!(err, PASSPHRASE_BACKOFF_MESSAGE);
+        assert_eq!(store.passphrase_failures_for_test(), 1);
 
         let second = now + first_wait;
         let err = must_err(store.reveal(&path, "wrong-horse-marker", second));
         assert_eq!(err, "That password does not open this wallet.");
-        assert_eq!(store.reveal_failures_for_test(), 2);
-        let second_wait = reveal_backoff_after(2);
+        assert_eq!(store.passphrase_failures_for_test(), 2);
+        let second_wait = passphrase_backoff_after(2);
         assert!(second_wait > first_wait);
         assert_eq!(
-            store.reveal_block_for_test(),
+            store.passphrase_block_for_test(),
             second.checked_add(second_wait)
         );
 
         let err = must_err(store.reveal(&path, "cross-check", second));
-        assert_eq!(err, REVEAL_BACKOFF_MESSAGE);
+        assert_eq!(err, PASSPHRASE_BACKOFF_MESSAGE);
         assert!(!store.is_open_for_test());
 
         let revealed = must(store.reveal(&path, "cross-check", second + second_wait));
         assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
         assert!(store.is_open_for_test());
-        assert_eq!(store.reveal_failures_for_test(), 0);
-        assert!(store.reveal_block_for_test().is_none());
+        assert_eq!(store.passphrase_failures_for_test(), 0);
+        assert!(store.passphrase_block_for_test().is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Unlock and reveal share one counter. A wrong unlock must throttle a
+    /// later reveal, and a wrong reveal must throttle a later unlock.
+    #[test]
+    fn unlock_and_reveal_share_one_backoff() {
+        assert_eq!(passphrase_backoff_after(0), Duration::ZERO);
+        assert_eq!(passphrase_backoff_after(1), Duration::from_secs(1));
+        assert_eq!(passphrase_backoff_after(2), Duration::from_secs(2));
+        assert_eq!(passphrase_backoff_after(3), Duration::from_secs(4));
+        assert_eq!(passphrase_backoff_after(4), Duration::from_secs(8));
+        assert_eq!(passphrase_backoff_after(5), Duration::from_secs(16));
+        assert_eq!(passphrase_backoff_after(6), Duration::from_secs(32));
+        assert_eq!(passphrase_backoff_after(7), PASSPHRASE_BACKOFF_MAX);
+        assert_eq!(passphrase_backoff_after(100), PASSPHRASE_BACKOFF_MAX);
+        assert_eq!(PASSPHRASE_BACKOFF_MAX, Duration::from_secs(32));
+
+        let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
+        let dir = temp_dir("shared-backoff");
+        let path = keystore_in(&dir);
+        fs::write(&path, cross_keystore_json()).unwrap();
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+
+        let err = must_err(store.unlock(&path, "", now));
+        assert_eq!(err, "Enter a password.");
+        assert_eq!(store.passphrase_failures_for_test(), 0);
+        assert!(store.passphrase_block_for_test().is_none());
+
+        let err = must_err(store.unlock(&path, "wrong-horse-marker", now));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert!(!err.contains("wrong-horse-marker"));
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 1);
+        let first_wait = Duration::from_secs(1);
+        assert_eq!(
+            store.passphrase_block_for_test(),
+            now.checked_add(first_wait)
+        );
+
+        let err = must_err(store.reveal(&path, "cross-check", now));
+        assert_eq!(err, PASSPHRASE_BACKOFF_MESSAGE);
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 1);
+
+        let err = must_err(store.unlock(
+            &path,
+            "cross-check",
+            now + first_wait - Duration::from_millis(1),
+        ));
+        assert_eq!(err, PASSPHRASE_BACKOFF_MESSAGE);
+        assert!(!store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 1);
+
+        let second = now + first_wait;
+        let err = must_err(store.reveal(&path, "wrong-horse-marker", second));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert!(!err.contains(&phrase));
+        assert_eq!(store.passphrase_failures_for_test(), 2);
+        let second_wait = Duration::from_secs(2);
+        assert!(second_wait > first_wait);
+        assert_eq!(
+            store.passphrase_block_for_test(),
+            second.checked_add(second_wait)
+        );
+
+        let err = must_err(store.unlock(&path, "cross-check", second));
+        assert_eq!(err, PASSPHRASE_BACKOFF_MESSAGE);
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 2);
+
+        let mut cursor = second + second_wait;
+        let mut previous = second_wait;
+        let mut use_unlock = true;
+        while previous < PASSPHRASE_BACKOFF_MAX {
+            let err = if use_unlock {
+                must_err(store.unlock(&path, "wrong-horse-marker", cursor))
+            } else {
+                must_err(store.reveal(&path, "wrong-horse-marker", cursor))
+            };
+            assert_eq!(err, "That password does not open this wallet.");
+            assert!(!err.contains(&phrase));
+            let wait = passphrase_backoff_after(store.passphrase_failures_for_test());
+            assert!(wait > previous);
+            assert!(wait <= PASSPHRASE_BACKOFF_MAX);
+            assert_eq!(store.passphrase_block_for_test(), cursor.checked_add(wait));
+            previous = wait;
+            cursor += wait;
+            use_unlock = !use_unlock;
+        }
+        assert_eq!(previous, Duration::from_secs(32));
+        assert_eq!(store.passphrase_failures_for_test(), 6);
+
+        let err = must_err(store.unlock(&path, "wrong-horse-marker", cursor));
+        assert_eq!(err, "That password does not open this wallet.");
+        let capped = passphrase_backoff_after(store.passphrase_failures_for_test());
+        assert_eq!(capped, Duration::from_secs(32));
+        assert_eq!(store.passphrase_failures_for_test(), 7);
+        assert_eq!(
+            store.passphrase_block_for_test(),
+            cursor.checked_add(capped)
+        );
+
+        let err = must_err(store.reveal(&path, "cross-check", cursor));
+        assert_eq!(err, PASSPHRASE_BACKOFF_MESSAGE);
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 7);
+
+        let opened = must(store.unlock(&path, "cross-check", cursor + capped));
+        assert_eq!(opened.phase, PHASE_OPEN);
+        assert!(store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 0);
+        assert!(store.passphrase_block_for_test().is_none());
+        let status_json = serde_json::to_string(&opened).unwrap();
+        assert!(!status_json.contains(&phrase));
+
+        let revealed = must(store.reveal(&path, "cross-check", cursor + capped));
+        assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
+        assert_eq!(store.passphrase_failures_for_test(), 0);
+        assert!(store.passphrase_block_for_test().is_none());
+        assert_eq!(fs::read(&path).unwrap(), cross_keystore_json().as_bytes());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The unlocked screen uses the same reveal path. A wrong password returns
+    /// no phrase, counts toward the shared backoff, and leaves the session open.
+    #[test]
+    fn reveal_from_an_open_session_checks_the_passphrase() {
+        let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
+        let dir = temp_dir("reveal-open");
+        let path = keystore_in(&dir);
+        fs::write(&path, cross_keystore_json()).unwrap();
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+
+        let status = must(store.unlock(&path, "cross-check", now));
+        assert_eq!(status.phase, PHASE_OPEN);
+        assert!(store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 0);
+
+        let err = must_err(store.reveal(&path, "wrong-horse-marker", now));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert!(!err.contains("wrong-horse-marker"));
+        assert!(!err.contains(&phrase));
+        assert!(store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 1);
+        let wait = passphrase_backoff_after(1);
+        assert_eq!(store.passphrase_block_for_test(), now.checked_add(wait));
+
+        let err = must_err(store.reveal(&path, "cross-check", now));
+        assert_eq!(err, PASSPHRASE_BACKOFF_MESSAGE);
+        assert!(!err.contains(&phrase));
+        assert!(store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 1);
+
+        let revealed = must(store.reveal(&path, "cross-check", now + wait));
+        assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
+        assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
+        assert_eq!(
+            revealed.address,
+            "kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag"
+        );
+        assert!(store.is_open_for_test());
+        assert_eq!(store.passphrase_failures_for_test(), 0);
+        assert!(store.passphrase_block_for_test().is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
