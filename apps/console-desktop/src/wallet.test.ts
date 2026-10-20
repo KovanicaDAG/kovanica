@@ -6,13 +6,11 @@ import {
   BALANCE_LABEL,
   EMPTY_HISTORY,
   HISTORY_HEADING,
-  LOCK_AFTER_MS,
   LOCK_WARNING,
   MNEMONIC_WARNING,
   WALLET_LOCK_WARNING_EVENT,
   WALLET_LOCKED_EVENT,
   clearedImportFields,
-  idleLocked,
   needsMainnetConfirm,
   phraseLockWarning,
   phraseOnScreen,
@@ -126,10 +124,14 @@ describe("wallet form", () => {
     expect(viewSource.includes("mnemonicText.textContent = phrase")).toBe(true);
   });
 
-  it("locks after five minutes and does not offer to copy the phrase", () => {
-    expect(LOCK_AFTER_MS).toBe(300_000);
-    expect(idleLocked(0, 299_999)).toBe(false);
-    expect(idleLocked(0, 300_000)).toBe(true);
+  it("does not keep a second idle timer beside the Rust lock", () => {
+    for (const text of [walletSource, viewSource]) {
+      expect(text.includes("LOCK_AFTER_MS")).toBe(false);
+      expect(text.includes("idleLocked")).toBe(false);
+    }
+  });
+
+  it("does not offer to copy the phrase", () => {
     expect(MNEMONIC_WARNING).toContain("Write it down");
     expect(MNEMONIC_WARNING.includes("clipboard")).toBe(false);
     for (const text of [walletSource, viewSource, htmlSource]) {
