@@ -19,7 +19,9 @@ use crate::{
 use futures::StreamExt;
 use kovanica_dag::DagStore;
 use kovanica_mempool::{Mempool, MempoolError};
-use kovanica_types::{SealAnnouncement, StatementBlock, Transaction, Vote};
+use kovanica_types::{
+    epoch_for_round, SealAnnouncement, SigningContext, StatementBlock, Transaction, Vote,
+};
 use libp2p::{
     gossipsub::{self, MessageAcceptance},
     identify, kad, request_response,
@@ -1453,10 +1455,17 @@ impl NetworkService {
             debug!("committee keys not set; vote gossip dropped unforwarded");
             return Verdict::Ignore;
         }
-        if let Err(rejection) = self
-            .validator
-            .verify_vote(&vote, &self.mempool.signing_context())
-        {
+        // B1d (PRO-B1d): a vote's signature is over `vote.signature_data(ctx)`
+        // where the engine's `vote_signing_ctx` uses epoch =
+        // `vote.leader_round / EPOCH_ROUNDS`. Verifying with the mempool's
+        // boot-time epoch (0) made every vote past the first epoch boundary fail
+        // with BadSignature, so honest peers lost score and banned each other.
+        // Derive the SAME round-based epoch here from the vote itself.
+        let vote_ctx = SigningContext {
+            chain_id: self.mempool.signing_context().chain_id,
+            epoch: epoch_for_round(vote.leader_round),
+        };
+        if let Err(rejection) = self.validator.verify_vote(&vote, &vote_ctx) {
             warn!(%peer, voter = vote.voter, leader_round = vote.leader_round, %rejection, "rejected vote gossip");
             return Verdict::rejected("vote", rejection);
         }
@@ -2057,6 +2066,66 @@ mod tests {
             NetworkEvent::VoteReceived { vote: got, .. } => assert_eq!(got, vote),
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    /// B1d (PRO-B1d) regression: a vote cast in a later epoch must pass the
+    /// gossip edge.
+    ///
+    /// The engine signs votes with epoch `leader_round / EPOCH_ROUNDS`
+    /// (`vote_signing_ctx`), but the gossip edge used to verify with the
+    /// mempool's boot-time epoch (0). After the first epoch boundary
+    /// (`EPOCH_ROUNDS` rounds) every honest vote then failed with
+    /// `BadSignature`, peers lost score, and validators banned each other.
+    ///
+    /// A vote at `leader_round = EPOCH_ROUNDS + 1` (epoch 1) signed with the
+    /// canonical round-derived epoch MUST be accepted here.
+    #[tokio::test]
+    async fn b1d_jarvis_vote_after_epoch_boundary_passes_gossip_edge() {
+        let (_dir, service, mut events, signers) = validating_service();
+        let leader_round = kovanica_types::EPOCH_ROUNDS + 1;
+        let mut vote = Vote {
+            leader_round,
+            leader_hash: Hash::new(b"leader-in-epoch-1"),
+            voter: 1,
+            signature: Signature([0; 64]),
+        };
+        let epoch_ctx = SigningContext {
+            chain_id: test_support::TEST_CTX.chain_id,
+            epoch: epoch_for_round(leader_round),
+        };
+        assert_ne!(
+            epoch_ctx.epoch,
+            test_support::TEST_CTX.epoch,
+            "test must exercise a NON-zero epoch to be a regression"
+        );
+        vote.signature = kovanica_crypto::sign(&signers[1], &vote.signature_data(&epoch_ctx));
+        let payload = bincode::serialize(&vote).expect("serialize vote");
+        assert_eq!(
+            service.on_vote_message(Some(PeerId::random()), &payload),
+            Verdict::Accept,
+            "a vote at leader_round = EPOCH_ROUNDS + 1 must pass the gossip edge"
+        );
+        match events.try_recv().expect("vote event emitted") {
+            NetworkEvent::VoteReceived { vote: got, .. } => assert_eq!(got, vote),
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        // Negative control: a vote signed with the boot-time epoch 0 at the
+        // same leader round must still be rejected — the edge derives the
+        // epoch from the round, it does not fall back to the mempool ctx.
+        let mut stale = Vote {
+            leader_round,
+            leader_hash: Hash::new(b"leader-in-epoch-1"),
+            voter: 1,
+            signature: Signature([0; 64]),
+        };
+        stale.signature =
+            kovanica_crypto::sign(&signers[1], &stale.signature_data(&test_support::TEST_CTX));
+        let payload = bincode::serialize(&stale).expect("serialize vote");
+        assert!(matches!(
+            service.on_vote_message(Some(PeerId::random()), &payload),
+            Verdict::Reject(_)
+        ));
     }
 
     #[tokio::test]
