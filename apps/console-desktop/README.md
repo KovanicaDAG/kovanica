@@ -44,8 +44,8 @@ that deadline. Status, quote, and send do not. Addresses, signing,
 and KUNA amounts stay in Rust (`kovanica-types`, `kovanica-crypto`, and
 `kovanica-light-ffi`), so a later address encoding arrives with the crates.
 
-A transfer shows the recipient, the amount, the fee, and the chain id before
-it is signed. Chain 1 asks for an extra confirmation, and that check happens
+A transfer shows the recipient, the amount, the fee, the chain id, and the
+nonce before it is signed. Chain 1 asks for an extra confirmation, and that check happens
 before the keystore is decrypted. The chain id in the transaction is the one
 the connection screen proved. This build pins no genesis committee, so the
 screen does not prove a chain id and the wallet will not sign.

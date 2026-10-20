@@ -90,6 +90,7 @@ export function reviewRows(quote: QuoteView): ReviewRow[] {
     },
     { label: "Fee", value: `${quote.feeDisplay} KUNA (${quote.feeAtoms} atoms)` },
     { label: "Chain id", value: quote.chainId },
+    { label: "Nonce", value: quote.nonce },
   ];
 }
 

@@ -45,12 +45,13 @@ function enabled(overrides: Partial<Parameters<typeof sendEnabled>[0]> = {}): bo
 }
 
 describe("wallet form", () => {
-  it("lists the recipient, amount, fee, and chain before sending", () => {
+  it("lists the recipient, amount, fee, chain, and nonce before sending", () => {
     expect(reviewRows(quote)).toEqual([
       { label: "Recipient", value: "kvnc-from-rust" },
       { label: "Amount", value: "1 KUNA (1000000000 atoms)" },
       { label: "Fee", value: "0.000000042 KUNA (42 atoms)" },
       { label: "Chain id", value: "4" },
+      { label: "Nonce", value: "7" },
     ]);
   });
 
