@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_P2P_PORT,
+  DEFAULT_POOL_STRATUM_URL,
+  POOL_STRATUM_URL,
   DEFAULT_SEED_PEERS,
   P2P_PORT,
   PRIMARY_SEED,
@@ -44,4 +46,9 @@ test("resolved config is consistent", () => {
   assert.equal(SEED_PEERS_CSV, SEED_PEERS.join(","));
   assert.equal(PRIMARY_SEED, SEED_PEERS[0]);
   assert.ok(P2P_PORT >= 1 && P2P_PORT <= 65535);
+});
+
+test("pool stratum endpoint is a stratum URL on a DNS name", () => {
+  assert.ok(!IPV4.test(DEFAULT_POOL_STRATUM_URL));
+  assert.match(POOL_STRATUM_URL, /^stratum\+tcp:\/\/[^\s/]+:\d+$/);
 });

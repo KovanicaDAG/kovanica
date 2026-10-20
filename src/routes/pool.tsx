@@ -1,3 +1,4 @@
+import { POOL_STRATUM_URL } from "@/lib/public-config";
 import { createFileRoute } from "@tanstack/react-router";
 import { Shell } from "@/components/layout/shell";
 import { Activity, Users, Pickaxe, Hash } from "lucide-react";
@@ -53,7 +54,7 @@ function PoolPage() {
           </div>
           <div className="rounded-md bg-surface-2 p-4 flex flex-col md:flex-row items-center gap-4">
             <code className="text-green-400 font-mono text-sm md:text-lg flex-1 overflow-x-auto">
-              stratum+tcp://pool.kovanica.online:3333
+              {POOL_STRATUM_URL}
             </code>
           </div>
         </div>
