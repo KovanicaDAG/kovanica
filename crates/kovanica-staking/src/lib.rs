@@ -22,7 +22,7 @@ pub use light::{
     SettleOutcome, LIGHT_REWARD_BPS, LIGHT_WITNESS_SLOTS, MAX_LIGHT_NODES, MIN_LIGHT_BOND,
 };
 
-use kovanica_types::{min_active_floor_active_from, Address, PublicKey, Stake};
+use kovanica_types::{Address, PublicKey, Stake};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap as HashMap;
 use thiserror::Error;
@@ -603,11 +603,11 @@ impl StakingState {
                 .committed_leader_height
                 .saturating_add(UNBONDING_ROUNDS),
         });
-        // If this unbond deactivated a committee member, refill up to the
-        // MIN_ACTIVE floor from qualified inactive candidates (gated).
-        if deactivated && min_active_floor_active_from(self.committed_leader_height) {
-            self.enforce_min_active(&[address]);
-        }
+        // A full unbond deactivates the validator unconditionally. There is no
+        // automatic refill: re-entry into the active set happens ONLY via a new
+        // stake transaction (`join_validator`). This keeps the departure
+        // deterministic and avoids resurrecting an evicted/unbonded validator.
+        let _ = deactivated;
         Ok(())
     }
 
@@ -745,78 +745,11 @@ impl StakingState {
             }
         }
 
-        // If offline evictions dropped the committee below the MIN_ACTIVE
-        // floor, refill deterministically from qualified inactive candidates (gated).
-        // The evicted set is excluded so an eviction is not undone by its own
-        // refill (they stay offline until a later departure re-qualifies them).
-        if !went_offline.is_empty() && min_active_floor_active_from(self.committed_leader_height) {
-            self.enforce_min_active(&went_offline);
-        }
+        // Offline evictions are final until the validator re-enters the active
+        // set with a NEW stake transaction (`join_validator`). No automatic
+        // refill from inactive candidates, so an evicted validator is never
+        // silently resurrected.
         went_offline
-    }
-
-    /// Number of validators that currently qualify for the committee (active
-    /// and `stake >= MIN_VALIDATOR_STAKE`), before the `MAX_ACTIVE_VALIDATORS`
-    /// cap. Used as the MIN_ACTIVE floor denominator.
-    pub fn committee_qualified_count(&self) -> usize {
-        self.validators
-            .iter()
-            .filter(|v| v.active && v.stake >= MIN_VALIDATOR_STAKE)
-            .count()
-    }
-
-    /// Enforce the [`MIN_ACTIVE_VALIDATORS`] floor after a validator departs
-    /// (full unbond / offline eviction).
-    ///
-    /// If the committee-qualified set would drop below the floor, qualified
-    /// inactive validators are re-activated deterministically to refill it:
-    /// - candidates are inactive validators with `stake >= MIN_VALIDATOR_STAKE`;
-    /// - ordered by stake desc, then address asc (mirrors committee tie-break);
-    /// - `exclude` is the just-departed validators (never re-activated here —
-    ///   otherwise an offline eviction would be undone by its own refill).
-    ///
-    /// Reactivated validators get `missed_leader_count` reset to 0 so they do
-    /// not immediately re-trip the offline check. No-op when the floor is
-    /// already satisfied or no qualified candidates exist. Purely
-    /// deterministic — no randomness, no reward/tokenomics change.
-    ///
-    /// Returns the reactivated validator addresses (may be empty).
-    pub fn enforce_min_active(&mut self, exclude: &[Address]) -> Vec<Address> {
-        let floor = MIN_ACTIVE_VALIDATORS as usize;
-        let mut reactivated = Vec::new();
-
-        // Only refill when we are actually below the floor.
-        while self.committee_qualified_count() < floor {
-            // Pick the best inactive candidate: stake desc, address asc.
-            let mut candidates: Vec<&ValidatorInfo> = self
-                .validators
-                .iter()
-                .filter(|v| {
-                    !v.active && v.stake >= MIN_VALIDATOR_STAKE && !exclude.contains(&v.address)
-                })
-                .collect();
-            candidates.sort_by(|a, b| {
-                b.stake
-                    .cmp(&a.stake)
-                    .then_with(|| a.address.0.cmp(&b.address.0))
-            });
-            let Some(&best) = candidates.first() else {
-                break; // no qualified candidates left
-            };
-            let addr = best.address;
-            if let Some(v) = self.validators.iter_mut().find(|v| v.address == addr) {
-                v.active = true;
-                v.missed_leader_count = 0;
-                reactivated.push(addr);
-                info!(
-                    validator = %addr,
-                    "MIN_ACTIVE floor: reactivated qualified validator"
-                );
-            } else {
-                break; // defensive; should not happen
-            }
-        }
-        reactivated
     }
 
     /// Check if a commission change is allowed (cooldown period has passed).
@@ -1652,93 +1585,65 @@ mod tests {
     }
 
     #[test]
-    fn min_active_floor_refills_after_full_unbond_when_gated() {
+    fn full_unbond_never_refills_from_inactive_spares() {
         // 16 validators: 15 active at MIN + one inactive-but-qualified spare.
-        // Activate the gate by setting height >= MIN_ACTIVE_FLOOR_ACTIVE_FROM_ROUND.
+        // Reactivation was deleted: a full unbond leaves the spare inactive.
         let mut st = StakingState::new();
         for i in 1..=16u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
                 .unwrap();
         }
-        st.committed_leader_height = kovanica_types::MIN_ACTIVE_FLOOR_ACTIVE_FROM_ROUND;
-        // Deactivate one (spare) manually, leaving 15 active = floor.
+        // Deactivate one (spare) manually, leaving 15 active.
         st.validators[15].active = false;
-        assert_eq!(st.committee_qualified_count(), 15);
 
-        // Full unbond of an active validator deactivates it → 14 < floor →
-        // the spare is re-activated deterministically (gate is active).
+        // Full unbond of an active validator deactivates it and the spare is
+        // NEVER reactivated — re-entry only via a new stake transaction.
         st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
         assert!(!st.validators[0].active);
-        assert_eq!(st.committee_qualified_count(), 15);
-        assert!(st.validators[15].active);
+        assert!(
+            !st.validators[15].active,
+            "spare must NOT be reactivated: no automatic refill exists"
+        );
     }
 
     #[test]
-    fn min_active_floor_is_noop_when_already_satisfied() {
-        let mut st = StakingState::new();
-        for i in 1..=16u8 {
-            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
-                .unwrap();
-        }
-        st.validators[15].active = false; // 15 active, one spare
-        let reactivated = st.enforce_min_active(&[]);
-        assert!(reactivated.is_empty(), "floor already met, nothing to do");
-        assert_eq!(st.committee_qualified_count(), 15);
-    }
-
-    #[test]
-    fn min_active_floor_noop_without_qualified_candidates() {
+    fn full_unbond_leaves_no_reactivation_path_in_staking() {
+        // Re-entry into the active set is NOT automatic: a full unbond
+        // deactivates the validator and `join_validator` refuses to re-add an
+        // address that already has a (now-inactive) record, so reactivation
+        // cannot silently happen from inside staking.
         let mut st = StakingState::new();
         for i in 1..=15u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
                 .unwrap();
         }
-        // Full unbond deactivates one → 14, but no inactive qualified spare.
         st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
-        assert_eq!(st.committee_qualified_count(), 14);
-    }
+        assert!(!st.validators[0].active, "full unbond deactivates");
 
-    #[test]
-    fn min_active_floor_refills_after_full_unbond_inert_by_default() {
-        // With MIN_ACTIVE_FLOOR_ACTIVE_FROM_ROUND = u64::MAX (inert), no refill happens.
-        let mut st = StakingState::new();
-        for i in 1..=17u8 {
-            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
-                .unwrap();
-        }
-        // Deactivate 2 spares, leaving 15 active = floor.
-        st.validators[15].active = false;
-        st.validators[16].active = false;
-        // 15 active, 2 inactive spares (a(16), a(17)). Both have same stake.
-        assert_eq!(st.committee_qualified_count(), 15);
-        assert!(!st.validators[15].active);
-        assert!(!st.validators[16].active);
-
-        // Drop below floor → NO refill because gate is inert (default).
-        st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
+        // A plain re-join of the same address is refused: the record persists.
         assert!(
-            !st.validators[15].active,
-            "spare NOT reactivated (gate inert)"
+            matches!(
+                st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None),
+                Err(StakingError::ValidatorExists)
+            ),
+            "an existing (inactive) record blocks a silent re-join"
         );
-        assert!(!st.validators[16].active, "other spare stays inactive");
-        assert_eq!(
-            st.committee_qualified_count(),
-            14,
-            "floor not enforced when inert"
+        assert!(
+            !st.validators[0].active,
+            "validator stays inactive: no automatic refill exists"
         );
     }
 
     #[test]
-    fn offline_eviction_respects_min_active_floor_inert_by_default() {
-        // 15 active + 1 offline spare. Evicting one active via missed-leader
-        // threshold does NOT refill from the spare when gate is inert.
+    fn offline_eviction_never_refills_from_inactive_spares() {
+        // 15 active + 1 offline spare. Evicting one active via the missed-leader
+        // threshold must NOT refill from the spare.
         let mut st = StakingState::new();
         for i in 1..=16u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
                 .unwrap();
         }
         st.validators[15].active = false; // spare
-        assert_eq!(st.committee_qualified_count(), 15);
 
         // Drive validator a(1) (authority index 0) over the offline threshold.
         // Leader is a(2) (index 1); every other active validator is incremented.
@@ -1746,37 +1651,44 @@ mod tests {
         let went_offline = st.advance_validator_liveness(1);
         assert!(went_offline.contains(&a(1)));
 
-        // Floor NOT refilled from the spare because gate is inert.
-        assert_eq!(
-            st.committee_qualified_count(),
-            14,
-            "floor not enforced when inert"
-        );
         assert!(
             !st.validators[15].active,
-            "spare NOT reactivated (gate inert)"
+            "spare must NOT be reactivated after an offline eviction"
         );
         assert!(!st.validators[0].active, "evicted validator stays offline");
     }
 
     #[test]
-    fn reactivated_validator_missed_count_is_reset_inert_by_default() {
+    fn offline_eviction_is_terminal_without_an_explicit_rejoin_path() {
+        // An evicted validator is never resurrected silently, and staking
+        // offers no automatic path back: the inactive record persists and a
+        // duplicate join is refused.
         let mut st = StakingState::new();
-        for i in 1..=16u8 {
+        for i in 1..=15u8 {
             st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
                 .unwrap();
         }
-        st.validators[15].active = false;
-        st.validators[15].missed_leader_count = MAX_MISSED_LEADERS_BEFORE_OFFLINE; // dirty
-        st.unbond_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
-        assert!(
-            !st.validators[15].active,
-            "spare NOT reactivated (gate inert)"
-        );
+        st.validators[0].missed_leader_count = MAX_MISSED_LEADERS_BEFORE_OFFLINE - 1;
+        let went_offline = st.advance_validator_liveness(1);
+        assert!(went_offline.contains(&a(1)));
+        assert!(!st.validators[0].active);
+        let missed = st.validators[0].missed_leader_count;
+
+        // Advancing liveness again must not reactivate the evicted validator.
+        st.advance_validator_liveness(1);
+        assert!(!st.validators[0].active, "evicted validator stays offline");
         assert_eq!(
-            st.validators[15].missed_leader_count,
-            MAX_MISSED_LEADERS_BEFORE_OFFLINE
+            st.validators[0].missed_leader_count, missed,
+            "no automatic refill means missed count is untouched"
         );
+
+        // No silent re-entry: a duplicate join is refused while the record
+        // remains, so reactivation needs an explicit operator action.
+        assert!(matches!(
+            st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None),
+            Err(StakingError::ValidatorExists)
+        ));
+        assert!(!st.validators[0].active);
     }
 
     #[test]

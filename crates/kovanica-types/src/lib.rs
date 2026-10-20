@@ -148,24 +148,5 @@ pub fn contract_hardening_active_from(round: Round) -> bool {
     round >= CONTRACT_HARDENING_ACTIVE_FROM_ROUND
 }
 
-/// Round from which the MIN_ACTIVE validator floor (re-activating offline
-/// qualified validators) takes effect.
-///
-/// Before this round, the MIN_ACTIVE floor is NOT enforced — validators that
-/// go offline stay offline, and the committee may shrink below 15. This
-/// matches the original pre-hardening behavior and avoids forking a live chain.
-///
-/// At/after this round, `StakingState::enforce_min_active` will re-activate
-/// qualified inactive validators to keep the active committee at >= 15.
-/// Defaults to `u64::MAX` (inert). Set to `0` at the next genesis / testnet
-/// reset after every validator runs a build containing this change.
-pub const MIN_ACTIVE_FLOOR_ACTIVE_FROM_ROUND: u64 = u64::MAX;
-
-/// Whether the MIN_ACTIVE floor enforcement applies at the given leader round.
-#[allow(clippy::absurd_extreme_comparisons)]
-pub fn min_active_floor_active_from(round: Round) -> bool {
-    round >= MIN_ACTIVE_FLOOR_ACTIVE_FROM_ROUND
-}
-
 /// Genesis round.
 pub const GENESIS_ROUND: Round = 0;
