@@ -2228,6 +2228,7 @@ dependencies = [
 name = "kovanica-console"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "hex",
  "kovanica-crypto",
  "kovanica-keystore",

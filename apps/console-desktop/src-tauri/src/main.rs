@@ -7,6 +7,7 @@
 
 mod amount;
 mod connection;
+mod transfer;
 mod wallet;
 
 use amount::{format_kuna_atoms, parse_kuna_atoms};
@@ -200,6 +201,70 @@ fn wallet_touch(state: State<'_, WalletApp>) -> Result<(), String> {
     })
 }
 
+/// Quote a transfer. The keystore is not decrypted.
+#[tauri::command]
+async fn wallet_quote(
+    app: tauri::AppHandle,
+    shown_chain_id: Option<String>,
+    recipient: String,
+    amount: String,
+) -> Result<transfer::TransferQuote, String> {
+    let url = current_url(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url.clone()).map_err(|err| err.to_string())?;
+        let wallet = app.state::<WalletApp>();
+        with_wallet(&wallet, |store| {
+            store.quote_on(
+                &rpc,
+                &url,
+                transfer::TransferDraft {
+                    shown_chain_id: shown_chain_id.as_deref(),
+                    confirm_mainnet: false,
+                    recipient: &recipient,
+                    amount: &amount,
+                },
+                Instant::now(),
+            )
+        })
+    })
+    .await
+    .map_err(|_| "The quote was interrupted.".to_string())?
+}
+
+/// Sign a quoted transfer. Chain 1 is refused until `confirm_mainnet` is set.
+#[tauri::command]
+async fn wallet_send(
+    app: tauri::AppHandle,
+    shown_chain_id: Option<String>,
+    confirm_mainnet: bool,
+    recipient: String,
+    amount: String,
+) -> Result<transfer::SendReceipt, String> {
+    let url = current_url(&app)?;
+    let path = wallet_file(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let rpc = HttpRpc::new(url.clone()).map_err(|err| err.to_string())?;
+        let status = fetch_status(&rpc, &url).map_err(|err| err.to_string())?;
+        let wallet = app.state::<WalletApp>();
+        with_wallet(&wallet, |store| {
+            store.send_prepared(
+                &rpc,
+                &path,
+                &status,
+                transfer::TransferDraft {
+                    shown_chain_id: shown_chain_id.as_deref(),
+                    confirm_mainnet,
+                    recipient: &recipient,
+                    amount: &amount,
+                },
+                Instant::now(),
+            )
+        })
+    })
+    .await
+    .map_err(|_| "The transfer was interrupted.".to_string())?
+}
+
 fn parse_atom_string(text: &str) -> Result<u64, String> {
     let text = text.trim();
     if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -240,7 +305,9 @@ fn main() {
             wallet_import,
             wallet_unlock,
             wallet_lock,
-            wallet_touch
+            wallet_touch,
+            wallet_quote,
+            wallet_send
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kovanica Console");

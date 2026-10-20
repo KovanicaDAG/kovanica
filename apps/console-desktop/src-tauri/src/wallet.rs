@@ -45,10 +45,11 @@ pub struct NewWallet {
     pub mnemonic: String,
 }
 
-struct OpenWallet {
-    passphrase: Zeroizing<String>,
-    address: String,
-    last_active: Instant,
+pub(crate) struct OpenWallet {
+    pub(crate) passphrase: Zeroizing<String>,
+    pub(crate) address: String,
+    pub(crate) last_active: Instant,
+    pub(crate) quote: Option<crate::transfer::TransferQuote>,
 }
 
 impl Drop for OpenWallet {
@@ -101,6 +102,7 @@ impl WalletStore {
             passphrase: Zeroizing::new(passphrase.to_string()),
             address: address.clone(),
             last_active: now,
+            quote: None,
         });
         let mnemonic = std::mem::take(&mut created.mnemonic);
         created.keystore_json.zeroize();
@@ -144,6 +146,7 @@ impl WalletStore {
             passphrase: Zeroizing::new(passphrase.to_string()),
             address: address.clone(),
             last_active: now,
+            quote: None,
         });
         imported.keystore_json.zeroize();
         Ok(WalletStatus {
@@ -173,11 +176,20 @@ impl WalletStore {
             passphrase: Zeroizing::new(passphrase.to_string()),
             address: address.clone(),
             last_active: now,
+            quote: None,
         });
         Ok(WalletStatus {
             phase: PHASE_OPEN.to_string(),
             address: Some(address),
         })
+    }
+
+    /// The open session, after an idle lock.
+    pub(crate) fn session(&mut self, now: Instant) -> Result<&mut OpenWallet, String> {
+        self.lock_if_idle(now);
+        self.open
+            .as_mut()
+            .ok_or_else(|| "The wallet is locked.".to_string())
     }
 
     /// Drop the session. The file stays on disk.
@@ -226,6 +238,23 @@ impl WalletStore {
             address: Some(address),
         })
     }
+
+    /// Open a session without a keystore. Tests use this for quotes that must not decrypt.
+    #[cfg(test)]
+    pub(crate) fn open_for_test(&mut self, address: String, now: Instant) {
+        self.open = Some(OpenWallet {
+            passphrase: Zeroizing::new("unused-passphrase".into()),
+            address,
+            last_active: now,
+            quote: None,
+        });
+    }
+
+    /// Whether the open session is holding a quote.
+    #[cfg(test)]
+    pub(crate) fn has_quote(&self) -> bool {
+        self.open.as_ref().is_some_and(|open| open.quote.is_some())
+    }
 }
 
 impl Default for WalletStore {
@@ -235,7 +264,7 @@ impl Default for WalletStore {
 }
 
 /// Map a light-ffi failure onto a fixed sentence. The raw text is never returned.
-fn map_ffi_error(err: &kovanica_light_ffi::LightFfiError) -> String {
+pub(crate) fn map_ffi_error(err: &kovanica_light_ffi::LightFfiError) -> String {
     let lower = err.to_string().to_ascii_lowercase();
     if lower.contains("passphrase is empty") {
         "Enter a password.".to_string()
@@ -340,7 +369,7 @@ fn write_new_keystore(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn read_keystore(path: &Path) -> Result<String, String> {
+pub(crate) fn read_keystore(path: &Path) -> Result<String, String> {
     path_exists(path)?;
     let file = fs::File::open(path).map_err(|_| "Could not read the wallet.".to_string())?;
     let mut bytes = Vec::new();
