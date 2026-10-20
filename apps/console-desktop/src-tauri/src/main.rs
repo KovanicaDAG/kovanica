@@ -105,7 +105,7 @@ fn format_kuna(atoms: String) -> Result<String, String> {
     Ok(format_kuna_atoms(atoms))
 }
 
-fn wallet_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn wallet_file<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_config_dir()
@@ -210,9 +210,11 @@ fn lock_and_emit(
 }
 
 /// Drop the session. The webview hears [`wallet::WALLET_LOCKED_EVENT`] at once.
+///
+/// `R` is generic so the mock runtime can invoke this same command.
 #[tauri::command]
-fn wallet_lock(
-    app: tauri::AppHandle,
+fn wallet_lock<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, WalletApp>,
 ) -> Result<wallet::WalletStatus, String> {
     let path = wallet_file(&app)?;
@@ -421,6 +423,7 @@ mod tests {
 
     use super::{install_wallet, lock_and_emit};
     use tauri::Listener;
+    use tauri::Manager;
 
     /// The lock command's emitter is the app bus, not a string in `main.rs`.
     #[test]
@@ -464,5 +467,102 @@ mod tests {
         assert_eq!(again.phase, "absent");
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         drop(wallet);
+    }
+
+    /// The `wallet_lock` command itself emits `wallet-locked`, and a second
+    /// call with no session does not emit it again.
+    #[test]
+    fn wallet_lock_command_emits_wallet_locked_once() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "kovanica-console-lock-ipc-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _cleanup = RemoveDir(root.clone());
+
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().app.app_directories_override = Some(
+            tauri::utils::config::AppDirectoriesOverride::Root(root.clone()),
+        );
+
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![super::wallet_lock])
+            .build(context)
+            .expect("test app");
+        app.manage(install_wallet(app.handle()));
+
+        let now = std::time::Instant::now();
+        {
+            let wallet = app.state::<super::WalletApp>();
+            wallet
+                .shared
+                .lock_store()
+                .open_for_test("kvnc-lock-cmd".into(), now);
+            assert!(wallet.shared.lock_store().is_open_for_test());
+        }
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        app.listen(crate::wallet::WALLET_LOCKED_EVENT, move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("webview");
+
+        let first = tauri::test::get_ipc_response(&webview, wallet_lock_request())
+            .unwrap_or_else(|err| panic!("wallet_lock failed: {err}"));
+        let first = response_json(first);
+        assert_eq!(first["phase"], "absent");
+        assert!(first["address"].is_null());
+        assert!(root.is_dir());
+        assert!(!app
+            .state::<super::WalletApp>()
+            .shared
+            .lock_store()
+            .is_open_for_test());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        let second = tauri::test::get_ipc_response(&webview, wallet_lock_request())
+            .unwrap_or_else(|err| panic!("second wallet_lock failed: {err}"));
+        let second = response_json(second);
+        assert_eq!(second["phase"], "absent");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    fn wallet_lock_request() -> tauri::webview::InvokeRequest {
+        tauri::webview::InvokeRequest {
+            cmd: "wallet_lock".into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: "tauri://localhost".parse().expect("local url"),
+            body: tauri::ipc::InvokeBody::Json(serde_json::json!({})),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.to_string(),
+        }
+    }
+
+    fn response_json(body: tauri::ipc::InvokeResponseBody) -> serde_json::Value {
+        match body {
+            tauri::ipc::InvokeResponseBody::Json(text) => {
+                serde_json::from_str(&text).expect("wallet_lock json")
+            }
+            tauri::ipc::InvokeResponseBody::Raw(_) => panic!("wallet_lock returned bytes"),
+        }
+    }
+
+    /// Deletes a test directory when the test ends, including on failure.
+    struct RemoveDir(std::path::PathBuf);
+
+    impl Drop for RemoveDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
