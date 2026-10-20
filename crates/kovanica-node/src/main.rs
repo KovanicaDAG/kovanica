@@ -6188,4 +6188,128 @@ mod b1_epoch_restart_repro {
             committee_a.epoch()
         );
     }
+
+    /// Produce a seal with the REAL production producer (`seals::publish_local_seal`)
+    /// at `leader_round = EPOCH_ROUNDS + 1` and admit it with the REAL production
+    /// verifier (`admit_seal`), plus a restart variant: the admitting node's keys
+    /// come from a committee built at genesis height while the producer is past the
+    /// boundary. The seal must still be accepted because the expected epoch is
+    /// derived from the header's `leader_round` (not boot-time height).
+    #[test]
+    fn seal_at_epoch_rounds_plus_one_is_admitted_with_production_context() {
+        use std::collections::HashMap;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, pk) = kovanica_crypto::generate_keypair();
+        let addr = Address::from_public_key(&pk);
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+
+        // Build staking state exactly as the node does, but with the chain already
+        // past the first epoch boundary when the seal is produced.
+        let make_storage = |name: &str, height: u64| {
+            let storage = Storage::new(dir.path().join(name)).unwrap();
+            let mut staking = StakingState::new();
+            staking.init_treasury(Address([0xcc; 32]));
+            staking
+                .join_validator(addr, MIN_VALIDATOR_STAKE, 0, Some(addr), Some(pk), None)
+                .unwrap();
+            staking.committed_leader_height = height;
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_staking_state(&txn, &staking).unwrap();
+            txn.commit().unwrap();
+            storage
+        };
+
+        // Producer node is past the epoch boundary; it publishes the real seal.
+        let producer = make_storage("producer.redb", EPOCH_ROUNDS + 1);
+        let leader_round = EPOCH_ROUNDS + 1;
+        let subdag = kovanica_consensus::CommittedSubDag {
+            blocks: vec![],
+            leader: StatementBlock {
+                author: 0,
+                round: leader_round,
+                parents: vec![],
+                transactions: vec![],
+                statements: vec![],
+                signature: Signature([0u8; 64]),
+                digest: StatementBlock::compute_digest(0, leader_round, &[], &[]),
+                merkle_root: Default::default(),
+            },
+            leader_round,
+            leader_author: 0,
+            non_blue: vec![],
+        };
+        let ctx = seals::SealContext {
+            chain_id,
+            signer: Some((0, sk.clone())),
+            mysticghost: false,
+        };
+        let announcement = seals::publish_local_seal(&producer, &ctx, &subdag, 0, Hash::zero())
+            .unwrap()
+            .gossip
+            .expect("validator signs a seal");
+
+        // The seal header epoch must equal leader_round / EPOCH_ROUNDS == 1.
+        assert_eq!(
+            announcement.header.epoch,
+            leader_round / EPOCH_ROUNDS,
+            "seal epoch must derive from leader_round"
+        );
+
+        // Verifier keys come from the SAME production committee builder the
+        // producer used (epoch derived from leader_round, not boot height).
+        let read = producer.begin_read().unwrap();
+        let staking = producer.state().load_staking_state(&read).unwrap();
+        let committee =
+            seals::build_committee_for_seal_epoch(&staking, announcement.header.epoch).unwrap();
+        let keys: HashMap<AuthorityIndex, PublicKey> = committee
+            .authorities()
+            .iter()
+            .map(|a| (a.index, a.public_key))
+            .collect();
+
+        // Admit using the real production verifier and the matching local header.
+        assert_eq!(
+            kovanica_network::admit_seal(
+                &keys,
+                chain_id,
+                &announcement,
+                Some(announcement.header.hash()),
+            ),
+            kovanica_network::SealAdmission::Accept,
+            "seal at EPOCH_ROUNDS + 1 must be admitted under the production context"
+        );
+
+        // Restart variant: the admitting node is a long-running peer started at
+        // genesis (height 0). Its keys are built from a genesis-height committee,
+        // yet it must still accept the producer's seal.
+        let long_running = make_storage("long_running.redb", 0);
+        let read_lr = long_running.begin_read().unwrap();
+        let staking_lr = long_running.state().load_staking_state(&read_lr).unwrap();
+        let committee_lr =
+            seals::build_committee_for_seal_epoch(&staking_lr, announcement.header.epoch).unwrap();
+        let keys_lr: HashMap<AuthorityIndex, PublicKey> = committee_lr
+            .authorities()
+            .iter()
+            .map(|a| (a.index, a.public_key))
+            .collect();
+        assert_eq!(
+            kovanica_network::admit_seal(
+                &keys_lr,
+                chain_id,
+                &announcement,
+                Some(announcement.header.hash()),
+            ),
+            kovanica_network::SealAdmission::Accept,
+            "restart variant: genesis-height verifier must accept a post-boundary seal"
+        );
+
+        // Negative control: an epoch that does NOT match leader_round is rejected.
+        let mut forged = announcement.clone();
+        forged.header.epoch = announcement.header.epoch + 1;
+        assert!(matches!(
+            kovanica_network::admit_seal(&keys, chain_id, &forged, Some(forged.header.hash()),),
+            kovanica_network::SealAdmission::Reject(kovanica_network::Rejection::EpochMismatch)
+        ));
+    }
 }

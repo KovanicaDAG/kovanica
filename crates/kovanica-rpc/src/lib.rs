@@ -661,7 +661,9 @@ mod tests {
             )),
             storage,
             staking: Arc::new(RwLock::new(StakingState::new())),
-            committee: Arc::new(RwLock::new(CommitteeInfo::try_new(0, vec![authority]).expect("committee"))),
+            committee: Arc::new(RwLock::new(
+                CommitteeInfo::try_new(0, vec![authority]).expect("committee"),
+            )),
             peer_count: Arc::new(AtomicUsize::new(peers)),
             events: EventBus::new(),
             rate_limiter: Arc::new(RateLimiterState::new(RateLimitConfig::default())),
@@ -752,7 +754,9 @@ mod tests {
             )),
             storage,
             staking: Arc::new(RwLock::new(StakingState::new())),
-            committee: Arc::new(RwLock::new(CommitteeInfo::try_new(0, vec![authority]).expect("committee"))),
+            committee: Arc::new(RwLock::new(
+                CommitteeInfo::try_new(0, vec![authority]).expect("committee"),
+            )),
             peer_count: Arc::new(AtomicUsize::new(0)),
             events: EventBus::new(),
             rate_limiter: Arc::new(RateLimiterState::new(rate.clone())),
