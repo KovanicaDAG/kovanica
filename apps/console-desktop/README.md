@@ -49,7 +49,10 @@ the connection screen proved. This build pins no genesis committee, so the
 screen does not prove a chain id and the wallet will not sign.
 
 Balance and transfer history come from the node. Both are labelled
-"reported by node". The light client does not prove them.
+"reported by node". The light client does not prove them. The wallet screen
+creates or imports a key, shows the recovery phrase once, and reviews a
+transfer before sending. Copying the phrase clears the clipboard after 30
+seconds. The session locks after 5 minutes without activity.
 
 ## Run
 
