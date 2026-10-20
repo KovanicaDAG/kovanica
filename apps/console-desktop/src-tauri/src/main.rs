@@ -34,6 +34,7 @@ use zeroize::Zeroizing;
 struct WalletApp {
     idle: wallet::IdleLockThread,
     shared: Arc<wallet::WalletShared>,
+    notify: Arc<dyn wallet::SessionNotify>,
 }
 
 /// Endpoint the screen should show and edit.
@@ -119,11 +120,7 @@ fn with_wallet<T>(
     body: impl FnOnce(&mut wallet::WalletStore) -> Result<T, String>,
 ) -> Result<T, String> {
     let _idle = &state.idle;
-    let mut store = state.shared.lock_store();
-    let result = body(&mut store);
-    drop(store);
-    state.shared.wake.notify_one();
-    result
+    wallet::with_store(&state.shared, state.notify.as_ref(), body)
 }
 
 /// Whether a wallet file exists, and whether the session is open.
@@ -185,6 +182,21 @@ fn wallet_unlock(
     })
 }
 
+/// Show the recovery phrase again. The password is required. A wrong password
+/// returns no phrase.
+#[tauri::command]
+fn wallet_reveal(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    passphrase: String,
+) -> Result<wallet::NewWallet, String> {
+    let path = wallet_file(&app)?;
+    let passphrase = Zeroizing::new(passphrase);
+    with_wallet(&state, |store| {
+        store.reveal(&path, passphrase.as_str(), Instant::now())
+    })
+}
+
 /// Drop the session. The webview hears [`wallet::WALLET_LOCKED_EVENT`] at once.
 #[tauri::command]
 fn wallet_lock(
@@ -192,15 +204,9 @@ fn wallet_lock(
     state: State<'_, WalletApp>,
 ) -> Result<wallet::WalletStatus, String> {
     let path = wallet_file(&app)?;
-    let (was_open, status) = with_wallet(&state, |store| {
-        let was_open = store.lock();
-        let status = store.status(&path, Instant::now())?;
-        Ok((was_open, status))
-    })?;
-    if was_open {
-        let _ = app.emit(wallet::WALLET_LOCKED_EVENT, ());
-    }
-    Ok(status)
+    let outcome = with_wallet(&state, |store| store.manual_lock(&path, Instant::now()))?;
+    wallet::notify_manual_lock(&outcome, state.notify.as_ref());
+    Ok(outcome.status)
 }
 
 /// Note that the user is still at the keyboard.
@@ -360,11 +366,15 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             let shared = Arc::new(wallet::WalletShared::new());
-            let notify = Arc::new(EmitSession {
+            let notify: Arc<dyn wallet::SessionNotify> = Arc::new(EmitSession {
                 app: app.handle().clone(),
             });
-            let idle = wallet::IdleLockThread::spawn_with(Arc::clone(&shared), notify);
-            app.manage(WalletApp { idle, shared });
+            let idle = wallet::IdleLockThread::spawn_with(Arc::clone(&shared), Arc::clone(&notify));
+            app.manage(WalletApp {
+                idle,
+                shared,
+                notify,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -378,6 +388,7 @@ fn main() {
             wallet_create,
             wallet_import,
             wallet_unlock,
+            wallet_reveal,
             wallet_lock,
             wallet_touch,
             wallet_quote,

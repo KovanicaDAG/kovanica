@@ -6,14 +6,21 @@ import {
   BALANCE_LABEL,
   EMPTY_HISTORY,
   HISTORY_HEADING,
+  LISTEN_FAILURE,
   LOCK_WARNING,
   MNEMONIC_WARNING,
+  PHRASE_STILL_IN_WALLET,
+  SHOW_PHRASE_AGAIN,
   WALLET_LOCK_WARNING_EVENT,
   WALLET_LOCKED_EVENT,
   clearedImportFields,
   needsMainnetConfirm,
+  ACTIVITY_EVENTS,
   phraseLockWarning,
   phraseOnScreen,
+  reportListenFailure,
+  revealedPhrase,
+  shouldNoteActivity,
   reviewRows,
   secretsCleared,
   sendEnabled,
@@ -116,12 +123,76 @@ describe("wallet form", () => {
     expect(clearer.includes("mnemonicPanel.hidden = true")).toBe(true);
   });
 
+  it("shows the recovery phrase again after the password", () => {
+    expect(SHOW_PHRASE_AGAIN).toBe("Show recovery phrase again");
+    expect(PHRASE_STILL_IN_WALLET).toContain("password");
+    expect(revealedPhrase("one two three")).toEqual({
+      phrase: "one two three",
+      password: "",
+    });
+    expect(LOCK_WARNING).toContain(SHOW_PHRASE_AGAIN);
+    expect(htmlSource.includes('id="show-phrase"')).toBe(true);
+    expect(htmlSource.includes('id="locked-backup"')).toBe(true);
+    expect(viewSource.includes("PHRASE_STILL_IN_WALLET")).toBe(true);
+    expect(viewSource.includes("SHOW_PHRASE_AGAIN")).toBe(true);
+    const handler = viewSource.slice(
+      viewSource.indexOf("showPhraseButton.addEventListener"),
+      viewSource.indexOf("\n  lockButton.addEventListener"),
+    );
+    expect(handler.includes('"wallet_reveal"')).toBe(true);
+    expect(handler.includes("revealedPhrase(revealed.mnemonic)")).toBe(true);
+    expect(handler.includes('show("mnemonic")')).toBe(true);
+    expect(handler.includes("unlockPassword.value = shown.password")).toBe(true);
+  });
+
   it("clears the recovery phrase from the screen when the session locks", () => {
     expect(phraseOnScreen("open", "one two three")).toBe("one two three");
     expect(phraseOnScreen("locked", "one two three")).toBe("");
     expect(phraseOnScreen("absent", "one two three")).toBe("");
     expect(viewSource.includes("phrase = phraseOnScreen(phase, phrase)")).toBe(true);
     expect(viewSource.includes("mnemonicText.textContent = phrase")).toBe(true);
+  });
+
+  it("logs a listen failure and shows an error", () => {
+    const logged: Array<{ message: string; detail: unknown }> = [];
+    const shown: string[] = [];
+    const failure = new Error("event plugin unavailable");
+    reportListenFailure(
+      failure,
+      (message, detail) => {
+        logged.push({ message, detail });
+      },
+      (message) => {
+        shown.push(message);
+      },
+    );
+    expect(shown).toEqual([LISTEN_FAILURE]);
+    expect(logged).toEqual([{ message: LISTEN_FAILURE, detail: failure }]);
+    const listened = viewSource.slice(viewSource.indexOf("const onListenError"));
+    expect(listened.includes("reportListenFailure")).toBe(true);
+    expect(listened.includes("console.error")).toBe(true);
+    expect(listened.includes(".catch(onListenError)")).toBe(true);
+    expect(listened.includes(".catch(() => undefined)")).toBe(false);
+    const locked = viewSource.slice(viewSource.indexOf("listen(WALLET_LOCKED_EVENT"));
+    expect(locked.includes(".catch(onListenError)")).toBe(true);
+    expect(locked.includes(".catch(() => undefined)")).toBe(false);
+  });
+
+  it("counts a keydown as activity", () => {
+    expect(ACTIVITY_EVENTS).toContain("keydown");
+    expect(shouldNoteActivity({ now: 10_000, lastTouch: 0, warningVisible: false })).toBe(true);
+    expect(shouldNoteActivity({ now: 14_999, lastTouch: 10_000, warningVisible: false })).toBe(
+      false,
+    );
+    expect(shouldNoteActivity({ now: 15_000, lastTouch: 10_000, warningVisible: false })).toBe(
+      true,
+    );
+    expect(shouldNoteActivity({ now: 10_001, lastTouch: 10_000, warningVisible: true })).toBe(
+      true,
+    );
+    const registration = viewSource.slice(viewSource.indexOf("for (const eventName of ACTIVITY_EVENTS)"));
+    expect(registration.includes("document.addEventListener(eventName, noteActivity)")).toBe(true);
+    expect(viewSource.includes('addEventListener("keydown"')).toBe(false);
   });
 
   it("does not keep a second idle timer beside the Rust lock", () => {

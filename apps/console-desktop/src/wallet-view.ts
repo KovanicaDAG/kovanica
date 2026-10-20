@@ -9,6 +9,10 @@ import {
   EMPTY_HISTORY,
   HISTORY_HEADING,
   MNEMONIC_WARNING,
+  PHRASE_STILL_IN_WALLET,
+  reportListenFailure,
+  SHOW_PHRASE_AGAIN,
+  ACTIVITY_EVENTS,
   WALLET_LOCK_WARNING_EVENT,
   WALLET_LOCKED_EVENT,
   clearedImportFields,
@@ -16,9 +20,11 @@ import {
   phraseLockWarning,
   phraseOnScreen,
   reviewEnabled,
+  revealedPhrase,
   reviewRows,
   secretsCleared,
   sendEnabled,
+  shouldNoteActivity,
   type QuoteView,
 } from "./wallet";
 
@@ -86,8 +92,10 @@ export function mountWallet(shownChainId: () => string | null): void {
   const mnemonicText = required<HTMLParagraphElement>("mnemonic-text");
   const doneButton = required<HTMLButtonElement>("mnemonic-done");
   const lockedAddress = required<HTMLParagraphElement>("locked-address");
+  const lockedBackup = required<HTMLParagraphElement>("locked-backup");
   const unlockPassword = required<HTMLInputElement>("unlock-password");
   const unlockButton = required<HTMLButtonElement>("unlock-wallet");
+  const showPhraseButton = required<HTMLButtonElement>("show-phrase");
   const readout = required<HTMLDListElement>("wallet-readout");
   const lockButton = required<HTMLButtonElement>("lock-wallet");
   const refreshButton = required<HTMLButtonElement>("refresh-wallet");
@@ -108,6 +116,8 @@ export function mountWallet(shownChainId: () => string | null): void {
   let quote: QuoteView | null = null;
 
   mnemonicWarning.textContent = MNEMONIC_WARNING;
+  lockedBackup.textContent = PHRASE_STILL_IN_WALLET;
+  showPhraseButton.textContent = SHOW_PHRASE_AGAIN;
   historyHeading.textContent = HISTORY_HEADING;
 
   function showError(message: string): void {
@@ -300,6 +310,26 @@ export function mountWallet(shownChainId: () => string | null): void {
     })();
   });
 
+  showPhraseButton.addEventListener("click", () => {
+    void (async () => {
+      clearError();
+      try {
+        const revealed = await invoke<NewWallet>("wallet_reveal", {
+          passphrase: unlockPassword.value,
+        });
+        const shown = revealedPhrase(revealed.mnemonic);
+        phrase = shown.phrase;
+        unlockPassword.value = shown.password;
+        mnemonicText.textContent = phrase;
+        paintLockWarning(false);
+        phase = "open";
+        show("mnemonic");
+      } catch (error) {
+        showError(messageFrom(error));
+      }
+    })();
+  });
+
   lockButton.addEventListener("click", () => {
     void (async () => {
       clearError();
@@ -375,22 +405,33 @@ export function mountWallet(shownChainId: () => string | null): void {
   const noteActivity = (): void => {
     const now = Date.now();
     const warningVisible = !mnemonicLockWarning.hidden;
-    if (!warningVisible && now - lastTouch < 5_000) return;
+    if (!shouldNoteActivity({ now, lastTouch, warningVisible })) return;
     lastTouch = now;
     if (warningVisible) paintLockWarning(false);
     void invoke("wallet_touch").catch(() => undefined);
   };
-  document.addEventListener("input", noteActivity);
-  document.addEventListener("click", noteActivity);
+  for (const eventName of ACTIVITY_EVENTS) {
+    document.addEventListener(eventName, noteActivity);
+  }
+
+  const onListenError = (error: unknown): void => {
+    reportListenFailure(
+      error,
+      (message, detail) => {
+        console.error(message, detail);
+      },
+      showError,
+    );
+  };
 
   void listen(WALLET_LOCK_WARNING_EVENT, () => {
     paintLockWarning(true);
-  }).catch(() => undefined);
+  }).catch(onListenError);
 
   void listen(WALLET_LOCKED_EVENT, () => {
     clearSecretFields();
     void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));
-  }).catch(() => undefined);
+  }).catch(onListenError);
 
   window.setInterval(() => {
     void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));

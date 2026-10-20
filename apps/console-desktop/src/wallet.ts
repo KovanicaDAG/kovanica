@@ -6,11 +6,35 @@
 /** Tauri event emitted when Rust drops the open session. */
 export const WALLET_LOCKED_EVENT = "wallet-locked";
 
+/** Shown when the screen cannot subscribe to the lock events. */
+export const LISTEN_FAILURE =
+  "The wallet could not watch for a lock. Lock it before you leave this screen.";
+
+/**
+ * A failed `listen` is logged and shown. The raw error stays in the log.
+ * The screen shows a fixed sentence.
+ */
+export function reportListenFailure(
+  error: unknown,
+  log: (message: string, detail: unknown) => void,
+  show: (message: string) => void,
+): void {
+  log(LISTEN_FAILURE, error);
+  show(LISTEN_FAILURE);
+}
+
 /** Tauri event emitted before the idle lock, while the session is still open. */
 export const WALLET_LOCK_WARNING_EVENT = "wallet-lock-warning";
 
 export const LOCK_WARNING =
-  "This wallet will lock soon. The recovery phrase will leave this screen. Finish writing it down. Click this screen if you are still here.";
+  "This wallet will lock soon. The recovery phrase will leave this screen. Finish writing it down. If it locks first, enter the password and choose Show recovery phrase again. Click this screen if you are still here.";
+
+/** Locked-screen control that decrypts the phrase with the wallet password. */
+export const SHOW_PHRASE_AGAIN = "Show recovery phrase again";
+
+/** The lock drops the on-screen copy. The keystore still has the phrase. */
+export const PHRASE_STILL_IN_WALLET =
+  "The recovery phrase is still in this wallet. Enter the password to see it again.";
 
 export const MNEMONIC_WARNING =
   "Anyone who reads this phrase can spend the KUNA. Write it down. This screen does not copy it.";
@@ -44,6 +68,14 @@ export function secretsCleared(): { phrase: string; password: string } {
   return { phrase: "", password: "" };
 }
 
+/**
+ * Phrase and password after a successful reveal.
+ * The password is cleared. The phrase is shown until the user dismisses it.
+ */
+export function revealedPhrase(mnemonic: string): { phrase: string; password: string } {
+  return { phrase: mnemonic, password: "" };
+}
+
 /** Import fields are wiped after the attempt, including a failed one. */
 export function clearedImportFields(): { phrase: string; password: string } {
   return { phrase: "", password: "" };
@@ -55,6 +87,28 @@ export function phraseLockWarning(phrase: string, warned: boolean): string {
     return "";
   }
   return LOCK_WARNING;
+}
+
+/** DOM events that mean the user is still at this screen. */
+export const ACTIVITY_EVENTS = ["input", "click", "keydown"] as const;
+
+/** How often ordinary activity moves the idle deadline. A lock warning is immediate. */
+export const ACTIVITY_TOUCH_INTERVAL_MS = 5_000;
+
+/**
+ * Whether this activity should move the idle deadline.
+ * A visible lock warning is reported at once. Other activity is reported
+ * at most once per interval.
+ */
+export function shouldNoteActivity(input: {
+  now: number;
+  lastTouch: number;
+  warningVisible: boolean;
+}): boolean {
+  if (input.warningVisible) {
+    return true;
+  }
+  return input.now - input.lastTouch >= ACTIVITY_TOUCH_INTERVAL_MS;
 }
 
 /** The phrase stays on screen only while the session is still open. */

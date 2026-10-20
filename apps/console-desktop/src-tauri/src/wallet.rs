@@ -58,6 +58,24 @@ const PHASE_OPEN: &str = "open";
 
 const MAX_KEYSTORE_BYTES: u64 = 64 * 1024;
 
+/// Outcome of the lock command. The webview event is separate from the status.
+pub struct ManualLock {
+    /// Phase after the session was dropped.
+    pub status: WalletStatus,
+    /// True when this call closed an open session.
+    pub session_closed: bool,
+}
+
+/// Tell the webview that a manual lock closed the session.
+///
+/// `SessionNotify::wallet_locked` is the `wallet-locked` event. A lock that
+/// finds the session already closed does not emit it again.
+pub fn notify_manual_lock(lock: &ManualLock, notify: &dyn SessionNotify) {
+    if lock.session_closed {
+        notify.wallet_locked();
+    }
+}
+
 /// What the screen should show. The passphrase is never included.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,13 +86,17 @@ pub struct WalletStatus {
     pub address: Option<String>,
 }
 
-/// A newly created wallet. The phrase is returned once and is not stored.
+/// A wallet whose phrase the screen may show.
+///
+/// `create` returns the phrase for a new key. `reveal` returns that same
+/// phrase again after the password checks out. The screen holds it until the
+/// user dismisses it or the session locks.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewWallet {
     /// Canonical address from `kovanica-light-ffi`.
     pub address: String,
-    /// 24-word seed. The caller shows it once.
+    /// 24-word seed.
     pub mnemonic: String,
 }
 
@@ -96,6 +118,8 @@ pub struct WalletStore {
     open: Option<OpenWallet>,
     /// Idle limit for this store. Production uses [`LOCK_AFTER`].
     lock_after: Duration,
+    /// An idle lock has not yet been reported as `wallet-locked`.
+    idle_lock_pending: bool,
 }
 
 /// Session plus the condvar the idle thread waits on.
@@ -120,6 +144,27 @@ impl WalletShared {
     pub fn lock_store(&self) -> MutexGuard<'_, WalletStore> {
         self.store.lock().unwrap_or_else(|err| err.into_inner())
     }
+}
+
+/// Run one IPC call against the session.
+///
+/// `session` and `status` apply the idle limit. When that call is the one
+/// that locks, this emits `wallet-locked` after the mutex is released so the
+/// screen can clear passphrase fields.
+pub fn with_store<T>(
+    shared: &WalletShared,
+    notify: &dyn SessionNotify,
+    body: impl FnOnce(&mut WalletStore) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut store = shared.lock_store();
+    let result = body(&mut store);
+    let emit_lock = store.take_idle_lock_event();
+    drop(store);
+    shared.wake.notify_one();
+    if emit_lock {
+        notify.wallet_locked();
+    }
+    result
 }
 
 /// Background lock. The session is cleared after [`LOCK_AFTER`] even when the
@@ -189,8 +234,13 @@ fn idle_lock_loop(shared: &WalletShared, stop: &AtomicBool, notify: &dyn Session
     while !stop.load(Ordering::SeqCst) {
         let now = Instant::now();
         if store.lock_if_idle(now) {
+            // This thread emits the event. Clear the mark first so the next
+            // IPC call does not emit a second one.
+            let emit = store.take_idle_lock_event();
             drop(store);
-            notify.wallet_locked();
+            if emit {
+                notify.wallet_locked();
+            }
             warned_for = None;
             store = shared.lock_store();
         } else {
@@ -228,6 +278,7 @@ impl WalletStore {
         Self {
             open: None,
             lock_after: LOCK_AFTER,
+            idle_lock_pending: false,
         }
     }
 
@@ -346,6 +397,45 @@ impl WalletStore {
         })
     }
 
+    /// Show the recovery phrase again. The password is checked by
+    /// `kovanica_light_ffi::reveal_mnemonic_raw`.
+    ///
+    /// A lock drops the on-screen copy and the open session. The keystore file
+    /// still holds the encrypted phrase, so this opens a new session and
+    /// returns the same words. A wrong password returns no phrase and leaves
+    /// the session locked.
+    pub fn reveal(
+        &mut self,
+        path: &Path,
+        passphrase: &str,
+        now: Instant,
+    ) -> Result<NewWallet, String> {
+        if passphrase.is_empty() {
+            return Err("Enter a password.".to_string());
+        }
+        let json = read_keystore(path)?;
+        let mut phrase =
+            kovanica_light_ffi::reveal_mnemonic_raw(json.clone(), passphrase.to_string())
+                .map_err(|err| map_ffi_error(&err))?;
+        let address = match kovanica_light_ffi::wallet_address(json) {
+            Ok(address) => address,
+            Err(_) => {
+                phrase.zeroize();
+                return Err("Could not read the wallet.".to_string());
+            }
+        };
+        self.open = Some(OpenWallet {
+            passphrase: Zeroizing::new(passphrase.to_string()),
+            address: address.clone(),
+            last_active: now,
+            quote: None,
+        });
+        Ok(NewWallet {
+            address,
+            mnemonic: std::mem::take(&mut phrase),
+        })
+    }
+
     /// The open session, after an idle lock.
     pub(crate) fn session(&mut self, now: Instant) -> Result<&mut OpenWallet, String> {
         self.lock_if_idle(now);
@@ -359,6 +449,19 @@ impl WalletStore {
     /// Returns whether a session was open.
     pub fn lock(&mut self) -> bool {
         self.open.take().is_some()
+    }
+
+    /// Drop the session for the lock command and read the phase afterwards.
+    ///
+    /// `session_closed` is true only when this call closed an open session.
+    /// The caller emits `wallet-locked` in that case.
+    pub fn manual_lock(&mut self, path: &Path, now: Instant) -> Result<ManualLock, String> {
+        let session_closed = self.lock();
+        let status = self.status(path, now)?;
+        Ok(ManualLock {
+            status,
+            session_closed,
+        })
     }
 
     /// Move the idle deadline of an open session.
@@ -382,10 +485,19 @@ impl WalletStore {
             .is_some_and(|open| now.saturating_duration_since(open.last_active) >= limit);
         if idle {
             self.open.take();
+            self.idle_lock_pending = true;
             true
         } else {
             false
         }
+    }
+
+    /// Whether an idle lock still needs a `wallet-locked` event. Clears the mark.
+    #[must_use]
+    pub fn take_idle_lock_event(&mut self) -> bool {
+        let pending = self.idle_lock_pending;
+        self.idle_lock_pending = false;
+        pending
     }
 
     /// Time left before [`lock_if_idle`] clears the session.
@@ -599,6 +711,21 @@ mod tests {
 
     struct RecordedLock {
         locked: AtomicBool,
+    }
+
+    struct NamedLock {
+        events: Mutex<Vec<&'static str>>,
+    }
+
+    impl SessionNotify for NamedLock {
+        fn wallet_locked(&self) {
+            self.events
+                .lock()
+                .expect("events")
+                .push(WALLET_LOCKED_EVENT);
+        }
+
+        fn wallet_lock_warning(&self) {}
     }
 
     impl SessionNotify for RecordedLock {
@@ -842,6 +969,46 @@ mod tests {
     const CROSS_KEYSTORE_JSON: &str = r#"{"version":2,"address":"kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag","public_key":"0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0","encrypted":true,"secret_key":"21406ec83c99222e1a7262d80534b3cf334d5b213654c65efe8b5fb5ea70f8d2c78403778f0d09902a7c9a2b21c4b055","cipher":"xchacha20poly1305","kdf":"argon2id","kdf_memory_kib":65536,"kdf_iterations":3,"kdf_parallelism":4,"salt":"88e37fe15da91bf57bfa24181fc595d9","nonce":"1d6b4b4a95293d5a4bf31f16059f032a4acf0c9cf2674e42"}"#;
 
     #[test]
+    fn reveal_shows_the_phrase_again_after_the_session_is_gone() {
+        let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
+        let dir = temp_dir("reveal");
+        let path = keystore_in(&dir);
+        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+
+        let err = must_err(store.reveal(&path, "", now));
+        assert_eq!(err, "Enter a password.");
+        assert!(!store.is_open_for_test());
+
+        let err = must_err(store.reveal(&path, "wrong-horse-marker", now));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert!(!err.contains("wrong-horse-marker"));
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(fs::read(&path).unwrap(), CROSS_KEYSTORE_JSON.as_bytes());
+
+        let revealed = must(store.reveal(&path, "cross-check", now));
+        assert_eq!(revealed.mnemonic, phrase);
+        assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
+        assert_eq!(
+            revealed.address,
+            "kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag"
+        );
+        let status = must(store.status(&path, now));
+        assert_eq!(status.phase, PHASE_OPEN);
+        let status_json = serde_json::to_string(&status).unwrap();
+        assert!(!status_json.contains(&phrase));
+        assert!(!fs::read_to_string(&path).unwrap().contains(&phrase));
+
+        assert!(store.lock());
+        let locked = must(store.status(&path, now));
+        assert_eq!(locked.phase, PHASE_LOCKED);
+        assert!(!store.is_open_for_test());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_fixed_keystore_vector_uses_keystore_validation() {
         let body = include_str!("wallet.rs").split("mod tests").next().unwrap();
         assert!(!body.contains("kdf_memory_kib"));
@@ -948,11 +1115,78 @@ mod tests {
     }
 
     #[test]
-    fn the_lock_command_names_the_webview_event() {
-        assert_eq!(WALLET_LOCKED_EVENT, "wallet-locked");
-        let main = include_str!("main.rs");
-        assert!(main.contains("emit(wallet::WALLET_LOCKED_EVENT"));
-        assert!(main.contains("IdleLockThread::spawn_with"));
+    fn manual_lock_emits_wallet_locked_when_a_session_closes() {
+        let dir = temp_dir("manual-lock");
+        let path = keystore_in(&dir);
+        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        let address =
+            "kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag";
+        store.open_for_test(address.to_string(), now);
+        let notify = NamedLock {
+            events: Mutex::new(Vec::new()),
+        };
+
+        let outcome = must(store.manual_lock(&path, now));
+        assert!(outcome.session_closed);
+        assert_eq!(outcome.status.phase, PHASE_LOCKED);
+        assert_eq!(outcome.status.address.as_deref(), Some(address));
+        notify_manual_lock(&outcome, &notify);
+        assert_eq!(
+            notify.events.lock().expect("events").as_slice(),
+            [WALLET_LOCKED_EVENT]
+        );
+        assert!(!store.is_open_for_test());
+
+        let again = must(store.manual_lock(&path, now));
+        assert!(!again.session_closed);
+        assert_eq!(again.status.phase, PHASE_LOCKED);
+        notify_manual_lock(&again, &notify);
+        assert_eq!(
+            notify.events.lock().expect("events").as_slice(),
+            [WALLET_LOCKED_EVENT]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ipc_session_lock_emits_wallet_locked_once() {
+        let shared = Arc::new(WalletShared::new());
+        let notify = NamedLock {
+            events: Mutex::new(Vec::new()),
+        };
+        let now = Instant::now();
+        shared.lock_store().open_for_test("kvnc-ipc".into(), now);
+
+        let open = must(with_store(&shared, &notify, |store| {
+            store.session(now).map(|open| open.address.clone())
+        }));
+        assert_eq!(open, "kvnc-ipc");
+        assert!(notify.events.lock().expect("events").is_empty());
+
+        let err = with_store(&shared, &notify, |store| {
+            store
+                .session(now + LOCK_AFTER)
+                .map(|open| open.address.clone())
+        });
+        assert!(err.is_err());
+        assert!(!shared.lock_store().is_open_for_test());
+        assert_eq!(
+            notify.events.lock().expect("events").as_slice(),
+            [WALLET_LOCKED_EVENT]
+        );
+
+        let err = with_store(&shared, &notify, |store| {
+            store
+                .session(now + LOCK_AFTER)
+                .map(|open| open.address.clone())
+        });
+        assert!(err.is_err());
+        assert_eq!(
+            notify.events.lock().expect("events").as_slice(),
+            [WALLET_LOCKED_EVENT]
+        );
     }
 
     #[test]
@@ -962,6 +1196,17 @@ mod tests {
         assert!(
             ignore.lines().any(|line| line.trim() == fingerprint),
             "gitleaks fingerprint for the encrypted test vector is missing"
+        );
+        let line_no = include_str!("wallet.rs")
+            .lines()
+            .position(|line| line.contains("const CROSS_KEYSTORE_JSON:"))
+            .expect("encrypted test vector")
+            + 1;
+        let dir_fingerprint =
+            format!("apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:{line_no}");
+        assert!(
+            ignore.lines().any(|line| line.trim() == dir_fingerprint),
+            "gitleaks directory fingerprint for the encrypted test vector is missing"
         );
     }
 
