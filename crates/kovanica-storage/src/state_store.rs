@@ -3,6 +3,7 @@
 //! Stores account balances, nonces, contract code/storage, and staking state.
 
 use crate::{address_to_bytes, BincodeSerialize, StorageError};
+use bincode::Options;
 use kovanica_staking::{Delegation, StakingState, TreasuryState, ValidatorInfo};
 use kovanica_types::hash::Hash;
 use kovanica_types::{
@@ -751,9 +752,12 @@ impl StateStore {
                 // Check for versioned encoding
                 match decode_with_version(&bytes) {
                     Ok((EPOCH_COMMITTEE_VERSION, payload)) => {
-                        // New format: Vec<SealCommitteeSnapshotMember>
+                        // New format (v1): Vec<SealCommitteeSnapshotMember> - STRICT decode
+                        let options = bincode::DefaultOptions::new()
+                            .with_fixint_encoding()
+                            .reject_trailing_bytes();
                         let decoded: Vec<kovanica_types::SealCommitteeSnapshotMember> =
-                            bincode::deserialize(payload)?;
+                            options.deserialize(payload)?;
                         Ok(Some(decoded))
                     }
                     Ok((v, _)) => {
@@ -765,22 +769,36 @@ impl StateStore {
                         .into())
                     }
                     Err("no version prefix") => {
-                        // Old untagged format: Vec<SealCommitteeMember> -> convert
-                        let old_format: Vec<kovanica_types::SealCommitteeMember> =
-                            bincode::deserialize(&bytes)?;
-                        let converted: Vec<kovanica_types::SealCommitteeSnapshotMember> =
-                            old_format
-                                .into_iter()
-                                .map(|(index, public_key, stake)| {
-                                    kovanica_types::SealCommitteeSnapshotMember {
-                                        index,
-                                        public_key,
-                                        stake,
-                                        vrf_public_key: None,
-                                    }
-                                })
-                                .collect();
-                        Ok(Some(converted))
+                        // Unversioned row: could be main-era (Vec<SealCommitteeSnapshotMember>)
+                        // or pre-83c8dcf format (Vec<SealCommitteeMember> tuples).
+                        // Try main-era format FIRST with strict options.
+                        let options = bincode::DefaultOptions::new()
+                            .with_fixint_encoding()
+                            .reject_trailing_bytes();
+                        if let Ok(main_era) = options
+                            .deserialize::<Vec<kovanica_types::SealCommitteeSnapshotMember>>(&bytes)
+                        {
+                            Ok(Some(main_era))
+                        } else {
+                            // Fall back to pre-83c8dcf format (3-field tuples) with strict options
+                            let old_format: Vec<kovanica_types::SealCommitteeMember> =
+                                options.deserialize(&bytes)?;
+                            // Convert to SnapshotMember with vrf_public_key = None.
+                            // The caller (build_committee_for_round) will backfill from staking state if needed.
+                            let converted: Vec<kovanica_types::SealCommitteeSnapshotMember> =
+                                old_format
+                                    .into_iter()
+                                    .map(|(index, public_key, stake)| {
+                                        kovanica_types::SealCommitteeSnapshotMember {
+                                            index,
+                                            public_key,
+                                            stake,
+                                            vrf_public_key: None,
+                                        }
+                                    })
+                                    .collect();
+                            Ok(Some(converted))
+                        }
                     }
                     Err(e) => {
                         // Truncated or other error
