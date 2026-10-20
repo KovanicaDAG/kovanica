@@ -7,9 +7,7 @@ import {
   EMPTY_HISTORY,
   HISTORY_HEADING,
   LOCK_AFTER_MS,
-  MNEMONIC_CLIPBOARD_MS,
-  MNEMONIC_COPY_WARNING,
-  copyMnemonic,
+  MNEMONIC_WARNING,
   idleLocked,
   needsMainnetConfirm,
   phraseOnScreen,
@@ -78,23 +76,17 @@ describe("wallet form", () => {
     expect(viewSource.includes("mnemonicText.textContent = phrase")).toBe(true);
   });
 
-  it("locks after five minutes and clears a copied phrase after 30 seconds", () => {
+  it("locks after five minutes and does not offer to copy the phrase", () => {
     expect(LOCK_AFTER_MS).toBe(300_000);
     expect(idleLocked(0, 299_999)).toBe(false);
     expect(idleLocked(0, 300_000)).toBe(true);
-    const writes: string[] = [];
-    const delays: number[] = [];
-    copyMnemonic(
-      "one two three",
-      (value) => writes.push(value),
-      (ms, run) => {
-        delays.push(ms);
-        run();
-      },
-    );
-    expect(writes).toEqual(["one two three", ""]);
-    expect(delays).toEqual([MNEMONIC_CLIPBOARD_MS]);
-    expect(MNEMONIC_COPY_WARNING).toContain("30 seconds");
+    expect(MNEMONIC_WARNING).toContain("Write it down");
+    expect(MNEMONIC_WARNING.includes("clipboard")).toBe(false);
+    for (const text of [walletSource, viewSource, htmlSource]) {
+      expect(text.includes("copy-mnemonic")).toBe(false);
+      expect(text.includes("clipboard")).toBe(false);
+      expect(text.includes("copyMnemonic")).toBe(false);
+    }
   });
 
   it("labels unproven figures and does not keep secrets in the page", () => {
