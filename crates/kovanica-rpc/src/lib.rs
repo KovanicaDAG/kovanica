@@ -131,7 +131,7 @@ pub struct RpcState {
     pub consensus_store: Arc<kovanica_dag::DagStore>,
     pub mempool: Arc<Mempool>,
     pub staking: Arc<RwLock<StakingState>>,
-    pub committee: CommitteeInfo,
+    pub committee: Arc<RwLock<CommitteeInfo>>,
     /// Shared distinct connected-peer count maintained by the network service.
     pub peer_count: Arc<AtomicUsize>,
     /// Execution / consensus liveness reported by the node's background tasks.
@@ -661,7 +661,7 @@ mod tests {
             )),
             storage,
             staking: Arc::new(RwLock::new(StakingState::new())),
-            committee: CommitteeInfo::try_new(0, vec![authority]).expect("committee"),
+            committee: Arc::new(RwLock::new(CommitteeInfo::try_new(0, vec![authority]).expect("committee"))),
             peer_count: Arc::new(AtomicUsize::new(peers)),
             events: EventBus::new(),
             rate_limiter: Arc::new(RateLimiterState::new(RateLimitConfig::default())),
@@ -752,7 +752,7 @@ mod tests {
             )),
             storage,
             staking: Arc::new(RwLock::new(StakingState::new())),
-            committee: CommitteeInfo::try_new(0, vec![authority]).expect("committee"),
+            committee: Arc::new(RwLock::new(CommitteeInfo::try_new(0, vec![authority]).expect("committee"))),
             peer_count: Arc::new(AtomicUsize::new(0)),
             events: EventBus::new(),
             rate_limiter: Arc::new(RateLimiterState::new(rate.clone())),

@@ -862,7 +862,7 @@ pub async fn handle_get_leader_schedule(params: Value, state: RpcState) -> Resul
             .saturating_add(1)
     };
 
-    let committee = &state.committee;
+    let committee = committee_from_state(&state).await;
     let schedule: Vec<Value> = (0..count)
         .map(|offset| {
             let round = start.saturating_add(offset);
@@ -1166,6 +1166,13 @@ fn committee_members_json(committee: &kovanica_consensus::CommitteeInfo) -> Vec<
         .collect::<Vec<Value>>()
 }
 
+/// Dereference the committee from the RPC state's RwLock.
+async fn committee_from_state(
+    state: &RpcState,
+) -> tokio::sync::RwLockReadGuard<'_, kovanica_consensus::CommitteeInfo> {
+    state.committee.read().await
+}
+
 /// `kovanica_getCommittee(epoch?)` — current consensus committee.
 ///
 /// Returns a bare JSON array of member rows; the Android client parses the
@@ -1175,7 +1182,7 @@ fn committee_members_json(committee: &kovanica_consensus::CommitteeInfo) -> Vec<
 /// returns an invalid-params error rather than silently answering with the
 /// wrong epoch's committee.
 pub async fn handle_get_committee(params: Value, state: RpcState) -> Result<Value, RpcError> {
-    let committee = &state.committee;
+    let committee = committee_from_state(&state).await;
     let args = params_vec(&params);
     if let Some(requested) = args.first() {
         let requested = parse_u64(requested, "epoch")?;
@@ -1186,7 +1193,7 @@ pub async fn handle_get_committee(params: Value, state: RpcState) -> Result<Valu
             )));
         }
     }
-    Ok(Value::Array(committee_members_json(committee)))
+    Ok(Value::Array(committee_members_json(&committee)))
 }
 
 /// `kovanica_getCommitteeInfo()` — current committee together with its epoch.
@@ -1196,10 +1203,10 @@ pub async fn handle_get_committee(params: Value, state: RpcState) -> Result<Valu
 /// recompute `committee_seal_hash(epoch, members)` against a sealed leader
 /// header's `committee_hash`.
 pub async fn handle_get_committee_info(_params: Value, state: RpcState) -> Result<Value, RpcError> {
-    let committee = &state.committee;
+    let committee = committee_from_state(&state).await;
     Ok(json!({
         "epoch": quantity(committee.epoch()),
-        "members": committee_members_json(committee),
+        "members": committee_members_json(&committee),
     }))
 }
 
@@ -1362,7 +1369,9 @@ mod tests {
             )),
             storage,
             staking: Arc::new(RwLock::new(StakingState::new())),
-            committee: CommitteeInfo::try_new(0, vec![authority]).expect("test committee is valid"),
+            committee: Arc::new(RwLock::new(
+                CommitteeInfo::try_new(0, vec![authority]).expect("test committee is valid"),
+            )),
             peer_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             events: crate::EventBus::new(),
             rate_limiter: Arc::new(crate::RateLimiterState::new(

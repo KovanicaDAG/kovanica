@@ -737,13 +737,14 @@ where
         consensus_store: dag_store.clone(),
         mempool: mempool.clone(),
         staking: Arc::new(tokio::sync::RwLock::new(staking_state)),
-        committee: committee.clone(),
+        committee: Arc::new(tokio::sync::RwLock::new(committee.clone())),
         peer_count: peer_count_for_rpc,
         events: events.clone(),
         rate_limiter: Arc::new(RateLimiterState::new(rate_limit_config.clone())),
         auth_config: Arc::new(auth_config.clone()),
         sync_status: Some(sync_status_source),
     };
+    let rpc_committee = rpc_state.committee.clone();
     let rpc_server = RpcServer::new(
         rpc_socket,
         rpc_state,
@@ -895,6 +896,10 @@ where
         shutdown_rx.clone(),
         node_health.clone(),
         Some(seal_duty),
+        rpc_committee,
+        config.listen_addr.clone(),
+        validator_address,
+        public_key,
     ));
 
     let engine_for_task = engine.clone();
@@ -2833,6 +2838,10 @@ async fn run_execution(
     mut shutdown: watch::Receiver<bool>,
     health: NodeHealth,
     seal_duty: Option<SealDuty>,
+    rpc_committee: Arc<tokio::sync::RwLock<CommitteeInfo>>,
+    listen_addr: String,
+    validator_address: Address,
+    public_key: PublicKey,
 ) {
     // Execution verifies tx signatures with the node's configured chain id.
     let mut ctx = ExecutionContext::with_signing_context(signing_ctx);
@@ -2867,8 +2876,22 @@ async fn run_execution(
                                 info!(
                                     from_epoch = prev,
                                     to_epoch = result.epoch,
-                                    "epoch boundary crossed; committee epoch now truthful"
+                                    "epoch boundary crossed; rebuilding committee for RPC"
                                 );
+                                match build_committee(
+                                    &state_storage,
+                                    &public_key,
+                                    &validator_address,
+                                    &listen_addr,
+                                ) {
+                                    Ok(new_committee) => {
+                                        let mut guard = rpc_committee.write().await;
+                                        *guard = new_committee;
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, "failed to rebuild committee at epoch boundary");
+                                    }
+                                }
                             }
                         }
                         last_epoch = Some(result.epoch);
@@ -4444,7 +4467,7 @@ mod tests {
         block_manager.set_authority_keys(HashMap::from([(0, public_key)]));
         let engine = ConsensusEngine::new(
             ConsensusConfig::default(),
-            committee,
+            committee.clone(),
             Arc::new(NodeDagStore { inner: dag.clone() }),
             Arc::new(RwLock::new(NodeBlockManager {
                 inner: block_manager,
@@ -4465,6 +4488,10 @@ mod tests {
             shutdown_rx,
             NodeHealth::new(),
             None,
+            Arc::new(tokio::sync::RwLock::new(committee)),
+            "127.0.0.1:8000".to_string(),
+            validator_address,
+            public_key,
         ));
 
         let leader_round = 3;
@@ -4593,6 +4620,18 @@ mod tests {
             shutdown_rx,
             health.clone(),
             None,
+            Arc::new(tokio::sync::RwLock::new(
+                build_committee(
+                    &state_storage,
+                    &PublicKey([0x22; 32]),
+                    &validator_address,
+                    "127.0.0.1:8000",
+                )
+                .unwrap(),
+            )),
+            "127.0.0.1:8000".to_string(),
+            validator_address,
+            PublicKey([0x22; 32]),
         )
         .await;
         assert_ne!(
@@ -4705,6 +4744,24 @@ mod tests {
             shutdown_rx,
             health.clone(),
             None,
+            Arc::new(tokio::sync::RwLock::new({
+                let txn = state_storage.begin_read().unwrap();
+                let s = state_storage.state().load_staking_state(&txn).unwrap();
+                build_committee(
+                    &state_storage,
+                    &PublicKey([0x30; 32]),
+                    &Address([0x30; 32]),
+                    "127.0.0.1:8000",
+                )
+                .unwrap_or_else(|_| {
+                    // Fall back to a committee built from the persisted state.
+                    let _ = s;
+                    panic!("committee build failed in test");
+                })
+            })),
+            "127.0.0.1:8000".to_string(),
+            Address([0x30; 32]),
+            PublicKey([0x30; 32]),
         )
         .await;
         assert_ne!(
@@ -4784,6 +4841,14 @@ mod tests {
                 non_blue: Vec::new(),
             }
         };
+        let test_public_key = PublicKey([0x22; 32]);
+        let test_committee = build_committee(
+            &state_storage,
+            &test_public_key,
+            &validator_address,
+            "127.0.0.1:8000",
+        )
+        .unwrap();
         let (exec_tx, exec_rx) = mpsc::unbounded_channel();
         exec_tx.send(committed_subdag(1, 9)).unwrap(); // Unregistered authority fails.
         exec_tx.send(committed_subdag(2, 0)).unwrap(); // Must not be executed next.
@@ -4800,6 +4865,10 @@ mod tests {
             shutdown_rx,
             health.clone(),
             None,
+            Arc::new(tokio::sync::RwLock::new(test_committee)),
+            "127.0.0.1:8000".to_string(),
+            validator_address,
+            test_public_key,
         )
         .await;
         assert_eq!(
