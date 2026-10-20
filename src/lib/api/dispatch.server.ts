@@ -1,3 +1,4 @@
+import { localNodeTarget } from "./local-node";
 import { SPEC_TEXT } from "./spec";
 import {
   localBlocksDump,
@@ -76,7 +77,7 @@ function apiRest(pathname: string): string {
 const NESTED_PROTOCOL = new Set(["multisig", "stealth", "htlc", "vault", "coinjoin"]);
 
 async function proxyLocalNode(req: Request, url: URL): Promise<Response> {
-  const target = `http://127.0.0.1:8080${url.pathname}${url.search}`;
+  const target = localNodeTarget(url.pathname, url.search);
   const body = req.method === "POST" ? await req.text() : undefined;
   try {
     const upstream = await fetch(target, {
