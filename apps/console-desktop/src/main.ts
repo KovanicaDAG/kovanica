@@ -8,7 +8,10 @@ import {
   type NodeStatus,
   type StatusRow,
 } from "./connection";
+import { mountWallet } from "./wallet-view";
 import "./styles.css";
+
+let shownChainId: string | null = null;
 
 const rpcInput = document.querySelector<HTMLInputElement>("#rpc");
 const endpoint = document.querySelector<HTMLParagraphElement>("#endpoint");
@@ -96,9 +99,11 @@ async function refreshStatus(): Promise<void> {
   clearError();
   try {
     const status = await invoke<NodeStatus>("node_status");
+    shownChainId = status.chainId;
     fillRows(statusRows(status));
     fillPeers(peerLines(status.peers));
   } catch (error) {
+    shownChainId = null;
     clearNode();
     showError(messageFrom(error));
   } finally {
@@ -133,6 +138,8 @@ reset.addEventListener("click", () => {
 refresh.addEventListener("click", () => {
   void refreshStatus();
 });
+
+mountWallet(() => shownChainId);
 
 void (async () => {
   try {

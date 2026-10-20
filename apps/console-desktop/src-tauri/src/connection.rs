@@ -595,7 +595,7 @@ fn field_qty(value: &Value, name: &str) -> Result<u64, ()> {
     parse_qty(value.get(name).ok_or(())?)
 }
 
-fn parse_qty(value: &Value) -> Result<u64, ()> {
+pub(crate) fn parse_qty(value: &Value) -> Result<u64, ()> {
     if let Some(number) = value.as_u64() {
         return Ok(number);
     }

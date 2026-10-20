@@ -25,6 +25,35 @@ committee is labelled consistent but not proven. A node that cannot be reached
 shows that error and clears the previous status. The shell has no shell plugin
 and no filesystem plugin. RPC calls stay in the Rust process.
 
+## Wallet
+
+Creating or importing a key uses the same keystore the Android wallet stores.
+The JSON is version 2: Argon2id (64 MiB, 3 iterations, parallelism 4) and
+XChaCha20-Poly1305. Android keeps that JSON under the `keystore` preference
+in `apps/android-wallet/app/src/main/java/io/kovanica/wallet/MainActivity.kt`
+(`onCreateWallet` and `onImportWallet`). The format is defined in
+`crates/kovanica-keystore/src/lib.rs`. This app writes those same bytes to
+`wallet.keystore.json` in the app data directory, mode `0600`, and refuses a
+symlink or a file that is already there.
+
+The recovery phrase is shown once. It is not written to the log, the keystore,
+or `localStorage`. Copying it warns that the clipboard is cleared after 30
+seconds. The wallet locks after 5 minutes without activity. Addresses, signing,
+and KUNA amounts stay in Rust (`kovanica-types`, `kovanica-crypto`, and
+`kovanica-light-ffi`), so a later address encoding arrives with the crates.
+
+A transfer shows the recipient, the amount, the fee, and the chain id before
+it is signed. Chain 1 asks for an extra confirmation, and that check happens
+before the keystore is decrypted. The chain id in the transaction is the one
+the connection screen proved. This build pins no genesis committee, so the
+screen does not prove a chain id and the wallet will not sign.
+
+Balance and transfer history come from the node. Both are labelled
+"reported by node". The light client does not prove them. The wallet screen
+creates or imports a key, shows the recovery phrase once, and reviews a
+transfer before sending. Copying the phrase clears the clipboard after 30
+seconds. The session locks after 5 minutes without activity.
+
 ## Run
 
 ```sh
