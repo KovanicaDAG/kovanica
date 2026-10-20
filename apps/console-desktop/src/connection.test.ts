@@ -21,10 +21,10 @@ describe("connection screen", () => {
     expect(rows.map((row) => row.label)).toEqual([
       "Chain id",
       "Chain check",
-      "Height",
+      "Height (reported by node)",
       "Leader round",
       "Epoch",
-      "Peers",
+      "Peers (reported by node)",
     ]);
     expect(rows.map((row) => row.value)).toEqual([
       "4",
@@ -39,7 +39,7 @@ describe("connection screen", () => {
   it("keeps a height that does not fit in a safe integer", () => {
     const height = "9007199254740993";
     const rows = statusRows(status({ height }));
-    expect(rows.find((row) => row.label === "Height")?.value).toBe(height);
+    expect(rows.find((row) => row.label === "Height (reported by node)")?.value).toBe(height);
   });
 
   it("does not invent a chain id or a leader round", () => {
@@ -53,8 +53,10 @@ describe("connection screen", () => {
       }),
     );
     expect(rows.find((row) => row.label === "Chain id")?.value).toBe("Unknown");
-    expect(rows.find((row) => row.label === "Leader round")?.value).toBe("—");
-    expect(rows.find((row) => row.label === "Epoch")?.value).toBe("—");
+    expect(rows.find((row) => row.label === "Leader round (reported by node)")?.value).toBe("—");
+    expect(rows.find((row) => row.label === "Epoch (reported by node)")?.value).toBe("—");
+    expect(rows.find((row) => row.label === "Height (reported by node)")?.value).toBe("1200");
+    expect(rows.find((row) => row.label === "Peers (reported by node)")?.value).toBe("2");
     expect(peerLines([])).toEqual(["No connected peers"]);
   });
 

@@ -30,15 +30,24 @@ export interface StatusRow {
   value: string;
 }
 
+/** A value the console did not prove. The screen says where it came from. */
+function reportedByNode(label: string): string {
+  return `${label} (reported by node)`;
+}
+
 /** Rows for the node panel, in the order the screen shows them. */
 export function statusRows(status: NodeStatus): StatusRow[] {
+  const proven = status.chainId !== null;
   return [
     { label: "Chain id", value: status.chainId ?? "Unknown" },
     { label: "Chain check", value: status.chainNote },
-    { label: "Height", value: status.height },
-    { label: "Leader round", value: status.leaderRound ?? "—" },
-    { label: "Epoch", value: status.epoch ?? "—" },
-    { label: "Peers", value: status.peerCount },
+    { label: reportedByNode("Height"), value: status.height },
+    {
+      label: proven ? "Leader round" : reportedByNode("Leader round"),
+      value: status.leaderRound ?? "—",
+    },
+    { label: proven ? "Epoch" : reportedByNode("Epoch"), value: status.epoch ?? "—" },
+    { label: reportedByNode("Peers"), value: status.peerCount },
   ];
 }
 
