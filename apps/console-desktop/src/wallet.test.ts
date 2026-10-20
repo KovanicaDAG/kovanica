@@ -20,6 +20,7 @@ import {
   phraseAfterCover,
   phraseLockWarning,
   phraseOnScreen,
+  phraseVariableAfterLock,
   shouldCoverPhrase,
   reportListenFailure,
   revealedPhrase,
@@ -124,6 +125,20 @@ describe("wallet form", () => {
     expect(clearer.includes("newPassword.value = cleared.password")).toBe(true);
     expect(clearer.includes("unlockPassword.value = cleared.password")).toBe(true);
     expect(clearer.includes("mnemonicPanel.hidden = true")).toBe(true);
+  });
+
+  it("sets the phrase variable to empty when the wallet locks", () => {
+    expect(phraseVariableAfterLock()).toBeNull();
+    expect(secretsCleared().phrase).toBe("");
+    const clearer = viewSource.slice(
+      viewSource.indexOf("function clearSecretFields"),
+      viewSource.indexOf("function paintLockWarning"),
+    );
+    expect(clearer.includes("phrase = phraseVariableAfterLock() ?? cleared.phrase")).toBe(true);
+    expect(clearer.includes("mnemonicText.textContent = cleared.phrase")).toBe(true);
+    const listenAt = viewSource.indexOf("listen(WALLET_LOCKED_EVENT");
+    const handler = viewSource.slice(listenAt, viewSource.indexOf("setInterval"));
+    expect(handler.indexOf("clearSecretFields()")).toBeGreaterThan(0);
   });
 
   it("shows the recovery phrase again after the password", () => {

@@ -197,6 +197,18 @@ fn wallet_reveal(
     })
 }
 
+/// Drop the session and tell the webview. [`wallet_lock`] calls this.
+fn lock_and_emit(
+    path: &std::path::Path,
+    shared: &wallet::WalletShared,
+    notify: &dyn wallet::SessionNotify,
+    now: Instant,
+) -> Result<wallet::WalletStatus, String> {
+    let outcome = wallet::with_store(shared, notify, |store| store.manual_lock(path, now))?;
+    wallet::notify_manual_lock(&outcome, notify);
+    Ok(outcome.status)
+}
+
 /// Drop the session. The webview hears [`wallet::WALLET_LOCKED_EVENT`] at once.
 #[tauri::command]
 fn wallet_lock(
@@ -204,9 +216,7 @@ fn wallet_lock(
     state: State<'_, WalletApp>,
 ) -> Result<wallet::WalletStatus, String> {
     let path = wallet_file(&app)?;
-    let outcome = with_wallet(&state, |store| store.manual_lock(&path, Instant::now()))?;
-    wallet::notify_manual_lock(&outcome, state.notify.as_ref());
-    Ok(outcome.status)
+    lock_and_emit(&path, &state.shared, state.notify.as_ref(), Instant::now())
 }
 
 /// Note that the user is still at the keyboard.
@@ -348,11 +358,11 @@ async fn node_status(app: tauri::AppHandle) -> Result<NodeStatus, String> {
 }
 
 /// Forwards a session lock to the webview. The idle thread calls this.
-struct EmitSession {
-    app: tauri::AppHandle,
+struct EmitSession<R: tauri::Runtime> {
+    app: tauri::AppHandle<R>,
 }
 
-impl wallet::SessionNotify for EmitSession {
+impl<R: tauri::Runtime> wallet::SessionNotify for EmitSession<R> {
     fn wallet_locked(&self) {
         let _ = self.app.emit(wallet::WALLET_LOCKED_EVENT, ());
     }
@@ -362,19 +372,22 @@ impl wallet::SessionNotify for EmitSession {
     }
 }
 
+/// Session, idle thread, and the notifier that emits `wallet-locked`.
+fn install_wallet<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> WalletApp {
+    let shared = Arc::new(wallet::WalletShared::new());
+    let notify: Arc<dyn wallet::SessionNotify> = Arc::new(EmitSession { app: app.clone() });
+    let idle = wallet::IdleLockThread::spawn_with(Arc::clone(&shared), Arc::clone(&notify));
+    WalletApp {
+        idle,
+        shared,
+        notify,
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            let shared = Arc::new(wallet::WalletShared::new());
-            let notify: Arc<dyn wallet::SessionNotify> = Arc::new(EmitSession {
-                app: app.handle().clone(),
-            });
-            let idle = wallet::IdleLockThread::spawn_with(Arc::clone(&shared), Arc::clone(&notify));
-            app.manage(WalletApp {
-                idle,
-                shared,
-                notify,
-            });
+            app.manage(install_wallet(app.handle()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -398,4 +411,58 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kovanica Console");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{install_wallet, lock_and_emit};
+    use tauri::Listener;
+
+    /// The lock command's emitter is the app bus, not a string in `main.rs`.
+    #[test]
+    fn wallet_lock_emits_wallet_locked_on_the_app() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("test app");
+        let wallet = install_wallet(app.handle());
+        let now = std::time::Instant::now();
+        wallet
+            .shared
+            .lock_store()
+            .open_for_test("kvnc-emit".into(), now);
+        assert!(wallet.shared.lock_store().is_open_for_test());
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        app.listen(crate::wallet::WALLET_LOCKED_EVENT, move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "kovanica-console-missing-wallet-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        assert!(!path.exists());
+
+        let status =
+            lock_and_emit(&path, &wallet.shared, wallet.notify.as_ref(), now).expect("lock");
+        assert_eq!(status.phase, "absent");
+        assert!(!wallet.shared.lock_store().is_open_for_test());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        let again =
+            lock_and_emit(&path, &wallet.shared, wallet.notify.as_ref(), now).expect("second lock");
+        assert_eq!(again.phase, "absent");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        drop(wallet);
+    }
 }

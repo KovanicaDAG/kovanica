@@ -20,6 +20,7 @@ import {
   phraseAfterCover,
   phraseLockWarning,
   phraseOnScreen,
+  phraseVariableAfterLock,
   shouldCoverPhrase,
   reviewEnabled,
   revealedPhrase,
@@ -204,7 +205,7 @@ export function mountWallet(shownChainId: () => string | null): void {
 
   function clearSecretFields(): void {
     const cleared = secretsCleared();
-    phrase = cleared.phrase;
+    phrase = phraseVariableAfterLock() ?? cleared.phrase;
     mnemonicText.textContent = cleared.phrase;
     newPassword.value = cleared.password;
     importPhrase.value = cleared.phrase;

@@ -29,3 +29,4 @@ kovanica-types = { path = "../../../crates/kovanica-types" }
 
 [dev-dependencies]
 kovanica-crypto = { path = "../../../crates/kovanica-crypto" }
+tauri = { version = "2", features = ["test"] }

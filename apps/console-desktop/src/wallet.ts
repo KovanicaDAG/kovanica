@@ -69,6 +69,14 @@ export function secretsCleared(): { phrase: string; password: string } {
 }
 
 /**
+ * Phrase variable after a lock or a clear.
+ * `null` means the screen is not holding the words.
+ */
+export function phraseVariableAfterLock(): string | null {
+  return null;
+}
+
+/**
  * Phrase and password after a successful reveal.
  * The password is cleared. The phrase is shown until the user dismisses it.
  */
