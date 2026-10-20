@@ -25,7 +25,9 @@ pub use light::{
 use bincode::de::read::SliceReader;
 use bincode::de::Deserializer as BincodeDeserializer;
 use bincode::{DefaultOptions, Options};
-use kovanica_types::{Address, PublicKey, Stake};
+use kovanica_types::{
+    decode_with_version, encode_with_version, Address, PublicKey, Stake, STAKING_STATE_VERSION,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap as HashMap;
 use thiserror::Error;
@@ -210,7 +212,7 @@ pub fn genesis_validator_shares(n: usize) -> Vec<u64> {
 /// 8 000 000 KUNA are released linearly over 8 years (1 000 000 KUNA per year).
 /// Vesting is driven by committed-leader height (using BLOCKS_PER_YEAR as the
 /// conversion factor). The treasury address is fixed at genesis.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TreasuryState {
     /// Fixed treasury address (set at genesis).
     pub treasury_address: Address,
@@ -357,7 +359,7 @@ pub struct ValidatorInfo {
     pub slashed: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Delegation {
     pub delegator: Address,
     pub validator: Address,
@@ -381,7 +383,7 @@ impl VrfPublicKey {
 }
 
 /// Unbonding queue entry.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnbondingEntry {
     pub delegator: Address,
     pub validator: Address,
@@ -460,24 +462,59 @@ impl StakingState {
         }
     }
 
+    /// Serialize StakingState with versioned encoding.
+    ///
+    /// Format: magic byte (0x4B) + version (1) + bincode payload.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
+        let payload = bincode::serialize(self)?;
+        Ok(encode_with_version(STAKING_STATE_VERSION, &payload))
+    }
+
     /// Load staking state from bytes with backward compatibility.
-    /// Handles both old format (ValidatorInfo without `slashed` field, 10 fields)
-    /// and new format (with `slashed` field, 11 fields).
+    ///
+    /// Handles:
+    /// - Versioned format: magic byte (0x4B) + version (1) + new format payload
+    /// - Old untagged format: bincode payload directly (10-field ValidatorInfo, no slashed)
+    /// - Unknown version: clear error
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, bincode::Error> {
-        // Use bincode's default options with fixint encoding (same as serialize)
+        // Use bincode's default options with fixint encoding (same as serialize).
+        // Reject trailing bytes (do NOT allow_trailing_bytes) to detect corruption.
         let options = DefaultOptions::new()
             .with_fixint_encoding()
-            .allow_trailing_bytes();
+            .with_no_limit()
+            .reject_trailing_bytes();
 
-        // Try new format first (11 fields per validator)
-        if let Ok(state) = options.deserialize::<StakingState>(bytes) {
-            return Ok(state);
+        // Check for versioned encoding
+        match decode_with_version(bytes) {
+            Ok((STAKING_STATE_VERSION, payload)) => {
+                // New versioned format (version 1)
+                options.deserialize::<StakingState>(payload)
+            }
+            Ok((v, _)) => {
+                // Known magic but unknown version
+                Err(Box::new(bincode::ErrorKind::Custom(format!(
+                    "staking state decode error: unknown version {}",
+                    v
+                ))))
+            }
+            Err("no version prefix") => {
+                // Old untagged format: try new format first, then fall back to old
+                if let Ok(state) = options.deserialize::<StakingState>(bytes) {
+                    Ok(state)
+                } else {
+                    // Fall back to old format: manually deserialize with 10-field validators
+                    let mut deserializer = BincodeDeserializer::from_slice(bytes, options);
+                    StakingState::deserialize_old_format(&mut deserializer)
+                }
+            }
+            Err(e) => {
+                // Truncated or other error
+                Err(Box::new(bincode::ErrorKind::Custom(format!(
+                    "staking state decode error: {}",
+                    e
+                ))))
+            }
         }
-
-        // Fall back to old format: manually deserialize with 10-field validators
-        let mut deserializer = BincodeDeserializer::from_slice(bytes, options);
-        let state = StakingState::deserialize_old_format(&mut deserializer)?;
-        Ok(state)
     }
 
     /// Deserialize StakingState in old format (ValidatorInfo has 10 fields, no slashed).
@@ -488,7 +525,8 @@ impl StakingState {
 
         // Read validators Vec: length + elements
         let validators_len: u64 = Deserialize::deserialize(&mut *deserializer)?;
-        let mut validators = Vec::with_capacity(validators_len as usize);
+        // Prevent OOM on corrupted length: cap capacity at 1024 validators.
+        let mut validators = Vec::with_capacity((validators_len as usize).min(1024));
         for _ in 0..validators_len {
             // Read ValidatorInfo with 10 fields (no slashed)
             let address: Address = Deserialize::deserialize(&mut *deserializer)?;
@@ -1680,8 +1718,8 @@ mod tests {
                 .unwrap();
         }
 
-        let bytes = bincode::serialize(&state).expect("serialize");
-        let decoded: StakingState = bincode::deserialize(&bytes).expect("deserialize");
+        let bytes = state.to_bytes().expect("serialize");
+        let decoded = StakingState::from_bytes(&bytes).expect("deserialize");
 
         assert_eq!(state.validators.len(), decoded.validators.len());
         for (a, b) in state.validators.iter().zip(decoded.validators.iter()) {
@@ -1896,9 +1934,9 @@ mod tests {
         assert_eq!(st.committee_order().len(), 15);
         assert_eq!(st.validators[0].missed_leader_count, 0);
 
-        // Survives a restart (bincode roundtrip, the persisted form).
-        let bytes = bincode::serialize(&st).expect("serialize");
-        let mut restarted: StakingState = bincode::deserialize(&bytes).expect("deserialize");
+        // Survives a restart (bincode roundtrip with versioned encoding, the persisted form).
+        let bytes = st.to_bytes().expect("serialize");
+        let mut restarted = StakingState::from_bytes(&bytes).expect("deserialize");
         assert!(
             restarted.validators[0].active,
             "reactivation survives a restart"
@@ -1931,8 +1969,8 @@ mod tests {
         assert!(!st.validators[0].active);
 
         // Across a restart.
-        let bytes = bincode::serialize(&st).expect("serialize");
-        let mut restarted: StakingState = bincode::deserialize(&bytes).expect("deserialize");
+        let bytes = st.to_bytes().expect("serialize");
+        let mut restarted = StakingState::from_bytes(&bytes).expect("deserialize");
         assert!(
             !restarted.validators[0].active,
             "no re-stake: still inactive after restart"
@@ -1992,8 +2030,8 @@ mod tests {
 
         // The slashed flag survives a bincode restart, so a restarted node
         // enforces the same rule.
-        let bytes = bincode::serialize(&st).expect("serialize");
-        let mut restarted: StakingState = bincode::deserialize(&bytes).expect("deserialize");
+        let bytes = st.to_bytes().expect("serialize");
+        let mut restarted = StakingState::from_bytes(&bytes).expect("deserialize");
         assert!(
             restarted.validators[0].slashed,
             "slashed flag must survive a restart"
@@ -2211,9 +2249,9 @@ mod tests {
         }
     }
 
-    // LOCAL REVIEW TEST (Jarvis, c8800ac): a StakingState persisted by a
-    // pre-c8800ac binary (ValidatorInfo without `slashed`) must still load,
-    // as the commit message claims ("bincode stays backward compatible").
+    // A StakingState persisted by a pre-c8800ac binary (ValidatorInfo without `slashed`)
+    // must still load, as the commit message claims ("bincode stays backward compatible").
+    // Test from Jarvis review (c8800ac).
     #[test]
     fn f7_jarvis_pre_slashed_field_state_still_loads() {
         let mut st = StakingState::new();
@@ -2240,5 +2278,107 @@ mod tests {
             decoded.err()
         );
         assert_eq!(decoded.unwrap().validators.len(), 3);
+    }
+
+    // Old StakingState bytes (pre-c8800ac, no slashed field) decode to identical
+    // in-memory state. Test from Jarvis review.
+    #[test]
+    fn jarvis_old_bytes_decode_to_identical_state() {
+        let mut st = StakingState::new();
+        for i in 1..=3u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        let full = bincode::serialize(&st).unwrap();
+        // Strip the slashed byte (last field of each ValidatorInfo) per validator.
+        let vec_bytes = bincode::serialize(&st.validators).unwrap();
+        assert_eq!(&full[..vec_bytes.len()], &vec_bytes[..]);
+        let mut old = vec_bytes[..8].to_vec();
+        for v in &st.validators {
+            let b = bincode::serialize(v).unwrap();
+            assert_eq!(*b.last().unwrap(), 0u8);
+            old.extend_from_slice(&b[..b.len() - 1]);
+        }
+        old.extend_from_slice(&full[vec_bytes.len()..]);
+        let decoded = StakingState::from_bytes(&old).unwrap();
+        assert_eq!(decoded.validators.len(), 3);
+        // Validate each field round-trips identically.
+        for (orig, dec) in st.validators.iter().zip(decoded.validators.iter()) {
+            assert_eq!(orig.address, dec.address);
+            assert_eq!(orig.stake, dec.stake);
+            assert_eq!(orig.commission_bps, dec.commission_bps);
+            assert_eq!(orig.active, dec.active);
+            assert_eq!(orig.payout_address, dec.payout_address);
+            assert_eq!(orig.public_key, dec.public_key);
+            assert_eq!(orig.vrf_public_key, dec.vrf_public_key);
+            assert_eq!(orig.missed_leader_count, dec.missed_leader_count);
+            assert_eq!(orig.last_online_height, dec.last_online_height);
+            assert_eq!(
+                orig.last_commission_change_height,
+                dec.last_commission_change_height
+            );
+            assert!(!dec.slashed); // defaulted to false
+        }
+        assert_eq!(decoded.delegations, st.delegations);
+        assert_eq!(decoded.total_staked, st.total_staked);
+        assert_eq!(decoded.committed_leader_height, st.committed_leader_height);
+        assert_eq!(decoded.total_mining_issued, st.total_mining_issued);
+        assert_eq!(decoded.reward_totals, st.reward_totals);
+        assert_eq!(decoded.unbonding_queue, st.unbonding_queue);
+        assert_eq!(decoded.treasury, st.treasury);
+    }
+
+    // Single validator, no delegations: old bytes decode identically.
+    // Test from Jarvis review.
+    #[test]
+    fn jarvis_single_validator_no_delegations_old_bytes() {
+        let mut st = StakingState::new();
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        let full = bincode::serialize(&st).unwrap();
+        let vec_bytes = bincode::serialize(&st.validators).unwrap();
+        let mut old = vec_bytes[..8].to_vec();
+        for v in &st.validators {
+            let b = bincode::serialize(v).unwrap();
+            assert_eq!(*b.last().unwrap(), 0u8);
+            old.extend_from_slice(&b[..b.len() - 1]);
+        }
+        old.extend_from_slice(&full[vec_bytes.len()..]);
+        let decoded = StakingState::from_bytes(&old).unwrap();
+        assert_eq!(decoded.validators.len(), 1);
+        assert_eq!(decoded.delegations.len(), 0);
+    }
+
+    // Corrupted new-format row (version prefix present, payload corrupted) must
+    // NOT be silently accepted as old format. Test from Jarvis review.
+    #[test]
+    fn jarvis_corrupt_new_row_is_not_silently_accepted() {
+        let mut st = StakingState::new();
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        let new_bytes = StakingState::to_bytes(&st).unwrap();
+        // Corrupt the payload (flip a byte after the version header).
+        let mut bad = new_bytes.clone();
+        if bad.len() > 3 {
+            bad[3] ^= 0xFF;
+        }
+        let result = StakingState::from_bytes(&bad);
+        assert!(result.is_err(), "corrupted new-format must fail to decode");
+    }
+
+    // Huge validator count in old format must not cause OOM / panic.
+    // Test from Jarvis review.
+    #[test]
+    fn jarvis_huge_validator_len_does_not_panic() {
+        // Build a fake old-format payload with a massive validator count.
+        // The old format is: validators_len (u64) + validators...
+        // We only need the length field to trigger the capacity check.
+        let fake_len: u64 = 10_000_000;
+        let mut fake = Vec::new();
+        fake.extend_from_slice(&fake_len.to_le_bytes());
+        // No actual validator data - deserializer will fail on missing bytes.
+        let result = StakingState::from_bytes(&fake);
+        // Must not panic, must not OOM. Should fail cleanly on missing data.
+        assert!(result.is_err());
     }
 }

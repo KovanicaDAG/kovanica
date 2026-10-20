@@ -212,6 +212,52 @@ impl SealCommitteeSnapshotMember {
     }
 }
 
+/// Versioned encoding for on-disk persisted structures.
+///
+/// The format is: `magic_byte (0x4B) || version (u8) || payload`.
+/// - Version 1: new format with SealCommitteeSnapshotMember (with optional vrf_public_key)
+/// - No prefix (or unknown magic): old untagged format (Vec<SealCommitteeMember> tuples)
+///
+/// Unknown/future versions return a clear error rather than silently falling back.
+pub const SNAPSHOT_MAGIC: u8 = 0x4B; // 'K' for Kovanica
+
+/// Current version for EPOCH_COMMITTEE snapshots.
+pub const EPOCH_COMMITTEE_VERSION: u8 = 1;
+
+/// Current version for StakingState snapshots.
+pub const STAKING_STATE_VERSION: u8 = 1;
+
+/// Encode a snapshot with version prefix.
+pub fn encode_with_version<B: AsRef<[u8]>>(version: u8, payload: B) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + payload.as_ref().len());
+    out.push(SNAPSHOT_MAGIC);
+    out.push(version);
+    out.extend_from_slice(payload.as_ref());
+    out
+}
+
+/// Decode a snapshot with version prefix.
+///
+/// Returns:
+/// - `Ok((version, payload))` if the magic byte matches and version is known
+/// - `Err("unknown version")` if magic matches but version is unknown
+/// - `Err("no version prefix")` if magic byte doesn't match (old format)
+pub fn decode_with_version(bytes: &[u8]) -> Result<(u8, &[u8]), &'static str> {
+    if bytes.len() < 2 {
+        return Err("truncated: too short for version header");
+    }
+    if bytes[0] != SNAPSHOT_MAGIC {
+        return Err("no version prefix");
+    }
+    let version = bytes[1];
+    // Both current versions are 1; match explicitly to avoid unreachable-pattern lint.
+    if version == EPOCH_COMMITTEE_VERSION || version == STAKING_STATE_VERSION {
+        Ok((version, &bytes[2..]))
+    } else {
+        Err("unknown version")
+    }
+}
+
 /// The hashed projection of a whole snapshot, in snapshot order.
 pub fn snapshot_seal_members(members: &[SealCommitteeSnapshotMember]) -> Vec<SealCommitteeMember> {
     members.iter().map(|m| m.seal_member()).collect()

@@ -36,11 +36,12 @@ pub use crypto::{PublicKey, Signature, SigningKey};
 pub use error::TypesError;
 pub use hash::Hash;
 pub use light_client::{
-    committee_seal_hash, executed_tx_hashes, leader_header, light_vrf_input, light_vrf_priority,
-    snapshot_seal_members, verify_colouring, vrf_hash_prefix, vrf_priority_cmp,
-    ColouringCertificate, CommitSeal, LeaderHeader, LightClientCheckpoint, SealAnnouncement,
-    SealCommitteeMember, SealCommitteeSnapshotMember, SealError, StateProof, WaveCommitCertificate,
-    LIGHT_VRF_DOMAIN,
+    committee_seal_hash, decode_with_version, encode_with_version, executed_tx_hashes,
+    leader_header, light_vrf_input, light_vrf_priority, snapshot_seal_members, verify_colouring,
+    vrf_hash_prefix, vrf_priority_cmp, ColouringCertificate, CommitSeal, LeaderHeader,
+    LightClientCheckpoint, SealAnnouncement, SealCommitteeMember, SealCommitteeSnapshotMember,
+    SealError, StateProof, WaveCommitCertificate, EPOCH_COMMITTEE_VERSION, LIGHT_VRF_DOMAIN,
+    SNAPSHOT_MAGIC, STAKING_STATE_VERSION,
 };
 pub use merkle::{MerkleProof, MerkleStep};
 pub use signing::SigningContext;
