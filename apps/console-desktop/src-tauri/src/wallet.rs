@@ -58,6 +58,24 @@ const PHASE_OPEN: &str = "open";
 
 const MAX_KEYSTORE_BYTES: u64 = 64 * 1024;
 
+/// Outcome of the lock command. The webview event is separate from the status.
+pub struct ManualLock {
+    /// Phase after the session was dropped.
+    pub status: WalletStatus,
+    /// True when this call closed an open session.
+    pub session_closed: bool,
+}
+
+/// Tell the webview that a manual lock closed the session.
+///
+/// `SessionNotify::wallet_locked` is the `wallet-locked` event. A lock that
+/// finds the session already closed does not emit it again.
+pub fn notify_manual_lock(lock: &ManualLock, notify: &dyn SessionNotify) {
+    if lock.session_closed {
+        notify.wallet_locked();
+    }
+}
+
 /// What the screen should show. The passphrase is never included.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -404,6 +422,19 @@ impl WalletStore {
         self.open.take().is_some()
     }
 
+    /// Drop the session for the lock command and read the phase afterwards.
+    ///
+    /// `session_closed` is true only when this call closed an open session.
+    /// The caller emits `wallet-locked` in that case.
+    pub fn manual_lock(&mut self, path: &Path, now: Instant) -> Result<ManualLock, String> {
+        let session_closed = self.lock();
+        let status = self.status(path, now)?;
+        Ok(ManualLock {
+            status,
+            session_closed,
+        })
+    }
+
     /// Move the idle deadline of an open session.
     ///
     /// This is the only extension. Create, import, and unlock start a new
@@ -642,6 +673,21 @@ mod tests {
 
     struct RecordedLock {
         locked: AtomicBool,
+    }
+
+    struct NamedLock {
+        events: Mutex<Vec<&'static str>>,
+    }
+
+    impl SessionNotify for NamedLock {
+        fn wallet_locked(&self) {
+            self.events
+                .lock()
+                .expect("events")
+                .push(WALLET_LOCKED_EVENT);
+        }
+
+        fn wallet_lock_warning(&self) {}
     }
 
     impl SessionNotify for RecordedLock {
@@ -1031,11 +1077,39 @@ mod tests {
     }
 
     #[test]
-    fn the_lock_command_names_the_webview_event() {
-        assert_eq!(WALLET_LOCKED_EVENT, "wallet-locked");
-        let main = include_str!("main.rs");
-        assert!(main.contains("emit(wallet::WALLET_LOCKED_EVENT"));
-        assert!(main.contains("IdleLockThread::spawn_with"));
+    fn manual_lock_emits_wallet_locked_when_a_session_closes() {
+        let dir = temp_dir("manual-lock");
+        let path = keystore_in(&dir);
+        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        let address =
+            "kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag";
+        store.open_for_test(address.to_string(), now);
+        let notify = NamedLock {
+            events: Mutex::new(Vec::new()),
+        };
+
+        let outcome = must(store.manual_lock(&path, now));
+        assert!(outcome.session_closed);
+        assert_eq!(outcome.status.phase, PHASE_LOCKED);
+        assert_eq!(outcome.status.address.as_deref(), Some(address));
+        notify_manual_lock(&outcome, &notify);
+        assert_eq!(
+            notify.events.lock().expect("events").as_slice(),
+            [WALLET_LOCKED_EVENT]
+        );
+        assert!(!store.is_open_for_test());
+
+        let again = must(store.manual_lock(&path, now));
+        assert!(!again.session_closed);
+        assert_eq!(again.status.phase, PHASE_LOCKED);
+        notify_manual_lock(&again, &notify);
+        assert_eq!(
+            notify.events.lock().expect("events").as_slice(),
+            [WALLET_LOCKED_EVENT]
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

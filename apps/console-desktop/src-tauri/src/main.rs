@@ -207,15 +207,9 @@ fn wallet_lock(
     state: State<'_, WalletApp>,
 ) -> Result<wallet::WalletStatus, String> {
     let path = wallet_file(&app)?;
-    let (was_open, status) = with_wallet(&state, |store| {
-        let was_open = store.lock();
-        let status = store.status(&path, Instant::now())?;
-        Ok((was_open, status))
-    })?;
-    if was_open {
-        let _ = app.emit(wallet::WALLET_LOCKED_EVENT, ());
-    }
-    Ok(status)
+    let outcome = with_wallet(&state, |store| store.manual_lock(&path, Instant::now()))?;
+    wallet::notify_manual_lock(&outcome, &EmitSession { app });
+    Ok(outcome.status)
 }
 
 /// Note that the user is still at the keyboard.
