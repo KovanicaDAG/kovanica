@@ -94,15 +94,40 @@ fn failed(err: impl std::fmt::Display) -> LightFfiError {
     }
 }
 
+/// Owned secret text. Drop overwrites the buffer with zeroes.
+struct SecretString(String);
+
+impl SecretString {
+    fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Drop for SecretString {
+    fn drop(&mut self) {
+        wipe_secret(&mut self.0);
+    }
+}
+
+/// Overwrite a secret string, then drop its length so the text is not left behind.
+fn wipe_secret(secret: &mut String) {
+    secret.zeroize();
+}
+
 /// Create a 24-word wallet and encrypt it. Runs Argon2id.
 #[uniffi::export]
 pub fn create_wallet(passphrase: String) -> Result<CreatedWallet, LightFfiError> {
-    if passphrase.is_empty() {
+    let passphrase = SecretString::new(passphrase);
+    if passphrase.as_str().is_empty() {
         return Err(failed("passphrase is empty"));
     }
     let (signing_key, _) = kovanica_crypto::generate_keypair();
     let mut seed = signing_key.to_bytes();
-    let created = wallet_from_seed(&seed, &passphrase);
+    let created = wallet_from_seed(&seed, passphrase.as_str());
     seed.zeroize();
     created
 }
@@ -113,11 +138,13 @@ pub fn import_wallet(
     mnemonic: String,
     passphrase: String,
 ) -> Result<ImportedWallet, LightFfiError> {
-    if passphrase.is_empty() {
+    let mnemonic = SecretString::new(mnemonic);
+    let passphrase = SecretString::new(passphrase);
+    if passphrase.as_str().is_empty() {
         return Err(failed("passphrase is empty"));
     }
-    let seed = kovanica_keystore::seed_from_mnemonic(&mnemonic).map_err(failed)?;
-    let created = wallet_from_seed(&seed, &passphrase)?;
+    let seed = kovanica_keystore::seed_from_mnemonic(mnemonic.as_str()).map_err(failed)?;
+    let created = wallet_from_seed(&seed, passphrase.as_str())?;
     Ok(ImportedWallet {
         address: created.address,
         keystore_json: created.keystore_json,
@@ -220,7 +247,8 @@ pub fn sign_transfer_raw(
     nonce: u64,
     fee_rate: u64,
 ) -> Result<String, LightFfiError> {
-    let (signing_key, sender) = open_signing_key(&keystore_json, &passphrase)?;
+    let passphrase = SecretString::new(passphrase);
+    let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
     let to = parse_address(&to)?;
     priced_raw(fee_rate, |fee| {
         sign_transfer(chain_id, &signing_key, sender, to, amount, nonce, fee)
@@ -245,7 +273,8 @@ pub fn sign_call_raw(
     nonce: u64,
     fee_rate: u64,
 ) -> Result<String, LightFfiError> {
-    let (signing_key, sender) = open_signing_key(&keystore_json, &passphrase)?;
+    let passphrase = SecretString::new(passphrase);
+    let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
     let contract = parse_address(&contract)?;
     let args = parse_hex_bytes(&args_hex, "args")?;
     priced_raw(fee_rate, |fee| {
@@ -276,7 +305,8 @@ pub fn sign_deploy_raw(
     nonce: u64,
     fee_rate: u64,
 ) -> Result<String, LightFfiError> {
-    let (signing_key, sender) = open_signing_key(&keystore_json, &passphrase)?;
+    let passphrase = SecretString::new(passphrase);
+    let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
     let code = parse_hex_bytes(&code_hex, "code")?;
     priced_raw(fee_rate, |fee| {
         sign_deploy(chain_id, &signing_key, sender, nonce, fee, code.clone())
@@ -293,7 +323,8 @@ pub fn sign_bond_raw(
     nonce: u64,
     fee_rate: u64,
 ) -> Result<String, LightFfiError> {
-    let (signing_key, sender) = open_signing_key(&keystore_json, &passphrase)?;
+    let passphrase = SecretString::new(passphrase);
+    let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
     let vrf = vrf_key(&signing_key)?;
     priced_raw(fee_rate, |fee| {
         sign_register_light_node(
@@ -317,7 +348,8 @@ pub fn sign_exit_raw(
     nonce: u64,
     fee_rate: u64,
 ) -> Result<String, LightFfiError> {
-    let (signing_key, sender) = open_signing_key(&keystore_json, &passphrase)?;
+    let passphrase = SecretString::new(passphrase);
+    let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
     priced_raw(fee_rate, |fee| {
         sign_exit_light_node(chain_id, &signing_key, sender, nonce, fee)
     })
@@ -334,7 +366,8 @@ pub fn sign_witness_raw(
     nonce: u64,
     fee_rate: u64,
 ) -> Result<String, LightFfiError> {
-    let (signing_key, sender) = open_signing_key(&keystore_json, &passphrase)?;
+    let passphrase = SecretString::new(passphrase);
+    let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
     let beacon = parse_beacon(&beacon_hex)?;
     let vrf = vrf_key(&signing_key)?;
     let input = kovanica_types::light_vrf_input(chain_id, epoch, &beacon);
@@ -434,7 +467,8 @@ pub fn reveal_mnemonic_raw(
     keystore_json: String,
     passphrase: String,
 ) -> Result<String, LightFfiError> {
-    reveal_mnemonic(&keystore_json, &passphrase).map_err(failed)
+    let passphrase = SecretString::new(passphrase);
+    reveal_mnemonic(&keystore_json, passphrase.as_str()).map_err(failed)
 }
 
 /// Re-encrypt the wallet under `new_passphrase`; returns the new keystore JSON.
@@ -450,10 +484,12 @@ pub fn change_passphrase_raw(
     passphrase: String,
     new_passphrase: String,
 ) -> Result<String, LightFfiError> {
-    if new_passphrase.is_empty() {
+    let passphrase = SecretString::new(passphrase);
+    let new_passphrase = SecretString::new(new_passphrase);
+    if new_passphrase.as_str().is_empty() {
         return Err(failed("passphrase is empty"));
     }
-    change_passphrase(&keystore_json, &passphrase, &new_passphrase).map_err(failed)
+    change_passphrase(&keystore_json, passphrase.as_str(), new_passphrase.as_str()).map_err(failed)
 }
 
 /// Derive the address a `Deploy` transaction will create on-chain, off-node.
@@ -491,7 +527,8 @@ pub fn sign_detached(
     message_hex: String,
     domain: Option<String>,
 ) -> Result<String, LightFfiError> {
-    let (sk, _) = open_signing_key(&keystore_json, &passphrase)?;
+    let passphrase = SecretString::new(passphrase);
+    let (sk, _) = open_signing_key(&keystore_json, passphrase.as_str())?;
     let msg_trim = message_hex.trim();
     let msg_stripped = msg_trim.strip_prefix("0x").unwrap_or(msg_trim);
     let msg_raw = hex::decode(msg_stripped).map_err(failed)?;
@@ -537,7 +574,8 @@ pub fn comms_seal_envelope(
     sent_at_ms: u64,
     expires_at_ms: u64,
 ) -> Result<String, LightFfiError> {
-    let (signing_key, _) = open_signing_key(&keystore_json, &passphrase)?;
+    let passphrase = SecretString::new(passphrase);
+    let (signing_key, _) = open_signing_key(&keystore_json, passphrase.as_str())?;
     let recipient = parse_comms_pubkey(&recipient_pubkey_hex, "recipient public key")?;
     if payload_json.len() > MAX_PLAINTEXT {
         return Err(failed("payload exceeds MAX_PLAINTEXT (16384)"));
@@ -568,7 +606,8 @@ pub fn comms_open_envelope(
     passphrase: String,
     envelope_json: String,
 ) -> Result<String, LightFfiError> {
-    let (signing_key, _) = open_signing_key(&keystore_json, &passphrase)?;
+    let passphrase = SecretString::new(passphrase);
+    let (signing_key, _) = open_signing_key(&keystore_json, passphrase.as_str())?;
     let envelope = Envelope::from_json(envelope_json.as_bytes()).map_err(failed)?;
 
     let my_pub = signing_key.verifying_key().to_bytes();
@@ -704,6 +743,23 @@ pub fn registry_decode_entry(value_hex: String) -> Result<String, LightFfiError>
 mod tests {
     use super::*;
     use kovanica_crypto::sign;
+
+    #[test]
+    fn wipe_secret_clears_every_byte() {
+        use zeroize::Zeroize;
+        let mut bytes = *b"hunter2-phrase!!";
+        bytes.zeroize();
+        assert_eq!(bytes, [0u8; 16]);
+
+        let mut secret = String::from("hunter2-phrase!!");
+        wipe_secret(&mut secret);
+        assert!(secret.is_empty());
+
+        let held = SecretString::new(String::from("hunter2-phrase!!"));
+        assert_eq!(held.as_str(), "hunter2-phrase!!");
+        drop(held);
+    }
+
     use kovanica_types::{
         committee_seal_hash, leader_header, CommittedSubDag, PublicKey, Signature, StatementBlock,
     };
