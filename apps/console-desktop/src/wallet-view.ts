@@ -10,6 +10,7 @@ import {
   HISTORY_HEADING,
   MNEMONIC_WARNING,
   PHRASE_STILL_IN_WALLET,
+  reportListenFailure,
   SHOW_PHRASE_AGAIN,
   ACTIVITY_EVENTS,
   WALLET_LOCK_WARNING_EVENT,
@@ -413,14 +414,24 @@ export function mountWallet(shownChainId: () => string | null): void {
     document.addEventListener(eventName, noteActivity);
   }
 
+  const onListenError = (error: unknown): void => {
+    reportListenFailure(
+      error,
+      (message, detail) => {
+        console.error(message, detail);
+      },
+      showError,
+    );
+  };
+
   void listen(WALLET_LOCK_WARNING_EVENT, () => {
     paintLockWarning(true);
-  }).catch(() => undefined);
+  }).catch(onListenError);
 
   void listen(WALLET_LOCKED_EVENT, () => {
     clearSecretFields();
     void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));
-  }).catch(() => undefined);
+  }).catch(onListenError);
 
   window.setInterval(() => {
     void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));

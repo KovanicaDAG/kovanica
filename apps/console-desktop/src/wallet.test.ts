@@ -6,6 +6,7 @@ import {
   BALANCE_LABEL,
   EMPTY_HISTORY,
   HISTORY_HEADING,
+  LISTEN_FAILURE,
   LOCK_WARNING,
   MNEMONIC_WARNING,
   PHRASE_STILL_IN_WALLET,
@@ -17,6 +18,7 @@ import {
   ACTIVITY_EVENTS,
   phraseLockWarning,
   phraseOnScreen,
+  reportListenFailure,
   revealedPhrase,
   shouldNoteActivity,
   reviewRows,
@@ -149,6 +151,31 @@ describe("wallet form", () => {
     expect(phraseOnScreen("absent", "one two three")).toBe("");
     expect(viewSource.includes("phrase = phraseOnScreen(phase, phrase)")).toBe(true);
     expect(viewSource.includes("mnemonicText.textContent = phrase")).toBe(true);
+  });
+
+  it("logs a listen failure and shows an error", () => {
+    const logged: Array<{ message: string; detail: unknown }> = [];
+    const shown: string[] = [];
+    const failure = new Error("event plugin unavailable");
+    reportListenFailure(
+      failure,
+      (message, detail) => {
+        logged.push({ message, detail });
+      },
+      (message) => {
+        shown.push(message);
+      },
+    );
+    expect(shown).toEqual([LISTEN_FAILURE]);
+    expect(logged).toEqual([{ message: LISTEN_FAILURE, detail: failure }]);
+    const listened = viewSource.slice(viewSource.indexOf("const onListenError"));
+    expect(listened.includes("reportListenFailure")).toBe(true);
+    expect(listened.includes("console.error")).toBe(true);
+    expect(listened.includes(".catch(onListenError)")).toBe(true);
+    expect(listened.includes(".catch(() => undefined)")).toBe(false);
+    const locked = viewSource.slice(viewSource.indexOf("listen(WALLET_LOCKED_EVENT"));
+    expect(locked.includes(".catch(onListenError)")).toBe(true);
+    expect(locked.includes(".catch(() => undefined)")).toBe(false);
   });
 
   it("counts a keydown as activity", () => {

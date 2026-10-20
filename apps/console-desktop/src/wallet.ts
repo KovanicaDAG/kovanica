@@ -6,6 +6,23 @@
 /** Tauri event emitted when Rust drops the open session. */
 export const WALLET_LOCKED_EVENT = "wallet-locked";
 
+/** Shown when the screen cannot subscribe to the lock events. */
+export const LISTEN_FAILURE =
+  "The wallet could not watch for a lock. Lock it before you leave this screen.";
+
+/**
+ * A failed `listen` is logged and shown. The raw error stays in the log.
+ * The screen shows a fixed sentence.
+ */
+export function reportListenFailure(
+  error: unknown,
+  log: (message: string, detail: unknown) => void,
+  show: (message: string) => void,
+): void {
+  log(LISTEN_FAILURE, error);
+  show(LISTEN_FAILURE);
+}
+
 /** Tauri event emitted before the idle lock, while the session is still open. */
 export const WALLET_LOCK_WARNING_EVENT = "wallet-lock-warning";
 
