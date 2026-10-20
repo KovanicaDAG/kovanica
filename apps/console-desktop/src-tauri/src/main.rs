@@ -34,6 +34,7 @@ use zeroize::Zeroizing;
 struct WalletApp {
     idle: wallet::IdleLockThread,
     shared: Arc<wallet::WalletShared>,
+    notify: Arc<dyn wallet::SessionNotify>,
 }
 
 /// Endpoint the screen should show and edit.
@@ -119,11 +120,7 @@ fn with_wallet<T>(
     body: impl FnOnce(&mut wallet::WalletStore) -> Result<T, String>,
 ) -> Result<T, String> {
     let _idle = &state.idle;
-    let mut store = state.shared.lock_store();
-    let result = body(&mut store);
-    drop(store);
-    state.shared.wake.notify_one();
-    result
+    wallet::with_store(&state.shared, state.notify.as_ref(), body)
 }
 
 /// Whether a wallet file exists, and whether the session is open.
@@ -208,7 +205,7 @@ fn wallet_lock(
 ) -> Result<wallet::WalletStatus, String> {
     let path = wallet_file(&app)?;
     let outcome = with_wallet(&state, |store| store.manual_lock(&path, Instant::now()))?;
-    wallet::notify_manual_lock(&outcome, &EmitSession { app });
+    wallet::notify_manual_lock(&outcome, state.notify.as_ref());
     Ok(outcome.status)
 }
 
@@ -369,11 +366,15 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             let shared = Arc::new(wallet::WalletShared::new());
-            let notify = Arc::new(EmitSession {
+            let notify: Arc<dyn wallet::SessionNotify> = Arc::new(EmitSession {
                 app: app.handle().clone(),
             });
-            let idle = wallet::IdleLockThread::spawn_with(Arc::clone(&shared), notify);
-            app.manage(WalletApp { idle, shared });
+            let idle = wallet::IdleLockThread::spawn_with(Arc::clone(&shared), Arc::clone(&notify));
+            app.manage(WalletApp {
+                idle,
+                shared,
+                notify,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

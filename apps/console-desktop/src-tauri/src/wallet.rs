@@ -118,6 +118,8 @@ pub struct WalletStore {
     open: Option<OpenWallet>,
     /// Idle limit for this store. Production uses [`LOCK_AFTER`].
     lock_after: Duration,
+    /// An idle lock has not yet been reported as `wallet-locked`.
+    idle_lock_pending: bool,
 }
 
 /// Session plus the condvar the idle thread waits on.
@@ -142,6 +144,27 @@ impl WalletShared {
     pub fn lock_store(&self) -> MutexGuard<'_, WalletStore> {
         self.store.lock().unwrap_or_else(|err| err.into_inner())
     }
+}
+
+/// Run one IPC call against the session.
+///
+/// `session` and `status` apply the idle limit. When that call is the one
+/// that locks, this emits `wallet-locked` after the mutex is released so the
+/// screen can clear passphrase fields.
+pub fn with_store<T>(
+    shared: &WalletShared,
+    notify: &dyn SessionNotify,
+    body: impl FnOnce(&mut WalletStore) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut store = shared.lock_store();
+    let result = body(&mut store);
+    let emit_lock = store.take_idle_lock_event();
+    drop(store);
+    shared.wake.notify_one();
+    if emit_lock {
+        notify.wallet_locked();
+    }
+    result
 }
 
 /// Background lock. The session is cleared after [`LOCK_AFTER`] even when the
@@ -211,8 +234,13 @@ fn idle_lock_loop(shared: &WalletShared, stop: &AtomicBool, notify: &dyn Session
     while !stop.load(Ordering::SeqCst) {
         let now = Instant::now();
         if store.lock_if_idle(now) {
+            // This thread emits the event. Clear the mark first so the next
+            // IPC call does not emit a second one.
+            let emit = store.take_idle_lock_event();
             drop(store);
-            notify.wallet_locked();
+            if emit {
+                notify.wallet_locked();
+            }
             warned_for = None;
             store = shared.lock_store();
         } else {
@@ -250,6 +278,7 @@ impl WalletStore {
         Self {
             open: None,
             lock_after: LOCK_AFTER,
+            idle_lock_pending: false,
         }
     }
 
@@ -456,10 +485,19 @@ impl WalletStore {
             .is_some_and(|open| now.saturating_duration_since(open.last_active) >= limit);
         if idle {
             self.open.take();
+            self.idle_lock_pending = true;
             true
         } else {
             false
         }
+    }
+
+    /// Whether an idle lock still needs a `wallet-locked` event. Clears the mark.
+    #[must_use]
+    pub fn take_idle_lock_event(&mut self) -> bool {
+        let pending = self.idle_lock_pending;
+        self.idle_lock_pending = false;
+        pending
     }
 
     /// Time left before [`lock_if_idle`] clears the session.
@@ -1110,6 +1148,45 @@ mod tests {
             [WALLET_LOCKED_EVENT]
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ipc_session_lock_emits_wallet_locked_once() {
+        let shared = Arc::new(WalletShared::new());
+        let notify = NamedLock {
+            events: Mutex::new(Vec::new()),
+        };
+        let now = Instant::now();
+        shared.lock_store().open_for_test("kvnc-ipc".into(), now);
+
+        let open = must(with_store(&shared, &notify, |store| {
+            store.session(now).map(|open| open.address.clone())
+        }));
+        assert_eq!(open, "kvnc-ipc");
+        assert!(notify.events.lock().expect("events").is_empty());
+
+        let err = with_store(&shared, &notify, |store| {
+            store
+                .session(now + LOCK_AFTER)
+                .map(|open| open.address.clone())
+        });
+        assert!(err.is_err());
+        assert!(!shared.lock_store().is_open_for_test());
+        assert_eq!(
+            notify.events.lock().expect("events").as_slice(),
+            [WALLET_LOCKED_EVENT]
+        );
+
+        let err = with_store(&shared, &notify, |store| {
+            store
+                .session(now + LOCK_AFTER)
+                .map(|open| open.address.clone())
+        });
+        assert!(err.is_err());
+        assert_eq!(
+            notify.events.lock().expect("events").as_slice(),
+            [WALLET_LOCKED_EVENT]
+        );
     }
 
     #[test]
