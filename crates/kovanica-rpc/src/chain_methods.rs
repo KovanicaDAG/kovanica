@@ -1102,9 +1102,14 @@ pub async fn handle_get_light_set(_params: Value, state: RpcState) -> Result<Val
         Ok(staking) => staking.committed_leader_height,
         Err(_) => 0,
     };
-    // E1: `committed_leader_height` is the committed leader ROUND; derive the
-    // epoch with the one canonical round→epoch unit so light-client/set paths
-    // agree with the committee and the consensus signing context.
+    // Light-set epoch is derived from the committed leader HEIGHT, matching
+    // execution's beacon indexing (`note_light_beacon` / `pay_light_escrow`
+    // index the light set by `committed_height / EPOCH_ROUNDS`). It is a
+    // deliberately distinct unit from the round-based committee epoch: the
+    // light-set beacon must line up with the height at which execution wrote
+    // it, not with the leader round of any seal. The arithmetic is the same
+    // `height / EPOCH_ROUNDS`; using the shared helper keeps the divisor
+    // canonical.
     let epoch = kovanica_types::epoch_for_round(height);
     let Some(set) = state
         .storage

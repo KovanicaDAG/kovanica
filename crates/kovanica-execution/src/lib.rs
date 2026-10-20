@@ -172,9 +172,6 @@ pub struct ExecutionResult {
     /// Account-tree root after this commit. `None` when the sub-DAG was
     /// already executed and this call did not write state.
     pub state_root: Option<kovanica_types::hash::Hash>,
-    /// Epoch this commit landed in (derived from committed-leader height).
-    /// Callers compare against the prior epoch to detect boundaries.
-    pub epoch: u64,
 }
 
 /// Minimal execution context (will later hold the full account state / Merkle tree).
@@ -299,7 +296,6 @@ impl ExecutionContext {
                     circulating_supply: self.staking.circulating_supply(),
                     receipts: Vec::new(),
                     state_root: None,
-                    epoch: self.staking.current_epoch(),
                 });
             }
         }
@@ -466,7 +462,6 @@ impl ExecutionContext {
             circulating_supply: self.staking.circulating_supply(),
             receipts,
             state_root: Some(state_root),
-            epoch: self.staking.current_epoch(),
         })
     }
 

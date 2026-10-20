@@ -268,6 +268,11 @@ impl LightSet {
     }
 
     /// Bond `stake` at `height`. The node becomes active at the next epoch.
+    ///
+    /// `height` is a committed leader height; the light-set epoch is
+    /// `height / EPOCH_ROUNDS`, the same height-based unit execution uses to
+    /// index the beacon (deliberately distinct from the round-based committee
+    /// epoch).
     pub fn register(
         &mut self,
         address: Address,
@@ -300,6 +305,9 @@ impl LightSet {
     ///
     /// An active node stays in the current epoch and unbonds after
     /// [`UNBONDING_ROUNDS`] committed leaders. Returns `(refund_now, unbond_height)`.
+    /// The epoch here is the same height-based light-set epoch as
+    /// [`Self::register`] (`height / EPOCH_ROUNDS`), not the round-based
+    /// committee epoch.
     pub fn exit(
         &mut self,
         address: Address,
