@@ -3471,15 +3471,38 @@ fn build_committee_for_round(
             // Reuse the exact (index, public_key, stake) triples that were
             // hashed, so the recomputed hash matches by construction. Staking
             // already assigns indices by address order; keep them as frozen.
+            //
+            // B3: the snapshot also carries each authority's VRF public key, so
+            // a node that restarts after the first seal of an epoch rebuilds
+            // consensus WITH its VRF keys instead of `None`. A snapshot stored
+            // before VRF keys were persisted deserializes with `None`; backfill
+            // those from the staking record for that address so a VRF-keyed
+            // validator is never silently dropped to `None`.
+            let staking_for_backfill = if members.iter().any(|m| m.vrf_public_key.is_none()) {
+                storage.state().load_staking_state(&read).ok()
+            } else {
+                None
+            };
             let authorities = members
                 .iter()
-                .map(|(index, public_key, stake)| AuthorityInfo {
-                    index: *index,
-                    stake: *stake,
-                    public_key: *public_key,
-                    vrf_public_key: None,
-                    address: Address::from_public_key(public_key),
-                    network_address: listen_addr.to_string(),
+                .map(|m| {
+                    let vrf_public_key = m.vrf_public_key.or_else(|| {
+                        staking_for_backfill.as_ref().and_then(|st| {
+                            st.validators
+                                .iter()
+                                .find(|v| v.address == Address::from_public_key(&m.public_key))
+                                .and_then(|v| v.vrf_public_key.as_ref())
+                                .map(|v| kovanica_types::PublicKey(v.0))
+                        })
+                    });
+                    AuthorityInfo {
+                        index: m.index,
+                        stake: m.stake,
+                        public_key: m.public_key,
+                        vrf_public_key,
+                        address: Address::from_public_key(&m.public_key),
+                        network_address: listen_addr.to_string(),
+                    }
                 })
                 .collect::<Vec<_>>();
             if let Ok(committee) = CommitteeInfo::try_new(epoch, authorities) {
@@ -6933,6 +6956,314 @@ mod b1_epoch_restart_repro {
             committee_hash_of(&committee),
             announcement.header.committee_hash,
             "a mid-epoch join must not change the epoch's frozen seal hash"
+        );
+    }
+
+    /// B3 (P0): persist VRF-keyed validators, then drive the real seal +
+    /// restart path. After the first seal of an epoch freezes the
+    /// `EPOCH_COMMITTEE` snapshot, a node that rebuilds the boot committee from
+    /// that snapshot MUST still see every authority's VRF key. Before the fix
+    /// `build_committee_for_round` hard-coded `vrf_public_key: None`, so a
+    /// restarted node booted consensus with an empty VRF author set
+    /// (`set_vrf_author_keys` received nothing) and diverged on leader
+    /// selection from a node that never restarted.
+    #[test]
+    fn e1_jarvis_boot_committee_keeps_vrf_keys_after_seal_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+        let leader_round = 3 * EPOCH_ROUNDS + 10;
+        let epoch = kovanica_types::epoch_for_round(leader_round);
+
+        // Three validators, each with a distinct VRF public key.
+        struct V {
+            sk: SigningKey,
+            pk: PublicKey,
+            addr: Address,
+            vrf: [u8; 32],
+        }
+        let vs: Vec<V> = (0..3)
+            .map(|i| {
+                let (sk, pk) = kovanica_crypto::generate_keypair();
+                V {
+                    sk,
+                    pk,
+                    addr: Address::from_public_key(&pk),
+                    vrf: [(i as u8) + 1; 32],
+                }
+            })
+            .collect();
+
+        // Persist a staking state where every validator has a VRF key.
+        let storage = Storage::new(dir.path().join("vrf-boot.redb")).unwrap();
+        {
+            let mut staking = StakingState::new();
+            staking.init_treasury(Address([0xcc; 32]));
+            for v in &vs {
+                staking
+                    .join_validator(
+                        v.addr,
+                        MIN_VALIDATOR_STAKE,
+                        0,
+                        Some(v.addr),
+                        Some(v.pk),
+                        Some(kovanica_staking::VrfPublicKey(v.vrf)),
+                    )
+                    .unwrap();
+            }
+            staking.committed_leader_height = leader_round;
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_staking_state(&txn, &staking).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let expected_vrf: Vec<(u16, kovanica_types::PublicKey)> = {
+            let read = storage.begin_read().unwrap();
+            let staking = storage.state().load_staking_state(&read).unwrap();
+            staking
+                .validators
+                .iter()
+                .map(|v| {
+                    (
+                        // index is assigned by address order in the builder.
+                        v.address,
+                        kovanica_types::PublicKey(v.vrf_public_key.as_ref().unwrap().0),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .iter()
+                .map(|(a, k)| (a, *k))
+                .enumerate()
+                .map(|(i, (_, k))| (i as u16, k))
+                .collect()
+        };
+
+        // Before any seal the boot committee already carries VRF keys.
+        let before = build_committee_for_round(
+            &storage,
+            &vs[0].pk,
+            &vs[0].addr,
+            "127.0.0.1:0",
+            leader_round,
+        )
+        .unwrap();
+        assert_eq!(before.epoch(), epoch);
+        for a in before.authorities() {
+            assert!(
+                a.vrf_public_key.is_some(),
+                "live committee must not drop a VRF key before sealing"
+            );
+        }
+        let pre_seal_vrf: Vec<_> = before
+            .authorities()
+            .iter()
+            .filter_map(|a| a.vrf_public_key.map(|k| (a.index, k)))
+            .collect();
+
+        // First seal of the epoch freezes the snapshot (with VRF keys).
+        let ctx = seals::SealContext {
+            chain_id,
+            signer: Some((0, vs[0].sk.clone())),
+            mysticghost: false,
+        };
+        seals::publish_local_seal(
+            &storage,
+            &ctx,
+            &subdag_at(leader_round),
+            leader_round,
+            Hash::zero(),
+        )
+        .unwrap();
+
+        // Restart: rebuild the boot committee purely from the frozen snapshot.
+        let restarted = build_committee_for_round(
+            &storage,
+            &vs[0].pk,
+            &vs[0].addr,
+            "127.0.0.1:0",
+            leader_round,
+        )
+        .unwrap();
+        assert_eq!(restarted.epoch(), epoch);
+        let post_snapshot_vrf: Vec<_> = restarted
+            .authorities()
+            .iter()
+            .filter_map(|a| a.vrf_public_key.map(|k| (a.index, k)))
+            .collect();
+        assert_eq!(
+            post_snapshot_vrf.len(),
+            vs.len(),
+            "every authority rebuilt from the snapshot must keep its VRF key (B3): \
+             set_vrf_author_keys would otherwise receive {} of {} keys",
+            post_snapshot_vrf.len(),
+            vs.len()
+        );
+        assert_eq!(
+            post_snapshot_vrf, pre_seal_vrf,
+            "restart must not change any authority's VRF key"
+        );
+        assert_eq!(expected_vrf.len(), vs.len());
+    }
+
+    /// B3 companion: the `EPOCH_COMMITTEE` snapshot now stores a `vrf_public_key`
+    /// field, but the sealed committee hash MUST stay bit-identical. A snapshot
+    /// built by the full (VRF-carrying) `freeze_epoch_committee_hash` hashes the
+    /// same as one whose members carry no VRF key, because the hash projects the
+    /// `(index, public_key, stake)` triple only.
+    #[test]
+    fn e1_jarvis_seal_hash_unchanged_by_full_snapshot() {
+        let rows_no_vrf = vec![
+            kovanica_types::SealCommitteeSnapshotMember {
+                index: 0,
+                public_key: PublicKey([0x11; 32]),
+                stake: 50_000,
+                vrf_public_key: None,
+            },
+            kovanica_types::SealCommitteeSnapshotMember {
+                index: 1,
+                public_key: PublicKey([0x22; 32]),
+                stake: 70_000,
+                vrf_public_key: None,
+            },
+        ];
+        let rows_full = vec![
+            kovanica_types::SealCommitteeSnapshotMember {
+                index: 0,
+                public_key: PublicKey([0x11; 32]),
+                stake: 50_000,
+                vrf_public_key: Some(PublicKey([0xaa; 32])),
+            },
+            kovanica_types::SealCommitteeSnapshotMember {
+                index: 1,
+                public_key: PublicKey([0x22; 32]),
+                stake: 70_000,
+                vrf_public_key: Some(PublicKey([0xbb; 32])),
+            },
+        ];
+
+        let h_no_vrf = kovanica_types::committee_seal_hash(
+            7,
+            &kovanica_types::snapshot_seal_members(&rows_no_vrf),
+        );
+        let h_full = kovanica_types::committee_seal_hash(
+            7,
+            &kovanica_types::snapshot_seal_members(&rows_full),
+        );
+        assert_eq!(
+            h_no_vrf, h_full,
+            "adding vrf_public_key to the snapshot must not change the seal hash"
+        );
+
+        // And the projection is exactly (index, public_key, stake).
+        assert_eq!(
+            kovanica_types::snapshot_seal_members(&rows_full),
+            vec![
+                (0, PublicKey([0x11; 32]), 50_000),
+                (1, PublicKey([0x22; 32]), 70_000),
+            ]
+        );
+    }
+
+    /// B3 end-to-end: two nodes share the same VRF-keyed genesis. Node A seals
+    /// epoch N (freezing the snapshot) and stays up; node B restarts after that
+    /// seal and rebuilds its boot committee from the snapshot. Both must select
+    /// the SAME round leader, which is what `set_vrf_author_keys` drives. Before
+    /// the fix, B's VRF author set was empty and it elected a different leader.
+    #[test]
+    fn e1_jarvis_restarted_node_picks_same_leader() {
+        let dir = tempfile::tempdir().unwrap();
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+        let leader_round = 2 * EPOCH_ROUNDS + 5;
+
+        struct V {
+            sk: SigningKey,
+            pk: PublicKey,
+            addr: Address,
+            vrf: [u8; 32],
+        }
+        let vs: Vec<V> = (0..3)
+            .map(|i| {
+                let (sk, pk) = kovanica_crypto::generate_keypair();
+                V {
+                    sk,
+                    pk,
+                    addr: Address::from_public_key(&pk),
+                    vrf: [(i as u8) + 10; 32],
+                }
+            })
+            .collect();
+
+        let build_storage = |name: &str| -> Storage {
+            let storage = Storage::new(dir.path().join(name)).unwrap();
+            let mut staking = StakingState::new();
+            staking.init_treasury(Address([0xcc; 32]));
+            for v in &vs {
+                staking
+                    .join_validator(
+                        v.addr,
+                        MIN_VALIDATOR_STAKE,
+                        0,
+                        Some(v.addr),
+                        Some(v.pk),
+                        Some(kovanica_staking::VrfPublicKey(v.vrf)),
+                    )
+                    .unwrap();
+            }
+            staking.committed_leader_height = leader_round;
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_staking_state(&txn, &staking).unwrap();
+            txn.commit().unwrap();
+            storage
+        };
+
+        // Node A — the long-running node.
+        let a = build_storage("leader-a.redb");
+        let ctx = seals::SealContext {
+            chain_id,
+            signer: Some((0, vs[0].sk.clone())),
+            mysticghost: false,
+        };
+        seals::publish_local_seal(
+            &a,
+            &ctx,
+            &subdag_at(leader_round),
+            leader_round,
+            Hash::zero(),
+        )
+        .unwrap();
+
+        // Node B — restarted; same persisted genesis AND the frozen snapshot
+        // from A's seal must be visible to it, so copy B from A's database file.
+        let b_path = dir.path().join("leader-b.redb");
+        std::fs::copy(dir.path().join("leader-a.redb"), &b_path).unwrap();
+        let b = Storage::new(b_path).unwrap();
+
+        let committee_a =
+            build_committee_for_round(&a, &vs[0].pk, &vs[0].addr, "127.0.0.1:0", leader_round)
+                .unwrap();
+        let committee_b =
+            build_committee_for_round(&b, &vs[0].pk, &vs[0].addr, "127.0.0.1:0", leader_round)
+                .unwrap();
+
+        // Same VRF author set => same leader choice.
+        let vrf_a: Vec<_> = committee_a
+            .authorities()
+            .iter()
+            .filter_map(|x| x.vrf_public_key.map(|k| (x.index, k)))
+            .collect();
+        let vrf_b: Vec<_> = committee_b
+            .authorities()
+            .iter()
+            .filter_map(|x| x.vrf_public_key.map(|k| (x.index, k)))
+            .collect();
+        assert_eq!(vrf_a.len(), vs.len(), "node A must expose all VRF keys");
+        assert_eq!(
+            vrf_b.len(),
+            vs.len(),
+            "restarted node B must expose all VRF keys (B3)"
+        );
+        assert_eq!(
+            vrf_a, vrf_b,
+            "both nodes must agree on the VRF author set, else leader selection forks"
         );
     }
 }

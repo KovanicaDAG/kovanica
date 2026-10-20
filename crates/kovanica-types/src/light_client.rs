@@ -176,6 +176,47 @@ pub fn leader_header(
 /// freezes and the RPC committee is rebuilt from, so both hash the same rows.
 pub type SealCommitteeMember = (AuthorityIndex, PublicKey, Stake);
 
+/// One row of the persisted `EPOCH_COMMITTEE` snapshot.
+///
+/// This is a strict superset of [`SealCommitteeMember`]: the extra
+/// `vrf_public_key` is stored so a restarted node can rebuild the boot
+/// committee WITH its VRF keys, instead of dropping to `None` and diverging on
+/// leader selection (B3). It is *not* hashed — [`Self::seal_member`] projects
+/// the exact `(index, public_key, stake)` triple that
+/// [`committee_seal_hash`] covers, so the sealed hash is unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealCommitteeSnapshotMember {
+    /// Authority index assigned by the committee builder (stable per epoch).
+    pub index: AuthorityIndex,
+    /// Consensus (Ed25519) public key of the authority.
+    pub public_key: PublicKey,
+    /// Staked amount at snapshot time.
+    pub stake: Stake,
+    /// VRF public key for leader selection, if the authority has one.
+    ///
+    /// `#[serde(default)]` keeps bincode/serde backward compatible with
+    /// snapshots written before the VRF key was stored (they deserialize to
+    /// `None`; the reader backfills from the staking record).
+    #[serde(default)]
+    pub vrf_public_key: Option<PublicKey>,
+}
+
+impl SealCommitteeSnapshotMember {
+    /// The hashed projection: exactly the fields [`committee_seal_hash`] covers.
+    ///
+    /// The persisted snapshot gained a `vrf_public_key` field, but the seal
+    /// hash must remain bit-identical, so the hash always goes through this
+    /// `(index, public_key, stake)` view.
+    pub fn seal_member(&self) -> SealCommitteeMember {
+        (self.index, self.public_key, self.stake)
+    }
+}
+
+/// The hashed projection of a whole snapshot, in snapshot order.
+pub fn snapshot_seal_members(members: &[SealCommitteeSnapshotMember]) -> Vec<SealCommitteeMember> {
+    members.iter().map(|m| m.seal_member()).collect()
+}
+
 /// Hash of the committee a commit seal is bound to.
 ///
 /// Members are `(index, public key, stake)`. Network addresses and VRF

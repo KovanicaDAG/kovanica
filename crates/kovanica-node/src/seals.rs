@@ -206,7 +206,10 @@ pub(crate) fn freeze_epoch_committee_hash(
     {
         let read = storage.begin_read()?;
         if let Some(members) = storage.state().get_epoch_committee(&read, seal_epoch)? {
-            return Ok(kovanica_types::committee_seal_hash(seal_epoch, &members));
+            return Ok(kovanica_types::committee_seal_hash(
+                seal_epoch,
+                &kovanica_types::snapshot_seal_members(&members),
+            ));
         }
     }
     // First seal of this epoch: build the committee from the live active set,
@@ -218,14 +221,22 @@ pub(crate) fn freeze_epoch_committee_hash(
     let proposed: Vec<_> = committee
         .authorities()
         .iter()
-        .map(|a| (a.index, a.public_key, a.stake))
+        .map(|a| kovanica_types::SealCommitteeSnapshotMember {
+            index: a.index,
+            public_key: a.public_key,
+            stake: a.stake,
+            vrf_public_key: a.vrf_public_key,
+        })
         .collect();
     let write = storage.begin_write()?;
     let frozen = storage
         .state()
         .put_epoch_committee_if_absent(&write, seal_epoch, &proposed)?;
     write.commit()?;
-    Ok(kovanica_types::committee_seal_hash(seal_epoch, &frozen))
+    Ok(kovanica_types::committee_seal_hash(
+        seal_epoch,
+        &kovanica_types::snapshot_seal_members(&frozen),
+    ))
 }
 
 /// Store a gossiped seal when it signs the header local execution saved.

@@ -715,14 +715,16 @@ impl StateStore {
 
     /// The frozen seal committee snapshot for `epoch`, if one was written.
     ///
-    /// Each member is `(authority index, public key, stake)`, the exact triple
-    /// `kovanica_types::committee_seal_hash` hashes. `None` before the first
-    /// seal of the epoch.
+    /// Each member carries `(authority index, public key, stake, vrf_public_key)`.
+    /// The first three are the exact triple `kovanica_types::committee_seal_hash`
+    /// hashes (see [`kovanica_types::SealCommitteeSnapshotMember::seal_member`]);
+    /// the VRF key is stored so a restarted node can rebuild the boot committee
+    /// WITH its VRF keys (B3). `None` before the first seal of the epoch.
     pub fn get_epoch_committee(
         &self,
         txn: &ReadTransaction,
         epoch: u64,
-    ) -> Result<Option<Vec<kovanica_types::SealCommitteeMember>>, StateStoreError> {
+    ) -> Result<Option<Vec<kovanica_types::SealCommitteeSnapshotMember>>, StateStoreError> {
         // redb creates tables lazily on first write, so on a database that has
         // never sealed in this epoch the table does not exist yet. That is the
         // "no snapshot" case, not an error.
@@ -748,8 +750,8 @@ impl StateStore {
         &self,
         txn: &WriteTransaction,
         epoch: u64,
-        members: &[kovanica_types::SealCommitteeMember],
-    ) -> Result<Vec<kovanica_types::SealCommitteeMember>, StateStoreError> {
+        members: &[kovanica_types::SealCommitteeSnapshotMember],
+    ) -> Result<Vec<kovanica_types::SealCommitteeSnapshotMember>, StateStoreError> {
         let mut table = txn.open_table(crate::tables::EPOCH_COMMITTEE)?;
         if let Some(existing) = table.get(epoch)? {
             return Ok(bincode::deserialize(&existing.value().to_vec())?);
