@@ -1197,6 +1197,17 @@ mod tests {
             ignore.lines().any(|line| line.trim() == fingerprint),
             "gitleaks fingerprint for the encrypted test vector is missing"
         );
+        let line_no = include_str!("wallet.rs")
+            .lines()
+            .position(|line| line.contains("const CROSS_KEYSTORE_JSON:"))
+            .expect("encrypted test vector")
+            + 1;
+        let dir_fingerprint =
+            format!("apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:{line_no}");
+        assert!(
+            ignore.lines().any(|line| line.trim() == dir_fingerprint),
+            "gitleaks directory fingerprint for the encrypted test vector is missing"
+        );
     }
 
     #[test]
