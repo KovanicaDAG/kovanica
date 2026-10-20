@@ -15,21 +15,24 @@ use amount::{format_kuna_atoms, parse_kuna_atoms};
 
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use connection::{
     endpoint_label, fetch_status, read_saved_url, resolve_rpc_url, write_saved_url, HttpRpc,
     NodeStatus, RPC_URL_ENV,
 };
 use serde::Serialize;
-use std::sync::Mutex;
 use std::time::Instant;
 use tauri::Manager;
 use tauri::State;
 use zeroize::Zeroizing;
 
 /// Process-local wallet session. The keystore file lives in the app data directory.
+///
+/// `idle` is read so the lock thread stays alive for the process. Drop joins it.
 struct WalletApp {
-    store: Mutex<wallet::WalletStore>,
+    idle: wallet::IdleLockThread,
+    shared: Arc<wallet::WalletShared>,
 }
 
 /// Endpoint the screen should show and edit.
@@ -114,11 +117,12 @@ fn with_wallet<T>(
     state: &State<'_, WalletApp>,
     body: impl FnOnce(&mut wallet::WalletStore) -> Result<T, String>,
 ) -> Result<T, String> {
-    let mut store = state
-        .store
-        .lock()
-        .map_err(|_| "The wallet could not be opened.".to_string())?;
-    body(&mut store)
+    let _idle = &state.idle;
+    let mut store = state.shared.lock_store();
+    let result = body(&mut store);
+    drop(store);
+    state.shared.wake.notify_one();
+    result
 }
 
 /// Whether a wallet file exists, and whether the session is open.
@@ -194,6 +198,8 @@ fn wallet_lock(
 }
 
 /// Note that the user is still at the keyboard.
+///
+/// This is the only IPC that moves the idle deadline of an open session.
 #[tauri::command]
 fn wallet_touch(state: State<'_, WalletApp>) -> Result<(), String> {
     with_wallet(&state, |store| {
@@ -330,10 +336,10 @@ async fn node_status(app: tauri::AppHandle) -> Result<NodeStatus, String> {
 }
 
 fn main() {
+    let shared = Arc::new(wallet::WalletShared::new());
+    let idle = wallet::IdleLockThread::spawn(Arc::clone(&shared));
     tauri::Builder::default()
-        .manage(WalletApp {
-            store: Mutex::new(wallet::WalletStore::new()),
-        })
+        .manage(WalletApp { idle, shared })
         .invoke_handler(tauri::generate_handler![
             connection_config,
             save_connection,

@@ -7,6 +7,9 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -18,6 +21,9 @@ pub const KEYSTORE_FILE: &str = "wallet.keystore.json";
 
 /// Lock the session after this long with no activity.
 pub const LOCK_AFTER: Duration = Duration::from_secs(5 * 60);
+
+/// How long the idle thread sleeps when no session is open.
+const IDLE_PARK: Duration = Duration::from_secs(60);
 
 const PHASE_ABSENT: &str = "absent";
 const PHASE_LOCKED: &str = "locked";
@@ -61,12 +67,101 @@ impl Drop for OpenWallet {
 /// In-memory session. The keystore file is the only copy on disk.
 pub struct WalletStore {
     open: Option<OpenWallet>,
+    /// Idle limit for this store. Production uses [`LOCK_AFTER`].
+    lock_after: Duration,
+}
+
+/// Session plus the condvar the idle thread waits on.
+///
+/// The condvar is paired with [`WalletShared::store`]. Notify it after every
+/// change to the session so the idle thread recomputes its deadline.
+pub struct WalletShared {
+    pub store: Mutex<WalletStore>,
+    pub wake: Condvar,
+}
+
+impl WalletShared {
+    /// Empty session. The idle thread is started separately.
+    pub fn new() -> Self {
+        Self {
+            store: Mutex::new(WalletStore::new()),
+            wake: Condvar::new(),
+        }
+    }
+
+    /// Lock the session. A poisoned mutex still yields the store.
+    pub fn lock_store(&self) -> MutexGuard<'_, WalletStore> {
+        self.store.lock().unwrap_or_else(|err| err.into_inner())
+    }
+}
+
+/// Background lock. The session is cleared after [`LOCK_AFTER`] even when the
+/// webview never calls status again.
+pub struct IdleLockThread {
+    shared: Arc<WalletShared>,
+    stop: Arc<AtomicBool>,
+    join: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl IdleLockThread {
+    /// Start the idle thread. Drop joins it.
+    pub fn spawn(shared: Arc<WalletShared>) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_shared = Arc::clone(&shared);
+        let thread_stop = Arc::clone(&stop);
+        let join = std::thread::Builder::new()
+            .name("kovanica-wallet-idle".into())
+            .spawn(move || idle_lock_loop(&thread_shared, &thread_stop))
+            .expect("wallet idle lock thread");
+        Self {
+            shared,
+            stop,
+            join: Mutex::new(Some(join)),
+        }
+    }
+}
+
+impl Drop for IdleLockThread {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.shared.wake.notify_one();
+        if let Some(join) = self
+            .join
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+        {
+            let _ = join.join();
+        }
+    }
+}
+
+/// Sleep until the open session is idle, then clear it. A notify recomputes the wait.
+fn idle_lock_loop(shared: &WalletShared, stop: &AtomicBool) {
+    let mut store = shared.lock_store();
+    while !stop.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        store.lock_if_idle(now);
+        let wait = match store.idle_remaining(now) {
+            Some(wait) if !wait.is_zero() => wait,
+            Some(_) => Duration::from_millis(1),
+            None => IDLE_PARK,
+        };
+        let waited = shared.wake.wait_timeout(store, wait);
+        store = match waited {
+            Ok((guard, _)) => guard,
+            Err(poisoned) => poisoned.into_inner().0,
+        };
+    }
 }
 
 impl WalletStore {
     /// No session and no file handle.
     pub fn new() -> Self {
-        Self { open: None }
+        Self {
+            open: None,
+            lock_after: LOCK_AFTER,
+        }
     }
 
     /// Create a key. Refuses to replace or follow a file that is already there.
@@ -197,7 +292,10 @@ impl WalletStore {
         self.open.take();
     }
 
-    /// Record activity while the session is open.
+    /// Move the idle deadline of an open session.
+    ///
+    /// This is the only extension. Create, import, and unlock start a new
+    /// deadline. Status, quote, and send leave it where it is.
     pub fn touch(&mut self, now: Instant) {
         if let Some(open) = self.open.as_mut() {
             open.last_active = now;
@@ -206,13 +304,21 @@ impl WalletStore {
 
     /// Lock when `now` is at least [`LOCK_AFTER`] after the last activity.
     pub fn lock_if_idle(&mut self, now: Instant) {
+        let limit = self.lock_after;
         let idle = self
             .open
             .as_ref()
-            .is_some_and(|open| now.saturating_duration_since(open.last_active) >= LOCK_AFTER);
+            .is_some_and(|open| now.saturating_duration_since(open.last_active) >= limit);
         if idle {
             self.open.take();
         }
+    }
+
+    /// Time left before [`lock_if_idle`] clears the session.
+    pub fn idle_remaining(&self, now: Instant) -> Option<Duration> {
+        let open = self.open.as_ref()?;
+        let elapsed = now.saturating_duration_since(open.last_active);
+        Some(self.lock_after.saturating_sub(elapsed))
     }
 
     /// Phase and address. An idle session is locked first.
@@ -254,6 +360,24 @@ impl WalletStore {
     #[cfg(test)]
     pub(crate) fn has_quote(&self) -> bool {
         self.open.as_ref().is_some_and(|open| open.quote.is_some())
+    }
+
+    /// Shorten the idle limit. Production keeps [`LOCK_AFTER`].
+    #[cfg(test)]
+    pub(crate) fn set_lock_after_for_test(&mut self, lock_after: Duration) {
+        self.lock_after = lock_after;
+    }
+
+    /// True when a session is open. Does not apply the idle limit.
+    #[cfg(test)]
+    pub(crate) fn is_open_for_test(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Deadline anchor, when a session is open.
+    #[cfg(test)]
+    pub(crate) fn last_active_for_test(&self) -> Option<Instant> {
+        self.open.as_ref().map(|open| open.last_active)
     }
 }
 
@@ -542,6 +666,51 @@ mod tests {
         assert_eq!(locked.address.as_deref(), Some(created.address.as_str()));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_does_not_extend_idle_and_only_touch_does() {
+        let path = Path::new("missing-idle-wallet");
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        store.open_for_test("kvnc-idle".into(), now);
+        let later = now + Duration::from_secs(30);
+        let status = must(store.status(path, later));
+        assert_eq!(status.phase, PHASE_OPEN);
+        assert_eq!(store.last_active_for_test(), Some(now));
+        store.touch(later);
+        assert_eq!(store.last_active_for_test(), Some(later));
+        let still = must(store.status(path, later + LOCK_AFTER - Duration::from_secs(1)));
+        assert_eq!(still.phase, PHASE_OPEN);
+        assert!(store.session(later + LOCK_AFTER).is_err());
+        assert!(!store.is_open_for_test());
+        store.touch(later + LOCK_AFTER + Duration::from_secs(1));
+        assert!(store.last_active_for_test().is_none());
+        assert!(!store.is_open_for_test());
+    }
+
+    #[test]
+    fn idle_thread_clears_the_session_without_a_status_poll() {
+        let shared = Arc::new(WalletShared::new());
+        {
+            let mut store = shared.lock_store();
+            store.set_lock_after_for_test(Duration::from_millis(40));
+            store.open_for_test("kvnc-timer".into(), Instant::now());
+        }
+        let idle = IdleLockThread::spawn(Arc::clone(&shared));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut cleared = false;
+        while Instant::now() < deadline {
+            if !shared.lock_store().is_open_for_test() {
+                cleared = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(idle);
+        assert!(cleared, "idle thread left the session open");
+        shared.lock_store().touch(Instant::now());
+        assert!(!shared.lock_store().is_open_for_test());
     }
 
     #[test]

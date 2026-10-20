@@ -38,7 +38,9 @@ symlink or a file that is already there.
 
 The recovery phrase is shown once. It is not written to the log, the keystore,
 or `localStorage`. Copying it warns that the clipboard is cleared after 30
-seconds. The wallet locks after 5 minutes without activity. Addresses, signing,
+seconds. A Rust timer clears the session after 5 minutes without activity,
+even when the screen is not polling. Only the explicit activity call moves
+that deadline. Status, quote, and send do not. Addresses, signing,
 and KUNA amounts stay in Rust (`kovanica-types`, `kovanica-crypto`, and
 `kovanica-light-ffi`), so a later address encoding arrives with the crates.
 
@@ -52,7 +54,7 @@ Balance and transfer history come from the node. Both are labelled
 "reported by node". The light client does not prove them. The wallet screen
 creates or imports a key, shows the recovery phrase once, and reviews a
 transfer before sending. Copying the phrase clears the clipboard after 30
-seconds. The session locks after 5 minutes without activity.
+seconds. A Rust timer clears the session after 5 minutes without activity.
 
 ## Run
 

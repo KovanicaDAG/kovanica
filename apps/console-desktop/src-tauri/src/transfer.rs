@@ -139,7 +139,6 @@ impl WalletStore {
         let nonce = read_nonce(rpc, &open.address)?;
         let rate = read_fee_rate(rpc)?;
         let quote = build_quote(sender, draft.recipient, draft.amount, chain, nonce, rate)?;
-        open.last_active = now;
         open.quote = Some(quote.clone());
         Ok(quote)
     }
@@ -206,7 +205,6 @@ impl WalletStore {
             .map_err(|err| err.to_string())?;
         let transaction_hash = accept_hash(&result)?;
         open.quote = None;
-        open.last_active = now;
         Ok(SendReceipt { transaction_hash })
     }
 }
@@ -301,6 +299,7 @@ mod tests {
     use super::*;
     use crate::connection::ConnError;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     fn fresh_status(chain: Option<&str>) -> NodeStatus {
         NodeStatus {
@@ -542,6 +541,27 @@ mod tests {
         assert!(!tx.verify_signature(&SigningContext::new(1)));
         assert!(transfer_matches(&tx, &quote));
         assert!(!store.has_quote());
+        assert_eq!(store.last_active_for_test(), Some(now));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quote_does_not_move_the_idle_deadline() {
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        let sender = Address([1; 32]);
+        store.open_for_test(sender.to_string(), now);
+        let recipient = Address([3; 32]).to_string();
+        let later = now + Duration::from_secs(30);
+        store
+            .quote_from_status(
+                &ScriptRpc::account(4, 1),
+                &fresh_status(Some("4")),
+                draft(Some("4"), false, &recipient, "1"),
+                later,
+            )
+            .expect("quote");
+        assert_eq!(store.last_active_for_test(), Some(now));
+        assert!(store.has_quote());
     }
 }
