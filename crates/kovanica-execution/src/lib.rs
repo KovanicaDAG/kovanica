@@ -717,7 +717,8 @@ impl ExecutionContext {
     /// * record present and `active` → top up self-stake (`bond_validator`);
     /// * record present but inactive (offline-evicted or fully unbonded) →
     ///   reactivate with an explicit stake (`reactivate_validator`). This is the
-    ///   ONLY way an evicted validator returns — there is no automatic refill;
+    ///   ONLY way an evicted validator returns — there is no automatic refill.
+    ///   A **slashed** record is refused (`ValidatorSlashed`) and never re-enters;
     /// * no record at all → register a new validator (`join_validator`).
     fn execute_stake(
         &mut self,

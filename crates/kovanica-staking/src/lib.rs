@@ -347,6 +347,11 @@ pub struct ValidatorInfo {
     /// Used to enforce a cooldown period before the next change.
     #[serde(default)]
     pub last_commission_change_height: u64,
+    /// Set once this validator has been slashed for provable misbehaviour.
+    /// F7 (Toni's decision): a slashed validator does NOT return to the active
+    /// set via [`StakingState::reactivate_validator`]; it stays out.
+    #[serde(default)]
+    pub slashed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -415,6 +420,8 @@ pub enum StakingError {
     BelowMinimumStake,
     #[error("Commission change is on cooldown; try again later")]
     CommissionCooldown,
+    #[error("Validator was slashed and cannot re-enter the active set")]
+    ValidatorSlashed,
 }
 
 /// Combined staking + emission + treasury state.
@@ -489,6 +496,7 @@ impl StakingState {
             missed_leader_count: 0,
             last_online_height: self.committed_leader_height,
             last_commission_change_height: self.committed_leader_height,
+            slashed: false,
         });
         self.total_staked += stake;
         Ok(())
@@ -530,6 +538,12 @@ impl StakingState {
             .ok_or(StakingError::NotValidator)?;
         if self.validators[v_idx].active {
             return Err(StakingError::ValidatorExists);
+        }
+        // F7 (Toni's decision): a slashed validator stays out. Topping the
+        // stake back up does NOT reinstate it; only an un-slashed, merely
+        // evicted/unbonded record may return via an explicit stake transaction.
+        if self.validators[v_idx].slashed {
+            return Err(StakingError::ValidatorSlashed);
         }
         let topped_up = self.validators[v_idx].stake.saturating_add(amount);
         if topped_up < MIN_VALIDATOR_STAKE {
@@ -1104,6 +1118,7 @@ impl StakingState {
         }
         let total = own_slash.saturating_add(delegated_slash);
         self.validators[v_idx].stake = self.validators[v_idx].stake.saturating_sub(total);
+        self.validators[v_idx].slashed = true;
         self.total_staked = self.total_staked.saturating_sub(total);
         Ok(total)
     }
@@ -1851,6 +1866,91 @@ mod tests {
             "no re-stake: still inactive after an epoch rotation"
         );
         assert_eq!(restarted.committee_order().len(), 14);
+    }
+
+    #[test]
+    fn f7_jarvis_slashed_validator_cannot_restake() {
+        // A slashed validator stays OUT. Topping its stake back up to MIN via
+        // an explicit stake tx must NOT reinstate it: reactivate_validator
+        // refuses a slashed record.
+        let mut st = StakingState::new();
+        for i in 1..=15u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+
+        // Slash a(1). The 5% cut drops it below MIN, and the record is flagged
+        // slashed.
+        let evidence = DoubleSignEvidence {
+            validator: a(1),
+            height: 42,
+        };
+        let slashed_amount = st.slash(evidence).unwrap();
+        assert!(slashed_amount > 0, "slash must cut stake");
+        assert!(
+            st.validators[0].slashed,
+            "slashing must flag the validator record"
+        );
+        // Deactivate it (evicted / below minimum in the committee sense).
+        st.validators[0].active = false;
+
+        // An explicit re-stake that tops it back above MIN is still refused.
+        let err = st
+            .reactivate_validator(a(1), MIN_VALIDATOR_STAKE * 10)
+            .unwrap_err();
+        assert!(
+            matches!(err, StakingError::ValidatorSlashed),
+            "slashed validator must be refused, got {err:?}"
+        );
+        assert!(!st.validators[0].active, "slashed validator stays inactive");
+        assert!(
+            !st.committee_order().iter().any(|v| v.address == a(1)),
+            "slashed validator must not re-enter the committee"
+        );
+
+        // The slashed flag survives a bincode restart, so a restarted node
+        // enforces the same rule.
+        let bytes = bincode::serialize(&st).expect("serialize");
+        let mut restarted: StakingState = bincode::deserialize(&bytes).expect("deserialize");
+        assert!(
+            restarted.validators[0].slashed,
+            "slashed flag must survive a restart"
+        );
+        assert!(matches!(
+            restarted.reactivate_validator(a(1), MIN_VALIDATOR_STAKE * 10),
+            Err(StakingError::ValidatorSlashed)
+        ));
+        assert!(!restarted.validators[0].active);
+    }
+
+    #[test]
+    fn f7_jarvis_unslashed_evicted_validator_still_restakes() {
+        // Control: a merely evicted (never slashed) validator still returns via
+        // an explicit stake tx — the slashed guard must not block it.
+        let mut st = StakingState::new();
+        for i in 1..=15u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        assert!(
+            !st.validators[0].slashed,
+            "a fresh validator is not slashed"
+        );
+
+        // Evict a(1) via the missed-leader threshold (not a slash).
+        st.validators[0].missed_leader_count = MAX_MISSED_LEADERS_BEFORE_OFFLINE - 1;
+        let went_offline = st.advance_validator_liveness(1);
+        assert!(went_offline.contains(&a(1)));
+        assert!(!st.validators[0].active);
+        assert!(!st.validators[0].slashed, "offline eviction is not a slash");
+
+        // Explicit re-stake returns it.
+        st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE).unwrap();
+        assert!(
+            st.validators[0].active,
+            "unslashed evicted validator returns"
+        );
+        assert_eq!(st.committee_order().len(), 15);
     }
 
     #[test]

@@ -5240,6 +5240,7 @@ mod tests {
             missed_leader_count: 0,
             last_online_height: 0,
             last_commission_change_height: 0,
+            slashed: false,
         });
         staking.total_staked += 10_000 * ONE_KUNA;
 
@@ -5286,6 +5287,7 @@ mod tests {
                 missed_leader_count: 0,
                 last_online_height: 0,
                 last_commission_change_height: 0,
+                slashed: false,
             });
             staking.total_staked += 100_000 * ONE_KUNA;
         }
