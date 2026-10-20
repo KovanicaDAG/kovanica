@@ -24,6 +24,7 @@ const REVIEW_AGAIN: &str = "Review the transfer again.";
 const QUOTE_STALE: &str = "The quote is out of date. Review the transfer again.";
 const BAD_RECIPIENT: &str = "That recipient is not a Kovanica address.";
 const SIGN_FAILED: &str = "The transfer could not be signed.";
+const ZERO_AMOUNT: &str = "Enter an amount greater than 0.";
 
 /// Values the screen showed when it asked for a quote or a signature.
 pub struct TransferDraft<'a> {
@@ -95,6 +96,9 @@ pub fn build_quote(
 ) -> Result<TransferQuote, String> {
     let recipient = canonical_recipient(draft_recipient)?;
     let amount = parse_kuna_atoms(draft_amount)?;
+    if amount == 0 {
+        return Err(ZERO_AMOUNT.to_string());
+    }
     let len = transfer_len(sender, recipient, amount, nonce)?;
     let fee = fee_rate.saturating_mul(len as u64).max(1);
     Ok(TransferQuote {
@@ -432,8 +436,33 @@ mod tests {
         assert_eq!(quote.fee_atoms, (2 * len as u64).to_string());
         assert_eq!(quote.amount_atoms, "1000000000");
         assert_eq!(quote.amount_display, "1");
-        let free = build_quote(sender, &recipient, "0", 4, 0, 0).unwrap();
+        let free = build_quote(sender, &recipient, "0.000000001", 4, 0, 0).unwrap();
         assert_eq!(free.fee_atoms, "1");
+    }
+
+    #[test]
+    fn a_zero_amount_is_rejected_before_a_quote() {
+        let sender = Address([1; 32]);
+        let recipient = Address([3; 32]).to_string();
+        for amount in ["0", "0.0", "0.000000000", " 0 "] {
+            let err = build_quote(sender, &recipient, amount, 4, 7, 1).unwrap_err();
+            assert_eq!(err, ZERO_AMOUNT, "{amount}");
+        }
+        assert!(build_quote(sender, &recipient, "0.000000001", 4, 7, 1).is_ok());
+
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        store.open_for_test(sender.to_string(), now);
+        let err = store
+            .quote_from_status(
+                &ScriptRpc::account(7, 1),
+                &fresh_status(Some("4")),
+                draft(Some("4"), false, &recipient, "0"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(err, ZERO_AMOUNT);
+        assert!(!store.has_quote());
     }
 
     #[test]
