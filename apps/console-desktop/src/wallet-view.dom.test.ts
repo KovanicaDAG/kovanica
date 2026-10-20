@@ -128,9 +128,6 @@ describe("recovery phrase on screen", () => {
     await showRecoveryPhrase();
     installHidden(true);
     document.dispatchEvent(new Event("visibilitychange"));
-    await vi.waitFor(() => {
-      expect(document.querySelector("#mnemonic-text")?.textContent ?? "").toBe("");
-    });
     assertPhraseGone();
   });
 
@@ -138,9 +135,6 @@ describe("recovery phrase on screen", () => {
     await showRecoveryPhrase();
     installHidden(false);
     window.dispatchEvent(new Event("blur"));
-    await vi.waitFor(() => {
-      expect(document.querySelector("#mnemonic-text")?.textContent ?? "").toBe("");
-    });
     assertPhraseGone();
   });
 

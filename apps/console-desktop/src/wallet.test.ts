@@ -200,8 +200,12 @@ describe("wallet form", () => {
     expect(blurAt).toBeGreaterThan(hiddenAt);
     const cover = viewSource.slice(start, hiddenAt);
     expect(cover.includes("shouldCoverPhrase")).toBe(true);
-    expect(cover.includes("phrase = phraseAfterCover(phrase, true)")).toBe(true);
-    expect(cover.includes("mnemonicText.textContent = phrase")).toBe(true);
+    const phraseAt = cover.indexOf("phrase = phraseAfterCover(phrase, true)");
+    const textAt = cover.indexOf("mnemonicText.textContent = phrase");
+    const refreshAt = cover.indexOf("refreshStatus");
+    expect(phraseAt).toBeGreaterThan(0);
+    expect(textAt).toBeGreaterThan(phraseAt);
+    expect(refreshAt).toBeGreaterThan(textAt);
     expect(cover.includes("document.hidden")).toBe(false);
     expect(viewSource.slice(hiddenAt, blurAt).includes("document.hidden")).toBe(true);
     expect(viewSource.slice(blurAt).includes("document.hidden")).toBe(true);
