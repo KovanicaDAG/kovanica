@@ -8,12 +8,15 @@ import {
   HISTORY_HEADING,
   LOCK_WARNING,
   MNEMONIC_WARNING,
+  PHRASE_STILL_IN_WALLET,
+  SHOW_PHRASE_AGAIN,
   WALLET_LOCK_WARNING_EVENT,
   WALLET_LOCKED_EVENT,
   clearedImportFields,
   needsMainnetConfirm,
   phraseLockWarning,
   phraseOnScreen,
+  revealedPhrase,
   reviewRows,
   secretsCleared,
   sendEnabled,
@@ -114,6 +117,28 @@ describe("wallet form", () => {
     expect(clearer.includes("newPassword.value = cleared.password")).toBe(true);
     expect(clearer.includes("unlockPassword.value = cleared.password")).toBe(true);
     expect(clearer.includes("mnemonicPanel.hidden = true")).toBe(true);
+  });
+
+  it("shows the recovery phrase again after the password", () => {
+    expect(SHOW_PHRASE_AGAIN).toBe("Show recovery phrase again");
+    expect(PHRASE_STILL_IN_WALLET).toContain("password");
+    expect(revealedPhrase("one two three")).toEqual({
+      phrase: "one two three",
+      password: "",
+    });
+    expect(LOCK_WARNING).toContain(SHOW_PHRASE_AGAIN);
+    expect(htmlSource.includes('id="show-phrase"')).toBe(true);
+    expect(htmlSource.includes('id="locked-backup"')).toBe(true);
+    expect(viewSource.includes("PHRASE_STILL_IN_WALLET")).toBe(true);
+    expect(viewSource.includes("SHOW_PHRASE_AGAIN")).toBe(true);
+    const handler = viewSource.slice(
+      viewSource.indexOf("showPhraseButton.addEventListener"),
+      viewSource.indexOf("\n  lockButton.addEventListener"),
+    );
+    expect(handler.includes('"wallet_reveal"')).toBe(true);
+    expect(handler.includes("revealedPhrase(revealed.mnemonic)")).toBe(true);
+    expect(handler.includes('show("mnemonic")')).toBe(true);
+    expect(handler.includes("unlockPassword.value = shown.password")).toBe(true);
   });
 
   it("clears the recovery phrase from the screen when the session locks", () => {

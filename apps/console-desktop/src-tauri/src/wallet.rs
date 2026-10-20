@@ -68,13 +68,17 @@ pub struct WalletStatus {
     pub address: Option<String>,
 }
 
-/// A newly created wallet. The phrase is returned once and is not stored.
+/// A wallet whose phrase the screen may show.
+///
+/// `create` returns the phrase for a new key. `reveal` returns that same
+/// phrase again after the password checks out. The screen holds it until the
+/// user dismisses it or the session locks.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewWallet {
     /// Canonical address from `kovanica-light-ffi`.
     pub address: String,
-    /// 24-word seed. The caller shows it once.
+    /// 24-word seed.
     pub mnemonic: String,
 }
 
@@ -343,6 +347,45 @@ impl WalletStore {
         Ok(WalletStatus {
             phase: PHASE_OPEN.to_string(),
             address: Some(address),
+        })
+    }
+
+    /// Show the recovery phrase again. The password is checked by
+    /// `kovanica_light_ffi::reveal_mnemonic_raw`.
+    ///
+    /// A lock drops the on-screen copy and the open session. The keystore file
+    /// still holds the encrypted phrase, so this opens a new session and
+    /// returns the same words. A wrong password returns no phrase and leaves
+    /// the session locked.
+    pub fn reveal(
+        &mut self,
+        path: &Path,
+        passphrase: &str,
+        now: Instant,
+    ) -> Result<NewWallet, String> {
+        if passphrase.is_empty() {
+            return Err("Enter a password.".to_string());
+        }
+        let json = read_keystore(path)?;
+        let mut phrase =
+            kovanica_light_ffi::reveal_mnemonic_raw(json.clone(), passphrase.to_string())
+                .map_err(|err| map_ffi_error(&err))?;
+        let address = match kovanica_light_ffi::wallet_address(json) {
+            Ok(address) => address,
+            Err(_) => {
+                phrase.zeroize();
+                return Err("Could not read the wallet.".to_string());
+            }
+        };
+        self.open = Some(OpenWallet {
+            passphrase: Zeroizing::new(passphrase.to_string()),
+            address: address.clone(),
+            last_active: now,
+            quote: None,
+        });
+        Ok(NewWallet {
+            address,
+            mnemonic: std::mem::take(&mut phrase),
         })
     }
 
@@ -840,6 +883,46 @@ mod tests {
     /// No Android device fixture is checked into this repo, so this vector
     /// comes from the same keystore code the Android wallet reaches.
     const CROSS_KEYSTORE_JSON: &str = r#"{"version":2,"address":"kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag","public_key":"0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0","encrypted":true,"secret_key":"21406ec83c99222e1a7262d80534b3cf334d5b213654c65efe8b5fb5ea70f8d2c78403778f0d09902a7c9a2b21c4b055","cipher":"xchacha20poly1305","kdf":"argon2id","kdf_memory_kib":65536,"kdf_iterations":3,"kdf_parallelism":4,"salt":"88e37fe15da91bf57bfa24181fc595d9","nonce":"1d6b4b4a95293d5a4bf31f16059f032a4acf0c9cf2674e42"}"#;
+
+    #[test]
+    fn reveal_shows_the_phrase_again_after_the_session_is_gone() {
+        let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
+        let dir = temp_dir("reveal");
+        let path = keystore_in(&dir);
+        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+
+        let err = must_err(store.reveal(&path, "", now));
+        assert_eq!(err, "Enter a password.");
+        assert!(!store.is_open_for_test());
+
+        let err = must_err(store.reveal(&path, "wrong-horse-marker", now));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert!(!err.contains("wrong-horse-marker"));
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(fs::read(&path).unwrap(), CROSS_KEYSTORE_JSON.as_bytes());
+
+        let revealed = must(store.reveal(&path, "cross-check", now));
+        assert_eq!(revealed.mnemonic, phrase);
+        assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
+        assert_eq!(
+            revealed.address,
+            "kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag"
+        );
+        let status = must(store.status(&path, now));
+        assert_eq!(status.phase, PHASE_OPEN);
+        let status_json = serde_json::to_string(&status).unwrap();
+        assert!(!status_json.contains(&phrase));
+        assert!(!fs::read_to_string(&path).unwrap().contains(&phrase));
+
+        assert!(store.lock());
+        let locked = must(store.status(&path, now));
+        assert_eq!(locked.phase, PHASE_LOCKED);
+        assert!(!store.is_open_for_test());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_fixed_keystore_vector_uses_keystore_validation() {

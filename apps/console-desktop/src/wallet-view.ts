@@ -9,6 +9,8 @@ import {
   EMPTY_HISTORY,
   HISTORY_HEADING,
   MNEMONIC_WARNING,
+  PHRASE_STILL_IN_WALLET,
+  SHOW_PHRASE_AGAIN,
   WALLET_LOCK_WARNING_EVENT,
   WALLET_LOCKED_EVENT,
   clearedImportFields,
@@ -16,6 +18,7 @@ import {
   phraseLockWarning,
   phraseOnScreen,
   reviewEnabled,
+  revealedPhrase,
   reviewRows,
   secretsCleared,
   sendEnabled,
@@ -86,8 +89,10 @@ export function mountWallet(shownChainId: () => string | null): void {
   const mnemonicText = required<HTMLParagraphElement>("mnemonic-text");
   const doneButton = required<HTMLButtonElement>("mnemonic-done");
   const lockedAddress = required<HTMLParagraphElement>("locked-address");
+  const lockedBackup = required<HTMLParagraphElement>("locked-backup");
   const unlockPassword = required<HTMLInputElement>("unlock-password");
   const unlockButton = required<HTMLButtonElement>("unlock-wallet");
+  const showPhraseButton = required<HTMLButtonElement>("show-phrase");
   const readout = required<HTMLDListElement>("wallet-readout");
   const lockButton = required<HTMLButtonElement>("lock-wallet");
   const refreshButton = required<HTMLButtonElement>("refresh-wallet");
@@ -108,6 +113,8 @@ export function mountWallet(shownChainId: () => string | null): void {
   let quote: QuoteView | null = null;
 
   mnemonicWarning.textContent = MNEMONIC_WARNING;
+  lockedBackup.textContent = PHRASE_STILL_IN_WALLET;
+  showPhraseButton.textContent = SHOW_PHRASE_AGAIN;
   historyHeading.textContent = HISTORY_HEADING;
 
   function showError(message: string): void {
@@ -294,6 +301,26 @@ export function mountWallet(shownChainId: () => string | null): void {
         await invoke<WalletStatus>("wallet_unlock", { passphrase: unlockPassword.value });
         unlockPassword.value = "";
         await refreshStatus();
+      } catch (error) {
+        showError(messageFrom(error));
+      }
+    })();
+  });
+
+  showPhraseButton.addEventListener("click", () => {
+    void (async () => {
+      clearError();
+      try {
+        const revealed = await invoke<NewWallet>("wallet_reveal", {
+          passphrase: unlockPassword.value,
+        });
+        const shown = revealedPhrase(revealed.mnemonic);
+        phrase = shown.phrase;
+        unlockPassword.value = shown.password;
+        mnemonicText.textContent = phrase;
+        paintLockWarning(false);
+        phase = "open";
+        show("mnemonic");
       } catch (error) {
         showError(messageFrom(error));
       }

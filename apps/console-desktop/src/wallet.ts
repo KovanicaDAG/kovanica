@@ -10,7 +10,14 @@ export const WALLET_LOCKED_EVENT = "wallet-locked";
 export const WALLET_LOCK_WARNING_EVENT = "wallet-lock-warning";
 
 export const LOCK_WARNING =
-  "This wallet will lock soon. The recovery phrase will leave this screen. Finish writing it down. Click this screen if you are still here.";
+  "This wallet will lock soon. The recovery phrase will leave this screen. Finish writing it down. If it locks first, enter the password and choose Show recovery phrase again. Click this screen if you are still here.";
+
+/** Locked-screen control that decrypts the phrase with the wallet password. */
+export const SHOW_PHRASE_AGAIN = "Show recovery phrase again";
+
+/** The lock drops the on-screen copy. The keystore still has the phrase. */
+export const PHRASE_STILL_IN_WALLET =
+  "The recovery phrase is still in this wallet. Enter the password to see it again.";
 
 export const MNEMONIC_WARNING =
   "Anyone who reads this phrase can spend the KUNA. Write it down. This screen does not copy it.";
@@ -42,6 +49,14 @@ export interface ReviewRow {
 /** Phrase and password values after a lock. The screen applies these at once. */
 export function secretsCleared(): { phrase: string; password: string } {
   return { phrase: "", password: "" };
+}
+
+/**
+ * Phrase and password after a successful reveal.
+ * The password is cleared. The phrase is shown until the user dismisses it.
+ */
+export function revealedPhrase(mnemonic: string): { phrase: string; password: string } {
+  return { phrase: mnemonic, password: "" };
 }
 
 /** Import fields are wiped after the attempt, including a failed one. */

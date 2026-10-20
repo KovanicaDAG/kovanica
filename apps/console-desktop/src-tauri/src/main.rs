@@ -185,6 +185,21 @@ fn wallet_unlock(
     })
 }
 
+/// Show the recovery phrase again. The password is required. A wrong password
+/// returns no phrase.
+#[tauri::command]
+fn wallet_reveal(
+    app: tauri::AppHandle,
+    state: State<'_, WalletApp>,
+    passphrase: String,
+) -> Result<wallet::NewWallet, String> {
+    let path = wallet_file(&app)?;
+    let passphrase = Zeroizing::new(passphrase);
+    with_wallet(&state, |store| {
+        store.reveal(&path, passphrase.as_str(), Instant::now())
+    })
+}
+
 /// Drop the session. The webview hears [`wallet::WALLET_LOCKED_EVENT`] at once.
 #[tauri::command]
 fn wallet_lock(
@@ -378,6 +393,7 @@ fn main() {
             wallet_create,
             wallet_import,
             wallet_unlock,
+            wallet_reveal,
             wallet_lock,
             wallet_touch,
             wallet_quote,
