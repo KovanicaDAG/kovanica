@@ -19,6 +19,7 @@ import {
   needsMainnetConfirm,
   phraseAfterCover,
   phraseLockWarning,
+  passphraseAfterFailedReveal,
   phraseOnScreen,
   phraseVariableAfterLock,
   shouldCoverPhrase,
@@ -328,6 +329,7 @@ export function mountWallet(shownChainId: () => string | null): void {
         phase = "open";
         show("mnemonic");
       } catch (error) {
+        unlockPassword.value = passphraseAfterFailedReveal();
         showError(messageFrom(error));
       }
     })();

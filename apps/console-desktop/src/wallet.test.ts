@@ -17,6 +17,7 @@ import {
   needsMainnetConfirm,
   ACTIVITY_EVENTS,
   PHRASE_COVER_EVENTS,
+  passphraseAfterFailedReveal,
   phraseAfterCover,
   phraseLockWarning,
   phraseOnScreen,
@@ -161,6 +162,21 @@ describe("wallet form", () => {
     expect(handler.includes("revealedPhrase(revealed.mnemonic)")).toBe(true);
     expect(handler.includes('show("mnemonic")')).toBe(true);
     expect(handler.includes("unlockPassword.value = shown.password")).toBe(true);
+  });
+
+  it("clears the passphrase after a failed reveal", () => {
+    expect(passphraseAfterFailedReveal()).toBe("");
+    const handler = viewSource.slice(
+      viewSource.indexOf("showPhraseButton.addEventListener"),
+      viewSource.indexOf("\n  lockButton.addEventListener"),
+    );
+    const catchAt = handler.indexOf("} catch");
+    expect(catchAt).toBeGreaterThan(0);
+    const failure = handler.slice(catchAt);
+    expect(failure.includes("unlockPassword.value = passphraseAfterFailedReveal()")).toBe(true);
+    expect(failure.includes("showError(messageFrom(error))")).toBe(true);
+    expect(handler.indexOf("passphraseAfterFailedReveal()")).toBeGreaterThan(catchAt);
+    expect(handler.indexOf("unlockPassword.value = shown.password")).toBeLessThan(catchAt);
   });
 
   it("clears the recovery phrase when the window is hidden or blurred", () => {

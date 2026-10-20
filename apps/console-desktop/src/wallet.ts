@@ -84,6 +84,11 @@ export function revealedPhrase(mnemonic: string): { phrase: string; password: st
   return { phrase: mnemonic, password: "" };
 }
 
+/** Passphrase field after a reveal that did not open the wallet. */
+export function passphraseAfterFailedReveal(): string {
+  return "";
+}
+
 /** Import fields are wiped after the attempt, including a failed one. */
 export function clearedImportFields(): { phrase: string; password: string } {
   return { phrase: "", password: "" };
