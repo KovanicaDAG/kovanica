@@ -144,6 +144,9 @@ function authPopupPlugin(): Plugin {
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
 export default defineConfig(({ command, isPreview }) => ({
+  // `KOVANICA_PUBLIC_*` carries public network config (seed DNS names, ports)
+  // into the client bundle — see src/lib/public-config.ts and .env.example.
+  envPrefix: ["VITE_", "KOVANICA_PUBLIC_"],
   server: {
     host: "0.0.0.0",
     port: 8080,

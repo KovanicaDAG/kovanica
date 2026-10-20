@@ -1,6 +1,8 @@
 // Network-specific constants and spec text generation
 // This file is imported by both network.ts and contract.ts to avoid circular dependencies
 
+import { P2P_PORT, PRIMARY_SEED, SEED_PEERS_CSV } from "./public-config";
+
 export const LIVE_EXPLORER = "https://explorer.kovanica.online";
 export const LIVE_WALLET = "https://wallet.kovanica.online";
 export const LIVE_MAP = "https://map.kovanica.online";
@@ -301,7 +303,7 @@ GET /api/p2p
   { path: "tcp", listen, peers, bootstrap } — Rust node only
 
 GET /api/blocks
-  octet-stream dump of every block (same bytes a clone pulls on :9000)
+  octet-stream dump of every block (same bytes a clone pulls on :${P2P_PORT})
 
 GET /api/download/install.sh
   node installer script (Linux x64/arm64)
@@ -375,13 +377,13 @@ Live CORS is closed — this app proxies it server-side.
   cargo build --release -p kovanica-node
   KOVANICA_MINE=0 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 \\\\
   KOVANICA_OPERATOR=0 KOVANICA_POW=1 \\\\
-  KOVANICA_LISTEN=0.0.0.0:9000 \\\\
-  KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 \\\\
+  KOVANICA_LISTEN=0.0.0.0:${P2P_PORT} \\\\
+  KOVANICA_PEERS=${SEED_PEERS_CSV} \\\\
   ./target/release/kovanica-node explorer 127.0.0.1:8080
 
-TCP :9000 is the only P2P path. Do not set peers to explorer.kovanica.online:9000
+TCP :${P2P_PORT} is the only P2P path. Do not set peers to explorer.kovanica.online:${P2P_PORT}
 — that name is Cloudflare-proxied and never reaches the seed. Use a DNS-only
-A record (seed.kovanica.online) or the origin IP.
+A record (${PRIMARY_SEED.split(":")[0]}) or the origin IP.
 After sync, GET /api/head on the clone matches the public genesis (and tip, once
 the seed has served its blocks).
 

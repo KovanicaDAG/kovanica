@@ -1,3 +1,4 @@
+import { P2P_PORT, PRIMARY_SEED } from "@/lib/public-config";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Shell } from "@/components/layout/shell";
@@ -109,7 +110,7 @@ function DocsBody() {
                     `${up.head.blocks} blocks · ${up.head.network}`,
                     `genesis ${up.head.genesis.slice(0, 8)}`,
                   ]
-                : [up?.error ?? err ?? "probing…", `P2P :9000 · ${getNetworkId()}`]
+                : [up?.error ?? err ?? "probing…", `P2P :${P2P_PORT} · ${getNetworkId()}`]
             }
           />
         </section>
@@ -329,7 +330,7 @@ function DocsBody() {
             />
             <Fact k="Min fee" v={`${MIN_FEE} atoms/byte floor (75% burned)`} />
             <Fact k="GHOSTDAG k" v={String(K)} />
-            <Fact k="P2P" v="TCP :9000 · seed.kovanica.online:9000" />
+            <Fact k="P2P" v={`TCP :${P2P_PORT} · ${PRIMARY_SEED}`} />
           </dl>
           <p className="mt-4 text-sm leading-relaxed text-muted">
             Block production is Proof-of-Authority: a fixed set of Ed25519 authorities take turns
@@ -383,13 +384,13 @@ function DocsBody() {
             </li>
             <li>Reset stays off on the public explorer.</li>
             <li>
-              Seed node: listen on TCP 9000, set{" "}
+              Seed node: listen on TCP {P2P_PORT}, set{" "}
               <code className="font-mono text-fg">KOVANICA_PEERS=off</code> so it does not dial
               itself. Clones must dial a <strong className="text-fg">DNS-only</strong> hostname or
               the origin IP — not{" "}
-              <code className="font-mono text-fg">explorer.kovanica.online:9000</code> (Cloudflare
-              does not proxy 9000). Use{" "}
-              <code className="font-mono text-fg">seed.kovanica.online:9000</code> once that A
+              <code className="font-mono text-fg">explorer.kovanica.online:{P2P_PORT}</code> (Cloudflare
+              does not proxy {P2P_PORT}). Use{" "}
+              <code className="font-mono text-fg">{PRIMARY_SEED}</code> once that A
               record exists (grey cloud).
             </li>
           </ol>
