@@ -123,8 +123,8 @@ pub struct WalletStatus {
 pub struct NewWallet {
     /// Canonical address from `kovanica-light-ffi`.
     pub address: String,
-    /// 24-word seed.
-    pub mnemonic: String,
+    /// 24-word seed. Drop overwrites the buffer with zeroes.
+    pub mnemonic: Zeroizing<String>,
 }
 
 pub(crate) struct OpenWallet {
@@ -350,7 +350,7 @@ impl WalletStore {
             last_active: now,
             quote: None,
         });
-        let mnemonic = std::mem::take(&mut created.mnemonic);
+        let mnemonic = Zeroizing::new(std::mem::take(&mut created.mnemonic));
         created.keystore_json.zeroize();
         Ok(NewWallet { address, mnemonic })
     }
@@ -479,7 +479,7 @@ impl WalletStore {
         });
         Ok(NewWallet {
             address,
-            mnemonic: std::mem::take(&mut phrase),
+            mnemonic: Zeroizing::new(std::mem::take(&mut phrase)),
         })
     }
 
@@ -840,6 +840,39 @@ mod tests {
     }
 
     #[test]
+    fn new_wallet_mnemonic_is_wiped_on_drop() {
+        use zeroize::{Zeroize, ZeroizeOnDrop};
+
+        fn assert_wiped_on_drop(mnemonic: &Zeroizing<String>) {
+            fn bound<T: Zeroize + ZeroizeOnDrop>(_: &T) {}
+            bound(mnemonic);
+        }
+
+        let words = "alpha beta gamma delta";
+        let mut wallet = NewWallet {
+            address: "kvnc".to_string(),
+            mnemonic: Zeroizing::new(words.to_string()),
+        };
+        assert_wiped_on_drop(&wallet.mnemonic);
+        assert_eq!(wallet.mnemonic.as_str(), words);
+        let json = serde_json::to_value(&wallet).unwrap();
+        assert_eq!(json["mnemonic"].as_str(), Some(words));
+
+        wallet.mnemonic.zeroize();
+        assert_eq!(wallet.mnemonic.as_str(), "");
+        let cleared = serde_json::to_string(&wallet).unwrap();
+        assert!(!cleared.contains(words));
+        assert!(!cleared.contains("alpha"));
+
+        let held = NewWallet {
+            address: "kvnc".to_string(),
+            mnemonic: Zeroizing::new(words.to_string()),
+        };
+        assert_eq!(held.mnemonic.as_str(), words);
+        drop(held);
+    }
+
+    #[test]
     fn wallet_source_does_not_log_secrets() {
         let src = include_str!("wallet.rs");
         let body = src.split("mod tests").next().unwrap_or(src);
@@ -922,7 +955,7 @@ mod tests {
 
         let bytes = fs::read(&path).unwrap();
         let text = String::from_utf8(bytes.clone()).unwrap();
-        assert!(!text.contains(&created.mnemonic));
+        assert!(!text.contains(created.mnemonic.as_str()));
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["version"], 2);
         assert_eq!(value["encrypted"], true);
@@ -947,7 +980,7 @@ mod tests {
         let status = must(store.status(&path, now));
         assert_eq!(status.phase, PHASE_OPEN);
         let status_json = serde_json::to_string(&status).unwrap();
-        assert!(!status_json.contains(&created.mnemonic));
+        assert!(!status_json.contains(created.mnemonic.as_str()));
 
         let err = must_err(store.create(&path, "create-password", now));
         assert_eq!(err, "A wallet already exists on this device.");
@@ -1066,7 +1099,7 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), CROSS_KEYSTORE_JSON.as_bytes());
 
         let revealed = must(store.reveal(&path, "cross-check", now + reveal_backoff_after(1)));
-        assert_eq!(revealed.mnemonic, phrase);
+        assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
         assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
         assert_eq!(
             revealed.address,
@@ -1146,7 +1179,7 @@ mod tests {
         assert!(!store.is_open_for_test());
 
         let revealed = must(store.reveal(&path, "cross-check", second + second_wait));
-        assert_eq!(revealed.mnemonic, phrase);
+        assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
         assert!(store.is_open_for_test());
         assert_eq!(store.reveal_failures_for_test(), 0);
         assert!(store.reveal_block_for_test().is_none());
@@ -1200,7 +1233,7 @@ mod tests {
         let created = must(store.create(&path, "desk-password", Instant::now()));
         let parsed = kovanica_keystore::parse(&fs::read(&path).unwrap()).unwrap();
         let sk = kovanica_keystore::signing_key(&parsed, Some("desk-password")).unwrap();
-        let seed = kovanica_keystore::seed_from_mnemonic(&created.mnemonic).unwrap();
+        let seed = kovanica_keystore::seed_from_mnemonic(created.mnemonic.as_str()).unwrap();
         assert_eq!(sk.to_bytes(), *seed);
         let _ = fs::remove_dir_all(&dir);
     }
