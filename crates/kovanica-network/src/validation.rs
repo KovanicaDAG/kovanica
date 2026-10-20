@@ -14,17 +14,14 @@
 //!   signature must verify over the digest under the author's key.
 
 use kovanica_types::{
-    block::StatementBlock, transaction::TransactionKind, Address, AuthorityIndex, Hash, PublicKey,
-    SealAnnouncement, SigningContext, Transaction, Vote,
+    block::StatementBlock, epoch_for_round, transaction::TransactionKind, Address, AuthorityIndex,
+    Hash, PublicKey, SealAnnouncement, SigningContext, Transaction, Vote,
 };
 use std::{
     collections::HashMap,
     fmt,
     sync::{Arc, RwLock},
 };
-
-/// Epoch length in leader rounds. Must match `kovanica_staking::EPOCH_ROUNDS`.
-const EPOCH_ROUNDS: u64 = 7_200;
 
 /// Committee public keys indexed by authority index.
 pub type AuthorityKeys = HashMap<AuthorityIndex, PublicKey>;
@@ -113,8 +110,9 @@ pub fn admit_seal(
         return SealAdmission::Reject(Rejection::ColouringFlag);
     }
     // Epoch MUST derive from leader_round (same as vote signing ctx)
-    // to avoid restart mismatch. Use leader_round / EPOCH_ROUNDS.
-    let expected_epoch = header.leader_round / EPOCH_ROUNDS;
+    // to avoid restart mismatch: `epoch_for_round` is the canonical,
+    // round-based epoch unit shared with consensus and staking.
+    let expected_epoch = epoch_for_round(header.leader_round);
     if header.epoch != expected_epoch {
         return SealAdmission::Reject(Rejection::EpochMismatch);
     }

@@ -49,7 +49,9 @@ fn test_state(storage: Arc<Storage>, events: EventBus) -> RpcState {
         )),
         storage,
         staking: Arc::new(RwLock::new(StakingState::new())),
-        committee: CommitteeInfo::try_new(0, vec![authority]).expect("valid committee"),
+        committee: Arc::new(RwLock::new(
+            CommitteeInfo::try_new(0, vec![authority]).expect("valid committee"),
+        )),
         peer_count: Arc::new(AtomicUsize::new(0)),
         events,
         rate_limiter: Arc::new(RateLimiterState::new(RateLimitConfig::default())),

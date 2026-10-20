@@ -116,7 +116,11 @@ pub const UNBONDING_ROUNDS: u64 = 100_000;
 ///
 /// Deliberately decoupled from `SUBSIDY_ERA_BLOCKS` so the active validator set
 /// keeps rotating frequently even though the subsidy era is long.
-pub const EPOCH_ROUNDS: u64 = 7_200;
+///
+/// Canonical definition lives in `kovanica_types::EPOCH_ROUNDS`; re-exported
+/// here so existing `kovanica_staking::EPOCH_ROUNDS` paths keep working and the
+/// `EPOCH_ROUNDS` crate-value equality test in this crate guards drift.
+pub use kovanica_types::EPOCH_ROUNDS;
 
 /// Maximum consecutive missed leader rounds before a validator is marked offline.
 ///

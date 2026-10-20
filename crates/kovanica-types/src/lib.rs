@@ -55,6 +55,30 @@ pub type AuthorityIndex = u16;
 /// Wave length used by the consensus (Mysticeti-style = 3).
 pub const WAVE_LENGTH: u64 = 3;
 
+/// Epoch rotation length in committed leader rounds (≈ 1 day at 12 s/leader:
+/// `86_400 / 12 = 7_200`).
+///
+/// This is the single canonical definition of the epoch unit. Every component
+/// that derives an epoch — consensus vote/seal signing
+/// (`leader_round / EPOCH_ROUNDS`), committee construction, RPC
+/// `getCommittee`/`signingContext`, and the staking state — must use
+/// [`epoch_for_round`] so all nodes compute the SAME epoch for the same round.
+/// `kovanica_staking` re-exports this constant for backward-compatible paths.
+pub const EPOCH_ROUNDS: u64 = 7_200;
+
+/// Epoch that a committed leader round belongs to.
+///
+/// The epoch is a pure function of the round: `round / EPOCH_ROUNDS`. It is
+/// deliberately decoupled from wall-clock time, committed height, and boot
+/// time, so it is derived identically everywhere and cannot drift across a
+/// restart. This is the one function the consensus signing context, the
+/// network vote/seal edge, the committee builder, and the RPC light-client
+/// paths must share.
+#[must_use]
+pub fn epoch_for_round(round: Round) -> u64 {
+    round / EPOCH_ROUNDS
+}
+
 /// Maximum allowed gap, in rounds, between a block and any of its parents.
 ///
 /// Parent selection walks backwards from `round - 1` until it finds the most
@@ -150,3 +174,28 @@ pub fn contract_hardening_active_from(round: Round) -> bool {
 
 /// Genesis round.
 pub const GENESIS_ROUND: Round = 0;
+
+#[cfg(test)]
+mod epoch_tests {
+    use super::{epoch_for_round, EPOCH_ROUNDS};
+
+    /// The epoch unit is frozen at 7_200 rounds. Every crate that derives an
+    /// epoch from a round must agree on this value; changing it is a consensus
+    /// change (it would fork the signing context at every boundary).
+    #[test]
+    fn epoch_rounds_is_the_frozen_unit() {
+        assert_eq!(EPOCH_ROUNDS, 7_200);
+    }
+
+    /// `epoch_for_round` is the one shared epoch function. It must be a pure
+    /// floor-division of the round so consensus, the network edge, the
+    /// committee builder, and the RPC paths all compute the same epoch.
+    #[test]
+    fn epoch_for_round_is_floor_division_of_the_round() {
+        assert_eq!(epoch_for_round(0), 0);
+        assert_eq!(epoch_for_round(EPOCH_ROUNDS - 1), 0);
+        assert_eq!(epoch_for_round(EPOCH_ROUNDS), 1);
+        assert_eq!(epoch_for_round(EPOCH_ROUNDS + 1), 1);
+        assert_eq!(epoch_for_round(5 * EPOCH_ROUNDS), 5);
+    }
+}
