@@ -260,7 +260,7 @@ fn env_truthy(name: &str) -> bool {
 fn ensure_chain_allowed(chain_id: u64, allow_mainnet: bool) -> Result<()> {
     if !kovanica_types::signing::chain_id::is_registered(chain_id) {
         bail!(
-            "unknown chain id {}: expected 1 (mainnet), 2 (testnet), 3 (devnet) or 1337 (local)",
+            "unknown chain id {}: expected 1 (mainnet), 2 (testnet), 3 (devnet), 4 (testnet v2) or 1337 (local)",
             chain_id
         );
     }
@@ -703,7 +703,12 @@ mod guard_tests {
 
     #[test]
     fn non_mainnet_networks_do_not_need_the_override() {
-        for id in [chain_id::TESTNET, chain_id::DEVNET, chain_id::LOCAL] {
+        for id in [
+            chain_id::TESTNET,
+            chain_id::DEVNET,
+            chain_id::TESTNET_V2,
+            chain_id::LOCAL,
+        ] {
             ensure_chain_allowed(id, false).expect("non-mainnet chain is allowed");
         }
     }

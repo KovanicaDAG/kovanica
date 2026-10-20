@@ -23,6 +23,9 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+/// Epoch length in leader rounds. Must match `kovanica_staking::EPOCH_ROUNDS`.
+const EPOCH_ROUNDS: u64 = 7_200;
+
 /// Committee public keys indexed by authority index.
 pub type AuthorityKeys = HashMap<AuthorityIndex, PublicKey>;
 
@@ -102,7 +105,6 @@ pub trait LocalHeaderHash: Send + Sync {
 pub fn admit_seal(
     keys: &AuthorityKeys,
     chain_id: u64,
-    epoch: u64,
     announcement: &SealAnnouncement,
     local_header_hash: Option<Hash>,
 ) -> SealAdmission {
@@ -110,7 +112,10 @@ pub fn admit_seal(
     if !header.colouring_roots_match_flag() {
         return SealAdmission::Reject(Rejection::ColouringFlag);
     }
-    if header.epoch != epoch {
+    // Epoch MUST derive from leader_round (same as vote signing ctx)
+    // to avoid restart mismatch. Use leader_round / EPOCH_ROUNDS.
+    let expected_epoch = header.leader_round / EPOCH_ROUNDS;
+    if header.epoch != expected_epoch {
         return SealAdmission::Reject(Rejection::EpochMismatch);
     }
     let Some(key) = keys.get(&announcement.seal.authority_index) else {
@@ -639,45 +644,26 @@ mod tests {
             },
         };
         assert_eq!(
-            admit_seal(
-                &keys,
-                TEST_CTX.chain_id,
-                TEST_CTX.epoch,
-                &announcement,
-                None
-            ),
+            admit_seal(&keys, TEST_CTX.chain_id, &announcement, None),
             SealAdmission::Ignore
         );
         assert_eq!(
             admit_seal(
                 &keys,
                 TEST_CTX.chain_id,
-                TEST_CTX.epoch,
                 &announcement,
                 Some(Hash::new([1u8]))
             ),
             SealAdmission::Ignore
         );
         assert_eq!(
-            admit_seal(
-                &keys,
-                TEST_CTX.chain_id,
-                TEST_CTX.epoch,
-                &announcement,
-                Some(header.hash())
-            ),
+            admit_seal(&keys, TEST_CTX.chain_id, &announcement, Some(header.hash())),
             SealAdmission::Accept
         );
         let mut forged = announcement.clone();
         forged.seal.signature = Signature([7; 64]);
         assert_eq!(
-            admit_seal(
-                &keys,
-                TEST_CTX.chain_id,
-                TEST_CTX.epoch,
-                &forged,
-                Some(header.hash())
-            ),
+            admit_seal(&keys, TEST_CTX.chain_id, &forged, Some(header.hash())),
             SealAdmission::Reject(Rejection::BadSignature(0))
         );
     }

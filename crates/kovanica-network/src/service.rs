@@ -1494,7 +1494,6 @@ impl NetworkService {
         match admit_seal(
             &self.validator.authority_keys_snapshot(),
             ctx.chain_id,
-            ctx.epoch,
             &announcement,
             local_hash,
         ) {
