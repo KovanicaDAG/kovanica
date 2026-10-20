@@ -6530,6 +6530,64 @@ mod b1_epoch_restart_repro {
         );
     }
 
+    fn e1_jarvis_subdag(leader_round: u64) -> kovanica_consensus::CommittedSubDag {
+        kovanica_consensus::CommittedSubDag {
+            blocks: vec![],
+            leader: StatementBlock {
+                author: 0,
+                round: leader_round,
+                parents: vec![],
+                transactions: vec![],
+                statements: vec![],
+                signature: Signature([0u8; 64]),
+                digest: StatementBlock::compute_digest(0, leader_round, &[], &[]),
+                merkle_root: Default::default(),
+            },
+            leader_round,
+            leader_author: 0,
+            non_blue: vec![],
+        }
+    }
+
+    // LOCAL REVIEW TEST (Jarvis, 2026-10-20), not committed. E1 refresh path:
+    // run_execution rebuilds with subdag.leader_round; at round 7200 exactly
+    // (boundary) the RPC committee must hash-match the sealed header.
+    #[test]
+    fn e1_jarvis_refresh_committee_matches_header_at_boundary_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sk, pk) = kovanica_crypto::generate_keypair();
+        let addr = Address::from_public_key(&pk);
+        let chain_id = kovanica_types::signing::chain_id::LOCAL;
+        let leader_round = EPOCH_ROUNDS;
+        let storage = storage_at_height(dir.path(), "e1r.redb", &[(addr, pk)], leader_round / 3);
+        let ctx = seals::SealContext {
+            chain_id,
+            signer: Some((0, sk)),
+            mysticghost: false,
+        };
+        let header = seals::publish_local_seal(
+            &storage,
+            &ctx,
+            &e1_jarvis_subdag(leader_round),
+            leader_round / 3,
+            Hash::zero(),
+        )
+        .unwrap()
+        .header;
+        assert_eq!(header.epoch, 1);
+        let rpc = build_committee(&storage, &pk, &addr, "127.0.0.1:0", leader_round).unwrap();
+        let members: Vec<_> = rpc
+            .authorities()
+            .iter()
+            .map(|a| (a.index, a.public_key, a.stake))
+            .collect();
+        assert_eq!(rpc.epoch(), header.epoch);
+        assert_eq!(
+            header.committee_hash,
+            kovanica_types::committee_seal_hash(rpc.epoch(), &members)
+        );
+    }
+
     /// Produce a seal with the REAL production producer (`seals::publish_local_seal`)
     /// at `leader_round = EPOCH_ROUNDS + 1` and admit it with the REAL production
     /// verifier (`admit_seal`), plus a restart variant: the admitting node's keys
@@ -7267,5 +7325,139 @@ mod b1_epoch_restart_repro {
             vrf_a, vrf_b,
             "both nodes must agree on the VRF author set, else leader selection forks"
         );
+    }
+    /// Jarvis review (0c09936): the boot committee is built with
+    /// `build_committee_for_round`, which after the first seal of an epoch
+    /// rebuilds it from the frozen `(index, key, stake)` snapshot. That snapshot
+    /// has no VRF keys, so a node restarted mid-epoch hands consensus a
+    /// committee with `vrf_public_key = None` for every authority, while peers
+    /// that did not restart still have the VRF keys from `build_committee`.
+    #[test]
+    fn e1_jarvis_local_boot_vrf_after_seal_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader_round = EPOCH_ROUNDS + 5;
+        let keys: Vec<(SigningKey, PublicKey, Address)> = (0..3)
+            .map(|_| {
+                let (sk, pk) = kovanica_crypto::generate_keypair();
+                (sk, pk, Address::from_public_key(&pk))
+            })
+            .collect();
+        let storage = Storage::new(dir.path().join("vrf.redb")).unwrap();
+        {
+            let mut staking = StakingState::new();
+            staking.init_treasury(Address([0xcc; 32]));
+            for (i, (_, pk, addr)) in keys.iter().enumerate() {
+                staking
+                    .join_validator(
+                        *addr,
+                        MIN_VALIDATOR_STAKE,
+                        0,
+                        Some(*addr),
+                        Some(*pk),
+                        Some(kovanica_staking::VrfPublicKey([i as u8 + 1; 32])),
+                    )
+                    .unwrap();
+            }
+            staking.committed_leader_height = 5;
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_staking_state(&txn, &staking).unwrap();
+            txn.commit().unwrap();
+        }
+        let live = build_committee(
+            &storage,
+            &keys[0].1,
+            &keys[0].2,
+            "127.0.0.1:0",
+            leader_round,
+        )
+        .unwrap();
+        assert!(live
+            .authorities()
+            .iter()
+            .all(|a| a.vrf_public_key.is_some()));
+
+        let ctx = seals::SealContext {
+            chain_id: kovanica_types::signing::chain_id::LOCAL,
+            signer: Some((0, keys[0].0.clone())),
+            mysticghost: false,
+        };
+        let subdag = kovanica_consensus::CommittedSubDag {
+            blocks: vec![],
+            leader: StatementBlock {
+                author: 0,
+                round: leader_round,
+                parents: vec![],
+                transactions: vec![],
+                statements: vec![],
+                signature: Signature([0u8; 64]),
+                digest: StatementBlock::compute_digest(0, leader_round, &[], &[]),
+                merkle_root: Default::default(),
+            },
+            leader_round,
+            leader_author: 0,
+            non_blue: vec![],
+        };
+        seals::publish_local_seal(&storage, &ctx, &subdag, 5, Hash::zero()).unwrap();
+
+        // Restart: the real boot path.
+        let boot = build_committee_for_round(
+            &storage,
+            &keys[0].1,
+            &keys[0].2,
+            "127.0.0.1:0",
+            startup_round_from_storage(&storage),
+        )
+        .unwrap();
+        assert_eq!(boot.epoch(), live.epoch());
+        let boot_vrf: Vec<_> = boot
+            .authorities()
+            .iter()
+            .map(|a| a.vrf_public_key)
+            .collect();
+        let live_vrf: Vec<_> = live
+            .authorities()
+            .iter()
+            .map(|a| a.vrf_public_key)
+            .collect();
+        assert_eq!(
+            boot_vrf, live_vrf,
+            "restarted node must keep the committee VRF keys (consensus leader schedule)"
+        );
+        let boot_addr: Vec<_> = boot.authorities().iter().map(|a| a.address).collect();
+        let live_addr: Vec<_> = live.authorities().iter().map(|a| a.address).collect();
+        assert_eq!(boot_addr, live_addr, "authority addresses must match");
+    }
+
+    // LOCAL REVIEW TEST (Jarvis, c8800ac): an EPOCH_COMMITTEE row written by a
+    // pre-83c8dcf binary (Vec<(index, key, stake)>) must still read back, with
+    // vrf_public_key None, as the commit message claims ("older snapshot
+    // deserializes without VRF keys ... backfill").
+    #[test]
+    fn b3_jarvis_old_format_snapshot_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_sk, pk) = kovanica_crypto::generate_keypair();
+        let (_sk2, pk2) = kovanica_crypto::generate_keypair();
+        let storage = Storage::new(dir.path().join("old-snap.redb")).unwrap();
+        let old: Vec<kovanica_types::SealCommitteeMember> =
+            vec![(0, pk, MIN_VALIDATOR_STAKE), (1, pk2, MIN_VALIDATOR_STAKE)];
+        {
+            let w = storage.begin_write().unwrap();
+            {
+                let mut t = w
+                    .open_table(kovanica_storage::tables::EPOCH_COMMITTEE)
+                    .unwrap();
+                t.insert(1u64, bincode::serialize(&old).unwrap()).unwrap();
+            }
+            w.commit().unwrap();
+        }
+        let r = storage.begin_read().unwrap();
+        let got = storage.state().get_epoch_committee(&r, 1);
+        assert!(
+            got.is_ok(),
+            "old-format snapshot must deserialize: {:?}",
+            got.err()
+        );
+        let got = got.unwrap().unwrap();
+        assert_eq!(kovanica_types::snapshot_seal_members(&got), old);
     }
 }

@@ -9,6 +9,7 @@ kovanica-types = { path = "../kovanica-types" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+bincode = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.5"

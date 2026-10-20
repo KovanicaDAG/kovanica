@@ -720,6 +720,12 @@ impl StateStore {
     /// hashes (see [`kovanica_types::SealCommitteeSnapshotMember::seal_member`]);
     /// the VRF key is stored so a restarted node can rebuild the boot committee
     /// WITH its VRF keys (B3). `None` before the first seal of the epoch.
+    ///
+    /// Compatibility: supports both the old format (Vec<SealCommitteeMember> i.e.
+    /// tuples of (index, key, stake)) and the new format
+    /// (Vec<SealCommitteeSnapshotMember> with optional vrf_public_key). Old rows
+    /// deserialize without VRF keys; the caller is expected to backfill from
+    /// staking state if needed.
     pub fn get_epoch_committee(
         &self,
         txn: &ReadTransaction,
@@ -735,7 +741,37 @@ impl StateStore {
         };
         let bytes = table.get(epoch)?.map(|guard| guard.value().to_vec());
         match bytes {
-            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            Some(bytes) => {
+                // Try new format first (Vec<SealCommitteeSnapshotMember>)
+                if let Ok(new_format) =
+                    bincode::deserialize::<Vec<kovanica_types::SealCommitteeSnapshotMember>>(&bytes)
+                {
+                    Ok(Some(new_format))
+                } else if let Ok(old_format) =
+                    bincode::deserialize::<Vec<kovanica_types::SealCommitteeMember>>(&bytes)
+                {
+                    // Old format: Vec<(AuthorityIndex, PublicKey, Stake)> -> convert
+                    let converted: Vec<kovanica_types::SealCommitteeSnapshotMember> = old_format
+                        .into_iter()
+                        .map(|(index, public_key, stake)| {
+                            kovanica_types::SealCommitteeSnapshotMember {
+                                index,
+                                public_key,
+                                stake,
+                                vrf_public_key: None,
+                            }
+                        })
+                        .collect();
+                    Ok(Some(converted))
+                } else {
+                    // Neither format worked - return the deserialization error
+                    Err(Box::new(bincode::ErrorKind::Custom(
+                        "failed to deserialize epoch committee: neither new nor old format matched"
+                            .to_string(),
+                    ))
+                    .into())
+                }
+            }
             None => Ok(None),
         }
     }

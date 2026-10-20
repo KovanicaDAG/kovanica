@@ -22,6 +22,9 @@ pub use light::{
     SettleOutcome, LIGHT_REWARD_BPS, LIGHT_WITNESS_SLOTS, MAX_LIGHT_NODES, MIN_LIGHT_BOND,
 };
 
+use bincode::de::read::SliceReader;
+use bincode::de::Deserializer as BincodeDeserializer;
+use bincode::{DefaultOptions, Options};
 use kovanica_types::{Address, PublicKey, Stake};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap as HashMap;
@@ -455,6 +458,85 @@ impl StakingState {
             unbonding_queue: Vec::new(),
             treasury: None,
         }
+    }
+
+    /// Load staking state from bytes with backward compatibility.
+    /// Handles both old format (ValidatorInfo without `slashed` field, 10 fields)
+    /// and new format (with `slashed` field, 11 fields).
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, bincode::Error> {
+        // Use bincode's default options with fixint encoding (same as serialize)
+        let options = DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes();
+
+        // Try new format first (11 fields per validator)
+        if let Ok(state) = options.deserialize::<StakingState>(bytes) {
+            return Ok(state);
+        }
+
+        // Fall back to old format: manually deserialize with 10-field validators
+        let mut deserializer = BincodeDeserializer::from_slice(bytes, options);
+        let state = StakingState::deserialize_old_format(&mut deserializer)?;
+        Ok(state)
+    }
+
+    /// Deserialize StakingState in old format (ValidatorInfo has 10 fields, no slashed).
+    fn deserialize_old_format<'de, O: Options>(
+        deserializer: &mut BincodeDeserializer<SliceReader<'de>, O>,
+    ) -> Result<Self, bincode::Error> {
+        use serde::Deserialize;
+
+        // Read validators Vec: length + elements
+        let validators_len: u64 = Deserialize::deserialize(&mut *deserializer)?;
+        let mut validators = Vec::with_capacity(validators_len as usize);
+        for _ in 0..validators_len {
+            // Read ValidatorInfo with 10 fields (no slashed)
+            let address: Address = Deserialize::deserialize(&mut *deserializer)?;
+            let stake: Stake = Deserialize::deserialize(&mut *deserializer)?;
+            let commission_bps: u16 = Deserialize::deserialize(&mut *deserializer)?;
+            let active: bool = Deserialize::deserialize(&mut *deserializer)?;
+            let payout_address: Address = Deserialize::deserialize(&mut *deserializer)?;
+            let public_key: Option<PublicKey> = Deserialize::deserialize(&mut *deserializer)?;
+            let vrf_public_key: Option<VrfPublicKey> =
+                Deserialize::deserialize(&mut *deserializer)?;
+            let missed_leader_count: u64 = Deserialize::deserialize(&mut *deserializer)?;
+            let last_online_height: u64 = Deserialize::deserialize(&mut *deserializer)?;
+            let last_commission_change_height: u64 = Deserialize::deserialize(&mut *deserializer)?;
+            // No slashed field in old format
+            validators.push(ValidatorInfo {
+                address,
+                stake,
+                commission_bps,
+                active,
+                payout_address,
+                public_key,
+                vrf_public_key,
+                missed_leader_count,
+                last_online_height,
+                last_commission_change_height,
+                slashed: false,
+            });
+        }
+
+        // Read remaining fields (same in both formats)
+        let delegations: Vec<Delegation> = Deserialize::deserialize(&mut *deserializer)?;
+        let total_staked: Stake = Deserialize::deserialize(&mut *deserializer)?;
+        let committed_leader_height: u64 = Deserialize::deserialize(&mut *deserializer)?;
+        let total_mining_issued: u64 = Deserialize::deserialize(&mut *deserializer)?;
+        let reward_totals: HashMap<Address, u64> = Deserialize::deserialize(&mut *deserializer)?;
+        let unbonding_queue: Vec<UnbondingEntry> = Deserialize::deserialize(&mut *deserializer)?;
+        let treasury: Option<TreasuryState> = Deserialize::deserialize(&mut *deserializer)?;
+
+        Ok(StakingState {
+            validators,
+            delegations,
+            total_staked,
+            committed_leader_height,
+            total_mining_issued,
+            reward_totals,
+            unbonding_queue,
+            treasury,
+        })
     }
 
     /// Configure treasury at genesis.
@@ -2127,5 +2209,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    // LOCAL REVIEW TEST (Jarvis, c8800ac): a StakingState persisted by a
+    // pre-c8800ac binary (ValidatorInfo without `slashed`) must still load,
+    // as the commit message claims ("bincode stays backward compatible").
+    #[test]
+    fn f7_jarvis_pre_slashed_field_state_still_loads() {
+        let mut st = StakingState::new();
+        for i in 1..=3u8 {
+            st.join_validator(a(i), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+        }
+        let full = bincode::serialize(&st).unwrap();
+        // validators is the first field: u64 len + each ValidatorInfo; `slashed`
+        // is the last (1-byte) field of ValidatorInfo, so drop it per validator.
+        let vec_bytes = bincode::serialize(&st.validators).unwrap();
+        assert_eq!(&full[..vec_bytes.len()], &vec_bytes[..]);
+        let mut old = vec_bytes[..8].to_vec();
+        for v in &st.validators {
+            let b = bincode::serialize(v).unwrap();
+            assert_eq!(*b.last().unwrap(), 0u8);
+            old.extend_from_slice(&b[..b.len() - 1]);
+        }
+        old.extend_from_slice(&full[vec_bytes.len()..]);
+        let decoded = StakingState::from_bytes(&old);
+        assert!(
+            decoded.is_ok(),
+            "pre-c8800ac staking bytes must load: {:?}",
+            decoded.err()
+        );
+        assert_eq!(decoded.unwrap().validators.len(), 3);
     }
 }
