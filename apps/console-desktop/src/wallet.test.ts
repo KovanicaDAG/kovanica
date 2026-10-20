@@ -16,8 +16,13 @@ import {
   clearedImportFields,
   needsMainnetConfirm,
   ACTIVITY_EVENTS,
+  PHRASE_COVER_EVENTS,
+  passphraseAfterFailedReveal,
+  phraseAfterCover,
   phraseLockWarning,
   phraseOnScreen,
+  phraseVariableAfterLock,
+  shouldCoverPhrase,
   reportListenFailure,
   revealedPhrase,
   shouldNoteActivity,
@@ -123,6 +128,20 @@ describe("wallet form", () => {
     expect(clearer.includes("mnemonicPanel.hidden = true")).toBe(true);
   });
 
+  it("sets the phrase variable to empty when the wallet locks", () => {
+    expect(phraseVariableAfterLock()).toBeNull();
+    expect(secretsCleared().phrase).toBe("");
+    const clearer = viewSource.slice(
+      viewSource.indexOf("function clearSecretFields"),
+      viewSource.indexOf("function paintLockWarning"),
+    );
+    expect(clearer.includes("phrase = phraseVariableAfterLock() ?? cleared.phrase")).toBe(true);
+    expect(clearer.includes("mnemonicText.textContent = cleared.phrase")).toBe(true);
+    const listenAt = viewSource.indexOf("listen(WALLET_LOCKED_EVENT");
+    const handler = viewSource.slice(listenAt, viewSource.indexOf("setInterval"));
+    expect(handler.indexOf("clearSecretFields()")).toBeGreaterThan(0);
+  });
+
   it("shows the recovery phrase again after the password", () => {
     expect(SHOW_PHRASE_AGAIN).toBe("Show recovery phrase again");
     expect(PHRASE_STILL_IN_WALLET).toContain("password");
@@ -143,6 +162,44 @@ describe("wallet form", () => {
     expect(handler.includes("revealedPhrase(revealed.mnemonic)")).toBe(true);
     expect(handler.includes('show("mnemonic")')).toBe(true);
     expect(handler.includes("unlockPassword.value = shown.password")).toBe(true);
+  });
+
+  it("clears the passphrase after a failed reveal", () => {
+    expect(passphraseAfterFailedReveal()).toBe("");
+    const handler = viewSource.slice(
+      viewSource.indexOf("showPhraseButton.addEventListener"),
+      viewSource.indexOf("\n  lockButton.addEventListener"),
+    );
+    const catchAt = handler.indexOf("} catch");
+    expect(catchAt).toBeGreaterThan(0);
+    const failure = handler.slice(catchAt);
+    expect(failure.includes("unlockPassword.value = passphraseAfterFailedReveal()")).toBe(true);
+    expect(failure.includes("showError(messageFrom(error))")).toBe(true);
+    expect(handler.indexOf("passphraseAfterFailedReveal()")).toBeGreaterThan(catchAt);
+    expect(handler.indexOf("unlockPassword.value = shown.password")).toBeLessThan(catchAt);
+  });
+
+  it("clears the recovery phrase when the window is hidden or blurred", () => {
+    expect(PHRASE_COVER_EVENTS).toEqual(["visibilitychange", "blur"]);
+    expect(shouldCoverPhrase("visibilitychange", true)).toBe(true);
+    expect(shouldCoverPhrase("visibilitychange", false)).toBe(false);
+    expect(shouldCoverPhrase("blur", false)).toBe(true);
+    expect(shouldCoverPhrase("blur", true)).toBe(true);
+    expect(phraseAfterCover("one two three", true)).toBe("");
+    expect(phraseAfterCover("one two three", false)).toBe("one two three");
+    const start = viewSource.indexOf("function coverShownPhrase");
+    const hiddenAt = viewSource.indexOf('addEventListener("visibilitychange"');
+    const blurAt = viewSource.indexOf('addEventListener("blur"');
+    expect(start).toBeGreaterThan(0);
+    expect(hiddenAt).toBeGreaterThan(start);
+    expect(blurAt).toBeGreaterThan(hiddenAt);
+    const cover = viewSource.slice(start, hiddenAt);
+    expect(cover.includes("shouldCoverPhrase")).toBe(true);
+    expect(cover.includes("phrase = phraseAfterCover(phrase, true)")).toBe(true);
+    expect(cover.includes("mnemonicText.textContent = phrase")).toBe(true);
+    expect(cover.includes("document.hidden")).toBe(false);
+    expect(viewSource.slice(hiddenAt, blurAt).includes("document.hidden")).toBe(true);
+    expect(viewSource.slice(blurAt).includes("document.hidden")).toBe(true);
   });
 
   it("clears the recovery phrase from the screen when the session locks", () => {

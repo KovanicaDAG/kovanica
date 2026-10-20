@@ -33,6 +33,33 @@ pub const WALLET_LOCK_WARNING_EVENT: &str = "wallet-lock-warning";
 /// phrase is on screen would leave the seed and an open session unattended.
 pub const LOCK_WARNING_BEFORE: Duration = Duration::from_secs(30);
 
+/// Wait after the first wrong reveal password. Later failures double it.
+const REVEAL_BACKOFF_BASE: Duration = Duration::from_secs(1);
+
+/// Longest reveal lockout. The wait stops doubling here.
+const REVEAL_BACKOFF_MAX: Duration = Duration::from_secs(32);
+
+/// Largest shift that still fits in [`REVEAL_BACKOFF_MAX`].
+const REVEAL_BACKOFF_SHIFT_CAP: u32 = 5;
+
+/// Returned when a reveal is refused because earlier passwords were wrong.
+const REVEAL_BACKOFF_MESSAGE: &str = "Wait a moment before trying the password again.";
+
+/// How long a reveal stays refused after `failures` wrong passwords.
+///
+/// `failures` is the count after the latest real decrypt failure. Zero failures
+/// wait nothing. The first failure waits [`REVEAL_BACKOFF_BASE`]. Each further
+/// failure doubles that wait, up to [`REVEAL_BACKOFF_MAX`].
+fn reveal_backoff_after(failures: u32) -> Duration {
+    if failures == 0 {
+        return Duration::ZERO;
+    }
+    let shift = failures.saturating_sub(1).min(REVEAL_BACKOFF_SHIFT_CAP);
+    REVEAL_BACKOFF_BASE
+        .saturating_mul(1_u32 << shift)
+        .min(REVEAL_BACKOFF_MAX)
+}
+
 /// How long the idle thread sleeps when no session is open.
 const IDLE_PARK: Duration = Duration::from_secs(60);
 
@@ -96,8 +123,8 @@ pub struct WalletStatus {
 pub struct NewWallet {
     /// Canonical address from `kovanica-light-ffi`.
     pub address: String,
-    /// 24-word seed.
-    pub mnemonic: String,
+    /// 24-word seed. Drop overwrites the buffer with zeroes.
+    pub mnemonic: Zeroizing<String>,
 }
 
 pub(crate) struct OpenWallet {
@@ -120,6 +147,10 @@ pub struct WalletStore {
     lock_after: Duration,
     /// An idle lock has not yet been reported as `wallet-locked`.
     idle_lock_pending: bool,
+    /// Consecutive wrong reveal passwords since the last success.
+    reveal_failures: u32,
+    /// Instant before which another reveal is refused.
+    reveal_blocked_until: Option<Instant>,
 }
 
 /// Session plus the condvar the idle thread waits on.
@@ -279,6 +310,8 @@ impl WalletStore {
             open: None,
             lock_after: LOCK_AFTER,
             idle_lock_pending: false,
+            reveal_failures: 0,
+            reveal_blocked_until: None,
         }
     }
 
@@ -317,7 +350,7 @@ impl WalletStore {
             last_active: now,
             quote: None,
         });
-        let mnemonic = std::mem::take(&mut created.mnemonic);
+        let mnemonic = Zeroizing::new(std::mem::take(&mut created.mnemonic));
         created.keystore_json.zeroize();
         Ok(NewWallet { address, mnemonic })
     }
@@ -404,6 +437,11 @@ impl WalletStore {
     /// still holds the encrypted phrase, so this opens a new session and
     /// returns the same words. A wrong password returns no phrase and leaves
     /// the session locked.
+    ///
+    /// Wrong passwords are counted here, on the store. The next reveal is
+    /// refused until [`reveal_backoff_after`] has passed. Attempts inside that
+    /// window do not decrypt and do not extend the window. A correct password
+    /// after the window clears the count.
     pub fn reveal(
         &mut self,
         path: &Path,
@@ -414,9 +452,18 @@ impl WalletStore {
             return Err("Enter a password.".to_string());
         }
         let json = read_keystore(path)?;
+        if self.reveal_is_blocked(now) {
+            return Err(REVEAL_BACKOFF_MESSAGE.to_string());
+        }
         let mut phrase =
-            kovanica_light_ffi::reveal_mnemonic_raw(json.clone(), passphrase.to_string())
-                .map_err(|err| map_ffi_error(&err))?;
+            match kovanica_light_ffi::reveal_mnemonic_raw(json.clone(), passphrase.to_string()) {
+                Ok(phrase) => phrase,
+                Err(err) => {
+                    self.note_reveal_failure(now);
+                    return Err(map_ffi_error(&err));
+                }
+            };
+        self.clear_reveal_backoff();
         let address = match kovanica_light_ffi::wallet_address(json) {
             Ok(address) => address,
             Err(_) => {
@@ -432,8 +479,26 @@ impl WalletStore {
         });
         Ok(NewWallet {
             address,
-            mnemonic: std::mem::take(&mut phrase),
+            mnemonic: Zeroizing::new(std::mem::take(&mut phrase)),
         })
+    }
+
+    /// True when `now` is still inside the reveal lockout.
+    fn reveal_is_blocked(&self, now: Instant) -> bool {
+        self.reveal_blocked_until.is_some_and(|until| now < until)
+    }
+
+    /// Record one wrong reveal password and start its lockout window.
+    fn note_reveal_failure(&mut self, now: Instant) {
+        self.reveal_failures = self.reveal_failures.saturating_add(1);
+        let delay = reveal_backoff_after(self.reveal_failures);
+        self.reveal_blocked_until = now.checked_add(delay);
+    }
+
+    /// A correct reveal password may be tried again immediately.
+    fn clear_reveal_backoff(&mut self) {
+        self.reveal_failures = 0;
+        self.reveal_blocked_until = None;
     }
 
     /// The open session, after an idle lock.
@@ -564,6 +629,18 @@ impl WalletStore {
     #[cfg(test)]
     pub(crate) fn last_active_for_test(&self) -> Option<Instant> {
         self.open.as_ref().map(|open| open.last_active)
+    }
+
+    /// Wrong reveal passwords since the last success.
+    #[cfg(test)]
+    fn reveal_failures_for_test(&self) -> u32 {
+        self.reveal_failures
+    }
+
+    /// When the reveal lockout ends, if one is active.
+    #[cfg(test)]
+    fn reveal_block_for_test(&self) -> Option<Instant> {
+        self.reveal_blocked_until
     }
 }
 
@@ -763,6 +840,39 @@ mod tests {
     }
 
     #[test]
+    fn new_wallet_mnemonic_is_wiped_on_drop() {
+        use zeroize::{Zeroize, ZeroizeOnDrop};
+
+        fn assert_wiped_on_drop(mnemonic: &Zeroizing<String>) {
+            fn bound<T: Zeroize + ZeroizeOnDrop>(_: &T) {}
+            bound(mnemonic);
+        }
+
+        let words = "alpha beta gamma delta";
+        let mut wallet = NewWallet {
+            address: "kvnc".to_string(),
+            mnemonic: Zeroizing::new(words.to_string()),
+        };
+        assert_wiped_on_drop(&wallet.mnemonic);
+        assert_eq!(wallet.mnemonic.as_str(), words);
+        let json = serde_json::to_value(&wallet).unwrap();
+        assert_eq!(json["mnemonic"].as_str(), Some(words));
+
+        wallet.mnemonic.zeroize();
+        assert_eq!(wallet.mnemonic.as_str(), "");
+        let cleared = serde_json::to_string(&wallet).unwrap();
+        assert!(!cleared.contains(words));
+        assert!(!cleared.contains("alpha"));
+
+        let held = NewWallet {
+            address: "kvnc".to_string(),
+            mnemonic: Zeroizing::new(words.to_string()),
+        };
+        assert_eq!(held.mnemonic.as_str(), words);
+        drop(held);
+    }
+
+    #[test]
     fn wallet_source_does_not_log_secrets() {
         let src = include_str!("wallet.rs");
         let body = src.split("mod tests").next().unwrap_or(src);
@@ -845,7 +955,7 @@ mod tests {
 
         let bytes = fs::read(&path).unwrap();
         let text = String::from_utf8(bytes.clone()).unwrap();
-        assert!(!text.contains(&created.mnemonic));
+        assert!(!text.contains(created.mnemonic.as_str()));
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["version"], 2);
         assert_eq!(value["encrypted"], true);
@@ -870,7 +980,7 @@ mod tests {
         let status = must(store.status(&path, now));
         assert_eq!(status.phase, PHASE_OPEN);
         let status_json = serde_json::to_string(&status).unwrap();
-        assert!(!status_json.contains(&created.mnemonic));
+        assert!(!status_json.contains(created.mnemonic.as_str()));
 
         let err = must_err(store.create(&path, "create-password", now));
         assert_eq!(err, "A wallet already exists on this device.");
@@ -963,17 +1073,23 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Produced by `kovanica_keystore::from_seed(&[0x5A; 32], "cross-check")`.
-    /// No Android device fixture is checked into this repo, so this vector
-    /// comes from the same keystore code the Android wallet reaches.
-    const CROSS_KEYSTORE_JSON: &str = r#"{"version":2,"address":"kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag","public_key":"0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0","encrypted":true,"secret_key":"21406ec83c99222e1a7262d80534b3cf334d5b213654c65efe8b5fb5ea70f8d2c78403778f0d09902a7c9a2b21c4b055","cipher":"xchacha20poly1305","kdf":"argon2id","kdf_memory_kib":65536,"kdf_iterations":3,"kdf_parallelism":4,"salt":"88e37fe15da91bf57bfa24181fc595d9","nonce":"1d6b4b4a95293d5a4bf31f16059f032a4acf0c9cf2674e42"}"#;
+    /// Encrypted keystore from `kovanica_keystore::from_seed(&[0x5A; 32], "cross-check")`.
+    ///
+    /// The ciphertext lives in `tests/fixtures`, not in this source file.
+    fn cross_keystore_json() -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cross-keystore.json");
+        fs::read_to_string(&path)
+            .expect("encrypted test vector fixture")
+            .trim()
+            .to_string()
+    }
 
     #[test]
     fn reveal_shows_the_phrase_again_after_the_session_is_gone() {
         let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
         let dir = temp_dir("reveal");
         let path = keystore_in(&dir);
-        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        fs::write(&path, cross_keystore_json()).unwrap();
         let mut store = WalletStore::new();
         let now = Instant::now();
 
@@ -986,10 +1102,10 @@ mod tests {
         assert!(!err.contains("wrong-horse-marker"));
         assert!(!err.contains(&phrase));
         assert!(!store.is_open_for_test());
-        assert_eq!(fs::read(&path).unwrap(), CROSS_KEYSTORE_JSON.as_bytes());
+        assert_eq!(fs::read(&path).unwrap(), cross_keystore_json().as_bytes());
 
-        let revealed = must(store.reveal(&path, "cross-check", now));
-        assert_eq!(revealed.mnemonic, phrase);
+        let revealed = must(store.reveal(&path, "cross-check", now + reveal_backoff_after(1)));
+        assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
         assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
         assert_eq!(
             revealed.address,
@@ -1009,14 +1125,82 @@ mod tests {
     }
 
     #[test]
+    fn wrong_reveal_passwords_are_throttled_until_the_window_ends() {
+        assert_eq!(reveal_backoff_after(0), Duration::ZERO);
+        assert_eq!(reveal_backoff_after(1), Duration::from_secs(1));
+        assert_eq!(reveal_backoff_after(2), Duration::from_secs(2));
+        assert_eq!(reveal_backoff_after(3), Duration::from_secs(4));
+        assert_eq!(reveal_backoff_after(6), REVEAL_BACKOFF_MAX);
+        assert_eq!(reveal_backoff_after(100), REVEAL_BACKOFF_MAX);
+
+        let phrase = kovanica_keystore::seed_to_mnemonic(&[0x5A; 32]).unwrap();
+        let dir = temp_dir("reveal-backoff");
+        let path = keystore_in(&dir);
+        fs::write(&path, cross_keystore_json()).unwrap();
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+
+        let err = must_err(store.reveal(&path, "", now));
+        assert_eq!(err, "Enter a password.");
+        assert_eq!(store.reveal_failures_for_test(), 0);
+        assert!(store.reveal_block_for_test().is_none());
+
+        let err = must_err(store.reveal(&path, "wrong-horse-marker", now));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert!(!err.contains("wrong-horse-marker"));
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(store.reveal_failures_for_test(), 1);
+        let first_wait = reveal_backoff_after(1);
+        assert_eq!(store.reveal_block_for_test(), now.checked_add(first_wait));
+
+        let err = must_err(store.reveal(&path, "cross-check", now));
+        assert_eq!(err, REVEAL_BACKOFF_MESSAGE);
+        assert!(!err.contains(&phrase));
+        assert!(!store.is_open_for_test());
+        assert_eq!(store.reveal_failures_for_test(), 1);
+        assert_eq!(fs::read(&path).unwrap(), cross_keystore_json().as_bytes());
+
+        let err = must_err(store.reveal(
+            &path,
+            "wrong-horse-marker",
+            now + first_wait - Duration::from_millis(1),
+        ));
+        assert_eq!(err, REVEAL_BACKOFF_MESSAGE);
+        assert_eq!(store.reveal_failures_for_test(), 1);
+
+        let second = now + first_wait;
+        let err = must_err(store.reveal(&path, "wrong-horse-marker", second));
+        assert_eq!(err, "That password does not open this wallet.");
+        assert_eq!(store.reveal_failures_for_test(), 2);
+        let second_wait = reveal_backoff_after(2);
+        assert!(second_wait > first_wait);
+        assert_eq!(
+            store.reveal_block_for_test(),
+            second.checked_add(second_wait)
+        );
+
+        let err = must_err(store.reveal(&path, "cross-check", second));
+        assert_eq!(err, REVEAL_BACKOFF_MESSAGE);
+        assert!(!store.is_open_for_test());
+
+        let revealed = must(store.reveal(&path, "cross-check", second + second_wait));
+        assert_eq!(revealed.mnemonic.as_str(), phrase.as_str());
+        assert!(store.is_open_for_test());
+        assert_eq!(store.reveal_failures_for_test(), 0);
+        assert!(store.reveal_block_for_test().is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_fixed_keystore_vector_uses_keystore_validation() {
         let body = include_str!("wallet.rs").split("mod tests").next().unwrap();
         assert!(!body.contains("kdf_memory_kib"));
         assert!(!body.contains("65_536"));
         assert!(!body.contains("kdf_iterations"));
 
-        let address = must(accept_keystore_json(CROSS_KEYSTORE_JSON));
-        let parsed = kovanica_keystore::parse(CROSS_KEYSTORE_JSON.as_bytes()).unwrap();
+        let address = must(accept_keystore_json(&cross_keystore_json()));
+        let parsed = kovanica_keystore::parse(cross_keystore_json().as_bytes()).unwrap();
         assert_eq!(
             kovanica_keystore::address(&parsed).unwrap().to_string(),
             address
@@ -1028,7 +1212,7 @@ mod tests {
             &[0x5A; 32]
         );
 
-        let mut tampered: Value = serde_json::from_str(CROSS_KEYSTORE_JSON).unwrap();
+        let mut tampered: Value = serde_json::from_str(&cross_keystore_json()).unwrap();
         tampered["kdf_iterations"] = Value::from(1);
         let bad = serde_json::to_string(&tampered).unwrap();
         assert!(accept_keystore_json(&bad).is_err());
@@ -1055,7 +1239,7 @@ mod tests {
         let created = must(store.create(&path, "desk-password", Instant::now()));
         let parsed = kovanica_keystore::parse(&fs::read(&path).unwrap()).unwrap();
         let sk = kovanica_keystore::signing_key(&parsed, Some("desk-password")).unwrap();
-        let seed = kovanica_keystore::seed_from_mnemonic(&created.mnemonic).unwrap();
+        let seed = kovanica_keystore::seed_from_mnemonic(created.mnemonic.as_str()).unwrap();
         assert_eq!(sk.to_bytes(), *seed);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1118,7 +1302,7 @@ mod tests {
     fn manual_lock_emits_wallet_locked_when_a_session_closes() {
         let dir = temp_dir("manual-lock");
         let path = keystore_in(&dir);
-        fs::write(&path, CROSS_KEYSTORE_JSON).unwrap();
+        fs::write(&path, cross_keystore_json()).unwrap();
         let mut store = WalletStore::new();
         let now = Instant::now();
         let address =
@@ -1190,20 +1374,27 @@ mod tests {
     }
 
     #[test]
-    fn the_encrypted_test_vector_is_ignored_by_gitleaks_fingerprint() {
+    fn the_encrypted_test_vector_fixture_loads_and_is_ignored() {
+        let loaded = cross_keystore_json();
+        let value: Value = serde_json::from_str(&loaded).expect("fixture json");
+        assert_eq!(value["version"], 2);
+        assert_eq!(value["encrypted"], true);
+        assert_eq!(value["cipher"], "xchacha20poly1305");
+        assert_eq!(value["kdf"], "argon2id");
+        assert_eq!(value["secret_key"].as_str().map(str::len), Some(96));
+        let body = include_str!("wallet.rs").split("mod tests").next().unwrap();
+        assert!(!body.contains("CROSS_KEYSTORE_JSON"));
+
         let ignore = include_str!("../../../../.gitleaksignore");
-        let fingerprint = "62f487532da42ada4cd656ea3de1d89db0bb8ea0:apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:735";
+        let historical = "62f487532da42ada4cd656ea3de1d89db0bb8ea0:apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:735";
         assert!(
-            ignore.lines().any(|line| line.trim() == fingerprint),
-            "gitleaks fingerprint for the encrypted test vector is missing"
+            ignore.lines().any(|line| line.trim() == historical),
+            "gitleaks fingerprint for the old encrypted test vector is missing"
         );
-        let line_no = include_str!("wallet.rs")
-            .lines()
-            .position(|line| line.contains("const CROSS_KEYSTORE_JSON:"))
-            .expect("encrypted test vector")
-            + 1;
-        let dir_fingerprint =
-            format!("apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:{line_no}");
+        let fixture = "apps/console-desktop/src-tauri/tests/fixtures/cross-keystore.json";
+        let line_no = loaded.lines().count();
+        assert_eq!(line_no, 1);
+        let dir_fingerprint = format!("{fixture}:generic-api-key:{line_no}");
         assert!(
             ignore.lines().any(|line| line.trim() == dir_fingerprint),
             "gitleaks directory fingerprint for the encrypted test vector is missing"

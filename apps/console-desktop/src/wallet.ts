@@ -69,11 +69,24 @@ export function secretsCleared(): { phrase: string; password: string } {
 }
 
 /**
+ * Phrase variable after a lock or a clear.
+ * `null` means the screen is not holding the words.
+ */
+export function phraseVariableAfterLock(): string | null {
+  return null;
+}
+
+/**
  * Phrase and password after a successful reveal.
  * The password is cleared. The phrase is shown until the user dismisses it.
  */
 export function revealedPhrase(mnemonic: string): { phrase: string; password: string } {
   return { phrase: mnemonic, password: "" };
+}
+
+/** Passphrase field after a reveal that did not open the wallet. */
+export function passphraseAfterFailedReveal(): string {
+  return "";
 }
 
 /** Import fields are wiped after the attempt, including a failed one. */
@@ -114,6 +127,31 @@ export function shouldNoteActivity(input: {
 /** The phrase stays on screen only while the session is still open. */
 export function phraseOnScreen(phase: string, phrase: string): string {
   if (phase !== "open") {
+    return "";
+  }
+  return phrase;
+}
+
+/** Events that hide the recovery phrase when the user leaves this window. */
+export const PHRASE_COVER_EVENTS = ["visibilitychange", "blur"] as const;
+
+export type PhraseCoverEvent = (typeof PHRASE_COVER_EVENTS)[number];
+
+/**
+ * Whether this event should remove the recovery phrase.
+ * A visibility change hides it only while the document is hidden.
+ * A window blur always hides it.
+ */
+export function shouldCoverPhrase(event: PhraseCoverEvent, documentHidden: boolean): boolean {
+  if (event === "blur") {
+    return true;
+  }
+  return documentHidden;
+}
+
+/** Phrase held after the window is covered. A cover clears it. */
+export function phraseAfterCover(phrase: string, cover: boolean): string {
+  if (cover) {
     return "";
   }
   return phrase;

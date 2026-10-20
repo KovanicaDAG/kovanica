@@ -17,8 +17,12 @@ import {
   WALLET_LOCKED_EVENT,
   clearedImportFields,
   needsMainnetConfirm,
+  phraseAfterCover,
   phraseLockWarning,
+  passphraseAfterFailedReveal,
   phraseOnScreen,
+  phraseVariableAfterLock,
+  shouldCoverPhrase,
   reviewEnabled,
   revealedPhrase,
   reviewRows,
@@ -202,7 +206,7 @@ export function mountWallet(shownChainId: () => string | null): void {
 
   function clearSecretFields(): void {
     const cleared = secretsCleared();
-    phrase = cleared.phrase;
+    phrase = phraseVariableAfterLock() ?? cleared.phrase;
     mnemonicText.textContent = cleared.phrase;
     newPassword.value = cleared.password;
     importPhrase.value = cleared.phrase;
@@ -325,6 +329,7 @@ export function mountWallet(shownChainId: () => string | null): void {
         phase = "open";
         show("mnemonic");
       } catch (error) {
+        unlockPassword.value = passphraseAfterFailedReveal();
         showError(messageFrom(error));
       }
     })();
@@ -413,6 +418,20 @@ export function mountWallet(shownChainId: () => string | null): void {
   for (const eventName of ACTIVITY_EVENTS) {
     document.addEventListener(eventName, noteActivity);
   }
+
+  function coverShownPhrase(event: "visibilitychange" | "blur", documentHidden: boolean): void {
+    if (!shouldCoverPhrase(event, documentHidden) || phrase === "") return;
+    phrase = phraseAfterCover(phrase, true);
+    mnemonicText.textContent = phrase;
+    paintLockWarning(false);
+    void refreshStatus().catch((error: unknown) => showError(messageFrom(error)));
+  }
+  document.addEventListener("visibilitychange", () => {
+    coverShownPhrase("visibilitychange", document.hidden);
+  });
+  window.addEventListener("blur", () => {
+    coverShownPhrase("blur", document.hidden);
+  });
 
   const onListenError = (error: unknown): void => {
     reportListenFailure(
