@@ -16,8 +16,11 @@ import {
   clearedImportFields,
   needsMainnetConfirm,
   ACTIVITY_EVENTS,
+  PHRASE_COVER_EVENTS,
+  phraseAfterCover,
   phraseLockWarning,
   phraseOnScreen,
+  shouldCoverPhrase,
   reportListenFailure,
   revealedPhrase,
   shouldNoteActivity,
@@ -143,6 +146,29 @@ describe("wallet form", () => {
     expect(handler.includes("revealedPhrase(revealed.mnemonic)")).toBe(true);
     expect(handler.includes('show("mnemonic")')).toBe(true);
     expect(handler.includes("unlockPassword.value = shown.password")).toBe(true);
+  });
+
+  it("clears the recovery phrase when the window is hidden or blurred", () => {
+    expect(PHRASE_COVER_EVENTS).toEqual(["visibilitychange", "blur"]);
+    expect(shouldCoverPhrase("visibilitychange", true)).toBe(true);
+    expect(shouldCoverPhrase("visibilitychange", false)).toBe(false);
+    expect(shouldCoverPhrase("blur", false)).toBe(true);
+    expect(shouldCoverPhrase("blur", true)).toBe(true);
+    expect(phraseAfterCover("one two three", true)).toBe("");
+    expect(phraseAfterCover("one two three", false)).toBe("one two three");
+    const start = viewSource.indexOf("function coverShownPhrase");
+    const hiddenAt = viewSource.indexOf('addEventListener("visibilitychange"');
+    const blurAt = viewSource.indexOf('addEventListener("blur"');
+    expect(start).toBeGreaterThan(0);
+    expect(hiddenAt).toBeGreaterThan(start);
+    expect(blurAt).toBeGreaterThan(hiddenAt);
+    const cover = viewSource.slice(start, hiddenAt);
+    expect(cover.includes("shouldCoverPhrase")).toBe(true);
+    expect(cover.includes("phrase = phraseAfterCover(phrase, true)")).toBe(true);
+    expect(cover.includes("mnemonicText.textContent = phrase")).toBe(true);
+    expect(cover.includes("document.hidden")).toBe(false);
+    expect(viewSource.slice(hiddenAt, blurAt).includes("document.hidden")).toBe(true);
+    expect(viewSource.slice(blurAt).includes("document.hidden")).toBe(true);
   });
 
   it("clears the recovery phrase from the screen when the session locks", () => {

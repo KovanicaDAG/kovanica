@@ -119,6 +119,31 @@ export function phraseOnScreen(phase: string, phrase: string): string {
   return phrase;
 }
 
+/** Events that hide the recovery phrase when the user leaves this window. */
+export const PHRASE_COVER_EVENTS = ["visibilitychange", "blur"] as const;
+
+export type PhraseCoverEvent = (typeof PHRASE_COVER_EVENTS)[number];
+
+/**
+ * Whether this event should remove the recovery phrase.
+ * A visibility change hides it only while the document is hidden.
+ * A window blur always hides it.
+ */
+export function shouldCoverPhrase(event: PhraseCoverEvent, documentHidden: boolean): boolean {
+  if (event === "blur") {
+    return true;
+  }
+  return documentHidden;
+}
+
+/** Phrase held after the window is covered. A cover clears it. */
+export function phraseAfterCover(phrase: string, cover: boolean): string {
+  if (cover) {
+    return "";
+  }
+  return phrase;
+}
+
 /** Review needs a recipient and an amount. Rust parses both. */
 export function reviewEnabled(phase: string, recipient: string, amount: string): boolean {
   return phase === "open" && recipient.trim() !== "" && amount.trim() !== "";
