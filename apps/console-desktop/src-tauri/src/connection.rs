@@ -11,6 +11,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+use kovanica_types::epoch_for_round;
 use kovanica_types::signing::chain_id;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,6 +26,18 @@ const PROVEN_BY_SEALS: &str = "Proven by commit seals.";
 /// Seals match the committee the node returned. That committee is not pinned.
 const SEALS_CONSISTENT_UNVERIFIED: &str =
     "Seals consistent with the node's committee (committee not verified)";
+
+/// `header.epoch` is not [`epoch_for_round`] of the header's leader round.
+const HEADER_EPOCH_MISMATCH: &str =
+    "The header epoch does not match the leader round, so the chain id is not proven.";
+
+/// `kovanica_getCommitteeInfo` epoch is not the header's leader-round epoch.
+const COMMITTEE_EPOCH_MISMATCH: &str =
+    "The committee epoch does not match the leader round, so the chain id is not proven.";
+
+/// The node did not return a committee epoch the console could compare.
+const COMMITTEE_EPOCH_MISSING: &str =
+    "The node did not return a committee epoch, so the chain id is not proven.";
 
 /// Environment variable that supplies the endpoint when nothing is saved.
 pub const RPC_URL_ENV: &str = "KOVANICA_RPC_URL";
@@ -286,6 +299,18 @@ fn fetch_status_with_pins(
             peers,
         });
     }
+    // Same function `admit_seal` uses. Do not re-derive the epoch here.
+    let expected_epoch = epoch_for_round(leader_round);
+    if epoch != expected_epoch {
+        return Ok(unproven(
+            height,
+            leader_round,
+            epoch,
+            peer_count,
+            peers,
+            HEADER_EPOCH_MISMATCH,
+        ));
+    }
     let committee = rpc.call("kovanica_getCommittee", Value::Array(vec![]))?;
     if !committee.is_array() {
         return Ok(unproven(
@@ -295,6 +320,42 @@ fn fetch_status_with_pins(
             peer_count,
             peers,
             "The node returned a committee the console could not read.",
+        ));
+    }
+    let info_epoch = match rpc.call("kovanica_getCommitteeInfo", Value::Array(vec![])) {
+        Ok(info) => match field_qty(&info, "epoch") {
+            Ok(value) => value,
+            Err(()) => {
+                return Ok(unproven(
+                    height,
+                    leader_round,
+                    epoch,
+                    peer_count,
+                    peers,
+                    COMMITTEE_EPOCH_MISSING,
+                ));
+            }
+        },
+        Err(ConnError::Rejected(_)) => {
+            return Ok(unproven(
+                height,
+                leader_round,
+                epoch,
+                peer_count,
+                peers,
+                COMMITTEE_EPOCH_MISSING,
+            ));
+        }
+        Err(err) => return Err(err),
+    };
+    if info_epoch != expected_epoch {
+        return Ok(unproven(
+            height,
+            leader_round,
+            epoch,
+            peer_count,
+            peers,
+            COMMITTEE_EPOCH_MISMATCH,
         ));
     }
     let seals = rpc.call(
@@ -613,8 +674,8 @@ mod tests {
     use super::*;
     use kovanica_crypto::sign;
     use kovanica_types::{
-        committee_seal_hash, leader_header, Address, CommittedSubDag, Hash, PublicKey, Signature,
-        SigningKey, StatementBlock,
+        committee_seal_hash, epoch_for_round, leader_header, Address, CommittedSubDag, Hash,
+        PublicKey, Signature, SigningKey, StatementBlock,
     };
     use serde_json::json;
 
@@ -753,7 +814,9 @@ mod tests {
         assert_ne!(status.chain_note, PROVEN_BY_SEALS);
         assert_eq!(status.height, "16");
         assert_eq!(status.leader_round.as_deref(), Some("42"));
-        assert_eq!(status.epoch.as_deref(), Some("7"));
+        let epoch = epoch_for_round(42).to_string();
+        assert_eq!(epoch, "0");
+        assert_eq!(status.epoch.as_deref(), Some(epoch.as_str()));
         assert_eq!(status.peer_count, "2");
         assert_eq!(status.peers.len(), 2);
         assert_eq!(status.peers[0].reported_tip_round.as_deref(), Some("42"));
@@ -804,6 +867,36 @@ mod tests {
     }
 
     #[test]
+    fn a_wrong_epoch_is_not_proven() {
+        let (committee, _, _) = sealed_fixture(chain_id::TESTNET_V2, true);
+        let pins = [PinnedCommittee {
+            chain_id: chain_id::TESTNET_V2,
+            committee_json: committee,
+        }];
+        assert_ne!(7, epoch_for_round(42));
+
+        let header_epoch =
+            fetch_status_with_pins(&Script::with_header_epoch(7), DEFAULT_RPC_URL, &pins).unwrap();
+        assert_eq!(header_epoch.chain_id, None);
+        assert_eq!(header_epoch.chain_note, HEADER_EPOCH_MISMATCH);
+        assert_eq!(header_epoch.leader_round.as_deref(), Some("42"));
+        assert_eq!(header_epoch.epoch.as_deref(), Some("7"));
+
+        let committee_epoch =
+            fetch_status_with_pins(&Script::with_committee_epoch(7), DEFAULT_RPC_URL, &pins)
+                .unwrap();
+        assert_eq!(committee_epoch.chain_id, None);
+        assert_eq!(committee_epoch.chain_note, COMMITTEE_EPOCH_MISMATCH);
+        assert_eq!(committee_epoch.epoch.as_deref(), Some("0"));
+
+        let missing =
+            fetch_status_with_pins(&Script::without_committee_info(), DEFAULT_RPC_URL, &pins)
+                .unwrap();
+        assert_eq!(missing.chain_id, None);
+        assert_eq!(missing.chain_note, COMMITTEE_EPOCH_MISSING);
+    }
+
+    #[test]
     fn a_missing_seal_does_not_invent_a_chain() {
         let status = fetch_status(&Script::unsigned(), DEFAULT_RPC_URL).unwrap();
         assert_eq!(status.chain_id, None);
@@ -847,6 +940,9 @@ mod tests {
         seals: bool,
         block_number: Value,
         header: Option<Value>,
+        header_epoch: Option<u64>,
+        committee_epoch: Option<u64>,
+        committee_info: bool,
     }
 
     impl Script {
@@ -856,7 +952,44 @@ mod tests {
                 seals: true,
                 block_number: json!("0x10"),
                 header: None,
+                header_epoch: None,
+                committee_epoch: None,
+                committee_info: true,
             }
+        }
+
+        fn with_header_epoch(epoch: u64) -> Self {
+            Self {
+                header_epoch: Some(epoch),
+                ..Self::new(chain_id::TESTNET_V2)
+            }
+        }
+
+        fn with_committee_epoch(epoch: u64) -> Self {
+            Self {
+                committee_epoch: Some(epoch),
+                ..Self::new(chain_id::TESTNET_V2)
+            }
+        }
+
+        fn without_committee_info() -> Self {
+            Self {
+                committee_info: false,
+                ..Self::new(chain_id::TESTNET_V2)
+            }
+        }
+
+        fn leader_header_value(&self, header_json: &str) -> Value {
+            if let Some(header) = &self.header {
+                return header.clone();
+            }
+            let mut value = parse_json(header_json);
+            if let Some(epoch) = self.header_epoch {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("epoch".to_string(), json!(hex_qty(epoch)));
+                }
+            }
+            value
         }
 
         fn unsigned() -> Self {
@@ -901,10 +1034,24 @@ mod tests {
                         {"peerId": "12D3KooWother"}
                     ]
                 })),
-                "kovanica_getLeaderHeader" => {
-                    Ok(self.header.clone().unwrap_or_else(|| parse_json(&header)))
-                }
+                "kovanica_getLeaderHeader" => Ok(self.leader_header_value(&header)),
                 "kovanica_getCommittee" => Ok(parse_json(&committee)),
+                "kovanica_getCommitteeInfo" => {
+                    if !self.committee_info {
+                        return Err(ConnError::Rejected(
+                            "The node does not support kovanica_getCommitteeInfo.".to_string(),
+                        ));
+                    }
+                    let header_value = self.leader_header_value(&header);
+                    let epoch = match self.committee_epoch {
+                        Some(epoch) => json!(hex_qty(epoch)),
+                        None => header_value.get("epoch").cloned().unwrap_or(Value::Null),
+                    };
+                    Ok(json!({
+                        "epoch": epoch,
+                        "members": parse_json(&committee),
+                    }))
+                }
                 "kovanica_getCommitSeals" => Ok(parse_json(&seals)),
                 other => Err(ConnError::Rejected(format!("unexpected method {other}"))),
             }
@@ -933,11 +1080,13 @@ mod tests {
             signers.push(signer);
         }
         let committee_json = Value::Array(members).to_string();
-        let committee_hash = committee_seal_hash(7, &seal_rows);
+        let leader_round = 42;
+        let epoch = epoch_for_round(leader_round);
+        let committee_hash = committee_seal_hash(epoch, &seal_rows);
         let digest = Hash::new([3u8]);
         let leader = StatementBlock {
             author: 0,
-            round: 42,
+            round: leader_round,
             parents: vec![],
             transactions: vec![],
             statements: vec![],
@@ -948,7 +1097,7 @@ mod tests {
         let subdag = CommittedSubDag {
             blocks: vec![leader.clone()],
             leader,
-            leader_round: 42,
+            leader_round,
             leader_author: 0,
             non_blue: vec![],
         };
@@ -957,7 +1106,7 @@ mod tests {
             16,
             Hash::zero(),
             Hash::new([9u8]),
-            7,
+            epoch,
             committee_hash,
             false,
         );

@@ -8,7 +8,7 @@ function status(overrides: Partial<NodeStatus> = {}): NodeStatus {
     chainNote: "Proven by commit seals.",
     height: "1200",
     leaderRound: "3600",
-    epoch: "3",
+    epoch: "0",
     peerCount: "2",
     peers: [{ peerId: "12D3KooWexample", reportedTipRound: "3601" }],
     ...overrides,
@@ -31,7 +31,7 @@ describe("connection screen", () => {
       "Proven by commit seals.",
       "1200",
       "3600",
-      "3",
+      "0",
       "2",
     ]);
   });
