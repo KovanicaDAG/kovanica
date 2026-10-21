@@ -576,15 +576,21 @@ where
         let mut round_interval = interval(Duration::from_millis(self.config.round_duration_ms));
 
         while *self.running.read() {
-            // Timeout check: skip leader if no block by the absolute deadline.
+            // Timeout check: stall on leader if no block by the absolute deadline.
+            // PRO-35 fix: Do NOT call register_skip (local timeout skip causes fork).
+            // The chain stalls until quorum arrives or a quorum-certified skip is
+            // implemented (future RFC). skip_leader returns in-flight txs to mempool
+            // so they can be re-proposed, but does not advance the commit cursor.
             {
                 let deadline_opt = *self.leader_deadline.read();
                 if let Some((round, deadline)) = deadline_opt {
                     if std::time::Instant::now() >= deadline {
+                        // Check if we have a leader for this round
                         if let Some(leader_author) = self.scheduled_leader_for_round(round) {
-                            self.committer.register_skip(round, leader_author);
+                            // Return in-flight transactions to mempool so they can be
+                            // re-proposed by the next leader. Do NOT record a Skip.
+                            self.skip_leader(round)?;
                         }
-                        self.skip_leader(round)?;
                         *self.leader_deadline.write() = None;
                     }
                 }

@@ -64,7 +64,8 @@ fn first_committed_subdag_is_genesis_later_ones_are_not() {
 fn first_leader_skipped_genesis_is_first_commit_at_later_round() {
     let (dag, leaders) = chain();
     let c = UniversalCommitter::new(committee(4), false, 100);
-    // L3 registered without votes (no own quorum -> Skip), L6 and L9 commit.
+    // PRO-35 fix: L3 registered without votes (no own quorum -> chain STALLS).
+    // L6 and L9 are registered with quorum but the chain cannot pass over L3.
     c.update_leader(leader_info(
         3,
         leaders[0].author,
@@ -75,9 +76,20 @@ fn first_leader_skipped_genesis_is_first_commit_at_later_round() {
     register_with_quorum(&c, &leaders[1]);
     register_with_quorum(&c, &leaders[2]);
     let subdags = drive_try_commit(&c, &dag);
-    assert_eq!(subdags[0].leader_round, 6, "L3 skipped, first commit is L6");
+    // Chain stalls at L3 (no quorum) - no commits at all
+    assert!(subdags.is_empty(), "chain must stall at L3 (no quorum)");
+
+    // Now give L3 its quorum
+    for v in [0u16, 1, 2] {
+        c.add_vote(3, v, leaders[0].digest);
+    }
+    let subdags = drive_try_commit(&c, &dag);
+    assert_eq!(subdags.len(), 3, "after L3 quorum, all three commit");
+    assert_eq!(subdags[0].leader_round, 3);
+    assert_eq!(subdags[1].leader_round, 6);
+    assert_eq!(subdags[2].leader_round, 9);
     let flags: Vec<bool> = subdags.iter().map(is_genesis_subdag).collect();
-    assert_eq!(flags, vec![true, false]);
+    assert_eq!(flags, vec![true, false, false]);
 }
 
 fn subdag_with(blocks: Vec<StatementBlock>, non_blue: Vec<BlockReference>) -> CommittedSubDag {

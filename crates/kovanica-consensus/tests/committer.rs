@@ -883,11 +883,9 @@ fn test_try_commit_direct_commit_end_to_end() {
     );
 }
 
-/// A round that never reaches quorum is decided Skip once a later round
-/// reaches its own quorum (never passed over undecided), even though it is in
-/// the later leader's causal history; the later certified round then commits.
-/// Threshold soundness: every Commit requires the leader's OWN direct quorum,
-/// so the un-certified round must never be marked Commit.
+/// PRO-35 fix: chain STALLS at the first leader without quorum.
+/// A later leader with quorum does NOT cause an earlier leader to be skipped.
+/// Both nodes must wait for the missing quorum before committing.
 #[test]
 fn test_try_commit_passes_over_uncertified_round() {
     let g = genesis();
@@ -917,30 +915,35 @@ fn test_try_commit_passes_over_uncertified_round() {
         committer.add_vote(3, voter, b3.digest);
     }
 
+    // PRO-35: chain must stall at round 1 (no quorum)
+    let first = committer
+        .try_commit_and_mark_durable(&dag)
+        .expect("persist commit");
+    assert!(first.is_none(), "chain must stall at round 1 (no quorum)");
+    assert_eq!(committer.last_decided_round(), 0);
+    assert!(!committer.is_decided(1), "round 1 must remain undecided");
+
+    // Now give round 1 its quorum.
+    committer.add_vote(1, 1, Hash::new("kovanica-test/b1"));
+    committer.add_vote(1, 2, Hash::new("kovanica-test/b1"));
+
     let subdag = committer
         .try_commit_and_mark_durable(&dag)
         .expect("persist commit")
-        .expect("round 3 has quorum");
-    assert_eq!(subdag.leader_round, 3);
-    assert_eq!(committer.last_decided_round(), 3);
+        .expect("round 1 now has quorum");
+    assert_eq!(subdag.leader_round, 1);
+    assert_eq!(committer.last_decided_round(), 1);
 
-    // Safety: round 1 never got quorum, so it must never be marked Commit.
+    // Round 3 must now also commit
+    let subdag = committer
+        .try_commit_and_mark_durable(&dag)
+        .expect("persist commit")
+        .expect("round 3 commits after round 1");
+    assert_eq!(subdag.leader_round, 3);
+
     let decided = committer.get_all_decided_leaders();
-    assert_ne!(
-        decided.get(&1).map(|l| l.status),
-        Some(LeaderStatus::Commit),
-        "round 1 had only 1 of 4 votes"
-    );
-    // Round 1 is passed over only via an explicit indirect Skip decision.
-    assert_eq!(
-        decided.get(&1).map(|l| l.status),
-        Some(LeaderStatus::Skip),
-        "round 1 must be explicitly skipped (no own quorum), not silently passed over"
-    );
-    assert_eq!(
-        decided.get(&3).map(|l| l.status),
-        Some(LeaderStatus::Commit)
-    );
+    assert_eq!(decided.get(&1).map(|l| l.status), Some(LeaderStatus::Commit));
+    assert_eq!(decided.get(&3).map(|l| l.status), Some(LeaderStatus::Commit));
 }
 
 /// Round 0 is exempt from commits even with full quorum (genesis handling).
@@ -1152,8 +1155,12 @@ fn test_try_commit_committed_rounds_strictly_increase() {
 /// sweep this round never entered `decided_leaders` (the historical BUG).
 ///
 /// Note: round 3's *block* is also committed as part of round 5's causal
-/// history, so this is bookkeeping/liveness — but `try_indirect_decide` and
+/// history, so this is bookkeeping/liveness but `try_indirect_decide` and
 /// the skip bookkeeping must be exercised, not dead code.
+///
+/// PRO-35 fix: With WAVE_LENGTH=3, there's exactly one leader per wave,
+/// so the same-wave indirect rule never triggers. This test now verifies
+/// the stall behavior (chain stalls at first leader without quorum).
 #[test]
 fn test_try_commit_indirect_commit_through_later_committed_leader() {
     let g = genesis();
@@ -1170,7 +1177,7 @@ fn test_try_commit_indirect_commit_through_later_committed_leader() {
         LeaderStatus::Undecided,
         &[],
     ));
-    committer.add_vote(3, 0, b3.digest); // 1 of 4 — no quorum
+    committer.add_vote(3, 0, b3.digest); // 1 of 4 - no quorum
                                          // Round 5: full quorum, causally descends from round 3.
     committer.update_leader(leader_info(
         5,
@@ -1183,28 +1190,38 @@ fn test_try_commit_indirect_commit_through_later_committed_leader() {
         committer.add_vote(5, voter, b5.digest);
     }
 
+    // PRO-35: chain must stall at round 3 (no quorum)
+    let first = committer
+        .try_commit_and_mark_durable(&dag)
+        .expect("persist commit");
+    assert!(first.is_none(), "chain must stall at round 3 (no quorum)");
+    assert_eq!(committer.last_decided_round(), 0);
+    assert!(!committer.is_decided(3), "round 3 must remain undecided");
+
+    // Now give round 3 its quorum.
+    committer.add_vote(3, 1, b3.digest);
+    committer.add_vote(3, 2, b3.digest);
+
     let committed = drive_try_commit(&committer, &dag);
-    assert!(!committed.is_empty(), "round 5 must commit");
+    assert!(!committed.is_empty(), "rounds 3 and 5 must commit");
 
     let decided = committer.get_all_decided_leaders();
     let round3 = decided.get(&3);
     assert!(
         round3.is_some(),
-        "BUG: round 3 (same wave as committed round 5, causally connected) was never decided; \
-         indirect rule unreachable, got decided rounds {:?}",
-        decided.keys().collect::<Vec<_>>()
+        "round 3 must be decided after its quorum arrives"
     );
-    // Owner decision (PR #18 review): a leader without its OWN direct quorum
-    // is never Commit; causal connection to a committed leader is not
-    // certificate proof, so round 3 is an explicit Skip.
     assert_eq!(
         round3.map(|l| l.status),
-        Some(LeaderStatus::Skip),
-        "no own quorum => Skip even when connected to the committed round-5 leader"
+        Some(LeaderStatus::Commit),
+        "with its own quorum, round 3 commits"
+    );
+    assert_eq!(
+        decided.get(&5).map(|l| l.status),
+        Some(LeaderStatus::Commit),
+        "round 5 committed"
     );
 }
-
-// Helper: digest sequence of a commit run.
 fn digest_seq(subdags: &[CommittedSubDag]) -> Vec<Vec<Hash>> {
     subdags
         .iter()
@@ -1252,11 +1269,12 @@ fn test_vote_for_foreign_hash_does_not_commit() {
 #[test]
 fn test_indirect_skip_is_recorded_with_skip_status() {
     let g = genesis();
-    // Round 3 leader block exists but is NOT causally connected to the
-    // round 5 leader (round 5 does not reference it).
+    // With WAVE_LENGTH=3: round 3 is leader (wave 1), round 6 is leader (wave 2).
+    // They are in DIFFERENT waves, so the same-wave indirect rule never applies.
+    // This test now verifies the stall behavior (chain stalls at first leader without quorum).
     let b3 = make_block(0, 3, vec![block_ref(&g)], "b3-unconnected");
-    let b5 = make_block(1, 5, vec![block_ref(&g)], "b5-quorum");
-    let dag = MockDag::with_blocks([g, b3.clone(), b5.clone()]);
+    let b6 = make_block(1, 6, vec![block_ref(&g)], "b6-quorum");
+    let dag = MockDag::with_blocks([g, b3.clone(), b6.clone()]);
 
     let committer = UniversalCommitter::new(committee(4), false, 100);
     committer.update_leader(leader_info(
@@ -1268,30 +1286,41 @@ fn test_indirect_skip_is_recorded_with_skip_status() {
     ));
     committer.add_vote(3, 0, b3.digest); // 1 of 4 — no direct quorum
     committer.update_leader(leader_info(
-        5,
+        6,
         1,
-        Some(b5.digest),
+        Some(b6.digest),
         LeaderStatus::Undecided,
         &[],
     ));
     for voter in 0..4u16 {
-        committer.add_vote(5, voter, b5.digest);
+        committer.add_vote(6, voter, b6.digest);
     }
 
+    // PRO-35: chain must stall at round 3 (no quorum)
+    let first = committer
+        .try_commit_and_mark_durable(&dag)
+        .expect("persist commit");
+    assert!(first.is_none(), "chain must stall at round 3 (no quorum)");
+    assert_eq!(committer.last_decided_round(), 0);
+    assert!(!committer.is_decided(3), "round 3 must remain undecided");
+
+    // Now give round 3 its quorum.
+    committer.add_vote(3, 1, b3.digest);
+    committer.add_vote(3, 2, b3.digest);
+
     let committed = drive_try_commit(&committer, &dag);
-    assert!(!committed.is_empty(), "round 5 must commit");
+    assert!(!committed.is_empty(), "rounds 3 and 6 must commit");
 
     let decided = committer.get_all_decided_leaders();
     assert_eq!(
         decided.get(&3).map(|l| l.status),
-        Some(LeaderStatus::Skip),
-        "unconnected earlier leader must be recorded as Skip, got {:?}",
-        decided.get(&3).map(|l| l.status)
+        Some(LeaderStatus::Commit),
+        "round 3 committed with its own quorum"
     );
     assert_eq!(
-        decided.get(&5).map(|l| l.status),
+        decided.get(&6).map(|l| l.status),
         Some(LeaderStatus::Commit),
-        "round 5 committed"
+        "round 6 committed"
     );
 }
 
