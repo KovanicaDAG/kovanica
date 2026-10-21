@@ -1,6 +1,7 @@
 //! Verifiable Random Function (VRF) implementation for Kovanica.
 //!
-//! Implements ECVRF-ED25519-SHA512-Elligator2 per RFC 9381 via `ecvrf` crate.
+//! Implements a Ristretto + SHA3 ECVRF via the `ecvrf` crate (NOT an RFC 9381
+//! suite; 96-byte proof). See `docs/VRF-PROOF-LENGTH.md`.
 //! Used for stake-weighted, unpredictable leader selection in consensus.
 //!
 //! The VRF output is a pair (hash, proof):
@@ -11,7 +12,16 @@ use ecvrf::{keygen, prove, verify, VrfPk, VrfProof, VrfSk};
 use kovanica_types::crypto::PublicKey;
 use thiserror::Error;
 
-/// VRF output: 32-byte hash (deterministic) + 96-byte proof (non-deterministic)
+/// VRF output: 32-byte hash (deterministic) + 96-byte proof (non-deterministic).
+///
+/// The proof is the raw `ecvrf` 0.4.3 encoding `Gamma (32) || c (32) || s (32)`:
+/// compressed Ristretto point, full 32-byte SHA3-256 challenge (untruncated),
+/// 32-byte response scalar. This is **not** an RFC 9381 proof — RFC 9381
+/// §5.1/§5.4.4 encodes `Gamma || c (16) || s (32)` = 80 bytes for both
+/// Edwards25519 suites (`ECVRF-EDWARDS25519-SHA512-TAI` / `-ELL2`), so the
+/// 80-byte figure does not apply here and must not be used to resize this
+/// type (it would break the 137-byte `KVNC-VRF1` statements framing and the
+/// `SubmitLightWitness` transaction body). See `docs/VRF-PROOF-LENGTH.md`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VRFOutput {
     /// VRF hash output (32 bytes) — DETERMINISTIC for given (input, secret key)
