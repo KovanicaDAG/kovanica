@@ -26,22 +26,22 @@
 > **Plan (korisnička uputa 2026-10-19) — redoslijed NAKON fix-22/23, prije svega ostalog.**
 > Svaki item = zaseban commit, s testom; `fmt`/`clippy`/testovi prije pusha. `[ ]` = nije napravljeno:
 > 1. **[x] Epoha committeeja** — računaj je deterministički pri svakom commitu, ne samo pri pokretanju (ref. 849d172). Test: restartan node nakon promjene epohe potpisuje za istu epohu kao ostali. **Zatvoreno 2026-10-20:** jedan kanonski unit `kovanica_types::epoch_for_round`; committee (node + RPC + light-client seal) i gossip/seal provjere glasova svi ga koriste (`PRO-B1d` f5a04a59 + kandidat f372e89a, `PRO-E1` 1569f0c9). **Startup epoha** sada dolazi iz `leader_round` zadnjeg spremljenog leader headera (`PRO-E1` 2d5bd8ea), a **seal committee je zamrznut po eposi** (`PRO-E1` 0c099361) da se `committee_seal_hash` RPC-a i potpisanog headera ne razilaze unutar epohe. Testovi prolaze: `b1d_jarvis_vote_after_epoch_boundary_passes_gossip_edge`, `b1_jarvis_build_committee_epoch_matches_after_restart`, `e1_jarvis_rpc_committee_epoch_matches_sealed_header_epoch`, `e1_jarvis_mid_epoch_eviction_keeps_rpc_committee_hash`, `e1_jarvis_seal_hash_matches_at_startup_and_restart`/`_across_epoch_boundary`/`_after_mid_epoch_change`, `restart_after_epoch_boundary_keeps_votes_verifiable`.
-> 2. **[ ] Adrese `kvnc…dag`** — faucet i genesis moraju prihvaćati kvnc…dag adrese (36 bajtova s checksumom), uz postojeći 64-hex ključ.
-> 3. **[ ] `chain_id` 4 = testnet** — registriraj i ispravi testove koji ga tretiraju kao nevažeći.
-> 4. **[ ] `kovanica_syncStatus`** — bez autentikacije NE smije vraćati IP adrese peerova; dodaj i `localHeight`.
-> 5. **[ ] `kovanica_getLogs`** — niži limiti i timeout da ne blokira server.
-> 6. **[ ] MIN_ACTIVE=15 iza aktivacijskog prekidača** (default isključen); nikad ne vraćaj izbačene offline validatore u committee.
+> 2. **[x] Adrese `kvnc…dag`** — faucet i genesis moraju prihvaćati kvnc…dag adrese (36 bajtova s checksumom), uz postojeći 64-hex ključ. **DONE 2026-10-20**: `Address::from_str()` u faucet i genesis, 4+5 testova, sve prolaze.
+> 3. **[x] `chain_id` 4 = testnet** — registriraj i ispravi testove koji ga tretiraju kao nevažeći. **DONE 2026-10-20**: dokumentirano u config.rs, CLI help, TUI error.
+> 4. **[x] `kovanica_syncStatus`** — bez autentikacije NE smije vraćati IP adrese peerova; dodaj i `localHeight`. **DONE** — `SyncPeerStatus` nema IP, `SyncStatus` ima `local_height` (committed height alias).
+> 5. **[x] `kovanica_getLogs`** — niži limiti i timeout da ne blokira server. **DONE** — `MAX_GET_LOGS_BLOCK_RANGE=500`, `MAX_GET_LOGS_RESULTS=2000`, `MAX_GET_LOGS_SCAN_MS=200`.
+> 6. **[x] MIN_ACTIVE=15 iza aktivacijskog prekidača** (default isključen); nikad ne vraćaj izbačene offline validatore u committee. **DONE 2026-10-21**: `enforce_min_active_validators` config + env var, wired through `build_committee` → `run_node` + epoch boundary, all test callers pass `false`, all tests pass.
 > 7. **[ ] VRF determinizam lidera (C1)** — lider slota L iz VRF izlaza runde L-7 commitanih do L-6, izbor se trajno sprema, čeka se ako lider nije poznat, + simulacijski test.
 > 8. **[ ] Slashing** — spoji u produkcijski put noda.
 > 9. **[ ] Metrike `kovanica_*` (M1–M8)** za monitoring.
 >
 > **Novi red (korisnička uputa 2026-10-19, nakon B1 i N1, prije VRF C1):**
-> 10. **[ ] Cargo.lock** — ukloni iz `.gitignore`, commitaj ga; dodaj `rust-toolchain.toml` s fiksnom Rust verzijom (wasmi gas identičan).
+> 10. **[x] Cargo.lock** — ukloni iz `.gitignore`, commitaj ga; dodaj `rust-toolchain.toml` s fiksnom Rust verzijom (wasmi gas identičan). **DONE** — oba commitana.
 > 11. **[ ] gitleaks** — dodaj u kvnc CI + pre-commit hook.
 > 12. **[ ] Consensus size limits** — limiti u bajtovima za blokove i transakcije, testovi da preveliki odbije.
 > 13. **[ ] chain_id 1/4: zamrzni round duration i VRF** — odbij env override na mainnet/testnet, dopusti samo local/dev.
 > 14. **[ ] Popravi komentarce** — `use_min_digest_fork`, `max_mergeset`: 2000 vs 1000.
-> 15. **[ ] VRF proof length** — 96 B vs 80 B (RFC 9381); dokumentiraj ili popravi varijantu.
+> 15. **[x] VRF proof length** — 96 B vs 80 B (RFC 9381); dokumentiraj ili popravi varijantu. **DONE 2026-10-21**: 96 B je točno za stvarnu implementaciju (`ecvrf` 0.4.3 → ristretto255 + SHA3, proof `Gamma(32)‖c(32)‖s(32)`), kod je ispravan; 80 B je RFC 9381 Edwards25519 dužina (`Gamma(32)‖c(16)‖s(32)`, suite `ECVRF-EDWARDS25519-SHA512-TAI/-ELL2`) i **ne primjenjuje se** ovdje (RFC 9381 nema 96-B proof; label "Elligator2" je bio netočan). Dokumentirano u `docs/VRF-PROOF-LENGTH.md`.
 > 16. **[ ] Docs: unbonding** — ~13.9 dana, ne 1 epoha.
 >
 > **Toni-jeve protokolske odluke (2026-10-19, chain 4 reset):**
