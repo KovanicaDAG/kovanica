@@ -84,7 +84,7 @@ year 0          year 1          year 2          …          year 8
 |--------------------------|------------------------|
 | Active validators        | 15 – 21                |
 | Min stake to join        | 50 000 KUNA            |
-| Unbonding period         | 100 000 rounds         |
+| Unbonding period         | 100 000 committed leader blocks (~13.9 days at 12 s/leader) |
 | Commission               | set by validator (bps) |
 
 Rewards go to the validator’s configured `payout_address` (defaults to the staking address). Future versions may support auto-compounding or commission splits with delegators.
@@ -133,7 +133,7 @@ Capped at `TOTAL_SUPPLY`. The genesis set circulating supply is therefore
 | `EPOCH_ROUNDS` | 7 200 (≈ 1 day; validator rotation, decoupled from the era) |
 | `MIN_VALIDATOR_STAKE` | 50 000 KUNA |
 | `MIN_ACTIVE_VALIDATORS` / `MAX_ACTIVE_VALIDATORS` | 15 / 21 |
-| `UNBONDING_ROUNDS` | 100 000 rounds |
+| `UNBONDING_ROUNDS` | 100 000 committed leader blocks (~13.9 days at 12 s/leader) |
 
 `MINING_SUBSIDY_BUDGET` is derived, not hard-coded:
 

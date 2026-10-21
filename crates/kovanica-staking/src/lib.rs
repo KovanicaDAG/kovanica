@@ -111,9 +111,15 @@ pub const MIN_ACTIVE_VALIDATORS: u32 = 15;
 /// Maximum number of active validators (target range 15-21).
 pub const MAX_ACTIVE_VALIDATORS: usize = 21;
 
-/// Unbonding period in rounds (approximate – will be mapped to time later).
+/// Unbonding period, counted in **committed leader blocks** (≈ 13.9 days at
+/// 12 s per committed leader: `1_200_000 s / 86_400`).
 ///
-/// (Skeleton name: `UNBONDING_PERIOD` — same value: 100_000 rounds.)
+/// The historical name says "rounds", but the value is added to
+/// `committed_leader_height`, which advances once per committed leader — not
+/// once per DAG round. One committed leader is produced every `WAVE_LENGTH`
+/// (3) rounds, so 100 000 committed leaders is 300 000 DAG rounds.
+///
+/// (Skeleton name: `UNBONDING_PERIOD` — same value: 100_000.)
 pub const UNBONDING_ROUNDS: u64 = 100_000;
 
 /// Epoch rotation length in committed leaders (≈ 1 day at 12 s/leader:

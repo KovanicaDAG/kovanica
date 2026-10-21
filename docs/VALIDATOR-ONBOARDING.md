@@ -134,7 +134,7 @@ export KOVANICA_VALIDATOR_KEY_PASS="your-passphrase"
 | **Min stake** | 50,000 KUNA (50,000,000,000,000 atoms) |
 | **Active validators** | 15–21 |
 | **Epoch** | 7,200 committed leader blocks (~1 day) |
-| **Unbonding** | 1 epoch (configurable) |
+| **Unbonding** | 100 000 committed leader blocks (~13.9 days at 12 s/leader) — **not** 1 epoch |
 
 ### 5.2 Stake via CLI
 
