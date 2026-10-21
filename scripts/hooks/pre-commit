@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# gitleaks pre-commit hook
+# Runs on staged changes. Skips with a warning if gitleaks is not installed
+# unless GITLEAKS_STRICT=1 is set.
+
+set -euo pipefail
+
+CONFIG_FILE=".gitleaks.toml"
+
+if ! command -v gitleaks &>/dev/null; then
+    if [[ "${GITLEAKS_STRICT:-0}" == "1" ]]; then
+        echo "ERROR: gitleaks not found in PATH and GITLEAKS_STRICT=1"
+        exit 1
+    fi
+    echo "WARNING: gitleaks not installed, skipping pre-commit secret scan (install with 'cargo install gitleaks' or see docs/SECRETS-SCANNING.md)"
+    exit 0
+fi
+
+# Scan staged changes
+echo "Running gitleaks on staged changes..."
+gitleaks protect --staged --redact --config "$CONFIG_FILE" --exit-code 1
