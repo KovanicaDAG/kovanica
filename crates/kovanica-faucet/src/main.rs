@@ -734,13 +734,17 @@ mod guard_tests {
         let pk_bytes = [2u8; 32];
         let address = Address(pk_bytes);
         let canonical = address.encode(); // kvnc<hex>dag with correct checksum
-        // Tamper with the checksum (last 8 hex chars before "dag")
+                                          // Tamper with the checksum (last 8 hex chars before "dag")
         let mut bad_canonical = canonical.clone();
         let checksum_start = bad_canonical.len() - "dag".len() - 8; // 8 hex chars = 4 bytes checksum
         bad_canonical.replace_range(checksum_start..checksum_start + 2, "ff");
         let err = parse_address(&bad_canonical).unwrap_err();
         // The error wraps AddressError::ChecksumMismatch with "invalid address" context
-        assert!(err.to_string().contains("invalid address"), "got error: {}", err);
+        assert!(
+            err.to_string().contains("invalid address"),
+            "got error: {}",
+            err
+        );
     }
 
     #[test]
