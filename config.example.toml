@@ -21,12 +21,13 @@
 #   retention_batch                 -> KOVANICA_RETENTION_BATCH
 
 # Extra env-only overrides without a TOML equivalent:
-#   KOVANICA_RUN_VALIDATOR  (true|false, default on)
-#   KOVANICA_CHAIN_ID       (1 mainnet, 2 testnet, 3 devnet, 1337 local)
-#   KOVANICA_RPC_AUTH       (disable|on, default on)
+#   KOVANICA_RUN_VALIDATOR              (true|false, default on)
+#   KOVANICA_CHAIN_ID                   (1 mainnet, 2 testnet, 3 devnet, 1337 local)
+#   KOVANICA_RPC_AUTH                   (disable|on, default on)
 #   KOVANICA_RPC_WRITE_TOKENS
-#   KOVANICA_HEALTH_COMMIT_STALL_SECS (default 120; 0 disables the /health stall check)
-#   KOVANICA_VRF_LEADER     (true|false; TOML equivalent use_vrf_leader)
+#   KOVANICA_HEALTH_COMMIT_STALL_SECS   (default 120; 0 disables the /health stall check)
+#   KOVANICA_VRF_LEADER                 (true|false; TOML equivalent use_vrf_leader)
+#   KOVANICA_ENFORCE_MIN_ACTIVE_VALIDATORS (true|false, default off; enforces 15 active validators minimum)
 #
 # Mempool tuning (env-only, no TOML equivalent; read by
 # `build_mempool_config` in the node):
@@ -40,6 +41,13 @@
 # round-robin. KOVANICA_MYSTICGHOST=false or KOVANICA_VRF_LEADER=false turns one off.
 use_mysticghost = true
 use_vrf_leader = true
+
+# Enforce MIN_ACTIVE_VALIDATORS (15) as a hard floor for committee size.
+# When enabled, build_committee will fail if fewer than 15 active validators
+# with sufficient stake exist. It will NOT automatically fill from offline/
+# spare validators, and NEVER returns offline/slashed validators automatically.
+# Explicit `reactivate_validator` stake tx is the only allowed re-entry path.
+# enforce_min_active_validators = false
 
 # Directory where chain data is stored (consensus.redb + state.redb).
 data_dir = "./data"

@@ -55,6 +55,16 @@ pub struct NodeConfig {
     /// Run as a validator (produce blocks, participate in consensus).
     /// When false, the node runs as an RPC/read-only node without consensus participation.
     pub run_validator: bool,
+    /// Enforce MIN_ACTIVE_VALIDATORS (15) as a hard floor for committee size.
+    ///
+    /// Default OFF. When enabled, `build_committee` will fail if fewer than
+    /// 15 active validators with sufficient stake exist. It will NOT
+    /// automatically fill the committee from offline/spare validators, and
+    /// NEVER returns offline/slashed validators automatically. Explicit
+    /// `reactivate_validator` stake tx is the only allowed re-entry path.
+    /// Overridable with `KOVANICA_ENFORCE_MIN_ACTIVE_VALIDATORS`.
+    #[serde(default)]
+    pub enforce_min_active_validators: bool,
     /// JSON-RPC rate limit, in requests per minute per client IP. `0` disables
     /// rate limiting. Overridable with `KOVANICA_RPC_RATE_LIMIT_PER_MIN`.
     pub rpc_rate_limit_per_min: u32,
@@ -133,6 +143,7 @@ impl Default for NodeConfig {
             use_mysticghost: true,
             use_vrf_leader: true,
             run_validator: true,
+            enforce_min_active_validators: false,
             rpc_rate_limit_per_min: 60,
             health_commit_stall_secs: kovanica_rpc::health::DEFAULT_COMMIT_STALL_SECS,
             peer_scoring: kovanica_network::PeerScoringConfig::default(),
@@ -277,6 +288,15 @@ impl NodeConfig {
                 Ok(rate) => self.rpc_rate_limit_per_min = rate,
                 Err(_) => {
                     tracing::warn!(value = %v, "ignoring invalid KOVANICA_RPC_RATE_LIMIT_PER_MIN")
+                }
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_ENFORCE_MIN_ACTIVE_VALIDATORS") {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.enforce_min_active_validators = true,
+                "0" | "false" | "no" | "off" => self.enforce_min_active_validators = false,
+                _ => {
+                    tracing::warn!(value = %v, "ignoring invalid KOVANICA_ENFORCE_MIN_ACTIVE_VALIDATORS")
                 }
             }
         }

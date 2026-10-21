@@ -67,7 +67,7 @@ impl LogPublisher for EventLogPublisher {
 }
 use kovanica_staking::{
     StakingState, FOUNDER_PREMINE, GENESIS_VALIDATOR_ALLOCATION, MAX_ACTIVE_VALIDATORS,
-    MIN_VALIDATOR_STAKE, ONE_KUNA,
+    MIN_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE, ONE_KUNA,
 };
 use kovanica_storage::{StateStoreError, Storage};
 use kovanica_types::{
@@ -577,6 +577,7 @@ where
         &validator_address,
         &config.listen_addr,
         startup_round,
+        config.enforce_min_active_validators,
     )?;
 
     // Register committee public keys with the crypto batch verifier (used by the
@@ -910,6 +911,7 @@ where
         validator_address,
         public_key,
         committee.epoch(),
+        config.enforce_min_active_validators,
     ));
 
     let engine_for_task = engine.clone();
@@ -2853,6 +2855,7 @@ async fn run_execution(
     validator_address: Address,
     public_key: PublicKey,
     boot_epoch: u64,
+    enforce_min_active: bool,
 ) {
     // Execution verifies tx signatures with the node's configured chain id.
     let mut ctx = ExecutionContext::with_signing_context(signing_ctx);
@@ -2903,6 +2906,7 @@ async fn run_execution(
                                     &validator_address,
                                     &listen_addr,
                                     subdag.leader_round,
+                                    enforce_min_active,
                                 ) {
                                     Ok(new_committee) => {
                                         let mut guard = rpc_committee.write().await;
@@ -3357,6 +3361,7 @@ fn build_committee(
     local_address: &Address,
     listen_addr: &str,
     round: Round,
+    enforce_min_active: bool,
 ) -> Result<CommitteeInfo> {
     let read = storage.begin_read()?;
     let staking_state = storage.state().load_staking_state(&read)?;
@@ -3385,6 +3390,17 @@ fn build_committee(
             network_address: listen_addr.to_string(),
         };
         return Ok(CommitteeInfo::try_new(epoch, vec![authority])?);
+    }
+
+    // If enforce_min_active is enabled, require at least MIN_ACTIVE_VALIDATORS (15)
+    // active validators with sufficient stake. Do NOT auto-fill from offline/spare.
+    if enforce_min_active && active_validators.len() < MIN_ACTIVE_VALIDATORS as usize {
+        anyhow::bail!(
+            "enforce_min_active_validators=true requires at least {} active validators with stake >= {} KUNA, found {}",
+            MIN_ACTIVE_VALIDATORS,
+            MIN_VALIDATOR_STAKE / ONE_KUNA,
+            active_validators.len()
+        );
     }
 
     // Sort by address for deterministic ordering across all nodes
@@ -3464,6 +3480,7 @@ fn build_committee_for_round(
     local_address: &Address,
     listen_addr: &str,
     round: Round,
+    enforce_min_active: bool,
 ) -> Result<CommitteeInfo> {
     let epoch = kovanica_types::epoch_for_round(round);
     if let Ok(read) = storage.begin_read() {
@@ -3508,7 +3525,14 @@ fn build_committee_for_round(
             }
         }
     }
-    build_committee(storage, local_public_key, local_address, listen_addr, round)
+    build_committee(
+        storage,
+        local_public_key,
+        local_address,
+        listen_addr,
+        round,
+        enforce_min_active,
+    )
 }
 
 /// Build the [`MempoolConfig`] from the node configuration and environment variables.
@@ -3863,7 +3887,10 @@ fn parse_address_hex(value: Option<&str>) -> Result<Address> {
         return Ok(Address::default());
     };
 
-    value.trim().parse::<Address>().with_context(|| format!("invalid address `{value}`"))
+    value
+        .trim()
+        .parse::<Address>()
+        .with_context(|| format!("invalid address `{value}`"))
 }
 
 #[cfg(test)]
@@ -3897,7 +3924,11 @@ mod tests {
         let checksum_start = bad_canonical.len() - "dag".len() - 8;
         bad_canonical.replace_range(checksum_start..checksum_start + 2, "ff");
         let err = parse_address_hex(Some(&bad_canonical)).unwrap_err();
-        assert!(err.to_string().contains("invalid address"), "got error: {}", err);
+        assert!(
+            err.to_string().contains("invalid address"),
+            "got error: {}",
+            err
+        );
     }
 
     #[test]
@@ -3910,7 +3941,8 @@ mod tests {
     #[test]
     fn parse_address_hex_accepts_0x_prefixed_hex() {
         let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let address = parse_address_hex(Some(&format!("0x{}", pk_hex))).expect("0x-prefixed hex parses");
+        let address =
+            parse_address_hex(Some(&format!("0x{}", pk_hex))).expect("0x-prefixed hex parses");
         assert_eq!(address.to_hex(), pk_hex);
     }
 
@@ -4599,6 +4631,7 @@ mod tests {
             &validator_address,
             "127.0.0.1:0",
             0,
+            false,
         )
         .expect("single-validator committee is valid");
         let block_manager = Arc::new(BlockManager::new(
@@ -4636,6 +4669,7 @@ mod tests {
             validator_address,
             public_key,
             0,
+            false,
         ));
 
         let leader_round = 3;
@@ -4771,6 +4805,7 @@ mod tests {
                     &validator_address,
                     "127.0.0.1:8000",
                     0,
+                    false,
                 )
                 .unwrap(),
             )),
@@ -4778,6 +4813,7 @@ mod tests {
             validator_address,
             PublicKey([0x22; 32]),
             0,
+            false,
         )
         .await;
         assert_ne!(
@@ -4899,6 +4935,7 @@ mod tests {
                     &Address([0x30; 32]),
                     "127.0.0.1:8000",
                     0,
+                    false,
                 )
                 .unwrap_or_else(|_| {
                     // Fall back to a committee built from the persisted state.
@@ -4910,6 +4947,7 @@ mod tests {
             Address([0x30; 32]),
             PublicKey([0x30; 32]),
             0,
+            false,
         )
         .await;
         assert_ne!(
@@ -4996,6 +5034,7 @@ mod tests {
             &validator_address,
             "127.0.0.1:8000",
             0,
+            false,
         )
         .unwrap();
         let (exec_tx, exec_rx) = mpsc::unbounded_channel();
@@ -5019,6 +5058,7 @@ mod tests {
             validator_address,
             test_public_key,
             0,
+            false,
         )
         .await;
         assert_eq!(
@@ -5150,8 +5190,15 @@ mod tests {
         let local_addr = addr1;
 
         // Build committee
-        let committee = build_committee(&state_storage, &local_pk, &local_addr, "127.0.0.1:0", 0)
-            .expect("committee should be built successfully");
+        let committee = build_committee(
+            &state_storage,
+            &local_pk,
+            &local_addr,
+            "127.0.0.1:0",
+            0,
+            false,
+        )
+        .expect("committee should be built successfully");
 
         // Verify committee has all 4 validators
         assert_eq!(committee.size(), 4, "committee should have 4 validators");
@@ -5276,7 +5323,7 @@ mod tests {
             .unwrap();
         txn.commit().unwrap();
 
-        let committee = build_committee(&state_storage, &pk1, &addr1, "127.0.0.1:0", 0)
+        let committee = build_committee(&state_storage, &pk1, &addr1, "127.0.0.1:0", 0, false)
             .expect("committee should be built with only active, sufficient-stake validators");
 
         assert_eq!(
@@ -5327,8 +5374,15 @@ mod tests {
         // Use first validator as local
         let (local_addr, local_pk) = validators[0];
 
-        let committee = build_committee(&state_storage, &local_pk, &local_addr, "127.0.0.1:0", 0)
-            .expect("committee should be built");
+        let committee = build_committee(
+            &state_storage,
+            &local_pk,
+            &local_addr,
+            "127.0.0.1:0",
+            0,
+            false,
+        )
+        .expect("committee should be built");
 
         // Should only have MAX_ACTIVE_VALIDATORS (21)
         assert_eq!(
@@ -6357,11 +6411,19 @@ mod b1_epoch_restart_repro {
 
         // Node A started at genesis and is still running: committee built at round 0.
         let a = storage_at_height(dir.path(), "a.redb", &pubs, 0);
-        let committee_a = build_committee(&a, &pubs[0].1, &pubs[0].0, "127.0.0.1:0", 0).unwrap();
+        let committee_a =
+            build_committee(&a, &pubs[0].1, &pubs[0].0, "127.0.0.1:0", 0, false).unwrap();
         // Node B is restarted once the chain has passed the first epoch boundary.
         let b = storage_at_height(dir.path(), "b.redb", &pubs, EPOCH_ROUNDS + 1);
-        let committee_b =
-            build_committee(&b, &pubs[1].1, &pubs[1].0, "127.0.0.1:0", EPOCH_ROUNDS + 1).unwrap();
+        let committee_b = build_committee(
+            &b,
+            &pubs[1].1,
+            &pubs[1].0,
+            "127.0.0.1:0",
+            EPOCH_ROUNDS + 1,
+            false,
+        )
+        .unwrap();
 
         // B1 FIX: epoch is now derived from leader_round, NOT from local committee.
         // Both nodes compute the SAME epoch for the same leader_round.
@@ -6419,8 +6481,15 @@ mod b1_epoch_restart_repro {
         // A node that has been running since genesis but is now at `round`
         // builds its committee for that same round.
         let running = storage_at_height(dir.path(), "running.redb", &pubs, round);
-        let running_committee =
-            build_committee(&running, &pubs[0].1, &pubs[0].0, "127.0.0.1:0", round).unwrap();
+        let running_committee = build_committee(
+            &running,
+            &pubs[0].1,
+            &pubs[0].0,
+            "127.0.0.1:0",
+            round,
+            false,
+        )
+        .unwrap();
 
         // A node restarted with height < round: the committed-height counter is
         // still in epoch 0 while the last stored leader header is in epoch 1.
@@ -6439,6 +6508,7 @@ mod b1_epoch_restart_repro {
             &pubs[1].0,
             "127.0.0.1:0",
             startup_round,
+            false,
         )
         .unwrap();
 
@@ -6492,7 +6562,7 @@ mod b1_epoch_restart_repro {
         // `run()` does, from the startup round read off the stored header.
         let startup_round = startup_round_from_storage(&storage);
         let rpc_committee =
-            build_committee(&storage, &pk, &addr, "127.0.0.1:0", startup_round).unwrap();
+            build_committee(&storage, &pk, &addr, "127.0.0.1:0", startup_round, false).unwrap();
         assert_eq!(
             rpc_committee.epoch(),
             expected_epoch,
@@ -6546,6 +6616,7 @@ mod b1_epoch_restart_repro {
             &addr,
             "127.0.0.1:0",
             startup_round_from_storage(&restarted),
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -6600,7 +6671,8 @@ mod b1_epoch_restart_repro {
         .unwrap()
         .header;
         assert_eq!(header.epoch, 1);
-        let rpc = build_committee(&storage, &pk, &addr, "127.0.0.1:0", leader_round).unwrap();
+        let rpc =
+            build_committee(&storage, &pk, &addr, "127.0.0.1:0", leader_round, false).unwrap();
         let members: Vec<_> = rpc
             .authorities()
             .iter()
@@ -6809,6 +6881,7 @@ mod b1_epoch_restart_repro {
             &keys[0].2,
             "127.0.0.1:0",
             leader_round,
+            false,
         )
         .unwrap();
         assert_eq!(rpc_committee.epoch(), epoch);
@@ -6843,6 +6916,7 @@ mod b1_epoch_restart_repro {
             &keys[0].2,
             "127.0.0.1:0",
             leader_round,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -6895,6 +6969,7 @@ mod b1_epoch_restart_repro {
             &addr,
             "127.0.0.1:0",
             startup_round_from_storage(&storage),
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -6916,6 +6991,7 @@ mod b1_epoch_restart_repro {
             &addr,
             "127.0.0.1:0",
             startup_round_from_storage(&restarted),
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -6961,7 +7037,8 @@ mod b1_epoch_restart_repro {
         .expect("validator signs");
 
         let committee =
-            build_committee_for_round(&storage, &pk, &addr, "127.0.0.1:0", boundary_round).unwrap();
+            build_committee_for_round(&storage, &pk, &addr, "127.0.0.1:0", boundary_round, false)
+                .unwrap();
         assert_eq!(committee.epoch(), 1);
         assert_eq!(
             committee_hash_of(&committee),
@@ -7034,6 +7111,7 @@ mod b1_epoch_restart_repro {
             &keys[0].2,
             "127.0.0.1:0",
             leader_round,
+            false,
         )
         .unwrap();
         assert_eq!(committee.epoch(), epoch);
@@ -7129,6 +7207,7 @@ mod b1_epoch_restart_repro {
             &vs[0].addr,
             "127.0.0.1:0",
             leader_round,
+            false,
         )
         .unwrap();
         assert_eq!(before.epoch(), epoch);
@@ -7166,6 +7245,7 @@ mod b1_epoch_restart_repro {
             &vs[0].addr,
             "127.0.0.1:0",
             leader_round,
+            false,
         )
         .unwrap();
         assert_eq!(restarted.epoch(), epoch);
@@ -7322,12 +7402,24 @@ mod b1_epoch_restart_repro {
         std::fs::copy(dir.path().join("leader-a.redb"), &b_path).unwrap();
         let b = Storage::new(b_path).unwrap();
 
-        let committee_a =
-            build_committee_for_round(&a, &vs[0].pk, &vs[0].addr, "127.0.0.1:0", leader_round)
-                .unwrap();
-        let committee_b =
-            build_committee_for_round(&b, &vs[0].pk, &vs[0].addr, "127.0.0.1:0", leader_round)
-                .unwrap();
+        let committee_a = build_committee_for_round(
+            &a,
+            &vs[0].pk,
+            &vs[0].addr,
+            "127.0.0.1:0",
+            leader_round,
+            false,
+        )
+        .unwrap();
+        let committee_b = build_committee_for_round(
+            &b,
+            &vs[0].pk,
+            &vs[0].addr,
+            "127.0.0.1:0",
+            leader_round,
+            false,
+        )
+        .unwrap();
 
         // Same VRF author set => same leader choice.
         let vrf_a: Vec<_> = committee_a
@@ -7394,6 +7486,7 @@ mod b1_epoch_restart_repro {
             &keys[0].2,
             "127.0.0.1:0",
             leader_round,
+            false,
         )
         .unwrap();
         assert!(live
@@ -7431,6 +7524,7 @@ mod b1_epoch_restart_repro {
             &keys[0].2,
             "127.0.0.1:0",
             startup_round_from_storage(&storage),
+            false,
         )
         .unwrap();
         assert_eq!(boot.epoch(), live.epoch());
@@ -7649,9 +7743,15 @@ mod b1_epoch_restart_repro {
         let epoch = kovanica_types::epoch_for_round(leader_round);
         // Upgraded node: has old-format snapshot
         let old_storage = Storage::new(&old_dir).unwrap();
-        let old_committee =
-            build_committee_for_round(&old_storage, &pk1, &keys[0].0, "127.0.0.1:0", leader_round)
-                .unwrap();
+        let old_committee = build_committee_for_round(
+            &old_storage,
+            &pk1,
+            &keys[0].0,
+            "127.0.0.1:0",
+            leader_round,
+            false,
+        )
+        .unwrap();
         // Fresh node: no snapshot, builds from live staking (has VRF keys)
         let fresh_storage = Storage::new(&fresh_dir).unwrap();
         let fresh_committee = build_committee_for_round(
@@ -7660,6 +7760,7 @@ mod b1_epoch_restart_repro {
             &keys[0].0,
             "127.0.0.1:0",
             leader_round,
+            false,
         )
         .unwrap();
 
@@ -7790,7 +7891,8 @@ mod b1_epoch_restart_repro {
             w.commit().unwrap();
             if old_snap {
                 let live =
-                    build_committee(&storage, &keys[0].1, &keys[0].2, "x", leader_round).unwrap();
+                    build_committee(&storage, &keys[0].1, &keys[0].2, "x", leader_round, false)
+                        .unwrap();
                 let old: Vec<kovanica_types::SealCommitteeMember> = live
                     .authorities()
                     .iter()
@@ -7802,9 +7904,11 @@ mod b1_epoch_restart_repro {
         };
         let up = mk("up.redb", true);
         let fresh = mk("fresh.redb", false);
-        let cu = build_committee_for_round(&up, &keys[0].1, &keys[0].2, "x", leader_round).unwrap();
+        let cu = build_committee_for_round(&up, &keys[0].1, &keys[0].2, "x", leader_round, false)
+            .unwrap();
         let cf =
-            build_committee_for_round(&fresh, &keys[0].1, &keys[0].2, "x", leader_round).unwrap();
+            build_committee_for_round(&fresh, &keys[0].1, &keys[0].2, "x", leader_round, false)
+                .unwrap();
         let vu = cu
             .authorities()
             .iter()
@@ -7913,8 +8017,14 @@ mod b1_epoch_restart_repro {
             pr.to_hex(),
             truth == pr
         );
-        let r =
-            build_committee_for_round(&storage, &PublicKey([10; 32]), &Address([10; 32]), "x", 5);
+        let r = build_committee_for_round(
+            &storage,
+            &PublicKey([10; 32]),
+            &Address([10; 32]),
+            "x",
+            5,
+            false,
+        );
         println!(
             "JARVIS build_committee_for_round on same row: {:?}",
             r.as_ref().map(|c| c.size()).map_err(|e| e.to_string())
