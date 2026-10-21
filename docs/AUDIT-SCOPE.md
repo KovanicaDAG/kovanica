@@ -37,6 +37,59 @@ This document defines the scope for an external security audit covering consensu
 - Skip registration persists in decided map with `LeaderStatus::Skip`
 - `mark_decided_and_commit_leader` atomicity (both or neither on crash)
 
+#### 2.1.1 KNOWN CRITICAL FINDING — committed-chain fork via node-local skip (PRO-35)
+
+**This is a pre-existing safety defect in the current tree, not a hypothetical. It
+must be treated as the top audit item and it blocks the VRF C1 work (PRO-7).**
+
+`crates/kovanica-consensus/src/committer.rs` can mark a leader round as **Skip**
+based on **node-local** information, while another node **commits** that same
+round. Because the committed height is a plain counter, the two nodes then
+assign the **same height to different blocks** and derive **different state
+roots**.
+
+Three independent paths reach the fork:
+
+1. **Local timeout skip (routine).** `register_skip` (`:238-259`) records
+   `LeaderStatus::Skip` with `block_hash: None`. The walk guard
+   (`:507-514`) then `continue`s over that round **without** `mark_decided`, so
+   the round is silently dropped from the committed sequence while the cursor
+   stays put. Node B (missed the L-6 block) commits **L-9** at the height where
+   node A commits **L-6**. This happens *every time a node misses a leader
+   block* — it is not a corner case.
+2. **Cross-wave skip (the normal path).** The `has_later_commit` branch
+   (`:544-561`) marks an earlier round Skip when a *later* round has a commit.
+   Votes for round `r` are cast in round `r+1`, so the L-3 certificate exists in
+   wall-clock time *before* the L-6 certificate — nodes routinely observe a
+   later certificate first.
+3. **Missing-block conflation.** `has_path` (`:109-127`) cannot distinguish
+   "block absent locally" from "block present but not causally connected", so
+   `try_indirect_decide` (`:72-106`) can return Skip. With `WAVE_LENGTH = 3`
+   there is exactly one leader per wave, so this path always returns
+   `Undecided` and `decide_earlier_in_wave` (`:411-450`) is effectively dead
+   code — meaning **no skip path in the tree is safe**.
+
+**Why the height model makes it fatal:** `STATE_ROOT` is keyed by
+`committed_leader_height` (`crates/kovanica-storage/src/lib.rs:150`), a counter
+incremented once per committed leader
+(`crates/kovanica-storage/src/consensus_store.rs:257-267`). A skipped round
+consumes no height slot, and the two nodes' committed-leader *sequences*
+differ — so the per-leader subsidy minting and the epoch boundaries diverge as
+well. Even a per-block height would not be enough: the **set of committed
+leaders must be identical on every node**.
+
+**Known-safe direction (no protocol change):** a node-local skip is unsafe
+because it removes a round from the committed sequence; a node that merely
+**waits** is only *behind*, never forked, and commits the same leader once the
+block and quorum arrive. Removing the local timeout skip and the cross-wave
+skip therefore converts a fork into a stall. Restoring liveness (a crashed
+leader) requires a quorum-certified timeout certificate — a protocol change,
+feasible in the pending chain-4 reset.
+
+**Auditor asks:** confirm the three paths above, assess the fork's blast
+radius on the live chain, and review the chosen remedy (stall vs. timeout
+certificate) against the subsidy/epoch invariants in §2.5.
+
 ### 2.2 Mempool — `kovanica-mempool` (HIGH)
 
 | Area | Risk | Description |
@@ -132,6 +185,7 @@ This document defines the scope for an external security audit covering consensu
 
 | Rank | Area | Rationale |
 |------|------|-----------|
+| 0 | **Committed-chain fork via node-local skip** (§2.1.1, PRO-35) | Two honest nodes can commit *different* leader blocks at the *same* height ⇒ divergent state roots, divergent subsidy/epoch schedule. Pre-existing, routinely reachable, blocks PRO-7. |
 | 1 | **Consensus engine commit logic** (`engine.rs` `try_commit_and_deliver`, `committer.rs`) | Safety/liveness of the entire chain; fork resolution, late votes, skip persistence |
 | 2 | **VRF leader election** (`mysticghost.rs`, `engine.rs` `scheduled_leader_for_round`) | Biasable leader selection → chain takeover; quorum threshold correctness |
 | 3 | **GHOSTDAG colouring** (`ghostdag_scoped.rs`) | k=3 correctness, mergeset bounds, previous-tip seeding |
