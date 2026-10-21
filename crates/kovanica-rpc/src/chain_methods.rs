@@ -20,7 +20,7 @@ use kovanica_types::{
     light_client::{LightClientCheckpoint, WaveCommitCertificate},
     merkle::{self, MerkleProof, MerkleStep},
     transaction::{Transaction, TransactionKind},
-    Address, CommitSeal, LeaderHeader,
+    Address, CommitSeal, LeaderHeader, WAVE_LENGTH,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -839,7 +839,41 @@ pub async fn handle_estimate_fee(_params: Value, state: RpcState) -> Result<Valu
 // Consensus methods
 // ============================================================================
 
+/// Returns the next `count` LEADER rounds strictly after `anchor_round`.
+///
+/// Leader rounds are the multiples of `WAVE_LENGTH`. `anchor_round` is the last
+/// already-decided round (any round, not just a leader round); the first
+/// returned round is the first leader round strictly greater than it.
+///
+/// All arithmetic is saturating so a near-`u64::MAX` anchor cannot panic.
+pub fn leader_schedule_rounds(anchor_round: u64, count: usize) -> Vec<u64> {
+    if count == 0 {
+        return Vec::new();
+    }
+    // The anchor's own leader slot is already behind us, so step to the
+    // following multiple of the wave length. `saturating_*` keeps this safe
+    // for anchors close to `u64::MAX`.
+    let first = (anchor_round / WAVE_LENGTH)
+        .saturating_add(1)
+        .saturating_mul(WAVE_LENGTH);
+    (0..count)
+        .map(|offset| first.saturating_add((offset as u64).saturating_mul(WAVE_LENGTH)))
+        .collect()
+}
+
 /// `kovanica_getLeaderSchedule(count)` — upcoming round leaders.
+///
+/// The schedule is the **round-robin** leader, i.e. [`CommitteeInfo::leader`],
+/// and is therefore **provisional**: it is *not* the canonical leader
+/// assignment and must not be treated as authoritative. Under VRF leader
+/// election (tracked as PRO-7) the real leader of round `L` is only
+/// determined from committed data at round `L-6`, so this method can never be
+/// exact for future rounds.
+///
+/// Only **leader rounds** are returned — the multiples of `WAVE_LENGTH` — and
+/// they start at the first leader round strictly after the highest already
+/// decided round. Each entry has the shape
+/// `{ "round", "leader_index", "leader_address" }`.
 pub async fn handle_get_leader_schedule(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
     let count = match args.first() {
@@ -852,20 +886,30 @@ pub async fn handle_get_leader_schedule(params: Value, state: RpcState) -> Resul
         )));
     }
 
-    let start = {
-        let txn = state.storage.begin_read().map_err(internal)?;
-        state
-            .storage
-            .consensus()
-            .get_committed_leader_height(&txn)
-            .map_err(internal)?
-            .saturating_add(1)
+    // Anchor on the highest already decided ROUND (not on the committed
+    // leader height, which counts committed leaders and is a different unit).
+    let anchor = {
+        let decided = state
+            .consensus_store
+            .get_decided_rounds(u64::MAX)
+            .map_err(internal)?;
+        match decided.iter().copied().max() {
+            Some(max) => max,
+            // Nothing decided yet: fall back to the local DAG tip round.
+            None => state
+                .consensus_store
+                .max_dag_round()
+                .map_err(internal)?
+                .unwrap_or(0),
+        }
     };
 
+    let rounds = leader_schedule_rounds(anchor, count as usize);
+
     let committee = committee_from_state(&state).await;
-    let schedule: Vec<Value> = (0..count)
-        .map(|offset| {
-            let round = start.saturating_add(offset);
+    let schedule: Vec<Value> = rounds
+        .into_iter()
+        .map(|round| {
             let leader_index = committee.leader(round);
             let leader_address = committee
                 .get_by_index(leader_index)
@@ -2297,5 +2341,72 @@ mod tests {
         assert!(got["peers"][1].get("reportedTipRound").is_none());
         // listenAddr should not be present
         assert!(got["peers"][0].get("listenAddr").is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // leader_schedule_rounds
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn leader_schedule_anchor_on_a_leader_round_returns_the_next_one() {
+        // 3 and 6 are leader rounds (multiples of WAVE_LENGTH == 3).
+        assert_eq!(leader_schedule_rounds(3, 1), vec![6]);
+        assert_eq!(leader_schedule_rounds(6, 1), vec![9]);
+        assert_eq!(
+            leader_schedule_rounds(WAVE_LENGTH * 10, 1),
+            vec![WAVE_LENGTH * 11]
+        );
+    }
+
+    #[test]
+    fn leader_schedule_anchor_on_a_non_leader_round_returns_the_next_leader_round() {
+        // Rounds 4 and 5 are vote/decide rounds, not leader rounds.
+        assert_eq!(leader_schedule_rounds(4, 1), vec![6]);
+        assert_eq!(leader_schedule_rounds(5, 1), vec![6]);
+        // The anchor itself must never be returned.
+        assert!(leader_schedule_rounds(4, 8)
+            .iter()
+            .all(|r| *r % WAVE_LENGTH == 0));
+        assert!(leader_schedule_rounds(4, 8).iter().all(|r| *r > 4));
+    }
+
+    #[test]
+    fn leader_schedule_anchor_zero_starts_at_the_first_leader_round() {
+        // Round 0 is already past, so the first leader round is WAVE_LENGTH.
+        assert_eq!(leader_schedule_rounds(0, 1), vec![WAVE_LENGTH]);
+        assert_eq!(
+            leader_schedule_rounds(0, 3),
+            vec![WAVE_LENGTH, WAVE_LENGTH * 2, WAVE_LENGTH * 3]
+        );
+    }
+
+    #[test]
+    fn leader_schedule_count_zero_is_empty() {
+        assert!(leader_schedule_rounds(0, 0).is_empty());
+        assert!(leader_schedule_rounds(42, 0).is_empty());
+        assert!(leader_schedule_rounds(u64::MAX, 0).is_empty());
+    }
+
+    #[test]
+    fn leader_schedule_entries_are_spaced_by_one_wave_length() {
+        let rounds = leader_schedule_rounds(7, 10);
+        assert_eq!(rounds.len(), 10);
+        for pair in rounds.windows(2) {
+            assert_eq!(pair[1] - pair[0], WAVE_LENGTH);
+        }
+        // Every entry is a leader round and strictly after the anchor.
+        assert!(rounds.iter().all(|r| *r % WAVE_LENGTH == 0));
+        assert!(rounds.iter().all(|r| *r > 7));
+    }
+
+    #[test]
+    fn leader_schedule_saturates_instead_of_panicking_near_u64_max() {
+        let rounds = leader_schedule_rounds(u64::MAX, 4);
+        assert_eq!(rounds.len(), 4);
+        assert!(rounds.iter().all(|r| *r >= u64::MAX - WAVE_LENGTH));
+        // A round that is itself a multiple of WAVE_LENGTH must not overflow.
+        let rounds = leader_schedule_rounds(u64::MAX - 1, 3);
+        assert_eq!(rounds.len(), 3);
+        assert!(rounds.windows(2).all(|p| p[1] >= p[0]));
     }
 }
