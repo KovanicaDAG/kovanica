@@ -58,7 +58,7 @@ static MYSTICGHOST_PRUNED_BLOCKS_TOTAL: Lazy<Counter> = Lazy::new(|| {
     let counter = Counter::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
-        "mysticghost_pruned_blocks_total",
+        "mysticghost_pruned_blocks",
         "Total number of DAG blocks removed by wave pruning after commit",
         counter.clone(),
     );
@@ -70,7 +70,7 @@ static MYSTICGHOST_PRUNED_WAVES_TOTAL: Lazy<Counter> = Lazy::new(|| {
     let counter = Counter::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
-        "mysticghost_pruned_waves_total",
+        "mysticghost_pruned_waves",
         "Total number of waves pruned (all blocks in old waves)",
         counter.clone(),
     );
@@ -253,7 +253,7 @@ static RPC_REQUESTS_TOTAL: Lazy<Family<RpcMethodLabels, Counter>> = Lazy::new(||
     let family = Family::<RpcMethodLabels, Counter>::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
-        "rpc_requests_total",
+        "rpc_requests",
         "Total number of JSON-RPC requests handled, by method",
         family.clone(),
     );
@@ -265,7 +265,7 @@ static RPC_ERRORS_TOTAL: Lazy<Family<RpcMethodLabels, Counter>> = Lazy::new(|| {
     let family = Family::<RpcMethodLabels, Counter>::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
-        "rpc_errors_total",
+        "rpc_errors",
         "Total number of JSON-RPC requests answered with an error, by method",
         family.clone(),
     );
@@ -283,7 +283,7 @@ static RPC_REQUEST_DURATION_SECONDS: Lazy<Family<RpcMethodLabels, Histogram>> = 
     });
     let mut registry = REGISTRY.lock().unwrap();
     registry.register_with_unit(
-        "rpc_request_duration_seconds",
+        "rpc_request_duration",
         "JSON-RPC request latency in seconds, by method",
         Unit::Seconds,
         family.clone(),
@@ -330,8 +330,20 @@ pub fn rpc_error_count(method: &'static str) -> u64 {
 mod tests {
     use super::*;
 
+    /// The registry is process-global, but tests run on parallel threads: the
+    /// tests that assert on a concrete gauge value must not overlap, or one
+    /// test overwrites another's value between the write and the scrape.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        // A panicking test poisons the lock; the value assertions are still
+        // meaningful afterwards.
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn test_metrics_registration() {
+        let _guard = serial();
         // Just verify metrics can be registered and used
         record_mergeset_size(100);
         record_colouring_duration_ms(10.5, "success");
@@ -345,6 +357,7 @@ mod tests {
     /// leader round by the commit path.
     #[test]
     fn block_height_and_current_round_are_independent() {
+        let _guard = serial();
         record_current_round(41);
         record_block_height(13);
 
@@ -359,10 +372,220 @@ mod tests {
         );
     }
 
+    /// Pull the `expr:` values out of the alert rules (including `expr: |`
+    /// block scalars).
+    fn alert_expressions(yaml: &str) -> Vec<String> {
+        let lines: Vec<&str> = yaml.lines().collect();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("expr:") {
+                let rest = rest.trim();
+                if rest.is_empty() || rest == "|" || rest == ">" {
+                    let base_indent = line.len() - trimmed.len();
+                    i += 1;
+                    let mut block = String::new();
+                    while i < lines.len() {
+                        let cur = lines[i];
+                        let cur_trimmed = cur.trim();
+                        if cur_trimmed.is_empty() {
+                            i += 1;
+                            continue;
+                        }
+                        let indent = cur.len() - cur.trim_start().len();
+                        if indent <= base_indent {
+                            break;
+                        }
+                        block.push_str(cur_trimmed);
+                        block.push(' ');
+                        i += 1;
+                    }
+                    out.push(block);
+                    continue;
+                }
+                out.push(rest.to_string());
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// Identifiers in a PromQL expression, ignoring quoted label values and
+    /// unit suffixes (`5m` must not yield `m`).
+    fn promql_identifiers(expr: &str) -> Vec<String> {
+        // Drop quoted strings (label values), keeping a separator.
+        let mut cleaned = String::new();
+        let mut in_quotes = false;
+        for ch in expr.chars() {
+            if ch == '"' {
+                in_quotes = !in_quotes;
+                cleaned.push(' ');
+                continue;
+            }
+            if !in_quotes {
+                cleaned.push(ch);
+            }
+        }
+
+        let mut out = Vec::new();
+        let mut current = String::new();
+        let mut prev_alnum = false;
+        for ch in cleaned.chars() {
+            let is_alnum = ch.is_ascii_alphanumeric() || ch == '_';
+            let starts = (ch.is_ascii_alphabetic() || ch == '_') && !prev_alnum;
+            if starts {
+                current.clear();
+                current.push(ch);
+            } else if is_alnum && !current.is_empty() {
+                current.push(ch);
+            } else if !current.is_empty() {
+                out.push(std::mem::take(&mut current));
+            }
+            prev_alnum = is_alnum;
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+        out
+    }
+
+    /// Every series the shipped Prometheus rules alert on must exist in this
+    /// registry.
+    ///
+    /// This is the check that was missing: `rss_proxy` and `commit_latency` were
+    /// registered but never updated, so `KovanicaMemoryHigh` and
+    /// `KovanicaCommitLatencyHigh` could never fire, and nothing noticed because
+    /// each side was valid on its own.
+    #[test]
+    fn alerts_reference_registered_metrics() {
+        let _guard = serial();
+        // Force every lazily-registered family into the registry.
+        record_peer_count(0);
+        record_mempool_size(0);
+        record_commit_latency(0.0);
+        record_rss_proxy(0);
+        record_block_height(0);
+        record_current_round(0);
+        record_mergeset_size(0);
+        record_mergeset_size_metric(0);
+        record_colouring_duration_ms(0.0, "fallback");
+        record_pruned_blocks(0);
+        record_pruned_waves(0);
+        observe_rpc_request("other", 0.0);
+        record_rpc_error("other");
+
+        let text = metrics_text();
+        let mut names: Vec<String> = text
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+            .filter_map(|line| {
+                let series = line.split_whitespace().next()?;
+                // Drop the label set: we compare family names.
+                Some(series.split('{').next().unwrap_or(series).to_string())
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        assert!(
+            names.iter().any(|n| n == "block_height"),
+            "registry did not populate:\n{text}"
+        );
+        // prometheus_client appends `_total`/the unit itself; registering a name
+        // that already carries it exported `…_total_total` and
+        // `…_seconds_seconds`, which no query would match.
+        for name in &names {
+            assert!(
+                !name.ends_with("_total_total") && !name.ends_with("_seconds_seconds"),
+                "metric name has a doubled suffix: {name}"
+            );
+        }
+        // The encoder appends `_total` to counters and `_bucket`/`_sum`/`_count`
+        // to histograms, so those exact suffixes are accepted — an arbitrary
+        // prefix is not, or a rename would slip through.
+        let registered = |name: &str| {
+            names.iter().any(|n| {
+                n == name
+                    || ["_total", "_bucket", "_sum", "_count"]
+                        .iter()
+                        .any(|suffix| n.strip_prefix(name) == Some(*suffix))
+            })
+        };
+
+        for expected in [
+            "rpc_requests_total",
+            "rpc_errors_total",
+            "rpc_request_duration_seconds_bucket",
+            "mysticghost_pruned_blocks_total",
+            "mysticghost_pruned_waves_total",
+        ] {
+            assert!(
+                registered(expected),
+                "expected exported series {expected}; registered: {names:?}"
+            );
+        }
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../ops/prometheus/alerts.yml"
+        );
+        let yaml =
+            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+        let exprs = alert_expressions(&yaml);
+        assert!(!exprs.is_empty(), "no expr: values parsed from {path}");
+
+        // PromQL keywords/functions and Prometheus' own series, not ours.
+        const NOT_OURS: &[&str] = &[
+            "and",
+            "avg",
+            "by",
+            "changes",
+            "count",
+            "count_values",
+            "delta",
+            "group_left",
+            "group_right",
+            "ignoring",
+            "increase",
+            "instance",
+            "job",
+            "max",
+            "min",
+            "on",
+            "or",
+            "rate",
+            "result",
+            "severity",
+            "sum",
+            "unless",
+            "up",
+            "without",
+        ];
+
+        let mut missing: Vec<String> = Vec::new();
+        for expr in &exprs {
+            for token in promql_identifiers(expr) {
+                if NOT_OURS.contains(&token.as_str()) || registered(&token) {
+                    continue;
+                }
+                missing.push(token);
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(
+            missing.is_empty(),
+            "alerts.yml alerts on series this registry never exports: {missing:?}\n\
+             registered: {names:?}"
+        );
+    }
+
     /// The alert rules read `rss_proxy` and `commit_latency`; a recorder that is
     /// never called leaves the series at 0 and the alert can never fire.
     #[test]
     fn alert_backed_metrics_are_exported() {
+        let _guard = serial();
         record_rss_proxy(1234);
         record_commit_latency(321.0);
         record_peer_count(4);
