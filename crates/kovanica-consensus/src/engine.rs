@@ -4,7 +4,9 @@
 //! Coordinates round advancement, leader selection, block production,
 //! and commit decisions using Mysticeti-style DAG consensus.
 
-use crate::metrics::{record_block_height, record_commit_latency, record_mergeset_size_metric};
+use crate::metrics::{
+    record_block_height, record_commit_latency, record_current_round, record_mergeset_size_metric,
+};
 use crate::types::{CommitteeInfo, LeaderInfo, LeaderStatus};
 use crate::{
     committer::UniversalCommitter, is_leader_round, linearizer::Linearizer, offset_in_wave,
@@ -630,8 +632,10 @@ where
             // Advance to next round
             *self.current_round.write() = next_round;
 
-            // Record current round metric
-            record_block_height(next_round as i64);
+            // Record the round on its own gauge. Writing it into `block_height`
+            // made that gauge fall back to the committed leader round on every
+            // commit, because three rounds pass per committed leader.
+            record_current_round(next_round as i64);
 
             // Broadcast round change to subscribers
             if let Some(tx) = self.round_sender.read().as_ref() {
@@ -1157,23 +1161,28 @@ where
         // of commit attempts must use it so a later decision cannot be marked
         // or delivered ahead of an earlier pending decision.
         let _guard = self.commit_trigger_lock.lock();
+        let commit_started = Instant::now();
         let Some(subdag) = self
             .committer
             .try_commit_and_mark_durable(self.dag_store.as_ref())?
         else {
             return Ok(());
         };
+        let commit_elapsed_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
 
         // The committer persists before publication. On restart, the node
         // reconstructs committed sub-DAGs from the decided-round index and
         // execution deduplicates by leader digest in the state database.
         info!("Committed leader at round {}", subdag.leader_round);
 
-        // Record metrics for committed leader
-        let committed_height = subdag.leader_round; // proxy for height
-        record_block_height(committed_height as i64);
+        // Record metrics for committed leader. `block_height` is the committed
+        // leader height ("height" in this DAG is the leader round), never the
+        // local round.
+        record_block_height(subdag.leader_round as i64);
         record_mergeset_size_metric(subdag.blocks.len());
-        record_commit_latency(0.0); // placeholder; actual latency measured in execution
+        // Real wall-clock cost of the commit work (colouring + durable write),
+        // not a placeholder: the 5 s alert threshold has to be able to fire.
+        record_commit_latency(commit_elapsed_ms);
 
         if let Some(sender) = self.commit_sender.read().as_ref() {
             if sender.send(subdag).is_err() {

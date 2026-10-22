@@ -41,7 +41,7 @@ use zeroize::Zeroizing;
 use config::NodeConfig;
 
 use kovanica_consensus::engine::{BlockManagerTrait, DagStoreTrait};
-use kovanica_consensus::metrics::{record_mempool_size, record_peer_count};
+use kovanica_consensus::metrics::{record_mempool_size, record_peer_count, record_rss_proxy};
 use kovanica_consensus::{AuthorityInfo, CommitteeInfo, ConsensusConfig, ConsensusEngine, Vote};
 use kovanica_dag::{BlockManager, BlockManagerError, DagStore, DagStoreError};
 use kovanica_execution::ExecutionContext;
@@ -969,6 +969,14 @@ where
                     // Update peer count
                     let peer_count_val = peer_count_for_metrics.load(Ordering::Relaxed) as i64;
                     record_peer_count(peer_count_val);
+
+                    // Update RSS. `record_rss_proxy` existed but was never
+                    // called, so `rss_proxy` stayed at 0: the memory alerts
+                    // could not fire and the soak collector wrote an empty
+                    // column.
+                    if let Some(rss_mb) = read_rss_mb() {
+                        record_rss_proxy(rss_mb);
+                    }
                 }
                 _ = shutdown_for_metrics.changed() => {
                     if *shutdown_for_metrics.borrow() {
@@ -1310,6 +1318,56 @@ fn run_retention_pass(
     }
 
     Ok(summary.join(" "))
+}
+
+/// Resident set size of this process in MB.
+///
+/// Read from `/proc/self/status` (`VmRSS`, already in kB) rather than
+/// `/proc/self/statm`, whose unit is the page size — 4 KiB on x86_64 but 16 KiB
+/// on the ARM64 hosts, which would silently under-report by 4x there.
+///
+/// Returns `None` off Linux; the gauge then simply keeps its previous value.
+#[cfg(target_os = "linux")]
+fn read_rss_mb() -> Option<i64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    parse_vmrss_kb(&status).map(|kb| (kb / 1024) as i64)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_rss_mb() -> Option<i64> {
+    None
+}
+
+/// Extract the `VmRSS` value (kB) from `/proc/self/status` contents.
+fn parse_vmrss_kb(status: &str) -> Option<u64> {
+    status.lines().find_map(|line| {
+        let rest = line.strip_prefix("VmRSS:")?;
+        rest.split_whitespace().next()?.parse::<u64>().ok()
+    })
+}
+
+#[cfg(test)]
+mod rss_metric_tests {
+    use super::*;
+
+    #[test]
+    fn parses_vmrss_from_status_lines() {
+        let sample = "Name:\tkovanica-node\nVmPeak:\t  900000 kB\nVmRSS:\t  123456 kB\n";
+        assert_eq!(parse_vmrss_kb(sample), Some(123_456));
+    }
+
+    #[test]
+    fn missing_vmrss_is_none() {
+        assert_eq!(parse_vmrss_kb("Name:\tkovanica-node\n"), None);
+        assert_eq!(parse_vmrss_kb("VmRSS:\t not-a-number kB\n"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn current_process_has_a_positive_rss() {
+        let rss = read_rss_mb().expect("Linux always exposes /proc/self/status");
+        assert!(rss > 0, "test binary should use more than 1 MB, got {rss}");
+    }
 }
 
 /// Steady-state active validator bounds are

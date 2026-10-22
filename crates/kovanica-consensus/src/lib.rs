@@ -32,9 +32,8 @@ pub use kovanica_types::Vote;
 pub use linearizer::Linearizer;
 pub use metrics::{
     metrics_text, record_block_height, record_colouring_duration_ms, record_commit_latency,
-    record_mempool_size, record_mergeset_size, record_mergeset_size_metric, record_peer_count,
-    record_pruned_blocks, record_pruned_waves, record_rss_proxy, registry,
-    update_dag_blocks_in_memory,
+    record_current_round, record_mempool_size, record_mergeset_size, record_mergeset_size_metric,
+    record_peer_count, record_pruned_blocks, record_pruned_waves, record_rss_proxy, registry,
 };
 pub use non_blue::{non_blue_refs, non_blue_transactions};
 pub use types::{

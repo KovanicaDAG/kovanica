@@ -115,13 +115,21 @@ Storage (redb / pruning / snapshots)
 
 ## Observability (Phase 21)
 
-### Done (Skeleton)
-- `kovanica-consensus/src/metrics.rs` — registry, `record_block_height`, `record_mergeset_size`, `record_rss_proxy`
+### Done
+- `kovanica-consensus/src/metrics.rs` — registry and recorders: `block_height`
+  (committed leader height), `current_round`, `peer_count`, `mempool_size`,
+  `commit_latency` (wall-clock commit work), `rss_proxy`, `mergeset_size`,
+  `mysticghost_*` (mergeset size, colouring duration, pruned blocks/waves),
+  `rpc_*` (per-method requests, errors, latency)
+- `GET /metrics` on the RPC listener, Prometheus text exposition
+- `ops/prometheus/alerts.yml` (alert rules) and
+  `ops/grafana/kovanica-overview.json` (dashboard)
 - `prometheus-client = 0.25` in workspace Cargo.toml
 
-### Minimal Next Steps
-- `/metrics` text exposition (HTTP TCP port, same as RPC or separate)
-- Grafana JSON dashboard (`ops/grafana/kovanica-overview.json`)
+### Notes
+- Metric series are process-global; `block_height` must never be fed the local
+  round (`current_round` exists for that) — the soak runner treats a
+  non-increasing `block_height` as a stall.
 - Alert rules YAML: `peer_drop`, `sync_stall`, `commit_lag`, `high_memory`
 - Structured logging (`tracing`) + optional `trace_id` per round
 

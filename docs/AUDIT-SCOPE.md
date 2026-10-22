@@ -216,7 +216,7 @@ would boot a genesis different from the one the operator configured.
 
 ## 5. Test Coverage Notes
 
-- Unit tests: 991 passing across workspace (2026-10-22)
+- Unit tests: 996 passing across workspace (2026-10-22)
 - Integration tests: `sustained_liveness_integration`, `multi_node_integration`, `late_join_integration`
 - Property tests: `proptest` in `kovanica-consensus` (wave arithmetic, committer properties)
 - Fuzzing: Block, vote, transaction, consensus fuzzers (cargo-fuzz)

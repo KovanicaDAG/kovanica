@@ -53,25 +53,13 @@ static MYSTICGHOST_COLOURING_DURATION_MS: Lazy<Family<MysticGhostLabels, Histogr
         family
     });
 
-/// Number of DAG blocks currently in memory/storage.
-static DAG_BLOCKS_IN_MEMORY: Lazy<Gauge> = Lazy::new(|| {
-    let gauge = Gauge::default();
-    let mut registry = REGISTRY.lock().unwrap();
-    registry.register(
-        "dag_blocks_in_memory",
-        "Current number of DAG blocks stored",
-        gauge.clone(),
-    );
-    gauge
-});
-
 /// Total number of non-blue blocks pruned.
 static MYSTICGHOST_PRUNED_BLOCKS_TOTAL: Lazy<Counter> = Lazy::new(|| {
     let counter = Counter::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
         "mysticghost_pruned_blocks_total",
-        "Total number of non-blue blocks pruned after commit",
+        "Total number of DAG blocks removed by wave pruning after commit",
         counter.clone(),
     );
     counter
@@ -176,9 +164,33 @@ static RSS_PROXY: Lazy<Gauge> = Lazy::new(|| {
     gauge
 });
 
+/// Current consensus round.
+///
+/// Separate from `block_height` on purpose: rounds advance every round interval
+/// (4 s) while a leader commits every wave (12 s), so writing the round into
+/// `block_height` made that gauge jump backwards on every commit.
+static CURRENT_ROUND: Lazy<Gauge> = Lazy::new(|| {
+    let gauge = Gauge::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "current_round",
+        "Current consensus round (advances every round interval)",
+        gauge.clone(),
+    );
+    gauge
+});
+
 /// Record block height.
+///
+/// This is the *committed leader* height. Do not feed it the local round number
+/// — use [`record_current_round`] for that.
 pub fn record_block_height(height: i64) {
     BLOCK_HEIGHT.set(height);
+}
+
+/// Record the current consensus round.
+pub fn record_current_round(round: i64) {
+    CURRENT_ROUND.set(round);
 }
 
 /// Record peer count.
@@ -218,11 +230,6 @@ pub fn metrics_text() -> String {
 pub fn metrics_text_stream(buffer: &mut String) {
     let reg = REGISTRY.lock().unwrap();
     let _ = encode(buffer, &reg);
-}
-
-/// Update DAG blocks in memory gauge.
-pub fn update_dag_blocks_in_memory(count: i64) {
-    DAG_BLOCKS_IN_MEMORY.set(count);
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +338,44 @@ mod tests {
         record_colouring_duration_ms(5.2, "fallback");
         record_pruned_blocks(50);
         record_pruned_waves(2);
-        update_dag_blocks_in_memory(1000);
+    }
+
+    /// `block_height` and `current_round` must be separate series. They used to
+    /// be the same gauge, fed the local round by the ticker and the committed
+    /// leader round by the commit path.
+    #[test]
+    fn block_height_and_current_round_are_independent() {
+        record_current_round(41);
+        record_block_height(13);
+
+        let text = metrics_text();
+        assert!(
+            text.contains("block_height 13"),
+            "block_height should be the committed height, got:\n{text}"
+        );
+        assert!(
+            text.contains("current_round 41"),
+            "current_round should be the local round, got:\n{text}"
+        );
+    }
+
+    /// The alert rules read `rss_proxy` and `commit_latency`; a recorder that is
+    /// never called leaves the series at 0 and the alert can never fire.
+    #[test]
+    fn alert_backed_metrics_are_exported() {
+        record_rss_proxy(1234);
+        record_commit_latency(321.0);
+        record_peer_count(4);
+        record_mempool_size(7);
+
+        let text = metrics_text();
+        for expected in [
+            "rss_proxy 1234",
+            "commit_latency 321",
+            "peer_count 4",
+            "mempool_size 7",
+        ] {
+            assert!(text.contains(expected), "missing {expected} in:\n{text}");
+        }
     }
 }

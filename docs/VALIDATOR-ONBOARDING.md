@@ -260,27 +260,35 @@ curl http://127.0.0.1:8545/health
 
 ```bash
 curl http://127.0.0.1:8545/metrics
-# Exposes: consensus_height, mempool_size, peer_count, block_commit_latency, etc.
+# Exposes: block_height, current_round, mempool_size, peer_count,
+# commit_latency, rss_proxy, mysticghost_*, rpc_*, etc.
 ```
+
+`block_height` is the **committed leader** height; `current_round` is the local
+round counter (three rounds pass per committed leader at the default 4 s round /
+12 s leader cadence). Use `block_height`, not `current_round`, to judge chain
+progress.
 
 ### 7.3 Grafana Dashboard
 
-Import `ops/monitoring/grafana-dashboard.json` for:
-- Consensus height & round
+Import `ops/grafana/kovanica-overview.json` for:
+- Committed height & current round
 - Mempool size & transaction throughput
 - Peer count & sync status
-- Block commit latency
-- Memory / CPU usage
+- Commit latency
+- Memory (RSS)
 
 ### 7.4 Key Metrics to Watch
 
+Thresholds match `ops/prometheus/alerts.yml`.
+
 | Metric | Healthy Range | Alert If |
 |--------|---------------|----------|
-| `consensus_height` | Increasing | Stalled > 5 min |
-| `peer_count` | ≥ 3 | < 3 for > 10 min |
-| `mempool_size` | < 10,000 | > 50,000 |
-| `block_commit_latency` | < 20s | > 60s |
-| `rss_memory_mb` | < 2000 | > 2800 (3G limit) |
+| `block_height` | Increasing | No increase for 5 min |
+| `peer_count` | ≥ 3 | < 3 for 2 min |
+| `mempool_size` | < 1,000 | > 1,000 for 5 min |
+| `commit_latency` | < 500 ms | > 5,000 ms for 3 min |
+| `rss_proxy` | < 3,000 MB | > 3,000 MB warn / > 3,500 MB critical |
 
 ---
 

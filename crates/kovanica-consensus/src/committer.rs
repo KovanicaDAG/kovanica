@@ -6,7 +6,7 @@
 
 use crate::engine::{DagStoreTrait, VoteRejection};
 use crate::ghostdag_scoped::ColouringResult;
-use crate::metrics::record_pruned_waves;
+use crate::metrics::{record_pruned_blocks, record_pruned_waves};
 use crate::mysticghost::{order_committed_wave, MysticGhostConfig, MysticGhostOrder};
 use crate::types::{CommitResult, CommitteeInfo, LeaderInfo, LeaderStatus};
 use kovanica_types::{block::StatementBlock, hash::Hash, AuthorityIndex, CommittedSubDag, Round};
@@ -592,6 +592,7 @@ impl UniversalCommitter {
             Ok(pruned) => {
                 if pruned > 0 {
                     info!("Pruned {} blocks from waves before {}", pruned, leader_wave);
+                    record_pruned_blocks(pruned);
                     record_pruned_waves(1); // One wave pruning event
                 }
             }
