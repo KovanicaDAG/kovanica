@@ -19,19 +19,35 @@ sudo mv gitleaks /usr/local/bin/
 ## How It Works
 
 ### Pre-commit Hook
-- Runs on **staged changes** (`gitleaks protect --staged`)
+- Runs on **staged changes** (`gitleaks git --staged`; falls back to the older
+  `protect --staged` on gitleaks < 8.19, so an older binary still works)
+- Scans the staged content, not the working tree: a secret is caught even if you
+  fixed the file after `git add`
 - Skips with a warning if gitleaks is not installed
 - Set `GITLEAKS_STRICT=1` to fail when gitleaks is missing
 - Config: `.gitleaks.toml`
+- Check it is active: `git config --get core.hooksPath` should print
+  `<repo>/scripts/hooks`. If it prints nothing, run
+  `./scripts/install-git-hooks.sh` — the hook is per-clone, so every fresh
+  checkout needs it once.
 
 ### CI Pipeline (`.github/workflows/secrets.yml`)
-- **Pull requests / pushes**: diff scan (fast)
-- **Nightly (02:00 UTC)**: full history scan (`--log-opts=--all-history`)
+- **Pull requests / pushes**: scans the checked-out history (`fetch-depth: 0`),
+  not just the diff
+- **Nightly (02:00 UTC)**: full history across every ref (`--log-opts=--all`)
 - Fails the build on any finding
+- Uses `gitleaks git`; `gitleaks detect` / `protect` are deprecated aliases.
+  `--log-opts` is passed straight to `git log`, so it must be a real git option —
+  `--all-history` is **not** one. With it, gitleaks reports a *partial scan* of
+  ~0 bytes and exits non-zero, i.e. it scans nothing; this was the state of the
+  nightly job until 2026-10-22.
 
 ### Configuration
 - `.gitleaks.toml` — extends gitleaks 8.24.3 default rules
-- `.gitleaksignore` — legacy ignore file (kept for reference, not used by gitleaks 8.x)
+- `.gitleaksignore` — fingerprint allowlist for known, revoked findings. gitleaks 8.x
+  **does** read it by default (`-i/--gitleaks-ignore-path` defaults to `.`), so entries
+  here suppress those exact fingerprints in git scans; the file path form covers
+  directory scans
 - Allowlisted test vectors in `.gitleaks.toml`:
   - `apps/console-desktop/src-tauri/src/wallet.rs` (encrypted test vector)
   - `apps/console-desktop/src-tauri/tests/fixtures/cross-keystore.json` (test fixture)
@@ -46,21 +62,36 @@ sudo mv gitleaks /usr/local/bin/
 ### Historical Secrets (Already in History)
 The following are already in commit history and are **revoked**:
 - 4 Ed25519 validator keys in `testnet/node-data/` and `mainnet/validators/` (PRO-28)
-- LINEAR_API_KEY and a monitor token in `opencode.json` (PRO-28)
+- `LINEAR_API_KEY` and `NOTION_TOKEN` in `opencode.json` at `e48b7530` (PRO-28);
+  the file now uses `${env:...}` placeholders
 
-These are **not** allowlisted — gitleaks will continue to flag them in full-history scans as a reminder that they exist in history. The tokens are revoked; the history rewrite to remove them is tracked in PRO-28 (requires Toni's explicit OK for force-push).
+The two `opencode.json` findings are pinned in `.gitleaksignore` by
+`commit:file:rule:line` fingerprint. They must be, otherwise the full-history
+scan can never pass and the check stops meaning anything: a permanently red job
+is one nobody reads, so a *new* leak would hide behind it. Fingerprints pin one
+exact finding, so any secret committed anywhere else still fails the scan
+(verified by putting a fresh key in a clone's history — exit 1).
+
+The history rewrite that would remove them from the git objects stays tracked
+in PRO-28 and needs an explicit force-push decision. When it lands, delete those
+fingerprints.
 
 ## Local Scans
 
 ```bash
-# Scan current working directory (fast)
-gitleaks dir --config .gitleaks.toml --redact
+# Scan specific source paths (NOT the repo root: `dir` ignores .gitignore, so a
+# root scan walks target/ and node_modules/ — 8.5 GB and ~100 s in this repo —
+# and flags your local, correctly-untracked .env)
+gitleaks dir --config .gitleaks.toml --redact --max-target-megabytes 2 crates apps docs
 
-# Scan full git history
-gitleaks detect --config .gitleaks.toml --log-opts="--all-history" --redact
+# Scan full git history (every ref)
+gitleaks git --config .gitleaks.toml --log-opts=--all --redact
+
+# Scan only what is staged (what the pre-commit hook runs)
+gitleaks git --staged --config .gitleaks.toml --redact
 
 # Scan with verbose output
-gitleaks detect --config .gitleaks.toml --verbose
+gitleaks git --config .gitleaks.toml --verbose
 ```
 
 ## Version Pinning
