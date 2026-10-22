@@ -181,3 +181,64 @@ fn check_config_accepts_funded_accounts_on_testnet() {
         stderr(&out)
     );
 }
+
+/// A mainnet genesis must declare a viable committee (15..=20). A ceremony file
+/// with three validators is a testnet-shaped genesis and must be refused.
+#[test]
+fn check_config_rejects_too_few_genesis_validators_on_mainnet() {
+    let (dir, path) = config_file(1);
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).expect("create data dir");
+    std::fs::write(
+        data.join("genesis_validators.toml"),
+        format!(
+            "chain_id = 1\n\n{}",
+            (1..=3)
+                .map(|i| format!(
+                    "[[validator]]\naddress = \"{i:02x}{}\"\nstake = 50000000000000\n\n",
+                    "00".repeat(31)
+                ))
+                .collect::<String>()
+        ),
+    )
+    .expect("write genesis validators");
+
+    let out = check_config(&path, &[]);
+    assert!(
+        !out.status.success(),
+        "chain 1 with 3 genesis validators must fail the config check"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("has 3 validators") && err.contains("15..=20"),
+        "the error must state the count and the bounds, got: {err}"
+    );
+}
+
+/// The same set is fine on a testnet, which runs on a handful of nodes.
+#[test]
+fn check_config_accepts_few_genesis_validators_on_testnet() {
+    let (dir, path) = config_file(4);
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).expect("create data dir");
+    std::fs::write(
+        data.join("genesis_validators.toml"),
+        format!(
+            "chain_id = 4\n\n{}",
+            (1..=3)
+                .map(|i| format!(
+                    "[[validator]]\naddress = \"{i:02x}{}\"\nstake = 50000000000000\n\n",
+                    "00".repeat(31)
+                ))
+                .collect::<String>()
+        ),
+    )
+    .expect("write genesis validators");
+
+    let out = check_config(&path, &[]);
+    assert!(
+        out.status.success(),
+        "chain 4 must accept a 3-validator genesis, stderr: {}",
+        stderr(&out)
+    );
+}

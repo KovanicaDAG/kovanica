@@ -187,9 +187,18 @@ fn run_check_config(path: &str) -> Result<()> {
         )
     })?;
     // Genesis-file policy that does not depend on booting the node: a mainnet
-    // data dir must not contain funded_accounts.toml. Reporting it here lets an
-    // operator catch it before the node runs.
+    // data dir must not contain funded_accounts.toml, and a mainnet genesis must
+    // declare a viable validator set. Reporting both here lets an operator catch
+    // the problem before the node runs.
     ensure_funded_accounts_allowed(&config)?;
+    // Only when a ceremony file is actually declared: a mainnet data dir of an
+    // already-initialised node has no genesis files, and that is not an error.
+    // The authoritative check runs in `init_genesis`.
+    if config.chain_id == kovanica_types::signing::chain_id::MAINNET {
+        if let Some(count) = declared_genesis_validator_count(&config)? {
+            ensure_mainnet_genesis_validator_count(config.chain_id, count)?;
+        }
+    }
     println!(
         "config OK: source={} chain_id={} data_dir={} listen_addr={} rpc={} round_duration_ms={} max_peers={} run_validator={}",
         path,
@@ -1303,6 +1312,81 @@ fn run_retention_pass(
     Ok(summary.join(" "))
 }
 
+/// Steady-state active validator bounds are
+/// `MIN_ACTIVE_VALIDATORS ..= MAX_ACTIVE_VALIDATORS` (15..=21), but a *genesis*
+/// set is additionally bounded by money: every genesis validator locks
+/// `MIN_VALIDATOR_STAKE` out of `GENESIS_VALIDATOR_ALLOCATION`, so at most 20
+/// can be funded at genesis. 21 is reachable later through staking, not at the
+/// ceremony.
+///
+/// Returns `(min, max)` for a mainnet genesis set.
+fn mainnet_genesis_validator_bounds() -> (usize, usize) {
+    (
+        kovanica_staking::MIN_ACTIVE_VALIDATORS as usize,
+        (kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::MIN_VALIDATOR_STAKE)
+            as usize,
+    )
+}
+
+/// Mainnet genesis must start with a committee that can actually reach quorum.
+///
+/// Below `MIN_ACTIVE_VALIDATORS` the chain launches with a committee smaller
+/// than the protocol's own floor, and above the allocation-bound maximum the
+/// genesis split cannot fund every stake. Both are ceremony mistakes that are
+/// irreversible once genesis is written, so they are refused up front. Other
+/// chains are unaffected: testnet and local runs legitimately use 1–4 nodes.
+fn ensure_mainnet_genesis_validator_count(chain_id: u64, count: usize) -> Result<()> {
+    if chain_id != kovanica_types::signing::chain_id::MAINNET {
+        return Ok(());
+    }
+    let (min, max) = mainnet_genesis_validator_bounds();
+    if count < min || count > max {
+        anyhow::bail!(
+            "mainnet genesis has {count} validators but must have {min}..={max}: the active \
+             committee floor is {min}, and {max} is the most that GENESIS_VALIDATOR_ALLOCATION \
+             can fund at the {}-KUNA minimum stake. Fix the genesis validator set before writing \
+             genesis",
+            kovanica_staking::MIN_VALIDATOR_STAKE / kovanica_staking::ONE_KUNA,
+        );
+    }
+    Ok(())
+}
+
+/// Count the genesis validators declared by the ceremony files, deduplicated by
+/// address *string* (no key parsing): `--check-config` only needs a pre-flight
+/// sanity number, and the authoritative check runs in `init_genesis` over
+/// parsed addresses. Returns `None` when neither file exists.
+fn declared_genesis_validator_count(config: &NodeConfig) -> Result<Option<usize>> {
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut any = false;
+
+    let toml_path = config.data_dir.join("genesis_validators.toml");
+    if toml_path.exists() {
+        let text = std::fs::read_to_string(&toml_path)
+            .with_context(|| format!("reading {}", toml_path.display()))?;
+        let parsed: GenesisValidatorsFile =
+            toml::from_str(&text).with_context(|| format!("parsing {}", toml_path.display()))?;
+        any = true;
+        for v in parsed.validator {
+            seen.insert(v.address.trim().to_ascii_lowercase());
+        }
+    }
+
+    let json_path = config.data_dir.join("validators.json");
+    if json_path.exists() {
+        let text = std::fs::read_to_string(&json_path)
+            .with_context(|| format!("reading {}", json_path.display()))?;
+        let parsed: Vec<GenesisValidatorInput> = serde_json::from_str(&text)
+            .with_context(|| format!("parsing {}", json_path.display()))?;
+        any = true;
+        for v in parsed {
+            seen.insert(v.address.trim().to_ascii_lowercase());
+        }
+    }
+
+    Ok(any.then_some(seen.len()))
+}
+
 /// Whether `data_dir/funded_accounts.toml` may be applied on `chain_id`.
 ///
 /// Pre-funding accounts from a file is a convenience for testnets, dev chains
@@ -1468,6 +1552,17 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         }
         info!(count = count, "loaded genesis validator set");
     }
+
+    // Mainnet must launch with a viable committee. Checked on the deduplicated
+    // set, and before the allocation block below so an empty mainnet genesis
+    // is refused too rather than silently starting with no validators.
+    let mut genesis_addresses: Vec<[u8; 32]> = genesis_stakes
+        .iter()
+        .map(|(address, _)| address.0)
+        .collect();
+    genesis_addresses.sort_unstable();
+    genesis_addresses.dedup();
+    ensure_mainnet_genesis_validator_count(config.chain_id, genesis_addresses.len())?;
 
     // Mint the genesis validator allocation (exactly once, at genesis).
     //
@@ -7043,6 +7138,108 @@ mod tests {
         let testnet = chain_id_config(dir.path(), chain_id::TESTNET_V2);
         ensure_funded_accounts_allowed(&testnet).expect("chain 4 accepts funded accounts");
         assert!(genesis_config_digest(&testnet).is_ok());
+    }
+
+    /// The authoritative check: actually running genesis on mainnet with a
+    /// testnet-sized validator set must refuse before anything is written.
+    #[test]
+    fn init_genesis_refuses_small_mainnet_validator_set_but_accepts_testnet() {
+        use kovanica_types::signing::chain_id;
+
+        let write_set = |dir: &std::path::Path, chain: u64, n: usize| {
+            let mut body = format!("chain_id = {chain}\n\n");
+            for i in 1..=n {
+                body.push_str(&format!(
+                    "[[validator]]\naddress = \"{i:02x}{}\"\nstake = {}\n\n",
+                    "00".repeat(31),
+                    kovanica_staking::MIN_VALIDATOR_STAKE
+                ));
+            }
+            std::fs::write(dir.join("genesis_validators.toml"), body).unwrap();
+        };
+
+        // Mainnet, 3 validators: refused.
+        let dir = tempfile::tempdir().unwrap();
+        write_set(dir.path(), chain_id::MAINNET, 3);
+        let config = chain_id_config(dir.path(), chain_id::MAINNET);
+        let dag = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
+        let state = Storage::new(dir.path().join("state.redb")).unwrap();
+        let err =
+            init_genesis(&config, &dag, &state).expect_err("mainnet must refuse 3 validators");
+        assert!(
+            err.to_string().contains("has 3 validators"),
+            "unexpected error: {err}"
+        );
+        // Nothing was persisted: genesis was refused, not partially applied.
+        let read = state.begin_read().unwrap();
+        assert!(
+            state.state().load_staking_state(&read).is_err(),
+            "a refused genesis must not write staking state"
+        );
+
+        // Testnet, same set: accepted, and the validators are staked.
+        let dir = tempfile::tempdir().unwrap();
+        write_set(dir.path(), chain_id::TESTNET_V2, 3);
+        let config = chain_id_config(dir.path(), chain_id::TESTNET_V2);
+        let dag = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
+        let state = Storage::new(dir.path().join("state.redb")).unwrap();
+        init_genesis(&config, &dag, &state).expect("chain 4 accepts a 3-validator genesis");
+        let read = state.begin_read().unwrap();
+        let staking = state.state().load_staking_state(&read).unwrap();
+        assert_eq!(
+            staking.validators.iter().filter(|v| v.active).count(),
+            3,
+            "all three genesis validators must be active"
+        );
+    }
+
+    /// Mainnet genesis must start with a committee the protocol can actually
+    /// run: at least `MIN_ACTIVE_VALIDATORS`, and no more than the genesis
+    /// allocation can fund at the minimum stake. Testnets are exempt because
+    /// they legitimately run on one to four nodes.
+    #[test]
+    fn mainnet_genesis_validator_count_is_bounded() {
+        use kovanica_types::signing::chain_id;
+
+        let (min, max) = mainnet_genesis_validator_bounds();
+        assert_eq!(min, kovanica_staking::MIN_ACTIVE_VALIDATORS as usize);
+        assert_eq!(
+            max,
+            (kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::MIN_VALIDATOR_STAKE)
+                as usize,
+            "the genesis set is capped by the allocation, not by MAX_ACTIVE_VALIDATORS"
+        );
+        // 21 active validators is the steady-state ceiling; at genesis the 1M
+        // allocation can only back 20 staking the 50k minimum.
+        assert_eq!(max, 20);
+        assert!(max < kovanica_staking::MAX_ACTIVE_VALIDATORS);
+
+        // Mainnet: bounds are enforced at both ends.
+        for count in [min, 16, max] {
+            ensure_mainnet_genesis_validator_count(chain_id::MAINNET, count)
+                .unwrap_or_else(|e| panic!("{count} validators must be accepted: {e}"));
+        }
+        for count in [0, 1, min - 1, max + 1] {
+            let err = ensure_mainnet_genesis_validator_count(chain_id::MAINNET, count)
+                .expect_err("out-of-range mainnet set must be refused");
+            assert!(
+                err.to_string().contains(&format!("has {count} validators")),
+                "unexpected error: {err}"
+            );
+        }
+
+        // Every other chain is exempt: a 1-node local or 3-node testnet is fine.
+        for other in [
+            chain_id::TESTNET,
+            chain_id::TESTNET_V2,
+            chain_id::DEVNET,
+            chain_id::LOCAL,
+        ] {
+            for count in [0, 3, 100] {
+                ensure_mainnet_genesis_validator_count(other, count)
+                    .unwrap_or_else(|e| panic!("chain {other} must be exempt: {e}"));
+            }
+        }
     }
 }
 

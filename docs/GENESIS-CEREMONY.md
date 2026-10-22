@@ -69,6 +69,18 @@ vrf_public_key = "<hex>"          # optional
 startup the node also looks for `validators.json`, `funded_accounts.toml`, and
 `founder_premine.hex` in the data directory.
 
+### Mainnet genesis needs 15–20 validators
+
+Mainnet genesis is refused unless the declared validator set (deduplicated by
+address, across `genesis_validators.toml` and `validators.json`) has at least
+`MIN_ACTIVE_VALIDATORS` (15) members. The upper bound is **20**, not the
+protocol's 21: the genesis allocation is 1 M KUNA and every genesis validator
+locks the 50 000 KUNA minimum stake, so 21 cannot be funded at genesis — 21 is
+reachable later through staking. `kovanica-node --check-config` reports the
+same error when a ceremony file is present; it does not require the files to
+exist, because an already-initialised mainnet data directory legitimately has
+none. Testnets, devnet and local chains are exempt (1–4 nodes is normal there).
+
 ### `funded_accounts.toml` is refused on mainnet
 
 ```

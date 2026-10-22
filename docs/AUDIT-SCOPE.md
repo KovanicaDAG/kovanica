@@ -138,6 +138,13 @@ certificate) against the subsidy/epoch invariants in §2.5.
 
 **Supply invariants:** `TOTAL_SUPPLY = FOUNDER_PREMINE (0.2M) + GENESIS_VALIDATOR_ALLOCATION (1M) + TREASURY_TOTAL (8M) + MINING_SUBSIDY_BUDGET (81M) = 90.2M KUNA`
 
+**Genesis committee invariant:** a mainnet genesis must declare 15..=20 validators
+(deduplicated across `genesis_validators.toml` and `validators.json`). The floor is
+`MIN_ACTIVE_VALIDATORS`; the ceiling is the genesis allocation divided by the 50 000 KUNA
+minimum stake, so 21 active validators is a post-genesis state, not a genesis one. Enforced
+in `init_genesis` before any state is written, and in `--check-config` when a ceremony file
+is present.
+
 **Genesis file invariant:** `funded_accounts.toml` pre-funds arbitrary balances and is
 refused outright on mainnet (chain 1) — at startup (`init_genesis`, before the
 already-initialised early return), in `genesis_config_digest` (so no digest is ever
@@ -209,7 +216,7 @@ would boot a genesis different from the one the operator configured.
 
 ## 5. Test Coverage Notes
 
-- Unit tests: 987 passing across workspace (2026-10-22)
+- Unit tests: 991 passing across workspace (2026-10-22)
 - Integration tests: `sustained_liveness_integration`, `multi_node_integration`, `late_join_integration`
 - Property tests: `proptest` in `kovanica-consensus` (wave arithmetic, committer properties)
 - Fuzzing: Block, vote, transaction, consensus fuzzers (cargo-fuzz)
