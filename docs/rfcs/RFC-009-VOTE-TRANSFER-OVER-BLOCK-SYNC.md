@@ -284,8 +284,23 @@ current committee; otherwise the vote is rejected as non-member. Cross-epoch
 catch-up therefore needs per-epoch committee resolution (follow-up 1). This is
 why `late_join_integration` covers a within-epoch join.
 
-### 8.6 Follow-up
+### 8.6 Retention — wired, and a pre-existing bug found while wiring it
 
-`ConsensusStore::prune_votes_below` exists and is tested but is **not yet
-wired** to the node's block-pruning pass, so the `VOTES` table currently grows
-unbounded. It must be called with the same cutoff as the DAG prune.
+`ConsensusStore::prune_votes_below` is now called from `run_retention_pass`
+with the **same cutoff as the DAG prune**, and takes a `limit` so a pass stays
+bounded. Votes are pruned *after* the blocks are committed: a joining node asks
+for a round's votes after syncing that round's leader block, so a vote that is
+gone while its block is still served would turn a catch-up back into a stall.
+A crash between the two leaves extra votes, never votes missing for a servable
+block. When the block window is not configured, no vote is pruned — every
+block, and therefore every vote, remains servable.
+
+Wiring this exposed a **pre-existing bug**: `run_retention_pass` read the
+committed leader height and the latest block from the *state* DB, while both
+live in the *consensus* DB (`data_dir/state.redb` vs `data_dir/consensus.redb`,
+separate redb files). On a real node the tip was always `None` and the
+committed height `0`, so `retention_floor` returned `None` and every
+configured window — blocks, receipts and state roots alike — silently deleted
+nothing. Tests had masked it by passing one handle for both stores. The pass
+now takes the consensus handle and reads both from there, and the new tests use
+two separate DB files like production does.
