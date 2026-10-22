@@ -137,3 +137,47 @@ fn deploy_compose_does_not_set_frozen_consensus_vars() {
         );
     }
 }
+
+/// `funded_accounts.toml` pre-funds arbitrary balances. It is a testnet/dev
+/// convenience and must be refused on mainnet (chain 1) at config-check time,
+/// before anything is minted.
+#[test]
+fn check_config_rejects_funded_accounts_on_mainnet() {
+    let (dir, path) = config_file(1);
+    std::fs::create_dir_all(dir.path().join("data")).expect("create data dir");
+    std::fs::write(
+        dir.path().join("data").join("funded_accounts.toml"),
+        "[[account]]\naddress = \"1111111111111111111111111111111111111111111111111111111111111111\"\nbalance = 1000\n",
+    )
+    .expect("write funded accounts");
+
+    let out = check_config(&path, &[]);
+    assert!(
+        !out.status.success(),
+        "chain 1 with funded_accounts.toml must fail the config check"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("funded_accounts.toml"),
+        "the error must name the file, got: {err}"
+    );
+}
+
+/// The same file is fine on a testnet.
+#[test]
+fn check_config_accepts_funded_accounts_on_testnet() {
+    let (dir, path) = config_file(4);
+    std::fs::create_dir_all(dir.path().join("data")).expect("create data dir");
+    std::fs::write(
+        dir.path().join("data").join("funded_accounts.toml"),
+        "[[account]]\naddress = \"1111111111111111111111111111111111111111111111111111111111111111\"\nbalance = 1000\n",
+    )
+    .expect("write funded accounts");
+
+    let out = check_config(&path, &[]);
+    assert!(
+        out.status.success(),
+        "chain 4 must accept funded_accounts.toml, stderr: {}",
+        stderr(&out)
+    );
+}

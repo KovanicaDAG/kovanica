@@ -61,7 +61,7 @@
 > 18. **[ ] MIN_ACTIVE=15: bez auto-popunjavanja** — ne ispuni ispod 15, NIKAD ne vrati offline/slashed validatore u committee *automatski*; iza aktivacijskog switcha. (Eksplicitni `reactivate_validator` stake tx, F7 931bb823, je dopušteni izuzetak — vidi item 1.)
 > 19. **[ ] Hash domains: KVNC-* → KUNA-*** — dio chain 4 reseta.
 > 20. **[ ] Adrese po chain_id** — chain 4: kvnc...dag + 64-hex; chain 1 (mainnet): SAMO kvnc...dag.
-> 21. **[ ] funded_accounts.toml** — samo u chain 4 genesis; odbaci za chain 1.
+> 21. **[x] funded_accounts.toml** — samo u chain 4 genesis; odbaci za chain 1. **DONE 2026-10-22:** `funded_accounts_allowed(chain_id)` = sve osim **chain 1 (mainnet)**; `ensure_funded_accounts_allowed` se poziva u `init_genesis` (**prije** early-returna za postojeću državu), u `genesis_config_digest` (da se digest nikad ne izračuna nad zabranjenom datotekom) i u `--check-config`. Hard error, ne tiho ignoriranje: preskakanje bi pokrenulo genesis drugačiji od onoga što operater misli da je konfigurirao. **Napomena o odluci:** TASKLIST je rekao "samo chain 4", ali `docker-compose.yml` (deployani testnet) vrti **chain 2** i mounta `funded_accounts.toml`, pa bi allow-list {4,3,1337} slomio postojeći deploy; zato je pravilo "zabranjeno samo na mainnetu". Testovi: `funded_accounts_are_rejected_on_mainnet_only`, `check_config_rejects_funded_accounts_on_mainnet`, `check_config_accepts_funded_accounts_on_testnet`; dokumentirano u `docs/GENESIS-CEREMONY.md`.
 > 22. **[ ] chain 4: drop block-sync 1.0.0** — zadrži samo 1.1.0.
 > 23. **[ ] MIN_DELEGATION** — placeholder vrijednost, Toni popunjava kasnije.
 > 24. **[ ] Mainnet genesis guard** — 15–21 validatori (validacija u genesis ceremoniji).

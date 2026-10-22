@@ -138,6 +138,13 @@ certificate) against the subsidy/epoch invariants in §2.5.
 
 **Supply invariants:** `TOTAL_SUPPLY = FOUNDER_PREMINE (0.2M) + GENESIS_VALIDATOR_ALLOCATION (1M) + TREASURY_TOTAL (8M) + MINING_SUBSIDY_BUDGET (81M) = 90.2M KUNA`
 
+**Genesis file invariant:** `funded_accounts.toml` pre-funds arbitrary balances and is
+refused outright on mainnet (chain 1) — at startup (`init_genesis`, before the
+already-initialised early return), in `genesis_config_digest` (so no digest is ever
+computed over it), and in `--check-config`. It remains accepted on 2/3/4/1337, where the
+balances are test money. Rejection is a hard error rather than a silent skip: skipping
+would boot a genesis different from the one the operator configured.
+
 ### 2.6 Cryptography — `kovanica-crypto` (CRITICAL)
 
 | Primitive | Risk | Description |
@@ -202,7 +209,7 @@ certificate) against the subsidy/epoch invariants in §2.5.
 
 ## 5. Test Coverage Notes
 
-- Unit tests: 975 passing across workspace (2026-10-22)
+- Unit tests: 987 passing across workspace (2026-10-22)
 - Integration tests: `sustained_liveness_integration`, `multi_node_integration`, `late_join_integration`
 - Property tests: `proptest` in `kovanica-consensus` (wave arithmetic, committer properties)
 - Fuzzing: Block, vote, transaction, consensus fuzzers (cargo-fuzz)

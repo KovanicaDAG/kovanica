@@ -69,6 +69,23 @@ vrf_public_key = "<hex>"          # optional
 startup the node also looks for `validators.json`, `funded_accounts.toml`, and
 `founder_premine.hex` in the data directory.
 
+### `funded_accounts.toml` is refused on mainnet
+
+```
+[[account]]
+address = "<32-byte hex>"
+balance = 1000000000000          # base units (9 decimals)
+```
+
+Pre-funding accounts from a file is a testnet, devnet and local convenience.
+On **chain 1 (mainnet)** the file must not exist at all: every KUNA there has to
+come from the published allocation (founder premine, treasury vesting, genesis
+validator allocation), never from a loose file in the data directory. The node
+fails at startup — and `kovanica-node --check-config` reports it — if
+`funded_accounts.toml` is present on mainnet, rather than ignoring it, because
+silently skipping it would boot a genesis the operator believes they
+configured. All other chain ids (2, 3, 4, 1337) accept the file.
+
 ## Genesis digest guard (startup behaviour)
 
 On first start the node persists a digest of its genesis configuration in the

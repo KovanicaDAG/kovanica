@@ -186,6 +186,10 @@ fn run_check_config(path: &str) -> Result<()> {
             path
         )
     })?;
+    // Genesis-file policy that does not depend on booting the node: a mainnet
+    // data dir must not contain funded_accounts.toml. Reporting it here lets an
+    // operator catch it before the node runs.
+    ensure_funded_accounts_allowed(&config)?;
     println!(
         "config OK: source={} chain_id={} data_dir={} listen_addr={} rpc={} round_duration_ms={} max_peers={} run_validator={}",
         path,
@@ -1299,7 +1303,46 @@ fn run_retention_pass(
     Ok(summary.join(" "))
 }
 
+/// Whether `data_dir/funded_accounts.toml` may be applied on `chain_id`.
+///
+/// Pre-funding accounts from a file is a convenience for testnets, dev chains
+/// and local runs, where the balances are play money. Mainnet is different:
+/// every KUNA there must come from the published allocation (founder premine,
+/// treasury vesting, genesis validator allocation). A loose file that can mint
+/// arbitrary balances must therefore never enter mainnet genesis — a stray
+/// mount in a deployment is enough to create them otherwise.
+fn funded_accounts_allowed(chain_id: u64) -> bool {
+    chain_id != kovanica_types::signing::chain_id::MAINNET
+}
+
+/// Reject `data_dir/funded_accounts.toml` on a chain where it is forbidden.
+///
+/// Deliberately a hard error rather than "ignore the file": silently skipping
+/// it would let a mainnet node boot with a different genesis than the operator
+/// believes they configured.
+fn ensure_funded_accounts_allowed(config: &NodeConfig) -> Result<()> {
+    if funded_accounts_allowed(config.chain_id) {
+        return Ok(());
+    }
+    let path = config.data_dir.join("funded_accounts.toml");
+    if path.exists() {
+        anyhow::bail!(
+            "{} exists but funded_accounts.toml is not allowed on chain_id {} (mainnet): \
+             every KUNA on mainnet must come from the published allocation, not from a file. \
+             Remove the file, or run a testnet (4) / devnet (3) / local (1337) chain",
+            path.display(),
+            config.chain_id
+        );
+    }
+    Ok(())
+}
+
 fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Storage) -> Result<()> {
+    // Checked before the "already initialised" early return: a forbidden file
+    // is a deployment error on a mainnet node whether or not genesis already
+    // ran, and the genesis digest below would otherwise silently include it.
+    ensure_funded_accounts_allowed(config)?;
+
     let existing = {
         let read = state_storage.begin_read()?;
         state_storage.state().load_staking_state(&read)
@@ -1558,6 +1601,10 @@ fn canonical_genesis_digest() -> Hash {
 /// This reads the same inputs `init_genesis` derives genesis state from; it
 /// does not change any allocation, emission or supply value.
 fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
+    // Same rule as `init_genesis`: a mainnet data dir must not contain the
+    // file at all, so the digest can never be computed over one.
+    ensure_funded_accounts_allowed(config)?;
+
     let mut data: Vec<u8> = Vec::new();
 
     // Canonical genesis block digest.
@@ -6947,6 +6994,55 @@ mod tests {
             "the leader is registered"
         );
         let _ = rx.try_recv();
+    }
+
+    /// Pre-funding from a file is a testnet/dev convenience. Mainnet must never
+    /// accept it, and the rule covers both the genesis init path and the digest
+    /// so neither can be bypassed.
+    #[test]
+    fn funded_accounts_are_rejected_on_mainnet_only() {
+        use kovanica_types::signing::chain_id;
+
+        assert!(!funded_accounts_allowed(chain_id::MAINNET));
+        for allowed in [
+            chain_id::TESTNET,
+            chain_id::DEVNET,
+            chain_id::TESTNET_V2,
+            chain_id::LOCAL,
+        ] {
+            assert!(
+                funded_accounts_allowed(allowed),
+                "chain {allowed} must accept funded_accounts.toml"
+            );
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("funded_accounts.toml"),
+            format!(
+                "[[account]]\naddress = \"{}\"\nbalance = 1000\n",
+                "11".repeat(32)
+            ),
+        )
+        .unwrap();
+
+        // Mainnet: both the check and the digest refuse.
+        let mainnet = chain_id_config(dir.path(), chain_id::MAINNET);
+        let err = ensure_funded_accounts_allowed(&mainnet).expect_err("mainnet must reject");
+        assert!(
+            err.to_string().contains("funded_accounts.toml")
+                && err.to_string().contains("chain_id 1"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            genesis_config_digest(&mainnet).is_err(),
+            "the digest must not be computable over a forbidden file"
+        );
+
+        // Testnet/dev: accepted, and the allocations are covered by the digest.
+        let testnet = chain_id_config(dir.path(), chain_id::TESTNET_V2);
+        ensure_funded_accounts_allowed(&testnet).expect("chain 4 accepts funded accounts");
+        assert!(genesis_config_digest(&testnet).is_ok());
     }
 }
 
