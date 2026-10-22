@@ -132,7 +132,7 @@ certificate) against the subsidy/epoch invariants in §2.5.
 | Emission schedule | **Critical** | `block_reward(height)`: 2.5 KUNA × (3/4)^era, era = 8.1M committed leaders; cumulative capped at 81M |
 | Genesis validator allocation | **Critical** | 1M KUNA split evenly (dust to first), min stake 50K KUNA locked |
 | Treasury vesting | **High** | 8M KUNA over 8 years (1M/year linear), `claim_treasury_vesting(committed_height)` |
-| Validator lifecycle | **High** | Bond/unbond (100k rounds), active set 15–21, commission (bps, change cooldown 7200 blocks), offline detection (100 missed leaders), slashing (500 bps = 5%) |
+| Validator lifecycle | **High** | Bond/unbond (100 000 **committed leader blocks**, ≈13.9 days at 12 s/leader — not 100k DAG rounds and not one epoch), active set 15–21, commission (bps, change cooldown 7200 blocks), offline detection (100 missed leaders), slashing (500 bps = 5%) |
 | Delegation | **High** | Delegate/undelegate/claim rewards, pending rewards tracked separately from `StakingState` bincode format |
 | Light nodes | **Medium** | Separate escrow (20% of block reward = `LIGHT_REWARD_BPS`), witness submission, 100 slots, min bond 1K KUNA |
 
