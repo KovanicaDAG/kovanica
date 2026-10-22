@@ -200,6 +200,15 @@ Configuration keys (see `config.example.toml` for the full list and the environm
 - `use_vrf_leader` — VRF-driven leader election (default `true`) → `KOVANICA_VRF_LEADER`
 - `treasury_address` — genesis treasury address (32 bytes hex); only read on fresh genesis → `KOVANICA_TREASURY_ADDRESS`
 
+**Consensus parameters are frozen on shared chains.** `KOVANICA_ROUND_DURATION_MS`,
+`KOVANICA_MYSTICGHOST` and `KOVANICA_VRF_LEADER` may only be set on `chain_id` 3
+(devnet) or 1337 (local). On any other chain their mere presence is a startup
+error (`--check-config` reports it too), because two nodes that disagree on round
+duration, leader election or colouring cannot commit together — the split shows
+up as a stalled commit, not as a config error. The check is on presence, not on
+the value: an unparseable value would otherwise be silently ignored while the
+operator believes the override applied.
+
 Additional environment variables read by the node:
 
 - `KOVANICA_CHAIN_ID` — chain id committed to by signatures (see the registry below)

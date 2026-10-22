@@ -24,6 +24,17 @@ pub mod chain_id {
     pub fn is_registered(id: u64) -> bool {
         matches!(id, MAINNET | TESTNET | DEVNET | LOCAL | TESTNET_V2)
     }
+
+    /// Whether `id` is a local development chain (devnet or local).
+    ///
+    /// Only these chains may vary consensus parameters per node. Every other
+    /// registered chain is shared with other operators: a node that runs
+    /// different round duration, VRF election or MysticGhost settings signs and
+    /// votes for rules its peers do not run, and the resulting split surfaces as
+    /// a stalled commit rather than a configuration error.
+    pub fn is_dev(id: u64) -> bool {
+        matches!(id, DEVNET | LOCAL)
+    }
 }
 
 /// Domain tag (16 bytes, `0x00`-padded) of vote `signature_data` v1.
@@ -90,5 +101,18 @@ mod tests {
             assert!(chain_id::is_registered(id));
         }
         assert!(!chain_id::is_registered(0));
+    }
+
+    /// Only devnet and local may vary consensus parameters per node; every
+    /// shared chain (mainnet, both testnets) must be frozen.
+    #[test]
+    fn only_dev_chains_are_dev() {
+        assert!(chain_id::is_dev(chain_id::DEVNET));
+        assert!(chain_id::is_dev(chain_id::LOCAL));
+        assert!(!chain_id::is_dev(chain_id::MAINNET));
+        assert!(!chain_id::is_dev(chain_id::TESTNET));
+        assert!(!chain_id::is_dev(chain_id::TESTNET_V2));
+        // Fail closed: an unregistered id is not a dev chain either.
+        assert!(!chain_id::is_dev(0));
     }
 }

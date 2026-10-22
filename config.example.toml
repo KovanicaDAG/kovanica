@@ -39,6 +39,12 @@
 # MysticGhost colouring and VRF leader election default on. A live mesh has
 # to take both together. With no validator VRF keys, leader election stays
 # round-robin. KOVANICA_MYSTICGHOST=false or KOVANICA_VRF_LEADER=false turns one off.
+#
+# FROZEN ENV OVERRIDES ON SHARED CHAINS: KOVANICA_ROUND_DURATION_MS,
+# KOVANICA_MYSTICGHOST and KOVANICA_VRF_LEADER may only be set on chain_id 3
+# (devnet) and 1337 (local). On any other chain their presence is a startup
+# error: consensus parameters must match every node or the chain splits.
+# (Values in this file are the operator's declared config and are not frozen.)
 use_mysticghost = true
 use_vrf_leader = true
 

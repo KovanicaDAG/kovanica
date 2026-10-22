@@ -115,6 +115,15 @@ pub struct NodeConfig {
     /// a long chain stays bounded. Overridable with `KOVANICA_RETENTION_BATCH`.
     #[serde(default = "default_retention_batch")]
     pub retention_batch: usize,
+    /// A consensus-parameter environment override that the final `chain_id`
+    /// forbids, recorded by [`NodeConfig::apply_env_overrides`] and rejected by
+    /// [`NodeConfig::validate`].
+    ///
+    /// This lives on the struct rather than being read from the environment
+    /// inside `validate`, so validation stays a pure function of the config and
+    /// tests do not have to mutate process-global state. Never loaded from TOML.
+    #[serde(skip)]
+    pub forbidden_override: Option<&'static str>,
 }
 
 fn default_retention_interval() -> u64 {
@@ -155,6 +164,7 @@ impl Default for NodeConfig {
             retain_receipts_below_height: None,
             retention_interval_secs: 300,
             retention_batch: 10_000,
+            forbidden_override: None,
         }
     }
 }
@@ -176,6 +186,35 @@ fn env_retention_window(var: &str) -> Option<u64> {
             None
         }
     }
+}
+
+/// Environment variables that change consensus behavior and therefore may
+/// only be set on a local development chain.
+///
+/// Round duration sets how often a validator proposes; VRF leader election and
+/// MysticGhost change which block counts as the leader and how history is
+/// ordered. Two nodes that disagree on any of them cannot commit together, so a
+/// per-node override on a shared chain is a fork waiting to happen rather than a
+/// tuning knob. `KOVANICA_CHAIN_ID` is deliberately not on this list: it selects
+/// the network, and the genesis/config pin rejects a mismatch separately.
+pub const FROZEN_CONSENSUS_ENV_VARS: [&str; 3] = [
+    "KOVANICA_ROUND_DURATION_MS",
+    "KOVANICA_MYSTICGHOST",
+    "KOVANICA_VRF_LEADER",
+];
+
+/// First frozen consensus variable present in `present`, if any.
+///
+/// Presence is what matters, not the parsed value: `apply_env_overrides` only
+/// warns about an unparseable value, and a value that happens to equal the
+/// default is still a deployment mistake worth surfacing before it drifts.
+fn first_frozen_override<'a, I>(present: I) -> Option<&'a str>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    present
+        .into_iter()
+        .find(|var| FROZEN_CONSENSUS_ENV_VARS.contains(var))
 }
 
 impl NodeConfig {
@@ -326,6 +365,20 @@ impl NodeConfig {
                 Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_RETENTION_BATCH"),
             }
         }
+        // Record (do not yet reject) a consensus-parameter override that the
+        // final chain_id forbids. This runs last because `chain_id` is itself an
+        // override; validation then turns the record into a hard error, so the
+        // rule is shared by `--check-config` and the boot path.
+        self.forbidden_override = if kovanica_types::signing::chain_id::is_dev(self.chain_id) {
+            None
+        } else {
+            first_frozen_override(
+                FROZEN_CONSENSUS_ENV_VARS
+                    .iter()
+                    .copied()
+                    .filter(|var| std::env::var_os(var).is_some()),
+            )
+        };
     }
 
     /// True when at least one retention window is configured.
@@ -368,6 +421,18 @@ impl NodeConfig {
         if !kovanica_types::signing::chain_id::is_registered(self.chain_id) {
             anyhow::bail!(
                 "chain_id {} is not registered (expected 1 mainnet, 2 testnet, 3 devnet, 4 testnet v2 or 1337 local)",
+                self.chain_id
+            );
+        }
+        // Consensus parameters must be identical on every node of a shared
+        // chain; only devnet (3) and local (1337) may differ. The offending
+        // variable was recorded when the environment was applied, so this check
+        // is a pure function of the config.
+        if let Some(var) = self.forbidden_override {
+            anyhow::bail!(
+                "{var} must not be set on chain_id {}: round duration, VRF leader election and \
+                 MysticGhost mode are consensus parameters and must match every node. Unset \
+                 {var}, or use chain_id 3 (devnet) or 1337 (local) for an experimental build",
                 self.chain_id
             );
         }
@@ -690,5 +755,108 @@ treasury_address = "treasury-address-placeholder"
 
         config.retention_batch = 10_000;
         config.validate().expect("sane retention config");
+    }
+    /// The frozen list is exactly the consensus-shaping variables, and detection
+    /// does not depend on ordering or on unrelated variables.
+    #[test]
+    fn frozen_override_detection_uses_the_declared_list() {
+        assert_eq!(
+            first_frozen_override(["KOVANICA_RPC_PORT", "KOVANICA_MYSTICGHOST"]),
+            Some("KOVANICA_MYSTICGHOST")
+        );
+        assert_eq!(
+            first_frozen_override(["KOVANICA_ROUND_DURATION_MS"]),
+            Some("KOVANICA_ROUND_DURATION_MS")
+        );
+        assert_eq!(
+            first_frozen_override(["KOVANICA_MAX_PEERS", "KOVANICA_DATA_DIR"]),
+            None
+        );
+        // `chain_id` selects the network and is frozen a different way (the
+        // genesis pin), so it must not appear in this list.
+        assert!(!FROZEN_CONSENSUS_ENV_VARS.contains(&"KOVANICA_CHAIN_ID"));
+        assert_eq!(FROZEN_CONSENSUS_ENV_VARS.len(), 3);
+    }
+
+    /// A public chain rejects a consensus override at validation time, naming
+    /// the variable; a dev chain accepts the same environment.
+    #[test]
+    fn public_chain_rejects_consensus_env_overrides() {
+        let _guard = env_guard();
+        std::env::set_var("KOVANICA_ROUND_DURATION_MS", "250");
+
+        let mut public = NodeConfig {
+            run_validator: false,
+            chain_id: kovanica_types::signing::chain_id::TESTNET_V2,
+            ..NodeConfig::default()
+        };
+        public.apply_env_overrides();
+        let err = public
+            .validate()
+            .expect_err("chain 4 must reject a round-duration override");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("KOVANICA_ROUND_DURATION_MS") && msg.contains("chain_id 4"),
+            "error must name the variable and the chain, got: {msg}"
+        );
+
+        // Presence, not value, is what is rejected: an unparseable value is
+        // ignored by `apply_env_overrides` but must still be flagged rather
+        // than silently leaving an operator believing they changed something.
+        std::env::set_var("KOVANICA_ROUND_DURATION_MS", "not-a-number");
+        let mut bogus = NodeConfig {
+            run_validator: false,
+            chain_id: kovanica_types::signing::chain_id::MAINNET,
+            ..NodeConfig::default()
+        };
+        bogus.apply_env_overrides();
+        assert!(
+            bogus.validate().is_err(),
+            "a bogus override is still an override"
+        );
+
+        std::env::remove_var("KOVANICA_ROUND_DURATION_MS");
+
+        // Same environment, dev chains: allowed.
+        for chain in [
+            kovanica_types::signing::chain_id::DEVNET,
+            kovanica_types::signing::chain_id::LOCAL,
+        ] {
+            let mut dev = NodeConfig {
+                run_validator: false,
+                chain_id: chain,
+                ..NodeConfig::default()
+            };
+            std::env::set_var("KOVANICA_VRF_LEADER", "false");
+            dev.apply_env_overrides();
+            std::env::remove_var("KOVANICA_VRF_LEADER");
+            assert!(dev.validate().is_ok(), "chain {chain} must allow overrides");
+            assert!(!dev.use_vrf_leader, "the override must still apply");
+        }
+    }
+
+    /// Every frozen variable is covered, not just the first one tested.
+    #[test]
+    fn each_frozen_variable_is_rejected_on_a_public_chain() {
+        let _guard = env_guard();
+        for var in FROZEN_CONSENSUS_ENV_VARS {
+            std::env::set_var(
+                var,
+                if var == "KOVANICA_ROUND_DURATION_MS" {
+                    "250"
+                } else {
+                    "false"
+                },
+            );
+            let mut config = NodeConfig {
+                run_validator: false,
+                chain_id: kovanica_types::signing::chain_id::TESTNET_V2,
+                ..NodeConfig::default()
+            };
+            config.apply_env_overrides();
+            let err = config.validate().expect_err(var);
+            assert!(err.to_string().contains(var), "{var}: {err}");
+            std::env::remove_var(var);
+        }
     }
 }
