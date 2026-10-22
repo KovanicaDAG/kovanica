@@ -1,0 +1,33 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const address_from_mnemonic: (a: number, b: number, c: number) => [number, number, number, number];
+export const address_from_public_key: (a: number, b: number) => [number, number, number, number];
+export const address_to_hex: (a: number, b: number) => [number, number, number, number];
+export const build_signed_transfer: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
+export const entropy_to_mnemonic: (a: number, b: number) => [number, number, number, number];
+export const generate_mnemonic: (a: number) => [number, number, number, number];
+export const mnemonic_is_valid: (a: number, b: number) => number;
+export const mnemonic_to_seed: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const mnemonic_unknown_words: (a: number, b: number) => [number, number];
+export const normalize_mnemonic: (a: number, b: number) => [number, number];
+export const public_key_from_mnemonic: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const public_key_from_secret_bytes: (a: number, b: number) => [number, number, number, number];
+export const seed_from_mnemonic: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const sign_sighash: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+export const sign_sighash_with_seed_hex: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const signing_key_from_seed_hex: (a: number, b: number, c: number) => [number, number, number, number];
+export const slip10_derivation_path: () => [number, number];
+export const slip44_coin_type: () => number;
+export const start: () => void;
+export const verify_signature: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+export const version: () => [number, number];
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __externref_table_dealloc: (a: number) => void;
+export const __externref_drop_slice: (a: number, b: number) => void;
+export const __wbindgen_start: () => void;
