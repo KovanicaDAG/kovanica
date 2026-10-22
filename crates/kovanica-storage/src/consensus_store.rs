@@ -417,17 +417,30 @@ impl ConsensusStore {
 
     /// Delete every vote for rounds strictly below `cutoff`. Returns the number of
     /// entries removed.
+    /// Remove the votes of every leader round strictly below `cutoff`.
+    ///
+    /// At most `limit` rows are removed in one call so a retention pass is
+    /// always bounded; the caller repeats the pass to make further progress.
+    ///
+    /// A caller must never prune votes ahead of the blocks they belong to: a
+    /// joining node asks for the votes of a round *after* it synced that
+    /// round's leader block, so a vote that is gone while its block is still
+    /// served turns a catch-up into a stall.
     pub fn prune_votes_below(
         &self,
         txn: &WriteTransaction,
         cutoff: Round,
+        limit: usize,
     ) -> Result<usize, ConsensusStoreError> {
+        if limit == 0 {
+            return Ok(0);
+        }
         // Collect the keys first: redb does not allow mutating a table while a
         // range iterator over it is alive.
         let keys_to_remove: Vec<(u64, u16)> = {
             let table = txn.open_table(crate::tables::VOTES)?;
             let mut keys = Vec::new();
-            for entry in table.range(..(cutoff, 0u16))? {
+            for entry in table.range(..(cutoff, 0u16))?.take(limit) {
                 let (key, _) = entry?;
                 keys.push(key.value());
             }
@@ -742,7 +755,7 @@ mod tests {
 
         {
             let txn = storage.begin_write().unwrap();
-            let removed = store.prune_votes_below(&txn, 5).unwrap();
+            let removed = store.prune_votes_below(&txn, 5, 64).unwrap();
             assert_eq!(removed, 2, "both votes below the cutoff must be removed");
             txn.commit().unwrap();
         }
@@ -759,5 +772,59 @@ mod tests {
         assert_eq!(newer_votes.len(), 1, "rounds above the cutoff must survive");
         assert_eq!(newer_votes[0], newer);
         assert!(!store.has_vote(&txn, 1, 0).unwrap());
+    }
+
+    #[test]
+    fn prune_votes_below_respects_the_batch_limit() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("votes-batch.redb")).unwrap();
+        let store = storage.consensus();
+
+        {
+            let txn = storage.begin_write().unwrap();
+            for round in 0..10 {
+                store.put_vote(&txn, &make_vote(round, 0, "old")).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        let mut removed_total = 0;
+        for _ in 0..10 {
+            let txn = storage.begin_write().unwrap();
+            let removed = store.prune_votes_below(&txn, 100, 3).unwrap();
+            txn.commit().unwrap();
+            removed_total += removed;
+            if removed == 0 {
+                break;
+            }
+        }
+        assert_eq!(removed_total, 10, "repeated passes drain the table");
+
+        let txn = storage.begin_read().unwrap();
+        for round in 0..10 {
+            assert!(
+                store.get_votes_for_round(&txn, round).unwrap().is_empty(),
+                "every vote must eventually be removed"
+            );
+        }
+    }
+
+    #[test]
+    fn prune_votes_below_with_a_zero_limit_removes_nothing() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("votes-zero.redb")).unwrap();
+        let store = storage.consensus();
+
+        {
+            let txn = storage.begin_write().unwrap();
+            store.put_vote(&txn, &make_vote(1, 0, "old")).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let txn = storage.begin_write().unwrap();
+        assert_eq!(store.prune_votes_below(&txn, 100, 0).unwrap(), 0);
+        drop(txn);
+        let read = storage.begin_read().unwrap();
+        assert!(store.has_vote(&read, 1, 0).unwrap());
     }
 }

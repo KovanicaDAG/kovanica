@@ -1020,6 +1020,7 @@ where
         };
         let retention_secs = config.retention_interval_secs.max(1);
         let storage = state_storage.clone();
+        let consensus = consensus_storage.clone();
         let mut shutdown_for_retention = shutdown_rx.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(retention_secs));
@@ -1032,9 +1033,10 @@ where
                         // Synchronous redb writes: keep them off the async
                         // executor so a bounded pass cannot stall the loop.
                         let storage = storage.clone();
+                        let consensus = consensus.clone();
                         let plan = retention.clone();
                         match tokio::task::spawn_blocking(move || {
-                            run_retention_pass(&storage, &plan)
+                            run_retention_pass(&storage, &consensus, &plan)
                         })
                         .await
                         {
@@ -1177,7 +1179,11 @@ fn retention_floor(committed_height: u64, window: u64, margin: u64) -> Option<u6
     committed_height.checked_sub(window.max(margin))
 }
 
-/// Run one bounded retention pass over `storage` and summarise what was removed.
+/// Run one bounded retention pass and summarise what was removed.
+///
+/// `storage` is the state DB (receipts, state roots); `consensus` is the
+/// consensus/DAG DB (blocks, votes). They are separate redb files, so each
+/// store is pruned in its own write transaction.
 ///
 /// Each configured window removes at most `plan.batch` rows of its store in this
 /// call, so a single pass never issues an unbounded write transaction. Nothing
@@ -1186,13 +1192,20 @@ fn retention_floor(committed_height: u64, window: u64, margin: u64) -> Option<u6
 ///
 /// Runs on the blocking worker because it performs synchronous redb writes.
 /// Returns an empty summary when no rows were removed.
-fn run_retention_pass(storage: &Storage, plan: &RetentionPlan) -> Result<String> {
+fn run_retention_pass(
+    storage: &Storage,
+    consensus: &Storage,
+    plan: &RetentionPlan,
+) -> Result<String> {
     let mut summary: Vec<String> = Vec::new();
 
-    // Committed tip: the receipts and state-root windows are keyed by it.
+    // Committed tip: the receipts and state-root windows are keyed by it, and
+    // it also bounds the block window. It lives in the consensus DB — reading
+    // it from the state DB would always yield 0 and silently disable the whole
+    // pass.
     let committed_height = {
-        let read = storage.begin_read()?;
-        storage
+        let read = consensus.begin_read()?;
+        consensus
             .consensus()
             .get_committed_leader_height(&read)
             .map_err(|e| anyhow::anyhow!("committed height: {e}"))?
@@ -1237,8 +1250,8 @@ fn run_retention_pass(storage: &Storage, plan: &RetentionPlan) -> Result<String>
     //    operator's window nor a miscounted tip can reach committed rounds.
     if let Some(window) = plan.blocks_below_tip.filter(|w| *w > 0) {
         let (tip_round, committed) = {
-            let read = storage.begin_read()?;
-            let tip = storage
+            let read = consensus.begin_read()?;
+            let tip = consensus
                 .blocks()
                 .get_latest_block(&read)
                 .map_err(|e| anyhow::anyhow!("block tip: {e}"))?
@@ -1252,14 +1265,31 @@ fn run_retention_pass(storage: &Storage, plan: &RetentionPlan) -> Result<String>
             if let Some(by_commit) = retention_floor(committed, window, plan.margin) {
                 let floor = tip_round.saturating_sub(window).min(by_commit);
                 if floor > 0 {
-                    let txn = storage.begin_write()?;
-                    let removed = storage
+                    let txn = consensus.begin_write()?;
+                    let removed = consensus
                         .blocks()
                         .prune_below_limited(&txn, floor, plan.batch)
                         .map_err(|e| anyhow::anyhow!("block prune: {e}"))?;
                     txn.commit().map_err(|e| anyhow::anyhow!("commit: {e}"))?;
                     if removed > 0 {
                         summary.push(format!("blocks={removed}"));
+                    }
+
+                    // 4. Votes follow the blocks they describe, never ahead of
+                    //    them: a joining node asks for a round's votes after it
+                    //    synced that round's leader block, so pruning a vote
+                    //    whose block is still served would turn a catch-up back
+                    //    into a stall. Blocks are committed first for the same
+                    //    reason — a crash between the two leaves extra votes,
+                    //    never votes missing for a servable block.
+                    let txn = consensus.begin_write()?;
+                    let removed = consensus
+                        .consensus()
+                        .prune_votes_below(&txn, floor, plan.batch)
+                        .map_err(|e| anyhow::anyhow!("vote prune: {e}"))?;
+                    txn.commit().map_err(|e| anyhow::anyhow!("commit: {e}"))?;
+                    if removed > 0 {
+                        summary.push(format!("votes={removed}"));
                     }
                 }
             }
@@ -6438,7 +6468,7 @@ mod tests {
 
         // No window configured: the pass must be a no-op.
         assert_eq!(
-            run_retention_pass(&storage, &retention_plan(None, None, None, 100)).unwrap(),
+            run_retention_pass(&storage, &storage, &retention_plan(None, None, None, 100)).unwrap(),
             "",
             "an unconfigured node must never delete data"
         );
@@ -6454,8 +6484,12 @@ mod tests {
         // Enabling a window is what makes the pass delete, and it deletes in
         // bounded batches: at most `batch` rows per store per pass.
         for _ in 0..3 {
-            let summary = run_retention_pass(&storage, &retention_plan(Some(1_000), None, None, 5))
-                .expect("pass runs without panicking");
+            let summary = run_retention_pass(
+                &storage,
+                &storage,
+                &retention_plan(Some(1_000), None, None, 5),
+            )
+            .expect("pass runs without panicking");
             assert!(summary.contains("blocks=5"), "summary: {summary:?}");
         }
         assert_eq!(
@@ -6538,9 +6572,12 @@ mod tests {
 
         // window floor would be 5000 - 1000 = 4000 rounds, but the
         // committed-height floor is 1100 - 1000 = 100 — and 100 wins.
-        let summary =
-            run_retention_pass(&storage, &retention_plan(Some(1_000), None, None, 10_000))
-                .expect("pass runs without panicking");
+        let summary = run_retention_pass(
+            &storage,
+            &storage,
+            &retention_plan(Some(1_000), None, None, 10_000),
+        )
+        .expect("pass runs without panicking");
         assert_eq!(summary, "blocks=99", "summary: {summary:?}");
 
         let read = storage.begin_read().unwrap();
@@ -6602,6 +6639,7 @@ mod tests {
 
         let summary = run_retention_pass(
             &storage,
+            &storage,
             &retention_plan(Some(100_000), Some(100_000), Some(100_000), 10_000),
         )
         .expect("pass runs without panicking");
@@ -6609,6 +6647,123 @@ mod tests {
         assert_eq!(count_blocks(&storage), 1_100);
         assert_eq!(count_state_roots(&storage), 0);
     }
+    #[test]
+    fn retention_pass_prunes_votes_exactly_with_their_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Storage::new(dir.path().join("retention-state.redb")).unwrap();
+        let consensus = Storage::new(dir.path().join("retention-consensus.redb")).unwrap();
+
+        const COMMITTED: u64 = 1_100;
+        const ROUNDS: u64 = 1_200;
+        let key = kovanica_crypto::generate_keypair().0;
+        {
+            let txn = consensus.begin_write().unwrap();
+            consensus
+                .consensus()
+                .set_committed_leader_height(&txn, COMMITTED)
+                .unwrap();
+            for round in 1..=ROUNDS {
+                consensus
+                    .blocks()
+                    .put_block(&txn, &retention_block(round), &[])
+                    .unwrap();
+                consensus
+                    .consensus()
+                    .put_vote(
+                        &txn,
+                        &vote_sync_test_vote(&key, round, Hash::new(b"leader")),
+                    )
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        // The committed floor is `1100 - 1000 = 100`; the tip bound is
+        // `1200 - 1000 = 200`, so 100 wins and rounds 1..=99 are removed.
+        let summary = run_retention_pass(
+            &state,
+            &consensus,
+            &retention_plan(Some(1_000), None, None, 10_000),
+        )
+        .expect("pass runs without panicking");
+        assert_eq!(summary, "blocks=99 votes=99", "summary: {summary:?}");
+
+        let read = consensus.begin_read().unwrap();
+        for round in 1..=ROUNDS {
+            let votes = consensus
+                .consensus()
+                .get_votes_for_round(&read, round)
+                .unwrap();
+            let block_gone = consensus
+                .blocks()
+                .get_block_by_height(&read, round)
+                .unwrap()
+                .is_none();
+            assert_eq!(
+                block_gone,
+                round < 100,
+                "round {round}: block presence must follow the floor"
+            );
+            assert_eq!(
+                votes.is_empty(),
+                block_gone,
+                "round {round}: a vote must be pruned exactly when its block is"
+            );
+        }
+    }
+
+    #[test]
+    fn retention_pass_keeps_every_vote_when_blocks_are_not_pruned() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Storage::new(dir.path().join("retention-state2.redb")).unwrap();
+        let consensus = Storage::new(dir.path().join("retention-consensus2.redb")).unwrap();
+
+        let key = kovanica_crypto::generate_keypair().0;
+        {
+            let txn = consensus.begin_write().unwrap();
+            consensus
+                .consensus()
+                .set_committed_leader_height(&txn, 5_000)
+                .unwrap();
+            for round in 1..=50 {
+                consensus
+                    .blocks()
+                    .put_block(&txn, &retention_block(round), &[])
+                    .unwrap();
+                consensus
+                    .consensus()
+                    .put_vote(
+                        &txn,
+                        &vote_sync_test_vote(&key, round, Hash::new(b"leader")),
+                    )
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        // Receipts/state roots are pruned, blocks are not: votes must stay,
+        // because every block they describe is still servable.
+        let summary = run_retention_pass(
+            &state,
+            &consensus,
+            &retention_plan(None, Some(1), Some(1), 10_000),
+        )
+        .expect("pass runs without panicking");
+        assert!(!summary.contains("votes="), "summary: {summary:?}");
+
+        let read = consensus.begin_read().unwrap();
+        for round in 1..=50 {
+            assert!(
+                !consensus
+                    .consensus()
+                    .get_votes_for_round(&read, round)
+                    .unwrap()
+                    .is_empty(),
+                "round {round}: votes must survive while their blocks do"
+            );
+        }
+    }
+
     // ------------------------------------------------------------------
     // Vote transfer over the block-sync protocol (RFC-009)
     // ------------------------------------------------------------------
