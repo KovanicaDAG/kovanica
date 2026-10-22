@@ -3973,7 +3973,20 @@ fn build_committee(
 
     // If no validators in staking state (fresh genesis), fall back to local validator identity
     // This allows a fresh node to start and produce blocks until validators join via staking txs.
+    //
+    // The fallback is a bootstrap convenience, NOT a committee. With the
+    // MIN_ACTIVE floor enabled it is exactly the failure mode the floor exists
+    // to prevent: every node would fabricate a one-member committee from its
+    // own identity and believe it is the sole leader, so nothing is committed
+    // on a shared chain. Refuse instead of starting in that state.
     if active_validators.is_empty() {
+        if enforce_min_active {
+            anyhow::bail!(
+                "enforce_min_active_validators=true requires at least {} active validators with stake >= {} KUNA, found 0; refusing the single-node genesis fallback",
+                MIN_ACTIVE_VALIDATORS,
+                MIN_VALIDATOR_STAKE / ONE_KUNA
+            );
+        }
         info!("no active validators in staking state; falling back to local validator identity");
         let authority = AuthorityInfo {
             index: 0,
@@ -7334,6 +7347,126 @@ mod tests {
                     .unwrap_or_else(|e| panic!("chain {other} must be exempt: {e}"));
             }
         }
+    }
+
+    // Item 18: `MIN_ACTIVE_VALIDATORS` is a fail-closed floor behind an
+    // activation switch (`enforce_min_active_validators`, default off). The
+    // floor must never pad a committee, and nothing may resurrect a validator
+    // that went inactive: re-entry is only the explicit `reactivate_validator`
+    // stake tx (F7).
+    fn seeded_staking_storage(
+        dir: &std::path::Path,
+        name: &str,
+        count: usize,
+    ) -> (Storage, Vec<(Address, PublicKey)>) {
+        let storage = Storage::new(dir.join(name)).unwrap();
+        let mut staking = StakingState::new();
+        staking.init_treasury(Address([0xcc; 32]));
+        let mut keys = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (_sk, pk) = kovanica_crypto::generate_keypair();
+            let addr = Address::from_public_key(&pk);
+            staking
+                .join_validator(addr, MIN_VALIDATOR_STAKE, 0, Some(addr), Some(pk), None)
+                .unwrap();
+            keys.push((addr, pk));
+        }
+        let txn = storage.begin_write().unwrap();
+        storage.state().save_staking_state(&txn, &staking).unwrap();
+        txn.commit().unwrap();
+        (storage, keys)
+    }
+
+    #[test]
+    fn enforce_min_active_is_off_by_default() {
+        assert!(
+            !NodeConfig::default().enforce_min_active_validators,
+            "the floor must be opt-in on existing chains"
+        );
+    }
+
+    #[test]
+    fn enforce_min_active_rejects_a_committee_below_the_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, keys) = seeded_staking_storage(dir.path(), "below.redb", 14);
+        let err = build_committee(&storage, &keys[0].1, &keys[0].0, "127.0.0.1:0", 0, true)
+            .expect_err("14 < 15 must be refused when the floor is on");
+        assert!(err.to_string().contains("found 14"), "{err}");
+
+        // The same state is a valid 14-member committee with the switch off:
+        // the floor is opt-in, it does not retroactively shrink live chains.
+        let committee = build_committee(&storage, &keys[0].1, &keys[0].0, "127.0.0.1:0", 0, false)
+            .expect("floor is opt-in");
+        assert_eq!(committee.authorities().len(), 14);
+    }
+
+    #[test]
+    fn enforce_min_active_accepts_exactly_the_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, keys) = seeded_staking_storage(dir.path(), "floor.redb", 15);
+        let committee = build_committee(&storage, &keys[0].1, &keys[0].0, "127.0.0.1:0", 0, true)
+            .expect("15 is the floor, not below it");
+        assert_eq!(committee.authorities().len(), 15);
+    }
+
+    #[test]
+    fn enforce_min_active_refuses_the_single_node_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        // Staking state exists but has no active validators. Without the floor
+        // the builder fabricates a one-member committee from the local
+        // identity; with the floor on that is exactly the state to refuse,
+        // because every node would build a committee containing only itself.
+        let (storage, _) = seeded_staking_storage(dir.path(), "empty.redb", 0);
+        let (_sk, pk) = kovanica_crypto::generate_keypair();
+        let addr = Address::from_public_key(&pk);
+
+        let err = build_committee(&storage, &pk, &addr, "127.0.0.1:0", 0, true)
+            .expect_err("an empty active set must not become a one-node committee");
+        assert!(err.to_string().contains("found 0"), "{err}");
+
+        let committee = build_committee(&storage, &pk, &addr, "127.0.0.1:0", 0, false)
+            .expect("dev bootstrap keeps the single-authority fallback");
+        assert_eq!(committee.authorities().len(), 1);
+    }
+
+    #[test]
+    fn committee_never_resurrects_inactive_or_undersized_validators() {
+        let dir = tempfile::tempdir().unwrap();
+        let (storage, keys) = seeded_staking_storage(dir.path(), "filtered.redb", 16);
+        let mut staking = {
+            let read = storage.begin_read().unwrap();
+            storage.state().load_staking_state(&read).unwrap()
+        };
+        // One evicted for liveness, one whose self-stake fell below the minimum
+        // (the shape a slashed validator takes).
+        staking.validators[0].active = false;
+        staking.validators[1].stake = MIN_VALIDATOR_STAKE - 1;
+        let txn = storage.begin_write().unwrap();
+        storage.state().save_staking_state(&txn, &staking).unwrap();
+        txn.commit().unwrap();
+
+        let committee = build_committee(&storage, &keys[2].1, &keys[2].0, "127.0.0.1:0", 0, false)
+            .expect("14 remaining validators build a committee");
+        assert_eq!(committee.authorities().len(), 14);
+        let addresses: Vec<_> = committee.authorities().iter().map(|a| a.address).collect();
+        assert!(
+            !addresses.contains(&keys[0].0),
+            "offline validator came back"
+        );
+        assert!(
+            !addresses.contains(&keys[1].0),
+            "undersized validator came back"
+        );
+
+        // Rebuilding never reactivates them: there is no implicit re-entry.
+        let again = build_committee(&storage, &keys[2].1, &keys[2].0, "127.0.0.1:0", 0, false)
+            .expect("rebuild is stable");
+        assert_eq!(again.authorities().len(), 14);
+
+        // With the floor on, 14 is refused instead of padded back to 15.
+        let err = build_committee(&storage, &keys[2].1, &keys[2].0, "127.0.0.1:0", 0, true)
+            .expect_err("the floor must not be satisfied by resurrection");
+        assert!(err.to_string().contains("found 14"), "{err}");
     }
 }
 
