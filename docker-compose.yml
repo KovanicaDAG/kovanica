@@ -21,8 +21,10 @@ x-node: &node
     KOVANICA_MAX_PEERS: "8"
     KOVANICA_RPC_RATE_LIMIT_PER_MIN: "${KOVANICA_RPC_RATE_LIMIT_PER_MIN:-0}"
     KOVANICA_RPC_AUTH: "${KOVANICA_RPC_AUTH:-disable}"
-    KOVANICA_ROUND_DURATION_MS: "4000"
-    KOVANICA_MYSTICGHOST: "true"
+    # No consensus-parameter env vars here on purpose. round_duration_ms (4000)
+    # and use_mysticghost (true) are the built-in defaults, and the node now
+    # refuses KOVANICA_ROUND_DURATION_MS / KOVANICA_MYSTICGHOST /
+    # KOVANICA_VRF_LEADER on any chain other than devnet (3) and local (1337).
     KOVANICA_MEMPOOL_REBROADCAST_INTERVAL_SECS: "5"
     KOVANICA_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "30"
     KOVANICA_MEMPOOL_MIN_FEE_RATE: "0"

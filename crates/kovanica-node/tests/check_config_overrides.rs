@@ -108,3 +108,32 @@ fn check_config_allows_overrides_on_local_and_devnet() {
         );
     }
 }
+
+/// The deployed testnet compose must not set consensus parameters: the node
+/// rejects them on chain 2, so a compose file that sets one now fails to boot.
+/// (This test exists because `docker-compose.yml` did exactly that, with values
+/// equal to the defaults — the break would have been invisible until deploy.)
+#[test]
+fn deploy_compose_does_not_set_frozen_consensus_vars() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docker-compose.yml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    for var in [
+        "KOVANICA_ROUND_DURATION_MS",
+        "KOVANICA_MYSTICGHOST",
+        "KOVANICA_VRF_LEADER",
+    ] {
+        // Assignment only: the file is allowed to *mention* a variable in a
+        // comment explaining why it is absent.
+        let assigned = text
+            .lines()
+            .map(str::trim)
+            .any(|line| line.starts_with(&format!("{var}:")));
+        assert!(
+            !assigned,
+            "docker-compose.yml assigns {var}, which the node rejects on a shared chain; \
+             remove the assignment (the built-in defaults are the production values) or run a \
+             dev chain"
+        );
+    }
+}

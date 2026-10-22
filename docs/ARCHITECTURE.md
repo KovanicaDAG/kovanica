@@ -190,7 +190,7 @@ Current agent config lives in root `AGENTS.md`, `.opencode/agents/kovanica.md`, 
 
 ## Current Edit Notes (2026-10-13)
 
-- `use_mysticghost` default = false (`NodeConfig` and `ConsensusConfig`; `KOVANICA_MYSTICGHOST` overrides). When enabled, `UniversalCommitter` applies scoped GHOSTDAG colouring.
+- `use_mysticghost` default = **true** in both `NodeConfig` and `ConsensusConfig` (an older note here said false; the code has defaulted to true for a while). `MysticGhostConfig::default()` is the separate colourer knob and does default `enabled: false`, which is what the committer overrides when it builds its own config. When enabled, `UniversalCommitter` applies scoped GHOSTDAG colouring. Since 2026-10-22 the `KOVANICA_MYSTICGHOST` override is only accepted on devnet/local chains.
 - `init_genesis` extended with `founder_premine.hex` + `validators.json` support (Phase 14/16)
 - Storage / staking compile fixes applied; `TASKLIST.md` updated
 - Tokenomics locked (RFC-006 / `docs/TOKENOMICS.md`)

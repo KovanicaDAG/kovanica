@@ -56,7 +56,7 @@ Source: full codebase inspection, targeted tests, and a partial full-workspace t
 1. Finish and stabilise the full `cargo test --workspace` run (notably `sustained_liveness_integration`) in CI.
 2. Regenerate/commit any missing lock files deliberately (root `package-lock.json` was removed as empty/stray; verify CI `npm ci` behaviour per package).
 3. Split the large local-edit commit `98d88cc` if review requires smaller PRs; mapping is in the commit message.
-4. Decide whether `KOVANICA_MYSTICGHOST` stays default `false` for testnet; current docs/tests assume linearizer path.
+4. ~~Decide whether `KOVANICA_MYSTICGHOST` stays default `false` for testnet~~ — **resolved 2026-10-22:** the default is `true` in `NodeConfig` and `ConsensusConfig`, the docs that said `false` are corrected, and the env override is now only accepted on devnet/local chains, so testnet consensus settings cannot drift per node.
 5. Update deployment scripts/Docker defaults to port 8000 if any still reference 9000 (grep done: README fixed, audit note remains intentional).
 6. Keep `TASKLIST.md` in lockstep with the VRF reality: primitives exist, but leader scheduling uses round-robin `CommitteeInfo::leader`, not `stake_weighted_leader`.
 7. Add coverage for `kovanica-execution::call_args` in contract integration tests.
