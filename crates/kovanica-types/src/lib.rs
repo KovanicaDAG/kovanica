@@ -174,6 +174,53 @@ pub fn contract_hardening_active_from(round: Round) -> bool {
     round >= CONTRACT_HARDENING_ACTIVE_FROM_ROUND
 }
 
+/// Maximum serialized size of a single transaction, in bytes (512 KiB).
+///
+/// Measured on the bincode encoding, which is what storage and the network
+/// use, so every node computes the same size for the same transaction. The
+/// cap keeps a hostile or buggy sender from forcing peers to buffer, relay
+/// and store arbitrarily large payloads; a wasm `Deploy` is the only kind
+/// that can realistically approach it.
+pub const MAX_TX_BYTES: usize = 512 * 1024;
+
+/// Maximum serialized size of a block, in bytes (960 KiB).
+///
+/// Must stay comfortably below the network frame cap (`MAX_TRANSMIT_SIZE`,
+/// 1 MiB) so a block that passes consensus validation always fits in one
+/// message; `kovanica-network` asserts that relationship in a test.
+pub const MAX_BLOCK_BYTES: usize = 960 * 1024;
+
+/// Round from which the consensus size limits take effect.
+///
+/// Two block-validity rejections are gated on
+/// `block.round >= SIZE_LIMITS_ACTIVE_FROM_ROUND` (below it every block
+/// validates exactly as before):
+///
+/// 1. a transaction whose bincode encoding exceeds [`MAX_TX_BYTES`];
+/// 2. a block whose bincode encoding exceeds [`MAX_BLOCK_BYTES`].
+///
+/// Defaults to `u64::MAX` so the rules are **inert** on the currently running
+/// testnet: activating them on a live chain without a coordinated upgrade
+/// would fork it, because a node that has not yet been updated would still
+/// accept an oversized block that an updated node rejects. Set to `0` at the
+/// next genesis / testnet reset, after every validator runs a build containing
+/// the limits.
+pub const SIZE_LIMITS_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+
+/// Whether the consensus size limits apply to a block at `round`.
+///
+/// Equivalent to `round >= SIZE_LIMITS_ACTIVE_FROM_ROUND`. This is the single
+/// predicate the block manager uses, so the activation rule has exactly one
+/// definition.
+///
+/// The lint is allowed because the default activation round is `u64::MAX` (so
+/// the rules are inert on the running testnet); the comparison is deliberate,
+/// not an accident, and would move here should the constant ever be redefined.
+#[allow(clippy::absurd_extreme_comparisons)]
+pub fn size_limits_active_from(round: Round) -> bool {
+    round >= SIZE_LIMITS_ACTIVE_FROM_ROUND
+}
+
 /// Genesis round.
 pub const GENESIS_ROUND: Round = 0;
 

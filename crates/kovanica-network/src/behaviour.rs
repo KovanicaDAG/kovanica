@@ -202,6 +202,27 @@ mod tests {
         assert_eq!(KAD_PROTOCOL, "/kovanica/kad/1.0.0");
     }
 
+    /// The consensus block cap must stay below the gossip frame cap: a block
+    /// that passes consensus validation has to be relayable in one message.
+    /// If either constant moves, this relationship must be re-derived.
+    // Clippy sees two constants and calls the assertions tautological; that is
+    // exactly the point — it fails the build when the relationship is broken.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn consensus_block_cap_fits_the_gossip_frame() {
+        assert!(
+            kovanica_types::MAX_BLOCK_BYTES < MAX_TRANSMIT_SIZE,
+            "MAX_BLOCK_BYTES ({}) must stay below MAX_TRANSMIT_SIZE ({})",
+            kovanica_types::MAX_BLOCK_BYTES,
+            MAX_TRANSMIT_SIZE
+        );
+        // Leave real headroom for the message envelope, not a byte or two.
+        assert!(
+            MAX_TRANSMIT_SIZE - kovanica_types::MAX_BLOCK_BYTES >= 64 * 1024,
+            "at least 64 KiB of envelope headroom is expected"
+        );
+    }
+
     #[test]
     fn message_id_is_deterministic() {
         let first = message_id(b"kovanica-block");

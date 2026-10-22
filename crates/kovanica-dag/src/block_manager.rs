@@ -50,6 +50,18 @@ fn total_gas_limit<'a>(txs: impl IntoIterator<Item = &'a kovanica_types::Transac
         .fold(0u64, |acc, tx| acc.saturating_add(tx_gas_limit(tx)))
 }
 
+/// Serialized size of `value` in bytes, using the bincode encoding shared by
+/// storage and the network.
+///
+/// This is the measure the consensus size limits use. bincode is deterministic
+/// for a given value, so two nodes always agree on the number. The types
+/// involved (blocks, transactions) contain no maps or other constructs whose
+/// encoding bincode cannot size, so a failure here is treated as over-limit:
+/// such a value could not be stored or relayed either.
+fn encoded_len<T: serde::Serialize>(value: &T) -> u64 {
+    bincode::serialized_size(value).unwrap_or(u64::MAX)
+}
+
 /// Errors specific to block manager operations.
 #[derive(Error, Debug)]
 pub enum BlockManagerError {
@@ -454,6 +466,34 @@ impl BlockManager {
             }
         }
 
+        // Consensus size limits, gated on `SIZE_LIMITS_ACTIVE_FROM_ROUND` so
+        // they are inert on a live chain that has not been upgraded in step.
+        //
+        // Sizes are measured on the bincode encoding, the same encoding used
+        // for storage and the wire, so every node computes the same number for
+        // the same value and the check is consensus deterministic. The block
+        // cap is below the network frame cap, so a block that passes here can
+        // always be relayed in one message.
+        if kovanica_types::size_limits_active_from(block.round) {
+            let block_bytes = encoded_len(block);
+            if block_bytes > kovanica_types::MAX_BLOCK_BYTES as u64 {
+                return Err(BlockManagerError::InvalidBlock(format!(
+                    "block size {} exceeds maximum {}",
+                    block_bytes,
+                    kovanica_types::MAX_BLOCK_BYTES
+                )));
+            }
+            for tx in &block.transactions {
+                let tx_bytes = encoded_len(tx);
+                if tx_bytes > kovanica_types::MAX_TX_BYTES as u64 {
+                    return Err(BlockManagerError::InvalidBlock(format!(
+                        "transaction size {tx_bytes} exceeds maximum {}",
+                        kovanica_types::MAX_TX_BYTES
+                    )));
+                }
+            }
+        }
+
         // Validate each transaction's hash and basic structure
         for tx in &block.transactions {
             self.validate_transaction(tx, gas_hardening_active)?;
@@ -703,7 +743,10 @@ impl BlockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND;
+    use kovanica_types::{
+        GAS_HARDENING_ACTIVE_FROM_ROUND, MAX_BLOCK_BYTES, MAX_TX_BYTES,
+        SIZE_LIMITS_ACTIVE_FROM_ROUND,
+    };
     const TEST_CTX: kovanica_types::SigningContext =
         kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL);
     #[test]
@@ -1685,5 +1728,107 @@ mod tests {
         manager
             .validate_block(&child)
             .expect("after restart, pruned parents/ancestors are still accepted");
+    }
+    /// Signed `Deploy` transaction carrying `code_len` bytes of bytecode.
+    fn deploy_tx(nonce: u64, code_len: usize) -> Transaction {
+        use kovanica_types::transaction::TransactionKind;
+        let mut tx = Transaction {
+            sender: kovanica_types::address::Address([0x11; 32]),
+            nonce,
+            kind: TransactionKind::Deploy {
+                code: vec![0u8; code_len],
+            },
+            fee: 1,
+            signature: Signature([0; 64]),
+            hash: Hash::zero(),
+        };
+        tx.hash = tx.signing_hash(&TEST_CTX);
+        tx
+    }
+
+    /// The size limits are gated exactly like the gas rules: inert below
+    /// `SIZE_LIMITS_ACTIVE_FROM_ROUND`, enforced from it, so an upgraded node
+    /// never diverges from one that has not been upgraded yet.
+    #[test]
+    fn size_limits_gate_is_inert_below_and_enforced_at_activation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = kovanica_storage::Storage::new(dir.path().join("dag.redb")).unwrap();
+        let store = Arc::new(DagStore::new(storage).unwrap());
+        let manager = BlockManager::new(store, TEST_CTX);
+        let (key, public_key) = crypto::generate_keypair();
+        manager.set_authority_keys(HashMap::from([(0, public_key)]));
+
+        // A transaction whose encoding is over the cap, and a block made of
+        // them that is over the block cap.
+        let oversized = deploy_tx(0, MAX_TX_BYTES);
+        let oversized_block_txs: Vec<Transaction> =
+            (0..4).map(|n| deploy_tx(n, 300 * 1024)).collect();
+
+        // Below activation both are still accepted: that is the behavior a
+        // node without the limits has, and matching it is what avoids a fork.
+        if let Some(below) = SIZE_LIMITS_ACTIVE_FROM_ROUND.checked_sub(1) {
+            let block = gas_block_at(below, vec![oversized.clone()], &key);
+            manager
+                .validate_block_content(&block)
+                .expect("below activation an oversized transaction must still validate");
+            let block = gas_block_at(below, oversized_block_txs.clone(), &key);
+            manager
+                .validate_block_content(&block)
+                .expect("below activation an oversized block must still validate");
+        }
+
+        // At activation the transaction is rejected on its own size.
+        let at = SIZE_LIMITS_ACTIVE_FROM_ROUND;
+        let block = gas_block_at(at, vec![oversized], &key);
+        let err = manager
+            .validate_block_content(&block)
+            .expect_err("at activation an oversized transaction must be rejected");
+        assert!(
+            err.to_string().contains("transaction size"),
+            "expected a transaction-size rejection, got: {err}"
+        );
+
+        // A transaction comfortably under the cap still passes.
+        let block = gas_block_at(at, vec![deploy_tx(0, MAX_TX_BYTES / 2)], &key);
+        manager
+            .validate_block_content(&block)
+            .expect("a transaction under the cap is accepted once active");
+    }
+
+    /// A block can exceed `MAX_BLOCK_BYTES` while every transaction in it is
+    /// individually legal: the block cap is checked separately.
+    #[test]
+    fn size_limits_reject_a_block_over_the_block_cap_when_active() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = kovanica_storage::Storage::new(dir.path().join("dag.redb")).unwrap();
+        let store = Arc::new(DagStore::new(storage).unwrap());
+        let manager = BlockManager::new(store, TEST_CTX);
+        let (key, public_key) = crypto::generate_keypair();
+        manager.set_authority_keys(HashMap::from([(0, public_key)]));
+
+        let at = SIZE_LIMITS_ACTIVE_FROM_ROUND;
+
+        // Each transaction is under `MAX_TX_BYTES`; together they are not.
+        let big: Vec<Transaction> = (0..4).map(|n| deploy_tx(n, 300 * 1024)).collect();
+        let block = gas_block_at(at, big, &key);
+        assert!(
+            encoded_len(&block) > MAX_BLOCK_BYTES as u64,
+            "the fixture must actually exceed the block cap"
+        );
+        let err = manager
+            .validate_block_content(&block)
+            .expect_err("a block over the cap must be rejected");
+        assert!(
+            err.to_string().contains("block size"),
+            "expected a block-size rejection, got: {err}"
+        );
+
+        // Two such transactions fit, so the block is accepted.
+        let fits: Vec<Transaction> = (0..2).map(|n| deploy_tx(n, 300 * 1024)).collect();
+        let block = gas_block_at(at, fits, &key);
+        assert!(encoded_len(&block) < MAX_BLOCK_BYTES as u64);
+        manager
+            .validate_block_content(&block)
+            .expect("a block under the cap is accepted once active");
     }
 }

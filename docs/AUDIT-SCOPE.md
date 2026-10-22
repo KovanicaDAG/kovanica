@@ -37,6 +37,7 @@ This document defines the scope for an external security audit covering consensu
 - Min-digest fork: only replaces when store accepts swap AND round undecided
 - Skip registration persists in decided map with `LeaderStatus::Skip`
 - `mark_decided_and_commit_leader` atomicity (both or neither on crash)
+- Block/transaction size limits: `MAX_BLOCK_BYTES` (960 KiB) and `MAX_TX_BYTES` (512 KiB) are checked in block-manager validation on the **bincode encoding**, so the bound applies on every ingest path (gossip, block sync, proposal, local assembly), not just at the P2P edge. Gated by `SIZE_LIMITS_ACTIVE_FROM_ROUND` (currently `u64::MAX` → inert until the next genesis reset, because a node without the limits would accept a block an upgraded node rejects).
 
 #### 2.1.1 KNOWN CRITICAL FINDING — committed-chain fork via node-local skip (PRO-35)
 
@@ -111,7 +112,7 @@ certificate) against the subsidy/epoch invariants in §2.5.
 | `state_sync.rs` | **High** | Request-response state sync (protocol `/kovanica/state-sync/1`) |
 | `identity.rs` | **Medium** | Persistent node identity (Ed25519 transport key, `0600` file perms), no hard-coded bootstrap nodes |
 
-**Configuration defaults:** listen `/ip4/0.0.0.0/tcp/8000`, max 50 peers, ping 10s. Bootstrap nodes supplied at deploy via DNS names (no external project infra).
+**Configuration defaults:** listen `/ip4/0.0.0.0/tcp/8000`, max 50 peers, ping 10s. Gossip frames are capped at `MAX_TRANSMIT_SIZE` (1 MiB); the consensus block cap sits 64 KiB below it so a valid block is always relayable in one message (asserted by `consensus_block_cap_fits_the_gossip_frame`). Bootstrap nodes supplied at deploy via DNS names (no external project infra).
 
 ### 2.4 Execution / WASM — `kovanica-execution` + `kovanica-runtime` (HIGH)
 
@@ -201,7 +202,7 @@ certificate) against the subsidy/epoch invariants in §2.5.
 
 ## 5. Test Coverage Notes
 
-- Unit tests: 500+ passing across workspace
+- Unit tests: 975 passing across workspace (2026-10-22)
 - Integration tests: `sustained_liveness_integration`, `multi_node_integration`, `late_join_integration`
 - Property tests: `proptest` in `kovanica-consensus` (wave arithmetic, committer properties)
 - Fuzzing: Block, vote, transaction, consensus fuzzers (cargo-fuzz)
