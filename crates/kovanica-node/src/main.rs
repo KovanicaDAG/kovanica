@@ -3874,8 +3874,6 @@ fn read_signing_key(path: &str) -> Result<SigningKey> {
     Ok(SigningKey::from_bytes(&seed))
 }
 
-/// Parse a Kovanica address from various formats:
-/// - 64-char hex (32 bytes)
 /// Parse an address string in any of the supported formats:
 /// - `kvnc<32-byte-hex>dag` (canonical, with checksum verification)
 /// - bare 32-byte hex

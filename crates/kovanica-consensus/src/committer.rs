@@ -1359,8 +1359,14 @@ mod tests {
             // After quorum on round 5, both nodes must commit the same sequence.
             assert_eq!(seq, vec![5, 6], "identical commit sequence after quorum");
             let decided = committer.get_all_decided_leaders();
-            assert_eq!(decided.get(&5).map(|l| l.status), Some(LeaderStatus::Commit));
-            assert_eq!(decided.get(&6).map(|l| l.status), Some(LeaderStatus::Commit));
+            assert_eq!(
+                decided.get(&5).map(|l| l.status),
+                Some(LeaderStatus::Commit)
+            );
+            assert_eq!(
+                decided.get(&6).map(|l| l.status),
+                Some(LeaderStatus::Commit)
+            );
         }
     }
 

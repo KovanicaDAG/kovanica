@@ -942,8 +942,14 @@ fn test_try_commit_passes_over_uncertified_round() {
     assert_eq!(subdag.leader_round, 3);
 
     let decided = committer.get_all_decided_leaders();
-    assert_eq!(decided.get(&1).map(|l| l.status), Some(LeaderStatus::Commit));
-    assert_eq!(decided.get(&3).map(|l| l.status), Some(LeaderStatus::Commit));
+    assert_eq!(
+        decided.get(&1).map(|l| l.status),
+        Some(LeaderStatus::Commit)
+    );
+    assert_eq!(
+        decided.get(&3).map(|l| l.status),
+        Some(LeaderStatus::Commit)
+    );
 }
 
 /// Round 0 is exempt from commits even with full quorum (genesis handling).
