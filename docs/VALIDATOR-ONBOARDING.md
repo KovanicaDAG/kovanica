@@ -261,13 +261,31 @@ curl http://127.0.0.1:8545/health
 ```bash
 curl http://127.0.0.1:8545/metrics
 # Exposes: block_height, current_round, mempool_size, peer_count,
-# commit_latency, rss_proxy, mysticghost_*, rpc_*, etc.
+# commit_latency, rss_proxy, mysticghost_*, rpc_*, plus the kovanica_* set:
+#   kovanica_committed_leaders_total, kovanica_skipped_leaders_total{reason},
+#   kovanica_finality_latency_seconds (histogram),
+#   kovanica_last_committed_round, kovanica_connected_peers,
+#   kovanica_active_validators, kovanica_sync_errors_total{kind},
+#   kovanica_last_committed_digest_prefix, kovanica_rss_bytes
 ```
 
 `block_height` is the **committed leader** height; `current_round` is the local
 round counter (three rounds pass per committed leader at the default 4 s round /
 12 s leader cadence). Use `block_height`, not `current_round`, to judge chain
 progress.
+
+The `kovanica_*` series are additive: the unprefixed names above are unchanged
+so existing dashboards keep working.
+
+`kovanica_finality_latency_seconds` is **node-local**: it measures from the
+moment this node first held the leader block to the durable commit, not from
+the proposal (`StatementBlock` has no timestamp).
+
+`kovanica_last_committed_digest_prefix` is the leading 64 bits of the last
+committed leader digest as a number. Scrape it from several validators: equal
+values mean they committed the same history, different values mean they
+diverged. It is a gauge, not an info metric, so it stays at one series per node
+instead of one series per committed block.
 
 ### 7.3 Grafana Dashboard
 
@@ -289,6 +307,10 @@ Thresholds match `ops/prometheus/alerts.yml`.
 | `mempool_size` | < 1,000 | > 1,000 for 5 min |
 | `commit_latency` | < 500 ms | > 5,000 ms for 3 min |
 | `rss_proxy` | < 3,000 MB | > 3,000 MB warn / > 3,500 MB critical |
+| `kovanica_active_validators` | 15–21 | Outside that range |
+| `kovanica_skipped_leaders_total{reason="timeout"}` | Rarely increases | Steady increase = leader blocks not arriving |
+| `kovanica_sync_errors_total{kind}` | Flat | Sustained increase = a peer or range is failing |
+| `kovanica_last_committed_digest_prefix` | Same across validators | Any validator differing = divergence |
 
 ---
 

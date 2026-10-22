@@ -5,7 +5,8 @@
 //! and commit decisions using Mysticeti-style DAG consensus.
 
 use crate::metrics::{
-    record_block_height, record_commit_latency, record_current_round, record_mergeset_size_metric,
+    observe_finality_latency, record_block_height, record_commit_latency, record_committed_leader,
+    record_current_round, record_mergeset_size_metric, record_skipped_leader, SkipReason,
 };
 use crate::types::{CommitteeInfo, LeaderInfo, LeaderStatus};
 use crate::{
@@ -373,6 +374,12 @@ where
     /// when `use_vrf_leader` is set. Empty until a caller records a proof
     /// that has already been checked against the committee VRF public key.
     vrf_outputs: RwLock<HashMap<Round, HashMap<kovanica_types::AuthorityIndex, [u8; 32]>>>,
+    /// When this node first held the leader block for a leader round.
+    ///
+    /// The commit path observes `now - first_seen` as node-local finality
+    /// latency. Entries are removed on commit and pruned with the round
+    /// window, so the map stays bounded by `max_pending_rounds`.
+    leader_first_seen: RwLock<HashMap<Round, Instant>>,
 }
 
 impl<D, B> ConsensusEngine<D, B>
@@ -438,6 +445,7 @@ where
             leader_deadline: RwLock::new(None),
             voted_rounds: Mutex::new(std::collections::BTreeSet::new()),
             vrf_outputs: RwLock::new(HashMap::new()),
+            leader_first_seen: RwLock::new(HashMap::new()),
         }
     }
 
@@ -701,6 +709,9 @@ where
                 votes: HashMap::new(),
             };
             self.committer.update_leader(info);
+            // Only the timeout path reaches here today; the indirect and
+            // direct-blame skips are unreachable with one leader per wave.
+            record_skipped_leader(SkipReason::Timeout);
             info!("Leader round {} skipped (timeout/fork)", round);
 
             // Return the skipped leader's in-flight transactions to mempool queue
@@ -790,6 +801,7 @@ where
                     votes: HashMap::new(),
                 };
                 self.committer.update_leader(leader_info);
+                self.note_leader_block_seen(round);
 
                 // Mark as proposed for this round.
                 self.state.write().proposed = true;
@@ -1029,6 +1041,7 @@ where
                             votes: HashMap::new(),
                         };
                         self.committer.update_leader(leader_info);
+                        self.note_leader_block_seen(block.round);
                         self.try_commit_and_deliver()?;
                         self.vote_if_late(block.round)?;
                         return Ok(());
@@ -1073,6 +1086,7 @@ where
                 votes: HashMap::new(),
             };
             self.committer.update_leader(leader_info);
+            self.note_leader_block_seen(block.round);
         }
 
         // Clear timeout if this block resolves the current leader slot
@@ -1184,6 +1198,18 @@ where
         // not a placeholder: the 5 s alert threshold has to be able to fire.
         record_commit_latency(commit_elapsed_ms);
 
+        // Node-local finality latency: how long this node needed from first
+        // sighting the leader block to the durable commit. A leader proposing
+        // locally starts the clock at proposal time, so the sample is never
+        // missing for a commit this node produced itself.
+        if let Some(seen) = self.leader_first_seen.write().remove(&subdag.leader_round) {
+            observe_finality_latency(seen.elapsed().as_secs_f64());
+        }
+        // Leading 64 bits of the leader digest as a divergence fingerprint.
+        let d = subdag.leader.digest.0;
+        let digest_prefix = u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]]);
+        record_committed_leader(subdag.leader_round as i64, digest_prefix);
+
         if let Some(sender) = self.commit_sender.read().as_ref() {
             if sender.send(subdag).is_err() {
                 warn!("execution receiver is unavailable; commit remains persisted for replay");
@@ -1199,7 +1225,24 @@ where
             let cutoff = current_round - max_pending;
             self.committer.cleanup_old_leaders(cutoff);
             self.voted_rounds.lock().retain(|&round| round >= cutoff);
+            // A leader that never committed (stalled chain) must not pin an
+            // `Instant` per round forever.
+            self.leader_first_seen
+                .write()
+                .retain(|&round, _| round >= cutoff);
         }
+    }
+
+    /// Remember when this node first held the leader block for `round`.
+    ///
+    /// Idempotent: a duplicate block delivery (idempotent re-processing, fork
+    /// replacement) must not reset the clock, or finality latency would be
+    /// under-reported.
+    fn note_leader_block_seen(&self, round: Round) {
+        self.leader_first_seen
+            .write()
+            .entry(round)
+            .or_insert_with(Instant::now);
     }
 
     /// The leader record registered for `round`, if any.
@@ -1836,6 +1879,84 @@ mod tests {
         ));
         assert!(receiver.try_recv().is_err());
         assert_eq!(dag.decisions.lock().as_slice(), &[(3, digest)]);
+    }
+
+    /// Read a single (unlabelled) series value out of the Prometheus text.
+    fn metric_value(text: &str, series: &str) -> f64 {
+        text.lines()
+            .find(|line| {
+                line.strip_prefix(series)
+                    .is_some_and(|rest| rest.starts_with(' '))
+            })
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0.0)
+    }
+
+    /// The commit path records the M1-M8 leader metrics and consumes the
+    /// arrival timestamp.
+    ///
+    /// The counters are process-global and tests run in parallel, so this
+    /// asserts a *monotonic increase* rather than an absolute value; the
+    /// per-round state (`leader_first_seen`) is asserted exactly.
+    #[tokio::test]
+    async fn commit_records_leader_metrics_and_clears_arrival() {
+        let (engine, _dag, key) = test_engine(100);
+        let before = crate::metrics_text();
+        let committed_before = metric_value(&before, "kovanica_committed_leaders_total");
+        let samples_before = metric_value(&before, "kovanica_finality_latency_seconds_count");
+
+        let digest = kovanica_types::StatementBlock::compute_digest(0, 3, &[], &[]);
+        let block = kovanica_types::StatementBlock {
+            author: 0,
+            round: 3,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+        engine.process_block(&block).unwrap();
+        // The leader block was seen; the clock starts here.
+        assert!(engine.leader_first_seen.read().contains_key(&3));
+
+        engine
+            .process_vote(&signed_vote(&key, 3, 0, digest))
+            .unwrap();
+
+        // The arrival entry is consumed exactly once by the commit.
+        assert!(!engine.leader_first_seen.read().contains_key(&3));
+
+        let after = crate::metrics_text();
+        assert!(
+            metric_value(&after, "kovanica_committed_leaders_total") > committed_before,
+            "committed-leader counter did not increase:\n{after}"
+        );
+        assert!(
+            metric_value(&after, "kovanica_finality_latency_seconds_count") > samples_before,
+            "finality latency histogram got no sample:\n{after}"
+        );
+    }
+
+    /// A leader deadline timeout is counted under the `timeout` reason.
+    #[tokio::test]
+    async fn skipped_leader_is_counted_as_timeout() {
+        let (engine, _dag, _key) = test_engine(100);
+        let before = crate::metrics_text();
+        let skipped_before = metric_value(
+            &before,
+            "kovanica_skipped_leaders_total{reason=\"timeout\"}",
+        );
+
+        engine.skip_leader(3).unwrap();
+
+        let after = crate::metrics_text();
+        assert!(
+            metric_value(&after, "kovanica_skipped_leaders_total{reason=\"timeout\"}")
+                > skipped_before,
+            "timeout skip was not counted:\n{after}"
+        );
     }
 
     /// An accepted vote is persisted, so a peer that joins later can be given

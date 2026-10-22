@@ -41,7 +41,10 @@ use zeroize::Zeroizing;
 use config::NodeConfig;
 
 use kovanica_consensus::engine::{BlockManagerTrait, DagStoreTrait};
-use kovanica_consensus::metrics::{record_mempool_size, record_peer_count, record_rss_proxy};
+use kovanica_consensus::metrics::{
+    record_active_validators, record_connected_peers, record_mempool_size, record_peer_count,
+    record_rss_bytes, record_rss_proxy, record_sync_error, SyncErrorKind,
+};
 use kovanica_consensus::{AuthorityInfo, CommitteeInfo, ConsensusConfig, ConsensusEngine, Vote};
 use kovanica_dag::{BlockManager, BlockManagerError, DagStore, DagStoreError};
 use kovanica_execution::ExecutionContext;
@@ -781,6 +784,7 @@ where
         sync_status: Some(sync_status_source),
     };
     let rpc_committee = rpc_state.committee.clone();
+    let committee_for_metrics = rpc_state.committee.clone();
     let rpc_server = RpcServer::new(
         rpc_socket,
         rpc_state,
@@ -966,9 +970,19 @@ where
                     let mempool_size = mempool_for_metrics.len() as i64;
                     record_mempool_size(mempool_size);
 
-                    // Update peer count
+                    // Update peer count. The `kovanica_` series is the
+                    // additive M1-M8 name; `peer_count` stays for the
+                    // dashboards already deployed.
                     let peer_count_val = peer_count_for_metrics.load(Ordering::Relaxed) as i64;
                     record_peer_count(peer_count_val);
+                    record_connected_peers(peer_count_val);
+
+                    // Active validators come from the RPC committee, which is
+                    // rebuilt at every epoch boundary.
+                    {
+                        let committee = committee_for_metrics.read().await;
+                        record_active_validators(committee.authorities().len() as i64);
+                    }
 
                     // Update RSS. `record_rss_proxy` existed but was never
                     // called, so `rss_proxy` stayed at 0: the memory alerts
@@ -976,6 +990,9 @@ where
                     // column.
                     if let Some(rss_mb) = read_rss_mb() {
                         record_rss_proxy(rss_mb);
+                    }
+                    if let Some(rss_bytes) = read_rss_bytes() {
+                        record_rss_bytes(rss_bytes);
                     }
                 }
                 _ = shutdown_for_metrics.changed() => {
@@ -1329,12 +1346,27 @@ fn run_retention_pass(
 /// Returns `None` off Linux; the gauge then simply keeps its previous value.
 #[cfg(target_os = "linux")]
 fn read_rss_mb() -> Option<i64> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    parse_vmrss_kb(&status).map(|kb| (kb / 1024) as i64)
+    read_rss_bytes().map(|bytes| (bytes / (1024 * 1024)) as i64)
 }
 
 #[cfg(not(target_os = "linux"))]
 fn read_rss_mb() -> Option<i64> {
+    None
+}
+
+/// Resident set size in bytes.
+///
+/// Read from `VmRSS` (kB) rather than `/proc/self/statm`: `statm` reports
+/// pages, and page size is 16 KiB on ARM64 hosts, which would under-report the
+/// footprint by 4x. `VmRSS` is already in kB on every architecture.
+#[cfg(target_os = "linux")]
+fn read_rss_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    parse_vmrss_kb(&status).map(|kb| kb * 1024)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_rss_bytes() -> Option<u64> {
     None
 }
 
@@ -2015,11 +2047,13 @@ async fn run_network(
                 }
                 Some(NetworkCommand::RequestSync(peer, request)) => {
                     if let Err(e) = service.request_block_sync(peer, request) {
+                        record_sync_error(SyncErrorKind::Request);
                         warn!(%peer, error = %e, "failed to request block sync");
                     }
                 }
                 Some(NetworkCommand::RequestStateSync(peer, request)) => {
                     if let Err(e) = service.request_state_sync(peer, request) {
+                        record_sync_error(SyncErrorKind::StateRequest);
                         warn!(%peer, error = %e, "failed to request state sync");
                     }
                 }
@@ -3260,10 +3294,12 @@ fn handle_network_event(
                 }
                 BlockSyncResponse::NotFound => {
                     catch_up.on_hash_response(peer, now, network_cmd_tx);
+                    record_sync_error(SyncErrorKind::NotFound);
                     debug!(%peer, "requested block not found on peer");
                 }
                 BlockSyncResponse::InvalidRequest => {
                     catch_up.on_hash_response(peer, now, network_cmd_tx);
+                    record_sync_error(SyncErrorKind::InvalidRequest);
                     warn!(%peer, "block sync request was invalid");
                 }
                 BlockSyncResponse::Status { tip_round } => {

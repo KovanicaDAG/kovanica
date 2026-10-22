@@ -218,6 +218,254 @@ pub fn record_rss_proxy(mb: i64) {
     RSS_PROXY.set(mb);
 }
 
+// ---------------------------------------------------------------------------
+// `kovanica_*` operational metrics (PRO-10, M1-M8)
+// ---------------------------------------------------------------------------
+//
+// These are additive: the older unprefixed series above stay exactly as they
+// are so dashboards deployed on the VPS keep working. New series carry the
+// `kovanica_` prefix agreed for the M1-M8 set.
+
+/// Reason for a skipped leader. The label values are compile-time constants
+/// so a caller cannot create series at will.
+///
+/// Today only [`SkipReason::Timeout`] is emitted: with `WAVE_LENGTH = 3` there
+/// is exactly one leader per wave, and the cross-wave and local-timeout skip
+/// paths were removed to eliminate the PRO-35 fork. `Indirect` and
+/// `DirectBlame` are defined for the indirect/blame code paths, which are
+/// reachable only from tests today; a label value that is never observed does
+/// not create a series.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkipReason {
+    /// The leader block did not arrive before the local leader deadline.
+    Timeout,
+    /// The leader was indirectly skipped because it is not causally connected
+    /// to a committed leader of its wave.
+    Indirect,
+    /// The direct rule decided to skip the leader (blame path).
+    DirectBlame,
+}
+
+impl SkipReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SkipReason::Timeout => "timeout",
+            SkipReason::Indirect => "indirect",
+            SkipReason::DirectBlame => "direct_blame",
+        }
+    }
+}
+
+/// Kind of block/state sync failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncErrorKind {
+    /// The request could not be issued to the peer.
+    Request,
+    /// A state-sync request could not be issued.
+    StateRequest,
+    /// The peer answered that it does not have the requested block.
+    NotFound,
+    /// The peer rejected the request as malformed.
+    InvalidRequest,
+}
+
+impl SyncErrorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SyncErrorKind::Request => "request",
+            SyncErrorKind::StateRequest => "state_request",
+            SyncErrorKind::NotFound => "not_found",
+            SyncErrorKind::InvalidRequest => "invalid_request",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct SkipReasonLabels {
+    pub reason: &'static str,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct SyncErrorLabels {
+    pub kind: &'static str,
+}
+
+/// Leaders committed by this node.
+static KOVANICA_COMMITTED_LEADERS_TOTAL: Lazy<Counter> = Lazy::new(|| {
+    let counter = Counter::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_committed_leaders",
+        "Total committed leaders",
+        counter.clone(),
+    );
+    counter
+});
+
+/// Leaders skipped by this node, by reason.
+static KOVANICA_SKIPPED_LEADERS_TOTAL: Lazy<Family<SkipReasonLabels, Counter>> = Lazy::new(|| {
+    let family = Family::<SkipReasonLabels, Counter>::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_skipped_leaders",
+        "Total skipped leader slots, by reason",
+        family.clone(),
+    );
+    family
+});
+
+/// Time from first sighting the leader block to committing it, in seconds.
+///
+/// This is node-local finality latency: it measures how long this node needed
+/// from receiving the leader block to a durable commit. It is *not* the time
+/// from proposal — `StatementBlock` carries no timestamp — so a leader's own
+/// node sees roughly the vote-round delay. Buckets cover 1 ms .. ~4 s, which
+/// is the useful range at a 4 s round / 12 s commit cadence.
+static KOVANICA_FINALITY_LATENCY_SECONDS: Lazy<Histogram> = Lazy::new(|| {
+    let buckets: Vec<f64> =
+        prometheus_client::metrics::histogram::exponential_buckets(0.001, 2.0, 13).collect();
+    let histogram = Histogram::new(buckets);
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register_with_unit(
+        "kovanica_finality_latency",
+        "Seconds from first sighting a leader block to committing it",
+        Unit::Seconds,
+        histogram.clone(),
+    );
+    histogram
+});
+
+/// Round of the most recently committed leader.
+static KOVANICA_LAST_COMMITTED_ROUND: Lazy<Gauge> = Lazy::new(|| {
+    let gauge = Gauge::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_last_committed_round",
+        "Round of the most recently committed leader",
+        gauge.clone(),
+    );
+    gauge
+});
+
+/// Connected P2P peers.
+static KOVANICA_CONNECTED_PEERS: Lazy<Gauge> = Lazy::new(|| {
+    let gauge = Gauge::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_connected_peers",
+        "Number of connected P2P peers",
+        gauge.clone(),
+    );
+    gauge
+});
+
+/// Active validators in the current committee.
+static KOVANICA_ACTIVE_VALIDATORS: Lazy<Gauge> = Lazy::new(|| {
+    let gauge = Gauge::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_active_validators",
+        "Number of active validators in the current committee",
+        gauge.clone(),
+    );
+    gauge
+});
+
+/// Sync failures, by kind.
+static KOVANICA_SYNC_ERRORS_TOTAL: Lazy<Family<SyncErrorLabels, Counter>> = Lazy::new(|| {
+    let family = Family::<SyncErrorLabels, Counter>::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_sync_errors",
+        "Total block/state sync failures, by kind",
+        family.clone(),
+    );
+    family
+});
+
+/// Leading 8 bytes of the last committed leader digest, as a `u64`.
+///
+/// Deliberately **not** an info metric: a `digest` label would create one
+/// series per commit (~7 200/day at a 12 s cadence) and exhaust Prometheus.
+/// Exposing the leading 64 bits as a number keeps cardinality at one series
+/// per node while still answering the only question operators ask of it — do
+/// two nodes agree on the last committed history? Equal values mean they agree
+/// (64-bit collision is negligible); different values mean they diverged.
+static KOVANICA_LAST_COMMITTED_DIGEST_PREFIX: Lazy<Gauge> = Lazy::new(|| {
+    let gauge = Gauge::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_last_committed_digest_prefix",
+        "Leading 64 bits of the last committed leader digest (divergence fingerprint)",
+        gauge.clone(),
+    );
+    gauge
+});
+
+/// Resident set size in bytes.
+static KOVANICA_RSS_BYTES: Lazy<Gauge> = Lazy::new(|| {
+    let gauge = Gauge::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_rss_bytes",
+        "Resident set size in bytes",
+        gauge.clone(),
+    );
+    gauge
+});
+
+/// Record one committed leader: counter, round, and digest fingerprint.
+///
+/// `digest_prefix` is the leading 8 bytes of the leader digest interpreted as
+/// a big-endian `u64`; see [`KOVANICA_LAST_COMMITTED_DIGEST_PREFIX`] for why it
+/// is a gauge rather than a labelled info metric.
+pub fn record_committed_leader(round: i64, digest_prefix: u64) {
+    KOVANICA_COMMITTED_LEADERS_TOTAL.inc();
+    KOVANICA_LAST_COMMITTED_ROUND.set(round);
+    // Prometheus gauges are i64; the fingerprint is used only for equality
+    // comparisons, so its signedness does not matter.
+    KOVANICA_LAST_COMMITTED_DIGEST_PREFIX.set(digest_prefix as i64);
+}
+
+/// Record a skipped leader slot.
+pub fn record_skipped_leader(reason: SkipReason) {
+    KOVANICA_SKIPPED_LEADERS_TOTAL
+        .get_or_create(&SkipReasonLabels {
+            reason: reason.as_str(),
+        })
+        .inc();
+}
+
+/// Observe node-local finality latency in seconds.
+pub fn observe_finality_latency(seconds: f64) {
+    KOVANICA_FINALITY_LATENCY_SECONDS.observe(seconds);
+}
+
+/// Record the connected peer count.
+pub fn record_connected_peers(count: i64) {
+    KOVANICA_CONNECTED_PEERS.set(count);
+}
+
+/// Record the number of active validators in the current committee.
+pub fn record_active_validators(count: i64) {
+    KOVANICA_ACTIVE_VALIDATORS.set(count);
+}
+
+/// Record one sync failure.
+pub fn record_sync_error(kind: SyncErrorKind) {
+    KOVANICA_SYNC_ERRORS_TOTAL
+        .get_or_create(&SyncErrorLabels {
+            kind: kind.as_str(),
+        })
+        .inc();
+}
+
+/// Record resident set size in bytes.
+pub fn record_rss_bytes(bytes: u64) {
+    // RSS above i64::MAX would be more than 8 EiB; saturate rather than wrap.
+    KOVANICA_RSS_BYTES.set(bytes.min(i64::MAX as u64) as i64);
+}
+
 /// Encode the metrics registry to the Prometheus text format.
 pub fn metrics_text() -> String {
     let mut buffer = String::new();
@@ -579,6 +827,45 @@ mod tests {
             "alerts.yml alerts on series this registry never exports: {missing:?}\n\
              registered: {names:?}"
         );
+    }
+
+    /// The M1-M8 series must exist under the agreed `kovanica_` prefix, with
+    /// the encoder-applied suffixes and bounded label values.
+    #[test]
+    fn kovanica_metrics_export_the_pro10_names() {
+        let _guard = serial();
+        record_committed_leader(7, 0xdead_beef_0000_0001);
+        record_skipped_leader(SkipReason::Timeout);
+        observe_finality_latency(0.25);
+        record_connected_peers(4);
+        record_active_validators(17);
+        record_sync_error(SyncErrorKind::NotFound);
+        record_rss_bytes(64 * 1024 * 1024);
+
+        let text = metrics_text();
+        for expected in [
+            "kovanica_committed_leaders_total",
+            "kovanica_skipped_leaders_total{reason=\"timeout\"}",
+            "kovanica_finality_latency_seconds_bucket",
+            "kovanica_finality_latency_seconds_count",
+            "kovanica_last_committed_round",
+            "kovanica_last_committed_digest_prefix",
+            "kovanica_connected_peers",
+            "kovanica_active_validators",
+            "kovanica_sync_errors_total{kind=\"not_found\"}",
+            "kovanica_rss_bytes",
+        ] {
+            assert!(text.contains(expected), "missing {expected} in:\n{text}");
+        }
+        // The reason/kind labels are bounded compile-time constants: no
+        // caller-supplied string can grow the cardinality.
+        assert_eq!(SkipReason::Timeout.as_str(), "timeout");
+        assert_eq!(SkipReason::Indirect.as_str(), "indirect");
+        assert_eq!(SkipReason::DirectBlame.as_str(), "direct_blame");
+        assert_eq!(SyncErrorKind::Request.as_str(), "request");
+        assert_eq!(SyncErrorKind::StateRequest.as_str(), "state_request");
+        assert_eq!(SyncErrorKind::NotFound.as_str(), "not_found");
+        assert_eq!(SyncErrorKind::InvalidRequest.as_str(), "invalid_request");
     }
 
     /// The alert rules read `rss_proxy` and `commit_latency`; a recorder that is

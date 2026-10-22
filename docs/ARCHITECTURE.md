@@ -121,6 +121,17 @@ Storage (redb / pruning / snapshots)
   `commit_latency` (wall-clock commit work), `rss_proxy`, `mergeset_size`,
   `mysticghost_*` (mergeset size, colouring duration, pruned blocks/waves),
   `rpc_*` (per-method requests, errors, latency)
+- `kovanica_*` operational set (PRO-10, additive to the names above):
+  `kovanica_committed_leaders_total`, `kovanica_skipped_leaders_total{reason}`
+  (`timeout` / `indirect` / `direct_blame`), `kovanica_finality_latency_seconds`
+  (node-local: first sighting of the leader block → durable commit),
+  `kovanica_last_committed_round`, `kovanica_connected_peers`,
+  `kovanica_active_validators`, `kovanica_sync_errors_total{kind}`,
+  `kovanica_last_committed_digest_prefix`, `kovanica_rss_bytes`
+- `alerts_reference_registered_metrics` is a test, not a convention: it parses
+  every `expr:` in `ops/prometheus/alerts.yml` and fails if a rule alerts on a
+  series the registry never exports. Five series were dead before this test
+  existed.
 - `GET /metrics` on the RPC listener, Prometheus text exposition
 - `ops/prometheus/alerts.yml` (alert rules) and
   `ops/grafana/kovanica-overview.json` (dashboard)
@@ -131,10 +142,19 @@ Storage (redb / pruning / snapshots)
   round (`current_round` exists for that) — the soak runner treats a
   non-increasing `block_height` as a stall.
 - Alert rules YAML: `peer_drop`, `sync_stall`, `commit_lag`, `high_memory`
+- `kovanica_last_committed_digest_prefix` is a gauge, not an info metric: a
+  `digest` label would create one series per commit (~7 200/day).
+- `kovanica_committee_peers_connected` is **not** exposed. The network layer
+  identifies peers by libp2p `PeerId` and nothing binds a `PeerId` to a
+  validator authority index, so any value would be a guess; a permanently-zero
+  gauge is worse than an absent one. Implementing it needs a peer-identity
+  exchange in the handshake.
 - Structured logging (`tracing`) + optional `trace_id` per round
 
 ### Exit Criteria
-Scrape `kovanica_node_block_height`, `kovanica_node_peer_count`, `kovanica_node_commit_latency`, `kovanica_node_mergeset_size`; dashboard shows live commit rate.
+Scrape `block_height`, `peer_count`, `commit_latency`, `mergeset_size` and
+`kovanica_committed_leaders_total`; the dashboard shows a live commit rate and
+`kovanica_finality_latency_seconds` has samples.
 
 ---
 
