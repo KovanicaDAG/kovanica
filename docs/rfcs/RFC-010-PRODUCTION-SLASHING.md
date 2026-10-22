@@ -1,0 +1,241 @@
+# RFC-010 — Production slashing: verifiable evidence and unbonding coverage
+
+- **Status:** Draft — decisions needed (see §8)
+- **Supersedes:** the skeleton described in PRO-12 (Linear), ANT-24
+- **Tracks:** TASKLIST item 8, Linear PRO-12
+- **Depends on:** PRO-19 (versioned store decode + immediate deactivation/jail)
+- **Consensus impact:** yes — new transaction kind and a new consensus rule. Must
+  ship behind `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`; activate only at the
+  chain 4 genesis reset.
+
+## 1. Goal
+
+A validator that provably equivocates (signs two different blocks for the same
+round) is slashed on every node, deterministically, and cannot escape the slash
+by unbonding first.
+
+## 2. What exists today (verified against main @ `b15f77c`)
+
+| Piece | State |
+|---|---|
+| `DoubleSignEvidence { validator, height }` (`kovanica-staking/src/lib.rs:402`) | **No proof.** Anyone could construct one; nothing constructs it in production. |
+| `StakingState::slash` (`lib.rs:1229`) | Cuts 5 % (`SLASH_PCT_BPS`) of self-stake and delegations, sets `slashed = true`. Does **not** touch `unbonding_queue` (H2). |
+| `evidence_id` (`lib.rs:1254`) | `validator ‖ height_le`, 40 bytes. |
+| `PROCESSED_EVIDENCE` table (`kovanica-execution/src/lib.rs:77`) | `[u8; 40] -> u8`, replay guard. |
+| `apply_double_sign_evidence` (`execution/lib.rs:1088`) | Slashes, credits treasury, bumps `slashed_to_treasury`, marks the id. **Opens its own write txn**, so it cannot run inside a sub-DAG apply as-is. Called only from tests. |
+| Engine equivocation check (`consensus/engine.rs:1019-1056`) | Detects a second, different-digest block for the same `(round, author)` when that author is the **scheduled leader**, then returns `InvalidVote`. It has both blocks in hand — the exact evidence needed — and discards it. |
+| `SignedBlockHeader` | Does not exist. `StatementBlock` carries `author, round, digest, signature, merkle_root`, … |
+| `EVIDENCE_MAX_AGE_ROUNDS`, `JAIL_ROUNDS` | Do not exist. |
+| Slashed validator deactivation | Missing. `slash()` leaves `active = true`; a 5 % cut leaves 95 % of stake, above `MIN_VALIDATOR_STAKE`, so the offender stays in the committee. This is PRO-19's scope (`slashed` flag + `ValidatorSlashed` already block re-entry). |
+
+`StatementBlock` is signed over its `digest`
+(`kovanica_crypto::verify_block_signature(pubkey, digest, signature)`), so a
+block's signature is a signature over `(author, round, parents, txs)`.
+
+## 3. Evidence type
+
+PRO-12 proposes `EquivocationEvidence { header_a: SignedBlockHeader, header_b:
+SignedBlockHeader }` with verification "under the author's committee key for
+that epoch". That requirement cannot be implemented as written: **no historical
+committee is stored**. Committees are rebuilt from the *current* active set via
+`build_committee_for_round`, and `epoch = epoch_for_round(round)`; asking for
+epoch *e*'s membership after the set changed is not answerable from state.
+
+Proposal — a self-contained proof that needs no historical committee:
+
+```rust
+// kovanica-types
+pub struct SignedBlockHeader {
+    pub author: Address,   // the validator's on-chain address (= pubkey)
+    pub round: Round,
+    pub digest: Hash,
+    pub signature: Signature,
+}
+
+pub struct EquivocationEvidence {
+    pub header_a: SignedBlockHeader,
+    pub header_b: SignedBlockHeader,
+}
+```
+
+Rules (`EquivocationEvidence::verify` — pure, no storage):
+
+1. `header_a.author == header_b.author` — same offender.
+2. `header_a.round == header_b.round` — same slot.
+3. `header_a.digest != header_b.digest` — actually two different blocks.
+4. Both signatures verify over their digest under `author` (block domain tag).
+5. Neither digest is the zero hash.
+
+Soundness: only the holder of the validator key can produce both signatures, so
+evidence cannot be forged against an honest validator. Advisory invalidity
+(evidence about a block from before the validator joined) is not proven, but
+slashing is only applied when `author` is a validator in state — and a
+non-validator equivocating harms nobody and yields `NotValidator`.
+
+**Decision D1:** accept the "no historical committee proof" model, or store
+per-epoch committee snapshots (a much larger change). Recommendation: accept
+for v1 and document the limitation. The spec's intent — prove the offender
+signed both — is satisfied.
+
+`evidence_id = blake3("KUNA/evidence/equivocation/v1" ‖ author ‖ round_le)`
+(32 bytes). This changes `PROCESSED_EVIDENCE`'s key type from `[u8; 40]`.
+Because the table is only written by an inert test-only path today, no live
+data migration is needed — but confirm with PRO-19's store-versioning work
+before shipping.
+
+## 4. Detection
+
+Hook: `engine.rs:1019`, the branch that already fetches `existing` by
+`(author, round)` and compares digests. On `existing.digest != block.digest`
+and after the block's own signature has been validated:
+
+1. Build `EquivocationEvidence` from `(existing, block)`.
+2. `mempool.add_transaction(evidence_tx)` if a mempool is configured.
+3. Keep the existing rejection of the second block.
+
+Detection is local and non-consensus: a node that misses the second block simply
+does not report, and the network needs only one honest reporter.
+
+**Open:** the current check runs only when `scheduled_leader_for_round(round) ==
+Some(author)`. That is the leader-equivocation case the spec targets. Whether
+non-scheduled authors can even produce competing blocks (and should be slashed)
+is a consensus question — see D2.
+
+## 5. Transport
+
+New `TransactionKind::Evidence { evidence: EquivocationEvidence }`, sighash tag
+**12** (next free; 11 is `ClaimTreasury`). Gate production of this kind on
+`SLASHING_ACTIVE_FROM_ROUND`; before activation the executor rejects it as
+unsupported, and no node creates one.
+
+Reporter semantics:
+
+- The reporter signs the tx like any other (sender = reporter address, nonce,
+  fee). Any account may report; no reward (tokenomics unchanged).
+- **Fee floor must be bypassed.** `Mempool::add_transaction` rejects
+  `fee_rate < min_fee_rate` (`mempool/src/lib.rs:375`). `min_fee_rate` defaults
+  to 0 but is operator-settable, so a fee floor could silently drop all
+  evidence. Options: exempt `Evidence` from the floor, or require the reporter
+  to pay. Recommendation: exempt it and document that evidence is a protocol
+  message carried in a block.
+- Mempool must dedup by `evidence_id`. It dedups by tx hash today; a second
+  reporter's byte-different tx would still occupy the pool. Add an
+  `evidence_id` index or reject duplicates at execution (execution already does,
+  via `PROCESSED_EVIDENCE`).
+
+**Decision D3:** evidence as a transaction (spec) vs. a first-class gossip
+message (like votes). Recommendation: transaction, because it gets replicated,
+ordered, and executed by the existing path — and it avoids new network protocol
+work. Accept the oddity of a reporter-signed, fee-exempt protocol tx.
+
+## 6. Execution
+
+On `TransactionKind::Evidence`:
+
+1. Reject unless `round >= SLASHING_ACTIVE_FROM_ROUND`.
+2. `evidence.verify()` — reject on any failure.
+3. Age bound: let `L` be the enclosing sub-DAG's `leader_round` (thread it into
+   the executor alongside `committed_height`). Require
+   `evidence.header_a.round <= L` and `L - round <= EVIDENCE_MAX_AGE_ROUNDS`.
+4. `PROCESSED_EVIDENCE` lookup by `evidence_id` → `EvidenceProcessed`.
+5. Apply in the **same write txn** as the sub-DAG: snapshot staking, `slash()`,
+   credit treasury, bump `slashed_to_treasury`, mark id — i.e. the body of
+   `apply_double_sign_evidence` with its `begin_write`/`commit` removed and a
+   savepoint/rollback on failure, matching the other staking executors. The
+   existing method stays for tests until the refactor lands.
+
+`EVIDENCE_MAX_AGE_ROUNDS` must be shorter than the unbonding window in
+comparable units, so an unbond cannot mature before evidence can be applied.
+Current unbonding is `committed_leader_height + UNBONDING_ROUNDS (100_000)` —
+**heights, despite the name** (the PRO-37 unit mismatch). Rounds and heights
+differ by the leader stride (`WAVE_LENGTH = 3`), so pick the constant
+deliberately: recommendation `EVIDENCE_MAX_AGE_ROUNDS = 30_000` rounds ≈ 10 000
+leader heights ≈ 1.4 days, comfortably inside 100 000 heights.
+
+**Decision D4:** the exact constant. It is economic policy; needs owner sign-off.
+
+## 7. H2 — unbonding coverage
+
+`slash()` must also cut pending unbonding entries of the offender:
+
+```
+for entry in unbonding_queue where entry.validator == offender:
+    cut = entry.amount * SLASH_PCT_BPS / 10_000
+    entry.amount -= cut
+    total += cut
+```
+
+`unbond_validator` already subtracts the amount from `total_staked` at unbond
+time, so H2 must **not** subtract again; it reduces what will be withdrawable
+and adds the cut to the returned total (which execution credits to treasury).
+Supply is unchanged: the funds exist in the treasury account afterwards.
+
+**Decision D5 — the window.** Comparing `evidence.round` to
+`entry.release_height` mixes rounds and heights. Two honest options:
+
+- (a) Cut **every entry still pending at execution time**. Simple, fully
+  deterministic, impossible to game with a forged height. The unbonding period
+  is the escape hatch; while funds are pending they are slashable. This makes
+  `EVIDENCE_MAX_AGE_ROUNDS` purely an anti-stale-evidence bound, not the
+  security boundary.
+- (b) Cut only entries with `release_height > height_of(evidence.round)`,
+  requiring a round→height reverse lookup that does not exist.
+
+Recommendation: (a). It satisfies PRO-12's acceptance test (unbond 100 %, then
+evidence lands → entry reduced by 5 %) and removes the unit trap. Note the
+residual: once an unbond **matures and is withdrawn**, there is nothing left to
+slash. That is why the evidence age bound must stay well inside the unbonding
+window.
+
+## 8. Decisions needed
+
+| # | Question | Recommendation |
+|---|---|---|
+| D1 | Historical committee proof for evidence | Accept self-contained evidence (no per-epoch snapshots) |
+| D2 | Slash only scheduled-leader equivocation, or any author? | Start with scheduled leader (what the engine detects today) |
+| D3 | Evidence as tx vs gossip message | Transaction, fee-floor exempt |
+| D4 | `EVIDENCE_MAX_AGE_ROUNDS` | 30 000 rounds (~1.4 days) |
+| D5 | Unbonding window rule | Cut all entries pending at execution |
+
+Also unresolved and **not** in this RFC's scope: the offender must leave the
+committee. `slash()` sets `slashed = true` but leaves `active = true`; with a
+5 % cut the validator stays above the minimum and keeps its seat. Immediate
+deactivation + 3-epoch jail is PRO-19. Until PRO-19 lands, slashing changes
+balances but does not remove the misbehaving validator — acceptable only
+because the whole feature is gated off.
+
+## 9. Activation
+
+- `pub const SLASHING_ACTIVE_FROM_ROUND: u64 = u64::MAX;` in `kovanica-types`,
+  with `slashing_active_from(round)` as the single predicate (same shape as
+  `GAS_HARDENING_ACTIVE_FROM_ROUND`, `CONTRACT_HARDENING_ACTIVE_FROM_ROUND`,
+  `SIZE_LIMITS_ACTIVE_FROM_ROUND`).
+- Set to `0` at the chain 4 genesis reset, together with the other three gates.
+- Chain 2 must not activate it: adding a `TransactionKind` variant changes the
+  wire enum, so an activated evidence tx would be undecodable by old nodes.
+
+## 10. Test plan
+
+Unit (types): forged evidence (bad signature), different authors, identical
+digests, different rounds, zero digest → rejected.
+
+Unit (staking): valid evidence cuts exactly 5 % of self-stake, each delegation,
+and each pending unbonding entry; `total_staked` and `unbonding_queue` stay
+consistent; treasury credit equals the total; supply unchanged.
+
+Unit (execution): a second submission returns `EvidenceProcessed`; failure rolls
+back staking and balances together; evidence older than the age bound is
+rejected; everything is rejected below `SLASHING_ACTIVE_FROM_ROUND`.
+
+Integration (`crates/kovanica-node/tests/`): node A signs two blocks for one
+round → within 2 waves every honest node commits the evidence tx; identical
+stake via `kovanica_getStake` and identical state root; replay after restart
+gives the same root.
+
+Regression: with the gate at `u64::MAX`, an `Evidence` tx is rejected and no
+existing behaviour changes; the full workspace suite must stay green.
+
+## 11. Out of scope
+
+Downtime/liveness slashing; governance-controlled slash parameters; reporter
+rewards; jail mechanics (PRO-19); slashing past a matured, withdrawn unbond.
