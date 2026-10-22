@@ -22,7 +22,7 @@ pub mod topics;
 pub mod validation;
 
 pub use block_sync::{
-    BlockSyncRequest, BlockSyncRequestEvent, BlockSyncResponse, BlockSyncResponseEvent,
+    BlockSyncRequest, BlockSyncRequestEvent, BlockSyncResponse, BlockSyncResponseEvent, VoteSource,
     BLOCK_SYNC_PROTOCOL, BLOCK_SYNC_PROTOCOL_LEGACY,
 };
 pub use error::NetworkError;

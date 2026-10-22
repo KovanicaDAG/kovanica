@@ -82,6 +82,17 @@ impl DagStore {
         }
     }
 
+    /// The shared storage handle this store reads and writes.
+    ///
+    /// The block, state and consensus tables all live in the same redb file,
+    /// so a caller that needs a table the DAG API does not expose (the vote
+    /// table, for example) reaches it through this handle. The returned
+    /// handle is the same one the store was built from, so writes through it
+    /// are visible to the store immediately.
+    pub fn storage(&self) -> &Arc<Storage> {
+        &self.storage
+    }
+
     /// Test-only: number of `get_block` calls made so far.
     #[cfg(test)]
     pub(crate) fn get_block_calls(&self) -> u64 {

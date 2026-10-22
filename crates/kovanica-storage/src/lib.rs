@@ -190,6 +190,14 @@ pub mod tables {
         TableDefinition::new("decided_rounds"); // round -> decided leader hashes
     pub const LAST_COMMITED: TableDefinition<&'static str, [u8; 32]> =
         TableDefinition::new("last_committed"); // "last" -> leader block hash
+
+    /// Consensus votes (bincode `Vote`), keyed by `(leader round, voter index)`.
+    ///
+    /// A node keeps the votes it accepted so it can serve the decision evidence
+    /// for a leader round to a peer that joins later. The invariant this table
+    /// exists to uphold: if a node can serve the block for round R, it can serve
+    /// the votes for round R.
+    pub const VOTES: TableDefinition<(u64, u16), Vec<u8>> = TableDefinition::new("votes");
 }
 
 // Helper trait for bincode serialization

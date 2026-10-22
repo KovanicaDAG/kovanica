@@ -25,7 +25,7 @@
 //! against the peer (see `NetworkService::handle_request_response_event`).
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use kovanica_types::{block::StatementBlock, hash::Hash, AuthorityIndex, Round};
+use kovanica_types::{block::StatementBlock, hash::Hash, AuthorityIndex, Round, Vote};
 use libp2p::request_response::{OutboundRequestId, ProtocolSupport, ResponseChannel};
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +86,17 @@ pub enum BlockSyncRequest {
         /// Last round of the window (inclusive).
         to: Round,
     },
+    /// Request the votes cast for one leader round.
+    ///
+    /// A node that joins a running network syncs leader *blocks* but the votes
+    /// for those rounds were cast before it connected and are not replayed by
+    /// gossipsub. Without the votes the requester can never reach a quorum for
+    /// the leader it synced, and the commit walk stalls at that round
+    /// (`docs/rfcs/RFC-009-VOTE-TRANSFER-OVER-BLOCK-SYNC.md`).
+    VotesForRound {
+        /// The leader round whose votes are requested.
+        round: Round,
+    },
 }
 
 impl BlockSyncRequest {
@@ -121,12 +132,33 @@ pub enum BlockSyncResponse {
         /// Advertised tip round; never trusted for validation.
         tip_round: Round,
     },
+    /// The votes cast for one leader round.
+    ///
+    /// The responder serves these from its durable vote store, so a peer that
+    /// has restarted can still hand a joining node the evidence for the rounds
+    /// it already decided. Every vote is signed by its voter and is verified
+    /// by the requester against the committee before it is counted, so a peer
+    /// cannot make the requester accept a different leader.
+    Votes {
+        /// The leader round these votes belong to.
+        round: Round,
+        /// The votes for that round, bounded by
+        /// [`BlockSyncResponse::MAX_VOTES_PER_ROUND`].
+        votes: Vec<Vote>,
+    },
 }
 
 impl BlockSyncResponse {
     /// Maximum number of hashes in one [`BlockSyncResponse::RoundHashes`]
     /// response (bounds the response size well under the 1 MiB frame cap).
     pub const MAX_RANGE_HASHES: usize = 512;
+
+    /// Maximum number of votes in one [`BlockSyncResponse::Votes`] response.
+    ///
+    /// A committee has at most `MAX_ACTIVE_VALIDATORS` members, so this is a
+    /// generous bound; it exists so a hostile or buggy peer cannot inflate one
+    /// response past the frame cap.
+    pub const MAX_VOTES_PER_ROUND: usize = 64;
 }
 
 impl std::fmt::Display for BlockSyncResponse {
@@ -140,8 +172,27 @@ impl std::fmt::Display for BlockSyncResponse {
                 write!(f, "RoundHashes(up_to={up_to_round})")
             }
             BlockSyncResponse::Status { tip_round } => write!(f, "Status(tip={tip_round})"),
+            BlockSyncResponse::Votes { round, votes } => {
+                write!(f, "Votes(round={round}, n={})", votes.len())
+            }
         }
     }
+}
+
+/// Export side of the vote-transfer part of the block-sync protocol.
+///
+/// Implemented by the node over its durable vote store and injected into
+/// [`crate::NetworkService`] via [`crate::NetworkService::set_vote_source`].
+///
+/// The service serves what this returns verbatim (bounded by
+/// [`BlockSyncResponse::MAX_VOTES_PER_ROUND`]), so an implementation must only
+/// return votes it actually holds for the requested round. Returning an empty
+/// vec answers the requester with "no votes for that round".
+///
+/// See `docs/rfcs/RFC-009-VOTE-TRANSFER-OVER-BLOCK-SYNC.md`.
+pub trait VoteSource: Send + Sync {
+    /// The votes held for `round`, if any.
+    fn votes_for_round(&self, round: Round) -> Result<Vec<Vote>, String>;
 }
 
 /// Codec for the block sync protocol.
@@ -366,6 +417,67 @@ mod tests {
         };
         let encoded = bincode::serialize(&worst_response).expect("serializes");
         assert!(encoded.len() <= MAX_RESPONSE_SIZE);
+    }
+
+    #[test]
+    fn block_sync_votes_for_round_round_trip() {
+        let req = BlockSyncRequest::VotesForRound { round: 42 };
+        let encoded = bincode::serialize(&req).expect("serializes");
+        let decoded: BlockSyncRequest = bincode::deserialize(&encoded).expect("deserializes");
+        assert_eq!(req, decoded);
+
+        let vote = kovanica_types::Vote {
+            leader_round: 42,
+            leader_hash: Hash::new("leader"),
+            voter: 3,
+            signature: kovanica_types::crypto::Signature([7u8; 64]),
+        };
+        let resp = BlockSyncResponse::Votes {
+            round: 42,
+            votes: vec![vote],
+        };
+        let encoded = bincode::serialize(&resp).expect("serializes");
+        let decoded: BlockSyncResponse = bincode::deserialize(&encoded).expect("deserializes");
+        assert_eq!(resp, decoded);
+        assert_eq!(resp.to_string(), "Votes(round=42, n=1)");
+    }
+
+    /// The new variants are appended, so the encoding of the pre-existing
+    /// variants is unchanged and an old peer can still decode what it knows.
+    #[test]
+    fn votes_variants_are_appended_after_the_existing_ones() {
+        // `Block` is variant 0 of the response enum and must stay there.
+        let encoded = bincode::serialize(&BlockSyncResponse::NotFound).expect("serializes");
+        assert_eq!(
+            &encoded[..4],
+            &1u32.to_le_bytes(),
+            "NotFound must keep variant index 1"
+        );
+        let encoded = bincode::serialize(&BlockSyncRequest::Status).expect("serializes");
+        assert_eq!(
+            &encoded[..4],
+            &2u32.to_le_bytes(),
+            "Status must keep variant index 2"
+        );
+    }
+
+    /// A worst-case vote response must stay well inside the frame cap.
+    #[test]
+    fn votes_response_fits_the_frame_caps() {
+        let votes: Vec<kovanica_types::Vote> = (0..BlockSyncResponse::MAX_VOTES_PER_ROUND)
+            .map(|voter| kovanica_types::Vote {
+                leader_round: 7,
+                leader_hash: Hash::new("leader"),
+                voter: voter as u16,
+                signature: kovanica_types::crypto::Signature([0u8; 64]),
+            })
+            .collect();
+        let worst_response = BlockSyncResponse::Votes { round: 7, votes };
+        let encoded = bincode::serialize(&worst_response).expect("serializes");
+        assert!(
+            encoded.len() <= MAX_RESPONSE_SIZE,
+            "worst-case vote response must fit the frame cap"
+        );
     }
 
     /// The catch-up protocol is offered first, and the legacy name stays

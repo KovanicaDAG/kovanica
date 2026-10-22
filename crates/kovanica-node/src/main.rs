@@ -24,7 +24,7 @@ mod non_blue;
 mod orphans;
 mod seals;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::{Duration, Instant};
@@ -49,7 +49,7 @@ use kovanica_execution::{LogPublisher, TransactionReceipt};
 use kovanica_mempool::{Mempool, MempoolConfig};
 use kovanica_network::{
     BlockSyncRequest, BlockSyncResponse, NetworkConfig, NetworkEvent, NetworkService,
-    SnapshotChunk, StateSnapshotSource, StateSyncRequest, StateSyncResponse,
+    SnapshotChunk, StateSnapshotSource, StateSyncRequest, StateSyncResponse, VoteSource,
     MAX_STATE_SYNC_CHUNK_BYTES, MAX_STATE_SYNC_SNAPSHOT_BYTES,
 };
 use kovanica_rpc::{
@@ -135,6 +135,7 @@ struct SealDuty {
 }
 
 /// Outbound network commands handled by the network task.
+#[derive(Debug)]
 enum NetworkCommand {
     /// Gossip a newly produced block.
     BroadcastBlock(StatementBlock),
@@ -541,7 +542,13 @@ where
     // redb files: `kovanica-dag::DagStore` owns its `Storage`, while the mempool and
     // execution layer need a shareable `Arc<Storage>`. redb locks a file to a
     // single `Database`, so they cannot share one file.
-    let dag_store = Arc::new(DagStore::new(Storage::new(config.consensus_db_path())?)?);
+    //
+    // The consensus database is kept as a shared handle as well: the vote
+    // table lives there and is reached both by the engine (which persists
+    // accepted votes) and by the block-sync vote source (which serves them to
+    // a peer that joins later, RFC-009).
+    let consensus_storage = Arc::new(Storage::new(config.consensus_db_path())?);
+    let dag_store = Arc::new(DagStore::from_storage(consensus_storage.clone()));
     let state_storage = Arc::new(Storage::new(config.state_db_path())?);
     info!(dir = %config.data_dir.display(), "opened storage");
 
@@ -661,6 +668,12 @@ where
     // answers every state sync request with NotFound.
     network.set_state_snapshot_source(Arc::new(NodeStateSnapshotSource {
         storage: state_storage.clone(),
+    }));
+    // Export side of the vote-transfer part of the block-sync protocol: a peer
+    // that joins a running network asks for the votes of the leader rounds it
+    // synced, and this is where those votes come from (RFC-009).
+    network.set_vote_source(Arc::new(NodeVoteSource {
+        storage: consensus_storage.clone(),
     }));
     let network = Arc::new(network);
     let peer_count = network.peer_count_handle();
@@ -1823,6 +1836,7 @@ async fn run_event_handler(
 ) {
     let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
     let mut state_sync_sessions = StateSyncSessions::new();
+    let mut vote_sync = VoteSync::new();
     loop {
         tokio::select! {
             maybe = network_events.recv() => match maybe {
@@ -1843,6 +1857,7 @@ async fn run_event_handler(
                         &mut orphans,
                         &mut catch_up_guard,
                         &mut state_sync_sessions,
+                        &mut vote_sync,
                         &state_storage,
                     );
                 }
@@ -2307,6 +2322,252 @@ fn local_dag_tip(dag_store: &DagStore) -> Option<Round> {
 }
 
 // ------------------------------------------------------------------
+// Vote transfer over the block-sync protocol (RFC-009)
+// ------------------------------------------------------------------
+
+/// Maximum number of leader rounds the node tracks as "votes wanted".
+const VOTE_SYNC_MAX_WANTED: usize = 4096;
+
+/// Maximum number of vote requests in flight at the same time.
+const VOTE_SYNC_MAX_OUTSTANDING: usize = 64;
+
+/// Maximum number of buffered vote rounds (votes that arrived before their
+/// leader block did).
+const VOTE_SYNC_MAX_BUFFERED: usize = 256;
+
+/// Minimum interval between two vote requests for the same leader round.
+const VOTE_SYNC_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Maximum number of vote requests issued for the same leader round before
+/// the round is given up on.
+const VOTE_SYNC_MAX_ATTEMPTS: u8 = 8;
+
+/// One in-flight vote request.
+struct VoteRequest {
+    /// The peer the request was sent to.
+    peer: PeerId,
+    /// When the request was last issued.
+    issued_at: Instant,
+    /// How many times the request has been issued for this round.
+    attempts: u8,
+}
+
+/// Vote transfer over the block-sync protocol.
+///
+/// A node that joins a running network syncs the leader blocks, but the votes
+/// that decided those leaders were cast before it connected, and gossipsub
+/// does not replay them. Without those votes the node can never reach a
+/// quorum for a leader it synced, and the commit walk stalls at the first
+/// undecided one.
+///
+/// The tracker asks a peer for the votes of every leader round the node
+/// syncs, keeps the answers that arrive before their leader block, and hands
+/// them to consensus through the normal authentication boundary — a peer
+/// cannot make the node accept a vote for a different leader.
+///
+/// See `docs/rfcs/RFC-009-VOTE-TRANSFER-OVER-BLOCK-SYNC.md`.
+struct VoteSync {
+    /// Leader rounds the node still needs the votes for.
+    wanted: BTreeSet<Round>,
+    /// Requests in flight: leader round → request state.
+    outstanding: HashMap<Round, VoteRequest>,
+    /// Votes that arrived before their leader block, in ascending round order.
+    buffered: BTreeMap<Round, Vec<Vote>>,
+    /// Currently connected peers, in connection order.
+    peers: Vec<PeerId>,
+}
+
+impl VoteSync {
+    fn new() -> Self {
+        Self {
+            wanted: BTreeSet::new(),
+            outstanding: HashMap::new(),
+            buffered: BTreeMap::new(),
+            peers: Vec::new(),
+        }
+    }
+
+    /// Record a newly connected peer.
+    fn peer_connected(&mut self, peer: PeerId) {
+        if !self.peers.contains(&peer) {
+            self.peers.push(peer);
+        }
+    }
+
+    /// Forget a disconnected peer and every request that was sent to it.
+    ///
+    /// The rounds those requests covered stay in `wanted`, so the next pump
+    /// asks another peer for them.
+    fn peer_disconnected(&mut self, peer: PeerId) {
+        self.peers.retain(|p| *p != peer);
+        self.outstanding.retain(|_, request| request.peer != peer);
+    }
+
+    /// Record that the node ingested the leader block of `round`.
+    ///
+    /// The votes for that round are wanted: without them the round can never
+    /// be decided, and the commit walk stops there.
+    fn want_votes(&mut self, round: Round) {
+        if self.wanted.insert(round) {
+            // Bound the set: the oldest rounds are the ones least likely to
+            // still be servable.
+            while self.wanted.len() > VOTE_SYNC_MAX_WANTED {
+                let Some(oldest) = self.wanted.iter().next().copied() else {
+                    break;
+                };
+                self.wanted.remove(&oldest);
+            }
+        }
+    }
+
+    /// Record the votes a peer sent for `round`.
+    fn on_votes(&mut self, round: Round, votes: Vec<Vote>) {
+        self.outstanding.remove(&round);
+        if votes.is_empty() {
+            // The peer holds no votes for this round. Keep the round wanted:
+            // another peer may hold them.
+            return;
+        }
+        let entry = self.buffered.entry(round).or_default();
+        for vote in votes {
+            // One vote per voter: the first one that arrives wins.
+            if !entry.iter().any(|held| held.voter == vote.voter) {
+                entry.push(vote);
+            }
+        }
+        while self.buffered.len() > VOTE_SYNC_MAX_BUFFERED {
+            let Some(oldest) = self.buffered.keys().next().copied() else {
+                break;
+            };
+            self.buffered.remove(&oldest);
+        }
+    }
+
+    /// Apply every buffered vote whose leader block this node has ingested.
+    ///
+    /// The votes go through [`ConsensusEngine::process_vote`], the same
+    /// authentication boundary every other vote passes, so nothing a peer
+    /// sends is trusted. A round whose leader block has not arrived yet keeps
+    /// its votes buffered and is applied after the block is ingested.
+    fn drain(
+        &mut self,
+        engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>,
+    ) -> Result<(), kovanica_consensus::ConsensusError> {
+        let rounds: Vec<Round> = self.buffered.keys().copied().collect();
+        for round in rounds {
+            if engine.registered_leader(round).is_none() {
+                // The leader block has not been ingested yet: keep the votes
+                // and apply them after it arrives.
+                continue;
+            }
+            let Some(votes) = self.buffered.remove(&round) else {
+                continue;
+            };
+            for vote in votes {
+                match engine.process_vote(&vote) {
+                    Ok(()) => {}
+                    Err(kovanica_consensus::ConsensusError::VoteRejected(
+                        reason @ (kovanica_consensus::VoteRejection::Duplicate { .. }
+                        | kovanica_consensus::VoteRejection::UnknownLeaderRound(_)),
+                    )) => {
+                        debug!(round, %reason, "ignored transferred vote");
+                    }
+                    Err(e) => warn!(round, error = %e, "rejected transferred vote"),
+                }
+            }
+            self.wanted.remove(&round);
+        }
+        // A batch of votes can unblock several leaders at once; drain the
+        // commit pipeline so none of them waits for an unrelated trigger.
+        engine.drain_commits()
+    }
+
+    /// Issue the outstanding vote requests.
+    ///
+    /// Every bound is explicit: at most [`VOTE_SYNC_MAX_OUTSTANDING`] requests
+    /// are in flight, a round is asked at most [`VOTE_SYNC_MAX_ATTEMPTS`]
+    /// times, and a request for the same round is never repeated within
+    /// [`VOTE_SYNC_RETRY_INTERVAL`].
+    fn pump(&mut self, now: Instant, network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>) {
+        if self.peers.is_empty() {
+            return;
+        }
+        // Retry the requests that got no answer.
+        let due: Vec<Round> = self
+            .outstanding
+            .iter()
+            .filter(|(_, request)| {
+                now.saturating_duration_since(request.issued_at) >= VOTE_SYNC_RETRY_INTERVAL
+            })
+            .map(|(round, _)| *round)
+            .collect();
+        for round in due {
+            let Some(request) = self.outstanding.get_mut(&round) else {
+                continue;
+            };
+            if request.attempts >= VOTE_SYNC_MAX_ATTEMPTS {
+                // The peer has nothing for this round; another peer may.
+                self.outstanding.remove(&round);
+                self.wanted.remove(&round);
+                warn!(round, "giving up on the votes for this leader round");
+                continue;
+            }
+            let peer = request.peer;
+            if !self.peers.contains(&peer) {
+                self.outstanding.remove(&round);
+                continue;
+            }
+            request.attempts += 1;
+            request.issued_at = now;
+            self.send_vote_request(peer, round, network_cmd_tx);
+        }
+        // Ask for the rounds nobody asked about yet.
+        let wanted: Vec<Round> = self
+            .wanted
+            .iter()
+            .copied()
+            .filter(|round| !self.outstanding.contains_key(round))
+            .take(VOTE_SYNC_MAX_OUTSTANDING)
+            .collect();
+        for round in wanted {
+            if self.outstanding.len() >= VOTE_SYNC_MAX_OUTSTANDING {
+                break;
+            }
+            let Some(peer) = self.peers.first().copied() else {
+                break;
+            };
+            self.outstanding.insert(
+                round,
+                VoteRequest {
+                    peer,
+                    issued_at: now,
+                    attempts: 1,
+                },
+            );
+            self.send_vote_request(peer, round, network_cmd_tx);
+        }
+    }
+
+    /// Send one vote request.
+    fn send_vote_request(
+        &self,
+        peer: PeerId,
+        round: Round,
+        network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) {
+        if network_cmd_tx
+            .send(NetworkCommand::RequestSync(
+                peer,
+                BlockSyncRequest::VotesForRound { round },
+            ))
+            .is_err()
+        {
+            warn!(%peer, round, "failed to queue vote request");
+        }
+    }
+}
+
+// ------------------------------------------------------------------
 // State sync (chunked snapshot fast-sync)
 // ------------------------------------------------------------------
 
@@ -2366,6 +2627,26 @@ impl StateSnapshotSource for NodeStateSnapshotSource {
             state_root,
             bytes,
         }))
+    }
+}
+
+/// Export side of the vote-transfer part of the block-sync protocol, backed by
+/// the node's durable vote store in the consensus database.
+///
+/// The votes served here are the ones this node accepted through consensus,
+/// so a peer that joins later can reach the same decisions this node reached.
+/// See `docs/rfcs/RFC-009-VOTE-TRANSFER-OVER-BLOCK-SYNC.md`.
+struct NodeVoteSource {
+    storage: Arc<Storage>,
+}
+
+impl VoteSource for NodeVoteSource {
+    fn votes_for_round(&self, round: Round) -> Result<Vec<Vote>, String> {
+        let txn = self.storage.begin_read().map_err(|e| e.to_string())?;
+        self.storage
+            .consensus()
+            .get_votes_for_round(&txn, round)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -2628,6 +2909,7 @@ fn handle_network_event(
     orphans: &mut orphans::OrphanBuffer,
     catch_up: &mut CatchUpTracker,
     state_sync_sessions: &mut StateSyncSessions,
+    vote_sync: &mut VoteSync,
     state_storage: &Arc<Storage>,
 ) {
     let now = Instant::now();
@@ -2635,6 +2917,10 @@ fn handle_network_event(
     if catch_up.is_active() && catch_up.tick_due(now) {
         catch_up.tick(now, local_dag_tip(io.dag_store), network_cmd_tx);
     }
+    // Vote requests are issued from the event path (the tracker is only
+    // advanced by network events), so an idle swarm defers them like the
+    // catch-up work.
+    vote_sync.pump(now, network_cmd_tx);
     orphans.expire(now);
     state_sync_sessions.expire(now);
     match event {
@@ -2692,6 +2978,7 @@ fn handle_network_event(
         }
         NetworkEvent::PeerConnected(peer) => {
             info!(%peer, "peer connected");
+            vote_sync.peer_connected(peer);
             // Proactive catch-up: probe the peer's tip and pull any missing
             // range through the existing block-sync protocol.
             catch_up.probe(peer, now, network_cmd_tx);
@@ -2701,6 +2988,7 @@ fn handle_network_event(
         NetworkEvent::PeerDisconnected(peer) => {
             info!(%peer, "peer disconnected");
             catch_up.remove(peer);
+            vote_sync.peer_disconnected(peer);
         }
         NetworkEvent::PeerDiscovered(peer, addr) => debug!(%peer, %addr, "peer discovered"),
         NetworkEvent::SyncRequest {
@@ -2724,7 +3012,21 @@ fn handle_network_event(
                     // Missing parents are fetched recursively via the orphan
                     // buffer.
                     catch_up.on_hash_response(peer, now, network_cmd_tx);
+                    let leader_round = block.round;
+                    let is_leader =
+                        engine.scheduled_leader_for_round(leader_round) == Some(block.author);
                     ingest_block(block, peer, engine, io, orphans);
+                    if is_leader {
+                        // The votes that decided this leader were cast before
+                        // we connected, so they have to be fetched explicitly
+                        // (RFC-009).
+                        vote_sync.want_votes(leader_round);
+                    }
+                    // A leader block that just arrived may unblock votes that
+                    // were buffered while waiting for it.
+                    if let Err(e) = vote_sync.drain(engine) {
+                        warn!(error = %e, "commit drain failed after ingesting a block");
+                    }
                 }
                 BlockSyncResponse::NotFound => {
                     catch_up.on_hash_response(peer, now, network_cmd_tx);
@@ -2779,6 +3081,17 @@ fn handle_network_event(
                         {
                             debug!(error = %e, "failed to queue re-request for missing block");
                         }
+                    }
+                }
+                BlockSyncResponse::Votes { round, votes } => {
+                    // The votes a peer sent for a leader round we synced. They
+                    // are applied through the normal consensus boundary, so a
+                    // peer cannot make this node accept a vote for a
+                    // different leader (RFC-009).
+                    debug!(%peer, round, count = votes.len(), "received transferred votes");
+                    vote_sync.on_votes(round, votes);
+                    if let Err(e) = vote_sync.drain(engine) {
+                        warn!(error = %e, "commit drain failed after applying transferred votes");
                     }
                 }
             }
@@ -3089,6 +3402,21 @@ impl DagStoreTrait for NodeDagStore {
 
     fn get_decided_rounds(&self, max_round: Round) -> Result<Vec<Round>, DagStoreError> {
         self.inner.get_decided_rounds(max_round)
+    }
+
+    /// Persist an accepted vote in the consensus database.
+    ///
+    /// The vote is written under its leader round so it survives a restart and
+    /// can be handed to a peer that joins later (RFC-009). The write is a
+    /// separate transaction from the vote's acceptance, which is deliberate:
+    /// consensus has already counted the vote, and a storage failure here must
+    /// not turn an accepted vote into a rejected one.
+    fn put_vote(&self, vote: &Vote) -> Result<(), DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_write()?;
+        storage.consensus().put_vote(&txn, vote)?;
+        txn.commit()?;
+        Ok(())
     }
 
     fn max_stored_round(&self) -> Result<Option<Round>, DagStoreError> {
@@ -6280,6 +6608,190 @@ mod tests {
         assert_eq!(summary, "", "summary: {summary:?}");
         assert_eq!(count_blocks(&storage), 1_100);
         assert_eq!(count_state_roots(&storage), 0);
+    }
+    // ------------------------------------------------------------------
+    // Vote transfer over the block-sync protocol (RFC-009)
+    // ------------------------------------------------------------------
+
+    /// A minimal single-validator engine for the vote-transfer tests.
+    fn vote_sync_test_engine(
+        dir: &tempfile::TempDir,
+    ) -> (
+        ConsensusEngine<NodeDagStore, NodeBlockManager>,
+        Arc<DagStore>,
+        kovanica_types::SigningKey,
+    ) {
+        let storage = Storage::new(dir.path().join("dag.redb")).expect("storage");
+        let dag = Arc::new(DagStore::new(storage).expect("dag store"));
+        let (key, public_key) = kovanica_crypto::generate_keypair();
+        let committee = kovanica_consensus::CommitteeInfo::try_new(
+            0,
+            vec![kovanica_consensus::AuthorityInfo {
+                index: 0,
+                stake: 100,
+                public_key,
+                vrf_public_key: None,
+                address: Address::default(),
+                network_address: String::new(),
+            }],
+        )
+        .expect("test committee is valid");
+        let block_manager = Arc::new(BlockManager::new(
+            dag.clone(),
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL),
+        ));
+        block_manager.set_authority(0);
+        block_manager.set_signing_key(key.clone());
+        block_manager.set_authority_keys(HashMap::from([(0, public_key)]));
+        let engine = ConsensusEngine::new(
+            ConsensusConfig::default(),
+            committee,
+            Arc::new(NodeDagStore { inner: dag.clone() }),
+            Arc::new(RwLock::new(NodeBlockManager {
+                inner: block_manager,
+            })),
+            key.clone(),
+            None,
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL),
+        );
+        (engine, dag, key)
+    }
+
+    fn vote_sync_test_vote(
+        key: &kovanica_types::SigningKey,
+        leader_round: Round,
+        leader_hash: Hash,
+    ) -> Vote {
+        let mut vote = Vote {
+            leader_round,
+            leader_hash,
+            voter: 0,
+            signature: kovanica_types::Signature([0; 64]),
+        };
+        vote.signature = kovanica_crypto::sign(
+            key,
+            &vote.signature_data(&kovanica_types::SigningContext::new(
+                kovanica_types::signing::chain_id::LOCAL,
+            )),
+        );
+        vote
+    }
+
+    /// A leader round the node synced is asked for by name.
+    #[tokio::test]
+    async fn vote_sync_requests_the_votes_of_a_synced_leader_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _dag, _key) = vote_sync_test_engine(&dir);
+        let mut tracker = VoteSync::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let peer = PeerId::random();
+
+        tracker.peer_connected(peer);
+        tracker.want_votes(3);
+        tracker.pump(Instant::now(), &tx);
+
+        match rx.try_recv().expect("a vote request was issued") {
+            NetworkCommand::RequestSync(peer_id, BlockSyncRequest::VotesForRound { round }) => {
+                assert_eq!(peer_id, peer);
+                assert_eq!(round, 3);
+            }
+            other => panic!("expected a vote request, got {other:?}"),
+        }
+        let _ = engine;
+    }
+
+    /// Without a connected peer nothing is requested.
+    #[tokio::test]
+    async fn vote_sync_requests_nothing_without_a_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _dag, _key) = vote_sync_test_engine(&dir);
+        let mut tracker = VoteSync::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
+
+        tracker.want_votes(3);
+        tracker.pump(Instant::now(), &tx);
+        assert!(rx.try_recv().is_err());
+        drop(tx);
+        let _ = engine;
+    }
+
+    /// A request for a disconnected peer is dropped, and the round is asked
+    /// from another peer instead.
+    #[tokio::test]
+    async fn vote_sync_reassigns_the_request_of_a_disconnected_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _dag, _key) = vote_sync_test_engine(&dir);
+        let mut tracker = VoteSync::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let first = PeerId::random();
+        let second = PeerId::random();
+
+        tracker.peer_connected(first);
+        tracker.want_votes(3);
+        tracker.pump(Instant::now(), &tx);
+        assert!(rx.try_recv().is_ok());
+
+        // The first peer goes away: its outstanding request is dropped.
+        tracker.peer_disconnected(first);
+        tracker.peer_connected(second);
+        tracker.pump(Instant::now(), &tx);
+        match rx.try_recv().expect("the round is asked again") {
+            NetworkCommand::RequestSync(peer_id, BlockSyncRequest::VotesForRound { round }) => {
+                assert_eq!(peer_id, second);
+                assert_eq!(round, 3);
+            }
+            other => panic!("expected a vote request, got {other:?}"),
+        }
+        let _ = engine;
+    }
+
+    /// Votes that arrive before their leader block are kept and applied as
+    /// soon as the leader is known.
+    #[tokio::test]
+    async fn vote_sync_applies_buffered_votes_once_the_leader_is_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, _dag, key) = vote_sync_test_engine(&dir);
+        let mut tracker = VoteSync::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let peer = PeerId::random();
+        tracker.peer_connected(peer);
+        tracker.want_votes(3);
+        tracker.pump(Instant::now(), &tx);
+
+        let leader_round = 3;
+        let digest = StatementBlock::compute_digest(0, leader_round, &[], &[]);
+        let vote = vote_sync_test_vote(&key, leader_round, digest);
+
+        // The votes arrive before the leader block does.
+        tracker.on_votes(leader_round, vec![vote]);
+        assert!(tracker.buffered.contains_key(&leader_round));
+        tracker.drain(&engine).expect("drain succeeds");
+        assert!(
+            tracker.buffered.contains_key(&leader_round),
+            "the votes stay buffered while the leader is unknown"
+        );
+        assert!(engine.registered_leader(leader_round).is_none());
+
+        // The leader block arrives: the votes are applied.
+        let block = StatementBlock {
+            author: 0,
+            round: leader_round,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+        engine.process_block(&block).unwrap();
+        tracker.drain(&engine).expect("drain succeeds");
+        assert!(!tracker.buffered.contains_key(&leader_round));
+        assert!(!tracker.wanted.contains(&leader_round));
+        assert!(
+            engine.registered_leader(leader_round).is_some(),
+            "the leader is registered"
+        );
+        let _ = rx.try_recv();
     }
 }
 

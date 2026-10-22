@@ -32,6 +32,7 @@ This document defines the scope for an external security audit covering consensu
 **Specific consensus invariants to verify:**
 - No two honest nodes commit different leader blocks at the same height
 - Late-vote window (`late_vote_window_rounds = WAVE_LENGTH = 3`) prevents divergent commits from late-joining nodes
+- Vote durability (RFC-009): every accepted vote **and the node's own vote** are persisted (`tables::VOTES`); a node that can serve a block for round R can serve the votes for R. Votes fetched from a peer are re-verified by `process_vote` before use — block-sync is a transport, never a trust boundary.
 - VRF leader election: quorum = `floor(2*N/3)+1` of VRF-keyed validators; partial set → round-robin
 - Min-digest fork: only replaces when store accepts swap AND round undecided
 - Skip registration persists in decided map with `LeaderStatus::Skip`
@@ -103,10 +104,10 @@ certificate) against the subsidy/epoch invariants in §2.5.
 
 | Component | Risk | Description |
 |-----------|------|-------------|
-| `service.rs` | **High** | `NetworkService` wrapping libp2p Swarm; gossipsub topics: `blocks`, `transactions`, `votes`, `sync`, `seals`; Kademlia + ping + identify |
+| `service.rs` | **High** | `NetworkService` wrapping libp2p Swarm; gossipsub topics: `blocks`, `transactions`, `votes`, `sync`, `seals`; Kademlia + ping + identify; serves `VotesForRound` from the durable vote store via `VoteSource` and validates the answer against the request |
 | `validation.rs` | **Critical** | Edge validation before gossip: block digest/merkle/author/signature; vote signature + committee membership + leader round/hash match; seal signature + header match |
 | `scoring.rs` | **High** | Peer scoring: topic mesh delivery, validation rejects, behaviour penalties; ban threshold |
-| `block_sync.rs` | **High** | Request-response block sync (protocol `/kovanica/block-sync/1`) |
+| `block_sync.rs` | **High** | Request-response block sync (protocol `/kovanica/block-sync/1`); carries block history **and** (since RFC-009) per-round vote history, bounded to `MAX_VOTES_PER_ROUND = 64` |
 | `state_sync.rs` | **High** | Request-response state sync (protocol `/kovanica/state-sync/1`) |
 | `identity.rs` | **Medium** | Persistent node identity (Ed25519 transport key, `0600` file perms), no hard-coded bootstrap nodes |
 
@@ -168,6 +169,7 @@ certificate) against the subsidy/epoch invariants in §2.5.
 - Committee build from staking state (active validators only, stake ≥ 50K)
 - Seal handling (local validators sign, non-validators store)
 - Recovery: committed sub-DAG replay from DAG store, execution idempotency via `execution_committed_subdags` table
+- Vote transfer (RFC-009): `VoteSync` requests votes for synced leader rounds, buffers out-of-order responses, bounds outstanding work (64), and retries with a bounded attempt count; the local vote is persisted at cast time
 
 ---
 

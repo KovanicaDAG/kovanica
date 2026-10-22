@@ -2,7 +2,7 @@
 
 use crate::{
     behaviour::{self, Behaviour},
-    block_sync::{BlockSyncRequest, BlockSyncResponse},
+    block_sync::{BlockSyncRequest, BlockSyncResponse, VoteSource},
     error::NetworkError,
     state_sync::{
         ExportedSnapshot, SnapshotChunk, StateSnapshotSource, StateSyncRequest, StateSyncResponse,
@@ -116,6 +116,10 @@ pub struct NetworkService {
     /// Export side of the state sync protocol. Unset until the node installs
     /// one; while unset, state sync requests are answered `NotFound`.
     state_snapshot_source: Mutex<Option<Arc<dyn StateSnapshotSource>>>,
+    /// Export side of the vote-transfer part of the block-sync protocol. Unset
+    /// until the node installs one; while unset, vote requests are answered
+    /// with an empty vote list.
+    vote_source: Mutex<Option<Arc<dyn VoteSource>>>,
     /// Short-lived cache of the last full snapshot export (see
     /// [`STATE_SYNC_EXPORT_CACHE_TTL`]).
     state_snapshot_cache: Mutex<Option<CachedSnapshotExport>>,
@@ -430,6 +434,7 @@ impl NetworkService {
                 next_block_request_seq: AtomicU64::new(0),
                 header_index: Mutex::new(None),
                 state_snapshot_source: Mutex::new(None),
+                vote_source: Mutex::new(None),
                 state_snapshot_cache: Mutex::new(None),
                 reported_tip: Mutex::new(HashMap::new()),
             },
@@ -551,6 +556,20 @@ impl NetworkService {
     pub fn set_state_snapshot_source(&self, source: Arc<dyn StateSnapshotSource>) {
         *lock(&self.state_snapshot_source) = Some(source);
         info!("state snapshot source installed");
+    }
+
+    /// Install the export side of the vote-transfer part of the block-sync
+    /// protocol.
+    ///
+    /// Until this is called, inbound [`BlockSyncRequest::VotesForRound`]
+    /// requests are answered with an empty vote list. The source is consulted
+    /// on the serving path only; it is never trusted for anything but the
+    /// votes it hands out, and every vote is verified by the requester.
+    ///
+    /// See `docs/rfcs/RFC-009-VOTE-TRANSFER-OVER-BLOCK-SYNC.md`.
+    pub fn set_vote_source(&self, source: Arc<dyn VoteSource>) {
+        *lock(&self.vote_source) = Some(source);
+        info!("vote source installed");
     }
 
     /// Our libp2p peer id (transport identity, not the validator key).
@@ -1032,6 +1051,29 @@ impl NetworkService {
                     None => BlockSyncResponse::InvalidRequest,
                 }
             }
+            BlockSyncRequest::VotesForRound { round } => {
+                // Serve the votes the node durably holds for this leader round.
+                // A peer that asks for a round we have no votes for gets an
+                // empty list, which the requester reads as "no evidence
+                // available" and never as a decision.
+                let votes = match lock(&self.vote_source).clone() {
+                    Some(source) => source.votes_for_round(*round).unwrap_or_else(|e| {
+                        warn!(round, error = %e, "vote source failed; serving no votes");
+                        Vec::new()
+                    }),
+                    None => Vec::new(),
+                };
+                // Defensive: never hand out more votes than the bound allows,
+                // even if the source misbehaves.
+                let votes = votes
+                    .into_iter()
+                    .take(BlockSyncResponse::MAX_VOTES_PER_ROUND)
+                    .collect();
+                BlockSyncResponse::Votes {
+                    round: *round,
+                    votes,
+                }
+            }
         }
     }
 
@@ -1187,8 +1229,11 @@ impl NetworkService {
                     BlockSyncRequest::ByAuthorRound { author, round } => {
                         block.author == *author && block.round == *round
                     }
-                    // A single block never answers a catch-up status/range request.
-                    BlockSyncRequest::Status | BlockSyncRequest::RoundRange { .. } => false,
+                    // A single block never answers a catch-up status/range
+                    // request, and never answers a vote request.
+                    BlockSyncRequest::Status
+                    | BlockSyncRequest::RoundRange { .. }
+                    | BlockSyncRequest::VotesForRound { .. } => false,
                 };
                 if !matches {
                     return Err("returned block does not match the request".to_string());
@@ -1233,6 +1278,31 @@ impl NetworkService {
                 BlockSyncRequest::Status => Ok(()),
                 _ => Err("status in response to a non-status request".to_string()),
             },
+            BlockSyncResponse::Votes { round, votes } => {
+                match expected {
+                    BlockSyncRequest::VotesForRound { round: asked } => {
+                        if *asked != *round {
+                            return Err(format!(
+                                "votes for round {round} in response to a request for {asked}"
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err("votes in response to a non-vote request".to_string());
+                    }
+                }
+                if votes.len() > BlockSyncResponse::MAX_VOTES_PER_ROUND {
+                    return Err(format!(
+                        "{} votes listed (max {})",
+                        votes.len(),
+                        BlockSyncResponse::MAX_VOTES_PER_ROUND
+                    ));
+                }
+                // The votes are only a hint about *who* voted; the requester
+                // verifies every signature against the committee before it
+                // counts a vote, so nothing here is trusted.
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -1682,7 +1752,7 @@ mod tests {
     use crate::validation::test_support;
     use kovanica_mempool::MempoolConfig;
     use kovanica_storage::Storage;
-    use kovanica_types::{Hash, Signature};
+    use kovanica_types::{Hash, Round, Signature};
 
     /// Build a service over throwaway databases. No ports are bound.
     fn test_service() -> (tempfile::TempDir, NetworkService) {
@@ -2447,6 +2517,129 @@ mod tests {
     }
 
     // ---- block sync catch-up serving + retry/failover (#1, #2) ----
+
+    /// A vote request is answered from the installed vote source, and an
+    /// empty answer when no source is installed (RFC-009).
+    #[tokio::test]
+    async fn votes_for_round_are_served_from_the_vote_source() {
+        let (_dir, service) = test_service();
+
+        // Without a vote source the service answers with an empty list.
+        assert_eq!(
+            service.build_block_sync_response(&BlockSyncRequest::VotesForRound { round: 3 }),
+            BlockSyncResponse::Votes {
+                round: 3,
+                votes: Vec::new()
+            }
+        );
+
+        struct StubVoteSource {
+            votes: Vec<Vote>,
+        }
+
+        impl VoteSource for StubVoteSource {
+            fn votes_for_round(&self, round: Round) -> Result<Vec<Vote>, String> {
+                Ok(self
+                    .votes
+                    .iter()
+                    .filter(|vote| vote.leader_round == round)
+                    .cloned()
+                    .collect())
+            }
+        }
+
+        let vote = Vote {
+            leader_round: 3,
+            leader_hash: Hash::new("leader"),
+            voter: 1,
+            signature: Signature([7u8; 64]),
+        };
+        service.set_vote_source(Arc::new(StubVoteSource {
+            votes: vec![vote.clone()],
+        }));
+
+        match service.build_block_sync_response(&BlockSyncRequest::VotesForRound { round: 3 }) {
+            BlockSyncResponse::Votes { round, votes } => {
+                assert_eq!(round, 3);
+                assert_eq!(votes, vec![vote]);
+            }
+            other => panic!("expected a votes response, got {other:?}"),
+        }
+
+        // A round the source holds nothing for is answered with an empty list.
+        assert_eq!(
+            service.build_block_sync_response(&BlockSyncRequest::VotesForRound { round: 9 }),
+            BlockSyncResponse::Votes {
+                round: 9,
+                votes: Vec::new()
+            }
+        );
+    }
+
+    /// A vote response that does not answer the request it was sent for is
+    /// rejected by the edge checks.
+    #[tokio::test]
+    async fn votes_response_must_answer_the_vote_request() {
+        let (_dir, service) = test_service();
+        let votes = vec![Vote {
+            leader_round: 3,
+            leader_hash: Hash::new("leader"),
+            voter: 1,
+            signature: Signature([7u8; 64]),
+        }];
+
+        // The round does not match the request.
+        let response = BlockSyncResponse::Votes {
+            round: 9,
+            votes: votes.clone(),
+        };
+        assert!(service
+            .check_block_sync_response(
+                Some(&BlockSyncRequest::VotesForRound { round: 3 }),
+                &response,
+            )
+            .is_err());
+
+        // The response does not answer a vote request at all.
+        let response = BlockSyncResponse::Votes {
+            round: 3,
+            votes: Vec::new(),
+        };
+        assert!(service
+            .check_block_sync_response(Some(&BlockSyncRequest::Status), &response)
+            .is_err());
+
+        // The matching response passes.
+        let response = BlockSyncResponse::Votes {
+            round: 3,
+            votes: votes.clone(),
+        };
+        service
+            .check_block_sync_response(
+                Some(&BlockSyncRequest::VotesForRound { round: 3 }),
+                &response,
+            )
+            .expect("a matching vote response passes the edge checks");
+
+        // Too many votes is refused.
+        let response = BlockSyncResponse::Votes {
+            round: 3,
+            votes: (0..=BlockSyncResponse::MAX_VOTES_PER_ROUND as u16)
+                .map(|voter| Vote {
+                    leader_round: 3,
+                    leader_hash: Hash::new("leader"),
+                    voter,
+                    signature: Signature([0u8; 64]),
+                })
+                .collect(),
+        };
+        assert!(service
+            .check_block_sync_response(
+                Some(&BlockSyncRequest::VotesForRound { round: 3 }),
+                &response,
+            )
+            .is_err());
+    }
 
     /// Catch-up responses are bounded and the DAG tip is reported honestly.
     #[tokio::test]

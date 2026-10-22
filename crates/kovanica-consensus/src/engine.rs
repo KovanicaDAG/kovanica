@@ -23,6 +23,14 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
+/// Upper bound on the number of commits one [`ConsensusEngine::drain_commits`]
+/// call performs.
+///
+/// The commit walk always advances the decided-round cursor, so it terminates
+/// on its own; the bound only exists so a pathological state cannot spin the
+/// caller forever.
+const MAX_COMMIT_DRAIN_STEPS: usize = 4096;
+
 /// Trait for broadcasting blocks to the network.
 pub trait BlockBroadcaster: Send + Sync {
     fn broadcast_block(&self, block: &StatementBlock);
@@ -122,6 +130,21 @@ pub trait DagStoreTrait: Send + Sync {
     ) -> Result<Vec<kovanica_types::block::StatementBlock>, kovanica_dag::DagStoreError>;
     /// Get decided leader hashes for a round.
     fn get_decided_leaders(&self, round: Round) -> Result<Vec<Hash>, kovanica_dag::DagStoreError>;
+    /// Persist an accepted vote so it survives a restart and can be handed to
+    /// a peer that joins later.
+    ///
+    /// The default is a no-op, which keeps in-memory test doubles unchanged.
+    /// A durable implementation stores the vote under its leader round.
+    ///
+    /// This is *not* part of consensus: the vote has already been accepted
+    /// (signature verified, leader matched, quorum evaluated) before it is
+    /// written. A failure here must never turn an accepted vote into a
+    /// rejected one — it only means the vote cannot be served later.
+    ///
+    /// See `docs/rfcs/RFC-009-VOTE-TRANSFER-OVER-BLOCK-SYNC.md`.
+    fn put_vote(&self, _vote: &kovanica_types::Vote) -> Result<(), kovanica_dag::DagStoreError> {
+        Ok(())
+    }
     /// Get all decided rounds up to a maximum.
     fn get_decided_rounds(
         &self,
@@ -696,7 +719,13 @@ where
     }
 
     /// Return the scheduled leader only for a protocol leader slot.
-    fn scheduled_leader_for_round(&self, round: Round) -> Option<kovanica_types::AuthorityIndex> {
+    ///
+    /// Public so the node can tell whether a block it synced is a leader
+    /// round, i.e. a round for which it will need the votes (RFC-009).
+    pub fn scheduled_leader_for_round(
+        &self,
+        round: Round,
+    ) -> Option<kovanica_types::AuthorityIndex> {
         if !is_leader_round(round) {
             return None;
         }
@@ -862,6 +891,21 @@ where
         // Record the vote locally
         self.committer
             .add_vote(leader_round, our_authority, leader_hash);
+
+        // Persist the vote. The node's own vote is part of the evidence for
+        // this leader round, and a peer that joins later needs it to reach a
+        // quorum: the joiner itself cannot vote for rounds outside its late
+        // vote window, so it depends on the votes this node holds. A storage
+        // failure is logged and never fatal — the vote is already recorded
+        // locally (RFC-009).
+        if let Err(e) = self.dag_store.as_ref().put_vote(&vote) {
+            warn!(
+                leader_round,
+                voter = our_authority,
+                error = %e,
+                "own vote could not be persisted; it cannot be served to a joining peer"
+            );
+        }
 
         // Broadcast the vote. Log unconditionally: a vote we recorded locally
         // but could not broadcast is exactly the state that stalls a quorum,
@@ -1086,6 +1130,18 @@ where
         let has_quorum = self
             .committer
             .add_verified_vote(leader_round, voter, vote.leader_hash)?;
+        // The vote is accepted by consensus at this point. Persisting it is a
+        // side concern: it only makes the vote available to a peer that joins
+        // later (RFC-009). A storage failure must not turn an accepted vote
+        // into a rejected one, so it is logged and swallowed.
+        if let Err(e) = self.dag_store.as_ref().put_vote(vote) {
+            warn!(
+                leader_round,
+                voter,
+                error = %e,
+                "accepted vote could not be persisted; it cannot be served to a joining peer"
+            );
+        }
         if has_quorum {
             info!("Leader round {} now has quorum", leader_round);
             self.try_commit_and_deliver()?;
@@ -1132,6 +1188,47 @@ where
             self.committer.cleanup_old_leaders(cutoff);
             self.voted_rounds.lock().retain(|&round| round >= cutoff);
         }
+    }
+
+    /// The leader record registered for `round`, if any.
+    ///
+    /// A round only has a record once this node has ingested that round's
+    /// leader block. Consensus rejects a vote for a round without a record
+    /// ([`VoteRejection::UnknownLeaderRound`]), so a caller that holds votes
+    /// for a round uses this to tell "not applicable yet" from "never
+    /// applicable".
+    pub fn registered_leader(&self, round: Round) -> Option<LeaderInfo> {
+        self.committer.get_leader(round)
+    }
+
+    /// Commit every leader the registered votes already justify.
+    ///
+    /// [`Self::process_vote`] and [`Self::process_block`] trigger a single
+    /// commit attempt each. A node that catches up applies a whole batch of
+    /// votes for many leader rounds at once, and a round that was *already* at
+    /// quorum can sit behind an earlier round that has just become decidable:
+    /// the commit walk stops at the first undecided leader, so the later round
+    /// stays uncommitted until some unrelated trigger runs the walk again.
+    ///
+    /// Draining the pipeline until it stops making progress removes that
+    /// wait. The commits are exactly the ones the next trigger would have
+    /// produced, in the same order, so this changes timing only — never the
+    /// committed sequence.
+    ///
+    /// See `docs/rfcs/RFC-009-VOTE-TRANSFER-OVER-BLOCK-SYNC.md`.
+    pub fn drain_commits(&self) -> Result<(), ConsensusError> {
+        for _ in 0..MAX_COMMIT_DRAIN_STEPS {
+            let before = self.committer.last_decided_round();
+            self.try_commit_and_deliver()?;
+            if self.committer.last_decided_round() == before {
+                // No further progress: the walk found nothing left to commit.
+                return Ok(());
+            }
+        }
+        warn!(
+            "commit drain hit its step bound; the remaining leaders are committed by a later drain"
+        );
+        Ok(())
     }
 
     /// Get the current round.
@@ -1223,6 +1320,8 @@ mod tests {
         /// Stand-in for the highest persisted DAG round, driven by
         /// `DagStoreTrait::max_stored_round`. `None` models an empty store.
         stored_tip: RwLock<Option<Round>>,
+        /// Votes persisted through `DagStoreTrait::put_vote`, in write order.
+        persisted_votes: Mutex<Vec<kovanica_types::Vote>>,
     }
 
     impl DagStoreTrait for TestDag {
@@ -1416,6 +1515,11 @@ mod tests {
 
         fn max_stored_round(&self) -> Result<Option<Round>, kovanica_dag::DagStoreError> {
             Ok(*self.stored_tip.read())
+        }
+
+        fn put_vote(&self, vote: &kovanica_types::Vote) -> Result<(), kovanica_dag::DagStoreError> {
+            self.persisted_votes.lock().push(vote.clone());
+            Ok(())
         }
 
         fn prune_non_blue(
@@ -1720,6 +1824,170 @@ mod tests {
         ));
         assert!(receiver.try_recv().is_err());
         assert_eq!(dag.decisions.lock().as_slice(), &[(3, digest)]);
+    }
+
+    /// An accepted vote is persisted, so a peer that joins later can be given
+    /// the evidence for that leader round (RFC-009).
+    #[tokio::test]
+    async fn accepted_vote_is_persisted() {
+        let (engine, dag, key) = test_engine(100);
+        let digest = kovanica_types::StatementBlock::compute_digest(0, 3, &[], &[]);
+        let block = kovanica_types::StatementBlock {
+            author: 0,
+            round: 3,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+        engine.process_block(&block).unwrap();
+        let vote = signed_vote(&key, 3, 0, digest);
+        engine.process_vote(&vote).unwrap();
+        let persisted = dag.persisted_votes.lock();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].leader_round, 3);
+        assert_eq!(persisted[0].voter, 0);
+        assert_eq!(persisted[0].leader_hash, digest);
+    }
+
+    /// The node's own vote is persisted too. It is part of the evidence for
+    /// the leader round, and a joining peer cannot produce it: the joiner is
+    /// outside its late vote window for the rounds it syncs.
+    #[tokio::test]
+    async fn own_vote_is_persisted() {
+        let (engine, dag, key) = test_engine(100);
+        let digest = kovanica_types::StatementBlock::compute_digest(0, 3, &[], &[]);
+        let block = kovanica_types::StatementBlock {
+            author: 0,
+            round: 3,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+        engine.process_block(&block).unwrap();
+        assert!(engine.vote_for_leader(3).unwrap());
+        let persisted = dag.persisted_votes.lock();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].leader_round, 3);
+        assert_eq!(persisted[0].voter, 0);
+    }
+
+    /// A rejected vote is never persisted: the durable store must only hold
+    /// votes that passed the authentication boundary.
+    #[tokio::test]
+    async fn rejected_vote_is_not_persisted() {
+        let (engine, dag, key) = test_engine(100);
+        let digest = kovanica_types::StatementBlock::compute_digest(0, 3, &[], &[]);
+        let block = kovanica_types::StatementBlock {
+            author: 0,
+            round: 3,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+        engine.process_block(&block).unwrap();
+        // A vote for a leader round nobody registered.
+        let vote = signed_vote(&key, 6, 0, digest);
+        assert!(engine.process_vote(&vote).is_err());
+        // A vote with a broken signature.
+        let mut bad = signed_vote(&key, 3, 0, digest);
+        bad.signature = kovanica_types::Signature([1u8; 64]);
+        assert!(engine.process_vote(&bad).is_err());
+        assert!(dag.persisted_votes.lock().is_empty());
+    }
+
+    /// The commit walk stops at the first undecided leader, so a leader that
+    /// was already at quorum stays uncommitted behind an earlier round.
+    /// Draining the pipeline commits it without waiting for an unrelated
+    /// trigger (RFC-009).
+    #[tokio::test]
+    async fn drain_commits_commits_a_leader_that_was_already_at_quorum() {
+        let (engine, dag, key) = test_engine(100);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        engine.set_commit_sender(sender);
+        let make_block = |round: Round| {
+            let digest = kovanica_types::StatementBlock::compute_digest(0, round, &[], &[]);
+            kovanica_types::StatementBlock {
+                author: 0,
+                round,
+                parents: Vec::new(),
+                transactions: Vec::new(),
+                statements: Vec::new(),
+                signature: kovanica_crypto::sign(&key, digest.as_ref()),
+                digest,
+                merkle_root: Default::default(),
+            }
+        };
+        let block3 = make_block(3);
+        let block6 = make_block(6);
+        let digest3 = block3.digest;
+        let digest6 = block6.digest;
+        engine.process_block(&block3).unwrap();
+        engine.process_block(&block6).unwrap();
+
+        // The later leader reaches quorum first. The walk must not pass the
+        // earlier undecided leader.
+        engine
+            .process_vote(&signed_vote(&key, 6, 0, digest6))
+            .unwrap();
+        assert!(
+            receiver.try_recv().is_err(),
+            "the commit walk must not pass an undecided leader"
+        );
+
+        // The earlier leader reaches quorum: it commits, and the later one
+        // stays behind it.
+        engine
+            .process_vote(&signed_vote(&key, 3, 0, digest3))
+            .unwrap();
+        assert_eq!(receiver.try_recv().unwrap().leader.digest, digest3);
+        assert!(
+            receiver.try_recv().is_err(),
+            "the later leader is still waiting behind the earlier one"
+        );
+
+        // Draining commits the leader that was already at quorum.
+        engine.drain_commits().unwrap();
+        assert_eq!(receiver.try_recv().unwrap().leader.digest, digest6);
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(
+            dag.decisions.lock().as_slice(),
+            &[(3, digest3), (6, digest6)]
+        );
+    }
+
+    /// `registered_leader` tells a caller whether the votes for a round can
+    /// be applied yet.
+    #[tokio::test]
+    async fn registered_leader_reports_the_ingested_leader_round() {
+        let (engine, _dag, key) = test_engine(100);
+        let digest = kovanica_types::StatementBlock::compute_digest(0, 3, &[], &[]);
+        let block = kovanica_types::StatementBlock {
+            author: 0,
+            round: 3,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+        assert!(engine.registered_leader(3).is_none());
+        engine.process_block(&block).unwrap();
+        let leader = engine
+            .registered_leader(3)
+            .expect("the leader is registered");
+        assert_eq!(leader.round, 3);
+        assert_eq!(leader.block_hash, Some(digest));
+        assert!(engine.registered_leader(6).is_none());
     }
 
     #[tokio::test]

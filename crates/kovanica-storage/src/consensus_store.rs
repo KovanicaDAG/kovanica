@@ -6,7 +6,7 @@ use crate::{hash_to_bytes, BincodeSerialize, StorageError};
 use kovanica_types::{
     block::{BlockReference, StatementBlock},
     hash::Hash,
-    AuthorityIndex, CommittedSubDag, Round,
+    AuthorityIndex, CommittedSubDag, Round, Vote,
 };
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 use thiserror::Error;
@@ -46,6 +46,7 @@ impl ConsensusStore {
             let _ = write_txn.open_table(crate::tables::COMMITTED_LEADER_HEIGHT)?;
             let _ = write_txn.open_table(crate::tables::DECIDED_ROUNDS)?;
             let _ = write_txn.open_table(crate::tables::LAST_COMMITED)?;
+            let _ = write_txn.open_table(crate::tables::VOTES)?;
         }
         write_txn.commit()?;
         Ok(Self)
@@ -370,6 +371,81 @@ impl ConsensusStore {
     }
 
     // ============================================================
+    // Vote operations
+    // ============================================================
+
+    /// Store a vote for a leader round, keyed by `(leader_round, voter)`.
+    /// Re-storing the same `(round, voter)` overwrites the previous entry.
+    pub fn put_vote(&self, txn: &WriteTransaction, vote: &Vote) -> Result<(), ConsensusStoreError> {
+        let mut table = txn.open_table(crate::tables::VOTES)?;
+        table.insert((vote.leader_round, vote.voter), vote.to_bytes()?)?;
+        Ok(())
+    }
+
+    /// All votes stored for a leader round, ordered by voter index (ascending).
+    /// Returns an empty vec when the round has no votes.
+    pub fn get_votes_for_round(
+        &self,
+        txn: &ReadTransaction,
+        round: Round,
+    ) -> Result<Vec<Vote>, ConsensusStoreError> {
+        let table = txn.open_table(crate::tables::VOTES)?;
+        let mut votes = Vec::new();
+
+        for entry in table.range((round, 0u16)..=(round, u16::MAX))? {
+            let (_, value) = entry?;
+            let vote: Vote = BincodeSerialize::from_bytes(&value.value())?;
+            votes.push(vote);
+        }
+
+        // The range scan already yields ascending keys, but sort explicitly so
+        // the ordering guarantee does not depend on the storage backend.
+        votes.sort_by_key(|vote| vote.voter);
+        Ok(votes)
+    }
+
+    /// Whether a vote from `voter` for `leader_round` is stored.
+    pub fn has_vote(
+        &self,
+        txn: &ReadTransaction,
+        leader_round: Round,
+        voter: AuthorityIndex,
+    ) -> Result<bool, ConsensusStoreError> {
+        let table = txn.open_table(crate::tables::VOTES)?;
+        Ok(table.get((leader_round, voter))?.is_some())
+    }
+
+    /// Delete every vote for rounds strictly below `cutoff`. Returns the number of
+    /// entries removed.
+    pub fn prune_votes_below(
+        &self,
+        txn: &WriteTransaction,
+        cutoff: Round,
+    ) -> Result<usize, ConsensusStoreError> {
+        // Collect the keys first: redb does not allow mutating a table while a
+        // range iterator over it is alive.
+        let keys_to_remove: Vec<(u64, u16)> = {
+            let table = txn.open_table(crate::tables::VOTES)?;
+            let mut keys = Vec::new();
+            for entry in table.range(..(cutoff, 0u16))? {
+                let (key, _) = entry?;
+                keys.push(key.value());
+            }
+            keys
+        }; // table is dropped here
+
+        if keys_to_remove.is_empty() {
+            return Ok(0);
+        }
+
+        let mut table = txn.open_table(crate::tables::VOTES)?;
+        for key in &keys_to_remove {
+            table.remove(*key)?;
+        }
+        Ok(keys_to_remove.len())
+    }
+
+    // ============================================================
     // Pruning
     // ============================================================
 
@@ -548,5 +624,140 @@ mod tests {
         assert!(digests.contains(&block_a.digest));
         assert!(digests.contains(&block_b.digest));
         assert!(!digests.contains(&stale), "missing block must not surface");
+    }
+
+    fn make_vote(leader_round: Round, voter: AuthorityIndex, tag: &str) -> Vote {
+        Vote {
+            leader_round,
+            leader_hash: Hash::new(format!("kovanica-consensus-store-test/vote/{tag}").as_bytes()),
+            voter,
+            signature: Signature([0u8; 64]),
+        }
+    }
+
+    #[test]
+    fn put_vote_then_get_votes_for_round_round_trips() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("votes.redb")).unwrap();
+        let store = storage.consensus();
+
+        let vote = make_vote(7, 3, "a");
+        {
+            let txn = storage.begin_write().unwrap();
+            store.put_vote(&txn, &vote).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let txn = storage.begin_read().unwrap();
+        let votes = store.get_votes_for_round(&txn, 7).unwrap();
+        assert_eq!(votes.len(), 1, "exactly one vote must be stored");
+        assert_eq!(votes[0].leader_round, vote.leader_round);
+        assert_eq!(votes[0].leader_hash, vote.leader_hash);
+        assert_eq!(votes[0].voter, vote.voter);
+        assert_eq!(votes[0].signature, vote.signature);
+        assert_eq!(votes[0], vote);
+    }
+
+    #[test]
+    fn get_votes_for_round_returns_votes_sorted_by_voter() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("votes.redb")).unwrap();
+        let store = storage.consensus();
+
+        // Insert out of voter order to prove the accessor sorts.
+        let voter_high = make_vote(9, 11, "high");
+        let voter_low = make_vote(9, 2, "low");
+        let voter_mid = make_vote(9, 7, "mid");
+        {
+            let txn = storage.begin_write().unwrap();
+            store.put_vote(&txn, &voter_high).unwrap();
+            store.put_vote(&txn, &voter_low).unwrap();
+            store.put_vote(&txn, &voter_mid).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let txn = storage.begin_read().unwrap();
+        let votes = store.get_votes_for_round(&txn, 9).unwrap();
+        assert_eq!(votes.len(), 3, "all three votes must be returned");
+        assert_eq!(
+            votes.iter().map(|v| v.voter).collect::<Vec<_>>(),
+            vec![2, 7, 11],
+            "votes must be ordered by voter index ascending"
+        );
+        assert_eq!(votes[0], voter_low);
+        assert_eq!(votes[1], voter_mid);
+        assert_eq!(votes[2], voter_high);
+    }
+
+    #[test]
+    fn has_vote_reports_stored_pairs_only() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("votes.redb")).unwrap();
+        let store = storage.consensus();
+
+        let vote = make_vote(4, 5, "a");
+        {
+            let txn = storage.begin_write().unwrap();
+            store.put_vote(&txn, &vote).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let txn = storage.begin_read().unwrap();
+        assert!(
+            store.has_vote(&txn, 4, 5).unwrap(),
+            "stored vote must be found"
+        );
+        assert!(
+            !store.has_vote(&txn, 4, 6).unwrap(),
+            "another voter for the same round must not be found"
+        );
+        assert!(
+            !store.has_vote(&txn, 5, 5).unwrap(),
+            "the same voter in another round must not be found"
+        );
+        assert!(
+            store.get_votes_for_round(&txn, 123).unwrap().is_empty(),
+            "a round without votes must return an empty vec"
+        );
+    }
+
+    #[test]
+    fn prune_votes_below_removes_only_older_rounds() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("votes.redb")).unwrap();
+        let store = storage.consensus();
+
+        let old_a = make_vote(1, 0, "old-a");
+        let old_b = make_vote(1, 1, "old-b");
+        let at_cutoff = make_vote(5, 0, "at-cutoff");
+        let newer = make_vote(9, 0, "newer");
+        {
+            let txn = storage.begin_write().unwrap();
+            store.put_vote(&txn, &old_a).unwrap();
+            store.put_vote(&txn, &old_b).unwrap();
+            store.put_vote(&txn, &at_cutoff).unwrap();
+            store.put_vote(&txn, &newer).unwrap();
+            txn.commit().unwrap();
+        }
+
+        {
+            let txn = storage.begin_write().unwrap();
+            let removed = store.prune_votes_below(&txn, 5).unwrap();
+            assert_eq!(removed, 2, "both votes below the cutoff must be removed");
+            txn.commit().unwrap();
+        }
+
+        let txn = storage.begin_read().unwrap();
+        assert!(
+            store.get_votes_for_round(&txn, 1).unwrap().is_empty(),
+            "votes below the cutoff must be gone"
+        );
+        let at_cutoff_votes = store.get_votes_for_round(&txn, 5).unwrap();
+        assert_eq!(at_cutoff_votes.len(), 1, "the cutoff round must survive");
+        assert_eq!(at_cutoff_votes[0], at_cutoff);
+        let newer_votes = store.get_votes_for_round(&txn, 9).unwrap();
+        assert_eq!(newer_votes.len(), 1, "rounds above the cutoff must survive");
+        assert_eq!(newer_votes[0], newer);
+        assert!(!store.has_vote(&txn, 1, 0).unwrap());
     }
 }
