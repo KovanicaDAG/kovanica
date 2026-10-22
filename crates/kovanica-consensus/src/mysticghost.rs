@@ -16,8 +16,13 @@ pub struct MysticGhostConfig {
     pub enabled: bool,
     /// GHOSTDAG parameter k (must be 3 for the current safety argument).
     pub k: usize,
-    /// Maximum number of blocks allowed in a mergeset before we refuse to colour.
-    /// Phase 5 hard guard: production cap 1_000 blocks.
+    /// Maximum number of blocks allowed in a mergeset before we refuse to
+    /// colour (the safety valve returns `MysticGhostOrder::Fallback`, it does
+    /// not error).
+    ///
+    /// The production cap is **2_000** blocks: both `Default` and the
+    /// committer's own config use that value. (This comment said "1_000" while
+    /// the code has always used 2_000; the code is the contract.)
     pub max_mergeset_blocks: usize,
 }
 

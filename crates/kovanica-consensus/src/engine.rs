@@ -273,9 +273,12 @@ pub struct ConsensusConfig {
     /// Replace an undecided leader block when a later same-author digest is
     /// lexicographically smaller **and** the DAG store can swap it.
     ///
-    /// Default off: first valid digest wins and a different digest is
-    /// equivocation. The committer map must not prefer a digest the store
-    /// does not hold. See `docs/rfcs/RFC-B1-B2-VRF-AND-MIN-DIGEST.md`.
+    /// Default **on** (see `Default`): of two digests for the same scheduled
+    /// leader slot, the byte-wise smaller one wins, but only while the round
+    /// is undecided and only when the DAG store accepts the swap. With it off,
+    /// the first valid digest wins and a different digest is equivocation.
+    /// Either way the committer map must not prefer a digest the store does
+    /// not hold. See `docs/rfcs/RFC-B1-B2-VRF-AND-MIN-DIGEST.md`.
     pub use_min_digest_fork: bool,
 }
 

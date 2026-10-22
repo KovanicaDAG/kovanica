@@ -48,7 +48,7 @@
 > 11. **[ ] gitleaks** — dodaj u kvnc CI + pre-commit hook.
 > 12. **[ ] Consensus size limits** — limiti u bajtovima za blokove i transakcije, testovi da preveliki odbije.
 > 13. **[ ] chain_id 1/4: zamrzni round duration i VRF** — odbij env override na mainnet/testnet, dopusti samo local/dev.
-> 14. **[ ] Popravi komentarce** — `use_min_digest_fork`, `max_mergeset`: 2000 vs 1000.
+> 14. **[x] Popravi komentarce** — `use_min_digest_fork`, `max_mergeset`: 2000 vs 1000. **DONE 2026-10-22:** `use_min_digest_fork` doc je tvrdio "Default off" a `ConsensusConfig::default()` postavlja `true` → doc sada kaže "Default **on**" uz točan opis tie-breaka (min digest, samo dok je runda `Undecided`, samo ako store prihvati swap); `max_mergeset_blocks` doc je tvrdio "production cap 1_000" a i `Default` i committer koriste **2_000** → doc sada kaže 2_000 i eksplicitno napominje da je kod mjerodavan. Nema promjene ponašanja (samo dokumentacija).
 > 15. **[x] VRF proof length** — 96 B vs 80 B (RFC 9381); dokumentiraj ili popravi varijantu. **DONE 2026-10-21**: 96 B je točno za stvarnu implementaciju (`ecvrf` 0.4.3 → ristretto255 + SHA3, proof `Gamma(32)‖c(32)‖s(32)`), kod je ispravan; 80 B je RFC 9381 Edwards25519 dužina (`Gamma(32)‖c(16)‖s(32)`, suite `ECVRF-EDWARDS25519-SHA512-TAI/-ELL2`) i **ne primjenjuje se** ovdje (RFC 9381 nema 96-B proof; label "Elligator2" je bio netočan). Dokumentirano u `docs/VRF-PROOF-LENGTH.md`.
 > 16. **[ ] Docs: unbonding** — ~13.9 dana, ne 1 epoha.
 >
