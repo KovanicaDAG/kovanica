@@ -232,6 +232,13 @@ fn kind_to_json(kind: &TransactionKind) -> Value {
             "type": "claim_treasury",
             "amount": quantity(*amount),
         }),
+        TransactionKind::Evidence { evidence } => json!({
+            "type": "evidence",
+            "author": evidence.header_a.author.to_string(),
+            "round": quantity(evidence.round()),
+            "digest_a": to_hex(&evidence.header_a.digest.0),
+            "digest_b": to_hex(&evidence.header_b.digest.0),
+        }),
     }
 }
 

@@ -26,7 +26,8 @@ use bincode::de::read::SliceReader;
 use bincode::de::Deserializer as BincodeDeserializer;
 use bincode::{DefaultOptions, Options};
 use kovanica_types::{
-    decode_with_version, encode_with_version, Address, PublicKey, Stake, STAKING_STATE_VERSION,
+    decode_with_version, encode_with_version, Address, Hash, PublicKey, Stake,
+    STAKING_STATE_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap as HashMap;
@@ -1215,47 +1216,92 @@ impl StakingState {
             .collect()
     }
 
-    /// Process double-sign evidence: apply fixed % slash to validator stake and delegations.
-    /// Security audit (20.1): slash is deterministic — fixed 500 bps, sum is commutative,
-    /// so delegation processing order does not affect total slashed amount.
+    /// Process double-sign evidence: slash the validator by
+    /// `SLASH_PCT_BPS`.
+    ///
+    /// Kept as the legacy entry point; the round in `evidence` is not used
+    /// for accounting (deduplication is the caller's job). New code should
+    /// call [`Self::slash_validator`].
+    pub fn slash(&mut self, evidence: DoubleSignEvidence) -> Result<u64, StakingError> {
+        self.slash_validator(evidence.validator)
+    }
+
+    /// Apply a fixed-percentage slash to a validator.
+    ///
+    /// Security audit (20.1): slash is deterministic — fixed 500 bps, sum is
+    /// commutative, so delegation processing order does not affect the total
+    /// slashed amount.
+    ///
+    /// The cut applies to three pools:
+    ///
+    /// 1. the validator's self-stake;
+    /// 2. every delegation to it;
+    /// 3. **every still-pending unbonding entry for it (H2)**. Without this a
+    ///    validator could start an unbond and keep the queued funds out of
+    ///    reach of the slash, even though the entry was created from stake
+    ///    that was live when the offence happened. Pending entries have
+    ///    already been removed from `total_staked` and from the delegator's
+    ///    self-stake at unbond time, so their cut must **not** be subtracted
+    ///    from either; it is redirected away from the queued withdrawal.
+    ///
+    /// Entries cut to zero are dropped from the queue: `withdraw_unbonded`
+    /// treats a zero-sum withdrawal as `UnbondNotComplete`, so leaving them
+    /// would wedge both the payout loop and the queue forever.
     ///
     /// `validator.stake` already includes delegated stake, so the cut is
     /// computed once on the self-stake and once per delegation (never twice
-    /// on delegated stake). Returns the total amount removed from stake; the
-    /// caller decides its destination (execution credits it to the treasury
-    /// account). Duplicate
+    /// on delegated stake). Returns the **total** amount removed from the
+    /// three pools (staked and queued alike); the caller decides its
+    /// destination — execution credits it to the treasury account. Duplicate
     /// evidence must be rejected by the caller (`EvidenceProcessed`), as the
     /// processed-evidence set is persisted outside `StakingState`.
-    pub fn slash(&mut self, evidence: DoubleSignEvidence) -> Result<u64, StakingError> {
+    pub fn slash_validator(&mut self, validator: Address) -> Result<u64, StakingError> {
         let v_idx = self
             .validators
             .iter()
-            .position(|v| v.address == evidence.validator)
+            .position(|v| v.address == validator)
             .ok_or(StakingError::NotValidator)?;
         let cut = |x: u64| (u128::from(x) * u128::from(SLASH_PCT_BPS) / 10_000) as u64;
-        let own_slash = cut(self.self_stake(evidence.validator));
+        let own_slash = cut(self.self_stake(validator));
         let mut delegated_slash = 0u64;
         for d in self.delegations.iter_mut() {
-            if d.validator == evidence.validator && d.amount > 0 {
+            if d.validator == validator && d.amount > 0 {
                 let d_slash = cut(d.amount);
                 d.amount -= d_slash;
                 delegated_slash = delegated_slash.saturating_add(d_slash);
             }
         }
-        let total = own_slash.saturating_add(delegated_slash);
-        self.validators[v_idx].stake = self.validators[v_idx].stake.saturating_sub(total);
+        // H2: pending unbonding entries are still slashable.
+        let mut unbonding_slash = 0u64;
+        for entry in self
+            .unbonding_queue
+            .iter_mut()
+            .filter(|e| e.validator == validator)
+        {
+            let entry_slash = cut(entry.amount);
+            entry.amount = entry.amount.saturating_sub(entry_slash);
+            unbonding_slash = unbonding_slash.saturating_add(entry_slash);
+        }
+        self.unbonding_queue.retain(|e| e.amount > 0);
+
+        let staked_slash = own_slash.saturating_add(delegated_slash);
+        self.validators[v_idx].stake = self.validators[v_idx].stake.saturating_sub(staked_slash);
         self.validators[v_idx].slashed = true;
-        self.total_staked = self.total_staked.saturating_sub(total);
-        Ok(total)
+        self.total_staked = self.total_staked.saturating_sub(staked_slash);
+        Ok(staked_slash.saturating_add(unbonding_slash))
     }
 
     /// Deterministic id of a piece of double-sign evidence
-    /// (`validator || height_le`).
-    pub fn evidence_id(evidence: &DoubleSignEvidence) -> [u8; 40] {
-        let mut id = [0u8; 40];
-        id[..32].copy_from_slice(&evidence.validator.0);
-        id[32..].copy_from_slice(&evidence.height.to_le_bytes());
-        id
+    /// (`blake3(author || round_le)`, domain-separated).
+    ///
+    /// Legacy evidence carries a committed height rather than a round; it is
+    /// hashed the same way so there is one id format. Both are 32 bytes, so
+    /// the `PROCESSED_EVIDENCE` table has a single key width.
+    pub fn evidence_id(evidence: &DoubleSignEvidence) -> [u8; 32] {
+        let mut data = [0u8; 40];
+        data[..32].copy_from_slice(&evidence.validator.0);
+        data[32..].copy_from_slice(&evidence.height.to_le_bytes());
+        Hash::new_keyed(Hash::DOMAIN_EVIDENCE, data).0
     }
 }
 
@@ -1611,6 +1657,96 @@ mod tests {
         let slashed = slash_state.slash(evidence).unwrap();
         assert!(slashed > 0);
         assert!(slash_state.total_staked < MIN_VALIDATOR_STAKE.saturating_add(delegate_amount));
+    }
+
+    /// H2: a validator cannot dodge the slash by unbonding first.
+    #[test]
+    fn slash_cuts_pending_unbonding_entries() {
+        let mut state = StakingState::new();
+        let validator = Address([1u8; 32]);
+        let delegator = Address([2u8; 32]);
+        let self_stake = 60_000 * ONE_KUNA;
+        state
+            .join_validator(validator, self_stake, 0, None, None, None)
+            .unwrap();
+        state
+            .delegate(delegator, validator, 10_000 * ONE_KUNA)
+            .unwrap();
+        // 60k self + 10k delegated staked; move 10k self into the queue while
+        // staying above MIN_VALIDATOR_STAKE (so the validator is still active).
+        state
+            .unbond_validator(validator, 10_000 * ONE_KUNA)
+            .unwrap();
+        assert!(state.validators[0].active);
+        assert_eq!(state.unbonding_queue.len(), 1);
+        let staked_before = state.total_staked;
+        let queued_before = state.unbonding_queue[0].amount;
+
+        let slashed = state.slash_validator(validator).unwrap();
+
+        // 5% of 50k self + 5% of 10k delegation + 5% of the 10k queued entry.
+        assert_eq!(slashed, 3_500 * ONE_KUNA);
+        // The queued cut was never part of `total_staked`, so only the staked
+        // part reduces it (57k = 60k - 3k).
+        assert_eq!(state.total_staked, staked_before - 3_000 * ONE_KUNA);
+        assert_eq!(
+            state.unbonding_queue[0].amount,
+            queued_before - queued_before / 20
+        );
+        assert!(state.validators[0].slashed);
+        // The queued funds stay withdrawable, just reduced.
+        state.committed_leader_height = state.unbonding_queue[0].release_height;
+        assert_eq!(
+            state.withdraw_unbonded(validator, validator).unwrap(),
+            queued_before - queued_before / 20
+        );
+        assert!(state.unbonding_queue.is_empty());
+    }
+
+    /// The legacy entry point keeps the same accounting and now shares H2.
+    #[test]
+    fn legacy_slash_delegates_to_slash_validator() {
+        let mut a = StakingState::new();
+        let mut b = StakingState::new();
+        for st in [&mut a, &mut b] {
+            st.join_validator(Address([1u8; 32]), MIN_VALIDATOR_STAKE, 0, None, None, None)
+                .unwrap();
+            st.unbond_validator(Address([1u8; 32]), 0)
+                .expect_err("zero unbond is rejected");
+            st.unbonding_queue.push(UnbondingEntry {
+                delegator: Address([2u8; 32]),
+                validator: Address([1u8; 32]),
+                amount: 1_000 * ONE_KUNA,
+                release_height: 10,
+            });
+        }
+        let legacy = a
+            .slash(DoubleSignEvidence {
+                validator: Address([1u8; 32]),
+                height: 1,
+            })
+            .unwrap();
+        let direct = b.slash_validator(Address([1u8; 32])).unwrap();
+        assert_eq!(legacy, direct);
+        assert_eq!(a.unbonding_queue[0].amount, b.unbonding_queue[0].amount);
+    }
+
+    #[test]
+    fn evidence_id_is_32_bytes_and_domain_separated() {
+        let ev = DoubleSignEvidence {
+            validator: Address([1u8; 32]),
+            height: 7,
+        };
+        let id = StakingState::evidence_id(&ev);
+        assert_eq!(id.len(), 32);
+        assert_eq!(id, StakingState::evidence_id(&ev));
+        assert_ne!(
+            id,
+            StakingState::evidence_id(&DoubleSignEvidence {
+                validator: Address([1u8; 32]),
+                height: 8,
+            })
+        );
     }
 
     #[test]

@@ -1,6 +1,8 @@
 # RFC-010 — Production slashing: verifiable evidence and unbonding coverage
 
-- **Status:** Draft — decisions needed (see §8)
+- **Status:** Accepted & implemented 2026-10-22 (gated behind
+  `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`). Decisions D1–D5 taken as
+  recommended in §8; see §11 for what shipped.
 - **Supersedes:** the skeleton described in PRO-12 (Linear), ANT-24
 - **Tracks:** TASKLIST item 8, Linear PRO-12
 - **Depends on:** PRO-19 (versioned store decode + immediate deactivation/jail)
@@ -189,6 +191,10 @@ window.
 
 ## 8. Decisions needed
 
+> **Accepted 2026-10-22 (owner): all five as recommended.** D4 is therefore
+> `EVIDENCE_MAX_AGE_ROUNDS = 30_000`; D5 slashes every entry still pending in
+> `unbonding_queue` at execution time.
+
 | # | Question | Recommendation |
 |---|---|---|
 | D1 | Historical committee proof for evidence | Accept self-contained evidence (no per-epoch snapshots) |
@@ -239,3 +245,30 @@ existing behaviour changes; the full workspace suite must stay green.
 
 Downtime/liveness slashing; governance-controlled slash parameters; reporter
 rewards; jail mechanics (PRO-19); slashing past a matured, withdrawn unbond.
+
+## 11. Implementation (2026-10-22)
+
+Shipped behind `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`, so chain 2 behaviour is
+bit-identical until the chain 4 reset.
+
+| Layer | Change |
+|---|---|
+| `kovanica-types` | New `evidence` module: `SignedBlockHeader { author, round, digest, signature }` (`from_block`, `verify` via `Signature::verify_strict`), `EquivocationEvidence { header_a, header_b }` (`from_blocks`, `offender`, `round`, `id`, `is_fresh_at`), `EvidenceError`, `EVIDENCE_MAX_AGE_ROUNDS = 30_000`. `Hash::DOMAIN_EVIDENCE` + `Hash::new_keyed`. `TransactionKind::Evidence` (sighash tag 12). `SLASHING_ACTIVE_FROM_ROUND` + `slashing_active_from`. |
+| `kovanica-staking` | `slash_validator(Address) -> Result<u64>`: cuts self-stake, all delegations and every pending unbonding entry; the queued cut was never counted in `total_staked`, so it is not subtracted again. Legacy `slash(DoubleSignEvidence)` delegates. `evidence_id` is now `[u8; 32]` (`Hash::new_keyed(DOMAIN_EVIDENCE, author ‖ round_le)`). |
+| `kovanica-execution` | `PROCESSED_EVIDENCE: [u8; 32] -> ()`. `execute_transaction` takes `leader_round` + `slashing_active`; new `Evidence` arm: gate → offender → freshness → active validator → dedup → treasury credit → in-memory slash → marker insert (before the credit, so a storage failure cannot mint). `slashed_to_treasury` counter unchanged. |
+| `kovanica-mempool` | `immediate_value` arm (`0`); `evidence_is_free(sender)` — fee-free only when the sender is an active validator (matches the gossip rule that only committee keys may publish evidence); public `next_nonce`. |
+| `kovanica-consensus` | `report_equivocation(existing, incoming)` builds and signs the evidence tx (nonce from the pool, up to 3 retries) and submits it. Called from the equivocation reject branch only — the `use_min_digest_fork` swap branch is convergence, not proof, and stays silent. Gated on `slashing_active_from(round)`. |
+| `kovanica-network` | `verify_transaction` exempts `Evidence` from the zero-fee rejection. This is safe because the same function already requires the sender key to be a current committee key — the gossip-edge equivalent of the mempool's active-validator check. Without it, a node's own report could never reach its peers (only the reporter would slash). |
+| `kovanica-rpc` | `kind_to_json` renders `{"type":"evidence", author, round, digest_a, digest_b}`. |
+
+Tests: 8 in `kovanica-types`, 3 in `kovanica-staking` (incl. H2 end-to-end),
+4 in `kovanica-execution` (gate off; slash + treasury + dedup; stale /
+non-validator / forged; H2 observed through `withdraw_unbonded`), 1 in
+`kovanica-consensus` (detection → signed evidence tx in the pool, nothing below
+the gate), 3 in `kovanica-network` (fee floor still applies to transfers;
+fee-free evidence from a committee member is accepted; non-committee senders
+are rejected).
+
+Still open: **PRO-19** (immediate deactivation + jail) — a 5 % cut leaves the
+validator above `MIN_VALIDATOR_STAKE`, so without PRO-19 it keeps its committee
+seat. `release_height` remains measured in heights (PRO-37).

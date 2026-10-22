@@ -68,7 +68,7 @@ Preimage:
 | 8    | fee          | u64 LE                                         |
 
 `kind` encoding (byte-for-byte identical to the current `Transaction::signing_hash`,
-`crates/kovanica-types/src/transaction.rs` ~L83-L135; the tag values are **not** in declaration order):
+`crates/kovanica-types/src/transaction.rs`; the tag values are **not** in declaration order):
 
 | Variant        | tag u8 | Fields after tag |
 |----------------|-------:|------------------|
@@ -79,6 +79,12 @@ Preimage:
 | Call           | 4      | `contract` 32 B, `value` u64 LE (new in v1, see §3), `len(method)` u64 LE, `method` UTF-8 bytes, `len(args)` u64 LE, `args`, `gas_limit` u64 LE |
 | Delegate       | 5      | `validator` 32 B, `amount` u64 LE |
 | ClaimRewards   | 6      | `0x00` (None) or `0x01` + `validator` 32 B |
+| RegisterLightNode | 7   | `vrf_public_key` 32 B, `stake` u64 LE |
+| ExitLightNode  | 8      | — |
+| SubmitLightWitness | 9  | `epoch` u64 LE, `vrf_hash` 32 B, `vrf_proof` (variable) |
+| SetCommission  | 10     | `validator` 32 B, `commission_bps` u16 LE |
+| ClaimTreasury  | 11     | `amount` u64 LE |
+| Evidence       | 12     | two headers × (`author` 32 B, `round` u64 LE, `digest` 32 B, `signature` 64 B) |
 
 ```
 signing_hash = BLAKE3_keyed(key = pad32("KUNA-TX-v1"), preimage)   // = Hash::new_keyed(b"KUNA-TX-v1", preimage)

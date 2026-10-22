@@ -161,4 +161,23 @@ impl Signature {
         };
         dalek_pk.verify(message, &dalek_sig).is_ok()
     }
+
+    /// Strict Ed25519 verification over the given message.
+    ///
+    /// Uses `verify_strict`, which additionally rejects small-order/weak
+    /// public keys and non-canonical `R`/`A`/`S` encodings. Equivocation
+    /// evidence is a consensus-critical proof: a signature that only passes
+    /// the malleable check must not be enough to slash a validator.
+    pub fn verify_strict(&self, message: &[u8], public_key: &PublicKey) -> bool {
+        use ed25519_dalek::{Signature as DalekSignature, VerifyingKey};
+        let dalek_sig = match DalekSignature::try_from(self.0.as_slice()) {
+            Ok(sig) => sig,
+            Err(_) => return false,
+        };
+        let dalek_pk = match VerifyingKey::from_bytes(&public_key.0) {
+            Ok(pk) => pk,
+            Err(_) => return false,
+        };
+        dalek_pk.verify_strict(message, &dalek_sig).is_ok()
+    }
 }

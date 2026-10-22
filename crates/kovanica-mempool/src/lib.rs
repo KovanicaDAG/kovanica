@@ -213,6 +213,7 @@ fn immediate_value(kind: &TransactionKind) -> u64 {
         TransactionKind::SubmitLightWitness { .. } => 0,
         TransactionKind::SetCommission { .. } => 0,
         TransactionKind::ClaimTreasury { .. } => 0, // funds leave the treasury account, not the sender
+        TransactionKind::Evidence { .. } => 0,      // the proof spends no funds
     }
 }
 
@@ -355,6 +356,48 @@ impl Mempool {
             .map_or(0, |a| a.nonce)
     }
 
+    /// Evidence is fee-free, but only from an active validator.
+    ///
+    /// The proof is self-authenticating, so *anyone* could relay a valid one
+    /// and should not have to pay for the privilege. Allowing fee-free
+    /// evidence from arbitrary accounts, however, would be free block space
+    /// for junk that fails verification. Restricting the exemption to the
+    /// active set keeps validator reporting free while everybody else pays
+    /// the normal fee floor. Gossip already only accepts transactions whose
+    /// sender key is a known committee key, so this matches the network edge.
+    fn evidence_is_free(&self, tx: &Transaction) -> bool {
+        if !matches!(tx.kind, TransactionKind::Evidence { .. }) || tx.fee != 0 {
+            return false;
+        }
+        let Ok(txn) = self.storage.begin_read() else {
+            return false;
+        };
+        let Ok(staking) = self.storage.state().load_staking_state(&txn) else {
+            return false;
+        };
+        staking
+            .validators
+            .iter()
+            .any(|v| v.address == tx.sender && v.active)
+    }
+
+    /// Next nonce the pool would accept from `sender`, including local
+    /// pending transactions. Used by the node to sign its own evidence
+    /// reports without racing the admission rule.
+    pub fn next_nonce(&self, sender: &Address) -> Result<u64, MempoolError> {
+        let txn = self.storage.begin_read()?;
+        let account = self.storage.state().get_account_or_default(&txn, sender)?;
+        let state = self.state.lock();
+        let next = state
+            .by_sender
+            .get(sender)
+            .and_then(|pending| pending.last_key_value())
+            .map(|(nonce, _)| nonce + 1)
+            .unwrap_or(account.nonce)
+            .max(account.nonce);
+        Ok(next)
+    }
+
     /// Shared admission path; `gossip == false` keeps the tx local.
     fn admit(&self, tx: Transaction, gossip: bool) -> Result<(), MempoolError> {
         // --- 1. cheap stateless checks ---------------------------------
@@ -368,7 +411,7 @@ impl Mempool {
             }
         }
         let fee_rate = tx.fee / size.max(1) as u64;
-        if requires_fee(&tx.kind) {
+        if requires_fee(&tx.kind) && !self.evidence_is_free(&tx) {
             if tx.fee == 0 {
                 return Err(MempoolError::ZeroFee);
             }

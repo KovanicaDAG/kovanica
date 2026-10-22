@@ -73,8 +73,9 @@ const TX_RECEIPT_BY_HASH: TableDefinition<[u8; 32], Vec<u8>> =
 const PENDING_REWARDS: TableDefinition<[u8; 64], u64> =
     TableDefinition::new("staking_pending_rewards");
 
-/// Processed double-sign evidence ids (`StakingState::evidence_id`).
-const PROCESSED_EVIDENCE: TableDefinition<[u8; 40], u8> =
+/// Processed double-sign evidence ids (`EquivocationEvidence::id` /
+/// `StakingState::evidence_id`): blake3, 32 bytes.
+const PROCESSED_EVIDENCE: TableDefinition<[u8; 32], u8> =
     TableDefinition::new("staking_processed_evidence");
 
 /// Supply accounting counters kept by execution (e.g. `"slashed_to_treasury"`).
@@ -198,6 +199,24 @@ pub trait LogPublisher: Send + Sync {
     fn publish_logs(&self, receipts: &[TransactionReceipt]);
 }
 
+/// Round context and activation gates for one committed sub-DAG.
+///
+/// Bundled so `execute_transaction` keeps a small, readable signature and so
+/// the set of gates stays one explicit value rather than five adjacent booleans.
+#[derive(Clone, Copy, Debug)]
+struct SubDagContext {
+    /// Committed leader height before this sub-DAG (the reward height).
+    committed_height: u64,
+    /// DAG round of this sub-DAG's leader block.
+    leader_round: kovanica_types::Round,
+    /// `gas_hardening_active_from(leader_round)`.
+    gas_hardening_active: bool,
+    /// `contract_hardening_active_from(leader_round)`.
+    contract_hardening_active: bool,
+    /// `slashing_active_from(leader_round)`.
+    slashing_active: bool,
+}
+
 impl ExecutionContext {
     /// **Dev/test only.** Context for `chain_id::LOCAL` (1337). On a real
     /// network every signature (signed for mainnet/testnet/devnet) is
@@ -318,6 +337,11 @@ impl ExecutionContext {
         // the network upgrades).
         let contract_hardening_active =
             kovanica_types::contract_hardening_active_from(subdag.leader_round);
+        // Slashing activation: `Evidence` transactions are only actionable
+        // from `SLASHING_ACTIVE_FROM_ROUND` on. Below it they fail
+        // deterministically, so a node without the feature keeps producing
+        // identical blocks (it just records a failed receipt).
+        let slashing_active = kovanica_types::slashing_active_from(subdag.leader_round);
 
         for block in &subdag.blocks {
             for tx in &block.transactions {
@@ -325,9 +349,13 @@ impl ExecutionContext {
                     tx,
                     storage,
                     &mut txn,
-                    committed_height,
-                    gas_hardening_active,
-                    contract_hardening_active,
+                    SubDagContext {
+                        committed_height,
+                        leader_round: subdag.leader_round,
+                        gas_hardening_active,
+                        contract_hardening_active,
+                        slashing_active,
+                    },
                 )?;
                 receipts.push(receipt);
                 txs_applied += 1;
@@ -472,10 +500,15 @@ impl ExecutionContext {
         tx: &Transaction,
         storage: &Storage,
         txn: &mut WriteTransaction,
-        committed_height: u64,
-        gas_hardening_active: bool,
-        contract_hardening_active: bool,
+        context: SubDagContext,
     ) -> Result<TransactionReceipt, ExecutionError> {
+        let SubDagContext {
+            committed_height,
+            leader_round,
+            gas_hardening_active,
+            contract_hardening_active,
+            slashing_active,
+        } = context;
         // Every transaction must carry a valid Ed25519 signature by its
         // sender over the signing hash. There is deliberately no bypass:
         // tests sign with real keypairs (see `tests::signed_tx`).
@@ -624,6 +657,9 @@ impl ExecutionContext {
             } => self.execute_set_commission(txn, storage, &tx.sender, *validator, *commission_bps),
             TransactionKind::ClaimTreasury { amount } => {
                 self.execute_claim_treasury(txn, storage, &tx.sender, *amount)
+            }
+            TransactionKind::Evidence { evidence } => {
+                self.execute_evidence(txn, storage, evidence, leader_round, slashing_active)
             }
         };
 
@@ -1392,6 +1428,103 @@ impl ExecutionContext {
         storage
             .state()
             .add_balance(txn, &treasury_address, claimed)?;
+        Ok(vec![event])
+    }
+
+    /// Apply equivocation (double-sign) evidence.
+    ///
+    /// Everything is checked before any state is written, so a malformed or
+    /// stale proof is a plain failed transaction (fee/nonce still charged by
+    /// the caller) and never a partial slash:
+    ///
+    /// 1. the transaction kind is only actionable from
+    ///    `SLASHING_ACTIVE_FROM_ROUND` on;
+    /// 2. both header signatures verify under the claimed author (strict
+    ///    Ed25519), same author, same round, different digests;
+    /// 3. the author is an **active** validator in the staking state being
+    ///    executed — the one piece the proof itself cannot establish;
+    /// 4. the proof is no older than `EVIDENCE_MAX_AGE_ROUNDS` relative to
+    ///    the leader round being executed;
+    /// 5. the (author, round) event has not been processed before.
+    ///
+    /// Then `slash_validator` applies the fixed cut to self-stake, all
+    /// delegations, and all still-pending unbonding entries (H2), and the
+    /// total is credited to the treasury account — the same destination and
+    /// the same `slashed_to_treasury` counter as the legacy path.
+    ///
+    /// The processed marker is written **before** the treasury credit: if the
+    /// credit fails, the offender escapes one slash rather than the treasury
+    /// being credited without a matching slash (which would inflate supply).
+    fn execute_evidence(
+        &mut self,
+        txn: &mut WriteTransaction,
+        storage: &Storage,
+        evidence: &kovanica_types::EquivocationEvidence,
+        leader_round: kovanica_types::Round,
+        slashing_active: bool,
+    ) -> Result<Vec<ContractEvent>, ExecutionError> {
+        if !slashing_active {
+            return Err(ExecutionError::Validation(
+                "slashing not active at this round".to_string(),
+            ));
+        }
+        let offender = evidence
+            .offender()
+            .map_err(|e| ExecutionError::Validation(format!("invalid evidence: {e}")))?;
+        if !evidence.is_fresh_at(leader_round) {
+            return Err(ExecutionError::Validation(format!(
+                "evidence from round {} is older than EVIDENCE_MAX_AGE_ROUNDS at {}",
+                evidence.round(),
+                leader_round
+            )));
+        }
+        let is_active = self
+            .staking
+            .validators
+            .iter()
+            .any(|v| v.address == offender && v.active);
+        if !is_active {
+            return Err(ExecutionError::Validation(
+                "evidence author is not an active validator".to_string(),
+            ));
+        }
+        let id = evidence.id().0;
+        if txn.open_table(PROCESSED_EVIDENCE)?.get(id)?.is_some() {
+            return Err(StakingError::EvidenceProcessed.into());
+        }
+        let treasury = self
+            .staking
+            .treasury_address()
+            .ok_or_else(|| ExecutionError::Other("treasury not configured".into()))?;
+
+        // Slash a candidate so a failure below leaves `self.staking` untouched
+        // (the caller's savepoint also covers this, but keeping it explicit
+        // makes the ordering obvious).
+        let mut candidate = snapshot_staking(&self.staking);
+        let slashed = candidate.slash_validator(offender)?;
+        if slashed == 0 {
+            return Err(ExecutionError::Validation(
+                "slash amount is zero".to_string(),
+            ));
+        }
+        let event = ContractEvent {
+            address: treasury,
+            topic: b"evidence_slash".to_vec(),
+            data: bincode::serialize(&(offender, slashed))
+                .map_err(|e| ExecutionError::Other(e.to_string()))?,
+        };
+
+        txn.open_table(PROCESSED_EVIDENCE)?.insert(id, 1)?;
+        {
+            let mut counters = txn.open_table(SUPPLY_COUNTERS)?;
+            let cur = counters
+                .get("slashed_to_treasury")?
+                .map(|v| v.value())
+                .unwrap_or(0);
+            counters.insert("slashed_to_treasury", cur.saturating_add(slashed))?;
+        }
+        storage.state().add_balance(txn, &treasury, slashed)?;
+        self.staking = candidate;
         Ok(vec![event])
     }
 }
@@ -3982,6 +4115,287 @@ mod tests {
             staking_state_bytes(&load_staking_state(&storage)),
             staking_state_bytes(&ctx.staking)
         );
+    }
+
+    /// Build a signed header for `round` over `seed`.
+    fn evidence_header(
+        key: &SigningKey,
+        round: u64,
+        seed: &[u8],
+    ) -> kovanica_types::SignedBlockHeader {
+        let digest = kovanica_types::Hash::new(seed);
+        kovanica_types::SignedBlockHeader {
+            author: address_of(key),
+            round,
+            digest,
+            signature: kovanica_crypto::sign(key, digest.as_ref()),
+        }
+    }
+
+    /// Two conflicting signed headers for `(key, round)`.
+    fn equivocation(key: &SigningKey, round: u64) -> kovanica_types::EquivocationEvidence {
+        kovanica_types::EquivocationEvidence {
+            header_a: evidence_header(key, round, b"block-a"),
+            header_b: evidence_header(key, round, b"block-b"),
+        }
+    }
+
+    fn evidence_tx(
+        reporter: &SigningKey,
+        nonce: u64,
+        evidence: kovanica_types::EquivocationEvidence,
+    ) -> Transaction {
+        signed_tx(reporter, TransactionKind::Evidence { evidence }, nonce, 0)
+    }
+
+    const GATE: u64 = kovanica_types::SLASHING_ACTIVE_FROM_ROUND;
+
+    /// Execute a sub-DAG at `round` with a unique leader digest.
+    ///
+    /// The activation round is `u64::MAX`, so every gated test must run at
+    /// that same round. `execute_committed_subdag` is idempotent per leader
+    /// digest and `subdag_at` derives it from `(author, round, [])` alone, so
+    /// a second call at the same round would be a no-op; salting the digest
+    /// models two different committed leaders at the same round instead.
+    fn run_salted(
+        ctx: &mut ExecutionContext,
+        storage: &Storage,
+        round: u64,
+        txs: Vec<Transaction>,
+        salt: u8,
+    ) -> Vec<TransactionReceipt> {
+        let mut sub = subdag_at(round, txs);
+        sub.leader.digest = kovanica_types::Hash::new([salt]);
+        ctx.execute_committed_subdag(&sub, storage)
+            .expect("execute")
+            .receipts
+    }
+
+    /// Like [`slash_fixture`], but the validator address is the *real*
+    /// address of `key` (tests sign blocks with that key, so the address and
+    /// the signing key must correspond; `Address([3;32])` is not the public
+    /// key of `SigningKey::from_bytes([3;32])`).
+    fn keyed_slash_fixture(storage: &Storage, key: &SigningKey) -> (ExecutionContext, Address) {
+        let reporter = Address([9u8; 32]);
+        let mut ctx = setup_funded_sender(storage, &reporter, 0);
+        ctx.init_treasury(TREASURY);
+        let v = address_of(key);
+        ctx.staking.validators.clear();
+        ctx.staking.delegations.clear();
+        ctx.staking.total_staked = 0;
+        ctx.staking
+            .join_validator(
+                v,
+                kovanica_staking::MIN_VALIDATOR_STAKE,
+                0,
+                Some(Address([4u8; 32])),
+                None,
+                None,
+            )
+            .expect("join validator");
+        ctx.staking
+            .delegate(reporter, v, 10_000 * K)
+            .expect("delegate");
+        (ctx, v)
+    }
+
+    #[test]
+    fn evidence_is_rejected_below_the_activation_round() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+        let k = test_keypair(3);
+        let (mut ctx, _) = keyed_slash_fixture(&storage, &k);
+        let staked_before = ctx.staking.total_staked;
+        let treasury_before = read_balance(&storage, &TREASURY);
+        let tx = evidence_tx(&test_keypair(9), 0, equivocation(&k, 1));
+
+        let r = run(&mut ctx, &storage, GATE - 1, vec![tx]);
+        assert!(!r[0].success);
+        assert!(
+            r[0].error
+                .as_deref()
+                .unwrap_or("")
+                .contains("slashing not active"),
+            "{:?}",
+            r[0].error
+        );
+        assert_eq!(ctx.staking.total_staked, staked_before);
+        assert!(!ctx.staking.validators[0].slashed);
+        assert_eq!(read_balance(&storage, &TREASURY), treasury_before);
+        assert_eq!(slashed_counter(&storage), None);
+    }
+
+    #[test]
+    fn evidence_slashes_active_validator_and_credits_treasury() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+        let k = test_keypair(3);
+        let (mut ctx, _) = keyed_slash_fixture(&storage, &k);
+        let supply_before = total_supply(&ctx, &storage);
+        let treasury_before = read_balance(&storage, &TREASURY);
+
+        let r = run(
+            &mut ctx,
+            &storage,
+            GATE,
+            vec![evidence_tx(&test_keypair(9), 0, equivocation(&k, GATE))],
+        );
+        assert!(r[0].success, "{:?}", r[0].error);
+        assert_eq!(r[0].events[0].topic, b"evidence_slash");
+
+        // 5% of 50k self + 5% of 10k delegation.
+        let slashed = 3_000 * K;
+        assert_eq!(read_balance(&storage, &TREASURY), treasury_before + slashed);
+        assert_eq!(
+            total_supply(&ctx, &storage),
+            supply_before,
+            "nothing burned"
+        );
+        assert_eq!(ctx.staking.total_staked, 57_000 * K);
+        assert!(ctx.staking.validators[0].slashed);
+        assert_eq!(slashed_counter(&storage), Some(slashed));
+        // Persisted, not just in memory.
+        assert_eq!(
+            staking_state_bytes(&load_staking_state(&storage)),
+            staking_state_bytes(&ctx.staking)
+        );
+
+        // Same (author, round) again, even with a different digest pair:
+        // rejected. (A new round avoids the sub-DAG idempotency marker.)
+        let again = kovanica_types::EquivocationEvidence {
+            header_a: evidence_header(&k, GATE, b"third"),
+            header_b: evidence_header(&k, GATE, b"fourth"),
+        };
+        let r = run_salted(
+            &mut ctx,
+            &storage,
+            GATE,
+            vec![evidence_tx(&test_keypair(9), 1, again)],
+            1,
+        );
+        assert!(!r[0].success);
+        assert!(
+            r[0].error
+                .as_deref()
+                .unwrap_or("")
+                .contains("already processed"),
+            "{:?}",
+            r[0].error
+        );
+        assert_eq!(read_balance(&storage, &TREASURY), treasury_before + slashed);
+    }
+
+    #[test]
+    fn evidence_is_rejected_when_stale_or_not_a_validator_or_forged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+        let k = test_keypair(3);
+        let (mut ctx, _) = keyed_slash_fixture(&storage, &k);
+        let staked_before = ctx.staking.total_staked;
+        let treasury_before = read_balance(&storage, &TREASURY);
+
+        // Stale: round 0 versus a leader round far beyond the age bound.
+        let r = run(
+            &mut ctx,
+            &storage,
+            GATE,
+            vec![evidence_tx(&test_keypair(9), 0, equivocation(&k, 0))],
+        );
+        assert!(!r[0].success);
+        assert!(
+            r[0].error.as_deref().unwrap_or("").contains("older than"),
+            "{:?}",
+            r[0].error
+        );
+
+        // A key that is not a registered validator.
+        let outsider = test_keypair(5);
+        let r = run_salted(
+            &mut ctx,
+            &storage,
+            GATE,
+            vec![evidence_tx(
+                &test_keypair(9),
+                1,
+                equivocation(&outsider, GATE),
+            )],
+            2,
+        );
+        assert!(!r[0].success);
+        assert!(
+            r[0].error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not an active validator"),
+            "{:?}",
+            r[0].error
+        );
+
+        // Forged: the second header is signed by a different key.
+        let mut forged = equivocation(&k, GATE);
+        forged.header_b = evidence_header(&outsider, GATE, b"block-b");
+        let r = run_salted(
+            &mut ctx,
+            &storage,
+            GATE,
+            vec![evidence_tx(&test_keypair(9), 2, forged)],
+            3,
+        );
+        assert!(!r[0].success);
+        assert!(
+            r[0].error
+                .as_deref()
+                .unwrap_or("")
+                .contains("invalid evidence"),
+            "{:?}",
+            r[0].error
+        );
+
+        assert_eq!(ctx.staking.total_staked, staked_before);
+        assert!(!ctx.staking.validators[0].slashed);
+        assert_eq!(read_balance(&storage, &TREASURY), treasury_before);
+        assert_eq!(slashed_counter(&storage), None);
+    }
+
+    /// H2 end to end: an unbond started before the offence is still cut.
+    #[test]
+    fn evidence_cuts_pending_unbonding_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+        let k = test_keypair(3);
+        let (mut ctx, v) = keyed_slash_fixture(&storage, &k);
+        // 60k self + 10k delegated, so 10k can unbond and the validator
+        // stays at MIN_VALIDATOR_STAKE (and thus active).
+        ctx.staking.validators[0].stake = 70_000 * K;
+        ctx.staking.total_staked += 20_000 * K;
+        ctx.staking.unbond_validator(v, 10_000 * K).expect("unbond");
+        assert_eq!(ctx.staking.unbonding_queue[0].amount, 10_000 * K);
+        assert!(ctx.staking.validators[0].active);
+
+        let supply_before = total_supply(&ctx, &storage);
+        let treasury_before = read_balance(&storage, &TREASURY);
+        let r = run(
+            &mut ctx,
+            &storage,
+            GATE,
+            vec![evidence_tx(&test_keypair(9), 0, equivocation(&k, GATE))],
+        );
+        assert!(r[0].success, "{:?}", r[0].error);
+
+        // 5% of 50k self + 5% of 10k delegation + 5% of the 10k queued.
+        let slashed = 3_500 * K;
+        assert_eq!(read_balance(&storage, &TREASURY), treasury_before + slashed);
+        assert_eq!(
+            total_supply(&ctx, &storage),
+            supply_before,
+            "nothing burned"
+        );
+        assert_eq!(ctx.staking.unbonding_queue[0].amount, 9_500 * K);
+
+        // The reduced amount is what becomes withdrawable.
+        ctx.staking.committed_leader_height = ctx.staking.unbonding_queue[0].release_height;
+        assert_eq!(ctx.staking.withdraw_unbonded(v, v).unwrap(), 9_500 * K);
+        assert!(ctx.staking.unbonding_queue.is_empty());
     }
 
     #[test]

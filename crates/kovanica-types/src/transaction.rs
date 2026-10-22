@@ -2,6 +2,7 @@
 
 use crate::address::Address;
 use crate::crypto::{PublicKey, Signature};
+use crate::evidence::EquivocationEvidence;
 use crate::hash::Hash;
 use crate::signing::{SigningContext, TX_DOMAIN_TAG};
 use serde::{Deserialize, Serialize};
@@ -91,6 +92,16 @@ pub enum TransactionKind {
     ClaimTreasury {
         /// Amount to claim in base units.
         amount: u64,
+    },
+    /// Report a validator that signed two different blocks in one round.
+    ///
+    /// Gated on [`crate::slashing_active_from`]; below the activation round
+    /// the transaction fails deterministically. Self-authenticating: the
+    /// sender's signature only authorises inclusion, the proof is the pair of
+    /// headers inside `evidence`.
+    Evidence {
+        /// The two conflicting signed headers.
+        evidence: EquivocationEvidence,
     },
 }
 
@@ -211,6 +222,15 @@ impl Transaction {
             TransactionKind::ClaimTreasury { amount } => {
                 data.push(11);
                 data.extend_from_slice(&amount.to_le_bytes());
+            }
+            TransactionKind::Evidence { evidence } => {
+                data.push(12);
+                for header in [&evidence.header_a, &evidence.header_b] {
+                    data.extend_from_slice(&header.author.0);
+                    data.extend_from_slice(&header.round.to_le_bytes());
+                    data.extend_from_slice(&header.digest.0);
+                    data.extend_from_slice(&header.signature.0);
+                }
             }
         }
         data.extend_from_slice(&self.fee.to_le_bytes());

@@ -44,6 +44,8 @@ impl Hash {
     pub const DOMAIN_SMT: &'static [u8] = b"KVNC-SMT-v1";
     /// Domain tag for the committee bound into a commit seal.
     pub const DOMAIN_COMMITTEE: &'static [u8] = b"KVNC-COMMITTEE-v1";
+    /// Domain tag for an equivocation-evidence id.
+    pub const DOMAIN_EVIDENCE: &'static [u8] = b"KVNC-EVIDENCE-v1";
 
     /// Zero hash (useful for genesis).
     pub fn zero() -> Self {

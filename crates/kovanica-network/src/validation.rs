@@ -248,12 +248,20 @@ impl Default for GossipValidator {
     }
 }
 
-/// Stake and delegate are fee-free by design; everything else pays a fee.
-#[allow(dead_code)]
+/// Stake, delegate and evidence are fee-free by design; everything else pays
+/// a fee.
+///
+/// Evidence is free because reporting a valid equivocation is a public good
+/// and the proof itself is the payload. This is safe at the gossip edge
+/// because [`GossipValidator::verify_transaction`] only accepts transactions
+/// whose sender key belongs to the current committee — the same restriction
+/// the mempool applies through its staking check.
 fn requires_fee(kind: &TransactionKind) -> bool {
     !matches!(
         kind,
-        TransactionKind::Stake { .. } | TransactionKind::Delegate { .. }
+        TransactionKind::Stake { .. }
+            | TransactionKind::Delegate { .. }
+            | TransactionKind::Evidence { .. }
     )
 }
 
@@ -700,6 +708,83 @@ mod tests {
         assert_eq!(
             admit_seal(&keys, TEST_CTX.chain_id, &ann, Some(bad.hash())),
             SealAdmission::Reject(Rejection::EpochMismatch)
+        );
+    }
+
+    fn signed_transaction(
+        signer: &kovanica_types::SigningKey,
+        kind: TransactionKind,
+        fee: u64,
+    ) -> Transaction {
+        let mut tx = Transaction {
+            sender: Address::from_public_key(&PublicKey::from(signer.verifying_key())),
+            nonce: 0,
+            kind,
+            fee,
+            signature: Signature([0; 64]),
+            hash: Hash::zero(),
+        };
+        tx.hash = tx.signing_hash(&TEST_CTX);
+        tx.signature = kovanica_crypto::sign(signer, tx.hash.as_ref());
+        tx
+    }
+
+    #[test]
+    fn zero_fee_transfer_from_a_committee_member_is_rejected() {
+        let (signers, keys) = committee(4);
+        let validator = GossipValidator::default();
+        validator.set_keys(keys);
+        let tx = signed_transaction(
+            &signers[0],
+            TransactionKind::Transfer {
+                to: Address([9u8; 32]),
+                amount: 1,
+            },
+            0,
+        );
+        assert_eq!(
+            validator.verify_transaction(&tx, &TEST_CTX),
+            Err(Rejection::ZeroFee)
+        );
+    }
+
+    #[test]
+    fn zero_fee_evidence_from_a_committee_member_is_accepted() {
+        let (signers, keys) = committee(4);
+        let offender = &signers[0];
+        let author = Address::from_public_key(&PublicKey::from(offender.verifying_key()));
+        let header = |seed: &[u8]| {
+            let digest = Hash::new(seed);
+            kovanica_types::SignedBlockHeader {
+                author,
+                round: 1,
+                digest,
+                signature: kovanica_crypto::sign(offender, digest.as_ref()),
+            }
+        };
+        let evidence = kovanica_types::EquivocationEvidence {
+            header_a: header(b"a"),
+            header_b: header(b"b"),
+        };
+        let validator = GossipValidator::default();
+        validator.set_keys(keys);
+        // The reporter is a different committee member than the offender.
+        let tx = signed_transaction(&signers[1], TransactionKind::Evidence { evidence }, 0);
+        assert_eq!(validator.verify_transaction(&tx, &TEST_CTX), Ok(()));
+    }
+
+    #[test]
+    fn transaction_from_a_non_committee_key_is_rejected() {
+        let (_signers, keys) = committee(4);
+        let validator = GossipValidator::default();
+        validator.set_keys(keys);
+        let outsider = kovanica_types::SigningKey::from_bytes(&[42u8; 32]);
+        let tx = signed_transaction(&outsider, TransactionKind::Stake { amount: 1 }, 0);
+        assert_eq!(
+            validator.verify_transaction(&tx, &TEST_CTX),
+            Err(Rejection::UnknownSender(Address::from_public_key(
+                &PublicKey::from(outsider.verifying_key())
+            )))
         );
     }
 }

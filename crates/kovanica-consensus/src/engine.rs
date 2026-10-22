@@ -13,9 +13,10 @@ use crate::{
     committer::UniversalCommitter, is_leader_round, linearizer::Linearizer, offset_in_wave,
 };
 use kovanica_crypto::sign;
-use kovanica_mempool::Mempool;
+use kovanica_mempool::{Mempool, MempoolError};
 use kovanica_types::{
-    block::StatementBlock, hash::Hash, AuthorityIndex, Round, Stake, Transaction, MAX_TXS_PER_BLOCK,
+    block::StatementBlock, hash::Hash, Address, AuthorityIndex, EquivocationEvidence, Round,
+    Signature, Stake, Transaction, TransactionKind, MAX_TXS_PER_BLOCK,
 };
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -1010,6 +1011,68 @@ where
         }
     }
 
+    /// Submit equivocation evidence for `(author, round)` to the local
+    /// mempool, signed by this node.
+    ///
+    /// Best-effort and non-fatal: a missing mempool, an unknown authority
+    /// index, a missing signing key match, or a full pool must never turn a
+    /// detected fork into a consensus failure. The transaction is signed by
+    /// the local validator (the only key this node holds), pays no fee, and
+    /// is admitted under the normal rules — so a node that is not a validator
+    /// simply cannot report, which is also true of gossip.
+    ///
+    /// Gated on `SLASHING_ACTIVE_FROM_ROUND`: below it the execution layer
+    /// rejects evidence deterministically, so reporting would only waste
+    /// block space.
+    fn report_equivocation(&self, existing: &StatementBlock, incoming: &StatementBlock) {
+        if !kovanica_types::slashing_active_from(incoming.round) {
+            return;
+        }
+        let Some(mempool) = self.mempool.as_ref() else {
+            return;
+        };
+        let Some(author) = self
+            .committee
+            .authorities()
+            .iter()
+            .find(|a| a.index == incoming.author)
+            .map(|a| a.address)
+        else {
+            return;
+        };
+        let Ok(evidence) = EquivocationEvidence::from_blocks(existing, incoming, author) else {
+            return;
+        };
+        let sender = Address::from_public_key(&kovanica_types::PublicKey(
+            self.signing_key.verifying_key().to_bytes(),
+        ));
+        // The pool's accepted nonce can move between our read and admission
+        // (the node's own traffic uses the same account). Retry a few times
+        // on a nonce race; anything else is not worth retrying.
+        for _ in 0..3 {
+            let Ok(nonce) = mempool.next_nonce(&sender) else {
+                return;
+            };
+            let mut tx = Transaction {
+                sender,
+                nonce,
+                kind: TransactionKind::Evidence {
+                    evidence: evidence.clone(),
+                },
+                fee: 0,
+                signature: Signature([0u8; 64]),
+                hash: Hash::zero(),
+            };
+            tx.hash = tx.signing_hash(&self.signing_ctx);
+            tx.signature = Signature(sign(&self.signing_key, &tx.hash.0).0);
+            match mempool.add_transaction(tx) {
+                Ok(()) => return,
+                Err(MempoolError::InvalidNonce { .. }) => continue,
+                Err(_) => return,
+            }
+        }
+    }
+
     /// Process a received block from another validator.
     pub fn process_block(
         &self,
@@ -1046,6 +1109,14 @@ where
                         self.vote_if_late(block.round)?;
                         return Ok(());
                     }
+                    // Both conflicting headers are in hand: the author signed
+                    // two different digests for one round. Report it before
+                    // returning, so the proof is not lost. The `use_min_digest`
+                    // branch above deliberately does not report: there the
+                    // configuration accepts an alternate block as fork
+                    // resolution, so treating it as slashable would change
+                    // that mode's consensus.
+                    self.report_equivocation(&existing, block);
                     return Err(ConsensusError::InvalidVote(format!(
                         "fork/equivocation at round {} author {}: existing={}, new={}",
                         block.round, block.author, existing.digest, block.digest
@@ -3207,5 +3278,120 @@ mod tests {
             None,
             "a round with no known leader block must never be voted for"
         );
+    }
+
+    /// Detection halves of the slashing path: two conflicting headers by the
+    /// scheduled leader are turned into a signed `Evidence` transaction in the
+    /// local mempool, and nothing is submitted below the activation round.
+    #[test]
+    fn detected_equivocation_is_reported_as_a_signed_evidence_transaction() {
+        use kovanica_types::{TransactionKind, SLASHING_ACTIVE_FROM_ROUND};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage =
+            Arc::new(kovanica_storage::Storage::new(dir.path().join("e.redb")).expect("storage"));
+        let key = kovanica_types::SigningKey::from_bytes(&[3u8; 32]);
+        let address =
+            Address::from_public_key(&kovanica_types::PublicKey(key.verifying_key().to_bytes()));
+        // The reporter is a validator, so its evidence is fee-free and the
+        // pool's staking lookup succeeds.
+        let mut staking = kovanica_staking::StakingState::new();
+        staking
+            .join_validator(
+                address,
+                kovanica_staking::MIN_VALIDATOR_STAKE,
+                0,
+                None,
+                None,
+                None,
+            )
+            .expect("join");
+        let txn = storage.begin_write().expect("write");
+        storage
+            .state()
+            .save_staking_state(&txn, &staking)
+            .expect("save staking");
+        txn.commit().expect("commit");
+
+        let mempool = Arc::new(Mempool::new(Default::default(), storage.clone(), TEST_CTX));
+        let dag = Arc::new(TestDag::default());
+        let committee = CommitteeInfo::try_new(
+            0,
+            vec![AuthorityInfo {
+                index: 0,
+                stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+                public_key: kovanica_types::PublicKey(key.verifying_key().to_bytes()),
+                vrf_public_key: None,
+                address,
+                network_address: String::new(),
+            }],
+        )
+        .expect("committee");
+        let manager = Arc::new(RwLock::new(TestBlockManager {
+            dag: dag.clone(),
+            key: RwLock::new(key.clone()),
+            set_key_calls: AtomicUsize::new(0),
+        }));
+        let engine = ConsensusEngine::new(
+            ConsensusConfig::default(),
+            committee,
+            dag,
+            manager,
+            key.clone(),
+            Some(mempool.clone()),
+            TEST_CTX,
+        );
+
+        let block = |round: Round, digest: Hash| kovanica_types::StatementBlock {
+            author: 0,
+            round,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+
+        // Below activation: detected, but not reported.
+        let below = SLASHING_ACTIVE_FROM_ROUND - 1;
+        engine.report_equivocation(
+            &block(below, Hash::new(b"a")),
+            &block(below, Hash::new(b"b")),
+        );
+        assert_eq!(mempool.len(), 0);
+
+        let a = block(SLASHING_ACTIVE_FROM_ROUND, Hash::new(b"a"));
+        let b = block(SLASHING_ACTIVE_FROM_ROUND, Hash::new(b"b"));
+        engine.report_equivocation(&a, &b);
+        assert_eq!(mempool.len(), 1, "one evidence transaction was admitted");
+
+        let hash = mempool.pending_hashes()[0];
+        let tx = mempool.get(&hash).expect("tx");
+        assert_eq!(tx.sender, address);
+        assert_eq!(tx.fee, 0);
+        assert!(
+            tx.verify_signature(&TEST_CTX),
+            "the node signs its own report"
+        );
+        match &tx.kind {
+            TransactionKind::Evidence { evidence } => {
+                assert_eq!(evidence.offender().expect("valid"), address);
+                assert_eq!(evidence.round(), SLASHING_ACTIVE_FROM_ROUND);
+                assert_eq!(
+                    evidence.id(),
+                    EquivocationEvidence::from_blocks(&a, &b, address)
+                        .expect("valid")
+                        .id()
+                );
+            }
+            other => panic!("expected Evidence, got {other:?}"),
+        }
+
+        // A second report of the same event is not admitted twice under a new
+        // nonce until the first is committed away: the pool accepts a
+        // different nonce, so the duplicate is stopped at execution instead.
+        // What matters here is that detection produced exactly one proof.
+        assert_eq!(mempool.len(), 1);
     }
 }

@@ -14,6 +14,7 @@ pub mod commit;
 pub mod committee;
 pub mod crypto;
 pub mod error;
+pub mod evidence;
 pub mod hash;
 pub mod light_client;
 pub mod merkle;
@@ -34,6 +35,9 @@ pub use commit::CommittedSubDag;
 pub use committee::{Authority, Committee, Stake};
 pub use crypto::{PublicKey, Signature, SigningKey};
 pub use error::TypesError;
+pub use evidence::{
+    EquivocationEvidence, EvidenceError, SignedBlockHeader, EVIDENCE_MAX_AGE_ROUNDS,
+};
 pub use hash::Hash;
 pub use light_client::{
     committee_seal_hash, decode_with_version, encode_with_version, executed_tx_hashes,
@@ -172,6 +176,32 @@ pub const CONTRACT_HARDENING_ACTIVE_FROM_ROUND: u64 = u64::MAX;
 #[allow(clippy::absurd_extreme_comparisons)]
 pub fn contract_hardening_active_from(round: Round) -> bool {
     round >= CONTRACT_HARDENING_ACTIVE_FROM_ROUND
+}
+
+/// Round from which production slashing takes effect.
+///
+/// Gates [`TransactionKind::Evidence`](crate::TransactionKind::Evidence) —
+/// the transaction that carries a self-contained [`EquivocationEvidence`]
+/// proof (see `docs/rfcs/RFC-010-PRODUCTION-SLASHING.md`). Below this round
+/// every such transaction fails deterministically with "slashing not
+/// active", so a node that has not been updated never diverges: it simply
+/// keeps the transaction in the block and records a failed receipt, exactly
+/// like any other failing transaction.
+///
+/// A new transaction kind changes the wire enum, so the rule cannot be
+/// activated on a running chain without a coordinated upgrade. Defaults to
+/// `u64::MAX`; set to `0` at the next genesis / testnet reset, after every
+/// validator runs a build containing the slashing implementation.
+pub const SLASHING_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+
+/// Whether production slashing applies to a block/leader at `round`.
+///
+/// Equivalent to `round >= SLASHING_ACTIVE_FROM_ROUND`. Single predicate for
+/// both the execution gate and the engine's evidence-reporting trigger, so
+/// the activation rule has exactly one definition.
+#[allow(clippy::absurd_extreme_comparisons)]
+pub fn slashing_active_from(round: Round) -> bool {
+    round >= SLASHING_ACTIVE_FROM_ROUND
 }
 
 /// Maximum serialized size of a single transaction, in bytes (512 KiB).
