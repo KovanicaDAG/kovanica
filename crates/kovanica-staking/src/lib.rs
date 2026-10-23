@@ -22,12 +22,10 @@ pub use light::{
     SettleOutcome, LIGHT_REWARD_BPS, LIGHT_WITNESS_SLOTS, MAX_LIGHT_NODES, MIN_LIGHT_BOND,
 };
 
-use bincode::de::read::SliceReader;
-use bincode::de::Deserializer as BincodeDeserializer;
 use bincode::{DefaultOptions, Options};
 use kovanica_types::{
     decode_with_version, encode_with_version, Address, Hash, PublicKey, Stake,
-    STAKING_STATE_VERSION,
+    STAKING_STATE_VERSION, STAKING_STATE_VERSION_PREVIOUS,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap as HashMap;
@@ -122,6 +120,18 @@ pub const MAX_ACTIVE_VALIDATORS: usize = 21;
 ///
 /// (Skeleton name: `UNBONDING_PERIOD` — same value: 100_000.)
 pub const UNBONDING_ROUNDS: u64 = 100_000;
+
+/// Jail length for a slashed validator, in committed leader heights (PRO-19).
+///
+/// A slashed validator is deactivated immediately and may not re-enter until
+/// `committed_leader_height >= jailed_until_height`. `21_600` committed leaders
+/// is about 3 days at 12 s/leader — matching Toni's 2026-10-20 decision ("jailed
+/// for 3 epochs, about 1 day" in *epochs*, expressed here in committed leaders
+/// to match `UNBONDING_ROUNDS` and `EPOCH_ROUNDS` units).
+///
+/// The field is compared against `committed_leader_height` (heights), not DAG
+/// rounds — see the note on `UNBONDING_ROUNDS` about the historical name.
+pub const JAIL_ROUNDS: u64 = 21_600;
 
 /// Epoch rotation length in committed leaders (≈ 1 day at 12 s/leader:
 /// `86_400 / 12 = 7_200`).
@@ -360,10 +370,21 @@ pub struct ValidatorInfo {
     #[serde(default)]
     pub last_commission_change_height: u64,
     /// Set once this validator has been slashed for provable misbehaviour.
-    /// F7 (Toni's decision): a slashed validator does NOT return to the active
-    /// set via [`StakingState::reactivate_validator`]; it stays out.
     #[serde(default)]
     pub slashed: bool,
+    /// Committed-leader height at which the slash jail ends (PRO-19).
+    ///
+    /// * `0` on a slashed record means "no jail" — the legacy F7 semantics:
+    ///   the validator stays out **forever**. This is what pre-jail rows
+    ///   (untagged legacy, or StakingState v1) decode to, so the F7 guarantee
+    ///   is preserved for records slashed before the jail existed.
+    /// * `> 0` on a slashed record is the jail end. Before it, a stake or a
+    ///   reactivation is rejected; at/after it, an explicit stake transaction
+    ///   with `stake >= MIN_VALIDATOR_STAKE` clears `slashed` and the jail.
+    ///
+    /// Nothing ever re-activates automatically.
+    #[serde(default)]
+    pub jailed_until_height: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -455,6 +476,118 @@ pub struct StakingState {
     pub treasury: Option<TreasuryState>,
 }
 
+/// Historical `ValidatorInfo` shape written before the PRO-19 jail
+/// (`c8800ac` untagged rows and StakingState v1): 11 fields, `slashed` present.
+#[derive(Deserialize)]
+struct ValidatorInfoV1 {
+    address: Address,
+    stake: Stake,
+    commission_bps: u16,
+    active: bool,
+    payout_address: Address,
+    public_key: Option<PublicKey>,
+    vrf_public_key: Option<VrfPublicKey>,
+    missed_leader_count: u64,
+    last_online_height: u64,
+    last_commission_change_height: u64,
+    slashed: bool,
+}
+
+/// Oldest `ValidatorInfo` shape (pre-`c8800ac`): 10 fields, no `slashed`.
+#[derive(Deserialize)]
+struct ValidatorInfoV0 {
+    address: Address,
+    stake: Stake,
+    commission_bps: u16,
+    active: bool,
+    payout_address: Address,
+    public_key: Option<PublicKey>,
+    vrf_public_key: Option<VrfPublicKey>,
+    missed_leader_count: u64,
+    last_online_height: u64,
+    last_commission_change_height: u64,
+}
+
+/// A `StakingState` whose validator payload uses a historical `ValidatorInfo`.
+///
+/// Field order, names, and `serde` defaults mirror `StakingState` exactly, so
+/// the only difference from the current layout is `V`.
+#[derive(Deserialize)]
+struct StakingStateLegacy<V> {
+    validators: Vec<V>,
+    delegations: Vec<Delegation>,
+    total_staked: Stake,
+    committed_leader_height: u64,
+    total_mining_issued: u64,
+    #[serde(default)]
+    reward_totals: HashMap<Address, u64>,
+    unbonding_queue: Vec<UnbondingEntry>,
+    treasury: Option<TreasuryState>,
+}
+
+trait LegacyValidator {
+    /// Lift a pre-jail record, defaulting the jail to 0 (permanent for any
+    /// record that was already slashed — the F7 guarantee).
+    fn lift(self) -> ValidatorInfo;
+}
+
+impl LegacyValidator for ValidatorInfoV1 {
+    fn lift(self) -> ValidatorInfo {
+        ValidatorInfo {
+            address: self.address,
+            stake: self.stake,
+            commission_bps: self.commission_bps,
+            active: self.active,
+            payout_address: self.payout_address,
+            public_key: self.public_key,
+            vrf_public_key: self.vrf_public_key,
+            missed_leader_count: self.missed_leader_count,
+            last_online_height: self.last_online_height,
+            last_commission_change_height: self.last_commission_change_height,
+            slashed: self.slashed,
+            jailed_until_height: 0,
+        }
+    }
+}
+
+impl LegacyValidator for ValidatorInfoV0 {
+    fn lift(self) -> ValidatorInfo {
+        ValidatorInfo {
+            address: self.address,
+            stake: self.stake,
+            commission_bps: self.commission_bps,
+            active: self.active,
+            payout_address: self.payout_address,
+            public_key: self.public_key,
+            vrf_public_key: self.vrf_public_key,
+            missed_leader_count: self.missed_leader_count,
+            last_online_height: self.last_online_height,
+            last_commission_change_height: self.last_commission_change_height,
+            slashed: false,
+            jailed_until_height: 0,
+        }
+    }
+}
+
+impl<V: LegacyValidator> StakingStateLegacy<V> {
+    fn lift(self) -> StakingState {
+        StakingState {
+            validators: self
+                .validators
+                .into_iter()
+                .map(LegacyValidator::lift)
+                .collect(),
+            delegations: self.delegations,
+            total_staked: self.total_staked,
+            committed_leader_height: self.committed_leader_height,
+            total_mining_issued: self.total_mining_issued,
+            reward_totals: self.reward_totals,
+            unbonding_queue: self.unbonding_queue,
+            treasury: self.treasury,
+        }
+    }
+}
+
 impl StakingState {
     pub fn new() -> Self {
         Self {
@@ -471,7 +604,8 @@ impl StakingState {
 
     /// Serialize StakingState with versioned encoding.
     ///
-    /// Format: magic byte (0x4B) + version (1) + bincode payload.
+    /// Format: magic byte (0x4B) + version ([`STAKING_STATE_VERSION`], currently
+    /// 2) + bincode payload.
     pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         let payload = bincode::serialize(self)?;
         Ok(encode_with_version(STAKING_STATE_VERSION, &payload))
@@ -480,8 +614,11 @@ impl StakingState {
     /// Load staking state from bytes with backward compatibility.
     ///
     /// Handles:
-    /// - Versioned format: magic byte (0x4B) + version (1) + new format payload
-    /// - Old untagged format: bincode payload directly (10-field ValidatorInfo, no slashed)
+    /// - Current versioned format (v2): `ValidatorInfo` with `jailed_until_height`
+    /// - Previous versioned format (v1): `ValidatorInfo` with `slashed`, no jail
+    ///   (lifted with `jailed_until_height = 0`, preserving F7)
+    /// - Old untagged formats: 11-field `ValidatorInfo` (`slashed`) or 10-field
+    ///   (no `slashed`), tried newest-first with `reject_trailing_bytes`
     /// - Unknown version: clear error
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, bincode::Error> {
         // Use bincode's default options with fixint encoding (same as serialize).
@@ -494,8 +631,15 @@ impl StakingState {
         // Check for versioned encoding
         match decode_with_version(bytes) {
             Ok((STAKING_STATE_VERSION, payload)) => {
-                // New versioned format (version 1)
+                // Current versioned format.
                 options.deserialize::<StakingState>(payload)
+            }
+            Ok((STAKING_STATE_VERSION_PREVIOUS, payload)) => {
+                // Previous StakingState layout: ValidatorInfo had `slashed` but
+                // no `jailed_until_height`. Lift every record with a jail height
+                // of 0, which keeps a pre-jail slashed record permanently out
+                // (F7) while leaving un-slashed records untouched.
+                StakingState::deserialize_legacy_validators(payload, options, true)
             }
             Ok((v, _)) => {
                 // Known magic but unknown version
@@ -505,14 +649,23 @@ impl StakingState {
                 ))))
             }
             Err("no version prefix") => {
-                // Old untagged format: try new format first, then fall back to old
+                // Untagged rows written before the version prefix existed. Try
+                // each historical layout in newest-first order; the first that
+                // consumes the whole buffer (reject_trailing_bytes) wins.
+                //   1. c8800ac/f3675d3: 11-field ValidatorInfo (`slashed`, no jail)
+                //   2. pre-c8800ac: 10-field ValidatorInfo (no `slashed`)
                 if let Ok(state) = options.deserialize::<StakingState>(bytes) {
-                    Ok(state)
-                } else {
-                    // Fall back to old format: manually deserialize with 10-field validators
-                    let mut deserializer = BincodeDeserializer::from_slice(bytes, options);
-                    StakingState::deserialize_old_format(&mut deserializer)
+                    return Ok(state);
                 }
+                for has_slashed in [true, false] {
+                    match StakingState::deserialize_legacy_validators(bytes, options, has_slashed) {
+                        Ok(state) => return Ok(state),
+                        Err(_) => continue,
+                    }
+                }
+                Err(Box::new(bincode::ErrorKind::Custom(
+                    "staking state decode error: untagged bytes match no known layout".to_string(),
+                )))
             }
             Err(e) => {
                 // Truncated or other error
@@ -524,64 +677,29 @@ impl StakingState {
         }
     }
 
-    /// Deserialize StakingState in old format (ValidatorInfo has 10 fields, no slashed).
-    fn deserialize_old_format<'de, O: Options>(
-        deserializer: &mut BincodeDeserializer<SliceReader<'de>, O>,
+    /// Decode a pre-jail row with an exact historical `ValidatorInfo` layout.
+    ///
+    /// `has_slashed` selects the `ValidatorInfo` shape that was written:
+    /// `false` for the oldest untagged rows (10 fields, no `slashed`) and
+    /// `true` for the `c8800ac` untagged rows and StakingState version 1
+    /// (11 fields, `slashed` present but no jail height). Both predate the
+    /// PRO-19 jail, so every record lifts with `jailed_until_height: 0`,
+    /// which keeps a previously slashed record permanently barred (F7).
+    ///
+    /// Decoding goes through bincode's `Options::deserialize`, so
+    /// `reject_trailing_bytes` is enforced exactly as for the current format.
+    fn deserialize_legacy_validators<O: Options>(
+        bytes: &[u8],
+        options: O,
+        has_slashed: bool,
     ) -> Result<Self, bincode::Error> {
-        use serde::Deserialize;
-
-        // Read validators Vec: length + elements
-        let validators_len: u64 = Deserialize::deserialize(&mut *deserializer)?;
-        // Prevent OOM on corrupted length: cap capacity at 1024 validators.
-        let mut validators = Vec::with_capacity((validators_len as usize).min(1024));
-        for _ in 0..validators_len {
-            // Read ValidatorInfo with 10 fields (no slashed)
-            let address: Address = Deserialize::deserialize(&mut *deserializer)?;
-            let stake: Stake = Deserialize::deserialize(&mut *deserializer)?;
-            let commission_bps: u16 = Deserialize::deserialize(&mut *deserializer)?;
-            let active: bool = Deserialize::deserialize(&mut *deserializer)?;
-            let payout_address: Address = Deserialize::deserialize(&mut *deserializer)?;
-            let public_key: Option<PublicKey> = Deserialize::deserialize(&mut *deserializer)?;
-            let vrf_public_key: Option<VrfPublicKey> =
-                Deserialize::deserialize(&mut *deserializer)?;
-            let missed_leader_count: u64 = Deserialize::deserialize(&mut *deserializer)?;
-            let last_online_height: u64 = Deserialize::deserialize(&mut *deserializer)?;
-            let last_commission_change_height: u64 = Deserialize::deserialize(&mut *deserializer)?;
-            // No slashed field in old format
-            validators.push(ValidatorInfo {
-                address,
-                stake,
-                commission_bps,
-                active,
-                payout_address,
-                public_key,
-                vrf_public_key,
-                missed_leader_count,
-                last_online_height,
-                last_commission_change_height,
-                slashed: false,
-            });
+        if has_slashed {
+            let raw: StakingStateLegacy<ValidatorInfoV1> = options.deserialize(bytes)?;
+            Ok(raw.lift())
+        } else {
+            let raw: StakingStateLegacy<ValidatorInfoV0> = options.deserialize(bytes)?;
+            Ok(raw.lift())
         }
-
-        // Read remaining fields (same in both formats)
-        let delegations: Vec<Delegation> = Deserialize::deserialize(&mut *deserializer)?;
-        let total_staked: Stake = Deserialize::deserialize(&mut *deserializer)?;
-        let committed_leader_height: u64 = Deserialize::deserialize(&mut *deserializer)?;
-        let total_mining_issued: u64 = Deserialize::deserialize(&mut *deserializer)?;
-        let reward_totals: HashMap<Address, u64> = Deserialize::deserialize(&mut *deserializer)?;
-        let unbonding_queue: Vec<UnbondingEntry> = Deserialize::deserialize(&mut *deserializer)?;
-        let treasury: Option<TreasuryState> = Deserialize::deserialize(&mut *deserializer)?;
-
-        Ok(StakingState {
-            validators,
-            delegations,
-            total_staked,
-            committed_leader_height,
-            total_mining_issued,
-            reward_totals,
-            unbonding_queue,
-            treasury,
-        })
     }
 
     /// Configure treasury at genesis.
@@ -624,6 +742,7 @@ impl StakingState {
             last_online_height: self.committed_leader_height,
             last_commission_change_height: self.committed_leader_height,
             slashed: false,
+            jailed_until_height: 0,
         });
         self.total_staked += stake;
         Ok(())
@@ -642,10 +761,11 @@ impl StakingState {
     /// * A currently-`active` record is not re-activated here; that is a
     ///   [`Self::bond_validator`] (top-up) call — returns
     ///   [`StakingError::ValidatorExists`] to keep the two paths disjoint.
-    /// * The post-stake self-stake (`existing + amount`) MUST reach
-    ///   [`MIN_VALIDATOR_STAKE`]; a slashed record (whose stake fell below the
-    ///   minimum) therefore stays out until it is topped back up to the minimum,
-    ///   and is never silently reactivated with too little at stake.
+    /// * The post-stake stake (`existing + amount`, the same quantity
+    ///   [`Self::committee_order`] checks) MUST reach [`MIN_VALIDATOR_STAKE`]; a
+    ///   slashed record (whose stake fell below the minimum) therefore stays out
+    ///   until it is topped back up to the minimum, and is never silently
+    ///   reactivated with too little at stake.
     /// * Reactivation counts toward [`MAX_ACTIVE_VALIDATORS`]; a full set
     ///   returns [`StakingError::ValidatorSetFull`].
     /// * `missed_leader_count` is reset so the reactivated validator starts a
@@ -666,11 +786,18 @@ impl StakingState {
         if self.validators[v_idx].active {
             return Err(StakingError::ValidatorExists);
         }
-        // F7 (Toni's decision): a slashed validator stays out. Topping the
-        // stake back up does NOT reinstate it; only an un-slashed, merely
-        // evicted/unbonded record may return via an explicit stake transaction.
+        // Slashed records are barred while the jail runs. A *legacy* slashed
+        // record (decoded with `jailed_until_height == 0`) stays out forever:
+        // F7's "never re-enter" guarantee is preserved for anything slashed
+        // before the jail existed. A jailed record (height > 0) may return,
+        // but only through this explicit stake transaction and only once the
+        // jail has elapsed at the current committed-leader height. Nothing
+        // reactivates on its own — see `slash_validator`.
         if self.validators[v_idx].slashed {
-            return Err(StakingError::ValidatorSlashed);
+            let jail_end = self.validators[v_idx].jailed_until_height;
+            if jail_end == 0 || self.committed_leader_height < jail_end {
+                return Err(StakingError::ValidatorSlashed);
+            }
         }
         let topped_up = self.validators[v_idx].stake.saturating_add(amount);
         if topped_up < MIN_VALIDATOR_STAKE {
@@ -679,11 +806,15 @@ impl StakingState {
         if self.validators.iter().filter(|v| v.active).count() >= MAX_ACTIVE_VALIDATORS {
             return Err(StakingError::ValidatorSetFull);
         }
+        let committed_height = self.committed_leader_height;
         let v = &mut self.validators[v_idx];
         v.stake = topped_up;
         v.active = true;
         v.missed_leader_count = 0;
-        v.last_online_height = self.committed_leader_height;
+        v.last_online_height = committed_height;
+        // Serving the jail clears both flags; the record rejoins as un-slashed.
+        v.slashed = false;
+        v.jailed_until_height = 0;
         self.total_staked = self.total_staked.saturating_add(amount);
         Ok(())
     }
@@ -820,12 +951,43 @@ impl StakingState {
         &mut self,
         leader_author: u16,
     ) -> Result<RewardOutcome, StakingError> {
-        let height = self.committed_leader_height;
         let recipient = self
             .payout_address_for(leader_author)
             .ok_or(StakingError::NotValidator)?;
+        let amount = block_reward(self.committed_leader_height);
+        Ok(self.commit_leader(leader_author, recipient, amount))
+    }
 
-        let outcome = apply_leader_reward(height, leader_author, recipient);
+    /// Commit a leader that is no longer resolvable in the active committee —
+    /// e.g. it equivocated and was slashed in the very sub-DAG it led (PRO-19).
+    ///
+    /// The reward is forfeited (no mint, no payout) but all consensus
+    /// bookkeeping still advances: `committed_leader_height`, liveness counters,
+    /// and treasury vesting. This makes a misbehaving leader unable to halt the
+    /// chain simply by being slashed mid-round.
+    pub fn on_leader_committed_forfeited(&mut self, leader_author: u16) -> RewardOutcome {
+        let recipient = self
+            .payout_address_for(leader_author)
+            .unwrap_or(Address([0u8; 32]));
+        self.commit_leader(leader_author, recipient, 0)
+    }
+
+    /// Shared leader-commit bookkeeping for both the paid and the forfeited
+    /// case. `amount == 0` performs no mint and records no reward total, but the
+    /// height and liveness transitions are identical.
+    fn commit_leader(
+        &mut self,
+        leader_author: u16,
+        recipient: Address,
+        amount: u64,
+    ) -> RewardOutcome {
+        let height = self.committed_leader_height;
+        let outcome = RewardOutcome {
+            leader_author,
+            recipient,
+            amount,
+            height,
+        };
 
         // Update global counters
         self.committed_leader_height = height.saturating_add(1);
@@ -834,13 +996,15 @@ impl StakingState {
             .saturating_add(outcome.amount)
             .min(MINING_SUBSIDY_BUDGET);
 
-        // Per-recipient reward accounting
-        *self.reward_totals.entry(recipient).or_insert(0) = self
-            .reward_totals
-            .get(&recipient)
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(outcome.amount);
+        // Per-recipient reward accounting (nothing to record for a forfeit)
+        if outcome.amount > 0 {
+            *self.reward_totals.entry(recipient).or_insert(0) = self
+                .reward_totals
+                .get(&recipient)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(outcome.amount);
+        }
         // Advance treasury vesting
         if let Some(ref mut treasury) = self.treasury {
             treasury.advance(self.committed_leader_height);
@@ -850,7 +1014,7 @@ impl StakingState {
         self.validator_online(leader_author);
         self.advance_validator_liveness(leader_author);
 
-        Ok(outcome)
+        outcome
     }
 
     /// Current circulating supply approximation (premine + genesis validator
@@ -1286,7 +1450,23 @@ impl StakingState {
 
         let staked_slash = own_slash.saturating_add(delegated_slash);
         self.validators[v_idx].stake = self.validators[v_idx].stake.saturating_sub(staked_slash);
+        // PRO-19: a slashed validator leaves the active set immediately and is
+        // jailed. `saturating_add` keeps the arithmetic total on absurd inputs;
+        // in practice heights are far below `u64::MAX`.
+        //
+        // A record that was already slashed with a jail height of 0 is a legacy
+        // row under the F7 rule: it is permanently excluded. Never turn that
+        // marker into a finite jail (which would make the record reactivatable
+        // later) and never shorten an existing jail on a repeat slash.
+        let permanently_excluded =
+            self.validators[v_idx].slashed && self.validators[v_idx].jailed_until_height == 0;
         self.validators[v_idx].slashed = true;
+        self.validators[v_idx].active = false;
+        if !permanently_excluded {
+            self.validators[v_idx].jailed_until_height = self.validators[v_idx]
+                .jailed_until_height
+                .max(self.committed_leader_height.saturating_add(JAIL_ROUNDS));
+        }
         self.total_staked = self.total_staked.saturating_sub(staked_slash);
         Ok(staked_slash.saturating_add(unbonding_slash))
     }
@@ -2402,15 +2582,20 @@ mod tests {
                 .unwrap();
         }
         let full = bincode::serialize(&st).unwrap();
-        // validators is the first field: u64 len + each ValidatorInfo; `slashed`
-        // is the last (1-byte) field of ValidatorInfo, so drop it per validator.
+        // validators is the first field: u64 len + each ValidatorInfo. The two
+        // trailing fields are `slashed` (1 byte) and `jailed_until_height`
+        // (u64, 8 bytes); drop all 9 per validator to reconstruct the oldest
+        // pre-`slashed` (10-field) layout.
         let vec_bytes = bincode::serialize(&st.validators).unwrap();
         assert_eq!(&full[..vec_bytes.len()], &vec_bytes[..]);
         let mut old = vec_bytes[..8].to_vec();
         for v in &st.validators {
             let b = bincode::serialize(v).unwrap();
-            assert_eq!(*b.last().unwrap(), 0u8);
-            old.extend_from_slice(&b[..b.len() - 1]);
+            assert!(
+                b[b.len() - 9..].iter().all(|byte| *byte == 0),
+                "slashed + jail height are zero in a fresh record"
+            );
+            old.extend_from_slice(&b[..b.len() - 9]);
         }
         old.extend_from_slice(&full[vec_bytes.len()..]);
         let decoded = StakingState::from_bytes(&old);
@@ -2432,14 +2617,15 @@ mod tests {
                 .unwrap();
         }
         let full = bincode::serialize(&st).unwrap();
-        // Strip the slashed byte (last field of each ValidatorInfo) per validator.
+        // Strip the two trailing fields (`slashed` 1 byte + `jailed_until_height`
+        // 8 bytes) from each ValidatorInfo to reach the pre-`slashed` layout.
         let vec_bytes = bincode::serialize(&st.validators).unwrap();
         assert_eq!(&full[..vec_bytes.len()], &vec_bytes[..]);
         let mut old = vec_bytes[..8].to_vec();
         for v in &st.validators {
             let b = bincode::serialize(v).unwrap();
-            assert_eq!(*b.last().unwrap(), 0u8);
-            old.extend_from_slice(&b[..b.len() - 1]);
+            assert!(b[b.len() - 9..].iter().all(|byte| *byte == 0));
+            old.extend_from_slice(&b[..b.len() - 9]);
         }
         old.extend_from_slice(&full[vec_bytes.len()..]);
         let decoded = StakingState::from_bytes(&old).unwrap();
@@ -2482,8 +2668,8 @@ mod tests {
         let mut old = vec_bytes[..8].to_vec();
         for v in &st.validators {
             let b = bincode::serialize(v).unwrap();
-            assert_eq!(*b.last().unwrap(), 0u8);
-            old.extend_from_slice(&b[..b.len() - 1]);
+            assert!(b[b.len() - 9..].iter().all(|byte| *byte == 0));
+            old.extend_from_slice(&b[..b.len() - 9]);
         }
         old.extend_from_slice(&full[vec_bytes.len()..]);
         let decoded = StakingState::from_bytes(&old).unwrap();
@@ -2541,16 +2727,41 @@ mod tests {
             Address(b)
         }
     }
+    /// Strip the two trailing per-validator fields (`slashed` 1 byte +
+    /// `jailed_until_height` 8 bytes) to reach the oldest (10-field) layout.
     fn j_old_bytes(st: &StakingState) -> Vec<u8> {
+        strip_validator_trailer(st, 9, None)
+    }
+
+    /// Strip only the `jailed_until_height` (8 bytes) to reach the layout that
+    /// `c8800ac`/`f3675d3` wrote untagged (11 fields, `slashed` present).
+    fn j_c8800ac_bytes(st: &StakingState) -> Vec<u8> {
+        strip_validator_trailer(st, 8, None)
+    }
+
+    /// The same 11-field layout, but tagged as StakingState version 1.
+    fn j_v1_bytes(st: &StakingState) -> Vec<u8> {
+        strip_validator_trailer(st, 8, Some(kovanica_types::STAKING_STATE_VERSION_PREVIOUS))
+    }
+
+    fn strip_validator_trailer(st: &StakingState, drop: usize, version: Option<u8>) -> Vec<u8> {
         let full = bincode::serialize(st).unwrap();
         let vec_bytes = bincode::serialize(&st.validators).unwrap();
-        let mut old = vec_bytes[..8].to_vec();
+        let mut out = Vec::new();
+        let head;
+        if let Some(v) = version {
+            out.extend_from_slice(&[kovanica_types::SNAPSHOT_MAGIC, v]);
+            head = 0;
+        } else {
+            head = 0;
+        }
+        out.extend_from_slice(&vec_bytes[head..8]);
         for v in &st.validators {
             let b = bincode::serialize(v).unwrap();
-            old.extend_from_slice(&b[..b.len() - 1]);
+            out.extend_from_slice(&b[..b.len() - drop]);
         }
-        old.extend_from_slice(&full[vec_bytes.len()..]);
-        old
+        out.extend_from_slice(&full[vec_bytes.len()..]);
+        out
     }
     fn j_state(r: &mut JRng, n: usize, dels: usize, treasury: bool) -> StakingState {
         let mut st = StakingState::new();
@@ -2600,24 +2811,20 @@ mod tests {
                             Ok(g) if bincode::serialize(&g).unwrap() == want => {}
                             _ => wrong_old += 1,
                         }
-                        // unversioned c8800ac/f3675d3 rows (with slashed)
-                        match StakingState::from_bytes(&want) {
+                        // unversioned c8800ac/f3675d3 rows (11 fields, slashed,
+                        // no jail height)
+                        match StakingState::from_bytes(&j_c8800ac_bytes(&st)) {
                             Ok(g) if bincode::serialize(&g).unwrap() == want => {}
                             _ => wrong_unv += 1,
                         }
-                        // v1
-                        let v1 = st.to_bytes().unwrap();
+                        // StakingState version 1 rows (same 11-field layout, tagged)
+                        let v1 = j_v1_bytes(&st);
                         match StakingState::from_bytes(&v1) {
                             Ok(g) if bincode::serialize(&g).unwrap() == want => {}
                             _ => wrong_v1 += 1,
                         }
-                        // corruptions of v1: slashed byte of validator0 -> 2; truncate 3; append 1 byte; version 2; random byte flip
-                        let v0 = bincode::serialize(&st.validators[0]).unwrap().len();
-                        let mut c = v1.clone();
-                        c[2 + 8 + v0 - 1] = 2;
-                        if StakingState::from_bytes(&c).is_ok() {
-                            corrupt_ok += 1;
-                        }
+                        // corruptions of a v1 row: truncate 3; append 1 byte;
+                        // unknown version byte; oversized validators length.
                         if StakingState::from_bytes(&v1[..v1.len() - 3]).is_ok() {
                             corrupt_ok += 1;
                         }
@@ -2627,7 +2834,12 @@ mod tests {
                             corrupt_ok += 1;
                         }
                         let mut c = v1.clone();
-                        c[1] = 2;
+                        c[1] = 99; // no such version
+                        if StakingState::from_bytes(&c).is_ok() {
+                            corrupt_ok += 1;
+                        }
+                        let mut c = v1.clone();
+                        c[2..10].copy_from_slice(&(u64::MAX).to_le_bytes());
                         if StakingState::from_bytes(&c).is_ok() {
                             corrupt_ok += 1;
                         }
@@ -2669,6 +2881,7 @@ mod tests {
                 last_online_height: 0,
                 last_commission_change_height: 0,
                 slashed: false,
+                jailed_until_height: 0,
             });
         }
         let unv = bincode::serialize(&st).unwrap();
@@ -2686,5 +2899,146 @@ mod tests {
                 .map(|s| s.validators.len())
                 .map_err(|e| e.to_string())
         );
+    }
+    // --- PRO-19 part 2: slash jail (explicit re-entry only) ---
+
+    /// A slashed validator leaves the active set at once and is jailed until
+    /// `committed_leader_height + JAIL_ROUNDS`. Nothing re-activates it by
+    /// itself, not even after the jail elapses.
+    #[test]
+    fn slash_deactivates_and_jails_until_explicit_restake() {
+        let mut st = StakingState::new();
+        st.committed_leader_height = 1_000;
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        assert!(st.validators[0].active);
+
+        st.slash_validator(a(1)).unwrap();
+        let v = &st.validators[0];
+        assert!(v.slashed, "slash marks the record");
+        assert!(
+            !v.active,
+            "slash removes it from the active set immediately"
+        );
+        assert_eq!(
+            v.jailed_until_height,
+            1_000 + JAIL_ROUNDS,
+            "jail ends JAIL_ROUNDS after the current committed-leader height"
+        );
+
+        // Time passing alone must not restart it.
+        st.committed_leader_height = 1_000 + JAIL_ROUNDS + 5;
+        assert!(!st.validators[0].active, "time alone never reactivates");
+        assert!(st.validators[0].slashed, "time alone never clears the flag");
+    }
+
+    /// A stake transaction during the jail (and while the record is jailed at
+    /// all) is rejected; the record cannot be topped up back into the set.
+    #[test]
+    fn stake_during_jail_is_rejected() {
+        let mut st = StakingState::new();
+        st.committed_leader_height = 0;
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        st.slash_validator(a(1)).unwrap();
+        let v = &st.validators[0];
+        assert_eq!(v.jailed_until_height, JAIL_ROUNDS);
+
+        // Mid-jail stake is refused.
+        st.committed_leader_height = JAIL_ROUNDS - 1;
+        assert!(matches!(
+            st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE),
+            Err(StakingError::ValidatorSlashed)
+        ));
+
+        // Exactly at the jail boundary the record may return, but only with an
+        // explicit stake of at least MIN_VALIDATOR_STAKE.
+        st.committed_leader_height = JAIL_ROUNDS;
+        assert!(matches!(
+            st.reactivate_validator(a(1), 1),
+            Err(StakingError::InsufficientStake)
+        ));
+        assert!(matches!(
+            st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE),
+            Ok(())
+        ));
+        let v = &st.validators[0];
+        assert!(v.active, "an explicit restake returns the validator");
+        assert!(!v.slashed, "a served jail clears the slashed flag");
+        assert_eq!(v.jailed_until_height, 0, "and clears the jail");
+    }
+
+    /// Rows slashed before the jail existed decode with `jailed_until_height == 0`
+    /// and stay barred forever — the F7 guarantee is preserved for them.
+    #[test]
+    fn legacy_slashed_row_without_a_jail_height_stays_out() {
+        let mut st = StakingState::new();
+        st.committed_leader_height = 10;
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        // Model a pre-jail slashed record: slashed, inactive, no jail height.
+        st.validators[0].slashed = true;
+        st.validators[0].active = false;
+        st.validators[0].jailed_until_height = 0;
+
+        // Even long after, and even at any height, a stake cannot revive it.
+        st.committed_leader_height = 10_000_000;
+        assert!(matches!(
+            st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE),
+            Err(StakingError::ValidatorSlashed)
+        ));
+
+        // A repeat slash must not convert the permanent marker into a finite
+        // jail (which would become reactivatable once the jail elapses).
+        st.slash_validator(a(1)).unwrap();
+        assert_eq!(
+            st.validators[0].jailed_until_height, 0,
+            "re-slashing a permanently excluded record keeps jail height 0"
+        );
+        assert!(matches!(
+            st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE),
+            Err(StakingError::ValidatorSlashed)
+        ));
+    }
+
+    /// StakingState v1 rows (11-field ValidatorInfo, no jail) lift to a jail of
+    /// 0 and keep a pre-existing `slashed` flag, so a slashed v1 row stays out.
+    #[test]
+    fn version_1_staking_row_decodes_without_a_jail() {
+        let mut st = StakingState::new();
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        st.join_validator(a(2), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        // One record slashed pre-jail: slashed, inactive, no jail height.
+        st.validators[0].slashed = true;
+        st.validators[0].active = false;
+
+        let mut decoded = StakingState::from_bytes(&j_v1_bytes(&st)).unwrap();
+        assert_eq!(decoded.validators.len(), 2);
+        assert_eq!(decoded.validators[0].jailed_until_height, 0);
+        assert!(decoded.validators[0].slashed, "v1 slashed flag survives");
+        assert_eq!(decoded.validators[1].jailed_until_height, 0);
+        assert!(!decoded.validators[1].slashed);
+
+        // And that lifted record is permanently barred.
+        assert!(matches!(
+            decoded.reactivate_validator(a(1), MIN_VALIDATOR_STAKE),
+            Err(StakingError::ValidatorSlashed)
+        ));
+    }
+
+    /// A round-trip through the current (v2) encoding preserves a jail.
+    #[test]
+    fn jail_round_trips_through_version_2_encoding() {
+        let mut st = StakingState::new();
+        st.committed_leader_height = 500;
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        st.slash_validator(a(1)).unwrap();
+        let decoded = StakingState::from_bytes(&st.to_bytes().unwrap()).unwrap();
+        assert!(decoded.validators[0].slashed);
+        assert!(!decoded.validators[0].active);
+        assert_eq!(decoded.validators[0].jailed_until_height, 500 + JAIL_ROUNDS);
     }
 }

@@ -366,39 +366,53 @@ impl ExecutionContext {
         // Perform the transition on a candidate state. The live in-memory state
         // is published only after all related storage writes commit successfully.
         let mut candidate_staking = snapshot_staking(&self.staking);
+        // The leader may have left the active committee *during* this sub-DAG,
+        // e.g. it equivocated and was slashed by an evidence tx it carried
+        // (PRO-19 deactivates a slashed validator immediately). In that case the
+        // leader reward is forfeited rather than aborting the commit — a
+        // misbehaving leader must not be able to halt the chain.
         let leader = candidate_staking
             .authority_validator(subdag.leader_author)
-            .cloned()
-            .ok_or(StakingError::NotValidator)?;
-        let reward = candidate_staking.on_leader_committed(subdag.leader_author)?;
+            .cloned();
+        let reward = match &leader {
+            Some(_) => candidate_staking.on_leader_committed(subdag.leader_author)?,
+            None => candidate_staking.on_leader_committed_forfeited(subdag.leader_author),
+        };
         // Split the reward: commission + the validator's own pro-rata share
         // go straight to its payout address; delegator shares accrue per
         // (delegator, validator) and are paid by ClaimRewards.
         // Production escrows [`kovanica_staking::LIGHT_REWARD_BPS`] (20%). The
         // leader side is what delegators share. Escrow is settled at epoch
         // close. `leader_amount + escrow_part` equals `reward.amount`.
-        let (leader_amount, escrow_part) =
-            kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
-        let shares =
-            candidate_staking.reward_share(leader.address, leader_amount, leader.commission_bps);
-        {
-            let mut pending = txn.open_table(PENDING_REWARDS)?;
-            for (addr, amount) in &shares {
-                if *addr != leader.address && *amount > 0 {
-                    let key = reward_key(addr, &leader.address);
-                    let cur = pending.get(key)?.map(|v| v.value()).unwrap_or(0);
-                    pending.insert(key, cur.saturating_add(*amount))?;
+        if let Some(leader) = &leader {
+            let (leader_amount, _) =
+                kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
+            let shares = candidate_staking.reward_share(
+                leader.address,
+                leader_amount,
+                leader.commission_bps,
+            );
+            {
+                let mut pending = txn.open_table(PENDING_REWARDS)?;
+                for (addr, amount) in &shares {
+                    if *addr != leader.address && *amount > 0 {
+                        let key = reward_key(addr, &leader.address);
+                        let cur = pending.get(key)?.map(|v| v.value()).unwrap_or(0);
+                        pending.insert(key, cur.saturating_add(*amount))?;
+                    }
                 }
             }
+            let validator_part: u64 = shares
+                .iter()
+                .filter(|(a, _)| *a == leader.address)
+                .map(|(_, x)| *x)
+                .sum();
+            storage
+                .state()
+                .add_balance(&txn, &reward.recipient, validator_part)?;
         }
-        let validator_part: u64 = shares
-            .iter()
-            .filter(|(a, _)| *a == leader.address)
-            .map(|(_, x)| *x)
-            .sum();
-        storage
-            .state()
-            .add_balance(&txn, &reward.recipient, validator_part)?;
+        let (_, escrow_part) =
+            kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
         // Pay out matured unbonding entries (UNBONDING_ROUNDS elapsed) via
         // withdraw_unbonded, in deterministic (delegator, validator) order.
         let mut ready: Vec<(Address, Address)> = candidate_staking
@@ -1478,6 +1492,15 @@ impl ExecutionContext {
                 leader_round
             )));
         }
+        // Replay check first: `id()` depends only on (offender, round), so a
+        // re-delivered evidence must report "already processed" deterministically
+        // instead of being judged against the offender's *current* (already
+        // slashed, hence inactive) status. PRO-19 makes this ordering matter —
+        // a slashed validator leaves the active set immediately.
+        let id = evidence.id().0;
+        if txn.open_table(PROCESSED_EVIDENCE)?.get(id)?.is_some() {
+            return Err(StakingError::EvidenceProcessed.into());
+        }
         let is_active = self
             .staking
             .validators
@@ -1487,10 +1510,6 @@ impl ExecutionContext {
             return Err(ExecutionError::Validation(
                 "evidence author is not an active validator".to_string(),
             ));
-        }
-        let id = evidence.id().0;
-        if txn.open_table(PROCESSED_EVIDENCE)?.get(id)?.is_some() {
-            return Err(StakingError::EvidenceProcessed.into());
         }
         let treasury = self
             .staking
@@ -2001,7 +2020,11 @@ mod tests {
             first.circulating_supply + reward2.amount
         );
 
-        // An unknown leader authority fails BEFORE any balance is credited.
+        // An unresolvable leader (never registered, or slashed and thus removed
+        // from the committee in PRO-19) forfeits the reward: the commit still
+        // succeeds deterministically and advances the height counter, but no
+        // balance is credited. Halting here would let a misbehaving leader stop
+        // the chain.
         let bad = CommittedSubDag {
             leader: sample_block(7),
             blocks: vec![sample_block(7)],
@@ -2009,14 +2032,20 @@ mod tests {
             leader_author: 7,
             non_blue: Vec::new(),
         };
-        let err = ctx
+        let forfeited = ctx
             .execute_committed_subdag(&bad, &storage)
-            .expect_err("unregistered authority must fail");
-        assert!(matches!(err, ExecutionError::Staking(_)), "{err:?}");
+            .expect("unresolvable leader forfeits, does not halt");
+        let reward3 = forfeited.reward.expect("forfeit is still a reward outcome");
+        assert_eq!(reward3.amount, 0, "forfeit pays nothing");
+        assert_eq!(
+            reward3.height,
+            reward2.height + 1,
+            "height still advances on a forfeit"
+        );
         assert_eq!(
             read_balance(&storage, &payout),
             expected_leader_side + (reward2.amount * 80 / 100),
-            "failed commit credits nothing"
+            "forfeit credits nothing"
         );
     }
 

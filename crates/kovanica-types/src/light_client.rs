@@ -225,7 +225,15 @@ pub const SNAPSHOT_MAGIC: u8 = 0x4B; // 'K' for Kovanica
 pub const EPOCH_COMMITTEE_VERSION: u8 = 1;
 
 /// Current version for StakingState snapshots.
-pub const STAKING_STATE_VERSION: u8 = 1;
+///
+/// Bumped to 2 when `ValidatorInfo` gained `jailed_until_height` (the PRO-19
+/// slash/jail rule). Version 1 rows are still decoded and lifted: the jail
+/// height defaults to 0, which means "permanent exclusion" — the pre-jail
+/// F7 semantics — so an already-slashed v1 row can never come back.
+pub const STAKING_STATE_VERSION: u8 = 2;
+
+/// Previous StakingState layout that is still accepted on decode.
+pub const STAKING_STATE_VERSION_PREVIOUS: u8 = 1;
 
 /// Encode a snapshot with version prefix.
 pub fn encode_with_version<B: AsRef<[u8]>>(version: u8, payload: B) -> Vec<u8> {
@@ -250,8 +258,14 @@ pub fn decode_with_version(bytes: &[u8]) -> Result<(u8, &[u8]), &'static str> {
         return Err("no version prefix");
     }
     let version = bytes[1];
-    // Both current versions are 1; match explicitly to avoid unreachable-pattern lint.
-    if version == EPOCH_COMMITTEE_VERSION || version == STAKING_STATE_VERSION {
+    // Accept the current EPOCH_COMMITTEE version, the current StakingState
+    // version, and the previous StakingState version. Values are matched
+    // explicitly (no ranges) so an unknown/future version is still an error
+    // rather than a silent fallback.
+    if version == EPOCH_COMMITTEE_VERSION
+        || version == STAKING_STATE_VERSION
+        || version == STAKING_STATE_VERSION_PREVIOUS
+    {
         Ok((version, &bytes[2..]))
     } else {
         Err("unknown version")

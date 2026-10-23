@@ -5642,8 +5642,21 @@ mod tests {
             false,
         )
         .unwrap();
+        // Fault injection: seed a corrupt light-set row, which the first commit
+        // fails to decode while noting its beacon. This is a genuine
+        // state-store error under the PRO-19 semantics; an unresolvable leader
+        // is no longer one (it forfeits its reward and the commit succeeds, see
+        // `committed_subdag_credits_leader_payout_address`).
+        {
+            let txn = state_storage.begin_write().unwrap();
+            {
+                let mut table = txn.open_table(kovanica_storage::tables::LIGHT_SET).unwrap();
+                table.insert("current", b"corrupt".to_vec()).unwrap();
+            }
+            txn.commit().unwrap();
+        }
         let (exec_tx, exec_rx) = mpsc::unbounded_channel();
-        exec_tx.send(committed_subdag(1, 9)).unwrap(); // Unregistered authority fails.
+        exec_tx.send(committed_subdag(1, 0)).unwrap(); // Undecodable beacon fails.
         exec_tx.send(committed_subdag(2, 0)).unwrap(); // Must not be executed next.
         drop(exec_tx);
 
@@ -5918,6 +5931,7 @@ mod tests {
             last_online_height: 0,
             last_commission_change_height: 0,
             slashed: false,
+            jailed_until_height: 0,
         });
         staking.total_staked += 10_000 * ONE_KUNA;
 
@@ -5965,6 +5979,7 @@ mod tests {
                 last_online_height: 0,
                 last_commission_change_height: 0,
                 slashed: false,
+                jailed_until_height: 0,
             });
             staking.total_staked += 100_000 * ONE_KUNA;
         }

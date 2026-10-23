@@ -2,7 +2,8 @@
 
 - **Status:** Accepted & implemented 2026-10-22 (gated behind
   `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`). Decisions D1–D5 taken as
-  recommended in §8; see §11 for what shipped.
+  recommended in §8; see §11 for what shipped and §11.1 for the PRO-19 jail
+  (part 2).
 - **Supersedes:** the skeleton described in PRO-12 (Linear), ANT-24
 - **Tracks:** TASKLIST item 8, Linear PRO-12
 - **Depends on:** PRO-19 (versioned store decode + immediate deactivation/jail)
@@ -244,7 +245,7 @@ existing behaviour changes; the full workspace suite must stay green.
 ## 11. Out of scope
 
 Downtime/liveness slashing; governance-controlled slash parameters; reporter
-rewards; jail mechanics (PRO-19); slashing past a matured, withdrawn unbond.
+rewards; slashing past a matured, withdrawn unbond.
 
 ## 11. Implementation (2026-10-22)
 
@@ -269,6 +270,32 @@ the gate), 3 in `kovanica-network` (fee floor still applies to transfers;
 fee-free evidence from a committee member is accepted; non-committee senders
 are rejected).
 
-Still open: **PRO-19** (immediate deactivation + jail) — a 5 % cut leaves the
-validator above `MIN_VALIDATOR_STAKE`, so without PRO-19 it keeps its committee
-seat. `release_height` remains measured in heights (PRO-37).
+### 11.1 PRO-19 part 2 — jail (2026-10-23)
+
+Shipped live (no activation gate): `slash_validator` now sets `active = false`
+and `jailed_until_height = committed_leader_height + JAIL_ROUNDS`
+(`JAIL_ROUNDS = 21_600` committed leaders, ≈3 days at 12 s/leader). A slashed
+validator therefore leaves the committee in the same sub-DAG that carries the
+evidence.
+
+| Layer | Change |
+|---|---|
+| `kovanica-types` | `STAKING_STATE_VERSION` 1 → 2; new `STAKING_STATE_VERSION_PREVIOUS = 1`. |
+| `kovanica-staking` | `ValidatorInfo.jailed_until_height` (`serde(default)`). `slash_validator` deactivates + jails (never converting a legacy `jailed_until_height == 0` permanent-exclusion marker into a finite jail). `reactivate_validator` refuses `ValidatorSlashed` while `jailed_until_height == 0` or `committed_leader_height < jailed_until_height`; after the jail it requires an explicit stake that leaves the record at/above `MIN_VALIDATOR_STAKE` with room under `MAX_ACTIVE_VALIDATORS`. A served jail clears `slashed` + `jailed_until_height`; nothing reactivates automatically. `on_leader_committed_forfeited` shares `commit_leader` bookkeeping with the paid path. |
+| `kovanica-staking` (decode) | `from_bytes` ladder: v2 → current; v1 → 11-field `ValidatorInfo` lifted with jail 0; untagged → try 12/11/10 fields newest-first; unknown version → `Err`. All branches use `Options::deserialize` with `reject_trailing_bytes`. |
+| `kovanica-execution` | `execute_evidence` checks `PROCESSED_EVIDENCE` before the active-validator check, so a replay stays `EvidenceProcessed` after the offender is deactivated. An unresolvable leader forfeits the reward (`amount = 0`) instead of aborting; height, liveness and treasury vesting still advance. |
+
+Tests: 5 new staking tests (jail lifecycle, mid-jail stake rejection, legacy
+permanent row, v1 decode, v2 round-trip) plus reworked execution/node tests.
+Workspace suite: 1029 passed, 1 ignored.
+
+Known limitation / follow-up before flipping `SLASHING_ACTIVE_FROM_ROUND`:
+execution resolves the leader by authority index against the **live**
+`committee_order()`, while consensus indices come from the epoch-sealed
+committee. A mid-epoch deactivation (liveness eviction or slash) shifts those
+indices, so a healthy leader can be paid to — or forfeited in favour of — the
+wrong record. This is pre-existing index fragility (HEAD already used the same
+lookup), not introduced by the jail, and is inert while slashing is gated off.
+Fix by resolving the leader against the sealed committee for
+`epoch_for_round(round)` (or carrying the payout in `CommittedSubDag`) before
+activation. `release_height` remains measured in heights (PRO-37).

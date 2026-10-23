@@ -45,7 +45,7 @@ pub use light_client::{
     vrf_hash_prefix, vrf_priority_cmp, ColouringCertificate, CommitSeal, LeaderHeader,
     LightClientCheckpoint, SealAnnouncement, SealCommitteeMember, SealCommitteeSnapshotMember,
     SealError, StateProof, WaveCommitCertificate, EPOCH_COMMITTEE_VERSION, LIGHT_VRF_DOMAIN,
-    SNAPSHOT_MAGIC, STAKING_STATE_VERSION,
+    SNAPSHOT_MAGIC, STAKING_STATE_VERSION, STAKING_STATE_VERSION_PREVIOUS,
 };
 pub use merkle::{MerkleProof, MerkleStep};
 pub use signing::SigningContext;
