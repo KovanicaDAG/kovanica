@@ -60,6 +60,12 @@ In the Mysticeti-style DAG:
 
 This guarantees that only **finalized, ordered leader blocks** mint new tokens.
 
+Light-node share (`LIGHT_REWARD_BPS = 2 000`, 20 %): it is escrowed per
+**light-set epoch** and settled once per epoch, i.e. every **2 400 committed
+leaders ≈ 8 h** (`EPOCH_LEADER_HEIGHTS`, `epoch_for_height`; Toni 2026-10-23).
+The beacon for an epoch is taken at its first height. A light node that
+registers becomes active in the next light-set epoch (at most ≈ 8 h later).
+
 ---
 
 ## 4. Treasury Vesting
@@ -86,6 +92,8 @@ year 0          year 1          year 2          …          year 8
 | Min stake to join        | 50 000 KUNA            |
 | Unbonding period         | 100 000 committed leader blocks (~13.9 days at 12 s/leader) |
 | Commission               | set by validator (bps) |
+| Commission change cooldown | 7 200 committed leader blocks (≈ 1 day = 3 epochs of 8 h) |
+| Slash jail               | 7 200 committed leader blocks (≈ 1 day = 3 epochs of 8 h, nominal) |
 
 Rewards go to the validator’s configured `payout_address` (defaults to the staking address). Future versions may support auto-compounding or commission splits with delegators.
 

@@ -308,7 +308,7 @@ The light stack lets clients follow committed leader headers and seals without r
 - `kovanica-light-ffi` — UniFFI bindings consumed by the Android (Kotlin) and iOS (Swift) apps.
 - Apps: `apps/android` (`io.kovanica.light`, versionCode 8 / versionName 0.7.0, minSdk 24) and `apps/ios` (SwiftUI `KovanicaLight`), both driven by the generated UniFFI bindings.
 
-Light nodes earn a **20% share** of the block reward (`LIGHT_REWARD_BPS = 2 000`), escrowed per epoch across `LIGHT_WITNESS_SLOTS = 32` winning witness slots, capped at `MAX_LIGHT_NODES = 4 096` identities, with a minimum bond of `MIN_LIGHT_BOND = 100 KUNA`. The light node reads its keystore passphrase from `KOVANICA_LIGHT_PASSPHRASE`; a systemd unit is provided in `packaging/systemd/kovanica-lightnode.service`.
+Light nodes earn a **20% share** of the block reward (`LIGHT_REWARD_BPS = 2 000`), escrowed per light-set epoch (2 400 committed leaders ≈ 8 h, settled once per epoch) across `LIGHT_WITNESS_SLOTS = 32` winning witness slots, capped at `MAX_LIGHT_NODES = 4 096` identities, with a minimum bond of `MIN_LIGHT_BOND = 100 KUNA`. The light node reads its keystore passphrase from `KOVANICA_LIGHT_PASSPHRASE`; a systemd unit is provided in `packaging/systemd/kovanica-lightnode.service`.
 
 The only light-client RPC surface today is `kovanica_lightClientCheckpoint` (stub, `verified = false`) and `kovanica_getLightSet` — see the RPC notes above.
 
