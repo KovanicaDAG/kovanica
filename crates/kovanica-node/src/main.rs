@@ -1758,15 +1758,6 @@ const GENESIS_DIGEST_DOMAIN: &[u8] = b"KUNA-GENESIS-v1";
 /// validators deterministically in [`genesis_config_digest`].
 type GenesisValidatorDigestRow = ([u8; 32], u64, [u8; 32], [u8; 32]);
 
-/// True when a genesis-mismatch override string enables the guard bypass.
-///
-/// Pure so the accepted spellings can be tested without touching the
-/// process-global environment. The value is recorded on [`NodeConfig`] by
-/// `apply_env_overrides` and refused in `validate` for every non-dev chain.
-fn parse_mismatch_override(value: Option<&str>) -> bool {
-    config::genesis_mismatch_override_enabled(value)
-}
-
 /// The canonical genesis block digest, reused from the deterministic genesis
 /// block (`StatementBlock::compute_digest(0, 0, &[], &[])`) rather than
 /// re-derived.
@@ -4885,15 +4876,18 @@ mod tests {
     #[test]
     fn mismatch_override_spellings() {
         for yes in ["1", "true", "TRUE", " yes ", "on"] {
-            assert!(parse_mismatch_override(Some(yes)), "{yes:?} should allow");
+            assert!(
+                crate::config::genesis_mismatch_override_enabled(Some(yes)),
+                "{yes:?} should allow"
+            );
         }
         for no in ["", "0", "false", "off", "nope"] {
             assert!(
-                !parse_mismatch_override(Some(no)),
+                !crate::config::genesis_mismatch_override_enabled(Some(no)),
                 "{no:?} should not allow"
             );
         }
-        assert!(!parse_mismatch_override(None));
+        assert!(!crate::config::genesis_mismatch_override_enabled(None));
     }
 
     /// Chains 1, 2 and 4 refuse the override inside `validate`, which `run_node`
