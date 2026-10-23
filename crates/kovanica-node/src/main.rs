@@ -39,6 +39,7 @@ use tracing::{debug, error, info, warn};
 use zeroize::Zeroizing;
 
 use config::NodeConfig;
+pub use config::ALLOW_GENESIS_MISMATCH_ENV;
 
 use kovanica_consensus::engine::{BlockManagerTrait, DagStoreTrait};
 use kovanica_consensus::metrics::{
@@ -544,6 +545,8 @@ async fn run_node<F>(config: NodeConfig, shutdown: F) -> Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    // Rejects KOVANICA_ALLOW_GENESIS_MISMATCH on every non-dev chain before
+    // the data directory is created (dev chains 3 and 1337 may keep it).
     config.validate()?;
 
     // ------------------------------------------------------------------
@@ -1743,13 +1746,6 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     Ok(())
 }
 
-/// Env override that disables the genesis fork/contamination guard.
-///
-/// Set to `1` (or `true`/`yes`/`on`) only when deliberately pointing an
-/// existing data dir at a different genesis (e.g. an intentional reset on an
-/// isolated node). Every start with this set logs a warning.
-const ALLOW_GENESIS_MISMATCH_ENV: &str = "KOVANICA_ALLOW_GENESIS_MISMATCH";
-
 /// File name (inside `data_dir`) of the genesis ceremony artifact written by
 /// the `genesis` subcommand.
 const GENESIS_JSON_FILE: &str = "genesis.json";
@@ -1765,21 +1761,10 @@ type GenesisValidatorDigestRow = ([u8; 32], u64, [u8; 32], [u8; 32]);
 /// True when a genesis-mismatch override string enables the guard bypass.
 ///
 /// Pure so the accepted spellings can be tested without touching the
-/// process-global environment.
+/// process-global environment. The value is recorded on [`NodeConfig`] by
+/// `apply_env_overrides` and refused in `validate` for every non-dev chain.
 fn parse_mismatch_override(value: Option<&str>) -> bool {
-    matches!(
-        value
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    )
-}
-
-/// True when the genesis mismatch guard is explicitly disabled.
-fn genesis_mismatch_allowed() -> bool {
-    parse_mismatch_override(std::env::var(ALLOW_GENESIS_MISMATCH_ENV).ok().as_deref())
+    config::genesis_mismatch_override_enabled(value)
 }
 
 /// The canonical genesis block digest, reused from the deterministic genesis
@@ -1924,7 +1909,11 @@ fn verify_persisted_genesis_digest(
     state_storage: &Storage,
     fresh: &Hash,
     allow_mismatch: bool,
+    chain_id: u64,
 ) -> Result<()> {
+    // The caller may pass `allow_mismatch` from the env flag. It never applies
+    // outside dev chains, even if `validate` was skipped.
+    let allow_mismatch = allow_mismatch && kovanica_types::signing::chain_id::is_dev(chain_id);
     let persisted = {
         let read = state_storage.begin_read()?;
         state_storage.state().load_genesis_digest(&read)?
@@ -2028,6 +2017,8 @@ fn verify_consensus_genesis_marker(
 /// tampered copy is never silently rewritten. On mismatch the node refuses
 /// unless `allow_mismatch`.
 fn verify_genesis_json(config: &NodeConfig, canonical: &Hash, allow_mismatch: bool) -> Result<()> {
+    let allow_mismatch =
+        allow_mismatch && kovanica_types::signing::chain_id::is_dev(config.chain_id);
     let path = config.data_dir.join(GENESIS_JSON_FILE);
     if !path.exists() {
         return Ok(());
@@ -2075,11 +2066,14 @@ fn verify_genesis_json(config: &NodeConfig, canonical: &Hash, allow_mismatch: bo
 /// `genesis_validators.toml`.
 fn verify_genesis_consistency(config: &NodeConfig, state_storage: &Storage) -> Result<()> {
     let fresh = genesis_config_digest(config)?;
-    let allow_mismatch = genesis_mismatch_allowed();
+    // Dev chains only. `validate` already refused the flag on every other chain
+    // before the data directory existed; this is the same rule at the guard.
+    let allow_mismatch =
+        config.allow_genesis_mismatch && kovanica_types::signing::chain_id::is_dev(config.chain_id);
     if allow_mismatch {
         warn!("{ALLOW_GENESIS_MISMATCH_ENV} set: genesis mismatch guard disabled for this start");
     }
-    verify_persisted_genesis_digest(state_storage, &fresh, allow_mismatch)?;
+    verify_persisted_genesis_digest(state_storage, &fresh, allow_mismatch, config.chain_id)?;
     verify_genesis_json(config, &canonical_genesis_digest(), allow_mismatch)?;
     Ok(())
 }
@@ -4824,7 +4818,7 @@ mod tests {
             txn.commit().unwrap();
         }
 
-        let err = verify_persisted_genesis_digest(&storage, &fresh, false).unwrap_err();
+        let err = verify_persisted_genesis_digest(&storage, &fresh, false, 1337).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains(&stored.to_hex()), "{msg}");
         assert!(msg.contains(&fresh.to_hex()), "{msg}");
@@ -4833,8 +4827,17 @@ mod tests {
         assert!(msg.contains("chain-4 format change"), "{msg}");
         assert!(msg.contains("fix is a wipe"), "{msg}");
 
-        // The explicit override lets the node start despite the mismatch...
-        verify_persisted_genesis_digest(&storage, &fresh, true).expect("override allows");
+        // The explicit override lets a dev chain start despite the mismatch...
+        verify_persisted_genesis_digest(&storage, &fresh, true, 1337).expect("dev override allows");
+        // ...and does nothing on a non-dev chain, even when the caller asks.
+        for chain_id in [1, 2, 4] {
+            let err = verify_persisted_genesis_digest(&storage, &fresh, true, chain_id)
+                .expect_err("non-dev chain must ignore the override");
+            assert!(
+                err.to_string().contains("genesis digest mismatch"),
+                "chain {chain_id}: {err:#}"
+            );
+        }
         // ...and the persisted value is left untouched.
         let read = storage.begin_read().unwrap();
         assert_eq!(
@@ -4855,6 +4858,52 @@ mod tests {
             );
         }
         assert!(!parse_mismatch_override(None));
+    }
+
+    /// Chains 1, 2 and 4 refuse the override inside `validate`, which `run_node`
+    /// calls before `create_dir_all`. Dev chains pass that check and do not
+    /// create a directory from `validate` itself.
+    #[tokio::test]
+    async fn non_dev_chains_refuse_genesis_mismatch_override_before_data_dir_exists() {
+        for chain_id in [1, 2, 4] {
+            let parent = tempfile::tempdir().unwrap();
+            let data_dir = parent.path().join("data");
+            assert!(!data_dir.exists());
+            let config = NodeConfig {
+                allow_genesis_mismatch: true,
+                ..chain_id_config(&data_dir, chain_id)
+            };
+            let err = run_node(config, std::future::pending()).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(ALLOW_GENESIS_MISMATCH_ENV),
+                "chain {chain_id}: {msg}"
+            );
+            assert!(msg.contains("must not be set"), "chain {chain_id}: {msg}");
+            assert!(
+                !data_dir.exists(),
+                "chain {chain_id} created a data dir before refusing the override"
+            );
+        }
+    }
+
+    #[test]
+    fn dev_chains_accept_genesis_mismatch_override_without_creating_data_dir() {
+        for chain_id in [3, 1337] {
+            let parent = tempfile::tempdir().unwrap();
+            let data_dir = parent.path().join("data");
+            let config = NodeConfig {
+                allow_genesis_mismatch: true,
+                ..chain_id_config(&data_dir, chain_id)
+            };
+            config
+                .validate()
+                .unwrap_or_else(|e| panic!("chain {chain_id} may set the override: {e}"));
+            assert!(
+                !data_dir.exists(),
+                "validate must not create a data dir for chain {chain_id}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4956,7 +5005,7 @@ mod tests {
         let fresh = Hash::new([5u8; 32]);
         // No silent migration, with or without the mismatch override.
         for allow_mismatch in [false, true] {
-            let err = verify_persisted_genesis_digest(&storage, &fresh, allow_mismatch)
+            let err = verify_persisted_genesis_digest(&storage, &fresh, allow_mismatch, 1)
                 .expect_err("a data dir without a genesis digest must be refused");
             let msg = format!("{err:#}");
             assert!(msg.contains("no genesis digest"), "{msg}");
@@ -4997,8 +5046,16 @@ mod tests {
         .unwrap();
         let err = verify_genesis_json(&config, &canonical, false).unwrap_err();
         assert!(err.to_string().contains("canonical genesis"), "{err:#}");
-        // Same override applies.
-        verify_genesis_json(&config, &canonical, true).expect("override allows");
+        // Non-dev chains ignore the override. Devnet (the config above) may use it.
+        for chain_id in [1, 2, 4] {
+            let err = verify_genesis_json(&chain_id_config(dir.path(), chain_id), &canonical, true)
+                .expect_err("non-dev chain must ignore the override");
+            assert!(
+                err.to_string().contains("canonical genesis"),
+                "chain {chain_id}: {err:#}"
+            );
+        }
+        verify_genesis_json(&config, &canonical, true).expect("dev override allows");
     }
 
     #[test]
