@@ -577,6 +577,34 @@ where
     // genesis (fork / cross-chain contamination), and read back genesis.json.
     verify_genesis_consistency(&config, &state_storage)?;
 
+    // A partial wipe can keep state.redb (headers and seals) and drop
+    // consensus.redb. The seal quorum is a certified cursor: note it before
+    // the engine starts so `restore_undecided_leaders` does not stall inside
+    // the pruned gap. A missing quorum is not a boot failure.
+    match seals::certified_leader_round(&state_storage, config.chain_id) {
+        Ok(Some(anchor)) => {
+            if let Err(e) = dag_store.note_certified_catchup_anchor(anchor) {
+                warn!(
+                    error = %e,
+                    anchor,
+                    "certified commit seal was not stored as a catch-up anchor"
+                );
+            } else {
+                info!(
+                    anchor,
+                    "noted certified catch-up anchor from local commit seals"
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            warn!(
+                error = %e,
+                "could not read a certified commit seal; catch-up anchor unchanged"
+            );
+        }
+    }
+
     // ------------------------------------------------------------------
     // 3. Mempool + validator identity
     // ------------------------------------------------------------------
@@ -3126,6 +3154,26 @@ impl StateSyncSessions {
     }
 }
 
+/// Leader round already executed when `committed_leaders` commits are in state.
+///
+/// While every leader slot commits, the Nth commit is the leader at round
+/// `N * WAVE_LENGTH` (the first commit is round 3). Zero commits have no
+/// anchor. The snapshot header's height is the state-root key, one behind
+/// [`kovanica_staking::StakingState::committed_leader_height`], and it is not
+/// covered by the state root, so the anchor is taken from staking state after
+/// a verified import.
+///
+/// PRO-40 PR #92 (skip certificates) breaks `N * WAVE_LENGTH`: a skipped slot
+/// advances the round without a commit. That PR must anchor on the sealed
+/// header's `leader_round`. [`seals::certified_leader_round`] already does.
+fn leader_round_for_synced_commits(committed_leaders: u64) -> Option<Round> {
+    if committed_leaders == 0 {
+        None
+    } else {
+        committed_leaders.checked_mul(kovanica_types::WAVE_LENGTH)
+    }
+}
+
 /// Verify and apply a fully reassembled state snapshot.
 ///
 /// Nothing is applied unless [`kovanica_storage::StateStore::import_verified_snapshot`]
@@ -3134,7 +3182,12 @@ impl StateSyncSessions {
 /// must not be below the local committed height (no silent rollback). The
 /// write transaction commits only after verification succeeds, so a reject
 /// leaves local state untouched.
-fn apply_state_snapshot(state_storage: &Arc<Storage>, peer: PeerId, bytes: &[u8]) {
+fn apply_state_snapshot(
+    state_storage: &Arc<Storage>,
+    dag_store: &DagStore,
+    peer: PeerId,
+    bytes: &[u8],
+) {
     let min_height = match state_storage.begin_read() {
         Ok(txn) => {
             let state = state_storage.state();
@@ -3178,6 +3231,40 @@ fn apply_state_snapshot(state_storage: &Arc<Storage>, peer: PeerId, bytes: &[u8]
                 return;
             }
             info!(%peer, height, min_height, "state snapshot verified and imported");
+            // Staking state inside the verified snapshot is the commit count
+            // execution will continue from. Anchor the consensus cursor there
+            // so a joiner whose DAG gap is wider than the prune window can
+            // follow new leaders instead of stalling on blocks peers deleted.
+            // A read failure leaves the anchor unset: jumping without the
+            // executed height would skip commits this node still needs.
+            let committed_leaders = match state_storage.begin_read() {
+                Ok(read) => match state_storage.state().load_staking_state(&read) {
+                    Ok(state) => state.committed_leader_height,
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "snapshot imported but staking state could not be read; catch-up anchor unchanged"
+                        );
+                        0
+                    }
+                },
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        "snapshot imported but staking state could not be read; catch-up anchor unchanged"
+                    );
+                    0
+                }
+            };
+            if let Some(anchor) = leader_round_for_synced_commits(committed_leaders) {
+                if let Err(e) = dag_store.note_certified_catchup_anchor(anchor) {
+                    warn!(
+                        error = %e,
+                        anchor,
+                        "state snapshot imported but the catch-up anchor was not stored"
+                    );
+                }
+            }
         }
         Err(e) => {
             // The transaction is dropped uncommitted: local state is untouched.
@@ -3406,7 +3493,9 @@ fn handle_network_event(
                     match state_sync_sessions.on_chunk(peer, chunk, now) {
                         // Transfer complete: verify (state root + height)
                         // before applying; a reject never touches local state.
-                        Some(bytes) => apply_state_snapshot(state_storage, peer, &bytes),
+                        Some(bytes) => {
+                            apply_state_snapshot(state_storage, io.dag_store, peer, &bytes)
+                        }
                         // Still incomplete and the session survived: ask for
                         // the next chunk. Rejected sessions are already gone.
                         None => state_sync_sessions.request_next(peer, network_cmd_tx),
@@ -3714,6 +3803,10 @@ impl DagStoreTrait for NodeDagStore {
         let storage = self.inner.storage();
         let txn = storage.begin_read()?;
         Ok(storage.consensus().get_votes_for_round(&txn, round)?)
+    }
+
+    fn certified_catchup_anchor(&self) -> Result<Option<Round>, DagStoreError> {
+        self.inner.certified_catchup_anchor()
     }
 
     fn max_stored_round(&self) -> Result<Option<Round>, DagStoreError> {
@@ -6687,13 +6780,19 @@ mod tests {
         storage.state().snapshot_bytes(&txn).unwrap()
     }
 
+    fn dag_for(dir: &tempfile::TempDir) -> DagStore {
+        let consensus = Arc::new(Storage::new(dir.path().join("consensus.redb")).unwrap());
+        DagStore::from_storage(consensus)
+    }
+
     #[test]
     fn apply_state_snapshot_imports_a_verified_payload() {
         let bytes = exported_snapshot_bytes();
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        let dag = dag_for(&dir);
 
-        apply_state_snapshot(&storage, PeerId::random(), &bytes);
+        apply_state_snapshot(&storage, &dag, PeerId::random(), &bytes);
 
         let txn = storage.begin_read().unwrap();
         let acct = storage
@@ -6701,6 +6800,8 @@ mod tests {
             .get_account(&txn, &Address([7; 32]))
             .unwrap();
         assert_eq!(acct.balance, 42, "verified snapshot must be applied");
+        // No staking commit count: nothing certified to jump to.
+        assert!(dag.certified_catchup_anchor().unwrap().is_none());
     }
 
     #[test]
@@ -6715,7 +6816,8 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
-        apply_state_snapshot(&storage, PeerId::random(), &tampered);
+        let dag = dag_for(&dir);
+        apply_state_snapshot(&storage, &dag, PeerId::random(), &tampered);
 
         let txn = storage.begin_read().unwrap();
         assert!(
@@ -6727,6 +6829,7 @@ mod tests {
                 == 0,
             "tampered snapshot must never be applied"
         );
+        assert!(dag.certified_catchup_anchor().unwrap().is_none());
     }
 
     #[test]
@@ -6740,6 +6843,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        let dag = dag_for(&dir);
         // Local state is ahead of the snapshot: importing would roll back.
         {
             let txn = storage.begin_write().unwrap();
@@ -6749,7 +6853,7 @@ mod tests {
                 .unwrap();
             txn.commit().unwrap();
         }
-        apply_state_snapshot(&storage, PeerId::random(), &bytes);
+        apply_state_snapshot(&storage, &dag, PeerId::random(), &bytes);
 
         let txn = storage.begin_read().unwrap();
         assert!(
@@ -6760,6 +6864,57 @@ mod tests {
                 .balance
                 == 0,
             "a snapshot below local height must never be applied"
+        );
+        assert!(dag.certified_catchup_anchor().unwrap().is_none());
+    }
+
+    /// A joiner more than the prune window behind anchors on the verified
+    /// snapshot's executed commit count, not on the header height.
+    ///
+    /// The default window is 100 waves. 101 executed commits is leader round
+    /// 303, which is past that window. The header height is the state-root
+    /// key (100 here) and is not what the cursor follows.
+    #[test]
+    fn apply_state_snapshot_anchors_past_the_prune_window() {
+        let commits = 101u64;
+        let dir = tempfile::tempdir().unwrap();
+        let src = Storage::new(dir.path().join("src.redb")).unwrap();
+        {
+            let txn = src.begin_write().unwrap();
+            let mut staking = StakingState::new();
+            staking.committed_leader_height = commits;
+            src.state().save_staking_state(&txn, &staking).unwrap();
+            // Header height is the state-root key, one behind the commit count.
+            src.state()
+                .save_state_root(&txn, commits - 1, &Hash::new([9u8]))
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let read = src.begin_read().unwrap();
+        let bytes = src.state().snapshot_bytes(&read).unwrap();
+        drop(read);
+        let decoded = kovanica_storage::StateStore::decode_snapshot(&bytes).unwrap();
+        assert_eq!(decoded.height, commits - 1);
+
+        let dst_dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dst_dir.path().join("state.redb")).unwrap());
+        let dag = dag_for(&dst_dir);
+        apply_state_snapshot(&storage, &dag, PeerId::random(), &bytes);
+
+        let anchor = commits * kovanica_types::WAVE_LENGTH;
+        assert!(
+            commits > 100,
+            "101 commits must sit past the default 100-wave prune window"
+        );
+        assert_eq!(dag.certified_catchup_anchor().unwrap(), Some(anchor));
+        let txn = storage.begin_read().unwrap();
+        assert_eq!(
+            storage
+                .state()
+                .load_staking_state(&txn)
+                .unwrap()
+                .committed_leader_height,
+            commits
         );
     }
 
