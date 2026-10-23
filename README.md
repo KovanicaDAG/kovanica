@@ -111,7 +111,7 @@ Workspace crate versions default to `0.2.0`; the table records the version each 
 | `kovanica-execution` | 0.2.0 | State-transition function, reward distribution, contract host |
 | `kovanica-staking` | 0.0.31 | Emission schedule, treasury, validator set, delegation, slashing, light-node rewards |
 | `kovanica-node` | 0.0.31 | Full-node binary (`kovanica-node`), incl. the `genesis` subcommand |
-| `kovanica-cli` | 0.0.31 | CLI wallet and tooling (bins `kovanica`, `generate-validators`, `kovanica-bench`) |
+| `kovanica-cli` | 0.1.0 | CLI wallet and tooling (bins `kovanica`, `generate-validators`, `kovanica-bench`) |
 | `kovanica-rpc` | 0.2.0 | JSON-RPC server, WebSocket subscriptions, rate limiting, OpenAPI generation |
 | `kovanica-common` | 0.2.0 | Shared contract types, WASM helpers, memory utilities, Host trait |
 | `kovanica-htlc` | 0.2.0 | HTLC contract (native + WASM) |
