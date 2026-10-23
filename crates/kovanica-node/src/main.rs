@@ -679,6 +679,7 @@ where
     // 4. Networking
     // ------------------------------------------------------------------
     let network_config = build_network_config(&config)?;
+    log_network_identity(&network_config);
     let (network, network_events) =
         NetworkService::new(network_config, dag_store.clone(), mempool.clone())
             .context("creating network service")?;
@@ -1756,7 +1757,8 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
 ///
 /// Set to `1` (or `true`/`yes`/`on`) only when deliberately pointing an
 /// existing data dir at a different genesis (e.g. an intentional reset on an
-/// isolated node). Every start with this set logs a warning.
+/// isolated node). Every start with this set logs a warning. Refused on
+/// chains 1 (mainnet) and 4 (testnet), see [`genesis_mismatch_override`].
 const ALLOW_GENESIS_MISMATCH_ENV: &str = "KOVANICA_ALLOW_GENESIS_MISMATCH";
 
 /// File name (inside `data_dir`) of the genesis ceremony artifact written by
@@ -1789,6 +1791,22 @@ fn parse_mismatch_override(value: Option<&str>) -> bool {
 /// True when the genesis mismatch guard is explicitly disabled.
 fn genesis_mismatch_allowed() -> bool {
     parse_mismatch_override(std::env::var(ALLOW_GENESIS_MISMATCH_ENV).ok().as_deref())
+}
+
+/// Resolve the genesis-mismatch override for `chain_id`.
+///
+/// The override is refused on mainnet (1) and the public testnet (4): a node
+/// there must never run on a data dir built for another genesis, so setting
+/// it is a deployment error, not a bypass. Dev/local chains keep it.
+fn genesis_mismatch_override(chain_id: u64, requested: bool) -> Result<bool> {
+    use kovanica_types::signing::chain_id::{MAINNET, TESTNET_V2};
+    if requested && (chain_id == MAINNET || chain_id == TESTNET_V2) {
+        anyhow::bail!(
+            "{ALLOW_GENESIS_MISMATCH_ENV} is not allowed on chain {chain_id}; \
+             unset it and fix the data dir or the genesis configuration"
+        );
+    }
+    Ok(requested)
 }
 
 /// The canonical genesis block digest, reused from the deterministic genesis
@@ -2023,7 +2041,7 @@ fn verify_genesis_json(config: &NodeConfig, canonical: &Hash, allow_mismatch: bo
 /// `genesis_validators.toml`.
 fn verify_genesis_consistency(config: &NodeConfig, state_storage: &Storage) -> Result<()> {
     let fresh = genesis_config_digest(config)?;
-    let allow_mismatch = genesis_mismatch_allowed();
+    let allow_mismatch = genesis_mismatch_override(config.chain_id, genesis_mismatch_allowed())?;
     if allow_mismatch {
         warn!("{ALLOW_GENESIS_MISMATCH_ENV} set: genesis mismatch guard disabled for this start");
     }
@@ -4296,6 +4314,21 @@ fn build_mempool_config() -> MempoolConfig {
 }
 
 /// Build the [`NetworkConfig`] from the node configuration.
+/// Log this node's network tag at startup and return it (#87 follow-up).
+///
+/// Every protocol id and topic carries the tag, and a peer with another tag
+/// is disconnected, so operators compare this line across all nodes of a
+/// chain before opening the mesh (`docs/TESTNET-RESET.md`).
+fn log_network_identity(network_config: &NetworkConfig) -> String {
+    let tag = network_config.network_id.tag();
+    info!(
+        chain_id = network_config.network_id.chain_id,
+        network_tag = %tag,
+        "network identity: peers must share this tag"
+    );
+    tag
+}
+
 fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
     let listen = to_multiaddr(&config.listen_addr)?;
 
@@ -4842,6 +4875,22 @@ mod tests {
         );
     }
 
+    /// Jarvis #85 review: the override is forbidden on chains 1 and 4 and
+    /// still available on dev/local chains.
+    #[test]
+    fn genesis_mismatch_override_is_forbidden_on_mainnet_and_testnet() {
+        use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET_V2};
+        for chain in [MAINNET, TESTNET_V2] {
+            let err = genesis_mismatch_override(chain, true).unwrap_err();
+            assert!(err.to_string().contains("not allowed"), "{err:#}");
+            assert!(!genesis_mismatch_override(chain, false).unwrap());
+        }
+        for chain in [DEVNET, LOCAL] {
+            assert!(genesis_mismatch_override(chain, true).unwrap());
+            assert!(!genesis_mismatch_override(chain, false).unwrap());
+        }
+    }
+
     #[test]
     fn mismatch_override_spellings() {
         for yes in ["1", "true", "TRUE", " yes ", "on"] {
@@ -5062,6 +5111,23 @@ mod tests {
         }
         let path = write_seed_file(dir.path(), &[9u8; 32], 0o400);
         load_validator_key(path.to_str(), true).expect("0400 is fine");
+    }
+
+    // #87 follow-up: the startup line carries exactly the tag that scopes
+    // every protocol id and topic.
+    #[test]
+    fn startup_logs_the_network_tag_that_scopes_the_protocols() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = chain_id_config(dir.path(), 4);
+        let net = build_network_config(&config).unwrap();
+        let tag = log_network_identity(&net);
+        assert_eq!(tag, net.network_id.tag());
+        assert!(tag.starts_with("4-"), "{tag}");
+        assert_eq!(tag.len(), "4-".len() + 16);
+        assert!(net
+            .network_id
+            .identify_version()
+            .starts_with(&format!("/kovanica/{tag}/")));
     }
 
     #[test]
