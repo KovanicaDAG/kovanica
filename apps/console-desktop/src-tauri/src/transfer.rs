@@ -94,7 +94,7 @@ pub fn build_quote(
     nonce: u64,
     fee_rate: u64,
 ) -> Result<TransferQuote, String> {
-    let recipient = canonical_recipient(draft_recipient)?;
+    let recipient = canonical_recipient(draft_recipient, chain)?;
     let amount = parse_kuna_atoms(draft_amount)?;
     if amount == 0 {
         return Err(ZERO_AMOUNT.to_string());
@@ -139,7 +139,7 @@ impl WalletStore {
     ) -> Result<TransferQuote, String> {
         let chain = require_same_chain(draft.shown_chain_id, status.chain_id.as_deref())?;
         let open = self.session(now)?;
-        let sender = wallet_address(&open.address)?;
+        let sender = wallet_address(&open.address, chain)?;
         let nonce = read_nonce(rpc, &open.address)?;
         let rate = read_fee_rate(rpc)?;
         let quote = build_quote(sender, draft.recipient, draft.amount, chain, nonce, rate)?;
@@ -221,14 +221,12 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|text| !text.is_empty())
 }
 
-fn canonical_recipient(raw: &str) -> Result<Address, String> {
-    raw.trim()
-        .parse::<Address>()
-        .map_err(|_| BAD_RECIPIENT.to_string())
+fn canonical_recipient(raw: &str, chain_id: u64) -> Result<Address, String> {
+    Address::parse_for_chain(raw.trim(), chain_id).map_err(|_| BAD_RECIPIENT.to_string())
 }
 
-fn wallet_address(text: &str) -> Result<Address, String> {
-    text.parse::<Address>()
+fn wallet_address(text: &str, chain_id: u64) -> Result<Address, String> {
+    Address::parse_for_chain(text, chain_id)
         .map_err(|_| "The wallet address could not be read.".to_string())
 }
 
@@ -672,6 +670,59 @@ mod tests {
         assert!(build_quote(Address([1; 32]), &format!(" {a} "), "1", 4, 0, 1).is_ok());
         assert!(build_quote(Address([1; 32]), &a.to_uppercase(), "1", 4, 0, 1).is_err());
         assert!(build_quote(Address([1; 32]), &a[..a.len() - 1], "1", 4, 0, 1).is_err());
+    }
+
+    #[test]
+    fn legacy_recipient_follows_the_chain_policy() {
+        let sender = Address([1; 32]);
+        let recipient = Address([3; 32]);
+        let legacy = recipient.encode_legacy_hex();
+        let bare = recipient.to_hex();
+        let prefixed = format!("0x{bare}");
+        let allowed = [chain_id::DEVNET, chain_id::TESTNET_V2, chain_id::LOCAL];
+        let refused = [chain_id::MAINNET, chain_id::TESTNET, 0, 42];
+        for chain in allowed {
+            for form in [&legacy, &bare, &prefixed] {
+                let quote = build_quote(sender, form, "1", chain, 0, 1).unwrap();
+                assert_eq!(quote.recipient, recipient.to_string(), "{form} on {chain}");
+            }
+        }
+        for chain in refused {
+            for form in [&legacy, &bare, &prefixed] {
+                let err = build_quote(sender, form, "1", chain, 0, 1).unwrap_err();
+                assert_eq!(err, BAD_RECIPIENT, "{form} on {chain}");
+                assert!(!err.contains(&bare));
+            }
+            let quote = build_quote(sender, &recipient.to_string(), "1", chain, 0, 1).unwrap();
+            assert_eq!(quote.recipient, recipient.to_string());
+        }
+
+        let mut store = WalletStore::new();
+        let now = Instant::now();
+        store.open_for_test(sender.encode_legacy_hex(), now);
+        let quote = store
+            .quote_from_status(
+                &ScriptRpc::account(4, 1),
+                &fresh_status(Some("4")),
+                draft(Some("4"), false, &legacy, "1"),
+                now,
+            )
+            .unwrap();
+        assert_eq!(quote.recipient, recipient.to_string());
+        assert_eq!(quote.chain_id, "4");
+
+        let mut refused_store = WalletStore::new();
+        refused_store.open_for_test(sender.encode_legacy_hex(), now);
+        let err = refused_store
+            .quote_from_status(
+                &ScriptRpc::account(4, 1),
+                &fresh_status(Some("1")),
+                draft(Some("1"), false, &recipient.to_string(), "1"),
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(err, "The wallet address could not be read.");
+        assert!(!refused_store.has_quote());
     }
 
     #[test]
