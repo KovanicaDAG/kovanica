@@ -529,9 +529,9 @@ Merge je izvršen kroz dva merge commita na `main`: `1571429e` (rename ⊕ VPS3)
 
 **ZAŠTIĆENO — nije mijenjano (consensus/state/disk/wire):**
 - `ADDRESS_PREFIX = "kvnc"` + svi `kvnc<hex>dag` formati/testovi (odluka vlasnika)
-- hash domain tagovi: `b"KVNC-BLOCK-v1"`, `-DIGEST-`, `-MERKLE-`, `-HEADER-`, `-ACCOUNT-`, `-ACCT-EMPTY`, `-SMT-`, `-COMMITTEE-` (`kovanica-types/src/hash.rs`)
+- hash domain tagovi: od chain-4 reseta (#81, `0ebb06d`) `b"KUNA-BLOCK-v1"`, `-TX-`, `-DIGEST-`, `-MERKLE-`, `-HEADER-`, `-ACCOUNT-`, `-ACCT-EMPTY`, `-SMT-`, `-COMMITTEE-`, `-EVIDENCE-`, `-GENESIS-` (`kovanica-types/src/hash.rs`, KAT test `hash_domain_known_answers`); **ne vraćati na `KVNC-*`**
 - legacy potpisni ključ `b"KVNC-TX-v1"` (`kovanica-execution/src/lib.rs` testovi)
-- VRF magic `KVNC-VRF1` (`kovanica-crypto/src/vrf.rs`, `kovanica-dag/src/block_manager.rs`, `kovanica-network/src/validation.rs`, `kovanica-types/src/block.rs`)
+- VRF magic `KUNA-VRF1` i VRF input `KUNA-VRF1-v1:…`: jedna definicija `kovanica_types::block::{VRF_STATEMENT_MAGIC, VRF_STATEMENT_LEN, VRF_INPUT_DOMAIN, vrf_input, is_vrf_statement}` (prije 8 literala u crypto/dag/network/types)
 - state-key prefiksi `b"kvnc/v1/state"`, `b"kvnc/v1/mtx/"`, `b"kvnc/v1/htlc/"`, `b"kvnc/v1/vault/"`, `b"kvnc/host/*"`
 - keystore AEAD AAD `b"KVNC keystore\0v2\0argon2id\0…"` (`kovanica-keystore/src/lib.rs`)
 

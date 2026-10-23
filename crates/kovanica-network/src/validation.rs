@@ -207,7 +207,7 @@ pub fn verify_block(keys: &AuthorityKeys, block: &StatementBlock) -> Result<(), 
         block.round,
         &block.parents,
         &block.transactions,
-        if block.statements.len() >= 137 && &block.statements[..9] == b"KUNA-VRF1" {
+        if kovanica_types::block::is_vrf_statement(&block.statements) {
             Some(&block.statements)
         } else {
             None

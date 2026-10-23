@@ -206,10 +206,12 @@ window.
 
 Also unresolved and **not** in this RFC's scope: the offender must leave the
 committee. `slash()` sets `slashed = true` but leaves `active = true`; with a
-5 % cut the validator stays above the minimum and keeps its seat. Immediate
-deactivation + 3-epoch jail is PRO-19. Until PRO-19 lands, slashing changes
-balances but does not remove the misbehaving validator — acceptable only
-because the whole feature is gated off.
+5 % cut the validator stays above the minimum and keeps its seat. PRO-19
+(#80, merged 2026-10-23) adds immediate deactivation and a jail of
+`JAIL_ROUNDS = 7 200` committed leaders (about 1 day; 3 epochs of 8 h once the
+staking epoch is 2 400 leaders, PRO-37). After the jail the validator returns
+only through an explicit stake transaction. The feature stays gated off
+(`SLASHING_ACTIVE_FROM_ROUND`).
 
 ## 9. Activation
 
