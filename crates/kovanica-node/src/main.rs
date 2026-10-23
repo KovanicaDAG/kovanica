@@ -1899,8 +1899,12 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
 ///
 /// * Persisted digest equal to `fresh` → ok (no write).
 /// * Persisted digest different → refuse unless `allow_mismatch`.
-/// * No persisted digest (data dir predates the digest) → write it once, so
-///   existing data dirs migrate cleanly and later starts are guarded.
+/// * No persisted digest → refuse, always (the override does not apply).
+///   `init_genesis` writes the digest in the same transaction as the genesis
+///   state, so chain state without a digest comes from a data dir created
+///   before the digest existed, i.e. before the chain-4 format change
+///   (KUNA-* hash domains, #81). Writing the fresh digest over it would bless
+///   state built under the old format.
 fn verify_persisted_genesis_digest(
     state_storage: &Storage,
     fresh: &Hash,
@@ -1929,10 +1933,13 @@ fn verify_persisted_genesis_digest(
         }
         Some(_) => {}
         None => {
-            let txn = state_storage.begin_write()?;
-            state_storage.state().save_genesis_digest(&txn, fresh)?;
-            txn.commit()?;
-            info!(digest = %fresh, "persisted genesis digest for existing data dir");
+            anyhow::bail!(
+                "data dir has chain state but no genesis digest: it was created by a build \
+                 before the chain-4 format change (KUNA-* hash domains, #81) and \
+                 cannot be migrated; stop the node, move the data dir away and \
+                 start from the chain-4 genesis (configured genesis digest {})",
+                fresh.to_hex(),
+            );
         }
     }
     Ok(())
@@ -4774,7 +4781,7 @@ mod tests {
     }
 
     #[test]
-    fn first_start_persists_digest_and_migrates_existing_dir() {
+    fn a_data_dir_without_a_genesis_digest_is_refused_not_migrated() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::new(dir.path().join("state.redb")).unwrap();
 
@@ -4795,17 +4802,21 @@ mod tests {
         }
 
         let fresh = Hash::new([5u8; 32]);
-        // Migration: first start writes the digest once.
-        verify_persisted_genesis_digest(&storage, &fresh, false).unwrap();
-        {
-            let read = storage.begin_read().unwrap();
-            assert_eq!(
-                storage.state().load_genesis_digest(&read).unwrap(),
-                Some(fresh)
-            );
+        // No silent migration, with or without the mismatch override.
+        for allow_mismatch in [false, true] {
+            let err = verify_persisted_genesis_digest(&storage, &fresh, allow_mismatch)
+                .expect_err("a data dir without a genesis digest must be refused");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("no genesis digest"), "{msg}");
+            assert!(msg.contains("chain-4 format change"), "{msg}");
         }
-        // Second start is a no-op and still succeeds.
-        verify_persisted_genesis_digest(&storage, &fresh, false).unwrap();
+        // Nothing was written.
+        let read = storage.begin_read().unwrap();
+        assert!(storage
+            .state()
+            .load_genesis_digest(&read)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

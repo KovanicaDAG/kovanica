@@ -108,7 +108,10 @@ against the persisted value:
 - **mismatch** — startup **refuses** with an error naming the genesis mismatch,
   because the data directory was created for a different genesis;
 - an **override environment variable** forces startup past the mismatch for a
-  deliberate single-node migration. Never set it on a live mesh.
+  deliberate single-node migration. Never set it on a live mesh;
+- **no persisted digest but chain state present** — startup **refuses**, even
+  with the override: the data directory predates the chain-4 format change and
+  must be wiped, not migrated.
 
 ## Data preservation
 
