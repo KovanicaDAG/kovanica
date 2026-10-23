@@ -1,8 +1,10 @@
 //! Owner-only permissions for keystore and seed files.
 //!
 //! Unix uses mode `0600`. Windows has no mode bits, so a private file gets a
-//! protected DACL that allows only the owner (`D:P(A;;FA;;;OW)`). A seed file
-//! is rejected when its DACL grants Everyone, Builtin Users, or Authenticated
+//! protected DACL that allows only the owner (`D:P(A;;FA;;;OW)`). The DACL is
+//! applied with `SetNamedSecurityInfoW` on the path. That opens the file with
+//! `WRITE_DAC` itself; the caller's handle does not need it. A seed file is
+//! rejected when its DACL grants Everyone, Builtin Users, or Authenticated
 //! Users. Other platforms have no equivalent in the standard library; the mode
 //! check there is a documented no-op after the regular-file check.
 
@@ -11,8 +13,27 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
-#[cfg(windows)]
+/// `SE_FILE_OBJECT` for `SetNamedSecurityInfoW`.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+const SE_FILE_OBJECT: u32 = 1;
+/// Replace the discretionary ACL.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 const DACL_SECURITY_INFORMATION: u32 = 0x4;
+/// Do not inherit a broader ACE from the parent directory (`D:P` in SDDL).
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x8000_0000;
+/// Access `SetNamedSecurityInfoW` requests on its own open. The caller's handle
+/// does not need this bit.
+#[cfg_attr(not(test), allow(dead_code))]
+const WRITE_DAC: u32 = 0x0004_0000;
+/// Read access `SetNamedSecurityInfoW` requests on its own open.
+#[cfg_attr(not(test), allow(dead_code))]
+const READ_CONTROL: u32 = 0x0002_0000;
+/// Flags passed to `SetNamedSecurityInfoW` for an owner-only key file.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+const NAMED_DACL_SECURITY_INFORMATION: u32 =
+    DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+
 #[cfg(windows)]
 const SDDL_REVISION_1: u32 = 1;
 
@@ -99,9 +120,9 @@ pub fn ensure_owner_only(path: &Path) -> Result<()> {
 
 /// Restrict `file` to its owner.
 ///
-/// On Unix this is mode `0600` on the open descriptor. On Windows the open
-/// handle's DACL is replaced with [`OWNER_ONLY_SDDL`]. Other platforms are a
-/// documented no-op.
+/// On Unix this is mode `0600` on the open descriptor. On Windows the file
+/// path receives [`OWNER_ONLY_SDDL`] through `SetNamedSecurityInfoW`, which
+/// does not need `WRITE_DAC` on `file`. Other platforms are a documented no-op.
 pub fn tighten_private_file(file: &fs::File) -> Result<()> {
     #[cfg(unix)]
     {
@@ -122,8 +143,7 @@ pub fn tighten_private_file(file: &fs::File) -> Result<()> {
 #[cfg(windows)]
 #[allow(unsafe_code)]
 fn windows_set_owner_only(file: &fs::File) -> Result<()> {
-    use std::os::windows::io::AsRawHandle;
-
+    let mut path = windows_final_path(file)?;
     let sddl = wide(OWNER_ONLY_SDDL);
     unsafe {
         let mut descriptor = std::ptr::null_mut();
@@ -136,19 +156,59 @@ fn windows_set_owner_only(file: &fs::File) -> Result<()> {
         if ok == 0 {
             return Err(os_error("building an owner-only DACL"));
         }
-        // SAFETY: `descriptor` came from the conversion above and is freed
-        // below. The handle is the open keystore file this process created.
-        let applied = SetKernelObjectSecurity(
-            file.as_raw_handle() as *mut std::ffi::c_void,
-            DACL_SECURITY_INFORMATION,
-            descriptor,
+        let mut present = 0i32;
+        let mut defaulted = 0i32;
+        let mut dacl = std::ptr::null_mut();
+        let ok = GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted);
+        if ok == 0 || present == 0 || dacl.is_null() {
+            LocalFree(descriptor);
+            return Err(os_error("reading the owner-only DACL"));
+        }
+        // SAFETY: `path` is a mutable NUL-terminated wide path from the open
+        // handle. `dacl` points inside `descriptor` and is freed only after
+        // `SetNamedSecurityInfoW` returns. That API opens the path with
+        // WRITE_DAC itself, so the caller's handle does not need it.
+        let status = SetNamedSecurityInfoW(
+            path.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            NAMED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            dacl,
+            std::ptr::null_mut(),
         );
         LocalFree(descriptor);
-        if applied == 0 {
-            return Err(os_error("restricting the keystore DACL to its owner"));
+        if status != 0 {
+            return Err(anyhow::anyhow!(
+                "restricting the keystore DACL to its owner: {}",
+                std::io::Error::from_raw_os_error(status as i32)
+            ));
         }
     }
     Ok(())
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn windows_final_path(file: &fs::File) -> Result<Vec<u16>> {
+    use std::os::windows::io::AsRawHandle;
+
+    unsafe {
+        // `AsRawHandle::as_raw_handle` is already `*mut c_void`.
+        let handle = file.as_raw_handle();
+        let needed = GetFinalPathNameByHandleW(handle, std::ptr::null_mut(), 0, 0);
+        if needed == 0 {
+            return Err(os_error("reading the keystore path"));
+        }
+        let mut buffer = vec![0u16; needed as usize];
+        let written = GetFinalPathNameByHandleW(handle, buffer.as_mut_ptr(), needed, 0);
+        if written == 0 || written >= needed {
+            return Err(os_error("reading the keystore path"));
+        }
+        buffer.truncate(written as usize);
+        buffer.push(0);
+        Ok(buffer)
+    }
 }
 
 #[cfg(windows)]
@@ -237,11 +297,29 @@ extern "system" {
         length_needed: *mut u32,
     ) -> i32;
 
-    fn SetKernelObjectSecurity(
-        handle: *mut std::ffi::c_void,
-        security_information: u32,
+    fn GetSecurityDescriptorDacl(
         security_descriptor: *const std::ffi::c_void,
+        dacl_present: *mut i32,
+        dacl: *mut *mut std::ffi::c_void,
+        dacl_defaulted: *mut i32,
     ) -> i32;
+
+    fn SetNamedSecurityInfoW(
+        object_name: *mut u16,
+        object_type: u32,
+        security_information: u32,
+        owner: *mut std::ffi::c_void,
+        group: *mut std::ffi::c_void,
+        dacl: *mut std::ffi::c_void,
+        sacl: *mut std::ffi::c_void,
+    ) -> u32;
+
+    fn GetFinalPathNameByHandleW(
+        file: *mut std::ffi::c_void,
+        path: *mut u16,
+        path_length: u32,
+        flags: u32,
+    ) -> u32;
 
     fn LocalFree(memory: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 }
@@ -268,6 +346,23 @@ mod tests {
         assert!(dacl_is_owner_only("D:P(D;;FA;;;WD)(A;;FA;;;OW)"));
     }
 
+    /// The DACL update goes through the path. `WRITE_DAC` and `READ_CONTROL`
+    /// are what `SetNamedSecurityInfoW` requests on its own open, not rights
+    /// the caller's handle must already have.
+    #[test]
+    fn windows_dacl_is_applied_by_path_with_protection() {
+        assert_eq!(SE_FILE_OBJECT, 1);
+        assert_eq!(DACL_SECURITY_INFORMATION, 0x4);
+        assert_eq!(PROTECTED_DACL_SECURITY_INFORMATION, 0x8000_0000);
+        assert_eq!(WRITE_DAC, 0x0004_0000);
+        assert_eq!(READ_CONTROL, 0x0002_0000);
+        assert_eq!(
+            NAMED_DACL_SECURITY_INFORMATION,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
+        );
+        assert!(dacl_is_owner_only("D:P(A;;FA;;;OW)"));
+    }
+
     #[test]
     fn owner_only_check_rejects_a_group_readable_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -284,6 +379,8 @@ mod tests {
         }
         #[cfg(windows)]
         {
+            // std opens this without WRITE_DAC. The path-based update must
+            // still restrict the file.
             let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
             tighten_private_file(&file).unwrap();
             drop(file);
