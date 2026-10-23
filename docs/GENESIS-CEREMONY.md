@@ -101,7 +101,9 @@ validator allocation), never from a loose file in the data directory. The node
 fails at startup — and `kovanica-node --check-config` reports it — if
 `funded_accounts.toml` is present on mainnet, rather than ignoring it, because
 silently skipping it would boot a genesis the operator believes they
-configured. All other chain ids (2, 3, 4, 1337) accept the file.
+configured. The mainnet `sha256sum` list therefore omits it (see
+[`docs/TESTNET-RESET.md`](TESTNET-RESET.md)). All other chain ids (2, 3, 4, 1337)
+accept the file.
 
 ## Genesis digest guard (startup behaviour)
 

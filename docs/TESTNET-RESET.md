@@ -82,10 +82,22 @@ expected network tag. **Where those are published is not fixed in this
 repository** — the person who cuts the bundle names the place and announces
 it with the bundle. Do not invent a host for it.
 
-From the directory that holds the four files:
+From the directory that holds the bundle files.
+
+Off mainnet, `funded_accounts.toml` may be part of the bundle (every chain
+except chain 1 allows it):
 
 ```sh
+# off mainnet
 sha256sum validators.json founder_premine.hex funded_accounts.toml genesis_validators.toml > SHA256SUMS
+```
+
+On mainnet (chain 1) that file is forbidden. It must not be in the data
+directory, and the checksum list must not name it:
+
+```sh
+# chain 1 (mainnet)
+sha256sum validators.json founder_premine.hex genesis_validators.toml > SHA256SUMS
 ```
 
 On each node, after the files are copied into the data directory and before
