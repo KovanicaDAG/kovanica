@@ -61,7 +61,7 @@ Canonical constants (implemented in `crates/kovanica-staking` and documented in 
 | Minimum validator stake | 50 000 KUNA |
 | Active validator range | 15–21 |
 | Unbonding period | 100 000 committed leader blocks (~13.9 days at 12 s/leader) |
-| Epoch rotation length | 7 200 rounds (`EPOCH_ROUNDS`; deliberately decoupled from the subsidy era) |
+| Epoch rotation length | 7 200 DAG rounds ≈ 8 h (`EPOCH_ROUNDS`; 2 400 committed leaders; deliberately decoupled from the subsidy era) |
 | Slashing | 500 bps (5%) fixed-percentage double-sign slash |
 | Light-node reward share | 20% (2 000 bps) of the block reward, escrowed for light nodes |
 | Minimum light-node bond | 100 KUNA |
