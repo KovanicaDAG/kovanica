@@ -41,7 +41,7 @@ codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-no
 | Subsidy era length        | **8 100 000** committed leader blocks          |
 | Decay                     | **× 3/4** each era                             |
 | Round / leader interval   | round 4 s → committed leader svakih 12 s       |
-| Epoch (validator rotacija)| 7 200 leader blokova (≈1 dan), neovisno o eri   |
+| Epoch (validator rotacija)| epoch = 8 h = 7 200 DAG rundi = 2 400 leader visina (committed leader svakih 12 s), neovisno o eri (PRO-37) |
 | Active validators         | 15–21                                          |
 | Min validator stake       | 50 000 KUNA                                    |
 
