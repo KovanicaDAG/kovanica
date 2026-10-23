@@ -106,8 +106,9 @@ fn parse_hash(value: &Value, what: &str) -> Result<Hash, RpcError> {
 /// Parse an account address parameter for `chain_id`.
 ///
 /// The canonical 64-character `kvnc…dag` base32 form is accepted on every
-/// chain. The legacy hex forms (`kvnc<hex>dag`, bare or `0x` hex) only on
-/// chain 4 (PRO-21, `kovanica_types::address::legacy_address_allowed`).
+/// chain. The legacy hex forms (`kvnc<hex>dag`, bare or `0x` hex) only where
+/// `kovanica_types::address::legacy_address_allowed` is true (devnet 3, chain
+/// 4, local 1337).
 fn parse_address(value: &Value, what: &str, chain_id: u64) -> Result<Address, RpcError> {
     let raw = value
         .as_str()
@@ -1436,7 +1437,7 @@ mod tests {
     use kovanica_staking::{StakingState, MIN_VALIDATOR_STAKE};
     use kovanica_storage::Storage;
     use kovanica_types::crypto::PublicKey;
-    use kovanica_types::signing::chain_id::{LOCAL, MAINNET, TESTNET_V2};
+    use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET, TESTNET_V2};
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -1444,8 +1445,7 @@ mod tests {
         format!("0x{}", hex::encode([byte; 32]))
     }
 
-    /// Canonical (base32) address string; the test node is a LOCAL chain,
-    /// where legacy hex addresses are refused (PRO-21).
+    /// Canonical (base32) address string. Every chain accepts this form.
     fn addr32(byte: u8) -> String {
         Address([byte; 32]).to_string()
     }
@@ -1513,13 +1513,16 @@ mod tests {
                 address
             );
         }
-        // Legacy hex forms: chain 4 only (PRO-21).
+        // Legacy hex: devnet, chain 4, and local. Refused on mainnet and testnet.
         for legacy in [hex32(0x2a), address.encode_legacy_hex()] {
-            assert_eq!(
-                parse_address(&json!(legacy), "address", TESTNET_V2).unwrap(),
-                address
-            );
-            for chain in [MAINNET, LOCAL] {
+            for chain in [DEVNET, TESTNET_V2, LOCAL] {
+                assert_eq!(
+                    parse_address(&json!(legacy), "address", chain).unwrap(),
+                    address,
+                    "{legacy} on chain {chain}"
+                );
+            }
+            for chain in [MAINNET, TESTNET] {
                 let err = parse_address(&json!(legacy), "address", chain).unwrap_err();
                 assert!(format!("{err:?}").contains("legacy"), "{err:?}");
             }

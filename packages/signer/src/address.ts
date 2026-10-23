@@ -12,8 +12,8 @@ const CHECKSUM_BITS = 29;
 const BODY_CHARS = 57;
 /** `kvnc` + 57 + `dag`. */
 export const ADDRESS_LENGTH = PREFIX.length + BODY_CHARS + SUFFIX.length;
-/** Chain on which the legacy hex forms are still accepted (testnet). */
-export const LEGACY_ADDRESS_CHAIN_ID = 4;
+/** Chains that still accept the legacy hex forms: devnet, chain 4, local. */
+const LEGACY_HEX_CHAIN_IDS = new Set([3, 4, 1337]);
 
 function checksum29(publicKey: Uint8Array): bigint {
   const d = blake3(publicKey);
@@ -70,7 +70,7 @@ export function decodeAddress(value: string): Uint8Array {
   return payload;
 }
 
-/** Legacy `kvnc` + hex(key || 4-byte BLAKE3 checksum) + `dag` (chain 4 only). */
+/** Legacy `kvnc` + hex(key || 4-byte BLAKE3 checksum) + `dag` (chains 3, 4, 1337). */
 export function encodeLegacyAddress(publicKey: Uint8Array): string {
   if (publicKey.length !== 32) {
     throw new Error("address payload must be 32 bytes");
@@ -105,9 +105,9 @@ function decodeLegacy(trimmed: string): Uint8Array {
 
 /**
  * Parse an address. The canonical form is accepted everywhere. The legacy hex forms
- * (`kvnc<hex>dag`, bare or `0x` hex) are accepted only when `chainId` is 4, or when no
- * chain is given (chain-independent tooling), matching `Address::parse_for_chain` /
- * `FromStr` in kovanica-types.
+ * (`kvnc<hex>dag`, bare or `0x` hex) are accepted when `chainId` is 3, 4, or 1337, or
+ * when no chain is given (chain-independent tooling), matching `Address::parse_for_chain`
+ * / `FromStr` in kovanica-types.
  */
 export function parseAddress(value: string, chainId?: number): Uint8Array {
   const trimmed = value.trim();
@@ -115,7 +115,7 @@ export function parseAddress(value: string, chainId?: number): Uint8Array {
     return decodeAddress(trimmed);
   }
   const legacy = decodeLegacy(trimmed);
-  if (chainId !== undefined && chainId !== LEGACY_ADDRESS_CHAIN_ID) {
+  if (chainId !== undefined && !LEGACY_HEX_CHAIN_IDS.has(chainId)) {
     throw new Error(`legacy hex addresses are not accepted on chain ${chainId}`);
   }
   return legacy;

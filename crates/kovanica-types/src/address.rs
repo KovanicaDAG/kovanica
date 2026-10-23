@@ -27,12 +27,18 @@ const BASE32_ALPHABET: &[u8; 32] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 /// Whether the legacy hex forms (`kvnc<72 hex>dag` and a bare or
 /// `0x`-prefixed 64-hex key) are accepted on `chain_id`.
 ///
-/// Toni, 2026-10-23: only on chain 4 (testnet), so existing testnet tooling
-/// keeps working during the transition. Every other chain, mainnet included,
-/// accepts only the canonical 64-character base32 form.
+/// Toni, 2026-10-23: dev chains stay lenient, and chain 4 stays lenient so
+/// existing tooling keeps working. Accepted on devnet (`3`), chain `4`, and
+/// local (`1337`). Refused on mainnet (`1`), on the other public testnet
+/// (`2`), and on every chain id that is not one of those three.
 #[must_use]
 pub fn legacy_address_allowed(chain_id: u64) -> bool {
-    chain_id == crate::signing::chain_id::TESTNET_V2
+    matches!(
+        chain_id,
+        crate::signing::chain_id::DEVNET
+            | crate::signing::chain_id::LOCAL
+            | crate::signing::chain_id::TESTNET_V2
+    )
 }
 
 /// Errors produced while parsing an [`Address`].
@@ -146,7 +152,7 @@ impl Address {
     /// Parse an address typed or sent for `chain_id`: the canonical base32
     /// form on every chain; the legacy hex forms (`kvnc<hex>dag` with its
     /// 4-byte checksum, bare or `0x` hex) only where
-    /// [`legacy_address_allowed`] says so (chain 4).
+    /// [`legacy_address_allowed`] says so (devnet 3, chain 4, local 1337).
     pub fn parse_for_chain(value: &str, chain_id: u64) -> Result<Self, AddressError> {
         let value = value.trim();
         if value.len() == ADDRESS_LEN
@@ -258,8 +264,8 @@ impl FromStr for Address {
 
     /// Chain-independent parse for tooling and tests: the canonical base32
     /// form, or a legacy hex form. Anything that knows its chain (RPC,
-    /// wallets) must use [`Address::parse_for_chain`] so legacy forms are
-    /// refused outside chain 4.
+    /// wallets, genesis, faucet) must use [`Address::parse_for_chain`] so
+    /// legacy forms are refused where [`legacy_address_allowed`] is false.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let value = value.trim();
         if value.len() == ADDRESS_LEN
@@ -376,11 +382,12 @@ mod tests {
         }
     }
 
-    /// Legacy hex forms: accepted only on chain 4, refused on mainnet and
-    /// every other chain; `FromStr` (chain-independent tooling) still reads
-    /// them.
+    /// Legacy hex forms follow [`legacy_address_allowed`]: accepted on devnet
+    /// (3), chain 4, and local (1337); refused on mainnet (1), testnet (2),
+    /// and any other chain id. `FromStr` (chain-independent tooling) still
+    /// reads them.
     #[test]
-    fn legacy_forms_only_on_chain_4() {
+    fn legacy_hex_policy_covers_known_and_unknown_chains() {
         let address = sample();
         let legacy = [
             address.encode_legacy_hex(),
@@ -388,18 +395,24 @@ mod tests {
             format!("0x{}", address.to_hex()),
         ];
         assert_eq!(legacy[0].len(), 4 + 72 + 3);
+        let allowed = [chain_id::DEVNET, chain_id::TESTNET_V2, chain_id::LOCAL];
+        let refused = [chain_id::MAINNET, chain_id::TESTNET, 0, 42];
+        for chain in allowed {
+            assert!(legacy_address_allowed(chain), "chain {chain}");
+        }
+        for chain in refused {
+            assert!(!legacy_address_allowed(chain), "chain {chain}");
+        }
+        assert!(!legacy_address_allowed(u64::MAX));
         for form in &legacy {
-            assert_eq!(
-                Address::parse_for_chain(form, chain_id::TESTNET_V2).unwrap(),
-                address,
-                "{form}"
-            );
-            for chain in [
-                chain_id::MAINNET,
-                chain_id::TESTNET,
-                chain_id::DEVNET,
-                chain_id::LOCAL,
-            ] {
+            for chain in allowed {
+                assert_eq!(
+                    Address::parse_for_chain(form, chain).unwrap(),
+                    address,
+                    "{form} on chain {chain}"
+                );
+            }
+            for chain in refused {
                 assert_eq!(
                     Address::parse_for_chain(form, chain),
                     Err(AddressError::LegacyNotAllowed(chain)),
@@ -408,8 +421,6 @@ mod tests {
             }
             assert_eq!(form.parse::<Address>().unwrap(), address);
         }
-        assert!(legacy_address_allowed(chain_id::TESTNET_V2));
-        assert!(!legacy_address_allowed(chain_id::MAINNET));
     }
 
     #[test]
