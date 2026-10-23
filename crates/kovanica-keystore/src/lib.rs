@@ -314,7 +314,7 @@ fn read_bounded(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
 }
 
 fn validate_v1_metadata(ks: &V1Keystore) -> Result<()> {
-    let _ = parse_address(&ks.address, "keystore address")?;
+    let _ = parse_stored_address(&ks.address, "keystore address")?;
     let pk_bytes = hex::decode(&ks.public_key).context("keystore public_key is not valid hex")?;
     if pk_bytes.len() != 32 {
         bail!("expected a 32-byte public key");
@@ -368,7 +368,7 @@ fn verify_v1_identity(keystore: &V1Keystore, seed: &[u8]) -> Result<()> {
     let expected_pk = signing_key.verifying_key().to_bytes();
     let stored_pk =
         hex::decode(&keystore.public_key).context("keystore public_key is not valid hex")?;
-    let stored_addr = parse_address(&keystore.address, "keystore address")?;
+    let stored_addr = parse_stored_address(&keystore.address, "keystore address")?;
     if stored_pk.as_slice() != expected_pk
         || Address::from_public_key(&PublicKey::from_bytes(expected_pk)) != stored_addr
     {
@@ -398,9 +398,9 @@ fn validate_metadata(ks: &Keystore) -> Result<()> {
             // Accept the canonical 64-character `kvnc…dag` encoding, the
             // legacy `kvnc<hex>dag` form, or a bare lowercase hex address, so
             // keystores written before PRO-21 (or before the canonical
-            // format) stay usable. The keystore is chain-independent; the
-            // chain-4-only rule for legacy forms applies where addresses are
-            // typed or sent (RPC, wallets), not to a file that holds the key.
+            // format) stay usable. The file is not bound to a chain. An
+            // address typed for a chain goes through [`parse_address`], which
+            // refuses legacy hex where `legacy_address_allowed` is false.
             if (ks.address != parsed_address.encode()
                 && ks.address != parsed_address.encode_legacy_hex()
                 && ks.address != parsed_address.to_hex())
@@ -499,14 +499,28 @@ pub fn public_key(keystore: &Keystore) -> Result<PublicKey> {
 }
 
 pub fn address(keystore: &Keystore) -> Result<Address> {
-    parse_address(&keystore.address, "keystore address")
+    parse_stored_address(&keystore.address, "keystore address")
 }
 
-pub fn parse_address(value: &str, what: &str) -> Result<Address> {
+/// Parse the address label stored in a keystore file.
+///
+/// The file is not bound to a chain. Canonical base32 and the legacy hex
+/// forms both identify the key, so a store written before PRO-21 still opens
+/// on mainnet. An address supplied *for* a chain goes through [`parse_address`].
+fn parse_stored_address(value: &str, what: &str) -> Result<Address> {
     value
         .trim()
         .parse::<Address>()
         .map_err(|e| anyhow!("{what}: {e}"))
+}
+
+/// Parse an address string for `chain_id`.
+///
+/// The canonical 64-character form is accepted on every chain. Legacy hex is
+/// accepted only where [`kovanica_types::address::legacy_address_allowed`] is
+/// true (devnet 3, chain 4, local 1337), so chain 1 refuses it.
+pub fn parse_address(value: &str, what: &str, chain_id: u64) -> Result<Address> {
+    Address::parse_for_chain(value, chain_id).map_err(|e| anyhow!("{what}: {e}"))
 }
 
 pub fn seed_from_raw_hex(raw: &str) -> Result<Zeroizing<[u8; 32]>> {
@@ -638,6 +652,37 @@ mod tests {
         old["address"] = serde_json::Value::String(parsed.encode_legacy_hex());
         let loaded = from_value(old).unwrap();
         assert_eq!(address(&loaded).unwrap(), parsed);
+    }
+
+    /// Chain 1 refuses a legacy hex string. Devnet, local, and chain 4 accept it.
+    #[test]
+    fn parse_address_follows_the_chain_policy() {
+        use kovanica_types::signing::chain_id;
+
+        let address = Address([0x2a; 32]);
+        let forms = [
+            address.to_hex(),
+            format!("0x{}", address.to_hex()),
+            address.encode_legacy_hex(),
+        ];
+        for form in &forms {
+            let err = parse_address(form, "address", chain_id::MAINNET).unwrap_err();
+            assert!(
+                err.to_string().contains("not accepted"),
+                "{form} on chain 1: {err}"
+            );
+            for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+                assert_eq!(
+                    parse_address(form, "address", chain).unwrap(),
+                    address,
+                    "{form} on chain {chain}"
+                );
+            }
+        }
+        assert_eq!(
+            parse_address(&address.encode(), "address", chain_id::MAINNET).unwrap(),
+            address
+        );
     }
 
     #[test]
