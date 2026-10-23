@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::tui::amount::format_kuna;
+use crate::amount::format_kuna;
 use crate::tui::app::{chain_title, FormFocus, FormKind, GateFocus, View, ViewScreen};
 use crate::tui::net::{Snapshot, ValidatorRow};
 use kovanica_types::signing::chain_id;

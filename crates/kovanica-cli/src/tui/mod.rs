@@ -6,7 +6,6 @@
 //! commands. Contracts stay on the `kovanica htlc`, `vault`, `multisig`, and `token`
 //! commands.
 
-mod amount;
 mod app;
 mod net;
 mod ui;

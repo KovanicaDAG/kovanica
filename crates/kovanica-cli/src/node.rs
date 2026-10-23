@@ -7,9 +7,11 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 
+use crate::amount::{format_kuna_decimal, format_kuna_fixed};
 use crate::output::{print_json, print_kv, print_table};
 use crate::rpc::{parse_quantity, RpcClient};
 use crate::wallet::parse_address;
+use kovanica_types::Address;
 
 /// Render a JSON value as a display cell (`-` when absent).
 fn cell(value: Option<&Value>) -> String {
@@ -95,25 +97,39 @@ pub async fn status(client: &RpcClient, json_output: bool) -> Result<()> {
     Ok(())
 }
 
-/// `kovanica balance <address>` — native KUNA balance in atoms.
+/// JSON and human rows for a native balance.
+///
+/// `balance` stays the atom count. `balanceKuna` is the same value with exactly
+/// 9 decimal places, so a JSON number is never asked to hold a fractional KUNA.
+pub fn balance_report(address: &Address, atoms: u64) -> Value {
+    json!({
+        "address": address.to_string(),
+        "balance": atoms,
+        "balanceKuna": format_kuna_decimal(atoms),
+    })
+}
+
+/// Human-readable balance rows. The amount always shows 9 decimal places.
+pub fn balance_rows(address: &Address, atoms: u64) -> Vec<(&'static str, String)> {
+    vec![
+        ("Address", address.to_string()),
+        ("Balance", format_kuna_fixed(atoms)),
+    ]
+}
+
+/// `kovanica balance <address>` — native balance, displayed in KUNA.
 pub async fn balance(client: &RpcClient, address: &str, json_output: bool) -> Result<()> {
     let address = parse_address(address, "address")?;
     let value = client
         .call("kovanica_getBalance", json!([address.to_string()]))
         .await?;
-    let balance = parse_quantity(&value)?;
+    let atoms = parse_quantity(&value)?;
 
     if json_output {
-        return print_json(&json!({
-            "address": address.to_string(),
-            "balance": balance,
-        }));
+        return print_json(&balance_report(&address, atoms));
     }
 
-    print_kv(&[
-        ("Address", address.to_string()),
-        ("Balance", format!("{balance} atoms")),
-    ]);
+    print_kv(&balance_rows(&address, atoms));
     Ok(())
 }
 
@@ -156,6 +172,18 @@ mod tests {
             );
             assert_eq!(output["syncing"], Value::Null);
         }
+    }
+
+    #[test]
+    fn balance_is_shown_in_kuna_with_nine_decimals() {
+        let address = Address([0x11; 32]);
+        let report = balance_report(&address, 1_500_000_000);
+        assert_eq!(report["balance"], json!(1_500_000_000));
+        assert_eq!(report["balanceKuna"], json!("1.500000000"));
+        assert_eq!(report["address"], json!(address.to_string()));
+        let rows = balance_rows(&address, 1);
+        assert_eq!(rows[1].1, "0.000000001 KUNA");
+        assert_eq!(balance_rows(&address, 0)[1].1, "0.000000000 KUNA");
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! The `kovanica` binary (`src/main.rs`) and other tools such as `kovanica-faucet`
 //! and `generate-validators` consume these modules via `kovanica_cli::...`.
 
+pub mod amount;
 pub mod comms;
 pub mod contracts;
 pub mod node;

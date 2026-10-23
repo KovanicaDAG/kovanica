@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
 
+use kovanica_cli::amount::{format_kuna_fixed, parse_cli_amount};
 use kovanica_cli::contracts::{
     ContractCommand, HtlcCommand, MultisigCommand, TokenCommand, VaultCommand,
 };
@@ -212,11 +213,11 @@ struct SignArgs {
 /// Arguments for `kovanica transfer`.
 #[derive(Args)]
 struct TransferArgs {
-    /// Recipient address (32-byte hex)
+    /// Recipient Kovanica address
     #[arg(long)]
     to: String,
-    /// Amount in atoms
-    #[arg(long)]
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -229,8 +230,8 @@ struct TransferArgs {
 /// Arguments carrying a single amount plus the signing keystore.
 #[derive(Args)]
 struct AmountArgs {
-    /// Amount in atoms
-    #[arg(long)]
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -246,8 +247,8 @@ struct RegisterLightNodeArgs {
     /// VRF public key (32-byte hex)
     #[arg(long)]
     vrf_public_key: String,
-    /// Bond amount in atoms (minimum 100 KUNA = 100_000_000_000)
-    #[arg(long)]
+    /// Bond of at least 100 KUNA (`100KUNA` or `100.0`). A bare integer is atoms.
+    #[arg(long, value_parser = parse_cli_amount)]
     stake: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -260,11 +261,11 @@ struct RegisterLightNodeArgs {
 /// Arguments for `kovanica delegate`.
 #[derive(Args)]
 struct DelegateArgs {
-    /// Validator address (32-byte hex)
+    /// Validator Kovanica address
     #[arg(long)]
     validator: String,
-    /// Amount in atoms
-    #[arg(long)]
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -277,7 +278,7 @@ struct DelegateArgs {
 /// Arguments for `kovanica claim-rewards`.
 #[derive(Args)]
 struct ClaimRewardsArgs {
-    /// Validator address (32-byte hex, optional - claims all if omitted)
+    /// Validator Kovanica address (optional — claims all if omitted)
     #[arg(long)]
     validator: Option<String>,
     /// Keystore file path
@@ -291,7 +292,7 @@ struct ClaimRewardsArgs {
 /// Arguments for `kovanica set-commission`.
 #[derive(Args)]
 struct SetCommissionArgs {
-    /// Validator address (32-byte hex)
+    /// Validator Kovanica address
     #[arg(long)]
     validator: String,
     /// Commission in basis points (10000 = 100%)
@@ -308,8 +309,8 @@ struct SetCommissionArgs {
 /// Arguments for `kovanica claim-treasury`.
 #[derive(Args)]
 struct ClaimTreasuryArgs {
-    /// Amount in atoms
-    #[arg(long)]
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -360,7 +361,7 @@ struct DeployArgs {
 /// Arguments for `kovanica call` — call a contract method.
 #[derive(Args)]
 struct CallArgs {
-    /// Contract address (32-byte hex)
+    /// Contract Kovanica address
     #[arg(long)]
     contract: String,
     /// Method name (e.g., htlc_create, token_transfer)
@@ -369,8 +370,8 @@ struct CallArgs {
     /// Arguments as JSON array (will be bincode encoded)
     #[arg(long)]
     args: String,
-    /// Native KUNA value to attach (base units)
-    #[arg(long, default_value_t = 0)]
+    /// Native KUNA to attach (`1.5` or `1.5KUNA`) or a whole number of atoms
+    #[arg(long, default_value_t = 0, value_parser = parse_cli_amount)]
     value: u64,
     /// Gas limit for execution
     #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
@@ -621,7 +622,7 @@ async fn cmd_transfer(
     println!("Submitted transaction {tx_hash}");
     println!("  from:   {}", sender);
     println!("  to:     {}", recipient);
-    println!("  amount: {} atoms", args.amount);
+    println!("  amount: {}", format_kuna_fixed(args.amount));
     println!("  fee:    {} atoms", args.fee);
     println!("  nonce:  {nonce}");
     Ok(())
@@ -691,7 +692,7 @@ async fn cmd_stake(
 
     println!("Submitted transaction {tx_hash}");
     println!("  from:   {}", sender);
-    println!("  amount: {} atoms", args.amount);
+    println!("  amount: {}", format_kuna_fixed(args.amount));
     println!("  fee:    {} atoms", args.fee);
     println!("  nonce:  {nonce}");
     Ok(())
@@ -726,7 +727,7 @@ async fn cmd_unstake(
 
     println!("Submitted transaction {tx_hash}");
     println!("  from:   {}", sender);
-    println!("  amount: {} atoms", args.amount);
+    println!("  amount: {}", format_kuna_fixed(args.amount));
     println!("  fee:    {} atoms", args.fee);
     println!("  nonce:  {nonce}");
     Ok(())
@@ -774,7 +775,7 @@ async fn cmd_register_light_node(
     println!("Submitted transaction {tx_hash}");
     println!("  from:         {}", sender);
     println!("  vrfPublicKey: {}", args.vrf_public_key);
-    println!("  stake:        {} atoms", args.stake);
+    println!("  stake:        {}", format_kuna_fixed(args.stake));
     println!("  fee:          {} atoms", args.fee);
     println!("  nonce:        {nonce}");
     Ok(())
@@ -813,7 +814,7 @@ async fn cmd_delegate(
     println!("Submitted transaction {tx_hash}");
     println!("  from:      {}", sender);
     println!("  validator: {}", validator);
-    println!("  amount:    {} atoms", args.amount);
+    println!("  amount:    {}", format_kuna_fixed(args.amount));
     println!("  fee:       {} atoms", args.fee);
     println!("  nonce:     {nonce}");
     Ok(())
@@ -933,7 +934,7 @@ async fn cmd_claim_treasury(
 
     println!("Submitted transaction {tx_hash}");
     println!("  from:    {}", sender);
-    println!("  amount:  {} atoms", args.amount);
+    println!("  amount:  {}", format_kuna_fixed(args.amount));
     println!("  fee:     {} atoms", args.fee);
     println!("  nonce:   {nonce}");
     Ok(())
@@ -1037,7 +1038,7 @@ async fn cmd_call(
     println!("  from:      {}", sender);
     println!("  contract:  {}", contract);
     println!("  method:    {}", method);
-    println!("  value:     {} atoms", args.value);
+    println!("  value:     {}", format_kuna_fixed(args.value));
     println!("  gas_limit: {}", args.gas_limit);
     println!("  fee:       {} atoms", args.fee);
     println!("  nonce:     {nonce}");
@@ -1206,6 +1207,35 @@ where
 mod wallet_cli_security_tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn amount_flag_parses_kuna_and_keeps_bare_integers_as_atoms() {
+        let to = "placeholder";
+        let decimal =
+            Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "1.5KUNA"])
+                .unwrap();
+        let Commands::Transfer(args) = decimal.command else {
+            panic!("expected transfer");
+        };
+        assert_eq!(args.amount, 1_500_000_000);
+
+        let atoms =
+            Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "42"]).unwrap();
+        let Commands::Transfer(args) = atoms.command else {
+            panic!("expected transfer");
+        };
+        assert_eq!(args.amount, 42);
+
+        assert!(Cli::try_parse_from([
+            "kovanica",
+            "transfer",
+            "--to",
+            to,
+            "--amount",
+            "0.0000000001",
+        ])
+        .is_err());
+    }
 
     #[test]
     fn secret_passphrases_are_not_cli_arguments() {
