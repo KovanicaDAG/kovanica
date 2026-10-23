@@ -335,15 +335,12 @@ fn keystore_failure(err: impl std::fmt::Display) -> LightError {
 /// signing-time nonce here; the `+1` is applied internally (via
 /// `saturating_add`, mirroring the node).
 ///
-/// `sender` accepts the canonical 64-character base32 form, or a legacy hex
-/// form (bare, `0x`, or `kvnc<hex>dag`). This helper has no chain id yet, so
-/// it uses the lenient parser (chain 4). Returns the bare 64-hex contract
-/// address.
-pub fn contract_address_for(sender: &str, nonce: u64) -> Result<String, LightError> {
-    // No chain is known here. Chain 4 accepts canonical and legacy hex, which
-    // is the contract this function had while `FromStr` was lenient. Passing
-    // a chain id through light-ffi is a follow-up; this file is not that API.
-    let sender = Address::parse_for_chain(sender, kovanica_types::signing::chain_id::TESTNET_V2)
+/// `sender` accepts the canonical 64-character base32 form on every chain.
+/// Legacy hex (bare, lowercase `0x`, or `kvnc<hex>dag`) is accepted only where
+/// [`kovanica_types::address::legacy_address_allowed`] is true for `chain_id`
+/// (devnet 3, chain 4, local 1337). Returns the bare 64-hex contract address.
+pub fn contract_address_for(sender: &str, nonce: u64, chain_id: u64) -> Result<String, LightError> {
+    let sender = Address::parse_for_chain(sender, chain_id)
         .map_err(|e| LightError::InvalidAddress(e.to_string()))?;
     // Mirrors `kovanica-execution::touched_accounts`: sender bytes followed by
     // the post-increment nonce, little-endian, then BLAKE3.
@@ -366,6 +363,7 @@ pub fn header_leader_digest(header: &LeaderHeader) -> Hash {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kovanica_types::signing::chain_id;
     use kovanica_types::{leader_header, AccountSmt, CommittedSubDag, StatementBlock};
 
     fn keys(n: u16) -> (Vec<SigningKey>, Committee) {
@@ -656,25 +654,42 @@ mod tests {
             let expected = Address(*blake3::hash(&material).as_bytes()).to_hex();
 
             // Bare hex form and canonical kvnc…dag form must both agree.
+            // Chain 4 still accepts legacy hex.
             assert_eq!(
-                contract_address_for(&sender.to_hex(), nonce).unwrap(),
+                contract_address_for(&sender.to_hex(), nonce, chain_id::TESTNET_V2).unwrap(),
                 expected
             );
             assert_eq!(
-                contract_address_for(&sender.encode(), nonce).unwrap(),
+                contract_address_for(&sender.encode(), nonce, chain_id::TESTNET_V2).unwrap(),
+                expected
+            );
+            // Canonical base32 does not need a lenient chain.
+            assert_eq!(
+                contract_address_for(&sender.encode(), nonce, chain_id::MAINNET).unwrap(),
                 expected
             );
         }
 
-        // 0x-prefixed input is accepted too.
+        // 0x-prefixed input is accepted on a lenient chain, not on mainnet.
         assert_eq!(
-            contract_address_for(&format!("0x{}", sender.to_hex()), 41).unwrap(),
-            contract_address_for(&sender.to_hex(), 41).unwrap()
+            contract_address_for(&format!("0x{}", sender.to_hex()), 41, chain_id::TESTNET_V2)
+                .unwrap(),
+            contract_address_for(&sender.to_hex(), 41, chain_id::TESTNET_V2).unwrap()
         );
+        assert!(matches!(
+            contract_address_for(&format!("0x{}", sender.to_hex()), 41, chain_id::MAINNET)
+                .unwrap_err(),
+            LightError::InvalidAddress(_)
+        ));
+        assert!(matches!(
+            contract_address_for(&format!("0X{}", sender.to_hex()), 41, chain_id::TESTNET_V2)
+                .unwrap_err(),
+            LightError::InvalidAddress(_)
+        ));
 
         // A malformed sender is rejected, never a panic.
         assert!(matches!(
-            contract_address_for("not-an-address", 0).unwrap_err(),
+            contract_address_for("not-an-address", 0, chain_id::TESTNET_V2).unwrap_err(),
             LightError::InvalidAddress(_)
         ));
 
@@ -685,10 +700,21 @@ mod tests {
         assert_eq!(
             contract_address_for(
                 "1111111111111111111111111111111111111111111111111111111111111111",
-                41
+                41,
+                chain_id::TESTNET_V2
             )
             .unwrap(),
             "806eaf0311f32e976df64184802ea7df85afa268c28978964ed1e3f120cc55bc"
         );
+        // The same legacy payload is refused on chain 1.
+        assert!(matches!(
+            contract_address_for(
+                "1111111111111111111111111111111111111111111111111111111111111111",
+                41,
+                chain_id::MAINNET
+            )
+            .unwrap_err(),
+            LightError::InvalidAddress(_)
+        ));
     }
 }
