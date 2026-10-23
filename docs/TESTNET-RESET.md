@@ -53,27 +53,71 @@ no peers on the right tag.
 
 The digest (`genesis_config_digest`) covers:
 
-- the canonical genesis block digest, which comes from the binary;
-- `chain_id`;
-- the treasury address (`treasury_address`);
+- the canonical genesis block digest, which comes from the binary, so every
+  node must run the **same binary** (same commit, same `sha256sum` of
+  `kovanica-node`) — a different build can change the tag with the files
+  untouched;
+- `chain_id` — every node must be configured with the same value;
+- the treasury address;
 - these files in the data directory, where present: `validators.json`,
   `founder_premine.hex`, `funded_accounts.toml`, and
   `genesis_validators.toml`.
 
-**Every** chain-4 node needs the **same bundle, byte for byte**: validators,
-seeds, RPC nodes, the explorer backend and the faucet. Distribute it as one
-archive with a published SHA-256. Do not let each operator re-type or
-regenerate files.
+The treasury address is `treasury_address` in the config file, or
+`KOVANICA_TREASURY_ADDRESS` when that variable is set (the variable wins).
+If neither is set, the **all-zero address** is what enters the digest. Two
+nodes that disagree about the treasury, including one of them leaving it
+unset, get different tags.
 
-On startup each node logs its tag at `info`:
+**Every** chain-4 node needs the **same chain id, the same binary and the
+same file set**, byte for byte: validators, seeds, RPC nodes, the explorer
+backend and the faucet. A file that is missing on one node and present on
+another changes the tag, even when the operator treats that file as optional.
+Do not let each operator re-type or regenerate files.
+
+### Check the bundle before the first start
+
+Coordinators publish two things with the bundle: a `SHA256SUMS` file and the
+expected network tag. **Where those are published is not fixed in this
+repository** — the person who cuts the bundle names the place and announces
+it with the bundle. Do not invent a host for it.
+
+From the directory that holds the four files:
+
+```sh
+sha256sum validators.json founder_premine.hex funded_accounts.toml genesis_validators.toml > SHA256SUMS
+```
+
+On each node, after the files are copied into the data directory and before
+the first start:
+
+```sh
+sha256sum -c SHA256SUMS
+```
+
+`sha256sum -c` exits non-zero if a listed file differs or is missing. Then
+print the tag without starting the node (this does not open the database or
+the network):
+
+```sh
+kovanica-node network-tag --config kovanica.toml
+```
+
+That command reads the same config, the same `KOVANICA_CHAIN_ID` /
+`KOVANICA_TREASURY_ADDRESS` / `KOVANICA_DATA_DIR` overrides, and the same
+files the node will hash. The printed line must equal the published tag.
+
+A running node also returns the tag on the read-only `kovanica_syncStatus`
+method as `networkTag`, and logs it at `info` on startup:
 
 ```
 network identity: peers must share this tag  chain_id=4 network_tag=4-<16 hex>
 ```
 
-Before opening the mesh, compare that line on every node. A node with a
-different tag has a different bundle. Fix the bundle, wipe the data directory,
-and restart. Do not use the genesis-mismatch override.
+Before opening the mesh, compare that line (or `networkTag`, or
+`network-tag`) on every node. A node with a different tag has a different
+bundle, chain id, treasury or binary. Fix the inputs, wipe the data
+directory, and restart. Do not use the genesis-mismatch override.
 
 ## Genesis digest guard (startup behaviour)
 
