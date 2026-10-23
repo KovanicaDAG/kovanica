@@ -249,7 +249,7 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 - [x] `StakingState::delegate` / `unbond` / `withdraw_unbonded` / `unbonding_ready` (UNBONDING_ROUNDS queue)
 - [x] `bond_validator` / `unbond_validator` / `set_commission` na `StakingState` (s pravim error tipovima: NotValidator, BelowMinimumStake, InvalidCommission) — **entry point dodan 2026-10-19**: `TransactionKind::SetCommission` + execute + RPC + CLI `set-commission` (prije samo testovi); isto `TransactionKind::ClaimTreasury` + CLI `claim-treasury`; **MIN_ACTIVE=15 runtime floor je UKLONJEN (F7, 5707a71d)**: `enforce_min_active` i auto-popunjavanje izbačeni per Toni — nema refilla iz offline/spare. **Ponovni ulaz je eksplicitni stake tx (F7, 931bb823)**: `reactivate_validator` reaktivira neaktivni (ne-slashed) zapis uz `stake >= MIN`, resetira `missed_leader_count` i poštuje `MAX_ACTIVE`; `execute_stake` usmjerava postojeći neaktivni zapis na `reactivate_validator`, postojeći aktivni na `bond_validator`, a novi na `join_validator`. Slashed zapis (stake pao ispod MIN) ostaje izvan committeea.
 - [x] `reward_share` (commission bps + delegator share)
-- [x] `rotate_epoch` na `EPOCH_ROUNDS` (7_200, ≈1 dan; decoupled od ere) — **wired u production 2026-10-19**: commit loop prati `last_epoch`, `build_committee` nosi round-derived epoch preko `epoch_for_round` (prije je bio NO-OP zvan samo iz testova)
+- [~] Epoha (Toni 2026-10-23, opcija a): **7 200 DAG rundi ≈ 8 h** (`epoch_for_round`, konsenzus) = **2 400 committed leadera ≈ 8 h** (`EPOCH_LEADER_HEIGHTS`, `epoch_for_height`: staking `current_epoch`, light set, beacon, escrow, RPC `getLightSet`); decoupled od ere. **Korekcija 2026-10-23:** `StakingState::rotate_epoch` **nema production pozivatelja** (samo testovi). Production commit loop prati epohu kroz `epoch_for_round(leader_round)` i gradi committee preko `build_committee`; to nije `rotate_epoch`. Brojači se razilaze kad se leader slot preskoči (nakon PRO-40 skip certifikata): runda napreduje, visina ne, pa height-epoha kasni za round-epohom (vidi doc na `EPOCH_ROUNDS`). JAIL_ROUNDS = 7 200 visina = 3 epohe; COMMISSION_CHANGE_COOLDOWN = 7 200 visina ≈ 1 dan = 3 epohe.
 - [x] `slash(DoubleSignEvidence)` fiksno 500 bps, test `slash_is_deterministic_fixed_500bps`
 - [ ] Governance hooks — **nema** (Phase 25)
 
@@ -357,7 +357,7 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 ## PHASE 19: State & Sync — `[~]` (late-join **DONE**; ostaje light-client endpoint)
 
 - [x] state Merkle — sorted-KV deterministički (`compute_state_root`, `state_store.rs`); verificiran u snapshot/state-sync putu (`STATE_ROOT`); full MPT nikad nije bio zahtjev
-- [x] snapshot/fast sync — `export_snapshot`/`import_snapshot` + **state-sync request/response STVARNO serviran** (`/kovanica/state-sync/2.0.0`, chunked 1 MiB / 64 MiB cap; raniji 1.0.0 handler je bio uvijek `NotFound`); verified import (magic envelope, recomputed state-root + height, legacy odbijen) + `KOVANICA_STATE_SYNC_PEER` debug trigger (1/10min/peer); gossip topic `state_sync` postoji
+- [x] snapshot/fast sync — `export_snapshot`/`import_snapshot` + **state-sync request/response STVARNO serviran** (`/kovanica/<chain tag>/state-sync/2.0.0`, chunked 1 MiB / 64 MiB cap; raniji 1.0.0 handler je bio uvijek `NotFound`); verified import (magic envelope, recomputed state-root + height, legacy odbijen) + `KOVANICA_STATE_SYNC_PEER` debug trigger (1/10min/peer); gossip topic `state_sync` postoji
 - [x] state pruning policy (`keep_recent`, `max_state_roots`, `prune_state_roots`)
 - [~] light-client — `kovanica_lightClientCheckpoint` RPC metoda je **wired** (`kovanica-rpc/src/lib.rs:277`, `chain_methods.rs:1389`); minimalni stub vraća konstruirani `LightClientCheckpoint` (client-only), bez full state-backed lookupa. **Note:** `kovanica-rpc` exposes `kovanica_lightClientCheckpoint` (camelCase via RPC method name) ali API naming confusion postoji jer je trait method name `light_client_checkpoint` / service method `kovanica_lightClientCheckpoint`; full state-backed retrieval od persisted checkpoints/commit certs ostaje djelomičan.
 - [x] missing-parent recovery — `orphans.rs` + `BlockSyncRequest::ByHash`; re-request MissingBlocks
@@ -521,9 +521,9 @@ Merge je izvršen kroz dva merge commita na `main`: `1571429e` (rename ⊕ VPS3)
 
 **ZAŠTIĆENO — nije mijenjano (consensus/state/disk/wire):**
 - `ADDRESS_PREFIX = "kvnc"` + svi `kvnc<hex>dag` formati/testovi (odluka vlasnika)
-- hash domain tagovi: `b"KVNC-BLOCK-v1"`, `-DIGEST-`, `-MERKLE-`, `-HEADER-`, `-ACCOUNT-`, `-ACCT-EMPTY`, `-SMT-`, `-COMMITTEE-` (`kovanica-types/src/hash.rs`)
+- hash domain tagovi: od chain-4 reseta (#81, `0ebb06d`) `b"KUNA-BLOCK-v1"`, `-TX-`, `-DIGEST-`, `-MERKLE-`, `-HEADER-`, `-ACCOUNT-`, `-ACCT-EMPTY`, `-SMT-`, `-COMMITTEE-`, `-EVIDENCE-`, `-GENESIS-` (`kovanica-types/src/hash.rs`, KAT test `hash_domain_known_answers`); **ne vraćati na `KVNC-*`**
 - legacy potpisni ključ `b"KVNC-TX-v1"` (`kovanica-execution/src/lib.rs` testovi)
-- VRF magic `KVNC-VRF1` (`kovanica-crypto/src/vrf.rs`, `kovanica-dag/src/block_manager.rs`, `kovanica-network/src/validation.rs`, `kovanica-types/src/block.rs`)
+- VRF magic `KUNA-VRF1` i VRF input `KUNA-VRF1-v1:…`: jedna definicija `kovanica_types::block::{VRF_STATEMENT_MAGIC, VRF_STATEMENT_LEN, VRF_INPUT_DOMAIN, vrf_input, is_vrf_statement}` (prije 8 literala u crypto/dag/network/types)
 - state-key prefiksi `b"kvnc/v1/state"`, `b"kvnc/v1/mtx/"`, `b"kvnc/v1/htlc/"`, `b"kvnc/v1/vault/"`, `b"kvnc/host/*"`
 - keystore AEAD AAD `b"KVNC keystore\0v2\0argon2id\0…"` (`kovanica-keystore/src/lib.rs`)
 

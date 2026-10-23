@@ -689,7 +689,7 @@ impl NetworkService {
         match swarm
             .behaviour_mut()
             .gossipsub
-            .publish(topics::ident(topic), payload)
+            .publish(topics::ident(&self.config.network_id, topic), payload)
         {
             Ok(_) => Ok(()),
             Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => {
@@ -870,15 +870,23 @@ impl NetworkService {
                 message_id,
                 message,
             } => {
-                let acceptance = match message.topic.as_str() {
-                    topics::BLOCKS => self.on_block_message(propagation_source, &message.data),
-                    topics::TRANSACTIONS => self.on_transaction_message(&message.data),
-                    topics::SYNC => self.on_sync_message(message.source, &message.data),
-                    topics::VOTES => self.on_vote_message(message.source, &message.data),
-                    topics::SEALS => self.on_seal_message(message.source, &message.data),
-                    topics::TIMEOUTS => self.on_timeout_message(message.source, &message.data),
-                    other => {
-                        debug!(topic = other, "message on unexpected topic");
+                let kind = self.config.network_id.topic_kind(message.topic.as_str());
+                let acceptance = match kind {
+                    Some(topics::BLOCKS) => {
+                        self.on_block_message(propagation_source, &message.data)
+                    }
+                    Some(topics::TRANSACTIONS) => self.on_transaction_message(&message.data),
+                    Some(topics::SYNC) => self.on_sync_message(message.source, &message.data),
+                    Some(topics::VOTES) => self.on_vote_message(message.source, &message.data),
+                    Some(topics::SEALS) => self.on_seal_message(message.source, &message.data),
+                    Some(topics::TIMEOUTS) => {
+                        self.on_timeout_message(message.source, &message.data)
+                    }
+                    _ => {
+                        debug!(
+                            topic = message.topic.as_str(),
+                            "message on unexpected topic"
+                        );
                         Verdict::Ignore
                     }
                 };
@@ -994,6 +1002,22 @@ impl NetworkService {
     /// Handle identify: learn the peer's listen addresses for Kademlia.
     fn handle_identify_event(&self, event: identify::Event) -> Result<(), NetworkError> {
         if let identify::Event::Received { peer_id, info, .. } = event {
+            // Chain separation: a peer of another chain (or a pre-chain-4
+            // build) is dropped and never enters the DHT.
+            if !self
+                .config
+                .network_id
+                .accepts_identify(&info.protocol_version)
+            {
+                warn!(
+                    %peer_id,
+                    theirs = %info.protocol_version,
+                    ours = %self.config.network_id.identify_version(),
+                    "peer is on another network; disconnecting"
+                );
+                let _ = self.swarm().disconnect_peer_id(peer_id);
+                return Ok(());
+            }
             if !info.listen_addrs.is_empty() {
                 let mut swarm = self.swarm();
                 for address in info.listen_addrs {

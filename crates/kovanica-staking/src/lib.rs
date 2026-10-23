@@ -127,8 +127,10 @@ pub const UNBONDING_ROUNDS: u64 = 100_000;
 /// `committed_leader_height >= jailed_until_height`. `7_200` committed leaders
 /// is about 1 day at 12 s/leader (`86_400 / 12`), which is Toni's 2026-10-23
 /// decision ("jail about 1 day, `JAIL_ROUNDS = 7200`"), replacing the earlier
-/// `21_600` (about 3 days). It is deliberately the same number and the same
-/// unit as [`EPOCH_ROUNDS`] and [`COMMISSION_CHANGE_COOLDOWN`].
+/// `21_600` (about 3 days). With the 8 h epoch (Toni 2026-10-23) that is
+/// **3 epochs** (`3 * EPOCH_LEADER_HEIGHTS`), matching the original
+/// "3 epochs / about 1 day" wording. Same unit and value as
+/// [`COMMISSION_CHANGE_COOLDOWN`].
 ///
 /// After the jail the validator returns only through an explicit stake
 /// transaction (`reactivate_validator`); nothing re-activates it automatically.
@@ -137,8 +139,10 @@ pub const UNBONDING_ROUNDS: u64 = 100_000;
 /// rounds — see the note on `UNBONDING_ROUNDS` about the historical name.
 pub const JAIL_ROUNDS: u64 = 7_200;
 
-/// Epoch rotation length in committed leaders (≈ 1 day at 12 s/leader:
-/// `86_400 / 12 = 7_200`).
+/// Epoch length in **DAG rounds** (7 200 × 4 s ≈ 8 h; Toni 2026-10-23).
+/// Staking state is keyed by committed height, so it uses
+/// [`EPOCH_LEADER_HEIGHTS`] (2 400 heights, the same 8 h) through
+/// `kovanica_types::epoch_for_height`.
 ///
 /// Deliberately decoupled from `SUBSIDY_ERA_BLOCKS` so the active validator set
 /// keeps rotating frequently even though the subsidy era is long.
@@ -146,7 +150,7 @@ pub const JAIL_ROUNDS: u64 = 7_200;
 /// Canonical definition lives in `kovanica_types::EPOCH_ROUNDS`; re-exported
 /// here so existing `kovanica_staking::EPOCH_ROUNDS` paths keep working and the
 /// `EPOCH_ROUNDS` crate-value equality test in this crate guards drift.
-pub use kovanica_types::EPOCH_ROUNDS;
+pub use kovanica_types::{EPOCH_LEADER_HEIGHTS, EPOCH_ROUNDS};
 
 /// Maximum consecutive missed leader rounds before a validator is marked offline.
 ///
@@ -156,9 +160,12 @@ pub const MAX_MISSED_LEADERS_BEFORE_OFFLINE: u64 = 100;
 
 /// Commission change cooldown in committed leader blocks.
 ///
-/// At 12 s/leader, 7200 blocks = 24 hours. A validator can only change
-/// commission once per day to prevent gaming the system.
-pub const COMMISSION_CHANGE_COOLDOWN: u64 = EPOCH_ROUNDS; // 7_200 blocks ≈ 24h
+/// At 12 s/leader, 7 200 blocks = 24 hours = 3 epochs of 8 h. A validator can
+/// only change commission once per day to prevent gaming the system. The value
+/// is unchanged by the 8 h epoch decision (it used to be written as
+/// `EPOCH_ROUNDS`, which only coincided with one day while the epoch was
+/// thought to be 7 200 leaders).
+pub const COMMISSION_CHANGE_COOLDOWN: u64 = 3 * EPOCH_LEADER_HEIGHTS; // 7_200 blocks ≈ 24h
 
 // ============================================================
 // Emission schedule (mining rewards)
@@ -1137,16 +1144,16 @@ impl StakingState {
         Ok(claimed)
     }
 
-    /// Current epoch derived from committed-leader height (starts at 0,
-    /// increments every [`EPOCH_ROUNDS`]).
+    /// Current staking epoch derived from committed-leader height (starts at
+    /// 0, increments every [`EPOCH_LEADER_HEIGHTS`] = 2 400 heights ≈ 8 h).
     ///
     /// Epoch is a pure function of committed height, so every node derives the
     /// same value at the same height — no extra persisted counter needed.
     pub fn current_epoch(&self) -> u64 {
-        self.committed_leader_height / EPOCH_ROUNDS
+        kovanica_types::epoch_for_height(self.committed_leader_height)
     }
 
-    /// Rotate epoch at the `EPOCH_ROUNDS` boundary. Returns `(new_epoch,
+    /// Rotate epoch at the [`EPOCH_LEADER_HEIGHTS`] boundary. Returns `(new_epoch,
     /// rotated)` where `rotated` is true iff this call crossed a boundary
     /// (i.e. the previous height was in a lower epoch).
     ///
@@ -1155,7 +1162,8 @@ impl StakingState {
     /// trigger a committee rebuild at the boundary.
     pub fn rotate_epoch(&mut self) -> (u64, bool) {
         let epoch = self.current_epoch();
-        let rotated = epoch > 0 && self.committed_leader_height.is_multiple_of(EPOCH_ROUNDS);
+        let rotated =
+            epoch > 0 && kovanica_types::is_epoch_start_height(self.committed_leader_height);
         (epoch, rotated)
     }
 
@@ -2162,17 +2170,17 @@ mod tests {
         let mut state = StakingState::new();
         assert_eq!(state.rotate_epoch(), (0, false));
 
-        state.committed_leader_height = EPOCH_ROUNDS - 1;
+        state.committed_leader_height = EPOCH_LEADER_HEIGHTS - 1;
         assert_eq!(state.rotate_epoch(), (0, false));
 
-        state.committed_leader_height = EPOCH_ROUNDS;
+        state.committed_leader_height = EPOCH_LEADER_HEIGHTS;
         assert_eq!(state.rotate_epoch(), (1, true));
 
         // Idempotent mid-epoch: same epoch, no further rotation.
-        state.committed_leader_height = EPOCH_ROUNDS + 1;
+        state.committed_leader_height = EPOCH_LEADER_HEIGHTS + 1;
         assert_eq!(state.rotate_epoch(), (1, false));
 
-        state.committed_leader_height = 2 * EPOCH_ROUNDS;
+        state.committed_leader_height = 2 * EPOCH_LEADER_HEIGHTS;
         assert_eq!(state.rotate_epoch(), (2, true));
     }
 
@@ -2494,7 +2502,7 @@ mod tests {
         assert_eq!(restarted.committee_order().len(), 15);
 
         // Survives an epoch rotation (which does not mutate the set).
-        restarted.committed_leader_height = EPOCH_ROUNDS;
+        restarted.committed_leader_height = EPOCH_LEADER_HEIGHTS;
         let (epoch, rotated) = restarted.rotate_epoch();
         assert_eq!(epoch, 1);
         assert!(rotated);
@@ -2528,7 +2536,7 @@ mod tests {
         assert_eq!(restarted.committee_order().len(), 14);
 
         // Across an epoch rotation.
-        restarted.committed_leader_height = EPOCH_ROUNDS;
+        restarted.committed_leader_height = EPOCH_LEADER_HEIGHTS;
         let (_epoch, rotated) = restarted.rotate_epoch();
         assert!(rotated);
         assert!(
@@ -2631,12 +2639,12 @@ mod tests {
         assert_eq!(e, 0);
         assert!(!rotated);
 
-        st.committed_leader_height = EPOCH_ROUNDS;
+        st.committed_leader_height = EPOCH_LEADER_HEIGHTS;
         let (e, rotated) = st.rotate_epoch();
         assert_eq!(e, 1);
         assert!(rotated, "boundary crossing must be reported");
 
-        st.committed_leader_height = EPOCH_ROUNDS + 5;
+        st.committed_leader_height = EPOCH_LEADER_HEIGHTS + 5;
         let (e, rotated) = st.rotate_epoch();
         assert_eq!(e, 1);
         assert!(!rotated, "mid-epoch call is not a boundary");
@@ -3130,14 +3138,20 @@ mod tests {
     }
     // --- PRO-19 part 2: slash jail (explicit re-entry only) ---
 
-    /// Toni's 2026-10-23 decision: the jail lasts about one day. At 12 s per
-    /// committed leader that is 7_200 heights, i.e. exactly one epoch and one
-    /// commission cooldown, and it is enforced end to end: still jailed one
-    /// height before release, re-stakeable exactly at release.
+    /// Toni's 2026-10-23 decisions: the jail lasts about one day, and an
+    /// epoch is 8 h. At 12 s per committed leader the jail is 7_200 heights,
+    /// which is 3 epochs (same wall-clock time as 3 × 7 200 DAG rounds of
+    /// 4 s) and one commission cooldown.
     #[test]
     fn jail_lasts_one_day_of_committed_leaders() {
+        const ROUND_SECS: u64 = 4;
         assert_eq!(JAIL_ROUNDS, 7_200);
-        assert_eq!(JAIL_ROUNDS, EPOCH_ROUNDS);
+        assert_eq!(JAIL_ROUNDS, 3 * EPOCH_LEADER_HEIGHTS, "jail = 3 epochs");
+        assert_eq!(
+            JAIL_ROUNDS * LEADER_INTERVAL_SECS,
+            3 * EPOCH_ROUNDS * ROUND_SECS,
+            "jail = 3 epochs of wall-clock time"
+        );
         assert_eq!(JAIL_ROUNDS, COMMISSION_CHANGE_COOLDOWN);
         assert_eq!(JAIL_ROUNDS * LEADER_INTERVAL_SECS, 86_400);
     }
@@ -3206,6 +3220,31 @@ mod tests {
         assert!(v.active, "an explicit restake returns the validator");
         assert!(!v.slashed, "a served jail clears the slashed flag");
         assert_eq!(v.jailed_until_height, 0, "and clears the jail");
+    }
+
+    /// Jarvis #80 review P2: a jail that starts at a non-zero height ends
+    /// exactly `JAIL_ROUNDS` later. Slashed at height 1 → still jailed at
+    /// 7 200, re-stakeable at 7 201.
+    #[test]
+    fn jail_from_height_one_ends_at_7201() {
+        let mut st = StakingState::new();
+        st.committed_leader_height = 1;
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        st.slash_validator(a(1)).unwrap();
+        assert_eq!(st.validators[0].jailed_until_height, 7_201);
+
+        st.committed_leader_height = 7_200;
+        assert!(matches!(
+            st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE),
+            Err(StakingError::ValidatorSlashed)
+        ));
+        st.committed_leader_height = 7_201;
+        assert!(matches!(
+            st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE),
+            Ok(())
+        ));
+        assert!(st.validators[0].active);
     }
 
     /// Rows slashed before the jail existed decode with `jailed_until_height == 0`
