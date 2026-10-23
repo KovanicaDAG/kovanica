@@ -138,7 +138,7 @@ Capped at `TOTAL_SUPPLY`. The genesis set circulating supply is therefore
 | `DECAY_NUM` / `DECAY_DEN` | × ¾ per era |
 | `LEADER_INTERVAL_SECS` | 12 (4 s round × wave 3) |
 | `BLOCKS_PER_YEAR` | 2 628 000 (treasury vesting conversion only) |
-| `EPOCH_ROUNDS` | 7 200 (≈ 1 day; validator rotation, decoupled from the era) |
+| `EPOCH_ROUNDS` | epoch = 8 h = 7200 DAG rounds = 2400 leader heights (validator rotation, decoupled from the era) |
 | `MIN_VALIDATOR_STAKE` | 50 000 KUNA |
 | `MIN_ACTIVE_VALIDATORS` / `MAX_ACTIVE_VALIDATORS` | 15 / 21 |
 | `UNBONDING_ROUNDS` | 100 000 committed leader blocks (~13.9 days at 12 s/leader) |
