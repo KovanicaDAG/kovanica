@@ -10,7 +10,10 @@ use crate::metrics::{
 };
 use crate::types::{CommitteeInfo, LeaderInfo, LeaderStatus};
 use crate::{
-    committer::UniversalCommitter, is_leader_round, linearizer::Linearizer, offset_in_wave,
+    committer::{next_leader_slot, UniversalCommitter},
+    is_leader_round,
+    linearizer::Linearizer,
+    offset_in_wave,
 };
 use kovanica_crypto::sign;
 use kovanica_mempool::{Mempool, MempoolError};
@@ -34,6 +37,12 @@ use tracing::{debug, info, warn};
 /// on its own; the bound only exists so a pathological state cannot spin the
 /// caller forever.
 const MAX_COMMIT_DRAIN_STEPS: usize = 4096;
+
+/// Number of leader slots above the commit cursor that may be voted for after
+/// the late-vote window has passed (PRO-40 (a), "K = 2"): the slot the commit
+/// walk is stalled on and the next one. No wire change; at most K extra votes
+/// per node.
+pub const LATE_VOTE_AWAITED_SLOTS: u64 = 2;
 
 /// Trait for broadcasting blocks to the network.
 pub trait BlockBroadcaster: Send + Sync {
@@ -277,6 +286,13 @@ pub struct ConsensusConfig {
     /// Must be at least `2 * Δ` in rounds (Δ = message delay) so a block and
     /// its votes can still traverse the network and reach quorum.
     /// Default: one wave (`kovanica_types::WAVE_LENGTH`, 3 rounds).
+    ///
+    /// Exception (PRO-40 (a)): the first [`LATE_VOTE_AWAITED_SLOTS`] leader
+    /// slots above the node's own commit cursor may be voted for at any
+    /// delay. A peer that already decided such a slot refuses to vote for it
+    /// (`vote_for_leader`), and since PRO-35 nobody commits past a slot
+    /// without that slot's own quorum, so the exception cannot produce a
+    /// divergent sequence; it only lets a stalled slot reach quorum.
     pub late_vote_window_rounds: Round,
     /// Use stake-weighted VRF leader selection when the previous decide round
     /// has a verified output for every authority that published a VRF key.
@@ -739,7 +755,9 @@ where
                 state.proposed = false;
             }
 
-            // Try to commit any pending leaders
+            // Late votes for the slots the commit walk is waiting on (PRO-40
+            // (a)), then try to commit any pending leaders.
+            self.vote_awaited_slots()?;
             self.try_commit_and_deliver()?;
 
             // If we're the leader, propose a block (no timeout needed; we just proposed).
@@ -1043,18 +1061,14 @@ where
         if current <= round {
             return Ok(());
         }
-        // Only vote while the round is still recent (`late_vote_window_rounds`,
-        // default `WAVE_LENGTH` = 3 rounds).
-        //
-        // WARNING (PRO-40): this window was written for the skip design — an
-        // ahead node could decide a stale round as Skip and never revisit it, so
-        // a late certificate would have been acted on only by the lagging peer.
-        // Since PRO-35 no node skips: an ahead node *stalls* at the missing
-        // round, which makes a late vote exactly what restores quorum. The window
-        // therefore converts a recoverable stall into a permanent halt once it
-        // expires. Do not widen or remove it without the PRO-40 liveness
-        // decision — vote validity is consensus-visible.
-        if current - round > self.config.late_vote_window_rounds {
+        // Outside `late_vote_window_rounds` (default `WAVE_LENGTH` = 3
+        // rounds) a vote is only cast for a round the commit walk is waiting
+        // on (PRO-40 (a)). Since PRO-35 no node moves past a leader slot
+        // without that slot's own quorum, so a late vote for an awaited slot
+        // is exactly what restores quorum; it cannot help a lagging peer
+        // commit a sequence the others settled differently. Any other stale
+        // round keeps the window.
+        if current - round > self.config.late_vote_window_rounds && !self.is_awaited_slot(round) {
             debug!(
                 "Not voting for stale leader round {} (current round {}, window {})",
                 round, current, self.config.late_vote_window_rounds
@@ -1066,6 +1080,39 @@ where
                 "Late vote for leader round {} (current round {})",
                 round, current
             );
+        }
+        Ok(())
+    }
+
+    /// Whether `round` is one of the first [`LATE_VOTE_AWAITED_SLOTS`] leader
+    /// slots above the commit cursor, i.e. a slot the commit walk is waiting
+    /// on (PRO-40 (a)). Such a slot may be voted for after the late-vote
+    /// window has passed.
+    fn is_awaited_slot(&self, round: Round) -> bool {
+        let cursor = self.committer.last_decided_round();
+        let first = next_leader_slot(cursor);
+        is_leader_round(round)
+            && round >= first
+            && round < first + LATE_VOTE_AWAITED_SLOTS * kovanica_types::WAVE_LENGTH
+    }
+
+    /// Retry the late vote for every awaited slot whose leader block is
+    /// known. Called every round, so a block that arrived while its slot was
+    /// not yet awaited (outside the window, further than
+    /// [`LATE_VOTE_AWAITED_SLOTS`] above the cursor) is voted for once the
+    /// cursor reaches it. `vote_for_leader` is idempotent (one vote per
+    /// round), so the retry never double-votes.
+    fn vote_awaited_slots(&self) -> Result<(), ConsensusError> {
+        let first = next_leader_slot(self.committer.last_decided_round());
+        for k in 0..LATE_VOTE_AWAITED_SLOTS {
+            let slot = first + k * kovanica_types::WAVE_LENGTH;
+            let known = self
+                .committer
+                .get_leader(slot)
+                .is_some_and(|leader| leader.block_hash.is_some());
+            if known {
+                self.vote_if_late(slot)?;
+            }
         }
         Ok(())
     }
@@ -3339,19 +3386,19 @@ mod tests {
     }
 
     /// A leader block arriving more than `late_vote_window_rounds` behind the
-    /// node's own round must not be voted for. The network has already moved
-    /// past the round, so a fresh certificate could only be acted on by the
-    /// lagging node, producing a divergent committed sequence
-    /// (`late_join_integration`). Exactly at the window boundary the vote is
-    /// still cast.
+    /// node's own round is not voted for unless the commit walk is waiting on
+    /// it (PRO-40 (a)): with the cursor at 0 the awaited slots are 3 and 6,
+    /// so a stale block for slot 9 is refused. Exactly at the window boundary
+    /// the vote is still cast.
     #[test]
     fn vote_is_refused_outside_the_late_vote_window() {
         let (committee, engine, sent) = late_vote_engine();
         let window = engine.config.late_vote_window_rounds;
         assert!(window >= 1, "window must allow in-flight votes");
+        assert_eq!(engine.committer.last_decided_round(), 0);
 
-        // Stale: one round beyond the window.
-        let stale_round: Round = 3;
+        // Stale and not awaited: one round beyond the window.
+        let stale_round: Round = 9;
         engine.committer.update_leader(registered_leader(
             stale_round,
             committee.leader(stale_round),
@@ -3361,12 +3408,12 @@ mod tests {
         engine.vote_if_late(stale_round).expect("no error");
         assert!(
             sent.lock().is_empty(),
-            "a leader block {} rounds behind must not be voted for",
+            "a leader block {} rounds behind that is not awaited must not be voted for",
             window + 1
         );
 
         // Boundary: exactly at the window, the vote is still cast.
-        let edge_round: Round = 6;
+        let edge_round: Round = 12;
         engine.committer.update_leader(registered_leader(
             edge_round,
             committee.leader(edge_round),
@@ -3380,6 +3427,45 @@ mod tests {
             "a leader block exactly {} rounds behind must still be voted for",
             window
         );
+    }
+
+    /// PRO-40 (a): the slot the walk is stalled on, and the next one, are
+    /// voted for however late their block arrives; the third slot is not.
+    #[test]
+    fn a_late_block_for_an_awaited_slot_is_voted_for() {
+        let (committee, engine, sent) = late_vote_engine();
+        assert_eq!(LATE_VOTE_AWAITED_SLOTS, 2);
+        *engine.current_round.write() = 200; // far beyond any window
+        for (round, byte) in [(3, 1), (6, 2), (9, 3)] {
+            engine
+                .committer
+                .update_leader(registered_leader(round, committee.leader(round), byte));
+            engine.vote_if_late(round).expect("no error");
+        }
+        assert_eq!(*sent.lock(), vec![3, 6], "only the K = 2 awaited slots");
+        // A non-slot round is never "awaited".
+        assert!(!engine.is_awaited_slot(4));
+        assert!(!engine.is_awaited_slot(0));
+    }
+
+    /// The per-round retry votes for a block that arrived while its slot was
+    /// not yet awaited, once the cursor makes it awaited, and never twice.
+    #[test]
+    fn awaited_slot_retry_votes_once_the_slot_becomes_awaited() {
+        let (committee, engine, sent) = late_vote_engine();
+        *engine.current_round.write() = 200;
+        let far: Round = 9;
+        engine
+            .committer
+            .update_leader(registered_leader(far, committee.leader(far), 4));
+        engine.vote_awaited_slots().expect("no error");
+        assert!(sent.lock().is_empty(), "slot 9 is not awaited at cursor 0");
+
+        engine.committer.restore_last_decided_round(3);
+        engine.vote_awaited_slots().expect("no error");
+        assert_eq!(*sent.lock(), vec![far], "awaited at cursor 3");
+        engine.vote_awaited_slots().expect("no error");
+        assert_eq!(*sent.lock(), vec![far], "one vote per round");
     }
 
     /// A timeout records a *provisional* skip. `register_skip` deliberately does
