@@ -4,20 +4,13 @@ use crate::{block_sync, error::NetworkError, state_sync, topics, NetworkConfig};
 use libp2p::{
     gossipsub, identify, kad, kad::store::MemoryStore, noise, ping, request_response,
     request_response::ProtocolSupport, swarm::NetworkBehaviour, tcp, yamux, Multiaddr, PeerId,
-    StreamProtocol, Swarm, SwarmBuilder,
+    Swarm, SwarmBuilder,
 };
 use std::{error::Error, time::Duration};
 
 /// Maximum gossip frame size: large enough for a full block, small enough to
 /// keep a hostile peer from forcing us to buffer an unbounded message.
 const MAX_TRANSMIT_SIZE: usize = 1024 * 1024;
-
-/// Identify protocol version advertised to peers.
-const IDENTIFY_PROTOCOL: &str = "/kovanica/1.0.0";
-
-/// Kademlia protocol name; peers speaking a different name are ignored by the
-/// DHT even if they share the transport.
-const KAD_PROTOCOL: &str = "/kovanica/kad/1.0.0";
 
 /// Composite libp2p behaviour: gossip, peer routing, liveness, identification and request-response.
 #[derive(NetworkBehaviour)]
@@ -98,6 +91,7 @@ pub(crate) fn build_swarm(config: &NetworkConfig) -> Result<Swarm<Behaviour>, Ne
     }
 
     let ping_interval = config.ping_interval;
+    let network = config.network_id;
     let scoring = config.peer_scoring.clone();
     scoring
         .validate()
@@ -131,19 +125,19 @@ pub(crate) fn build_swarm(config: &NetworkConfig) -> Result<Swarm<Behaviour>, Ne
             .map_err(|err| NetworkError::Gossipsub(err.to_string()))?;
             if scoring.enabled {
                 gossipsub
-                    .with_peer_score(scoring.params(), scoring.thresholds())
+                    .with_peer_score(scoring.params(&network), scoring.thresholds())
                     .map_err(NetworkError::Gossipsub)?;
             }
             for name in topics::ALL {
                 gossipsub
-                    .subscribe(&gossipsub::IdentTopic::new(name))
+                    .subscribe(&topics::ident(&network, name))
                     .map_err(|err| NetworkError::Gossipsub(err.to_string()))?;
             }
 
             let mut kad = kad::Behaviour::with_config(
                 local_peer_id,
                 MemoryStore::new(local_peer_id),
-                kad::Config::new(StreamProtocol::new(KAD_PROTOCOL)),
+                kad::Config::new(network.protocol(crate::KAD_PROTOCOL)),
             );
             for (peer, addr) in &bootstrap_peers {
                 kad.add_address(peer, addr.clone());
@@ -151,23 +145,20 @@ pub(crate) fn build_swarm(config: &NetworkConfig) -> Result<Swarm<Behaviour>, Ne
 
             let ping = ping::Behaviour::new(ping::Config::new().with_interval(ping_interval));
             let identify = identify::Behaviour::new(identify::Config::new(
-                IDENTIFY_PROTOCOL.to_string(),
+                network.identify_version(),
                 key.public(),
             ));
 
-            // Block sync request-response protocol: advertise the catch-up
-            // (1.1.0) name first and the legacy (1.0.0) name as fallback, so
-            // current peers negotiate catch-up support while old peers still
-            // connect for the original sync variants.
+            // Block sync request-response: only this chain's 1.1.0 id.
             let block_sync = request_response::Behaviour::new(
-                block_sync::block_sync_protocols(),
+                block_sync::block_sync_protocols(&network),
                 block_sync::block_sync_protocol(),
             );
 
             // State sync request-response protocol (fast sync)
             let state_sync = request_response::Behaviour::new(
                 [(
-                    libp2p::StreamProtocol::new(state_sync::STATE_SYNC_PROTOCOL),
+                    network.protocol(state_sync::STATE_SYNC_PROTOCOL),
                     ProtocolSupport::Full,
                 )],
                 state_sync::state_sync_protocol(),
@@ -198,8 +189,13 @@ mod tests {
     /// `/kvanc/` or the old typo.
     #[test]
     fn protocol_namespace_is_kovanica() {
-        assert_eq!(IDENTIFY_PROTOCOL, "/kovanica/1.0.0");
-        assert_eq!(KAD_PROTOCOL, "/kovanica/kad/1.0.0");
+        let network = crate::NetworkId::default();
+        let tag = network.tag();
+        assert_eq!(network.identify_version(), format!("/kovanica/{tag}/1.0.0"));
+        assert_eq!(
+            network.protocol(crate::KAD_PROTOCOL).as_ref(),
+            format!("/kovanica/{tag}/kad/1.0.0")
+        );
     }
 
     /// The consensus block cap must stay below the gossip frame cap: a block
@@ -265,12 +261,20 @@ mod tests {
             .topics()
             .map(ToString::to_string)
             .collect();
+        let network = crate::NetworkId::default();
         for name in topics::ALL {
+            let full = network.topic(name);
             assert!(
-                subscribed.iter().any(|topic| topic == name),
-                "missing subscription for topic {name}"
+                subscribed.contains(&full),
+                "missing subscription for topic {full}"
             );
         }
+        assert!(
+            subscribed
+                .iter()
+                .all(|topic| topic.starts_with("kovanica/")),
+            "every topic is chain-scoped: {subscribed:?}"
+        );
         assert!(!swarm.local_peer_id().to_string().is_empty());
     }
 

@@ -53,7 +53,11 @@ the persisted value:
 - an **override environment variable** exists to force startup past the
   mismatch. Do not set it on a live mesh: it defeats exactly the guard that
   stops two nodes from running diverged genesis state. It is only for a
-  deliberate single-node migration.
+  deliberate single-node migration;
+- **no persisted digest but chain state present** — startup **refuses**, with
+  or without the override. Genesis writes the digest together with the state,
+  so such a data directory predates the chain-4 format change (#81) and cannot
+  be migrated. Wipe it (step 3).
 
 If you see the mismatch error after a legitimate reset, the fix is the wipe in
 step 3 — not the override.

@@ -149,6 +149,17 @@ pub trait DagStoreTrait: Send + Sync {
     fn put_vote(&self, _vote: &kovanica_types::Vote) -> Result<(), kovanica_dag::DagStoreError> {
         Ok(())
     }
+    /// Votes persisted through [`Self::put_vote`] for one leader round.
+    ///
+    /// Read once at start-up to re-register the leaders a restarted node
+    /// still has to decide (PRO-40). The default returns nothing, which is
+    /// correct for stores that do not persist votes.
+    fn get_votes_for_round(
+        &self,
+        _round: Round,
+    ) -> Result<Vec<kovanica_types::Vote>, kovanica_dag::DagStoreError> {
+        Ok(Vec::new())
+    }
     /// Get all decided rounds up to a maximum.
     fn get_decided_rounds(
         &self,
@@ -587,6 +598,7 @@ where
         if tip == 0 {
             return Ok(());
         }
+        self.restore_undecided_leaders(tip)?;
 
         let mut current = self.current_round.write();
         if *current >= tip {
@@ -600,6 +612,69 @@ where
             next_round = tip + 1,
             "resuming consensus from the persisted DAG tip"
         );
+        Ok(())
+    }
+
+    /// Restore the commit cursor and the undecided leaders after a restart.
+    ///
+    /// The committer's cursor and leader map live in memory. Before PRO-40 a
+    /// restarted node started its walk at round 0 with an empty map, so the
+    /// first leader it heard about after the restart became the first
+    /// candidate and every undecided slot in between was passed over without
+    /// a quorum. Now:
+    ///
+    /// 1. the cursor is restored from the persisted decision index;
+    /// 2. every leader slot in `(cursor, tip]` whose scheduled leader block is
+    ///    in the store is registered again, and the votes persisted for it
+    ///    (RFC-009) are replayed through [`Self::process_vote`], the same
+    ///    authentication boundary as live votes.
+    ///
+    /// A slot whose block is not in the store keeps no record, so the walk
+    /// stalls there until block sync delivers it. It never skips the slot.
+    fn restore_undecided_leaders(&self, tip: Round) -> Result<(), ConsensusError> {
+        let cursor = self
+            .dag_store
+            .get_decided_rounds(u64::MAX)?
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+        self.committer.restore_last_decided_round(cursor);
+        let cursor = self.committer.last_decided_round();
+
+        let mut restored = 0usize;
+        let mut round = (cursor / kovanica_types::WAVE_LENGTH + 1) * kovanica_types::WAVE_LENGTH;
+        while round <= tip {
+            let slot = round;
+            round += kovanica_types::WAVE_LENGTH;
+            if self.committer.get_leader(slot).is_some() {
+                continue;
+            }
+            let Some(author) = self.scheduled_leader_for_round(slot) else {
+                continue;
+            };
+            let Some(block) = self.dag_store.get_block_by_author_round(author, slot)? else {
+                continue;
+            };
+            self.committer.update_leader(LeaderInfo {
+                round: slot,
+                author,
+                block_hash: Some(block.digest),
+                status: LeaderStatus::Undecided,
+                votes: HashMap::new(),
+            });
+            restored += 1;
+            for vote in self.dag_store.get_votes_for_round(slot)? {
+                if let Err(e) = self.process_vote(&vote) {
+                    debug!(round = slot, error = %e, "persisted vote not re-applied");
+                }
+            }
+        }
+        if restored > 0 || cursor > 0 {
+            info!(
+                cursor,
+                restored, "restored the commit cursor and undecided leaders from the store"
+            );
+        }
         Ok(())
     }
 
@@ -1307,13 +1382,21 @@ where
         let max_pending = self.config.max_pending_rounds;
         if current_round > max_pending {
             let cutoff = current_round - max_pending;
+            // Nothing above the commit cursor is dropped (PRO-40): the record
+            // of a stuck leader keeps the commit walk stalled on it instead of
+            // letting it skip the round, and the "already voted" marker keeps
+            // this node from voting a second time for that round.
+            let last_decided = self.committer.last_decided_round();
             self.committer.cleanup_old_leaders(cutoff);
-            self.voted_rounds.lock().retain(|&round| round >= cutoff);
-            // A leader that never committed (stalled chain) must not pin an
-            // `Instant` per round forever.
+            self.voted_rounds
+                .lock()
+                .retain(|&round| round >= cutoff || round > last_decided);
+            // A stalled chain keeps one `Instant` per undecided slot; that is
+            // bounded by the length of the stall, and it is dropped once the
+            // round is decided.
             self.leader_first_seen
                 .write()
-                .retain(|&round, _| round >= cutoff);
+                .retain(|&round, _| round >= cutoff || round > last_decided);
         }
     }
 
@@ -1661,6 +1744,19 @@ mod tests {
             Ok(())
         }
 
+        fn get_votes_for_round(
+            &self,
+            round: Round,
+        ) -> Result<Vec<kovanica_types::Vote>, kovanica_dag::DagStoreError> {
+            Ok(self
+                .persisted_votes
+                .lock()
+                .iter()
+                .filter(|v| v.leader_round == round)
+                .cloned()
+                .collect())
+        }
+
         fn prune_non_blue(
             &self,
             _blue_hashes: &[Hash],
@@ -1930,6 +2026,79 @@ mod tests {
         assert!(
             rounds.iter().all(|r| *r > 9),
             "engine replayed already decided rounds: {rounds:?}"
+        );
+    }
+
+    fn stored_leader_block(
+        key: &kovanica_types::SigningKey,
+        round: Round,
+    ) -> kovanica_types::StatementBlock {
+        let digest = kovanica_types::StatementBlock::compute_digest(0, round, &[], &[]);
+        kovanica_types::StatementBlock {
+            author: 0,
+            round,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        }
+    }
+
+    /// PRO-40, restart: the cursor comes back from the decision index and an
+    /// undecided leader whose block and votes are in the store is registered
+    /// and decided again, in order, from the slot after the cursor.
+    #[test]
+    fn restart_restores_the_cursor_and_replays_stored_leaders_and_votes() {
+        let (engine, dag, key) = test_engine(100);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        engine.set_commit_sender(sender);
+        let committed = stored_leader_block(&key, 3);
+        dag.decisions.lock().push((3, committed.digest));
+        let pending = stored_leader_block(&key, 6);
+        dag.blocks.write().insert(pending.digest, pending.clone());
+        dag.persisted_votes
+            .lock()
+            .push(signed_vote(&key, 6, 0, pending.digest));
+        *dag.stored_tip.write() = Some(7);
+
+        engine.resume_from_store().expect("resume");
+
+        let sub = receiver
+            .try_recv()
+            .expect("round 6 is decided from the store");
+        assert_eq!(sub.leader_round, 6);
+        assert_eq!(engine.committer.last_decided_round(), 6);
+        assert!(receiver.try_recv().is_err(), "nothing else is committed");
+    }
+
+    /// PRO-40, restart: a slot above the restored cursor whose block is not in
+    /// the store stalls the walk. A later leader with quorum must not be
+    /// committed over it, which is what the empty in-memory map used to allow.
+    #[test]
+    fn restart_with_a_missing_slot_stalls_instead_of_skipping() {
+        let (engine, dag, key) = test_engine(100);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        engine.set_commit_sender(sender);
+        let committed = stored_leader_block(&key, 3);
+        dag.decisions.lock().push((3, committed.digest));
+        // Slot 6: no block in the store. Slot 9: block and quorum.
+        let later = stored_leader_block(&key, 9);
+        dag.blocks.write().insert(later.digest, later.clone());
+        dag.persisted_votes
+            .lock()
+            .push(signed_vote(&key, 9, 0, later.digest));
+        *dag.stored_tip.write() = Some(10);
+
+        engine.resume_from_store().expect("resume");
+
+        assert_eq!(engine.committer.last_decided_round(), 3);
+        assert!(engine.registered_leader(9).is_some());
+        assert!(engine.registered_leader(6).is_none());
+        assert!(
+            receiver.try_recv().is_err(),
+            "round 9 must not be committed over the unseen slot 6"
         );
     }
 
@@ -3138,6 +3307,35 @@ mod tests {
             status: LeaderStatus::Undecided,
             votes: HashMap::new(),
         }
+    }
+
+    /// PRO-40: the per-round GC must keep everything above the commit cursor.
+    /// Before the fix a leader stuck for `max_pending_rounds` (100 rounds,
+    /// about 400 s) lost its record and the "already voted" marker, so the
+    /// commit walk passed over it and the node could vote for it again.
+    #[test]
+    fn gc_keeps_the_stuck_leader_and_the_vote_marker_above_the_cursor() {
+        let (committee, engine, _sent) = late_vote_engine();
+        let stuck: Round = 3;
+        engine
+            .committer
+            .update_leader(registered_leader(stuck, committee.leader(stuck), 7));
+        engine.voted_rounds.lock().insert(stuck);
+        engine.note_leader_block_seen(stuck);
+
+        let max_pending = engine.config.max_pending_rounds;
+        engine.cleanup_old_rounds(stuck + max_pending + 1_000);
+
+        assert!(
+            engine.registered_leader(stuck).is_some(),
+            "the stuck leader record must survive GC"
+        );
+        assert!(
+            engine.voted_rounds.lock().contains(&stuck),
+            "the vote marker of an undecided round must survive GC"
+        );
+        assert!(engine.leader_first_seen.read().contains_key(&stuck));
+        assert_eq!(engine.committer.last_decided_round(), 0);
     }
 
     /// A leader block arriving more than `late_vote_window_rounds` behind the

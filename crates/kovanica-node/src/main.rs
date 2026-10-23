@@ -1899,8 +1899,12 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
 ///
 /// * Persisted digest equal to `fresh` → ok (no write).
 /// * Persisted digest different → refuse unless `allow_mismatch`.
-/// * No persisted digest (data dir predates the digest) → write it once, so
-///   existing data dirs migrate cleanly and later starts are guarded.
+/// * No persisted digest → refuse, always (the override does not apply).
+///   `init_genesis` writes the digest in the same transaction as the genesis
+///   state, so chain state without a digest comes from a data dir created
+///   before the digest existed, i.e. before the chain-4 format change
+///   (KUNA-* hash domains, #81). Writing the fresh digest over it would bless
+///   state built under the old format.
 fn verify_persisted_genesis_digest(
     state_storage: &Storage,
     fresh: &Hash,
@@ -1929,10 +1933,13 @@ fn verify_persisted_genesis_digest(
         }
         Some(_) => {}
         None => {
-            let txn = state_storage.begin_write()?;
-            state_storage.state().save_genesis_digest(&txn, fresh)?;
-            txn.commit()?;
-            info!(digest = %fresh, "persisted genesis digest for existing data dir");
+            anyhow::bail!(
+                "data dir has chain state but no genesis digest: it was created by a build \
+                 before the chain-4 format change (KUNA-* hash domains, #81) and \
+                 cannot be migrated; stop the node, move the data dir away and \
+                 start from the chain-4 genesis (configured genesis digest {})",
+                fresh.to_hex(),
+            );
         }
     }
     Ok(())
@@ -2250,7 +2257,7 @@ struct CatchUpSession {
 
 /// Bounded proactive catch-up: when a peer connects, ask for its DAG tip and,
 /// if it is ahead, pull the missing rounds through the existing
-/// `/kovanica/block-sync/1.1.0` protocol (one `RoundRange` window at a time,
+/// chain-scoped `/kovanica/<tag>/block-sync/1.1.0` protocol (one `RoundRange` window at a time,
 /// re-fetching every hash via `ByHash` so block validation is unchanged).
 ///
 /// Every bound is explicit: one session per peer, at most
@@ -3685,6 +3692,12 @@ impl DagStoreTrait for NodeDagStore {
         Ok(())
     }
 
+    fn get_votes_for_round(&self, round: Round) -> Result<Vec<Vote>, DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_read()?;
+        Ok(storage.consensus().get_votes_for_round(&txn, round)?)
+    }
+
     fn max_stored_round(&self) -> Result<Option<Round>, DagStoreError> {
         self.inner.max_dag_round()
     }
@@ -4223,6 +4236,12 @@ fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
         ping_interval: Duration::from_secs(10),
         node_key_path: Some(config.data_dir.join(NODE_IDENTITY_FILE)),
         peer_scoring: config.peer_scoring.clone(),
+        // Chain separation: every libp2p protocol id and gossip topic carries
+        // the chain id and the genesis digest this data dir is bound to.
+        network_id: kovanica_network::NetworkId::new(
+            config.chain_id,
+            genesis_config_digest(config)?,
+        ),
     })
 }
 
@@ -4774,7 +4793,7 @@ mod tests {
     }
 
     #[test]
-    fn first_start_persists_digest_and_migrates_existing_dir() {
+    fn a_data_dir_without_a_genesis_digest_is_refused_not_migrated() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::new(dir.path().join("state.redb")).unwrap();
 
@@ -4795,17 +4814,21 @@ mod tests {
         }
 
         let fresh = Hash::new([5u8; 32]);
-        // Migration: first start writes the digest once.
-        verify_persisted_genesis_digest(&storage, &fresh, false).unwrap();
-        {
-            let read = storage.begin_read().unwrap();
-            assert_eq!(
-                storage.state().load_genesis_digest(&read).unwrap(),
-                Some(fresh)
-            );
+        // No silent migration, with or without the mismatch override.
+        for allow_mismatch in [false, true] {
+            let err = verify_persisted_genesis_digest(&storage, &fresh, allow_mismatch)
+                .expect_err("a data dir without a genesis digest must be refused");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("no genesis digest"), "{msg}");
+            assert!(msg.contains("chain-4 format change"), "{msg}");
         }
-        // Second start is a no-op and still succeeds.
-        verify_persisted_genesis_digest(&storage, &fresh, false).unwrap();
+        // Nothing was written.
+        let read = storage.begin_read().unwrap();
+        assert!(storage
+            .state()
+            .load_genesis_digest(&read)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -4969,6 +4992,28 @@ mod tests {
             Some(std::ffi::OsStr::new("validator.key")),
             "transport identity must not reuse the validator seed file"
         );
+    }
+
+    /// #81 review P1: the libp2p network is scoped to chain id + genesis,
+    /// so a node of another chain (or the same chain id with a different
+    /// genesis) speaks different protocol ids and topics.
+    #[test]
+    fn network_config_is_scoped_to_chain_id_and_genesis() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = chain_id_config(dir.path(), 1337);
+        let net = build_network_config(&config).unwrap();
+        assert_eq!(net.network_id.chain_id, 1337);
+        assert_eq!(
+            net.network_id.genesis,
+            genesis_config_digest(&config).unwrap()
+        );
+
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = build_network_config(&chain_id_config(other_dir.path(), 4)).unwrap();
+        assert_ne!(net.network_id.tag(), other.network_id.tag());
+        assert!(!net
+            .network_id
+            .accepts_identify(&other.network_id.identify_version()));
     }
 
     #[test]

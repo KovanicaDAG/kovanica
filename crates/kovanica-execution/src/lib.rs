@@ -1252,8 +1252,8 @@ impl ExecutionContext {
         let Some(mut set) = storage.state().load_light_set_write(txn)? else {
             return Ok(());
         };
-        if height.is_multiple_of(kovanica_staking::EPOCH_ROUNDS) {
-            set.note_beacon(height / kovanica_staking::EPOCH_ROUNDS, leader_digest);
+        if kovanica_types::is_epoch_start_height(height) {
+            set.note_beacon(kovanica_types::epoch_for_height(height), leader_digest);
             storage.state().save_light_set(txn, &set)?;
         }
         Ok(())
@@ -1276,12 +1276,12 @@ impl ExecutionContext {
         }) else {
             return Ok(());
         };
-        let epoch = committed_height / kovanica_staking::EPOCH_ROUNDS;
+        let epoch = kovanica_types::epoch_for_height(committed_height);
         if escrow_part > 0 {
             set.add_escrow(epoch, contributor, escrow_part);
         }
         let mut credits = Vec::new();
-        if (committed_height + 1).is_multiple_of(kovanica_staking::EPOCH_ROUNDS) {
+        if kovanica_types::is_epoch_start_height(committed_height + 1) {
             let settled = set.settle(epoch);
             credits.extend(settled.winner_payouts);
             credits.extend(settled.leader_refunds);
@@ -5099,7 +5099,7 @@ mod tests {
         assert_eq!(set.nodes()[0].effective_epoch, 1);
         assert!(set.active_nodes(0).is_empty());
 
-        ctx.staking.committed_leader_height = kovanica_staking::EPOCH_ROUNDS;
+        ctx.staking.committed_leader_height = kovanica_staking::EPOCH_LEADER_HEIGHTS;
         let leader = sample_block_at(0, 9);
         let input = light_vrf_input(chain_id::LOCAL, 1, &leader.digest);
         let output = kovanica_crypto::vrf_prove(&vrf, &input);
@@ -5173,7 +5173,7 @@ mod tests {
         let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
         let mut ctx = ExecutionContext::new();
         ctx.light_reward_bps = 2_000;
-        ctx.staking.committed_leader_height = kovanica_staking::EPOCH_ROUNDS - 1;
+        ctx.staking.committed_leader_height = kovanica_staking::EPOCH_LEADER_HEIGHTS - 1;
         let payout = Address([9u8; 32]);
         ctx.staking
             .join_validator(
