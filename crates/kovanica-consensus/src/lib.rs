@@ -20,6 +20,7 @@ pub mod linearizer;
 pub mod metrics;
 pub mod mysticghost;
 pub mod non_blue;
+pub mod skip;
 pub mod types;
 
 pub use committer::{uncommitted_history, BaseCommitter, UniversalCommitter};
@@ -35,8 +36,8 @@ pub use metrics::{
     record_colouring_duration_ms, record_commit_latency, record_committed_leader,
     record_connected_peers, record_current_round, record_mempool_size, record_mergeset_size,
     record_mergeset_size_metric, record_peer_count, record_pruned_blocks, record_pruned_waves,
-    record_rss_bytes, record_rss_proxy, record_skipped_leader, record_sync_error, registry,
-    SkipReason, SyncErrorKind,
+    record_rss_bytes, record_rss_proxy, record_skipped_leader, record_sync_error,
+    record_timeout_signed, record_vote_timeout_equivocation, registry, SkipReason, SyncErrorKind,
 };
 pub use non_blue::{non_blue_refs, non_blue_transactions};
 pub use types::{
