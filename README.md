@@ -89,7 +89,7 @@ Rewards, treasury vesting, and circulating-supply accounting are applied atomica
 | `Dockerfile` / `docker-compose.yml` | Container build and local testnet compose |
 | `TASKLIST.md` | Phased implementation status (code-verified) |
 | `AUDIT_REPORT.md` / `AUDIT_FIRMS.md` / `AUTOMATED_SECURITY_CHECKS.md` | Internal audit template, audit-firm shortlist, and automated check notes |
-| `.github/workflows/` | CI: fmt, clippy, tests, `cargo audit`, docs, MSRV 1.90, release check, foundation-crate matrix, faucet/explorer deploy |
+| *(no `.github/workflows/`)* | GitHub Actions removed 2026-10-23 (Toni). CI moves to the public `KovanicaDAG/kovanica-protocol` repo once the frozen code is there. Until then the gate is local: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and the gitleaks pre-commit hook (`./scripts/install-git-hooks.sh`). |
 | `.opencode/` | Internal agent tooling and skills used by the project |
 | `run-seed1.sh`, `opencode.json` | Local seed-node launcher and OpenCode project config |
 
