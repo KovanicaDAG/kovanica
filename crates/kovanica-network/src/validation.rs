@@ -675,13 +675,13 @@ mod tests {
     }
 
     // B1c: a seal for a header after the first epoch boundary is admitted;
-    // a header whose epoch does not match leader_round / EPOCH_ROUNDS is rejected.
+    // a header whose epoch does not match leader_round / EPOCH_DAG_ROUNDS is rejected.
     // Test from Jarvis review (2026-10-20).
     #[test]
     fn b1c_jarvis_seal_after_epoch_boundary_is_admitted() {
         let (signers, keys) = committee(1);
         let mut header = sample_header();
-        header.leader_round = kovanica_types::EPOCH_ROUNDS + 1;
+        header.leader_round = kovanica_types::EPOCH_DAG_ROUNDS + 1;
         header.epoch = 1;
         let signature = kovanica_crypto::sign(&signers[0], &header.seal_message(TEST_CTX.chain_id));
         let ann = kovanica_types::SealAnnouncement {

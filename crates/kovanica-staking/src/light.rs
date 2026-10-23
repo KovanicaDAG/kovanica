@@ -289,7 +289,7 @@ impl LightSet {
         if self.nodes.len() >= MAX_LIGHT_NODES {
             return Err(LightSetError::CapReached);
         }
-        let epoch = kovanica_types::epoch_for_round(height);
+        let epoch = kovanica_types::epoch_for_height(height);
         self.nodes.push(LightNode {
             address,
             vrf_public_key,
@@ -313,7 +313,7 @@ impl LightSet {
         address: Address,
         height: u64,
     ) -> Result<(u64, Option<u64>), LightSetError> {
-        let epoch = kovanica_types::epoch_for_round(height);
+        let epoch = kovanica_types::epoch_for_height(height);
         let index = self
             .nodes
             .iter()

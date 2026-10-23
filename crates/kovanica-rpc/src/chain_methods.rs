@@ -1161,7 +1161,7 @@ pub async fn handle_get_light_set(_params: Value, state: RpcState) -> Result<Val
     // it, not with the leader round of any seal. The arithmetic is the same
     // `height / EPOCH_ROUNDS`; using the shared helper keeps the divisor
     // canonical.
-    let epoch = kovanica_types::epoch_for_round(height);
+    let epoch = kovanica_types::epoch_for_height(height);
     let Some(set) = state
         .storage
         .state()

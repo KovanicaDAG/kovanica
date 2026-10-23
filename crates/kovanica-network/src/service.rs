@@ -1527,7 +1527,7 @@ impl NetworkService {
         }
         // B1d (PRO-B1d): a vote's signature is over `vote.signature_data(ctx)`
         // where the engine's `vote_signing_ctx` uses epoch =
-        // `vote.leader_round / EPOCH_ROUNDS`. Verifying with the mempool's
+        // `vote.leader_round / EPOCH_DAG_ROUNDS`. Verifying with the mempool's
         // boot-time epoch (0) made every vote past the first epoch boundary fail
         // with BadSignature, so honest peers lost score and banned each other.
         // Derive the SAME round-based epoch here from the vote itself.
@@ -2141,18 +2141,18 @@ mod tests {
     /// B1d (PRO-B1d) regression: a vote cast in a later epoch must pass the
     /// gossip edge.
     ///
-    /// The engine signs votes with epoch `leader_round / EPOCH_ROUNDS`
+    /// The engine signs votes with epoch `leader_round / EPOCH_DAG_ROUNDS`
     /// (`vote_signing_ctx`), but the gossip edge used to verify with the
     /// mempool's boot-time epoch (0). After the first epoch boundary
-    /// (`EPOCH_ROUNDS` rounds) every honest vote then failed with
+    /// (`EPOCH_DAG_ROUNDS` rounds) every honest vote then failed with
     /// `BadSignature`, peers lost score, and validators banned each other.
     ///
-    /// A vote at `leader_round = EPOCH_ROUNDS + 1` (epoch 1) signed with the
+    /// A vote at `leader_round = EPOCH_DAG_ROUNDS + 1` (epoch 1) signed with the
     /// canonical round-derived epoch MUST be accepted here.
     #[tokio::test]
     async fn b1d_jarvis_vote_after_epoch_boundary_passes_gossip_edge() {
         let (_dir, service, mut events, signers) = validating_service();
-        let leader_round = kovanica_types::EPOCH_ROUNDS + 1;
+        let leader_round = kovanica_types::EPOCH_DAG_ROUNDS + 1;
         let mut vote = Vote {
             leader_round,
             leader_hash: Hash::new(b"leader-in-epoch-1"),
@@ -2173,7 +2173,7 @@ mod tests {
         assert_eq!(
             service.on_vote_message(Some(PeerId::random()), &payload),
             Verdict::Accept,
-            "a vote at leader_round = EPOCH_ROUNDS + 1 must pass the gossip edge"
+            "a vote at leader_round = EPOCH_DAG_ROUNDS + 1 must pass the gossip edge"
         );
         match events.try_recv().expect("vote event emitted") {
             NetworkEvent::VoteReceived { vote: got, .. } => assert_eq!(got, vote),

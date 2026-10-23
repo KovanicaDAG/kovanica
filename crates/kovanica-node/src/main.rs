@@ -590,7 +590,7 @@ where
     // different quantity: `committed_leader_height` counts committed leaders,
     // while the epoch unit is derived from the DAG `leader_round`). The last
     // stored leader header carries its own `leader_round`, so a node that
-    // restarts mid-height (e.g. round >= EPOCH_ROUNDS while height <
+    // restarts mid-height (e.g. round >= EPOCH_DAG_ROUNDS while height <
     // EPOCH_ROUNDS) still derives the truthful, round-based epoch instead of a
     // height-based one.
     let startup_round = startup_round_from_storage(&state_storage);
@@ -614,7 +614,7 @@ where
     kovanica_crypto::set_validator_keys_from_public(committee_keys);
 
     // v1 signing context: chain id from config (verified against genesis).
-    // Epoch is derived per-leader-round as leader_round / EPOCH_ROUNDS
+    // Epoch is derived per-leader-round as leader_round / EPOCH_DAG_ROUNDS
     // (see `vote_signing_ctx` and `publish_local_seal`). The value here is a
     // placeholder and NOT used for consensus decisions.
     let signing_ctx = kovanica_types::SigningContext::new(config.chain_id).with_epoch(0);
@@ -3923,7 +3923,7 @@ fn recover_committed_subdag_mysticghost(
 /// which is the unit the epoch is derived from. Falls back to 0 when no header
 /// has been stored yet (fresh genesis). Deliberately NOT the
 /// `committed_leader_height` counter: that is a committed-leader count, and a
-/// node that restarts with round >= EPOCH_ROUNDS while that counter is still
+/// node that restarts with round >= EPOCH_DAG_ROUNDS while that counter is still
 /// below EPOCH_ROUNDS would otherwise derive a height-based (wrong) epoch.
 fn startup_round_from_storage(storage: &Storage) -> u64 {
     storage
@@ -7493,6 +7493,7 @@ mod tests {
 mod b1_epoch_restart_repro {
     use super::*;
     use kovanica_staking::{StakingState, EPOCH_ROUNDS, MIN_VALIDATOR_STAKE};
+    use kovanica_types::EPOCH_DAG_ROUNDS;
 
     fn storage_at_height(
         dir: &std::path::Path,
@@ -7620,15 +7621,15 @@ mod b1_epoch_restart_repro {
             &pubs[1].1,
             &pubs[1].0,
             "127.0.0.1:0",
-            EPOCH_ROUNDS + 1,
+            EPOCH_DAG_ROUNDS + 1,
             false,
         )
         .unwrap();
 
         // B1 FIX: epoch is now derived from leader_round, NOT from local committee.
         // Both nodes compute the SAME epoch for the same leader_round.
-        let leader_round = 3 * (EPOCH_ROUNDS + 1); // epoch 1
-        let epoch = leader_round / EPOCH_ROUNDS;
+        let leader_round = 3 * (EPOCH_DAG_ROUNDS + 1); // epoch 1
+        let epoch = leader_round / EPOCH_DAG_ROUNDS;
         let ctx_a = kovanica_types::SigningContext::new(chain_id).with_epoch(epoch);
         let ctx_b = kovanica_types::SigningContext::new(chain_id).with_epoch(epoch);
 
@@ -7671,11 +7672,11 @@ mod b1_epoch_restart_repro {
         let pubs: Vec<_> = keys.iter().map(|(_, a, p)| (*a, *p)).collect();
 
         // The round past the first epoch boundary that both nodes agree on.
-        let round = EPOCH_ROUNDS + 1;
+        let round = EPOCH_DAG_ROUNDS + 1;
         let expected_epoch = kovanica_types::epoch_for_round(round);
         assert_eq!(
             expected_epoch, 1,
-            "EPOCH_ROUNDS + 1 must be in epoch 1 for this regression"
+            "EPOCH_DAG_ROUNDS + 1 must be in epoch 1 for this regression"
         );
 
         // A node that has been running since genesis but is now at `round`
@@ -7733,7 +7734,7 @@ mod b1_epoch_restart_repro {
     }
 
     /// E1 (PRO-E1) end-to-end: the epoch `getCommittee` serves must equal the
-    /// epoch a sealed leader header carries, at `leader_round = EPOCH_ROUNDS + 1`
+    /// epoch a sealed leader header carries, at `leader_round = EPOCH_DAG_ROUNDS + 1`
     /// and again after a restart through the REAL startup path.
     ///
     /// The RPC committee is built exactly as `run()` builds it: the round comes
@@ -7746,9 +7747,9 @@ mod b1_epoch_restart_repro {
         let (sk, pk) = kovanica_crypto::generate_keypair();
         let addr = Address::from_public_key(&pk);
         let chain_id = kovanica_types::signing::chain_id::LOCAL;
-        let leader_round = EPOCH_ROUNDS + 1;
+        let leader_round = EPOCH_DAG_ROUNDS + 1;
         let expected_epoch = kovanica_types::epoch_for_round(leader_round);
-        assert_eq!(expected_epoch, 1, "EPOCH_ROUNDS + 1 must be epoch 1");
+        assert_eq!(expected_epoch, 1, "EPOCH_DAG_ROUNDS + 1 must be epoch 1");
 
         // Producer/restart storage: the committed-height counter is BELOW the
         // boundary while the last stored header is past it. A height-derived
@@ -7854,7 +7855,7 @@ mod b1_epoch_restart_repro {
         let (sk, pk) = kovanica_crypto::generate_keypair();
         let addr = Address::from_public_key(&pk);
         let chain_id = kovanica_types::signing::chain_id::LOCAL;
-        let leader_round = EPOCH_ROUNDS;
+        let leader_round = EPOCH_DAG_ROUNDS;
         let storage = storage_at_height(dir.path(), "e1r.redb", &[(addr, pk)], leader_round / 3);
         let ctx = seals::SealContext {
             chain_id,
@@ -7886,7 +7887,7 @@ mod b1_epoch_restart_repro {
     }
 
     /// Produce a seal with the REAL production producer (`seals::publish_local_seal`)
-    /// at `leader_round = EPOCH_ROUNDS + 1` and admit it with the REAL production
+    /// at `leader_round = EPOCH_DAG_ROUNDS + 1` and admit it with the REAL production
     /// verifier (`admit_seal`), plus a restart variant: the admitting node's keys
     /// come from a committee built at genesis height while the producer is past the
     /// boundary. The seal must still be accepted because the expected epoch is
@@ -7918,7 +7919,7 @@ mod b1_epoch_restart_repro {
 
         // Producer node is past the epoch boundary; it publishes the real seal.
         let producer = make_storage("producer.redb", EPOCH_ROUNDS + 1);
-        let leader_round = EPOCH_ROUNDS + 1;
+        let leader_round = EPOCH_DAG_ROUNDS + 1;
         let subdag = kovanica_consensus::CommittedSubDag {
             blocks: vec![],
             leader: StatementBlock {
@@ -7945,10 +7946,10 @@ mod b1_epoch_restart_repro {
             .gossip
             .expect("validator signs a seal");
 
-        // The seal header epoch must equal leader_round / EPOCH_ROUNDS == 1.
+        // The seal header epoch must equal leader_round / EPOCH_DAG_ROUNDS == 1.
         assert_eq!(
             announcement.header.epoch,
-            leader_round / EPOCH_ROUNDS,
+            leader_round / EPOCH_DAG_ROUNDS,
             "seal epoch must derive from leader_round"
         );
 
@@ -7973,7 +7974,7 @@ mod b1_epoch_restart_repro {
                 Some(announcement.header.hash()),
             ),
             kovanica_network::SealAdmission::Accept,
-            "seal at EPOCH_ROUNDS + 1 must be admitted under the production context"
+            "seal at EPOCH_DAG_ROUNDS + 1 must be admitted under the production context"
         );
 
         // Restart variant: the admitting node is a long-running peer started at
@@ -8051,7 +8052,7 @@ mod b1_epoch_restart_repro {
     fn e1_jarvis_mid_epoch_eviction_keeps_rpc_committee_hash() {
         let dir = tempfile::tempdir().unwrap();
         let chain_id = kovanica_types::signing::chain_id::LOCAL;
-        let leader_round = 3 * EPOCH_ROUNDS + 10; // epoch 3, mid-epoch
+        let leader_round = 3 * EPOCH_DAG_ROUNDS + 10; // epoch 3, mid-epoch
         let epoch = kovanica_types::epoch_for_round(leader_round);
 
         // Three validators so evicting one leaves a non-empty committee.
@@ -8148,7 +8149,7 @@ mod b1_epoch_restart_repro {
         let (sk, pk) = kovanica_crypto::generate_keypair();
         let addr = Address::from_public_key(&pk);
         let chain_id = kovanica_types::signing::chain_id::LOCAL;
-        let leader_round = EPOCH_ROUNDS + 1;
+        let leader_round = EPOCH_DAG_ROUNDS + 1;
 
         let storage =
             storage_with_header(dir.path(), "startup.redb", &[(addr, pk)], 5, leader_round);
@@ -8210,7 +8211,7 @@ mod b1_epoch_restart_repro {
         let addr = Address::from_public_key(&pk);
         let chain_id = kovanica_types::signing::chain_id::LOCAL;
         // Exactly at the boundary: round that starts epoch 1.
-        let boundary_round = EPOCH_ROUNDS;
+        let boundary_round = EPOCH_DAG_ROUNDS;
         assert_eq!(kovanica_types::epoch_for_round(boundary_round), 1);
 
         let storage = storage_with_header(
@@ -8256,7 +8257,7 @@ mod b1_epoch_restart_repro {
     fn e1_jarvis_seal_hash_matches_after_mid_epoch_change() {
         let dir = tempfile::tempdir().unwrap();
         let chain_id = kovanica_types::signing::chain_id::LOCAL;
-        let leader_round = 5 * EPOCH_ROUNDS + 3;
+        let leader_round = 5 * EPOCH_DAG_ROUNDS + 3;
         let epoch = kovanica_types::epoch_for_round(leader_round);
 
         let keys: Vec<(SigningKey, PublicKey, Address)> = (0..2)
@@ -8334,7 +8335,7 @@ mod b1_epoch_restart_repro {
     fn e1_jarvis_boot_committee_keeps_vrf_keys_after_seal_snapshot() {
         let dir = tempfile::tempdir().unwrap();
         let chain_id = kovanica_types::signing::chain_id::LOCAL;
-        let leader_round = 3 * EPOCH_ROUNDS + 10;
+        let leader_round = 3 * EPOCH_DAG_ROUNDS + 10;
         let epoch = kovanica_types::epoch_for_round(leader_round);
 
         // Three validators, each with a distinct VRF public key.
@@ -8537,7 +8538,7 @@ mod b1_epoch_restart_repro {
     fn e1_jarvis_restarted_node_picks_same_leader() {
         let dir = tempfile::tempdir().unwrap();
         let chain_id = kovanica_types::signing::chain_id::LOCAL;
-        let leader_round = 2 * EPOCH_ROUNDS + 5;
+        let leader_round = 2 * EPOCH_DAG_ROUNDS + 5;
 
         struct V {
             sk: SigningKey,
@@ -8652,7 +8653,7 @@ mod b1_epoch_restart_repro {
     #[test]
     fn e1_jarvis_local_boot_vrf_after_seal_snapshot() {
         let dir = tempfile::tempdir().unwrap();
-        let leader_round = EPOCH_ROUNDS + 5;
+        let leader_round = EPOCH_DAG_ROUNDS + 5;
         let keys: Vec<(SigningKey, PublicKey, Address)> = (0..3)
             .map(|_| {
                 let (sk, pk) = kovanica_crypto::generate_keypair();
@@ -8872,7 +8873,7 @@ mod b1_epoch_restart_repro {
             (Address::from_public_key(&pk2), pk2),
             (Address::from_public_key(&pk3), pk3),
         ];
-        let leader_round = 3 * EPOCH_ROUNDS + 5; // epoch 1, after seal
+        let leader_round = EPOCH_DAG_ROUNDS + 5; // epoch 1, after seal
 
         // Create OLD data dir with pre-versioned EPOCH_COMMITTEE snapshot (no VRF keys)
         let old_dir = dir.path().join("upgraded.redb");
@@ -8885,11 +8886,17 @@ mod b1_epoch_restart_repro {
                     .unwrap();
             }
             st.committed_leader_height = leader_round;
-            let old_snap: Vec<kovanica_types::SealCommitteeMember> = vec![
-                (0, pk1, MIN_VALIDATOR_STAKE),
-                (1, pk2, MIN_VALIDATOR_STAKE),
-                (2, pk3, MIN_VALIDATOR_STAKE),
-            ];
+            // A real pre-versioned snapshot was written in committee order
+            // (sorted by address), so build it the same way. With the 1-day
+            // epoch (PRO-37) `leader_round` now really falls in epoch 1, so
+            // this snapshot is the one the upgraded node reads.
+            let mut by_addr = keys.to_vec();
+            by_addr.sort_by_key(|(addr, _)| addr.0);
+            let old_snap: Vec<kovanica_types::SealCommitteeMember> = by_addr
+                .iter()
+                .enumerate()
+                .map(|(i, (_, pk))| (i as u16, *pk, MIN_VALIDATOR_STAKE))
+                .collect();
             {
                 let w = storage.begin_write().unwrap();
                 {
@@ -8979,8 +8986,8 @@ mod b1_epoch_restart_repro {
         // Since VRF leader election is currently reverted (round-robin), both
         // should pick the same leader for the same round in the epoch.
         // The round-robin leader for round `leader_round` in epoch 1 is:
-        //   leader_index = (leader_round - epoch * EPOCH_ROUNDS) % committee_size
-        let expected_leader_index = ((leader_round - epoch * EPOCH_ROUNDS) as usize) % 3;
+        //   leader_index = (leader_round - epoch * EPOCH_DAG_ROUNDS) % committee_size
+        let expected_leader_index = ((leader_round - epoch * EPOCH_DAG_ROUNDS) as usize) % 3;
         let old_leader = old_committee.leader(leader_round);
         let fresh_leader = fresh_committee.leader(leader_round);
         assert_eq!(
@@ -9065,7 +9072,7 @@ mod b1_epoch_restart_repro {
                 (sk, pk, Address::from_public_key(&pk))
             })
             .collect();
-        let leader_round = EPOCH_ROUNDS + 6; // epoch 1, leader round (offset 0)
+        let leader_round = EPOCH_DAG_ROUNDS + 6; // epoch 1, leader round (offset 0)
         let epoch = kovanica_types::epoch_for_round(leader_round);
         let mk = |name: &str, old_snap: bool| {
             let storage = Storage::new(dir.path().join(name)).unwrap();
@@ -9126,7 +9133,7 @@ mod b1_epoch_restart_repro {
         let mut total = 0;
         let mut r = 1u64;
         for w in 0..200u64 {
-            let round = EPOCH_ROUNDS + 3 * (w + 1);
+            let round = EPOCH_DAG_ROUNDS + 3 * (w + 1);
             let outputs: std::collections::HashMap<_, _> = cf
                 .authorities()
                 .iter()

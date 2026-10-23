@@ -2852,7 +2852,7 @@ mod tests {
         Hash,
         mpsc::UnboundedReceiver<kovanica_types::CommittedSubDag>,
     ) {
-        let leader_round = epoch * kovanica_staking::EPOCH_ROUNDS;
+        let leader_round = kovanica_types::epoch_start_round(epoch);
         let (engine, _dag, key) = test_engine_at_epoch(100, epoch);
         let (sender, receiver) = mpsc::unbounded_channel();
         engine.set_commit_sender(sender);
@@ -2872,10 +2872,10 @@ mod tests {
     }
 
     fn local_v1_ctx() -> kovanica_types::SigningContext {
-        // With new epoch derivation (leader_round / EPOCH_ROUNDS), round 3 -> epoch 0
+        // With new epoch derivation (leader_round / EPOCH_DAG_ROUNDS), round 3 -> epoch 0
         kovanica_types::SigningContext {
             chain_id: TEST_CTX.chain_id,
-            epoch: 3 / kovanica_staking::EPOCH_ROUNDS,
+            epoch: kovanica_types::epoch_for_round(3),
         }
     }
 
@@ -2905,7 +2905,7 @@ mod tests {
     #[tokio::test]
     async fn sig_v1_vote_for_other_epoch_rejected() {
         // Create engine with committee at epoch 5, but leader round that maps to epoch 5
-        // With EPOCH_ROUNDS = 7200, round 36000 -> epoch 5
+        // With EPOCH_DAG_ROUNDS = 21_600, round 108_000 -> epoch 5
         let (engine, key, digest, mut receiver) = engine_with_leader_at_epoch_for_epoch(5);
         // Vote signed for epoch 0 (wrong epoch) while leader round maps to epoch 5
         let other_epoch = kovanica_types::SigningContext {
@@ -2929,7 +2929,7 @@ mod tests {
         let (engine, key, digest, _receiver) = engine_with_leader_at_epoch(); // committee epoch 5, round 3
         let running_ctx = kovanica_types::SigningContext {
             chain_id: TEST_CTX.chain_id,
-            epoch: 3 / kovanica_staking::EPOCH_ROUNDS,
+            epoch: kovanica_types::epoch_for_round(3),
         };
         let res = engine.process_vote(&vote_with_ctx(&key, &running_ctx, 3, digest));
         assert!(

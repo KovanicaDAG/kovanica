@@ -1253,7 +1253,7 @@ impl ExecutionContext {
             return Ok(());
         };
         if height.is_multiple_of(kovanica_staking::EPOCH_ROUNDS) {
-            set.note_beacon(height / kovanica_staking::EPOCH_ROUNDS, leader_digest);
+            set.note_beacon(kovanica_types::epoch_for_height(height), leader_digest);
             storage.state().save_light_set(txn, &set)?;
         }
         Ok(())
@@ -1276,7 +1276,7 @@ impl ExecutionContext {
         }) else {
             return Ok(());
         };
-        let epoch = committed_height / kovanica_staking::EPOCH_ROUNDS;
+        let epoch = kovanica_types::epoch_for_height(committed_height);
         if escrow_part > 0 {
             set.add_escrow(epoch, contributor, escrow_part);
         }
