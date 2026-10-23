@@ -3,7 +3,7 @@
 //! Status, balance, stake, and rewards read the node JSON-RPC. Governance
 //! proposal commands are still a TODO: the node has no proposal RPC.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
 use crate::amount::{format_kuna_decimal, format_kuna_fixed};
@@ -46,6 +46,8 @@ pub struct SyncSnapshot {
     pub target: Option<u64>,
     pub peer_count: Option<usize>,
     pub peers: Vec<PeerView>,
+    /// Chain id from `networkTag`, `chainId`, or `chain_id`, when the node sent one.
+    pub node_chain_id: Option<u64>,
 }
 
 /// How far the node is from the peers it can see.
@@ -66,8 +68,10 @@ pub enum SyncState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainStatus {
     pub rpc: String,
-    /// `--chain-id` or `KOVANICA_CHAIN_ID`. The node does not report this.
+    /// `--chain-id` or `KOVANICA_CHAIN_ID`.
     pub signing_chain_id: Option<u64>,
+    /// Chain id the node reported, when `kovanica_syncStatus` included one.
+    pub node_chain_id: Option<u64>,
     pub height: Option<u64>,
     pub round: Option<u64>,
     pub epoch: Option<u64>,
@@ -123,7 +127,49 @@ pub fn parse_sync_status(value: &Value) -> Result<SyncSnapshot> {
         target: optional_quantity(object.get("catchUpTarget"))?,
         peer_count,
         peers,
+        node_chain_id: reported_chain_id(object)?,
     })
+}
+
+/// Chain id from a sync-status object.
+///
+/// `networkTag` is `<chain_id>-<16 hex genesis digest>`. A numeric `chainId`
+/// or `chain_id` is used when the tag is absent. Missing fields mean the node
+/// did not report a chain.
+fn reported_chain_id(object: &serde_json::Map<String, Value>) -> Result<Option<u64>> {
+    if let Some(tag) = object.get("networkTag").and_then(Value::as_str) {
+        let prefix = tag.split_once('-').map(|(id, _)| id).unwrap_or(tag);
+        if prefix.is_empty() {
+            return Ok(None);
+        }
+        let id = prefix.parse::<u64>().map_err(|_| {
+            anyhow!("kovanica_syncStatus networkTag does not start with a chain id")
+        })?;
+        return Ok(Some(id));
+    }
+    for key in ["chainId", "chain_id"] {
+        if let Some(value) = object.get(key) {
+            if value.is_null() {
+                return Ok(None);
+            }
+            return Ok(Some(
+                parse_quantity(value).with_context(|| format!("kovanica_syncStatus {key}"))?,
+            ));
+        }
+    }
+    Ok(None)
+}
+
+/// Refuse to sign when `--chain-id` and the node name two different chains.
+fn refuse_chain_mismatch(local: Option<u64>, reported: Option<u64>) -> Result<()> {
+    if let (Some(local), Some(reported)) = (local, reported) {
+        if local != reported {
+            bail!(
+                "--chain-id {local} does not match the node's chain {reported}. Refusing to use a different chain."
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Parse `kovanica_getCommitteeInfo` into `(epoch, members)`.
@@ -179,6 +225,7 @@ pub fn assemble_status(
     ChainStatus {
         rpc: rpc.to_string(),
         signing_chain_id,
+        node_chain_id: sync.and_then(|item| item.node_chain_id),
         height,
         round,
         epoch,
@@ -192,7 +239,7 @@ pub fn assemble_status(
 fn status_json(status: &ChainStatus) -> Value {
     json!({
         "rpc": status.rpc,
-        "chainIdReportedByNode": false,
+        "chainIdReportedByNode": status.node_chain_id.is_some(),
         "signingChainId": status.signing_chain_id,
         "latestBlock": status.height,
         "round": status.round,
@@ -218,7 +265,7 @@ fn status_rows(status: &ChainStatus) -> Vec<(&'static str, String)> {
         ("RPC", status.rpc.clone()),
         (
             "Signing chain id",
-            signing_chain_label(status.signing_chain_id),
+            signing_chain_label(status.signing_chain_id, status.node_chain_id),
         ),
         ("Height", optional_number(status.height)),
         ("Round", optional_number(status.round)),
@@ -232,10 +279,13 @@ fn status_rows(status: &ChainStatus) -> Vec<(&'static str, String)> {
     ]
 }
 
-fn signing_chain_label(chain_id: Option<u64>) -> String {
-    match chain_id {
-        Some(id) => format!("{id} (local flag; the node does not report chain_id)"),
-        None => "not reported by the node".to_string(),
+fn signing_chain_label(local: Option<u64>, reported: Option<u64>) -> String {
+    match (local, reported) {
+        (Some(id), Some(node)) if id == node => format!("{id} (matches the node)"),
+        (Some(id), Some(node)) => format!("{id} (local flag; the node reports chain {node})"),
+        (Some(id), None) => format!("{id} (local flag; the node does not report chain_id)"),
+        (None, Some(id)) => format!("{id} (reported by the node)"),
+        (None, None) => "not reported by the node".to_string(),
     }
 }
 
@@ -285,8 +335,9 @@ fn stake_cell(value: Option<&Value>) -> String {
 /// `kovanica status` — height, round, epoch, peers, and sync, as the node reports them.
 ///
 /// `signing_chain_id` is the local `--chain-id` / `KOVANICA_CHAIN_ID` value.
-/// No RPC returns the node's chain id, so the command says so instead of
-/// inventing one.
+/// When `kovanica_syncStatus` includes `networkTag` or `chainId` and that
+/// chain differs from the flag, the command refuses. When the node reports
+/// nothing, status still says the chain id is a local flag.
 pub async fn status(
     client: &RpcClient,
     signing_chain_id: Option<u64>,
@@ -316,6 +367,9 @@ pub async fn status(
             Err(_) => (None, Vec::new()),
         },
     };
+    if let Some(snapshot) = &sync {
+        refuse_chain_mismatch(signing_chain_id, snapshot.node_chain_id)?;
+    }
     let health_peers = if sync.as_ref().and_then(|item| item.peer_count).is_none() {
         client.health_peer_count().await
     } else {
@@ -688,6 +742,49 @@ mod tests {
             "catching up (behind 4 rounds, target 40)"
         );
         assert_eq!(row(&rows, "Signing chain id"), "not reported by the node");
+
+        let tagged = parse_sync_status(&json!({
+            "committedHeight": 1,
+            "catchingUp": false,
+            "networkTag": "4-0123456789abcdef",
+        }))
+        .unwrap();
+        assert_eq!(tagged.node_chain_id, Some(4));
+        assert!(refuse_chain_mismatch(Some(4), tagged.node_chain_id).is_ok());
+        let mismatch = refuse_chain_mismatch(Some(1), tagged.node_chain_id)
+            .unwrap_err()
+            .to_string();
+        assert!(mismatch.contains("--chain-id 1"), "{mismatch}");
+        assert!(mismatch.contains("node's chain 4"), "{mismatch}");
+        let numeric = parse_sync_status(&json!({
+            "committedHeight": 1,
+            "chainId": 1,
+        }))
+        .unwrap();
+        assert_eq!(numeric.node_chain_id, Some(1));
+        assert!(refuse_chain_mismatch(Some(4), numeric.node_chain_id).is_err());
+        let snake = parse_sync_status(&json!({
+            "committedHeight": 1,
+            "chain_id": "0x4",
+        }))
+        .unwrap();
+        assert_eq!(snake.node_chain_id, Some(4));
+        assert!(parse_sync_status(&json!({"networkTag": "nope-abcd"})).is_err());
+        assert_eq!(sync.node_chain_id, None);
+        assert!(refuse_chain_mismatch(Some(4), None).is_ok());
+        assert!(refuse_chain_mismatch(None, Some(4)).is_ok());
+        let matched = assemble_status(
+            "http://127.0.0.1:8545/rpc",
+            Some(4),
+            None,
+            Some(&tagged),
+            None,
+            Vec::new(),
+            None,
+        );
+        assert_eq!(matched.node_chain_id, Some(4));
+        assert_eq!(status_json(&matched)["chainIdReportedByNode"], json!(true));
+        assert!(row(&status_rows(&matched), "Signing chain id").contains("matches the node"));
         assert_eq!(row(&rows, "Epoch"), "unknown");
     }
 

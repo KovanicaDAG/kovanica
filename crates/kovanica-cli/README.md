@@ -53,7 +53,7 @@ The release profile enables LTO, so a release build is slow.
 | Flag | Role |
 |------|------|
 | `--rpc-url` | Node JSON-RPC URL. Default `http://127.0.0.1:8545`. |
-| `--chain-id` | Signing chain id. Falls back to `KOVANICA_CHAIN_ID`. Required for commands that sign. The node does not report this value. |
+| `--chain-id` | Signing chain id. Falls back to `KOVANICA_CHAIN_ID`. Required for commands that sign. When the node reports `networkTag` or `chainId`, a different local value is refused. |
 | `--json` | Machine-readable JSON. |
 
 `kovanica --help` lists every command.
@@ -100,7 +100,10 @@ kovanica tui --keystore keystore.json
 
 `status` prints the local signing chain id, committed height, DAG round,
 committee epoch, sync state, peer count, and the current committee when the
-node returns them. Sync comes from `kovanica_syncStatus`. Epoch comes from
+node returns them. Sync comes from `kovanica_syncStatus`. When that object
+includes `networkTag` (the `<chain_id>-<digest>` prefix) or `chainId`, and
+`--chain-id` names a different chain, `status` refuses. If the node reports
+neither, the signing chain stays the local flag. Epoch comes from
 `kovanica_getCommitteeInfo`. Peer count falls back to `/health` when sync
 status is absent. A dead RPC still fails the command.
 
