@@ -391,6 +391,172 @@ pub fn balance_rows(address: &Address, atoms: u64) -> Vec<(&'static str, String)
     ]
 }
 
+/// Stake, the part of it that is this address's validator bond, and rewards.
+///
+/// `kovanica_getStake` is one number: own validator stake plus every delegation
+/// this address has made. The node does not return one row per delegation.
+/// `own` is the sum of matching `kovanica_getValidators` rows. `delegated` is
+/// `total - own` when that does not underflow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StakingReport {
+    pub address: Address,
+    pub total: u64,
+    pub own: u64,
+    pub delegated: u64,
+    /// `false` when the stake total is smaller than the matching validator rows.
+    pub total_covers_own: bool,
+    pub rewards: u64,
+    pub validator_rows: usize,
+    /// Commission from the first matching validator row.
+    pub commission_bps: Option<u64>,
+    /// Active flag from the first matching validator row.
+    pub active: Option<bool>,
+    /// Payout address from the first matching validator row.
+    pub payout: Option<Address>,
+}
+
+/// Split a stake total using validator rows compared as [`Address`] values.
+pub fn assemble_staking(
+    address: Address,
+    total: u64,
+    rewards: u64,
+    validators: &[Value],
+) -> Result<StakingReport> {
+    let mut own = 0u64;
+    let mut validator_rows = 0usize;
+    let mut commission_bps = None;
+    let mut active = None;
+    let mut payout = None;
+    for row in validators {
+        let Some(text) = row.get("address").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(row_address) = text.trim().parse::<Address>() else {
+            continue;
+        };
+        if row_address != address {
+            continue;
+        }
+        validator_rows += 1;
+        let stake = match row.get("stake") {
+            None | Some(Value::Null) => 0,
+            Some(value) => parse_quantity(value).context("validator stake")?,
+        };
+        own = own.saturating_add(stake);
+        if validator_rows == 1 {
+            commission_bps = row.get("commission_bps").and_then(Value::as_u64);
+            active = row.get("active").and_then(Value::as_bool);
+            payout = row
+                .get("payout_address")
+                .and_then(Value::as_str)
+                .and_then(|text| text.trim().parse::<Address>().ok());
+        }
+    }
+    let total_covers_own = total >= own;
+    Ok(StakingReport {
+        address,
+        total,
+        own,
+        delegated: total.saturating_sub(own),
+        total_covers_own,
+        rewards,
+        validator_rows,
+        commission_bps,
+        active,
+        payout,
+    })
+}
+
+fn staking_json(report: &StakingReport) -> Value {
+    json!({
+        "address": report.address.to_string(),
+        "total": report.total,
+        "totalKuna": format_kuna_decimal(report.total),
+        "own": report.own,
+        "ownKuna": format_kuna_decimal(report.own),
+        "delegated": report.delegated,
+        "delegatedKuna": format_kuna_decimal(report.delegated),
+        "rewards": report.rewards,
+        "rewardsKuna": format_kuna_decimal(report.rewards),
+        "totalCoversOwn": report.total_covers_own,
+        "validatorRows": report.validator_rows,
+        "commissionBps": report.commission_bps,
+        "active": report.active,
+        "payoutAddress": report.payout.as_ref().map(ToString::to_string),
+        "delegationDetail": "unavailable",
+    })
+}
+
+fn staking_rows(report: &StakingReport) -> Vec<(&'static str, String)> {
+    let mut rows = vec![
+        ("Address", report.address.to_string()),
+        ("Total stake", format_kuna_fixed(report.total)),
+        ("Own stake", format_kuna_fixed(report.own)),
+        ("Delegated", format_kuna_fixed(report.delegated)),
+        ("Rewards", format_kuna_fixed(report.rewards)),
+        ("Validator rows", report.validator_rows.to_string()),
+        (
+            "Commission (bps)",
+            report
+                .commission_bps
+                .map(|bps| bps.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        ),
+        (
+            "Active",
+            match report.active {
+                Some(true) => "yes".to_string(),
+                Some(false) => "no".to_string(),
+                None => "unknown".to_string(),
+            },
+        ),
+        (
+            "Payout",
+            report
+                .payout
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "unknown".to_string()),
+        ),
+        (
+            "Delegation detail",
+            "unavailable (the node returns one stake total)".to_string(),
+        ),
+    ];
+    if !report.total_covers_own {
+        rows.push((
+            "Stake check",
+            "total is smaller than own stake; delegated is zero".to_string(),
+        ));
+    }
+    rows
+}
+
+/// `kovanica staking <address>` — own stake, delegations, and rewards.
+pub async fn staking(client: &RpcClient, address: &str, json_output: bool) -> Result<()> {
+    let address = parse_address(address, "address")?;
+    let encoded = address.to_string();
+    let total = parse_quantity(
+        &client
+            .call("kovanica_getStake", json!([encoded.clone()]))
+            .await?,
+    )
+    .context("kovanica_getStake")?;
+    let rewards = parse_quantity(&client.call("kovanica_getRewards", json!([encoded])).await?)
+        .context("kovanica_getRewards")?;
+    let validators = client.call("kovanica_getValidators", json!([])).await?;
+    let validators = validators
+        .as_array()
+        .cloned()
+        .ok_or_else(|| anyhow!("kovanica_getValidators: expected an array"))?;
+    let report = assemble_staking(address, total, rewards, &validators)?;
+    if json_output {
+        return print_json(&staking_json(&report));
+    }
+    print_kv(&staking_rows(&report));
+    Ok(())
+}
+
 /// `kovanica balance <address>` — native balance, displayed in KUNA.
 pub async fn balance(client: &RpcClient, address: &str, json_output: bool) -> Result<()> {
     let address = parse_address(address, "address")?;
@@ -571,5 +737,105 @@ mod tests {
         let rows = balance_rows(&address, 1);
         assert_eq!(rows[1].1, "0.000000001 KUNA");
         assert_eq!(balance_rows(&address, 0)[1].1, "0.000000000 KUNA");
+    }
+
+    fn validator_row(address: &Address, stake: &str, commission: u64, active: bool) -> Value {
+        json!({
+            "address": address.to_string(),
+            "stake": stake,
+            "commission_bps": commission,
+            "active": active,
+            "payout_address": address.to_string(),
+        })
+    }
+
+    #[test]
+    fn staking_splits_own_stake_from_delegations() {
+        let address = Address([0x11; 32]);
+        let other = Address([0x22; 32]);
+        let mut own_row = validator_row(&address, "0x3b9aca00", 500, true);
+        own_row["address"] = json!(address.to_hex());
+        let validators = vec![
+            own_row,
+            validator_row(&other, "0x1", 0, true),
+            json!({"address": "not-an-address", "stake": "0x5"}),
+        ];
+        let report = assemble_staking(address, 1_500_000_000, 42, &validators).unwrap();
+        assert_eq!(report.own, 1_000_000_000);
+        assert_eq!(report.delegated, 500_000_000);
+        assert_eq!(report.rewards, 42);
+        assert!(report.total_covers_own);
+        assert_eq!(report.validator_rows, 1);
+        assert_eq!(report.commission_bps, Some(500));
+        assert_eq!(report.active, Some(true));
+        assert_eq!(report.payout, Some(address));
+
+        let body = staking_json(&report);
+        assert_eq!(body["address"], json!(address.to_string()));
+        assert_eq!(body["total"], json!(1_500_000_000u64));
+        assert_eq!(body["totalKuna"], json!("1.500000000"));
+        assert_eq!(body["ownKuna"], json!("1.000000000"));
+        assert_eq!(body["delegatedKuna"], json!("0.500000000"));
+        assert_eq!(body["rewards"], json!(42));
+        assert_eq!(body["rewardsKuna"], json!("0.000000042"));
+        assert_eq!(body["payoutAddress"], json!(address.to_string()));
+        assert_eq!(body["delegationDetail"], json!("unavailable"));
+
+        let rows = staking_rows(&report);
+        assert_eq!(row(&rows, "Total stake"), "1.500000000 KUNA");
+        assert_eq!(row(&rows, "Own stake"), "1.000000000 KUNA");
+        assert_eq!(row(&rows, "Delegated"), "0.500000000 KUNA");
+        assert_eq!(row(&rows, "Rewards"), "0.000000042 KUNA");
+        assert_eq!(row(&rows, "Payout"), address.to_string());
+    }
+
+    #[test]
+    fn staking_does_not_invent_a_delegation_when_the_total_is_smaller() {
+        let address = Address([0x33; 32]);
+        let validators = vec![validator_row(&address, "0x3b9aca00", 100, false)];
+        let report = assemble_staking(address, 10, 0, &validators).unwrap();
+        assert_eq!(report.own, 1_000_000_000);
+        assert_eq!(report.delegated, 0);
+        assert!(!report.total_covers_own);
+        assert_eq!(report.active, Some(false));
+        let rows = staking_rows(&report);
+        assert_eq!(
+            row(&rows, "Stake check"),
+            "total is smaller than own stake; delegated is zero"
+        );
+        assert_eq!(staking_json(&report)["totalCoversOwn"], json!(false));
+    }
+
+    #[test]
+    fn staking_sums_duplicate_validator_rows_and_keeps_the_first() {
+        let address = Address([0x44; 32]);
+        let mut first = validator_row(&address, "0xffffffffffffffff", 1, true);
+        first["payout_address"] = json!(Address([0x55; 32]).to_string());
+        let second = validator_row(&address, "0x5", 9, false);
+        let report = assemble_staking(address, u64::MAX, 0, &[first, second]).unwrap();
+        assert_eq!(report.own, u64::MAX);
+        assert_eq!(report.delegated, 0);
+        assert!(report.total_covers_own);
+        assert_eq!(report.validator_rows, 2);
+        assert_eq!(report.commission_bps, Some(1));
+        assert_eq!(report.active, Some(true));
+        assert_eq!(report.payout, Some(Address([0x55; 32])));
+    }
+
+    #[test]
+    fn staking_with_no_validator_row_treats_the_total_as_delegated() {
+        let address = Address([0x66; 32]);
+        let report = assemble_staking(address, 7, 3, &[]).unwrap();
+        assert_eq!(report.own, 0);
+        assert_eq!(report.delegated, 7);
+        assert_eq!(report.rewards, 3);
+        assert_eq!(report.validator_rows, 0);
+        assert_eq!(report.commission_bps, None);
+        assert_eq!(report.payout, None);
+        let rows = staking_rows(&report);
+        assert_eq!(row(&rows, "Commission (bps)"), "unknown");
+        assert_eq!(row(&rows, "Active"), "unknown");
+        assert_eq!(row(&rows, "Payout"), "unknown");
+        assert!(staking_json(&report)["payoutAddress"].is_null());
     }
 }

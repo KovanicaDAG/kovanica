@@ -3,7 +3,12 @@
 //!
 //! `stake` / `unstake` / `delegate` / `claim-rewards` are implemented as signed native
 //! transactions that go out over the ordinary `kovanica_sendRawTransaction` path.
-//! No staking-specific node RPC is introduced and private key material never leaves the machine.
+//! Private key material never leaves the machine.
+//!
+//! `kovanica staking <address>` is read-only. It calls the existing
+//! `kovanica_getStake`, `kovanica_getRewards`, and `kovanica_getValidators`
+//! methods. `getStake` is one total (own validator stake plus delegations).
+//! The node does not return one row per delegation.
 //!
 //! The actual command implementations are in `main.rs` using the shared
 //! `sign_and_submit_self` helper for consistency with `stake`/`unstake`.

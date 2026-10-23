@@ -79,6 +79,11 @@ enum Commands {
         /// Kovanica address
         address: String,
     },
+    /// Show stake, delegations, and rewards for a Kovanica address
+    Staking {
+        /// Kovanica address
+        address: String,
+    },
     /// Stake KUNA (builds and submits a signed Stake transaction)
     Stake(AmountArgs),
     /// Unstake KUNA (builds and submits a signed Unstake transaction)
@@ -423,6 +428,7 @@ async fn main() -> Result<()> {
         Commands::Transfer(args) => cmd_transfer(&client, chain_id, args, json).await,
         Commands::Status | Commands::Info => node::status(&client, chain_id, json).await,
         Commands::Balance { address } => node::balance(&client, &address, json).await,
+        Commands::Staking { address } => node::staking(&client, &address, json).await,
         Commands::Stake(args) => cmd_stake(&client, chain_id, args, json).await,
         Commands::Unstake(args) => cmd_unstake(&client, chain_id, args, json).await,
         Commands::RegisterLightNode(args) => {
