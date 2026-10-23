@@ -124,14 +124,18 @@ pub const UNBONDING_ROUNDS: u64 = 100_000;
 /// Jail length for a slashed validator, in committed leader heights (PRO-19).
 ///
 /// A slashed validator is deactivated immediately and may not re-enter until
-/// `committed_leader_height >= jailed_until_height`. `21_600` committed leaders
-/// is about 3 days at 12 s/leader — matching Toni's 2026-10-20 decision ("jailed
-/// for 3 epochs, about 1 day" in *epochs*, expressed here in committed leaders
-/// to match `UNBONDING_ROUNDS` and `EPOCH_ROUNDS` units).
+/// `committed_leader_height >= jailed_until_height`. `7_200` committed leaders
+/// is about 1 day at 12 s/leader (`86_400 / 12`), which is Toni's 2026-10-23
+/// decision ("jail about 1 day, `JAIL_ROUNDS = 7200`"), replacing the earlier
+/// `21_600` (about 3 days). It is deliberately the same number and the same
+/// unit as [`EPOCH_ROUNDS`] and [`COMMISSION_CHANGE_COOLDOWN`].
+///
+/// After the jail the validator returns only through an explicit stake
+/// transaction (`reactivate_validator`); nothing re-activates it automatically.
 ///
 /// The field is compared against `committed_leader_height` (heights), not DAG
 /// rounds — see the note on `UNBONDING_ROUNDS` about the historical name.
-pub const JAIL_ROUNDS: u64 = 21_600;
+pub const JAIL_ROUNDS: u64 = 7_200;
 
 /// Epoch rotation length in committed leaders (≈ 1 day at 12 s/leader:
 /// `86_400 / 12 = 7_200`).
@@ -3125,6 +3129,18 @@ mod tests {
         );
     }
     // --- PRO-19 part 2: slash jail (explicit re-entry only) ---
+
+    /// Toni's 2026-10-23 decision: the jail lasts about one day. At 12 s per
+    /// committed leader that is 7_200 heights, i.e. exactly one epoch and one
+    /// commission cooldown, and it is enforced end to end: still jailed one
+    /// height before release, re-stakeable exactly at release.
+    #[test]
+    fn jail_lasts_one_day_of_committed_leaders() {
+        assert_eq!(JAIL_ROUNDS, 7_200);
+        assert_eq!(JAIL_ROUNDS, EPOCH_ROUNDS);
+        assert_eq!(JAIL_ROUNDS, COMMISSION_CHANGE_COOLDOWN);
+        assert_eq!(JAIL_ROUNDS * LEADER_INTERVAL_SECS, 86_400);
+    }
 
     /// A slashed validator leaves the active set at once and is jailed until
     /// `committed_leader_height + JAIL_ROUNDS`. Nothing re-activates it by
