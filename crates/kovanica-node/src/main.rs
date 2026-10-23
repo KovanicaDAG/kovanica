@@ -4242,7 +4242,6 @@ fn build_mempool_config() -> MempoolConfig {
     config
 }
 
-/// Build the [`NetworkConfig`] from the node configuration.
 /// Log this node's network tag at startup and return it (#87 follow-up).
 ///
 /// Every protocol id and topic carries the tag, and a peer with another tag
@@ -4266,6 +4265,7 @@ fn network_tag_from_config(config: &NodeConfig) -> Result<String> {
     Ok(build_network_config(config)?.network_id.tag())
 }
 
+/// Build the [`NetworkConfig`] from the node configuration.
 fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
     let listen = to_multiaddr(&config.listen_addr)?;
 
