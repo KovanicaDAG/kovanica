@@ -4,7 +4,7 @@ Two scripts live here:
 
 | Script      | Purpose                                                                 | Used by |
 |-------------|-------------------------------------------------------------------------|---------|
-| `run-soak.sh` | **The soak runner.** Brings up the compose stack, waits for health + commits, exercises the node for `SOAK_SECS`, samples `/health` + `/metrics`, fails on the first stall or crash, and collects logs on failure. | `.github/workflows/soak.yml` (nightly + manual) |
+| `run-soak.sh` | **The soak runner.** Brings up the compose stack, waits for health + commits, exercises the node for `SOAK_SECS`, samples `/health` + `/metrics`, fails on the first stall or crash, and collects logs on failure. | manual (the `soak.yml` workflow was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14)) |
 | `soak.sh`   | Legacy Phase 12.4 RSS/memory monitor. Assumes a 4-node stack is *already* running (`kovanica-quorum-node1..4`) and only logs memory every 30 s; it never brings the stack up and never gates on a stall. | manual memory runs only |
 
 For CI use `run-soak.sh`. `soak.sh` predates the current compose service names
@@ -79,17 +79,16 @@ long-lived machine:
 SOAK_SECS=86400 ./ops/soak/run-soak.sh
 ```
 
-## CI workflow
+## CI workflow (removed)
 
-`.github/workflows/soak.yml` runs the runner:
+`.github/workflows/soak.yml` was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14). It ran this runner nightly (03:00 UTC) and on
+`workflow_dispatch`, with `timeout-minutes: 180` and the `soak-artifacts/`
+directory uploaded on every run. Until the soak job exists again, run the
+runner by hand:
 
-* **Triggers:** nightly `schedule` (03:00 UTC) and `workflow_dispatch` with a
-  `duration` input (seconds). It never runs on push/PR.
-* **Concurrency:** `group: soak`, `cancel-in-progress: false` — a scheduled and
-  a manual soak can never overlap, and a running soak is never cancelled.
-* **Timeout:** `timeout-minutes: 180` for the whole job (build + warm-up + soak).
-* **Artifacts:** the `soak-artifacts/` directory (`OUT_DIR`) is uploaded on
-  every run (`if: always()`), so a failing soak leaves its logs behind.
+```bash
+SOAK_SECS=86400 OUT_DIR=soak-artifacts ops/soak/run-soak.sh
+```
 
 ## Known gaps / prerequisites
 

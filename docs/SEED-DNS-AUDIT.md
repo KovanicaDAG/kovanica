@@ -239,7 +239,7 @@ volumes:
 ### Phase 3: Testnet Launch (T-0)
 1. [ ] Deploy explorer to Cloudflare Pages
 2. [ ] Add DNS records for `explorer.kovanica.online` (proxied)
-3. [ ] Deploy faucet CI job (GitHub Actions nightly)
+3. [ ] Deploy faucet CI job (kvnc GitHub Actions were removed 2026-10-23, PR #78; CI moves to kovanica-protocol, PRO-14)
 3. [ ] Announce testnet: seeds, faucet, explorer, RPC endpoints
 4. [ ] Monitor `#testnet` Discord channel for issues
 
