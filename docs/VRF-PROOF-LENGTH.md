@@ -65,7 +65,7 @@ VRF proof (96 bytes)
   └─ s              32 B   response scalar
 
 Block statements payload (137 bytes)
-  ├─ magic           9 B   b"KVNC-VRF1"
+  ├─ magic           9 B   b"KUNA-VRF1"
   ├─ VRF hash       32 B   beta = SHA3-256(compress(Gamma))  (deterministic)
   └─ VRF proof      96 B   Gamma ‖ c ‖ s                     (non-deterministic)
 
@@ -119,16 +119,16 @@ no trailing 16-byte `pi`. RFC 9381 also renamed the draft-era suite
 
 ## 4. Every in-tree site that hardcodes 96 or 137
 
-### 137-byte `KVNC-VRF1` framing
+### 137-byte `KUNA-VRF1` framing
 
 | Site | What it does |
 |---|---|
 | `crates/kovanica-crypto/src/vrf.rs:145` | doc comment: magic 9 + hash 32 + proof 96 = 137 |
 | `crates/kovanica-crypto/src/vrf.rs:148` | `encode_statements` — `Vec::with_capacity(137)` |
 | `crates/kovanica-crypto/src/vrf.rs:149-151` | `encode_statements` — writes magic, hash, proof |
-| `crates/kovanica-crypto/src/vrf.rs:157` | `decode_statements` — gate `data.len() < 137 \|\| &data[..9] != b"KVNC-VRF1"` |
+| `crates/kovanica-crypto/src/vrf.rs:157` | `decode_statements` — gate `data.len() < 137 \|\| &data[..9] != b"KUNA-VRF1"` |
 | `crates/kovanica-crypto/src/vrf.rs:162-163` | `decode_statements` — `hash` from `data[9..41]`, `proof` from `data[41..137]` |
-| `crates/kovanica-types/src/block.rs:78` | `compute_digest_statements` — statements enter the block digest only if `len >= 137 && &s[..9] == b"KVNC-VRF1"` |
+| `crates/kovanica-types/src/block.rs:78` | `compute_digest_statements` — statements enter the block digest only if `len >= 137 && &s[..9] == b"KUNA-VRF1"` |
 | `crates/kovanica-dag/src/block_manager.rs:356-358` | `create_block` — gate before recording the verified VRF output |
 | `crates/kovanica-dag/src/block_manager.rs:374` | `create_block` — gate before passing statements into the digest |
 | `crates/kovanica-dag/src/block_manager.rs:480-490` | `validate_block_content` — `decode_statements` + `vrf_verify` on inbound blocks |
@@ -181,7 +181,7 @@ as *open* because they were out of the authorised edit scope.
 | `crates/kovanica-crypto/src/vrf.rs:3` (module header) | `Implements ECVRF-ED25519-SHA512-Elligator2 per RFC 9381 via `ecvrf` crate.` | `Implements a Ristretto + SHA3 ECVRF via the `ecvrf` crate (NOT an RFC 9381 suite; 96-byte proof). See docs/VRF-PROOF-LENGTH.md.` — **open** (needs a one-line code edit outside this item's scope) |
 | `crates/kovanica-crypto/src/vrf.rs:8` | `proof` = 96-byte VRF proof | keep — accurate; see the `VRFOutput` doc comment (added in this change) for the layout |
 | `docs/VALIDATOR-ONBOARDING.md:51` | `(ECVRF-ED25519-SHA512-Elligator2 per RFC 9381)` | `(ecvrf 0.4.3, Ristretto255 + SHA3; see docs/VRF-PROOF-LENGTH.md)` — **fixed in this change** |
-| `docs/AUDIT-SCOPE.md:91, 180` | `ECVRF (ecvrf crate v0.4)` / `ecvrf = "0.4.0"` | suite + 96-byte proof + `KVNC-VRF1` framing / `ecvrf = "0.4.3"` — **fixed in this change** |
+| `docs/AUDIT-SCOPE.md:91, 180` | `ECVRF (ecvrf crate v0.4)` / `ecvrf = "0.4.0"` | suite + 96-byte proof + `KUNA-VRF1` framing / `ecvrf = "0.4.3"` — **fixed in this change** |
 | `docs/rfcs/RFC-B1-B2-VRF-AND-MIN-DIGEST.md:20` | `implements ECVRF-ED25519` | add a pointer to this document — **fixed in this change** (see the 2026-10-21 update note at the top of the draft) |
 
 ### Follow-ups for the owner (not actioned here)
@@ -225,7 +225,7 @@ ls ~/.cargo/registry/src/*/ecvrf-0.4.3/src/lib.rs
 grep -n "to_bytes\|from_bytes" ~/.cargo/registry/src/*/ecvrf-0.4.3/src/lib.rs
 
 # in-tree framing
-grep -rn "KVNC-VRF1\|\b137\b" crates/ --include="*.rs"
+grep -rn "KUNA-VRF1\|\b137\b" crates/ --include="*.rs"
 
 cargo check -p kovanica-crypto
 cargo test  -p kovanica-crypto --lib

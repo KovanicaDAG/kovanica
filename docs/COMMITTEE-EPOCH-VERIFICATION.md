@@ -29,7 +29,7 @@ sorts the members by authority index and hashes
 epoch.to_le_bytes() ‖ u32_le(count) ‖ for each member { index.to_le_bytes() ‖ 32-byte public key ‖ stake.to_le_bytes() }
 ```
 
-keyed as `Hash::new_keyed(DOMAIN_COMMITTEE = b"KVNC-COMMITTEE-v1", &data)`
+keyed as `Hash::new_keyed(DOMAIN_COMMITTEE = b"KUNA-COMMITTEE-v1", &data)`
 (`crates/kovanica-types/src/hash.rs:20,46`).
 
 Two consequences follow directly from the input:

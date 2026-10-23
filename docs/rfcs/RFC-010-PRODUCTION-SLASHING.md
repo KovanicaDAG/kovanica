@@ -274,7 +274,8 @@ are rejected).
 
 Shipped live (no activation gate): `slash_validator` now sets `active = false`
 and `jailed_until_height = committed_leader_height + JAIL_ROUNDS`
-(`JAIL_ROUNDS = 21_600` committed leaders, ≈3 days at 12 s/leader). A slashed
+(`JAIL_ROUNDS = 7_200` committed leaders, ≈1 day at 12 s/leader — Toni's
+2026-10-23 decision, replacing the earlier `21_600` ≈3 days). A slashed
 validator therefore leaves the committee in the same sub-DAG that carries the
 evidence.
 

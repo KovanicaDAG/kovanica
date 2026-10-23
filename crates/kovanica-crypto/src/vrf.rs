@@ -20,7 +20,7 @@ use thiserror::Error;
 /// §5.1/§5.4.4 encodes `Gamma || c (16) || s (32)` = 80 bytes for both
 /// Edwards25519 suites (`ECVRF-EDWARDS25519-SHA512-TAI` / `-ELL2`), so the
 /// 80-byte figure does not apply here and must not be used to resize this
-/// type (it would break the 137-byte `KVNC-VRF1` statements framing and the
+/// type (it would break the 137-byte `KUNA-VRF1` statements framing and the
 /// `SubmitLightWitness` transaction body). See `docs/VRF-PROOF-LENGTH.md`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VRFOutput {
@@ -143,11 +143,11 @@ pub fn vrf_hash_to_u64(hash: &[u8; 32]) -> u64 {
 }
 
 /// Encode a VRF output into the `statements` payload (wire format).
-/// Magic prefix `KVNC-VRF1` (9 bytes) + 32-byte hash + 96-byte proof = 137 bytes.
+/// Magic prefix `KUNA-VRF1` (9 bytes) + 32-byte hash + 96-byte proof = 137 bytes.
 /// Old blocks with empty `statements` remain exactly as-is.
 pub fn encode_statements(output: &VRFOutput) -> Vec<u8> {
     let mut v = Vec::with_capacity(137);
-    v.extend_from_slice(b"KVNC-VRF1");
+    v.extend_from_slice(b"KUNA-VRF1");
     v.extend_from_slice(&output.hash);
     v.extend_from_slice(&output.proof);
     v
@@ -155,7 +155,7 @@ pub fn encode_statements(output: &VRFOutput) -> Vec<u8> {
 
 /// Decode a VRF payload from `statements` if present; else None.
 pub fn decode_statements(data: &[u8]) -> Option<VRFOutput> {
-    if data.len() < 137 || &data[..9] != b"KVNC-VRF1" {
+    if data.len() < 137 || &data[..9] != b"KUNA-VRF1" {
         return None;
     }
     let mut hash = [0u8; 32];
