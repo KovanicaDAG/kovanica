@@ -311,7 +311,7 @@ async fn faucet_handler(
     }
 
     // Parse destination address
-    let to_address = match parse_address(&req.address) {
+    let to_address = match parse_address(&req.address, state.config.signing_ctx.chain_id) {
         Ok(addr) => addr,
         Err(e) => {
             return (
@@ -449,8 +449,13 @@ async fn faucet_handler(
     }
 }
 
-fn parse_address(s: &str) -> Result<Address> {
-    s.trim().parse::<Address>().context("invalid address")
+/// Parse a dispense destination for the faucet's chain.
+///
+/// Canonical base32 is accepted on every chain. Legacy hex is accepted only
+/// where [`kovanica_types::address::legacy_address_allowed`] is true, so
+/// chain 1 refuses it.
+fn parse_address(s: &str, chain_id: u64) -> Result<Address> {
+    Address::parse_for_chain(s, chain_id).context("invalid address")
 }
 
 async fn get_nonce(client: &reqwest::Client, rpc_url: &str, address: &Address) -> Result<u64> {
@@ -720,26 +725,22 @@ mod guard_tests {
 
     #[test]
     fn parse_address_accepts_canonical_kvnc_dag_format() {
-        // A valid 32-byte public key (just for testing)
         let pk_bytes = [1u8; 32];
         let address = Address(pk_bytes);
-        let canonical = address.encode(); // kvnc<hex>dag with correct checksum
-        let parsed = parse_address(&canonical).expect("canonical format parses");
+        let canonical = address.encode();
+        let parsed = parse_address(&canonical, chain_id::MAINNET).expect("canonical format parses");
         assert_eq!(parsed.to_hex(), address.to_hex());
     }
 
     #[test]
     fn parse_address_rejects_invalid_canonical_checksum() {
-        // Create a valid address and then tamper with the checksum
         let pk_bytes = [2u8; 32];
         let address = Address(pk_bytes);
-        let canonical = address.encode(); // kvnc<hex>dag with correct checksum
-                                          // Tamper with the checksum (last 8 hex chars before "dag")
+        let canonical = address.encode();
         let mut bad_canonical = canonical.clone();
-        let checksum_start = bad_canonical.len() - "dag".len() - 8; // 8 hex chars = 4 bytes checksum
+        let checksum_start = bad_canonical.len() - "dag".len() - 8;
         bad_canonical.replace_range(checksum_start..checksum_start + 2, "ff");
-        let err = parse_address(&bad_canonical).unwrap_err();
-        // The error wraps AddressError::ChecksumMismatch with "invalid address" context
+        let err = parse_address(&bad_canonical, chain_id::MAINNET).unwrap_err();
         assert!(
             err.to_string().contains("invalid address"),
             "got error: {}",
@@ -747,17 +748,27 @@ mod guard_tests {
         );
     }
 
+    /// Chain 1 refuses legacy hex. Devnet, chain 4, and local still accept it.
     #[test]
-    fn parse_address_accepts_bare_hex_for_backward_compatibility() {
+    fn parse_address_follows_the_chain_policy() {
         let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let address = parse_address(pk_hex).expect("bare hex parses");
-        assert_eq!(address.to_hex(), pk_hex);
-    }
-
-    #[test]
-    fn parse_address_accepts_0x_prefixed_hex() {
-        let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let address = parse_address(&format!("0x{}", pk_hex)).expect("0x-prefixed hex parses");
-        assert_eq!(address.to_hex(), pk_hex);
+        let address = Address(hex::decode(pk_hex).unwrap().try_into().expect("32 bytes"));
+        let forms = [
+            pk_hex.to_string(),
+            format!("0x{pk_hex}"),
+            address.encode_legacy_hex(),
+        ];
+        for form in &forms {
+            let err = parse_address(form, chain_id::MAINNET).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("not accepted"),
+                "{form} on chain 1: {err:#}"
+            );
+            for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+                let parsed = parse_address(form, chain)
+                    .unwrap_or_else(|e| panic!("{form} on chain {chain}: {e:#}"));
+                assert_eq!(parsed, address);
+            }
+        }
     }
 }
