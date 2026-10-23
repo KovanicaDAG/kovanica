@@ -640,13 +640,18 @@ where
     /// a quorum. Now:
     ///
     /// 1. the cursor is restored from the persisted decision index;
-    /// 2. every leader slot in `(cursor, tip]` whose scheduled leader block is
+    /// 2. stored decide-round carriers in `(cursor, tip]` are re-verified
+    ///    through the block manager, and those VRF outputs are ingested
+    ///    **before** any leader is selected;
+    /// 3. every leader slot in `(cursor, tip]` whose scheduled leader block is
     ///    in the store is registered again, and the votes persisted for it
     ///    (RFC-009) are replayed through [`Self::process_vote`], the same
     ///    authentication boundary as live votes.
     ///
-    /// A slot whose block is not in the store keeps no record, so the walk
-    /// stalls there until block sync delivers it. It never skips the slot.
+    /// Selecting the leader first would see an empty VRF map and fall back to
+    /// round-robin, then miss the VRF leader's block. A slot whose block is
+    /// not in the store keeps no record, so the walk stalls there until block
+    /// sync delivers it. It never skips the slot.
     fn restore_undecided_leaders(&self, tip: Round) -> Result<(), ConsensusError> {
         let cursor = self
             .dag_store
@@ -656,6 +661,11 @@ where
             .unwrap_or(0);
         self.committer.restore_last_decided_round(cursor);
         let cursor = self.committer.last_decided_round();
+
+        // Replay, then ingest, then select. Ingest with an empty manager
+        // (no replay) leaves the map empty and the slot stays round-robin.
+        self.replay_stored_vrf_carriers(cursor, tip)?;
+        self.ingest_vrf_outputs();
 
         let mut restored = 0usize;
         let mut round = (cursor / kovanica_types::WAVE_LENGTH + 1) * kovanica_types::WAVE_LENGTH;
@@ -690,6 +700,39 @@ where
                 cursor,
                 restored, "restored the commit cursor and undecided leaders from the store"
             );
+        }
+        Ok(())
+    }
+
+    /// Re-verify decide-round carriers whose VRF outputs elect leaders in
+    /// `(cursor, tip]`.
+    ///
+    /// The block manager is new on every process start, so its verified-output
+    /// map is empty until these blocks are processed again. A carrier that
+    /// fails verification is skipped: that beacon stays incomplete and the
+    /// slot keeps round-robin. The scan is only the decide round (wave offset
+    /// 2) of each leader slot, and it stops at `u64::MAX` instead of wrapping.
+    fn replay_stored_vrf_carriers(&self, cursor: Round, tip: Round) -> Result<(), ConsensusError> {
+        let mut slot = (cursor / kovanica_types::WAVE_LENGTH + 1) * kovanica_types::WAVE_LENGTH;
+        while slot <= tip {
+            if let Some(beacon) = election_beacon(slot) {
+                if beacon > cursor && beacon <= tip {
+                    for block in self.dag_store.get_blocks_by_round(beacon)? {
+                        if let Err(e) = self.block_manager.read().process_block(&block) {
+                            debug!(
+                                round = beacon,
+                                author = block.author,
+                                error = %e,
+                                "stored VRF carrier was not re-verified"
+                            );
+                        }
+                    }
+                }
+            }
+            slot = match slot.checked_add(kovanica_types::WAVE_LENGTH) {
+                Some(next) => next,
+                None => break,
+            };
         }
         Ok(())
     }
@@ -1591,6 +1634,11 @@ mod tests {
         stored_tip: RwLock<Option<Round>>,
         /// Votes persisted through `DagStoreTrait::put_vote`, in write order.
         persisted_votes: Mutex<Vec<kovanica_types::Vote>>,
+        /// Digests whose `process_block` records a VRF output without checking
+        /// a signature. Empty unless a test is replaying stored carriers.
+        replay_vrf: RwLock<HashMap<Hash, [u8; 32]>>,
+        /// Outputs recorded by [`TestBlockManager::process_block`].
+        recorded_vrf: RwLock<HashMap<Round, HashMap<AuthorityIndex, [u8; 32]>>>,
     }
 
     impl DagStoreTrait for TestDag {
@@ -1861,10 +1909,26 @@ mod tests {
             &self,
             block: &kovanica_types::StatementBlock,
         ) -> Result<(), kovanica_dag::BlockManagerError> {
+            if let Some(output) = self.dag.replay_vrf.read().get(&block.digest).copied() {
+                self.dag
+                    .recorded_vrf
+                    .write()
+                    .entry(block.round)
+                    .or_default()
+                    .insert(block.author, output);
+                self.dag.put_block(block)?;
+                return Ok(());
+            }
             let public_key = PublicKey::from(self.key.read().verifying_key());
             kovanica_crypto::verify_block_signature(&public_key, &block.digest, &block.signature)?;
             self.dag.put_block(block)?;
             Ok(())
+        }
+
+        fn verified_vrf_outputs(
+            &self,
+        ) -> HashMap<Round, HashMap<kovanica_types::AuthorityIndex, [u8; 32]>> {
+            self.dag.recorded_vrf.read().clone()
         }
 
         fn our_authority(&self) -> AuthorityIndex {
@@ -2847,6 +2911,106 @@ mod tests {
             engine.scheduled_leader_for_round(3),
             Some(0),
             "lower stake-weighted VRF hash must beat the prefetched round-robin leader"
+        );
+    }
+
+    /// Restart must replay stored decide-round carriers and ingest them before
+    /// it selects the leader. Round-robin for round 3 is authority 1. The
+    /// outputs below elect authority 0, and only authority 0's leader block is
+    /// stored. Selecting round-robin first leaves the slot unregistered.
+    ///
+    /// The engine map starts empty. Outputs appear only when `process_block`
+    /// sees `replay_vrf`, so calling `ingest_vrf_outputs` without that replay
+    /// still elects round-robin and this test fails.
+    #[test]
+    fn restart_ingests_vrf_outputs_before_restoring_leaders() {
+        let (key, public_key) = kovanica_crypto::generate_keypair();
+        let dag = Arc::new(TestDag::default());
+        let committee = CommitteeInfo::try_new(
+            0,
+            vec![
+                AuthorityInfo {
+                    index: 0,
+                    stake: 100,
+                    public_key,
+                    vrf_public_key: Some(kovanica_types::crypto::PublicKey([1; 32])),
+                    address: Address::default(),
+                    network_address: String::new(),
+                },
+                AuthorityInfo {
+                    index: 1,
+                    stake: 100,
+                    public_key: kovanica_types::crypto::PublicKey([9; 32]),
+                    vrf_public_key: Some(kovanica_types::crypto::PublicKey([2; 32])),
+                    address: Address::default(),
+                    network_address: String::new(),
+                },
+            ],
+        )
+        .expect("committee");
+        let manager = Arc::new(RwLock::new(TestBlockManager {
+            dag: dag.clone(),
+            key: RwLock::new(key.clone()),
+            set_key_calls: AtomicUsize::new(0),
+        }));
+        let engine = ConsensusEngine::new(
+            ConsensusConfig::default(),
+            committee,
+            dag.clone(),
+            manager,
+            key,
+            None,
+            TEST_CTX,
+        );
+        assert_eq!(engine.scheduled_leader_for_round(3), Some(1));
+
+        let mut replay = dag.replay_vrf.write();
+        for (author, output) in [(0u16, [0x01u8; 32]), (1u16, [0xffu8; 32])] {
+            let digest = kovanica_types::Hash([author as u8 + 1; 32]);
+            replay.insert(digest, output);
+            let block = kovanica_types::StatementBlock {
+                author,
+                round: 2,
+                parents: Vec::new(),
+                transactions: Vec::new(),
+                statements: Vec::new(),
+                signature: kovanica_types::Signature([0; 64]),
+                digest,
+                merkle_root: Default::default(),
+            };
+            dag.blocks.write().insert(digest, block);
+        }
+        drop(replay);
+
+        let leader_digest = kovanica_types::Hash([0x11; 32]);
+        dag.blocks.write().insert(
+            leader_digest,
+            kovanica_types::StatementBlock {
+                author: 0,
+                round: 3,
+                parents: Vec::new(),
+                transactions: Vec::new(),
+                statements: Vec::new(),
+                signature: kovanica_types::Signature([0; 64]),
+                digest: leader_digest,
+                merkle_root: Default::default(),
+            },
+        );
+        *dag.stored_tip.write() = Some(3);
+
+        engine.resume_from_store().expect("resume");
+
+        let leader = engine
+            .committer
+            .get_leader(3)
+            .expect("VRF leader is registered from the stored block");
+        assert_eq!(leader.author, 0);
+        assert_eq!(leader.block_hash, Some(leader_digest));
+        assert!(
+            dag.recorded_vrf.read().get(&2).is_some_and(|outputs| {
+                outputs.len() == 2 && outputs.get(&0) == Some(&[0x01; 32])
+            }),
+            "carriers must be re-verified before the leader is selected"
         );
     }
 
