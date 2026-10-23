@@ -1105,6 +1105,13 @@ where
         let our_authority = self.state.read().our_authority;
         {
             // Check-and-mark under one lock: exactly one caller wins.
+            //
+            // `voted_rounds` is memory-only. After a restart it is empty, and
+            // a min-digest swap rejects the replayed vote (`LeaderHashMismatch`),
+            // so the awaited-slot path would sign a second digest for the same
+            // slot. The stored vote for `(slot, our authority)` is the lock:
+            // a different digest is refused, and the same digest is not signed
+            // again.
             let mut voted = self.voted_rounds.lock();
             if voted.contains(&leader_round) || leader_info.votes.contains_key(&our_authority) {
                 debug!("Already voted for leader round {}", leader_round);
@@ -1125,6 +1132,40 @@ where
                 );
                 return Ok(false);
             }
+            match self.dag_store.get_votes_for_round(leader_round) {
+                Ok(votes) => {
+                    if let Some(stored) = votes.into_iter().find(|vote| vote.voter == our_authority)
+                    {
+                        voted.insert(leader_round);
+                        if stored.leader_hash != leader_hash {
+                            warn!(
+                                leader_round,
+                                voter = our_authority,
+                                stored = %stored.leader_hash,
+                                candidate = %leader_hash,
+                                "refusing to sign a second digest for the same slot"
+                            );
+                        } else {
+                            debug!(
+                                "stored self-vote already covers leader round {}",
+                                leader_round
+                            );
+                        }
+                        return Ok(false);
+                    }
+                }
+                Err(e) => {
+                    // Fail closed. Signing without knowing whether a vote is
+                    // already stored can publish two digests for one slot.
+                    warn!(
+                        leader_round,
+                        voter = our_authority,
+                        error = %e,
+                        "refusing to vote; the stored self-vote could not be read"
+                    );
+                    return Ok(false);
+                }
+            }
             voted.insert(leader_round);
         }
 
@@ -1140,24 +1181,26 @@ where
             &vote.signature_data(&self.vote_signing_ctx(leader_round)),
         );
 
-        // Record the vote locally
-        self.committer
-            .add_vote(leader_round, our_authority, leader_hash);
-
-        // Persist the vote. The node's own vote is part of the evidence for
-        // this leader round, and a peer that joins later needs it to reach a
-        // quorum: the joiner itself cannot vote for rounds outside its late
-        // vote window, so it depends on the votes this node holds. A storage
-        // failure is logged and never fatal — the vote is already recorded
-        // locally (RFC-009).
+        // Persist before broadcast and before the vote counts locally. A
+        // crash or a storage error must not leave a signature on the wire
+        // that the next start cannot see. A failed write is not remembered,
+        // same as a timeout that could not be stored: nothing was sent, so a
+        // later attempt may still vote. Once a vote is stored, the check
+        // above refuses a second digest for this slot.
         if let Err(e) = self.dag_store.as_ref().put_vote(&vote) {
+            self.voted_rounds.lock().remove(&leader_round);
             warn!(
                 leader_round,
                 voter = our_authority,
                 error = %e,
-                "own vote could not be persisted; it cannot be served to a joining peer"
+                "own vote could not be persisted; not broadcasting it"
             );
+            return Ok(false);
         }
+
+        // Record the vote locally only after it is durable.
+        self.committer
+            .add_vote(leader_round, our_authority, leader_hash);
 
         // Broadcast the vote. Log unconditionally: a vote we recorded locally
         // but could not broadcast is exactly the state that stalls a quorum,
@@ -2034,6 +2077,8 @@ mod tests {
         stored_tip: RwLock<Option<Round>>,
         /// Votes persisted through `DagStoreTrait::put_vote`, in write order.
         persisted_votes: Mutex<Vec<kovanica_types::Vote>>,
+        /// When set, `put_vote` fails without storing the vote.
+        fail_put_vote: std::sync::atomic::AtomicBool,
         /// Timeouts persisted through `DagStoreTrait::put_timeout`.
         persisted_timeouts: Mutex<Vec<kovanica_types::Timeout>>,
         /// Rounds recorded through `DagStoreTrait::mark_round_skipped`.
@@ -2281,6 +2326,11 @@ mod tests {
         }
 
         fn put_vote(&self, vote: &kovanica_types::Vote) -> Result<(), kovanica_dag::DagStoreError> {
+            if self.fail_put_vote.load(Ordering::SeqCst) {
+                return Err(kovanica_dag::DagStoreError::NotFound(
+                    "injected vote write failure".into(),
+                ));
+            }
             self.persisted_votes.lock().push(vote.clone());
             Ok(())
         }
@@ -3397,6 +3447,256 @@ mod tests {
         assert!(!dag.has_block(&bigger).unwrap());
     }
 
+    /// Equivocating leader, min-digest swap, then a restart.
+    ///
+    /// The node voted for digest X. The store then replaced the leader block
+    /// with a smaller digest Y. After restart, `voted_rounds` is empty and
+    /// replaying the stored vote X fails with `LeaderHashMismatch`, so the
+    /// awaited-slot path would otherwise sign Y. It must not.
+    #[test]
+    fn restart_after_min_digest_swap_does_not_vote_the_replacement() {
+        let (our_key, our_public) = kovanica_crypto::generate_keypair();
+        let (leader_key, leader_public) = kovanica_crypto::generate_keypair();
+        let dag = Arc::new(TestDag::default());
+        let authorities = vec![
+            AuthorityInfo {
+                index: 0,
+                stake: 1,
+                public_key: our_public,
+                vrf_public_key: None,
+                address: Address::default(),
+                network_address: String::new(),
+            },
+            AuthorityInfo {
+                index: 1,
+                stake: 1,
+                public_key: leader_public,
+                vrf_public_key: None,
+                address: Address::default(),
+                network_address: String::new(),
+            },
+            AuthorityInfo {
+                index: 2,
+                stake: 1,
+                public_key: PublicKey([2; 32]),
+                vrf_public_key: None,
+                address: Address::default(),
+                network_address: String::new(),
+            },
+            AuthorityInfo {
+                index: 3,
+                stake: 1,
+                public_key: PublicKey([3; 32]),
+                vrf_public_key: None,
+                address: Address::default(),
+                network_address: String::new(),
+            },
+        ];
+        let committee = CommitteeInfo::try_new(0, authorities).expect("committee");
+        // Round 3 is slot 1. With 4 authorities the round-robin leader is index 1,
+        // so this node (index 0) votes and one vote is not a quorum.
+        assert_eq!(committee.leader(3), 1);
+        let config = ConsensusConfig {
+            round_duration_ms: 100,
+            use_min_digest_fork: true,
+            ..ConsensusConfig::default()
+        };
+        let manager = Arc::new(RwLock::new(TestBlockManager {
+            dag: dag.clone(),
+            key: RwLock::new(leader_key.clone()),
+            set_key_calls: AtomicUsize::new(0),
+        }));
+        let engine = ConsensusEngine::new(
+            config.clone(),
+            committee.clone(),
+            dag.clone(),
+            manager,
+            our_key.clone(),
+            None,
+            TEST_CTX,
+        );
+
+        let digest_x = kovanica_types::Hash([0x20; 32]);
+        let digest_y = kovanica_types::Hash([0x10; 32]);
+        let block_x = kovanica_types::StatementBlock {
+            author: 1,
+            round: 3,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&leader_key, digest_x.as_ref()),
+            digest: digest_x,
+            merkle_root: Default::default(),
+        };
+        engine.process_block(&block_x).unwrap();
+
+        let broadcast = Arc::new(Mutex::new(Vec::<kovanica_types::Vote>::new()));
+        let broadcast_log = broadcast.clone();
+        let dag_for_broadcast = dag.clone();
+        engine.set_vote_broadcaster(Arc::new(move |vote: &kovanica_types::Vote| {
+            let stored = dag_for_broadcast
+                .get_votes_for_round(vote.leader_round)
+                .expect("stored votes");
+            assert!(
+                stored
+                    .iter()
+                    .any(|stored| stored.voter == vote.voter
+                        && stored.leader_hash == vote.leader_hash),
+                "the vote must be persisted before it is broadcast"
+            );
+            broadcast_log.lock().push(vote.clone());
+        }));
+
+        assert!(
+            engine.vote_for_leader(3).unwrap(),
+            "the node votes for the first leader digest"
+        );
+        assert_eq!(broadcast.lock().len(), 1);
+        assert_eq!(broadcast.lock()[0].leader_hash, digest_x);
+
+        let block_y = kovanica_types::StatementBlock {
+            digest: digest_y,
+            signature: kovanica_crypto::sign(&leader_key, digest_y.as_ref()),
+            ..block_x
+        };
+        engine.process_block(&block_y).unwrap();
+        assert_eq!(
+            engine
+                .committer
+                .get_leader(3)
+                .and_then(|leader| leader.block_hash),
+            Some(digest_y),
+            "min-digest swap replaces the leader block before it is decided"
+        );
+        assert!(
+            broadcast
+                .lock()
+                .iter()
+                .all(|vote| vote.leader_hash != digest_y),
+            "the same process must not vote for the replacement"
+        );
+
+        // Restart: new engine, same store. The tip is far enough past the
+        // late-vote window that only the awaited-slot path can vote.
+        let restarted_manager = Arc::new(RwLock::new(TestBlockManager {
+            dag: dag.clone(),
+            key: RwLock::new(leader_key),
+            set_key_calls: AtomicUsize::new(0),
+        }));
+        let restarted = ConsensusEngine::new(
+            config,
+            committee,
+            dag.clone(),
+            restarted_manager,
+            our_key,
+            None,
+            TEST_CTX,
+        );
+        let restarted_broadcast = Arc::new(Mutex::new(Vec::<kovanica_types::Vote>::new()));
+        let restarted_log = restarted_broadcast.clone();
+        restarted.set_vote_broadcaster(Arc::new(move |vote: &kovanica_types::Vote| {
+            restarted_log.lock().push(vote.clone());
+        }));
+        *dag.stored_tip.write() = Some(20);
+        restarted.resume_from_store().expect("resume");
+        assert_eq!(
+            restarted
+                .committer
+                .get_leader(3)
+                .and_then(|leader| leader.block_hash),
+            Some(digest_y),
+            "restore registers the swapped leader block"
+        );
+        restarted.vote_awaited_slots().expect("awaited slots");
+
+        assert!(
+            restarted_broadcast.lock().is_empty(),
+            "restart must not broadcast a vote for Y, got {:?}",
+            restarted_broadcast
+                .lock()
+                .iter()
+                .map(|vote| vote.leader_hash)
+                .collect::<Vec<_>>()
+        );
+        let own_votes: Vec<_> = dag
+            .get_votes_for_round(3)
+            .unwrap()
+            .into_iter()
+            .filter(|vote| vote.voter == 0)
+            .collect();
+        assert_eq!(own_votes.len(), 1, "exactly one stored self-vote");
+        assert_eq!(own_votes[0].leader_hash, digest_x);
+        assert!(own_votes.iter().all(|vote| vote.leader_hash != digest_y));
+    }
+
+    /// A failed durable write must not put the vote on the wire. The slot is
+    /// not remembered, so once storage accepts the write the same slot is
+    /// voted and the vote is stored before it is broadcast.
+    #[test]
+    fn failed_vote_write_is_not_broadcast() {
+        let (engine, dag, key) = test_engine(100);
+        let digest = kovanica_types::StatementBlock::compute_digest(0, 3, &[], &[]);
+        let block = kovanica_types::StatementBlock {
+            author: 0,
+            round: 3,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+        engine.process_block(&block).unwrap();
+        dag.fail_put_vote.store(true, Ordering::SeqCst);
+
+        let sent = Arc::new(Mutex::new(Vec::<kovanica_types::Vote>::new()));
+        let sent_log = sent.clone();
+        let dag_for_broadcast = dag.clone();
+        engine.set_vote_broadcaster(Arc::new(move |vote: &kovanica_types::Vote| {
+            let stored = dag_for_broadcast
+                .get_votes_for_round(vote.leader_round)
+                .expect("stored votes");
+            assert!(
+                stored.iter().any(|stored| {
+                    stored.voter == vote.voter && stored.leader_hash == vote.leader_hash
+                }),
+                "the vote must be persisted before it is broadcast"
+            );
+            sent_log.lock().push(vote.clone());
+        }));
+        let (commit_tx, mut commits) = mpsc::unbounded_channel();
+        engine.set_commit_sender(commit_tx);
+
+        assert!(
+            !engine.vote_for_leader(3).unwrap(),
+            "a failed write does not cast a vote"
+        );
+        assert!(
+            sent.lock().is_empty(),
+            "a failed write must not broadcast, got {:?}",
+            sent.lock()
+                .iter()
+                .map(|vote| vote.leader_hash)
+                .collect::<Vec<_>>()
+        );
+        assert!(dag.persisted_votes.lock().is_empty());
+        assert!(
+            engine.committer.get_leader(3).unwrap().votes.is_empty(),
+            "the vote must not count locally when it was not stored"
+        );
+        assert!(commits.try_recv().is_err(), "nothing is committed");
+
+        dag.fail_put_vote.store(false, Ordering::SeqCst);
+        assert!(
+            engine.vote_for_leader(3).unwrap(),
+            "storage recovered, so the slot can still be voted"
+        );
+        assert_eq!(sent.lock().len(), 1);
+        assert_eq!(sent.lock()[0].leader_hash, digest);
+        assert_eq!(dag.get_votes_for_round(3).unwrap().len(), 1);
+        assert_eq!(commits.try_recv().unwrap().leader.digest, digest);
+    }
+
     #[test]
     fn fork_same_digest_is_idempotent() {
         let (engine, _dag, key) = test_engine(100);
@@ -4415,6 +4715,54 @@ mod tests {
         let sent = f.recorder.timeouts.lock().clone();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0], f.engine.own_timeouts.lock()[&6]);
+    }
+
+    /// The other half of the durable xor: a vote written before it was sent
+    /// still refuses a timeout for that slot after restart, and the restarted
+    /// node rebroadcasts the stored vote.
+    #[test]
+    fn restart_after_own_vote_refuses_the_timeout() {
+        let keys = key_pairs();
+        let dag = Arc::new(TestDag::default());
+        {
+            let f = skip_fixture_with(dag.clone(), keys.clone());
+            *f.engine.current_round.write() = 4;
+            let block = leader_block(&f.committee, &f.keys[0], 3);
+            f.engine.process_block(&block).unwrap();
+            assert_eq!(*f.votes.lock(), vec![3]);
+            assert!(!f.engine.sign_timeout(3).unwrap(), "voted: no timeout");
+            assert_eq!(
+                dag.persisted_votes.lock().len(),
+                1,
+                "the vote is stored before it is broadcast"
+            );
+        }
+        *dag.stored_tip.write() = Some(9);
+        let f = skip_fixture_with(dag.clone(), keys);
+        f.engine.resume_from_store().unwrap();
+        assert!(
+            f.engine.voted_rounds.lock().contains(&3),
+            "the stored self-vote is restored"
+        );
+        assert!(
+            !f.engine.sign_timeout(3).unwrap(),
+            "no timeout after restart"
+        );
+        assert!(f.recorder.timeouts.lock().is_empty());
+        f.engine.time_out_or_rebroadcast(3).unwrap();
+        assert!(
+            f.recorder.timeouts.lock().is_empty(),
+            "rebroadcast must not sign a timeout"
+        );
+        assert_eq!(*f.votes.lock(), vec![3], "the stored vote is rebroadcast");
+        assert!(
+            dag.get_votes_for_round(3)
+                .unwrap()
+                .iter()
+                .any(|vote| vote.voter == f.engine.state.read().our_authority),
+            "the stored vote is unchanged"
+        );
+        assert!(dag.persisted_timeouts.lock().is_empty());
     }
 
     #[test]
