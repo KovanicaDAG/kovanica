@@ -1,8 +1,9 @@
 //! P2P networking layer (libp2p).
 //!
 //! The crate runs a [`libp2p::Swarm`] composed of gossipsub (topics `blocks`,
-//! `transactions`, `votes`, `sync`, and `seals`), Kademlia peer discovery, ping-based
-//! liveness and identify, wrapped in [`NetworkService`]. Swarm activity is
+//! `transactions`, `votes`, `sync`, `state_sync` and `seals`), Kademlia peer
+//! discovery, ping-based liveness and identify, wrapped in [`NetworkService`].
+//! Every protocol id and topic is scoped to one chain ([`NetworkId`]). Swarm activity is
 //! translated into a stream of [`NetworkEvent`]s for the rest of the node.
 
 #![deny(unsafe_code)]
@@ -14,6 +15,7 @@ mod behaviour;
 mod block_sync;
 mod error;
 pub mod identity;
+pub mod network_id;
 pub mod scoring;
 mod service;
 mod state_sync;
@@ -23,8 +25,17 @@ pub mod validation;
 
 pub use block_sync::{
     BlockSyncRequest, BlockSyncRequestEvent, BlockSyncResponse, BlockSyncResponseEvent, VoteSource,
-    BLOCK_SYNC_PROTOCOL, BLOCK_SYNC_PROTOCOL_LEGACY,
+    BLOCK_SYNC_PROTOCOL,
 };
+pub use network_id::NetworkId;
+
+/// Identify protocol version suffix; the advertised version is
+/// [`NetworkId::identify_version`].
+pub const IDENTIFY_VERSION: &str = "1.0.0";
+
+/// Kademlia protocol suffix; the full id is `NetworkId::protocol(KAD_PROTOCOL)`.
+/// Peers speaking another chain's id are ignored by the DHT.
+pub const KAD_PROTOCOL: &str = "kad/1.0.0";
 pub use error::NetworkError;
 pub use scoring::PeerScoringConfig;
 pub use service::{NetworkService, PeerStatus};
@@ -133,6 +144,8 @@ pub struct NetworkConfig {
     pub node_key_path: Option<std::path::PathBuf>,
     /// Gossipsub peer scoring (on by default, see [`PeerScoringConfig`]).
     pub peer_scoring: PeerScoringConfig,
+    /// Chain id + genesis digest bound into every protocol id and topic.
+    pub network_id: NetworkId,
 }
 
 impl Default for NetworkConfig {
@@ -151,6 +164,7 @@ impl Default for NetworkConfig {
             ping_interval: Duration::from_secs(10),
             node_key_path: None,
             peer_scoring: PeerScoringConfig::default(),
+            network_id: NetworkId::default(),
         }
     }
 }

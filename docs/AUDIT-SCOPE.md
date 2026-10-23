@@ -108,7 +108,7 @@ certificate) against the subsidy/epoch invariants in §2.5.
 | `service.rs` | **High** | `NetworkService` wrapping libp2p Swarm; gossipsub topics: `blocks`, `transactions`, `votes`, `sync`, `seals`; Kademlia + ping + identify; serves `VotesForRound` from the durable vote store via `VoteSource` and validates the answer against the request |
 | `validation.rs` | **Critical** | Edge validation before gossip: block digest/merkle/author/signature; vote signature + committee membership + leader round/hash match; seal signature + header match |
 | `scoring.rs` | **High** | Peer scoring: topic mesh delivery, validation rejects, behaviour penalties; ban threshold |
-| `block_sync.rs` | **High** | Request-response block sync (protocol `/kovanica/block-sync/1`); carries block history **and** (since RFC-009) per-round vote history, bounded to `MAX_VOTES_PER_ROUND = 64` |
+| `block_sync.rs` | **High** | Request-response block sync (protocol `/kovanica/<chain_id>-<genesis prefix>/block-sync/1.1.0`; every protocol id and topic is chain-scoped, `network_id.rs`); carries block history **and** (since RFC-009) per-round vote history, bounded to `MAX_VOTES_PER_ROUND = 64` |
 | `state_sync.rs` | **High** | Request-response state sync (protocol `/kovanica/state-sync/1`) |
 | `identity.rs` | **Medium** | Persistent node identity (Ed25519 transport key, `0600` file perms), no hard-coded bootstrap nodes |
 
