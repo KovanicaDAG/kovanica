@@ -112,7 +112,10 @@ impl Address {
     }
 
     /// Decode the canonical 64-character form, verifying the checksum.
-    /// Legacy hex forms are rejected here; see [`Self::parse_for_chain`].
+    ///
+    /// The 57-character body is the lowercase bech32 alphabet. An uppercase
+    /// letter is [`AddressError::InvalidBase32`]. Legacy hex forms are
+    /// rejected here; see [`Self::parse_for_chain`].
     pub fn decode(value: &str) -> Result<Self, AddressError> {
         let body = value
             .strip_prefix(ADDRESS_PREFIX)
@@ -170,6 +173,10 @@ impl Address {
 
     /// The legacy hex forms. Chain-independent; callers decide whether they
     /// are allowed.
+    ///
+    /// Hex digits are case-insensitive (`a-f` and `A-F`). The `kvnc` and
+    /// `dag` affixes, and the `0x` prefix, are lowercase only. The canonical
+    /// base32 body is a different alphabet and is strictly lowercase.
     fn parse_legacy(value: &str) -> Result<Self, AddressError> {
         if value.starts_with(ADDRESS_PREFIX) || value.ends_with(ADDRESS_SUFFIX) {
             let body = value
@@ -460,6 +467,66 @@ mod tests {
             "0x1234".parse::<Address>(),
             Err(AddressError::MissingAffix)
         ));
+    }
+
+    /// Legacy hex digits accept `A-F`. Base32 does not: the alphabet is lowercase.
+    #[test]
+    fn legacy_hex_digits_are_case_insensitive_and_base32_is_lowercase() {
+        let address = sample();
+        let encoded = address.encode();
+        let ch = encoded.as_bytes()[10];
+        assert!(ch.is_ascii_lowercase());
+        let mut upper_body = encoded.clone();
+        upper_body.replace_range(10..11, &char::from(ch).to_ascii_uppercase().to_string());
+        assert_eq!(
+            upper_body.parse::<Address>(),
+            Err(AddressError::InvalidBase32)
+        );
+        assert_eq!(
+            Address::parse_for_chain(&upper_body, chain_id::MAINNET),
+            Err(AddressError::InvalidBase32)
+        );
+
+        let legacy = address.encode_legacy_hex();
+        let body = &legacy[ADDRESS_PREFIX.len()..legacy.len() - ADDRESS_SUFFIX.len()];
+        let upper_legacy = format!(
+            "{ADDRESS_PREFIX}{}{ADDRESS_SUFFIX}",
+            body.to_ascii_uppercase()
+        );
+        for chain in [chain_id::DEVNET, chain_id::TESTNET_V2, chain_id::LOCAL] {
+            assert_eq!(
+                Address::parse_for_chain(&upper_legacy, chain).unwrap(),
+                address,
+                "chain {chain}"
+            );
+        }
+        assert_eq!(
+            Address::parse_for_chain(&upper_legacy, chain_id::MAINNET),
+            Err(AddressError::LegacyNotAllowed(chain_id::MAINNET))
+        );
+        assert_eq!(
+            Address::parse_for_chain(&upper_legacy, chain_id::TESTNET),
+            Err(AddressError::LegacyNotAllowed(chain_id::TESTNET))
+        );
+        assert!(upper_legacy.parse::<Address>().is_err());
+
+        let upper_bare = address.to_hex().to_ascii_uppercase();
+        assert_eq!(
+            Address::parse_for_chain(&upper_bare, chain_id::TESTNET_V2).unwrap(),
+            address
+        );
+        assert_eq!(
+            Address::parse_for_chain(&format!("0x{upper_bare}"), chain_id::TESTNET_V2).unwrap(),
+            address
+        );
+        assert_eq!(
+            Address::parse_for_chain(&format!("0X{upper_bare}"), chain_id::TESTNET_V2),
+            Err(AddressError::InvalidHex)
+        );
+        assert_eq!(
+            Address::parse_for_chain(&legacy.to_ascii_uppercase(), chain_id::TESTNET_V2),
+            Err(AddressError::InvalidHex)
+        );
     }
 
     #[test]

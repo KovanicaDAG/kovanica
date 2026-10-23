@@ -178,6 +178,25 @@ describe("addresses and amounts", () => {
     }
   });
 
+  it("treats legacy hex digits as case-insensitive and base32 as lowercase (PRO-21)", () => {
+    const upperHex = fixture.publicKeyHex.toUpperCase();
+    expect(bytesToHex(parseAddress(upperHex, 4))).toBe(fixture.publicKeyHex);
+    expect(bytesToHex(parseAddress(`0x${upperHex}`, 1337))).toBe(fixture.publicKeyHex);
+    const legacy = fixture.senderAddressLegacy;
+    const upperLegacy = `kvnc${legacy.slice(4, -3).toUpperCase()}dag`;
+    expect(bytesToHex(parseAddress(upperLegacy, 3))).toBe(fixture.publicKeyHex);
+    expect(() => parseAddress(upperLegacy, 1)).toThrow(/not accepted/);
+    const letter = [...fixture.senderAddress].findIndex(
+      (c, i) => i > 3 && i < 61 && c >= "a" && c <= "z",
+    );
+    expect(letter).toBeGreaterThan(3);
+    const upperBody =
+      fixture.senderAddress.slice(0, letter) +
+      fixture.senderAddress[letter].toUpperCase() +
+      fixture.senderAddress.slice(letter + 1);
+    expect(() => parseAddress(upperBody, 4)).toThrow(/alphabet/);
+  });
+
   it("parses KUNA with 9 decimal places", () => {
     expect(parseKuna("1.5")).toBe(1_500_000_000n);
     expect(parseKuna("0")).toBe(0n);

@@ -6,7 +6,7 @@
 
 **Naming (zaključano):** chain = **Kovanica**, native coin ticker = **KUNA** (9 decimals),
 codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-node`, `KOVANICA_*`). Adresa je
-`kvnc` + 57 base32 znakova (bech32 abeceda) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); legacy `kvnc<hex>dag` i hex na chainovima 3, 4 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Nikad ne koristi `KVNC` kao naziv valute.
+`kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3, 4 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Nikad ne koristi `KVNC` kao naziv valute.
 
 | Layer              | Choice                                      |
 |--------------------|---------------------------------------------|

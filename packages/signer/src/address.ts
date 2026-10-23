@@ -107,7 +107,8 @@ function decodeLegacy(trimmed: string): Uint8Array {
  * Parse an address. The canonical form is accepted everywhere. The legacy hex forms
  * (`kvnc<hex>dag`, bare or `0x` hex) are accepted when `chainId` is 3, 4, or 1337.
  * Omitting `chainId` still accepts legacy hex (console follow-up). Rust `FromStr` is
- * base32 only; chain checks match `Address::parse_for_chain`.
+ * base32 only; chain checks match `Address::parse_for_chain`. The base32 body is
+ * strictly lowercase. Legacy hex digits accept `A-F`; `kvnc`, `dag`, and `0x` do not.
  */
 export function parseAddress(value: string, chainId?: number): Uint8Array {
   const trimmed = value.trim();
