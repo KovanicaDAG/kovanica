@@ -50,9 +50,10 @@ class TokenClient(private val node: NodeClient) {
      */
     fun read(contractHex: String): TokenRead {
         val valueHex = try {
+            val contract = KvncAddress.canonical(contractHex) ?: contractHex
             node.call(
                 "kovanica_getStorageAt",
-                JSONArray().put(contractHex).put("0x" + TokenCodec.stateSlotHex()),
+                JSONArray().put(contract).put("0x" + TokenCodec.stateSlotHex()),
             )
         } catch (error: Exception) {
             return TokenRead.Failed(error.message ?: "the node didn't answer")
@@ -132,7 +133,8 @@ class TokenClient(private val node: NodeClient) {
             keystoreJson,
             passphrase,
             chainId,
-            TokenCodec.hex(contract),
+            KvncAddress.canonical(TokenCodec.hex(contract))
+                ?: throw IllegalArgumentException("That isn't a valid contract address."),
             NO_NATIVE_VALUE, // a token transfer sends no KUNA
             TRANSFER_METHOD, // "token_transfer"
             argsHex,
@@ -147,7 +149,7 @@ class TokenClient(private val node: NodeClient) {
 
     /** A validated 32-byte address as raw bytes; throws on any malformed input. */
     private fun addressBytes(hex: String, what: String): ByteArray {
-        val normalized = KvncAddress.normalizeHex(hex)
+        val normalized = KvncAddress.storedKey(hex)
             ?: throw IllegalArgumentException("That isn't a valid $what.")
         return TokenCodec.unhex(normalized)
             ?: throw IllegalArgumentException("That isn't a valid $what.")
