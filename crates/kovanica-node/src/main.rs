@@ -3692,6 +3692,12 @@ impl DagStoreTrait for NodeDagStore {
         Ok(())
     }
 
+    fn get_votes_for_round(&self, round: Round) -> Result<Vec<Vote>, DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_read()?;
+        Ok(storage.consensus().get_votes_for_round(&txn, round)?)
+    }
+
     fn max_stored_round(&self) -> Result<Option<Round>, DagStoreError> {
         self.inner.max_dag_round()
     }
