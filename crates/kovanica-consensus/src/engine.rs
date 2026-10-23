@@ -699,7 +699,15 @@ where
         Ok(())
     }
 
-    /// Skip a leader slot (timeout or fork resolution).
+    /// Handle a leader slot whose deadline expired (timeout).
+    ///
+    /// Since PRO-35 this is **not** a decision: it records a hash-less leader
+    /// placeholder, increments the timeout counter and returns the slot's
+    /// in-flight transactions to the mempool so a later leader can re-propose
+    /// them. The committer never learns that the round was "skipped" — it keeps
+    /// stalling at the round until a real quorum arrives, so a node that
+    /// timed out and a node that did not can never commit different leaders at
+    /// the same height.
     fn skip_leader(&self, round: Round) -> Result<(), ConsensusError> {
         if let Some(leader) = self.scheduled_leader_for_round(round) {
             let info = LeaderInfo {
@@ -710,10 +718,11 @@ where
                 votes: HashMap::new(),
             };
             self.committer.update_leader(info);
-            // Only the timeout path reaches here today; the indirect and
-            // direct-blame skips are unreachable with one leader per wave.
+            // No Skip decision is recorded (PRO-35): the counter below measures
+            // "the leader block did not arrive by the deadline", not "the chain
+            // moved past this round". The chain stalls instead.
             record_skipped_leader(SkipReason::Timeout);
-            info!("Leader round {} skipped (timeout/fork)", round);
+            info!("Leader round {} timed out (no commit decision)", round);
 
             // Return the skipped leader's in-flight transactions to mempool queue
             // so they can be re-proposed by the next leader
@@ -851,15 +860,14 @@ where
         // round this node settled differently, producing divergent committed
         // sequences (see `late_join_integration`). Refuse in that case.
         //
-        // A `register_skip` decision is deliberately *provisional*: it records
-        // the Skip without advancing the cursor precisely so that a leader
-        // block arriving after a timeout can still be decided
-        // (`UniversalCommitter::try_commit_with_leader` re-examines decided
-        // rounds that have a live block-bearing leader). Refusing to vote on
-        // any decided round would defeat that and make a single timeout
-        // permanent: the round could never gather a quorum, the advance would
-        // never happen, and the chain would stall. So only refuse once the
-        // cursor has actually passed the round.
+        // Since PRO-35 the only decision is Commit: `decided_leaders` never
+        // holds a Skip, and `mark_decided` is the only writer of the cursor, so
+        // `is_decided` and "the cursor passed this round" now coincide. The
+        // explicit cursor comparison is kept because it is the property that
+        // matters — a timeout is *not* a decision, so a round this node merely
+        // timed out on must still be votable when its block finally arrives
+        // (otherwise one missed timeout would make quorum unreachable and the
+        // chain would halt while every component still reported healthy).
         if self.committer.is_decided(leader_round)
             && self.committer.last_decided_round() >= leader_round
         {
@@ -960,12 +968,17 @@ where
         if current <= round {
             return Ok(());
         }
-        // Only vote while the round is still recent. A leader block for a round
-        // the network has already moved far past cannot be turned into a
-        // certificate all nodes honour: ahead nodes have decided the round as
-        // Skip and can never revisit it, so a certificate they co-sign would be
-        // acted on only by the lagging node. Refusing the vote keeps every node
-        // on the same committed sequence (see `late_vote_window_rounds`).
+        // Only vote while the round is still recent (`late_vote_window_rounds`,
+        // default `WAVE_LENGTH` = 3 rounds).
+        //
+        // WARNING (PRO-40): this window was written for the skip design — an
+        // ahead node could decide a stale round as Skip and never revisit it, so
+        // a late certificate would have been acted on only by the lagging peer.
+        // Since PRO-35 no node skips: an ahead node *stalls* at the missing
+        // round, which makes a late vote exactly what restores quorum. The window
+        // therefore converts a recoverable stall into a permanent halt once it
+        // expires. Do not widen or remove it without the PRO-40 liveness
+        // decision — vote validity is consensus-visible.
         if current - round > self.config.late_vote_window_rounds {
             debug!(
                 "Not voting for stale leader round {} (current round {}, window {})",

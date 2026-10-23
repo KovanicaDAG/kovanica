@@ -234,7 +234,14 @@ impl UniversalCommitter {
     }
 
     /// Explicitly register a skip for a leader (timeout resolution).
-    /// Persists Skip in both leaders and decided maps when appropriate.
+    ///
+    /// **Test-only since PRO-35.** The node no longer records Skip decisions: a
+    /// node-local skip let other nodes commit the same round, so two nodes
+    /// produced different committed-leader sequences at the same height (fork).
+    /// `try_commit_with_leader` now stalls instead. Kept so the regression
+    /// tests can still build the "a skip was decided" state and prove the
+    /// properties the removed paths violated.
+    #[cfg(test)]
     pub fn register_skip(&self, round: Round, author: AuthorityIndex) {
         let info = LeaderInfo {
             round,
@@ -261,10 +268,20 @@ impl UniversalCommitter {
     /// Update leader information for a round.
     /// Deterministic tie-break (fork): same (round, author) with different
     /// digest keeps the lexicographically smaller digest; larger rejected.
+    ///
+    /// A hash-less record (a timeout placeholder) never replaces a record that
+    /// already carries a leader block, whichever author it names. Otherwise a
+    /// node whose leader schedule diverges from its peers (PRO-7) could erase a
+    /// block it already holds when its own slot deadline for that round expires,
+    /// and — now that `try_commit_with_leader` stalls at the first undecided
+    /// round instead of skipping it (PRO-35) — it could never commit again.
     pub fn update_leader(&self, leader_info: LeaderInfo) {
         let mut leaders = self.leaders.write();
         let key = leader_info.round;
         if let Some(existing) = leaders.get(&key) {
+            if leader_info.block_hash.is_none() && existing.block_hash.is_some() {
+                return;
+            }
             if existing.author == leader_info.author {
                 match (
                     existing.block_hash.as_ref(),
@@ -505,13 +522,14 @@ impl UniversalCommitter {
                 return self
                     .build_committed_subdag(dag_store, leader_info)
                     .map(|(subdag, colouring)| (subdag, leader_info.clone(), colouring));
-            } else if direct_status == LeaderStatus::Skip {
-                // Mark as skipped and continue
-                let mut skipped = leader_info.clone();
-                skipped.status = LeaderStatus::Skip;
-                self.mark_decided(round, skipped);
-                continue;
             }
+
+            // `try_direct_decide` only ever returns Commit or Undecided (a
+            // validity threshold without quorum is not a decision). The old
+            // `direct_status == Skip` branch that called `mark_decided(Skip)`
+            // was removed with PRO-35: it is the exact primitive that advanced
+            // the commit cursor without a certificate. If a Skip ever appears
+            // here it must stall like Undecided, never fall through.
 
             // Still undecided. A leader without its OWN direct quorum is never
             // committed (votes are not DAG references, so causal history is
