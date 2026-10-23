@@ -31,7 +31,12 @@ sudo mv gitleaks /usr/local/bin/
   `./scripts/install-git-hooks.sh` — the hook is per-clone, so every fresh
   checkout needs it once.
 
-### CI Pipeline (`.github/workflows/secrets.yml`)
+### CI Pipeline (removed from this repo 2026-10-23)
+> The kvnc GitHub workflows were deleted at Toni's request; secret scanning in CI
+> moves to `KovanicaDAG/kovanica-protocol` together with the frozen code. Until
+> then the pre-commit hook above and a manual `gitleaks git --log-opts=--all`
+> are the only scans. The notes below describe the removed job for reference.
+
 - **Pull requests / pushes**: scans the checked-out history (`fetch-depth: 0`),
   not just the diff
 - **Nightly (02:00 UTC)**: full history across every ref (`--log-opts=--all`)
