@@ -67,6 +67,23 @@ use kovanica_common::{
 
 pub type VaultId = [u8; 32];
 
+/// Activation height for the "cancel never takes vested funds" rule.
+///
+/// Historical behaviour (below this height): `cancel` refunds the creator
+/// `total - claimed`, i.e. it also takes amounts that have **already vested
+/// but not yet been claimed**, and blocks any later `claim`. A fully vested
+/// vault can therefore be clawed back until the beneficiary claims.
+///
+/// From this height on: `cancel` refunds only the **unvested** remainder and
+/// freezes the vault at what had vested; the beneficiary can still `claim`
+/// the vested-but-unclaimed amount afterwards.
+///
+/// Changing this alters state transitions, so — like the other hardening
+/// gates in `kovanica-types` — it stays `u64::MAX` (inert) until it is
+/// switched on for every validator at a coordinated genesis reset. The
+/// comparison is against [`Host::block_height`].
+pub const CANCEL_PROTECTS_VESTED_FROM_HEIGHT: Height = Height::MAX;
+
 /// bincode failed while serializing a vault record — infallible for these
 /// field types in practice; surfaces state-layer corruption.
 const ERR_BINCODE_SERIALIZE: u32 = 1;
@@ -217,8 +234,21 @@ impl Vault {
     /// Only the beneficiary may claim; returns 0 (no transfer) when nothing
     /// is vested yet.
     pub fn claim(host: &mut impl Host, id: VaultId) -> ContractResult<Amount> {
+        Self::claim_with_gate(host, id, CANCEL_PROTECTS_VESTED_FROM_HEIGHT)
+    }
+
+    /// [`Vault::claim`] with an explicit activation height (tests drive both
+    /// sides of the gate; production uses the constant).
+    fn claim_with_gate(
+        host: &mut impl Host,
+        id: VaultId,
+        protect_from: Height,
+    ) -> ContractResult<Amount> {
         let mut vault = Self::load(host, &id)?;
-        if vault.cancelled {
+        // Legacy rule: a cancelled vault can never be claimed. Under the
+        // protective rule a cancelled vault is frozen at its vested amount and
+        // the beneficiary may still collect what had vested before the cancel.
+        if vault.cancelled && host.block_height() < protect_from {
             return Err(ContractError::InvalidInput);
         }
         if host.caller() != vault.beneficiary {
@@ -243,6 +273,16 @@ impl Vault {
 
     /// Creator can cancel and reclaim everything not yet claimed.
     pub fn cancel(host: &mut impl Host, id: VaultId) -> ContractResult<()> {
+        Self::cancel_with_gate(host, id, CANCEL_PROTECTS_VESTED_FROM_HEIGHT)
+    }
+
+    /// [`Vault::cancel`] with an explicit activation height (tests drive both
+    /// sides of the gate; production uses the constant).
+    fn cancel_with_gate(
+        host: &mut impl Host,
+        id: VaultId,
+        protect_from: Height,
+    ) -> ContractResult<()> {
         let mut vault = Self::load(host, &id)?;
         if host.caller() != vault.creator {
             return Err(ContractError::Unauthorized);
@@ -251,7 +291,24 @@ impl Vault {
             return Err(ContractError::InvalidInput);
         }
 
-        let remaining = vault.total.saturating_sub(vault.claimed);
+        let remaining = if host.block_height() >= protect_from {
+            // Refund only what has NOT vested. Whatever vested stays in escrow
+            // for the beneficiary: freeze `total` at the vested amount and
+            // make it fully vested from now on, so a later `claim` pays
+            // `total - claimed` regardless of the original schedule.
+            // (`max(claimed)` is belt-and-braces: vested is monotonic, so
+            // claimed <= vested already.)
+            let vested = vault.vested_amount(host.timestamp()).max(vault.claimed);
+            let unvested = vault.total.saturating_sub(vested);
+            vault.total = vested;
+            // `Absolute { unlock_at: 0 }` cannot be created through `create`
+            // (it requires unlock_at > now), so it doubles as the "frozen" marker.
+            vault.schedule = VestingSchedule::Absolute { unlock_at: 0 };
+            unvested
+        } else {
+            // Legacy behaviour: also takes vested-but-unclaimed funds.
+            vault.total.saturating_sub(vault.claimed)
+        };
         vault.cancelled = true;
 
         let escrow = escrow_address(&id);
@@ -802,6 +859,193 @@ mod tests {
             Vault::cancel(&mut host, [0xEE; 32]),
             Err(ContractError::NotFound)
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Cancel vs. vested funds (audit finding) and the contract-time unit.
+    // `*_legacy_*` tests pin today's behaviour (gate inert); `*_protected_*`
+    // tests pin the fixed behaviour by driving the gate explicitly.
+    // ------------------------------------------------------------------
+
+    const LEGACY: Height = Height::MAX; // gate off  — what production runs today
+    const PROTECTED: Height = 0; //          gate on   — behaviour after activation
+
+    fn linear_vault(host: &mut MemHost) -> VaultId {
+        // 100 atoms vest linearly over [1_000, 2_000]; created at ts 500.
+        Vault::create(
+            host,
+            addr(BENEFICIARY),
+            100,
+            VestingSchedule::Linear {
+                start: 1_000,
+                end: 2_000,
+                cliff: None,
+            },
+        )
+        .unwrap()
+    }
+
+    /// FINDING: the creator can cancel a FULLY VESTED vault before the
+    /// beneficiary claims and take every atom back; the beneficiary is then
+    /// locked out of `claim`.
+    #[test]
+    fn cancel_legacy_takes_fully_vested_unclaimed_funds() {
+        let mut host = setup(1_000, 500);
+        let id = linear_vault(&mut host);
+        let escrow = escrow_address(&id);
+
+        // Long after `end`: everything is vested, nothing claimed yet.
+        host.set_timestamp(9_999);
+        assert_eq!(Vault::load(&host, &id).unwrap().vested_amount(9_999), 100);
+
+        host.set_caller(addr(CREATOR));
+        Vault::cancel_with_gate(&mut host, id, LEGACY).unwrap();
+
+        // Creator got ALL 100 back (900 + 100), escrow is empty ...
+        assert_eq!(host.balance_of(&addr(CREATOR)), 1_000);
+        assert_eq!(host.balance_of(&escrow), 0);
+
+        // ... and the beneficiary, who was fully vested, can no longer claim.
+        host.set_caller(addr(BENEFICIARY));
+        assert_eq!(
+            Vault::claim_with_gate(&mut host, id, LEGACY),
+            Err(ContractError::InvalidInput)
+        );
+        assert_eq!(host.balance_of(&addr(BENEFICIARY)), 0);
+    }
+
+    /// Same finding, partial vesting: 60% vested at ts 1_600, 50 already
+    /// claimed → the 10 vested-but-unclaimed atoms go to the creator too.
+    #[test]
+    fn cancel_legacy_takes_partially_vested_unclaimed_funds() {
+        let mut host = setup(1_000, 500);
+        let id = linear_vault(&mut host);
+
+        host.set_caller(addr(BENEFICIARY));
+        host.set_timestamp(1_500);
+        assert_eq!(Vault::claim_with_gate(&mut host, id, LEGACY).unwrap(), 50);
+
+        host.set_caller(addr(CREATOR));
+        host.set_timestamp(1_600); // 60 vested, 50 claimed → 10 owed
+        Vault::cancel_with_gate(&mut host, id, LEGACY).unwrap();
+
+        // 900 + 50 refunded: creator took the 10 that were already vested.
+        assert_eq!(host.balance_of(&addr(CREATOR)), 950);
+        assert_eq!(host.balance_of(&addr(BENEFICIARY)), 50);
+    }
+
+    /// FIX: a fully vested vault keeps every atom for the beneficiary.
+    #[test]
+    fn cancel_protected_leaves_fully_vested_funds_claimable() {
+        let mut host = setup(1_000, 500);
+        let id = linear_vault(&mut host);
+        let escrow = escrow_address(&id);
+
+        host.set_timestamp(9_999);
+        host.set_caller(addr(CREATOR));
+        Vault::cancel_with_gate(&mut host, id, PROTECTED).unwrap();
+
+        // Nothing unvested → creator refunded nothing; funds stay escrowed.
+        assert_eq!(host.balance_of(&addr(CREATOR)), 900);
+        assert_eq!(host.balance_of(&escrow), 100);
+
+        host.set_caller(addr(BENEFICIARY));
+        assert_eq!(
+            Vault::claim_with_gate(&mut host, id, PROTECTED).unwrap(),
+            100
+        );
+        assert_eq!(host.balance_of(&addr(BENEFICIARY)), 100);
+        assert_eq!(host.balance_of(&escrow), 0);
+    }
+
+    /// FIX: partial vesting splits exactly at the cancel moment.
+    #[test]
+    fn cancel_protected_splits_at_the_cancel_moment() {
+        let mut host = setup(1_000, 500);
+        let id = linear_vault(&mut host);
+        let escrow = escrow_address(&id);
+
+        host.set_caller(addr(BENEFICIARY));
+        host.set_timestamp(1_500);
+        assert_eq!(
+            Vault::claim_with_gate(&mut host, id, PROTECTED).unwrap(),
+            50
+        );
+
+        host.set_caller(addr(CREATOR));
+        host.set_timestamp(1_600); // 60 vested, 50 claimed, 40 unvested
+        Vault::cancel_with_gate(&mut host, id, PROTECTED).unwrap();
+
+        // Creator gets only the 40 unvested atoms (900 + 40).
+        assert_eq!(host.balance_of(&addr(CREATOR)), 940);
+        assert_eq!(host.balance_of(&escrow), 10);
+
+        // Beneficiary collects the 10 vested-but-unclaimed atoms, even much
+        // later — the schedule is frozen, not still running.
+        host.set_caller(addr(BENEFICIARY));
+        host.set_timestamp(9_999);
+        assert_eq!(
+            Vault::claim_with_gate(&mut host, id, PROTECTED).unwrap(),
+            10
+        );
+        assert_eq!(host.balance_of(&addr(BENEFICIARY)), 60);
+        assert_eq!(host.balance_of(&escrow), 0);
+
+        // Nothing left; a further claim is a harmless no-op.
+        assert_eq!(Vault::claim_with_gate(&mut host, id, PROTECTED).unwrap(), 0);
+
+        let v = Vault::load(&host, &id).unwrap();
+        assert!(v.cancelled);
+        assert_eq!(v.total, 60);
+        assert_eq!(v.claimed, 60);
+    }
+
+    /// FIX: cancelling before anything vests still refunds everything.
+    #[test]
+    fn cancel_protected_before_start_refunds_everything() {
+        let mut host = setup(1_000, 500);
+        let id = linear_vault(&mut host);
+
+        host.set_caller(addr(CREATOR));
+        host.set_timestamp(900); // before `start`
+        Vault::cancel_with_gate(&mut host, id, PROTECTED).unwrap();
+        assert_eq!(host.balance_of(&addr(CREATOR)), 1_000);
+
+        host.set_caller(addr(BENEFICIARY));
+        assert_eq!(Vault::claim_with_gate(&mut host, id, PROTECTED).unwrap(), 0);
+    }
+
+    /// FIX: authorization and double-cancel rules are unchanged.
+    #[test]
+    fn cancel_protected_keeps_auth_and_double_cancel_rules() {
+        let mut host = setup(1_000, 500);
+        let id = linear_vault(&mut host);
+
+        host.set_caller(addr(BENEFICIARY));
+        assert_eq!(
+            Vault::cancel_with_gate(&mut host, id, PROTECTED),
+            Err(ContractError::Unauthorized)
+        );
+
+        host.set_caller(addr(CREATOR));
+        Vault::cancel_with_gate(&mut host, id, PROTECTED).unwrap();
+        assert_eq!(
+            Vault::cancel_with_gate(&mut host, id, PROTECTED),
+            Err(ContractError::InvalidInput)
+        );
+    }
+
+    /// The public entry points must still run the legacy rule until the gate
+    /// is deliberately switched on.
+    #[test]
+    fn public_entry_points_use_the_declared_gate() {
+        assert_eq!(CANCEL_PROTECTS_VESTED_FROM_HEIGHT, Height::MAX);
+        let mut host = setup(1_000, 500);
+        let id = linear_vault(&mut host);
+        host.set_timestamp(9_999);
+        host.set_caller(addr(CREATOR));
+        Vault::cancel(&mut host, id).unwrap();
+        assert_eq!(host.balance_of(&addr(CREATOR)), 1_000); // legacy: took it all
     }
 
     /// FINDING (unit mismatch): contract time on a live node is the block
