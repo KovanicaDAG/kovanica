@@ -2250,7 +2250,7 @@ struct CatchUpSession {
 
 /// Bounded proactive catch-up: when a peer connects, ask for its DAG tip and,
 /// if it is ahead, pull the missing rounds through the existing
-/// `/kovanica/block-sync/1.1.0` protocol (one `RoundRange` window at a time,
+/// chain-scoped `/kovanica/<tag>/block-sync/1.1.0` protocol (one `RoundRange` window at a time,
 /// re-fetching every hash via `ByHash` so block validation is unchanged).
 ///
 /// Every bound is explicit: one session per peer, at most
@@ -4223,6 +4223,12 @@ fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
         ping_interval: Duration::from_secs(10),
         node_key_path: Some(config.data_dir.join(NODE_IDENTITY_FILE)),
         peer_scoring: config.peer_scoring.clone(),
+        // Chain separation: every libp2p protocol id and gossip topic carries
+        // the chain id and the genesis digest this data dir is bound to.
+        network_id: kovanica_network::NetworkId::new(
+            config.chain_id,
+            genesis_config_digest(config)?,
+        ),
     })
 }
 
@@ -4969,6 +4975,28 @@ mod tests {
             Some(std::ffi::OsStr::new("validator.key")),
             "transport identity must not reuse the validator seed file"
         );
+    }
+
+    /// #81 review P1: the libp2p network is scoped to chain id + genesis,
+    /// so a node of another chain (or the same chain id with a different
+    /// genesis) speaks different protocol ids and topics.
+    #[test]
+    fn network_config_is_scoped_to_chain_id_and_genesis() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = chain_id_config(dir.path(), 1337);
+        let net = build_network_config(&config).unwrap();
+        assert_eq!(net.network_id.chain_id, 1337);
+        assert_eq!(
+            net.network_id.genesis,
+            genesis_config_digest(&config).unwrap()
+        );
+
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = build_network_config(&chain_id_config(other_dir.path(), 4)).unwrap();
+        assert_ne!(net.network_id.tag(), other.network_id.tag());
+        assert!(!net
+            .network_id
+            .accepts_identify(&other.network_id.identify_version()));
     }
 
     #[test]

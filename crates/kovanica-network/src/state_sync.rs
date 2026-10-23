@@ -22,8 +22,9 @@ use futures::{AsyncReadExt, AsyncWriteExt};
 use libp2p::{request_response::Codec, StreamProtocol};
 use serde::{Deserialize, Serialize};
 
-/// Protocol name for state sync request-response.
-pub const STATE_SYNC_PROTOCOL: &str = "/kovanica/state-sync/2.0.0";
+/// Protocol suffix for state sync request-response. The id on the wire is
+/// `/kovanica/<chain tag>/state-sync/2.0.0` ([`crate::NetworkId::protocol`]).
+pub const STATE_SYNC_PROTOCOL: &str = "state-sync/2.0.0";
 
 /// Maximum state sync request size.
 pub const MAX_STATE_SYNC_REQUEST_SIZE: usize = 1024;
@@ -318,6 +319,6 @@ mod tests {
     fn state_sync_codec_round_trip() {
         let _codec = StateSyncCodec;
         // Just verify the protocol constants
-        assert_eq!(STATE_SYNC_PROTOCOL, "/kovanica/state-sync/2.0.0");
+        assert_eq!(STATE_SYNC_PROTOCOL, "state-sync/2.0.0");
     }
 }
