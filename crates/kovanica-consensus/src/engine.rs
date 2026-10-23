@@ -1769,6 +1769,14 @@ where
         if !is_leader_round(leader_round) {
             return Err(VoteRejection::NotLeaderRound(leader_round).into());
         }
+        // PRO-40 (b): a validator that voted for a slot the others skipped
+        // while it was away cannot time it out; it rebroadcasts its vote
+        // instead. Answer with the stored certificate (rate limited).
+        if leader_round <= self.committer.last_decided_round() {
+            if let Err(e) = self.serve_skip_cert(leader_round) {
+                debug!(leader_round, error = %e, "could not serve a skip certificate");
+            }
+        }
 
         let has_quorum = self
             .committer
@@ -4469,6 +4477,28 @@ mod tests {
         assert_eq!(served.len(), 1);
         assert_eq!(served[0].round, 3);
         assert!(served[0].timeouts.len() >= 4);
+    }
+
+    #[test]
+    fn a_rebroadcast_vote_for_a_skipped_slot_is_answered_with_the_certificate() {
+        let f = skip_fixture();
+        *f.engine.current_round.write() = 10;
+        f.engine
+            .process_skip_cert(&kovanica_types::SkipCert {
+                round: 3,
+                timeouts: (1..5u16)
+                    .map(|v| signed_timeout(&f.keys[v as usize], v, 3, &SKIP_GENESIS))
+                    .collect(),
+            })
+            .unwrap();
+        // The returning leader voted for its own slot-3 block and keeps
+        // rebroadcasting that vote.
+        let vote = signed_vote(&f.keys[1], 3, 1, Hash([9; 32]));
+        let _ = f.engine.process_vote(&vote);
+        let _ = f.engine.process_vote(&vote);
+        let served = f.recorder.certs.lock().clone();
+        assert_eq!(served.len(), 1, "served once per T_skip");
+        assert_eq!(served[0].round, 3);
     }
 
     #[test]
