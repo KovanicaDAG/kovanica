@@ -105,11 +105,11 @@ certificate) against the subsidy/epoch invariants in §2.5.
 
 | Component | Risk | Description |
 |-----------|------|-------------|
-| `service.rs` | **High** | `NetworkService` wrapping libp2p Swarm; gossipsub topics: `blocks`, `transactions`, `votes`, `sync`, `seals`; Kademlia + ping + identify; serves `VotesForRound` from the durable vote store via `VoteSource` and validates the answer against the request |
+| `service.rs` | **High** | `NetworkService` wrapping libp2p Swarm; gossipsub topics `kovanica/<tag>/{blocks, transactions, votes, sync, state_sync, seals}` (`<tag>` = `<chain_id>-<genesis prefix>`, `network_id.rs`); Kademlia `/kovanica/<tag>/kad/1.0.0` + ping + identify `/kovanica/<tag>/1.0.0` (a peer with another tag is disconnected); serves `VotesForRound` from the durable vote store via `VoteSource` and validates the answer against the request |
 | `validation.rs` | **Critical** | Edge validation before gossip: block digest/merkle/author/signature; vote signature + committee membership + leader round/hash match; seal signature + header match |
 | `scoring.rs` | **High** | Peer scoring: topic mesh delivery, validation rejects, behaviour penalties; ban threshold |
 | `block_sync.rs` | **High** | Request-response block sync (protocol `/kovanica/<chain_id>-<genesis prefix>/block-sync/1.1.0`; every protocol id and topic is chain-scoped, `network_id.rs`); carries block history **and** (since RFC-009) per-round vote history, bounded to `MAX_VOTES_PER_ROUND = 64` |
-| `state_sync.rs` | **High** | Request-response state sync (protocol `/kovanica/state-sync/1`) |
+| `state_sync.rs` | **High** | Request-response state sync (protocol `/kovanica/<tag>/state-sync/2.0.0`) |
 | `identity.rs` | **Medium** | Persistent node identity (Ed25519 transport key, `0600` file perms), no hard-coded bootstrap nodes |
 
 **Configuration defaults:** listen `/ip4/0.0.0.0/tcp/8000`, max 50 peers, ping 10s. Gossip frames are capped at `MAX_TRANSMIT_SIZE` (1 MiB); the consensus block cap sits 64 KiB below it so a valid block is always relayable in one message (asserted by `consensus_block_cap_fits_the_gossip_frame`). Bootstrap nodes supplied at deploy via DNS names (no external project infra).
