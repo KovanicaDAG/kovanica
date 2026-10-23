@@ -16,8 +16,8 @@ export interface Network {
 export const TESTNET: Network = {
   id: "testnet",
   label: "Testnet",
-  // Chain ids: mainnet 1, testnet 2, devnet 3, local 1337.
-  chainId: 2,
+  // Chain ids: mainnet 1, public testnet 4, devnet 3, local 1337.
+  chainId: 4,
   rpcUrl: "https://rpc-testnet.kovanica.online/rpc",
   wsUrl: "wss://rpc-testnet.kovanica.online/ws",
   faucetUrl: "https://faucet-testnet.kovanica.online/faucet",
