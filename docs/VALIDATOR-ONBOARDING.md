@@ -93,7 +93,9 @@ sha256sum -c SHA256SUMS
 kovanica-node network-tag --config kovanica.toml
 ```
 
-`SHA256SUMS` lists the four bundle files. `network-tag` prints the tag
+`SHA256SUMS` lists the bundle files. Off mainnet that can include
+`funded_accounts.toml`. On mainnet (chain 1) the file is forbidden, so the
+checksum list must not name it. `network-tag` prints the tag
 without starting a node; it must equal the tag published with the checksums.
 The publication place is chosen when the bundle is cut (it is not named in
 this repo). A running node returns the same value as `networkTag` on

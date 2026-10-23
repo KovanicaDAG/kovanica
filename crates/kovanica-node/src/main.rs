@@ -7682,6 +7682,61 @@ mod tests {
         assert!(genesis_config_digest(&testnet).is_ok());
     }
 
+    /// The published checksum example must not tell a mainnet operator to hash
+    /// `funded_accounts.toml`. That file is refused on chain 1.
+    #[test]
+    fn mainnet_sha256sum_example_omits_funded_accounts() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let reset = std::fs::read_to_string(root.join("docs/TESTNET-RESET.md")).unwrap();
+        let onboarding =
+            std::fs::read_to_string(root.join("docs/VALIDATOR-ONBOARDING.md")).unwrap();
+        let ceremony = std::fs::read_to_string(root.join("docs/GENESIS-CEREMONY.md")).unwrap();
+
+        let mut saw_mainnet = false;
+        let mut saw_off_mainnet = false;
+        let mut mainnet_command = false;
+        for line in reset.lines() {
+            let trimmed = line.trim();
+            if trimmed == "# chain 1 (mainnet)" {
+                mainnet_command = true;
+                continue;
+            }
+            if !trimmed.starts_with("sha256sum ") {
+                continue;
+            }
+            if mainnet_command {
+                assert!(
+                    !trimmed.contains("funded_accounts.toml"),
+                    "mainnet checksum must omit funded_accounts.toml: {trimmed}"
+                );
+                assert!(trimmed.contains("validators.json"));
+                assert!(trimmed.contains("founder_premine.hex"));
+                assert!(trimmed.contains("genesis_validators.toml"));
+                saw_mainnet = true;
+                mainnet_command = false;
+            } else if trimmed.contains("funded_accounts.toml") {
+                saw_off_mainnet = true;
+            }
+        }
+        assert!(saw_mainnet, "missing the chain 1 sha256sum example");
+        assert!(
+            saw_off_mainnet,
+            "off-mainnet bundles still hash funded_accounts.toml"
+        );
+        assert!(
+            onboarding.contains("On mainnet (chain 1)") && onboarding.contains("must not name it"),
+            "onboarding must say the mainnet checksum omits funded_accounts.toml"
+        );
+        assert!(
+            !onboarding.contains("lists the four bundle files"),
+            "onboarding must not say every checksum lists funded_accounts.toml"
+        );
+        assert!(
+            ceremony.contains("mainnet `sha256sum` list therefore omits it"),
+            "the ceremony doc must point at the mainnet checksum list"
+        );
+    }
+
     /// The authoritative check: actually running genesis on mainnet with a
     /// testnet-sized validator set must refuse before anything is written.
     #[test]
