@@ -29,7 +29,10 @@ use kovanica_storage::{
     StorageError,
 };
 use kovanica_types::signing::{chain_id, SigningContext};
-use kovanica_types::{light_vrf_input, Address, Hash, PublicKey, Transaction, TransactionKind};
+use kovanica_types::{
+    epoch_for_round, light_vrf_input, Address, Hash, PublicKey, SealCommitteeSnapshotMember,
+    Transaction, TransactionKind,
+};
 use redb::{ReadableTable, TableDefinition, WriteTransaction};
 use thiserror::Error;
 use tracing::{debug, info};
@@ -298,17 +301,22 @@ impl ExecutionContext {
         storage: &Storage,
         commit: impl FnOnce(WriteTransaction) -> Result<(), ExecutionError>,
     ) -> Result<ExecutionResult, ExecutionError> {
-        // 1. Check idempotency first (before any execution)
-        let mut txn = storage.begin_write()?;
+        // 1. Check idempotency first (before any execution). A replayed
+        // sub-DAG must not freeze a committee snapshot: the live state is now
+        // past that epoch, so a late snapshot would poison the epoch.
         {
-            let table = txn
-                .open_table(EXECUTED_SUBDAGS)
-                .map_err(StorageError::Table)?;
-            if table
-                .get(subdag.leader.digest.0)
-                .map_err(StorageError::Storage)?
-                .is_some()
-            {
+            let check = storage.begin_write()?;
+            let executed = {
+                let table = check
+                    .open_table(EXECUTED_SUBDAGS)
+                    .map_err(StorageError::Table)?;
+                let present = table
+                    .get(subdag.leader.digest.0)
+                    .map_err(StorageError::Storage)?
+                    .is_some();
+                present
+            };
+            if executed {
                 return Ok(ExecutionResult {
                     reward: None,
                     txs_applied: 0,
@@ -317,9 +325,21 @@ impl ExecutionContext {
                     state_root: None,
                 });
             }
+            drop(check); // abort the empty txn before opening another write txn
         }
 
+        // 1b. Pin the epoch committee BEFORE the sub-DAG's transactions run,
+        // then resolve the leader's identity from it. Authority indices are
+        // assigned per epoch; the live `committee_order()` can shift inside
+        // this very sub-DAG (unbond, slash, liveness eviction) and must never
+        // be used to decide who gets paid or who missed a leader slot.
+        let leader_epoch = epoch_for_round(subdag.leader_round);
+        let epoch_committee = ensure_epoch_committee(storage, &self.staking, leader_epoch)?;
+        let leader_identity =
+            resolve_leader_identity(&epoch_committee, &self.staking, subdag.leader_author);
+
         // 2. Execute all transactions in the committed sub-DAG
+        let mut txn = storage.begin_write()?;
         let mut receipts = Vec::new();
         let mut txs_applied = 0;
         let committed_height = self.staking.committed_leader_height;
@@ -366,17 +386,22 @@ impl ExecutionContext {
         // Perform the transition on a candidate state. The live in-memory state
         // is published only after all related storage writes commit successfully.
         let mut candidate_staking = snapshot_staking(&self.staking);
-        // The leader may have left the active committee *during* this sub-DAG,
-        // e.g. it equivocated and was slashed by an evidence tx it carried
-        // (PRO-19 deactivates a slashed validator immediately). In that case the
-        // leader reward is forfeited rather than aborting the commit — a
-        // misbehaving leader must not be able to halt the chain.
-        let leader = candidate_staking
-            .authority_validator(subdag.leader_author)
+        // The leader identity was resolved from the epoch committee BEFORE the
+        // transactions ran. It may have left the active committee *during* this
+        // sub-DAG, e.g. it equivocated and was slashed by an evidence tx it
+        // carried (PRO-19 deactivates a slashed validator immediately), or it
+        // fully unbonded. In that case the reward is forfeited rather than
+        // aborting the commit — a misbehaving leader must not be able to halt
+        // the chain, and a departed validator must not be paid by accident.
+        let leader = leader_identity
+            .and_then(|address| candidate_staking.active_validator(address))
             .cloned();
-        let reward = match &leader {
-            Some(_) => candidate_staking.on_leader_committed(subdag.leader_author)?,
-            None => candidate_staking.on_leader_committed_forfeited(subdag.leader_author),
+        let reward = match (&leader, leader_identity) {
+            (Some(_), Some(address)) => {
+                candidate_staking.on_leader_committed_resolved(subdag.leader_author, address)?
+            }
+            _ => candidate_staking
+                .on_leader_committed_forfeited_resolved(subdag.leader_author, leader_identity),
         };
         // Split the reward: commission + the validator's own pro-rata share
         // go straight to its payout address; delegator shares accrue per
@@ -1744,6 +1769,64 @@ fn snapshot_staking(s: &StakingState) -> StakingState {
     }
 }
 
+/// Return the epoch committee snapshot for `epoch`, freezing it from the
+/// **pre-sub-DAG** staking state on first use.
+///
+/// Execution calls this before applying the sub-DAG's transactions, so the
+/// snapshot always describes the committee that assigned authority indices at
+/// the epoch's start. The seal path (`publish_local_seal`) reuses the same row,
+/// and `put_epoch_committee_if_absent` makes it first-writer-wins.
+///
+/// An empty vector means "no snapshot available / not freezable"; the caller
+/// then falls back to the live committee order. A snapshot is only frozen when
+/// every member has a consensus key, so the index sequence is never sparse.
+fn ensure_epoch_committee(
+    storage: &Storage,
+    staking: &StakingState,
+    epoch: u64,
+) -> Result<Vec<SealCommitteeSnapshotMember>, ExecutionError> {
+    {
+        let read = storage.begin_read()?;
+        if let Some(members) = storage.state().get_epoch_committee(&read, epoch)? {
+            return Ok(members);
+        }
+    }
+    let Some(proposed) = staking.epoch_committee_snapshot() else {
+        return Ok(Vec::new());
+    };
+    let write = storage.begin_write()?;
+    let frozen = storage
+        .state()
+        .put_epoch_committee_if_absent(&write, epoch, &proposed)?;
+    write
+        .commit()
+        .map_err(|e| ExecutionError::Other(format!("commit epoch committee: {e}")))?;
+    Ok(frozen)
+}
+
+/// Map an authority index to the leader's identity address using the epoch
+/// committee that assigned it.
+///
+/// Falls back to the live committee order only when no snapshot exists (direct
+/// execution-layer callers and bootstrap). When a snapshot exists but the index
+/// is not a member, the leader is unresolvable: the reward is forfeited rather
+/// than paid to whoever happens to sit at that index in the live order now.
+fn resolve_leader_identity(
+    epoch_committee: &[SealCommitteeSnapshotMember],
+    staking: &StakingState,
+    leader_author: u16,
+) -> Option<Address> {
+    if epoch_committee.is_empty() {
+        return staking
+            .authority_validator(leader_author)
+            .map(|validator| validator.address);
+    }
+    epoch_committee
+        .iter()
+        .find(|member| member.index == leader_author)
+        .map(|member| Address::from_public_key(&member.public_key))
+}
+
 /// Every `ACCOUNTS` row a transaction body can write (sender, plus the
 /// transfer recipient / deployed contract address).
 fn touched_accounts(tx: &Transaction) -> Vec<[u8; 32]> {
@@ -2047,6 +2130,187 @@ mod tests {
             expected_leader_side + (reward2.amount * 80 / 100),
             "forfeit credits nothing"
         );
+    }
+
+    /// Freeze a committee snapshot directly, as the first sub-DAG of an epoch
+    /// would.
+    fn freeze_test_committee(
+        storage: &Storage,
+        epoch: u64,
+        members: &[SealCommitteeSnapshotMember],
+    ) {
+        let txn = storage.begin_write().expect("write txn");
+        storage
+            .state()
+            .put_epoch_committee_if_absent(&txn, epoch, members)
+            .expect("freeze committee");
+        txn.commit().expect("commit");
+    }
+
+    fn snapshot_member(index: u16, address: Address) -> SealCommitteeSnapshotMember {
+        SealCommitteeSnapshotMember {
+            index,
+            public_key: PublicKey(address.0),
+            stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+            vrf_public_key: None,
+        }
+    }
+
+    #[test]
+    fn leader_index_resolves_against_the_frozen_epoch_committee() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("epoch-committee.redb")).expect("storage");
+        let mut ctx = ExecutionContext::new();
+        ctx.staking = genesis_staking_state(); // a(1)=[1], a(2)=[2], a(3)=[3]
+
+        // The epoch started with a(1) at authority index 0.
+        freeze_test_committee(
+            &storage,
+            0,
+            &[
+                snapshot_member(0, Address([1u8; 32])),
+                snapshot_member(1, Address([2u8; 32])),
+                snapshot_member(2, Address([3u8; 32])),
+            ],
+        );
+
+        // A validator whose address sorts first joins mid-epoch, so the LIVE
+        // order maps index 0 to it — while the epoch index still belongs to
+        // a(1).
+        ctx.staking
+            .join_validator(
+                Address([0u8; 32]),
+                kovanica_staking::MIN_VALIDATOR_STAKE,
+                0,
+                Some(Address([10u8; 32])),
+                None,
+                None,
+            )
+            .expect("mid-epoch join");
+        assert_eq!(ctx.staking.committee_order()[0].address, Address([0u8; 32]));
+
+        let result = ctx
+            .execute_committed_subdag(&sample_committed_subdag(1, 0), &storage)
+            .expect("execute");
+        let reward = result.reward.expect("reward outcome");
+
+        assert_eq!(
+            reward.recipient,
+            Address([11u8; 32]),
+            "must pay a(1)'s payout, not the shifted live index-0 validator"
+        );
+        assert_eq!(
+            read_balance(&storage, &Address([11u8; 32])),
+            reward.amount * 80 / 100
+        );
+        assert_eq!(read_balance(&storage, &Address([10u8; 32])), 0);
+        assert_eq!(read_balance(&storage, &Address([12u8; 32])), 0);
+        assert_eq!(
+            ctx.staking
+                .validator(Address([1u8; 32]))
+                .expect("leader")
+                .missed_leader_count,
+            0,
+            "the real leader is credited with being online"
+        );
+    }
+
+    #[test]
+    fn leader_deactivated_in_its_own_subdag_forfeits_against_the_epoch_committee() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("epoch-forfeit.redb")).expect("storage");
+        let mut ctx = ExecutionContext::new();
+        ctx.staking = genesis_staking_state();
+        freeze_test_committee(
+            &storage,
+            0,
+            &[
+                snapshot_member(0, Address([1u8; 32])),
+                snapshot_member(1, Address([2u8; 32])),
+                snapshot_member(2, Address([3u8; 32])),
+            ],
+        );
+
+        // a(1) is slashed by an evidence tx inside the sub-DAG it led. It leaves
+        // the live committee, so live index 0 now names a(2).
+        let leader = ctx
+            .staking
+            .validators
+            .iter_mut()
+            .find(|v| v.address == Address([1u8; 32]))
+            .expect("leader record");
+        leader.active = false;
+        leader.missed_leader_count = 5;
+        assert_eq!(ctx.staking.committee_order()[0].address, Address([2u8; 32]));
+
+        let result = ctx
+            .execute_committed_subdag(&sample_committed_subdag(1, 0), &storage)
+            .expect("execute");
+        let reward = result.reward.expect("forfeit is still an outcome");
+
+        assert_eq!(reward.amount, 0, "a departed leader is not paid");
+        assert_eq!(reward.recipient, Address([11u8; 32]));
+        assert_eq!(
+            read_balance(&storage, &Address([12u8; 32])),
+            0,
+            "the shifted index-0 validator must not be paid either"
+        );
+        assert_eq!(ctx.staking.committed_leader_height, 1);
+        assert_eq!(
+            ctx.staking
+                .validator(Address([1u8; 32]))
+                .expect("leader")
+                .missed_leader_count,
+            0,
+            "the leader's own miss counter is reset on forfeit"
+        );
+        assert_eq!(
+            ctx.staking
+                .validator(Address([2u8; 32]))
+                .expect("shifted validator")
+                .missed_leader_count,
+            1
+        );
+    }
+
+    #[test]
+    fn first_execution_freezes_the_epoch_committee_before_transactions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("pre-tx-freeze.redb")).expect("storage");
+        let key = test_keypair(1);
+        let me = address_of(&key);
+        let mut ctx = setup_funded_sender(&storage, &me, 100_000 * K);
+        let validator = ctx.staking.validators[0].address;
+        // Give the sole member a consensus key so the snapshot is freezable.
+        ctx.staking.validators[0].public_key = Some(PublicKey(validator.0));
+
+        // The sub-DAG itself adds a second validator. If the snapshot were
+        // frozen after execution it would contain both; it must contain only
+        // the pre-sub-DAG committee.
+        let joiner = test_keypair(2);
+        fund(&storage, &address_of(&joiner), 100_000 * K);
+        let txs = vec![signed_tx(
+            &joiner,
+            TransactionKind::Stake {
+                amount: kovanica_staking::MIN_VALIDATOR_STAKE,
+            },
+            0,
+            1000,
+        )];
+        let result = ctx
+            .execute_committed_subdag(&subdag_at(5, txs), &storage)
+            .expect("execute");
+        assert!(result.receipts[0].success, "{:?}", result.receipts);
+        assert_eq!(ctx.staking.committee_order().len(), 2, "joiner is active");
+
+        let read = storage.begin_read().expect("read txn");
+        let frozen = storage
+            .state()
+            .get_epoch_committee(&read, 0)
+            .expect("read committee")
+            .expect("committee frozen");
+        assert_eq!(frozen.len(), 1, "snapshot predates the joining tx");
+        assert_eq!(frozen[0].public_key, PublicKey(validator.0));
     }
 
     #[test]

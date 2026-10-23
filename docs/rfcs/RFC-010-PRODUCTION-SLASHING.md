@@ -287,15 +287,31 @@ evidence.
 
 Tests: 5 new staking tests (jail lifecycle, mid-jail stake rejection, legacy
 permanent row, v1 decode, v2 round-trip) plus reworked execution/node tests.
-Workspace suite: 1029 passed, 1 ignored.
+Workspace suite: 1035 passed, 1 ignored.
 
-Known limitation / follow-up before flipping `SLASHING_ACTIVE_FROM_ROUND`:
-execution resolves the leader by authority index against the **live**
-`committee_order()`, while consensus indices come from the epoch-sealed
-committee. A mid-epoch deactivation (liveness eviction or slash) shifts those
-indices, so a healthy leader can be paid to — or forfeited in favour of — the
-wrong record. This is pre-existing index fragility (HEAD already used the same
-lookup), not introduced by the jail, and is inert while slashing is gated off.
-Fix by resolving the leader against the sealed committee for
-`epoch_for_round(round)` (or carrying the payout in `CommittedSubDag`) before
-activation. `release_height` remains measured in heights (PRO-37).
+Leader identity resolution (fixed 2026-10-23). Execution no longer resolves
+`subdag.leader_author` by position in the **live** `committee_order()`.
+Before running a sub-DAG's transactions it freezes the `EPOCH_COMMITTEE`
+snapshot for `epoch_for_round(leader_round)` from the **pre-sub-DAG** staking
+state (first writer wins, and `publish_local_seal` reuses the same row), then
+maps the authority index through that snapshot's public key to the validator
+address. This makes the index stable for the whole epoch: joins, unbonds,
+slashes and liveness evictions cannot shift who index *N* names.
+
+The paid/forfeited decision is still made **after** the transactions: the
+resolved validator must still be an active committee member with
+`stake >= MIN_VALIDATOR_STAKE`. Otherwise the reward is forfeited — a validator
+slashed or fully unbonded inside its own sub-DAG is not paid, and whoever now
+occupies the shifted live index is not paid by accident. Liveness uses the same
+identity, so a shifted order cannot reset the wrong validator's miss counter or
+charge the leader with a miss. Idempotent replays skip the freeze, so a restart
+cannot write a snapshot for a past epoch from the current state. Direct
+execution-layer callers with no snapshot, and a node that starts executing
+mid-epoch without one, fall back to the live order and freeze the set they see
+(stable from then on).
+
+Remaining, orthogonal: the consensus engine's `CommitteeInfo` is fixed when the
+process boots, so a node that runs across an epoch boundary keeps using its boot
+committee's indices. Epoch-scoped engine committees are tracked with the
+per-epoch vote resolution work (RFC-009 §8.5). `release_height` remains measured
+in committed-leader heights (PRO-37).

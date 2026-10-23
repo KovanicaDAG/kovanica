@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use kovanica_consensus::{AuthorityInfo, CommitteeInfo};
-use kovanica_staking::{StakingState, MAX_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE};
+use kovanica_staking::StakingState;
 use kovanica_storage::Storage;
 use kovanica_types::{
     CommitSeal, CommittedSubDag, Hash, LeaderHeader, SealAnnouncement, SigningKey,
@@ -42,42 +42,18 @@ pub(crate) fn build_committee_for_seal_epoch(
     staking_state: &StakingState,
     seal_epoch: u64,
 ) -> Result<CommitteeInfo> {
-    // Filter active validators with sufficient stake
-    let mut active_validators: Vec<_> = staking_state
-        .validators
-        .iter()
-        .filter(|v| v.active && v.stake >= MIN_VALIDATOR_STAKE)
-        .collect();
-
-    // If no validators in staking state (fresh genesis), return empty committee
-    if active_validators.is_empty() {
+    // The committee order lives in ONE place: `StakingState::committee_order`
+    // (active and stake >= MIN, stake desc with address tie-break, top
+    // MAX_ACTIVE_VALIDATORS, re-sorted by address). Reusing it keeps the seal
+    // snapshot, the RPC committee and execution's authority indices on the
+    // same ordering.
+    let committee = staking_state.committee_order();
+    if committee.is_empty() {
         anyhow::bail!("no active validators in staking state; committee cannot be empty");
     }
 
-    // Sort by address for deterministic ordering
-    active_validators.sort_by_key(|a| a.address.0);
-
-    // Sort by stake desc, take top MAX_ACTIVE_VALIDATORS
-    active_validators.sort_by(|a, b| {
-        b.stake
-            .cmp(&a.stake)
-            .then_with(|| a.address.0.cmp(&b.address.0))
-    });
-    let top_validators = active_validators
-        .into_iter()
-        .take(MAX_ACTIVE_VALIDATORS)
-        .collect::<Vec<_>>();
-
-    // Re-sort by address for stable index assignment
-    let mut top_validators = top_validators;
-    top_validators.sort_by_key(|a| a.address.0);
-
-    if top_validators.is_empty() {
-        anyhow::bail!("no active validators found in staking state; committee cannot be empty");
-    }
-
-    let mut authorities = Vec::with_capacity(top_validators.len());
-    for (index, validator) in top_validators.iter().enumerate() {
+    let mut authorities = Vec::with_capacity(committee.len());
+    for (index, validator) in committee.iter().enumerate() {
         let public_key = validator
             .public_key
             .ok_or_else(|| anyhow::anyhow!("validator {} missing public key", validator.address))?;

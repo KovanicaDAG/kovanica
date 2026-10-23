@@ -209,14 +209,14 @@ would boot a genesis different from the one the operator configured.
 | 4 | **Vote signature verification** (`crypto.rs` `verify_vote_signature`) | Cross-chain/epoch replay, domain separation, strict verification |
 | 5 | **Mempool RBF + in-flight timeout** | Fee sniping, transaction censorship, DoS via nonce exhaustion |
 | 6 | **WASM gas/memory metering** | Out-of-gas handling, trap cleanup, host function reentrancy |
-| 7 | **Staking slashing + delegation accounting** | Double-counting, arithmetic overflow, unbonding race conditions. Evidence-based slashing (RFC-010) and the PRO-19 jail (immediate deactivation, `JAIL_ROUNDS`, explicit-only reactivation, versioned store v2) are implemented, but slashing is gated off behind `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`; it lands live only at the chain 4 reset. |
+| 7 | **Staking slashing + delegation accounting** | Double-counting, arithmetic overflow, unbonding race conditions. Evidence-based slashing (RFC-010) and the PRO-19 jail (immediate deactivation, `JAIL_ROUNDS`, explicit-only reactivation, versioned store v2) are implemented, but slashing is gated off behind `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`; it lands live only at the chain 4 reset. Leader reward and liveness are resolved through the epoch's frozen committee snapshot (not the live authority index), with a pre-transaction freeze and forfeit when the resolved leader is no longer active. |
 | 8 | **P2P validation + peer scoring** | Eclipse/Sybil, invalid message amplification, scoring manipulation |
 
 ---
 
 ## 5. Test Coverage Notes
 
-- Unit tests: 1029 passing across workspace, 1 ignored (2026-10-23)
+- Unit tests: 1035 passing across workspace, 1 ignored (2026-10-23)
 - Integration tests: `sustained_liveness_integration`, `multi_node_integration`, `late_join_integration`
 - Property tests: `proptest` in `kovanica-consensus` (wave arithmetic, committer properties)
 - Fuzzing: Block, vote, transaction, consensus fuzzers (cargo-fuzz)

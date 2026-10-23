@@ -24,8 +24,8 @@ pub use light::{
 
 use bincode::{DefaultOptions, Options};
 use kovanica_types::{
-    decode_with_version, encode_with_version, Address, Hash, PublicKey, Stake,
-    STAKING_STATE_VERSION, STAKING_STATE_VERSION_PREVIOUS,
+    decode_with_version, encode_with_version, Address, Hash, PublicKey,
+    SealCommitteeSnapshotMember, Stake, STAKING_STATE_VERSION, STAKING_STATE_VERSION_PREVIOUS,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap as HashMap;
@@ -854,6 +854,53 @@ impl StakingState {
             .map(|v| v.payout_address)
     }
 
+    /// Validator record by identity address (regardless of `active`).
+    pub fn validator(&self, address: Address) -> Option<&ValidatorInfo> {
+        self.validators.iter().find(|v| v.address == address)
+    }
+
+    /// Committee member by identity address: active and above
+    /// [`MIN_VALIDATOR_STAKE`], i.e. exactly the set [`Self::committee_order`]
+    /// would include.
+    ///
+    /// Leader rewards must be resolved through this predicate, never through a
+    /// positional authority index, because the live committee order can change
+    /// mid-epoch (unbond, slash, liveness eviction).
+    pub fn active_validator(&self, address: Address) -> Option<&ValidatorInfo> {
+        self.validators
+            .iter()
+            .find(|v| v.address == address && v.active && v.stake >= MIN_VALIDATOR_STAKE)
+    }
+
+    /// Snapshot of the current committee in authority-index order, in the
+    /// shape persisted in the `EPOCH_COMMITTEE` table.
+    ///
+    /// `committee_order()` is the single source of the ordering (stake desc,
+    /// ties by address, top [`MAX_ACTIVE_VALIDATORS`], re-sorted by address);
+    /// the enumerate position is the authority index. Returns `None` when the
+    /// committee is empty or a member has no consensus public key — such a
+    /// committee cannot be frozen, so callers must fall back rather than store
+    /// a snapshot with holes in the index sequence.
+    pub fn epoch_committee_snapshot(&self) -> Option<Vec<SealCommitteeSnapshotMember>> {
+        let committee = self.committee_order();
+        if committee.is_empty() {
+            return None;
+        }
+        let mut members = Vec::with_capacity(committee.len());
+        for (index, validator) in committee.iter().enumerate() {
+            members.push(SealCommitteeSnapshotMember {
+                index: index as u16,
+                public_key: validator.public_key?,
+                stake: validator.stake,
+                vrf_public_key: validator
+                    .vrf_public_key
+                    .as_ref()
+                    .map(|key| PublicKey(key.0)),
+            });
+        }
+        Some(members)
+    }
+
     /// Cumulative mining rewards credited to `address` so far (accounting only;
     /// spendable balance updates are applied by the execution layer).
     pub fn reward_total(&self, address: &Address) -> u64 {
@@ -940,7 +987,14 @@ impl StakingState {
         Ok(())
     }
 
-    /// Called by the execution layer when a leader block is committed.
+    /// Called by the execution layer when a leader block is committed,
+    /// resolving the leader from its **live** authority index.
+    ///
+    /// Prefer [`Self::on_leader_committed_resolved`] on the execution path:
+    /// authority indices are pinned by the epoch committee snapshot, while the
+    /// live order shifts whenever a validator joins, unbonds, is slashed or is
+    /// evicted mid-epoch. This index-based entry point remains for callers
+    /// that already hold a live-index identity (tests, genesis bootstrap).
     ///
     /// 1. Calculates the reward for the current `committed_leader_height`
     /// 2. Advances the height counter
@@ -951,11 +1005,32 @@ impl StakingState {
         &mut self,
         leader_author: u16,
     ) -> Result<RewardOutcome, StakingError> {
+        let leader = self
+            .authority_validator(leader_author)
+            .map(|v| v.address)
+            .ok_or(StakingError::NotValidator)?;
+        self.on_leader_committed_resolved(leader_author, leader)
+    }
+
+    /// Commit a leader whose identity (`leader`) was resolved by the caller —
+    /// on the execution path, from the epoch committee snapshot that assigned
+    /// `leader_author`.
+    ///
+    /// Fails with [`StakingError::NotValidator`] when `leader` is no longer an
+    /// active, sufficiently staked committee member (e.g. it was slashed or
+    /// unbonded inside this very sub-DAG). Callers that must not halt the chain
+    /// then use [`Self::on_leader_committed_forfeited_resolved`].
+    pub fn on_leader_committed_resolved(
+        &mut self,
+        leader_author: u16,
+        leader: Address,
+    ) -> Result<RewardOutcome, StakingError> {
         let recipient = self
-            .payout_address_for(leader_author)
+            .active_validator(leader)
+            .map(|v| v.payout_address)
             .ok_or(StakingError::NotValidator)?;
         let amount = block_reward(self.committed_leader_height);
-        Ok(self.commit_leader(leader_author, recipient, amount))
+        Ok(self.commit_leader(leader_author, Some(leader), recipient, amount))
     }
 
     /// Commit a leader that is no longer resolvable in the active committee —
@@ -966,10 +1041,26 @@ impl StakingState {
     /// and treasury vesting. This makes a misbehaving leader unable to halt the
     /// chain simply by being slashed mid-round.
     pub fn on_leader_committed_forfeited(&mut self, leader_author: u16) -> RewardOutcome {
-        let recipient = self
-            .payout_address_for(leader_author)
+        let leader = self.authority_validator(leader_author).map(|v| v.address);
+        self.on_leader_committed_forfeited_resolved(leader_author, leader)
+    }
+
+    /// Forfeit a leader whose identity was resolved from the epoch committee.
+    ///
+    /// `leader = None` means the authority index is not a member of that
+    /// committee; the height/liveness/treasury transitions still run and no
+    /// balance is credited. Liveness skips the resolved leader **by address**,
+    /// so a shifted live order cannot charge the wrong validator with a miss.
+    pub fn on_leader_committed_forfeited_resolved(
+        &mut self,
+        leader_author: u16,
+        leader: Option<Address>,
+    ) -> RewardOutcome {
+        let recipient = leader
+            .and_then(|address| self.validator(address))
+            .map(|v| v.payout_address)
             .unwrap_or(Address([0u8; 32]));
-        self.commit_leader(leader_author, recipient, 0)
+        self.commit_leader(leader_author, leader, recipient, 0)
     }
 
     /// Shared leader-commit bookkeeping for both the paid and the forfeited
@@ -978,6 +1069,7 @@ impl StakingState {
     fn commit_leader(
         &mut self,
         leader_author: u16,
+        leader: Option<Address>,
         recipient: Address,
         amount: u64,
     ) -> RewardOutcome {
@@ -1010,9 +1102,11 @@ impl StakingState {
             treasury.advance(self.committed_leader_height);
         }
 
-        // Validator liveness: reset missed count for the leader, increment for others
-        self.validator_online(leader_author);
-        self.advance_validator_liveness(leader_author);
+        // Validator liveness: reset missed count for the leader, increment for
+        // others. Identity-based, so a shifted live index cannot credit one
+        // validator with another's leadership.
+        self.validator_online_by_address(leader);
+        self.advance_validator_liveness_by_address(leader);
 
         outcome
     }
@@ -1063,13 +1157,27 @@ impl StakingState {
 
     /// Called when a validator produces a committed leader block.
     /// Resets their missed leader count and updates last_online_height.
+    ///
+    /// Resolves the identity from the **live** authority order; the execution
+    /// path uses [`Self::validator_online_by_address`] with the epoch
+    /// committee's identity instead.
     pub fn validator_online(&mut self, leader_author: u16) {
-        if let Some(v) = self.authority_validator(leader_author) {
-            let address = v.address;
-            if let Some(v_mut) = self.validators.iter_mut().find(|v| v.address == address) {
-                v_mut.missed_leader_count = 0;
-                v_mut.last_online_height = self.committed_leader_height;
-            }
+        let leader = self.authority_validator(leader_author).map(|v| v.address);
+        self.validator_online_by_address(leader);
+    }
+
+    /// Reset the missed-leader counter for the leader's identity address.
+    ///
+    /// The record is matched by address regardless of `active`, so a leader
+    /// deactivated inside its own sub-DAG is still recorded as online for the
+    /// height it led (the commit bookkeeping runs for forfeits too).
+    pub fn validator_online_by_address(&mut self, leader: Option<Address>) {
+        let Some(address) = leader else {
+            return;
+        };
+        if let Some(v_mut) = self.validators.iter_mut().find(|v| v.address == address) {
+            v_mut.missed_leader_count = 0;
+            v_mut.last_online_height = self.committed_leader_height;
         }
     }
 
@@ -1081,8 +1189,21 @@ impl StakingState {
     /// is applied. The `leader_author` is the one that succeeded; all other
     /// active validators in the committee get their missed count incremented.
     pub fn advance_validator_liveness(&mut self, leader_author: u16) -> Vec<Address> {
+        let leader = self.authority_validator(leader_author).map(|v| v.address);
+        self.advance_validator_liveness_by_address(leader)
+    }
+
+    /// Address-resolved variant of [`Self::advance_validator_liveness`].
+    ///
+    /// The leader is excluded **by address**, which is what makes liveness
+    /// deterministic: the execution path passes the identity from the epoch
+    /// committee snapshot, so a mid-epoch reshuffle of the live authority order
+    /// cannot turn the successful leader into a "missed" one (or vice versa).
+    pub fn advance_validator_liveness_by_address(
+        &mut self,
+        leader_address: Option<Address>,
+    ) -> Vec<Address> {
         let committee: Vec<_> = self.committee_order().into_iter().cloned().collect();
-        let leader_address = self.authority_validator(leader_author).map(|v| v.address);
         let mut went_offline = Vec::new();
 
         for v in committee {
@@ -1791,6 +1912,109 @@ mod tests {
             state.on_leader_committed(9),
             Err(StakingError::NotValidator)
         ));
+    }
+
+    #[test]
+    fn resolved_leader_payment_ignores_a_mid_epoch_joiner_at_index_zero() {
+        let mut state = StakingState::new();
+        for i in 1..=3u8 {
+            state
+                .join_validator(a(i), MIN_VALIDATOR_STAKE, 0, Some(a(i + 10)), None, None)
+                .unwrap();
+        }
+
+        // a(0) joining mid-epoch sorts to live index 0, so the live order no
+        // longer maps index 0 to the epoch's leader. The snapshot-resolved
+        // identity must still win: a(1) led, not the newcomer.
+        state
+            .join_validator(a(0), MIN_VALIDATOR_STAKE, 0, Some(a(10)), None, None)
+            .unwrap();
+        assert_eq!(state.committee_order()[0].address, a(0));
+
+        let outcome = state.on_leader_committed_resolved(0, a(1)).unwrap();
+        assert_eq!(
+            outcome.recipient,
+            a(11),
+            "pays the identity that held index 0, not the shifted live index"
+        );
+        assert_eq!(outcome.amount, block_reward(0));
+
+        let missed = |addr: Address| state.validator(addr).unwrap().missed_leader_count;
+        assert_eq!(missed(a(1)), 0, "the real leader is online");
+        assert_eq!(missed(a(2)), 1);
+        assert_eq!(missed(a(3)), 1);
+    }
+
+    #[test]
+    fn resolved_leader_deactivated_in_its_own_subdag_forfeits_without_paying_the_shifted_index() {
+        let mut state = StakingState::new();
+        for i in 1..=3u8 {
+            state
+                .join_validator(a(i), MIN_VALIDATOR_STAKE, 0, Some(a(i + 10)), None, None)
+                .unwrap();
+        }
+        // a(1) held index 0 at epoch start. The sub-DAG it led slashed it, so
+        // it left the live committee: index 0 now resolves to a(2).
+        state.validators[0].missed_leader_count = 5;
+        state.validators[0].active = false;
+        assert_eq!(state.committee_order()[0].address, a(2));
+
+        let outcome = state.on_leader_committed_forfeited_resolved(0, Some(a(1)));
+        assert_eq!(outcome.amount, 0, "a leader that left must not be paid");
+        assert_eq!(
+            outcome.recipient,
+            a(11),
+            "outcome still names the real leader"
+        );
+        assert_eq!(
+            state.committed_leader_height, 1,
+            "height advances on forfeit"
+        );
+
+        let missed = |addr: Address| state.validator(addr).unwrap().missed_leader_count;
+        assert_eq!(missed(a(1)), 0, "the leader's own miss counter is reset");
+        assert_eq!(
+            missed(a(2)),
+            1,
+            "the shifted index-0 validator takes a miss"
+        );
+        assert_eq!(missed(a(3)), 1);
+    }
+
+    #[test]
+    fn epoch_committee_snapshot_is_committee_order_in_index_order() {
+        let mut state = StakingState::new();
+        for i in 1..=3u8 {
+            state
+                .join_validator(
+                    a(i),
+                    MIN_VALIDATOR_STAKE,
+                    0,
+                    Some(a(i + 10)),
+                    Some(PublicKey(a(i).0)),
+                    None,
+                )
+                .unwrap();
+        }
+
+        let snapshot = state
+            .epoch_committee_snapshot()
+            .expect("freezable committee");
+        let order = state.committee_order();
+        assert_eq!(snapshot.len(), order.len());
+        for (index, (member, validator)) in snapshot.iter().zip(order.iter()).enumerate() {
+            assert_eq!(member.index, index as u16);
+            assert_eq!(
+                Address::from_public_key(&member.public_key),
+                validator.address
+            );
+            assert_eq!(member.stake, validator.stake);
+        }
+
+        // One member without a consensus key would leave a hole in the index
+        // sequence, so the snapshot is refused rather than stored sparse.
+        state.validators[1].public_key = None;
+        assert!(state.epoch_committee_snapshot().is_none());
     }
 
     #[test]
