@@ -249,7 +249,7 @@ pub fn sign_transfer_raw(
 ) -> Result<String, LightFfiError> {
     let passphrase = SecretString::new(passphrase);
     let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
-    let to = parse_address(&to)?;
+    let to = parse_address(&to, chain_id)?;
     priced_raw(fee_rate, |fee| {
         sign_transfer(chain_id, &signing_key, sender, to, amount, nonce, fee)
     })
@@ -275,7 +275,7 @@ pub fn sign_call_raw(
 ) -> Result<String, LightFfiError> {
     let passphrase = SecretString::new(passphrase);
     let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
-    let contract = parse_address(&contract)?;
+    let contract = parse_address(&contract, chain_id)?;
     let args = parse_hex_bytes(&args_hex, "args")?;
     priced_raw(fee_rate, |fee| {
         sign_call(
@@ -416,8 +416,8 @@ fn vrf_key(signing_key: &SigningKey) -> Result<VRFKeyPair, LightFfiError> {
     VRFKeyPair::from_secret(secret).map_err(failed)
 }
 
-fn parse_address(value: &str) -> Result<Address, LightFfiError> {
-    kovanica_keystore::parse_address(value, "address").map_err(failed)
+fn parse_address(value: &str, chain_id: u64) -> Result<Address, LightFfiError> {
+    kovanica_keystore::parse_address(value, "address", chain_id).map_err(failed)
 }
 
 fn parse_beacon(value: &str) -> Result<Hash, LightFfiError> {

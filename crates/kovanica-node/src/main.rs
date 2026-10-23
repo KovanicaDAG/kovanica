@@ -118,6 +118,11 @@ struct GenesisArgs {
     #[arg(long, value_name = "HEX")]
     founder_address: String,
 
+    /// Chain this genesis is for (1 mainnet, 2 testnet, 3 devnet, 4 testnet
+    /// v2, 1337 local). Legacy hex addresses are accepted on 3, 4, and 1337.
+    #[arg(long)]
+    chain_id: u64,
+
     /// Output genesis JSON file
     #[arg(long, value_name = "FILE", default_value = "genesis.json")]
     output: String,
@@ -246,8 +251,8 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
         serde_json::from_str(&text).with_context(|| format!("parsing {}", args.validators))?;
 
     // Build treasury
-    let treasury = parse_address_hex(Some(&args.treasury_address))?;
-    let founder = parse_address_hex(Some(&args.founder_address))?;
+    let treasury = parse_address_hex(Some(&args.treasury_address), args.chain_id)?;
+    let founder = parse_address_hex(Some(&args.founder_address), args.chain_id)?;
     let mut staking = StakingState::new();
     staking.init_treasury(treasury);
 
@@ -256,7 +261,7 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
 
     // Join each validator
     for v in validators_input {
-        let address = parse_address_hex(Some(&v.address))?;
+        let address = parse_address_hex(Some(&v.address), args.chain_id)?;
         let pk = v
             .public_key
             .as_ref()
@@ -1557,7 +1562,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     }
 
     info!("initialising genesis state");
-    let treasury = parse_address_hex(config.treasury_address.as_deref())?;
+    let treasury = parse_address_hex(config.treasury_address.as_deref(), config.chain_id)?;
     let mut staking = StakingState::new();
     staking.init_treasury(treasury);
 
@@ -1574,7 +1579,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         let validators_input: Vec<GenesisValidatorInput> = serde_json::from_str(&text)
             .with_context(|| format!("parsing {}", validators_json_path.display()))?;
         for v in &validators_input {
-            let address = parse_address_hex(Some(&v.address))?;
+            let address = parse_address_hex(Some(&v.address), config.chain_id)?;
             let pk = v
                 .public_key
                 .as_ref()
@@ -1595,7 +1600,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     if premine_path.exists() {
         let hex = std::fs::read_to_string(&premine_path)?.trim().to_string();
         if !hex.is_empty() {
-            let founder = parse_address_hex(Some(&hex))?;
+            let founder = parse_address_hex(Some(&hex), config.chain_id)?;
             use kovanica_storage::state_store::Account;
             let state = state_storage.state();
             let acct = Account {
@@ -1620,7 +1625,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         })?;
         let state = state_storage.state();
         for entry in funded.account {
-            let address = parse_address_hex(Some(&entry.address))?;
+            let address = parse_address_hex(Some(&entry.address), config.chain_id)?;
             use kovanica_storage::state_store::Account;
             let acct = Account {
                 balance: entry.balance,
@@ -1651,7 +1656,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         let validators = validators.validator;
         let count = validators.len();
         for v in validators {
-            let address = parse_address_hex(Some(&v.address))?;
+            let address = parse_address_hex(Some(&v.address), config.chain_id)?;
             let pk = if let Some(p) = v.public_key.as_ref() {
                 Some(parse_public_key_hex(p)?)
             } else {
@@ -1840,7 +1845,9 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
     // when `genesis_validators.toml` (the other chain-id source) is absent.
     data.extend_from_slice(&config.chain_id.to_le_bytes());
     // Treasury address.
-    data.extend_from_slice(&parse_address_hex(config.treasury_address.as_deref())?.0);
+    data.extend_from_slice(
+        &parse_address_hex(config.treasury_address.as_deref(), config.chain_id)?.0,
+    );
 
     // validators.json (Phase 14 ceremony): array of {address, public_key?, stake?}.
     let validators_json_path = config.data_dir.join("validators.json");
@@ -1852,7 +1859,7 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
             .with_context(|| format!("parsing {}", validators_json_path.display()))?;
         let mut rows: Vec<([u8; 32], [u8; 32], u64)> = Vec::with_capacity(entries.len());
         for v in entries {
-            let address = parse_address_hex(Some(&v.address))?;
+            let address = parse_address_hex(Some(&v.address), config.chain_id)?;
             let pk = match v.public_key.as_ref() {
                 Some(p) => parse_public_key_hex(p)?.0,
                 None => [0u8; 32],
@@ -1880,7 +1887,7 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
             .trim()
             .to_string();
         if !hex.is_empty() {
-            data.extend_from_slice(&parse_address_hex(Some(&hex))?.0);
+            data.extend_from_slice(&parse_address_hex(Some(&hex), config.chain_id)?.0);
         }
     }
 
@@ -1894,7 +1901,10 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
             toml::from_str(&text).with_context(|| format!("parsing {}", funded_path.display()))?;
         let mut rows: Vec<([u8; 32], u64)> = Vec::with_capacity(funded.account.len());
         for entry in funded.account {
-            rows.push((parse_address_hex(Some(&entry.address))?.0, entry.balance));
+            rows.push((
+                parse_address_hex(Some(&entry.address), config.chain_id)?.0,
+                entry.balance,
+            ));
         }
         rows.sort_unstable();
         for (address, balance) in rows {
@@ -1914,7 +1924,7 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
         data.extend_from_slice(&genesis.chain_id.unwrap_or(0).to_le_bytes());
         let mut rows: Vec<GenesisValidatorDigestRow> = Vec::with_capacity(genesis.validator.len());
         for v in genesis.validator {
-            let address = parse_address_hex(Some(&v.address))?.0;
+            let address = parse_address_hex(Some(&v.address), config.chain_id)?.0;
             let pk = match v.public_key.as_ref() {
                 Some(p) => parse_public_key_hex(p)?.0,
                 None => [0u8; 32],
@@ -4611,21 +4621,18 @@ fn read_signing_key(path: &str) -> Result<SigningKey> {
     Ok(SigningKey::from_bytes(&seed))
 }
 
-/// Parse an address string in any of the supported formats:
-/// - `kvnc<32-byte-hex>dag` (canonical, with checksum verification)
-/// - bare 32-byte hex
-/// - 0x-prefixed hex
+/// Parse a genesis address for `chain_id`.
 ///
-/// Returns the 32-byte address.
-fn parse_address_hex(value: Option<&str>) -> Result<Address> {
+/// The canonical 64-character base32 form is accepted on every chain. The
+/// legacy hex forms are accepted only where
+/// [`kovanica_types::address::legacy_address_allowed`] is true. `None` is the
+/// zero address (the default treasury).
+fn parse_address_hex(value: Option<&str>, chain_id: u64) -> Result<Address> {
     let Some(value) = value else {
         return Ok(Address::default());
     };
 
-    value
-        .trim()
-        .parse::<Address>()
-        .with_context(|| format!("invalid address `{value}`"))
+    Address::parse_for_chain(value, chain_id).with_context(|| format!("invalid address `{value}`"))
 }
 
 #[cfg(test)]
@@ -4645,8 +4652,10 @@ mod tests {
     fn parse_address_hex_accepts_canonical_kvnc_dag_format() {
         let pk_bytes = [3u8; 32];
         let address = Address(pk_bytes);
-        let canonical = address.encode(); // kvnc<hex>dag with correct checksum
-        let parsed = parse_address_hex(Some(&canonical)).expect("canonical format parses");
+        let canonical = address.encode();
+        let parsed =
+            parse_address_hex(Some(&canonical), kovanica_types::signing::chain_id::MAINNET)
+                .expect("canonical format parses");
         assert_eq!(parsed.to_hex(), address.to_hex());
     }
 
@@ -4658,7 +4667,11 @@ mod tests {
         let mut bad_canonical = canonical.clone();
         let checksum_start = bad_canonical.len() - "dag".len() - 8;
         bad_canonical.replace_range(checksum_start..checksum_start + 2, "ff");
-        let err = parse_address_hex(Some(&bad_canonical)).unwrap_err();
+        let err = parse_address_hex(
+            Some(&bad_canonical),
+            kovanica_types::signing::chain_id::MAINNET,
+        )
+        .unwrap_err();
         assert!(
             err.to_string().contains("invalid address"),
             "got error: {}",
@@ -4666,24 +4679,35 @@ mod tests {
         );
     }
 
+    /// Chain 1 refuses legacy hex. Devnet, chain 4, and local still accept it.
     #[test]
-    fn parse_address_hex_accepts_bare_hex_for_backward_compatibility() {
+    fn parse_address_hex_follows_the_chain_policy() {
+        use kovanica_types::signing::chain_id;
         let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let address = parse_address_hex(Some(pk_hex)).expect("bare hex parses");
-        assert_eq!(address.to_hex(), pk_hex);
-    }
-
-    #[test]
-    fn parse_address_hex_accepts_0x_prefixed_hex() {
-        let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let address =
-            parse_address_hex(Some(&format!("0x{}", pk_hex))).expect("0x-prefixed hex parses");
-        assert_eq!(address.to_hex(), pk_hex);
+        let address = Address(hex::decode(pk_hex).unwrap().try_into().expect("32 bytes"));
+        let forms = [
+            pk_hex.to_string(),
+            format!("0x{pk_hex}"),
+            address.encode_legacy_hex(),
+        ];
+        for form in &forms {
+            let err = parse_address_hex(Some(form), chain_id::MAINNET).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("not accepted"),
+                "{form} on chain 1: {err:#}"
+            );
+            for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+                let parsed = parse_address_hex(Some(form), chain)
+                    .unwrap_or_else(|e| panic!("{form} on chain {chain}: {e:#}"));
+                assert_eq!(parsed, address);
+            }
+        }
     }
 
     #[test]
     fn parse_address_hex_returns_default_for_none() {
-        let address = parse_address_hex(None).expect("None returns default address");
+        let address = parse_address_hex(None, kovanica_types::signing::chain_id::MAINNET)
+            .expect("None returns default address");
         assert_eq!(address, Address::default());
     }
 
@@ -5033,6 +5057,7 @@ mod tests {
             validators: validators.to_string_lossy().into_owned(),
             treasury_address: "22".repeat(32),
             founder_address: "33".repeat(32),
+            chain_id: kovanica_types::signing::chain_id::LOCAL,
             output: output.to_string_lossy().into_owned(),
             validator_keys_out: Some(keys_dir.to_string_lossy().into_owned()),
             force: false,
@@ -5193,8 +5218,11 @@ mod tests {
 
     #[test]
     fn zero_address_is_default_treasury() {
-        assert_eq!(parse_address_hex(None).unwrap(), Address::default());
-        assert!(parse_address_hex(Some("zz")).is_err());
+        assert_eq!(
+            parse_address_hex(None, kovanica_types::signing::chain_id::LOCAL).unwrap(),
+            Address::default()
+        );
+        assert!(parse_address_hex(Some("zz"), kovanica_types::signing::chain_id::LOCAL).is_err());
     }
 
     #[test]
@@ -7467,6 +7495,33 @@ mod tests {
         let _ = rx.try_recv();
     }
 
+    /// `founder_premine.hex` is parsed with the chain policy: chain 1 refuses
+    /// legacy hex, and devnet, local, and chain 4 accept it. Canonical still
+    /// parses on mainnet.
+    #[test]
+    fn genesis_file_addresses_follow_the_chain_policy() {
+        use kovanica_types::signing::chain_id;
+
+        let hex = "11".repeat(32);
+        let canonical = Address([0x11; 32]).encode();
+        let digest_with = |chain: u64, body: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("founder_premine.hex"), body).unwrap();
+            genesis_config_digest(&chain_id_config(dir.path(), chain))
+        };
+
+        let err = digest_with(chain_id::MAINNET, &hex).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("not accepted"),
+            "chain 1 must refuse hex: {err:#}"
+        );
+        for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+            digest_with(chain, &hex)
+                .unwrap_or_else(|e| panic!("chain {chain} must accept hex: {e:#}"));
+        }
+        digest_with(chain_id::MAINNET, &canonical).expect("mainnet accepts the canonical form");
+    }
+
     /// Pre-funding from a file is a testnet/dev convenience. Mainnet must never
     /// accept it, and the rule covers both the genesis init path and the digest
     /// so neither can be bypassed.
@@ -7522,21 +7577,28 @@ mod tests {
     fn init_genesis_refuses_small_mainnet_validator_set_but_accepts_testnet() {
         use kovanica_types::signing::chain_id;
 
-        let write_set = |dir: &std::path::Path, chain: u64, n: usize| {
+        let write_set = |dir: &std::path::Path, chain: u64, addresses: &[String]| {
             let mut body = format!("chain_id = {chain}\n\n");
-            for i in 1..=n {
+            for address in addresses {
                 body.push_str(&format!(
-                    "[[validator]]\naddress = \"{i:02x}{}\"\nstake = {}\n\n",
-                    "00".repeat(31),
+                    "[[validator]]\naddress = \"{address}\"\nstake = {}\n\n",
                     kovanica_staking::MIN_VALIDATOR_STAKE
                 ));
             }
             std::fs::write(dir.join("genesis_validators.toml"), body).unwrap();
         };
+        let indexed_hex = |i: u8| format!("{i:02x}{}", "00".repeat(31));
+        let indexed_canonical = |i: u8| {
+            let mut raw = [0u8; 32];
+            raw[0] = i;
+            Address(raw).encode()
+        };
 
-        // Mainnet, 3 validators: refused.
+        // Mainnet, 3 canonical addresses: refused for the count. Hex would be
+        // refused earlier, which would hide this check.
         let dir = tempfile::tempdir().unwrap();
-        write_set(dir.path(), chain_id::MAINNET, 3);
+        let mainnet_set: Vec<String> = (1..=3).map(indexed_canonical).collect();
+        write_set(dir.path(), chain_id::MAINNET, &mainnet_set);
         let config = chain_id_config(dir.path(), chain_id::MAINNET);
         let dag = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
         let state = Storage::new(dir.path().join("state.redb")).unwrap();
@@ -7553,9 +7615,10 @@ mod tests {
             "a refused genesis must not write staking state"
         );
 
-        // Testnet, same set: accepted, and the validators are staked.
+        // Chain 4, same count in legacy hex: accepted, and the validators are staked.
         let dir = tempfile::tempdir().unwrap();
-        write_set(dir.path(), chain_id::TESTNET_V2, 3);
+        let testnet_set: Vec<String> = (1..=3).map(indexed_hex).collect();
+        write_set(dir.path(), chain_id::TESTNET_V2, &testnet_set);
         let config = chain_id_config(dir.path(), chain_id::TESTNET_V2);
         let dag = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
         let state = Storage::new(dir.path().join("state.redb")).unwrap();

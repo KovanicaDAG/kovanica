@@ -1148,10 +1148,11 @@ impl App {
     }
 
     fn draft(&self, kind: FormKind) -> Result<TxDraft, String> {
+        let chain = ensure_chain(self.chain_id)?;
         let fee = amount::parse_fee_atoms(&self.fee).map_err(|err| err.to_string())?;
         let action = match kind {
             FormKind::Transfer => TxAction::Transfer {
-                to: wallet::parse_address(self.to.trim(), "recipient")
+                to: wallet::parse_address(self.to.trim(), "recipient", chain)
                     .map_err(|err| err.to_string())?,
                 amount: amount::parse_positive_kuna(&self.amount).map_err(|err| err.to_string())?,
             },
@@ -1162,7 +1163,7 @@ impl App {
                 amount: amount::parse_positive_kuna(&self.amount).map_err(|err| err.to_string())?,
             },
             FormKind::Delegate => TxAction::Delegate {
-                validator: wallet::parse_address(self.validator.trim(), "validator")
+                validator: wallet::parse_address(self.validator.trim(), "validator", chain)
                     .map_err(|err| err.to_string())?,
                 amount: amount::parse_positive_kuna(&self.amount).map_err(|err| err.to_string())?,
             },
@@ -1171,7 +1172,7 @@ impl App {
                     None
                 } else {
                     Some(
-                        wallet::parse_address(self.validator.trim(), "validator")
+                        wallet::parse_address(self.validator.trim(), "validator", chain)
                             .map_err(|err| err.to_string())?,
                     )
                 },

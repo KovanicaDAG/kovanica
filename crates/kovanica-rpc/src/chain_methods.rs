@@ -103,21 +103,23 @@ fn parse_hash(value: &Value, what: &str) -> Result<Hash, RpcError> {
     Ok(Hash(parse_bytes32(value, what)?))
 }
 
-/// Parse an account address parameter.
-fn parse_address(value: &Value, what: &str) -> Result<Address, RpcError> {
+/// Parse an account address parameter for `chain_id`.
+///
+/// The canonical 64-character `kvnc…dag` base32 form is accepted on every
+/// chain. The legacy hex forms (`kvnc<hex>dag`, bare or `0x` hex) only where
+/// `kovanica_types::address::legacy_address_allowed` is true (devnet 3, chain
+/// 4, local 1337).
+fn parse_address(value: &Value, what: &str, chain_id: u64) -> Result<Address, RpcError> {
     let raw = value
         .as_str()
         .ok_or_else(|| RpcError::InvalidParams(format!("{what}: expected an address string")))?;
-    let raw = raw.trim();
-    // Canonical `kvnc…dag` encoding (checksum verified) or a raw 32-byte hex.
-    if raw.starts_with(kovanica_types::address::ADDRESS_PREFIX)
-        || raw.ends_with(kovanica_types::address::ADDRESS_SUFFIX)
-    {
-        return raw
-            .parse::<Address>()
-            .map_err(|e| RpcError::InvalidParams(format!("{what}: {e}")));
-    }
-    Ok(Address(parse_bytes32(value, what)?))
+    Address::parse_for_chain(raw, chain_id)
+        .map_err(|e| RpcError::InvalidParams(format!("{what}: {e}")))
+}
+
+/// Chain id this node serves (the mempool's signing context).
+fn served_chain_id(state: &RpcState) -> u64 {
+    state.mempool.signing_context().chain_id
 }
 
 /// Parse an integer parameter accepted as either a JSON number or a
@@ -530,7 +532,7 @@ pub async fn handle_get_logs(params: Value, state: RpcState) -> Result<Value, Rp
         )));
     }
 
-    let addresses = parse_address_filter(filter.get("address"))?;
+    let addresses = parse_address_filter(filter.get("address"), served_chain_id(&state))?;
     let topics = parse_topics_filter(filter.get("topics"))?;
 
     let scanned =
@@ -617,14 +619,19 @@ fn parse_topic(value: &Value, what: &str) -> Result<Option<Vec<u8>>, RpcError> {
 
 /// Parse the `address` filter: a single address, an array of addresses, or
 /// absent/null for "no address constraint".
-fn parse_address_filter(value: Option<&Value>) -> Result<Option<Vec<Address>>, RpcError> {
+fn parse_address_filter(
+    value: Option<&Value>,
+    chain_id: u64,
+) -> Result<Option<Vec<Address>>, RpcError> {
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(value @ Value::String(_)) => Ok(Some(vec![parse_address(value, "address")?])),
+        Some(value @ Value::String(_)) => {
+            Ok(Some(vec![parse_address(value, "address", chain_id)?]))
+        }
         Some(Value::Array(items)) => Ok(Some(
             items
                 .iter()
-                .map(|item| parse_address(item, "address"))
+                .map(|item| parse_address(item, "address", chain_id))
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         Some(_) => Err(RpcError::InvalidParams(
@@ -691,7 +698,11 @@ fn topics_match(filter: &[Option<Vec<Vec<u8>>>], topic: &[u8]) -> bool {
 /// `kovanica_getBalance(address)` — native KUNA balance in atoms.
 pub async fn handle_get_balance(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
 
     let txn = state.storage.begin_read().map_err(internal)?;
     let account = state
@@ -705,7 +716,11 @@ pub async fn handle_get_balance(params: Value, state: RpcState) -> Result<Value,
 /// `kovanica_getNonce(address)` — account nonce.
 pub async fn handle_get_nonce(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
 
     let txn = state.storage.begin_read().map_err(internal)?;
     let account = state
@@ -719,7 +734,11 @@ pub async fn handle_get_nonce(params: Value, state: RpcState) -> Result<Value, R
 /// `kovanica_getCode(address)` — contract bytecode as hex.
 pub async fn handle_get_code(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
 
     let txn = state.storage.begin_read().map_err(internal)?;
     let account = state
@@ -744,7 +763,11 @@ pub async fn handle_get_code(params: Value, state: RpcState) -> Result<Value, Rp
 /// `kovanica_getStorageAt(address, key)` — raw contract storage slot as hex.
 pub async fn handle_get_storage_at(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
     let key = parse_storage_key(required(&args, 1, "storage key")?, "storage key")?;
 
     let txn = state.storage.begin_read().map_err(internal)?;
@@ -786,7 +809,11 @@ pub async fn handle_get_validators(_params: Value, state: RpcState) -> Result<Va
 /// has made.
 pub async fn handle_get_stake(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
 
     let staking = state.staking.read().await;
     let own_stake: u64 = staking
@@ -807,7 +834,11 @@ pub async fn handle_get_stake(params: Value, state: RpcState) -> Result<Value, R
 /// `kovanica_getRewards(address)` — cumulative rewards for an address.
 pub async fn handle_get_rewards(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
     let rewards = state.staking.read().await.reward_total(&address);
     Ok(quantity(rewards as u128))
 }
@@ -1099,7 +1130,11 @@ fn leader_tx_proof(state: &RpcState, header: &LeaderHeader, tx_hash: &Hash) -> V
 /// not the account rows. A requested older height is rejected.
 pub async fn handle_get_account_proof(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
     let requested = match args.get(1) {
         Some(value) => Some(parse_u64(value, "height")?),
         None => None,
@@ -1402,11 +1437,17 @@ mod tests {
     use kovanica_staking::{StakingState, MIN_VALIDATOR_STAKE};
     use kovanica_storage::Storage;
     use kovanica_types::crypto::PublicKey;
+    use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET, TESTNET_V2};
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
     fn hex32(byte: u8) -> String {
         format!("0x{}", hex::encode([byte; 32]))
+    }
+
+    /// Canonical (base32) address string. Every chain accepts this form.
+    fn addr32(byte: u8) -> String {
+        Address([byte; 32]).to_string()
     }
 
     fn test_state(storage: Arc<Storage>) -> RpcState {
@@ -1453,7 +1494,7 @@ mod tests {
         let value = Value::String(hex32(0xab));
         assert_eq!(parse_hash(&value, "hash").unwrap(), Hash([0xab; 32]));
         assert_eq!(
-            parse_address(&value, "address").unwrap(),
+            parse_address(&value, "address", TESTNET_V2).unwrap(),
             Address([0xab; 32])
         );
 
@@ -1465,18 +1506,34 @@ mod tests {
     fn parses_canonical_and_hex_addresses() {
         let address = Address([0x2a; 32]);
         assert_eq!(address.to_string(), address.encode());
-        assert_eq!(
-            parse_address(&json!(address.to_string()), "address").unwrap(),
-            address
-        );
-        assert_eq!(
-            parse_address(&json!(hex32(0x2a)), "address").unwrap(),
-            address
-        );
+        assert_eq!(address.to_string().len(), 64);
+        for chain in [MAINNET, TESTNET_V2, LOCAL] {
+            assert_eq!(
+                parse_address(&json!(address.to_string()), "address", chain).unwrap(),
+                address
+            );
+        }
+        // Legacy hex: devnet, chain 4, and local. Refused on mainnet and testnet.
+        for legacy in [hex32(0x2a), address.encode_legacy_hex()] {
+            for chain in [DEVNET, TESTNET_V2, LOCAL] {
+                assert_eq!(
+                    parse_address(&json!(legacy), "address", chain).unwrap(),
+                    address,
+                    "{legacy} on chain {chain}"
+                );
+            }
+            for chain in [MAINNET, TESTNET] {
+                let err = parse_address(&json!(legacy), "address", chain).unwrap_err();
+                assert!(format!("{err:?}").contains("legacy"), "{err:?}");
+            }
+        }
 
-        // Correct affixes/length but a wrong checksum must be rejected.
-        let bad = json!(format!("kvnc{}dag", "00".repeat(36)));
-        assert!(parse_address(&bad, "address").is_err());
+        // Correct affixes but a wrong checksum must be rejected.
+        let mut bad = address.encode();
+        bad.replace_range(10..11, if &bad[10..11] == "q" { "p" } else { "q" });
+        assert!(parse_address(&json!(bad), "address", MAINNET).is_err());
+        let bad_legacy = json!(format!("kvnc{}dag", "00".repeat(36)));
+        assert!(parse_address(&bad_legacy, "address", TESTNET_V2).is_err());
     }
 
     #[test]
@@ -1517,21 +1574,21 @@ mod tests {
         assert!(parse_block_ref(&json!("nope"), 0, "b").is_err());
 
         // Address filter: single, list, absent, invalid.
-        assert!(parse_address_filter(None).unwrap().is_none());
+        assert!(parse_address_filter(None, TESTNET_V2).unwrap().is_none());
         assert_eq!(
-            parse_address_filter(Some(&json!(hex32(0x11))))
+            parse_address_filter(Some(&json!(hex32(0x11))), TESTNET_V2)
                 .unwrap()
                 .unwrap(),
             vec![Address([0x11; 32])]
         );
         assert_eq!(
-            parse_address_filter(Some(&json!([hex32(0x11), hex32(0x22)])))
+            parse_address_filter(Some(&json!([hex32(0x11), hex32(0x22)])), TESTNET_V2)
                 .unwrap()
                 .unwrap()
                 .len(),
             2
         );
-        assert!(parse_address_filter(Some(&json!(5))).is_err());
+        assert!(parse_address_filter(Some(&json!(5)), TESTNET_V2).is_err());
 
         // Topic matching: empty/None wildcard, exact, and out-of-range position.
         assert!(topics_match(&[], events::TOKEN_TRANSFER));
@@ -1571,19 +1628,19 @@ mod tests {
             json!("0x0")
         );
         assert_eq!(
-            handle_get_balance(json!([hex32(0x11)]), state.clone())
+            handle_get_balance(json!([addr32(0x11)]), state.clone())
                 .await
                 .unwrap(),
             json!("0x0")
         );
         assert_eq!(
-            handle_get_nonce(json!([hex32(0x11)]), state.clone())
+            handle_get_nonce(json!([addr32(0x11)]), state.clone())
                 .await
                 .unwrap(),
             json!("0x0")
         );
         assert_eq!(
-            handle_get_code(json!([hex32(0x11)]), state.clone())
+            handle_get_code(json!([addr32(0x11)]), state.clone())
                 .await
                 .unwrap(),
             json!("0x")
@@ -2164,7 +2221,7 @@ mod tests {
         .unwrap();
         assert_eq!(by_addr.as_array().unwrap().len(), 1);
         let stranger = handle_get_logs(
-            json!([{ "fromBlock": "0x0", "address": hex32(0x77) }]),
+            json!([{ "fromBlock": "0x0", "address": addr32(0x77) }]),
             state.clone(),
         )
         .await
