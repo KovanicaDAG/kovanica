@@ -1364,6 +1364,11 @@ pub struct SyncStatus {
     pub peer_count: usize,
     /// Connected peers, bounded by the node's `max_peers`.
     pub peers: Vec<SyncPeerStatus>,
+    /// `<chain_id>-<first 16 hex chars of the genesis digest>`. The same
+    /// string the node logs at startup (`network identity: peers must share
+    /// this tag`). `None` only when the process has no sync-status source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_tag: Option<String>,
 }
 
 /// Callable the node installs into [`RpcState`] to produce a fresh
@@ -1378,8 +1383,9 @@ pub type SyncStatusSource = Arc<dyn Fn() -> SyncStatus + Send + Sync>;
 /// `kovanica_syncStatus()` — read-only sync / catch-up and peer status.
 ///
 /// Reports the local DAG tip, the committed height, whether the node is
-/// catching up (and how far behind), and the connected peers with their last
-/// reported tip rounds. No parameters; needs no auth token (read-only).
+/// catching up (and how far behind), the connected peers with their last
+/// reported tip rounds, and this process's `networkTag`. No parameters; needs
+/// no auth token (read-only).
 pub async fn handle_sync_status(_params: Value, state: RpcState) -> Result<Value, RpcError> {
     let status = match &state.sync_status {
         Some(source) => source(),
@@ -2308,6 +2314,7 @@ mod tests {
         // Absent optional fields are omitted rather than emitted as null.
         assert!(got.get("catchUpTarget").is_none());
         assert!(got.get("behindBy").is_none());
+        assert!(got.get("networkTag").is_none());
     }
 
     #[tokio::test]
@@ -2332,6 +2339,7 @@ mod tests {
                     reported_tip_round: None,
                 },
             ],
+            network_tag: Some("4-0123456789abcdef".to_string()),
         }));
 
         let got = handle_sync_status(Value::Null, state).await.unwrap();
@@ -2344,6 +2352,7 @@ mod tests {
         assert_eq!(got["peerCount"], json!(2));
         assert_eq!(got["peers"][0]["peerId"], json!("12D3KooWpeer-a"));
         assert_eq!(got["peers"][0]["reportedTipRound"], json!(200));
+        assert_eq!(got["networkTag"], json!("4-0123456789abcdef"));
         // Peer b has no tip: those fields are omitted.
         assert!(got["peers"][1].get("reportedTipRound").is_none());
         // listenAddr should not be present
