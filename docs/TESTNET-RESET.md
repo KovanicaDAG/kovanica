@@ -37,8 +37,43 @@ the mesh.
 5. **Start them together**, with matching bootnodes
    (`KOVANICA_BOOTNODES`, or `bootnodes` in the config; default P2P listen is
    `0.0.0.0:8000`).
-6. **Verify convergence** — compare head height / digest across all nodes
-   before re-opening the mesh to public traffic.
+6. **Verify convergence** — compare the `network_tag` startup line (see
+   below) and then head height / digest across all nodes before re-opening
+   the mesh to public traffic.
+
+## Chain 4: one byte-identical genesis bundle for every node
+
+Since #87, every libp2p protocol id and gossip topic carries the node's
+**network tag**: `<chain_id>-<first 16 hex chars of the genesis config
+digest>`. Examples are `/kovanica/<tag>/block-sync/1.1.0` and
+`kovanica/<tag>/votes`. A peer that advertises another tag is disconnected at
+identify. Two nodes whose genesis inputs differ in a single byte therefore
+**never talk to each other**. The node logs no error for this; it simply has
+no peers on the right tag.
+
+The digest (`genesis_config_digest`) covers:
+
+- the canonical genesis block digest, which comes from the binary;
+- `chain_id`;
+- the treasury address (`treasury_address`);
+- these files in the data directory, where present: `validators.json`,
+  `founder_premine.hex`, `funded_accounts.toml`, and
+  `genesis_validators.toml`.
+
+**Every** chain-4 node needs the **same bundle, byte for byte**: validators,
+seeds, RPC nodes, the explorer backend and the faucet. Distribute it as one
+archive with a published SHA-256. Do not let each operator re-type or
+regenerate files.
+
+On startup each node logs its tag at `info`:
+
+```
+network identity: peers must share this tag  chain_id=4 network_tag=4-<16 hex>
+```
+
+Before opening the mesh, compare that line on every node. A node with a
+different tag has a different bundle. Fix the bundle, wipe the data directory,
+and restart. Do not use the genesis-mismatch override.
 
 ## Genesis digest guard (startup behaviour)
 
