@@ -1123,28 +1123,11 @@ fn cmd_address(args: AddressArgs, json_output: bool) -> Result<()> {
     if !args.allow_raw_hex {
         anyhow::bail!(
             "raw hex seed import is disabled by default for security. \
-            Use --allow-raw-hex to enable (ensure key file has 0600 permissions and is not shared)."
+            Use --allow-raw-hex to enable, and keep the key file readable only by its owner."
         );
     }
 
-    // Enforce key file permissions (0600) to prevent accidental exposure
-    let metadata = std::fs::metadata(&args.key_file)
-        .with_context(|| format!("reading key file metadata {}", args.key_file.display()))?;
-    let permissions = metadata.permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if permissions.mode() & 0o077 != 0 {
-            anyhow::bail!(
-                "key file {} has insecure permissions (mode: {:o}). \
-                Must be 0600 (readable/writable only by owner). \
-                Run: chmod 600 {}",
-                args.key_file.display(),
-                permissions.mode() & 0o777,
-                args.key_file.display()
-            );
-        }
-    }
+    wallet::ensure_owner_only(&args.key_file)?;
 
     let raw = std::fs::read_to_string(&args.key_file)
         .with_context(|| format!("reading key file {}", args.key_file.display()))?;
@@ -1276,11 +1259,19 @@ mod wallet_cli_security_tests {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("validator.pem");
         std::fs::write(&key_path, hex::encode([0x2a; 32])).unwrap();
-        // Set secure permissions (0600)
+        // Owner-only: Unix mode 0600. Windows replaces the DACL.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&key_path)
+                .unwrap();
+            wallet::tighten_private_file(&file).unwrap();
         }
         assert!(cmd_address(
             AddressArgs {
@@ -1299,6 +1290,27 @@ mod wallet_cli_security_tests {
             false
         )
         .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn address_command_rejects_a_group_readable_seed_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("validator.pem");
+        std::fs::write(&key_path, hex::encode([0x2a; 32])).unwrap();
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let error = cmd_address(
+            AddressArgs {
+                key_file: key_path,
+                allow_raw_hex: true,
+            },
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("other users"), "{error}");
     }
 
     #[test]
