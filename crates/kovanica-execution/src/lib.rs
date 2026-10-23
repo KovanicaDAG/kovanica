@@ -490,6 +490,36 @@ impl ExecutionContext {
             }
         }
 
+        // Address history is a local RPC index in this same write transaction.
+        // A failed commit drops it with the rest of the transition. It is not
+        // read by `commit_account_smt` and it is not part of any consensus hash.
+        {
+            let mut indexed = Vec::with_capacity(receipts.len());
+            let mut seen = 0usize;
+            for block in &subdag.blocks {
+                for tx in &block.transactions {
+                    let success = receipts
+                        .get(seen)
+                        .ok_or_else(|| {
+                            ExecutionError::Other(
+                                "address tx index: receipt count does not match transactions"
+                                    .into(),
+                            )
+                        })?
+                        .success;
+                    indexed.push((tx, success));
+                    seen += 1;
+                }
+            }
+            if seen != receipts.len() {
+                return Err(ExecutionError::Other(
+                    "address tx index: receipt count does not match transactions".into(),
+                ));
+            }
+            kovanica_storage::index_committed_txs(&txn, committed_height, &indexed)
+                .map_err(|e| ExecutionError::Other(format!("address tx index: {e}")))?;
+        }
+
         // 5. Account sparse Merkle over balance and nonce, then mark executed.
         let state_root = storage.state().commit_account_smt(&txn, committed_height)?;
         txn.open_table(EXECUTED_SUBDAGS)
@@ -3968,6 +3998,99 @@ mod tests {
     fn account_exists(storage: &Storage, addr: &Address) -> bool {
         let txn = storage.begin_read().expect("read txn");
         storage.state().get_account(&txn, addr).is_ok()
+    }
+
+    fn history(
+        storage: &Storage,
+        address: Address,
+        direction: kovanica_storage::TxDirection,
+    ) -> Vec<kovanica_storage::TxHistoryEntry> {
+        let txn = storage.begin_read().expect("read");
+        kovanica_storage::query_tx_history(
+            &txn,
+            &kovanica_storage::TxHistoryQuery {
+                address,
+                limit: Some(50),
+                cursor: None,
+                direction,
+            },
+        )
+        .expect("history")
+        .entries
+    }
+
+    #[test]
+    fn committed_subdag_writes_address_index_in_the_commit_transaction() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("hist.redb")).expect("storage");
+        let mut ctx = ExecutionContext::new();
+        let key = test_keypair(0x21);
+        let sender = address_of(&key);
+        let bob = Address([0x22; 32]);
+        fund(&storage, &sender, 1_000);
+
+        let first = create_transfer_tx(&key, &bob, 10, 0, 1);
+        let second = create_transfer_tx(&key, &bob, 11, 1, 1);
+        let result = ctx
+            .execute_committed_subdag(&subdag_at(1, vec![first.clone(), second.clone()]), &storage)
+            .expect("commit");
+        assert!(result.receipts.iter().all(|r| r.success));
+        let root = result.state_root.expect("state root");
+        {
+            // `commit_account_smt` stores the account SMT (balance + nonce).
+            // `compute_state_root` is the snapshot Merkle and is a different
+            // value. The account proof root is the consensus root, and it is
+            // built only from the accounts table.
+            let txn = storage.begin_read().expect("read");
+            let proof = storage
+                .state()
+                .prove_account(&txn, &sender)
+                .expect("account proof");
+            assert_eq!(
+                proof.state_root, root,
+                "committed state root is the account SMT and does not include the address index"
+            );
+        }
+
+        let sent = history(&storage, sender, kovanica_storage::TxDirection::Sent);
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].tx_hash, second.hash);
+        assert_eq!(sent[0].height, 0);
+        assert_eq!(sent[0].tx_index, 1);
+        assert_eq!(sent[0].amount, 11);
+        assert_eq!(sent[1].tx_hash, first.hash);
+        assert_eq!(sent[1].tx_index, 0);
+        let received = history(&storage, bob, kovanica_storage::TxDirection::Received);
+        assert_eq!(received.len(), 2);
+        assert!(history(&storage, bob, kovanica_storage::TxDirection::Sent).is_empty());
+
+        let replay = ctx
+            .execute_committed_subdag(&subdag_at(1, vec![first.clone(), second.clone()]), &storage)
+            .expect("replay");
+        assert!(replay.state_root.is_none(), "replay must not write");
+        assert_eq!(
+            history(&storage, sender, kovanica_storage::TxDirection::All).len(),
+            2,
+            "replay must not duplicate index rows"
+        );
+
+        // A commit that fails after the index write is opened rolls the index
+        // back with the balance update. Height 0 was already committed above,
+        // so this is the next height.
+        let balance_before = read_balance(&storage, &sender);
+        let third = create_transfer_tx(&key, &bob, 4, 2, 1);
+        let err = ctx
+            .execute_committed_subdag_with_commit(&subdag_at(2, vec![third]), &storage, |_txn| {
+                Err(ExecutionError::Other("forced rollback".into()))
+            })
+            .expect_err("commit callback fails");
+        assert!(matches!(err, ExecutionError::Other(_)));
+        assert_eq!(read_balance(&storage, &sender), balance_before);
+        assert_eq!(
+            history(&storage, sender, kovanica_storage::TxDirection::All).len(),
+            2,
+            "rolled-back commit must not publish index rows"
+        );
     }
 
     #[test]
