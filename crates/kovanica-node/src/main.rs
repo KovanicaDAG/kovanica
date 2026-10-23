@@ -4694,6 +4694,18 @@ mod tests {
         );
     }
 
+    /// The genesis digest domain is KUNA-*, fits the 32-byte BLAKE3 key, and
+    /// has a known answer computed independently (Python `blake3`).
+    #[test]
+    fn genesis_digest_domain_is_kuna_with_a_known_answer() {
+        assert_eq!(GENESIS_DIGEST_DOMAIN, b"KUNA-GENESIS-v1");
+        assert!(GENESIS_DIGEST_DOMAIN.len() <= 32);
+        assert_eq!(
+            Hash::new_keyed(GENESIS_DIGEST_DOMAIN, b"kovanica-kat").to_hex(),
+            "79dd91af609f2f8264b2f8a0a17c5dc46b7cea995e4fafd912a5b6623d588704"
+        );
+    }
+
     #[test]
     fn genesis_digest_is_deterministic_and_covers_chain_id_and_allocations() {
         let dir = tempfile::tempdir().unwrap();

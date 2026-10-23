@@ -7,6 +7,30 @@ use crate::transaction::Transaction;
 use crate::{AuthorityIndex, Round};
 use serde::{Deserialize, Serialize};
 
+/// Magic prefix of the VRF blob carried in [`StatementBlock::statements`].
+/// The one definition; every encoder, decoder and digest check uses it.
+pub const VRF_STATEMENT_MAGIC: &[u8; 9] = b"KUNA-VRF1";
+
+/// Length of the VRF blob: magic (9) ‖ output hash (32) ‖ proof (96).
+pub const VRF_STATEMENT_LEN: usize = 137;
+
+/// Domain prefix of the VRF *input* (`KUNA-VRF1-v1:<chain_id>:<round>:<author>:0`).
+pub const VRF_INPUT_DOMAIN: &str = "KUNA-VRF1-v1";
+
+/// VRF input for `author`'s block at `round` on `chain_id`.
+#[must_use]
+pub fn vrf_input(chain_id: u64, round: Round, author: AuthorityIndex) -> String {
+    format!("{VRF_INPUT_DOMAIN}:{chain_id}:{round}:{author}:0")
+}
+
+/// Whether `statements` carry the VRF blob (magic + at least
+/// [`VRF_STATEMENT_LEN`] bytes). Only then does the block digest cover them
+/// (see [`StatementBlock::compute_digest_statements`]).
+#[must_use]
+pub fn is_vrf_statement(statements: &[u8]) -> bool {
+    statements.len() >= VRF_STATEMENT_LEN && statements[..9] == VRF_STATEMENT_MAGIC[..]
+}
+
 /// Reference to a block in the DAG (author + round + digest).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct BlockReference {
@@ -73,9 +97,12 @@ impl StatementBlock {
         for tx in transactions {
             data.extend_from_slice(&tx.hash().0);
         }
-        // Wire upgrade: only include statements when they carry the VRF blob.
+        // The digest covers `statements` ONLY when they carry the VRF blob
+        // (`is_vrf_statement`: `KUNA-VRF1` magic and at least 137 bytes).
+        // Any other statements content is outside the digest, so it is not
+        // authenticated by the block signature and must never be interpreted.
         if let Some(s) = statements {
-            if s.len() >= 137 && &s[..9] == b"KUNA-VRF1" {
+            if is_vrf_statement(s) {
                 data.extend_from_slice(s);
             }
         }
@@ -214,5 +241,44 @@ mod tests {
         let d = Hash::new_keyed(Hash::DOMAIN_DIGEST, data);
         let m = Hash::new_keyed(Hash::DOMAIN_MERKLE, data);
         assert_ne!(d, m);
+    }
+}
+
+#[cfg(test)]
+mod vrf_statement_tests {
+    use super::*;
+
+    #[test]
+    fn vrf_framing_constants() {
+        assert_eq!(VRF_STATEMENT_MAGIC, b"KUNA-VRF1");
+        assert_eq!(VRF_STATEMENT_LEN, 9 + 32 + 96);
+        assert_eq!(VRF_INPUT_DOMAIN, "KUNA-VRF1-v1");
+        assert_eq!(vrf_input(4, 12, 3), "KUNA-VRF1-v1:4:12:3:0");
+    }
+
+    /// The digest covers `statements` only when they are a VRF blob
+    /// (block.rs `compute_digest_statements`).
+    #[test]
+    fn digest_covers_statements_only_for_the_vrf_blob() {
+        let mut blob = VRF_STATEMENT_MAGIC.to_vec();
+        blob.resize(VRF_STATEMENT_LEN, 7);
+        assert!(is_vrf_statement(&blob));
+        let short = &blob[..VRF_STATEMENT_LEN - 1];
+        assert!(!is_vrf_statement(short));
+        let mut wrong = blob.clone();
+        wrong[0] = b'X';
+        assert!(!is_vrf_statement(&wrong));
+        let mut legacy = b"KVNC-VRF1".to_vec();
+        legacy.resize(VRF_STATEMENT_LEN, 7);
+        assert!(
+            !is_vrf_statement(&legacy),
+            "the pre-chain-4 magic is not accepted"
+        );
+
+        let none = StatementBlock::compute_digest_statements(1, 3, &[], &[], None);
+        let with_blob = StatementBlock::compute_digest_statements(1, 3, &[], &[], Some(&blob));
+        let with_other = StatementBlock::compute_digest_statements(1, 3, &[], &[], Some(&wrong));
+        assert_ne!(none, with_blob, "a VRF blob is covered");
+        assert_eq!(none, with_other, "anything else is outside the digest");
     }
 }
