@@ -103,6 +103,22 @@ pub enum VestingSchedule {
 }
 
 impl VestingSchedule {
+    /// Apply [`kovanica_common::check_contract_time`] to every time in the schedule.
+    fn check_times(&self, height: Height, reject_from: Height) -> ContractResult<()> {
+        use kovanica_common::check_contract_time as check;
+        match self {
+            VestingSchedule::Absolute { unlock_at } => check(height, *unlock_at, reject_from),
+            VestingSchedule::Linear { start, end, cliff } => {
+                check(height, *start, reject_from)?;
+                check(height, *end, reject_from)?;
+                if let Some(c) = cliff {
+                    check(height, *c, reject_from)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Append the FIXED hash encoding of this schedule to `buf`
     /// (tag byte 0x00/0x01, all timestamps u64 LE — see crate docs).
     fn encode_for_hash(&self, buf: &mut Vec<u8>) {
@@ -146,10 +162,31 @@ impl Vault {
         amount: Amount,
         schedule: VestingSchedule,
     ) -> ContractResult<VaultId> {
+        Self::create_with_gate(
+            host,
+            beneficiary,
+            amount,
+            schedule,
+            kovanica_common::REJECT_UNIX_SECONDS_FROM_HEIGHT,
+        )
+    }
+
+    /// [`Vault::create`] with an explicit activation height for the
+    /// unix-seconds guard (tests drive both sides; production uses the constant).
+    fn create_with_gate(
+        host: &mut impl Host,
+        beneficiary: Address,
+        amount: Amount,
+        schedule: VestingSchedule,
+        reject_unix_from: Height,
+    ) -> ContractResult<VaultId> {
         if amount == 0 {
             return Err(ContractError::InvalidInput);
         }
         Self::validate_schedule(&schedule, host.timestamp())?;
+        // Contract time is the block height, not unix seconds: refuse any
+        // schedule time that is obviously a wall-clock value.
+        schedule.check_times(host.block_height(), reject_unix_from)?;
 
         let creator = host.caller();
         let vault = Vault {
@@ -765,5 +802,81 @@ mod tests {
             Vault::cancel(&mut host, [0xEE; 32]),
             Err(ContractError::NotFound)
         );
+    }
+
+    /// FINDING (unit mismatch): contract time on a live node is the block
+    /// height, but the CLI documents `--unlock-at` as unix seconds. A vault
+    /// created with a unix-seconds unlock never opens at any realistic height.
+    #[test]
+    fn unix_seconds_unlock_never_opens_under_a_height_clock() {
+        let unix_unlock: Timestamp = 1_800_000_000; // ~Jan 2027 as unix seconds
+        assert!(kovanica_common::looks_like_unix_seconds(unix_unlock));
+
+        // Height clock at the very start of the chain.
+        let mut host = setup(1_000, kovanica_common::contract_time_from_height(100));
+        let id = Vault::create(
+            &mut host,
+            addr(BENEFICIARY),
+            100,
+            VestingSchedule::Absolute {
+                unlock_at: unix_unlock,
+            },
+        )
+        .unwrap(); // create accepts it: unlock_at > "now"
+
+        // ~38 years of 12 s leaders later (100 million heights): still locked.
+        host.set_caller(addr(BENEFICIARY));
+        host.set_timestamp(kovanica_common::contract_time_from_height(100_000_000));
+        assert_eq!(Vault::claim(&mut host, id).unwrap(), 0);
+        assert_eq!(host.balance_of(&addr(BENEFICIARY)), 0);
+    }
+
+    /// FIX: with the guard active, any unix-seconds time in a schedule is
+    /// refused at create and nothing is escrowed; height-style schedules pass.
+    #[test]
+    fn unix_seconds_schedule_is_rejected_when_the_guard_is_active() {
+        let unix: Timestamp = 1_800_000_000;
+        let mut host = setup(1_000, 100);
+
+        let absolute = VestingSchedule::Absolute { unlock_at: unix };
+        let linear_end = VestingSchedule::Linear {
+            start: 1_000,
+            end: unix,
+            cliff: None,
+        };
+        let linear_all = VestingSchedule::Linear {
+            start: unix,
+            end: unix + 1_000,
+            cliff: Some(unix + 10),
+        };
+        for schedule in [absolute, linear_end, linear_all] {
+            assert_eq!(
+                Vault::create_with_gate(&mut host, addr(BENEFICIARY), 100, schedule, 0),
+                Err(ContractError::InvalidInput)
+            );
+        }
+        assert_eq!(host.balance_of(&addr(CREATOR)), 1_000); // nothing escrowed
+
+        let ok = VestingSchedule::Linear {
+            start: 1_000,
+            end: 2_000,
+            cliff: Some(1_500),
+        };
+        assert!(Vault::create_with_gate(&mut host, addr(BENEFICIARY), 100, ok, 0).is_ok());
+    }
+
+    /// The public entry point keeps today's behaviour until the gate is
+    /// deliberately switched on.
+    #[test]
+    fn public_create_still_accepts_unix_seconds_while_the_gate_is_inert() {
+        assert_eq!(
+            kovanica_common::REJECT_UNIX_SECONDS_FROM_HEIGHT,
+            kovanica_common::Height::MAX
+        );
+        let mut host = setup(1_000, 100);
+        let s = VestingSchedule::Absolute {
+            unlock_at: 1_800_000_000,
+        };
+        assert!(Vault::create(&mut host, addr(BENEFICIARY), 100, s).is_ok());
     }
 }
