@@ -286,7 +286,7 @@ State (accounts, staking, contracts)
 Storage (redb, pruning, snapshots)
 ```
 
-Consensus parameters of note: `WAVE_LENGTH = 3`, `round_duration_ms` default 4 000 (→ 12 s per committed leader), MysticGhost = scoped GHOSTDAG `k=3`, and `EPOCH_ROUNDS = 7 200`. Leader election uses **ECVRF-ED25519-SHA512-Elligator2** with a quorum beacon on decide rounds, falling back to stake-weighted round-robin when the VRF set is empty.
+Consensus parameters of note: `WAVE_LENGTH = 3`, `round_duration_ms` default 4 000 (→ 12 s per committed leader), MysticGhost = scoped GHOSTDAG `k=3`, and `EPOCH_ROUNDS = 7 200`. Leader election uses a **ristretto255 + SHA3 ECVRF** (`ecvrf` crate, 96-byte proof; not an RFC 9381 suite, see `docs/VRF-PROOF-LENGTH.md`) with a quorum beacon on decide rounds, falling back to stake-weighted round-robin when the VRF set is empty.
 
 ### RPC & Interfaces
 
