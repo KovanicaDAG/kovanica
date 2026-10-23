@@ -52,7 +52,7 @@ Canonical constants (implemented in `crates/kovanica-staking` and documented in 
 | Total supply | 90 200 000 KUNA |
 | Decimals | 9 (1 KUNA = 1 000 000 000 atoms) |
 | Founder premine | 200 000 KUNA |
-| Genesis validator allocation | 1 000 000 KUNA (split across 5–20 genesis validators; remainder distributed deterministically) |
+| Genesis validator allocation | 1 000 000 KUNA (split across the genesis validators: 5–20 on testnet, 15–20 on mainnet; remainder distributed deterministically) |
 | Treasury | 8 000 000 KUNA (1 M per year × 8 years, linear vesting) |
 | Mining subsidy budget | 81 000 000 KUNA (derived: 90.2M − 0.2M − 8M − 1M) |
 | Initial block reward | 2.5 KUNA (paid to the author of a committed leader block) |
