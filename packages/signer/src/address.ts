@@ -86,7 +86,13 @@ function decodeLegacy(trimmed: string): Uint8Array {
     if (!trimmed.startsWith(PREFIX) || !trimmed.endsWith(SUFFIX)) {
       throw new Error("address must start with kvnc and end with dag");
     }
-    const body = hexToBytes(trimmed.slice(PREFIX.length, -SUFFIX.length));
+    const text = trimmed.slice(PREFIX.length, -SUFFIX.length);
+    // Match Rust: the legacy body is hex digits only. `kvnc0x…dag` is not hex,
+    // and a lowercase `0x` prefix is not stripped inside `kvnc…dag`.
+    if (!/^[0-9a-fA-F]+$/.test(text)) {
+      throw new Error("invalid hex");
+    }
+    const body = hexToBytes(text);
     if (body.length !== 36) {
       throw new Error("address payload must be 32 bytes plus a 4-byte checksum");
     }
@@ -104,11 +110,12 @@ function decodeLegacy(trimmed: string): Uint8Array {
 }
 
 /**
- * Parse an address. The canonical form is accepted everywhere. The legacy hex forms
- * (`kvnc<hex>dag`, bare or `0x` hex) are accepted when `chainId` is 3, 4, or 1337.
- * Omitting `chainId` still accepts legacy hex (console follow-up). Rust `FromStr` is
- * base32 only; chain checks match `Address::parse_for_chain`. The base32 body is
- * strictly lowercase. Legacy hex digits accept `A-F`; `kvnc`, `dag`, and `0x` do not.
+ * Parse an address. The canonical form is accepted everywhere, including when
+ * `chainId` is omitted. The legacy hex forms (`kvnc<hex>dag`, bare or lowercase
+ * `0x` hex) are accepted only when `chainId` is 3, 4, or 1337. Omitting
+ * `chainId` refuses legacy hex. `0X` and `kvnc0x…dag` are refused on every
+ * chain, matching Rust. The base32 body is strictly lowercase. Legacy hex
+ * digits accept `A-F`; `kvnc`, `dag`, and `0x` do not.
  */
 export function parseAddress(value: string, chainId?: number): Uint8Array {
   const trimmed = value.trim();
@@ -116,7 +123,10 @@ export function parseAddress(value: string, chainId?: number): Uint8Array {
     return decodeAddress(trimmed);
   }
   const legacy = decodeLegacy(trimmed);
-  if (chainId !== undefined && !LEGACY_HEX_CHAIN_IDS.has(chainId)) {
+  if (chainId === undefined) {
+    throw new Error("legacy hex addresses are not accepted when chain id is omitted");
+  }
+  if (!LEGACY_HEX_CHAIN_IDS.has(chainId)) {
     throw new Error(`legacy hex addresses are not accepted on chain ${chainId}`);
   }
   return legacy;
