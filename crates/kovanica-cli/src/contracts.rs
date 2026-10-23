@@ -134,7 +134,7 @@ pub struct HtlcCreateArgs {
     /// Claimer Kovanica address
     #[arg(long)]
     pub claimer: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = crate::amount::parse_cli_amount)]
     pub amount: u64,
     /// BLAKE3-256 hash lock (64 hex chars)
@@ -219,7 +219,7 @@ pub struct VaultCreateArgs {
     /// Beneficiary Kovanica address
     #[arg(long)]
     pub beneficiary: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = crate::amount::parse_cli_amount)]
     pub amount: u64,
     /// Absolute unlock timestamp (seconds) — mutually exclusive with --start/--end
@@ -330,7 +330,7 @@ pub struct MultisigProposeArgs {
     /// Recipient Kovanica address
     #[arg(long)]
     pub to: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = crate::amount::parse_cli_amount)]
     pub amount: u64,
     /// Optional calldata (hex)

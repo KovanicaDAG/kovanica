@@ -224,7 +224,7 @@ struct TransferArgs {
     /// Recipient Kovanica address
     #[arg(long)]
     to: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -238,7 +238,7 @@ struct TransferArgs {
 /// Arguments carrying a single amount plus the signing keystore.
 #[derive(Args)]
 struct AmountArgs {
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -255,7 +255,7 @@ struct RegisterLightNodeArgs {
     /// VRF public key (32-byte hex)
     #[arg(long)]
     vrf_public_key: String,
-    /// Bond of at least 100 KUNA (`100KUNA` or `100.0`). A bare integer is atoms.
+    /// Bond of at least 100 KUNA (`100KUNA` or `100.0`). Atoms need a suffix (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     stake: u64,
     /// Keystore file path
@@ -272,7 +272,7 @@ struct DelegateArgs {
     /// Validator Kovanica address
     #[arg(long)]
     validator: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -317,7 +317,7 @@ struct SetCommissionArgs {
 /// Arguments for `kovanica claim-treasury`.
 #[derive(Args)]
 struct ClaimTreasuryArgs {
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -378,8 +378,8 @@ struct CallArgs {
     /// Arguments as JSON array (will be bincode encoded)
     #[arg(long)]
     args: String,
-    /// Native KUNA to attach (`1.5` or `1.5KUNA`) or a whole number of atoms
-    #[arg(long, default_value_t = 0, value_parser = parse_cli_amount)]
+    /// Native KUNA to attach (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    #[arg(long, default_value = "0atoms", value_parser = parse_cli_amount)]
     value: u64,
     /// Gas limit for execution
     #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
@@ -1218,7 +1218,7 @@ mod wallet_cli_security_tests {
     use clap::Parser;
 
     #[test]
-    fn amount_flag_parses_kuna_and_keeps_bare_integers_as_atoms() {
+    fn amount_flag_requires_a_unit() {
         let to = "placeholder";
         let decimal =
             Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "1.5KUNA"])
@@ -1229,11 +1229,16 @@ mod wallet_cli_security_tests {
         assert_eq!(args.amount, 1_500_000_000);
 
         let atoms =
-            Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "42"]).unwrap();
+            Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "42atoms"])
+                .unwrap();
         let Commands::Transfer(args) = atoms.command else {
             panic!("expected transfer");
         };
         assert_eq!(args.amount, 42);
+
+        // `5` does not say KUNA or atoms.
+        let bare = Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "5"]);
+        assert!(bare.is_err(), "a bare integer must be rejected");
 
         assert!(Cli::try_parse_from([
             "kovanica",
@@ -1408,7 +1413,7 @@ mod wallet_cli_security_tests {
             "kovanica",
             "stake",
             "--amount",
-            "42",
+            "42atoms",
             "--fee",
             "3",
             "--keystore",
@@ -1424,7 +1429,7 @@ mod wallet_cli_security_tests {
             _ => panic!("expected stake command"),
         }
 
-        let cli = Cli::try_parse_from(["kovanica", "unstake", "--amount", "7"]).unwrap();
+        let cli = Cli::try_parse_from(["kovanica", "unstake", "--amount", "7atoms"]).unwrap();
         match cli.command {
             Commands::Unstake(args) => {
                 assert_eq!(args.amount, 7);
@@ -1479,6 +1484,8 @@ mod wallet_cli_security_tests {
             Commands::Call(args) => {
                 assert_eq!(args.gas_limit, 77);
                 assert_eq!(args.method, "token_transfer");
+                // Omitted `--value` is zero atoms, not a bare `0` that needs a unit.
+                assert_eq!(args.value, 0);
             }
             _ => panic!("expected call command"),
         }

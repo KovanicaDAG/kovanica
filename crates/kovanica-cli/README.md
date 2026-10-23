@@ -60,15 +60,17 @@ The release profile enables LTO, so a release build is slow.
 
 ## Amounts
 
-Native amounts accept a KUNA decimal or a whole number of atoms. A decimal
-point or a trailing `KUNA` (any case, optional space) selects KUNA. A bare
-integer stays atoms, so older scripts keep their meaning.
+Native amounts must name a unit. A decimal point or a trailing `KUNA`
+(any case, optional space) selects KUNA. An `atoms` or `atom` suffix
+selects atoms. A bare integer such as `5` is rejected, so it is neither
+five KUNA nor five atoms.
 
 ```text
 --amount 1.5       # 1.500000000 KUNA
 --amount 1.5KUNA   # same
 --amount 1 KUNA    # same
---amount 42        # 42 atoms
+--amount 5atoms    # 5 atoms
+--amount 5         # rejected
 ```
 
 Parsing is integer arithmetic. More than 9 fractional digits, a sign, an

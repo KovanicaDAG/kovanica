@@ -1,9 +1,9 @@
 //! KUNA amounts for the CLI and the interactive wallet.
 //!
 //! The chain counts atoms. One KUNA is `10^9` atoms. Parsing is exact integer
-//! arithmetic: no floating point. A decimal point or a `KUNA` suffix selects
-//! KUNA. A bare integer stays a whole number of atoms, which is what older
-//! CLIs sent.
+//! arithmetic: no floating point. A CLI amount must name its unit: a decimal
+//! or a `KUNA` suffix is KUNA, and an `atoms` suffix is atoms. A bare integer
+//! such as `5` is rejected.
 
 use std::fmt;
 
@@ -17,6 +17,8 @@ pub enum AmountError {
     Empty,
     /// The text was not a plain decimal number.
     Invalid,
+    /// A bare integer did not say whether it was KUNA or atoms.
+    NeedsUnit,
     /// More than 9 digits followed the decimal point.
     TooPrecise,
     /// The value does not fit in a `u64` atom count.
@@ -29,9 +31,8 @@ impl fmt::Display for AmountError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Empty => "enter an amount",
-            Self::Invalid => {
-                "amount must be KUNA such as 1.5 or 1.5KUNA, or a whole number of atoms"
-            }
+            Self::Invalid => "amount must be KUNA such as 1.5 or 1.5KUNA, or atoms such as 5atoms",
+            Self::NeedsUnit => "amount needs a unit, for example 5KUNA or 5atoms",
             Self::TooPrecise => "KUNA has 9 decimal places",
             Self::Overflow => "amount is too large",
             Self::Zero => "amount must be greater than 0",
@@ -113,10 +114,10 @@ pub(crate) fn parse_kuna(input: &str) -> Result<u64, AmountError> {
 /// Parse a CLI amount into atoms.
 ///
 /// `1.5`, `1.5KUNA`, and `1.5 KUNA` are one and a half KUNA. `1KUNA` is one
-/// KUNA. A bare integer such as `1500000000` is that many atoms, so existing
-/// scripts keep their meaning. More than 9 fractional digits and values that
-/// do not fit in `u64` atoms are rejected. The conversion does not use
-/// floating point.
+/// KUNA. `5atoms` and `5atom` are five atoms. A bare integer is rejected:
+/// `5` does not say which unit it is. More than 9 fractional digits and
+/// values that do not fit in `u64` atoms are rejected. The conversion does
+/// not use floating point.
 pub fn parse_cli_amount(input: &str) -> Result<u64, AmountError> {
     let text = input.trim();
     if text.is_empty() {
@@ -128,13 +129,28 @@ pub fn parse_cli_amount(input: &str) -> Result<u64, AmountError> {
         }
         return parse_kuna(text);
     }
+    if let Some(body) =
+        strip_named_suffix(text, "atoms").or_else(|| strip_named_suffix(text, "atom"))
+    {
+        return parse_atom_count(body);
+    }
     if text.contains('.') {
         return parse_kuna(text);
     }
-    if !text.bytes().all(|byte| byte.is_ascii_digit()) {
+    if text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(AmountError::NeedsUnit);
+    }
+    Err(AmountError::Invalid)
+}
+
+fn parse_atom_count(body: &str) -> Result<u64, AmountError> {
+    if body.is_empty() {
+        return Err(AmountError::Empty);
+    }
+    if !body.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(AmountError::Invalid);
     }
-    text.parse::<u64>().map_err(|_| AmountError::Overflow)
+    body.parse::<u64>().map_err(|_| AmountError::Overflow)
 }
 
 /// Parse a KUNA amount that must be greater than zero.
@@ -203,7 +219,10 @@ pub(crate) fn format_fee(atoms: u64) -> String {
 }
 
 fn strip_kuna_suffix(input: &str) -> Option<&str> {
-    let suffix = "kuna";
+    strip_named_suffix(input, "kuna")
+}
+
+fn strip_named_suffix<'a>(input: &'a str, suffix: &str) -> Option<&'a str> {
     if input.len() >= suffix.len()
         && input[input.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
     {
@@ -251,18 +270,31 @@ mod tests {
     }
 
     #[test]
-    fn cli_amount_accepts_kuna_and_keeps_bare_integers_as_atoms() {
+    fn cli_amount_requires_a_unit() {
         assert_eq!(parse_cli_amount("1.5").unwrap(), 1_500_000_000);
         assert_eq!(parse_cli_amount("1.5KUNA").unwrap(), 1_500_000_000);
         assert_eq!(parse_cli_amount("1.5kuna").unwrap(), 1_500_000_000);
         assert_eq!(parse_cli_amount("1.5 KUNA").unwrap(), 1_500_000_000);
         assert_eq!(parse_cli_amount("1KUNA").unwrap(), 1_000_000_000);
         assert_eq!(parse_cli_amount("0.000000001").unwrap(), 1);
-        // A bare integer is atoms. `1` is not one KUNA.
-        assert_eq!(parse_cli_amount("1").unwrap(), 1);
-        assert_eq!(parse_cli_amount("1500000000").unwrap(), 1_500_000_000);
-        assert_eq!(parse_cli_amount("0002").unwrap(), 2);
-        assert_eq!(parse_cli_amount("18446744073709551615").unwrap(), u64::MAX);
+        assert_eq!(parse_cli_amount("5atoms").unwrap(), 5);
+        assert_eq!(parse_cli_amount("5atom").unwrap(), 5);
+        assert_eq!(parse_cli_amount("5 ATOMS").unwrap(), 5);
+        assert_eq!(parse_cli_amount("1500000000atoms").unwrap(), 1_500_000_000);
+        assert_eq!(parse_cli_amount("0002atoms").unwrap(), 2);
+        assert_eq!(
+            parse_cli_amount("18446744073709551615atoms").unwrap(),
+            u64::MAX
+        );
+        // `5` does not say KUNA or atoms.
+        assert_eq!(parse_cli_amount("1"), Err(AmountError::NeedsUnit));
+        assert_eq!(parse_cli_amount("5"), Err(AmountError::NeedsUnit));
+        assert_eq!(parse_cli_amount("1500000000"), Err(AmountError::NeedsUnit));
+        assert_eq!(parse_cli_amount("0002"), Err(AmountError::NeedsUnit));
+        assert!(parse_cli_amount("5")
+            .unwrap_err()
+            .to_string()
+            .contains("5KUNA"));
         assert_eq!(format_kuna_fixed(1_500_000_000), "1.500000000 KUNA");
         assert_eq!(format_kuna_decimal(1), "0.000000001");
         assert_eq!(format_kuna_fixed(1), "0.000000001 KUNA");
@@ -279,9 +311,10 @@ mod tests {
             Err(AmountError::TooPrecise)
         );
         assert_eq!(
-            parse_cli_amount("18446744073709551616"),
+            parse_cli_amount("18446744073709551616atoms"),
             Err(AmountError::Overflow)
         );
+        assert_eq!(parse_cli_amount("atoms"), Err(AmountError::Empty));
         assert_eq!(
             parse_cli_amount("18446744074KUNA"),
             Err(AmountError::Overflow)
