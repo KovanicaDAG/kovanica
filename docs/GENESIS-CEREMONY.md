@@ -53,6 +53,11 @@ Next steps the script prints: distribute `genesis.json` to all validators,
 each validator places it in its data directory (`KOVANICA_DATA_DIR`), configures
 the bootnodes, and all validators start simultaneously.
 
+The files that actually enter the network tag, and the `sha256sum -c` check
+every node runs before the first start, are described in
+[`docs/TESTNET-RESET.md`](TESTNET-RESET.md). A node whose bundle, chain id,
+treasury or binary differs from the others never joins the mesh.
+
 ## `genesis_validators.toml` format
 
 ```
