@@ -47,6 +47,7 @@ impl ConsensusStore {
             let _ = write_txn.open_table(crate::tables::DECIDED_ROUNDS)?;
             let _ = write_txn.open_table(crate::tables::LAST_COMMITED)?;
             let _ = write_txn.open_table(crate::tables::VOTES)?;
+            let _ = write_txn.open_table(crate::tables::GENESIS_DIGEST)?;
         }
         write_txn.commit()?;
         Ok(Self)
@@ -285,6 +286,34 @@ impl ConsensusStore {
         let mut table = txn.open_table(crate::tables::LAST_COMMITED)?;
         table.insert("last", hash_to_bytes(hash))?;
         Ok(())
+    }
+
+    // ============================================================
+    // Genesis marker (#86 follow-up)
+    // ============================================================
+
+    /// Persist the genesis config digest this consensus database belongs to.
+    ///
+    /// `state.redb` has its own copy; keeping one here too means a partial
+    /// wipe (only `state.redb` removed) cannot reopen an old DAG and commit
+    /// cursor under a freshly initialised genesis state.
+    pub fn save_genesis_marker(
+        &self,
+        txn: &WriteTransaction,
+        digest: &Hash,
+    ) -> Result<(), ConsensusStoreError> {
+        let mut table = txn.open_table(crate::tables::GENESIS_DIGEST)?;
+        table.insert("genesis", digest.0)?;
+        Ok(())
+    }
+
+    /// The genesis config digest stored in this consensus database, if any.
+    pub fn load_genesis_marker(
+        &self,
+        txn: &ReadTransaction,
+    ) -> Result<Option<Hash>, ConsensusStoreError> {
+        let table = txn.open_table(crate::tables::GENESIS_DIGEST)?;
+        Ok(table.get("genesis")?.map(|v| Hash(v.value())))
     }
 
     // ============================================================
@@ -826,5 +855,28 @@ mod tests {
         drop(txn);
         let read = storage.begin_read().unwrap();
         assert!(store.has_vote(&read, 1, 0).unwrap());
+    }
+
+    #[test]
+    fn genesis_marker_round_trips_and_starts_empty() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("consensus.redb")).unwrap();
+        let store = storage.consensus();
+        assert_eq!(
+            store
+                .load_genesis_marker(&storage.begin_read().unwrap())
+                .unwrap(),
+            None
+        );
+        let digest = Hash([0x42; 32]);
+        let txn = storage.begin_write().unwrap();
+        store.save_genesis_marker(&txn, &digest).unwrap();
+        txn.commit().unwrap();
+        assert_eq!(
+            store
+                .load_genesis_marker(&storage.begin_read().unwrap())
+                .unwrap(),
+            Some(digest)
+        );
     }
 }
