@@ -204,7 +204,9 @@ impl Address {
     }
 
     /// Legacy `kvnc<hex>dag` encoding (key + 4-byte blake3 checksum, hex).
-    /// Only for chain-4 tooling during the transition; never the default.
+    ///
+    /// Tooling on chains 3, 4, and 1337. Never the default display. [`FromStr`]
+    /// does not read this form; use [`Self::parse_for_chain`].
     pub fn encode_legacy_hex(&self) -> String {
         let mut bytes = [0u8; ADDRESS_PAYLOAD_LEN + LEGACY_CHECKSUM_LEN];
         bytes[..ADDRESS_PAYLOAD_LEN].copy_from_slice(&self.0);
@@ -262,19 +264,15 @@ impl fmt::Debug for Address {
 impl FromStr for Address {
     type Err = AddressError;
 
-    /// Chain-independent parse for tooling and tests: the canonical base32
-    /// form, or a legacy hex form. Anything that knows its chain (RPC,
-    /// wallets, genesis, faucet) must use [`Address::parse_for_chain`] so
-    /// legacy forms are refused where [`legacy_address_allowed`] is false.
+    /// The canonical 64-character base32 form only: `kvnc` + 57 lowercase
+    /// bech32 characters + `dag`.
+    ///
+    /// Legacy hex is not accepted here. Callers that know a chain use
+    /// [`Address::parse_for_chain`]. That is lenient (legacy hex allowed) on
+    /// devnet 3, chain 4, and local 1337, and base32-only on mainnet 1 and
+    /// every other chain id.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let value = value.trim();
-        if value.len() == ADDRESS_LEN
-            && value.starts_with(ADDRESS_PREFIX)
-            && value.ends_with(ADDRESS_SUFFIX)
-        {
-            return Self::decode(value);
-        }
-        Self::parse_legacy(value)
+        Self::decode(value.trim())
     }
 }
 
@@ -384,8 +382,7 @@ mod tests {
 
     /// Legacy hex forms follow [`legacy_address_allowed`]: accepted on devnet
     /// (3), chain 4, and local (1337); refused on mainnet (1), testnet (2),
-    /// and any other chain id. `FromStr` (chain-independent tooling) still
-    /// reads them.
+    /// and any other chain id. [`FromStr`] is base32 only, on every chain.
     #[test]
     fn legacy_hex_policy_covers_known_and_unknown_chains() {
         let address = sample();
@@ -419,8 +416,16 @@ mod tests {
                     "{form} on chain {chain}"
                 );
             }
-            assert_eq!(form.parse::<Address>().unwrap(), address);
+            let err = form.parse::<Address>().expect_err("FromStr is base32 only");
+            assert!(
+                matches!(
+                    err,
+                    AddressError::InvalidStringLength(_) | AddressError::MissingAffix
+                ),
+                "{form}: {err:?}"
+            );
         }
+        assert_eq!(address.encode().parse::<Address>().unwrap(), address);
     }
 
     #[test]
@@ -437,13 +442,23 @@ mod tests {
             Address::parse_for_chain(&legacy, chain_id::TESTNET_V2),
             Err(AddressError::ChecksumMismatch)
         );
+        // Short legacy strings still report a length error on a lenient chain.
+        // `FromStr` never reaches that parser: it only decodes base32.
         assert!(matches!(
-            "kvnc00dag".parse::<Address>(),
+            Address::parse_for_chain("kvnc00dag", chain_id::TESTNET_V2),
             Err(AddressError::InvalidLength(_))
         ));
         assert!(matches!(
-            "0x1234".parse::<Address>(),
+            Address::parse_for_chain("0x1234", chain_id::TESTNET_V2),
             Err(AddressError::InvalidLength(_))
+        ));
+        assert!(matches!(
+            "kvnc00dag".parse::<Address>(),
+            Err(AddressError::InvalidStringLength(9))
+        ));
+        assert!(matches!(
+            "0x1234".parse::<Address>(),
+            Err(AddressError::MissingAffix)
         ));
     }
 

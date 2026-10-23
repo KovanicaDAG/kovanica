@@ -398,9 +398,10 @@ fn validate_metadata(ks: &Keystore) -> Result<()> {
             // Accept the canonical 64-character `kvnc…dag` encoding, the
             // legacy `kvnc<hex>dag` form, or a bare lowercase hex address, so
             // keystores written before PRO-21 (or before the canonical
-            // format) stay usable. The file is not bound to a chain. An
-            // address typed for a chain goes through [`parse_address`], which
-            // refuses legacy hex where `legacy_address_allowed` is false.
+            // format) stay usable. The file is not bound to a chain, so
+            // [`parse_stored_address`] still accepts legacy hex. An address
+            // typed for a chain goes through [`parse_address`], which refuses
+            // legacy hex where `legacy_address_allowed` is false.
             if (ks.address != parsed_address.encode()
                 && ks.address != parsed_address.encode_legacy_hex()
                 && ks.address != parsed_address.to_hex())
@@ -504,13 +505,13 @@ pub fn address(keystore: &Keystore) -> Result<Address> {
 
 /// Parse the address label stored in a keystore file.
 ///
-/// The file is not bound to a chain. Canonical base32 and the legacy hex
-/// forms both identify the key, so a store written before PRO-21 still opens
-/// on mainnet. An address supplied *for* a chain goes through [`parse_address`].
+/// The file is not bound to a chain (migration). [`Address::from_str`] is
+/// base32 only, so this calls [`Address::parse_for_chain`] on chain 4, which
+/// accepts the canonical form and the legacy hex forms. That does not assign
+/// the key to chain 4. An address typed for a chain goes through
+/// [`parse_address`].
 fn parse_stored_address(value: &str, what: &str) -> Result<Address> {
-    value
-        .trim()
-        .parse::<Address>()
+    Address::parse_for_chain(value, kovanica_types::signing::chain_id::TESTNET_V2)
         .map_err(|e| anyhow!("{what}: {e}"))
 }
 
@@ -652,6 +653,11 @@ mod tests {
         old["address"] = serde_json::Value::String(parsed.encode_legacy_hex());
         let loaded = from_value(old).unwrap();
         assert_eq!(address(&loaded).unwrap(), parsed);
+
+        // `FromStr` does not open those labels. Only the file reader does.
+        assert!(parsed.to_hex().parse::<Address>().is_err());
+        assert!(parsed.encode_legacy_hex().parse::<Address>().is_err());
+        assert_eq!(parsed.encode().parse::<Address>().unwrap(), parsed);
     }
 
     /// Chain 1 refuses a legacy hex string. Devnet, local, and chain 4 accept it.
