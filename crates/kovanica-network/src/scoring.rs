@@ -86,8 +86,8 @@ impl PeerScoringConfig {
         }
     }
 
-    /// Gossipsub score parameters with per-topic params for blocks, votes
-    /// and transactions.
+    /// Gossipsub score parameters with per-topic params for blocks, votes,
+    /// timeouts and transactions.
     pub fn params(&self, network: &crate::NetworkId) -> PeerScoreParams {
         let mut params = PeerScoreParams {
             // Same-IP peers are normal in local/devnet setups; keep the
@@ -95,10 +95,12 @@ impl PeerScoringConfig {
             ip_colocation_factor_weight: -1.0,
             ..PeerScoreParams::default()
         };
-        // Blocks and votes are consensus-critical: a bad one weighs more.
+        // Blocks, votes and timeouts are consensus-critical: a bad one weighs
+        // more.
         for (name, weight) in [
             (topics::BLOCKS, 1.0),
             (topics::VOTES, 1.0),
+            (topics::TIMEOUTS, 1.0),
             (topics::TRANSACTIONS, 0.5),
         ] {
             params.topics.insert(
@@ -147,15 +149,20 @@ mod tests {
     }
 
     #[test]
-    fn scored_topics_are_blocks_votes_transactions() {
+    fn scored_topics_are_blocks_votes_timeouts_transactions() {
         let network = crate::NetworkId::default();
         let params = PeerScoringConfig::default().params(&network);
-        for name in [topics::BLOCKS, topics::VOTES, topics::TRANSACTIONS] {
+        for name in [
+            topics::BLOCKS,
+            topics::VOTES,
+            topics::TIMEOUTS,
+            topics::TRANSACTIONS,
+        ] {
             let p = &params.topics[&topics::ident(&network, name).hash()];
             assert!(p.invalid_message_deliveries_weight < 0.0, "{name}");
             assert_eq!(p.mesh_message_deliveries_weight, 0.0, "{name}");
         }
-        assert_eq!(params.topics.len(), 3);
+        assert_eq!(params.topics.len(), 4);
     }
 
     #[test]

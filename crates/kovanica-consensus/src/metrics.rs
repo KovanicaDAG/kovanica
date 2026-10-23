@@ -244,6 +244,9 @@ pub enum SkipReason {
     Indirect,
     /// The direct rule decided to skip the leader (blame path).
     DirectBlame,
+    /// A quorum skip certificate moved the commit cursor past the slot
+    /// (PRO-40 (b)). The only skip that is a decision.
+    Certified,
 }
 
 impl SkipReason {
@@ -252,6 +255,7 @@ impl SkipReason {
             SkipReason::Timeout => "timeout",
             SkipReason::Indirect => "indirect",
             SkipReason::DirectBlame => "direct_blame",
+            SkipReason::Certified => "certified",
         }
     }
 }
@@ -430,6 +434,41 @@ pub fn record_committed_leader(round: i64, digest_prefix: u64) {
     // Prometheus gauges are i64; the fingerprint is used only for equality
     // comparisons, so its signedness does not matter.
     KOVANICA_LAST_COMMITTED_DIGEST_PREFIX.set(digest_prefix as i64);
+}
+
+/// Timeouts this node signed for a leader slot it never voted for
+/// (PRO-40 (b)).
+static KOVANICA_TIMEOUTS_SIGNED_TOTAL: Lazy<Counter> = Lazy::new(|| {
+    let counter = Counter::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_timeouts_signed",
+        "Leader-slot timeouts signed by this node",
+        counter.clone(),
+    );
+    counter
+});
+
+/// Validators seen signing both a vote and a timeout for the same slot.
+static KOVANICA_VOTE_TIMEOUT_EQUIVOCATIONS_TOTAL: Lazy<Counter> = Lazy::new(|| {
+    let counter = Counter::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_vote_timeout_equivocations",
+        "Validators observed signing both a vote and a timeout for one leader slot",
+        counter.clone(),
+    );
+    counter
+});
+
+/// Record one timeout signed by this node.
+pub fn record_timeout_signed() {
+    KOVANICA_TIMEOUTS_SIGNED_TOTAL.inc();
+}
+
+/// Record a vote/timeout equivocation (evidence only; no slashing yet).
+pub fn record_vote_timeout_equivocation() {
+    KOVANICA_VOTE_TIMEOUT_EQUIVOCATIONS_TOTAL.inc();
 }
 
 /// Record a skipped leader slot.
@@ -846,6 +885,9 @@ mod tests {
         record_active_validators(17);
         record_sync_error(SyncErrorKind::NotFound);
         record_rss_bytes(64 * 1024 * 1024);
+        record_skipped_leader(SkipReason::Certified);
+        record_timeout_signed();
+        record_vote_timeout_equivocation();
 
         let text = metrics_text();
         for expected in [
@@ -859,6 +901,9 @@ mod tests {
             "kovanica_active_validators",
             "kovanica_sync_errors_total{kind=\"not_found\"}",
             "kovanica_rss_bytes",
+            "kovanica_skipped_leaders_total{reason=\"certified\"}",
+            "kovanica_timeouts_signed_total",
+            "kovanica_vote_timeout_equivocations_total",
         ] {
             assert!(text.contains(expected), "missing {expected} in:\n{text}");
         }
@@ -867,6 +912,7 @@ mod tests {
         assert_eq!(SkipReason::Timeout.as_str(), "timeout");
         assert_eq!(SkipReason::Indirect.as_str(), "indirect");
         assert_eq!(SkipReason::DirectBlame.as_str(), "direct_blame");
+        assert_eq!(SkipReason::Certified.as_str(), "certified");
         assert_eq!(SyncErrorKind::Request.as_str(), "request");
         assert_eq!(SyncErrorKind::StateRequest.as_str(), "state_request");
         assert_eq!(SyncErrorKind::NotFound.as_str(), "not_found");

@@ -160,6 +160,14 @@ mod tests {
             fixture["recipientAddress"].as_str().unwrap()
         );
         assert_eq!(
+            sender.encode_legacy_hex(),
+            fixture["senderAddressLegacy"].as_str().unwrap()
+        );
+        assert_eq!(
+            Address([0x22; 32]).encode_legacy_hex(),
+            fixture["recipientAddressLegacy"].as_str().unwrap()
+        );
+        assert_eq!(
             crate::wallet::seed_to_mnemonic(&seed).unwrap(),
             fixture["mnemonic"].as_str().unwrap()
         );

@@ -145,7 +145,7 @@ class AddressBookActivity : Activity() {
                 validation.visibility = View.GONE
                 return false
             }
-            KvncAddress.isValid(raw) -> {
+            KvncAddress.isValid(raw, NetworkPrefs.chainId(this)) -> {
                 validation.text = "Looks good — saves as ${KvncAddress.short(raw)}."
                 validation.setTextColor(WalletUi.GOOD)
                 validation.visibility = View.VISIBLE
@@ -167,11 +167,11 @@ class AddressBookActivity : Activity() {
             setStatus("Give the contact a label first.", Tone.ERROR)
             return
         }
-        if (!KvncAddress.isValid(raw)) {
+        if (!KvncAddress.isValid(raw, NetworkPrefs.chainId(this))) {
             setStatus("That is not a Kovanica address. Check it and try again.", Tone.ERROR)
             return
         }
-        val hex = KvncAddress.normalizeHex(raw) ?: return
+        val hex = KvncAddress.normalizeHex(raw, NetworkPrefs.chainId(this)) ?: return
         val already = store.list().any { it.address == hex }
         if (!store.add(label, hex)) {
             setStatus("Couldn't save that contact.", Tone.ERROR)
