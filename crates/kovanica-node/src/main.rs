@@ -148,12 +148,30 @@ enum NetworkCommand {
     BroadcastTransaction(Transaction),
     /// Gossip a commit seal produced after local execution.
     BroadcastSeal(kovanica_types::SealAnnouncement),
+    /// Gossip a leader-slot timeout (PRO-40 (b)).
+    BroadcastTimeout(kovanica_types::Timeout),
+    /// Gossip a skip certificate (PRO-40 (b)).
+    BroadcastSkipCert(kovanica_types::SkipCert),
     /// Request a block sync from a specific peer.
     RequestSync(PeerId, BlockSyncRequest),
     /// Request a state sync (chunked snapshot transfer) from a peer.
     RequestStateSync(PeerId, StateSyncRequest),
     /// Ask the network task to stop.
     Shutdown,
+}
+
+/// Engine → network adapter for timeouts and skip certificates (PRO-40 (b)).
+struct TimeoutGossip(mpsc::UnboundedSender<NetworkCommand>);
+
+impl kovanica_consensus::engine::TimeoutBroadcaster for TimeoutGossip {
+    fn broadcast_timeout(&self, timeout: &kovanica_types::Timeout) {
+        let _ = self
+            .0
+            .send(NetworkCommand::BroadcastTimeout(timeout.clone()));
+    }
+    fn broadcast_skip_cert(&self, cert: &kovanica_types::SkipCert) {
+        let _ = self.0.send(NetworkCommand::BroadcastSkipCert(cert.clone()));
+    }
 }
 
 #[tokio::main]
@@ -671,6 +689,8 @@ where
     // edge before they are forwarded or handed to consensus.
     // Vote signatures are checked through the injected VoteVerifier.
     network.set_vote_verifier(Arc::new(kovanica_network::Ed25519VoteVerifier));
+    // Timeouts are signed over this chain's genesis digest (PRO-40 (b)).
+    network.set_timeout_genesis(genesis_config_digest(&config)?);
     network.set_authority_keys(
         committee
             .authorities()
@@ -846,6 +866,9 @@ where
             round_duration_ms: config.round_duration_ms,
             use_mysticghost: config.use_mysticghost,
             use_vrf_leader: config.use_vrf_leader,
+            // Timeouts are bound to this chain's genesis (PRO-40 (b)), the
+            // same digest the network tag and the data-dir guard use.
+            genesis_hash: genesis_config_digest(&config)?,
             ..Default::default()
         },
         committee.clone(),
@@ -880,6 +903,7 @@ where
     engine.set_vote_broadcaster(Arc::new(move |vote: &Vote| {
         let _ = vote_broadcast_tx.send(NetworkCommand::BroadcastVote(vote.clone()));
     }));
+    engine.set_timeout_broadcaster(Arc::new(TimeoutGossip(network_cmd_tx.clone())));
 
     // ------------------------------------------------------------------
     // 7. Shutdown plumbing + task spawning
@@ -2063,6 +2087,16 @@ async fn run_network(
                 Some(NetworkCommand::BroadcastTransaction(tx)) => {
                     if let Err(e) = service.broadcast_transaction(&tx) {
                         warn!(error = %e, "failed to broadcast transaction");
+                    }
+                }
+                Some(NetworkCommand::BroadcastTimeout(timeout)) => {
+                    if let Err(e) = service.broadcast_timeout(&timeout) {
+                        warn!(error = %e, "failed to broadcast timeout");
+                    }
+                }
+                Some(NetworkCommand::BroadcastSkipCert(cert)) => {
+                    if let Err(e) = service.broadcast_skip_cert(&cert) {
+                        warn!(error = %e, "failed to broadcast skip certificate");
                     }
                 }
                 Some(NetworkCommand::BroadcastSeal(announcement)) => {
@@ -3265,6 +3299,26 @@ fn handle_network_event(
                 Err(e) => warn!(%peer, %e, "rejected received vote"),
             }
         }
+        NetworkEvent::TimeoutReceived { peer, timeout } => {
+            debug!(%peer, round = timeout.round, voter = timeout.voter, "processing received timeout");
+            match engine.process_timeout(&timeout) {
+                Ok(()) => {}
+                Err(kovanica_consensus::ConsensusError::TimeoutRejected(
+                    reason @ kovanica_consensus::skip::TimeoutRejection::OutOfRange { .. },
+                )) => debug!(%peer, %reason, "ignored received timeout"),
+                Err(e) => warn!(%peer, %e, "rejected received timeout"),
+            }
+        }
+        NetworkEvent::SkipCertReceived { peer, cert } => {
+            debug!(%peer, round = cert.round, "processing received skip certificate");
+            match engine.process_skip_cert(&cert) {
+                Ok(()) => {}
+                Err(kovanica_consensus::ConsensusError::TimeoutRejected(
+                    reason @ kovanica_consensus::skip::TimeoutRejection::OutOfRange { .. },
+                )) => debug!(%peer, %reason, "ignored received skip certificate"),
+                Err(e) => warn!(%peer, %e, "rejected received skip certificate"),
+            }
+        }
         NetworkEvent::PeerConnected(peer) => {
             info!(%peer, "peer connected");
             vote_sync.peer_connected(peer);
@@ -3714,6 +3768,30 @@ impl DagStoreTrait for NodeDagStore {
         let storage = self.inner.storage();
         let txn = storage.begin_read()?;
         Ok(storage.consensus().get_votes_for_round(&txn, round)?)
+    }
+
+    fn mark_round_skipped(&self, round: Round) -> Result<(), DagStoreError> {
+        self.inner.mark_round_skipped(round)
+    }
+
+    /// Persist a verified timeout (PRO-40 (b)). Unlike `put_vote`, the
+    /// engine treats a failure for its own timeout as fatal for that timeout:
+    /// it is not broadcast, so the vote-xor-timeout lock stays durable.
+    fn put_timeout(&self, timeout: &kovanica_types::Timeout) -> Result<(), DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_write()?;
+        storage.consensus().put_timeout(&txn, timeout)?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    fn get_timeouts_for_round(
+        &self,
+        round: Round,
+    ) -> Result<Vec<kovanica_types::Timeout>, DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_read()?;
+        Ok(storage.consensus().get_timeouts_for_round(&txn, round)?)
     }
 
     fn max_stored_round(&self) -> Result<Option<Round>, DagStoreError> {
@@ -7217,6 +7295,59 @@ mod tests {
             )),
         );
         vote
+    }
+
+    // PRO-40 (b): the engine's timeouts and certificates reach the network
+    // task as gossip commands.
+    #[test]
+    fn timeout_gossip_forwards_timeouts_and_certificates() {
+        use kovanica_consensus::engine::TimeoutBroadcaster;
+        let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let gossip = TimeoutGossip(tx);
+        let timeout = kovanica_types::Timeout {
+            round: 3,
+            voter: 1,
+            signature: kovanica_types::Signature([0; 64]),
+        };
+        gossip.broadcast_timeout(&timeout);
+        let cert = kovanica_types::SkipCert {
+            round: 3,
+            timeouts: vec![timeout.clone()],
+        };
+        gossip.broadcast_skip_cert(&cert);
+        assert!(matches!(rx.try_recv(), Ok(NetworkCommand::BroadcastTimeout(t)) if t == timeout));
+        assert!(matches!(rx.try_recv(), Ok(NetworkCommand::BroadcastSkipCert(c)) if c == cert));
+    }
+
+    // PRO-40 (b): the node store keeps timeouts and certified skips across a
+    // reopen; a skipped round restores the cursor and replays nothing.
+    #[test]
+    fn node_dag_store_persists_timeouts_and_skips_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dag.redb");
+        let timeout = kovanica_types::Timeout {
+            round: 6,
+            voter: 2,
+            signature: kovanica_types::Signature([7; 64]),
+        };
+        {
+            let store = NodeDagStore {
+                inner: Arc::new(DagStore::new(Storage::new(&path).unwrap()).unwrap()),
+            };
+            store.put_timeout(&timeout).unwrap();
+            store.mark_round_skipped(6).unwrap();
+        }
+        let store = NodeDagStore {
+            inner: Arc::new(DagStore::new(Storage::new(&path).unwrap()).unwrap()),
+        };
+        assert_eq!(store.get_timeouts_for_round(6).unwrap(), vec![timeout]);
+        assert_eq!(
+            crate::DagStoreTrait::get_decided_rounds(&store, u64::MAX).unwrap(),
+            vec![6]
+        );
+        assert!(crate::DagStoreTrait::get_decided_leaders(&store, 6)
+            .unwrap()
+            .is_empty());
     }
 
     /// A leader round the node synced is asked for by name.
