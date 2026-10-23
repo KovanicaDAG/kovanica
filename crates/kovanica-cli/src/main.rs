@@ -75,7 +75,10 @@ enum Commands {
     /// Show chain info (alias of `status`)
     Info,
     /// Query an account balance
-    Balance { address: String },
+    Balance {
+        /// Kovanica address
+        address: String,
+    },
     /// Stake KUNA (builds and submits a signed Stake transaction)
     Stake(AmountArgs),
     /// Unstake KUNA (builds and submits a signed Unstake transaction)
@@ -787,7 +790,7 @@ async fn cmd_delegate(
     args: DelegateArgs,
     json_output: bool,
 ) -> Result<()> {
-    let validator = args.validator.parse::<kovanica_types::Address>()?;
+    let validator = wallet::parse_address(&args.validator, "validator")?;
     let (tx_hash, sender, nonce) = sign_and_submit_self(
         client,
         chain_id,
@@ -826,10 +829,10 @@ async fn cmd_claim_rewards(
     args: ClaimRewardsArgs,
     json_output: bool,
 ) -> Result<()> {
-    let validator = args
-        .validator
-        .map(|v| v.parse::<kovanica_types::Address>())
-        .transpose()?;
+    let validator = match args.validator {
+        Some(value) => Some(wallet::parse_address(&value, "validator")?),
+        None => None,
+    };
     let (tx_hash, sender, nonce) = sign_and_submit_self(
         client,
         chain_id,

@@ -1,8 +1,8 @@
 //! Contract subcommands (HTLC / vault / multisig / token).
 //!
-//! These map onto the typed contract RPC handlers in `kovanica-rpc`. Contract
-//! parameters use serde's `[u8; 32]` representation, so addresses, hashes and
-//! byte blobs are sent as JSON arrays of numbers.
+//! These map onto the typed contract RPC handlers in `kovanica-rpc`. Addresses
+//! are parsed with [`kovanica_types::Address`] and sent as the byte array that
+//! type stores. Hashes and ids stay raw hex.
 
 use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
@@ -10,6 +10,34 @@ use serde_json::{json, Value};
 
 use crate::output::print_json;
 use crate::rpc::{bytes32_json, bytes_json, RpcClient};
+use crate::wallet::parse_address;
+use kovanica_types::Address;
+
+/// Encode a Kovanica address as the JSON byte array the contract RPC expects.
+fn address_param(text: &str, what: &str) -> Result<Value> {
+    let address = parse_address(text, what)?;
+    Ok(bytes_json(&address.0))
+}
+
+/// Render an address field with [`Address`]'s display, whatever string form that is.
+fn address_field(value: &Value, key: &str) -> String {
+    match value.get(key) {
+        Some(Value::String(text)) => parse_address(text, key)
+            .map(|address| address.to_string())
+            .unwrap_or_else(|_| text.clone()),
+        Some(Value::Array(items)) if items.len() == 32 => {
+            let mut bytes = [0u8; 32];
+            for (slot, item) in items.iter().enumerate() {
+                match item.as_u64() {
+                    Some(byte) if byte <= 0xff => bytes[slot] = byte as u8,
+                    _ => return field(value, key),
+                }
+            }
+            Address(bytes).to_string()
+        }
+        _ => field(value, key),
+    }
+}
 
 /// Top-level contract command group.
 #[derive(Subcommand)]
@@ -48,8 +76,8 @@ pub async fn run(client: &RpcClient, command: ContractCommand, json_output: bool
 
 /// Extract a field from a JSON object for human-readable output.
 ///
-/// 32-byte blobs (serde `[u8; 32]`, e.g. `contract_address`) are rendered as
-/// `0x`-prefixed hex rather than a raw JSON array.
+/// 32-byte id blobs are rendered as `0x`-prefixed hex. Address fields use
+/// [`address_field`] so they follow [`Address`]'s display.
 fn field(value: &Value, key: &str) -> String {
     match value.get(key) {
         Some(Value::String(s)) => s.clone(),
@@ -103,7 +131,7 @@ pub enum HtlcCommand {
 /// Arguments for `kovanica htlc create`.
 #[derive(Args)]
 pub struct HtlcCreateArgs {
-    /// Recipient (claimer) address, 32-byte hex
+    /// Claimer Kovanica address
     #[arg(long)]
     pub claimer: String,
     /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
@@ -140,7 +168,7 @@ async fn run_htlc(client: &RpcClient, command: HtlcCommand, json_output: bool) -
     match command {
         HtlcCommand::Create(args) => {
             let params = json!({
-                "claimer": bytes32_json(&args.claimer, "claimer")?,
+                "claimer": address_param(&args.claimer, "claimer")?,
                 "amount": args.amount,
                 "hash_lock": bytes32_json(&args.hash_lock, "hash-lock")?,
                 "expiry": args.expiry,
@@ -188,7 +216,7 @@ pub enum VaultCommand {
 /// Arguments for `kovanica vault create`.
 #[derive(Args)]
 pub struct VaultCreateArgs {
-    /// Beneficiary address, 32-byte hex
+    /// Beneficiary Kovanica address
     #[arg(long)]
     pub beneficiary: String,
     /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
@@ -237,7 +265,7 @@ async fn run_vault(client: &RpcClient, command: VaultCommand, json_output: bool)
             };
 
             let params = json!({
-                "beneficiary": bytes32_json(&args.beneficiary, "beneficiary")?,
+                "beneficiary": address_param(&args.beneficiary, "beneficiary")?,
                 "amount": args.amount,
                 "schedule": schedule,
             });
@@ -285,7 +313,7 @@ pub enum MultisigCommand {
 /// Arguments for `kovanica multisig create`.
 #[derive(Args)]
 pub struct MultisigCreateArgs {
-    /// Comma-separated owner addresses (32-byte hex each)
+    /// Comma-separated owner Kovanica addresses
     #[arg(long, value_delimiter = ',')]
     pub owners: Vec<String>,
     /// Required confirmation threshold
@@ -299,7 +327,7 @@ pub struct MultisigProposeArgs {
     /// Multisig id (32-byte hex)
     #[arg(long)]
     pub id: String,
-    /// Recipient address (32-byte hex)
+    /// Recipient Kovanica address
     #[arg(long)]
     pub to: String,
     /// Amount of KUNA (`1.5` or `1.5KUNA`) or a whole number of atoms
@@ -331,7 +359,7 @@ async fn run_multisig(
             let owners: Vec<Value> = args
                 .owners
                 .iter()
-                .map(|owner| bytes32_json(owner, "owner"))
+                .map(|owner| address_param(owner, "owner"))
                 .collect::<Result<_>>()?;
             let params = json!({ "owners": owners, "threshold": args.threshold });
             let result = client.call("multisig_create", params).await?;
@@ -351,7 +379,7 @@ async fn run_multisig(
             };
             let params = json!({
                 "multisig_id": bytes32_json(&args.id, "id")?,
-                "to": bytes32_json(&args.to, "to")?,
+                "to": address_param(&args.to, "to")?,
                 "amount": args.amount,
                 "data": data,
             });
@@ -410,7 +438,7 @@ pub struct TokenCreateArgs {
     /// Decimals
     #[arg(long, default_value_t = 9)]
     pub decimals: u8,
-    /// Initial supply in base units
+    /// Initial supply in token base units, not KUNA
     #[arg(long = "initial-supply")]
     pub initial_supply: u64,
 }
@@ -418,10 +446,10 @@ pub struct TokenCreateArgs {
 /// Arguments for `kovanica token transfer` / `mint`.
 #[derive(Args)]
 pub struct TokenAmountToArgs {
-    /// Recipient address (32-byte hex)
+    /// Recipient Kovanica address
     #[arg(long)]
     pub to: String,
-    /// Amount in base units
+    /// Amount in token base units, not KUNA
     #[arg(long)]
     pub amount: u64,
 }
@@ -429,7 +457,7 @@ pub struct TokenAmountToArgs {
 /// Arguments for `kovanica token burn`.
 #[derive(Args)]
 pub struct TokenBurnArgs {
-    /// Amount in base units
+    /// Amount in token base units, not KUNA
     #[arg(long)]
     pub amount: u64,
 }
@@ -437,7 +465,7 @@ pub struct TokenBurnArgs {
 /// Arguments for `kovanica token balance`.
 #[derive(Args)]
 pub struct TokenBalanceArgs {
-    /// Address to query (32-byte hex)
+    /// Kovanica address to query
     #[arg(long)]
     pub address: String,
 }
@@ -445,10 +473,10 @@ pub struct TokenBalanceArgs {
 /// Arguments for `kovanica token approve`.
 #[derive(Args)]
 pub struct TokenApproveArgs {
-    /// Spender address (32-byte hex)
+    /// Spender Kovanica address
     #[arg(long)]
     pub spender: String,
-    /// Amount in base units
+    /// Amount in token base units, not KUNA
     #[arg(long)]
     pub amount: u64,
 }
@@ -466,12 +494,15 @@ async fn run_token(client: &RpcClient, command: TokenCommand, json_output: bool)
             emit(
                 json_output,
                 &result,
-                &[("contract_address", field(&result, "contract_address"))],
+                &[(
+                    "contract_address",
+                    address_field(&result, "contract_address"),
+                )],
             )
         }
         TokenCommand::Transfer(args) => {
             let params = json!({
-                "to": bytes32_json(&args.to, "to")?,
+                "to": address_param(&args.to, "to")?,
                 "amount": args.amount,
             });
             let result = client.call("token_transfer", params).await?;
@@ -479,7 +510,7 @@ async fn run_token(client: &RpcClient, command: TokenCommand, json_output: bool)
         }
         TokenCommand::Mint(args) => {
             let params = json!({
-                "to": bytes32_json(&args.to, "to")?,
+                "to": address_param(&args.to, "to")?,
                 "amount": args.amount,
             });
             let result = client.call("token_mint", params).await?;
@@ -491,7 +522,7 @@ async fn run_token(client: &RpcClient, command: TokenCommand, json_output: bool)
             emit(json_output, &result, &[("ok", field(&result, "ok"))])
         }
         TokenCommand::Balance(args) => {
-            let params = json!({ "address": bytes32_json(&args.address, "address")? });
+            let params = json!({ "address": address_param(&args.address, "address")? });
             let result = client.call("token_balance", params).await?;
             emit(
                 json_output,
@@ -509,5 +540,34 @@ async fn run_token(client: &RpcClient, command: TokenCommand, json_output: bool)
                 json_output,
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contract_address_params_follow_the_address_type() {
+        let address = Address([0xab; 32]);
+        let value = address_param(&address.to_string(), "addr").unwrap();
+        let decoded: Address = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, address);
+
+        let from_hex = address_param(&address.to_hex(), "addr").unwrap();
+        let decoded_hex: Address = serde_json::from_value(from_hex).unwrap();
+        assert_eq!(decoded_hex, address);
+
+        assert!(address_param("not-an-address", "addr").is_err());
+    }
+
+    #[test]
+    fn contract_address_field_uses_address_display() {
+        let address = Address([0xcd; 32]);
+        let result = json!({ "contract_address": address });
+        assert_eq!(
+            address_field(&result, "contract_address"),
+            address.to_string()
+        );
     }
 }
