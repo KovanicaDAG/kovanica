@@ -1,7 +1,7 @@
 //! Kovanica (KUNA) command-line interface.
 //!
 //! Wallet operations (keygen/import/export/sign/tui), node operations
-//! (status/balance/staking/governance) and contract subcommands
+//! (status/balance/history/staking/governance) and contract subcommands
 //! (htlc/vault/multisig/token). All commands support `--json` for
 //! machine-readable output and `--rpc-url` to target a specific node.
 
@@ -75,6 +75,8 @@ enum Commands {
     Info,
     /// Query an account balance
     Balance { address: String },
+    /// List committed transactions for an address, newest first
+    History(HistoryArgs),
     /// Stake KUNA (builds and submits a signed Stake transaction)
     Stake(AmountArgs),
     /// Unstake KUNA (builds and submits a signed Unstake transaction)
@@ -122,6 +124,25 @@ enum Commands {
         #[command(subcommand)]
         command: comms::CommsCommand,
     },
+}
+
+/// Arguments for `kovanica history`.
+#[derive(Args)]
+struct HistoryArgs {
+    /// Account address (`kvnc…dag` or 32-byte hex)
+    address: String,
+    /// Page size. The node defaults to 20 and clamps anything above 100.
+    #[arg(long)]
+    limit: Option<u64>,
+    /// Opaque cursor returned as `next_cursor` by the previous page
+    #[arg(long)]
+    cursor: Option<String>,
+    /// Only transactions sent by this address
+    #[arg(long, conflicts_with = "received")]
+    sent: bool,
+    /// Only transactions received by this address
+    #[arg(long, conflicts_with = "sent")]
+    received: bool,
 }
 
 /// Arguments for `kovanica keygen`.
@@ -419,6 +440,18 @@ async fn main() -> Result<()> {
         Commands::Transfer(args) => cmd_transfer(&client, chain_id, args, json).await,
         Commands::Status | Commands::Info => node::status(&client, json).await,
         Commands::Balance { address } => node::balance(&client, &address, json).await,
+        Commands::History(args) => {
+            node::history(
+                &client,
+                &args.address,
+                args.limit,
+                args.cursor.as_deref(),
+                args.sent,
+                args.received,
+                json,
+            )
+            .await
+        }
         Commands::Stake(args) => cmd_stake(&client, chain_id, args, json).await,
         Commands::Unstake(args) => cmd_unstake(&client, chain_id, args, json).await,
         Commands::RegisterLightNode(args) => {
@@ -1431,5 +1464,39 @@ mod wallet_cli_security_tests {
             }
             _ => panic!("expected call command"),
         }
+    }
+
+    #[test]
+    fn history_command_parses_limit_cursor_and_exclusive_direction() {
+        let cli = Cli::try_parse_from([
+            "kovanica", "history", "11", "--limit", "7", "--cursor", "abc", "--sent",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::History(args) => {
+                assert_eq!(args.address, "11");
+                assert_eq!(args.limit, Some(7));
+                assert_eq!(args.cursor.as_deref(), Some("abc"));
+                assert!(args.sent);
+                assert!(!args.received);
+            }
+            _ => panic!("expected history command"),
+        }
+
+        let received = Cli::try_parse_from(["kovanica", "history", "abc", "--received"]).unwrap();
+        match received.command {
+            Commands::History(args) => {
+                assert!(args.received);
+                assert!(!args.sent);
+                assert!(args.limit.is_none());
+                assert!(args.cursor.is_none());
+            }
+            _ => panic!("expected history command"),
+        }
+
+        assert!(
+            Cli::try_parse_from(["kovanica", "history", "abc", "--sent", "--received"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["kovanica", "history"]).is_err());
     }
 }
