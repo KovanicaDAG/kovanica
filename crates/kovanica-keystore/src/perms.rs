@@ -4,9 +4,9 @@
 //! protected DACL that allows only the owner (`D:P(A;;FA;;;OW)`). The DACL is
 //! applied with `SetNamedSecurityInfoW` on the path. That opens the file with
 //! `WRITE_DAC` itself; the caller's handle does not need it. A seed file is
-//! rejected when its DACL grants Everyone, Builtin Users, or Authenticated
-//! Users. Other platforms have no equivalent in the standard library; the mode
-//! check there is a documented no-op after the regular-file check.
+//! accepted only when every allow ACE is the owner, SYSTEM, or Administrators.
+//! Other platforms have no equivalent in the standard library; the mode check
+//! there is a documented no-op after the regular-file check.
 
 use std::fs;
 use std::path::Path;
@@ -41,25 +41,48 @@ const SDDL_REVISION_1: u32 = 1;
 #[cfg(windows)]
 const OWNER_ONLY_SDDL: &str = "D:P(A;;FA;;;OW)";
 
-/// Trustees that make a file readable beyond its owner and administrators.
+/// Allow ACEs that may remain on an owner-only file.
 ///
-/// `WD` / `S-1-1-0` is Everyone, `BU` / `S-1-5-32-545` is Builtin Users, and
-/// `AU` / `S-1-5-11` is Authenticated Users. SYSTEM (`SY`) and Administrators
-/// (`BA`) are left in place: on Unix, root can still read mode `0600`.
+/// `OW` / `S-1-3-4` is the owner, `SY` / `S-1-5-18` is SYSTEM, and `BA` /
+/// `S-1-5-32-544` is Administrators. On Unix, root can still read mode `0600`.
+/// The owner SID from the SDDL `O:` field is allowed as well. Any other allow
+/// ACE, including a different user, Interactive (`IU`), Network (`NU`), or
+/// Anonymous (`AN`), is refused.
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
-const BROAD_TRUSTEES: &[&str] = &["WD", "BU", "AU", "S-1-1-0", "S-1-5-11", "S-1-5-32-545"];
+const OWNER_TRUSTEES: &[&str] = &["OW", "SY", "BA", "S-1-3-4", "S-1-5-18", "S-1-5-32-544"];
 
-/// Whether `sddl` is a DACL that does not grant broad read access.
+/// Owner SID from an SDDL `O:` field, if that field is present.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn sddl_owner(upper: &str) -> Option<&str> {
+    let rest = upper.split_once("O:")?.1;
+    let end = ["G:", "D:", "S:"]
+        .iter()
+        .filter_map(|mark| rest.find(mark))
+        .min()
+        .unwrap_or(rest.len());
+    let owner = rest[..end].trim();
+    if owner.is_empty() {
+        None
+    } else {
+        Some(owner)
+    }
+}
+
+/// Whether `sddl` is an explicit owner-only DACL.
 ///
-/// An empty or missing DACL is not owner-only. `NO_ACCESS_CONTROL` is a NULL
-/// DACL, which Windows treats as access for everyone.
+/// An allow ACE must name the owner, SYSTEM, or Administrators. A deny ACE
+/// does not grant access. An empty or missing DACL is not owner-only, and
+/// neither is `NO_ACCESS_CONTROL` (a NULL DACL, which Windows treats as access
+/// for everyone). At least one allow ACE is required.
 #[cfg_attr(not(any(windows, test)), allow(dead_code))]
 pub(crate) fn dacl_is_owner_only(sddl: &str) -> bool {
     let upper = sddl.to_ascii_uppercase();
     if !upper.contains("D:") || upper.contains("NO_ACCESS_CONTROL") {
         return false;
     }
+    let owner = sddl_owner(&upper);
     let dacl = upper.split("S:").next().unwrap_or(&upper);
+    let mut allow = 0usize;
     for ace in dacl.split('(').skip(1) {
         let body = ace.split(')').next().unwrap_or("");
         let mut fields = body.split(';');
@@ -68,11 +91,13 @@ pub(crate) fn dacl_is_owner_only(sddl: &str) -> bool {
             continue;
         }
         let account = fields.nth(4).unwrap_or("");
-        if BROAD_TRUSTEES.contains(&account) {
+        let owner_ace = owner.is_some_and(|sid| sid == account);
+        if !owner_ace && !OWNER_TRUSTEES.contains(&account) {
             return false;
         }
+        allow += 1;
     }
-    true
+    allow > 0
 }
 
 /// Reject a symlink or a file that other users can read.
@@ -104,7 +129,7 @@ pub fn ensure_owner_only(path: &Path) -> Result<()> {
         let sddl = windows_dacl_sddl(path)?;
         if !dacl_is_owner_only(&sddl) {
             bail!(
-                "key file {} is readable by other users. Move it to a private folder or remove inherited access for Everyone, Users, and Authenticated Users.",
+                "key file {} is readable by other users. Keep the DACL owner-only (owner, SYSTEM, and Administrators).",
                 path.display()
             );
         }
@@ -331,9 +356,20 @@ mod tests {
     #[test]
     fn owner_only_dacl_rejects_everyone_users_and_a_null_dacl() {
         assert!(dacl_is_owner_only("D:P(A;;FA;;;OW)"));
+        assert!(dacl_is_owner_only("D:(A;;FA;;;SY)(A;;FA;;;BA)"));
         assert!(dacl_is_owner_only(
+            "D:(A;;FA;;;S-1-5-18)(A;;FA;;;S-1-5-32-544)"
+        ));
+        assert!(dacl_is_owner_only(
+            "O:S-1-5-21-1-2-3-1001G:SYD:(A;;FA;;;S-1-5-21-1-2-3-1001)"
+        ));
+        // A user who is not the owner is not an allowlist entry.
+        assert!(!dacl_is_owner_only(
             "D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-21-1-2-3-1001)"
         ));
+        assert!(!dacl_is_owner_only("D:(A;;FA;;;IU)"));
+        assert!(!dacl_is_owner_only("D:(A;;FA;;;NU)"));
+        assert!(!dacl_is_owner_only("D:(A;;FA;;;AN)"));
         assert!(!dacl_is_owner_only("D:(A;;FA;;;WD)"));
         assert!(!dacl_is_owner_only("D:(A;;FA;;;BU)"));
         assert!(!dacl_is_owner_only("D:(A;;FA;;;AU)"));
@@ -342,8 +378,9 @@ mod tests {
         assert!(!dacl_is_owner_only("D:(A;;FA;;;S-1-5-32-545)"));
         assert!(!dacl_is_owner_only("D:NO_ACCESS_CONTROL"));
         assert!(!dacl_is_owner_only(""));
-        // A deny ACE for Everyone does not by itself grant access.
+        // A deny ACE does not grant access. An allow ACE is still required.
         assert!(dacl_is_owner_only("D:P(D;;FA;;;WD)(A;;FA;;;OW)"));
+        assert!(!dacl_is_owner_only("D:P(D;;FA;;;WD)"));
     }
 
     /// The DACL update goes through the path. `WRITE_DAC` and `READ_CONTROL`
