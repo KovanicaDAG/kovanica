@@ -1741,7 +1741,7 @@ const GENESIS_JSON_FILE: &str = "genesis.json";
 
 /// Domain separator for the persisted genesis digest. Bump only alongside a
 /// deliberate genesis-format change.
-const GENESIS_DIGEST_DOMAIN: &[u8] = b"KVNC-GENESIS-v1";
+const GENESIS_DIGEST_DOMAIN: &[u8] = b"KUNA-GENESIS-v1";
 
 /// Row `(address, stake, public_key, vrf_public_key)` used to order genesis
 /// validators deterministically in [`genesis_config_digest`].

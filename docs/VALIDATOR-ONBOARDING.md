@@ -308,7 +308,7 @@ Thresholds match `ops/prometheus/alerts.yml`.
 | `commit_latency` | < 500 ms | > 5,000 ms for 3 min |
 | `rss_proxy` | < 3,000 MB | > 3,000 MB warn / > 3,500 MB critical |
 | `kovanica_active_validators` | 15–21 | Outside that range |
-| `kovanica_skipped_leaders_total{reason="timeout"}` | Rarely increases | Steady increase = leader blocks not arriving |
+| `kovanica_skipped_leaders_total{reason="timeout"}` | Rarely increases | Any increase = a leader block missed its deadline; since PRO-35 the chain **stalls** instead of skipping, so a sustained increase pairs with a frozen `block_height` (liveness incident, not a fork) |
 | `kovanica_sync_errors_total{kind}` | Flat | Sustained increase = a peer or range is failing |
 | `kovanica_last_committed_digest_prefix` | Same across validators | Any validator differing = divergence |
 

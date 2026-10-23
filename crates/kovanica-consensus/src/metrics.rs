@@ -302,13 +302,18 @@ static KOVANICA_COMMITTED_LEADERS_TOTAL: Lazy<Counter> = Lazy::new(|| {
     counter
 });
 
-/// Leaders skipped by this node, by reason.
+/// Leader slots whose block did not arrive by this node's leader deadline, by
+/// reason.
+///
+/// Since PRO-35 a timeout is **not** a decision: the committer stalls at the
+/// round instead of skipping it. The counter therefore measures missed leader
+/// blocks, not rounds the chain moved past.
 static KOVANICA_SKIPPED_LEADERS_TOTAL: Lazy<Family<SkipReasonLabels, Counter>> = Lazy::new(|| {
     let family = Family::<SkipReasonLabels, Counter>::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
         "kovanica_skipped_leaders",
-        "Total skipped leader slots, by reason",
+        "Leader slots that timed out (block missed the deadline); the chain stalls, it does not skip",
         family.clone(),
     );
     family

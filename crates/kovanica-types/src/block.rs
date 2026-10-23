@@ -75,7 +75,7 @@ impl StatementBlock {
         }
         // Wire upgrade: only include statements when they carry the VRF blob.
         if let Some(s) = statements {
-            if s.len() >= 137 && &s[..9] == b"KVNC-VRF1" {
+            if s.len() >= 137 && &s[..9] == b"KUNA-VRF1" {
                 data.extend_from_slice(s);
             }
         }
