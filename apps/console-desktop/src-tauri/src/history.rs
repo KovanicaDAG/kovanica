@@ -221,10 +221,26 @@ pub fn proven_chain_id(chain_id: Option<&str>) -> Option<u64> {
 
 fn parse_owner(wallet: &str, chain_id: Option<u64>) -> Result<Address, String> {
     match chain_id {
-        Some(chain) => Address::parse_for_chain(wallet, chain),
-        None => wallet.parse(),
+        Some(chain) => match Address::parse_for_chain(wallet, chain) {
+            Ok(address) => Ok(address),
+            Err(_) if legacy_label_refused(wallet, chain) => Err(format!(
+                "A legacy address label is not accepted on chain {chain}."
+            )),
+            Err(_) => Err("The wallet address could not be read.".to_string()),
+        },
+        None => wallet
+            .parse()
+            .map_err(|_| "The wallet address could not be read.".to_string()),
     }
-    .map_err(|_| "The wallet address could not be read.".to_string())
+}
+
+/// A keystore label in the legacy hex form, on a chain that only accepts base32.
+fn legacy_label_refused(wallet: &str, chain_id: u64) -> bool {
+    if kovanica_types::address::legacy_address_allowed(chain_id) {
+        return false;
+    }
+    wallet.parse::<Address>().is_err()
+        && Address::parse_for_chain(wallet, kovanica_types::signing::chain_id::TESTNET_V2).is_ok()
 }
 
 fn placement(owner: Address, from: Address, to: Address) -> Option<(String, String)> {
@@ -437,10 +453,24 @@ mod tests {
         assert_eq!(on_v2.transfers[0].direction, "in");
         assert_eq!(on_v2.transfers[0].counterparty, other.to_string());
 
-        let refused = page_for(Some(chain_id::MAINNET), &wallet.encode_legacy_hex()).unwrap_err();
-        assert_eq!(refused, "The wallet address could not be read.");
-        let unknown = page_for(None, &wallet.encode_legacy_hex()).unwrap_err();
+        let legacy = wallet.encode_legacy_hex();
+        let refused = page_for(Some(chain_id::MAINNET), &legacy).unwrap_err();
+        assert_eq!(
+            refused,
+            "A legacy address label is not accepted on chain 1."
+        );
+        let unknown = page_for(None, &legacy).unwrap_err();
         assert_eq!(unknown, "The wallet address could not be read.");
+        assert_eq!(
+            parse_owner(&legacy, Some(chain_id::MAINNET)).unwrap_err(),
+            "A legacy address label is not accepted on chain 1."
+        );
+        assert!(parse_owner(&legacy, Some(chain_id::TESTNET_V2)).is_ok());
+        assert!(parse_owner(&wallet.to_string(), Some(chain_id::MAINNET)).is_ok());
+        assert_eq!(
+            parse_owner("not-an-address", Some(chain_id::MAINNET)).unwrap_err(),
+            "The wallet address could not be read."
+        );
 
         let base32_only = page_for(None, &wallet.to_string()).unwrap();
         assert_eq!(base32_only.transfers.len(), 1);

@@ -226,8 +226,23 @@ fn canonical_recipient(raw: &str, chain_id: u64) -> Result<Address, String> {
 }
 
 fn wallet_address(text: &str, chain_id: u64) -> Result<Address, String> {
-    Address::parse_for_chain(text, chain_id)
-        .map_err(|_| "The wallet address could not be read.".to_string())
+    match Address::parse_for_chain(text, chain_id) {
+        Ok(address) => Ok(address),
+        Err(_) if legacy_label_refused(text, chain_id) => Err(format!(
+            "A legacy address label is not accepted on chain {chain_id}."
+        )),
+        Err(_) => Err("The wallet address could not be read.".to_string()),
+    }
+}
+
+/// A keystore label in the legacy hex form, on a chain that only accepts base32.
+fn legacy_label_refused(text: &str, chain_id: u64) -> bool {
+    if kovanica_types::address::legacy_address_allowed(chain_id) {
+        return false;
+    }
+    // Canonical base32 parses on every chain. Success on a lenient chain and
+    // failure as base32 means the label is legacy hex.
+    text.parse::<Address>().is_err() && Address::parse_for_chain(text, chain_id::TESTNET_V2).is_ok()
 }
 
 fn transfer_len(sender: Address, to: Address, amount: u64, nonce: u64) -> Result<usize, String> {
@@ -721,8 +736,28 @@ mod tests {
                 now,
             )
             .unwrap_err();
-        assert_eq!(err, "The wallet address could not be read.");
+        assert_eq!(err, "A legacy address label is not accepted on chain 1.");
         assert!(!refused_store.has_quote());
+    }
+
+    #[test]
+    fn legacy_keystore_label_is_refused_on_chain_1() {
+        let label = Address([9; 32]).encode_legacy_hex();
+        let err = wallet_address(&label, chain_id::MAINNET).unwrap_err();
+        assert_eq!(err, "A legacy address label is not accepted on chain 1.");
+        assert!(wallet_address(&label, chain_id::TESTNET_V2).is_ok());
+        assert!(wallet_address(&label, chain_id::DEVNET).is_ok());
+        assert!(wallet_address(&label, chain_id::LOCAL).is_ok());
+        let canonical = Address([9; 32]).to_string();
+        assert!(wallet_address(&canonical, chain_id::MAINNET).is_ok());
+        assert_eq!(
+            wallet_address("not-an-address", chain_id::MAINNET).unwrap_err(),
+            "The wallet address could not be read."
+        );
+        assert_eq!(
+            wallet_address(&label, chain_id::TESTNET).unwrap_err(),
+            "A legacy address label is not accepted on chain 2."
+        );
     }
 
     #[test]
