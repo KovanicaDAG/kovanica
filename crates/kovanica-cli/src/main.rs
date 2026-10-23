@@ -418,7 +418,7 @@ async fn main() -> Result<()> {
             .await
         }
         Commands::Transfer(args) => cmd_transfer(&client, chain_id, args, json).await,
-        Commands::Status | Commands::Info => node::status(&client, json).await,
+        Commands::Status | Commands::Info => node::status(&client, chain_id, json).await,
         Commands::Balance { address } => node::balance(&client, &address, json).await,
         Commands::Stake(args) => cmd_stake(&client, chain_id, args, json).await,
         Commands::Unstake(args) => cmd_unstake(&client, chain_id, args, json).await,
