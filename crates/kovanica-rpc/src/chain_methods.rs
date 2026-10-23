@@ -1155,13 +1155,13 @@ pub async fn handle_get_light_set(_params: Value, state: RpcState) -> Result<Val
     };
     // Light-set epoch is derived from the committed leader HEIGHT, matching
     // execution's beacon indexing (`note_light_beacon` / `pay_light_escrow`
-    // index the light set by `committed_height / EPOCH_ROUNDS`). It is a
+    // index the light set by `epoch_for_height(committed_height)`). It is a
     // deliberately distinct unit from the round-based committee epoch: the
     // light-set beacon must line up with the height at which execution wrote
     // it, not with the leader round of any seal. The arithmetic is the same
-    // `height / EPOCH_ROUNDS`; using the shared helper keeps the divisor
-    // canonical.
-    let epoch = kovanica_types::epoch_for_round(height);
+    // 8 h epoch length (2 400 heights); using the shared helper keeps the
+    // divisor canonical.
+    let epoch = kovanica_types::epoch_for_height(height);
     let Some(set) = state
         .storage
         .state()
