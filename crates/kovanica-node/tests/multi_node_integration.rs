@@ -378,3 +378,98 @@ fn two_two_partition_neither_side_reaches_quorum() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// PRO-40 (b): quorum-certified skips
+// ---------------------------------------------------------------------
+
+fn signed_timeout(round: Round, voter: AuthorityIndex) -> kovanica_types::Timeout {
+    let mut timeout = kovanica_types::Timeout {
+        round,
+        voter,
+        signature: kovanica_types::Signature([0; 64]),
+    };
+    timeout.signature = kovanica_crypto::sign(
+        &common::validator_signing_key(voter),
+        &timeout.signature_data(
+            kovanica_types::signing::chain_id::LOCAL,
+            &engine_config().genesis_hash,
+        ),
+    );
+    timeout
+}
+
+/// I2 (in-process): nobody votes for leader slot 3 (its block is too late
+/// everywhere), three of four validators time out. Nodes 0, 2, 3 assemble the
+/// certificate from individual timeouts, node 1 only receives the finished
+/// certificate. All four skip slot 3, commit 6 and 9, and the slot-3 block is
+/// ordered into the slot-6 sub-DAG identically on every node.
+#[test]
+fn certified_skip_is_identical_on_every_node_and_the_chain_continues() {
+    let chain = canonical_chain(9);
+    let mut nodes = cluster();
+    for block in &chain {
+        deliver_all(&mut nodes, &Wire::Block(block.clone()));
+    }
+
+    let signers: [AuthorityIndex; 3] = [0, 2, 3];
+    for node in [0usize, 2, 3] {
+        for voter in signers {
+            nodes[node]
+                .engine
+                .process_timeout(&signed_timeout(3, voter))
+                .expect("timeout accepted");
+        }
+    }
+    let cert = kovanica_types::SkipCert {
+        round: 3,
+        timeouts: signers.iter().map(|v| signed_timeout(3, *v)).collect(),
+    };
+    nodes[1]
+        .engine
+        .process_skip_cert(&cert)
+        .expect("cert accepted");
+
+    let all_voters: Vec<AuthorityIndex> = (0..NODES as u16).collect();
+    let all_targets: Vec<usize> = (0..NODES).collect();
+    cast_votes(&mut nodes, &all_targets, &all_voters, &chain, &[6, 9]);
+    drain_all(&mut nodes);
+
+    let baseline = fingerprints(&nodes[0]);
+    assert_eq!(committed_rounds(&nodes[0]), vec![6, 9]);
+    for (i, node) in nodes.iter().enumerate() {
+        assert_eq!(fingerprints(node), baseline, "node {i} diverged");
+    }
+    let slot3 = chain[3].digest;
+    assert!(
+        nodes[0].commits[0].blocks.iter().any(|b| b.digest == slot3),
+        "the skipped leader block is ordered into the next sub-DAG"
+    );
+}
+
+/// I3 / C3 (in-process): an even split, two votes and two timeouts for slot
+/// 3. Neither a vote quorum nor a skip certificate exists, so no node commits
+/// or skips anything: a safe stall, never a fork.
+#[test]
+fn a_vote_timeout_split_stalls_safely_on_every_node() {
+    let chain = canonical_chain(9);
+    let mut nodes = cluster();
+    for block in &chain {
+        deliver_all(&mut nodes, &Wire::Block(block.clone()));
+    }
+    let all_targets: Vec<usize> = (0..NODES).collect();
+    cast_votes(&mut nodes, &all_targets, &[0, 1], &chain, &[3]);
+    for node in nodes.iter() {
+        for voter in [2u16, 3] {
+            node.engine
+                .process_timeout(&signed_timeout(3, voter))
+                .expect("timeout accepted");
+        }
+    }
+    cast_votes(&mut nodes, &all_targets, &[0, 1, 2, 3], &chain, &[6, 9]);
+    drain_all(&mut nodes);
+    for (i, node) in nodes.iter().enumerate() {
+        assert!(node.commits.is_empty(), "node {i} moved past a split slot");
+        assert_eq!(node.engine.last_decided_round(), 0);
+    }
+}

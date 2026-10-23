@@ -1927,6 +1927,12 @@ where
         Ok(())
     }
 
+    /// The commit cursor: the highest leader slot decided by a commit or a
+    /// certified skip.
+    pub fn last_decided_round(&self) -> Round {
+        self.committer.last_decided_round()
+    }
+
     /// Get the current round.
     pub fn current_round(&self) -> Round {
         *self.current_round.read()

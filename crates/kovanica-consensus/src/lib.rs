@@ -25,8 +25,8 @@ pub mod types;
 
 pub use committer::{uncommitted_history, BaseCommitter, UniversalCommitter};
 pub use engine::{
-    BlockBroadcaster, ConsensusConfig, ConsensusEngine, ConsensusError, ValidatorState,
-    VoteBroadcaster, VoteRejection,
+    BlockBroadcaster, ConsensusConfig, ConsensusEngine, ConsensusError, TimeoutBroadcaster,
+    ValidatorState, VoteBroadcaster, VoteRejection,
 };
 pub use genesis::is_genesis_subdag;
 pub use kovanica_types::Vote;

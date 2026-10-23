@@ -95,10 +95,12 @@ impl PeerScoringConfig {
             ip_colocation_factor_weight: -1.0,
             ..PeerScoreParams::default()
         };
-        // Blocks and votes are consensus-critical: a bad one weighs more.
+        // Blocks, votes and timeouts are consensus-critical: a bad one weighs
+        // more.
         for (name, weight) in [
             (topics::BLOCKS, 1.0),
             (topics::VOTES, 1.0),
+            (topics::TIMEOUTS, 1.0),
             (topics::TRANSACTIONS, 0.5),
         ] {
             params
@@ -144,14 +146,19 @@ mod tests {
     }
 
     #[test]
-    fn scored_topics_are_blocks_votes_transactions() {
+    fn scored_topics_are_blocks_votes_timeouts_transactions() {
         let params = PeerScoringConfig::default().params();
-        for name in [topics::BLOCKS, topics::VOTES, topics::TRANSACTIONS] {
+        for name in [
+            topics::BLOCKS,
+            topics::VOTES,
+            topics::TIMEOUTS,
+            topics::TRANSACTIONS,
+        ] {
             let p = &params.topics[&topics::ident(name).hash()];
             assert!(p.invalid_message_deliveries_weight < 0.0, "{name}");
             assert_eq!(p.mesh_message_deliveries_weight, 0.0, "{name}");
         }
-        assert_eq!(params.topics.len(), 3);
+        assert_eq!(params.topics.len(), 4);
     }
 
     #[test]

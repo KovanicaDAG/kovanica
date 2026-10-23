@@ -39,6 +39,15 @@ pub use validation::{
     SigError, VoteVerifier,
 };
 
+/// Payload of the [`topics::TIMEOUTS`] gossip topic (PRO-40 (b)).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TimeoutMessage {
+    /// One validator's timeout for a leader slot.
+    Timeout(kovanica_types::Timeout),
+    /// A quorum of timeouts for one leader slot.
+    SkipCert(kovanica_types::SkipCert),
+}
+
 use kovanica_types::{
     block::StatementBlock, transaction::Transaction, Round, SealAnnouncement, Vote,
 };
@@ -102,6 +111,22 @@ pub enum NetworkEvent {
         peer: PeerId,
         /// The vote.
         vote: Vote,
+    },
+    /// A leader-slot timeout whose signer is a committee member and whose
+    /// signature verifies for this chain and genesis (PRO-40 (b)).
+    TimeoutReceived {
+        /// Peer that sent the timeout.
+        peer: PeerId,
+        /// The timeout.
+        timeout: kovanica_types::Timeout,
+    },
+    /// A skip certificate that passed the edge checks
+    /// ([`validation::verify_skip_cert`]); consensus checks the quorum.
+    SkipCertReceived {
+        /// Peer that sent the certificate.
+        peer: PeerId,
+        /// The certificate.
+        cert: kovanica_types::SkipCert,
     },
     /// A post-execution commit seal whose signature verified and whose
     /// header hash matches the header this node already executed.

@@ -15,7 +15,7 @@
 
 use kovanica_types::{
     block::StatementBlock, epoch_for_round, transaction::TransactionKind, Address, AuthorityIndex,
-    Hash, PublicKey, SealAnnouncement, SigningContext, Transaction, Vote,
+    Hash, PublicKey, SealAnnouncement, SigningContext, SkipCert, Timeout, Transaction, Vote,
 };
 use std::{
     collections::HashMap,
@@ -47,6 +47,9 @@ pub enum Rejection {
     ColouringFlag,
     /// The seal's header epoch is not the verifier's epoch.
     EpochMismatch,
+    /// A skip certificate is empty, oversized, mixes rounds or repeats a
+    /// signer.
+    MalformedCertificate,
 }
 
 impl fmt::Display for Rejection {
@@ -69,6 +72,7 @@ impl fmt::Display for Rejection {
             Rejection::EpochMismatch => {
                 write!(f, "commit seal epoch does not match the local epoch")
             }
+            Rejection::MalformedCertificate => write!(f, "malformed skip certificate"),
         }
     }
 }
@@ -230,6 +234,49 @@ pub fn verify_block(keys: &AuthorityKeys, block: &StatementBlock) -> Result<(), 
 ///
 /// Until keys are configured nothing can be authenticated, so votes and
 /// blocks are neither delivered nor forwarded (fail closed).
+/// Verify a leader-slot timeout under `keys` (PRO-40 (b)): committee member
+/// and a signature over `KUNA/timeout/v1 ‖ chain_id ‖ genesis_hash ‖
+/// epoch(R) ‖ voter ‖ R`.
+pub fn verify_timeout(
+    keys: &AuthorityKeys,
+    timeout: &Timeout,
+    chain_id: u64,
+    genesis_hash: &Hash,
+) -> Result<(), Rejection> {
+    let key = keys
+        .get(&timeout.voter)
+        .ok_or(Rejection::UnknownAuthority(timeout.voter))?;
+    kovanica_crypto::verify(
+        key,
+        &timeout.signature_data(chain_id, genesis_hash),
+        &timeout.signature,
+    )
+    .map_err(|_| Rejection::BadSignature(timeout.voter))
+}
+
+/// Edge check of a skip certificate: at most one timeout per committee
+/// member, all for the certificate's round, every signature valid. Whether
+/// the signers hold a stake quorum is decided by consensus, which knows the
+/// stakes.
+pub fn verify_skip_cert(
+    keys: &AuthorityKeys,
+    cert: &SkipCert,
+    chain_id: u64,
+    genesis_hash: &Hash,
+) -> Result<(), Rejection> {
+    if cert.timeouts.is_empty() || cert.timeouts.len() > keys.len() {
+        return Err(Rejection::MalformedCertificate);
+    }
+    let mut seen = std::collections::HashSet::new();
+    for timeout in &cert.timeouts {
+        if timeout.round != cert.round || !seen.insert(timeout.voter) {
+            return Err(Rejection::MalformedCertificate);
+        }
+        verify_timeout(keys, timeout, chain_id, genesis_hash)?;
+    }
+    Ok(())
+}
+
 pub(crate) struct GossipValidator {
     /// Keys indexed by authority index (for votes and blocks).
     authority_keys: RwLock<AuthorityKeys>,
@@ -327,6 +374,40 @@ impl GossipValidator {
                 .unwrap_or_else(|e| e.into_inner()),
             vote,
             ctx,
+        )
+    }
+
+    pub(crate) fn verify_timeout(
+        &self,
+        timeout: &Timeout,
+        chain_id: u64,
+        genesis_hash: &Hash,
+    ) -> Result<(), Rejection> {
+        verify_timeout(
+            &self
+                .authority_keys
+                .read()
+                .unwrap_or_else(|e| e.into_inner()),
+            timeout,
+            chain_id,
+            genesis_hash,
+        )
+    }
+
+    pub(crate) fn verify_skip_cert(
+        &self,
+        cert: &SkipCert,
+        chain_id: u64,
+        genesis_hash: &Hash,
+    ) -> Result<(), Rejection> {
+        verify_skip_cert(
+            &self
+                .authority_keys
+                .read()
+                .unwrap_or_else(|e| e.into_inner()),
+            cert,
+            chain_id,
+            genesis_hash,
         )
     }
 

@@ -120,6 +120,9 @@ pub struct NetworkService {
     /// until the node installs one; while unset, vote requests are answered
     /// with an empty vote list.
     vote_source: Mutex<Option<Arc<dyn VoteSource>>>,
+    /// Genesis hash bound into timeout signatures (PRO-40 (b)). Until the
+    /// node sets it, timeout gossip is dropped unforwarded.
+    timeout_genesis: Mutex<Option<kovanica_types::Hash>>,
     /// Short-lived cache of the last full snapshot export (see
     /// [`STATE_SYNC_EXPORT_CACHE_TTL`]).
     state_snapshot_cache: Mutex<Option<CachedSnapshotExport>>,
@@ -435,6 +438,7 @@ impl NetworkService {
                 header_index: Mutex::new(None),
                 state_snapshot_source: Mutex::new(None),
                 vote_source: Mutex::new(None),
+                timeout_genesis: Mutex::new(None),
                 state_snapshot_cache: Mutex::new(None),
                 reported_tip: Mutex::new(HashMap::new()),
             },
@@ -510,6 +514,23 @@ impl NetworkService {
     pub fn broadcast_vote(&self, vote: &Vote) -> Result<(), NetworkError> {
         let payload = bincode::serialize(vote)?;
         self.publish(topics::VOTES, payload)
+    }
+
+    /// Broadcast a leader-slot timeout (PRO-40 (b)).
+    pub fn broadcast_timeout(&self, timeout: &kovanica_types::Timeout) -> Result<(), NetworkError> {
+        let payload = bincode::serialize(&crate::TimeoutMessage::Timeout(timeout.clone()))?;
+        self.publish(topics::TIMEOUTS, payload)
+    }
+
+    /// Broadcast a skip certificate (PRO-40 (b)).
+    pub fn broadcast_skip_cert(&self, cert: &kovanica_types::SkipCert) -> Result<(), NetworkError> {
+        let payload = bincode::serialize(&crate::TimeoutMessage::SkipCert(cert.clone()))?;
+        self.publish(topics::TIMEOUTS, payload)
+    }
+
+    /// Set the genesis hash that timeout signatures are bound to.
+    pub fn set_timeout_genesis(&self, genesis_hash: kovanica_types::Hash) {
+        *lock(&self.timeout_genesis) = Some(genesis_hash);
     }
 
     /// Broadcast one locally produced commit seal.
@@ -855,6 +876,7 @@ impl NetworkService {
                     topics::SYNC => self.on_sync_message(message.source, &message.data),
                     topics::VOTES => self.on_vote_message(message.source, &message.data),
                     topics::SEALS => self.on_seal_message(message.source, &message.data),
+                    topics::TIMEOUTS => self.on_timeout_message(message.source, &message.data),
                     other => {
                         debug!(topic = other, "message on unexpected topic");
                         Verdict::Ignore
@@ -1544,6 +1566,48 @@ impl NetworkService {
         Verdict::Accept
     }
 
+    /// Decode a timeout or skip certificate, authenticate it and announce it
+    /// (PRO-40 (b)). The range, deduplication and quorum checks are done by
+    /// consensus.
+    fn on_timeout_message(&self, source: Option<PeerId>, payload: &[u8]) -> Verdict {
+        let message: crate::TimeoutMessage = match bincode::deserialize(payload) {
+            Ok(message) => message,
+            Err(err) => {
+                warn!(%err, "dropping malformed timeout gossip");
+                return Verdict::reject("malformed timeout");
+            }
+        };
+        let Some(peer) = source else {
+            return Verdict::reject("timeout without author");
+        };
+        let Some(genesis) = *lock(&self.timeout_genesis) else {
+            debug!("timeout genesis not set; timeout gossip dropped unforwarded");
+            return Verdict::Ignore;
+        };
+        if !self.validator.is_configured() {
+            return Verdict::Ignore;
+        }
+        let chain_id = self.mempool.signing_context().chain_id;
+        match message {
+            crate::TimeoutMessage::Timeout(timeout) => {
+                if let Err(rejection) = self.validator.verify_timeout(&timeout, chain_id, &genesis)
+                {
+                    warn!(%peer, voter = timeout.voter, round = timeout.round, %rejection, "rejected timeout gossip");
+                    return Verdict::rejected("timeout", rejection);
+                }
+                self.emit(NetworkEvent::TimeoutReceived { peer, timeout });
+            }
+            crate::TimeoutMessage::SkipCert(cert) => {
+                if let Err(rejection) = self.validator.verify_skip_cert(&cert, chain_id, &genesis) {
+                    warn!(%peer, round = cert.round, %rejection, "rejected skip certificate gossip");
+                    return Verdict::rejected("skip certificate", rejection);
+                }
+                self.emit(NetworkEvent::SkipCertReceived { peer, cert });
+            }
+        }
+        Verdict::Accept
+    }
+
     /// Decode a commit seal, check one signature, and deliver it only when
     /// local execution already stored the same header.
     ///
@@ -2136,6 +2200,80 @@ mod tests {
             NetworkEvent::VoteReceived { vote: got, .. } => assert_eq!(got, vote),
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    fn signed_timeout(
+        key: &kovanica_types::SigningKey,
+        voter: u16,
+        round: u64,
+        genesis: &kovanica_types::Hash,
+    ) -> kovanica_types::Timeout {
+        let mut t = kovanica_types::Timeout {
+            round,
+            voter,
+            signature: kovanica_types::Signature([0; 64]),
+        };
+        t.signature = kovanica_crypto::sign(
+            key,
+            &t.signature_data(test_support::TEST_CTX.chain_id, genesis),
+        );
+        t
+    }
+
+    // PRO-40 (b): timeouts and skip certificates are authenticated at the
+    // gossip edge against this chain's genesis.
+    #[tokio::test]
+    async fn timeout_gossip_is_authenticated_against_the_genesis() {
+        let (_dir, service, mut events, signers) = validating_service();
+        let genesis = kovanica_types::Hash([3; 32]);
+        let timeout = signed_timeout(&signers[1], 1, 3, &genesis);
+        let payload = bincode::serialize(&crate::TimeoutMessage::Timeout(timeout.clone())).unwrap();
+        assert_eq!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Ignore,
+            "no genesis set: dropped unforwarded"
+        );
+        service.set_timeout_genesis(genesis);
+        assert_eq!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Accept
+        );
+        match events.try_recv().expect("timeout event") {
+            NetworkEvent::TimeoutReceived { timeout: got, .. } => assert_eq!(got, timeout),
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let foreign = signed_timeout(&signers[1], 1, 3, &kovanica_types::Hash([4; 32]));
+        let payload = bincode::serialize(&crate::TimeoutMessage::Timeout(foreign)).unwrap();
+        assert!(matches!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Reject(_)
+        ));
+
+        let cert = kovanica_types::SkipCert {
+            round: 3,
+            timeouts: (0..3u16)
+                .map(|v| signed_timeout(&signers[v as usize], v, 3, &genesis))
+                .collect(),
+        };
+        let payload = bincode::serialize(&crate::TimeoutMessage::SkipCert(cert.clone())).unwrap();
+        assert_eq!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Accept
+        );
+        match events.try_recv().expect("cert event") {
+            NetworkEvent::SkipCertReceived { cert: got, .. } => assert_eq!(got, cert),
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let mut dup = cert;
+        dup.timeouts.push(dup.timeouts[0].clone());
+        let payload = bincode::serialize(&crate::TimeoutMessage::SkipCert(dup)).unwrap();
+        assert!(matches!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Reject(_)
+        ));
+        assert!(events.try_recv().is_err());
     }
 
     /// B1d (PRO-B1d) regression: a vote cast in a later epoch must pass the

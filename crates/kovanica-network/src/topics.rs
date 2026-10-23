@@ -23,8 +23,20 @@ pub const STATE_SYNC: &str = "state_sync";
 /// still commit. The topic is not peer-scored.
 pub const SEALS: &str = "seals";
 
+/// Topic carrying leader-slot timeouts and skip certificates
+/// ([`crate::TimeoutMessage`], PRO-40 (b)).
+pub const TIMEOUTS: &str = "timeouts";
+
 /// Every topic subscribed to at startup, in subscription order.
-pub const ALL: [&str; 6] = [BLOCKS, TRANSACTIONS, VOTES, SYNC, STATE_SYNC, SEALS];
+pub const ALL: [&str; 7] = [
+    BLOCKS,
+    TRANSACTIONS,
+    VOTES,
+    SYNC,
+    STATE_SYNC,
+    SEALS,
+    TIMEOUTS,
+];
 
 /// Topic handle for a topic name (round-trips through [`gossipsub::TopicHash`]).
 ///
@@ -44,7 +56,7 @@ mod tests {
         for name in ALL {
             assert!(seen.insert(name), "duplicate topic name: {name}");
         }
-        assert_eq!(ALL.len(), 6);
+        assert_eq!(ALL.len(), 7);
     }
 
     #[test]
