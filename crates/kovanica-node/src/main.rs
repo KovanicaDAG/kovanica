@@ -1933,9 +1933,14 @@ fn verify_persisted_genesis_digest(
         Some(stored) if stored != *fresh => {
             if !allow_mismatch {
                 anyhow::bail!(
-                    "genesis digest mismatch: data dir was created for genesis {} but the \
-                     configured genesis is {}; refusing to start to avoid mixing chains \
-                     (set {ALLOW_GENESIS_MISMATCH_ENV}=1 to override)",
+                    "genesis digest mismatch: this data dir belongs to genesis {} but this \
+                     build and config give {}; refusing to start to avoid mixing chains. \
+                     Either the data dir was created by a build before the chain-4 format \
+                     change (KUNA-* hash domains, #81), or the genesis files / treasury / \
+                     chain_id differ from the ones it was created with. The fix is a wipe, \
+                     not {ALLOW_GENESIS_MISMATCH_ENV} (a dev-only override): stop the node, \
+                     move the data dir away and start from the published chain genesis \
+                     bundle (docs/TESTNET-RESET.md)",
                     stored.to_hex(),
                     fresh.to_hex(),
                 );
@@ -1960,11 +1965,6 @@ fn verify_persisted_genesis_digest(
     Ok(())
 }
 
-/// Read back `genesis.json` (if present) and verify its declared genesis-block
-/// digest matches the canonical genesis digest.
-///
-/// The ceremony writes this artifact but nothing used to read it; a stale or
-/// tampered copy is never silently rewritten. On mismatch the node refuses
 /// Check the genesis marker of `consensus.redb` (#86 follow-up). Returns
 /// whether the marker is missing and must be written after genesis init.
 ///
@@ -2021,6 +2021,11 @@ fn verify_consensus_genesis_marker(
     }
 }
 
+/// Read back `genesis.json` (if present) and verify its declared genesis-block
+/// digest matches the canonical genesis digest.
+///
+/// The ceremony writes this artifact but nothing used to read it; a stale or
+/// tampered copy is never silently rewritten. On mismatch the node refuses
 /// unless `allow_mismatch`.
 fn verify_genesis_json(config: &NodeConfig, canonical: &Hash, allow_mismatch: bool) -> Result<()> {
     let path = config.data_dir.join(GENESIS_JSON_FILE);
@@ -4824,6 +4829,9 @@ mod tests {
         assert!(msg.contains(&stored.to_hex()), "{msg}");
         assert!(msg.contains(&fresh.to_hex()), "{msg}");
         assert!(msg.contains(ALLOW_GENESIS_MISMATCH_ENV), "{msg}");
+        // The message names the likely cause and the real fix (#86 P2).
+        assert!(msg.contains("chain-4 format change"), "{msg}");
+        assert!(msg.contains("fix is a wipe"), "{msg}");
 
         // The explicit override lets the node start despite the mismatch...
         verify_persisted_genesis_digest(&storage, &fresh, true).expect("override allows");
@@ -4875,14 +4883,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_data_dir_without_a_genesis_digest_is_refused_not_migrated() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::new(dir.path().join("state.redb")).unwrap();
-
-        // Simulate a data dir created before the digest existed: chain state
-        // present, no genesis digest.
-        let mut staking = StakingState::new();
     // #86 follow-up (Jarvis P2): consensus.redb carries its own genesis
     // marker, so a partial wipe cannot reopen another chain's DAG.
     #[test]
@@ -4932,6 +4932,14 @@ mod tests {
         assert!(verify_consensus_genesis_marker(&consensus, &dag, &state, &fresh).unwrap());
     }
 
+    #[test]
+    fn a_data_dir_without_a_genesis_digest_is_refused_not_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+
+        // Simulate a data dir created before the digest existed: chain state
+        // present, no genesis digest.
+        let mut staking = StakingState::new();
         staking.init_treasury(Address([9; 32]));
         let txn = storage.begin_write().unwrap();
         storage.state().save_staking_state(&txn, &staking).unwrap();
