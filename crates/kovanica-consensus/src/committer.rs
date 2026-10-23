@@ -9,7 +9,9 @@ use crate::ghostdag_scoped::ColouringResult;
 use crate::metrics::{record_pruned_blocks, record_pruned_waves};
 use crate::mysticghost::{order_committed_wave, MysticGhostConfig, MysticGhostOrder};
 use crate::types::{CommitResult, CommitteeInfo, LeaderInfo, LeaderStatus};
-use kovanica_types::{block::StatementBlock, hash::Hash, AuthorityIndex, CommittedSubDag, Round};
+use kovanica_types::{
+    block::StatementBlock, hash::Hash, AuthorityIndex, CommittedSubDag, Round, WAVE_LENGTH,
+};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -129,6 +131,14 @@ impl BaseCommitter {
     fn wave_of(&self, round: Round) -> u64 {
         round / kovanica_types::WAVE_LENGTH
     }
+}
+
+/// The first leader slot strictly above `round`.
+///
+/// Leader slots are the rounds at offset 0 of a wave (`round % WAVE_LENGTH ==
+/// 0`), and round 0 is genesis, so the first slot is `WAVE_LENGTH`.
+fn next_leader_slot(round: Round) -> Round {
+    (round / WAVE_LENGTH + 1).saturating_mul(WAVE_LENGTH)
 }
 
 /// Helper: registered leaders strictly after `round`, in round order.
@@ -445,9 +455,31 @@ impl UniversalCommitter {
     }
 
     /// Clean up old leader info to limit memory usage.
+    ///
+    /// Only records at or below the commit cursor may be dropped. A leader
+    /// above `last_decided_round` is still undecided: the commit walk stalls on
+    /// it, and dropping its record would turn the stall into a silent skip
+    /// (the walk would then commit a later leader over a round that never got
+    /// a quorum, at a moment that depends on this node's clock — the PRO-35
+    /// fork class, PRO-40). Memory stays bounded by the length of a stall.
     pub fn cleanup_old_leaders(&self, cutoff: Round) {
+        let last_decided = self.last_decided_round();
         let mut leaders = self.leaders.write();
-        leaders.retain(|&round, _| round >= cutoff);
+        leaders.retain(|&round, _| round >= cutoff || round > last_decided);
+    }
+
+    /// Restore the commit cursor from the persisted decision index.
+    ///
+    /// The in-memory cursor starts at 0 on every boot. Without this a
+    /// restarted node walks from round 0 with an empty leader map, so the
+    /// first leader it hears about after the restart is the first candidate
+    /// and every undecided slot in between is passed over silently. The
+    /// cursor only moves forward.
+    pub fn restore_last_decided_round(&self, round: Round) {
+        let mut last = self.last_decided_round.write();
+        if round > *last {
+            *last = round;
+        }
     }
 
     /// Construct the next committed sub-DAG candidate without publishing it.
@@ -468,50 +500,42 @@ impl UniversalCommitter {
         let leaders = self.leaders.read().clone();
         let decided = self.decided_leaders.read().clone();
 
-        // Bound the walk to the rounds that actually have a registered leader.
+        // Walk the expected leader slots in round order, starting at the
+        // first slot above the cursor. The walk stops at the first slot that
+        // is not decided by its own quorum, and also at the first slot that
+        // has **no record at all** (PRO-40): a missing record means this node
+        // has not seen that leader yet (it restarted, joined late, or the
+        // block never arrived), not that the round may be passed over.
+        // Previously the candidates were `leaders.keys()`, so a round without
+        // a record was skipped silently and a later leader with quorum was
+        // committed over it.
         //
-        // Iterating every integer round from `last_decided + 1` would cost
-        // O(highest_leader_round - last_decided) even when nothing is registered
-        // in between, which grows without bound while commits lag. Visiting the
-        // sorted set of known leader rounds keeps every registered leader
-        // reachable (there is no fixed look-ahead cap) at a cost proportional to
-        // the number of known leaders. A round already present in `decided` is
-        // skipped, and no integer round without a leader is ever visited.
-        //
-        // The walk is strictly in round order and stops at the first leader
-        // that is still Undecided (see below), so commits are emitted in
-        // strictly increasing round order and no leader is passed over
-        // without an explicit Skip decision.
+        // The walk visits at most the run of consecutive slots that have
+        // records, so its cost stays proportional to the number of known
+        // leaders, and there is no fixed look-ahead cap.
         let max_checked = leaders.keys().copied().max().unwrap_or(last_decided);
-        let mut candidate_rounds: Vec<Round> = leaders
-            .keys()
-            .copied()
-            .filter(|round| *round > last_decided)
-            .collect();
-        candidate_rounds.sort_unstable();
+        let mut round = next_leader_slot(last_decided);
+        while round <= max_checked {
+            let slot = round;
+            round = round.saturating_add(WAVE_LENGTH);
 
-        for round in candidate_rounds
-            .into_iter()
-            .take_while(|round| *round <= max_checked)
-        {
             // A round already decided must not be re-processed. A provisional
             // Skip entry, however, must not permanently disqualify a round
             // whose leader block later reaches quorum (register_skip no longer
             // advances the cursor), so only skip when no live block-bearing
             // leader is registered for that round.
-            if decided.contains_key(&round)
+            if decided.contains_key(&slot)
                 && !leaders
-                    .get(&round)
+                    .get(&slot)
                     .map(|l| l.block_hash.is_some())
                     .unwrap_or(false)
             {
                 continue;
             }
 
-            let Some(leader_info) = leaders.get(&round) else {
-                // The candidate set is built from `leaders.keys()`, so this is
-                // unreachable; guard defensively without touching the cursor.
-                continue;
+            let Some(leader_info) = leaders.get(&slot) else {
+                // Expected leader slot without any record: stall here.
+                break;
             };
 
             // Try direct decision
@@ -1273,10 +1297,13 @@ mod tests {
         assert!(committer.is_decided(6));
     }
 
+    /// PRO-40: a leader with quorum far above the cursor is NOT committed
+    /// while the slots in between have no record. Before the fix the walk
+    /// only visited `leaders.keys()`, so it jumped straight to the far leader.
     #[test]
-    fn try_commit_reaches_a_leader_beyond_the_old_fixed_lookahead_cap() {
+    fn a_far_leader_is_not_committed_over_empty_slots() {
         let genesis = make_block(0, 0, vec![], "genesis");
-        let far_round: Round = 250; // > last_decided + 100 (the removed fixed cap)
+        let far_round: Round = 249; // a leader slot far above the cursor
         let far_block = make_block(0, far_round, vec![block_ref(&genesis)], "far-leader");
         let mut dag = RecordingDag::default();
         dag.insert(genesis.clone());
@@ -1289,17 +1316,59 @@ mod tests {
             committer.add_vote(far_round, voter, far_block.digest);
         }
 
-        let committed = committer
-            .try_commit(&dag)
-            .expect("a leader beyond the old cap must still be reached");
-        assert_eq!(committed.leader_round, far_round);
+        assert!(
+            committer.try_commit(&dag).is_none(),
+            "slots 3..=246 have no record: the walk must stall at slot 3"
+        );
+        assert_eq!(committer.last_decided_round(), 0);
+    }
+
+    /// The walk is not capped: a run of consecutive leader slots with quorum
+    /// commits all the way up, however far it reaches.
+    #[test]
+    fn consecutive_leaders_commit_without_a_lookahead_cap() {
+        let genesis = make_block(0, 0, vec![], "genesis");
+        let mut dag = RecordingDag::default();
+        dag.insert(genesis.clone());
+        let committer = UniversalCommitter::new(committee(4), false, 100);
+        let mut parent = genesis.clone();
+        let mut expected = Vec::new();
+        for slot in 1..=40u64 {
+            let round = slot * WAVE_LENGTH;
+            let block = make_block(
+                (slot % 4) as u16,
+                round,
+                vec![block_ref(&parent)],
+                &format!("l{round}"),
+            );
+            dag.insert(block.clone());
+            dag.set_ancestors(block.digest, vec![parent.digest]);
+            committer.update_leader(leader(round, (slot % 4) as u16, Some(block.digest)));
+            for voter in [0u16, 1, 2] {
+                committer.add_vote(round, voter, block.digest);
+            }
+            expected.push(round);
+            parent = block;
+        }
+        let mut seen = Vec::new();
+        for _ in 0..64 {
+            match committer
+                .try_commit_and_mark_durable(&dag)
+                .expect("no storage error")
+            {
+                Some(sub) => seen.push(sub.leader_round),
+                None => break,
+            }
+        }
+        assert_eq!(seen, expected);
+        assert_eq!(committer.last_decided_round(), 120);
     }
 
     // -----------------------------------------------------------------
     // #3: commit order — never commit over an undecided earlier leader
     // -----------------------------------------------------------------
 
-    /// Earlier leader (round 5, wave 1) has no quorum, later leader (round 6,
+    /// Earlier leader (round 3, wave 1) has no quorum, later leader (round 6,
     /// wave 2) has quorum. Crossing a wave boundary means the same-wave sweep
     /// cannot rescue the earlier leader. Returns (dag, committer, earlier block, later block).
     fn gap_fixture(
@@ -1311,7 +1380,7 @@ mod tests {
         StatementBlock,
     ) {
         let genesis = make_block(0, 0, vec![], "genesis");
-        let earlier = make_block(1, 5, vec![block_ref(&genesis)], "earlier-5");
+        let earlier = make_block(1, 3, vec![block_ref(&genesis)], "earlier-3");
         let later_parents = if earlier_in_history {
             vec![block_ref(&earlier)]
         } else {
@@ -1331,14 +1400,85 @@ mod tests {
         dag.set_ancestors(later.digest, later_anc);
 
         let committer = UniversalCommitter::new(committee(4), false, 100);
-        committer.update_leader(leader(5, 1, Some(earlier.digest)));
+        committer.update_leader(leader(3, 1, Some(earlier.digest)));
         committer.update_leader(leader(6, 2, Some(later.digest)));
         // Only one vote for the earlier leader: Undecided on its own.
-        committer.add_vote(5, 0, earlier.digest);
+        committer.add_vote(3, 0, earlier.digest);
         for voter in [0u16, 1, 2] {
             committer.add_vote(6, voter, later.digest);
         }
         (dag, committer, earlier, later)
+    }
+
+    /// PRO-40 (Jarvis probe 1, inverted): GC must not drop the record of a
+    /// stuck leader. Before the fix `cleanup_old_leaders` removed it and the
+    /// next walk committed round 6 over the unconfirmed round 3.
+    #[test]
+    fn pro40_cleanup_keeps_the_stalled_leader_and_the_walk_stays_stalled() {
+        let (dag, committer, earlier, _later) = gap_fixture(true);
+        assert!(committer.try_commit(&dag).is_none(), "stalls at 3");
+        committer.cleanup_old_leaders(6);
+        committer.cleanup_old_leaders(1_000);
+        assert!(
+            committer.get_leader(3).is_some(),
+            "the undecided leader record survives GC"
+        );
+        assert!(
+            committer.try_commit(&dag).is_none(),
+            "GC must not let the walk pass the stuck round 3"
+        );
+        // Quorum for 3 still resolves the stall in order.
+        committer.add_vote(3, 1, earlier.digest);
+        committer.add_vote(3, 2, earlier.digest);
+        assert_eq!(drain(&committer, &dag), vec![3, 6]);
+        // Decided records may be collected again.
+        committer.cleanup_old_leaders(1_000);
+        assert!(committer.get_all_leaders().is_empty());
+    }
+
+    /// PRO-40 (Jarvis probe 2, inverted): an expected leader slot without
+    /// any record is a stall, not a skip. This is the restart / late-join
+    /// case: the node never heard of round 3.
+    #[test]
+    fn pro40_missing_record_for_an_expected_slot_is_a_stall() {
+        let (dag, _c, _earlier, later) = gap_fixture(true);
+        let committer = UniversalCommitter::new(committee(4), false, 100);
+        committer.update_leader(leader(6, 2, Some(later.digest)));
+        for voter in [0u16, 1, 2] {
+            committer.add_vote(6, voter, later.digest);
+        }
+        assert!(
+            committer.try_commit(&dag).is_none(),
+            "round 6 must not commit while slot 3 has no record"
+        );
+        assert_eq!(committer.last_decided_round(), 0);
+    }
+
+    /// A restarted node restores its cursor from the decision index; the walk
+    /// then resumes at the next slot instead of slot 3.
+    #[test]
+    fn pro40_restored_cursor_resumes_at_the_next_slot() {
+        let (dag, _c, _earlier, later) = gap_fixture(true);
+        let committer = UniversalCommitter::new(committee(4), false, 100);
+        committer.restore_last_decided_round(3);
+        committer.restore_last_decided_round(0); // never moves backwards
+        assert_eq!(committer.last_decided_round(), 3);
+        committer.update_leader(leader(6, 2, Some(later.digest)));
+        for voter in [0u16, 1, 2] {
+            committer.add_vote(6, voter, later.digest);
+        }
+        let c = committer
+            .try_commit(&dag)
+            .expect("slot 6 follows the restored cursor");
+        assert_eq!(c.leader_round, 6);
+    }
+
+    #[test]
+    fn next_leader_slot_is_the_next_wave_start() {
+        assert_eq!(next_leader_slot(0), WAVE_LENGTH);
+        assert_eq!(next_leader_slot(1), WAVE_LENGTH);
+        assert_eq!(next_leader_slot(WAVE_LENGTH), 2 * WAVE_LENGTH);
+        assert_eq!(next_leader_slot(2 * WAVE_LENGTH - 1), 2 * WAVE_LENGTH);
     }
 
     fn drain(committer: &UniversalCommitter, dag: &RecordingDag) -> Vec<Round> {
@@ -1363,23 +1503,23 @@ mod tests {
     fn regression_no_fork_different_arrival_order() {
         for in_history in [true, false] {
             let (dag, committer, earlier, _) = gap_fixture(in_history);
-            // No commit should pass over the undecided round 5.
+            // No commit should pass over the undecided round 3.
             let first = committer
                 .try_commit_and_mark_durable(&dag)
                 .expect("no storage error");
-            assert!(first.is_none(), "chain must stall at round 5 (no quorum)");
+            assert!(first.is_none(), "chain must stall at round 3 (no quorum)");
             assert_eq!(committer.last_decided_round(), 0);
-            assert!(!committer.is_decided(5), "round 5 must remain undecided");
+            assert!(!committer.is_decided(3), "round 3 must remain undecided");
 
-            // Now give round 5 its quorum.
-            committer.add_vote(5, 1, earlier.digest);
-            committer.add_vote(5, 2, earlier.digest);
+            // Now give round 3 its quorum.
+            committer.add_vote(3, 1, earlier.digest);
+            committer.add_vote(3, 2, earlier.digest);
             let seq = drain(&committer, &dag);
-            // After quorum on round 5, both nodes must commit the same sequence.
-            assert_eq!(seq, vec![5, 6], "identical commit sequence after quorum");
+            // After quorum on round 3, both nodes must commit the same sequence.
+            assert_eq!(seq, vec![3, 6], "identical commit sequence after quorum");
             let decided = committer.get_all_decided_leaders();
             assert_eq!(
-                decided.get(&5).map(|l| l.status),
+                decided.get(&3).map(|l| l.status),
                 Some(LeaderStatus::Commit)
             );
             assert_eq!(
