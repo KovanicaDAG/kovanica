@@ -3150,7 +3150,7 @@ mod tests {
         assert_eq!(
             JAIL_ROUNDS * LEADER_INTERVAL_SECS,
             3 * EPOCH_ROUNDS * ROUND_SECS,
-            "jail = 3 epochs of wall-clock time"
+            "jail = 3 epochs of nominal wall-clock time (no skipped slots)"
         );
         assert_eq!(JAIL_ROUNDS, COMMISSION_CHANGE_COOLDOWN);
         assert_eq!(JAIL_ROUNDS * LEADER_INTERVAL_SECS, 86_400);
