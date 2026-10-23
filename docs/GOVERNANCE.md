@@ -111,14 +111,14 @@ Upgrade signaling is client-only / ledger-safe until adopted as a consensus rule
 
 ### 5.1 Signal format (planned)
 
-A validator broadcasts an upgrade-intent record (into `StatementBlock::statements`, placeholder `Vec<u8>` at `kovanica-types/src/block.rs:48-49`; VRF payload format `b"KVNC-VRF1"` already reserved at `block.rs` for wire-upgrade statements). Planned fields:
+A validator broadcasts an upgrade-intent record (into `StatementBlock::statements`, placeholder `Vec<u8>` at `kovanica-types/src/block.rs:48-49`; VRF payload format `b"KUNA-VRF1"` already reserved at `block.rs` for wire-upgrade statements). Planned fields:
 
 - `upgrade_epoch`: `u64` — epoch at which upgrade activates
 - `target_version`: `String` — e.g. `v2.1.0`
 - `change_digest`: `Hash` — BLAKE3 of the patch / binary hash
 - `signature`: `Ed25519` (64 bytes) — validator's signing key over the above
 
-Status: `StatementBlock::statements` is an empty placeholder; `compute_digest_statements()` only includes statements when `s.len() >= 137 && s[..9] == b"KVNC-VRF1"` (`block.rs`). No upgrade-intent parsing exists.
+Status: `StatementBlock::statements` is an empty placeholder; `compute_digest_statements()` only includes statements when `s.len() >= 137 && s[..9] == b"KUNA-VRF1"` (`block.rs`). No upgrade-intent parsing exists.
 
 ### 5.2 Activation rule (planned — consensus-safe only post-adoption)
 
