@@ -19,6 +19,7 @@ pub mod hash;
 pub mod light_client;
 pub mod merkle;
 pub mod signing;
+pub mod timeout;
 pub mod transaction;
 pub mod vote;
 
@@ -49,6 +50,7 @@ pub use light_client::{
 };
 pub use merkle::{MerkleProof, MerkleStep};
 pub use signing::SigningContext;
+pub use timeout::{SkipCert, Timeout};
 pub use transaction::{Transaction, TransactionKind};
 pub use vote::Vote;
 
