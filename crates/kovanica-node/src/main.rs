@@ -845,6 +845,9 @@ where
             round_duration_ms: config.round_duration_ms,
             use_mysticghost: config.use_mysticghost,
             use_vrf_leader: config.use_vrf_leader,
+            // Timeouts are bound to this chain's genesis (PRO-40 (b)), the
+            // same digest the network tag and the data-dir guard use.
+            genesis_hash: genesis_config_digest(&config)?,
             ..Default::default()
         },
         committee.clone(),
@@ -3689,6 +3692,30 @@ impl DagStoreTrait for NodeDagStore {
         let storage = self.inner.storage();
         let txn = storage.begin_read()?;
         Ok(storage.consensus().get_votes_for_round(&txn, round)?)
+    }
+
+    fn mark_round_skipped(&self, round: Round) -> Result<(), DagStoreError> {
+        self.inner.mark_round_skipped(round)
+    }
+
+    /// Persist a verified timeout (PRO-40 (b)). Unlike `put_vote`, the
+    /// engine treats a failure for its own timeout as fatal for that timeout:
+    /// it is not broadcast, so the vote-xor-timeout lock stays durable.
+    fn put_timeout(&self, timeout: &kovanica_types::Timeout) -> Result<(), DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_write()?;
+        storage.consensus().put_timeout(&txn, timeout)?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    fn get_timeouts_for_round(
+        &self,
+        round: Round,
+    ) -> Result<Vec<kovanica_types::Timeout>, DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_read()?;
+        Ok(storage.consensus().get_timeouts_for_round(&txn, round)?)
     }
 
     fn max_stored_round(&self) -> Result<Option<Round>, DagStoreError> {

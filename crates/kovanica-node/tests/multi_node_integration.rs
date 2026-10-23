@@ -55,6 +55,10 @@ fn engine_config() -> ConsensusConfig {
         late_vote_window_rounds: kovanica_types::WAVE_LENGTH,
         use_vrf_leader: false,
         use_min_digest_fork: false,
+        genesis_hash: kovanica_types::Hash::zero(),
+        // Certified skips are exercised by their own tests; with 1-5 ms
+        // rounds a 6-round T_skip would turn scheduling jitter into skips.
+        skip_timeout_rounds: 1_000_000,
     }
 }
 
