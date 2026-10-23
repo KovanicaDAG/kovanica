@@ -1732,7 +1732,8 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
 ///
 /// Set to `1` (or `true`/`yes`/`on`) only when deliberately pointing an
 /// existing data dir at a different genesis (e.g. an intentional reset on an
-/// isolated node). Every start with this set logs a warning.
+/// isolated node). Every start with this set logs a warning. Refused on
+/// chains 1 (mainnet) and 4 (testnet), see [`genesis_mismatch_override`].
 const ALLOW_GENESIS_MISMATCH_ENV: &str = "KOVANICA_ALLOW_GENESIS_MISMATCH";
 
 /// File name (inside `data_dir`) of the genesis ceremony artifact written by
@@ -1765,6 +1766,22 @@ fn parse_mismatch_override(value: Option<&str>) -> bool {
 /// True when the genesis mismatch guard is explicitly disabled.
 fn genesis_mismatch_allowed() -> bool {
     parse_mismatch_override(std::env::var(ALLOW_GENESIS_MISMATCH_ENV).ok().as_deref())
+}
+
+/// Resolve the genesis-mismatch override for `chain_id`.
+///
+/// The override is refused on mainnet (1) and the public testnet (4): a node
+/// there must never run on a data dir built for another genesis, so setting
+/// it is a deployment error, not a bypass. Dev/local chains keep it.
+fn genesis_mismatch_override(chain_id: u64, requested: bool) -> Result<bool> {
+    use kovanica_types::signing::chain_id::{MAINNET, TESTNET_V2};
+    if requested && (chain_id == MAINNET || chain_id == TESTNET_V2) {
+        anyhow::bail!(
+            "{ALLOW_GENESIS_MISMATCH_ENV} is not allowed on chain {chain_id}; \
+             unset it and fix the data dir or the genesis configuration"
+        );
+    }
+    Ok(requested)
 }
 
 /// The canonical genesis block digest, reused from the deterministic genesis
@@ -1992,7 +2009,7 @@ fn verify_genesis_json(config: &NodeConfig, canonical: &Hash, allow_mismatch: bo
 /// `genesis_validators.toml`.
 fn verify_genesis_consistency(config: &NodeConfig, state_storage: &Storage) -> Result<()> {
     let fresh = genesis_config_digest(config)?;
-    let allow_mismatch = genesis_mismatch_allowed();
+    let allow_mismatch = genesis_mismatch_override(config.chain_id, genesis_mismatch_allowed())?;
     if allow_mismatch {
         warn!("{ALLOW_GENESIS_MISMATCH_ENV} set: genesis mismatch guard disabled for this start");
     }
@@ -4731,6 +4748,22 @@ mod tests {
             storage.state().load_genesis_digest(&read).unwrap(),
             Some(stored)
         );
+    }
+
+    /// Jarvis #85 review: the override is forbidden on chains 1 and 4 and
+    /// still available on dev/local chains.
+    #[test]
+    fn genesis_mismatch_override_is_forbidden_on_mainnet_and_testnet() {
+        use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET_V2};
+        for chain in [MAINNET, TESTNET_V2] {
+            let err = genesis_mismatch_override(chain, true).unwrap_err();
+            assert!(err.to_string().contains("not allowed"), "{err:#}");
+            assert!(!genesis_mismatch_override(chain, false).unwrap());
+        }
+        for chain in [DEVNET, LOCAL] {
+            assert!(genesis_mismatch_override(chain, true).unwrap());
+            assert!(!genesis_mismatch_override(chain, false).unwrap());
+        }
     }
 
     #[test]
