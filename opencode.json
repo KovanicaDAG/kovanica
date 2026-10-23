@@ -10,7 +10,7 @@
           "@mseep/linear-mcp"
         ],
         "environment": {
-          "LINEAR_API_KEY": "{env:LINEAR_API_KEY}"
+          "LINEAR_API_KEY": "{file:~/.config/opencode/secrets/linear_api_key}"
         }
       },
       "notion": {
@@ -21,7 +21,7 @@
           "@notionhq/notion-mcp-server"
         ],
         "environment": {
-          "NOTION_TOKEN": "{env:NOTION_TOKEN}"
+          "NOTION_TOKEN": "{file:~/.config/opencode/secrets/notion_token}"
         }
       }
     }
