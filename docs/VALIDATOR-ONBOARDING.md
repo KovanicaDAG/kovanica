@@ -74,6 +74,16 @@ You will receive:
 - `genesis.json` — genesis block + initial staking state
 - `genesis_validators.toml` — validator set with VRF keys
 
+**Use the bundle byte for byte.** The node derives its network tag
+(`<chain_id>-<16 hex>`) from the chain id, the treasury address and every
+genesis file in the data directory (`validators.json`, `founder_premine.hex`,
+`funded_accounts.toml`, `genesis_validators.toml`). A node with a single
+different byte gets a different tag and never connects to the mesh. This
+applies to validators, seeds, RPC nodes, the explorer and the faucet alike.
+Check the published SHA-256 of the bundle, then compare the startup line
+`network identity: peers must share this tag … network_tag=…` with the tag
+the coordinators announce. See `docs/TESTNET-RESET.md`.
+
 ---
 
 ## 4. Node Configuration

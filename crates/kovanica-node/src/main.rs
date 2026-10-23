@@ -661,6 +661,7 @@ where
     // 4. Networking
     // ------------------------------------------------------------------
     let network_config = build_network_config(&config)?;
+    log_network_identity(&network_config);
     let (network, network_events) =
         NetworkService::new(network_config, dag_store.clone(), mempool.clone())
             .context("creating network service")?;
@@ -4218,6 +4219,21 @@ fn build_mempool_config() -> MempoolConfig {
 }
 
 /// Build the [`NetworkConfig`] from the node configuration.
+/// Log this node's network tag at startup and return it (#87 follow-up).
+///
+/// Every protocol id and topic carries the tag, and a peer with another tag
+/// is disconnected, so operators compare this line across all nodes of a
+/// chain before opening the mesh (`docs/TESTNET-RESET.md`).
+fn log_network_identity(network_config: &NetworkConfig) -> String {
+    let tag = network_config.network_id.tag();
+    info!(
+        chain_id = network_config.network_id.chain_id,
+        network_tag = %tag,
+        "network identity: peers must share this tag"
+    );
+    tag
+}
+
 fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
     let listen = to_multiaddr(&config.listen_addr)?;
 
@@ -4984,6 +5000,23 @@ mod tests {
         }
         let path = write_seed_file(dir.path(), &[9u8; 32], 0o400);
         load_validator_key(path.to_str(), true).expect("0400 is fine");
+    }
+
+    // #87 follow-up: the startup line carries exactly the tag that scopes
+    // every protocol id and topic.
+    #[test]
+    fn startup_logs_the_network_tag_that_scopes_the_protocols() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = chain_id_config(dir.path(), 4);
+        let net = build_network_config(&config).unwrap();
+        let tag = log_network_identity(&net);
+        assert_eq!(tag, net.network_id.tag());
+        assert!(tag.starts_with("4-"), "{tag}");
+        assert_eq!(tag.len(), "4-".len() + 16);
+        assert!(net
+            .network_id
+            .identify_version()
+            .starts_with(&format!("/kovanica/{tag}/")));
     }
 
     #[test]
