@@ -6,7 +6,7 @@
 Not audited. Do not use with real value. Not for production.
 Interfaces, consensus parameters, and tokenomics constants may change without notice.
 
-The chain is **Kovanica**. The native coin ticker is **KUNA** (9 decimals). All crates, binaries, environment variables, and protocol prefixes use the `kovanica` namespace. Addresses use the `kvnc<hex>dag` format: `kvnc` + 72 hex chars (32-byte Ed25519 public key + 4-byte Blake3 checksum) + `dag`. Bare or `0x`-prefixed 64-hex public keys are also accepted for backward compatibility.
+The chain is **Kovanica**. The native coin ticker is **KUNA** (9 decimals). All crates, binaries, environment variables, and protocol prefixes use the `kovanica` namespace. Addresses are 64 characters: `kvnc` + 57 base32 chars (bech32 alphabet, 285 bits: the 32-byte Ed25519 public key followed by the first 29 bits of its Blake3 hash, no padding) + `dag` (PRO-21). The legacy forms (`kvnc` + 72 hex + `dag`, and bare or `0x` 64-hex keys) are accepted only on chain 4 (testnet); `Address::parse_for_chain` enforces it.
 
 ---
 

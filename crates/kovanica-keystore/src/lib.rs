@@ -395,10 +395,15 @@ fn validate_metadata(ks: &Keystore) -> Result<()> {
             let nonce = decode_hex_field(ks.nonce.as_deref(), "nonce", NONCE_LEN)?;
             let parsed_address = address(ks)?;
             let parsed_public_key = public_key(ks)?;
-            // Accept the canonical `kvnc…dag` encoding or a bare lowercase hex
-            // address so that keystores written before the canonical format
-            // remain usable.
-            if (ks.address != parsed_address.encode() && ks.address != parsed_address.to_hex())
+            // Accept the canonical 64-character `kvnc…dag` encoding, the
+            // legacy `kvnc<hex>dag` form, or a bare lowercase hex address, so
+            // keystores written before PRO-21 (or before the canonical
+            // format) stay usable. The keystore is chain-independent; the
+            // chain-4-only rule for legacy forms applies where addresses are
+            // typed or sent (RPC, wallets), not to a file that holds the key.
+            if (ks.address != parsed_address.encode()
+                && ks.address != parsed_address.encode_legacy_hex()
+                && ks.address != parsed_address.to_hex())
                 || ks.public_key != hex::encode(parsed_public_key.as_bytes())
             {
                 bail!("v2 identity fields must use canonical `kvnc…dag` or lowercase hex");
@@ -624,6 +629,14 @@ mod tests {
         let mut legacy = serde_json::to_value(&ks).unwrap();
         legacy["address"] = serde_json::Value::String(parsed.to_hex());
         let loaded = from_value(legacy).unwrap();
+        assert_eq!(address(&loaded).unwrap(), parsed);
+
+        // New keystores carry the 64-character base32 address (PRO-21); one
+        // written with the pre-PRO-21 `kvnc<hex>dag` form stays loadable.
+        assert_eq!(ks.address.len(), 64);
+        let mut old = serde_json::to_value(&ks).unwrap();
+        old["address"] = serde_json::Value::String(parsed.encode_legacy_hex());
+        let loaded = from_value(old).unwrap();
         assert_eq!(address(&loaded).unwrap(), parsed);
     }
 
