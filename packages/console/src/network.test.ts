@@ -15,7 +15,7 @@ describe("network selection", () => {
     expect(networks.map((network) => network.id)).toEqual(["testnet", "mainnet"]);
     expect(networks.find((network) => network.id === "local")).toBeUndefined();
     expect(TESTNET.enabled).toBe(true);
-    expect(TESTNET.chainId).toBe(2);
+    expect(TESTNET.chainId).toBe(4);
     expect(MAINNET.enabled).toBe(false);
     expect(MAINNET.chainId).toBe(1);
     expect(MAINNET.faucetUrl).toBeNull();
@@ -24,7 +24,7 @@ describe("network selection", () => {
 
   it("ignores mainnet from the query string and from storage", () => {
     expect(resolveNetwork("mainnet", "mainnet", networks).id).toBe("testnet");
-    expect(resolveNetwork("mainnet", "mainnet", networks).chainId).toBe(2);
+    expect(resolveNetwork("mainnet", "mainnet", networks).chainId).toBe(4);
     expect(rejectionMessage("mainnet", networks)).toMatch(/not open yet/i);
     expect(rejectionMessage("testnet", networks)).toBeNull();
   });

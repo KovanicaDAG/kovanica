@@ -361,12 +361,11 @@ impl BlockManager {
         let mut statements = Vec::new();
         if let Some(ref kp) = *self.vrf_keypair.read() {
             let chain_id = self.signing_ctx.chain_id;
-            let input = format!("KUNA-VRF1-v1:{chain_id}:{round}:{author}:0");
+            let input = kovanica_types::block::vrf_input(chain_id, round, author);
             let proof = kovanica_crypto::vrf_prove(kp, input.as_bytes());
             statements = kovanica_crypto::encode_statements(&proof);
         }
-        if statements.len() >= 137
-            && &statements[..9] == b"KUNA-VRF1"
+        if kovanica_types::block::is_vrf_statement(&statements)
             && self.vrf_author_keys.read().contains_key(&author)
         {
             if let Some(output) = kovanica_crypto::decode_statements(&statements) {
@@ -383,7 +382,7 @@ impl BlockManager {
             round,
             &parents,
             &transactions,
-            if statements.len() >= 137 && &statements[..9] == b"KUNA-VRF1" {
+            if kovanica_types::block::is_vrf_statement(&statements) {
                 Some(&statements)
             } else {
                 None
@@ -519,9 +518,10 @@ impl BlockManager {
         // Wire-upgrade: verify VRF proof and record verified output when statements carry it.
         if let Some(output) = kovanica_crypto::decode_statements(&block.statements) {
             if let Some(vrf_pk) = self.vrf_author_keys.read().get(&block.author).copied() {
-                let input = format!(
-                    "KUNA-VRF1-v1:{}:{}:{}:{}",
-                    self.signing_ctx.chain_id, block.round, block.author, 0u64
+                let input = kovanica_types::block::vrf_input(
+                    self.signing_ctx.chain_id,
+                    block.round,
+                    block.author,
                 );
                 if kovanica_crypto::vrf_verify(&vrf_pk, input.as_bytes(), &output).is_err() {
                     return Err(BlockManagerError::InvalidBlock(

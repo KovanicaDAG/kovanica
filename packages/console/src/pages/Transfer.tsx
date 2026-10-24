@@ -5,6 +5,11 @@ import { ReviewSheet, type ReviewDetails } from "../components";
 import { useSession } from "../session";
 import { submitTransaction } from "../submit";
 
+/** Recipient bytes for a transfer on `chainId`. Legacy hex follows that chain. */
+export function transferRecipient(to: string, chainId: number): Uint8Array {
+  return parseAddress(to, chainId);
+}
+
 export function Transfer() {
   const { key, client, network } = useSession();
   const [to, setTo] = useState("");
@@ -24,7 +29,7 @@ export function Transfer() {
     setError(null);
     setHash(null);
     try {
-      const recipient = parseAddress(to);
+      const recipient = transferRecipient(to, network.chainId);
       const value = parseKuna(amount);
       if (value === 0n) throw new Error("amount must be greater than 0");
       const [nonce, rate] = await Promise.all([client.getNonce(key.address), client.estimateFee()]);

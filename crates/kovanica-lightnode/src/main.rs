@@ -239,7 +239,7 @@ fn transfer(
 ) -> Result<()> {
     let (cfg, keystore, signing_key) = open_keystore(dir, passphrase)?;
     let sender = kovanica_keystore::address(&keystore)?;
-    let to = parse_address(to, "recipient")?;
+    let to = parse_address(to, "recipient", cfg.chain_id)?;
     let rpc = RpcClient::new(rpc_override.unwrap_or(&cfg.rpc))?;
     let nonce = rpc.nonce(&sender)?;
     let transaction = signed_transfer(cfg.chain_id, &signing_key, sender, to, amount, nonce, fee);
