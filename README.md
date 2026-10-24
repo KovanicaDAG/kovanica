@@ -347,6 +347,7 @@ Detailed architectural specifications and operational runbooks:
 - **Governance Specification:** [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md)
 - **Audit Scope & Threat Model:** [`docs/AUDIT-SCOPE.md`](docs/AUDIT-SCOPE.md)
 - **Documentation Archive Index:** [`docs/archive/README.md`](docs/archive/README.md)
+- **Comprehensive 2026 Audit Report:** [`docs/AUDIT_REPORT_2026.md`](docs/AUDIT_REPORT_2026.md)
 
 ---
 
