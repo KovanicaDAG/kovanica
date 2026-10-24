@@ -8,13 +8,13 @@ It is not a network upgrade.
 > **Update 2026-10-21 (TASKLIST item 15).** The VRF implementation is the
 > `ecvrf` 0.4.3 crate (ristretto255 + SHA3) — **not** an RFC 9381 ciphersuite.
 > The proof is **96 bytes** (`Gamma(32) ‖ c(32) ‖ s(32)`), carried in
-> `StatementBlock::statements` behind the `b"KVNC-VRF1"` magic (137 bytes total)
+> `StatementBlock::statements` behind the `b"KUNA-VRF1"` magic (137 bytes total; `KVNC-VRF1` before the chain-4 reset)
 > and covered by `compute_digest_statements`. The RFC 9381 80-byte proof length
 > does **not** apply. Suite, byte layout and the full file:line map:
 > `docs/VRF-PROOF-LENGTH.md`.
 >
 > This note supersedes the "Not activated" wording below for the *statements
-> framing* only: the digest-covered `b"KVNC-VRF1"` VRF blob does exist in the
+> framing* only: the digest-covered `b"KUNA-VRF1"` VRF blob does exist in the
 > tree today. The VRF **leader-election** activation items (1-4 below) are
 > unchanged — `use_vrf_leader` still defaults to false.
 

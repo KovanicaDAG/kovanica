@@ -74,6 +74,11 @@ const STATE_SYNC_EXPORT_CACHE_TTL: Duration = Duration::from_secs(60);
 const BOOTSTRAP_RETRY_BASE: Duration = Duration::from_secs(1);
 const BOOTSTRAP_RETRY_MAX: Duration = Duration::from_secs(60);
 const BOOTSTRAP_DIAL_STAGGER: Duration = Duration::from_millis(250);
+/// Retry delay for a bootstrap address that answered with another network
+/// tag (another chain or genesis). Without it the address was redialled
+/// about once a second forever: the connection itself succeeds, which resets
+/// the backoff, and identify then drops it.
+const BOOTSTRAP_FOREIGN_RETRY: Duration = Duration::from_secs(600);
 
 /// Main network service.
 pub struct NetworkService {
@@ -120,6 +125,9 @@ pub struct NetworkService {
     /// until the node installs one; while unset, vote requests are answered
     /// with an empty vote list.
     vote_source: Mutex<Option<Arc<dyn VoteSource>>>,
+    /// Genesis hash bound into timeout signatures (PRO-40 (b)). Until the
+    /// node sets it, timeout gossip is dropped unforwarded.
+    timeout_genesis: Mutex<Option<kovanica_types::Hash>>,
     /// Short-lived cache of the last full snapshot export (see
     /// [`STATE_SYNC_EXPORT_CACHE_TTL`]).
     state_snapshot_cache: Mutex<Option<CachedSnapshotExport>>,
@@ -166,6 +174,8 @@ struct BootstrapAddress {
     pending: Option<ConnectionId>,
     peer: Option<PeerId>,
     endpoint: Option<Multiaddr>,
+    /// The connected peer reported another network tag at identify.
+    foreign: bool,
 }
 
 /// Small deterministic state machine for bootstrap-only transport maintenance.
@@ -189,6 +199,7 @@ impl BootstrapMaintenance {
                 pending: None,
                 peer: None,
                 endpoint: None,
+                foreign: false,
             })
             .collect();
         Self {
@@ -270,9 +281,25 @@ impl BootstrapMaintenance {
             if state.peer == Some(peer) {
                 state.peer = None;
                 state.endpoint = None;
-                Self::schedule_retry(index, state, now);
+                if std::mem::take(&mut state.foreign) {
+                    state.retry_at = now + BOOTSTRAP_FOREIGN_RETRY;
+                } else {
+                    Self::schedule_retry(index, state, now);
+                }
                 matched = true;
             }
+        }
+        matched
+    }
+
+    /// Mark the bootstrap address connected to `peer` as belonging to another
+    /// network, so its disconnect schedules [`BOOTSTRAP_FOREIGN_RETRY`].
+    /// Returns whether `peer` was a bootstrap peer.
+    fn mark_foreign(&mut self, peer: PeerId) -> bool {
+        let mut matched = false;
+        for state in self.addresses.iter_mut().filter(|s| s.peer == Some(peer)) {
+            state.foreign = true;
+            matched = true;
         }
         matched
     }
@@ -435,6 +462,7 @@ impl NetworkService {
                 header_index: Mutex::new(None),
                 state_snapshot_source: Mutex::new(None),
                 vote_source: Mutex::new(None),
+                timeout_genesis: Mutex::new(None),
                 state_snapshot_cache: Mutex::new(None),
                 reported_tip: Mutex::new(HashMap::new()),
             },
@@ -510,6 +538,23 @@ impl NetworkService {
     pub fn broadcast_vote(&self, vote: &Vote) -> Result<(), NetworkError> {
         let payload = bincode::serialize(vote)?;
         self.publish(topics::VOTES, payload)
+    }
+
+    /// Broadcast a leader-slot timeout (PRO-40 (b)).
+    pub fn broadcast_timeout(&self, timeout: &kovanica_types::Timeout) -> Result<(), NetworkError> {
+        let payload = bincode::serialize(&crate::TimeoutMessage::Timeout(timeout.clone()))?;
+        self.publish(topics::TIMEOUTS, payload)
+    }
+
+    /// Broadcast a skip certificate (PRO-40 (b)).
+    pub fn broadcast_skip_cert(&self, cert: &kovanica_types::SkipCert) -> Result<(), NetworkError> {
+        let payload = bincode::serialize(&crate::TimeoutMessage::SkipCert(cert.clone()))?;
+        self.publish(topics::TIMEOUTS, payload)
+    }
+
+    /// Set the genesis hash that timeout signatures are bound to.
+    pub fn set_timeout_genesis(&self, genesis_hash: kovanica_types::Hash) {
+        *lock(&self.timeout_genesis) = Some(genesis_hash);
     }
 
     /// Broadcast one locally produced commit seal.
@@ -858,6 +903,9 @@ impl NetworkService {
                     Some(topics::SYNC) => self.on_sync_message(message.source, &message.data),
                     Some(topics::VOTES) => self.on_vote_message(message.source, &message.data),
                     Some(topics::SEALS) => self.on_seal_message(message.source, &message.data),
+                    Some(topics::TIMEOUTS) => {
+                        self.on_timeout_message(message.source, &message.data)
+                    }
                     _ => {
                         debug!(
                             topic = message.topic.as_str(),
@@ -991,6 +1039,13 @@ impl NetworkService {
                     ours = %self.config.network_id.identify_version(),
                     "peer is on another network; disconnecting"
                 );
+                if lock(&self.bootstrap).mark_foreign(peer_id) {
+                    warn!(
+                        %peer_id,
+                        retry_secs = BOOTSTRAP_FOREIGN_RETRY.as_secs(),
+                        "configured bootnode is on another network; check KOVANICA_BOOTNODES"
+                    );
+                }
                 let _ = self.swarm().disconnect_peer_id(peer_id);
                 return Ok(());
             }
@@ -1566,6 +1621,48 @@ impl NetworkService {
         Verdict::Accept
     }
 
+    /// Decode a timeout or skip certificate, authenticate it and announce it
+    /// (PRO-40 (b)). The range, deduplication and quorum checks are done by
+    /// consensus.
+    fn on_timeout_message(&self, source: Option<PeerId>, payload: &[u8]) -> Verdict {
+        let message: crate::TimeoutMessage = match bincode::deserialize(payload) {
+            Ok(message) => message,
+            Err(err) => {
+                warn!(%err, "dropping malformed timeout gossip");
+                return Verdict::reject("malformed timeout");
+            }
+        };
+        let Some(peer) = source else {
+            return Verdict::reject("timeout without author");
+        };
+        let Some(genesis) = *lock(&self.timeout_genesis) else {
+            debug!("timeout genesis not set; timeout gossip dropped unforwarded");
+            return Verdict::Ignore;
+        };
+        if !self.validator.is_configured() {
+            return Verdict::Ignore;
+        }
+        let chain_id = self.mempool.signing_context().chain_id;
+        match message {
+            crate::TimeoutMessage::Timeout(timeout) => {
+                if let Err(rejection) = self.validator.verify_timeout(&timeout, chain_id, &genesis)
+                {
+                    warn!(%peer, voter = timeout.voter, round = timeout.round, %rejection, "rejected timeout gossip");
+                    return Verdict::rejected("timeout", rejection);
+                }
+                self.emit(NetworkEvent::TimeoutReceived { peer, timeout });
+            }
+            crate::TimeoutMessage::SkipCert(cert) => {
+                if let Err(rejection) = self.validator.verify_skip_cert(&cert, chain_id, &genesis) {
+                    warn!(%peer, round = cert.round, %rejection, "rejected skip certificate gossip");
+                    return Verdict::rejected("skip certificate", rejection);
+                }
+                self.emit(NetworkEvent::SkipCertReceived { peer, cert });
+            }
+        }
+        Verdict::Accept
+    }
+
     /// Decode a commit seal, check one signature, and deliver it only when
     /// local execution already stored the same header.
     ///
@@ -1889,6 +1986,61 @@ mod tests {
         assert!(failures < INVALID_BLOCK_FAILURE_LIMIT);
     }
 
+    // #87 follow-up (integration): two nodes of the same chain id with
+    // different genesis files never stay connected, and the node that has the
+    // other one as bootnode backs off for ten minutes instead of redialling.
+    #[tokio::test]
+    async fn nodes_with_different_genesis_never_peer_and_back_off() {
+        let port = free_tcp_port();
+        let genesis_a = kovanica_types::Hash([0xa1; 32]);
+        let genesis_b = kovanica_types::Hash([0xb2; 32]);
+        let (_da, receiver) = test_service_with(NetworkConfig {
+            listen_addrs: vec![address(&format!("/ip4/127.0.0.1/tcp/{port}"))],
+            bootstrap_nodes: Vec::new(),
+            network_id: crate::NetworkId::new(4, genesis_a),
+            ..NetworkConfig::default()
+        });
+        let receiver_id = receiver.local_peer_id();
+        let (_db, sender) = test_service_with(NetworkConfig {
+            listen_addrs: vec![address("/ip4/127.0.0.1/tcp/0")],
+            bootstrap_nodes: vec![address(&format!(
+                "/ip4/127.0.0.1/tcp/{port}/p2p/{receiver_id}"
+            ))],
+            network_id: crate::NetworkId::new(4, genesis_b),
+            ..NetworkConfig::default()
+        });
+        let r = receiver.clone();
+        let rx_task = tokio::spawn(async move { r.start().await });
+        let s = sender.clone();
+        let tx_task = tokio::spawn(async move { s.start().await });
+
+        // Wait until the sender's bootstrap entry is marked foreign and
+        // rescheduled (connect, identify mismatch, disconnect).
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let backed_off = {
+                let bootstrap = lock(&sender.bootstrap);
+                let state = &bootstrap.addresses[0];
+                state.peer.is_none()
+                    && state.pending.is_none()
+                    && state.retry_at > Instant::now() + Duration::from_secs(300)
+            };
+            if backed_off {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "foreign bootnode was not backed off"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(!receiver.connected_peers().contains(&sender.local_peer_id()));
+        assert!(!sender.connected_peers().contains(&receiver_id));
+        rx_task.abort();
+        tx_task.abort();
+    }
+
     fn address(text: &str) -> Multiaddr {
         text.parse().expect("valid test multiaddr")
     }
@@ -1912,6 +2064,42 @@ mod tests {
         assert_eq!(maintenance.addresses.len(), 2);
         assert_eq!(maintenance.addresses[0].address, first);
         assert_eq!(maintenance.addresses[1].address, second);
+    }
+
+    // #87 follow-up: a bootnode of another chain/genesis connects fine and is
+    // then dropped at identify. It must not be redialled every second.
+    #[test]
+    fn a_foreign_bootnode_is_retried_after_ten_minutes_not_every_second() {
+        let now = Instant::now();
+        let mut maintenance = BootstrapMaintenance::new(
+            &[
+                address("/ip4/127.0.0.1/tcp/19001"),
+                address("/ip4/127.0.0.1/tcp/19002"),
+            ],
+            2,
+            now,
+        );
+        let foreign_peer = PeerId::random();
+        let own_peer = PeerId::random();
+        for (i, peer) in [foreign_peer, own_peer].into_iter().enumerate() {
+            let at = now + BOOTSTRAP_DIAL_STAGGER * i as u32;
+            let (index, addr) = maintenance.due_address(at).expect("dial due");
+            maintenance.set_attempt(index, test_id(10 + i));
+            assert!(maintenance.establish_attempt(test_id(10 + i), peer, addr));
+        }
+        assert!(maintenance.mark_foreign(foreign_peer));
+        assert!(
+            !maintenance.mark_foreign(PeerId::random()),
+            "not a bootnode"
+        );
+        assert!(maintenance.peer_disconnected(foreign_peer, 0, now));
+        assert!(maintenance.peer_disconnected(own_peer, 0, now));
+        assert_eq!(
+            maintenance.addresses[0].retry_at,
+            now + BOOTSTRAP_FOREIGN_RETRY
+        );
+        assert!(maintenance.addresses[1].retry_at < now + BOOTSTRAP_RETRY_MAX);
+        assert!(!maintenance.addresses[0].foreign, "flag is consumed");
     }
 
     #[test]
@@ -2158,6 +2346,80 @@ mod tests {
             NetworkEvent::VoteReceived { vote: got, .. } => assert_eq!(got, vote),
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    fn signed_timeout(
+        key: &kovanica_types::SigningKey,
+        voter: u16,
+        round: u64,
+        genesis: &kovanica_types::Hash,
+    ) -> kovanica_types::Timeout {
+        let mut t = kovanica_types::Timeout {
+            round,
+            voter,
+            signature: kovanica_types::Signature([0; 64]),
+        };
+        t.signature = kovanica_crypto::sign(
+            key,
+            &t.signature_data(test_support::TEST_CTX.chain_id, genesis),
+        );
+        t
+    }
+
+    // PRO-40 (b): timeouts and skip certificates are authenticated at the
+    // gossip edge against this chain's genesis.
+    #[tokio::test]
+    async fn timeout_gossip_is_authenticated_against_the_genesis() {
+        let (_dir, service, mut events, signers) = validating_service();
+        let genesis = kovanica_types::Hash([3; 32]);
+        let timeout = signed_timeout(&signers[1], 1, 3, &genesis);
+        let payload = bincode::serialize(&crate::TimeoutMessage::Timeout(timeout.clone())).unwrap();
+        assert_eq!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Ignore,
+            "no genesis set: dropped unforwarded"
+        );
+        service.set_timeout_genesis(genesis);
+        assert_eq!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Accept
+        );
+        match events.try_recv().expect("timeout event") {
+            NetworkEvent::TimeoutReceived { timeout: got, .. } => assert_eq!(got, timeout),
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let foreign = signed_timeout(&signers[1], 1, 3, &kovanica_types::Hash([4; 32]));
+        let payload = bincode::serialize(&crate::TimeoutMessage::Timeout(foreign)).unwrap();
+        assert!(matches!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Reject(_)
+        ));
+
+        let cert = kovanica_types::SkipCert {
+            round: 3,
+            timeouts: (0..3u16)
+                .map(|v| signed_timeout(&signers[v as usize], v, 3, &genesis))
+                .collect(),
+        };
+        let payload = bincode::serialize(&crate::TimeoutMessage::SkipCert(cert.clone())).unwrap();
+        assert_eq!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Accept
+        );
+        match events.try_recv().expect("cert event") {
+            NetworkEvent::SkipCertReceived { cert: got, .. } => assert_eq!(got, cert),
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let mut dup = cert;
+        dup.timeouts.push(dup.timeouts[0].clone());
+        let payload = bincode::serialize(&crate::TimeoutMessage::SkipCert(dup)).unwrap();
+        assert!(matches!(
+            service.on_timeout_message(Some(PeerId::random()), &payload),
+            Verdict::Reject(_)
+        ));
+        assert!(events.try_recv().is_err());
     }
 
     /// B1d (PRO-B1d) regression: a vote cast in a later epoch must pass the

@@ -485,7 +485,9 @@ pub fn assemble_staking(
         let Some(text) = row.get("address").and_then(Value::as_str) else {
             continue;
         };
-        let Ok(row_address) = text.trim().parse::<Address>() else {
+        let Ok(row_address) =
+            Address::parse_for_chain(text.trim(), kovanica_types::signing::chain_id::LOCAL)
+        else {
             continue;
         };
         if row_address != address {
@@ -503,7 +505,10 @@ pub fn assemble_staking(
             payout = row
                 .get("payout_address")
                 .and_then(Value::as_str)
-                .and_then(|text| text.trim().parse::<Address>().ok());
+                .and_then(|text| {
+                    Address::parse_for_chain(text.trim(), kovanica_types::signing::chain_id::LOCAL)
+                        .ok()
+                });
         }
     }
     let total_covers_own = total >= own;
@@ -587,8 +592,13 @@ fn staking_rows(report: &StakingReport) -> Vec<(&'static str, String)> {
 }
 
 /// `kovanica staking <address>` — own stake, delegations, and rewards.
-pub async fn staking(client: &RpcClient, address: &str, json_output: bool) -> Result<()> {
-    let address = parse_address(address, "address")?;
+pub async fn staking(
+    client: &RpcClient,
+    address: &str,
+    chain_id: Option<u64>,
+    json_output: bool,
+) -> Result<()> {
+    let address = parse_address(address, "address", chain_id.unwrap_or(0))?;
     let encoded = address.to_string();
     let total = parse_quantity(
         &client
@@ -612,8 +622,15 @@ pub async fn staking(client: &RpcClient, address: &str, json_output: bool) -> Re
 }
 
 /// `kovanica balance <address>` — native balance, displayed in KUNA.
-pub async fn balance(client: &RpcClient, address: &str, json_output: bool) -> Result<()> {
-    let address = parse_address(address, "address")?;
+pub async fn balance(
+    client: &RpcClient,
+    address: &str,
+    chain_id: Option<u64>,
+    json_output: bool,
+) -> Result<()> {
+    // No selected chain is not a dev chain: legacy hex is refused. The
+    // canonical form still parses.
+    let address = parse_address(address, "address", chain_id.unwrap_or(0))?;
     let value = client
         .call("kovanica_getBalance", json!([address.to_string()]))
         .await?;

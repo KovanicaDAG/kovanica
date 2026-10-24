@@ -249,7 +249,7 @@ pub fn sign_transfer_raw(
 ) -> Result<String, LightFfiError> {
     let passphrase = SecretString::new(passphrase);
     let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
-    let to = parse_address(&to)?;
+    let to = parse_address(&to, chain_id)?;
     priced_raw(fee_rate, |fee| {
         sign_transfer(chain_id, &signing_key, sender, to, amount, nonce, fee)
     })
@@ -275,7 +275,7 @@ pub fn sign_call_raw(
 ) -> Result<String, LightFfiError> {
     let passphrase = SecretString::new(passphrase);
     let (signing_key, sender) = open_signing_key(&keystore_json, passphrase.as_str())?;
-    let contract = parse_address(&contract)?;
+    let contract = parse_address(&contract, chain_id)?;
     let args = parse_hex_bytes(&args_hex, "args")?;
     priced_raw(fee_rate, |fee| {
         sign_call(
@@ -416,8 +416,8 @@ fn vrf_key(signing_key: &SigningKey) -> Result<VRFKeyPair, LightFfiError> {
     VRFKeyPair::from_secret(secret).map_err(failed)
 }
 
-fn parse_address(value: &str) -> Result<Address, LightFfiError> {
-    kovanica_keystore::parse_address(value, "address").map_err(failed)
+fn parse_address(value: &str, chain_id: u64) -> Result<Address, LightFfiError> {
+    kovanica_keystore::parse_address(value, "address", chain_id).map_err(failed)
 }
 
 fn parse_beacon(value: &str) -> Result<Hash, LightFfiError> {
@@ -1214,6 +1214,120 @@ mod tests {
             1,
         )
         .is_err());
+    }
+
+    /// `sign_transfer_raw` and `sign_call_raw` pass `chain_id` into `parse_address`.
+    /// Legacy hex is accepted only on chains 3, 4, and 1337.
+    #[test]
+    fn transfer_and_call_addresses_follow_the_chain_policy() {
+        let key = Address([0x33; 32]);
+        let canonical = key.to_string();
+        let legacy = key.encode_legacy_hex();
+        let bare = key.to_hex();
+        let prefixed = format!("0x{bare}");
+        let forms = [legacy.as_str(), bare.as_str(), prefixed.as_str()];
+        let allowed = [chain_id::DEVNET, chain_id::TESTNET_V2, chain_id::LOCAL];
+        let refused = [chain_id::MAINNET, chain_id::TESTNET, 0, 42];
+
+        for chain in allowed {
+            for form in forms {
+                assert_eq!(
+                    parse_address(form, chain).unwrap(),
+                    key,
+                    "{form} on {chain}"
+                );
+            }
+            assert_eq!(parse_address(&canonical, chain).unwrap(), key);
+        }
+        for chain in refused {
+            for form in forms {
+                assert!(
+                    parse_address(form, chain).is_err(),
+                    "{form} must be refused on {chain}"
+                );
+            }
+            assert_eq!(parse_address(&canonical, chain).unwrap(), key);
+        }
+
+        let created = create_wallet("pw".to_string()).unwrap();
+        let transfer = sign_transfer_raw(
+            created.keystore_json.clone(),
+            "pw".to_string(),
+            chain_id::TESTNET_V2,
+            legacy.clone(),
+            1,
+            0,
+            1,
+        )
+        .unwrap();
+        let tx = decode_signed(&transfer);
+        assert!(matches!(
+            tx.kind,
+            kovanica_types::TransactionKind::Transfer { to, amount: 1 } if to == key
+        ));
+
+        let call = sign_call_raw(
+            created.keystore_json.clone(),
+            "pw".to_string(),
+            chain_id::LOCAL,
+            prefixed.clone(),
+            0,
+            "m".to_string(),
+            "01".to_string(),
+            1,
+            0,
+            1,
+        )
+        .unwrap();
+        let tx = decode_signed(&call);
+        assert!(matches!(
+            tx.kind,
+            kovanica_types::TransactionKind::Call { contract, .. } if contract == key
+        ));
+
+        let mainnet = sign_transfer_raw(
+            created.keystore_json.clone(),
+            "pw".to_string(),
+            chain_id::MAINNET,
+            canonical,
+            1,
+            0,
+            1,
+        )
+        .unwrap();
+        let tx = decode_signed(&mainnet);
+        assert!(matches!(
+            tx.kind,
+            kovanica_types::TransactionKind::Transfer { to, .. } if to == key
+        ));
+        assert!(sign_transfer_raw(
+            created.keystore_json.clone(),
+            "pw".to_string(),
+            chain_id::MAINNET,
+            bare.clone(),
+            1,
+            0,
+            1,
+        )
+        .is_err());
+        assert!(sign_call_raw(
+            created.keystore_json,
+            "pw".to_string(),
+            chain_id::TESTNET,
+            legacy.clone(),
+            0,
+            "m".to_string(),
+            "01".to_string(),
+            1,
+            0,
+            1,
+        )
+        .is_err());
+    }
+
+    fn decode_signed(raw: &str) -> Transaction {
+        let bytes = hex::decode(raw.strip_prefix("0x").unwrap()).unwrap();
+        bincode::deserialize(&bytes).unwrap()
     }
 
     fn created_wallet_json() -> String {

@@ -296,7 +296,10 @@ async fn wallet_history(app: tauri::AppHandle) -> Result<history::HistoryPage, S
                 .address
                 .ok_or_else(|| "Create or import a wallet first.".to_string())
         })?;
-        history::reported_history(&rpc, &address)
+        let chain_id = fetch_status(&rpc, &url)
+            .ok()
+            .and_then(|status| history::proven_chain_id(status.chain_id.as_deref()));
+        history::reported_history(&rpc, &address, chain_id)
     })
     .await
     .map_err(|_| "The history request was interrupted.".to_string())?

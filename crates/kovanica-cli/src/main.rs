@@ -427,8 +427,8 @@ async fn main() -> Result<()> {
         }
         Commands::Transfer(args) => cmd_transfer(&client, chain_id, args, json).await,
         Commands::Status | Commands::Info => node::status(&client, chain_id, json).await,
-        Commands::Balance { address } => node::balance(&client, &address, json).await,
-        Commands::Staking { address } => node::staking(&client, &address, json).await,
+        Commands::Balance { address } => node::balance(&client, &address, chain_id, json).await,
+        Commands::Staking { address } => node::staking(&client, &address, chain_id, json).await,
         Commands::Stake(args) => cmd_stake(&client, chain_id, args, json).await,
         Commands::Unstake(args) => cmd_unstake(&client, chain_id, args, json).await,
         Commands::RegisterLightNode(args) => {
@@ -453,16 +453,22 @@ async fn main() -> Result<()> {
         Commands::Deploy(args) => cmd_deploy(&client, chain_id, args, json).await,
         Commands::Call(args) => cmd_call(&client, chain_id, args, json).await,
         Commands::Htlc { command } => {
-            contracts::run(&client, ContractCommand::Htlc { command }, json).await
+            contracts::run(&client, chain_id, ContractCommand::Htlc { command }, json).await
         }
         Commands::Vault { command } => {
-            contracts::run(&client, ContractCommand::Vault { command }, json).await
+            contracts::run(&client, chain_id, ContractCommand::Vault { command }, json).await
         }
         Commands::Multisig { command } => {
-            contracts::run(&client, ContractCommand::Multisig { command }, json).await
+            contracts::run(
+                &client,
+                chain_id,
+                ContractCommand::Multisig { command },
+                json,
+            )
+            .await
         }
         Commands::Token { command } => {
-            contracts::run(&client, ContractCommand::Token { command }, json).await
+            contracts::run(&client, chain_id, ContractCommand::Token { command }, json).await
         }
         Commands::Comms { command } => comms::run(command, json),
     }
@@ -597,7 +603,7 @@ async fn cmd_transfer(
     let password = prompt_keystore_password(&keystore)?;
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let sender = wallet::address(&keystore)?;
-    let recipient = wallet::parse_address(&args.to, "to")?;
+    let recipient = wallet::parse_address(&args.to, "to", ctx.chain_id)?;
 
     // The account nonce is the next unused nonce, so it is used as-is.
     let nonce_value = client
@@ -796,7 +802,8 @@ async fn cmd_delegate(
     args: DelegateArgs,
     json_output: bool,
 ) -> Result<()> {
-    let validator = wallet::parse_address(&args.validator, "validator")?;
+    let chain = tx::signing_context(chain_id)?.chain_id;
+    let validator = wallet::parse_address(&args.validator, "validator", chain)?;
     let (tx_hash, sender, nonce) = sign_and_submit_self(
         client,
         chain_id,
@@ -835,8 +842,9 @@ async fn cmd_claim_rewards(
     args: ClaimRewardsArgs,
     json_output: bool,
 ) -> Result<()> {
+    let chain = tx::signing_context(chain_id)?.chain_id;
     let validator = match args.validator {
-        Some(value) => Some(wallet::parse_address(&value, "validator")?),
+        Some(value) => Some(wallet::parse_address(&value, "validator", chain)?),
         None => None,
     };
     let (tx_hash, sender, nonce) = sign_and_submit_self(
@@ -880,7 +888,8 @@ async fn cmd_set_commission(
     if args.commission_bps > 10_000 {
         anyhow::bail!("commission_bps must be <= 10000 (100%)");
     }
-    let validator = wallet::parse_address(&args.validator, "validator")?;
+    let chain = tx::signing_context(chain_id)?.chain_id;
+    let validator = wallet::parse_address(&args.validator, "validator", chain)?;
     let (tx_hash, sender, nonce) = sign_and_submit_self(
         client,
         chain_id,
@@ -1007,7 +1016,8 @@ async fn cmd_call(
     args: CallArgs,
     json_output: bool,
 ) -> Result<()> {
-    let contract = wallet::parse_address(&args.contract, "contract")?;
+    let chain = tx::signing_context(chain_id)?.chain_id;
+    let contract = wallet::parse_address(&args.contract, "contract", chain)?;
     let method = args.method.clone();
     let args_bytes = {
         let json_val: serde_json::Value = serde_json::from_str(&args.args)

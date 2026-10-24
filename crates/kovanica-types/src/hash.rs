@@ -108,4 +108,86 @@ mod domain_tests {
             }
         }
     }
+
+    /// `new_keyed` uses the tag as a 32-byte BLAKE3 key and truncates
+    /// anything longer, so two long tags with the same 32-byte prefix would
+    /// silently collide. Every tag must fit.
+    #[test]
+    fn hash_domains_fit_the_32_byte_key() {
+        for d in [
+            Hash::DOMAIN_BLOCK,
+            Hash::DOMAIN_TX,
+            Hash::DOMAIN_DIGEST,
+            Hash::DOMAIN_MERKLE,
+            Hash::DOMAIN_HEADER,
+            Hash::DOMAIN_ACCOUNT,
+            Hash::DOMAIN_ACCOUNT_EMPTY,
+            Hash::DOMAIN_SMT,
+            Hash::DOMAIN_COMMITTEE,
+            Hash::DOMAIN_EVIDENCE,
+        ] {
+            assert!(
+                d.len() <= 32,
+                "{} is longer than 32 B",
+                String::from_utf8_lossy(d)
+            );
+        }
+    }
+
+    /// Known-answer digests: `new_keyed(domain, b"kovanica-kat")`, computed
+    /// independently (Python `blake3`, key = tag zero-padded to 32 B). A
+    /// change to a tag or to the keying shows up here.
+    #[test]
+    fn hash_domain_known_answers() {
+        let cases: [(&[u8], &str); 10] = [
+            (
+                Hash::DOMAIN_BLOCK,
+                "a29004f9acd71f82fbac7162cbad0cda4e3ef6c8d8f2717dd2c91bce7a7a650f",
+            ),
+            (
+                Hash::DOMAIN_TX,
+                "59fc894f29e7e64f83760f04f8a522fa3bb22a10c592ad3a51928d0cc70b8c5d",
+            ),
+            (
+                Hash::DOMAIN_DIGEST,
+                "89803e36915e574052298400377ae4c79e493756ba23828bb186146e76c6e612",
+            ),
+            (
+                Hash::DOMAIN_MERKLE,
+                "f57fb2d2c1a213fcddd4f61ab2925b963f7d8541e43b0e01adcf74379ca7e251",
+            ),
+            (
+                Hash::DOMAIN_HEADER,
+                "a2abb5e9b5ae67a2b5c55573ebc35eab86e3fad707c59c67de29abe8f342cf20",
+            ),
+            (
+                Hash::DOMAIN_ACCOUNT,
+                "cad10474fa0dae6e2fb200f5bce4400853e82da907bda26ae86013352c024889",
+            ),
+            (
+                Hash::DOMAIN_ACCOUNT_EMPTY,
+                "9694849c8c5b7de5bbd0b6d510442c90381a493e78ad19ce677241cfa476614f",
+            ),
+            (
+                Hash::DOMAIN_SMT,
+                "2ff0c13806b0dcc20b792799fb7b5de2a44f223b24dd14edb72d29923cf1ae7b",
+            ),
+            (
+                Hash::DOMAIN_COMMITTEE,
+                "8d0f7b7c55d1245f87ef605d186925aaa807e4b07abc996567b0fcc9b8b3f2a8",
+            ),
+            (
+                Hash::DOMAIN_EVIDENCE,
+                "e53ec284e86d16e720e16f0d5b80d7916853b9a7d71b15b24b40f44f31b47678",
+            ),
+        ];
+        for (domain, hex) in cases {
+            assert_eq!(
+                Hash::new_keyed(domain, b"kovanica-kat").to_hex(),
+                hex,
+                "{}",
+                String::from_utf8_lossy(domain)
+            );
+        }
+    }
 }

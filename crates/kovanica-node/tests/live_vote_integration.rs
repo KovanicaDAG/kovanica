@@ -414,7 +414,7 @@ async fn get_balance(client: &Client, port: u16, address: &Address) -> Result<u6
         client,
         port,
         "kovanica_getBalance",
-        json!([hex::encode(address.0)]),
+        json!([address.to_string()]),
     )
     .await?;
     parse_quantity(
