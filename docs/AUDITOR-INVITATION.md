@@ -42,7 +42,7 @@ Referiraj `AUDIT_REPORT.md` (§2, §3, §4) i `docs/AUDIT-CHECKLIST.md`.
 
 ### P2 — staking, upravljanje, operacija (blokira Phase 18 / 25)
 8. **Staking ekonomija**: `crates/kovanica-staking/src/lib.rs` — `bond`/`unbond`/`commission`/`slash` pravila; potvrditi da `MIN_VALIDATOR_STAKE = 50_000 KUNA` i `UNBONDING_ROUNDS` ne dozvoljavaju napade na aktivni skup (15–21).
-9. **Governance (Phase 25)**: `docs/GOVERNANCE.md` + `docs/B-TREASURY-PROPOSAL.md` — provjeriti da `TreasuryProposal` i `vote_on_proposal()` ne mijenjaju konsenzus pravila (trenutno `docs-only` / `client-only`); aktivacija tek nakon Phase 18.
+9. **Governance (Phase 25)**: `docs/GOVERNANCE.md` + `docs/archive/B-TREASURY-PROPOSAL.md` — provjeriti da `TreasuryProposal` i `vote_on_proposal()` ne mijenjaju konsenzus pravila (trenutno `docs-only` / `client-only`); aktivacija tek nakon Phase 18.
 10. **CLI delegate / claim**: `kovanica-cli/src/main.rs` (`delegate_skeleton`, `claim_rewards_skeleton`); potvrditi da `HTLC` claim (`A8.2-DELEGATION-SKELETON.md`) ne uvodi neodređenost.
 
 ---
@@ -62,7 +62,7 @@ Referiraj `AUDIT_REPORT.md` (§2, §3, §4) i `docs/AUDIT-CHECKLIST.md`.
 ## Rok i kontakt
 
 - Preporučeni rok revizije: **2 tjedna** nakon primanja ovog poziva.
-- Materijal za pregled: ovaj repo (`kovanica`), `docs/AUDIT-CHECKLIST.md`, `AUDIT_REPORT.md`, `docs/GOVERNANCE.md`, `docs/B-TREASURY-PROPOSAL.md`, `docs/A8.2-DELEGATION-SKELETON.md`, `docs/EXECUTION-GAS-SKELETON.md`, `crates/kovanica-staking/src/lib.rs`, `crates/kovanica-consensus/src/engine.rs`, `crates/kovanica-execution/src/lib.rs`.
+- Materijal za pregled: ovaj repo (`kovanica`), `docs/AUDIT-CHECKLIST.md`, `AUDIT_REPORT.md`, `docs/GOVERNANCE.md`, `docs/archive/B-TREASURY-PROPOSAL.md`, `docs/GAS_SCHEDULE.md`, `crates/kovanica-staking/src/lib.rs`, `crates/kovanica-consensus/src/engine.rs`, `crates/kovanica-execution/src/lib.rs`.
 - Koordinacija: `kovanica-specialist` (interne); eksterni auditor mora biti neovisan (nema veze s `kovanica-protocol` ili starijim Kovanica repo-ima).
 
 ---

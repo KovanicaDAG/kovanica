@@ -48,7 +48,7 @@ kovanica-cli key generate --output validator.keystore --with-vrf
 kovanica-cli key inspect --keystore validator.keystore
 ```
 
-> **Why VRF?** Kovanica uses stake-weighted VRF leader selection. The implementation is the `ecvrf` 0.4.3 crate (ristretto255 group + SHA3-512 hash-to-curve, 32-byte output, 96-byte proof) — it is **not** an RFC 9381 ciphersuite, despite the older "ECVRF-ED25519-SHA512-Elligator2" label that used to appear here. See `docs/VRF-PROOF-LENGTH.md` for the suite, the byte layout and why the RFC 9381 80-byte proof length does not apply. The VRF public key must be registered at genesis.
+> **Why VRF?** Kovanica uses stake-weighted VRF leader selection. The implementation is the `ecvrf` 0.4.3 crate (ristretto255 group + SHA3-512 hash-to-curve, 32-byte output, 96-byte proof) — it is **not** an RFC 9381 ciphersuite, despite the older "ECVRF-ED25519-SHA512-Elligator2" label that used to appear here. See `docs/archive/VRF-PROOF-LENGTH.md` for the suite, the byte layout and why the RFC 9381 80-byte proof length does not apply. The VRF public key must be registered at genesis.
 
 ---
 
