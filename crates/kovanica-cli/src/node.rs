@@ -96,8 +96,15 @@ pub async fn status(client: &RpcClient, json_output: bool) -> Result<()> {
 }
 
 /// `kovanica balance <address>` — native KUNA balance in atoms.
-pub async fn balance(client: &RpcClient, address: &str, json_output: bool) -> Result<()> {
-    let address = parse_address(address, "address")?;
+pub async fn balance(
+    client: &RpcClient,
+    address: &str,
+    chain_id: Option<u64>,
+    json_output: bool,
+) -> Result<()> {
+    // No selected chain is not a dev chain: legacy hex is refused. The
+    // canonical form still parses.
+    let address = parse_address(address, "address", chain_id.unwrap_or(0))?;
     let value = client
         .call("kovanica_getBalance", json!([address.to_string()]))
         .await?;

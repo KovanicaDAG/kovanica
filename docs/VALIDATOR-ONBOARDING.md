@@ -74,6 +74,36 @@ You will receive:
 - `genesis.json` — genesis block + initial staking state
 - `genesis_validators.toml` — validator set with VRF keys
 
+**Use the bundle byte for byte.** The node derives its network tag
+(`<chain_id>-<16 hex>`) from the chain id, the treasury address, the binary's
+genesis-block digest, and every genesis file in the data directory
+(`validators.json`, `founder_premine.hex`, `funded_accounts.toml`,
+`genesis_validators.toml`). Every node of the chain needs the same `chain_id`,
+the same binary and the same file set. A missing file changes the tag: a node
+that lacks one of those files does not match a node that has it. The treasury
+comes from `treasury_address` in the config, or from `KOVANICA_TREASURY_ADDRESS`
+when that variable is set. If both are unset, the all-zero address goes into
+the digest.
+
+This applies to validators, seeds, RPC nodes, the explorer and the faucet
+alike. In the data directory, before the first start:
+
+```sh
+sha256sum -c SHA256SUMS
+kovanica-node network-tag --config kovanica.toml
+```
+
+`SHA256SUMS` lists the bundle files. Off mainnet that can include
+`funded_accounts.toml`. On mainnet (chain 1) the file is forbidden, so the
+checksum list must not name it. `network-tag` prints the tag
+without starting a node; it must equal the tag published with the checksums.
+The publication place is chosen when the bundle is cut (it is not named in
+this repo). A running node returns the same value as `networkTag` on
+`kovanica_syncStatus` and logs
+`network identity: peers must share this tag … network_tag=…`.
+See `docs/TESTNET-RESET.md`. How the ceremony assembles the files is in
+`docs/GENESIS-CEREMONY.md`.
+
 ---
 
 ## 4. Node Configuration

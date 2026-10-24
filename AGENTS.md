@@ -6,7 +6,7 @@
 
 **Naming (zaključano):** chain = **Kovanica**, native coin ticker = **KUNA** (9 decimals),
 codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-node`, `KOVANICA_*`). Adresa je
-`kvnc<hex>dag`. Nikad ne koristi `KVNC` kao naziv valute.
+`kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3, 4 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Nikad ne koristi `KVNC` kao naziv valute.
 
 | Layer              | Choice                                      |
 |--------------------|---------------------------------------------|
@@ -41,7 +41,7 @@ codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-no
 | Subsidy era length        | **8 100 000** committed leader blocks          |
 | Decay                     | **× 3/4** each era                             |
 | Round / leader interval   | round 4 s → committed leader svakih 12 s       |
-| Epoch (validator rotacija)| 7 200 leader blokova (≈1 dan), neovisno o eri   |
+| Epoch (validator rotacija)| epoch = 8 h = 7 200 DAG rundi = 2 400 leader visina (committed leader svakih 12 s), neovisno o eri (PRO-37) |
 | Active validators         | 15–21                                          |
 | Min validator stake       | 50 000 KUNA                                    |
 

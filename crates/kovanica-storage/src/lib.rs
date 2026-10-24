@@ -198,6 +198,15 @@ pub mod tables {
     /// exists to uphold: if a node can serve the block for round R, it can serve
     /// the votes for round R.
     pub const VOTES: TableDefinition<(u64, u16), Vec<u8>> = TableDefinition::new("votes");
+
+    /// Accepted leader-slot timeouts: (round, voter) → bincode `Timeout`
+    /// (PRO-40 (b)).
+    ///
+    /// Holds this node's own timeouts — written before they are broadcast, so
+    /// a restart can never vote for a slot it already timed out — and the
+    /// verified timeouts of other validators, from which a skip certificate
+    /// can be rebuilt and served to a peer.
+    pub const TIMEOUTS: TableDefinition<(u64, u16), Vec<u8>> = TableDefinition::new("timeouts");
 }
 
 // Helper trait for bincode serialization
