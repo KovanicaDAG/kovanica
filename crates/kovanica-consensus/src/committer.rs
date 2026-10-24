@@ -6,6 +6,7 @@
 
 use crate::engine::{DagStoreTrait, VoteRejection};
 use crate::ghostdag_scoped::ColouringResult;
+use crate::is_leader_round;
 use crate::metrics::{record_pruned_blocks, record_pruned_waves};
 use crate::mysticghost::{order_committed_wave, MysticGhostConfig, MysticGhostOrder};
 use crate::types::{CommitResult, CommitteeInfo, LeaderInfo, LeaderStatus};
@@ -13,7 +14,7 @@ use kovanica_types::{
     block::StatementBlock, hash::Hash, AuthorityIndex, CommittedSubDag, Round, WAVE_LENGTH,
 };
 use parking_lot::{Mutex, RwLock};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -137,7 +138,7 @@ impl BaseCommitter {
 ///
 /// Leader slots are the rounds at offset 0 of a wave (`round % WAVE_LENGTH ==
 /// 0`), and round 0 is genesis, so the first slot is `WAVE_LENGTH`.
-fn next_leader_slot(round: Round) -> Round {
+pub(crate) fn next_leader_slot(round: Round) -> Round {
     (round / WAVE_LENGTH + 1).saturating_mul(WAVE_LENGTH)
 }
 
@@ -227,6 +228,10 @@ pub struct UniversalCommitter {
     decided_leaders: RwLock<HashMap<Round, LeaderInfo>>,
     /// Serializes durable commit attempts and their in-memory publication.
     durable_commit_lock: Mutex<()>,
+    /// Leader slots above the cursor with a verified skip certificate
+    /// (PRO-40 (b)). Applied in slot order by
+    /// [`Self::try_skip_and_mark_durable`].
+    skip_certified: RwLock<BTreeSet<Round>>,
 }
 
 impl UniversalCommitter {
@@ -240,6 +245,7 @@ impl UniversalCommitter {
             leaders: RwLock::new(HashMap::new()),
             decided_leaders: RwLock::new(HashMap::new()),
             durable_commit_lock: Mutex::new(()),
+            skip_certified: RwLock::new(BTreeSet::new()),
         }
     }
 
@@ -480,6 +486,83 @@ impl UniversalCommitter {
         if round > *last {
             *last = round;
         }
+    }
+
+    /// Record that `round` has a verified skip certificate (PRO-40 (b)).
+    ///
+    /// The caller has verified the certificate (`crate::skip`). Nothing moves
+    /// here: the skip is applied by [`Self::try_skip_and_mark_durable`] once
+    /// `round` is the first undecided slot, so skips and commits stay in slot
+    /// order. A round at or below the cursor is ignored.
+    pub fn record_skip_certificate(&self, round: Round) {
+        if is_leader_round(round) && round > self.last_decided_round() {
+            self.skip_certified.write().insert(round);
+        }
+    }
+
+    /// Whether a verified skip certificate is held for `round`.
+    pub fn has_skip_certificate(&self, round: Round) -> bool {
+        self.skip_certified.read().contains(&round)
+    }
+
+    /// Durably skip the first undecided leader slot if it has a skip
+    /// certificate (PRO-40 (b)). Returns the skipped round.
+    ///
+    /// This is the only path besides a commit that moves the cursor, and it
+    /// needs a quorum certificate: no node passes over a slot on a local
+    /// timeout. A slot that has its own vote quorum is committed, never
+    /// skipped (with honest signers both cannot exist; this is defensive).
+    ///
+    /// The skip is written to the decided-round index as a decision with no
+    /// leaders before the cursor moves, so a restart resumes after it and
+    /// replay commits nothing for it. The skipped leader block, if any, stays
+    /// in the DAG and is ordered into the next committed leader's sub-DAG.
+    pub fn try_skip_and_mark_durable<D: DagStoreTrait>(
+        &self,
+        dag_store: &D,
+    ) -> Result<Option<Round>, kovanica_dag::DagStoreError> {
+        let _guard = self.durable_commit_lock.lock();
+        let slot = next_leader_slot(self.last_decided_round());
+        if !self.skip_certified.read().contains(&slot) {
+            return Ok(None);
+        }
+        let existing = self.leaders.read().get(&slot).cloned();
+        if let Some(info) = existing.as_ref() {
+            if self.base.try_direct_decide(dag_store, info) == LeaderStatus::Commit {
+                warn!(
+                    round = slot,
+                    "slot has both a vote quorum and a skip certificate; committing, not skipping"
+                );
+                return Ok(None);
+            }
+        }
+        dag_store.mark_round_skipped(slot)?;
+        let author = existing.as_ref().map(|l| l.author).unwrap_or_default();
+        self.decided_leaders.write().insert(
+            slot,
+            LeaderInfo {
+                round: slot,
+                author,
+                block_hash: existing.and_then(|l| l.block_hash),
+                status: LeaderStatus::Skip,
+                votes: HashMap::new(),
+            },
+        );
+        {
+            let mut last = self.last_decided_round.write();
+            if slot > *last {
+                *last = slot;
+            }
+        }
+        {
+            let mut certified = self.skip_certified.write();
+            *certified = certified.split_off(&(slot + 1));
+        }
+        info!(
+            round = slot,
+            "leader slot skipped with a quorum certificate"
+        );
+        Ok(Some(slot))
     }
 
     /// Construct the next committed sub-DAG candidate without publishing it.

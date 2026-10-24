@@ -246,7 +246,7 @@ async fn main() -> Result<()> {
     let client = Arc::new(RpcClient::new(args.rpc_url.clone()));
 
     let dest = match &args.dest {
-        Some(s) => wallet::parse_address(s, "dest")?,
+        Some(s) => wallet::parse_address(s, "dest", args.chain_id)?,
         None => Address([0x01; 32]),
     };
 

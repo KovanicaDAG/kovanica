@@ -389,7 +389,7 @@ class ScanActivity : Activity(), TextureView.SurfaceTextureListener {
     private fun handleText(text: String) {
         if (done) return
         val trimmed = text.trim()
-        if (KvncAddress.isValid(trimmed)) {
+        if (KvncAddress.isValid(trimmed, NetworkPrefs.chainId(this))) {
             done = true
             runOnUiThread {
                 setResult(RESULT_OK, Intent().putExtra(EXTRA_RESULT_ADDRESS, trimmed))
