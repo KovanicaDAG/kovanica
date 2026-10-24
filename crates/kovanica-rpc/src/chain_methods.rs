@@ -489,6 +489,7 @@ pub async fn handle_get_transaction_by_hash(
 /// - `direction` (optional): `sent`, `received`, or `all` (the default).
 ///
 /// The read walks only that address's index and stops after one page.
+/// Block rewards are not transactions and are not in the history.
 /// `timestamp` is the leader-header producer time when it is non-zero, and
 /// `null` when the header is missing or still carries the consensus
 /// placeholder `0`. `amount` is atoms (`0` when the kind has no KUNA amount).
@@ -516,6 +517,7 @@ pub async fn handle_get_transaction_history(
         obj.get("address")
             .ok_or_else(|| RpcError::InvalidParams("missing parameter: address".into()))?,
         "address",
+        served_chain_id(&state),
     )?;
     let limit = match obj.get("limit") {
         None | Some(Value::Null) => None,

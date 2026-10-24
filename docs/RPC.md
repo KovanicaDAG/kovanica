@@ -15,8 +15,9 @@ Newest-first committed transactions that touch an address. The call is
 read-only. It is not a write method and does not require an auth token.
 
 The handler reads only that address's rows in the local `address_tx_index`
-table. It stops after one page (plus one extra match, to decide whether
-another page exists). It does not scan the chain.
+table. It stops after one page of matching or scanned rows (plus one extra
+peek, to decide whether another page exists). It does not scan the chain.
+Block rewards are not transactions and are not in the history.
 
 ### Parameters
 
@@ -91,7 +92,8 @@ second row when its counterparty is a different address (322 bytes). A
 self-counterparty is a single row. Counterparties are `Transfer.to`,
 `Delegate.validator`, `Call.contract`, `SetCommission.validator`, and
 `ClaimRewards.validator` when it is set. Other kinds are sender-only.
-The contract address created by `Deploy` is not indexed.
+The contract address created by `Deploy` is not indexed, and block rewards
+are not in the history.
 
 The table is not created at startup. A database from before this index
 opens normally. A history query before the first commit that contains a
