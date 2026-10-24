@@ -135,7 +135,13 @@ async fn prepare(app: &mut App, runtime: &mut Runtime, draft: app::TxDraft) {
         app.on_prepare_failed(anyhow!("Unlock a keystore first."));
         return;
     };
-    match net::fetch_nonce(runtime.client(app.rpc_url()), &address).await {
+    let chain_id = app.chain_id();
+    let client = runtime.client(app.rpc_url());
+    if let Err(err) = crate::node::ensure_node_chain_matches(client, chain_id).await {
+        app.on_prepare_failed(err);
+        return;
+    }
+    match net::fetch_nonce(client, &address).await {
         Ok(nonce) => app.on_review_ready(draft, nonce),
         Err(err) => app.on_prepare_failed(err),
     }

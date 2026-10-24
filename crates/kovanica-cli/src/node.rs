@@ -161,13 +161,32 @@ fn reported_chain_id(object: &serde_json::Map<String, Value>) -> Result<Option<u
 }
 
 /// Refuse to sign when `--chain-id` and the node name two different chains.
-fn refuse_chain_mismatch(local: Option<u64>, reported: Option<u64>) -> Result<()> {
+pub fn refuse_chain_mismatch(local: Option<u64>, reported: Option<u64>) -> Result<()> {
     if let (Some(local), Some(reported)) = (local, reported) {
         if local != reported {
             bail!(
                 "--chain-id {local} does not match the node's chain {reported}. Refusing to use a different chain."
             );
         }
+    }
+    Ok(())
+}
+
+/// Query `kovanica_syncStatus` and refuse when the node reports a chain id
+/// that differs from `signing_chain_id`.
+///
+/// When `kovanica_syncStatus` is unavailable or does not report a chain id,
+/// this succeeds so signing still works against older or minimal RPC servers.
+pub async fn ensure_node_chain_matches(
+    client: &RpcClient,
+    signing_chain_id: Option<u64>,
+) -> Result<()> {
+    if signing_chain_id.is_none() {
+        return Ok(());
+    }
+    if let Ok(value) = client.call("kovanica_syncStatus", json!([])).await {
+        let snapshot = parse_sync_status(&value)?;
+        refuse_chain_mismatch(signing_chain_id, snapshot.node_chain_id)?;
     }
     Ok(())
 }

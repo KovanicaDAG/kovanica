@@ -599,11 +599,12 @@ async fn cmd_transfer(
     json_output: bool,
 ) -> Result<()> {
     let ctx = tx::signing_context(chain_id)?;
+    let recipient = wallet::parse_address(&args.to, "to", ctx.chain_id)?;
+    node::ensure_node_chain_matches(client, Some(ctx.chain_id)).await?;
     let keystore = wallet::load(&args.keystore)?;
     let password = prompt_keystore_password(&keystore)?;
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let sender = wallet::address(&keystore)?;
-    let recipient = wallet::parse_address(&args.to, "to", ctx.chain_id)?;
 
     // The account nonce is the next unused nonce, so it is used as-is.
     let nonce_value = client
@@ -657,6 +658,7 @@ async fn sign_and_submit_self(
     fee: u64,
 ) -> Result<(String, kovanica_types::Address, u64)> {
     let ctx = tx::signing_context(chain_id)?;
+    node::ensure_node_chain_matches(client, Some(ctx.chain_id)).await?;
     let keystore = wallet::load(keystore_path)?;
     let password = prompt_keystore_password(&keystore)?;
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
@@ -1499,5 +1501,66 @@ mod wallet_cli_security_tests {
             }
             _ => panic!("expected call command"),
         }
+    }
+
+    #[tokio::test]
+    async fn transfer_and_stake_refuse_chain_mismatch_reported_by_node() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await.unwrap();
+                let body = r#"{"jsonrpc":"2.0","id":1,"result":{"committedHeight":1,"catchingUp":false,"networkTag":"4-0123456789abcdef"}}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let client = RpcClient::new(format!("http://{addr}"));
+        let recipient = Address([0x22; 32]).to_string();
+
+        let transfer_err = cmd_transfer(
+            &client,
+            Some(1),
+            TransferArgs {
+                to: recipient,
+                amount: 1_000_000_000,
+                keystore: PathBuf::from("unused-keystore.json"),
+                fee: 1,
+            },
+            true,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(transfer_err.contains("--chain-id 1"), "{transfer_err}");
+        assert!(transfer_err.contains("node's chain 4"), "{transfer_err}");
+
+        let stake_err = cmd_stake(
+            &client,
+            Some(1),
+            AmountArgs {
+                amount: 50_000_000_000_000,
+                keystore: PathBuf::from("unused-keystore.json"),
+                fee: 1,
+            },
+            true,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(stake_err.contains("--chain-id 1"), "{stake_err}");
+        assert!(stake_err.contains("node's chain 4"), "{stake_err}");
+
+        server.await.unwrap();
     }
 }

@@ -102,10 +102,11 @@ kovanica tui --keystore keystore.json
 committee epoch, sync state, peer count, and the current committee when the
 node returns them. Sync comes from `kovanica_syncStatus`. When that object
 includes `networkTag` (the `<chain_id>-<digest>` prefix) or `chainId`, and
-`--chain-id` names a different chain, `status` refuses. If the node reports
-neither, the signing chain stays the local flag. Epoch comes from
-`kovanica_getCommitteeInfo`. Peer count falls back to `/health` when sync
-status is absent. A dead RPC still fails the command.
+`--chain-id` names a different chain, `status`, `transfer`, `stake`, and the
+other signing commands refuse. If the node reports neither, the signing chain
+stays the local flag. Epoch comes from `kovanica_getCommitteeInfo`. Peer count
+falls back to `/health` when sync status is absent. A dead RPC still fails the
+command.
 
 `staking <address>` reads `kovanica_getStake`, `kovanica_getRewards`, and
 `kovanica_getValidators`. Own stake is the sum of validator rows for that
