@@ -6,7 +6,7 @@ use crate::{hash_to_bytes, BincodeSerialize, StorageError};
 use kovanica_types::{
     block::{BlockReference, StatementBlock},
     hash::Hash,
-    AuthorityIndex, CommittedSubDag, Round, Vote,
+    AuthorityIndex, CommittedSubDag, Round, Timeout, Vote,
 };
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 use thiserror::Error;
@@ -47,6 +47,7 @@ impl ConsensusStore {
             let _ = write_txn.open_table(crate::tables::DECIDED_ROUNDS)?;
             let _ = write_txn.open_table(crate::tables::LAST_COMMITED)?;
             let _ = write_txn.open_table(crate::tables::VOTES)?;
+            let _ = write_txn.open_table(crate::tables::TIMEOUTS)?;
         }
         write_txn.commit()?;
         Ok(Self)
@@ -402,6 +403,58 @@ impl ConsensusStore {
         // the ordering guarantee does not depend on the storage backend.
         votes.sort_by_key(|vote| vote.voter);
         Ok(votes)
+    }
+
+    /// Persist a verified leader-slot timeout under (round, voter).
+    pub fn put_timeout(
+        &self,
+        txn: &WriteTransaction,
+        timeout: &Timeout,
+    ) -> Result<(), ConsensusStoreError> {
+        let mut table = txn.open_table(crate::tables::TIMEOUTS)?;
+        table.insert((timeout.round, timeout.voter), timeout.to_bytes()?)?;
+        Ok(())
+    }
+
+    /// All timeouts stored for a leader slot, ordered by voter index.
+    pub fn get_timeouts_for_round(
+        &self,
+        txn: &ReadTransaction,
+        round: Round,
+    ) -> Result<Vec<Timeout>, ConsensusStoreError> {
+        let table = txn.open_table(crate::tables::TIMEOUTS)?;
+        let mut timeouts = Vec::new();
+        for entry in table.range((round, 0u16)..=(round, u16::MAX))? {
+            let (_, value) = entry?;
+            let timeout: Timeout = BincodeSerialize::from_bytes(&value.value())?;
+            timeouts.push(timeout);
+        }
+        timeouts.sort_by_key(|t| t.voter);
+        Ok(timeouts)
+    }
+
+    /// Mark `round` decided as a certified skip: an entry with no leaders.
+    ///
+    /// The decided-round index then contains the round (so the commit cursor
+    /// is restored past it) while `get_decided_leaders` returns nothing (so
+    /// replay and causal-history walks commit nothing for it). Returns
+    /// `false` without writing if the round already holds a leader decision.
+    pub fn mark_round_skipped(
+        &self,
+        txn: &WriteTransaction,
+        round: Round,
+    ) -> Result<bool, ConsensusStoreError> {
+        let mut table = txn.open_table(crate::tables::DECIDED_ROUNDS)?;
+        let existing: Vec<[u8; 32]> = table
+            .get(round)?
+            .map(|v| BincodeSerialize::from_bytes(&v.value()).unwrap_or_default())
+            .unwrap_or_default();
+        if !existing.is_empty() {
+            return Ok(false);
+        }
+        let empty: Vec<[u8; 32]> = Vec::new();
+        table.insert(round, empty.to_bytes()?)?;
+        Ok(true)
     }
 
     /// Whether a vote from `voter` for `leader_round` is stored.
@@ -826,5 +879,57 @@ mod tests {
         drop(txn);
         let read = storage.begin_read().unwrap();
         assert!(store.has_vote(&read, 1, 0).unwrap());
+    }
+
+    // PRO-40 (b): timeouts round-trip, sorted by voter, per round.
+    #[test]
+    fn put_timeout_then_get_timeouts_for_round_round_trips_sorted() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("timeouts.redb")).unwrap();
+        let store = storage.consensus();
+        let t = |round, voter: AuthorityIndex| Timeout {
+            round,
+            voter,
+            signature: Signature([voter as u8; 64]),
+        };
+        {
+            let txn = storage.begin_write().unwrap();
+            store.put_timeout(&txn, &t(12, 4)).unwrap();
+            store.put_timeout(&txn, &t(12, 1)).unwrap();
+            store.put_timeout(&txn, &t(15, 0)).unwrap();
+            txn.commit().unwrap();
+        }
+        let txn = storage.begin_read().unwrap();
+        assert_eq!(
+            store.get_timeouts_for_round(&txn, 12).unwrap(),
+            vec![t(12, 1), t(12, 4)]
+        );
+        assert_eq!(
+            store.get_timeouts_for_round(&txn, 15).unwrap(),
+            vec![t(15, 0)]
+        );
+        assert!(store.get_timeouts_for_round(&txn, 18).unwrap().is_empty());
+    }
+
+    // PRO-40 (b): a skipped round is decided with no leaders, and a skip
+    // never overwrites a leader decision.
+    #[test]
+    fn mark_round_skipped_records_an_empty_decision_and_never_overrides_a_commit() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("skip.redb")).unwrap();
+        let store = storage.consensus();
+        let leader = Hash::new(b"kovanica-consensus-store-test/skip/leader");
+        {
+            let txn = storage.begin_write().unwrap();
+            assert!(store.mark_round_skipped(&txn, 6).unwrap());
+            assert!(store.mark_round_skipped(&txn, 6).unwrap(), "idempotent");
+            store.mark_round_decided(&txn, 9, &leader).unwrap();
+            assert!(!store.mark_round_skipped(&txn, 9).unwrap());
+            txn.commit().unwrap();
+        }
+        let txn = storage.begin_read().unwrap();
+        assert!(store.is_round_decided(&txn, 6).unwrap());
+        assert!(store.get_decided_leaders(&txn, 6).unwrap().is_empty());
+        assert_eq!(store.get_decided_leaders(&txn, 9).unwrap(), vec![leader]);
     }
 }
