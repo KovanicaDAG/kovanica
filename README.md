@@ -150,13 +150,13 @@ Workspace crate versions default to `0.2.0`; the table records the version each 
 
 Key documents under `docs/` (all 31 markdown files are the source of truth over this README):
 
-- `docs/ARCHITECTURE.md`, `docs/TOKENOMICS.md`, `docs/CONTRACTS.md`, `docs/SIGNATURE_FORMAT.md`, `docs/GAS_SCHEDULE.md`, `docs/EXAMPLES.md`
+- `docs/ARCHITECTURE.md`, `docs/TOKENOMICS.md`, `docs/CONTRACTS.md`, `docs/SIGNATURE_FORMAT.md`, `docs/GAS_SCHEDULE.md`, `docs/EXAMPLES.md`, `docs/RPC.md`
 - `docs/VALIDATOR-ONBOARDING.md`, `docs/TESTNET-SEED-NODES.md`, `docs/SEED-DNS-AUDIT.md`, `docs/TESTNET-RESET.md`
 - `docs/GENESIS-CEREMONY.md` (draft), `docs/MAINNET-FREEZE-CHECKLIST.md` (draft), `docs/GOVERNANCE.md` (Phase-25 draft — **not implemented**), `docs/AUDIT-SCOPE.md`
 - `docs/COMMS-APP-PLAN.md`, `docs/COMMS-M1-INTERFACES.md`, `docs/COMMS-M2-INTERFACES.md`, `docs/COMMS-THREAT-MODEL.md`, `docs/COMMS-ANDROID-INTERFACES.md`, `docs/RFC-008-NAME-REGISTRY.md`
 - `docs/rfcs/RFC-B1-B2-VRF-AND-MIN-DIGEST.md`, `docs/adr/0001-mysticeti-c-weighted-consensus.md`, `docs/adr/0002-cli-wallet-keystore-v2.md`, `docs/design/epoch-rotation.md`, `docs/design/multi-proposer.md`
 
-> Note: `docs/ARCHITECTURE.md` references a `docs/RPC.md` reference document that does not exist in this tree. The OpenAPI document is generated in code (`crates/kovanica-rpc/src/openapi.rs`).
+> `docs/RPC.md` documents `kovanica_getTransactionHistory`. The OpenAPI document for every registered method is generated in code (`crates/kovanica-rpc/src/openapi.rs`).
 
 ## Quick Start
 
@@ -292,7 +292,7 @@ Consensus parameters of note: `WAVE_LENGTH = 3`, `round_duration_ms` default 4 0
 ### RPC & Interfaces
 
 - HTTP router: `POST /rpc`, `GET /ws`, `GET /health`, `GET /metrics`. `/rpc` and `/ws` are rate-limited per client IP; default bind is `127.0.0.1:8545`.
-- **23 implemented `kovanica_*` methods** span chain, transaction, account, staking, mempool, consensus, and light-client reads (e.g. `kovanica_blockNumber`, `kovanica_sendRawTransaction`, `kovanica_getBalance`, `kovanica_getValidators`, `kovanica_getStake`, `kovanica_getCommitSeals`, `kovanica_getLightSet`, `kovanica_lightClientCheckpoint`), plus `subscribe` / `unsubscribe`.
+- **27 implemented `kovanica_*` methods** span chain, transaction, account, staking, mempool, consensus, and light-client reads (e.g. `kovanica_blockNumber`, `kovanica_sendRawTransaction`, `kovanica_getBalance`, `kovanica_getTransactionHistory`, `kovanica_getValidators`, `kovanica_getStake`, `kovanica_getCommitSeals`, `kovanica_getLightSet`, `kovanica_lightClientCheckpoint`), plus `subscribe` / `unsubscribe`. The names are `KNOWN_RPC_METHODS` in `crates/kovanica-rpc/src/lib.rs`.
 - **15 contract methods are registered but not wired** — `htlc_*` (3), `vault_*` (3), `multisig_*` (4), `token_*` (5). All return `NotImplemented` (**-32004**) until a real contract host is attached. Clients must submit contract calls through `kovanica_sendRawTransaction` instead.
 - WebSocket subscription kinds (5): `newHeads`, `newCommittedLeader`, `pendingTransactions`, `logs` (transaction execution receipts, emitted per committed sub-DAG), and `newSealedHeader`.
 - `kovanica_lightClientCheckpoint` is registered but is a **minimal read-only stub** that reports `verified = false`; state-backed checkpoints are not implemented yet.
