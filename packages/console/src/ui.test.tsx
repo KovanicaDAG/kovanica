@@ -39,13 +39,13 @@ function renderApp() {
 }
 
 describe("network switch", () => {
-  it("keeps chain id 2 when Mainnet is clicked", async () => {
+  it("keeps chain id 4 when Mainnet is clicked", async () => {
     const user = userEvent.setup();
     renderApp();
-    expect(screen.getByText("Chain ID 2").textContent).toBe("Chain ID 2");
+    expect(screen.getByText("Chain ID 4").textContent).toBe("Chain ID 4");
     await user.click(screen.getByRole("button", { name: /mainnet/i }));
     expect(screen.getByRole("status").textContent).toMatch(/not open yet/i);
-    expect(screen.getByText("Chain ID 2").textContent).toBe("Chain ID 2");
+    expect(screen.getByText("Chain ID 4").textContent).toBe("Chain ID 4");
     expect(screen.getByRole("link", { name: "Faucet" }).textContent).toBe("Faucet");
   });
 });
@@ -71,7 +71,7 @@ describe("review sheet", () => {
     const dialog = screen.getByRole("dialog").textContent ?? "";
     expect(dialog).toContain("Testnet");
     expect(dialog).toContain("Chain ID");
-    expect(dialog).toContain("2");
+    expect(dialog).toContain("4");
     expect(dialog).toContain("rpc-testnet.kovanica.online");
     expect(dialog).toContain("Transfer");
     expect(dialog).toContain("1.5 KUNA");

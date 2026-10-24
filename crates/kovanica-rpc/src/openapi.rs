@@ -298,6 +298,10 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
                 "catchUpTarget": { "type": ["integer", "null"], "description": "Peer-advertised tip being chased" },
                 "behindBy": { "type": ["integer", "null"], "description": "Rounds behind the catch-up target" },
                 "peerCount": { "type": "integer" },
+                "networkTag": {
+                    "type": "string",
+                    "description": "Network tag (<chain_id>-<16 hex of the genesis digest>) this node logs at startup. Peers must share it."
+                },
                 "peers": {
                     "type": "array",
                     "items": { "$ref": "#/components/schemas/SyncPeerStatus" }

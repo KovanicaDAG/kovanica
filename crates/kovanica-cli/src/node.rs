@@ -97,8 +97,15 @@ pub async fn status(client: &RpcClient, json_output: bool) -> Result<()> {
 }
 
 /// `kovanica balance <address>` — native KUNA balance in atoms.
-pub async fn balance(client: &RpcClient, address: &str, json_output: bool) -> Result<()> {
-    let address = parse_address(address, "address")?;
+pub async fn balance(
+    client: &RpcClient,
+    address: &str,
+    chain_id: Option<u64>,
+    json_output: bool,
+) -> Result<()> {
+    // No selected chain is not a dev chain: legacy hex is refused. The
+    // canonical form still parses.
+    let address = parse_address(address, "address", chain_id.unwrap_or(0))?;
     let value = client
         .call("kovanica_getBalance", json!([address.to_string()]))
         .await?;
@@ -125,6 +132,7 @@ pub async fn balance(client: &RpcClient, address: &str, json_output: bool) -> Re
 /// the node default (`all`). A blank cursor is rejected.
 pub fn history_params(
     address: &str,
+    chain_id: Option<u64>,
     limit: Option<u64>,
     cursor: Option<&str>,
     sent: bool,
@@ -133,7 +141,9 @@ pub fn history_params(
     if sent && received {
         return Err(anyhow!("--sent and --received cannot be used together"));
     }
-    let address = parse_address(address, "address")?;
+    // No selected chain is not a dev chain: legacy hex is refused. The
+    // canonical form still parses.
+    let address = parse_address(address, "address", chain_id.unwrap_or(0))?;
     let mut params = serde_json::Map::new();
     params.insert("address".into(), json!(address.to_string()));
     if let Some(limit) = limit {
@@ -192,6 +202,10 @@ pub fn history_view(page: &Value) -> Result<HistoryView> {
             .get("height")
             .ok_or_else(|| anyhow!("history: entry missing height"))?;
         let height_text = parse_quantity(height)?.to_string();
+        let timestamp_text = match entry.get("timestamp") {
+            None | Some(Value::Null) => "-".to_string(),
+            Some(value) => parse_quantity(value)?.to_string(),
+        };
         let kind = json_string(entry, "kind")?;
         let status = json_string(entry, "status")?;
         let from = json_string(entry, "from")?;
@@ -213,6 +227,7 @@ pub fn history_view(page: &Value) -> Result<HistoryView> {
         json_entries.push(enriched);
         rows.push(vec![
             height_text,
+            timestamp_text,
             kind,
             status,
             from,
@@ -245,23 +260,26 @@ fn json_string(entry: &Value, field: &str) -> Result<String> {
 pub struct HistoryView {
     /// JSON object with atom counts and KUNA strings added to each entry.
     pub json: Value,
-    /// Human table cells: height, kind, status, from, to, amount, fee, hash.
+    /// Human table cells: height, timestamp, kind, status, from, to, amount, fee, hash.
     pub rows: Vec<Vec<String>>,
     /// Cursor for the next page, when the node returned one.
     pub next_cursor: Option<String>,
 }
 
 /// `kovanica history <address>` — newest-first committed transactions.
+#[allow(clippy::too_many_arguments)]
 pub async fn history(
     client: &RpcClient,
     address: &str,
+    chain_id: Option<u64>,
     limit: Option<u64>,
     cursor: Option<&str>,
     sent: bool,
     received: bool,
     json_output: bool,
 ) -> Result<()> {
-    let params = history_params(address, limit, cursor, sent, received)?;
+    let address_parsed = parse_address(address, "address", chain_id.unwrap_or(0))?;
+    let params = history_params(address, chain_id, limit, cursor, sent, received)?;
     let page = client
         .call("kovanica_getTransactionHistory", params)
         .await?;
@@ -269,14 +287,22 @@ pub async fn history(
     if json_output {
         return print_json(&view.json);
     }
-    print_kv(&[("Address", parse_address(address, "address")?.to_string())]);
+    print_kv(&[("Address", address_parsed.to_string())]);
     if view.rows.is_empty() {
         println!("No transactions.");
     } else {
         println!();
         print_table(
             &[
-                "HEIGHT", "KIND", "STATUS", "FROM", "TO", "AMOUNT", "FEE", "HASH",
+                "HEIGHT",
+                "TIMESTAMP",
+                "KIND",
+                "STATUS",
+                "FROM",
+                "TO",
+                "AMOUNT",
+                "FEE",
+                "HASH",
             ],
             &view.rows,
         );
@@ -347,27 +373,47 @@ mod tests {
         let hex = "11".repeat(32);
         let canonical = kovanica_types::Address([0x11; 32]).to_string();
         let cursor = " ab ".to_string();
-        let params = history_params(&hex, Some(5), Some(cursor.as_str()), true, false).unwrap();
+        let params = history_params(
+            &hex,
+            Some(kovanica_types::signing::chain_id::LOCAL),
+            Some(5),
+            Some(cursor.as_str()),
+            true,
+            false,
+        )
+        .unwrap();
         assert_eq!(params["address"], json!(canonical));
         assert!(canonical.starts_with("kvnc") && canonical.ends_with("dag"));
         assert_eq!(params["limit"], json!(5));
         assert_eq!(params["cursor"], json!("ab"));
         assert_eq!(params["direction"], json!("sent"));
 
-        let all = history_params(&canonical, None, None, false, false).unwrap();
+        // Legacy hex is refused when chain_id is None (defaults to 0) or mainnet (1).
+        assert!(history_params(&hex, None, None, None, false, false).is_err());
+        assert!(history_params(
+            &hex,
+            Some(kovanica_types::signing::chain_id::MAINNET),
+            None,
+            None,
+            false,
+            false,
+        )
+        .is_err());
+
+        let all = history_params(&canonical, None, None, None, false, false).unwrap();
         assert!(all.get("limit").is_none());
         assert!(all.get("cursor").is_none());
         assert!(all.get("direction").is_none());
         assert_eq!(all["address"], json!(canonical));
 
-        let received = history_params(&canonical, None, None, false, true).unwrap();
+        let received = history_params(&canonical, None, None, None, false, true).unwrap();
         assert_eq!(received["direction"], json!("received"));
 
-        assert!(history_params(&canonical, None, None, true, true).is_err());
-        assert!(history_params("not-an-address", None, None, false, false).is_err());
-        assert!(history_params(&canonical, None, Some("  "), false, false).is_err());
+        assert!(history_params(&canonical, None, None, None, true, true).is_err());
+        assert!(history_params("not-an-address", None, None, None, false, false).is_err());
+        assert!(history_params(&canonical, None, None, Some("  "), false, false).is_err());
         let bad = format!("kvnc{}dag", "00".repeat(36));
-        assert!(history_params(&bad, None, None, false, false).is_err());
+        assert!(history_params(&bad, None, None, None, false, false).is_err());
     }
 
     #[test]
@@ -416,10 +462,12 @@ mod tests {
         assert_eq!(view.json["entries"][1]["feeAtoms"], json!(100_000_000u64));
         assert_eq!(view.json["entries"][1]["feeKuna"], json!("0.1 KUNA"));
         assert_eq!(view.rows[0][0], "2");
-        assert_eq!(view.rows[0][5], "1 KUNA");
-        assert_eq!(view.rows[0][6], "0.000000001 KUNA");
-        assert_eq!(view.rows[1][4], "-");
-        assert_eq!(view.rows[1][1], "stake");
+        assert_eq!(view.rows[0][1], "-");
+        assert_eq!(view.rows[0][6], "1 KUNA");
+        assert_eq!(view.rows[0][7], "0.000000001 KUNA");
+        assert_eq!(view.rows[1][1], "42");
+        assert_eq!(view.rows[1][5], "-");
+        assert_eq!(view.rows[1][2], "stake");
         assert_eq!(view.rows.len(), 2);
 
         let whole = format_kuna(1_500_000_000);

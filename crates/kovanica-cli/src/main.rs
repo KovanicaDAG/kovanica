@@ -439,11 +439,12 @@ async fn main() -> Result<()> {
         }
         Commands::Transfer(args) => cmd_transfer(&client, chain_id, args, json).await,
         Commands::Status | Commands::Info => node::status(&client, json).await,
-        Commands::Balance { address } => node::balance(&client, &address, json).await,
+        Commands::Balance { address } => node::balance(&client, &address, chain_id, json).await,
         Commands::History(args) => {
             node::history(
                 &client,
                 &args.address,
+                chain_id,
                 args.limit,
                 args.cursor.as_deref(),
                 args.sent,
@@ -620,7 +621,7 @@ async fn cmd_transfer(
     let password = prompt_keystore_password(&keystore)?;
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let sender = wallet::address(&keystore)?;
-    let recipient = wallet::parse_address(&args.to, "to")?;
+    let recipient = wallet::parse_address(&args.to, "to", ctx.chain_id)?;
 
     // The account nonce is the next unused nonce, so it is used as-is.
     let nonce_value = client
@@ -903,7 +904,8 @@ async fn cmd_set_commission(
     if args.commission_bps > 10_000 {
         anyhow::bail!("commission_bps must be <= 10000 (100%)");
     }
-    let validator = wallet::parse_address(&args.validator, "validator")?;
+    let chain = tx::signing_context(chain_id)?.chain_id;
+    let validator = wallet::parse_address(&args.validator, "validator", chain)?;
     let (tx_hash, sender, nonce) = sign_and_submit_self(
         client,
         chain_id,
@@ -1030,7 +1032,8 @@ async fn cmd_call(
     args: CallArgs,
     json_output: bool,
 ) -> Result<()> {
-    let contract = wallet::parse_address(&args.contract, "contract")?;
+    let chain = tx::signing_context(chain_id)?.chain_id;
+    let contract = wallet::parse_address(&args.contract, "contract", chain)?;
     let method = args.method.clone();
     let args_bytes = {
         let json_val: serde_json::Value = serde_json::from_str(&args.args)

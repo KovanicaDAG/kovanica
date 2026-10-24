@@ -42,9 +42,10 @@
 //! - `SetCommission.validator`
 //! - `ClaimRewards.validator` when set
 //!
-//! Other kinds index the sender only. There is no backfill: commits applied
-//! before this table existed are absent. Chain-4 reset starts empty, so no
-//! migration is required.
+//! Other kinds index the sender only. Block rewards are not transactions and
+//! are not in the history. There is no backfill: commits applied before this
+//! table existed are absent. Chain-4 reset starts empty, so no migration is
+//! required.
 //!
 //! # Growth
 //!
@@ -205,8 +206,11 @@ pub fn index_committed_txs(
 /// Newest-first page for `query.address`.
 ///
 /// The scan is the key range of that address only. It stops after `limit`
-/// matching rows (plus one peek to decide `next_cursor`). A database that
-/// has never created the table returns an empty page.
+/// matching rows or `limit` scanned rows (plus one peek to decide
+/// `next_cursor`). When `direction` is `Sent` or `Received` and the scan hits
+/// the scan cap before filling `limit` matches, `next_cursor` points at the
+/// last scanned row so the caller can continue without an unbounded scan. A
+/// database that has never created the table returns an empty page.
 pub fn query_tx_history(
     txn: &ReadTransaction,
     query: &TxHistoryQuery,
@@ -238,6 +242,7 @@ pub fn query_tx_history(
     let cursor = query.cursor.as_deref().map(decode_cursor).transpose()?;
     let mut entries = Vec::new();
     let mut last_pos: Option<(u64, u32)> = None;
+    let mut scanned = 0u64;
     let mut more = false;
 
     let mut accept = |row_addr: [u8; 32],
@@ -249,15 +254,19 @@ pub fn query_tx_history(
             return Ok(false);
         }
         let decoded = decode_value(value)?;
-        if !direction_matches(query.direction, decoded.role) {
+        let matches = direction_matches(query.direction, decoded.role);
+        if entries.len() == limit as usize || scanned == limit {
+            if matches || scanned == limit {
+                more = true;
+                return Ok(false);
+            }
             return Ok(true);
         }
-        if entries.len() == limit as usize {
-            more = true;
-            return Ok(false);
-        }
+        scanned += 1;
         last_pos = Some((height, tx_index));
-        entries.push(decoded.into_entry(height, tx_index));
+        if matches {
+            entries.push(decoded.into_entry(height, tx_index));
+        }
         Ok(true)
     };
 
@@ -562,7 +571,7 @@ mod tests {
             out.extend(next.entries);
             match next.next_cursor {
                 Some(c) => {
-                    assert!(n > 0, "a cursor must not point at an empty page");
+                    assert_ne!(cursor.as_deref(), Some(c.as_str()), "cursor must advance");
                     cursor = Some(c);
                 }
                 None => return out,
@@ -866,5 +875,43 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn direction_filter_caps_scanned_rows_on_a_busy_address() {
+        let dir = tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("busy.redb")).unwrap();
+        let alice = addr(0x11);
+        let bob = addr(0x22);
+
+        // Height 1: one outgoing transfer from Alice.
+        let earliest_sent = transfer(alice, bob, 99, 1);
+        let mut inbound_txs = Vec::new();
+        for n in 2..=251u64 {
+            inbound_txs.push(transfer(bob, alice, n, n));
+        }
+        {
+            let txn = storage.begin_write().unwrap();
+            index_committed_txs(&txn, 1, &[(&earliest_sent, true)]).unwrap();
+            // Heights 2..=251: 250 incoming transfers to Alice (wrong direction for `Sent`).
+            for (i, inbound) in inbound_txs.iter().enumerate() {
+                index_committed_txs(&txn, i as u64 + 2, &[(inbound, true)]).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        // Querying `Sent` with limit 50 must stop after scanning 50 rows
+        // (heights 251..=202) and return a cursor at height 202 instead of
+        // scanning all 250 incoming rows in a single call.
+        let first = page(&storage, alice, Some(50), None, TxDirection::Sent);
+        assert!(first.entries.is_empty());
+        assert_eq!(first.next_cursor, Some(encode_cursor(202, 0)));
+
+        // Walking all pages with limit 50 eventually reaches height 1 and
+        // returns the single `Sent` row with no duplicates or gaps.
+        let all_sent = all_pages(&storage, alice, 50, TxDirection::Sent);
+        assert_eq!(all_sent.len(), 1);
+        assert_eq!(all_sent[0].tx_hash, earliest_sent.hash);
+        assert_eq!(all_sent[0].height, 1);
     }
 }

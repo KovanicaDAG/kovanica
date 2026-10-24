@@ -593,16 +593,16 @@ const JOIN_AFTER_HEIGHT: u64 = 4;
 const CATCH_UP_MARGIN: u64 = 4;
 const CATCH_UP_TIMEOUT_SECS: u64 = 120;
 
-// PRO-40 hotfix: with one of four validators offline until the join, every
-// fourth leader slot never gets a block. Before the hotfix this test passed
-// only because each node silently skipped those slots on its own schedule:
-// on 38e6a74 node 1 committed rounds 15, 18, 21... over the unseen slot 12
-// while node 0 stalled at 9 (heights [6, 12, 5] when the joiner started).
-// The commit walk now stalls at the empty slot instead, on every node, so
-// the three initial validators cannot reach the join height until the
-// quorum-certified skip (PRO-40 PR 3) lands. Re-enable it in that PR.
+// PRO-40: with one of four validators offline until the join, every fourth
+// leader slot never gets a block. Before the hotfix (#84) this test passed
+// only because each node silently skipped those slots on its own schedule
+// (on 38e6a74 node 1 committed 15, 18, 21... over the unseen slot 12 while
+// node 0 stalled at 9). With the hotfix the walk stalled there on every node;
+// with the quorum-certified skip (PR 3/4) the three online validators time the
+// empty slots out together and skip them with a certificate. The late node
+// proposes for its own old slots, votes for them, and gets past them when a
+// peer answers its rebroadcast vote with the stored certificate.
 #[tokio::test]
-#[ignore = "PRO-40: needs the quorum-certified skip; stalls by design at the offline validator's slot"]
 async fn late_joining_validator_catches_up_via_parent_sync() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
