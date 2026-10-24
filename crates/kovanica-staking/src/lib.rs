@@ -3150,7 +3150,7 @@ mod tests {
         assert_eq!(
             JAIL_ROUNDS * LEADER_INTERVAL_SECS,
             3 * EPOCH_ROUNDS * ROUND_SECS,
-            "jail = 3 epochs of wall-clock time"
+            "jail = 3 epochs of nominal wall-clock time (no skipped slots)"
         );
         assert_eq!(JAIL_ROUNDS, COMMISSION_CHANGE_COOLDOWN);
         assert_eq!(JAIL_ROUNDS * LEADER_INTERVAL_SECS, 86_400);
@@ -3220,6 +3220,31 @@ mod tests {
         assert!(v.active, "an explicit restake returns the validator");
         assert!(!v.slashed, "a served jail clears the slashed flag");
         assert_eq!(v.jailed_until_height, 0, "and clears the jail");
+    }
+
+    /// Jarvis #80 review P2: a jail that starts at a non-zero height ends
+    /// exactly `JAIL_ROUNDS` later. Slashed at height 1 → still jailed at
+    /// 7 200, re-stakeable at 7 201.
+    #[test]
+    fn jail_from_height_one_ends_at_7201() {
+        let mut st = StakingState::new();
+        st.committed_leader_height = 1;
+        st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        st.slash_validator(a(1)).unwrap();
+        assert_eq!(st.validators[0].jailed_until_height, 7_201);
+
+        st.committed_leader_height = 7_200;
+        assert!(matches!(
+            st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE),
+            Err(StakingError::ValidatorSlashed)
+        ));
+        st.committed_leader_height = 7_201;
+        assert!(matches!(
+            st.reactivate_validator(a(1), MIN_VALIDATOR_STAKE),
+            Ok(())
+        ));
+        assert!(st.validators[0].active);
     }
 
     /// Rows slashed before the jail existed decode with `jailed_until_height == 0`

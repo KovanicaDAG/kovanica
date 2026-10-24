@@ -14,17 +14,19 @@ use crate::wallet::parse_address;
 use kovanica_types::Address;
 
 /// Encode a Kovanica address as the JSON byte array the contract RPC expects.
-fn address_param(text: &str, what: &str) -> Result<Value> {
-    let address = parse_address(text, what)?;
+fn address_param(text: &str, what: &str, chain_id: Option<u64>) -> Result<Value> {
+    let address = parse_address(text, what, chain_id.unwrap_or(0))?;
     Ok(bytes_json(&address.0))
 }
 
 /// Render an address field with [`Address`]'s display, whatever string form that is.
 fn address_field(value: &Value, key: &str) -> String {
     match value.get(key) {
-        Some(Value::String(text)) => parse_address(text, key)
-            .map(|address| address.to_string())
-            .unwrap_or_else(|_| text.clone()),
+        Some(Value::String(text)) => {
+            parse_address(text, key, kovanica_types::signing::chain_id::LOCAL)
+                .map(|address| address.to_string())
+                .unwrap_or_else(|_| text.clone())
+        }
         Some(Value::Array(items)) if items.len() == 32 => {
             let mut bytes = [0u8; 32];
             for (slot, item) in items.iter().enumerate() {
@@ -65,12 +67,23 @@ pub enum ContractCommand {
 }
 
 /// Dispatch a contract subcommand.
-pub async fn run(client: &RpcClient, command: ContractCommand, json_output: bool) -> Result<()> {
+pub async fn run(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    command: ContractCommand,
+    json_output: bool,
+) -> Result<()> {
     match command {
-        ContractCommand::Htlc { command } => run_htlc(client, command, json_output).await,
-        ContractCommand::Vault { command } => run_vault(client, command, json_output).await,
-        ContractCommand::Multisig { command } => run_multisig(client, command, json_output).await,
-        ContractCommand::Token { command } => run_token(client, command, json_output).await,
+        ContractCommand::Htlc { command } => run_htlc(client, chain_id, command, json_output).await,
+        ContractCommand::Vault { command } => {
+            run_vault(client, chain_id, command, json_output).await
+        }
+        ContractCommand::Multisig { command } => {
+            run_multisig(client, chain_id, command, json_output).await
+        }
+        ContractCommand::Token { command } => {
+            run_token(client, chain_id, command, json_output).await
+        }
     }
 }
 
@@ -164,11 +177,16 @@ pub struct HtlcRefundArgs {
     pub id: String,
 }
 
-async fn run_htlc(client: &RpcClient, command: HtlcCommand, json_output: bool) -> Result<()> {
+async fn run_htlc(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    command: HtlcCommand,
+    json_output: bool,
+) -> Result<()> {
     match command {
         HtlcCommand::Create(args) => {
             let params = json!({
-                "claimer": address_param(&args.claimer, "claimer")?,
+                "claimer": address_param(&args.claimer, "claimer", chain_id)?,
                 "amount": args.amount,
                 "hash_lock": bytes32_json(&args.hash_lock, "hash-lock")?,
                 "expiry": args.expiry,
@@ -244,7 +262,12 @@ pub struct VaultIdArgs {
     pub id: String,
 }
 
-async fn run_vault(client: &RpcClient, command: VaultCommand, json_output: bool) -> Result<()> {
+async fn run_vault(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    command: VaultCommand,
+    json_output: bool,
+) -> Result<()> {
     match command {
         VaultCommand::Create(args) => {
             let schedule = match (args.unlock_at, args.start, args.end) {
@@ -265,7 +288,7 @@ async fn run_vault(client: &RpcClient, command: VaultCommand, json_output: bool)
             };
 
             let params = json!({
-                "beneficiary": address_param(&args.beneficiary, "beneficiary")?,
+                "beneficiary": address_param(&args.beneficiary, "beneficiary", chain_id)?,
                 "amount": args.amount,
                 "schedule": schedule,
             });
@@ -351,6 +374,7 @@ pub struct MultisigTxArgs {
 
 async fn run_multisig(
     client: &RpcClient,
+    chain_id: Option<u64>,
     command: MultisigCommand,
     json_output: bool,
 ) -> Result<()> {
@@ -359,7 +383,7 @@ async fn run_multisig(
             let owners: Vec<Value> = args
                 .owners
                 .iter()
-                .map(|owner| address_param(owner, "owner"))
+                .map(|owner| address_param(owner, "owner", chain_id))
                 .collect::<Result<_>>()?;
             let params = json!({ "owners": owners, "threshold": args.threshold });
             let result = client.call("multisig_create", params).await?;
@@ -379,7 +403,7 @@ async fn run_multisig(
             };
             let params = json!({
                 "multisig_id": bytes32_json(&args.id, "id")?,
-                "to": address_param(&args.to, "to")?,
+                "to": address_param(&args.to, "to", chain_id)?,
                 "amount": args.amount,
                 "data": data,
             });
@@ -481,7 +505,12 @@ pub struct TokenApproveArgs {
     pub amount: u64,
 }
 
-async fn run_token(client: &RpcClient, command: TokenCommand, json_output: bool) -> Result<()> {
+async fn run_token(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    command: TokenCommand,
+    json_output: bool,
+) -> Result<()> {
     match command {
         TokenCommand::Create(args) => {
             let params = json!({
@@ -502,7 +531,7 @@ async fn run_token(client: &RpcClient, command: TokenCommand, json_output: bool)
         }
         TokenCommand::Transfer(args) => {
             let params = json!({
-                "to": address_param(&args.to, "to")?,
+                "to": address_param(&args.to, "to", chain_id)?,
                 "amount": args.amount,
             });
             let result = client.call("token_transfer", params).await?;
@@ -510,7 +539,7 @@ async fn run_token(client: &RpcClient, command: TokenCommand, json_output: bool)
         }
         TokenCommand::Mint(args) => {
             let params = json!({
-                "to": address_param(&args.to, "to")?,
+                "to": address_param(&args.to, "to", chain_id)?,
                 "amount": args.amount,
             });
             let result = client.call("token_mint", params).await?;
@@ -522,7 +551,7 @@ async fn run_token(client: &RpcClient, command: TokenCommand, json_output: bool)
             emit(json_output, &result, &[("ok", field(&result, "ok"))])
         }
         TokenCommand::Balance(args) => {
-            let params = json!({ "address": address_param(&args.address, "address")? });
+            let params = json!({ "address": address_param(&args.address, "address", chain_id)? });
             let result = client.call("token_balance", params).await?;
             emit(
                 json_output,
@@ -550,15 +579,26 @@ mod tests {
     #[test]
     fn contract_address_params_follow_the_address_type() {
         let address = Address([0xab; 32]);
-        let value = address_param(&address.to_string(), "addr").unwrap();
+        let value = address_param(&address.to_string(), "addr", None).unwrap();
         let decoded: Address = serde_json::from_value(value).unwrap();
         assert_eq!(decoded, address);
 
-        let from_hex = address_param(&address.to_hex(), "addr").unwrap();
+        let from_hex = address_param(
+            &address.to_hex(),
+            "addr",
+            Some(kovanica_types::signing::chain_id::LOCAL),
+        )
+        .unwrap();
         let decoded_hex: Address = serde_json::from_value(from_hex).unwrap();
         assert_eq!(decoded_hex, address);
 
-        assert!(address_param("not-an-address", "addr").is_err());
+        assert!(address_param(
+            &address.to_hex(),
+            "addr",
+            Some(kovanica_types::signing::chain_id::MAINNET),
+        )
+        .is_err());
+        assert!(address_param("not-an-address", "addr", None).is_err());
     }
 
     #[test]

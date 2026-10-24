@@ -392,8 +392,15 @@ pub fn balance_rows(address: &Address, atoms: u64) -> Vec<(&'static str, String)
 }
 
 /// `kovanica balance <address>` — native balance, displayed in KUNA.
-pub async fn balance(client: &RpcClient, address: &str, json_output: bool) -> Result<()> {
-    let address = parse_address(address, "address")?;
+pub async fn balance(
+    client: &RpcClient,
+    address: &str,
+    chain_id: Option<u64>,
+    json_output: bool,
+) -> Result<()> {
+    // No selected chain is not a dev chain: legacy hex is refused. The
+    // canonical form still parses.
+    let address = parse_address(address, "address", chain_id.unwrap_or(0))?;
     let value = client
         .call("kovanica_getBalance", json!([address.to_string()]))
         .await?;

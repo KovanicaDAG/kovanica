@@ -2,9 +2,11 @@
   "chainId": 2,
   "mnemonic": "alpha deal scrub asthma idea logic bright thought alpha deal scrub asthma idea logic bright thought alpha deal scrub asthma idea logic bright truly",
   "publicKeyHex": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
-  "recipientAddress": "kvnc22222222222222222222222222222222222222222222222222222222222222227caa514adag",
+  "recipientAddress": "kvncyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg38e2j3fdag",
+  "recipientAddressLegacy": "kvnc22222222222222222222222222222222222222222222222222222222222222227caa514adag",
   "seedHex": "0707070707070707070707070707070707070707070707070707070707070707",
-  "senderAddress": "kvncea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c0871f3aadag",
+  "senderAddress": "kvncaf9xcclzn3fq40h42pa3xtk9lx25wa4wh6l8hyjzrm4xj9zx6gkqsu0n4dag",
+  "senderAddressLegacy": "kvncea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c0871f3aadag",
   "transactions": [
     {
       "fee": 1000,
