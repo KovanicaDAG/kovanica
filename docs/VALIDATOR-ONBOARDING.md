@@ -141,16 +141,13 @@ data_dir = "/var/lib/kovanica"
 ### 4.3 Environment Variables (Alternative to Config File)
 
 ```bash
-export KOVANICA_LISTEN=0.0.0.0:8000
-export KOVANICA_RPC=127.0.0.1:8545
-export KOVANICA_PEERS="seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"
-export KOVANICA_MINE=0                      # 1 only if you run a seed node
-export KOVANICA_FAUCET=0
-export KOVANICA_OPERATOR=0
-export KOVANICA_ALLOW_RESET=0
-export KOVANICA_DATA="/var/lib/kovanica"
-export KOVANICA_VALIDATOR_KEY="/path/to/validator.keystore"
-export KOVANICA_VALIDATOR_KEY_PASS="your-passphrase"
+export KOVANICA_LISTEN_ADDR=0.0.0.0:8000
+export KOVANICA_RPC_ADDR=127.0.0.1
+export KOVANICA_RPC_PORT=8545
+export KOVANICA_BOOTNODES="seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"
+export KOVANICA_DATA_DIR="/var/lib/kovanica"
+export KOVANICA_VALIDATOR_KEY="/path/to/validator.key"
+export KOVANICA_RUN_VALIDATOR=true
 ```
 
 ---

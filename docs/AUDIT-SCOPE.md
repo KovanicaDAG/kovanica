@@ -3,8 +3,8 @@
 **Version:** 1.0  
 **Date:** 2026-10-14  
 **Codebase:** `kovanica` (Mysticeti-style DAG, account-based, Wasmi execution)  
-**Commit:** `main` @ `98d88cc` (2026-10-13 snapshot)  
-**Crates:** 19 workspace members, ~53k LOC Rust
+**Commit:** `main` @ `dd3aff9` (Baseline: `98d88cc`)  
+**Crates:** 27 workspace members, ~90.5k LOC Rust (crates) / ~95.5k repo
 
 ---
 
@@ -120,7 +120,7 @@ certificate) against the subsidy/epoch invariants in §2.5.
 |-----------|------|-------------|
 | `contracts.rs` (execution) | **High** | Native contract dispatch (HTLC, Vault, Multisig, Token, LightNode), WASM via `ContractRunner`, commit-on-success semantics, gas metering |
 | `Runtime::execute` (runtime) | **High** | Wasmi fuel metering (`gas_limit` default 10M), memory limit (16 pages = 1 MiB), deterministic engine, argument/result buffer copy via `kovanica_alloc`/`kovanica_dealloc` |
-| Host ABI (`kovanica-common/wasm.rs`) | **High** | Fixed imports: `kovanica_caller`, `kovanica_contract_address`, `kovanica_block_height`, `kovanica_timestamp`, `kovanica_balance_of`, `kovanica_storage_get/set`, `kovanica_transfer`, `kovanica_emit_log`, `kovanica_alloc`, `kovanica_dealloc` |
+| Host ABI (`crates/kovanica-common/src/wasm.rs`) | **High** | Fixed imports: `kovanica_caller`, `kovanica_contract_address`, `kovanica_block_height`, `kovanica_timestamp`, `kovanica_balance_of`, `kovanica_storage_get/set`, `kovanica_transfer`, `kovanica_emit_log`, `kovanica_alloc`, `kovanica_dealloc` |
 | Contract crates (`kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`, `kovanica-token`, `kovanica-staking/light.rs`) | **High** | Entry points returning packed `i64` (negative = error code 0..11), all state via `Host` trait |
 
 **WASM threat model:** untrusted bytecode, gas exhaustion, memory exhaustion, host function reentrancy, trap handling, deterministic execution.

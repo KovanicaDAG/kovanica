@@ -1,7 +1,7 @@
-# KUNA Contract Layer (Lane 3b)
+# Kovanica Contract Layer (Lane 3b)
 
-The four contract crates — `kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`,
-`kovanica-token` — are ordinary Rust libraries with a **typed API** and, on
+The contract crates — `kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`,
+`kovanica-token`, and `kovanica-name-registry` — are ordinary Rust libraries with a **typed API** and, on
 `wasm32-unknown-unknown`, a fixed set of `extern "C"` **entry-point exports**.
 Lane 3b wires them into the real execution path through
 `kovanica-execution::contracts`; `kovanica-runtime` provides the gas-metered Wasmi
