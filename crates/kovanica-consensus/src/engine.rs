@@ -4898,4 +4898,80 @@ mod tests {
         assert_eq!(sent.len(), 2, "rebroadcast while stalled");
         assert_eq!(sent[0], sent[1], "the same timeout, never a second one");
     }
+
+    /// A skip certificate on the last leader slot of an epoch and the first
+    /// slot of the next epoch. The timeout preimage binds `epoch(round)`, so
+    /// a signature from the previous epoch does not verify on the far side
+    /// of the boundary, and both certificates still move the cursor.
+    #[test]
+    fn epoch_boundary_skip_certs_bind_epoch_of_the_round() {
+        let mut f = skip_fixture();
+        let wave = kovanica_types::WAVE_LENGTH;
+        let last_of_epoch_0 = kovanica_types::EPOCH_ROUNDS - wave;
+        let first_of_epoch_1 = kovanica_types::EPOCH_ROUNDS;
+        assert_eq!(last_of_epoch_0, 7_197);
+        assert_eq!(first_of_epoch_1, 7_200);
+        assert!(is_leader_round(last_of_epoch_0));
+        assert!(is_leader_round(first_of_epoch_1));
+        assert_eq!(kovanica_types::epoch_for_round(last_of_epoch_0), 0);
+        assert_eq!(kovanica_types::epoch_for_round(first_of_epoch_1), 1);
+
+        let cursor = last_of_epoch_0 - wave;
+        f.engine.committer.restore_last_decided_round(cursor);
+        *f.engine.current_round.write() = first_of_epoch_1 + 6;
+
+        // Same bytes as a valid epoch-0 timeout, retargeted at the epoch-1 slot.
+        let mut forged = signed_timeout(&f.keys[1], 1, last_of_epoch_0, &SKIP_GENESIS);
+        forged.round = first_of_epoch_1;
+        assert!(matches!(
+            f.engine.process_timeout(&forged),
+            Err(ConsensusError::TimeoutRejected(
+                TimeoutRejection::BadSignature(1)
+            ))
+        ));
+
+        assert!(f.engine.sign_timeout(last_of_epoch_0).unwrap());
+        for voter in [1u16, 2, 3] {
+            f.engine
+                .process_timeout(&signed_timeout(
+                    &f.keys[voter as usize],
+                    voter,
+                    last_of_epoch_0,
+                    &SKIP_GENESIS,
+                ))
+                .unwrap();
+        }
+        assert_eq!(f.engine.committer.last_decided_round(), last_of_epoch_0);
+        assert!(f.commits.try_recv().is_err(), "a skip delivers nothing");
+
+        assert!(f.engine.sign_timeout(first_of_epoch_1).unwrap());
+        let own = f.engine.own_timeouts.lock()[&first_of_epoch_1].clone();
+        let preimage = own.signature_data(TEST_CTX.chain_id, &SKIP_GENESIS);
+        assert_eq!(
+            &preimage[56..64],
+            &1u64.to_le_bytes(),
+            "the epoch-1 slot is signed under epoch 1"
+        );
+        for voter in [1u16, 2, 3] {
+            f.engine
+                .process_timeout(&signed_timeout(
+                    &f.keys[voter as usize],
+                    voter,
+                    first_of_epoch_1,
+                    &SKIP_GENESIS,
+                ))
+                .unwrap();
+        }
+        assert_eq!(f.engine.committer.last_decided_round(), first_of_epoch_1);
+        assert!(f.commits.try_recv().is_err(), "a skip delivers nothing");
+        let rounds: Vec<_> = f
+            .recorder
+            .certs
+            .lock()
+            .iter()
+            .map(|cert| cert.round)
+            .collect();
+        assert!(rounds.contains(&last_of_epoch_0));
+        assert!(rounds.contains(&first_of_epoch_1));
+    }
 }

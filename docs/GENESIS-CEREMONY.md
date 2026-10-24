@@ -53,6 +53,11 @@ Next steps the script prints: distribute `genesis.json` to all validators,
 each validator places it in its data directory (`KOVANICA_DATA_DIR`), configures
 the bootnodes, and all validators start simultaneously.
 
+The files that actually enter the network tag, and the `sha256sum -c` check
+every node runs before the first start, are described in
+[`docs/TESTNET-RESET.md`](TESTNET-RESET.md). A node whose bundle, chain id,
+treasury or binary differs from the others never joins the mesh.
+
 ## `genesis_validators.toml` format
 
 ```
@@ -96,7 +101,9 @@ validator allocation), never from a loose file in the data directory. The node
 fails at startup — and `kovanica-node --check-config` reports it — if
 `funded_accounts.toml` is present on mainnet, rather than ignoring it, because
 silently skipping it would boot a genesis the operator believes they
-configured. All other chain ids (2, 3, 4, 1337) accept the file.
+configured. The mainnet `sha256sum` list therefore omits it (see
+[`docs/TESTNET-RESET.md`](TESTNET-RESET.md)). All other chain ids (2, 3, 4, 1337)
+accept the file.
 
 ## Genesis digest guard (startup behaviour)
 

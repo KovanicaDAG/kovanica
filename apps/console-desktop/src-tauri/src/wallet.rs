@@ -1127,7 +1127,7 @@ mod tests {
         assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
         assert_eq!(
             revealed.address,
-            "kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag"
+            "kvncp464qa2wpqq2t53ham6cycp4we4ek0j6zkrg49q2k2yetpuguwc8hj0hadag"
         );
         let status = must(store.status(&path, now));
         assert_eq!(status.phase, PHASE_OPEN);
@@ -1375,7 +1375,7 @@ mod tests {
         assert_eq!(revealed.mnemonic.split_whitespace().count(), 24);
         assert_eq!(
             revealed.address,
-            "kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag"
+            "kvncp464qa2wpqq2t53ham6cycp4we4ek0j6zkrg49q2k2yetpuguwc8hj0hadag"
         );
         assert!(store.is_open_for_test());
         assert_eq!(store.passphrase_failures_for_test(), 0);
@@ -1496,8 +1496,7 @@ mod tests {
         fs::write(&path, cross_keystore_json()).unwrap();
         let mut store = WalletStore::new();
         let now = Instant::now();
-        let address =
-            "kvnc0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b07bc9f7e9dag";
+        let address = "kvncp464qa2wpqq2t53ham6cycp4we4ek0j6zkrg49q2k2yetpuguwc8hj0hadag";
         store.open_for_test(address.to_string(), now);
         let notify = NamedLock {
             events: Mutex::new(Vec::new()),

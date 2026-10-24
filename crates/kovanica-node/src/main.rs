@@ -87,8 +87,11 @@ struct Args {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Path to config file (used when running node)
-    #[arg(short, long, default_value = "config.toml")]
+    /// Path to config file (used when running the node and by `network-tag`).
+    ///
+    /// Global so `kovanica-node network-tag --config kovanica.toml` and
+    /// `kovanica-node --config kovanica.toml network-tag` both see it.
+    #[arg(short, long, default_value = "config.toml", global = true)]
     config: String,
 
     /// Validate the configuration (file + `KOVANICA_*` env overrides) and exit
@@ -102,6 +105,14 @@ struct Args {
 enum Commands {
     /// Genesis ceremony: build genesis block + staking state from validator keys
     Genesis(GenesisArgs),
+    /// Print the network tag for this config and genesis bundle, then exit.
+    ///
+    /// Does not open the database or listen on the network. The printed tag
+    /// is the string startup logs and `kovanica_syncStatus` returns as
+    /// `networkTag`. Uses the same `--config` and `KOVANICA_*` overrides as
+    /// a normal start.
+    #[command(name = "network-tag")]
+    NetworkTag,
 }
 
 #[derive(clap::Args, Debug)]
@@ -191,12 +202,23 @@ async fn main() -> Result<()> {
         Some(Commands::Genesis(g)) => {
             return run_genesis(g);
         }
+        Some(Commands::NetworkTag) => {
+            return run_network_tag(&args.config);
+        }
         None => {
             let config = NodeConfig::load(&args.config)?;
             info!(data_dir = %config.data_dir.display(), "starting Kovanica node");
             run_node(config, shutdown_signal()).await
         }
     }
+}
+
+/// Print the network tag and exit. No database, no sockets.
+fn run_network_tag(config_path: &str) -> Result<()> {
+    let config = NodeConfig::load(config_path)?;
+    let tag = network_tag_from_config(&config)?;
+    println!("{tag}");
+    Ok(())
 }
 
 /// Validate the configuration file plus environment overrides and exit.
@@ -684,7 +706,8 @@ where
     // 4. Networking
     // ------------------------------------------------------------------
     let network_config = build_network_config(&config)?;
-    log_network_identity(&network_config);
+    // Captured for `kovanica_syncStatus`: the same string just logged.
+    let network_tag = log_network_identity(&network_config);
     let (network, network_events) =
         NetworkService::new(network_config, dag_store.clone(), mempool.clone())
             .context("creating network service")?;
@@ -791,6 +814,7 @@ where
                 behind_by,
                 peer_count,
                 peers,
+                network_tag: Some(network_tag.clone()),
             }
         })
     };
@@ -4323,7 +4347,6 @@ fn build_mempool_config() -> MempoolConfig {
     config
 }
 
-/// Build the [`NetworkConfig`] from the node configuration.
 /// Log this node's network tag at startup and return it (#87 follow-up).
 ///
 /// Every protocol id and topic carries the tag, and a peer with another tag
@@ -4339,6 +4362,15 @@ fn log_network_identity(network_config: &NetworkConfig) -> String {
     tag
 }
 
+/// Tag [`log_network_identity`] prints and `kovanica_syncStatus` reports.
+///
+/// A pure read of the config and the genesis files in `data_dir`. Callers
+/// that must not start a node (`network-tag`) use this instead of [`run_node`].
+fn network_tag_from_config(config: &NodeConfig) -> Result<String> {
+    Ok(build_network_config(config)?.network_id.tag())
+}
+
+/// Build the [`NetworkConfig`] from the node configuration.
 fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
     let listen = to_multiaddr(&config.listen_addr)?;
 
@@ -5153,6 +5185,85 @@ mod tests {
             .network_id
             .identify_version()
             .starts_with(&format!("/kovanica/{tag}/")));
+    }
+
+    /// Files the genesis digest covers. Addresses are 32-byte hex, not keys.
+    fn write_network_tag_bundle(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("validators.json"),
+            format!(
+                r#"[{{"address":"{}","stake":50000000000000}}]"#,
+                "11".repeat(32)
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("founder_premine.hex"), "44".repeat(32)).unwrap();
+        std::fs::write(
+            dir.join("funded_accounts.toml"),
+            format!(
+                "[[account]]\naddress = \"{}\"\nbalance = 1000\n",
+                "22".repeat(32)
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("genesis_validators.toml"),
+            format!(
+                "chain_id = 4\n[[validator]]\naddress = \"{}\"\nstake = 50000000000000\n",
+                "33".repeat(32)
+            ),
+        )
+        .unwrap();
+    }
+
+    fn bundle_config(dir: &std::path::Path, treasury: Option<String>) -> NodeConfig {
+        NodeConfig {
+            treasury_address: treasury,
+            ..chain_id_config(dir, 4)
+        }
+    }
+
+    /// `kovanica_syncStatus.networkTag` is the startup line, and the offline
+    /// helper returns that same tag. Changing or dropping one bundle file
+    /// changes it. An unset treasury is the zero address.
+    #[test]
+    fn sync_status_network_tag_equals_the_startup_log() {
+        let dir = tempfile::tempdir().unwrap();
+        write_network_tag_bundle(dir.path());
+        let config = bundle_config(dir.path(), Some("55".repeat(32)));
+        let net = build_network_config(&config).unwrap();
+        let logged = log_network_identity(&net);
+        let offline = network_tag_from_config(&config).unwrap();
+        assert_eq!(offline, logged);
+        // Known answer for this fixture (chain 4, treasury 0x55.., the four
+        // bundle files). The offline CLI test locks the same string.
+        assert_eq!(logged, "4-2bd89b0649c4ecbd");
+        assert_eq!(offline, net.network_id.tag());
+
+        let status = SyncStatus {
+            network_tag: Some(logged.clone()),
+            ..SyncStatus::default()
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert!(json.get("networkTag").is_some(), "{json}");
+        assert_eq!(json["networkTag"], serde_json::json!(logged));
+
+        std::fs::write(dir.path().join("founder_premine.hex"), "66".repeat(32)).unwrap();
+        let changed = network_tag_from_config(&config).unwrap();
+        assert_ne!(changed, logged, "one changed file must change the tag");
+
+        std::fs::remove_file(dir.path().join("funded_accounts.toml")).unwrap();
+        let missing = network_tag_from_config(&config).unwrap();
+        assert_ne!(missing, logged, "a missing file must change the tag");
+        assert_ne!(missing, changed);
+
+        let unset = bundle_config(dir.path(), None);
+        let explicit_zero = bundle_config(dir.path(), Some("00".repeat(32)));
+        assert_eq!(
+            network_tag_from_config(&unset).unwrap(),
+            network_tag_from_config(&explicit_zero).unwrap(),
+            "an unset treasury is the zero address in the digest"
+        );
     }
 
     #[test]
@@ -7569,6 +7680,61 @@ mod tests {
         let testnet = chain_id_config(dir.path(), chain_id::TESTNET_V2);
         ensure_funded_accounts_allowed(&testnet).expect("chain 4 accepts funded accounts");
         assert!(genesis_config_digest(&testnet).is_ok());
+    }
+
+    /// The published checksum example must not tell a mainnet operator to hash
+    /// `funded_accounts.toml`. That file is refused on chain 1.
+    #[test]
+    fn mainnet_sha256sum_example_omits_funded_accounts() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let reset = std::fs::read_to_string(root.join("docs/TESTNET-RESET.md")).unwrap();
+        let onboarding =
+            std::fs::read_to_string(root.join("docs/VALIDATOR-ONBOARDING.md")).unwrap();
+        let ceremony = std::fs::read_to_string(root.join("docs/GENESIS-CEREMONY.md")).unwrap();
+
+        let mut saw_mainnet = false;
+        let mut saw_off_mainnet = false;
+        let mut mainnet_command = false;
+        for line in reset.lines() {
+            let trimmed = line.trim();
+            if trimmed == "# chain 1 (mainnet)" {
+                mainnet_command = true;
+                continue;
+            }
+            if !trimmed.starts_with("sha256sum ") {
+                continue;
+            }
+            if mainnet_command {
+                assert!(
+                    !trimmed.contains("funded_accounts.toml"),
+                    "mainnet checksum must omit funded_accounts.toml: {trimmed}"
+                );
+                assert!(trimmed.contains("validators.json"));
+                assert!(trimmed.contains("founder_premine.hex"));
+                assert!(trimmed.contains("genesis_validators.toml"));
+                saw_mainnet = true;
+                mainnet_command = false;
+            } else if trimmed.contains("funded_accounts.toml") {
+                saw_off_mainnet = true;
+            }
+        }
+        assert!(saw_mainnet, "missing the chain 1 sha256sum example");
+        assert!(
+            saw_off_mainnet,
+            "off-mainnet bundles still hash funded_accounts.toml"
+        );
+        assert!(
+            onboarding.contains("On mainnet (chain 1)") && onboarding.contains("must not name it"),
+            "onboarding must say the mainnet checksum omits funded_accounts.toml"
+        );
+        assert!(
+            !onboarding.contains("lists the four bundle files"),
+            "onboarding must not say every checksum lists funded_accounts.toml"
+        );
+        assert!(
+            ceremony.contains("mainnet `sha256sum` list therefore omits it"),
+            "the ceremony doc must point at the mainnet checksum list"
+        );
     }
 
     /// The authoritative check: actually running genesis on mainnet with a
