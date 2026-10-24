@@ -78,10 +78,12 @@ pub fn reported_balance(rpc: &impl Rpc, wallet: &str) -> Result<ReportedBalance,
 
 /// Transfers to or from `wallet` in the last [`HISTORY_WINDOW`] heights, plus
 /// a short look at the pool.
-pub fn reported_history(rpc: &impl Rpc, wallet: &str) -> Result<HistoryPage, String> {
-    let owner = wallet
-        .parse::<Address>()
-        .map_err(|_| "The wallet address could not be read.".to_string())?;
+pub fn reported_history(
+    rpc: &impl Rpc,
+    wallet: &str,
+    chain_id: Option<u64>,
+) -> Result<HistoryPage, String> {
+    let owner = parse_owner(wallet, chain_id)?;
     let height_value = rpc
         .call("kovanica_blockNumber", json!([]))
         .map_err(|err| err.to_string())?;
@@ -116,7 +118,7 @@ pub fn reported_history(rpc: &impl Rpc, wallet: &str) -> Result<HistoryPage, Str
                 let Ok(tx) = rpc.call("kovanica_getTransactionByHash", json!([hash])) else {
                     continue;
                 };
-                if let Some(row) = row_from_pending(&tx, owner, hash) {
+                if let Some(row) = row_from_pending(&tx, owner, hash, chain_id) {
                     transfers.push(row);
                 }
             }
@@ -157,7 +159,12 @@ fn row_from_log(item: &Value, owner: Address) -> Option<TransferRow> {
     })
 }
 
-fn row_from_pending(tx: &Value, owner: Address, requested_hash: &str) -> Option<TransferRow> {
+fn row_from_pending(
+    tx: &Value,
+    owner: Address,
+    requested_hash: &str,
+    chain_id: Option<u64>,
+) -> Option<TransferRow> {
     if tx.is_null() {
         return None;
     }
@@ -173,8 +180,8 @@ fn row_from_pending(tx: &Value, owner: Address, requested_hash: &str) -> Option<
     if kind.get("type").and_then(Value::as_str) != Some("transfer") {
         return None;
     }
-    let from = kind_address(tx.get("sender")?)?;
-    let to = kind_address(kind.get("to")?)?;
+    let from = kind_address(tx.get("sender")?, chain_id)?;
+    let to = kind_address(kind.get("to")?, chain_id)?;
     let amount = parse_qty(kind.get("amount")?).ok()?;
     let (direction, counterparty) = placement(owner, from, to)?;
     let transaction_hash = tx
@@ -193,8 +200,47 @@ fn row_from_pending(tx: &Value, owner: Address, requested_hash: &str) -> Option<
     })
 }
 
-fn kind_address(value: &Value) -> Option<Address> {
-    value.as_str()?.parse().ok()
+fn kind_address(value: &Value, chain_id: Option<u64>) -> Option<Address> {
+    let text = value.as_str()?;
+    match chain_id {
+        Some(chain) => Address::parse_for_chain(text, chain).ok(),
+        None => text.parse().ok(),
+    }
+}
+
+/// Decimal chain id from a node status field.
+///
+/// Missing, blank, or non-numeric text means the chain is unknown. History
+/// then accepts only the canonical base32 address.
+pub fn proven_chain_id(chain_id: Option<&str>) -> Option<u64> {
+    chain_id
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .and_then(|text| text.parse().ok())
+}
+
+fn parse_owner(wallet: &str, chain_id: Option<u64>) -> Result<Address, String> {
+    match chain_id {
+        Some(chain) => match Address::parse_for_chain(wallet, chain) {
+            Ok(address) => Ok(address),
+            Err(_) if legacy_label_refused(wallet, chain) => Err(format!(
+                "A legacy address label is not accepted on chain {chain}."
+            )),
+            Err(_) => Err("The wallet address could not be read.".to_string()),
+        },
+        None => wallet
+            .parse()
+            .map_err(|_| "The wallet address could not be read.".to_string()),
+    }
+}
+
+/// A keystore label in the legacy hex form, on a chain that only accepts base32.
+fn legacy_label_refused(wallet: &str, chain_id: u64) -> bool {
+    if kovanica_types::address::legacy_address_allowed(chain_id) {
+        return false;
+    }
+    wallet.parse::<Address>().is_err()
+        && Address::parse_for_chain(wallet, kovanica_types::signing::chain_id::TESTNET_V2).is_ok()
 }
 
 fn placement(owner: Address, from: Address, to: Address) -> Option<(String, String)> {
@@ -295,7 +341,7 @@ mod tests {
         ]);
         let pending = json!((0..20).map(|i| format!("0x{i:x}")).collect::<Vec<_>>());
         let rpc = HistRpc::new(600, logs, pending);
-        let page = reported_history(&rpc, &wallet.to_string()).unwrap();
+        let page = reported_history(&rpc, &wallet.to_string(), Some(4)).unwrap();
         assert_eq!(page.label, HISTORY_LABEL);
         assert_eq!(page.transfers.len(), 3);
         assert_eq!(page.transfers[0].direction, "out");
@@ -352,13 +398,89 @@ mod tests {
             inner: HistRpc::new(3, logs, json!([hash])),
             tx: pending_tx,
         };
-        let page = reported_history(&rpc, &wallet.to_string()).unwrap();
+        let page = reported_history(&rpc, &wallet.to_string(), Some(4)).unwrap();
         assert_eq!(page.transfers.len(), 2);
         assert!(page.transfers[0].pending);
         assert_eq!(page.transfers[0].direction, "in");
         assert_eq!(page.transfers[0].amount_atoms, "42");
         assert_eq!(page.transfers[0].transaction_hash, hash);
         assert!(!page.transfers[1].pending);
+    }
+
+    #[test]
+    fn legacy_history_addresses_follow_the_chain_policy() {
+        use kovanica_types::signing::chain_id;
+
+        let wallet = Address([4; 32]);
+        let other = Address([5; 32]);
+        let logs = json!([log(wallet, other, 2, 3, "0xab")]);
+        let hash = "0xpending";
+        let pending_tx = json!({
+            "hash": hash,
+            "sender": other.encode_legacy_hex(),
+            "status": "pending",
+            "blockNumber": null,
+            "kind": {
+                "type": "transfer",
+                "to": wallet.encode_legacy_hex(),
+                "amount": "0x2a",
+            }
+        });
+
+        struct OnePending {
+            inner: HistRpc,
+            tx: Value,
+        }
+        impl Rpc for OnePending {
+            fn call(&self, method: &str, params: Value) -> Result<Value, ConnError> {
+                if method == "kovanica_getTransactionByHash" {
+                    return Ok(self.tx.clone());
+                }
+                self.inner.call(method, params)
+            }
+        }
+        let page_for = |chain: Option<u64>, wallet_text: &str| {
+            let rpc = OnePending {
+                inner: HistRpc::new(3, logs.clone(), json!([hash])),
+                tx: pending_tx.clone(),
+            };
+            reported_history(&rpc, wallet_text, chain)
+        };
+
+        let on_v2 = page_for(Some(chain_id::TESTNET_V2), &wallet.encode_legacy_hex()).unwrap();
+        assert_eq!(on_v2.transfers.len(), 2);
+        assert!(on_v2.transfers[0].pending);
+        assert_eq!(on_v2.transfers[0].direction, "in");
+        assert_eq!(on_v2.transfers[0].counterparty, other.to_string());
+
+        let legacy = wallet.encode_legacy_hex();
+        let refused = page_for(Some(chain_id::MAINNET), &legacy).unwrap_err();
+        assert_eq!(
+            refused,
+            "A legacy address label is not accepted on chain 1."
+        );
+        let unknown = page_for(None, &legacy).unwrap_err();
+        assert_eq!(unknown, "The wallet address could not be read.");
+        assert_eq!(
+            parse_owner(&legacy, Some(chain_id::MAINNET)).unwrap_err(),
+            "A legacy address label is not accepted on chain 1."
+        );
+        assert!(parse_owner(&legacy, Some(chain_id::TESTNET_V2)).is_ok());
+        assert!(parse_owner(&wallet.to_string(), Some(chain_id::MAINNET)).is_ok());
+        assert_eq!(
+            parse_owner("not-an-address", Some(chain_id::MAINNET)).unwrap_err(),
+            "The wallet address could not be read."
+        );
+
+        let base32_only = page_for(None, &wallet.to_string()).unwrap();
+        assert_eq!(base32_only.transfers.len(), 1);
+        assert!(!base32_only.transfers[0].pending);
+
+        assert_eq!(proven_chain_id(Some("4")), Some(4));
+        assert_eq!(proven_chain_id(Some(" 1337 ")), Some(1337));
+        assert_eq!(proven_chain_id(Some("")), None);
+        assert_eq!(proven_chain_id(Some("nope")), None);
+        assert_eq!(proven_chain_id(None), None);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 Not audited. Do not use with real value. Not for production.
 Interfaces, consensus parameters, and tokenomics constants may change without notice.
 
-The chain is **Kovanica**. The native coin ticker is **KUNA** (9 decimals). All crates, binaries, environment variables, and protocol prefixes use the `kovanica` namespace. Addresses use the `kvnc<hex>dag` format: `kvnc` + 72 hex chars (32-byte Ed25519 public key + 4-byte Blake3 checksum) + `dag`. Bare or `0x`-prefixed 64-hex public keys are also accepted for backward compatibility.
+The chain is **Kovanica**. The native coin ticker is **KUNA** (9 decimals). All crates, binaries, environment variables, and protocol prefixes use the `kovanica` namespace. Addresses are 64 characters: `kvnc` + 57 base32 chars (bech32 alphabet, 285 bits: the 32-byte Ed25519 public key followed by the first 29 bits of its Blake3 hash, no padding) + `dag` (PRO-21). The legacy forms (`kvnc` + 72 hex + `dag`, and bare or `0x` 64-hex keys) are accepted on devnet (chain 3), chain 4, and local (1337). Mainnet (1), testnet (2), and every other chain id refuse them. `Address::parse_for_chain` enforces it (`legacy_address_allowed`). `FromStr` accepts only the 64-character base32 form. That base32 body is strictly lowercase. Legacy hex digits are case-insensitive; the `kvnc` and `dag` affixes and the `0x` prefix are lowercase.
 
 ---
 
@@ -61,7 +61,7 @@ Canonical constants (implemented in `crates/kovanica-staking` and documented in 
 | Minimum validator stake | 50 000 KUNA |
 | Active validator range | 15–21 |
 | Unbonding period | 100 000 committed leader blocks (~13.9 days at 12 s/leader) |
-| Epoch rotation length | 7 200 rounds (`EPOCH_ROUNDS`; deliberately decoupled from the subsidy era) |
+| Epoch rotation length | epoch = 8 h = 7200 DAG rounds = 2400 leader heights (`EPOCH_ROUNDS` / `EPOCH_LEADER_HEIGHTS`; deliberately decoupled from the subsidy era) |
 | Slashing | 500 bps (5%) fixed-percentage double-sign slash |
 | Light-node reward share | 20% (2 000 bps) of the block reward, escrowed for light nodes |
 | Minimum light-node bond | 100 KUNA |
@@ -224,8 +224,9 @@ The `kovanica-node` binary exposes a `genesis` subcommand that builds a genesis 
 ```bash
 kovanica-node genesis \
   --validators validators.json \
-  --treasury-address <64 hex> \
-  --founder-address <64 hex> \
+  --chain-id <1|2|3|4|1337> \
+  --treasury-address <64 hex or kvnc…dag> \
+  --founder-address <64 hex or kvnc…dag> \
   --output genesis.json \
   [--validator-keys-out <dir>] \
   [--force]
@@ -308,7 +309,7 @@ The light stack lets clients follow committed leader headers and seals without r
 - `kovanica-light-ffi` — UniFFI bindings consumed by the Android (Kotlin) and iOS (Swift) apps.
 - Apps: `apps/android` (`io.kovanica.light`, versionCode 8 / versionName 0.7.0, minSdk 24) and `apps/ios` (SwiftUI `KovanicaLight`), both driven by the generated UniFFI bindings.
 
-Light nodes earn a **20% share** of the block reward (`LIGHT_REWARD_BPS = 2 000`), escrowed per epoch across `LIGHT_WITNESS_SLOTS = 32` winning witness slots, capped at `MAX_LIGHT_NODES = 4 096` identities, with a minimum bond of `MIN_LIGHT_BOND = 100 KUNA`. The light node reads its keystore passphrase from `KOVANICA_LIGHT_PASSPHRASE`; a systemd unit is provided in `packaging/systemd/kovanica-lightnode.service`.
+Light nodes earn a **20% share** of the block reward (`LIGHT_REWARD_BPS = 2 000`), escrowed per light-set epoch (2 400 committed leaders ≈ 8 h, settled once per epoch) across `LIGHT_WITNESS_SLOTS = 32` winning witness slots, capped at `MAX_LIGHT_NODES = 4 096` identities, with a minimum bond of `MIN_LIGHT_BOND = 100 KUNA`. The light node reads its keystore passphrase from `KOVANICA_LIGHT_PASSPHRASE`; a systemd unit is provided in `packaging/systemd/kovanica-lightnode.service`.
 
 The only light-client RPC surface today is `kovanica_lightClientCheckpoint` (stub, `verified = false`) and `kovanica_getLightSet` — see the RPC notes above.
 

@@ -415,11 +415,19 @@ class MessagesActivity : Activity() {
             )
             return
         }
+        val registryCanonical = registryCanonical(registry)
+        if (registryCanonical == null) {
+            setStatus(
+                "That registry address isn't valid on this chain. Use the 64-character kvnc…dag form.",
+                Tone.ERROR,
+            )
+            return
+        }
         val rpc = rpcField.text.toString().trim().ifEmpty { DEFAULT_RPC }
         saveRpc(rpc)
         task("Looking up \"$name\"…", work = {
             try {
-                LookupOutcome(RegistryClient(NodeClient(rpc), registry).resolve(name), null)
+                LookupOutcome(RegistryClient(NodeClient(rpc), registryCanonical).resolve(name), null)
             } catch (invalid: IllegalArgumentException) {
                 // resolve() rejects names that break the registry rules; say so plainly.
                 LookupOutcome(null, invalid.message ?: "That name isn't valid for this registry.")
@@ -535,6 +543,20 @@ class MessagesActivity : Activity() {
         }
     }
 
+    /**
+     * Chain id from the shared `chainId` pref, when the wallet has set one.
+     * Absent means base32 only: this app has no chain picker, and guessing
+     * 1337 would turn a legacy hex address into canonical on every chain.
+     */
+    private fun addressChain(): Long =
+        prefs().getString("chainId", null)?.trim()?.toLongOrNull() ?: -1L
+
+    /** Canonical registry address, or null when [raw] is not valid for [addressChain]. */
+    private fun registryCanonical(raw: String): String? {
+        val key = KvncAddress.normalizeHex(raw, addressChain()) ?: return null
+        return KvncAddress.display(key)
+    }
+
     /** Keep the always-visible state line honest as the address is typed. */
     private fun updateRegistryState() {
         val value = registryField.text.toString().trim()
@@ -542,8 +564,11 @@ class MessagesActivity : Activity() {
             registryState.text =
                 "Name lookup is off — no registry contract address set. Tap Add to save someone by public key."
             registryState.setTextColor(MUTED)
+        } else if (registryCanonical(value) == null) {
+            registryState.text = "That isn't a Kovanica address on this chain."
+            registryState.setTextColor(BAD)
         } else {
-            registryState.text = "Name lookup on · ${shortId(value)}"
+            registryState.text = "Name lookup on · ${KvncAddress.short(value)}"
             registryState.setTextColor(ACCENT)
         }
     }

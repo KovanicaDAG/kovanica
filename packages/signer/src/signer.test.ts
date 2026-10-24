@@ -4,7 +4,13 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { decodeAddress, encodeAddress } from "./address.js";
+import {
+  ADDRESS_LENGTH,
+  decodeAddress,
+  encodeAddress,
+  encodeLegacyAddress,
+  parseAddress,
+} from "./address.js";
 import { formatKuna, parseKuna } from "./amount.js";
 import { bytesToHex, hexToBytes } from "./bytes.js";
 import "./ed25519.js";
@@ -20,7 +26,9 @@ const fixture = JSON.parse(
   seedHex: string;
   publicKeyHex: string;
   senderAddress: string;
+  senderAddressLegacy: string;
   recipientAddress: string;
+  recipientAddressLegacy: string;
   mnemonic: string;
   transactions: Array<{
     name: string;
@@ -143,9 +151,50 @@ describe("addresses and amounts", () => {
     expect(encodeAddress(sender)).toBe(fixture.senderAddress);
     expect(encodeAddress(recipient)).toBe(fixture.recipientAddress);
     expect(bytesToHex(decodeAddress(fixture.senderAddress))).toBe(fixture.publicKeyHex);
+    expect(fixture.senderAddress.length).toBe(ADDRESS_LENGTH);
+    expect(ADDRESS_LENGTH).toBe(64);
     const body = fixture.senderAddress.slice(0, -3);
-    const flipped = body.slice(0, -1) + (body.endsWith("a") ? "b" : "a");
+    const flipped = body.slice(0, -1) + (body.endsWith("q") ? "p" : "q");
     expect(() => decodeAddress(`${flipped}dag`)).toThrow(/checksum/);
+    expect(() => decodeAddress(`${body.slice(0, -1)}bdag`)).toThrow(/alphabet/);
+    expect(() => decodeAddress(`${body.slice(0, -1)}dag`)).toThrow(/64 characters/);
+    expect(() => decodeAddress(`kvnx${fixture.senderAddress.slice(4)}`)).toThrow(/start with kvnc/);
+  });
+
+  it("accepts legacy hex on dev chains and chain 4, and refuses it elsewhere (PRO-21)", () => {
+    expect(encodeLegacyAddress(sender)).toBe(fixture.senderAddressLegacy);
+    expect(encodeLegacyAddress(recipient)).toBe(fixture.recipientAddressLegacy);
+    for (const legacy of [fixture.senderAddressLegacy, fixture.publicKeyHex, `0x${fixture.publicKeyHex}`]) {
+      for (const chain of [3, 4, 1337]) {
+        expect(bytesToHex(parseAddress(legacy, chain))).toBe(fixture.publicKeyHex);
+      }
+      expect(bytesToHex(parseAddress(legacy))).toBe(fixture.publicKeyHex);
+      expect(() => parseAddress(legacy, 1)).toThrow(/not accepted on chain 1/);
+      expect(() => parseAddress(legacy, 2)).toThrow(/not accepted on chain 2/);
+      expect(() => parseAddress(legacy, 99)).toThrow(/not accepted on chain 99/);
+    }
+    for (const chain of [1, 2, 3, 4, 1337]) {
+      expect(bytesToHex(parseAddress(fixture.senderAddress, chain))).toBe(fixture.publicKeyHex);
+    }
+  });
+
+  it("treats legacy hex digits as case-insensitive and base32 as lowercase (PRO-21)", () => {
+    const upperHex = fixture.publicKeyHex.toUpperCase();
+    expect(bytesToHex(parseAddress(upperHex, 4))).toBe(fixture.publicKeyHex);
+    expect(bytesToHex(parseAddress(`0x${upperHex}`, 1337))).toBe(fixture.publicKeyHex);
+    const legacy = fixture.senderAddressLegacy;
+    const upperLegacy = `kvnc${legacy.slice(4, -3).toUpperCase()}dag`;
+    expect(bytesToHex(parseAddress(upperLegacy, 3))).toBe(fixture.publicKeyHex);
+    expect(() => parseAddress(upperLegacy, 1)).toThrow(/not accepted/);
+    const letter = [...fixture.senderAddress].findIndex(
+      (c, i) => i > 3 && i < 61 && c >= "a" && c <= "z",
+    );
+    expect(letter).toBeGreaterThan(3);
+    const upperBody =
+      fixture.senderAddress.slice(0, letter) +
+      fixture.senderAddress[letter].toUpperCase() +
+      fixture.senderAddress.slice(letter + 1);
+    expect(() => parseAddress(upperBody, 4)).toThrow(/alphabet/);
   });
 
   it("parses KUNA with 9 decimal places", () => {

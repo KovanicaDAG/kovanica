@@ -27,14 +27,14 @@ class TokenStore(context: Context) {
         val out = ArrayList<String>(list.length())
         for (i in 0 until list.length()) {
             val raw = list.optString(i)
-            KvncAddress.normalizeHex(raw)?.let { if (it !in out) out.add(it) }
+            KvncAddress.storedKey(raw)?.let { if (it !in out) out.add(it) }
         }
         return out
     }
 
     /** Add [addressHex] to [networkId]; a no-op when already present. */
     fun add(networkId: String, addressHex: String) {
-        val hex = KvncAddress.normalizeHex(addressHex) ?: return
+        val hex = KvncAddress.storedKey(addressHex) ?: return
         val current = watched(networkId).toMutableList()
         if (current.contains(hex)) return
         current.add(hex)
@@ -43,7 +43,7 @@ class TokenStore(context: Context) {
 
     /** Remove [addressHex] from [networkId]; a no-op when absent. */
     fun remove(networkId: String, addressHex: String) {
-        val hex = KvncAddress.normalizeHex(addressHex) ?: return
+        val hex = KvncAddress.storedKey(addressHex) ?: return
         val current = watched(networkId).toMutableList()
         if (!current.remove(hex)) return
         save(networkId, current)
