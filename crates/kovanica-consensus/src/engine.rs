@@ -6,8 +6,10 @@
 
 use crate::metrics::{
     observe_finality_latency, record_block_height, record_commit_latency, record_committed_leader,
-    record_current_round, record_mergeset_size_metric, record_skipped_leader, SkipReason,
+    record_current_round, record_mergeset_size_metric, record_skipped_leader,
+    record_timeout_signed, record_vote_timeout_equivocation, SkipReason,
 };
+use crate::skip::{verify_skip_cert, verify_timeout, TimeoutPool, TimeoutRejection};
 use crate::types::{CommitteeInfo, LeaderInfo, LeaderStatus};
 use crate::{
     committer::{next_leader_slot, UniversalCommitter},
@@ -70,6 +72,12 @@ where
     fn broadcast_vote(&self, vote: &kovanica_types::Vote) {
         self(vote)
     }
+}
+
+/// Broadcasts leader-slot timeouts and skip certificates (PRO-40 (b)).
+pub trait TimeoutBroadcaster: Send + Sync {
+    fn broadcast_timeout(&self, timeout: &kovanica_types::Timeout);
+    fn broadcast_skip_cert(&self, cert: &kovanica_types::SkipCert);
 }
 
 /// Trait for DAG store operations needed by consensus.
@@ -172,6 +180,30 @@ pub trait DagStoreTrait: Send + Sync {
         &self,
         _round: Round,
     ) -> Result<Vec<kovanica_types::Vote>, kovanica_dag::DagStoreError> {
+        Ok(Vec::new())
+    }
+    /// Record `round` as decided by a quorum skip certificate: a decided
+    /// round with no leader (PRO-40 (b)). Durable stores must persist it, so
+    /// a restart resumes the cursor after the skip. Must refuse a round that
+    /// already holds a leader decision. The default is a no-op for in-memory
+    /// test doubles.
+    fn mark_round_skipped(&self, _round: Round) -> Result<(), kovanica_dag::DagStoreError> {
+        Ok(())
+    }
+    /// Persist a verified timeout (PRO-40 (b)). This node's own timeout is
+    /// written here **before** it is broadcast, so a restart can never vote
+    /// for a slot it already timed out. Default no-op for test doubles.
+    fn put_timeout(
+        &self,
+        _timeout: &kovanica_types::Timeout,
+    ) -> Result<(), kovanica_dag::DagStoreError> {
+        Ok(())
+    }
+    /// Timeouts persisted for one leader slot, ordered by signer.
+    fn get_timeouts_for_round(
+        &self,
+        _round: Round,
+    ) -> Result<Vec<kovanica_types::Timeout>, kovanica_dag::DagStoreError> {
         Ok(Vec::new())
     }
     /// Get all decided rounds up to a maximum.
@@ -316,6 +348,15 @@ pub struct ConsensusConfig {
     /// Either way the committer map must not prefer a digest the store does
     /// not hold. See `docs/rfcs/RFC-B1-B2-VRF-AND-MIN-DIGEST.md`.
     pub use_min_digest_fork: bool,
+    /// Genesis hash bound into every timeout signature (PRO-40 (b)), so a
+    /// timeout from another reset of the same chain never verifies. The node
+    /// sets it from the genesis configuration digest.
+    pub genesis_hash: Hash,
+    /// `T_skip` in rounds (PRO-40 (b)): how long the first undecided leader
+    /// slot may stay unvoted, after its vote round, before this node signs a
+    /// timeout for it. Also the rebroadcast interval while the slot stays
+    /// stalled. Default `2 * WAVE_LENGTH` = 6 rounds ≈ 24 s.
+    pub skip_timeout_rounds: Round,
 }
 
 impl Default for ConsensusConfig {
@@ -331,6 +372,8 @@ impl Default for ConsensusConfig {
             late_vote_window_rounds: kovanica_types::WAVE_LENGTH,
             use_vrf_leader: true,
             use_min_digest_fork: true,
+            genesis_hash: Hash::zero(),
+            skip_timeout_rounds: 2 * kovanica_types::WAVE_LENGTH,
         }
     }
 }
@@ -413,6 +456,19 @@ where
     /// latency. Entries are removed on commit and pruned with the round
     /// window, so the map stays bounded by `max_pending_rounds`.
     leader_first_seen: RwLock<HashMap<Round, Instant>>,
+    /// This node's own timeouts, by slot (PRO-40 (b)). Together with
+    /// `voted_rounds` this is the vote-xor-timeout lock; both are restored
+    /// from the store at start-up. Lock order: `voted_rounds` first.
+    own_timeouts: Mutex<std::collections::BTreeMap<Round, kovanica_types::Timeout>>,
+    /// Verified timeouts of all signers for undecided slots.
+    timeout_pool: Mutex<TimeoutPool>,
+    /// The first undecided slot and when this node started waiting on it
+    /// (after its vote round). Drives `T_skip` and rebroadcasts.
+    stall_timer: Mutex<Option<(Round, Instant)>>,
+    /// Last time a stored skip certificate was served for a round, to rate
+    /// limit answers to lagging peers.
+    cert_served: Mutex<HashMap<Round, Instant>>,
+    timeout_broadcaster: RwLock<Option<Arc<dyn TimeoutBroadcaster>>>,
 }
 
 impl<D, B> ConsensusEngine<D, B>
@@ -479,6 +535,11 @@ where
             voted_rounds: Mutex::new(std::collections::BTreeSet::new()),
             vrf_outputs: RwLock::new(HashMap::new()),
             leader_first_seen: RwLock::new(HashMap::new()),
+            own_timeouts: Mutex::new(std::collections::BTreeMap::new()),
+            timeout_pool: Mutex::new(TimeoutPool::default()),
+            stall_timer: Mutex::new(None),
+            cert_served: Mutex::new(HashMap::new()),
+            timeout_broadcaster: RwLock::new(None),
         }
     }
 
@@ -579,6 +640,11 @@ where
         *self.vote_broadcaster.write() = Some(broadcaster);
     }
 
+    /// Attach the network side for timeouts and skip certificates.
+    pub fn set_timeout_broadcaster(&self, broadcaster: Arc<dyn TimeoutBroadcaster>) {
+        *self.timeout_broadcaster.write() = Some(broadcaster);
+    }
+
     /// Deliver durable committed sub-DAGs to the execution pipeline.
     pub fn set_commit_sender(
         &self,
@@ -664,6 +730,15 @@ where
 
         let mut restored = 0usize;
         let mut round = (cursor / kovanica_types::WAVE_LENGTH + 1) * kovanica_types::WAVE_LENGTH;
+        // Own votes and timeouts first, over a range that also covers slots
+        // timed out after the last stored block, so the vote-xor-timeout lock
+        // survives the restart even where the leader block is missing.
+        let lock_end = tip + self.config.skip_timeout_rounds + 2 * kovanica_types::WAVE_LENGTH;
+        let mut lock_slot = round;
+        while lock_slot <= lock_end {
+            self.restore_slot_locks(lock_slot)?;
+            lock_slot += kovanica_types::WAVE_LENGTH;
+        }
         while round <= tip {
             let slot = round;
             round += kovanica_types::WAVE_LENGTH;
@@ -695,6 +770,43 @@ where
                 cursor,
                 restored, "restored the commit cursor and undecided leaders from the store"
             );
+        }
+        Ok(())
+    }
+
+    /// Reload this node's own vote/timeout for `slot` and the stored
+    /// timeouts of other signers (PRO-40 (b)).
+    fn restore_slot_locks(&self, slot: Round) -> Result<(), ConsensusError> {
+        let our = self.state.read().our_authority;
+        if self
+            .dag_store
+            .get_votes_for_round(slot)?
+            .iter()
+            .any(|v| v.voter == our)
+        {
+            self.voted_rounds.lock().insert(slot);
+        }
+        let mut certified = false;
+        for timeout in self.dag_store.get_timeouts_for_round(slot)? {
+            if verify_timeout(
+                &self.committee,
+                self.signing_ctx.chain_id,
+                &self.config.genesis_hash,
+                &timeout,
+            )
+            .is_err()
+            {
+                continue;
+            }
+            if timeout.voter == our {
+                self.own_timeouts.lock().insert(slot, timeout.clone());
+            }
+            let mut pool = self.timeout_pool.lock();
+            pool.insert(timeout);
+            certified = pool.certificate(&self.committee, slot).is_some();
+        }
+        if certified {
+            self.committer.record_skip_certificate(slot);
         }
         Ok(())
     }
@@ -763,7 +875,8 @@ where
             // Late votes for the slots the commit walk is waiting on (PRO-40
             // (a)), then try to commit any pending leaders.
             self.vote_awaited_slots()?;
-            self.try_commit_and_deliver()?;
+            self.check_skip_timeout()?;
+            self.drain_commits()?;
 
             // If we're the leader, propose a block (no timeout needed; we just proposed).
             // Non-leaders: start an absolute deadline for the scheduled leader of this round.
@@ -966,9 +1079,12 @@ where
         // timed out on must still be votable when its block finally arrives
         // (otherwise one missed timeout would make quorum unreachable and the
         // chain would halt while every component still reported healthy).
-        if self.committer.is_decided(leader_round)
-            && self.committer.last_decided_round() >= leader_round
-        {
+        //
+        // PRO-40 (b): every leader slot at or below the cursor is decided
+        // (committed, or skipped with a certificate), including slots decided
+        // before a restart that the in-memory map no longer holds, so the
+        // cursor alone is the test.
+        if self.committer.last_decided_round() >= leader_round {
             debug!(
                 "Leader round {} already decided locally; not voting",
                 leader_round
@@ -1004,6 +1120,21 @@ where
             let mut voted = self.voted_rounds.lock();
             if voted.contains(&leader_round) || leader_info.votes.contains_key(&our_authority) {
                 debug!("Already voted for leader round {}", leader_round);
+                return Ok(false);
+            }
+            // Vote xor timeout (PRO-40 (b)): a slot this node timed out is
+            // never voted for, also after a restart (durable check).
+            if self.own_timeouts.lock().contains_key(&leader_round)
+                || self
+                    .dag_store
+                    .get_timeouts_for_round(leader_round)?
+                    .iter()
+                    .any(|t| t.voter == our_authority)
+            {
+                debug!(
+                    "Timed out leader round {} earlier; not voting",
+                    leader_round
+                );
                 return Ok(false);
             }
             match self.dag_store.get_votes_for_round(leader_round) {
@@ -1160,6 +1291,291 @@ where
                 .is_some_and(|leader| leader.block_hash.is_some());
             if known {
                 self.vote_if_late(slot)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `T_skip` as a duration.
+    fn skip_timeout(&self) -> Duration {
+        Duration::from_millis(
+            self.config
+                .skip_timeout_rounds
+                .saturating_mul(self.config.round_duration_ms),
+        )
+    }
+
+    /// Highest slot a timeout or certificate is accepted for.
+    fn timeout_high_water(&self) -> Round {
+        let current = *self.current_round.read();
+        current.saturating_add(
+            self.config
+                .lookahead_rounds
+                .max(kovanica_types::WAVE_LENGTH),
+        )
+    }
+
+    /// Called every round (PRO-40 (b)). Once the first undecided slot has
+    /// stayed unvoted for `T_skip` after its vote round, sign a timeout for
+    /// it; while it stays stalled, rebroadcast this node's own timeout or
+    /// vote every `T_skip`, so lost messages and lagging peers recover.
+    fn check_skip_timeout(&self) -> Result<(), ConsensusError> {
+        if self.state.read().our_stake == 0 {
+            return Ok(());
+        }
+        let slot = next_leader_slot(self.committer.last_decided_round());
+        let current = *self.current_round.read();
+        if current <= slot + 1 {
+            // The vote round has not passed yet.
+            *self.stall_timer.lock() = None;
+            return Ok(());
+        }
+        let now = Instant::now();
+        {
+            let mut timer = self.stall_timer.lock();
+            match *timer {
+                Some((stalled, since)) if stalled == slot => {
+                    if now.duration_since(since) < self.skip_timeout() {
+                        return Ok(());
+                    }
+                }
+                _ => {
+                    *timer = Some((slot, now));
+                    return Ok(());
+                }
+            }
+            *timer = Some((slot, now));
+        }
+        self.time_out_or_rebroadcast(slot)
+    }
+
+    /// Sign a timeout for `slot` unless this node voted for it; otherwise
+    /// rebroadcast what it already signed for the slot.
+    pub(crate) fn time_out_or_rebroadcast(&self, slot: Round) -> Result<(), ConsensusError> {
+        if let Some(own) = self.own_timeouts.lock().get(&slot).cloned() {
+            if let Some(b) = self.timeout_broadcaster.read().as_ref() {
+                b.broadcast_timeout(&own);
+            }
+            return Ok(());
+        }
+        let our = self.state.read().our_authority;
+        let own_vote = self
+            .dag_store
+            .get_votes_for_round(slot)?
+            .into_iter()
+            .find(|v| v.voter == our);
+        if let Some(vote) = own_vote {
+            if let Some(b) = self.vote_broadcaster.read().as_ref() {
+                b.broadcast_vote(&vote);
+            }
+            return Ok(());
+        }
+        self.sign_timeout(slot)?;
+        Ok(())
+    }
+
+    /// Sign, durably record, and broadcast this node's timeout for `slot`
+    /// (PRO-40 (b)). Returns `false` if the node voted for the slot or
+    /// already timed it out. The timeout is written to the store **before**
+    /// it leaves the node; if that write fails it is not sent.
+    pub(crate) fn sign_timeout(&self, slot: Round) -> Result<bool, ConsensusError> {
+        if !is_leader_round(slot) || slot <= self.committer.last_decided_round() {
+            return Ok(false);
+        }
+        let our = self.state.read().our_authority;
+        let timeout = {
+            let voted = self.voted_rounds.lock();
+            let mut own = self.own_timeouts.lock();
+            if voted.contains(&slot) || own.contains_key(&slot) {
+                return Ok(false);
+            }
+            let voted_in_map = self
+                .committer
+                .get_leader(slot)
+                .is_some_and(|l| l.votes.contains_key(&our));
+            if voted_in_map
+                || self
+                    .dag_store
+                    .get_votes_for_round(slot)?
+                    .iter()
+                    .any(|v| v.voter == our)
+            {
+                return Ok(false);
+            }
+            let mut timeout = kovanica_types::Timeout {
+                round: slot,
+                voter: our,
+                signature: kovanica_types::Signature([0u8; 64]),
+            };
+            timeout.signature = sign(
+                &self.signing_key,
+                &timeout.signature_data(self.signing_ctx.chain_id, &self.config.genesis_hash),
+            );
+            if let Err(e) = self.dag_store.put_timeout(&timeout) {
+                warn!(
+                    round = slot,
+                    error = %e,
+                    "own timeout could not be persisted; not sending it"
+                );
+                return Ok(false);
+            }
+            own.insert(slot, timeout.clone());
+            timeout
+        };
+        record_timeout_signed();
+        warn!(
+            round = slot,
+            "leader slot still undecided after T_skip; signed a timeout"
+        );
+        self.add_verified_timeout(timeout.clone())?;
+        match self.timeout_broadcaster.read().as_ref() {
+            Some(b) => b.broadcast_timeout(&timeout),
+            None => warn!(round = slot, "no timeout broadcaster is attached"),
+        }
+        Ok(true)
+    }
+
+    /// Process a timeout received from the network (PRO-40 (b)).
+    ///
+    /// Accepted for slots in `(cursor, current + lookahead]`, at most one per
+    /// signer and slot. A timeout for a slot this node already skipped is
+    /// answered with the stored certificate, which is how a lagging peer
+    /// moves past a slot the others skipped while it was away.
+    pub fn process_timeout(&self, timeout: &kovanica_types::Timeout) -> Result<(), ConsensusError> {
+        verify_timeout(
+            &self.committee,
+            self.signing_ctx.chain_id,
+            &self.config.genesis_hash,
+            timeout,
+        )?;
+        let cursor = self.committer.last_decided_round();
+        if timeout.round <= cursor {
+            self.serve_skip_cert(timeout.round)?;
+            return Ok(());
+        }
+        let high = self.timeout_high_water();
+        if timeout.round > high {
+            return Err(TimeoutRejection::OutOfRange {
+                round: timeout.round,
+                low: cursor,
+                high,
+            }
+            .into());
+        }
+        self.add_verified_timeout(timeout.clone())
+    }
+
+    /// Pool a verified timeout, persist it, and act on a new certificate.
+    fn add_verified_timeout(&self, timeout: kovanica_types::Timeout) -> Result<(), ConsensusError> {
+        let round = timeout.round;
+        let voter = timeout.voter;
+        if self
+            .committer
+            .get_leader(round)
+            .is_some_and(|l| l.votes.contains_key(&voter))
+        {
+            record_vote_timeout_equivocation();
+            warn!(
+                round,
+                voter, "validator signed both a vote and a timeout for one slot"
+            );
+        }
+        let cert = {
+            let mut pool = self.timeout_pool.lock();
+            if !pool.insert(timeout.clone()) {
+                return Ok(());
+            }
+            pool.certificate(&self.committee, round)
+        };
+        if voter != self.state.read().our_authority {
+            if let Err(e) = self.dag_store.put_timeout(&timeout) {
+                warn!(round, voter, error = %e, "accepted timeout could not be persisted");
+            }
+        }
+        if let Some(cert) = cert {
+            if !self.committer.has_skip_certificate(round) {
+                info!(
+                    round,
+                    signers = cert.timeouts.len(),
+                    "skip certificate formed"
+                );
+                self.committer.record_skip_certificate(round);
+                if let Some(b) = self.timeout_broadcaster.read().as_ref() {
+                    b.broadcast_skip_cert(&cert);
+                }
+                self.drain_commits()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Process a skip certificate received from the network (PRO-40 (b)).
+    pub fn process_skip_cert(&self, cert: &kovanica_types::SkipCert) -> Result<(), ConsensusError> {
+        let cursor = self.committer.last_decided_round();
+        if cert.round <= cursor || self.committer.has_skip_certificate(cert.round) {
+            return Ok(());
+        }
+        let high = self.timeout_high_water();
+        // The upper bound caps memory against certificates for far-future
+        // slots; a stale certificate (at or below the cursor) is ignored.
+        if cert.round > high {
+            return Err(TimeoutRejection::OutOfRange {
+                round: cert.round,
+                low: cursor,
+                high,
+            }
+            .into());
+        }
+        verify_skip_cert(
+            &self.committee,
+            self.signing_ctx.chain_id,
+            &self.config.genesis_hash,
+            cert,
+        )?;
+        {
+            let mut pool = self.timeout_pool.lock();
+            for timeout in &cert.timeouts {
+                if pool.insert(timeout.clone()) {
+                    if let Err(e) = self.dag_store.put_timeout(timeout) {
+                        warn!(round = cert.round, error = %e, "certificate timeout could not be persisted");
+                    }
+                }
+            }
+        }
+        info!(round = cert.round, "received a valid skip certificate");
+        self.committer.record_skip_certificate(cert.round);
+        self.drain_commits()
+    }
+
+    /// Re-send the stored certificate for a slot this node skipped, at most
+    /// once per `T_skip` per slot.
+    fn serve_skip_cert(&self, round: Round) -> Result<(), ConsensusError> {
+        if !self.dag_store.get_decided_leaders(round)?.is_empty() {
+            return Ok(()); // committed, not skipped
+        }
+        let now = Instant::now();
+        {
+            let mut served = self.cert_served.lock();
+            if served
+                .get(&round)
+                .is_some_and(|at| now.duration_since(*at) < self.skip_timeout())
+            {
+                return Ok(());
+            }
+            served.retain(|r, at| {
+                *r + 64 * kovanica_types::WAVE_LENGTH > round
+                    && now.duration_since(*at) < self.skip_timeout()
+            });
+            served.insert(round, now);
+        }
+        let mut pool = TimeoutPool::default();
+        for timeout in self.dag_store.get_timeouts_for_round(round)? {
+            pool.insert(timeout);
+        }
+        if let Some(cert) = pool.certificate(&self.committee, round) {
+            if let Some(b) = self.timeout_broadcaster.read().as_ref() {
+                debug!(round, "serving a stored skip certificate to a lagging peer");
+                b.broadcast_skip_cert(&cert);
             }
         }
         Ok(())
@@ -1401,6 +1817,14 @@ where
         if !is_leader_round(leader_round) {
             return Err(VoteRejection::NotLeaderRound(leader_round).into());
         }
+        // PRO-40 (b): a validator that voted for a slot the others skipped
+        // while it was away cannot time it out; it rebroadcasts its vote
+        // instead. Answer with the stored certificate (rate limited).
+        if leader_round <= self.committer.last_decided_round() {
+            if let Err(e) = self.serve_skip_cert(leader_round) {
+                debug!(leader_round, error = %e, "could not serve a skip certificate");
+            }
+        }
 
         let has_quorum = self
             .committer
@@ -1434,8 +1858,19 @@ where
             .committer
             .try_commit_and_mark_durable(self.dag_store.as_ref())?
         else {
+            // No commit: the first undecided slot may have a skip certificate
+            // (PRO-40 (b)). `drain_commits` then continues with the next slot.
+            if let Some(round) = self
+                .committer
+                .try_skip_and_mark_durable(self.dag_store.as_ref())?
+            {
+                record_skipped_leader(SkipReason::Certified);
+                self.timeout_pool.lock().prune_through(round);
+                self.leader_first_seen.write().remove(&round);
+            }
             return Ok(());
         };
+        self.timeout_pool.lock().prune_through(subdag.leader_round);
         let commit_elapsed_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
 
         // The committer persists before publication. On restart, the node
@@ -1548,6 +1983,12 @@ where
         Ok(())
     }
 
+    /// The commit cursor: the highest leader slot decided by a commit or a
+    /// certified skip.
+    pub fn last_decided_round(&self) -> Round {
+        self.committer.last_decided_round()
+    }
+
     /// Get the current round.
     pub fn current_round(&self) -> Round {
         *self.current_round.read()
@@ -1591,6 +2032,8 @@ pub enum ConsensusError {
     InvalidVote(String),
     #[error("Vote rejected: {0}")]
     VoteRejected(#[from] VoteRejection),
+    #[error("Timeout rejected: {0}")]
+    TimeoutRejected(#[from] TimeoutRejection),
 }
 
 /// Why [`ConsensusEngine::process_vote`] refused to count a vote.
@@ -1643,6 +2086,10 @@ mod tests {
         fail_put_vote: std::sync::atomic::AtomicBool,
         /// When set, `get_votes_for_round` fails before returning stored votes.
         fail_get_votes: std::sync::atomic::AtomicBool,
+        /// Timeouts persisted through `DagStoreTrait::put_timeout`.
+        persisted_timeouts: Mutex<Vec<kovanica_types::Timeout>>,
+        /// Rounds recorded through `DagStoreTrait::mark_round_skipped`.
+        skipped: Mutex<Vec<Round>>,
     }
 
     impl DagStoreTrait for TestDag {
@@ -1825,13 +2272,60 @@ mod tests {
             &self,
             max_round: Round,
         ) -> Result<Vec<Round>, kovanica_dag::DagStoreError> {
-            Ok(self
+            let mut rounds: Vec<Round> = self
                 .decisions
                 .lock()
                 .iter()
                 .filter(|(r, _)| *r <= max_round)
                 .map(|(r, _)| *r)
-                .collect())
+                .collect();
+            rounds.extend(self.skipped.lock().iter().filter(|r| **r <= max_round));
+            Ok(rounds)
+        }
+
+        fn mark_round_skipped(&self, round: Round) -> Result<(), kovanica_dag::DagStoreError> {
+            let existing = self.get_decided_leaders(round)?;
+            if !existing.is_empty() {
+                return Err(kovanica_dag::DagStoreError::ConflictingDecision {
+                    round,
+                    existing,
+                    new: Hash::zero(),
+                });
+            }
+            let mut skipped = self.skipped.lock();
+            if !skipped.contains(&round) {
+                skipped.push(round);
+            }
+            Ok(())
+        }
+
+        fn put_timeout(
+            &self,
+            timeout: &kovanica_types::Timeout,
+        ) -> Result<(), kovanica_dag::DagStoreError> {
+            let mut stored = self.persisted_timeouts.lock();
+            if !stored
+                .iter()
+                .any(|t| t.round == timeout.round && t.voter == timeout.voter)
+            {
+                stored.push(timeout.clone());
+            }
+            Ok(())
+        }
+
+        fn get_timeouts_for_round(
+            &self,
+            round: Round,
+        ) -> Result<Vec<kovanica_types::Timeout>, kovanica_dag::DagStoreError> {
+            let mut out: Vec<_> = self
+                .persisted_timeouts
+                .lock()
+                .iter()
+                .filter(|t| t.round == round)
+                .cloned()
+                .collect();
+            out.sort_by_key(|t| t.voter);
+            Ok(out)
         }
 
         fn max_stored_round(&self) -> Result<Option<Round>, kovanica_dag::DagStoreError> {
@@ -4217,5 +4711,494 @@ mod tests {
         // different nonce, so the duplicate is stopped at execution instead.
         // What matters here is that detection produced exactly one proof.
         assert_eq!(mempool.len(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // PRO-40 (b): timeouts and quorum skip certificates
+    // -----------------------------------------------------------------
+
+    const SKIP_GENESIS: Hash = Hash([0x5a; 32]);
+
+    #[derive(Default)]
+    struct TimeoutRecorder {
+        timeouts: Mutex<Vec<kovanica_types::Timeout>>,
+        certs: Mutex<Vec<kovanica_types::SkipCert>>,
+    }
+
+    impl TimeoutBroadcaster for TimeoutRecorder {
+        fn broadcast_timeout(&self, timeout: &kovanica_types::Timeout) {
+            self.timeouts.lock().push(timeout.clone());
+        }
+        fn broadcast_skip_cert(&self, cert: &kovanica_types::SkipCert) {
+            self.certs.lock().push(cert.clone());
+        }
+    }
+
+    struct SkipFixture {
+        committee: CommitteeInfo,
+        keys: Vec<kovanica_types::SigningKey>,
+        dag: Arc<TestDag>,
+        engine: ConsensusEngine<TestDag, TestBlockManager>,
+        recorder: Arc<TimeoutRecorder>,
+        votes: Arc<Mutex<Vec<Round>>>,
+        commits: mpsc::UnboundedReceiver<kovanica_types::CommittedSubDag>,
+    }
+
+    /// Authority 0 of five equal validators (quorum 4).
+    type KeyPairs = Vec<(kovanica_types::SigningKey, PublicKey)>;
+
+    fn key_pairs() -> KeyPairs {
+        (0..5)
+            .map(|_| kovanica_crypto::generate_keypair())
+            .collect()
+    }
+
+    fn skip_fixture_with(dag: Arc<TestDag>, pairs: KeyPairs) -> SkipFixture {
+        let keys: Vec<kovanica_types::SigningKey> = pairs.iter().map(|p| p.0.clone()).collect();
+        let authorities = pairs
+            .iter()
+            .enumerate()
+            .map(|(i, (_, pk))| AuthorityInfo {
+                index: i as AuthorityIndex,
+                stake: 1,
+                public_key: *pk,
+                vrf_public_key: None,
+                address: Address::default(),
+                network_address: String::new(),
+            })
+            .collect();
+        let committee = CommitteeInfo::try_new(0, authorities).expect("committee");
+        let manager = Arc::new(RwLock::new(TestBlockManager {
+            dag: dag.clone(),
+            key: RwLock::new(keys[0].clone()),
+            set_key_calls: AtomicUsize::new(0),
+        }));
+        let engine = ConsensusEngine::new(
+            ConsensusConfig {
+                genesis_hash: SKIP_GENESIS,
+                ..ConsensusConfig::default()
+            },
+            committee.clone(),
+            dag.clone(),
+            manager,
+            keys[0].clone(),
+            None,
+            TEST_CTX,
+        );
+        let recorder = Arc::new(TimeoutRecorder::default());
+        engine.set_timeout_broadcaster(recorder.clone());
+        let votes: Arc<Mutex<Vec<Round>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = votes.clone();
+        engine.set_vote_broadcaster(Arc::new(move |v: &kovanica_types::Vote| {
+            sink.lock().push(v.leader_round)
+        }));
+        let (tx, commits) = mpsc::unbounded_channel();
+        engine.set_commit_sender(tx);
+        SkipFixture {
+            committee,
+            keys,
+            dag,
+            engine,
+            recorder,
+            votes,
+            commits,
+        }
+    }
+
+    fn skip_fixture() -> SkipFixture {
+        skip_fixture_with(Arc::new(TestDag::default()), key_pairs())
+    }
+
+    fn signed_timeout(
+        key: &kovanica_types::SigningKey,
+        voter: AuthorityIndex,
+        round: Round,
+        genesis: &Hash,
+    ) -> kovanica_types::Timeout {
+        let mut t = kovanica_types::Timeout {
+            round,
+            voter,
+            signature: kovanica_types::Signature([0; 64]),
+        };
+        t.signature = kovanica_crypto::sign(key, &t.signature_data(TEST_CTX.chain_id, genesis));
+        t
+    }
+
+    fn leader_block(
+        committee: &CommitteeInfo,
+        key: &kovanica_types::SigningKey,
+        round: Round,
+    ) -> kovanica_types::StatementBlock {
+        let author = committee.leader(round);
+        let digest = kovanica_types::StatementBlock::compute_digest(author, round, &[], &[]);
+        kovanica_types::StatementBlock {
+            author,
+            round,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_crypto::sign(key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        }
+    }
+
+    #[test]
+    fn four_timeouts_skip_the_slot_durably_and_the_next_leader_commits() {
+        let mut f = skip_fixture();
+        *f.engine.current_round.write() = 10;
+        // Slot 3 never got a block. We time out, then three peers do.
+        assert!(f.engine.sign_timeout(3).unwrap());
+        assert_eq!(f.recorder.timeouts.lock().len(), 1);
+        for voter in [1u16, 2] {
+            f.engine
+                .process_timeout(&signed_timeout(
+                    &f.keys[voter as usize],
+                    voter,
+                    3,
+                    &SKIP_GENESIS,
+                ))
+                .unwrap();
+        }
+        assert_eq!(
+            f.engine.committer.last_decided_round(),
+            0,
+            "3 of 5: no skip"
+        );
+        assert!(f.dag.skipped.lock().is_empty());
+        f.engine
+            .process_timeout(&signed_timeout(&f.keys[4], 4, 3, &SKIP_GENESIS))
+            .unwrap();
+        assert_eq!(f.engine.committer.last_decided_round(), 3);
+        assert_eq!(*f.dag.skipped.lock(), vec![3], "skip is durable");
+        assert_eq!(f.recorder.certs.lock().len(), 1, "certificate is gossiped");
+        assert!(f.commits.try_recv().is_err(), "a skip delivers nothing");
+        // The skipped slot is never voted for afterwards.
+        assert!(!f.engine.vote_for_leader(3).unwrap());
+
+        // Slot 6 commits normally after the skip.
+        *f.engine.current_round.write() = 7;
+        let block = leader_block(&f.committee, &f.keys[0], 6);
+        f.engine.process_block(&block).unwrap();
+        assert_eq!(f.votes.lock().last().copied(), Some(6));
+        for voter in [1u16, 2, 3] {
+            f.engine
+                .process_vote(&signed_vote(
+                    &f.keys[voter as usize],
+                    6,
+                    voter,
+                    block.digest,
+                ))
+                .unwrap();
+        }
+        let committed = f.commits.try_recv().expect("slot 6 commits after the skip");
+        assert_eq!(committed.leader_round, 6);
+    }
+
+    #[test]
+    fn a_vote_blocks_the_timeout_and_a_timeout_blocks_the_vote() {
+        let f = skip_fixture();
+        *f.engine.current_round.write() = 4;
+        let block = leader_block(&f.committee, &f.keys[0], 3);
+        f.engine.process_block(&block).unwrap();
+        assert_eq!(*f.votes.lock(), vec![3]);
+        assert!(!f.engine.sign_timeout(3).unwrap(), "voted: no timeout");
+
+        *f.engine.current_round.write() = 9;
+        assert!(f.engine.sign_timeout(6).unwrap());
+        assert!(!f.engine.sign_timeout(6).unwrap(), "one timeout per slot");
+        *f.engine.current_round.write() = 7;
+        f.engine
+            .process_block(&leader_block(&f.committee, &f.keys[0], 6))
+            .unwrap();
+        assert!(!f.engine.vote_for_leader(6).unwrap(), "timed out: no vote");
+        assert_eq!(*f.votes.lock(), vec![3]);
+    }
+
+    #[test]
+    fn the_own_timeout_lock_survives_a_restart() {
+        let keys = key_pairs();
+        let dag = Arc::new(TestDag::default());
+        {
+            let f = skip_fixture_with(dag.clone(), keys.clone());
+            *f.engine.current_round.write() = 9;
+            assert!(f.engine.sign_timeout(6).unwrap());
+        }
+        assert_eq!(
+            dag.persisted_timeouts.lock().len(),
+            1,
+            "written before sending"
+        );
+        *dag.stored_tip.write() = Some(9);
+        let f = skip_fixture_with(dag, keys);
+        f.engine.resume_from_store().unwrap();
+        f.engine
+            .process_block(&leader_block(&f.committee, &f.keys[0], 6))
+            .unwrap();
+        assert!(!f.engine.vote_for_leader(6).unwrap());
+        assert!(f.votes.lock().is_empty());
+        // The restarted node rebroadcasts the stored timeout, never a new one.
+        f.engine.time_out_or_rebroadcast(6).unwrap();
+        let sent = f.recorder.timeouts.lock().clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0], f.engine.own_timeouts.lock()[&6]);
+    }
+
+    /// The other half of the durable xor: a vote written before it was sent
+    /// still refuses a timeout for that slot after restart, and the restarted
+    /// node rebroadcasts the stored vote.
+    #[test]
+    fn restart_after_own_vote_refuses_the_timeout() {
+        let keys = key_pairs();
+        let dag = Arc::new(TestDag::default());
+        {
+            let f = skip_fixture_with(dag.clone(), keys.clone());
+            *f.engine.current_round.write() = 4;
+            let block = leader_block(&f.committee, &f.keys[0], 3);
+            f.engine.process_block(&block).unwrap();
+            assert_eq!(*f.votes.lock(), vec![3]);
+            assert!(!f.engine.sign_timeout(3).unwrap(), "voted: no timeout");
+            assert_eq!(
+                dag.persisted_votes.lock().len(),
+                1,
+                "the vote is stored before it is broadcast"
+            );
+        }
+        *dag.stored_tip.write() = Some(9);
+        let f = skip_fixture_with(dag.clone(), keys);
+        f.engine.resume_from_store().unwrap();
+        assert!(
+            f.engine.voted_rounds.lock().contains(&3),
+            "the stored self-vote is restored"
+        );
+        assert!(
+            !f.engine.sign_timeout(3).unwrap(),
+            "no timeout after restart"
+        );
+        assert!(f.recorder.timeouts.lock().is_empty());
+        f.engine.time_out_or_rebroadcast(3).unwrap();
+        assert!(
+            f.recorder.timeouts.lock().is_empty(),
+            "rebroadcast must not sign a timeout"
+        );
+        assert_eq!(*f.votes.lock(), vec![3], "the stored vote is rebroadcast");
+        assert!(
+            dag.get_votes_for_round(3)
+                .unwrap()
+                .iter()
+                .any(|vote| vote.voter == f.engine.state.read().our_authority),
+            "the stored vote is unchanged"
+        );
+        assert!(dag.persisted_timeouts.lock().is_empty());
+    }
+
+    #[test]
+    fn foreign_genesis_out_of_range_and_non_member_timeouts_are_rejected() {
+        let f = skip_fixture();
+        *f.engine.current_round.write() = 10;
+        let wrong = signed_timeout(&f.keys[1], 1, 3, &Hash([1; 32]));
+        assert!(matches!(
+            f.engine.process_timeout(&wrong),
+            Err(ConsensusError::TimeoutRejected(
+                TimeoutRejection::BadSignature(1)
+            ))
+        ));
+        let far = signed_timeout(&f.keys[1], 1, 30, &SKIP_GENESIS);
+        assert!(matches!(
+            f.engine.process_timeout(&far),
+            Err(ConsensusError::TimeoutRejected(
+                TimeoutRejection::OutOfRange { .. }
+            ))
+        ));
+        let mut stranger = signed_timeout(&f.keys[1], 1, 3, &SKIP_GENESIS);
+        stranger.voter = 7;
+        assert!(matches!(
+            f.engine.process_timeout(&stranger),
+            Err(ConsensusError::TimeoutRejected(
+                TimeoutRejection::UnknownVoter(7)
+            ))
+        ));
+        assert!(f.engine.timeout_pool.lock().is_empty());
+    }
+
+    #[test]
+    fn a_network_certificate_skips_only_with_a_quorum() {
+        let mut f = skip_fixture();
+        *f.engine.current_round.write() = 10;
+        let cert = |voters: &[u16]| kovanica_types::SkipCert {
+            round: 3,
+            timeouts: voters
+                .iter()
+                .map(|v| signed_timeout(&f.keys[*v as usize], *v, 3, &SKIP_GENESIS))
+                .collect(),
+        };
+        assert!(matches!(
+            f.engine.process_skip_cert(&cert(&[1, 2, 3])),
+            Err(ConsensusError::TimeoutRejected(
+                TimeoutRejection::NoQuorum { .. }
+            ))
+        ));
+        assert_eq!(f.engine.committer.last_decided_round(), 0);
+        f.engine.process_skip_cert(&cert(&[1, 2, 3, 4])).unwrap();
+        assert_eq!(f.engine.committer.last_decided_round(), 3);
+        assert_eq!(*f.dag.skipped.lock(), vec![3]);
+        assert!(f.commits.try_recv().is_err());
+        // A lagging peer's timeout for the skipped slot is answered with
+        // the stored certificate.
+        f.engine
+            .process_timeout(&signed_timeout(&f.keys[2], 2, 3, &SKIP_GENESIS))
+            .unwrap();
+        let served = f.recorder.certs.lock().clone();
+        assert_eq!(served.len(), 1);
+        assert_eq!(served[0].round, 3);
+        assert!(served[0].timeouts.len() >= 4);
+    }
+
+    #[test]
+    fn a_rebroadcast_vote_for_a_skipped_slot_is_answered_with_the_certificate() {
+        let f = skip_fixture();
+        *f.engine.current_round.write() = 10;
+        f.engine
+            .process_skip_cert(&kovanica_types::SkipCert {
+                round: 3,
+                timeouts: (1..5u16)
+                    .map(|v| signed_timeout(&f.keys[v as usize], v, 3, &SKIP_GENESIS))
+                    .collect(),
+            })
+            .unwrap();
+        // The returning leader voted for its own slot-3 block and keeps
+        // rebroadcasting that vote.
+        let vote = signed_vote(&f.keys[1], 3, 1, Hash([9; 32]));
+        let _ = f.engine.process_vote(&vote);
+        let _ = f.engine.process_vote(&vote);
+        let served = f.recorder.certs.lock().clone();
+        assert_eq!(served.len(), 1, "served once per T_skip");
+        assert_eq!(served[0].round, 3);
+    }
+
+    #[test]
+    fn a_slot_with_a_vote_quorum_is_committed_never_skipped() {
+        let mut f = skip_fixture();
+        *f.engine.current_round.write() = 4;
+        let block = leader_block(&f.committee, &f.keys[0], 3);
+        f.engine.process_block(&block).unwrap();
+        for voter in [1u16, 2, 3] {
+            f.engine
+                .process_vote(&signed_vote(
+                    &f.keys[voter as usize],
+                    3,
+                    voter,
+                    block.digest,
+                ))
+                .unwrap();
+        }
+        assert_eq!(f.commits.try_recv().unwrap().leader_round, 3);
+        // A (byzantine) certificate for the committed slot is stale.
+        f.engine
+            .process_skip_cert(&kovanica_types::SkipCert {
+                round: 3,
+                timeouts: (1..5u16)
+                    .map(|v| signed_timeout(&f.keys[v as usize], v, 3, &SKIP_GENESIS))
+                    .collect(),
+            })
+            .unwrap();
+        assert!(f.dag.skipped.lock().is_empty());
+    }
+
+    #[test]
+    fn check_skip_timeout_signs_only_after_t_skip_and_then_rebroadcasts() {
+        let mut f = skip_fixture_with(Arc::new(TestDag::default()), key_pairs());
+        f.engine.config.round_duration_ms = 1;
+        f.engine.config.skip_timeout_rounds = 20; // 20 ms
+        *f.engine.current_round.write() = 5; // slot 3, vote round 4 passed
+        f.engine.check_skip_timeout().unwrap();
+        assert!(f.recorder.timeouts.lock().is_empty(), "timer only started");
+        f.engine.check_skip_timeout().unwrap();
+        assert!(f.recorder.timeouts.lock().is_empty(), "T_skip not elapsed");
+        std::thread::sleep(Duration::from_millis(30));
+        f.engine.check_skip_timeout().unwrap();
+        assert_eq!(f.recorder.timeouts.lock().len(), 1);
+        assert_eq!(f.recorder.timeouts.lock()[0].round, 3);
+        std::thread::sleep(Duration::from_millis(30));
+        f.engine.check_skip_timeout().unwrap();
+        let sent = f.recorder.timeouts.lock().clone();
+        assert_eq!(sent.len(), 2, "rebroadcast while stalled");
+        assert_eq!(sent[0], sent[1], "the same timeout, never a second one");
+    }
+
+    /// A skip certificate on the last leader slot of an epoch and the first
+    /// slot of the next epoch. The timeout preimage binds `epoch(round)`, so
+    /// a signature from the previous epoch does not verify on the far side
+    /// of the boundary, and both certificates still move the cursor.
+    #[test]
+    fn epoch_boundary_skip_certs_bind_epoch_of_the_round() {
+        let mut f = skip_fixture();
+        let wave = kovanica_types::WAVE_LENGTH;
+        let last_of_epoch_0 = kovanica_types::EPOCH_ROUNDS - wave;
+        let first_of_epoch_1 = kovanica_types::EPOCH_ROUNDS;
+        assert_eq!(last_of_epoch_0, 7_197);
+        assert_eq!(first_of_epoch_1, 7_200);
+        assert!(is_leader_round(last_of_epoch_0));
+        assert!(is_leader_round(first_of_epoch_1));
+        assert_eq!(kovanica_types::epoch_for_round(last_of_epoch_0), 0);
+        assert_eq!(kovanica_types::epoch_for_round(first_of_epoch_1), 1);
+
+        let cursor = last_of_epoch_0 - wave;
+        f.engine.committer.restore_last_decided_round(cursor);
+        *f.engine.current_round.write() = first_of_epoch_1 + 6;
+
+        // Same bytes as a valid epoch-0 timeout, retargeted at the epoch-1 slot.
+        let mut forged = signed_timeout(&f.keys[1], 1, last_of_epoch_0, &SKIP_GENESIS);
+        forged.round = first_of_epoch_1;
+        assert!(matches!(
+            f.engine.process_timeout(&forged),
+            Err(ConsensusError::TimeoutRejected(
+                TimeoutRejection::BadSignature(1)
+            ))
+        ));
+
+        assert!(f.engine.sign_timeout(last_of_epoch_0).unwrap());
+        for voter in [1u16, 2, 3] {
+            f.engine
+                .process_timeout(&signed_timeout(
+                    &f.keys[voter as usize],
+                    voter,
+                    last_of_epoch_0,
+                    &SKIP_GENESIS,
+                ))
+                .unwrap();
+        }
+        assert_eq!(f.engine.committer.last_decided_round(), last_of_epoch_0);
+        assert!(f.commits.try_recv().is_err(), "a skip delivers nothing");
+
+        assert!(f.engine.sign_timeout(first_of_epoch_1).unwrap());
+        let own = f.engine.own_timeouts.lock()[&first_of_epoch_1].clone();
+        let preimage = own.signature_data(TEST_CTX.chain_id, &SKIP_GENESIS);
+        assert_eq!(
+            &preimage[56..64],
+            &1u64.to_le_bytes(),
+            "the epoch-1 slot is signed under epoch 1"
+        );
+        for voter in [1u16, 2, 3] {
+            f.engine
+                .process_timeout(&signed_timeout(
+                    &f.keys[voter as usize],
+                    voter,
+                    first_of_epoch_1,
+                    &SKIP_GENESIS,
+                ))
+                .unwrap();
+        }
+        assert_eq!(f.engine.committer.last_decided_round(), first_of_epoch_1);
+        assert!(f.commits.try_recv().is_err(), "a skip delivers nothing");
+        let rounds: Vec<_> = f
+            .recorder
+            .certs
+            .lock()
+            .iter()
+            .map(|cert| cert.round)
+            .collect();
+        assert!(rounds.contains(&last_of_epoch_0));
+        assert!(rounds.contains(&first_of_epoch_1));
     }
 }

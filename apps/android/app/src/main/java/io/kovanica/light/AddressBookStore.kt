@@ -39,7 +39,7 @@ class AddressBookStore(context: Context) {
 
     /** The saved label for [address], or `null` when it is not in the book. */
     fun label(address: String?): String? {
-        val hex = KvncAddress.normalizeHex(address) ?: return null
+        val hex = KvncAddress.storedKey(address) ?: return null
         return list().firstOrNull { it.address == hex }?.label
     }
 
@@ -50,7 +50,7 @@ class AddressBookStore(context: Context) {
      * deleting the row.
      */
     fun add(label: String, address: String): Boolean {
-        val hex = KvncAddress.normalizeHex(address) ?: return false
+        val hex = KvncAddress.storedKey(address) ?: return false
         val name = label.trim()
         if (name.isEmpty()) return false
 
@@ -69,7 +69,7 @@ class AddressBookStore(context: Context) {
 
     /** Drop [address] from the book. Returns true when a row was removed. */
     fun remove(address: String): Boolean {
-        val hex = KvncAddress.normalizeHex(address) ?: return false
+        val hex = KvncAddress.storedKey(address) ?: return false
         val current = list().toMutableList()
         if (!current.removeAll { it.address == hex }) return false
         save(current)
@@ -86,7 +86,7 @@ class AddressBookStore(context: Context) {
         val out = ArrayList<AddressBookEntry>(array.length())
         for (i in 0 until array.length()) {
             val obj = array.optJSONObject(i) ?: continue
-            val hex = KvncAddress.normalizeHex(obj.optString("address")) ?: continue
+            val hex = KvncAddress.storedKey(obj.optString("address")) ?: continue
             val name = obj.optString("label").trim()
             if (name.isEmpty()) continue
             if (out.any { it.address == hex }) continue

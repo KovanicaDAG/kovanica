@@ -335,15 +335,16 @@ fn keystore_failure(err: impl std::fmt::Display) -> LightError {
 /// signing-time nonce here; the `+1` is applied internally (via
 /// `saturating_add`, mirroring the node).
 ///
-/// `sender` accepts the canonical `kvnc<hex>dag` display form (checksum
-/// verified) or a bare / `0x`-prefixed 64-hex payload. Returns the bare
-/// 64-hex contract address.
+/// `sender` accepts the canonical 64-character base32 form, or a legacy hex
+/// form (bare, `0x`, or `kvnc<hex>dag`). This helper has no chain id yet, so
+/// it uses the lenient parser (chain 4). Returns the bare 64-hex contract
+/// address.
 pub fn contract_address_for(sender: &str, nonce: u64) -> Result<String, LightError> {
-    let sender: Address = sender
-        .parse()
-        .map_err(|e: kovanica_types::address::AddressError| {
-            LightError::InvalidAddress(e.to_string())
-        })?;
+    // No chain is known here. Chain 4 accepts canonical and legacy hex, which
+    // is the contract this function had while `FromStr` was lenient. Passing
+    // a chain id through light-ffi is a follow-up; this file is not that API.
+    let sender = Address::parse_for_chain(sender, kovanica_types::signing::chain_id::TESTNET_V2)
+        .map_err(|e| LightError::InvalidAddress(e.to_string()))?;
     // Mirrors `kovanica-execution::touched_accounts`: sender bytes followed by
     // the post-increment nonce, little-endian, then BLAKE3.
     let mut material = Vec::with_capacity(40);
