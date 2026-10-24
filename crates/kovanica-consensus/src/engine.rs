@@ -151,16 +151,21 @@ pub trait DagStoreTrait: Send + Sync {
     ) -> Result<Vec<kovanica_types::block::StatementBlock>, kovanica_dag::DagStoreError>;
     /// Get decided leader hashes for a round.
     fn get_decided_leaders(&self, round: Round) -> Result<Vec<Hash>, kovanica_dag::DagStoreError>;
-    /// Persist an accepted vote so it survives a restart and can be handed to
-    /// a peer that joins later.
+    /// Persist a vote so it survives a restart and can be handed to a peer
+    /// that joins later.
     ///
     /// The default is a no-op, which keeps in-memory test doubles unchanged.
     /// A durable implementation stores the vote under its leader round.
     ///
-    /// This is *not* part of consensus: the vote has already been accepted
-    /// (signature verified, leader matched, quorum evaluated) before it is
-    /// written. A failure here must never turn an accepted vote into a
-    /// rejected one — it only means the vote cannot be served later.
+    /// Two callers, with different failure rules:
+    ///
+    /// * An already-accepted vote (`process_vote`) is written after consensus
+    ///   has counted it. A failure there must not turn that accepted vote
+    ///   into a rejected one. It only means the vote cannot be served later.
+    /// * This node's own vote is written *before* it is counted or broadcast.
+    ///   `Err` means the vote was not sent and the slot is not reserved. `Ok`
+    ///   is the durable lock for that slot: a later start must not sign a
+    ///   different digest, and it does not re-send the stored vote.
     ///
     /// See `docs/rfcs/RFC-009-VOTE-TRANSFER-OVER-BLOCK-SYNC.md`.
     fn put_vote(&self, _vote: &kovanica_types::Vote) -> Result<(), kovanica_dag::DagStoreError> {
@@ -2079,6 +2084,8 @@ mod tests {
         persisted_votes: Mutex<Vec<kovanica_types::Vote>>,
         /// When set, `put_vote` fails without storing the vote.
         fail_put_vote: std::sync::atomic::AtomicBool,
+        /// When set, `get_votes_for_round` fails before returning stored votes.
+        fail_get_votes: std::sync::atomic::AtomicBool,
         /// Timeouts persisted through `DagStoreTrait::put_timeout`.
         persisted_timeouts: Mutex<Vec<kovanica_types::Timeout>>,
         /// Rounds recorded through `DagStoreTrait::mark_round_skipped`.
@@ -2339,6 +2346,11 @@ mod tests {
             &self,
             round: Round,
         ) -> Result<Vec<kovanica_types::Vote>, kovanica_dag::DagStoreError> {
+            if self.fail_get_votes.load(Ordering::SeqCst) {
+                return Err(kovanica_dag::DagStoreError::NotFound(
+                    "injected vote read failure".into(),
+                ));
+            }
             Ok(self
                 .persisted_votes
                 .lock()
@@ -2470,6 +2482,55 @@ mod tests {
             TEST_CTX,
         );
         (engine, dag, key)
+    }
+
+    /// A new engine on an existing store, as after a process restart.
+    fn restarted_engine(
+        dag: Arc<TestDag>,
+        key: kovanica_types::SigningKey,
+        round_duration_ms: u64,
+    ) -> ConsensusEngine<TestDag, TestBlockManager> {
+        let public_key = PublicKey::from(key.verifying_key());
+        let committee = CommitteeInfo::try_new(
+            0,
+            vec![AuthorityInfo {
+                index: 0,
+                stake: 100,
+                public_key,
+                vrf_public_key: None,
+                address: Address::default(),
+                network_address: String::new(),
+            }],
+        )
+        .expect("test committee is valid");
+        let manager = Arc::new(RwLock::new(TestBlockManager {
+            dag: dag.clone(),
+            key: RwLock::new(key.clone()),
+            set_key_calls: AtomicUsize::new(0),
+        }));
+        ConsensusEngine::new(
+            ConsensusConfig {
+                round_duration_ms,
+                ..Default::default()
+            },
+            committee,
+            dag,
+            manager,
+            key,
+            None,
+            TEST_CTX,
+        )
+    }
+
+    fn record_broadcasts(
+        engine: &ConsensusEngine<TestDag, TestBlockManager>,
+    ) -> Arc<Mutex<Vec<kovanica_types::Vote>>> {
+        let sent: Arc<Mutex<Vec<kovanica_types::Vote>>> = Arc::new(Mutex::new(Vec::new()));
+        let sent_log = sent.clone();
+        engine.set_vote_broadcaster(Arc::new(move |vote: &kovanica_types::Vote| {
+            sent_log.lock().push(vote.clone());
+        }));
+        sent
     }
 
     fn test_engine_at_epoch(
@@ -3695,6 +3756,172 @@ mod tests {
         assert_eq!(sent.lock()[0].leader_hash, digest);
         assert_eq!(dag.get_votes_for_round(3).unwrap().len(), 1);
         assert_eq!(commits.try_recv().unwrap().leader.digest, digest);
+    }
+
+    /// The durable write committed and the process died before `broadcast_vote`.
+    /// After restart the stored vote is not sent, and a different digest for
+    /// the same slot is not signed.
+    #[test]
+    fn crash_between_persist_and_send_is_not_resent_and_does_not_equivocate() {
+        let (engine, dag, key) = test_engine(100);
+        let block = stored_leader_block(&key, 3);
+        let digest_x = block.digest;
+        engine.process_block(&block).unwrap();
+
+        let ctx = engine.vote_signing_ctx(3);
+        let mut stored = kovanica_types::Vote {
+            leader_round: 3,
+            leader_hash: digest_x,
+            voter: 0,
+            signature: kovanica_types::Signature([0; 64]),
+        };
+        stored.signature = kovanica_crypto::sign(&key, &stored.signature_data(&ctx));
+        dag.persisted_votes.lock().push(stored);
+        drop(engine);
+
+        let restarted = restarted_engine(dag.clone(), key, 100);
+        // The block is already in the store, so `process_block` does not
+        // re-register the leader. Put the record back the way a resume would,
+        // with an empty in-memory vote map.
+        restarted.committer.update_leader(LeaderInfo {
+            round: 3,
+            author: 0,
+            block_hash: Some(digest_x),
+            status: LeaderStatus::Undecided,
+            votes: HashMap::new(),
+        });
+        let sent = record_broadcasts(&restarted);
+        assert!(
+            !restarted.vote_for_leader(3).unwrap(),
+            "a vote stored before the crash is not sent after restart"
+        );
+        assert!(
+            sent.lock().is_empty(),
+            "restart must not re-send a vote that was never broadcast"
+        );
+
+        // The in-memory reservation from the same-digest refusal is gone on a
+        // real restart. Drop it here so the conflicting digest reaches the
+        // durable check.
+        let digest_y = kovanica_types::Hash([0x00; 32]);
+        assert!(
+            digest_y.0 < digest_x.0,
+            "the replacement must be the smaller digest so the leader record updates"
+        );
+        restarted.committer.update_leader(LeaderInfo {
+            round: 3,
+            author: 0,
+            block_hash: Some(digest_y),
+            status: LeaderStatus::Undecided,
+            votes: HashMap::new(),
+        });
+        assert_eq!(
+            restarted
+                .committer
+                .get_leader(3)
+                .and_then(|leader| leader.block_hash),
+            Some(digest_y)
+        );
+        restarted.voted_rounds.lock().remove(&3);
+        assert!(
+            !restarted.vote_for_leader(3).unwrap(),
+            "a stored vote must block a conflicting digest"
+        );
+        assert!(
+            sent.lock().is_empty(),
+            "a conflicting digest must not be broadcast, got {:?}",
+            sent.lock()
+                .iter()
+                .map(|vote| vote.leader_hash)
+                .collect::<Vec<_>>()
+        );
+        let own = dag.get_votes_for_round(3).unwrap();
+        assert_eq!(own.len(), 1, "the stored self-vote is unchanged");
+        assert_eq!(own[0].voter, 0);
+        assert_eq!(own[0].leader_hash, digest_x);
+    }
+
+    /// A read error on the stored self-vote fails closed: nothing is signed
+    /// or reserved. A later successful read can still vote.
+    #[test]
+    fn stored_vote_read_error_rejects_the_vote() {
+        let (engine, dag, key) = test_engine(100);
+        let block = stored_leader_block(&key, 3);
+        let digest = block.digest;
+        engine.process_block(&block).unwrap();
+        dag.fail_get_votes.store(true, Ordering::SeqCst);
+
+        let sent = record_broadcasts(&engine);
+        assert!(
+            !engine.vote_for_leader(3).unwrap(),
+            "a store read error does not cast a vote"
+        );
+        assert!(
+            sent.lock().is_empty(),
+            "a store read error must not broadcast"
+        );
+        assert!(
+            dag.persisted_votes.lock().is_empty(),
+            "a refused read must not write a vote"
+        );
+        assert!(
+            !engine.voted_rounds.lock().contains(&3),
+            "a failed read must not reserve the slot"
+        );
+        assert!(
+            !engine.vote_for_leader(3).unwrap(),
+            "the slot stays closed while the read keeps failing"
+        );
+        assert!(sent.lock().is_empty());
+
+        dag.fail_get_votes.store(false, Ordering::SeqCst);
+        assert!(
+            engine.vote_for_leader(3).unwrap(),
+            "a recovered read can still vote"
+        );
+        assert_eq!(sent.lock().len(), 1);
+        assert_eq!(sent.lock()[0].leader_hash, digest);
+        assert_eq!(dag.get_votes_for_round(3).unwrap().len(), 1);
+    }
+
+    /// A vote that was persisted and sent is not broadcast again after restart.
+    #[test]
+    fn persisted_vote_is_not_resent_after_restart() {
+        let (engine, dag, key) = test_engine(100);
+        let block = stored_leader_block(&key, 3);
+        let digest = block.digest;
+        engine.process_block(&block).unwrap();
+        let sent = record_broadcasts(&engine);
+        assert!(engine.vote_for_leader(3).unwrap(), "the vote is cast once");
+        assert_eq!(sent.lock().len(), 1);
+        assert_eq!(sent.lock()[0].leader_hash, digest);
+        drop(engine);
+
+        let restarted = restarted_engine(dag.clone(), key, 100);
+        restarted.committer.update_leader(LeaderInfo {
+            round: 3,
+            author: 0,
+            block_hash: Some(digest),
+            status: LeaderStatus::Undecided,
+            votes: HashMap::new(),
+        });
+        let resent = record_broadcasts(&restarted);
+        assert!(
+            !restarted.vote_for_leader(3).unwrap(),
+            "the stored vote is not signed again"
+        );
+        assert!(
+            resent.lock().is_empty(),
+            "restart must not re-send the persisted vote, got {:?}",
+            resent
+                .lock()
+                .iter()
+                .map(|vote| vote.leader_hash)
+                .collect::<Vec<_>>()
+        );
+        let own = dag.get_votes_for_round(3).unwrap();
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].leader_hash, digest);
     }
 
     #[test]
