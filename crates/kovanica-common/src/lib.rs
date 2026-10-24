@@ -44,8 +44,104 @@ pub type Amount = u128;
 /// Block / round height.
 pub type Height = u64;
 
-/// Timestamp in seconds (host-provided).
+/// Contract time, as reported by [`Host::timestamp`].
+///
+/// **Unit caveat:** blocks carry no wall-clock time, so on a live node this is
+/// the *committed-leader height* (see [`contract_time_from_height`]), roughly
+/// 12 s per unit at the default round duration — **not** unix seconds. Any
+/// expiry / unlock / vesting value a contract stores must be expressed in the
+/// same unit. Use [`looks_like_unix_seconds`] to reject values a client
+/// obviously produced from a wall clock.
 pub type Timestamp = u64;
+
+/// The single definition of what the executor reports as contract time.
+///
+/// Execution passes the committed height straight through; keeping it in one
+/// named function (instead of an inline `timestamp: block_height`) makes the
+/// unit explicit and gives tests and clients one thing to point at.
+pub const fn contract_time_from_height(height: Height) -> Timestamp {
+    height
+}
+
+/// Smallest value treated as "obviously unix seconds" (2001-09-09).
+///
+/// At 12 s per height unit the chain would need ~380 years to reach this, so
+/// any expiry/unlock at or above it that was meant as a height would be a
+/// lock that never expires — almost certainly a unit mistake.
+pub const UNIX_SECONDS_FLOOR: u64 = 1_000_000_000;
+
+/// `true` if `t` is far more plausibly a unix-seconds value than a height.
+pub const fn looks_like_unix_seconds(t: u64) -> bool {
+    t >= UNIX_SECONDS_FLOOR
+}
+
+/// Activation height for rejecting unix-seconds-looking contract times when an
+/// HTLC / vault is created.
+///
+/// Rejecting a value that was accepted before changes which transactions
+/// succeed, so — like the other hardening gates — it stays `Height::MAX`
+/// (inert) until it is switched on for every validator at a coordinated
+/// genesis reset. The comparison is against [`Host::block_height`].
+pub const REJECT_UNIX_SECONDS_FROM_HEIGHT: Height = Height::MAX;
+
+/// Validate one expiry / unlock / vesting time at creation.
+///
+/// Returns `InvalidInput` when the gate is active at `height`
+/// (`height >= reject_from`) and `t` looks like unix seconds
+/// ([`looks_like_unix_seconds`]); otherwise `Ok`. Callers pass
+/// [`REJECT_UNIX_SECONDS_FROM_HEIGHT`] as `reject_from` in production and an
+/// explicit value in tests.
+pub fn check_contract_time(
+    height: Height,
+    t: Timestamp,
+    reject_from: Height,
+) -> ContractResult<()> {
+    if height >= reject_from && looks_like_unix_seconds(t) {
+        Err(ContractError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+
+    #[test]
+    fn contract_time_is_the_block_height() {
+        assert_eq!(contract_time_from_height(0), 0);
+        assert_eq!(contract_time_from_height(123_456), 123_456);
+    }
+
+    #[test]
+    fn unix_seconds_are_detected_and_plausible_heights_are_not() {
+        // 2026-10-22 as unix seconds.
+        assert!(looks_like_unix_seconds(1_792_000_000));
+        // ~10 years of 12 s leaders.
+        assert!(!looks_like_unix_seconds(26_280_000));
+        assert!(!looks_like_unix_seconds(UNIX_SECONDS_FLOOR - 1));
+        assert!(looks_like_unix_seconds(UNIX_SECONDS_FLOOR));
+    }
+
+    #[test]
+    fn check_contract_time_is_gated_and_only_flags_unix_seconds() {
+        let unix = 1_800_000_000;
+        // Gate inert: everything passes (today's production behaviour).
+        assert_eq!(check_contract_time(10, unix, Height::MAX), Ok(()));
+        assert_eq!(
+            check_contract_time(10, unix, REJECT_UNIX_SECONDS_FROM_HEIGHT),
+            Ok(())
+        );
+        // Gate active: unix-looking time rejected, plausible heights accepted.
+        assert_eq!(
+            check_contract_time(10, unix, 0),
+            Err(ContractError::InvalidInput)
+        );
+        assert_eq!(check_contract_time(10, 26_280_000, 0), Ok(()));
+        // Gate not reached yet at this height.
+        assert_eq!(check_contract_time(10, unix, 11), Ok(()));
+    }
+}
 
 /// Simple result type used across contracts.
 pub type ContractResult<T> = Result<T, ContractError>;

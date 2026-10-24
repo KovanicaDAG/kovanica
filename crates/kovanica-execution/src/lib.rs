@@ -1128,7 +1128,10 @@ impl ExecutionContext {
             contract,
             caller: *from,
             height: block_height,
-            timestamp: block_height, // Simplified: use height as timestamp
+            // Blocks carry no wall-clock time: contract time IS the height.
+            // Contract expiry/vesting values must use the same unit
+            // (see `kovanica_common::Timestamp`).
+            timestamp: kovanica_common::contract_time_from_height(block_height),
             args,
             storage,
             // Single writer: the host reads and writes through the sub-DAG's
