@@ -1530,14 +1530,14 @@ fn decode_epoch_committee_bytes(
                     options.deserialize(bytes)?;
                 Ok(old_format
                     .into_iter()
-                    .map(|(index, public_key, stake)| {
-                        kovanica_types::SealCommitteeSnapshotMember {
+                    .map(
+                        |(index, public_key, stake)| kovanica_types::SealCommitteeSnapshotMember {
                             index,
                             public_key,
                             stake,
                             vrf_public_key: None,
-                        }
-                    })
+                        },
+                    )
                     .collect())
             }
         }
@@ -1659,12 +1659,8 @@ fn verify_snapshot_seal_quorum(
     let candidate_chains = [1337u64, 1, 2, 3, 4, 0];
     let mut last_err = None;
     for chain_id in candidate_chains {
-        match kovanica_crypto::verify_commit_seals(
-            chain_id,
-            header,
-            &data.commit_seals,
-            &committee,
-        ) {
+        match kovanica_crypto::verify_commit_seals(chain_id, header, &data.commit_seals, &committee)
+        {
             Ok(()) => return Ok(()),
             Err(e) => last_err = Some(e),
         }

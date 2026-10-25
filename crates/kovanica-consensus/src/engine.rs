@@ -2026,6 +2026,11 @@ where
     pub fn committee(&self) -> &CommitteeInfo {
         &self.committee
     }
+
+    /// Configured prune window in waves (`WAVE_LENGTH` rounds per wave).
+    pub fn prune_window_waves(&self) -> u64 {
+        self.config.prune_window_waves
+    }
 }
 
 /// Errors that can occur in consensus operations.
