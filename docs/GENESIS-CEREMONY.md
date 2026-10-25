@@ -6,8 +6,8 @@ guard are still being finished (see **Known gaps**).
 Consensus impact: ledger-safe / client-only — the genesis file only defines
 initial state, once, before the chain starts.
 
-Purpose: coordinate a multi-validator genesis so that all 5–20 active
-validators agree on the validator set, staking allocations, treasury address,
+Purpose: coordinate a multi-validator genesis so that all genesis
+validators (testnet: 5 recommended, at most 20; mainnet: 15–20 enforced) agree on the validator set, staking allocations, treasury address,
 and chain id.
 
 ## Inputs

@@ -165,9 +165,15 @@ an even 1 000 000 KUNA split supports **at most 20 genesis validators**.
 The minimum viable set is **5 validators** (each receives 200 000 KUNA, leaving
 150 000 KUNA liquid after the 50 000 KUNA self-stake).
 
-**Valid genesis validator count: 5–20 inclusive.** Genesis fails fast
-(`anyhow::bail!` in `init_genesis`) if the requested set is outside this range
-(raise `GENESIS_VALIDATOR_ALLOCATION` to support more).
+**Genesis validator count.** Testnet: **5 recommended**; the code enforces
+only the maximum of 20 (a larger set cannot be funded from
+`GENESIS_VALIDATOR_ALLOCATION` at `MIN_VALIDATOR_STAKE`, so `init_genesis`
+bails), and smaller sets are accepted (local and test clusters use 1–4 nodes).
+Mainnet (chain 1): **15–20 enforced** by `ensure_mainnet_genesis_validator_count`
+in `init_genesis` and `--check-config`; the lower bound is
+`MIN_ACTIVE_VALIDATORS` (15). The 5-validator genesis is for the chain 4
+testnet (Toni, 2026-10-23). Raise `GENESIS_VALIDATOR_ALLOCATION` to support
+more than 20.
 
 These values are cross-checked by the unit tests in `kovanica-staking`
 (`canonical_values_match_skeleton`, `genesis_validator_shares_sum_exactly_and_are_even`).
