@@ -7,6 +7,7 @@
 //! commands.
 
 mod amount;
+pub(crate) use amount::format_kuna;
 mod app;
 mod net;
 mod ui;

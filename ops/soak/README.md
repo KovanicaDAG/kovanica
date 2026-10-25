@@ -4,10 +4,10 @@ Two scripts live here:
 
 | Script      | Purpose                                                                 | Used by |
 |-------------|-------------------------------------------------------------------------|---------|
-| `run-soak.sh` | **The soak runner.** Brings up the compose stack, waits for health + commits, exercises the node for `SOAK_SECS`, samples `/health` + `/metrics`, fails on the first stall or crash, and collects logs on failure. | `.github/workflows/soak.yml` (nightly + manual) |
+| `run-soak.sh` | **The soak runner.** Brings up the compose stack, waits for health + commits, exercises the node for `SOAK_SECS`, samples `/health` + `/metrics`, fails on the first stall or crash, and collects logs on failure. | Local automated & manual soak runner (formerly `.github/workflows/soak.yml`) |
 | `soak.sh`   | Legacy Phase 12.4 RSS/memory monitor. Assumes a 4-node stack is *already* running (`kovanica-quorum-node1..4`) and only logs memory every 30 s; it never brings the stack up and never gates on a stall. | manual memory runs only |
 
-For CI use `run-soak.sh`. `soak.sh` predates the current compose service names
+For local soak testing use `run-soak.sh`. `soak.sh` predates the current compose service names
 (see "Known gaps" below) and is kept for the memory-specific 6h runs.
 
 ## run-soak.sh
@@ -79,17 +79,16 @@ long-lived machine:
 SOAK_SECS=86400 ./ops/soak/run-soak.sh
 ```
 
-## CI workflow
+## CI / Automated Workflow
+> **Note on CI:** Repository-level GitHub Actions workflows were decommissioned on 2026-10-23; soak testing is executed using the local runner scripts directly or integrated into self-hosted runners.
 
-`.github/workflows/soak.yml` runs the runner:
+The runner specifications:
 
-* **Triggers:** nightly `schedule` (03:00 UTC) and `workflow_dispatch` with a
-  `duration` input (seconds). It never runs on push/PR.
-* **Concurrency:** `group: soak`, `cancel-in-progress: false` — a scheduled and
-  a manual soak can never overlap, and a running soak is never cancelled.
-* **Timeout:** `timeout-minutes: 180` for the whole job (build + warm-up + soak).
-* **Artifacts:** the `soak-artifacts/` directory (`OUT_DIR`) is uploaded on
-  every run (`if: always()`), so a failing soak leaves its logs behind.
+* **Triggers:** Automated nightly schedule or manual invocation with a
+  `duration` input (seconds).
+* **Concurrency:** A running soak should not be overlapped.
+* **Timeout:** Recommended 180 minutes for automated runs (build + warm-up + soak).
+* **Artifacts:** The `soak-artifacts/` directory (`OUT_DIR`) contains all logs (`compose ps`, `docker inspect`, `samples.csv`).
 
 ## Known gaps / prerequisites
 

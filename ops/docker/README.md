@@ -12,71 +12,69 @@ under `/var/lib/kovanica` (declared `VOLUME`), and exposes P2P `8000` / JSON-RPC
 A plain `docker run kovanica-node:local` prints `--help`; it never boots a node by
 default.
 
-## Run the local 4-node devnet
+## Run the local multi-node testnet / devnet
+
+### Step 1: Generate Devnet Validator Keys & Genesis
+
+The compose services mount validator seed keys and a shared genesis file. Before running `docker compose up`, generate these local development keys:
 
 ```bash
-docker compose up --build        # start (builds the image once)
-docker compose ps                # health of all four nodes
-docker compose logs -f node1
-docker compose down              # stop, keep volumes
-docker compose down -v           # stop and wipe all chain data
+# Build the CLI tool required to generate addresses and genesis
+cargo build --release -p kovanica-cli
+
+# Run the key generation helper script
+./ops/docker/validators/generate.sh
 ```
 
-Topology (`docker-compose.yml`):
+This creates:
+- `ops/docker/validators/val1.pem` through `val4.pem` (32-byte hex seeds, mode 0600)
+- `ops/docker/validators/genesis_validators.toml` (shared genesis validator declarations)
+- `ops/docker/validators/funded_accounts.toml` (initial account allocations)
 
-| Node  | RPC (internal) | Host RPC        | Data volume  | Bootnodes                    |
-|-------|----------------|-----------------|--------------|------------------------------|
-| node1 | 8545           | `127.0.0.1:8545`| node1-data   | node2, node3, node4          |
-| node2 | 8546           | —               | node2-data   | node1, node3, node4          |
-| node3 | 8547           | —               | node3-data   | node1, node2, node4          |
-| node4 | 8548           | —               | node4-data   | node1, node2, node3          |
+*(Note: These files are development keys and are intentionally gitignored).*
 
-Only node1 publishes its RPC port, bound to loopback. To reach another node's RPC,
-query it from inside the network, e.g.:
+### Step 2: Launch the Compose Stack
 
 ```bash
-docker compose exec node2 curl -s http://127.0.0.1:8546/health
-docker compose exec node2 curl -s -X POST http://127.0.0.1:8546/rpc \
-  -H 'content-type: application/json' \
+docker compose up --build -d     # start stack in background
+docker compose ps                # verify health of seed and validators
+docker compose logs -f seed      # stream seed node logs
+docker compose down              # stop containers, preserve data volumes
+docker compose down -v           # stop and wipe all data volumes
+```
+
+### Topology (`docker-compose.yml`)
+
+The compose stack runs **1 seed / bootnode + 3 active validators**:
+
+| Service | Container Name | Role | Host RPC Endpoint | P2P Listen |
+|---------|----------------|------|-------------------|------------|
+| `seed`  | `kovanica-testnet-seed` | Read-only RPC & Bootnode | `127.0.0.1:8545` | `8000` |
+| `val1`  | `kovanica-testnet-val1` | Active Validator 1 | `127.0.0.1:8546` | `8000` |
+| `val2`  | `kovanica-testnet-val2` | Active Validator 2 | `127.0.0.1:8547` | `8000` |
+| `val3`  | `kovanica-testnet-val3` | Active Validator 3 | `127.0.0.1:8548` | `8000` |
+
+All four nodes publish their respective JSON-RPC ports to loopback (`127.0.0.1`).
+
+### Interacting with the Stack
+
+Query the seed node health and status:
+```bash
+curl -fsS http://127.0.0.1:8545/health
+curl -s -X POST http://127.0.0.1:8545/rpc \
+  -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"kovanica_blockNumber","params":[]}'
 ```
 
-or add a `ports:` mapping in `docker-compose.yml` and re-run `docker compose up -d`.
+Query validator 1:
+```bash
+curl -fsS http://127.0.0.1:8546/health
+```
 
-### Genesis and validator seeds
+### Healthcheck
 
-- **No genesis file is required.** On a fresh data directory the node writes an
-  initial genesis state itself (`crates/kovanica-node/src/main.rs::init_genesis`).
-  `docker compose down -v` gives every node a fresh genesis; plain `down` keeps it.
-- **Validator seeds are never committed.** The image entrypoint
-  (`ops/docker/entrypoint.sh`) generates a random 32-byte hex seed at
-  `/var/lib/kovanica/validator.key` on first boot and passes it to the node via
-  `KOVANICA_VALIDATOR_KEY`. The seed lives only in the node's data volume and survives
-  restarts. Point `KOVANICA_VALIDATOR_KEY` at your own file to override.
-- This repo's node has **no faucet and no `ALLOW_RESET`/mining toggles** to disable;
-  it always runs the consensus loop as configured. Keep the host RPC binding on
-  loopback (the compose file already does) and never expose this devnet publicly.
-
-### Current devnet limitation
-
-The node bootstrap builds a **per-node, single-authority committee** from its local
-identity (`build_committee`). A genesis/committee format that carries several
-validators does not exist yet, so the four nodes cannot form a real M-of-N quorum.
-The devnet exercises P2P connectivity, gossip, the mempool and the JSON-RPC surface.
-True multi-validator finality is a follow-up (RFC-006-era consensus work).
-
-## Adding or removing a node
-
-1. Add a `nodeN` service to `docker-compose.yml` copied from `node2`, with a new
-   `KOVANICA_RPC_PORT`, its own `<nodeN>-data` volume, a distinct healthcheck URL, and
-   `KOVANICA_BOOTNODES` listing the existing nodes.
-2. Add the new node's `host:8000` to the other nodes' `KOVANICA_BOOTNODES` and `<nodeN>-data`
-   to the `volumes:` section.
-3. `docker compose up -d`; scale down with `docker compose rm -sf nodeN` followed by
-   removing its service and volume.
-
-## Healthcheck
-
-`GET /health` returns `{"status":"ok","peer_count":N}` (HTTP 200). The image and
-compose healthchecks treat a successful request as healthy; `peer_count` is
-informational and `0` is healthy.
+`GET /health` returns HTTP 200 with JSON status:
+```json
+{"status":"ok","peer_count":3,"is_healthy":true,...}
+```
+The compose healthchecks monitor `/health` and report when nodes are running and synchronized.

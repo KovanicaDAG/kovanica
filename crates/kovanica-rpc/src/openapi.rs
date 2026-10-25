@@ -420,6 +420,56 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
             }),
         ),
         (
+            "kovanica_getTransactionHistory",
+            "Newest-first committed transactions for an address",
+            "Transactions",
+            json!({
+                "type": "object",
+                "required": ["address"],
+                "properties": {
+                    "address": { "$ref": "#/components/schemas/Address" },
+                    "limit": {
+                        "$ref": "#/components/schemas/Quantity",
+                        "description": "Page size. Default 20, hard max 100."
+                    },
+                    "cursor": {
+                        "type": "string",
+                        "description": "Opaque cursor from a previous next_cursor."
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["sent", "received", "all"],
+                        "default": "all"
+                    }
+                }
+            }),
+            json!({
+                "type": "object",
+                "required": ["entries", "next_cursor"],
+                "properties": {
+                    "entries": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["hash", "height", "timestamp", "from", "to", "amount", "fee", "kind", "status"],
+                            "properties": {
+                                "hash": { "$ref": "#/components/schemas/Hash" },
+                                "height": { "$ref": "#/components/schemas/Quantity" },
+                                "timestamp": { "type": ["string", "null"] },
+                                "from": { "$ref": "#/components/schemas/Address" },
+                                "to": { "type": ["string", "null"] },
+                                "amount": { "$ref": "#/components/schemas/Quantity" },
+                                "fee": { "$ref": "#/components/schemas/Quantity" },
+                                "kind": { "type": "string" },
+                                "status": { "type": "string", "enum": ["success", "failed"] }
+                            }
+                        }
+                    },
+                    "next_cursor": { "type": ["string", "null"] }
+                }
+            }),
+        ),
+        (
             "kovanica_getLogs",
             "Query transaction logs by block range, address and topics",
             "Transactions",
@@ -800,6 +850,10 @@ mod tests {
         assert!(
             json.contains("\"kovanica_subscribe\""),
             "Missing kovanica_subscribe"
+        );
+        assert!(
+            json.contains("\"kovanica_getTransactionHistory\""),
+            "Missing kovanica_getTransactionHistory"
         );
     }
 }

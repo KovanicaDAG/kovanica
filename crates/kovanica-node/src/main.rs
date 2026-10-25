@@ -616,11 +616,26 @@ where
     // ------------------------------------------------------------------
     // 2. Genesis / staking state
     // ------------------------------------------------------------------
+    // A consensus.redb from another genesis (partial wipe: only state.redb
+    // removed) must be caught before init_genesis re-creates the state.
+    let consensus_marker_missing = verify_consensus_genesis_marker(
+        &consensus_storage,
+        &dag_store,
+        &state_storage,
+        &genesis_config_digest(&config)?,
+    )?;
     init_genesis(&config, &dag_store, &state_storage)?;
 
     // Guard against a data dir whose genesis does not match the configured
     // genesis (fork / cross-chain contamination), and read back genesis.json.
     verify_genesis_consistency(&config, &state_storage)?;
+    if consensus_marker_missing {
+        let txn = consensus_storage.begin_write()?;
+        consensus_storage
+            .consensus()
+            .save_genesis_marker(&txn, &genesis_config_digest(&config)?)?;
+        txn.commit()?;
+    }
 
     // ------------------------------------------------------------------
     // 3. Mempool + validator identity
@@ -1425,6 +1440,7 @@ fn read_rss_bytes() -> Option<u64> {
 }
 
 /// Extract the `VmRSS` value (kB) from `/proc/self/status` contents.
+#[cfg(any(target_os = "linux", test))]
 fn parse_vmrss_kb(status: &str) -> Option<u64> {
     status.lines().find_map(|line| {
         let rest = line.strip_prefix("VmRSS:")?;
@@ -1994,9 +2010,14 @@ fn verify_persisted_genesis_digest(
         Some(stored) if stored != *fresh => {
             if !allow_mismatch {
                 anyhow::bail!(
-                    "genesis digest mismatch: data dir was created for genesis {} but the \
-                     configured genesis is {}; refusing to start to avoid mixing chains \
-                     (set {ALLOW_GENESIS_MISMATCH_ENV}=1 to override)",
+                    "genesis digest mismatch: this data dir belongs to genesis {} but this \
+                     build and config give {}; refusing to start to avoid mixing chains. \
+                     Either the data dir was created by a build before the chain-4 format \
+                     change (KUNA-* hash domains, #81), or the genesis files / treasury / \
+                     chain_id differ from the ones it was created with. The fix is a wipe, \
+                     not {ALLOW_GENESIS_MISMATCH_ENV} (a dev-only override): stop the node, \
+                     move the data dir away and start from the published chain genesis \
+                     bundle (docs/TESTNET-RESET.md)",
                     stored.to_hex(),
                     fresh.to_hex(),
                 );
@@ -2019,6 +2040,62 @@ fn verify_persisted_genesis_digest(
         }
     }
     Ok(())
+}
+
+/// Check the genesis marker of `consensus.redb` (#86 follow-up). Returns
+/// whether the marker is missing and must be written after genesis init.
+///
+/// * marker equal to `fresh` → ok;
+/// * marker different → refuse (no override: the DAG and the commit cursor
+///   of another chain would be reopened);
+/// * no marker, no chain data (fresh dir, or only the genesis block) → ok,
+///   write it;
+/// * no marker but DAG data → accepted only if `state.redb` already holds the
+///   same genesis digest (a data dir from before the marker); otherwise this
+///   is a partial wipe or a pre-chain-4 dir, and it is refused.
+fn verify_consensus_genesis_marker(
+    consensus_storage: &Storage,
+    dag_store: &DagStore,
+    state_storage: &Storage,
+    fresh: &Hash,
+) -> Result<bool> {
+    let marker = {
+        let read = consensus_storage.begin_read()?;
+        consensus_storage.consensus().load_genesis_marker(&read)?
+    };
+    match marker {
+        Some(stored) if stored == *fresh => Ok(false),
+        Some(stored) => anyhow::bail!(
+            "consensus.redb belongs to genesis {} but this build and config give {}; \
+             refusing to reopen another chain's DAG and commit cursor. Stop the node, \
+             move the whole data dir away (consensus.redb and state.redb) and start \
+             from the published chain genesis bundle",
+            stored.to_hex(),
+            fresh.to_hex(),
+        ),
+        None => {
+            let has_dag = dag_store.max_dag_round()?.is_some_and(|round| round > 0)
+                || !dag_store.get_decided_rounds(u64::MAX)?.is_empty();
+            if !has_dag {
+                return Ok(true);
+            }
+            let state_digest = {
+                let read = state_storage.begin_read()?;
+                state_storage.state().load_genesis_digest(&read)?
+            };
+            if state_digest == Some(*fresh) {
+                return Ok(true);
+            }
+            anyhow::bail!(
+                "consensus.redb holds a DAG but no genesis marker, and state.redb does not \
+                 hold the configured genesis {}: this is a partial wipe or a data dir from \
+                 before the chain-4 format change (#81). Stop the node, move the whole \
+                 data dir away (consensus.redb and state.redb) and start from the \
+                 published chain genesis bundle",
+                fresh.to_hex(),
+            )
+        }
+    }
 }
 
 /// Read back `genesis.json` (if present) and verify its declared genesis-block
@@ -3783,13 +3860,17 @@ impl DagStoreTrait for NodeDagStore {
         self.inner.get_decided_rounds(max_round)
     }
 
-    /// Persist an accepted vote in the consensus database.
+    /// Persist a vote in the consensus database.
     ///
-    /// The vote is written under its leader round so it survives a restart and
-    /// can be handed to a peer that joins later (RFC-009). The write is a
-    /// separate transaction from the vote's acceptance, which is deliberate:
-    /// consensus has already counted the vote, and a storage failure here must
-    /// not turn an accepted vote into a rejected one.
+    /// The vote is written under its leader round in its own transaction so it
+    /// survives a restart and can be handed to a peer that joins later
+    /// (RFC-009).
+    ///
+    /// Callers differ. For a vote consensus has already accepted, a storage
+    /// failure must not turn that vote into a rejected one. For this node's
+    /// own vote the engine persists first and broadcasts only after `Ok`. A
+    /// failure then means the vote was not sent and is not a durable lock.
+    /// Once this returns `Ok`, the stored vote is that lock.
     fn put_vote(&self, vote: &Vote) -> Result<(), DagStoreError> {
         let storage = self.inner.storage();
         let txn = storage.begin_write()?;
@@ -4920,6 +5001,9 @@ mod tests {
         assert!(msg.contains(&stored.to_hex()), "{msg}");
         assert!(msg.contains(&fresh.to_hex()), "{msg}");
         assert!(msg.contains(ALLOW_GENESIS_MISMATCH_ENV), "{msg}");
+        // The message names the likely cause and the real fix (#86 P2).
+        assert!(msg.contains("chain-4 format change"), "{msg}");
+        assert!(msg.contains("fix is a wipe"), "{msg}");
 
         // The explicit override lets the node start despite the mismatch...
         verify_persisted_genesis_digest(&storage, &fresh, true).expect("override allows");
@@ -4985,6 +5069,55 @@ mod tests {
             err.to_string().contains("genesis digest mismatch"),
             "{err:#}"
         );
+    }
+
+    // #86 follow-up (Jarvis P2): consensus.redb carries its own genesis
+    // marker, so a partial wipe cannot reopen another chain's DAG.
+    #[test]
+    fn consensus_genesis_marker_catches_partial_wipes_and_foreign_dags() {
+        let fresh = Hash::new([5u8; 32]);
+        let open = |dir: &std::path::Path| {
+            let consensus = Arc::new(Storage::new(dir.join("consensus.redb")).unwrap());
+            let dag = DagStore::from_storage(consensus.clone());
+            let state = Storage::new(dir.join("state.redb")).unwrap();
+            (consensus, dag, state)
+        };
+
+        // Fresh dir: marker missing, to be written.
+        let dir = tempfile::tempdir().unwrap();
+        let (consensus, dag, state) = open(dir.path());
+        assert!(verify_consensus_genesis_marker(&consensus, &dag, &state, &fresh).unwrap());
+        let txn = consensus.begin_write().unwrap();
+        consensus
+            .consensus()
+            .save_genesis_marker(&txn, &fresh)
+            .unwrap();
+        txn.commit().unwrap();
+        assert!(!verify_consensus_genesis_marker(&consensus, &dag, &state, &fresh).unwrap());
+
+        // A marker of another genesis is refused.
+        let other = Hash::new([6u8; 32]);
+        let err = verify_consensus_genesis_marker(&consensus, &dag, &state, &other)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("belongs to genesis"), "{err}");
+
+        // Partial wipe: a DAG without a marker and a state.redb without the
+        // configured digest (it was wiped) is refused.
+        let dir = tempfile::tempdir().unwrap();
+        let (consensus, dag, state) = open(dir.path());
+        dag.mark_round_decided(3, &Hash::new([7u8; 32])).unwrap();
+        let err = verify_consensus_genesis_marker(&consensus, &dag, &state, &fresh)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("partial wipe"), "{err}");
+
+        // A pre-marker dir whose state.redb holds the same genesis is
+        // accepted and gets the marker.
+        let txn = state.begin_write().unwrap();
+        state.state().save_genesis_digest(&txn, &fresh).unwrap();
+        txn.commit().unwrap();
+        assert!(verify_consensus_genesis_marker(&consensus, &dag, &state, &fresh).unwrap());
     }
 
     #[test]
@@ -9081,8 +9214,11 @@ mod b1_epoch_restart_repro {
 
         // Node B — restarted; same persisted genesis AND the frozen snapshot
         // from A's seal must be visible to it, so copy B from A's database file.
+        let a_path = dir.path().join("leader-a.redb");
+        drop(a);
         let b_path = dir.path().join("leader-b.redb");
-        std::fs::copy(dir.path().join("leader-a.redb"), &b_path).unwrap();
+        std::fs::copy(&a_path, &b_path).unwrap();
+        let a = Storage::new(a_path).unwrap();
         let b = Storage::new(b_path).unwrap();
 
         let committee_a = build_committee_for_round(
