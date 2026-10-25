@@ -13,6 +13,7 @@
 #   round_duration_ms -> KOVANICA_ROUND_DURATION_MS
 #   max_peers         -> KOVANICA_MAX_PEERS
 #   treasury_address  -> KOVANICA_TREASURY_ADDRESS
+#   run_validator     -> KOVANICA_RUN_VALIDATOR
 #   rpc_rate_limit_per_min -> KOVANICA_RPC_RATE_LIMIT_PER_MIN
 #   retain_blocks_below_tip         -> KOVANICA_RETENTION_BLOCKS_BELOW_TIP
 #   retain_state_roots_below_height -> KOVANICA_RETENTION_STATE_ROOTS_BELOW_HEIGHT
@@ -21,7 +22,6 @@
 #   retention_batch                 -> KOVANICA_RETENTION_BATCH
 
 # Extra env-only overrides without a TOML equivalent:
-#   KOVANICA_RUN_VALIDATOR              (true|false, default on)
 #   KOVANICA_CHAIN_ID                   (1 mainnet, 2 testnet, 3 devnet, 1337 local)
 #   KOVANICA_RPC_AUTH                   (disable|on, default on)
 #   KOVANICA_RPC_WRITE_TOKENS
@@ -79,6 +79,14 @@ rpc_port = 8545
 # Mainnet:
 # bootnodes = ["mainnet.kovanica.online:8000"]
 bootnodes = []
+
+# Run as an active consensus validator (participate in block proposal and voting).
+# Defaults to true in code. When run_validator is true, validator_key is REQUIRED
+# (pointing to a 0600 seed file).
+#
+# To run as a non-validating read-only / RPC node without generating keys:
+# set `run_validator = false` (or export KOVANICA_RUN_VALIDATOR=false).
+# run_validator = false
 
 # Path to a validator signing key file containing a 32-byte hex seed.
 # Required while run_validator is true (the default): the node refuses to

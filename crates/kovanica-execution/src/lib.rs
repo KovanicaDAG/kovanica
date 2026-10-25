@@ -490,6 +490,36 @@ impl ExecutionContext {
             }
         }
 
+        // Address history is a local RPC index in this same write transaction.
+        // A failed commit drops it with the rest of the transition. It is not
+        // read by `commit_account_smt` and it is not part of any consensus hash.
+        {
+            let mut indexed = Vec::with_capacity(receipts.len());
+            let mut seen = 0usize;
+            for block in &subdag.blocks {
+                for tx in &block.transactions {
+                    let success = receipts
+                        .get(seen)
+                        .ok_or_else(|| {
+                            ExecutionError::Other(
+                                "address tx index: receipt count does not match transactions"
+                                    .into(),
+                            )
+                        })?
+                        .success;
+                    indexed.push((tx, success));
+                    seen += 1;
+                }
+            }
+            if seen != receipts.len() {
+                return Err(ExecutionError::Other(
+                    "address tx index: receipt count does not match transactions".into(),
+                ));
+            }
+            kovanica_storage::index_committed_txs(&txn, committed_height, &indexed)
+                .map_err(|e| ExecutionError::Other(format!("address tx index: {e}")))?;
+        }
+
         // 5. Account sparse Merkle over balance and nonce, then mark executed.
         let state_root = storage.state().commit_account_smt(&txn, committed_height)?;
         txn.open_table(EXECUTED_SUBDAGS)
@@ -1128,7 +1158,10 @@ impl ExecutionContext {
             contract,
             caller: *from,
             height: block_height,
-            timestamp: block_height, // Simplified: use height as timestamp
+            // Blocks carry no wall-clock time: contract time IS the height.
+            // Contract expiry/vesting values must use the same unit
+            // (see `kovanica_common::Timestamp`).
+            timestamp: kovanica_common::contract_time_from_height(block_height),
             args,
             storage,
             // Single writer: the host reads and writes through the sub-DAG's
@@ -3970,6 +4003,99 @@ mod tests {
         storage.state().get_account(&txn, addr).is_ok()
     }
 
+    fn history(
+        storage: &Storage,
+        address: Address,
+        direction: kovanica_storage::TxDirection,
+    ) -> Vec<kovanica_storage::TxHistoryEntry> {
+        let txn = storage.begin_read().expect("read");
+        kovanica_storage::query_tx_history(
+            &txn,
+            &kovanica_storage::TxHistoryQuery {
+                address,
+                limit: Some(50),
+                cursor: None,
+                direction,
+            },
+        )
+        .expect("history")
+        .entries
+    }
+
+    #[test]
+    fn committed_subdag_writes_address_index_in_the_commit_transaction() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("hist.redb")).expect("storage");
+        let mut ctx = ExecutionContext::new();
+        let key = test_keypair(0x21);
+        let sender = address_of(&key);
+        let bob = Address([0x22; 32]);
+        fund(&storage, &sender, 1_000);
+
+        let first = create_transfer_tx(&key, &bob, 10, 0, 1);
+        let second = create_transfer_tx(&key, &bob, 11, 1, 1);
+        let result = ctx
+            .execute_committed_subdag(&subdag_at(1, vec![first.clone(), second.clone()]), &storage)
+            .expect("commit");
+        assert!(result.receipts.iter().all(|r| r.success));
+        let root = result.state_root.expect("state root");
+        {
+            // `commit_account_smt` stores the account SMT (balance + nonce).
+            // `compute_state_root` is the snapshot Merkle and is a different
+            // value. The account proof root is the consensus root, and it is
+            // built only from the accounts table.
+            let txn = storage.begin_read().expect("read");
+            let proof = storage
+                .state()
+                .prove_account(&txn, &sender)
+                .expect("account proof");
+            assert_eq!(
+                proof.state_root, root,
+                "committed state root is the account SMT and does not include the address index"
+            );
+        }
+
+        let sent = history(&storage, sender, kovanica_storage::TxDirection::Sent);
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].tx_hash, second.hash);
+        assert_eq!(sent[0].height, 0);
+        assert_eq!(sent[0].tx_index, 1);
+        assert_eq!(sent[0].amount, 11);
+        assert_eq!(sent[1].tx_hash, first.hash);
+        assert_eq!(sent[1].tx_index, 0);
+        let received = history(&storage, bob, kovanica_storage::TxDirection::Received);
+        assert_eq!(received.len(), 2);
+        assert!(history(&storage, bob, kovanica_storage::TxDirection::Sent).is_empty());
+
+        let replay = ctx
+            .execute_committed_subdag(&subdag_at(1, vec![first.clone(), second.clone()]), &storage)
+            .expect("replay");
+        assert!(replay.state_root.is_none(), "replay must not write");
+        assert_eq!(
+            history(&storage, sender, kovanica_storage::TxDirection::All).len(),
+            2,
+            "replay must not duplicate index rows"
+        );
+
+        // A commit that fails after the index write is opened rolls the index
+        // back with the balance update. Height 0 was already committed above,
+        // so this is the next height.
+        let balance_before = read_balance(&storage, &sender);
+        let third = create_transfer_tx(&key, &bob, 4, 2, 1);
+        let err = ctx
+            .execute_committed_subdag_with_commit(&subdag_at(2, vec![third]), &storage, |_txn| {
+                Err(ExecutionError::Other("forced rollback".into()))
+            })
+            .expect_err("commit callback fails");
+        assert!(matches!(err, ExecutionError::Other(_)));
+        assert_eq!(read_balance(&storage, &sender), balance_before);
+        assert_eq!(
+            history(&storage, sender, kovanica_storage::TxDirection::All).len(),
+            2,
+            "rolled-back commit must not publish index rows"
+        );
+    }
+
     #[test]
     fn sub_balance_mapped_debits_and_allows_more_ops_in_txn() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -5461,6 +5587,366 @@ mod tests {
                 vec![signed_tx(&key, kind, 0, 1_000)],
             );
             assert!(receipts[0].success, "{:?}", receipts[0].error);
+        }
+    }
+
+    #[test]
+    fn contract_e2e_transactions_htlc_vault_multisig_gated_and_ungated() {
+        let htlc_wasm = match contracts::tests::build_contract_wasm("kovanica-htlc") {
+            Some(w) => w,
+            None => return,
+        };
+        let vault_wasm = match contracts::tests::build_contract_wasm("kovanica-vault") {
+            Some(w) => w,
+            None => return,
+        };
+        let multisig_wasm = match contracts::tests::build_contract_wasm("kovanica-multisig") {
+            Some(w) => w,
+            None => return,
+        };
+
+        let active_round = kovanica_types::CONTRACT_HARDENING_ACTIVE_FROM_ROUND;
+
+        // Test with gate inactive (round 1) and gate active (round active_round)
+        for &round in &[1u64, active_round] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let storage = Storage::new(dir.path().join("e2e.redb")).expect("storage");
+
+            let key1 = test_keypair(1);
+            let sender1 = address_of(&key1);
+            let key2 = test_keypair(2);
+            let sender2 = address_of(&key2);
+            let key3 = test_keypair(3);
+            let sender3 = address_of(&key3);
+
+            let mut ctx = setup_funded_sender(&storage, &sender1, 50_000_000);
+            fund(&storage, &sender2, 20_000_000);
+            fund(&storage, &sender3, 10_000_000);
+
+            let mut step = 0u16;
+            let mut execute_step = |ctx: &mut ExecutionContext, txs: Vec<Transaction>| {
+                let leader = sample_block_at(step, round);
+                let mut block = sample_block_with_txs(step, txs);
+                block.round = round;
+                let subdag = CommittedSubDag {
+                    blocks: vec![block],
+                    leader,
+                    leader_round: round,
+                    leader_author: step,
+                    non_blue: Vec::new(),
+                };
+                step += 1;
+                ctx.execute_committed_subdag(&subdag, &storage)
+                    .expect("execute")
+                    .receipts
+            };
+
+            // ---------------------------------------------------------------
+            // 1. HTLC (Deploy -> Create -> Claim failure -> Claim success)
+            // ---------------------------------------------------------------
+            let deploy_htlc = signed_tx(
+                &key1,
+                TransactionKind::Deploy {
+                    code: htlc_wasm.clone(),
+                },
+                0,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![deploy_htlc]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            let htlc_addr = deployed_address(&sender1, 0);
+
+            let preimage = b"tx_e2e_htlc_secret";
+            let hash_lock = kovanica_common::hash(preimage);
+
+            let create_args = call_args::encode_htlc_create(sender2.0, 500_000, hash_lock, 10_000)
+                .expect("encode");
+            let create_tx = signed_tx(
+                &key1,
+                TransactionKind::Call {
+                    contract: htlc_addr,
+                    value: 500_000,
+                    method: "htlc_create".to_string(),
+                    args: create_args,
+                    gas_limit: 10_000_000,
+                },
+                1,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![create_tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert!(receipts[0].gas_used > 0);
+            assert_eq!(receipts[0].events.len(), 1);
+            assert_eq!(
+                receipts[0].events[0].topic,
+                kovanica_common::events::HTLC_CREATED
+            );
+            let htlc_id: [u8; 32] = receipts[0].events[0]
+                .data
+                .as_slice()
+                .try_into()
+                .expect("32-byte id");
+
+            // Claim failure (wrong preimage) -> receipt.success == false, rolled back
+            let bad_claim_args =
+                call_args::encode_htlc_claim(htlc_id, b"wrong_preimage").expect("encode");
+            let fail_claim_tx = signed_tx(
+                &key2,
+                TransactionKind::Call {
+                    contract: htlc_addr,
+                    value: 0,
+                    method: "htlc_claim".to_string(),
+                    args: bad_claim_args,
+                    gas_limit: 10_000_000,
+                },
+                0,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![fail_claim_tx]);
+            assert!(!receipts[0].success);
+            assert!(receipts[0].error.is_some());
+            // Recipient was not credited 500_000
+            assert_eq!(read_balance(&storage, &sender2), 20_000_000 - 1_000);
+
+            // Claim success (valid preimage)
+            let good_claim_args = call_args::encode_htlc_claim(htlc_id, preimage).expect("encode");
+            let claim_tx = signed_tx(
+                &key2,
+                TransactionKind::Call {
+                    contract: htlc_addr,
+                    value: 0,
+                    method: "htlc_claim".to_string(),
+                    args: good_claim_args,
+                    gas_limit: 10_000_000,
+                },
+                1,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![claim_tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(
+                receipts[0].events[0].topic,
+                kovanica_common::events::HTLC_CLAIMED
+            );
+            assert_eq!(
+                read_balance(&storage, &sender2),
+                20_000_000 - 2_000 + 500_000
+            );
+
+            // ---------------------------------------------------------------
+            // 2. Vault (Deploy -> Create -> Unauthorized claim -> Valid claim)
+            // ---------------------------------------------------------------
+            let deploy_vault = signed_tx(
+                &key1,
+                TransactionKind::Deploy {
+                    code: vault_wasm.clone(),
+                },
+                2,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![deploy_vault]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            let vault_addr = deployed_address(&sender1, 2);
+
+            let schedule = kovanica_vault::VestingSchedule::Linear {
+                start: 0,
+                end: 1,
+                cliff: None,
+            };
+            let v_create_args =
+                call_args::encode_vault_create(sender2.0, 1_000_000, &schedule).expect("encode");
+            let v_create_tx = signed_tx(
+                &key1,
+                TransactionKind::Call {
+                    contract: vault_addr,
+                    value: 1_000_000,
+                    method: "vault_create".to_string(),
+                    args: v_create_args,
+                    gas_limit: 10_000_000,
+                },
+                3,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![v_create_tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(
+                receipts[0].events[0].topic,
+                kovanica_common::events::VAULT_CREATED
+            );
+            let vault_id: [u8; 32] = receipts[0].events[0]
+                .data
+                .as_slice()
+                .try_into()
+                .expect("32-byte id");
+
+            // Unauthorized claim by sender3
+            let v_claim_args = call_args::encode_vault_claim(vault_id).expect("encode");
+            let unauth_tx = signed_tx(
+                &key3,
+                TransactionKind::Call {
+                    contract: vault_addr,
+                    value: 0,
+                    method: "vault_claim".to_string(),
+                    args: v_claim_args.clone(),
+                    gas_limit: 10_000_000,
+                },
+                0,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![unauth_tx]);
+            assert!(!receipts[0].success);
+
+            // Beneficiary claim success
+            let v_claim_tx = signed_tx(
+                &key2,
+                TransactionKind::Call {
+                    contract: vault_addr,
+                    value: 0,
+                    method: "vault_claim".to_string(),
+                    args: v_claim_args,
+                    gas_limit: 10_000_000,
+                },
+                2,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![v_claim_tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(
+                receipts[0].events[0].topic,
+                kovanica_common::events::VAULT_CLAIMED
+            );
+
+            // ---------------------------------------------------------------
+            // 3. Multisig (Deploy -> Fund -> Create -> Propose -> Execute fail -> Confirm -> Execute)
+            // ---------------------------------------------------------------
+            let deploy_ms = signed_tx(
+                &key1,
+                TransactionKind::Deploy {
+                    code: multisig_wasm.clone(),
+                },
+                4,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![deploy_ms]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            let ms_addr = deployed_address(&sender1, 4);
+
+            // Fund multisig contract with 5_000_000 via native transfer
+            let fund_ms_tx = create_transfer_tx(&key1, &ms_addr, 5_000_000, 5, 1_000);
+            let receipts = execute_step(&mut ctx, vec![fund_ms_tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+
+            // Create 2-of-2 multisig
+            let ms_create_args =
+                call_args::encode_multisig_create(&[sender1.0, sender2.0], 2).expect("encode");
+            let ms_create_tx = signed_tx(
+                &key1,
+                TransactionKind::Call {
+                    contract: ms_addr,
+                    value: 0,
+                    method: "multisig_create".to_string(),
+                    args: ms_create_args,
+                    gas_limit: 10_000_000,
+                },
+                6,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![ms_create_tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(
+                receipts[0].events[0].topic,
+                kovanica_common::events::MULTISIG_CREATED
+            );
+            let ms_id: [u8; 32] = receipts[0].events[0]
+                .data
+                .as_slice()
+                .try_into()
+                .expect("32-byte id");
+
+            // Propose transfer of 1_000_000 to sender3
+            let prop_args = call_args::encode_multisig_propose(ms_id, sender3.0, 1_000_000, &[])
+                .expect("encode");
+            let prop_tx = signed_tx(
+                &key1,
+                TransactionKind::Call {
+                    contract: ms_addr,
+                    value: 0,
+                    method: "multisig_propose".to_string(),
+                    args: prop_args,
+                    gas_limit: 10_000_000,
+                },
+                7,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![prop_tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(
+                receipts[0].events[0].topic,
+                kovanica_common::events::MULTISIG_PROPOSED
+            );
+            let tx_id =
+                u64::from_le_bytes(receipts[0].events[0].data.as_slice().try_into().unwrap());
+            assert_eq!(tx_id, 1);
+
+            // Execute failure (only 1 confirmation, threshold is 2)
+            let exec_args = call_args::encode_multisig_execute(ms_id, tx_id).expect("encode");
+            let early_exec_tx = signed_tx(
+                &key1,
+                TransactionKind::Call {
+                    contract: ms_addr,
+                    value: 0,
+                    method: "multisig_execute".to_string(),
+                    args: exec_args.clone(),
+                    gas_limit: 10_000_000,
+                },
+                8,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![early_exec_tx]);
+            assert!(!receipts[0].success);
+
+            // Confirm by sender2 (now 2 of 2)
+            let conf_args = call_args::encode_multisig_confirm(ms_id, tx_id).expect("encode");
+            let conf_tx = signed_tx(
+                &key2,
+                TransactionKind::Call {
+                    contract: ms_addr,
+                    value: 0,
+                    method: "multisig_confirm".to_string(),
+                    args: conf_args,
+                    gas_limit: 10_000_000,
+                },
+                3,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![conf_tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(
+                receipts[0].events[0].topic,
+                kovanica_common::events::MULTISIG_CONFIRMED
+            );
+
+            // Execute success
+            let balance_before = read_balance(&storage, &sender3);
+            let exec_tx = signed_tx(
+                &key1,
+                TransactionKind::Call {
+                    contract: ms_addr,
+                    value: 0,
+                    method: "multisig_execute".to_string(),
+                    args: exec_args,
+                    gas_limit: 10_000_000,
+                },
+                9,
+                1_000,
+            );
+            let receipts = execute_step(&mut ctx, vec![exec_tx]);
+            assert!(receipts[0].success, "{:?}", receipts[0].error);
+            assert_eq!(
+                receipts[0].events[0].topic,
+                kovanica_common::events::MULTISIG_EXECUTED
+            );
+            assert_eq!(read_balance(&storage, &sender3), balance_before + 1_000_000);
         }
     }
 }

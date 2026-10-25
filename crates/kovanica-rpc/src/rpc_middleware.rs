@@ -426,6 +426,10 @@ mod tests {
             auth.authorize("kovanica_getBalance", &HeaderMap::new()),
             Ok(())
         );
+        assert_eq!(
+            auth.authorize("kovanica_getTransactionHistory", &HeaderMap::new()),
+            Ok(())
+        );
     }
 
     #[test]
