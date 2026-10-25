@@ -115,6 +115,12 @@ pub struct SnapshotData {
     /// Sealed leader header at `height`, if recorded.
     #[serde(default)]
     pub leader_header: Option<kovanica_types::LeaderHeader>,
+    /// Commit seals over `leader_header`.
+    #[serde(default)]
+    pub commit_seals: Vec<kovanica_types::CommitSeal>,
+    /// Frozen seal committee for `leader_header.epoch`, if recorded.
+    #[serde(default)]
+    pub epoch_committee: Option<Vec<kovanica_types::SealCommitteeSnapshotMember>>,
 }
 
 /// State store for accounts, contracts, and staking.
@@ -1026,6 +1032,10 @@ impl StateStore {
         data.height = self.snapshot_height(txn)?;
         data.state_root = snapshot_state_root(&data)?.0;
         data.leader_header = self.get_leader_header(txn, data.height)?;
+        data.commit_seals = self.seals_for(txn, data.height)?;
+        if let Some(header) = &data.leader_header {
+            data.epoch_committee = self.get_epoch_committee(txn, header.epoch)?;
+        }
         let mut bytes = Vec::with_capacity(SNAPSHOT_MAGIC.len() + 64);
         bytes.extend_from_slice(&SNAPSHOT_MAGIC);
         bytes.extend_from_slice(&bincode::serialize(&data)?);
@@ -1043,6 +1053,32 @@ impl StateStore {
         if let Some(payload) = bytes.strip_prefix(SNAPSHOT_MAGIC.as_slice()) {
             if let Ok(data) = bincode::deserialize::<SnapshotData>(payload) {
                 return Ok(data);
+            }
+            #[derive(Deserialize)]
+            struct V1WithoutSeals {
+                version: u32,
+                height: u64,
+                state_root: [u8; 32],
+                accounts: Vec<(Vec<u8>, Vec<u8>)>,
+                contract_code: Vec<(Vec<u8>, Vec<u8>)>,
+                contract_storage: Vec<(Vec<u8>, Vec<u8>)>,
+                staking_state: Vec<(Vec<u8>, Vec<u8>)>,
+                #[serde(default)]
+                leader_header: Option<kovanica_types::LeaderHeader>,
+            }
+            if let Ok(v1) = bincode::deserialize::<V1WithoutSeals>(payload) {
+                return Ok(SnapshotData {
+                    version: v1.version,
+                    height: v1.height,
+                    state_root: v1.state_root,
+                    accounts: v1.accounts,
+                    contract_code: v1.contract_code,
+                    contract_storage: v1.contract_storage,
+                    staking_state: v1.staking_state,
+                    leader_header: v1.leader_header,
+                    commit_seals: Vec::new(),
+                    epoch_committee: None,
+                });
             }
             #[derive(Deserialize)]
             struct V1WithoutHeader {
@@ -1065,6 +1101,8 @@ impl StateStore {
                 contract_storage: v1.contract_storage,
                 staking_state: v1.staking_state,
                 leader_header: None,
+                commit_seals: Vec::new(),
+                epoch_committee: None,
             });
         }
 
@@ -1086,6 +1124,8 @@ impl StateStore {
             contract_storage: legacy.contract_storage,
             staking_state: legacy.staking_state,
             leader_header: None,
+            commit_seals: Vec::new(),
+            epoch_committee: None,
         })
     }
 
@@ -1171,6 +1211,13 @@ impl StateStore {
         }
         if let Some(header) = &data.leader_header {
             self.save_leader_header(txn, header)?;
+            for seal in &data.commit_seals {
+                self.save_commit_seal(txn, header.committed_height, seal)?;
+            }
+            if let Some(members) = &data.epoch_committee {
+                let _ = self.put_epoch_committee_if_absent(txn, header.epoch, members)?;
+            }
+            self.save_state_root(txn, data.height, &header.state_root)?;
         }
         Ok(())
     }
@@ -1184,7 +1231,9 @@ impl StateStore {
     ///    the root the snapshot header claims (catches a corrupted stream or a
     ///    peer that tampered with the payload),
     /// 3. `height` must not be below `min_height` (the caller's local
-    ///    committed height), so a snapshot can never roll state backwards.
+    ///    committed height), so a snapshot can never roll state backwards,
+    /// 4. a sealed [`kovanica_types::LeaderHeader`] at `height` with a verified
+    ///    commit-seal quorum (`floor(2T/3) + 1` stake) must certify the state.
     ///
     /// On any failure the error explains why and the caller must not commit
     /// the transaction. Returns the applied committed-leader height.
@@ -1214,6 +1263,7 @@ impl StateStore {
                 recomputed.to_hex()
             )));
         }
+        verify_snapshot_seal_quorum(txn, &data, recomputed)?;
         self.apply_snapshot(txn, &data)?;
         Ok(data.height)
     }
@@ -1409,6 +1459,220 @@ fn snapshot_state_root(data: &SnapshotData) -> Result<Hash, StateStoreError> {
         leaves.push(Hash::new(&combined).0);
     }
     Ok(Hash(merkle_root(leaves)))
+}
+
+/// Recompute the account sparse Merkle root (`AccountSmt`) from a snapshot's
+/// `accounts` rows, matching [`StateStore::commit_account_smt`].
+fn snapshot_account_smt_root(data: &SnapshotData) -> Result<Hash, StateStoreError> {
+    let mut tree = kovanica_types::AccountSmt::empty();
+    for (key, value) in &data.accounts {
+        let account = Account::from_bytes(value)?;
+        if account.balance == 0 && account.nonce == 0 {
+            continue;
+        }
+        let address_bytes: [u8; 32] = key.as_slice().try_into().map_err(|_| {
+            StateStoreError::SnapshotFormat("account key is not 32 bytes".to_string())
+        })?;
+        tree.insert(
+            kovanica_types::Address(address_bytes),
+            account.balance,
+            account.nonce,
+        );
+    }
+    Ok(tree.root())
+}
+
+fn committee_members_from_staking(
+    staking: &StakingState,
+) -> Vec<kovanica_types::SealCommitteeSnapshotMember> {
+    staking
+        .committee_order()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, validator)| {
+            let public_key = validator.public_key?;
+            Some(kovanica_types::SealCommitteeSnapshotMember {
+                index: index as u16,
+                public_key,
+                stake: validator.stake,
+                vrf_public_key: validator
+                    .vrf_public_key
+                    .as_ref()
+                    .map(|v| kovanica_types::PublicKey(v.0)),
+            })
+        })
+        .collect()
+}
+
+fn decode_epoch_committee_bytes(
+    bytes: &[u8],
+) -> Result<Vec<kovanica_types::SealCommitteeSnapshotMember>, StateStoreError> {
+    match decode_with_version(bytes) {
+        Ok((EPOCH_COMMITTEE_VERSION, payload)) => {
+            let options = bincode::DefaultOptions::new()
+                .with_fixint_encoding()
+                .reject_trailing_bytes();
+            Ok(options.deserialize(payload)?)
+        }
+        Ok((v, _)) => Err(StateStoreError::SnapshotFormat(format!(
+            "epoch committee decode error: unknown version {v}"
+        ))),
+        Err("no version prefix") => {
+            let options = bincode::DefaultOptions::new()
+                .with_fixint_encoding()
+                .reject_trailing_bytes();
+            if let Ok(main_era) =
+                options.deserialize::<Vec<kovanica_types::SealCommitteeSnapshotMember>>(bytes)
+            {
+                Ok(main_era)
+            } else {
+                let old_format: Vec<kovanica_types::SealCommitteeMember> =
+                    options.deserialize(bytes)?;
+                Ok(old_format
+                    .into_iter()
+                    .map(|(index, public_key, stake)| {
+                        kovanica_types::SealCommitteeSnapshotMember {
+                            index,
+                            public_key,
+                            stake,
+                            vrf_public_key: None,
+                        }
+                    })
+                    .collect())
+            }
+        }
+        Err(e) => Err(StateStoreError::SnapshotFormat(format!(
+            "epoch committee decode error: {e}"
+        ))),
+    }
+}
+
+/// Resolve the committee to verify a snapshot's commit seals against.
+///
+/// Prefers the local database (`txn` before import):
+/// 1. local `EPOCH_COMMITTEE` frozen for `epoch`,
+/// 2. local `STAKING_STATE` active validator committee (seeded at genesis).
+///
+/// Falls back to the snapshot's own `epoch_committee` or `staking_state` only
+/// when the destination database has no local committee yet.
+fn resolve_snapshot_seal_committee(
+    txn: &WriteTransaction,
+    data: &SnapshotData,
+    epoch: u64,
+) -> Result<Vec<kovanica_types::SealCommitteeSnapshotMember>, StateStoreError> {
+    if let Ok(table) = txn.open_table(crate::tables::EPOCH_COMMITTEE) {
+        if let Some(guard) = table.get(epoch)? {
+            let members = decode_epoch_committee_bytes(&guard.value())?;
+            if !members.is_empty() {
+                return Ok(members);
+            }
+        }
+    }
+    if let Ok(table) = txn.open_table(crate::tables::STAKING_STATE) {
+        if let Some(guard) = table.get("staking")? {
+            let staking = StakingState::from_bytes(&guard.value())?;
+            let members = committee_members_from_staking(&staking);
+            if !members.is_empty() {
+                return Ok(members);
+            }
+        }
+    }
+    if let Some(members) = &data.epoch_committee {
+        if !members.is_empty() {
+            return Ok(members.clone());
+        }
+    }
+    for (_k, v) in &data.staking_state {
+        if let Ok(staking) = StakingState::from_bytes(v) {
+            let members = committee_members_from_staking(&staking);
+            if !members.is_empty() {
+                return Ok(members);
+            }
+        }
+    }
+    Err(StateStoreError::SnapshotVerify(
+        "snapshot has no validator committee for seal verification".to_string(),
+    ))
+}
+
+/// Verify that `data` carries a sealed [`kovanica_types::LeaderHeader`] at
+/// `data.height` and a stake quorum of [`kovanica_types::CommitSeal`]s over it.
+fn verify_snapshot_seal_quorum(
+    txn: &WriteTransaction,
+    data: &SnapshotData,
+    recomputed_snapshot_root: Hash,
+) -> Result<(), StateStoreError> {
+    let header = data.leader_header.as_ref().ok_or_else(|| {
+        StateStoreError::SnapshotVerify(
+            "snapshot is missing sealed leader header; refusing uncertified import".to_string(),
+        )
+    })?;
+    if header.committed_height != data.height {
+        return Err(StateStoreError::SnapshotVerify(format!(
+            "sealed header height {} != snapshot height {}",
+            header.committed_height, data.height
+        )));
+    }
+    if header.timestamp != 0 {
+        return Err(StateStoreError::SnapshotVerify(
+            "sealed header timestamp is not zero".to_string(),
+        ));
+    }
+    if data.commit_seals.is_empty() {
+        return Err(StateStoreError::SnapshotVerify(
+            "snapshot has no commit seals; refusing uncertified import".to_string(),
+        ));
+    }
+    let smt_root = snapshot_account_smt_root(data)?;
+    if header.state_root != smt_root && header.state_root != recomputed_snapshot_root {
+        return Err(StateStoreError::SnapshotVerify(format!(
+            "sealed header state_root {} matches neither account SMT root {} nor snapshot root {}",
+            header.state_root.to_hex(),
+            smt_root.to_hex(),
+            recomputed_snapshot_root.to_hex()
+        )));
+    }
+    let members = resolve_snapshot_seal_committee(txn, data, header.epoch)?;
+    let expected_committee_hash = kovanica_types::committee_seal_hash(
+        header.epoch,
+        &kovanica_types::snapshot_seal_members(&members),
+    );
+    if header.committee_hash != expected_committee_hash {
+        return Err(StateStoreError::SnapshotVerify(format!(
+            "sealed header committee_hash {} != expected {}",
+            header.committee_hash.to_hex(),
+            expected_committee_hash.to_hex()
+        )));
+    }
+    let authorities = members
+        .into_iter()
+        .map(|member| kovanica_types::Authority {
+            index: member.index,
+            public_key: member.public_key,
+            vrf_public_key: member.vrf_public_key,
+            address: kovanica_types::Address::from_public_key(&member.public_key),
+            stake: member.stake,
+            network_address: String::new(),
+        })
+        .collect();
+    let committee = kovanica_types::Committee::new(header.epoch, authorities);
+    let candidate_chains = [1337u64, 1, 2, 3, 4, 0];
+    let mut last_err = None;
+    for chain_id in candidate_chains {
+        match kovanica_crypto::verify_commit_seals(
+            chain_id,
+            header,
+            &data.commit_seals,
+            &committee,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(StateStoreError::SnapshotVerify(format!(
+        "commit seal quorum verification failed: {:?}",
+        last_err
+    )))
 }
 
 /// Compute binary Merkle root from sorted leaf hashes.
@@ -1650,12 +1914,27 @@ mod snapshot_tests {
     use kovanica_types::Address;
     use tempfile::tempdir;
 
-    /// Fresh storage with one seeded account and (optionally) a saved state
-    /// root so [`StateStore::snapshot_height`] reports `height`.
+    /// Fresh storage with one seeded account and a quorum-sealed leader header
+    /// at `height` (defaulting to height `0`) so [`StateStore::snapshot_height`]
+    /// reports that height and [`StateStore::import_verified_snapshot`] can
+    /// verify the commit-seal quorum.
     fn seeded_storage(name: &str, height: Option<u64>) -> (tempfile::TempDir, Storage) {
         let dir = tempdir().unwrap();
         let storage = Storage::new(dir.path().join(name)).unwrap();
         {
+            let h = height.unwrap_or(0);
+            let key = kovanica_types::SigningKey::from_bytes(&[7u8; 32]);
+            let pk = kovanica_types::PublicKey(key.verifying_key().to_bytes());
+            let members = vec![kovanica_types::SealCommitteeSnapshotMember {
+                index: 0,
+                public_key: pk,
+                stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+                vrf_public_key: None,
+            }];
+            let committee_hash = kovanica_types::committee_seal_hash(
+                0,
+                &kovanica_types::snapshot_seal_members(&members),
+            );
             let txn = storage.begin_write().unwrap();
             let acct = Account {
                 balance: 1234,
@@ -1667,12 +1946,33 @@ mod snapshot_tests {
                 .state()
                 .set_account(&txn, &Address([4; 32]), &acct)
                 .unwrap();
-            if let Some(height) = height {
-                storage
-                    .state()
-                    .save_state_root(&txn, height, &Hash::new(b"root"))
-                    .unwrap();
-            }
+            let smt_root = storage.state().commit_account_smt(&txn, h).unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            let header = kovanica_types::LeaderHeader {
+                committed_height: h,
+                leader_round: (h + 1) * kovanica_types::WAVE_LENGTH,
+                leader_digest: Hash::new([h as u8]),
+                leader_author: 0,
+                parent_leader_digest: Hash::zero(),
+                tx_merkle_root: Hash::zero(),
+                executed_tx_root: Hash::zero(),
+                non_blue_root: Hash::zero(),
+                blue_root: Hash::zero(),
+                mysticghost: false,
+                state_root: smt_root,
+                epoch: 0,
+                committee_hash,
+                timestamp: 0,
+            };
+            let seal = kovanica_types::CommitSeal {
+                authority_index: 0,
+                signature: kovanica_crypto::sign(&key, &header.seal_message(1337)),
+            };
+            storage.state().save_leader_header(&txn, &header).unwrap();
+            storage.state().save_commit_seal(&txn, h, &seal).unwrap();
             txn.commit().unwrap();
         }
         (dir, storage)
@@ -1845,6 +2145,120 @@ mod snapshot_tests {
         key.copy_from_slice(&[6u8; 32]);
         let acct = storage.state().get_account(&txn, &Address(key)).unwrap();
         assert_eq!(acct.balance, 77, "legacy payload must still import");
+    }
+
+    #[test]
+    fn verified_import_rejects_snapshot_without_seal_quorum() {
+        let (_src_dir, src) = seeded_storage("src.redb", Some(4));
+        let valid_bytes = {
+            let txn = src.begin_read().unwrap();
+            src.state().snapshot_bytes(&txn).unwrap()
+        };
+
+        // 1. Missing leader header is rejected even when the snapshot root matches.
+        let mut no_header = StateStore::decode_snapshot(&valid_bytes).unwrap();
+        no_header.leader_header = None;
+        let mut no_header_bytes = SNAPSHOT_MAGIC.to_vec();
+        no_header_bytes.extend_from_slice(&bincode::serialize(&no_header).unwrap());
+
+        let dst_dir = tempdir().unwrap();
+        let dst = Storage::new(dst_dir.path().join("dst.redb")).unwrap();
+        {
+            let txn = dst.begin_write().unwrap();
+            let err = dst
+                .state()
+                .import_verified_snapshot(&txn, &no_header_bytes, 0)
+                .unwrap_err();
+            assert!(
+                matches!(err, StateStoreError::SnapshotVerify(_)),
+                "snapshot without sealed header must fail verification: {err:?}"
+            );
+        }
+
+        // 2. Empty seal set is rejected.
+        let mut no_seals = StateStore::decode_snapshot(&valid_bytes).unwrap();
+        no_seals.commit_seals.clear();
+        let mut no_seals_bytes = SNAPSHOT_MAGIC.to_vec();
+        no_seals_bytes.extend_from_slice(&bincode::serialize(&no_seals).unwrap());
+        {
+            let txn = dst.begin_write().unwrap();
+            let err = dst
+                .state()
+                .import_verified_snapshot(&txn, &no_seals_bytes, 0)
+                .unwrap_err();
+            assert!(
+                matches!(err, StateStoreError::SnapshotVerify(_)),
+                "snapshot without seals must fail verification: {err:?}"
+            );
+        }
+
+        // 3. Sub-quorum seal set (2 of 4 equal-stake validators = 50% < 2/3+1) is rejected.
+        let mut sub_quorum = StateStore::decode_snapshot(&valid_bytes).unwrap();
+        let keys: Vec<kovanica_types::SigningKey> = (1u8..=4)
+            .map(|b| kovanica_types::SigningKey::from_bytes(&[b; 32]))
+            .collect();
+        let members: Vec<kovanica_types::SealCommitteeSnapshotMember> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| kovanica_types::SealCommitteeSnapshotMember {
+                index: i as u16,
+                public_key: kovanica_types::PublicKey(k.verifying_key().to_bytes()),
+                stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+                vrf_public_key: None,
+            })
+            .collect();
+        let committee_hash = kovanica_types::committee_seal_hash(
+            0,
+            &kovanica_types::snapshot_seal_members(&members),
+        );
+        let mut header = sub_quorum.leader_header.clone().unwrap();
+        header.committee_hash = committee_hash;
+        sub_quorum.epoch_committee = Some(members);
+        // Only 2 of 4 sign: 100_000 < floor(2 * 200_000 / 3) + 1 = 133_334.
+        sub_quorum.commit_seals = keys[..2]
+            .iter()
+            .enumerate()
+            .map(|(i, k)| kovanica_types::CommitSeal {
+                authority_index: i as u16,
+                signature: kovanica_crypto::sign(k, &header.seal_message(1337)),
+            })
+            .collect();
+        sub_quorum.leader_header = Some(header.clone());
+        let mut sub_quorum_bytes = SNAPSHOT_MAGIC.to_vec();
+        sub_quorum_bytes.extend_from_slice(&bincode::serialize(&sub_quorum).unwrap());
+        {
+            let txn = dst.begin_write().unwrap();
+            let err = dst
+                .state()
+                .import_verified_snapshot(&txn, &sub_quorum_bytes, 0)
+                .unwrap_err();
+            assert!(
+                matches!(err, StateStoreError::SnapshotVerify(_)),
+                "sub-quorum snapshot must fail verification: {err:?}"
+            );
+        }
+
+        // 4. With 3 of 4 validators signing (>= 2/3+1 quorum), verification succeeds.
+        let mut full_quorum = sub_quorum;
+        full_quorum.commit_seals = keys[..3]
+            .iter()
+            .enumerate()
+            .map(|(i, k)| kovanica_types::CommitSeal {
+                authority_index: i as u16,
+                signature: kovanica_crypto::sign(k, &header.seal_message(1337)),
+            })
+            .collect();
+        let mut full_quorum_bytes = SNAPSHOT_MAGIC.to_vec();
+        full_quorum_bytes.extend_from_slice(&bincode::serialize(&full_quorum).unwrap());
+        {
+            let txn = dst.begin_write().unwrap();
+            let height = dst
+                .state()
+                .import_verified_snapshot(&txn, &full_quorum_bytes, 0)
+                .expect("3-of-4 quorum snapshot must import");
+            assert_eq!(height, 4);
+            txn.commit().unwrap();
+        }
     }
 }
 

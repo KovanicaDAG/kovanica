@@ -7010,11 +7010,24 @@ mod tests {
         assert!(sessions.sessions.is_empty(), "empty claim abandoned");
     }
 
-    /// Export a snapshot from a throwaway storage with one seeded account.
+    /// Export a snapshot from a throwaway storage with one seeded account and
+    /// a quorum-sealed leader header at height 0 (`committed_leader_height = 0`).
     fn exported_snapshot_bytes() -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::new(dir.path().join("src.redb")).unwrap();
         {
+            let key = SigningKey::from_bytes(&[7u8; 32]);
+            let pk = PublicKey(key.verifying_key().to_bytes());
+            let members = vec![kovanica_types::SealCommitteeSnapshotMember {
+                index: 0,
+                public_key: pk,
+                stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+                vrf_public_key: None,
+            }];
+            let committee_hash = kovanica_types::committee_seal_hash(
+                0,
+                &kovanica_types::snapshot_seal_members(&members),
+            );
             let txn = storage.begin_write().unwrap();
             let acct = kovanica_storage::state_store::Account {
                 balance: 42,
@@ -7026,6 +7039,33 @@ mod tests {
                 .state()
                 .set_account(&txn, &Address([7; 32]), &acct)
                 .unwrap();
+            let smt_root = storage.state().commit_account_smt(&txn, 0).unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            let header = kovanica_types::LeaderHeader {
+                committed_height: 0,
+                leader_round: 3,
+                leader_digest: Hash::new([1u8]),
+                leader_author: 0,
+                parent_leader_digest: Hash::zero(),
+                tx_merkle_root: Hash::zero(),
+                executed_tx_root: Hash::zero(),
+                non_blue_root: Hash::zero(),
+                blue_root: Hash::zero(),
+                mysticghost: false,
+                state_root: smt_root,
+                epoch: 0,
+                committee_hash,
+                timestamp: 0,
+            };
+            let seal = kovanica_types::CommitSeal {
+                authority_index: 0,
+                signature: kovanica_crypto::sign(&key, &header.seal_message(1337)),
+            };
+            storage.state().save_leader_header(&txn, &header).unwrap();
+            storage.state().save_commit_seal(&txn, 0, &seal).unwrap();
             txn.commit().unwrap();
         }
         let txn = storage.begin_read().unwrap();
@@ -7137,35 +7177,62 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = Storage::new(dir.path().join("src.redb")).unwrap();
         {
+            let key = SigningKey::from_bytes(&[7u8; 32]);
+            let pk = PublicKey(key.verifying_key().to_bytes());
+            let addr = Address::from_public_key(&pk);
             let txn = src.begin_write().unwrap();
             let mut staking = StakingState::new();
+            staking.init_treasury(Address([0xcc; 32]));
+            staking
+                .join_validator(
+                    addr,
+                    kovanica_staking::MIN_VALIDATOR_STAKE,
+                    0,
+                    Some(addr),
+                    Some(pk),
+                    None,
+                )
+                .unwrap();
             staking.committed_leader_height = commits;
             src.state().save_staking_state(&txn, &staking).unwrap();
-            let state_root = Hash::new([9u8]);
-            // Header height is the state-root key, one behind the commit count.
+            let members = vec![kovanica_types::SealCommitteeSnapshotMember {
+                index: 0,
+                public_key: pk,
+                stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+                vrf_public_key: None,
+            }];
+            let committee_hash = kovanica_types::committee_seal_hash(
+                0,
+                &kovanica_types::snapshot_seal_members(&members),
+            );
             src.state()
-                .save_state_root(&txn, commits - 1, &state_root)
+                .put_epoch_committee_if_absent(&txn, 0, &members)
                 .unwrap();
+            // Header height is the state-root key, one behind the commit count.
+            let state_root = src.state().commit_account_smt(&txn, commits - 1).unwrap();
+            let header = kovanica_types::LeaderHeader {
+                committed_height: commits - 1,
+                leader_round: anchor,
+                leader_digest: Hash::new([1u8]),
+                leader_author: 0,
+                parent_leader_digest: Hash::zero(),
+                tx_merkle_root: Hash::zero(),
+                executed_tx_root: Hash::zero(),
+                non_blue_root: Hash::zero(),
+                blue_root: Hash::zero(),
+                mysticghost: false,
+                state_root,
+                epoch: 0,
+                committee_hash,
+                timestamp: 0,
+            };
+            let seal = kovanica_types::CommitSeal {
+                authority_index: 0,
+                signature: kovanica_crypto::sign(&key, &header.seal_message(1337)),
+            };
+            src.state().save_leader_header(&txn, &header).unwrap();
             src.state()
-                .save_leader_header(
-                    &txn,
-                    &kovanica_types::LeaderHeader {
-                        committed_height: commits - 1,
-                        leader_round: anchor,
-                        leader_digest: Hash::new([1u8]),
-                        leader_author: 0,
-                        parent_leader_digest: Hash::zero(),
-                        tx_merkle_root: Hash::zero(),
-                        executed_tx_root: Hash::zero(),
-                        non_blue_root: Hash::zero(),
-                        blue_root: Hash::zero(),
-                        mysticghost: false,
-                        state_root,
-                        epoch: 0,
-                        committee_hash: Hash::zero(),
-                        timestamp: 0,
-                    },
-                )
+                .save_commit_seal(&txn, commits - 1, &seal)
                 .unwrap();
             txn.commit().unwrap();
         }

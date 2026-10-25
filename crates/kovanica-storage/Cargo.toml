@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 kovanica-types = { path = "../kovanica-types" }
+kovanica-crypto = { path = "../kovanica-crypto" }
 kovanica-staking = { path = "../kovanica-staking" }
 serde = { workspace = true }
 thiserror = { workspace = true }
