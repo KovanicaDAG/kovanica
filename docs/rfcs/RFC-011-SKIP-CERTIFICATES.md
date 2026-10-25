@@ -1,6 +1,24 @@
-# RFC-011: Leader-slot timeouts and skip certificates (PRO-40 (b))
+# RFC-011 — Leader-Slot Timeouts and Skip Certificates (PRO-40 (b))
 
-Status: implemented for the chain-4 reset (wire change). Approved by Toni on 2026-10-23 as PRO-40 PR 3/4.
+- **Status:** Implemented (2026-10-23, wire change)
+- **Crate Scope:** `kovanica-consensus`, `kovanica-types`, `kovanica-network`
+- **Primary References:**
+  - Skip verification: [`crates/kovanica-consensus/src/skip.rs`](file:///crates/kovanica-consensus/src/skip.rs)
+  - Timeout and SkipCert types: [`crates/kovanica-types/src/timeout.rs`](file:///crates/kovanica-types/src/timeout.rs)
+  - Committer integration: [`crates/kovanica-consensus/src/committer.rs`](file:///crates/kovanica-consensus/src/committer.rs)
+  - Related RFCs:
+    - [`RFC-002-MYSTICETI-DAG-CONSENSUS-AND-LEADER-LOGIC.md`](file:///docs/rfcs/RFC-002-MYSTICETI-DAG-CONSENSUS-AND-LEADER-LOGIC.md)
+    - [`RFC-006-P2P-NETWORK-PROTOCOL-AND-MEMPOOL.md`](file:///docs/rfcs/RFC-006-P2P-NETWORK-PROTOCOL-AND-MEMPOOL.md)
+
+---
+
+## Sažetak (Executive Summary)
+
+RFC-011 rješava problem zastoja lanca (chain stall) kada predlagatelj liderskog bloka u krugu $R$ ne uspije isporučiti blok ili kada blok ne prikupi kvorum glasova. Committer prema pravilima Mysticetija ne smije preskočiti neodlučeni liderski krug jer bi lokalni preskoci temeljeni na satovima pojedinih čvorova doveli do račvanja stanja (chain fork).
+
+Ovaj RFC uvodi kvorumski verificirane certifikate preskakanja (`SkipCert`): nakon čekanja $T_\text{skip}$, validatori potpisuju `Timeout(R)`. Kada se prikupi kvorum uloga ($2f+1$), formira se `SkipCert` koji jedini ima ovlast pomaknuti kursor committera preko neodlučenog slota bez primjene liderskog bloka.
+
+---
 
 ## Problem
 

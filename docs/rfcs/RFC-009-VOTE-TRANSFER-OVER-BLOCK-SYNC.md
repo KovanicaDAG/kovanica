@@ -1,16 +1,27 @@
-# RFC draft: 009 — vote transfer over block sync (late-join catch-up)
+# RFC-009 — Vote Transfer Over Block Sync (Late-Join Catch-Up)
 
-Status: **implemented (2026-10-22) — see §8 for the outcome and what changed
-during implementation.** The wire change below is *additive*: it adds two
-variants to the existing block-sync request/response enums and does not alter
-any existing variant, digest, or consensus rule. No activation gate is needed:
-a peer that does not know the new variants simply never asks for votes, and a
-peer that is never asked behaves exactly as before.
+- **Status:** Implemented (2026-10-22)
+- **Crate Scope:** `kovanica-network`, `kovanica-consensus`, `kovanica-storage`
+- **Primary References:**
+  - Network block sync: [`crates/kovanica-network/src/block_sync.rs`](file:///crates/kovanica-network/src/block_sync.rs)
+  - Committer logic: [`crates/kovanica-consensus/src/committer.rs`](file:///crates/kovanica-consensus/src/committer.rs)
+  - Vote storage: [`crates/kovanica-storage/src/consensus_store.rs`](file:///crates/kovanica-storage/src/consensus_store.rs)
+  - Related RFCs:
+    - [`RFC-002-MYSTICETI-DAG-CONSENSUS-AND-LEADER-LOGIC.md`](file:///docs/rfcs/RFC-002-MYSTICETI-DAG-CONSENSUS-AND-LEADER-LOGIC.md)
+    - [`RFC-005-STATE-COMMITMENT-PRUNING-AND-VERIFIABLE-STATE-SYNC.md`](file:///docs/rfcs/RFC-005-STATE-COMMITMENT-PRUNING-AND-VERIFIABLE-STATE-SYNC.md)
+    - [`RFC-006-P2P-NETWORK-PROTOCOL-AND-MEMPOOL.md`](file:///docs/rfcs/RFC-006-P2P-NETWORK-PROTOCOL-AND-MEMPOOL.md)
 
-> **Problem.** A validator that joins an already-running network can never sync.
-> Its committed height stays `0` forever, even though it receives blocks and
-> peers. This is the `late_join_integration` failure, acknowledged upstream in
-> `a85731a` (PRO-35) as a *"pre-existing state sync issue"*.
+---
+
+## Sažetak (Executive Summary)
+
+RFC-009 rješava problem zaustavljanja sinkronizacije (stall) kod čvorova koji se naknadno priključuju pokrenutoj mreži (late-joiners). U originalnoj verziji protokola, konsenzusni glasovi (`Vote`) prenosili su se isključivo preko nepostojanog Gossipsub kanala "votes" i nisu bili trajno pohranjeni niti dostupni preko sinkronizacijskog protokola `block-sync`.
+
+Kako committer odbija prijeći preko neodlučenog lidera bez kvoruma glasova ($2f+1$), čvor koji se naknadno priključi zaprimio bi blokove lidera, ali nikada ne bi mogao prikupiti kvorum glasova za njih, što bi trajno zaledilo visinu potvrđenog lanca na nuli (`committed_height = 0`).
+
+Ovaj RFC definira trajno čuvanje glasova u tablici `VOTES` unutar `kovanica-storage`, proširenje protokola `block-sync/1.1.0` novim varijantama `VotesForRound` i `Votes`, te automatsko povlačenje nedostajućih glasova tijekom sinkronizacije liderskih blokova.
+
+---
 
 ## 1. Root cause
 

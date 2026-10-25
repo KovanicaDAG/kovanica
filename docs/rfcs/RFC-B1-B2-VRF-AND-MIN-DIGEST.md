@@ -1,9 +1,26 @@
-# RFC draft: B1 VRF leader election and B2 min-digest fork resolution
+# RFC-012 — VRF Leader Election (B1) and Min-Digest Fork Resolution (B2)
 
-Status: **draft / not activated**. Default consensus behaviour is unchanged.
+- **Status:** Draft / Gated (TASKLIST item 15)
+- **Crate Scope:** `kovanica-crypto`, `kovanica-consensus`, `kovanica-dag`
+- **Primary References:**
+  - VRF implementation: [`crates/kovanica-crypto/src/lib.rs`](file:///crates/kovanica-crypto/src/lib.rs)
+  - Consensus VRF election: [`crates/kovanica-consensus/src/engine.rs`](file:///crates/kovanica-consensus/src/engine.rs)
+  - Min-digest replacement: [`crates/kovanica-dag/src/dag_store.rs`](file:///crates/kovanica-dag/src/dag_store.rs)
+  - Related RFCs:
+    - [`RFC-002-MYSTICETI-DAG-CONSENSUS-AND-LEADER-LOGIC.md`](file:///docs/rfcs/RFC-002-MYSTICETI-DAG-CONSENSUS-AND-LEADER-LOGIC.md)
+    - [`RFC-003-STAKING-EPOCHS-AND-VALIDATOR-LIFECYCLE.md`](file:///docs/rfcs/RFC-003-STAKING-EPOCHS-AND-VALIDATOR-LIFECYCLE.md)
 
-This document records the subset that can ship without a wire-format break.
-It is not a network upgrade.
+---
+
+## Sažetak (Executive Summary)
+
+RFC-012 (izvorno B1/B2) specificira dvije opcionalne konsenzusne nadogradnje:
+1. **B1: Izbor lidera putem Verifiable Random Function (VRF):** Validatori prilažu 96-bajtni ECVRF dokaz (ristretto255 + SHA3 iz `ecvrf` crate-a), a komitet deterministički bira lidera s najmanjim ulogom ponderiranim VRF izlazom, zamjenjujući deterministički round-robin.
+2. **B2: Rješavanje račvanja najmanjim hešom (Min-Digest Fork Resolution):** U slučaju da validator proizvede dva bloka za isti liderski krug prije odluke komiteta, `replace_block` u `DagStore` atomski mijenja pohranjeni blok leksikografski manjim hešom unutar jedne transakcije upisa.
+
+Obje funkcionalnosti su zaštićene konfiguracijskim prekidačima (`use_vrf_leader = false`, `use_min_digest_fork = false`) i ostaju neaktivne do koordiniranog mrežnog resetiranja.
+
+---
 
 > **Update 2026-10-21 (TASKLIST item 15).** The VRF implementation is the
 > `ecvrf` 0.4.3 crate (ristretto255 + SHA3) — **not** an RFC 9381 ciphersuite.

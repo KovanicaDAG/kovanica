@@ -1,15 +1,26 @@
-# RFC-010 — Production slashing: verifiable evidence and unbonding coverage
+# RFC-010 — Production Slashing: Verifiable Evidence and Unbonding Coverage
 
-- **Status:** Accepted & implemented 2026-10-22 (gated behind
-  `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`). Decisions D1–D5 taken as
-  recommended in §8; see §11 for what shipped and §11.1 for the PRO-19 jail
-  (part 2).
-- **Supersedes:** the skeleton described in PRO-12 (Linear), ANT-24
-- **Tracks:** TASKLIST item 8, Linear PRO-12
-- **Depends on:** PRO-19 (versioned store decode + immediate deactivation/jail)
-- **Consensus impact:** yes — new transaction kind and a new consensus rule. Must
-  ship behind `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`; activate only at the
-  chain 4 genesis reset.
+- **Status:** Accepted & Implemented (2026-10-22, gated behind `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`)
+- **Crate Scope:** `kovanica-staking`, `kovanica-types`, `kovanica-consensus`, `kovanica-execution`
+- **Tracks:** TASKLIST item 8, Linear PRO-12, PRO-19
+- **Primary References:**
+  - Staking slashing logic: [`crates/kovanica-staking/src/lib.rs`](file:///crates/kovanica-staking/src/lib.rs)
+  - Equivocation evidence: [`crates/kovanica-types/src/evidence.rs`](file:///crates/kovanica-types/src/evidence.rs)
+  - Engine equivocation check: [`crates/kovanica-consensus/src/engine.rs`](file:///crates/kovanica-consensus/src/engine.rs)
+  - Execution processing: [`crates/kovanica-execution/src/lib.rs`](file:///crates/kovanica-execution/src/lib.rs)
+  - Related RFCs:
+    - [`RFC-002-MYSTICETI-DAG-CONSENSUS-AND-LEADER-LOGIC.md`](file:///docs/rfcs/RFC-002-MYSTICETI-DAG-CONSENSUS-AND-LEADER-LOGIC.md)
+    - [`RFC-003-STAKING-EPOCHS-AND-VALIDATOR-LIFECYCLE.md`](file:///docs/rfcs/RFC-003-STAKING-EPOCHS-AND-VALIDATOR-LIFECYCLE.md)
+
+---
+
+## Sažetak (Executive Summary)
+
+RFC-010 definira produkcijski sustav kažnjavanja (slashing) za validatore koji dokazano equivociraju (potpišu dva različita bloka za istu rundu). Kazna se provodi deterministički na svim čvorovima u mreži kroz fiksni odbitak od 5% uloga (`SLASH_PCT_BPS = 500`), preusmjeravanje oduzetih sredstava u riznicu, trenutnu deaktivaciju validatora i smještanje u zatvor (jail) na 7 200 visina lidera (~24h).
+
+Kako bi se spriječilo izbjegavanje kazne pokretanjem unbonding procesa prije detekcije prekršaja, unbonding red čeka 100 000 blokova lidera i ostaje podložan retroaktivnom rezanju ako je prekršaj počinjen dok su sredstva bila aktivna.
+
+---
 
 ## 1. Goal
 
