@@ -112,12 +112,35 @@ impl Htlc {
         hash_lock: Hash,
         expiry: Timestamp,
     ) -> ContractResult<SwapId> {
+        Self::create_with_gate(
+            host,
+            claimer,
+            amount,
+            hash_lock,
+            expiry,
+            kovanica_common::REJECT_UNIX_SECONDS_FROM_HEIGHT,
+        )
+    }
+
+    /// [`Htlc::create`] with an explicit activation height for the
+    /// unix-seconds guard (tests drive both sides; production uses the constant).
+    fn create_with_gate(
+        host: &mut impl Host,
+        claimer: Address,
+        amount: Amount,
+        hash_lock: Hash,
+        expiry: Timestamp,
+        reject_unix_from: kovanica_common::Height,
+    ) -> ContractResult<SwapId> {
         if amount == 0 {
             return Err(ContractError::InvalidInput);
         }
         if expiry <= host.timestamp() {
             return Err(ContractError::InvalidInput);
         }
+        // Contract time is the block height, not unix seconds: refuse a value
+        // that is obviously a wall-clock time (it would never expire).
+        kovanica_common::check_contract_time(host.block_height(), expiry, reject_unix_from)?;
 
         let sender = host.caller();
         let swap = Htlc {
@@ -662,4 +685,83 @@ mod tests {
     }
 
     use alloc::rc::Rc;
+
+    /// FINDING (unit mismatch): contract time on a live node is the block
+    /// height, but the CLI documents `--expiry` as unix seconds. A lock whose
+    /// expiry is a unix-seconds value cannot be refunded at any realistic
+    /// height, so the sender's funds are stuck unless the claimer cooperates.
+    #[test]
+    fn unix_seconds_expiry_never_expires_under_a_height_clock() {
+        let sender = addr(1);
+        let claimer = addr(2);
+        let unix_expiry: Timestamp = 1_800_000_000; // ~Jan 2027 as unix seconds
+        assert!(kovanica_common::looks_like_unix_seconds(unix_expiry));
+
+        // Height clock near genesis.
+        let mut host = funded_host(
+            sender,
+            addr(9),
+            1_000,
+            kovanica_common::contract_time_from_height(100),
+        );
+        let id = Htlc::create(&mut host, claimer, 100, hash(b"secret"), unix_expiry).unwrap();
+
+        // ~38 years of 12 s leaders later (100 million heights): refund is
+        // still refused as NotExpired.
+        host.set_timestamp(kovanica_common::contract_time_from_height(100_000_000));
+        assert_eq!(Htlc::refund(&mut host, id), Err(ContractError::NotExpired));
+        assert_eq!(host.balance_of(&sender), 900);
+    }
+
+    /// A height-denominated expiry behaves as intended: claim before, refund
+    /// from the expiry height on, with no overlap between the two windows.
+    #[test]
+    fn height_denominated_expiry_has_disjoint_claim_and_refund_windows() {
+        let sender = addr(1);
+        let claimer = addr(2);
+        let mut host = funded_host(sender, addr(9), 1_000, 100);
+        let id = Htlc::create(&mut host, claimer, 100, hash(b"secret"), 200).unwrap();
+
+        host.set_timestamp(199);
+        assert_eq!(Htlc::refund(&mut host, id), Err(ContractError::NotExpired));
+
+        host.set_timestamp(200);
+        host.set_caller(claimer);
+        assert_eq!(
+            Htlc::claim(&mut host, id, b"secret"),
+            Err(ContractError::Expired)
+        );
+        assert_eq!(Htlc::refund(&mut host, id), Ok(()));
+        assert_eq!(host.balance_of(&sender), 1_000);
+    }
+
+    /// FIX: with the guard active a unix-seconds expiry is refused at create
+    /// and nothing is escrowed; a height-style expiry is still accepted.
+    #[test]
+    fn unix_seconds_expiry_is_rejected_when_the_guard_is_active() {
+        let sender = addr(1);
+        let unix_expiry: Timestamp = 1_800_000_000;
+        let mut host = funded_host(sender, addr(9), 1_000, 100);
+
+        assert_eq!(
+            Htlc::create_with_gate(&mut host, addr(2), 100, hash(b"s"), unix_expiry, 0),
+            Err(ContractError::InvalidInput)
+        );
+        assert_eq!(host.balance_of(&sender), 1_000); // nothing escrowed
+
+        assert!(Htlc::create_with_gate(&mut host, addr(2), 100, hash(b"s"), 200, 0).is_ok());
+        assert_eq!(host.balance_of(&sender), 900);
+    }
+
+    /// The public entry point keeps today's behaviour until the gate is
+    /// deliberately switched on.
+    #[test]
+    fn public_create_still_accepts_unix_seconds_while_the_gate_is_inert() {
+        assert_eq!(
+            kovanica_common::REJECT_UNIX_SECONDS_FROM_HEIGHT,
+            kovanica_common::Height::MAX
+        );
+        let mut host = funded_host(addr(1), addr(9), 1_000, 100);
+        assert!(Htlc::create(&mut host, addr(2), 100, hash(b"s"), 1_800_000_000).is_ok());
+    }
 }

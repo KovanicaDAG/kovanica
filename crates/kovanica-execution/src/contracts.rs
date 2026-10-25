@@ -1107,8 +1107,9 @@ impl Default for ContractRunner {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::call_args;
     use kovanica_common::{Amount, ContractError};
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
@@ -1122,7 +1123,7 @@ mod tests {
     /// `CARGO_MANIFEST_DIR` is `crates/kovanica-execution`, so a single `.parent()`
     /// would point at `crates/` and place the isolated wasm target dir in an
     /// un-ignored `crates/target/`. The root `target/` is git-ignored.
-    fn workspace_root() -> PathBuf {
+    pub(crate) fn workspace_root() -> PathBuf {
         let start = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut dir = start;
         loop {
@@ -1136,6 +1137,67 @@ mod tests {
                 None => return start.to_path_buf(),
             }
         }
+    }
+
+    /// Thread-safe build of a contract wasm artifact in an isolated target directory.
+    pub(crate) fn build_contract_wasm(contract_pkg: &str) -> Option<Vec<u8>> {
+        static BUILD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = BUILD_LOCK.lock().unwrap();
+
+        let workspace = workspace_root();
+
+        let probe = std::process::Command::new("rustup")
+            .args(["target", "list", "--installed"])
+            .output();
+        let probe = match probe {
+            Ok(output) if output.status.success() => output,
+            _ => {
+                eprintln!("SKIP wasm build for {contract_pkg}: rustup unavailable");
+                return None;
+            }
+        };
+        let has_target = String::from_utf8_lossy(&probe.stdout)
+            .lines()
+            .any(|line| line.trim() == "wasm32-unknown-unknown");
+        if !has_target {
+            eprintln!(
+                "SKIP wasm build for {contract_pkg}: wasm32-unknown-unknown target not installed"
+            );
+            return None;
+        }
+
+        let target_dir = workspace.join("target").join("contract-wasm-e2e");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let build = std::process::Command::new(&cargo)
+            .current_dir(&workspace)
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env("RUSTFLAGS", "-C link-arg=--allow-undefined")
+            .args([
+                "build",
+                "-p",
+                contract_pkg,
+                "--target",
+                "wasm32-unknown-unknown",
+                "--release",
+            ])
+            .output()
+            .expect("failed to spawn cargo for the wasm contract build");
+        assert!(
+            build.status.success(),
+            "wasm contract build failed for {contract_pkg}:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let wasm_file = format!("{}.wasm", contract_pkg.replace('-', "_"));
+        let wasm_path = target_dir
+            .join("wasm32-unknown-unknown")
+            .join("release")
+            .join(wasm_file);
+        let wasm = std::fs::read(&wasm_path)
+            .unwrap_or_else(|err| panic!("built wasm missing at {}: {err}", wasm_path.display()));
+        assert!(!wasm.is_empty(), "empty wasm artifact");
+        Some(wasm)
     }
 
     fn open_storage() -> (TempDir, Storage) {
@@ -1829,62 +1891,10 @@ mod tests {
     // check does not link; the durable fix belongs in kovanica-common.
     #[test]
     fn wasmi_e2e_kovanica_token_wasm() {
-        let workspace_root = workspace_root();
-
-        // Skip: rustup missing or wasm32-unknown-unknown not installed.
-        let probe = std::process::Command::new("rustup")
-            .args(["target", "list", "--installed"])
-            .output();
-        let probe = match probe {
-            Ok(output) if output.status.success() => output,
-            _ => {
-                eprintln!("SKIP wasmi_e2e_kovanica_token_wasm: rustup unavailable");
-                return;
-            }
+        let wasm = match build_contract_wasm("kovanica-token") {
+            Some(w) => w,
+            None => return,
         };
-        let has_target = String::from_utf8_lossy(&probe.stdout)
-            .lines()
-            .any(|line| line.trim() == "wasm32-unknown-unknown");
-        if !has_target {
-            eprintln!(
-                "SKIP wasmi_e2e_kovanica_token_wasm: wasm32-unknown-unknown target not installed"
-            );
-            return;
-        }
-
-        // Isolated target dir: the outer `cargo test` must not hold the lock
-        // the subprocess build would wait on (target-lock deadlock).
-        let target_dir = workspace_root.join("target").join("contract-wasm-e2e");
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let build = std::process::Command::new(&cargo)
-            .current_dir(workspace_root)
-            .env("CARGO_TARGET_DIR", &target_dir)
-            // Lane 3a gap workaround — see the test doc comment above.
-            .env("RUSTFLAGS", "-C link-arg=--allow-undefined")
-            .args([
-                "build",
-                "-p",
-                "kovanica-token",
-                "--target",
-                "wasm32-unknown-unknown",
-                "--release",
-            ])
-            .output()
-            .expect("failed to spawn cargo for the wasm contract build");
-        assert!(
-            build.status.success(),
-            "wasm contract build failed:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr)
-        );
-
-        let wasm_path = target_dir
-            .join("wasm32-unknown-unknown")
-            .join("release")
-            .join("kovanica_token.wasm");
-        let wasm = std::fs::read(&wasm_path)
-            .unwrap_or_else(|err| panic!("built wasm missing at {}: {err}", wasm_path.display()));
-        assert!(!wasm.is_empty(), "empty wasm artifact");
 
         let (_dir, storage) = open_storage();
         let creator = addr(1);
@@ -1955,6 +1965,629 @@ mod tests {
         let token = token_state(&storage, &contract);
         assert_eq!(token.balances.get(&creator.0), Some(&500));
         assert_eq!(token.balances.get(&recipient.0), Some(&500));
+    }
+
+    /// Helper to assert contract errors across both native and wasmi dispatch.
+    fn assert_contract_err(err: &ExecutionError, expected: ContractError) {
+        match err {
+            ExecutionError::Runtime(kovanica_runtime::RuntimeError::Contract(code)) => {
+                assert_eq!(
+                    *code,
+                    expected.code(),
+                    "expected error code {}, got {}",
+                    expected.code(),
+                    code
+                );
+            }
+            ExecutionError::Contract(c) => {
+                assert_eq!(c, &expected);
+            }
+            other => panic!("expected contract error {expected:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wasmi_e2e_kovanica_htlc_wasm() {
+        let wasm = match build_contract_wasm("kovanica-htlc") {
+            Some(w) => w,
+            None => return,
+        };
+        let (_dir, storage) = open_storage();
+        let sender = addr(1);
+        let claimer = addr(2);
+        let third_party = addr(3);
+        let contract = addr(41);
+        deploy(&storage, &contract);
+        fund(&storage, &sender, 5_000);
+        let config = ExecutionConfig {
+            gas_limit: 100_000_000,
+            memory_limit_pages: 256,
+        };
+        let mut runner = ContractRunner::new();
+
+        let preimage = b"my_preimage_for_htlc_swap";
+        let hash_lock = kovanica_common::hash(preimage);
+        let expiry = 1_000u64;
+
+        // 1. Successful create via wasm with attached value 1_000
+        let create_args = call_args::encode_htlc_create(claimer.0, 1_000, hash_lock, expiry)
+            .expect("encode create");
+        let (out, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_create",
+                contract,
+                caller: sender,
+                height: 1,
+                timestamp: 100,
+                args: &create_args,
+                storage: &storage,
+                txn: None,
+                value: 1_000,
+                config: &config,
+            })
+            .expect("wasm htlc_create");
+        let id: [u8; 32] = bincode::deserialize(&out).expect("swap id");
+        let escrow = Address(kovanica_htlc::escrow_address(&id));
+
+        assert_eq!(native_balance(&storage, &sender), 4_000);
+        assert_eq!(native_balance(&storage, &contract), 1_000);
+        assert_eq!(custody(&storage, &contract, &escrow), 1_000);
+
+        // 2. Failure case: duplicate create must fail (AlreadyExists)
+        let dup_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_create",
+                contract,
+                caller: sender,
+                height: 2,
+                timestamp: 105,
+                args: &create_args,
+                storage: &storage,
+                txn: None,
+                value: 1_000,
+                config: &config,
+            })
+            .expect_err("duplicate create must fail");
+        assert_contract_err(&dup_err, ContractError::AlreadyExists);
+        assert_eq!(native_balance(&storage, &sender), 4_000);
+
+        // 3. Failure case: claim by unauthorized caller (not claimer)
+        let claim_args = call_args::encode_htlc_claim(id, preimage).expect("encode claim");
+        let unauth_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_claim",
+                contract,
+                caller: third_party,
+                height: 3,
+                timestamp: 200,
+                args: &claim_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("unauthorized claimer must fail");
+        assert_contract_err(&unauth_err, ContractError::Unauthorized);
+
+        // 4. Failure case: claim with wrong preimage
+        let bad_claim_args =
+            call_args::encode_htlc_claim(id, b"wrong_preimage").expect("encode claim");
+        let mismatch_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_claim",
+                contract,
+                caller: claimer,
+                height: 4,
+                timestamp: 200,
+                args: &bad_claim_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("wrong preimage must fail");
+        assert_contract_err(&mismatch_err, ContractError::HashMismatch);
+
+        // 5. Failure case: refund before expiry
+        let refund_args = call_args::encode_htlc_refund(id).expect("encode refund");
+        let not_exp_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_refund",
+                contract,
+                caller: sender,
+                height: 5,
+                timestamp: 500, // < expiry (1000)
+                args: &refund_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("refund before expiry must fail");
+        assert_contract_err(&not_exp_err, ContractError::NotExpired);
+
+        // 6. Successful claim by claimer before expiry
+        runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_claim",
+                contract,
+                caller: claimer,
+                height: 6,
+                timestamp: 500,
+                args: &claim_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm htlc_claim");
+        assert_eq!(native_balance(&storage, &claimer), 1_000);
+        assert_eq!(native_balance(&storage, &contract), 0);
+        assert_eq!(custody_total(&storage, &contract), 0);
+
+        // 7. Failure case: claim already claimed
+        let claimed_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_claim",
+                contract,
+                caller: claimer,
+                height: 7,
+                timestamp: 550,
+                args: &claim_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("double claim must fail");
+        assert_contract_err(&claimed_err, ContractError::InvalidInput);
+
+        // 8. Test refund path: create swap2, expire it, refund it
+        let create_args2 =
+            call_args::encode_htlc_create(claimer.0, 500, hash_lock, 800).expect("encode create2");
+        let (out2, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_create",
+                contract,
+                caller: sender,
+                height: 8,
+                timestamp: 600,
+                args: &create_args2,
+                storage: &storage,
+                txn: None,
+                value: 500,
+                config: &config,
+            })
+            .expect("wasm htlc_create2");
+        let id2: [u8; 32] = bincode::deserialize(&out2).expect("swap id2");
+        assert_eq!(native_balance(&storage, &sender), 3_500);
+
+        // Claim at t >= expiry (800) fails with Expired
+        let claim_args2 = call_args::encode_htlc_claim(id2, preimage).expect("encode claim2");
+        let exp_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_claim",
+                contract,
+                caller: claimer,
+                height: 9,
+                timestamp: 850,
+                args: &claim_args2,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("expired claim must fail");
+        assert_contract_err(&exp_err, ContractError::Expired);
+
+        // Refund after expiry succeeds (triggered by third party, funds return to sender)
+        let refund_args2 = call_args::encode_htlc_refund(id2).expect("encode refund2");
+        runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "htlc_refund",
+                contract,
+                caller: third_party,
+                height: 10,
+                timestamp: 850,
+                args: &refund_args2,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm htlc_refund");
+        assert_eq!(native_balance(&storage, &sender), 4_000);
+        assert_eq!(custody_total(&storage, &contract), 0);
+    }
+
+    #[test]
+    fn wasmi_e2e_kovanica_vault_wasm() {
+        let wasm = match build_contract_wasm("kovanica-vault") {
+            Some(w) => w,
+            None => return,
+        };
+        let (_dir, storage) = open_storage();
+        let creator = addr(1);
+        let beneficiary = addr(2);
+        let third_party = addr(3);
+        let contract = addr(42);
+        deploy(&storage, &contract);
+        fund(&storage, &creator, 10_000);
+        let config = ExecutionConfig {
+            gas_limit: 100_000_000,
+            memory_limit_pages: 256,
+        };
+        let mut runner = ContractRunner::new();
+
+        let schedule = kovanica_vault::VestingSchedule::Linear {
+            start: 1_000,
+            end: 3_000,
+            cliff: None,
+        };
+
+        // 1. Successful vault_create via wasm with attached value 2_000
+        let create_args =
+            call_args::encode_vault_create(beneficiary.0, 2_000, &schedule).expect("encode create");
+        let (out, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "vault_create",
+                contract,
+                caller: creator,
+                height: 1,
+                timestamp: 500,
+                args: &create_args,
+                storage: &storage,
+                txn: None,
+                value: 2_000,
+                config: &config,
+            })
+            .expect("wasm vault_create");
+        let id: kovanica_vault::VaultId = bincode::deserialize(&out).expect("vault id");
+        let escrow = Address(kovanica_vault::escrow_address(&id));
+
+        assert_eq!(native_balance(&storage, &creator), 8_000);
+        assert_eq!(native_balance(&storage, &contract), 2_000);
+        assert_eq!(custody(&storage, &contract, &escrow), 2_000);
+
+        // 2. Failure case: claim by third party (not beneficiary) -> Unauthorized
+        let claim_args = call_args::encode_vault_claim(id).expect("encode claim");
+        let unauth_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "vault_claim",
+                contract,
+                caller: third_party,
+                height: 2,
+                timestamp: 2_000,
+                args: &claim_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("unauthorized claim must fail");
+        assert_contract_err(&unauth_err, ContractError::Unauthorized);
+
+        // 3. Claim before vesting (timestamp 800 < start 1000) -> returns 0
+        let (zero_out, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "vault_claim",
+                contract,
+                caller: beneficiary,
+                height: 3,
+                timestamp: 800,
+                args: &claim_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("claim before start returns 0");
+        let claimed_amount: Amount = bincode::deserialize(&zero_out).expect("amount");
+        assert_eq!(claimed_amount, 0);
+        assert_eq!(native_balance(&storage, &beneficiary), 0);
+
+        // 4. Claim halfway (timestamp 2_000: (2000-1000)/(3000-1000) = 50% = 1_000)
+        let (claim_out, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "vault_claim",
+                contract,
+                caller: beneficiary,
+                height: 4,
+                timestamp: 2_000,
+                args: &claim_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("claim halfway");
+        let claimed_amount: Amount = bincode::deserialize(&claim_out).expect("amount");
+        assert_eq!(claimed_amount, 1_000);
+        assert_eq!(native_balance(&storage, &beneficiary), 1_000);
+        assert_eq!(native_balance(&storage, &contract), 1_000);
+        assert_eq!(custody(&storage, &contract, &escrow), 1_000);
+
+        // 5. Failure case: cancel by non-creator -> Unauthorized
+        let cancel_args = call_args::encode_vault_cancel(id).expect("encode cancel");
+        let unauth_cancel = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "vault_cancel",
+                contract,
+                caller: beneficiary,
+                height: 5,
+                timestamp: 2_100,
+                args: &cancel_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("non-creator cancel must fail");
+        assert_contract_err(&unauth_cancel, ContractError::Unauthorized);
+
+        // 6. Creator cancels: remaining 1_000 returns to creator
+        runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "vault_cancel",
+                contract,
+                caller: creator,
+                height: 6,
+                timestamp: 2_100,
+                args: &cancel_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("vault_cancel");
+        assert_eq!(native_balance(&storage, &creator), 9_000);
+        assert_eq!(native_balance(&storage, &contract), 0);
+        assert_eq!(custody_total(&storage, &contract), 0);
+
+        // 7. Failure case: cancel already cancelled -> InvalidInput
+        let dup_cancel = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "vault_cancel",
+                contract,
+                caller: creator,
+                height: 7,
+                timestamp: 2_200,
+                args: &cancel_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("double cancel must fail");
+        assert_contract_err(&dup_cancel, ContractError::InvalidInput);
+    }
+
+    #[test]
+    fn wasmi_e2e_kovanica_multisig_wasm() {
+        let wasm = match build_contract_wasm("kovanica-multisig") {
+            Some(w) => w,
+            None => return,
+        };
+        let (_dir, storage) = open_storage();
+        let owner1 = addr(1);
+        let owner2 = addr(2);
+        let owner3 = addr(3);
+        let non_owner = addr(9);
+        let recipient = addr(4);
+        let contract = addr(43);
+        deploy(&storage, &contract);
+        fund(&storage, &contract, 50_000); // Multisig contract holds native balance to disburse
+        let config = ExecutionConfig {
+            gas_limit: 100_000_000,
+            memory_limit_pages: 256,
+        };
+        let mut runner = ContractRunner::new();
+
+        // 1. Failure case: invalid threshold 0 or > owners.len() -> InvalidInput
+        let invalid_create =
+            call_args::encode_multisig_create(&[owner1.0, owner2.0], 0).expect("encode");
+        let inv_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_create",
+                contract,
+                caller: owner1,
+                height: 1,
+                timestamp: 100,
+                args: &invalid_create,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("threshold 0 must fail");
+        assert_contract_err(&inv_err, ContractError::InvalidInput);
+
+        // 2. Successful multisig_create with threshold 2
+        let create_args = call_args::encode_multisig_create(&[owner1.0, owner2.0, owner3.0], 2)
+            .expect("encode create");
+        let (out, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_create",
+                contract,
+                caller: owner1,
+                height: 2,
+                timestamp: 100,
+                args: &create_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm multisig_create");
+        let id: kovanica_multisig::MultisigId = bincode::deserialize(&out).expect("multisig id");
+
+        // 3. Failure case: second create on singleton -> AlreadyExists
+        let dup_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_create",
+                contract,
+                caller: owner1,
+                height: 3,
+                timestamp: 105,
+                args: &create_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("second create must fail");
+        assert_contract_err(&dup_err, ContractError::AlreadyExists);
+
+        // 4. Failure case: propose by non-owner -> Unauthorized
+        let prop_args = call_args::encode_multisig_propose(id, recipient.0, 10_000, &[])
+            .expect("encode propose");
+        let unauth_prop = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_propose",
+                contract,
+                caller: non_owner,
+                height: 4,
+                timestamp: 110,
+                args: &prop_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("non-owner propose must fail");
+        assert_contract_err(&unauth_prop, ContractError::Unauthorized);
+
+        // 5. Successful propose by owner1 -> returns tx_id = 1 (proposer auto-confirms, 1 confirmation)
+        let (p_out, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_propose",
+                contract,
+                caller: owner1,
+                height: 5,
+                timestamp: 120,
+                args: &prop_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm multisig_propose");
+        let tx_id: kovanica_multisig::TxId = bincode::deserialize(&p_out).expect("tx_id");
+        assert_eq!(tx_id, 1);
+
+        // 6. Failure case: execute before threshold reached (1 of 2) -> ThresholdNotMet
+        let exec_args = call_args::encode_multisig_execute(id, tx_id).expect("encode exec");
+        let th_err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_execute",
+                contract,
+                caller: owner1,
+                height: 6,
+                timestamp: 130,
+                args: &exec_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("execute before threshold must fail");
+        assert_contract_err(&th_err, ContractError::ThresholdNotMet);
+
+        // 7. Failure case: double confirm by proposer -> AlreadyExists
+        let conf_args = call_args::encode_multisig_confirm(id, tx_id).expect("encode confirm");
+        let dbl_conf = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_confirm",
+                contract,
+                caller: owner1,
+                height: 7,
+                timestamp: 140,
+                args: &conf_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("double confirm must fail");
+        assert_contract_err(&dbl_conf, ContractError::AlreadyExists);
+
+        // 8. Confirm by owner2 (now 2 of 2 confirmations)
+        runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_confirm",
+                contract,
+                caller: owner2,
+                height: 8,
+                timestamp: 150,
+                args: &conf_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm multisig_confirm");
+
+        // 9. Execute (can be called by any caller)
+        runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_execute",
+                contract,
+                caller: non_owner,
+                height: 9,
+                timestamp: 160,
+                args: &exec_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm multisig_execute");
+        assert_eq!(native_balance(&storage, &contract), 40_000);
+        assert_eq!(native_balance(&storage, &recipient), 10_000);
+
+        // 10. Failure case: execute already executed tx -> InvalidInput
+        let dup_exec = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "multisig_execute",
+                contract,
+                caller: owner1,
+                height: 10,
+                timestamp: 170,
+                args: &exec_args,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("re-execute must fail");
+        assert_contract_err(&dup_exec, ContractError::InvalidInput);
     }
     // Native path in single-writer mode: reads see uncommitted writes of the
     // outer transaction, and the result is applied into it (no 2nd writer).

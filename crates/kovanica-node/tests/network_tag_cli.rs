@@ -34,9 +34,9 @@ fn write_bundle(dir: &Path) {
 
 fn write_config(dir: &Path, data_dir: &Path, treasury: &str) -> String {
     let path = dir.join("config.toml");
+    let data_str = data_dir.display().to_string().replace('\\', "/");
     let body = format!(
-        "chain_id = 4\nrun_validator = false\ndata_dir = \"{}\"\ntreasury_address = \"{treasury}\"\nlisten_addr = \"127.0.0.1:0\"\n",
-        data_dir.display()
+        "chain_id = 4\nrun_validator = false\ndata_dir = \"{data_str}\"\ntreasury_address = \"{treasury}\"\nlisten_addr = \"127.0.0.1:0\"\n"
     );
     std::fs::write(&path, &body).unwrap();
     path.to_string_lossy().into_owned()

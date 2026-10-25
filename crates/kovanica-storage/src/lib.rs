@@ -23,10 +23,16 @@ use std::path::Path;
 use thiserror::Error;
 use tracing::warn;
 
+pub mod address_tx_index;
 pub mod block_store;
 pub mod consensus_store;
 pub mod state_store;
 
+pub use address_tx_index::{
+    index_committed_txs, query_tx_history, AddressTxIndexError, TxDirection, TxHistoryEntry,
+    TxHistoryPage, TxHistoryQuery, ADDRESS_TX_INDEX_KEY_LEN, ADDRESS_TX_INDEX_VALUE_LEN,
+    DEFAULT_TX_HISTORY_LIMIT, MAX_TX_HISTORY_LIMIT, ROLE_BOTH, ROLE_RECEIVED, ROLE_SENT,
+};
 pub use block_store::{BlockStore, BlockStoreError};
 pub use consensus_store::{ConsensusStore, ConsensusStoreError};
 pub use state_store::{StateStore, StateStoreError};
@@ -138,6 +144,8 @@ pub mod tables {
         TableDefinition::new("block_transactions");
     pub const TRANSACTION_INDEX: TableDefinition<[u8; 32], [u8; 32]> =
         TableDefinition::new("tx_index"); // tx_hash -> block_hash
+                                          // Address history (`address_tx_index`) is defined in `address_tx_index`.
+                                          // It is a local RPC index: not a state-root input and not consensus bytes.
 
     // State store tables
     pub const ACCOUNTS: TableDefinition<[u8; 32], Vec<u8>> = TableDefinition::new("accounts");

@@ -25,7 +25,7 @@ Based on `docs/SEED-DNS-AUDIT.md` (port 8000 vs 9000 gap) and HARD RULES.
 - [ ] Verify `KOVANICA_DATA` preserved after genesis; no reset (`KOVANICA_ALLOW_RESET=0`)
 
 ## 4. CLI / wallet audit (related gaps from tasklist)
-- [ ] Delegate / claim skeleton: HTLC claim verified (`A8.2-DELEGATION-SKELETON.md`); delegation deferred Phase 18
-- [ ] CLI delegate command exists but deferred; confirm ABI / gas metering in `EXECUTION-GAS-SKELETON.md`
+- [ ] Delegate / claim: verified in `crates/kovanica-staking` and `kovanica-cli`
+- [ ] CLI contract calls: verify ABI / gas metering in `docs/GAS_SCHEDULE.md`
 
 Status: audit **not started**; docs complete. Blocked only by external auditor assignment.

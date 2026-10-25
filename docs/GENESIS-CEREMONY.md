@@ -17,7 +17,7 @@ and chain id.
   (`address` required, `public_key` / `stake` optional at this layer).
 - **Treasury address** and **founder address** — both 32-byte hex. The founder
   receives the 200,000 KUNA premine.
-- **Chain id** — `1` mainnet, `2` testnet, `3` devnet, `1337` local. A
+- **Chain id** — `1` mainnet, `2` testnet, `3` devnet, `4` testnet v2, `1337` local. A
   `genesis_validators.toml` that declares `chain_id` must match the node's
   configured chain id.
 

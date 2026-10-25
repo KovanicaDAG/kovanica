@@ -144,7 +144,7 @@ pub fn encode_token_burn(amount: Amount) -> Result<Vec<u8>, EncodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::execute_contract_call;
+    use crate::contracts::{execute_contract_call, execute_contract_call_with_value};
     use crate::ExecutionError;
     use kovanica_common::ContractError;
     use kovanica_storage::Storage;
@@ -153,6 +153,20 @@ mod tests {
 
     fn addr(tag: u8) -> Address {
         Address([tag; 32])
+    }
+
+    fn fund(storage: &Storage, address: &Address, balance: u64) {
+        let txn = storage.begin_write().expect("write");
+        let mut account = storage
+            .state()
+            .get_account_or_default_write(&txn, address)
+            .expect("account");
+        account.balance = balance;
+        storage
+            .state()
+            .set_account(&txn, address, &account)
+            .expect("set");
+        txn.commit().expect("commit");
     }
 
     fn deploy(storage: &Storage, address: &Address) {
@@ -292,5 +306,224 @@ mod tests {
             ),
             "{err:?}"
         );
+
+        let spender = addr(2);
+        let third = [5u8; 32];
+        // token_approve
+        let approve = encode_token_approve(spender.0, 200).unwrap();
+        execute_contract_call("token_approve", contract, caller, 4, 4, &approve, &storage)
+            .expect("token_approve");
+
+        // token_transfer_from
+        let transfer_from = encode_token_transfer_from(caller.0, third, 150).unwrap();
+        execute_contract_call(
+            "token_transfer_from",
+            contract,
+            spender,
+            5,
+            5,
+            &transfer_from,
+            &storage,
+        )
+        .expect("token_transfer_from");
+
+        // token_mint
+        let mint = encode_token_mint(recipient, 300).unwrap();
+        execute_contract_call("token_mint", contract, caller, 6, 6, &mint, &storage)
+            .expect("token_mint");
+
+        // token_burn
+        let burn = encode_token_burn(100).unwrap();
+        execute_contract_call("token_burn", contract, caller, 7, 7, &burn, &storage)
+            .expect("token_burn");
+    }
+
+    #[test]
+    fn encoded_htlc_calls_execute_on_a_local_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("state.redb")).expect("storage");
+        let contract = addr(31);
+        let sender = addr(1);
+        let claimer = addr(2);
+        deploy(&storage, &contract);
+        fund(&storage, &sender, 2_000);
+
+        let preimage = b"htlc_call_args_secret";
+        let hash_lock = kovanica_common::hash(preimage);
+
+        // 1. Create with encode_htlc_create
+        let create = encode_htlc_create(claimer.0, 500, hash_lock, 1_000).unwrap();
+        let out = execute_contract_call_with_value(
+            "htlc_create",
+            contract,
+            sender,
+            1,
+            100,
+            &create,
+            500,
+            &storage,
+        )
+        .expect("htlc_create");
+        let id: [u8; 32] = bincode::deserialize(&out).expect("id");
+
+        // 2. Claim with encode_htlc_claim
+        let claim = encode_htlc_claim(id, preimage).unwrap();
+        execute_contract_call("htlc_claim", contract, claimer, 2, 200, &claim, &storage)
+            .expect("htlc_claim");
+
+        // 3. Create expiring swap and refund with encode_htlc_refund
+        let create2 = encode_htlc_create(claimer.0, 300, hash_lock, 500).unwrap();
+        let out2 = execute_contract_call_with_value(
+            "htlc_create",
+            contract,
+            sender,
+            3,
+            300,
+            &create2,
+            300,
+            &storage,
+        )
+        .expect("htlc_create2");
+        let id2: [u8; 32] = bincode::deserialize(&out2).expect("id2");
+
+        let refund = encode_htlc_refund(id2).unwrap();
+        execute_contract_call(
+            "htlc_refund",
+            contract,
+            sender,
+            4,
+            600, // > expiry (500)
+            &refund,
+            &storage,
+        )
+        .expect("htlc_refund");
+    }
+
+    #[test]
+    fn encoded_vault_calls_execute_on_a_local_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("state.redb")).expect("storage");
+        let contract = addr(32);
+        let creator = addr(1);
+        let beneficiary = addr(2);
+        deploy(&storage, &contract);
+        fund(&storage, &creator, 3_000);
+
+        let schedule = VestingSchedule::Absolute { unlock_at: 500 };
+
+        // 1. Create with encode_vault_create
+        let create = encode_vault_create(beneficiary.0, 1_000, &schedule).unwrap();
+        let out = execute_contract_call_with_value(
+            "vault_create",
+            contract,
+            creator,
+            1,
+            100,
+            &create,
+            1_000,
+            &storage,
+        )
+        .expect("vault_create");
+        let id: kovanica_vault::VaultId = bincode::deserialize(&out).expect("id");
+
+        // 2. Claim after unlock with encode_vault_claim
+        let claim = encode_vault_claim(id).unwrap();
+        let claim_out = execute_contract_call(
+            "vault_claim",
+            contract,
+            beneficiary,
+            2,
+            600, // > unlock_at (500)
+            &claim,
+            &storage,
+        )
+        .expect("vault_claim");
+        let claimed_amount: Amount = bincode::deserialize(&claim_out).expect("amount");
+        assert_eq!(claimed_amount, 1_000);
+
+        // 3. Create vault 2 and cancel with encode_vault_cancel
+        let create2 = encode_vault_create(beneficiary.0, 500, &schedule).unwrap();
+        let out2 = execute_contract_call_with_value(
+            "vault_create",
+            contract,
+            creator,
+            3,
+            200,
+            &create2,
+            500,
+            &storage,
+        )
+        .expect("vault_create2");
+        let id2: kovanica_vault::VaultId = bincode::deserialize(&out2).expect("id2");
+
+        let cancel = encode_vault_cancel(id2).unwrap();
+        execute_contract_call("vault_cancel", contract, creator, 4, 300, &cancel, &storage)
+            .expect("vault_cancel");
+    }
+
+    #[test]
+    fn encoded_multisig_calls_execute_on_a_local_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("state.redb")).expect("storage");
+        let contract = addr(33);
+        let owner1 = addr(1);
+        let owner2 = addr(2);
+        let recipient = addr(3);
+        deploy(&storage, &contract);
+        fund(&storage, &contract, 20_000);
+
+        // 1. Create with encode_multisig_create
+        let create = encode_multisig_create(&[owner1.0, owner2.0], 2).unwrap();
+        let out = execute_contract_call(
+            "multisig_create",
+            contract,
+            owner1,
+            1,
+            100,
+            &create,
+            &storage,
+        )
+        .expect("multisig_create");
+        let id: kovanica_multisig::MultisigId = bincode::deserialize(&out).expect("id");
+
+        // 2. Propose with encode_multisig_propose
+        let propose = encode_multisig_propose(id, recipient.0, 5_000, &[]).unwrap();
+        let p_out = execute_contract_call(
+            "multisig_propose",
+            contract,
+            owner1,
+            2,
+            110,
+            &propose,
+            &storage,
+        )
+        .expect("multisig_propose");
+        let tx_id: kovanica_multisig::TxId = bincode::deserialize(&p_out).expect("tx_id");
+
+        // 3. Confirm with encode_multisig_confirm
+        let confirm = encode_multisig_confirm(id, tx_id).unwrap();
+        execute_contract_call(
+            "multisig_confirm",
+            contract,
+            owner2,
+            3,
+            120,
+            &confirm,
+            &storage,
+        )
+        .expect("multisig_confirm");
+
+        // 4. Execute with encode_multisig_execute
+        let execute = encode_multisig_execute(id, tx_id).unwrap();
+        execute_contract_call(
+            "multisig_execute",
+            contract,
+            owner1,
+            4,
+            130,
+            &execute,
+            &storage,
+        )
+        .expect("multisig_execute");
     }
 }
