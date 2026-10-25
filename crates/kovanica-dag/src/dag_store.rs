@@ -864,6 +864,7 @@ impl DagStore {
 /// decided-round mark and the committed-leader update.
 #[cfg(test)]
 pub(crate) mod fault {
+    #![allow(clippy::missing_const_for_thread_local)]
     use std::cell::Cell;
 
     thread_local! {

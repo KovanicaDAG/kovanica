@@ -5,8 +5,10 @@ It complements the existing in-process partition tests (`multi_node_integration`
 and the graceful `SIGTERM` restart test with **real process kills** and **real
 network impairment**.
 
-> **These tests are opt-in and executed manually or in scheduled test harnesses.**
-> They use `ops/chaos/docker-compose.chaos.yml` and require a release binary (see below).
+> **These tests are opt-in and executed manually or in scheduled test harnesses.** Run them by hand with the
+> scripts in `ops/chaos/` (see the quick reference). The `.github/workflows/chaos.yml`
+> workflow that could dispatch them was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14). It was
+> `workflow_dispatch`-only, never nightly. They use `ops/chaos/docker-compose.chaos.yml` and require a release binary (see below).
 
 ---
 
@@ -107,7 +109,7 @@ bash ops/chaos/netem.sh --cleanup
 
 - `tc` (iproute2) must be installed.
 - **CAP_NET_ADMIN** capability — GitHub-hosted runners generally **do not** have
-  this. The `chaos.yml` workflow detects this and gracefully skips the netem
+  this. The removed `chaos.yml` workflow detected this and skipped the netem
   job with a warning. To run locally, use a VM/container with `--cap-add=NET_ADMIN`
   or run as root.
 
@@ -120,29 +122,13 @@ After the impairment is removed (heal):
 
 ---
 
-## 3. CI Integration: `ops/chaos/chaos.yml`
+## 3. CI Integration (removed)
 
-**Schedule:** Nightly at 03:17 UTC (cron `17 3 * * *`).  
-**Manual:** `workflow_dispatch` with inputs:
-- `test_type`: `kill-mid-commit`, `netem-partition`, `both` (default `both`)
-- `use_release`: boolean (default `true`) — release binary required for kill test
-
-### Jobs
-
-| Job | When | What |
-|-----|------|------|
-| `kill-mid-commit` | schedule OR dispatch `kill-mid-commit`/`both` | Builds release binary, runs `chaos_kill_mid_commit` test |
-| `netem-partition` | dispatch `netem-partition`/`both` | Checks `tc`/`CAP_NET_ADMIN`; if available runs `netem.sh`; else skips with warning |
-
-Both jobs use `concurrency: group: chaos-${{ github.ref }}` with
-`cancel-in-progress: true` so only one chaos run per ref is active.
-
-### Why not on PRs?
-
-- Real process kill + real TCP = slow (30–90s) and inherently flaky (timing,
-  port collisions, scheduler).
-- Netem requires `CAP_NET_ADMIN` — not available on standard runners.
-- We want nightly signal, not per-PR noise.
+The `.github/workflows/chaos.yml` workflow was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14). It was `workflow_dispatch` only (inputs
+`test_type` = `kill-mid-commit` / `netem-partition` / `both`, and
+`use_release`); it was never scheduled. Chaos tests stay out of per-PR CI:
+real process kills and real TCP are slow and timing-sensitive, and netem needs
+`CAP_NET_ADMIN`, which standard runners lack. Run them by hand (section 6).
 
 ---
 
@@ -160,7 +146,7 @@ Both jobs use `concurrency: group: chaos-${{ github.ref }}` with
 1. Add a new `#[ignore]`d test in `crates/kovanica-node/tests/` (or a new file
    `chaos_*.rs`).
 2. Add a wrapper script in `ops/chaos/` if it needs shell orchestration.
-3. Extend `ops/chaos/chaos.yml` with a new job (keep it opt-in, never blocking).
+3. Once CI exists in kovanica-protocol, add it there as an opt-in, never-blocking job.
 4. Document it here.
 
 ---
@@ -171,5 +157,4 @@ Both jobs use `concurrency: group: chaos-${{ github.ref }}` with
 |---------|---------|
 | `bash ops/chaos/kill-mid-commit.sh` | Local mid-commit kill test (builds release, runs test) |
 | `bash ops/chaos/netem.sh --test-partition --duration 30` | Local netem partition (needs CAP_NET_ADMIN) |
-| `gh workflow run chaos.yml -f test_type=both` | Trigger nightly workflow manually |
 | `cargo test -p kovanica-node --test chaos_kill_mid_commit -- --list` | List ignored chaos tests |

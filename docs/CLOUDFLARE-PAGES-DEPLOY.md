@@ -58,7 +58,11 @@ The local node (`chain_id` 1337) is compiled out of production builds.
 }
 ```
 
-## GitHub Actions Workflow (Optional - for additional testing)
+## GitHub Actions Workflow (removed)
+
+> `.github/workflows/web-deploy.yml` was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14).
+> Deploys are manual until then (Cloudflare Pages dashboard or `wrangler pages deploy`).
+> The YAML below is kept only as a reference for re-creating the job.
 
 ```yaml
 # .github/workflows/web-deploy.yml

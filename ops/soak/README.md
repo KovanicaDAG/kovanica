@@ -4,7 +4,7 @@ Two scripts live here:
 
 | Script      | Purpose                                                                 | Used by |
 |-------------|-------------------------------------------------------------------------|---------|
-| `run-soak.sh` | **The soak runner.** Brings up the compose stack, waits for health + commits, exercises the node for `SOAK_SECS`, samples `/health` + `/metrics`, fails on the first stall or crash, and collects logs on failure. | Local automated & manual soak runner (formerly `.github/workflows/soak.yml`) |
+| `run-soak.sh` | **The soak runner.** Brings up the compose stack, waits for health + commits, exercises the node for `SOAK_SECS`, samples `/health` + `/metrics`, fails on the first stall or crash, and collects logs on failure. | Local automated & manual soak runner (the `soak.yml` workflow was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14)) |
 | `soak.sh`   | Legacy Phase 12.4 RSS/memory monitor. Assumes a 4-node stack is *already* running (`kovanica-quorum-node1..4`) and only logs memory every 30 s; it never brings the stack up and never gates on a stall. | manual memory runs only |
 
 For local soak testing use `run-soak.sh`. `soak.sh` predates the current compose service names
@@ -80,7 +80,13 @@ SOAK_SECS=86400 ./ops/soak/run-soak.sh
 ```
 
 ## CI / Automated Workflow
-> **Note on CI:** Repository-level GitHub Actions workflows were decommissioned on 2026-10-23; soak testing is executed using the local runner scripts directly or integrated into self-hosted runners.
+> **Note on CI:** Repository-level GitHub Actions workflows were decommissioned on 2026-10-23 (`.github/workflows/soak.yml` was removed in kvnc PR #78; CI moves to KovanicaDAG/kovanica-protocol (PRO-14)); soak testing is executed using the local runner scripts directly or integrated into self-hosted runners.
+
+Until the soak job exists again, run the runner by hand:
+
+```bash
+SOAK_SECS=86400 OUT_DIR=soak-artifacts ops/soak/run-soak.sh
+```
 
 The runner specifications:
 

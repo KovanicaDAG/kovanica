@@ -154,6 +154,15 @@ cargo build --workspace
 
 # Run the test suite (excluding long-running stress tests)
 cargo test --workspace -- --skip sustained_liveness
+
+# Local quality gate (GitHub Actions workflows removed 2026-10-23; run locally)
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo test --doc
+cargo doc --no-deps --all-features
+cargo audit
+cargo +1.90 build --all-targets
 ```
 
 ---
@@ -355,5 +364,6 @@ Detailed architectural specifications and operational runbooks:
 ## 7. Status, Security & License
 
 - **Project Status:** Pre-Alpha. Active testnets are running with ongoing stress testing and performance tuning.
+- **Quality Gates & CI:** GitHub Actions workflows were decommissioned on 2026-10-23 (Toni). CI moves to the public `KovanicaDAG/kovanica-protocol` repo once the frozen code is there. Until then, quality checks are run locally via the local gate commands (`cargo fmt`, `clippy`, `cargo test`, `cargo test --doc`, `cargo doc`, `cargo audit`, and `cargo +1.90 build`).
 - **Security Audit:** Automated security checks (`AUTOMATED_SECURITY_CHECKS.md`) and pre-audit vulnerability catalogues (`AUDIT_REPORT.md`) are maintained. Professional third-party security audits are planned prior to mainnet launch.
 - **License:** The Kovanica codebase is distributed under the **Apache License, Version 2.0**.

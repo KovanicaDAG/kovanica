@@ -40,9 +40,9 @@
 //! always mid-activity rather than before warm-up or after quiescence. Exact
 //! sub-round timing is inherently non-deterministic (real processes, real
 //! sockets), so every phase uses a bounded window with an explicit timeout and a
-//! clear failure message. This test is therefore **opt-in** (`#[ignore]`) and is
-//! wired into the scheduled `ops/chaos/chaos.yml` workflow, never into the
-//! per-PR CI job.
+//! clear failure message. This test is therefore **opt-in** (`#[ignore]`): run it
+//! by hand (`bash ops/chaos/kill-mid-commit.sh`), never in per-PR CI. The kvnc
+//! `chaos.yml` workflow that could dispatch it was removed on 2026-10-23.
 //!
 //! # Bug this harness found (restart after `SIGKILL`)
 //!
