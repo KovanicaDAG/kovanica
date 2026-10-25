@@ -3,8 +3,8 @@
 **Version:** 1.0  
 **Date:** 2026-10-14  
 **Codebase:** `kovanica` (Mysticeti-style DAG, account-based, Wasmi execution)  
-**Commit:** `main` @ `98d88cc` (2026-10-13 snapshot)  
-**Crates:** 19 workspace members, ~53k LOC Rust
+**Commit:** `main` @ `dd3aff9` (Baseline: `98d88cc`)  
+**Crates:** 27 workspace members, ~90.5k LOC Rust (crates) / ~95.5k repo
 
 ---
 
@@ -120,7 +120,7 @@ certificate) against the subsidy/epoch invariants in §2.5.
 |-----------|------|-------------|
 | `contracts.rs` (execution) | **High** | Native contract dispatch (HTLC, Vault, Multisig, Token, LightNode), WASM via `ContractRunner`, commit-on-success semantics, gas metering |
 | `Runtime::execute` (runtime) | **High** | Wasmi fuel metering (`gas_limit` default 10M), memory limit (16 pages = 1 MiB), deterministic engine, argument/result buffer copy via `kovanica_alloc`/`kovanica_dealloc` |
-| Host ABI (`kovanica-common/wasm.rs`) | **High** | Fixed imports: `kovanica_caller`, `kovanica_contract_address`, `kovanica_block_height`, `kovanica_timestamp`, `kovanica_balance_of`, `kovanica_storage_get/set`, `kovanica_transfer`, `kovanica_emit_log`, `kovanica_alloc`, `kovanica_dealloc` |
+| Host ABI (`crates/kovanica-common/src/wasm.rs`) | **High** | Fixed imports: `kovanica_caller`, `kovanica_contract_address`, `kovanica_block_height`, `kovanica_timestamp`, `kovanica_balance_of`, `kovanica_storage_get/set`, `kovanica_transfer`, `kovanica_emit_log`, `kovanica_alloc`, `kovanica_dealloc` |
 | Contract crates (`kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`, `kovanica-token`, `kovanica-staking/light.rs`) | **High** | Entry points returning packed `i64` (negative = error code 0..11), all state via `Host` trait |
 
 **WASM threat model:** untrusted bytecode, gas exhaustion, memory exhaustion, host function reentrancy, trap handling, deterministic execution.
@@ -157,7 +157,7 @@ would boot a genesis different from the one the operator configured.
 | Primitive | Risk | Description |
 |-----------|------|-------------|
 | Ed25519 (dalek v2.1) | **Critical** | `sign`, `verify` (strict: rejects non-canonical S, weak/small-order keys), batch verify (strict per-item) |
-| ECVRF (`ecvrf` crate v0.4.3) | **Critical** | `vrf_prove`, `vrf_verify`, `derive_vrf_secret_from_seed`, `vrf_hash_to_u64` for leader election. Construction: ristretto255 group, SHA3-512 hash-to-curve, SHA3-256 challenge (**untruncated, 32 B**) and SHA3-256 output (32 B) — **not** an RFC 9381 ciphersuite. Proof = `Gamma(32) ‖ c(32) ‖ s(32)` = **96 bytes**; block statements framing = `b"KUNA-VRF1"(9) ‖ hash(32) ‖ proof(96)` = **137 bytes**; `SubmitLightWitness` tx body carries the raw 96-byte proof. Random (non-deterministic) nonce ⇒ proofs are malleable, `beta` is deterministic. Pinned `curve25519-dalek` 3.2.0 via `ecvrf` (RUSTSEC-2024-0344, Scalar-subtraction timing variability — already suppressed in `.cargo/audit.toml`). **Licence note:** `ecvrf` 0.4.3 is **GPL-3.0-or-later** while this project ships under Apache-2.0 — please advise on compatibility. Full analysis + file:line map: `docs/VRF-PROOF-LENGTH.md` |
+| ECVRF (`ecvrf` crate v0.4.3) | **Critical** | `vrf_prove`, `vrf_verify`, `derive_vrf_secret_from_seed`, `vrf_hash_to_u64` for leader election. Construction: ristretto255 group, SHA3-512 hash-to-curve, SHA3-256 challenge (**untruncated, 32 B**) and SHA3-256 output (32 B) — **not** an RFC 9381 ciphersuite. Proof = `Gamma(32) ‖ c(32) ‖ s(32)` = **96 bytes**; block statements framing = `b"KUNA-VRF1"(9) ‖ hash(32) ‖ proof(96)` = **137 bytes**; `SubmitLightWitness` tx body carries the raw 96-byte proof. Random (non-deterministic) nonce ⇒ proofs are malleable, `beta` is deterministic. Pinned `curve25519-dalek` 3.2.0 via `ecvrf` (RUSTSEC-2024-0344, Scalar-subtraction timing variability — already suppressed in `.cargo/audit.toml`). **Licence note:** `ecvrf` 0.4.3 is **GPL-3.0-or-later** while this project ships under Apache-2.0 — please advise on compatibility. Full analysis + file:line map: `docs/archive/VRF-PROOF-LENGTH.md` |
 | Vote signature format v1 | **Critical** | Domain `KUNA/vote/v1`, 74-byte encoding: `chain_id (LE) || epoch (LE) || voter (LE) || leader_round (LE) || leader_hash`; ctx built from LOCAL chain_id + committee epoch only |
 | Commit seal format | **High** | Domain `KUNA/commit/v1`, covers `LeaderHeader` (state root, blue/non-blue roots, epoch, committee_hash) |
 | Keystore v2 | **High** | Argon2id (64 MiB, 3 iter, 4 parallelism), XChaCha20-Poly1305, salt 16B, nonce 24B; v1 migration only |

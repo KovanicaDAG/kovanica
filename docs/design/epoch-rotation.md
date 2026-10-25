@@ -1,6 +1,6 @@
 # Design: Epoch rotation
 
-Status: draft (Consensus). Code state: `origin/main` 8170a82.
+Status: implemented (Consensus PRO-37). Baseline: `origin/main` 8170a82.
 
 ## 1. Goal
 
@@ -19,7 +19,7 @@ Make the committee epoch real. Today every committee is epoch 0
   the schedule.
 
 Non-goals: staking/reward logic for choosing the next committee (Execution),
-state sync across epochs (`docs/STATE-SYNC.md`), key rotation inside an epoch.
+state sync across epochs (handled via DAG/state sync protocol), key rotation inside an epoch.
 
 ## 2. Current state (grounded in code)
 
