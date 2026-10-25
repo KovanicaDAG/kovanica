@@ -1,6 +1,6 @@
 # Testnet seed nodes — kovanica L1
 
-**Network:** testnet (canonical public testnet: `chain_id 2` / testnet v2: `chain_id 4`; local dev: `1337`)
+**Network:** public testnet: `chain_id 4` (local dev only: `1337`)
 **Deployed:** 2026-10-13 (build c44f672, mempool requeue fix)
 **P2P:** TCP 8000, libp2p swarm
 **RPC:** 8545 (loopback-only)

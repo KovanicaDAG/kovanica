@@ -411,9 +411,9 @@ Default network configuration parameters (`crates/kovanica-node/src/config.rs`):
 
 ### Chain ID Registry
 - **`1`**: **Mainnet** (`MAINNET`) — strictly enforces PRO-21 canonical base32 addresses; consensus parameters frozen.
-- **`2`**: **Public Testnet** (`TESTNET`) — canonical public testnet; enforces PRO-21 addresses.
+- **`2`**: **Testnet (legacy)** (`TESTNET`) — not the public testnet; enforces PRO-21 addresses.
 - **`3`**: **Devnet** (`DEVNET`) — lenient address parsing; allows parameter overrides.
-- **`4`**: **Testnet v2** (`TESTNET_V2`) — ephemeral reset testnet; supports PRO-21 and legacy migration.
+- **`4`**: **Public Testnet** (`TESTNET_V2`) — the public testnet; supports PRO-21 and legacy migration.
 - **`1337`**: **Local Devnet** (`LOCAL`) — single-node / local cluster testing.
 
 ---
