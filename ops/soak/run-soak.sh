@@ -5,18 +5,20 @@
 # duration while sampling `/health` and `/metrics`. Exits non-zero on the first
 # stall or crash and collects diagnostics on failure.
 #
-# This is the runner wired into .github/workflows/soak.yml. It is deliberately
+# This runner was wired into .github/workflows/soak.yml until that workflow was
+# removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14).
+# Run it by hand or on a long-lived host. It is deliberately
 # self-contained: it brings the stack up itself (the older ops/soak/soak.sh
 # only monitors an already-running quorum and never gates on a stall).
 #
 # ---------------------------------------------------------------------------
 # Usage
-#   SOAK_SECS=600 ./ops/soak/run-soak.sh            # 10 min (CI default)
+#   SOAK_SECS=600 ./ops/soak/run-soak.sh            # 10 min (default)
 #   ./ops/soak/run-soak.sh --duration 30 --interval 5
 #   SOAK_SKIP_UP=1 SOAK_SECS=60 ./ops/soak/run-soak.sh   # soak an already-running stack
 #
 # Duration
-#   SOAK_SECS is intentionally much lower than 24h by default so CI stays fast.
+#   SOAK_SECS is intentionally much lower than 24h by default so a routine run stays fast.
 #   * CI / nightly default ........ 600 s   (10 min)
 #   * The 24h "long soak" is a MANUAL setting: on a long-lived machine run
 #       SOAK_SECS=86400 ./ops/soak/run-soak.sh

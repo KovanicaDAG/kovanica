@@ -1,5 +1,6 @@
 package io.kovanica.wallet
 
+import io.kovanica.chain.ChainIds
 import java.math.BigInteger
 import java.util.Locale
 
@@ -33,8 +34,7 @@ object KvncAddress {
     private const val ALPHABET: String = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 
     /** Devnet 3, chain 4, local 1337. Same set as `legacy_address_allowed`. */
-    fun legacyAllowed(chainId: Long): Boolean =
-        chainId == 3L || chainId == 4L || chainId == 1337L
+    fun legacyAllowed(chainId: Long): Boolean = ChainIds.legacyAllowed(chainId)
 
     /**
      * Parse an address typed or returned for [chainId] to a lowercase 64-hex

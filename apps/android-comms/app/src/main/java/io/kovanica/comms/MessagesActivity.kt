@@ -21,6 +21,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import io.kovanica.chain.ChainIds
 import org.json.JSONObject
 import uniffi.kovanica_light.createWallet
 import uniffi.kovanica_light.importWallet
@@ -549,7 +550,7 @@ class MessagesActivity : Activity() {
      * 1337 would turn a legacy hex address into canonical on every chain.
      */
     private fun addressChain(): Long =
-        prefs().getString("chainId", null)?.trim()?.toLongOrNull() ?: -1L
+        prefs().getString("chainId", null)?.trim()?.toLongOrNull() ?: ChainIds.UNSPECIFIED
 
     /** Canonical registry address, or null when [raw] is not valid for [addressChain]. */
     private fun registryCanonical(raw: String): String? {
