@@ -906,8 +906,8 @@ impl DagStore {
 /// Test-only fault injection: simulate a process crash between the
 /// decided-round mark and the committed-leader update.
 #[cfg(test)]
-#[allow(clippy::missing_const_for_thread_local)]
 pub(crate) mod fault {
+    #![allow(clippy::missing_const_for_thread_local)]
     use std::cell::Cell;
 
     thread_local! {
