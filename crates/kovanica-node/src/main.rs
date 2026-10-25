@@ -3224,22 +3224,55 @@ impl StateSyncSessions {
 
 /// Leader round already executed when `committed_leaders` commits are in state.
 ///
-/// While every leader slot commits, the Nth commit is the leader at round
-/// `N * WAVE_LENGTH` (the first commit is round 3). Zero commits have no
-/// anchor. The snapshot header's height is the state-root key, one behind
-/// [`kovanica_staking::StakingState::committed_leader_height`], and it is not
-/// covered by the state root, so the anchor is taken from staking state after
-/// a verified import.
-///
-/// PRO-40 PR #92 (skip certificates) breaks `N * WAVE_LENGTH`: a skipped slot
-/// advances the round without a commit. That PR must anchor on the sealed
-/// header's `leader_round`. [`seals::certified_leader_round`] already does.
-fn leader_round_for_synced_commits(committed_leaders: u64) -> Option<Round> {
+/// Zero commits have no anchor. Since skip certificates (PRO-40 PR #92) can
+/// advance the round without a commit, `committed_leaders * WAVE_LENGTH` is
+/// wrong: the anchor is taken from the sealed [`kovanica_types::LeaderHeader`]'s
+/// `leader_round` stored for that exact commit (`committed_leaders - 1` for
+/// 0-based reward heights, or `committed_leaders` if indexed 1-based). If no
+/// header is stored at that height, returns `None` rather than guessing from
+/// `committed_leaders * WAVE_LENGTH`.
+fn leader_round_for_synced_commits(
+    state_storage: &Storage,
+    committed_leaders: u64,
+) -> Option<Round> {
     if committed_leaders == 0 {
-        None
-    } else {
-        committed_leaders.checked_mul(kovanica_types::WAVE_LENGTH)
+        return None;
     }
+    let read = match state_storage.begin_read() {
+        Ok(read) => read,
+        Err(e) => {
+            warn!(
+                error = %e,
+                committed_leaders,
+                "could not open read transaction for synced commit header; catch-up anchor unchanged"
+            );
+            return None;
+        }
+    };
+    let state = state_storage.state();
+    let header = match state.get_leader_header(&read, committed_leaders) {
+        Ok(Some(header)) => Some(header),
+        Ok(None) => match state.get_leader_header(&read, committed_leaders - 1) {
+            Ok(header) => header,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    committed_leaders,
+                    "could not read sealed header for synced commits; catch-up anchor unchanged"
+                );
+                return None;
+            }
+        },
+        Err(e) => {
+            warn!(
+                error = %e,
+                committed_leaders,
+                "could not read sealed header for synced commits; catch-up anchor unchanged"
+            );
+            return None;
+        }
+    }?;
+    (header.leader_round > 0).then_some(header.leader_round)
 }
 
 /// Verify and apply a fully reassembled state snapshot.
@@ -3324,7 +3357,9 @@ fn apply_state_snapshot(
                     0
                 }
             };
-            if let Some(anchor) = leader_round_for_synced_commits(committed_leaders) {
+            if let Some(anchor) =
+                leader_round_for_synced_commits(state_storage, committed_leaders)
+            {
                 if let Err(e) = dag_store.note_certified_catchup_anchor(anchor) {
                     warn!(
                         error = %e,
@@ -7085,15 +7120,20 @@ mod tests {
         assert!(dag.certified_catchup_anchor().unwrap().is_none());
     }
 
-    /// A joiner more than the prune window behind anchors on the verified
-    /// snapshot's executed commit count, not on the header height.
+    /// A joiner more than the prune window behind anchors on the sealed
+    /// header's `leader_round` at that committed height, not on
+    /// `committed_leader_height * WAVE_LENGTH`.
     ///
-    /// The default window is 100 waves. 101 executed commits is leader round
-    /// 303, which is past that window. The header height is the state-root
-    /// key (100 here) and is not what the cursor follows.
+    /// With skip certificates (PRO-40 #92), skipped leader slots advance the
+    /// round without incrementing `committed_leader_height`, so 101 commits
+    /// with 4 skipped slots lands at leader round 315 (not 303).
     #[test]
     fn apply_state_snapshot_anchors_past_the_prune_window() {
         let commits = 101u64;
+        let skipped_slots = 4u64;
+        let anchor = (commits + skipped_slots) * kovanica_types::WAVE_LENGTH;
+        assert_ne!(anchor, commits * kovanica_types::WAVE_LENGTH);
+
         let dir = tempfile::tempdir().unwrap();
         let src = Storage::new(dir.path().join("src.redb")).unwrap();
         {
@@ -7101,9 +7141,31 @@ mod tests {
             let mut staking = StakingState::new();
             staking.committed_leader_height = commits;
             src.state().save_staking_state(&txn, &staking).unwrap();
+            let state_root = Hash::new([9u8]);
             // Header height is the state-root key, one behind the commit count.
             src.state()
-                .save_state_root(&txn, commits - 1, &Hash::new([9u8]))
+                .save_state_root(&txn, commits - 1, &state_root)
+                .unwrap();
+            src.state()
+                .save_leader_header(
+                    &txn,
+                    &kovanica_types::LeaderHeader {
+                        committed_height: commits - 1,
+                        leader_round: anchor,
+                        leader_digest: Hash::new([1u8]),
+                        leader_author: 0,
+                        parent_leader_digest: Hash::zero(),
+                        tx_merkle_root: Hash::zero(),
+                        executed_tx_root: Hash::zero(),
+                        non_blue_root: Hash::zero(),
+                        blue_root: Hash::zero(),
+                        mysticghost: false,
+                        state_root,
+                        epoch: 0,
+                        committee_hash: Hash::zero(),
+                        timestamp: 0,
+                    },
+                )
                 .unwrap();
             txn.commit().unwrap();
         }
@@ -7118,7 +7180,6 @@ mod tests {
         let dag = dag_for(&dst_dir);
         apply_state_snapshot(&storage, &dag, PeerId::random(), &bytes);
 
-        let anchor = commits * kovanica_types::WAVE_LENGTH;
         assert!(
             commits > 100,
             "101 commits must sit past the default 100-wave prune window"
@@ -7133,6 +7194,74 @@ mod tests {
                 .committed_leader_height,
             commits
         );
+    }
+
+    #[test]
+    fn leader_round_for_synced_commits_uses_sealed_header_at_exact_height() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+
+        assert_eq!(leader_round_for_synced_commits(&storage, 0), None);
+        // Without a sealed header, never guess `committed_leaders * WAVE_LENGTH`.
+        assert_eq!(leader_round_for_synced_commits(&storage, 10), None);
+
+        // A header at an unrelated height (5) must not be used for commit count 10.
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_leader_header(
+                    &txn,
+                    &kovanica_types::LeaderHeader {
+                        committed_height: 5,
+                        leader_round: 21,
+                        leader_digest: Hash::new([5u8]),
+                        leader_author: 0,
+                        parent_leader_digest: Hash::zero(),
+                        tx_merkle_root: Hash::zero(),
+                        executed_tx_root: Hash::zero(),
+                        non_blue_root: Hash::zero(),
+                        blue_root: Hash::zero(),
+                        mysticghost: false,
+                        state_root: Hash::zero(),
+                        epoch: 0,
+                        committee_hash: Hash::zero(),
+                        timestamp: 0,
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        assert_eq!(leader_round_for_synced_commits(&storage, 10), None);
+
+        // Save the header for the 10th commit (height 9, with 4 skipped waves -> round 42 != 30).
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_leader_header(
+                    &txn,
+                    &kovanica_types::LeaderHeader {
+                        committed_height: 9,
+                        leader_round: 42,
+                        leader_digest: Hash::new([9u8]),
+                        leader_author: 0,
+                        parent_leader_digest: Hash::zero(),
+                        tx_merkle_root: Hash::zero(),
+                        executed_tx_root: Hash::zero(),
+                        non_blue_root: Hash::zero(),
+                        blue_root: Hash::zero(),
+                        mysticghost: false,
+                        state_root: Hash::zero(),
+                        epoch: 0,
+                        committee_hash: Hash::zero(),
+                        timestamp: 0,
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        assert_eq!(leader_round_for_synced_commits(&storage, 10), Some(42));
     }
 
     /// A parentless block at `round` (digest recomputed so `put_block` accepts

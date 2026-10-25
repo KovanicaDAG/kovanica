@@ -112,6 +112,9 @@ pub struct SnapshotData {
     pub contract_storage: Vec<(Vec<u8>, Vec<u8>)>,
     /// Staking state rows: key -> bincode(value).
     pub staking_state: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Sealed leader header at `height`, if recorded.
+    #[serde(default)]
+    pub leader_header: Option<kovanica_types::LeaderHeader>,
 }
 
 /// State store for accounts, contracts, and staking.
@@ -1022,6 +1025,7 @@ impl StateStore {
         data.version = SNAPSHOT_VERSION;
         data.height = self.snapshot_height(txn)?;
         data.state_root = snapshot_state_root(&data)?.0;
+        data.leader_header = self.get_leader_header(txn, data.height)?;
         let mut bytes = Vec::with_capacity(SNAPSHOT_MAGIC.len() + 64);
         bytes.extend_from_slice(&SNAPSHOT_MAGIC);
         bytes.extend_from_slice(&bincode::serialize(&data)?);
@@ -1037,8 +1041,31 @@ impl StateStore {
     /// [`Self::import_verified_snapshot`].
     pub fn decode_snapshot(bytes: &[u8]) -> Result<SnapshotData, StateStoreError> {
         if let Some(payload) = bytes.strip_prefix(SNAPSHOT_MAGIC.as_slice()) {
-            return bincode::deserialize(payload)
-                .map_err(|e| StateStoreError::SnapshotFormat(e.to_string()));
+            if let Ok(data) = bincode::deserialize::<SnapshotData>(payload) {
+                return Ok(data);
+            }
+            #[derive(Deserialize)]
+            struct V1WithoutHeader {
+                version: u32,
+                height: u64,
+                state_root: [u8; 32],
+                accounts: Vec<(Vec<u8>, Vec<u8>)>,
+                contract_code: Vec<(Vec<u8>, Vec<u8>)>,
+                contract_storage: Vec<(Vec<u8>, Vec<u8>)>,
+                staking_state: Vec<(Vec<u8>, Vec<u8>)>,
+            }
+            let v1: V1WithoutHeader = bincode::deserialize(payload)
+                .map_err(|e| StateStoreError::SnapshotFormat(e.to_string()))?;
+            return Ok(SnapshotData {
+                version: v1.version,
+                height: v1.height,
+                state_root: v1.state_root,
+                accounts: v1.accounts,
+                contract_code: v1.contract_code,
+                contract_storage: v1.contract_storage,
+                staking_state: v1.staking_state,
+                leader_header: None,
+            });
         }
 
         #[derive(Deserialize, Default)]
@@ -1058,6 +1085,7 @@ impl StateStore {
             contract_code: legacy.contract_code,
             contract_storage: legacy.contract_storage,
             staking_state: legacy.staking_state,
+            leader_header: None,
         })
     }
 
@@ -1140,6 +1168,9 @@ impl StateStore {
             for (_k, v) in &data.staking_state {
                 table.insert("staking", v.clone())?;
             }
+        }
+        if let Some(header) = &data.leader_header {
+            self.save_leader_header(txn, header)?;
         }
         Ok(())
     }
