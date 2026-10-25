@@ -91,6 +91,7 @@ shell history you share.
 kovanica status --chain-id <chain-id>
 kovanica balance <kovanica-address>
 kovanica staking <kovanica-address>
+kovanica history <kovanica-address>
 kovanica --chain-id <chain-id> transfer \
   --to <kovanica-address> \
   --amount 1.5 \
@@ -119,11 +120,20 @@ is 100 KUNA, written `100KUNA` or `100.0`.
 
 ## Transaction history
 
-The node has no method that lists transactions for an address.
-`kovanica_getLogs` returns contract events. `kovanica_getTransactionByHash`
-and `kovanica_getTransactionReceipt` need a known hash. This console does
-not scan blocks and does not add a `history` command.
+`history <address>` reads `kovanica_getTransactionHistory` and lists committed
+transactions that touch the given address, newest first.
 
-A history view needs a node RPC (for example
-`kovanica_getTransactionsByAddress`) before the CLI can grow one. That
-choice belongs to the project owner.
+```bash
+kovanica history <kovanica-address>
+kovanica history <kovanica-address> --limit 50
+kovanica history <kovanica-address> --cursor <cursor>
+kovanica history <kovanica-address> --sent
+kovanica history <kovanica-address> --received
+kovanica history <kovanica-address> --json
+```
+
+Columns: `HEIGHT`, `TIMESTAMP`, `KIND`, `STATUS`, `FROM`, `TO`, `AMOUNT`, `FEE`, `HASH`.
+`--limit` controls page size (default 20, max 100). `--cursor` accepts the `next_cursor`
+value from a previous page to paginate backwards in history. Direction can be
+filtered with `--sent` or `--received` (default is all).
+
