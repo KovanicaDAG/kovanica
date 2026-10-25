@@ -1443,6 +1443,7 @@ fn read_rss_bytes() -> Option<u64> {
 }
 
 /// Extract the `VmRSS` value (kB) from `/proc/self/status` contents.
+#[cfg(any(target_os = "linux", test))]
 fn parse_vmrss_kb(status: &str) -> Option<u64> {
     status.lines().find_map(|line| {
         let rest = line.strip_prefix("VmRSS:")?;
@@ -3868,13 +3869,17 @@ impl DagStoreTrait for NodeDagStore {
         self.inner.get_decided_rounds(max_round)
     }
 
-    /// Persist an accepted vote in the consensus database.
+    /// Persist a vote in the consensus database.
     ///
-    /// The vote is written under its leader round so it survives a restart and
-    /// can be handed to a peer that joins later (RFC-009). The write is a
-    /// separate transaction from the vote's acceptance, which is deliberate:
-    /// consensus has already counted the vote, and a storage failure here must
-    /// not turn an accepted vote into a rejected one.
+    /// The vote is written under its leader round in its own transaction so it
+    /// survives a restart and can be handed to a peer that joins later
+    /// (RFC-009).
+    ///
+    /// Callers differ. For a vote consensus has already accepted, a storage
+    /// failure must not turn that vote into a rejected one. For this node's
+    /// own vote the engine persists first and broadcasts only after `Ok`. A
+    /// failure then means the vote was not sent and is not a durable lock.
+    /// Once this returns `Ok`, the stored vote is that lock.
     fn put_vote(&self, vote: &Vote) -> Result<(), DagStoreError> {
         let storage = self.inner.storage();
         let txn = storage.begin_write()?;
@@ -9349,8 +9354,11 @@ mod b1_epoch_restart_repro {
 
         // Node B — restarted; same persisted genesis AND the frozen snapshot
         // from A's seal must be visible to it, so copy B from A's database file.
+        let a_path = dir.path().join("leader-a.redb");
+        drop(a);
         let b_path = dir.path().join("leader-b.redb");
-        std::fs::copy(dir.path().join("leader-a.redb"), &b_path).unwrap();
+        std::fs::copy(&a_path, &b_path).unwrap();
+        let a = Storage::new(a_path).unwrap();
         let b = Storage::new(b_path).unwrap();
 
         let committee_a = build_committee_for_round(

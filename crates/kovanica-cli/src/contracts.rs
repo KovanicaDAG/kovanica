@@ -112,7 +112,8 @@ pub struct HtlcCreateArgs {
     /// BLAKE3-256 hash lock (64 hex chars)
     #[arg(long = "hash-lock")]
     pub hash_lock: String,
-    /// Unix expiry timestamp (seconds)
+    /// Expiry in contract time = committed-leader HEIGHT (~12 s per unit),
+    /// NOT unix seconds. Use a height above the current one (see `status`).
     #[arg(long)]
     pub expiry: u64,
 }
@@ -194,16 +195,17 @@ pub struct VaultCreateArgs {
     /// Amount in atoms
     #[arg(long)]
     pub amount: u64,
-    /// Absolute unlock timestamp (seconds) — mutually exclusive with --start/--end
+    /// Absolute unlock time in contract time = committed-leader HEIGHT
+    /// (~12 s per unit), NOT unix seconds — mutually exclusive with --start/--end
     #[arg(long = "unlock-at")]
     pub unlock_at: Option<u64>,
-    /// Linear vesting start (seconds)
+    /// Linear vesting start (height, not unix seconds)
     #[arg(long, requires = "end")]
     pub start: Option<u64>,
-    /// Linear vesting end (seconds)
+    /// Linear vesting end (height, not unix seconds)
     #[arg(long, requires = "start")]
     pub end: Option<u64>,
-    /// Optional cliff for linear vesting (seconds)
+    /// Optional cliff for linear vesting (height, not unix seconds)
     #[arg(long)]
     pub cliff: Option<u64>,
 }

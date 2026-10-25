@@ -7,7 +7,7 @@ kovanica-faucet --chain-id 2 --keystore faucet.keystore --rpc-url http://127.0.0
             [--dispense-kovanica 10] [--rate-limit-window 3600] [--max-requests 3]
 ```
 
-`--chain-id` is **required** (no default): 1 mainnet, 2 testnet, 3 devnet, 1337 local. Any other value is rejected at startup.
+`--chain-id` is **required** (no default): 1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 1337 local. Any other value is rejected at startup.
 
 ## Mainnet guard
 

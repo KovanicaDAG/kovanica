@@ -4,7 +4,9 @@
 
 set -euo pipefail
 
-WASM_DIR="/root/Projects/kvnc/target/contracts"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+WASM_DIR="${WASM_DIR:-${WORKSPACE_ROOT}/target/contracts}"
 
 echo "=== Basic WASM validation ==="
 echo "Checking that .wasm files exist and are non-empty..."

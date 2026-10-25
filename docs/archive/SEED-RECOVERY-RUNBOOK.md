@@ -1,7 +1,7 @@
 # Seed recovery runbook — stalled public testnet
 
 Status: **RUNBOOK ONLY. Nothing here has been executed.** Written 2026-10-15 against
-`main` = `d0a26b11`. Companion to `docs/RENAME-CUTOVER-PLAN.md`; that doc owns the Option A
+`main` = `d0a26b11`. Companion to `docs/archive/RENAME-CUTOVER-PLAN.md`; that doc owns the Option A
 *rename* cutover — this one covers only **restoring quorum**. Facts come from the plan doc's
 read-only audit (§1, §2.5) and the tree. Owner gates are marked **[OWNER]** and collected in §9.
 
@@ -217,7 +217,7 @@ minute apart; `last_executed_round` non-null; `state.redb` mtime advances.
 
 ## 10. Related documents
 
-- **`docs/RENAME-CUTOVER-PLAN.md`** — the Option A rename cutover itself (D1–D5, phases,
+- **`docs/archive/RENAME-CUTOVER-PLAN.md`** — the Option A rename cutover itself (D1–D5, phases,
   rollback, risks). Use its §5 for rename mechanics, this doc for the recovery/quorum half.
 - `TASKLIST.md` §B 471 — the `KVNC_*` rename-drift item this workstream closes.
 - `docs/TESTNET-SEED-NODES.md`, `docs/TESTNET-RESET.md` — historical, partly superseded.

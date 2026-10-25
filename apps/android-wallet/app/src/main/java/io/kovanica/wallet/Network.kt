@@ -2,6 +2,7 @@ package io.kovanica.wallet
 
 import android.content.Context
 import android.content.SharedPreferences
+import io.kovanica.chain.ChainIds
 
 /**
  * One selectable network profile.
@@ -33,17 +34,17 @@ data class Network(
  */
 object Networks {
     val MAINNET: Network = Network(
-        "mainnet", "Mainnet", 1L,
+        "mainnet", "Mainnet", ChainIds.MAINNET,
         "https://rpc.kovanica.online/rpc", null, enabled = false,
         soon = "Mainnet is not open yet.",
     )
     val TESTNET: Network = Network(
-        "testnet", "Testnet", 4L,
+        "testnet", "Testnet", ChainIds.TESTNET,
         "https://rpc-testnet.kovanica.online/rpc",
         "https://faucet-testnet.kovanica.online/faucet", enabled = true,
     )
     val LOCAL: Network = Network(
-        "local", "Local", 1337L,
+        "local", "Local", ChainIds.LOCAL,
         "http://10.0.2.2:8545/rpc", "http://10.0.2.2:8080/faucet", enabled = true,
     )
 

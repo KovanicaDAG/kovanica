@@ -48,7 +48,7 @@ kovanica-cli key generate --output validator.keystore --with-vrf
 kovanica-cli key inspect --keystore validator.keystore
 ```
 
-> **Why VRF?** Kovanica uses stake-weighted VRF leader selection. The implementation is the `ecvrf` 0.4.3 crate (ristretto255 group + SHA3-512 hash-to-curve, 32-byte output, 96-byte proof) — it is **not** an RFC 9381 ciphersuite, despite the older "ECVRF-ED25519-SHA512-Elligator2" label that used to appear here. See `docs/VRF-PROOF-LENGTH.md` for the suite, the byte layout and why the RFC 9381 80-byte proof length does not apply. The VRF public key must be registered at genesis.
+> **Why VRF?** Kovanica uses stake-weighted VRF leader selection. The implementation is the `ecvrf` 0.4.3 crate (ristretto255 group + SHA3-512 hash-to-curve, 32-byte output, 96-byte proof) — it is **not** an RFC 9381 ciphersuite, despite the older "ECVRF-ED25519-SHA512-Elligator2" label that used to appear here. See `docs/archive/VRF-PROOF-LENGTH.md` for the suite, the byte layout and why the RFC 9381 80-byte proof length does not apply. The VRF public key must be registered at genesis.
 
 ---
 
@@ -141,16 +141,13 @@ data_dir = "/var/lib/kovanica"
 ### 4.3 Environment Variables (Alternative to Config File)
 
 ```bash
-export KOVANICA_LISTEN=0.0.0.0:8000
-export KOVANICA_RPC=127.0.0.1:8545
-export KOVANICA_PEERS="seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"
-export KOVANICA_MINE=0                      # 1 only if you run a seed node
-export KOVANICA_FAUCET=0
-export KOVANICA_OPERATOR=0
-export KOVANICA_ALLOW_RESET=0
-export KOVANICA_DATA="/var/lib/kovanica"
-export KOVANICA_VALIDATOR_KEY="/path/to/validator.keystore"
-export KOVANICA_VALIDATOR_KEY_PASS="your-passphrase"
+export KOVANICA_LISTEN_ADDR=0.0.0.0:8000
+export KOVANICA_RPC_ADDR=127.0.0.1
+export KOVANICA_RPC_PORT=8545
+export KOVANICA_BOOTNODES="seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"
+export KOVANICA_DATA_DIR="/var/lib/kovanica"
+export KOVANICA_VALIDATOR_KEY="/path/to/validator.key"
+export KOVANICA_RUN_VALIDATOR=true
 ```
 
 ---

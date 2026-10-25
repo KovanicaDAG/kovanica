@@ -11,7 +11,7 @@ It is not a network upgrade.
 > `StatementBlock::statements` behind the `b"KUNA-VRF1"` magic (137 bytes total; `KVNC-VRF1` before the chain-4 reset)
 > and covered by `compute_digest_statements`. The RFC 9381 80-byte proof length
 > does **not** apply. Suite, byte layout and the full file:line map:
-> `docs/VRF-PROOF-LENGTH.md`.
+> `docs/archive/VRF-PROOF-LENGTH.md`.
 >
 > This note supersedes the "Not activated" wording below for the *statements
 > framing* only: the digest-covered `b"KUNA-VRF1"` VRF blob does exist in the
@@ -24,7 +24,7 @@ It is not a network upgrade.
 
 - `kovanica-crypto` implements the VRF (`vrf_prove` / `vrf_verify`) on top of the
   `ecvrf` 0.4.3 crate — ristretto255 + SHA3, **not** an RFC 9381 ciphersuite
-  (proof layout and the 96 B vs 80 B question: `docs/VRF-PROOF-LENGTH.md`).
+  (proof layout and the 96 B vs 80 B question: `docs/archive/VRF-PROOF-LENGTH.md`).
 - `Authority` / `AuthorityInfo` already carry an optional `vrf_public_key`.
 - `Committee::leader_with_vrf` selects the lowest stake-weighted VRF hash when
   every authority in the map has an output, and otherwise falls back to
