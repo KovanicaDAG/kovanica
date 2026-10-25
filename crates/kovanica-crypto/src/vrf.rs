@@ -146,8 +146,8 @@ pub fn vrf_hash_to_u64(hash: &[u8; 32]) -> u64 {
 /// Magic prefix `KUNA-VRF1` (9 bytes) + 32-byte hash + 96-byte proof = 137 bytes.
 /// Old blocks with empty `statements` remain exactly as-is.
 pub fn encode_statements(output: &VRFOutput) -> Vec<u8> {
-    let mut v = Vec::with_capacity(137);
-    v.extend_from_slice(b"KUNA-VRF1");
+    let mut v = Vec::with_capacity(kovanica_types::block::VRF_STATEMENT_LEN);
+    v.extend_from_slice(kovanica_types::block::VRF_STATEMENT_MAGIC);
     v.extend_from_slice(&output.hash);
     v.extend_from_slice(&output.proof);
     v
@@ -155,7 +155,7 @@ pub fn encode_statements(output: &VRFOutput) -> Vec<u8> {
 
 /// Decode a VRF payload from `statements` if present; else None.
 pub fn decode_statements(data: &[u8]) -> Option<VRFOutput> {
-    if data.len() < 137 || &data[..9] != b"KUNA-VRF1" {
+    if !kovanica_types::block::is_vrf_statement(data) {
         return None;
     }
     let mut hash = [0u8; 32];

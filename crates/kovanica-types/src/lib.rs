@@ -19,6 +19,7 @@ pub mod hash;
 pub mod light_client;
 pub mod merkle;
 pub mod signing;
+pub mod timeout;
 pub mod transaction;
 pub mod vote;
 
@@ -49,6 +50,7 @@ pub use light_client::{
 };
 pub use merkle::{MerkleProof, MerkleStep};
 pub use signing::SigningContext;
+pub use timeout::{SkipCert, Timeout};
 pub use transaction::{Transaction, TransactionKind};
 pub use vote::Vote;
 
@@ -61,28 +63,67 @@ pub type AuthorityIndex = u16;
 /// Wave length used by the consensus (Mysticeti-style = 3).
 pub const WAVE_LENGTH: u64 = 3;
 
-/// Epoch rotation length in committed leader rounds (≈ 1 day at 12 s/leader:
-/// `86_400 / 12 = 7_200`).
+/// Epoch length in **DAG rounds**: 7 200 rounds × 4 s ≈ **8 h**.
 ///
-/// This is the single canonical definition of the epoch unit. Every component
-/// that derives an epoch — consensus vote/seal signing
-/// (`leader_round / EPOCH_ROUNDS`), committee construction, RPC
-/// `getCommittee`/`signingContext`, and the staking state — must use
-/// [`epoch_for_round`] so all nodes compute the SAME epoch for the same round.
+/// Toni's decision of 2026-10-23 (option a): an epoch is 7 200 DAG rounds,
+/// which is what consensus has always computed (`leader_round / 7_200`), so
+/// the vote/seal signing context and the committee snapshots are unchanged.
+/// The earlier "7 200 committed leaders ≈ 1 day" wording is retired.
+///
+/// There are two epoch counters with the **same length**:
+///
+/// * [`epoch_for_round`]: consensus (vote/seal signing context, committee
+///   snapshots `EPOCH_COMMITTEE`, RPC `getCommittee`/`signingContext`),
+///   derived from the DAG round of the leader.
+/// * [`epoch_for_height`]: staking-side state keyed by committed leader
+///   height (light set registration/exit, beacon, escrow settlement,
+///   `StakingState::current_epoch`). One leader slot per wave, so an epoch is
+///   [`EPOCH_LEADER_HEIGHTS`] = `EPOCH_ROUNDS / WAVE_LENGTH` = 2 400 heights.
+///
+/// The counters agree only while every leader slot is committed. Each leader
+/// slot that is skipped (today none are: the commit walk stalls instead,
+/// PRO-35/PRO-40; after the PRO-40 quorum-certified skip, each certified
+/// skip) advances the round by `WAVE_LENGTH` without advancing the height, so
+/// the height-based epoch lags the round-based one by
+/// `skipped_slots / EPOCH_LEADER_HEIGHTS` epochs. The two are used by
+/// independent subsystems and never compared, so the lag is not a safety
+/// problem: a height-based epoch is never shorter than 8 h of wall-clock
+/// time, but it is longer when leader slots are skipped.
 /// `kovanica_staking` re-exports this constant for backward-compatible paths.
 pub const EPOCH_ROUNDS: u64 = 7_200;
 
-/// Epoch that a committed leader round belongs to.
+/// Epoch length in committed leader heights: `EPOCH_ROUNDS / WAVE_LENGTH` =
+/// 2 400 (one leader per wave, 12 s per leader ≈ 8 h).
+pub const EPOCH_LEADER_HEIGHTS: u64 = EPOCH_ROUNDS / WAVE_LENGTH;
+
+/// Consensus epoch of a DAG round: `round / EPOCH_ROUNDS`.
 ///
-/// The epoch is a pure function of the round: `round / EPOCH_ROUNDS`. It is
-/// deliberately decoupled from wall-clock time, committed height, and boot
-/// time, so it is derived identically everywhere and cannot drift across a
-/// restart. This is the one function the consensus signing context, the
-/// network vote/seal edge, the committee builder, and the RPC light-client
-/// paths must share.
+/// A pure function of the round, decoupled from wall-clock time, committed
+/// height and boot time, so every node derives the same value and it cannot
+/// drift across a restart. The consensus signing context, the network
+/// vote/seal edge, the committee builder and the RPC committee paths must all
+/// use it. Never pass a committed height here; use [`epoch_for_height`].
 #[must_use]
 pub fn epoch_for_round(round: Round) -> u64 {
     round / EPOCH_ROUNDS
+}
+
+/// Staking-side epoch of a committed leader height:
+/// `height / EPOCH_LEADER_HEIGHTS`.
+///
+/// Used by everything that is keyed by committed height (light set, beacon,
+/// escrow settlement, `StakingState::current_epoch`). Same 8 h length as
+/// [`epoch_for_round`]; see [`EPOCH_ROUNDS`] for why the two counters can
+/// drift apart once leader slots are skipped.
+#[must_use]
+pub fn epoch_for_height(height: u64) -> u64 {
+    height / EPOCH_LEADER_HEIGHTS
+}
+
+/// True if `height` is the first committed height of a staking epoch.
+#[must_use]
+pub fn is_epoch_start_height(height: u64) -> bool {
+    height.is_multiple_of(EPOCH_LEADER_HEIGHTS)
 }
 
 /// Maximum allowed gap, in rounds, between a block and any of its parents.
@@ -256,7 +297,10 @@ pub const GENESIS_ROUND: Round = 0;
 
 #[cfg(test)]
 mod epoch_tests {
-    use super::{epoch_for_round, EPOCH_ROUNDS};
+    use super::{
+        epoch_for_height, epoch_for_round, is_epoch_start_height, EPOCH_LEADER_HEIGHTS,
+        EPOCH_ROUNDS, WAVE_LENGTH,
+    };
 
     /// The epoch unit is frozen at 7_200 rounds. Every crate that derives an
     /// epoch from a round must agree on this value; changing it is a consensus
@@ -276,5 +320,37 @@ mod epoch_tests {
         assert_eq!(epoch_for_round(EPOCH_ROUNDS), 1);
         assert_eq!(epoch_for_round(EPOCH_ROUNDS + 1), 1);
         assert_eq!(epoch_for_round(5 * EPOCH_ROUNDS), 5);
+    }
+
+    /// Toni 2026-10-23: one epoch is 7 200 DAG rounds ≈ 8 h, and the
+    /// height-based staking epoch has the same length (2 400 leaders).
+    #[test]
+    fn consensus_and_staking_epochs_are_both_eight_hours() {
+        const ROUND_SECS: u64 = 4;
+        assert_eq!(EPOCH_ROUNDS, 7_200);
+        assert_eq!(EPOCH_ROUNDS * ROUND_SECS, 8 * 3_600);
+        assert_eq!(EPOCH_LEADER_HEIGHTS, 2_400);
+        assert_eq!(EPOCH_LEADER_HEIGHTS * WAVE_LENGTH * ROUND_SECS, 8 * 3_600);
+        // With no skipped slots the counters advance together: height h and
+        // round h * WAVE_LENGTH name the same epoch. (The leader at height h
+        // is at round (h + 1) * WAVE_LENGTH, so at a boundary the two can
+        // differ by that one slot.)
+        for height in [0, 1, EPOCH_LEADER_HEIGHTS - 2, EPOCH_LEADER_HEIGHTS * 3 + 7] {
+            let round = height * WAVE_LENGTH;
+            assert_eq!(epoch_for_height(height), epoch_for_round(round));
+        }
+    }
+
+    #[test]
+    fn epoch_for_height_boundary() {
+        assert_eq!(epoch_for_height(0), 0);
+        assert_eq!(epoch_for_height(EPOCH_LEADER_HEIGHTS - 1), 0);
+        assert_eq!(epoch_for_height(EPOCH_LEADER_HEIGHTS), 1);
+        assert_eq!(epoch_for_height(EPOCH_LEADER_HEIGHTS + 1), 1);
+        assert_eq!(epoch_for_height(3 * EPOCH_LEADER_HEIGHTS), 3);
+        assert!(is_epoch_start_height(0));
+        assert!(!is_epoch_start_height(EPOCH_LEADER_HEIGHTS - 1));
+        assert!(is_epoch_start_height(EPOCH_LEADER_HEIGHTS));
+        assert!(!is_epoch_start_height(EPOCH_LEADER_HEIGHTS + 1));
     }
 }

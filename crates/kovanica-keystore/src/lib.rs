@@ -22,6 +22,10 @@ use zeroize::Zeroizing;
 
 use kovanica_types::{Address, Hash, PublicKey, SigningKey};
 
+mod perms;
+
+pub use perms::{ensure_owner_only, tighten_private_file};
+
 pub const KEYSTORE_VERSION: u32 = 2;
 const KDF_MEMORY_KIB: u32 = 64 * 1024;
 const KDF_ITERATIONS: u32 = 3;
@@ -211,12 +215,10 @@ fn save_atomic(path: &Path, keystore: &Keystore, replace: bool) -> Result<()> {
         .prefix(".kovanica-keystore-")
         .tempfile_in(parent)
         .with_context(|| format!("creating temporary keystore in {}", parent.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        temp.as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
+    // Unix: mode 0600 on the open descriptor. Windows: owner-only DACL on
+    // the same handle. The restriction happens before the secret bytes are
+    // written. A rename keeps both.
+    tighten_private_file(temp.as_file())?;
     temp.write_all(&json)?;
     temp.as_file().sync_all()?;
     if replace {

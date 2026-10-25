@@ -979,6 +979,25 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     }
 }
 /**
+ * Re-encrypt the wallet under `new_passphrase`; returns the new keystore JSON.
+ *
+ * The seed is preserved, so the address does not change. On success the caller
+ * replaces its stored `keystore` value with the returned JSON.
+ *
+ * **Note:** Runs off the UI thread (decrypts and re-encrypts; Argon2id runs twice).
+ * A wrong `passphrase` is an error, never a panic.
+ */
+public func changePassphraseRaw(keystoreJson: String, passphrase: String, newPassphrase: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_light_ffi_fn_func_change_passphrase_raw(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),
+        FfiConverterString.lower(newPassphrase),uniffiCallStatus
+    )
+})
+}
+/**
  * Open a comms envelope addressed to this keystore's comms id.
  *
  * The envelope signature is **not** checked here (see [`comms_verify_envelope`]);
@@ -1044,6 +1063,27 @@ public func confirmAccount(headerJson: String, proofJson: String)throws  -> Acco
     uniffi_kovanica_light_ffi_fn_func_confirm_account(
         FfiConverterString.lower(headerJson),
         FfiConverterString.lower(proofJson),uniffiCallStatus
+    )
+})
+}
+/**
+ * Derive the address a `Deploy` transaction will create on-chain, off-node.
+ *
+ * `sender_hex` is the `kvnc…dag` address, or a legacy hex form where
+ * `chain_id` allows it (devnet 3, chain 4, local 1337). `nonce` is the
+ * sender's account nonce **as it stands while the `Deploy` tx is being
+ * signed** (i.e. the `tx.nonce`); the `+1` the node bakes into the address is
+ * applied inside. Returns the bare 64-hex contract address.
+ *
+ * **Note:** Pure BLAKE3 — safe to call on the UI thread.
+ */
+public func contractAddressForRaw(senderHex: String, nonce: UInt64, chainId: UInt64)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_light_ffi_fn_func_contract_address_for_raw(
+        FfiConverterString.lower(senderHex),
+        FfiConverterUInt64.lower(nonce),
+        FfiConverterUInt64.lower(chainId),uniffiCallStatus
     )
 })
 }
@@ -1133,6 +1173,21 @@ public func registrySlotHex(name: String)throws  -> String  {
         uniffiCallStatus in
     uniffi_kovanica_light_ffi_fn_func_registry_slot_hex(
         FfiConverterString.lower(name),uniffiCallStatus
+    )
+})
+}
+/**
+ * Reveal the 24-word seed phrase for backup.
+ *
+ * **Note:** Runs off the UI thread (decrypts the keystore; Argon2id is expensive).
+ * A wrong passphrase is an error, never a panic.
+ */
+public func revealMnemonicRaw(keystoreJson: String, passphrase: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeLightFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_kovanica_light_ffi_fn_func_reveal_mnemonic_raw(
+        FfiConverterString.lower(keystoreJson),
+        FfiConverterString.lower(passphrase),uniffiCallStatus
     )
 })
 }
@@ -1317,6 +1372,9 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_kovanica_light_ffi_checksum_func_change_passphrase_raw() != 16537) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kovanica_light_ffi_checksum_func_comms_open_envelope() != 21852) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1327,6 +1385,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_light_ffi_checksum_func_confirm_account() != 55701) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kovanica_light_ffi_checksum_func_contract_address_for_raw() != 59815) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_light_ffi_checksum_func_create_wallet() != 1575) {
@@ -1345,6 +1406,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_light_ffi_checksum_func_registry_slot_hex() != 45968) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kovanica_light_ffi_checksum_func_reveal_mnemonic_raw() != 40673) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_light_ffi_checksum_func_sign_bond_raw() != 28793) {

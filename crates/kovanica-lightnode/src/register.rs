@@ -30,7 +30,7 @@ pub const LIGHT_TX_FEE: u64 = 1;
 pub struct LightView {
     /// Live reward split in basis points, as reported by the full node.
     pub reward_bps: u64,
-    /// `committed_height / EPOCH_ROUNDS` on the full node.
+    /// `epoch_for_height(committed_height)` (2 400 heights ≈ 8 h) on the full node.
     pub epoch: u64,
     /// Epoch-opening leader digest, when the full node has noted one.
     pub beacon: Option<Hash>,

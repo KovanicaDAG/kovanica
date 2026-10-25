@@ -1,4 +1,4 @@
-# KUNA Architecture Overview
+# Kovanica Architecture Overview
 
 ## High-level flow
 
@@ -91,11 +91,11 @@ Storage (redb / pruning / snapshots)
 
 | Component | Status | Location |
 |-----------|--------|----------|
-| TypeScript API client | Skeleton | `packages/api-client/src/index.ts` |
-| OpenAPI / JSON schema | Reference | `docs/RPC.md` |
-| Contract SDK (Rust + TS) | Contracts done; SDK helper open | `kovanica-htlc`, `kovanica-vault`, `kovanica-multisig` |
-| Dev faucet CLI | Open (faucet service needed) | — |
-| Indexer skeleton | Open | `docs/INDEXER.md` (WS events → SQL) |
+| TypeScript API client | Implemented | `packages/api-client/src/index.ts` |
+| OpenAPI / JSON schema generator | Implemented | `crates/kovanica-rpc/src/openapi.rs` |
+| Contract SDK (Rust + TS) | Implemented | `kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`, `kovanica-token` |
+| Dev faucet service | Implemented | `crates/kovanica-faucet` |
+| Indexer skeleton | Planned | WebSocket push subscriptions (`/ws`) |
 
 ---
 

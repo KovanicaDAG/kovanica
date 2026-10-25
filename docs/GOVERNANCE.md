@@ -5,7 +5,7 @@ Summary: Parameter-change, treasury-spend, upgrade-signaling, and stake-weighted
 Status: **Draft / Stage-3** (Phase 25 — not shipped; do not mark Shipped).
 Consensus impact: **client-only / ledger-safe** for proposal format and treasury flow; **consensus-safe** only once quorum thresholds and epoch-boundary execution rules are adopted by the committee (currently not active). No consensus rule changed by this document.
 
-Cross-links: `docs/B-TREASURY-PROPOSAL.md` (treasury proposal skeleton), `docs/A8.2-DELEGATION-SKELETON.md` (Phase 18 deferred, delegation required for stake-weighted voting), `TASKLIST.md` Phase 25 (`[ ]` governance hooks; `kovanica-cli propose/vote → not_implemented` at `main.rs:366-374`), `crates/kovanica-staking/src/lib.rs` (`MIN_VALIDATOR_STAKE=50_000 KUNA`, `SLASH_PCT_BPS=500`, `EPOCH_ROUNDS=7_200`, `UNBONDING_ROUNDS=100_000`, `TREASURY_TOTAL=8_000_000 KUNA`), `crates/kovanica-types/src/committee.rs` (quorum `2f+1`, validity `f+1`), `crates/kovanica-cli/src/main.rs` (`ProposeArgs` / `VoteArgs` stubs).
+Cross-links: `docs/archive/B-TREASURY-PROPOSAL.md` (treasury proposal skeleton), `docs/A8.2-DELEGATION-SKELETON.md` (Phase 18 deferred, delegation required for stake-weighted voting), `TASKLIST.md` Phase 25 (`[ ]` governance hooks; `kovanica-cli propose/vote → not_implemented` at `main.rs:366-374`), `crates/kovanica-staking/src/lib.rs` (`MIN_VALIDATOR_STAKE=50_000 KUNA`, `SLASH_PCT_BPS=500`, `EPOCH_ROUNDS=7_200`, `UNBONDING_ROUNDS=100_000`, `TREASURY_TOTAL=8_000_000 KUNA`), `crates/kovanica-types/src/committee.rs` (quorum `2f+1`, validity `f+1`), `crates/kovanica-cli/src/main.rs` (`ProposeArgs` / `VoteArgs` stubs).
 
 ---
 
@@ -123,8 +123,8 @@ Status: `StatementBlock::statements` is an empty placeholder; `compute_digest_st
 ### 5.2 Activation rule (planned — consensus-safe only post-adoption)
 
 - Signal is valid if signed by at least `validity_threshold = total_stake/3 + 1` (`committee.rs`) of the *current* committee.
-- Activation requires `quorum_threshold = 2*total_stake/3 + 1` over a window of at least `EPOCH_ROUNDS = 7_200` committed leaders.
-- Once activated, the upgrade applies at the first `committed_leader_height` that is a multiple of `EPOCH_ROUNDS` after the activation epoch.
+- Activation requires `quorum_threshold = 2*total_stake/3 + 1` over a window of at least one epoch (epoch = 8 h = 7200 DAG rounds = 2400 leader heights; `EPOCH_ROUNDS` / `EPOCH_LEADER_HEIGHTS`).
+- Once activated, the upgrade applies at the first `committed_leader_height` that is a multiple of `EPOCH_LEADER_HEIGHTS` (2400 leader heights) after the activation epoch.
 
 Status: not implemented; no `node::not_implemented` stub for upgrade, but no `StatementBlock` parsing is present either.
 

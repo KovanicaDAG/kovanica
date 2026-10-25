@@ -244,6 +244,11 @@ impl RpcServer {
             handle_get_transaction_by_hash,
         )
         .await;
+        self.register_stateful(
+            "kovanica_getTransactionHistory",
+            handle_get_transaction_history,
+        )
+        .await;
         self.register_stateful("kovanica_getLogs", handle_get_logs)
             .await;
 
@@ -412,6 +417,7 @@ const KNOWN_RPC_METHODS: &[&str] = &[
     "kovanica_sendRawTransaction",
     "kovanica_getTransactionReceipt",
     "kovanica_getTransactionByHash",
+    "kovanica_getTransactionHistory",
     "kovanica_getLogs",
     "kovanica_getBalance",
     "kovanica_getNonce",

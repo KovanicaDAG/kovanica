@@ -41,7 +41,7 @@ codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-no
 | Subsidy era length        | **8 100 000** committed leader blocks          |
 | Decay                     | **× 3/4** each era                             |
 | Round / leader interval   | round 4 s → committed leader svakih 12 s       |
-| Epoch (validator rotacija)| 7 200 leader blokova (≈1 dan), neovisno o eri   |
+| Epoch (validator rotacija)| epoch = 8 h = 7 200 DAG rundi = 2 400 leader visina (committed leader svakih 12 s), neovisno o eri (PRO-37) |
 | Active validators         | 15–21                                          |
 | Min validator stake       | 50 000 KUNA                                    |
 
@@ -80,16 +80,16 @@ Packages (TypeScript):
 
 Contracts (već implementirani): HTLC, Vault, Multisig, Token + Host trait.
 
-## Snapshot (2026-10-13, main @ 98d88cc)
+## Snapshot (2026-10-24, main @ dd3aff9)
 
-- Workspace crates: 19
-- Rust source: ~53k LOC across 113 `.rs` files
-- TypeScript packages: 3 (`api-client`, `console`, `signer`) + `web`
+- Workspace crates: 27
+- Rust source: ~90.5k LOC (crates) / ~95.5k LOC (repo) across 163 `.rs` files
+- TypeScript packages: 5 (`api-client`, `comms`, `console`, `signer`, `web`)
 - Default P2P listen: `0.0.0.0:8000`
 - Default RPC bind: `127.0.0.1:8545`
 - Default round duration: 4000 ms (=> 12 s per committed leader)
 - Max peers: 50 (`config.example.toml`)
-- Workspace tests: 503+ passing in the latest partial `cargo test --workspace` run (`sustained_liveness` still running before timeout)
+- Workspace tests: 1,101+ tests passing (100% pass in verified crate suites)
 
 ## Coding standards
 

@@ -427,7 +427,9 @@ class CreateTokenActivity : Activity() {
         val deployHash = node.call("kovanica_sendRawTransaction", JSONArray().put(deploy))?.toString()
 
         // The node does not return the new address, so derive it from sender + deploy nonce.
-        val contract = contractAddressForRaw(sender, nonce)
+        val contractHex = contractAddressForRaw(sender, nonce, chainId)
+        val contract = KvncAddress.canonical(contractHex)
+            ?: return Outcome.Failed("The new token address could not be encoded.")
 
         note("Deploy sent${shortHash(deployHash)}. Waiting for it to be mined…")
 
@@ -468,7 +470,7 @@ class CreateTokenActivity : Activity() {
         )
         val callHash = node.call("kovanica_sendRawTransaction", JSONArray().put(call))?.toString()
 
-        return Outcome.Done(contract, deployHash, callHash)
+        return Outcome.Done(contractHex, deployHash, callHash)
     }
 
     /**

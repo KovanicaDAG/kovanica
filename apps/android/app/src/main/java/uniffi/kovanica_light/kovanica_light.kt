@@ -741,7 +741,7 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_kovanica_light_ffi_fn_func_confirm_account(`headerJson`: RustBuffer.ByValue,`proofJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_kovanica_light_ffi_fn_func_contract_address_for_raw(`senderHex`: RustBuffer.ByValue,`nonce`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_kovanica_light_ffi_fn_func_contract_address_for_raw(`senderHex`: RustBuffer.ByValue,`nonce`: Long,`chainId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kovanica_light_ffi_fn_func_create_wallet(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -911,7 +911,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_light_ffi_checksum_func_confirm_account() != 55701) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_contract_address_for_raw() != 23892) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_contract_address_for_raw() != 59815) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_create_wallet() != 1575) {
@@ -1599,21 +1599,23 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         /**
          * Derive the address a `Deploy` transaction will create on-chain, off-node.
          *
-         * `sender_hex` is the `kvnc…dag` address or a bare / `0x`-prefixed 64-hex
-         * payload. `nonce` is the sender's account nonce **as it stands while the
-         * `Deploy` tx is being signed** (i.e. the `tx.nonce`); the `+1` the node bakes
-         * into the address is applied inside. Returns the bare 64-hex contract address.
+         * `sender_hex` is the `kvnc…dag` address, or a legacy hex form where
+         * `chain_id` allows it (devnet 3, chain 4, local 1337). `nonce` is the
+         * sender's account nonce **as it stands while the `Deploy` tx is being
+         * signed** (i.e. the `tx.nonce`); the `+1` the node bakes into the address is
+         * applied inside. Returns the bare 64-hex contract address.
          *
          * **Note:** Pure BLAKE3 — safe to call on the UI thread.
          */
-    @Throws(LightFfiException::class) fun `contractAddressForRaw`(`senderHex`: kotlin.String, `nonce`: kotlin.ULong): kotlin.String {
+    @Throws(LightFfiException::class) fun `contractAddressForRaw`(`senderHex`: kotlin.String, `nonce`: kotlin.ULong, `chainId`: kotlin.ULong): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCallWithError(LightFfiException) { _status ->
     UniffiLib.uniffi_kovanica_light_ffi_fn_func_contract_address_for_raw(
     
         
         FfiConverterString.lower(`senderHex`),
-        FfiConverterULong.lower(`nonce`),_status)
+        FfiConverterULong.lower(`nonce`),
+        FfiConverterULong.lower(`chainId`),_status)
 }
     )
     }

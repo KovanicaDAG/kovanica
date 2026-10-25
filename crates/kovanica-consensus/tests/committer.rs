@@ -644,6 +644,9 @@ fn test_update_get_leader_roundtrip() {
     assert_eq!(committer.get_all_leaders().len(), 1);
 }
 
+/// PRO-40: GC keeps every record above the commit cursor, whatever the
+/// cutoff. Before the fix rounds below the cutoff were dropped even while
+/// undecided, which let the commit walk skip them.
 #[test]
 fn test_cleanup_old_leaders_retains_cutoff_and_above() {
     let committer = UniversalCommitter::new(committee(4), false, 100);
@@ -658,19 +661,13 @@ fn test_cleanup_old_leaders_retains_cutoff_and_above() {
     }
     committer.cleanup_old_leaders(5);
     let remaining = committer.get_all_leaders();
-    assert_eq!(remaining.len(), 6, "rounds 5..=10 must survive");
-    for round in 5..=10u64 {
-        assert!(remaining.contains_key(&round), "round {round} pruned");
-    }
-    for round in 1..5u64 {
-        assert!(
-            !remaining.contains_key(&round),
-            "round {round} should be gone"
-        );
-    }
+    assert_eq!(
+        remaining.len(),
+        10,
+        "nothing above the cursor (0) may be pruned"
+    );
     committer.cleanup_old_leaders(5);
     assert_eq!(committer.last_decided_round(), 0);
-    assert!(committer.get_all_decided_leaders().is_empty());
 }
 
 #[test]
@@ -889,65 +886,65 @@ fn test_try_commit_direct_commit_end_to_end() {
 #[test]
 fn test_try_commit_passes_over_uncertified_round() {
     let g = genesis();
-    let b1 = make_block(0, 1, vec![block_ref(&g)], "b1");
-    let b3 = make_block(1, 3, vec![block_ref(&b1)], "b3");
+    let b1 = make_block(0, 3, vec![block_ref(&g)], "b1");
+    let b3 = make_block(1, 6, vec![block_ref(&b1)], "b3");
     let dag = MockDag::with_blocks([g, b1, b3.clone()]);
 
     let committer = UniversalCommitter::new(committee(4), false, 100);
-    // Round 1: registered, only 1 vote (below quorum).
+    // Round 3: registered, only 1 vote (below quorum).
     committer.update_leader(leader_info(
-        1,
+        3,
         0,
         Some(Hash::new("kovanica-test/b1")),
         LeaderStatus::Undecided,
         &[],
     ));
-    committer.add_vote(1, 0, Hash::new("kovanica-test/b1"));
-    // Round 3: registered with full quorum.
+    committer.add_vote(3, 0, Hash::new("kovanica-test/b1"));
+    // Round 6: registered with full quorum.
     committer.update_leader(leader_info(
-        3,
+        6,
         1,
         Some(b3.digest),
         LeaderStatus::Undecided,
         &[],
     ));
     for voter in [0u16, 1, 2] {
-        committer.add_vote(3, voter, b3.digest);
+        committer.add_vote(6, voter, b3.digest);
     }
 
-    // PRO-35: chain must stall at round 1 (no quorum)
+    // PRO-35: chain must stall at round 3 (no quorum)
     let first = committer
         .try_commit_and_mark_durable(&dag)
         .expect("persist commit");
-    assert!(first.is_none(), "chain must stall at round 1 (no quorum)");
+    assert!(first.is_none(), "chain must stall at round 3 (no quorum)");
     assert_eq!(committer.last_decided_round(), 0);
-    assert!(!committer.is_decided(1), "round 1 must remain undecided");
+    assert!(!committer.is_decided(3), "round 3 must remain undecided");
 
-    // Now give round 1 its quorum.
-    committer.add_vote(1, 1, Hash::new("kovanica-test/b1"));
-    committer.add_vote(1, 2, Hash::new("kovanica-test/b1"));
+    // Now give round 3 its quorum.
+    committer.add_vote(3, 1, Hash::new("kovanica-test/b1"));
+    committer.add_vote(3, 2, Hash::new("kovanica-test/b1"));
 
     let subdag = committer
         .try_commit_and_mark_durable(&dag)
         .expect("persist commit")
-        .expect("round 1 now has quorum");
-    assert_eq!(subdag.leader_round, 1);
-    assert_eq!(committer.last_decided_round(), 1);
-
-    // Round 3 must now also commit
-    let subdag = committer
-        .try_commit_and_mark_durable(&dag)
-        .expect("persist commit")
-        .expect("round 3 commits after round 1");
+        .expect("round 3 now has quorum");
     assert_eq!(subdag.leader_round, 3);
+    assert_eq!(committer.last_decided_round(), 3);
+
+    // Round 6 must now also commit
+    let subdag = committer
+        .try_commit_and_mark_durable(&dag)
+        .expect("persist commit")
+        .expect("round 6 commits after round 3");
+    assert_eq!(subdag.leader_round, 6);
 
     let decided = committer.get_all_decided_leaders();
     assert_eq!(
-        decided.get(&1).map(|l| l.status),
+        decided.get(&3).map(|l| l.status),
         Some(LeaderStatus::Commit)
     );
     assert_eq!(
-        decided.get(&3).map(|l| l.status),
+        decided.get(&6).map(|l| l.status),
         Some(LeaderStatus::Commit)
     );
 }
@@ -1061,10 +1058,10 @@ fn test_try_commit_deterministic_across_committers() {
     fn build() -> (UniversalCommitter, MockDag) {
         let g = genesis();
         let b3 = make_block(1, 3, vec![block_ref(&g)], "b3");
-        let b5 = make_block(2, 5, vec![block_ref(&b3)], "b5");
+        let b5 = make_block(2, 6, vec![block_ref(&b3)], "b5");
         let dag = MockDag::with_blocks([g, b3.clone(), b5.clone()]);
         let committer = UniversalCommitter::new(committee(4), false, 100);
-        for (round, author, block) in [(3u64, 1u16, &b3), (5, 2, &b5)] {
+        for (round, author, block) in [(3u64, 1u16, &b3), (6, 2, &b5)] {
             committer.update_leader(leader_info(
                 round,
                 author,
@@ -1084,7 +1081,7 @@ fn test_try_commit_deterministic_across_committers() {
     let out1 = drive_try_commit(&c1, &d1);
     let out2 = drive_try_commit(&c2, &d2);
 
-    assert_eq!(out1.len(), 2, "rounds 3 and 5 both commit");
+    assert_eq!(out1.len(), 2, "rounds 3 and 6 both commit");
     assert_eq!(
         digest_seq(&out1),
         digest_seq(&out2),
@@ -1171,11 +1168,11 @@ fn test_try_commit_committed_rounds_strictly_increase() {
 fn test_try_commit_indirect_commit_through_later_committed_leader() {
     let g = genesis();
     let b3 = make_block(0, 3, vec![block_ref(&g)], "b3-no-quorum");
-    let b5 = make_block(1, 5, vec![block_ref(&b3)], "b5-quorum");
+    let b5 = make_block(1, 6, vec![block_ref(&b3)], "b5-quorum");
     let dag = MockDag::with_blocks([g, b3.clone(), b5.clone()]);
 
     let committer = UniversalCommitter::new(committee(4), false, 100);
-    // Round 3: block exists, connected to round 5, but no direct quorum.
+    // Round 3: block exists, connected to round 6, but no direct quorum.
     committer.update_leader(leader_info(
         3,
         0,
@@ -1184,16 +1181,16 @@ fn test_try_commit_indirect_commit_through_later_committed_leader() {
         &[],
     ));
     committer.add_vote(3, 0, b3.digest); // 1 of 4 - no quorum
-                                         // Round 5: full quorum, causally descends from round 3.
+                                         // Round 6: full quorum, causally descends from round 3.
     committer.update_leader(leader_info(
-        5,
+        6,
         1,
         Some(b5.digest),
         LeaderStatus::Undecided,
         &[],
     ));
     for voter in 0..4u16 {
-        committer.add_vote(5, voter, b5.digest);
+        committer.add_vote(6, voter, b5.digest);
     }
 
     // PRO-35: chain must stall at round 3 (no quorum)
@@ -1209,7 +1206,7 @@ fn test_try_commit_indirect_commit_through_later_committed_leader() {
     committer.add_vote(3, 2, b3.digest);
 
     let committed = drive_try_commit(&committer, &dag);
-    assert!(!committed.is_empty(), "rounds 3 and 5 must commit");
+    assert!(!committed.is_empty(), "rounds 3 and 6 must commit");
 
     let decided = committer.get_all_decided_leaders();
     let round3 = decided.get(&3);
@@ -1223,9 +1220,9 @@ fn test_try_commit_indirect_commit_through_later_committed_leader() {
         "with its own quorum, round 3 commits"
     );
     assert_eq!(
-        decided.get(&5).map(|l| l.status),
+        decided.get(&6).map(|l| l.status),
         Some(LeaderStatus::Commit),
-        "round 5 committed"
+        "round 6 committed"
     );
 }
 fn digest_seq(subdags: &[CommittedSubDag]) -> Vec<Vec<Hash>> {

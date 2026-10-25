@@ -243,6 +243,11 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureRes
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_CHANGE_PASSPHRASE_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_CHANGE_PASSPHRASE_RAW
+RustBuffer uniffi_kovanica_light_ffi_fn_func_change_passphrase_raw(RustBuffer keystore_json, RustBuffer passphrase, RustBuffer new_passphrase, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_COMMS_OPEN_ENVELOPE
 #define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_COMMS_OPEN_ENVELOPE
 RustBuffer uniffi_kovanica_light_ffi_fn_func_comms_open_envelope(RustBuffer keystore_json, RustBuffer passphrase, RustBuffer envelope_json, RustCallStatus *_Nonnull out_status
@@ -261,6 +266,11 @@ int8_t uniffi_kovanica_light_ffi_fn_func_comms_verify_envelope(RustBuffer envelo
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_CONFIRM_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_CONFIRM_ACCOUNT
 RustBuffer uniffi_kovanica_light_ffi_fn_func_confirm_account(RustBuffer header_json, RustBuffer proof_json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_CONTRACT_ADDRESS_FOR_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_CONTRACT_ADDRESS_FOR_RAW
+RustBuffer uniffi_kovanica_light_ffi_fn_func_contract_address_for_raw(RustBuffer sender_hex, uint64_t nonce, uint64_t chain_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_CREATE_WALLET
@@ -291,6 +301,11 @@ RustBuffer uniffi_kovanica_light_ffi_fn_func_registry_decode_entry(RustBuffer va
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_REGISTRY_SLOT_HEX
 #define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_REGISTRY_SLOT_HEX
 RustBuffer uniffi_kovanica_light_ffi_fn_func_registry_slot_hex(RustBuffer name, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_REVEAL_MNEMONIC_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_REVEAL_MNEMONIC_RAW
+RustBuffer uniffi_kovanica_light_ffi_fn_func_reveal_mnemonic_raw(RustBuffer keystore_json, RustBuffer passphrase, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_FN_FUNC_SIGN_BOND_RAW
@@ -603,6 +618,12 @@ void ffi_kovanica_light_ffi_rust_future_free_void(uint64_t handle
 void ffi_kovanica_light_ffi_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_CHANGE_PASSPHRASE_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_CHANGE_PASSPHRASE_RAW
+uint16_t uniffi_kovanica_light_ffi_checksum_func_change_passphrase_raw(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_COMMS_OPEN_ENVELOPE
 #define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_COMMS_OPEN_ENVELOPE
 uint16_t uniffi_kovanica_light_ffi_checksum_func_comms_open_envelope(void
@@ -624,6 +645,12 @@ uint16_t uniffi_kovanica_light_ffi_checksum_func_comms_verify_envelope(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_CONFIRM_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_CONFIRM_ACCOUNT
 uint16_t uniffi_kovanica_light_ffi_checksum_func_confirm_account(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_CONTRACT_ADDRESS_FOR_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_CONTRACT_ADDRESS_FOR_RAW
+uint16_t uniffi_kovanica_light_ffi_checksum_func_contract_address_for_raw(void
     
 );
 #endif
@@ -660,6 +687,12 @@ uint16_t uniffi_kovanica_light_ffi_checksum_func_registry_decode_entry(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_SLOT_HEX
 #define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_REGISTRY_SLOT_HEX
 uint16_t uniffi_kovanica_light_ffi_checksum_func_registry_slot_hex(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_REVEAL_MNEMONIC_RAW
+#define UNIFFI_FFIDEF_UNIFFI_KOVANICA_LIGHT_FFI_CHECKSUM_FUNC_REVEAL_MNEMONIC_RAW
+uint16_t uniffi_kovanica_light_ffi_checksum_func_reveal_mnemonic_raw(void
     
 );
 #endif
