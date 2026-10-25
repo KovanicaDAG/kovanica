@@ -246,7 +246,7 @@ volumes:
 ### Phase 4: Mainnet Preparation (T+4 weeks)
 1. [ ] External security audit
 2. [ ] Bug bounty program launch
-3. [ ] Mainnet freeze checklist (see `TESTNET-MAINNET.md`)
+3. [ ] Mainnet freeze checklist (see `docs/MAINNET-FREEZE-CHECKLIST.md`)
 3. [ ] Genesis ceremony for mainnet
 4. [ ] Mainnet launch
 
@@ -254,7 +254,7 @@ volumes:
 
 ## 8. References
 
-- `docs/TESTNET-MAINNET.md` — full testnet/mainnet checklist
+- `docs/MAINNET-FREEZE-CHECKLIST.md` — full testnet/mainnet freeze checklist
 - `docs/TOKENOMICS.md` — genesis allocation numbers
 - `ops/docker/validators/generate.sh` — key generation script
 - `ops/docker/` — docker compose files

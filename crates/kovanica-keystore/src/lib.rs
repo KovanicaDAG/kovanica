@@ -22,6 +22,10 @@ use zeroize::Zeroizing;
 
 use kovanica_types::{Address, Hash, PublicKey, SigningKey};
 
+mod perms;
+
+pub use perms::{ensure_owner_only, tighten_private_file};
+
 pub const KEYSTORE_VERSION: u32 = 2;
 const KDF_MEMORY_KIB: u32 = 64 * 1024;
 const KDF_ITERATIONS: u32 = 3;
@@ -211,12 +215,10 @@ fn save_atomic(path: &Path, keystore: &Keystore, replace: bool) -> Result<()> {
         .prefix(".kovanica-keystore-")
         .tempfile_in(parent)
         .with_context(|| format!("creating temporary keystore in {}", parent.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        temp.as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
+    // Unix: mode 0600 on the open descriptor. Windows: owner-only DACL on
+    // the same handle. The restriction happens before the secret bytes are
+    // written. A rename keeps both.
+    tighten_private_file(temp.as_file())?;
     temp.write_all(&json)?;
     temp.as_file().sync_all()?;
     if replace {
@@ -314,7 +316,7 @@ fn read_bounded(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
 }
 
 fn validate_v1_metadata(ks: &V1Keystore) -> Result<()> {
-    let _ = parse_address(&ks.address, "keystore address")?;
+    let _ = parse_stored_address(&ks.address, "keystore address")?;
     let pk_bytes = hex::decode(&ks.public_key).context("keystore public_key is not valid hex")?;
     if pk_bytes.len() != 32 {
         bail!("expected a 32-byte public key");
@@ -368,7 +370,7 @@ fn verify_v1_identity(keystore: &V1Keystore, seed: &[u8]) -> Result<()> {
     let expected_pk = signing_key.verifying_key().to_bytes();
     let stored_pk =
         hex::decode(&keystore.public_key).context("keystore public_key is not valid hex")?;
-    let stored_addr = parse_address(&keystore.address, "keystore address")?;
+    let stored_addr = parse_stored_address(&keystore.address, "keystore address")?;
     if stored_pk.as_slice() != expected_pk
         || Address::from_public_key(&PublicKey::from_bytes(expected_pk)) != stored_addr
     {
@@ -395,10 +397,16 @@ fn validate_metadata(ks: &Keystore) -> Result<()> {
             let nonce = decode_hex_field(ks.nonce.as_deref(), "nonce", NONCE_LEN)?;
             let parsed_address = address(ks)?;
             let parsed_public_key = public_key(ks)?;
-            // Accept the canonical `kvnc…dag` encoding or a bare lowercase hex
-            // address so that keystores written before the canonical format
-            // remain usable.
-            if (ks.address != parsed_address.encode() && ks.address != parsed_address.to_hex())
+            // Accept the canonical 64-character `kvnc…dag` encoding, the
+            // legacy `kvnc<hex>dag` form, or a bare lowercase hex address, so
+            // keystores written before PRO-21 (or before the canonical
+            // format) stay usable. The file is not bound to a chain, so
+            // [`parse_stored_address`] still accepts legacy hex. An address
+            // typed for a chain goes through [`parse_address`], which refuses
+            // legacy hex where `legacy_address_allowed` is false.
+            if (ks.address != parsed_address.encode()
+                && ks.address != parsed_address.encode_legacy_hex()
+                && ks.address != parsed_address.to_hex())
                 || ks.public_key != hex::encode(parsed_public_key.as_bytes())
             {
                 bail!("v2 identity fields must use canonical `kvnc…dag` or lowercase hex");
@@ -494,14 +502,28 @@ pub fn public_key(keystore: &Keystore) -> Result<PublicKey> {
 }
 
 pub fn address(keystore: &Keystore) -> Result<Address> {
-    parse_address(&keystore.address, "keystore address")
+    parse_stored_address(&keystore.address, "keystore address")
 }
 
-pub fn parse_address(value: &str, what: &str) -> Result<Address> {
-    value
-        .trim()
-        .parse::<Address>()
+/// Parse the address label stored in a keystore file.
+///
+/// The file is not bound to a chain (migration). [`Address::from_str`] is
+/// base32 only, so this calls [`Address::parse_for_chain`] on chain 4, which
+/// accepts the canonical form and the legacy hex forms. That does not assign
+/// the key to chain 4. An address typed for a chain goes through
+/// [`parse_address`].
+fn parse_stored_address(value: &str, what: &str) -> Result<Address> {
+    Address::parse_for_chain(value, kovanica_types::signing::chain_id::TESTNET_V2)
         .map_err(|e| anyhow!("{what}: {e}"))
+}
+
+/// Parse an address string for `chain_id`.
+///
+/// The canonical 64-character form is accepted on every chain. Legacy hex is
+/// accepted only where [`kovanica_types::address::legacy_address_allowed`] is
+/// true (devnet 3, chain 4, local 1337), so chain 1 refuses it.
+pub fn parse_address(value: &str, what: &str, chain_id: u64) -> Result<Address> {
+    Address::parse_for_chain(value, chain_id).map_err(|e| anyhow!("{what}: {e}"))
 }
 
 pub fn seed_from_raw_hex(raw: &str) -> Result<Zeroizing<[u8; 32]>> {
@@ -625,6 +647,50 @@ mod tests {
         legacy["address"] = serde_json::Value::String(parsed.to_hex());
         let loaded = from_value(legacy).unwrap();
         assert_eq!(address(&loaded).unwrap(), parsed);
+
+        // New keystores carry the 64-character base32 address (PRO-21); one
+        // written with the pre-PRO-21 `kvnc<hex>dag` form stays loadable.
+        assert_eq!(ks.address.len(), 64);
+        let mut old = serde_json::to_value(&ks).unwrap();
+        old["address"] = serde_json::Value::String(parsed.encode_legacy_hex());
+        let loaded = from_value(old).unwrap();
+        assert_eq!(address(&loaded).unwrap(), parsed);
+
+        // `FromStr` does not open those labels. Only the file reader does.
+        assert!(parsed.to_hex().parse::<Address>().is_err());
+        assert!(parsed.encode_legacy_hex().parse::<Address>().is_err());
+        assert_eq!(parsed.encode().parse::<Address>().unwrap(), parsed);
+    }
+
+    /// Chain 1 refuses a legacy hex string. Devnet, local, and chain 4 accept it.
+    #[test]
+    fn parse_address_follows_the_chain_policy() {
+        use kovanica_types::signing::chain_id;
+
+        let address = Address([0x2a; 32]);
+        let forms = [
+            address.to_hex(),
+            format!("0x{}", address.to_hex()),
+            address.encode_legacy_hex(),
+        ];
+        for form in &forms {
+            let err = parse_address(form, "address", chain_id::MAINNET).unwrap_err();
+            assert!(
+                err.to_string().contains("not accepted"),
+                "{form} on chain 1: {err}"
+            );
+            for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+                assert_eq!(
+                    parse_address(form, "address", chain).unwrap(),
+                    address,
+                    "{form} on chain {chain}"
+                );
+            }
+        }
+        assert_eq!(
+            parse_address(&address.encode(), "address", chain_id::MAINNET).unwrap(),
+            address
+        );
     }
 
     #[test]

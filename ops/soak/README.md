@@ -4,10 +4,10 @@ Two scripts live here:
 
 | Script      | Purpose                                                                 | Used by |
 |-------------|-------------------------------------------------------------------------|---------|
-| `run-soak.sh` | **The soak runner.** Brings up the compose stack, waits for health + commits, exercises the node for `SOAK_SECS`, samples `/health` + `/metrics`, fails on the first stall or crash, and collects logs on failure. | manual (the `soak.yml` workflow was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14)) |
+| `run-soak.sh` | **The soak runner.** Brings up the compose stack, waits for health + commits, exercises the node for `SOAK_SECS`, samples `/health` + `/metrics`, fails on the first stall or crash, and collects logs on failure. | Local automated & manual soak runner (the `soak.yml` workflow was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14)) |
 | `soak.sh`   | Legacy Phase 12.4 RSS/memory monitor. Assumes a 4-node stack is *already* running (`kovanica-quorum-node1..4`) and only logs memory every 30 s; it never brings the stack up and never gates on a stall. | manual memory runs only |
 
-For CI use `run-soak.sh`. `soak.sh` predates the current compose service names
+For local soak testing use `run-soak.sh`. `soak.sh` predates the current compose service names
 (see "Known gaps" below) and is kept for the memory-specific 6h runs.
 
 ## run-soak.sh
@@ -79,16 +79,22 @@ long-lived machine:
 SOAK_SECS=86400 ./ops/soak/run-soak.sh
 ```
 
-## CI workflow (removed)
+## CI / Automated Workflow
+> **Note on CI:** Repository-level GitHub Actions workflows were decommissioned on 2026-10-23 (`.github/workflows/soak.yml` was removed in kvnc PR #78; CI moves to KovanicaDAG/kovanica-protocol (PRO-14)); soak testing is executed using the local runner scripts directly or integrated into self-hosted runners.
 
-`.github/workflows/soak.yml` was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14). It ran this runner nightly (03:00 UTC) and on
-`workflow_dispatch`, with `timeout-minutes: 180` and the `soak-artifacts/`
-directory uploaded on every run. Until the soak job exists again, run the
-runner by hand:
+Until the soak job exists again, run the runner by hand:
 
 ```bash
 SOAK_SECS=86400 OUT_DIR=soak-artifacts ops/soak/run-soak.sh
 ```
+
+The runner specifications:
+
+* **Triggers:** Automated nightly schedule or manual invocation with a
+  `duration` input (seconds).
+* **Concurrency:** A running soak should not be overlapped.
+* **Timeout:** Recommended 180 minutes for automated runs (build + warm-up + soak).
+* **Artifacts:** The `soak-artifacts/` directory (`OUT_DIR`) contains all logs (`compose ps`, `docker inspect`, `samples.csv`).
 
 ## Known gaps / prerequisites
 

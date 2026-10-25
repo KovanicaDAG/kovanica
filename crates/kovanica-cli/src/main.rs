@@ -1,7 +1,7 @@
 //! Kovanica (KUNA) command-line interface.
 //!
 //! Wallet operations (keygen/import/export/sign/tui), node operations
-//! (status/balance/staking/governance) and contract subcommands
+//! (status/balance/history/staking/governance) and contract subcommands
 //! (htlc/vault/multisig/token). All commands support `--json` for
 //! machine-readable output and `--rpc-url` to target a specific node.
 
@@ -75,6 +75,8 @@ enum Commands {
     Info,
     /// Query an account balance
     Balance { address: String },
+    /// List committed transactions for an address, newest first
+    History(HistoryArgs),
     /// Stake KUNA (builds and submits a signed Stake transaction)
     Stake(AmountArgs),
     /// Unstake KUNA (builds and submits a signed Unstake transaction)
@@ -122,6 +124,25 @@ enum Commands {
         #[command(subcommand)]
         command: comms::CommsCommand,
     },
+}
+
+/// Arguments for `kovanica history`.
+#[derive(Args)]
+struct HistoryArgs {
+    /// Account address (`kvnc…dag` or 32-byte hex)
+    address: String,
+    /// Page size. The node defaults to 20 and clamps anything above 100.
+    #[arg(long)]
+    limit: Option<u64>,
+    /// Opaque cursor returned as `next_cursor` by the previous page
+    #[arg(long)]
+    cursor: Option<String>,
+    /// Only transactions sent by this address
+    #[arg(long, conflicts_with = "received")]
+    sent: bool,
+    /// Only transactions received by this address
+    #[arg(long, conflicts_with = "sent")]
+    received: bool,
 }
 
 /// Arguments for `kovanica keygen`.
@@ -418,7 +439,20 @@ async fn main() -> Result<()> {
         }
         Commands::Transfer(args) => cmd_transfer(&client, chain_id, args, json).await,
         Commands::Status | Commands::Info => node::status(&client, json).await,
-        Commands::Balance { address } => node::balance(&client, &address, json).await,
+        Commands::Balance { address } => node::balance(&client, &address, chain_id, json).await,
+        Commands::History(args) => {
+            node::history(
+                &client,
+                &args.address,
+                chain_id,
+                args.limit,
+                args.cursor.as_deref(),
+                args.sent,
+                args.received,
+                json,
+            )
+            .await
+        }
         Commands::Stake(args) => cmd_stake(&client, chain_id, args, json).await,
         Commands::Unstake(args) => cmd_unstake(&client, chain_id, args, json).await,
         Commands::RegisterLightNode(args) => {
@@ -587,7 +621,7 @@ async fn cmd_transfer(
     let password = prompt_keystore_password(&keystore)?;
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let sender = wallet::address(&keystore)?;
-    let recipient = wallet::parse_address(&args.to, "to")?;
+    let recipient = wallet::parse_address(&args.to, "to", ctx.chain_id)?;
 
     // The account nonce is the next unused nonce, so it is used as-is.
     let nonce_value = client
@@ -870,7 +904,8 @@ async fn cmd_set_commission(
     if args.commission_bps > 10_000 {
         anyhow::bail!("commission_bps must be <= 10000 (100%)");
     }
-    let validator = wallet::parse_address(&args.validator, "validator")?;
+    let chain = tx::signing_context(chain_id)?.chain_id;
+    let validator = wallet::parse_address(&args.validator, "validator", chain)?;
     let (tx_hash, sender, nonce) = sign_and_submit_self(
         client,
         chain_id,
@@ -997,7 +1032,8 @@ async fn cmd_call(
     args: CallArgs,
     json_output: bool,
 ) -> Result<()> {
-    let contract = wallet::parse_address(&args.contract, "contract")?;
+    let chain = tx::signing_context(chain_id)?.chain_id;
+    let contract = wallet::parse_address(&args.contract, "contract", chain)?;
     let method = args.method.clone();
     let args_bytes = {
         let json_val: serde_json::Value = serde_json::from_str(&args.args)
@@ -1123,28 +1159,11 @@ fn cmd_address(args: AddressArgs, json_output: bool) -> Result<()> {
     if !args.allow_raw_hex {
         anyhow::bail!(
             "raw hex seed import is disabled by default for security. \
-            Use --allow-raw-hex to enable (ensure key file has 0600 permissions and is not shared)."
+            Use --allow-raw-hex to enable, and keep the key file readable only by its owner."
         );
     }
 
-    // Enforce key file permissions (0600) to prevent accidental exposure
-    let metadata = std::fs::metadata(&args.key_file)
-        .with_context(|| format!("reading key file metadata {}", args.key_file.display()))?;
-    let permissions = metadata.permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if permissions.mode() & 0o077 != 0 {
-            anyhow::bail!(
-                "key file {} has insecure permissions (mode: {:o}). \
-                Must be 0600 (readable/writable only by owner). \
-                Run: chmod 600 {}",
-                args.key_file.display(),
-                permissions.mode() & 0o777,
-                args.key_file.display()
-            );
-        }
-    }
+    wallet::ensure_owner_only(&args.key_file)?;
 
     let raw = std::fs::read_to_string(&args.key_file)
         .with_context(|| format!("reading key file {}", args.key_file.display()))?;
@@ -1276,11 +1295,19 @@ mod wallet_cli_security_tests {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("validator.pem");
         std::fs::write(&key_path, hex::encode([0x2a; 32])).unwrap();
-        // Set secure permissions (0600)
+        // Owner-only: Unix mode 0600. Windows replaces the DACL.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&key_path)
+                .unwrap();
+            wallet::tighten_private_file(&file).unwrap();
         }
         assert!(cmd_address(
             AddressArgs {
@@ -1299,6 +1326,27 @@ mod wallet_cli_security_tests {
             false
         )
         .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn address_command_rejects_a_group_readable_seed_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("validator.pem");
+        std::fs::write(&key_path, hex::encode([0x2a; 32])).unwrap();
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let error = cmd_address(
+            AddressArgs {
+                key_file: key_path,
+                allow_raw_hex: true,
+            },
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("other users"), "{error}");
     }
 
     #[test]
@@ -1431,5 +1479,39 @@ mod wallet_cli_security_tests {
             }
             _ => panic!("expected call command"),
         }
+    }
+
+    #[test]
+    fn history_command_parses_limit_cursor_and_exclusive_direction() {
+        let cli = Cli::try_parse_from([
+            "kovanica", "history", "11", "--limit", "7", "--cursor", "abc", "--sent",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::History(args) => {
+                assert_eq!(args.address, "11");
+                assert_eq!(args.limit, Some(7));
+                assert_eq!(args.cursor.as_deref(), Some("abc"));
+                assert!(args.sent);
+                assert!(!args.received);
+            }
+            _ => panic!("expected history command"),
+        }
+
+        let received = Cli::try_parse_from(["kovanica", "history", "abc", "--received"]).unwrap();
+        match received.command {
+            Commands::History(args) => {
+                assert!(args.received);
+                assert!(!args.sent);
+                assert!(args.limit.is_none());
+                assert!(args.cursor.is_none());
+            }
+            _ => panic!("expected history command"),
+        }
+
+        assert!(
+            Cli::try_parse_from(["kovanica", "history", "abc", "--sent", "--received"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["kovanica", "history"]).is_err());
     }
 }

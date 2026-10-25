@@ -73,7 +73,7 @@ pub enum TransactionKind {
     ExitLightNode,
     /// Submit an ECVRF witness for one light-node epoch.
     SubmitLightWitness {
-        /// Epoch the witness is for (`committed_height / EPOCH_ROUNDS`).
+        /// Epoch the witness is for (`epoch_for_height(committed_height)`, 2 400 heights ≈ 8 h).
         epoch: u64,
         /// 32-byte VRF hash.
         vrf_hash: [u8; 32],

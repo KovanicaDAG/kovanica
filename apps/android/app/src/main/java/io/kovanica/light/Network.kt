@@ -2,13 +2,14 @@ package io.kovanica.light
 
 import android.content.Context
 import android.content.SharedPreferences
+import io.kovanica.chain.ChainIds
 
 /**
  * One selectable network profile.
  *
  * @property id stable key persisted as `network_id` (`"mainnet"` | `"testnet"` | `"local"`).
  * @property label human-readable name shown in the selector.
- * @property chainId chain id used for signing (`1` mainnet, `2` testnet, `3` devnet, `1337` local).
+ * @property chainId chain id used for signing (`1` mainnet, `4` testnet, `3` devnet, `1337` local).
  * @property rpcUrl full JSON-RPC base, including the `/rpc` path ([NodeClient] tolerates either form).
  * @property faucetUrl full faucet `POST` target, or `null` when the network has no faucet.
  * @property enabled when `false` the entry is shown but not selectable.
@@ -27,23 +28,23 @@ data class Network(
 /**
  * Built-in network profiles (mirrors `packages/console/src/network.ts`).
  *
- * Chain ids are mainnet 1, testnet 2, devnet 3, and local 1337. Devnet has no
+ * Chain ids are mainnet 1, testnet 4, devnet 3, and local 1337. Devnet has no
  * preset here. Mainnet stays listed but disabled until it is open. Every
  * endpoint stays editable once selected.
  */
 object Networks {
     val MAINNET: Network = Network(
-        "mainnet", "Mainnet", 1L,
+        "mainnet", "Mainnet", ChainIds.MAINNET,
         "https://rpc.kovanica.online/rpc", null, enabled = false,
         soon = "Mainnet is not open yet.",
     )
     val TESTNET: Network = Network(
-        "testnet", "Testnet", 2L,
+        "testnet", "Testnet", ChainIds.TESTNET,
         "https://rpc-testnet.kovanica.online/rpc",
         "https://faucet-testnet.kovanica.online/faucet", enabled = true,
     )
     val LOCAL: Network = Network(
-        "local", "Local", 1337L,
+        "local", "Local", ChainIds.LOCAL,
         "http://10.0.2.2:8545/rpc", "http://10.0.2.2:8080/faucet", enabled = true,
     )
 

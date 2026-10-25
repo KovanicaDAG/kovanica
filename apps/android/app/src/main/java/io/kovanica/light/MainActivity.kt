@@ -28,6 +28,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import io.kovanica.chain.ChainIds
 import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.kovanica_light.confirmAccount
@@ -683,10 +684,11 @@ class MainActivity : Activity() {
             setStatus("Enter the recipient address.", Tone.ERROR)
             return
         }
-        // Accept bare 64-hex or any `kvnc…dag` wrapper (the app's own
-        // `kvnc<64hex>dag` label form and the canonical `kvnc<72hex>dag`); the
-        // signer only accepts the 64-hex key. Mirrors `attemptTokenSend`.
-        val toHex = KvncAddress.normalizeHex(to)
+        // Canonical base32 on every chain. Legacy hex only on 3, 4, and 1337.
+        // The signer receives the base32 form, which `parse_for_chain` accepts
+        // on the chain this transfer is signed for.
+        val chain = chainIdField().toLong()
+        val toHex = KvncAddress.normalizeHex(to, chain)
         if (toHex == null) {
             setStatus("Enter a valid recipient address.", Tone.ERROR)
             return
@@ -737,7 +739,9 @@ class MainActivity : Activity() {
             val address = walletAddress(keystore)
             val node = client(env)
             val nonce = parseQuantity(node.call("kovanica_getNonce", JSONArray().put(address)))
-            val raw = signTransferRaw(keystore, passphrase, env.chainId, toHex, amount, nonce, rate)
+            val recipient = KvncAddress.canonical(toHex)
+                ?: return@background Line("Enter a valid recipient address.", Tone.ERROR)
+            val raw = signTransferRaw(keystore, passphrase, env.chainId, recipient, amount, nonce, rate)
             val hash = node.call("kovanica_sendRawTransaction", JSONArray().put(raw))
             record(
                 kind = HistoryEntry.KIND_SEND,
@@ -1283,10 +1287,10 @@ class MainActivity : Activity() {
     }
 
     private fun addToken() {
-        val hex = KvncAddress.normalizeHex(addTokenField.text.toString())
+        val hex = KvncAddress.normalizeHex(addTokenField.text.toString(), chainIdField().toLong())
         if (hex == null) {
             setStatus(
-                "That isn't a valid contract address — paste a kvnc…dag address or 64 hex characters.",
+                "That isn't a valid contract address on this chain. Paste the 64-character kvnc…dag address.",
                 Tone.ERROR,
             )
             return
@@ -1491,7 +1495,7 @@ class MainActivity : Activity() {
 
     /** This phone's wallet as canonical lowercase hex, or null when there's no wallet. */
     private fun activeViewerHex(): String? =
-        walletAddressDisplay?.let { KvncAddress.normalizeHex(it) }
+        walletAddressDisplay?.let { KvncAddress.storedKey(it) }
 
     private fun balanceLine(info: TokenInfo): String {
         val viewer = activeViewerHex() ?: return "—"
@@ -1540,7 +1544,7 @@ class MainActivity : Activity() {
         }
 
     private fun attemptTokenSend(contract: String, to: String, amountText: String, info: TokenInfo?) {
-        val toHex = KvncAddress.normalizeHex(to)
+        val toHex = KvncAddress.normalizeHex(to, chainIdField().toLong())
         if (toHex == null) {
             setStatus("Enter a valid recipient address.", Tone.ERROR)
             return
@@ -1758,7 +1762,7 @@ class MainActivity : Activity() {
         val raw = toField.text.toString().trim()
         when {
             raw.isEmpty() -> toValidation.visibility = View.GONE
-            KvncAddress.isValid(raw) -> {
+            KvncAddress.isValid(raw, chainIdField().toLong()) -> {
                 toValidation.text = "Looks like a valid address — ${KvncAddress.short(raw)}."
                 toValidation.setTextColor(GOOD)
                 toValidation.visibility = View.VISIBLE
@@ -1857,7 +1861,8 @@ class MainActivity : Activity() {
         faucetRow.visibility = if (current.faucetUrl == null) View.GONE else View.VISIBLE
     }
 
-    private fun chainIdField(): ULong = chainField.text.toString().trim().toULongOrNull() ?: 0uL
+    private fun chainIdField(): ULong =
+        ChainIds.resolve(chainField.text.toString(), NetworkPrefs.chainId(this))
 
     // --- widgets -------------------------------------------------------------------------
 

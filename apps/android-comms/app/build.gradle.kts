@@ -36,8 +36,18 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    sourceSets {
+        getByName("main") {
+            java.srcDir(projectDir.resolve("../../android-chain/src/main/kotlin"))
+        }
+        getByName("test") {
+            java.srcDir(projectDir.resolve("../../android-chain/src/test/kotlin"))
+        }
+    }
 }
 
 dependencies {
     implementation("net.java.dev.jna:jna:5.14.0@aar")
+    testImplementation("junit:junit:4.13.2")
 }

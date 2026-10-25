@@ -39,6 +39,7 @@ use tracing::{debug, error, info, warn};
 use zeroize::Zeroizing;
 
 use config::NodeConfig;
+pub use config::ALLOW_GENESIS_MISMATCH_ENV;
 
 use kovanica_consensus::engine::{BlockManagerTrait, DagStoreTrait};
 use kovanica_consensus::metrics::{
@@ -87,8 +88,11 @@ struct Args {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Path to config file (used when running node)
-    #[arg(short, long, default_value = "config.toml")]
+    /// Path to config file (used when running the node and by `network-tag`).
+    ///
+    /// Global so `kovanica-node network-tag --config kovanica.toml` and
+    /// `kovanica-node --config kovanica.toml network-tag` both see it.
+    #[arg(short, long, default_value = "config.toml", global = true)]
     config: String,
 
     /// Validate the configuration (file + `KOVANICA_*` env overrides) and exit
@@ -102,6 +106,14 @@ struct Args {
 enum Commands {
     /// Genesis ceremony: build genesis block + staking state from validator keys
     Genesis(GenesisArgs),
+    /// Print the network tag for this config and genesis bundle, then exit.
+    ///
+    /// Does not open the database or listen on the network. The printed tag
+    /// is the string startup logs and `kovanica_syncStatus` returns as
+    /// `networkTag`. Uses the same `--config` and `KOVANICA_*` overrides as
+    /// a normal start.
+    #[command(name = "network-tag")]
+    NetworkTag,
 }
 
 #[derive(clap::Args, Debug)]
@@ -117,6 +129,11 @@ struct GenesisArgs {
     /// Founder premine address (32-byte hex, receives 200,000 KUNA)
     #[arg(long, value_name = "HEX")]
     founder_address: String,
+
+    /// Chain this genesis is for (1 mainnet, 2 testnet, 3 devnet, 4 testnet
+    /// v2, 1337 local). Legacy hex addresses are accepted on 3, 4, and 1337.
+    #[arg(long)]
+    chain_id: u64,
 
     /// Output genesis JSON file
     #[arg(long, value_name = "FILE", default_value = "genesis.json")]
@@ -148,12 +165,30 @@ enum NetworkCommand {
     BroadcastTransaction(Transaction),
     /// Gossip a commit seal produced after local execution.
     BroadcastSeal(kovanica_types::SealAnnouncement),
+    /// Gossip a leader-slot timeout (PRO-40 (b)).
+    BroadcastTimeout(kovanica_types::Timeout),
+    /// Gossip a skip certificate (PRO-40 (b)).
+    BroadcastSkipCert(kovanica_types::SkipCert),
     /// Request a block sync from a specific peer.
     RequestSync(PeerId, BlockSyncRequest),
     /// Request a state sync (chunked snapshot transfer) from a peer.
     RequestStateSync(PeerId, StateSyncRequest),
     /// Ask the network task to stop.
     Shutdown,
+}
+
+/// Engine → network adapter for timeouts and skip certificates (PRO-40 (b)).
+struct TimeoutGossip(mpsc::UnboundedSender<NetworkCommand>);
+
+impl kovanica_consensus::engine::TimeoutBroadcaster for TimeoutGossip {
+    fn broadcast_timeout(&self, timeout: &kovanica_types::Timeout) {
+        let _ = self
+            .0
+            .send(NetworkCommand::BroadcastTimeout(timeout.clone()));
+    }
+    fn broadcast_skip_cert(&self, cert: &kovanica_types::SkipCert) {
+        let _ = self.0.send(NetworkCommand::BroadcastSkipCert(cert.clone()));
+    }
 }
 
 #[tokio::main]
@@ -168,12 +203,23 @@ async fn main() -> Result<()> {
         Some(Commands::Genesis(g)) => {
             return run_genesis(g);
         }
+        Some(Commands::NetworkTag) => {
+            return run_network_tag(&args.config);
+        }
         None => {
             let config = NodeConfig::load(&args.config)?;
             info!(data_dir = %config.data_dir.display(), "starting Kovanica node");
             run_node(config, shutdown_signal()).await
         }
     }
+}
+
+/// Print the network tag and exit. No database, no sockets.
+fn run_network_tag(config_path: &str) -> Result<()> {
+    let config = NodeConfig::load(config_path)?;
+    let tag = network_tag_from_config(&config)?;
+    println!("{tag}");
+    Ok(())
 }
 
 /// Validate the configuration file plus environment overrides and exit.
@@ -228,8 +274,8 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
         serde_json::from_str(&text).with_context(|| format!("parsing {}", args.validators))?;
 
     // Build treasury
-    let treasury = parse_address_hex(Some(&args.treasury_address))?;
-    let founder = parse_address_hex(Some(&args.founder_address))?;
+    let treasury = parse_address_hex(Some(&args.treasury_address), args.chain_id)?;
+    let founder = parse_address_hex(Some(&args.founder_address), args.chain_id)?;
     let mut staking = StakingState::new();
     staking.init_treasury(treasury);
 
@@ -238,7 +284,7 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
 
     // Join each validator
     for v in validators_input {
-        let address = parse_address_hex(Some(&v.address))?;
+        let address = parse_address_hex(Some(&v.address), args.chain_id)?;
         let pk = v
             .public_key
             .as_ref()
@@ -544,6 +590,8 @@ async fn run_node<F>(config: NodeConfig, shutdown: F) -> Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    // Rejects KOVANICA_ALLOW_GENESIS_MISMATCH on every non-dev chain before
+    // the data directory is created (dev chains 3 and 1337 may keep it).
     config.validate()?;
 
     // ------------------------------------------------------------------
@@ -571,11 +619,26 @@ where
     // ------------------------------------------------------------------
     // 2. Genesis / staking state
     // ------------------------------------------------------------------
+    // A consensus.redb from another genesis (partial wipe: only state.redb
+    // removed) must be caught before init_genesis re-creates the state.
+    let consensus_marker_missing = verify_consensus_genesis_marker(
+        &consensus_storage,
+        &dag_store,
+        &state_storage,
+        &genesis_config_digest(&config)?,
+    )?;
     init_genesis(&config, &dag_store, &state_storage)?;
 
     // Guard against a data dir whose genesis does not match the configured
     // genesis (fork / cross-chain contamination), and read back genesis.json.
     verify_genesis_consistency(&config, &state_storage)?;
+    if consensus_marker_missing {
+        let txn = consensus_storage.begin_write()?;
+        consensus_storage
+            .consensus()
+            .save_genesis_marker(&txn, &genesis_config_digest(&config)?)?;
+        txn.commit()?;
+    }
 
     // ------------------------------------------------------------------
     // 3. Mempool + validator identity
@@ -661,6 +724,8 @@ where
     // 4. Networking
     // ------------------------------------------------------------------
     let network_config = build_network_config(&config)?;
+    // Captured for `kovanica_syncStatus`: the same string just logged.
+    let network_tag = log_network_identity(&network_config);
     let (network, network_events) =
         NetworkService::new(network_config, dag_store.clone(), mempool.clone())
             .context("creating network service")?;
@@ -670,6 +735,8 @@ where
     // edge before they are forwarded or handed to consensus.
     // Vote signatures are checked through the injected VoteVerifier.
     network.set_vote_verifier(Arc::new(kovanica_network::Ed25519VoteVerifier));
+    // Timeouts are signed over this chain's genesis digest (PRO-40 (b)).
+    network.set_timeout_genesis(genesis_config_digest(&config)?);
     network.set_authority_keys(
         committee
             .authorities()
@@ -765,6 +832,7 @@ where
                 behind_by,
                 peer_count,
                 peers,
+                network_tag: Some(network_tag.clone()),
             }
         })
     };
@@ -845,6 +913,9 @@ where
             round_duration_ms: config.round_duration_ms,
             use_mysticghost: config.use_mysticghost,
             use_vrf_leader: config.use_vrf_leader,
+            // Timeouts are bound to this chain's genesis (PRO-40 (b)), the
+            // same digest the network tag and the data-dir guard use.
+            genesis_hash: genesis_config_digest(&config)?,
             ..Default::default()
         },
         committee.clone(),
@@ -879,6 +950,7 @@ where
     engine.set_vote_broadcaster(Arc::new(move |vote: &Vote| {
         let _ = vote_broadcast_tx.send(NetworkCommand::BroadcastVote(vote.clone()));
     }));
+    engine.set_timeout_broadcaster(Arc::new(TimeoutGossip(network_cmd_tx.clone())));
 
     // ------------------------------------------------------------------
     // 7. Shutdown plumbing + task spawning
@@ -1371,6 +1443,7 @@ fn read_rss_bytes() -> Option<u64> {
 }
 
 /// Extract the `VmRSS` value (kB) from `/proc/self/status` contents.
+#[cfg(any(target_os = "linux", test))]
 fn parse_vmrss_kb(status: &str) -> Option<u64> {
     status.lines().find_map(|line| {
         let rest = line.strip_prefix("VmRSS:")?;
@@ -1532,7 +1605,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     }
 
     info!("initialising genesis state");
-    let treasury = parse_address_hex(config.treasury_address.as_deref())?;
+    let treasury = parse_address_hex(config.treasury_address.as_deref(), config.chain_id)?;
     let mut staking = StakingState::new();
     staking.init_treasury(treasury);
 
@@ -1549,7 +1622,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         let validators_input: Vec<GenesisValidatorInput> = serde_json::from_str(&text)
             .with_context(|| format!("parsing {}", validators_json_path.display()))?;
         for v in &validators_input {
-            let address = parse_address_hex(Some(&v.address))?;
+            let address = parse_address_hex(Some(&v.address), config.chain_id)?;
             let pk = v
                 .public_key
                 .as_ref()
@@ -1570,7 +1643,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     if premine_path.exists() {
         let hex = std::fs::read_to_string(&premine_path)?.trim().to_string();
         if !hex.is_empty() {
-            let founder = parse_address_hex(Some(&hex))?;
+            let founder = parse_address_hex(Some(&hex), config.chain_id)?;
             use kovanica_storage::state_store::Account;
             let state = state_storage.state();
             let acct = Account {
@@ -1595,7 +1668,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         })?;
         let state = state_storage.state();
         for entry in funded.account {
-            let address = parse_address_hex(Some(&entry.address))?;
+            let address = parse_address_hex(Some(&entry.address), config.chain_id)?;
             use kovanica_storage::state_store::Account;
             let acct = Account {
                 balance: entry.balance,
@@ -1626,7 +1699,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         let validators = validators.validator;
         let count = validators.len();
         for v in validators {
-            let address = parse_address_hex(Some(&v.address))?;
+            let address = parse_address_hex(Some(&v.address), config.chain_id)?;
             let pk = if let Some(p) = v.public_key.as_ref() {
                 Some(parse_public_key_hex(p)?)
             } else {
@@ -1728,13 +1801,6 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     Ok(())
 }
 
-/// Env override that disables the genesis fork/contamination guard.
-///
-/// Set to `1` (or `true`/`yes`/`on`) only when deliberately pointing an
-/// existing data dir at a different genesis (e.g. an intentional reset on an
-/// isolated node). Every start with this set logs a warning.
-const ALLOW_GENESIS_MISMATCH_ENV: &str = "KOVANICA_ALLOW_GENESIS_MISMATCH";
-
 /// File name (inside `data_dir`) of the genesis ceremony artifact written by
 /// the `genesis` subcommand.
 const GENESIS_JSON_FILE: &str = "genesis.json";
@@ -1747,24 +1813,20 @@ const GENESIS_DIGEST_DOMAIN: &[u8] = b"KUNA-GENESIS-v1";
 /// validators deterministically in [`genesis_config_digest`].
 type GenesisValidatorDigestRow = ([u8; 32], u64, [u8; 32], [u8; 32]);
 
-/// True when a genesis-mismatch override string enables the guard bypass.
+/// Resolve the genesis-mismatch override for `chain_id`.
 ///
-/// Pure so the accepted spellings can be tested without touching the
-/// process-global environment.
-fn parse_mismatch_override(value: Option<&str>) -> bool {
-    matches!(
-        value
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    )
-}
-
-/// True when the genesis mismatch guard is explicitly disabled.
-fn genesis_mismatch_allowed() -> bool {
-    parse_mismatch_override(std::env::var(ALLOW_GENESIS_MISMATCH_ENV).ok().as_deref())
+/// The override is refused on every non-dev chain (only dev chains 3 and 1337
+/// allow it): a node on mainnet, public testnets, or any other non-dev chain
+/// must never run on a data dir built for another genesis, so setting it is a
+/// deployment error, not a bypass.
+fn genesis_mismatch_override(chain_id: u64, requested: bool) -> Result<bool> {
+    if requested && !kovanica_types::signing::chain_id::is_dev(chain_id) {
+        anyhow::bail!(
+            "{ALLOW_GENESIS_MISMATCH_ENV} is not allowed on chain {chain_id}; \
+             unset it and fix the data dir or the genesis configuration"
+        );
+    }
+    Ok(requested)
 }
 
 /// The canonical genesis block digest, reused from the deterministic genesis
@@ -1798,7 +1860,9 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
     // when `genesis_validators.toml` (the other chain-id source) is absent.
     data.extend_from_slice(&config.chain_id.to_le_bytes());
     // Treasury address.
-    data.extend_from_slice(&parse_address_hex(config.treasury_address.as_deref())?.0);
+    data.extend_from_slice(
+        &parse_address_hex(config.treasury_address.as_deref(), config.chain_id)?.0,
+    );
 
     // validators.json (Phase 14 ceremony): array of {address, public_key?, stake?}.
     let validators_json_path = config.data_dir.join("validators.json");
@@ -1810,7 +1874,7 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
             .with_context(|| format!("parsing {}", validators_json_path.display()))?;
         let mut rows: Vec<([u8; 32], [u8; 32], u64)> = Vec::with_capacity(entries.len());
         for v in entries {
-            let address = parse_address_hex(Some(&v.address))?;
+            let address = parse_address_hex(Some(&v.address), config.chain_id)?;
             let pk = match v.public_key.as_ref() {
                 Some(p) => parse_public_key_hex(p)?.0,
                 None => [0u8; 32],
@@ -1838,7 +1902,7 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
             .trim()
             .to_string();
         if !hex.is_empty() {
-            data.extend_from_slice(&parse_address_hex(Some(&hex))?.0);
+            data.extend_from_slice(&parse_address_hex(Some(&hex), config.chain_id)?.0);
         }
     }
 
@@ -1852,7 +1916,10 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
             toml::from_str(&text).with_context(|| format!("parsing {}", funded_path.display()))?;
         let mut rows: Vec<([u8; 32], u64)> = Vec::with_capacity(funded.account.len());
         for entry in funded.account {
-            rows.push((parse_address_hex(Some(&entry.address))?.0, entry.balance));
+            rows.push((
+                parse_address_hex(Some(&entry.address), config.chain_id)?.0,
+                entry.balance,
+            ));
         }
         rows.sort_unstable();
         for (address, balance) in rows {
@@ -1872,7 +1939,7 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
         data.extend_from_slice(&genesis.chain_id.unwrap_or(0).to_le_bytes());
         let mut rows: Vec<GenesisValidatorDigestRow> = Vec::with_capacity(genesis.validator.len());
         for v in genesis.validator {
-            let address = parse_address_hex(Some(&v.address))?.0;
+            let address = parse_address_hex(Some(&v.address), config.chain_id)?.0;
             let pk = match v.public_key.as_ref() {
                 Some(p) => parse_public_key_hex(p)?.0,
                 None => [0u8; 32],
@@ -1899,13 +1966,21 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
 ///
 /// * Persisted digest equal to `fresh` → ok (no write).
 /// * Persisted digest different → refuse unless `allow_mismatch`.
-/// * No persisted digest (data dir predates the digest) → write it once, so
-///   existing data dirs migrate cleanly and later starts are guarded.
+/// * No persisted digest → refuse, always (the override does not apply).
+///   `init_genesis` writes the digest in the same transaction as the genesis
+///   state, so chain state without a digest comes from a data dir created
+///   before the digest existed, i.e. before the chain-4 format change
+///   (KUNA-* hash domains, #81). Writing the fresh digest over it would bless
+///   state built under the old format.
 fn verify_persisted_genesis_digest(
     state_storage: &Storage,
     fresh: &Hash,
     allow_mismatch: bool,
+    chain_id: u64,
 ) -> Result<()> {
+    // The caller may pass `allow_mismatch` from the env flag. It never applies
+    // outside dev chains, even if `validate` was skipped.
+    let allow_mismatch = allow_mismatch && kovanica_types::signing::chain_id::is_dev(chain_id);
     let persisted = {
         let read = state_storage.begin_read()?;
         state_storage.state().load_genesis_digest(&read)?
@@ -1913,10 +1988,31 @@ fn verify_persisted_genesis_digest(
     match persisted {
         Some(stored) if stored != *fresh => {
             if !allow_mismatch {
+                // Non-dev chains must not be told the override exists. Dev
+                // chains keep the #94 wording, which names it only to say a
+                // wipe is the fix.
+                if kovanica_types::signing::chain_id::is_dev(chain_id) {
+                    anyhow::bail!(
+                        "genesis digest mismatch: this data dir belongs to genesis {} but this \
+                         build and config give {}; refusing to start to avoid mixing chains. \
+                         Either the data dir was created by a build before the chain-4 format \
+                         change (KUNA-* hash domains, #81), or the genesis files / treasury / \
+                         chain_id differ from the ones it was created with. The fix is a wipe, \
+                         not {ALLOW_GENESIS_MISMATCH_ENV} (a dev-only override): stop the node, \
+                         move the data dir away and start from the published chain genesis \
+                         bundle (docs/TESTNET-RESET.md)",
+                        stored.to_hex(),
+                        fresh.to_hex(),
+                    );
+                }
                 anyhow::bail!(
-                    "genesis digest mismatch: data dir was created for genesis {} but the \
-                     configured genesis is {}; refusing to start to avoid mixing chains \
-                     (set {ALLOW_GENESIS_MISMATCH_ENV}=1 to override)",
+                    "genesis digest mismatch: this data dir belongs to genesis {} but this \
+                     build and config give {}; refusing to start to avoid mixing chains. \
+                     Either the data dir was created by a build before the chain-4 format \
+                     change (KUNA-* hash domains, #81), or the genesis files / treasury / \
+                     chain_id differ from the ones it was created with. The fix is a wipe: \
+                     stop the node, move the data dir away and start from the published \
+                     chain genesis bundle (docs/TESTNET-RESET.md)",
                     stored.to_hex(),
                     fresh.to_hex(),
                 );
@@ -1929,13 +2025,72 @@ fn verify_persisted_genesis_digest(
         }
         Some(_) => {}
         None => {
-            let txn = state_storage.begin_write()?;
-            state_storage.state().save_genesis_digest(&txn, fresh)?;
-            txn.commit()?;
-            info!(digest = %fresh, "persisted genesis digest for existing data dir");
+            anyhow::bail!(
+                "data dir has chain state but no genesis digest: it was created by a build \
+                 before the chain-4 format change (KUNA-* hash domains, #81) and \
+                 cannot be migrated; stop the node, move the data dir away and \
+                 start from the chain-4 genesis (configured genesis digest {})",
+                fresh.to_hex(),
+            );
         }
     }
     Ok(())
+}
+
+/// Check the genesis marker of `consensus.redb` (#86 follow-up). Returns
+/// whether the marker is missing and must be written after genesis init.
+///
+/// * marker equal to `fresh` → ok;
+/// * marker different → refuse (no override: the DAG and the commit cursor
+///   of another chain would be reopened);
+/// * no marker, no chain data (fresh dir, or only the genesis block) → ok,
+///   write it;
+/// * no marker but DAG data → accepted only if `state.redb` already holds the
+///   same genesis digest (a data dir from before the marker); otherwise this
+///   is a partial wipe or a pre-chain-4 dir, and it is refused.
+fn verify_consensus_genesis_marker(
+    consensus_storage: &Storage,
+    dag_store: &DagStore,
+    state_storage: &Storage,
+    fresh: &Hash,
+) -> Result<bool> {
+    let marker = {
+        let read = consensus_storage.begin_read()?;
+        consensus_storage.consensus().load_genesis_marker(&read)?
+    };
+    match marker {
+        Some(stored) if stored == *fresh => Ok(false),
+        Some(stored) => anyhow::bail!(
+            "consensus.redb belongs to genesis {} but this build and config give {}; \
+             refusing to reopen another chain's DAG and commit cursor. Stop the node, \
+             move the whole data dir away (consensus.redb and state.redb) and start \
+             from the published chain genesis bundle",
+            stored.to_hex(),
+            fresh.to_hex(),
+        ),
+        None => {
+            let has_dag = dag_store.max_dag_round()?.is_some_and(|round| round > 0)
+                || !dag_store.get_decided_rounds(u64::MAX)?.is_empty();
+            if !has_dag {
+                return Ok(true);
+            }
+            let state_digest = {
+                let read = state_storage.begin_read()?;
+                state_storage.state().load_genesis_digest(&read)?
+            };
+            if state_digest == Some(*fresh) {
+                return Ok(true);
+            }
+            anyhow::bail!(
+                "consensus.redb holds a DAG but no genesis marker, and state.redb does not \
+                 hold the configured genesis {}: this is a partial wipe or a data dir from \
+                 before the chain-4 format change (#81). Stop the node, move the whole \
+                 data dir away (consensus.redb and state.redb) and start from the \
+                 published chain genesis bundle",
+                fresh.to_hex(),
+            )
+        }
+    }
 }
 
 /// Read back `genesis.json` (if present) and verify its declared genesis-block
@@ -1945,6 +2100,8 @@ fn verify_persisted_genesis_digest(
 /// tampered copy is never silently rewritten. On mismatch the node refuses
 /// unless `allow_mismatch`.
 fn verify_genesis_json(config: &NodeConfig, canonical: &Hash, allow_mismatch: bool) -> Result<()> {
+    let allow_mismatch =
+        allow_mismatch && kovanica_types::signing::chain_id::is_dev(config.chain_id);
     let path = config.data_dir.join(GENESIS_JSON_FILE);
     if !path.exists() {
         return Ok(());
@@ -1965,9 +2122,18 @@ fn verify_genesis_json(config: &NodeConfig, canonical: &Hash, allow_mismatch: bo
     };
     if declared != canonical.to_hex().as_str() {
         if !allow_mismatch {
+            if kovanica_types::signing::chain_id::is_dev(config.chain_id) {
+                anyhow::bail!(
+                    "genesis file {} declares genesis block digest {} but the canonical genesis \
+                     digest is {}; refusing to start (set {ALLOW_GENESIS_MISMATCH_ENV}=1 to override)",
+                    path.display(),
+                    declared,
+                    canonical.to_hex(),
+                );
+            }
             anyhow::bail!(
                 "genesis file {} declares genesis block digest {} but the canonical genesis \
-                 digest is {}; refusing to start (set {ALLOW_GENESIS_MISMATCH_ENV}=1 to override)",
+                 digest is {}; refusing to start",
                 path.display(),
                 declared,
                 canonical.to_hex(),
@@ -1992,11 +2158,14 @@ fn verify_genesis_json(config: &NodeConfig, canonical: &Hash, allow_mismatch: bo
 /// `genesis_validators.toml`.
 fn verify_genesis_consistency(config: &NodeConfig, state_storage: &Storage) -> Result<()> {
     let fresh = genesis_config_digest(config)?;
-    let allow_mismatch = genesis_mismatch_allowed();
+    // Dev chains only. `validate` already refused the flag on every other chain
+    // before the data directory existed; `genesis_mismatch_override` enforces
+    // the same rule at the guard.
+    let allow_mismatch = genesis_mismatch_override(config.chain_id, config.allow_genesis_mismatch)?;
     if allow_mismatch {
         warn!("{ALLOW_GENESIS_MISMATCH_ENV} set: genesis mismatch guard disabled for this start");
     }
-    verify_persisted_genesis_digest(state_storage, &fresh, allow_mismatch)?;
+    verify_persisted_genesis_digest(state_storage, &fresh, allow_mismatch, config.chain_id)?;
     verify_genesis_json(config, &canonical_genesis_digest(), allow_mismatch)?;
     Ok(())
 }
@@ -2038,6 +2207,16 @@ async fn run_network(
                 Some(NetworkCommand::BroadcastTransaction(tx)) => {
                     if let Err(e) = service.broadcast_transaction(&tx) {
                         warn!(error = %e, "failed to broadcast transaction");
+                    }
+                }
+                Some(NetworkCommand::BroadcastTimeout(timeout)) => {
+                    if let Err(e) = service.broadcast_timeout(&timeout) {
+                        warn!(error = %e, "failed to broadcast timeout");
+                    }
+                }
+                Some(NetworkCommand::BroadcastSkipCert(cert)) => {
+                    if let Err(e) = service.broadcast_skip_cert(&cert) {
+                        warn!(error = %e, "failed to broadcast skip certificate");
                     }
                 }
                 Some(NetworkCommand::BroadcastSeal(announcement)) => {
@@ -2250,7 +2429,7 @@ struct CatchUpSession {
 
 /// Bounded proactive catch-up: when a peer connects, ask for its DAG tip and,
 /// if it is ahead, pull the missing rounds through the existing
-/// `/kovanica/block-sync/1.1.0` protocol (one `RoundRange` window at a time,
+/// chain-scoped `/kovanica/<tag>/block-sync/1.1.0` protocol (one `RoundRange` window at a time,
 /// re-fetching every hash via `ByHash` so block validation is unchanged).
 ///
 /// Every bound is explicit: one session per peer, at most
@@ -3240,6 +3419,26 @@ fn handle_network_event(
                 Err(e) => warn!(%peer, %e, "rejected received vote"),
             }
         }
+        NetworkEvent::TimeoutReceived { peer, timeout } => {
+            debug!(%peer, round = timeout.round, voter = timeout.voter, "processing received timeout");
+            match engine.process_timeout(&timeout) {
+                Ok(()) => {}
+                Err(kovanica_consensus::ConsensusError::TimeoutRejected(
+                    reason @ kovanica_consensus::skip::TimeoutRejection::OutOfRange { .. },
+                )) => debug!(%peer, %reason, "ignored received timeout"),
+                Err(e) => warn!(%peer, %e, "rejected received timeout"),
+            }
+        }
+        NetworkEvent::SkipCertReceived { peer, cert } => {
+            debug!(%peer, round = cert.round, "processing received skip certificate");
+            match engine.process_skip_cert(&cert) {
+                Ok(()) => {}
+                Err(kovanica_consensus::ConsensusError::TimeoutRejected(
+                    reason @ kovanica_consensus::skip::TimeoutRejection::OutOfRange { .. },
+                )) => debug!(%peer, %reason, "ignored received skip certificate"),
+                Err(e) => warn!(%peer, %e, "rejected received skip certificate"),
+            }
+        }
         NetworkEvent::PeerConnected(peer) => {
             info!(%peer, "peer connected");
             vote_sync.peer_connected(peer);
@@ -3670,19 +3869,53 @@ impl DagStoreTrait for NodeDagStore {
         self.inner.get_decided_rounds(max_round)
     }
 
-    /// Persist an accepted vote in the consensus database.
+    /// Persist a vote in the consensus database.
     ///
-    /// The vote is written under its leader round so it survives a restart and
-    /// can be handed to a peer that joins later (RFC-009). The write is a
-    /// separate transaction from the vote's acceptance, which is deliberate:
-    /// consensus has already counted the vote, and a storage failure here must
-    /// not turn an accepted vote into a rejected one.
+    /// The vote is written under its leader round in its own transaction so it
+    /// survives a restart and can be handed to a peer that joins later
+    /// (RFC-009).
+    ///
+    /// Callers differ. For a vote consensus has already accepted, a storage
+    /// failure must not turn that vote into a rejected one. For this node's
+    /// own vote the engine persists first and broadcasts only after `Ok`. A
+    /// failure then means the vote was not sent and is not a durable lock.
+    /// Once this returns `Ok`, the stored vote is that lock.
     fn put_vote(&self, vote: &Vote) -> Result<(), DagStoreError> {
         let storage = self.inner.storage();
         let txn = storage.begin_write()?;
         storage.consensus().put_vote(&txn, vote)?;
         txn.commit()?;
         Ok(())
+    }
+
+    fn get_votes_for_round(&self, round: Round) -> Result<Vec<Vote>, DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_read()?;
+        Ok(storage.consensus().get_votes_for_round(&txn, round)?)
+    }
+
+    fn mark_round_skipped(&self, round: Round) -> Result<(), DagStoreError> {
+        self.inner.mark_round_skipped(round)
+    }
+
+    /// Persist a verified timeout (PRO-40 (b)). Unlike `put_vote`, the
+    /// engine treats a failure for its own timeout as fatal for that timeout:
+    /// it is not broadcast, so the vote-xor-timeout lock stays durable.
+    fn put_timeout(&self, timeout: &kovanica_types::Timeout) -> Result<(), DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_write()?;
+        storage.consensus().put_timeout(&txn, timeout)?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    fn get_timeouts_for_round(
+        &self,
+        round: Round,
+    ) -> Result<Vec<kovanica_types::Timeout>, DagStoreError> {
+        let storage = self.inner.storage();
+        let txn = storage.begin_read()?;
+        Ok(storage.consensus().get_timeouts_for_round(&txn, round)?)
     }
 
     fn max_stored_round(&self) -> Result<Option<Round>, DagStoreError> {
@@ -4204,6 +4437,29 @@ fn build_mempool_config() -> MempoolConfig {
     config
 }
 
+/// Log this node's network tag at startup and return it (#87 follow-up).
+///
+/// Every protocol id and topic carries the tag, and a peer with another tag
+/// is disconnected, so operators compare this line across all nodes of a
+/// chain before opening the mesh (`docs/TESTNET-RESET.md`).
+fn log_network_identity(network_config: &NetworkConfig) -> String {
+    let tag = network_config.network_id.tag();
+    info!(
+        chain_id = network_config.network_id.chain_id,
+        network_tag = %tag,
+        "network identity: peers must share this tag"
+    );
+    tag
+}
+
+/// Tag [`log_network_identity`] prints and `kovanica_syncStatus` reports.
+///
+/// A pure read of the config and the genesis files in `data_dir`. Callers
+/// that must not start a node (`network-tag`) use this instead of [`run_node`].
+fn network_tag_from_config(config: &NodeConfig) -> Result<String> {
+    Ok(build_network_config(config)?.network_id.tag())
+}
+
 /// Build the [`NetworkConfig`] from the node configuration.
 fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
     let listen = to_multiaddr(&config.listen_addr)?;
@@ -4223,6 +4479,12 @@ fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
         ping_interval: Duration::from_secs(10),
         node_key_path: Some(config.data_dir.join(NODE_IDENTITY_FILE)),
         peer_scoring: config.peer_scoring.clone(),
+        // Chain separation: every libp2p protocol id and gossip topic carries
+        // the chain id and the genesis digest this data dir is bound to.
+        network_id: kovanica_network::NetworkId::new(
+            config.chain_id,
+            genesis_config_digest(config)?,
+        ),
     })
 }
 
@@ -4481,21 +4743,18 @@ fn read_signing_key(path: &str) -> Result<SigningKey> {
     Ok(SigningKey::from_bytes(&seed))
 }
 
-/// Parse an address string in any of the supported formats:
-/// - `kvnc<32-byte-hex>dag` (canonical, with checksum verification)
-/// - bare 32-byte hex
-/// - 0x-prefixed hex
+/// Parse a genesis address for `chain_id`.
 ///
-/// Returns the 32-byte address.
-fn parse_address_hex(value: Option<&str>) -> Result<Address> {
+/// The canonical 64-character base32 form is accepted on every chain. The
+/// legacy hex forms are accepted only where
+/// [`kovanica_types::address::legacy_address_allowed`] is true. `None` is the
+/// zero address (the default treasury).
+fn parse_address_hex(value: Option<&str>, chain_id: u64) -> Result<Address> {
     let Some(value) = value else {
         return Ok(Address::default());
     };
 
-    value
-        .trim()
-        .parse::<Address>()
-        .with_context(|| format!("invalid address `{value}`"))
+    Address::parse_for_chain(value, chain_id).with_context(|| format!("invalid address `{value}`"))
 }
 
 #[cfg(test)]
@@ -4515,8 +4774,10 @@ mod tests {
     fn parse_address_hex_accepts_canonical_kvnc_dag_format() {
         let pk_bytes = [3u8; 32];
         let address = Address(pk_bytes);
-        let canonical = address.encode(); // kvnc<hex>dag with correct checksum
-        let parsed = parse_address_hex(Some(&canonical)).expect("canonical format parses");
+        let canonical = address.encode();
+        let parsed =
+            parse_address_hex(Some(&canonical), kovanica_types::signing::chain_id::MAINNET)
+                .expect("canonical format parses");
         assert_eq!(parsed.to_hex(), address.to_hex());
     }
 
@@ -4528,7 +4789,11 @@ mod tests {
         let mut bad_canonical = canonical.clone();
         let checksum_start = bad_canonical.len() - "dag".len() - 8;
         bad_canonical.replace_range(checksum_start..checksum_start + 2, "ff");
-        let err = parse_address_hex(Some(&bad_canonical)).unwrap_err();
+        let err = parse_address_hex(
+            Some(&bad_canonical),
+            kovanica_types::signing::chain_id::MAINNET,
+        )
+        .unwrap_err();
         assert!(
             err.to_string().contains("invalid address"),
             "got error: {}",
@@ -4536,24 +4801,35 @@ mod tests {
         );
     }
 
+    /// Chain 1 refuses legacy hex. Devnet, chain 4, and local still accept it.
     #[test]
-    fn parse_address_hex_accepts_bare_hex_for_backward_compatibility() {
+    fn parse_address_hex_follows_the_chain_policy() {
+        use kovanica_types::signing::chain_id;
         let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let address = parse_address_hex(Some(pk_hex)).expect("bare hex parses");
-        assert_eq!(address.to_hex(), pk_hex);
-    }
-
-    #[test]
-    fn parse_address_hex_accepts_0x_prefixed_hex() {
-        let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let address =
-            parse_address_hex(Some(&format!("0x{}", pk_hex))).expect("0x-prefixed hex parses");
-        assert_eq!(address.to_hex(), pk_hex);
+        let address = Address(hex::decode(pk_hex).unwrap().try_into().expect("32 bytes"));
+        let forms = [
+            pk_hex.to_string(),
+            format!("0x{pk_hex}"),
+            address.encode_legacy_hex(),
+        ];
+        for form in &forms {
+            let err = parse_address_hex(Some(form), chain_id::MAINNET).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("not accepted"),
+                "{form} on chain 1: {err:#}"
+            );
+            for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+                let parsed = parse_address_hex(Some(form), chain)
+                    .unwrap_or_else(|e| panic!("{form} on chain {chain}: {e:#}"));
+                assert_eq!(parsed, address);
+            }
+        }
     }
 
     #[test]
     fn parse_address_hex_returns_default_for_none() {
-        let address = parse_address_hex(None).expect("None returns default address");
+        let address = parse_address_hex(None, kovanica_types::signing::chain_id::MAINNET)
+            .expect("None returns default address");
         assert_eq!(address, Address::default());
     }
 
@@ -4675,6 +4951,18 @@ mod tests {
         );
     }
 
+    /// The genesis digest domain is KUNA-*, fits the 32-byte BLAKE3 key, and
+    /// has a known answer computed independently (Python `blake3`).
+    #[test]
+    fn genesis_digest_domain_is_kuna_with_a_known_answer() {
+        assert_eq!(GENESIS_DIGEST_DOMAIN, b"KUNA-GENESIS-v1");
+        assert!(GENESIS_DIGEST_DOMAIN.len() <= 32);
+        assert_eq!(
+            Hash::new_keyed(GENESIS_DIGEST_DOMAIN, b"kovanica-kat").to_hex(),
+            "79dd91af609f2f8264b2f8a0a17c5dc46b7cea995e4fafd912a5b6623d588704"
+        );
+    }
+
     #[test]
     fn genesis_digest_is_deterministic_and_covers_chain_id_and_allocations() {
         let dir = tempfile::tempdir().unwrap();
@@ -4717,14 +5005,37 @@ mod tests {
             txn.commit().unwrap();
         }
 
-        let err = verify_persisted_genesis_digest(&storage, &fresh, false).unwrap_err();
+        let err = verify_persisted_genesis_digest(&storage, &fresh, false, 1337).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains(&stored.to_hex()), "{msg}");
         assert!(msg.contains(&fresh.to_hex()), "{msg}");
         assert!(msg.contains(ALLOW_GENESIS_MISMATCH_ENV), "{msg}");
+        // The message names the likely cause and the real fix (#86 P2).
+        assert!(msg.contains("chain-4 format change"), "{msg}");
+        assert!(msg.contains("fix is a wipe"), "{msg}");
 
-        // The explicit override lets the node start despite the mismatch...
-        verify_persisted_genesis_digest(&storage, &fresh, true).expect("override allows");
+        // The explicit override lets a dev chain start despite the mismatch...
+        verify_persisted_genesis_digest(&storage, &fresh, true, 1337).expect("dev override allows");
+        verify_persisted_genesis_digest(&storage, &fresh, true, 3).expect("devnet override allows");
+        // ...and does nothing on a non-dev chain. Those errors never name the override.
+        for chain_id in [1, 2, 4] {
+            let err = verify_persisted_genesis_digest(&storage, &fresh, true, chain_id)
+                .expect_err("non-dev chain must ignore the override");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("genesis digest mismatch"),
+                "chain {chain_id}: {msg}"
+            );
+            assert!(msg.contains("fix is a wipe"), "chain {chain_id}: {msg}");
+            assert!(
+                !msg.contains(ALLOW_GENESIS_MISMATCH_ENV),
+                "chain {chain_id} must not mention the override: {msg}"
+            );
+            assert!(
+                !msg.to_ascii_lowercase().contains("override"),
+                "chain {chain_id} must not mention the override: {msg}"
+            );
+        }
         // ...and the persisted value is left untouched.
         let read = storage.begin_read().unwrap();
         assert_eq!(
@@ -4733,18 +5044,83 @@ mod tests {
         );
     }
 
+    /// Jarvis #85 review: the override is forbidden on non-dev chains (1, 2, 4)
+    /// and only available on dev chains (3 and 1337).
+    #[test]
+    fn genesis_mismatch_override_is_forbidden_on_mainnet_and_testnet() {
+        use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET_V2};
+        for chain in [MAINNET, 2, TESTNET_V2] {
+            let err = genesis_mismatch_override(chain, true).unwrap_err();
+            assert!(err.to_string().contains("not allowed"), "{err:#}");
+            assert!(!genesis_mismatch_override(chain, false).unwrap());
+        }
+        for chain in [DEVNET, LOCAL] {
+            assert!(genesis_mismatch_override(chain, true).unwrap());
+            assert!(!genesis_mismatch_override(chain, false).unwrap());
+        }
+    }
+
     #[test]
     fn mismatch_override_spellings() {
         for yes in ["1", "true", "TRUE", " yes ", "on"] {
-            assert!(parse_mismatch_override(Some(yes)), "{yes:?} should allow");
+            assert!(
+                crate::config::genesis_mismatch_override_enabled(Some(yes)),
+                "{yes:?} should allow"
+            );
         }
         for no in ["", "0", "false", "off", "nope"] {
             assert!(
-                !parse_mismatch_override(Some(no)),
+                !crate::config::genesis_mismatch_override_enabled(Some(no)),
                 "{no:?} should not allow"
             );
         }
-        assert!(!parse_mismatch_override(None));
+        assert!(!crate::config::genesis_mismatch_override_enabled(None));
+    }
+
+    /// Chains 1, 2 and 4 refuse the override inside `validate`, which `run_node`
+    /// calls before `create_dir_all`. Dev chains pass that check and do not
+    /// create a directory from `validate` itself.
+    #[tokio::test]
+    async fn non_dev_chains_refuse_genesis_mismatch_override_before_data_dir_exists() {
+        for chain_id in [1, 2, 4] {
+            let parent = tempfile::tempdir().unwrap();
+            let data_dir = parent.path().join("data");
+            assert!(!data_dir.exists());
+            let config = NodeConfig {
+                allow_genesis_mismatch: true,
+                ..chain_id_config(&data_dir, chain_id)
+            };
+            let err = run_node(config, std::future::pending()).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(ALLOW_GENESIS_MISMATCH_ENV),
+                "chain {chain_id}: {msg}"
+            );
+            assert!(msg.contains("must not be set"), "chain {chain_id}: {msg}");
+            assert!(
+                !data_dir.exists(),
+                "chain {chain_id} created a data dir before refusing the override"
+            );
+        }
+    }
+
+    #[test]
+    fn dev_chains_accept_genesis_mismatch_override_without_creating_data_dir() {
+        for chain_id in [3, 1337] {
+            let parent = tempfile::tempdir().unwrap();
+            let data_dir = parent.path().join("data");
+            let config = NodeConfig {
+                allow_genesis_mismatch: true,
+                ..chain_id_config(&data_dir, chain_id)
+            };
+            config
+                .validate()
+                .unwrap_or_else(|e| panic!("chain {chain_id} may set the override: {e}"));
+            assert!(
+                !data_dir.exists(),
+                "validate must not create a data dir for chain {chain_id}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4767,14 +5143,102 @@ mod tests {
         let err = run_node(chain_id_config(dir.path(), 1337), std::future::pending())
             .await
             .unwrap_err();
-        assert!(
-            err.to_string().contains("genesis digest mismatch"),
-            "{err:#}"
-        );
+        let msg = err.to_string();
+        assert!(msg.contains("genesis digest mismatch"), "{msg}");
+        // Dev startup may name the override; it is dev-only.
+        assert!(msg.contains(ALLOW_GENESIS_MISMATCH_ENV), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn non_dev_startup_mismatch_does_not_mention_the_override() {
+        for chain_id in [1, 2, 4] {
+            let dir = tempfile::tempdir().unwrap();
+            write_genesis_chain_id(dir.path(), chain_id);
+            {
+                let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+                let mut staking = StakingState::new();
+                staking.init_treasury(Address([1; 32]));
+                let txn = storage.begin_write().unwrap();
+                storage.state().save_staking_state(&txn, &staking).unwrap();
+                storage
+                    .state()
+                    .save_genesis_digest(&txn, &Hash::new([0xEE; 32]))
+                    .unwrap();
+                txn.commit().unwrap();
+            }
+            let err = run_node(
+                chain_id_config(dir.path(), chain_id),
+                std::future::pending(),
+            )
+            .await
+            .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("genesis digest mismatch"),
+                "chain {chain_id}: {msg}"
+            );
+            assert!(
+                !msg.contains(ALLOW_GENESIS_MISMATCH_ENV),
+                "chain {chain_id} must not mention the override: {msg}"
+            );
+            assert!(
+                !msg.to_ascii_lowercase().contains("override"),
+                "chain {chain_id} must not mention the override: {msg}"
+            );
+        }
+    }
+
+    // #86 follow-up (Jarvis P2): consensus.redb carries its own genesis
+    // marker, so a partial wipe cannot reopen another chain's DAG.
+    #[test]
+    fn consensus_genesis_marker_catches_partial_wipes_and_foreign_dags() {
+        let fresh = Hash::new([5u8; 32]);
+        let open = |dir: &std::path::Path| {
+            let consensus = Arc::new(Storage::new(dir.join("consensus.redb")).unwrap());
+            let dag = DagStore::from_storage(consensus.clone());
+            let state = Storage::new(dir.join("state.redb")).unwrap();
+            (consensus, dag, state)
+        };
+
+        // Fresh dir: marker missing, to be written.
+        let dir = tempfile::tempdir().unwrap();
+        let (consensus, dag, state) = open(dir.path());
+        assert!(verify_consensus_genesis_marker(&consensus, &dag, &state, &fresh).unwrap());
+        let txn = consensus.begin_write().unwrap();
+        consensus
+            .consensus()
+            .save_genesis_marker(&txn, &fresh)
+            .unwrap();
+        txn.commit().unwrap();
+        assert!(!verify_consensus_genesis_marker(&consensus, &dag, &state, &fresh).unwrap());
+
+        // A marker of another genesis is refused.
+        let other = Hash::new([6u8; 32]);
+        let err = verify_consensus_genesis_marker(&consensus, &dag, &state, &other)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("belongs to genesis"), "{err}");
+
+        // Partial wipe: a DAG without a marker and a state.redb without the
+        // configured digest (it was wiped) is refused.
+        let dir = tempfile::tempdir().unwrap();
+        let (consensus, dag, state) = open(dir.path());
+        dag.mark_round_decided(3, &Hash::new([7u8; 32])).unwrap();
+        let err = verify_consensus_genesis_marker(&consensus, &dag, &state, &fresh)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("partial wipe"), "{err}");
+
+        // A pre-marker dir whose state.redb holds the same genesis is
+        // accepted and gets the marker.
+        let txn = state.begin_write().unwrap();
+        state.state().save_genesis_digest(&txn, &fresh).unwrap();
+        txn.commit().unwrap();
+        assert!(verify_consensus_genesis_marker(&consensus, &dag, &state, &fresh).unwrap());
     }
 
     #[test]
-    fn first_start_persists_digest_and_migrates_existing_dir() {
+    fn a_data_dir_without_a_genesis_digest_is_refused_not_migrated() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::new(dir.path().join("state.redb")).unwrap();
 
@@ -4795,17 +5259,25 @@ mod tests {
         }
 
         let fresh = Hash::new([5u8; 32]);
-        // Migration: first start writes the digest once.
-        verify_persisted_genesis_digest(&storage, &fresh, false).unwrap();
-        {
-            let read = storage.begin_read().unwrap();
-            assert_eq!(
-                storage.state().load_genesis_digest(&read).unwrap(),
-                Some(fresh)
+        // No silent migration, with or without the mismatch override.
+        for allow_mismatch in [false, true] {
+            let err = verify_persisted_genesis_digest(&storage, &fresh, allow_mismatch, 1)
+                .expect_err("a data dir without a genesis digest must be refused");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("no genesis digest"), "{msg}");
+            assert!(msg.contains("chain-4 format change"), "{msg}");
+            assert!(
+                !msg.contains(ALLOW_GENESIS_MISMATCH_ENV),
+                "missing-digest refusal must not mention the override: {msg}"
             );
         }
-        // Second start is a no-op and still succeeds.
-        verify_persisted_genesis_digest(&storage, &fresh, false).unwrap();
+        // Nothing was written.
+        let read = storage.begin_read().unwrap();
+        assert!(storage
+            .state()
+            .load_genesis_digest(&read)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -4833,9 +5305,28 @@ mod tests {
         )
         .unwrap();
         let err = verify_genesis_json(&config, &canonical, false).unwrap_err();
-        assert!(err.to_string().contains("canonical genesis"), "{err:#}");
-        // Same override applies.
-        verify_genesis_json(&config, &canonical, true).expect("override allows");
+        let msg = err.to_string();
+        assert!(msg.contains("canonical genesis"), "{msg}");
+        assert!(
+            msg.contains(ALLOW_GENESIS_MISMATCH_ENV),
+            "dev genesis.json mismatch may name the override: {msg}"
+        );
+        // Non-dev chains ignore the override and do not mention it.
+        for chain_id in [1, 2, 4] {
+            let err = verify_genesis_json(&chain_id_config(dir.path(), chain_id), &canonical, true)
+                .expect_err("non-dev chain must ignore the override");
+            let msg = err.to_string();
+            assert!(msg.contains("canonical genesis"), "chain {chain_id}: {msg}");
+            assert!(
+                !msg.contains(ALLOW_GENESIS_MISMATCH_ENV),
+                "chain {chain_id} must not mention the override: {msg}"
+            );
+            assert!(
+                !msg.to_ascii_lowercase().contains("override"),
+                "chain {chain_id} must not mention the override: {msg}"
+            );
+        }
+        verify_genesis_json(&config, &canonical, true).expect("dev override allows");
     }
 
     #[test]
@@ -4871,6 +5362,7 @@ mod tests {
             validators: validators.to_string_lossy().into_owned(),
             treasury_address: "22".repeat(32),
             founder_address: "33".repeat(32),
+            chain_id: kovanica_types::signing::chain_id::LOCAL,
             output: output.to_string_lossy().into_owned(),
             validator_keys_out: Some(keys_dir.to_string_lossy().into_owned()),
             force: false,
@@ -4951,6 +5443,102 @@ mod tests {
         load_validator_key(path.to_str(), true).expect("0400 is fine");
     }
 
+    // #87 follow-up: the startup line carries exactly the tag that scopes
+    // every protocol id and topic.
+    #[test]
+    fn startup_logs_the_network_tag_that_scopes_the_protocols() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = chain_id_config(dir.path(), 4);
+        let net = build_network_config(&config).unwrap();
+        let tag = log_network_identity(&net);
+        assert_eq!(tag, net.network_id.tag());
+        assert!(tag.starts_with("4-"), "{tag}");
+        assert_eq!(tag.len(), "4-".len() + 16);
+        assert!(net
+            .network_id
+            .identify_version()
+            .starts_with(&format!("/kovanica/{tag}/")));
+    }
+
+    /// Files the genesis digest covers. Addresses are 32-byte hex, not keys.
+    fn write_network_tag_bundle(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("validators.json"),
+            format!(
+                r#"[{{"address":"{}","stake":50000000000000}}]"#,
+                "11".repeat(32)
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("founder_premine.hex"), "44".repeat(32)).unwrap();
+        std::fs::write(
+            dir.join("funded_accounts.toml"),
+            format!(
+                "[[account]]\naddress = \"{}\"\nbalance = 1000\n",
+                "22".repeat(32)
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("genesis_validators.toml"),
+            format!(
+                "chain_id = 4\n[[validator]]\naddress = \"{}\"\nstake = 50000000000000\n",
+                "33".repeat(32)
+            ),
+        )
+        .unwrap();
+    }
+
+    fn bundle_config(dir: &std::path::Path, treasury: Option<String>) -> NodeConfig {
+        NodeConfig {
+            treasury_address: treasury,
+            ..chain_id_config(dir, 4)
+        }
+    }
+
+    /// `kovanica_syncStatus.networkTag` is the startup line, and the offline
+    /// helper returns that same tag. Changing or dropping one bundle file
+    /// changes it. An unset treasury is the zero address.
+    #[test]
+    fn sync_status_network_tag_equals_the_startup_log() {
+        let dir = tempfile::tempdir().unwrap();
+        write_network_tag_bundle(dir.path());
+        let config = bundle_config(dir.path(), Some("55".repeat(32)));
+        let net = build_network_config(&config).unwrap();
+        let logged = log_network_identity(&net);
+        let offline = network_tag_from_config(&config).unwrap();
+        assert_eq!(offline, logged);
+        // Known answer for this fixture (chain 4, treasury 0x55.., the four
+        // bundle files). The offline CLI test locks the same string.
+        assert_eq!(logged, "4-2bd89b0649c4ecbd");
+        assert_eq!(offline, net.network_id.tag());
+
+        let status = SyncStatus {
+            network_tag: Some(logged.clone()),
+            ..SyncStatus::default()
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert!(json.get("networkTag").is_some(), "{json}");
+        assert_eq!(json["networkTag"], serde_json::json!(logged));
+
+        std::fs::write(dir.path().join("founder_premine.hex"), "66".repeat(32)).unwrap();
+        let changed = network_tag_from_config(&config).unwrap();
+        assert_ne!(changed, logged, "one changed file must change the tag");
+
+        std::fs::remove_file(dir.path().join("funded_accounts.toml")).unwrap();
+        let missing = network_tag_from_config(&config).unwrap();
+        assert_ne!(missing, logged, "a missing file must change the tag");
+        assert_ne!(missing, changed);
+
+        let unset = bundle_config(dir.path(), None);
+        let explicit_zero = bundle_config(dir.path(), Some("00".repeat(32)));
+        assert_eq!(
+            network_tag_from_config(&unset).unwrap(),
+            network_tag_from_config(&explicit_zero).unwrap(),
+            "an unset treasury is the zero address in the digest"
+        );
+    }
+
     #[test]
     fn network_config_uses_persistent_identity_in_data_dir() {
         let config = NodeConfig {
@@ -4969,6 +5557,28 @@ mod tests {
             Some(std::ffi::OsStr::new("validator.key")),
             "transport identity must not reuse the validator seed file"
         );
+    }
+
+    /// #81 review P1: the libp2p network is scoped to chain id + genesis,
+    /// so a node of another chain (or the same chain id with a different
+    /// genesis) speaks different protocol ids and topics.
+    #[test]
+    fn network_config_is_scoped_to_chain_id_and_genesis() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = chain_id_config(dir.path(), 1337);
+        let net = build_network_config(&config).unwrap();
+        assert_eq!(net.network_id.chain_id, 1337);
+        assert_eq!(
+            net.network_id.genesis,
+            genesis_config_digest(&config).unwrap()
+        );
+
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = build_network_config(&chain_id_config(other_dir.path(), 4)).unwrap();
+        assert_ne!(net.network_id.tag(), other.network_id.tag());
+        assert!(!net
+            .network_id
+            .accepts_identify(&other.network_id.identify_version()));
     }
 
     #[test]
@@ -4992,8 +5602,11 @@ mod tests {
 
     #[test]
     fn zero_address_is_default_treasury() {
-        assert_eq!(parse_address_hex(None).unwrap(), Address::default());
-        assert!(parse_address_hex(Some("zz")).is_err());
+        assert_eq!(
+            parse_address_hex(None, kovanica_types::signing::chain_id::LOCAL).unwrap(),
+            Address::default()
+        );
+        assert!(parse_address_hex(Some("zz"), kovanica_types::signing::chain_id::LOCAL).is_err());
     }
 
     #[test]
@@ -7096,6 +7709,59 @@ mod tests {
         vote
     }
 
+    // PRO-40 (b): the engine's timeouts and certificates reach the network
+    // task as gossip commands.
+    #[test]
+    fn timeout_gossip_forwards_timeouts_and_certificates() {
+        use kovanica_consensus::engine::TimeoutBroadcaster;
+        let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let gossip = TimeoutGossip(tx);
+        let timeout = kovanica_types::Timeout {
+            round: 3,
+            voter: 1,
+            signature: kovanica_types::Signature([0; 64]),
+        };
+        gossip.broadcast_timeout(&timeout);
+        let cert = kovanica_types::SkipCert {
+            round: 3,
+            timeouts: vec![timeout.clone()],
+        };
+        gossip.broadcast_skip_cert(&cert);
+        assert!(matches!(rx.try_recv(), Ok(NetworkCommand::BroadcastTimeout(t)) if t == timeout));
+        assert!(matches!(rx.try_recv(), Ok(NetworkCommand::BroadcastSkipCert(c)) if c == cert));
+    }
+
+    // PRO-40 (b): the node store keeps timeouts and certified skips across a
+    // reopen; a skipped round restores the cursor and replays nothing.
+    #[test]
+    fn node_dag_store_persists_timeouts_and_skips_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dag.redb");
+        let timeout = kovanica_types::Timeout {
+            round: 6,
+            voter: 2,
+            signature: kovanica_types::Signature([7; 64]),
+        };
+        {
+            let store = NodeDagStore {
+                inner: Arc::new(DagStore::new(Storage::new(&path).unwrap()).unwrap()),
+            };
+            store.put_timeout(&timeout).unwrap();
+            store.mark_round_skipped(6).unwrap();
+        }
+        let store = NodeDagStore {
+            inner: Arc::new(DagStore::new(Storage::new(&path).unwrap()).unwrap()),
+        };
+        assert_eq!(store.get_timeouts_for_round(6).unwrap(), vec![timeout]);
+        assert_eq!(
+            crate::DagStoreTrait::get_decided_rounds(&store, u64::MAX).unwrap(),
+            vec![6]
+        );
+        assert!(crate::DagStoreTrait::get_decided_leaders(&store, 6)
+            .unwrap()
+            .is_empty());
+    }
+
     /// A leader round the node synced is asked for by name.
     #[tokio::test]
     async fn vote_sync_requests_the_votes_of_a_synced_leader_round() {
@@ -7213,6 +7879,33 @@ mod tests {
         let _ = rx.try_recv();
     }
 
+    /// `founder_premine.hex` is parsed with the chain policy: chain 1 refuses
+    /// legacy hex, and devnet, local, and chain 4 accept it. Canonical still
+    /// parses on mainnet.
+    #[test]
+    fn genesis_file_addresses_follow_the_chain_policy() {
+        use kovanica_types::signing::chain_id;
+
+        let hex = "11".repeat(32);
+        let canonical = Address([0x11; 32]).encode();
+        let digest_with = |chain: u64, body: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("founder_premine.hex"), body).unwrap();
+            genesis_config_digest(&chain_id_config(dir.path(), chain))
+        };
+
+        let err = digest_with(chain_id::MAINNET, &hex).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("not accepted"),
+            "chain 1 must refuse hex: {err:#}"
+        );
+        for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+            digest_with(chain, &hex)
+                .unwrap_or_else(|e| panic!("chain {chain} must accept hex: {e:#}"));
+        }
+        digest_with(chain_id::MAINNET, &canonical).expect("mainnet accepts the canonical form");
+    }
+
     /// Pre-funding from a file is a testnet/dev convenience. Mainnet must never
     /// accept it, and the rule covers both the genesis init path and the digest
     /// so neither can be bypassed.
@@ -7262,27 +7955,89 @@ mod tests {
         assert!(genesis_config_digest(&testnet).is_ok());
     }
 
+    /// The published checksum example must not tell a mainnet operator to hash
+    /// `funded_accounts.toml`. That file is refused on chain 1.
+    #[test]
+    fn mainnet_sha256sum_example_omits_funded_accounts() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let reset = std::fs::read_to_string(root.join("docs/TESTNET-RESET.md")).unwrap();
+        let onboarding =
+            std::fs::read_to_string(root.join("docs/VALIDATOR-ONBOARDING.md")).unwrap();
+        let ceremony = std::fs::read_to_string(root.join("docs/GENESIS-CEREMONY.md")).unwrap();
+
+        let mut saw_mainnet = false;
+        let mut saw_off_mainnet = false;
+        let mut mainnet_command = false;
+        for line in reset.lines() {
+            let trimmed = line.trim();
+            if trimmed == "# chain 1 (mainnet)" {
+                mainnet_command = true;
+                continue;
+            }
+            if !trimmed.starts_with("sha256sum ") {
+                continue;
+            }
+            if mainnet_command {
+                assert!(
+                    !trimmed.contains("funded_accounts.toml"),
+                    "mainnet checksum must omit funded_accounts.toml: {trimmed}"
+                );
+                assert!(trimmed.contains("validators.json"));
+                assert!(trimmed.contains("founder_premine.hex"));
+                assert!(trimmed.contains("genesis_validators.toml"));
+                saw_mainnet = true;
+                mainnet_command = false;
+            } else if trimmed.contains("funded_accounts.toml") {
+                saw_off_mainnet = true;
+            }
+        }
+        assert!(saw_mainnet, "missing the chain 1 sha256sum example");
+        assert!(
+            saw_off_mainnet,
+            "off-mainnet bundles still hash funded_accounts.toml"
+        );
+        assert!(
+            onboarding.contains("On mainnet (chain 1)") && onboarding.contains("must not name it"),
+            "onboarding must say the mainnet checksum omits funded_accounts.toml"
+        );
+        assert!(
+            !onboarding.contains("lists the four bundle files"),
+            "onboarding must not say every checksum lists funded_accounts.toml"
+        );
+        assert!(
+            ceremony.contains("mainnet `sha256sum` list therefore omits it"),
+            "the ceremony doc must point at the mainnet checksum list"
+        );
+    }
+
     /// The authoritative check: actually running genesis on mainnet with a
     /// testnet-sized validator set must refuse before anything is written.
     #[test]
     fn init_genesis_refuses_small_mainnet_validator_set_but_accepts_testnet() {
         use kovanica_types::signing::chain_id;
 
-        let write_set = |dir: &std::path::Path, chain: u64, n: usize| {
+        let write_set = |dir: &std::path::Path, chain: u64, addresses: &[String]| {
             let mut body = format!("chain_id = {chain}\n\n");
-            for i in 1..=n {
+            for address in addresses {
                 body.push_str(&format!(
-                    "[[validator]]\naddress = \"{i:02x}{}\"\nstake = {}\n\n",
-                    "00".repeat(31),
+                    "[[validator]]\naddress = \"{address}\"\nstake = {}\n\n",
                     kovanica_staking::MIN_VALIDATOR_STAKE
                 ));
             }
             std::fs::write(dir.join("genesis_validators.toml"), body).unwrap();
         };
+        let indexed_hex = |i: u8| format!("{i:02x}{}", "00".repeat(31));
+        let indexed_canonical = |i: u8| {
+            let mut raw = [0u8; 32];
+            raw[0] = i;
+            Address(raw).encode()
+        };
 
-        // Mainnet, 3 validators: refused.
+        // Mainnet, 3 canonical addresses: refused for the count. Hex would be
+        // refused earlier, which would hide this check.
         let dir = tempfile::tempdir().unwrap();
-        write_set(dir.path(), chain_id::MAINNET, 3);
+        let mainnet_set: Vec<String> = (1..=3).map(indexed_canonical).collect();
+        write_set(dir.path(), chain_id::MAINNET, &mainnet_set);
         let config = chain_id_config(dir.path(), chain_id::MAINNET);
         let dag = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
         let state = Storage::new(dir.path().join("state.redb")).unwrap();
@@ -7299,9 +8054,10 @@ mod tests {
             "a refused genesis must not write staking state"
         );
 
-        // Testnet, same set: accepted, and the validators are staked.
+        // Chain 4, same count in legacy hex: accepted, and the validators are staked.
         let dir = tempfile::tempdir().unwrap();
-        write_set(dir.path(), chain_id::TESTNET_V2, 3);
+        let testnet_set: Vec<String> = (1..=3).map(indexed_hex).collect();
+        write_set(dir.path(), chain_id::TESTNET_V2, &testnet_set);
         let config = chain_id_config(dir.path(), chain_id::TESTNET_V2);
         let dag = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
         let state = Storage::new(dir.path().join("state.redb")).unwrap();
@@ -8598,8 +9354,11 @@ mod b1_epoch_restart_repro {
 
         // Node B — restarted; same persisted genesis AND the frozen snapshot
         // from A's seal must be visible to it, so copy B from A's database file.
+        let a_path = dir.path().join("leader-a.redb");
+        drop(a);
         let b_path = dir.path().join("leader-b.redb");
-        std::fs::copy(dir.path().join("leader-a.redb"), &b_path).unwrap();
+        std::fs::copy(&a_path, &b_path).unwrap();
+        let a = Storage::new(a_path).unwrap();
         let b = Storage::new(b_path).unwrap();
 
         let committee_a = build_committee_for_round(

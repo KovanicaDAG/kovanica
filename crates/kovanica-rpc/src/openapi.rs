@@ -298,6 +298,10 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
                 "catchUpTarget": { "type": ["integer", "null"], "description": "Peer-advertised tip being chased" },
                 "behindBy": { "type": ["integer", "null"], "description": "Rounds behind the catch-up target" },
                 "peerCount": { "type": "integer" },
+                "networkTag": {
+                    "type": "string",
+                    "description": "Network tag (<chain_id>-<16 hex of the genesis digest>) this node logs at startup. Peers must share it."
+                },
                 "peers": {
                     "type": "array",
                     "items": { "$ref": "#/components/schemas/SyncPeerStatus" }
@@ -413,6 +417,56 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
             }),
             json!({
                 "$ref": "#/components/schemas/Transaction"
+            }),
+        ),
+        (
+            "kovanica_getTransactionHistory",
+            "Newest-first committed transactions for an address",
+            "Transactions",
+            json!({
+                "type": "object",
+                "required": ["address"],
+                "properties": {
+                    "address": { "$ref": "#/components/schemas/Address" },
+                    "limit": {
+                        "$ref": "#/components/schemas/Quantity",
+                        "description": "Page size. Default 20, hard max 100."
+                    },
+                    "cursor": {
+                        "type": "string",
+                        "description": "Opaque cursor from a previous next_cursor."
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["sent", "received", "all"],
+                        "default": "all"
+                    }
+                }
+            }),
+            json!({
+                "type": "object",
+                "required": ["entries", "next_cursor"],
+                "properties": {
+                    "entries": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["hash", "height", "timestamp", "from", "to", "amount", "fee", "kind", "status"],
+                            "properties": {
+                                "hash": { "$ref": "#/components/schemas/Hash" },
+                                "height": { "$ref": "#/components/schemas/Quantity" },
+                                "timestamp": { "type": ["string", "null"] },
+                                "from": { "$ref": "#/components/schemas/Address" },
+                                "to": { "type": ["string", "null"] },
+                                "amount": { "$ref": "#/components/schemas/Quantity" },
+                                "fee": { "$ref": "#/components/schemas/Quantity" },
+                                "kind": { "type": "string" },
+                                "status": { "type": "string", "enum": ["success", "failed"] }
+                            }
+                        }
+                    },
+                    "next_cursor": { "type": ["string", "null"] }
+                }
             }),
         ),
         (
@@ -796,6 +850,10 @@ mod tests {
         assert!(
             json.contains("\"kovanica_subscribe\""),
             "Missing kovanica_subscribe"
+        );
+        assert!(
+            json.contains("\"kovanica_getTransactionHistory\""),
+            "Missing kovanica_getTransactionHistory"
         );
     }
 }

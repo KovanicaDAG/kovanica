@@ -17,7 +17,7 @@ and chain id.
   (`address` required, `public_key` / `stake` optional at this layer).
 - **Treasury address** and **founder address** — both 32-byte hex. The founder
   receives the 200,000 KUNA premine.
-- **Chain id** — `1` mainnet, `2` testnet, `3` devnet, `1337` local. A
+- **Chain id** — `1` mainnet, `2` testnet, `3` devnet, `4` testnet v2, `1337` local. A
   `genesis_validators.toml` that declares `chain_id` must match the node's
   configured chain id.
 
@@ -52,6 +52,11 @@ Outputs, in `--output`: `genesis.json`, `genesis_validators.toml`,
 Next steps the script prints: distribute `genesis.json` to all validators,
 each validator places it in its data directory (`KOVANICA_DATA_DIR`), configures
 the bootnodes, and all validators start simultaneously.
+
+The files that actually enter the network tag, and the `sha256sum -c` check
+every node runs before the first start, are described in
+[`docs/TESTNET-RESET.md`](TESTNET-RESET.md). A node whose bundle, chain id,
+treasury or binary differs from the others never joins the mesh.
 
 ## `genesis_validators.toml` format
 
@@ -96,7 +101,9 @@ validator allocation), never from a loose file in the data directory. The node
 fails at startup — and `kovanica-node --check-config` reports it — if
 `funded_accounts.toml` is present on mainnet, rather than ignoring it, because
 silently skipping it would boot a genesis the operator believes they
-configured. All other chain ids (2, 3, 4, 1337) accept the file.
+configured. The mainnet `sha256sum` list therefore omits it (see
+[`docs/TESTNET-RESET.md`](TESTNET-RESET.md)). All other chain ids (2, 3, 4, 1337)
+accept the file.
 
 ## Genesis digest guard (startup behaviour)
 
@@ -108,7 +115,10 @@ against the persisted value:
 - **mismatch** — startup **refuses** with an error naming the genesis mismatch,
   because the data directory was created for a different genesis;
 - an **override environment variable** forces startup past the mismatch for a
-  deliberate single-node migration. Never set it on a live mesh.
+  deliberate single-node migration. Never set it on a live mesh;
+- **no persisted digest but chain state present** — startup **refuses**, even
+  with the override: the data directory predates the chain-4 format change and
+  must be wiped, not migrated.
 
 ## Data preservation
 

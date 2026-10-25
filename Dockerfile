@@ -47,7 +47,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 ENV KOVANICA_DATA_DIR=/var/lib/kovanica
 WORKDIR /var/lib/kovanica
 VOLUME ["/var/lib/kovanica"]
-EXPOSE 9000 8545
+EXPOSE 8000 8545
 
 USER kovanica
 

@@ -1,4 +1,4 @@
-//! Block sync request-response protocol (`/kovanica/block-sync/1.1.0`).
+//! Block sync request-response protocol (`/kovanica/<chain tag>/block-sync/1.1.0`).
 //!
 //! Uses libp2p's request-response behaviour to fetch blocks by hash or by
 //! (author, round) pair, plus two bounded catch-up messages:
@@ -14,30 +14,23 @@
 //!
 //! # Compatibility
 //!
-//! `Status` and `RoundRange` are new, so the protocol version was bumped from
-//! `1.0.0` to `1.1.0`. Both names are advertised (see
-//! [`block_sync_protocols`]), most-preferred first: a peer that speaks `1.1.0`
-//! negotiates it and can use the catch-up messages, while a peer that only
-//! understands `1.0.0` negotiates the legacy name. An old peer that receives a
-//! `1.1.0`-only message over the `1.0.0` name cannot decode it and the request
-//! fails at the transport layer; the requester's `retry_peer` budget makes
-//! that fail *bounded* (three sends, then give up) and it is never counted
-//! against the peer (see `NetworkService::handle_request_response_event`).
+//! `Status` and `RoundRange` came with `1.1.0`. The `1.0.0` fallback name was
+//! removed with the chain-4 network separation: the protocol id is now
+//! `/kovanica/<chain tag>/block-sync/1.1.0` (see [`crate::network_id`]), and
+//! a peer of another chain, or a pre-chain-4 build, cannot negotiate it.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
 use kovanica_types::{block::StatementBlock, hash::Hash, AuthorityIndex, Round, Vote};
 use libp2p::request_response::{OutboundRequestId, ProtocolSupport, ResponseChannel};
 use serde::{Deserialize, Serialize};
 
-/// Protocol name for block sync request-response.
+/// Protocol suffix for block sync request-response. The id on the wire is
+/// `/kovanica/<chain tag>/block-sync/1.1.0` ([`crate::NetworkId::protocol`]).
 ///
-/// `1.1.0` adds the `Status`/`RoundRange` catch-up messages; see the module
-/// docs for how it is negotiated alongside [`BLOCK_SYNC_PROTOCOL_LEGACY`].
-pub const BLOCK_SYNC_PROTOCOL: &str = "/kovanica/block-sync/1.1.0";
-
-/// Legacy protocol name (`1.0.0`), kept so peers that predate the catch-up
-/// messages can still be dialed for `ByHash`/`ByAuthorRound` sync.
-pub const BLOCK_SYNC_PROTOCOL_LEGACY: &str = "/kovanica/block-sync/1.0.0";
+/// `1.1.0` has the `Status`/`RoundRange` catch-up messages. The
+/// chain-independent `/kovanica/block-sync/1.0.0` fallback was removed with
+/// the chain-4 network separation: it let any chain's peer sync from us.
+pub const BLOCK_SYNC_PROTOCOL: &str = "block-sync/1.1.0";
 
 /// Maximum response size (1 MiB): one block, same cap as a gossip frame.
 pub const MAX_RESPONSE_SIZE: usize = 1024 * 1024;
@@ -266,22 +259,11 @@ pub fn block_sync_protocol() -> libp2p::request_response::Config {
         .with_max_concurrent_streams(100)
 }
 
-/// Protocols advertised for block sync, most-preferred first.
-///
-/// `1.1.0` (catch-up aware) is offered first, so two current nodes always
-/// negotiate it; a peer that only understands `1.0.0` falls back to the legacy
-/// name instead of being dropped. Both names share [`BlockSyncCodec`].
-pub fn block_sync_protocols() -> [(libp2p::StreamProtocol, ProtocolSupport); 2] {
-    [
-        (
-            libp2p::StreamProtocol::new(BLOCK_SYNC_PROTOCOL),
-            ProtocolSupport::Full,
-        ),
-        (
-            libp2p::StreamProtocol::new(BLOCK_SYNC_PROTOCOL_LEGACY),
-            ProtocolSupport::Full,
-        ),
-    ]
+/// Protocols advertised for block sync: only this chain's `1.1.0` id.
+pub fn block_sync_protocols(
+    network: &crate::NetworkId,
+) -> [(libp2p::StreamProtocol, ProtocolSupport); 1] {
+    [(network.protocol(BLOCK_SYNC_PROTOCOL), ProtocolSupport::Full)]
 }
 
 /// Request event.
@@ -324,7 +306,7 @@ mod tests {
         use libp2p::request_response::Codec;
         futures::executor::block_on(async {
             let mut codec = BlockSyncCodec;
-            let protocol = libp2p::StreamProtocol::new(BLOCK_SYNC_PROTOCOL);
+            let protocol = crate::NetworkId::default().protocol(BLOCK_SYNC_PROTOCOL);
             let mut io = futures::io::Cursor::new(vec![0u8; MAX_RESPONSE_SIZE + 1]);
             assert!(codec.read_response(&protocol, &mut io).await.is_err());
             let mut io = futures::io::Cursor::new(vec![0u8; MAX_REQUEST_SIZE + 1]);
@@ -480,16 +462,21 @@ mod tests {
         );
     }
 
-    /// The catch-up protocol is offered first, and the legacy name stays
-    /// available so old peers are not dropped (compat, audit MEDIUM-6).
+    /// Only this chain's `1.1.0` id is advertised; the chain-independent
+    /// `1.0.0` legacy name is gone (Jarvis #81 review, P1).
     #[test]
-    fn block_sync_advertises_new_and_legacy_protocols_in_preference_order() {
-        assert_eq!(BLOCK_SYNC_PROTOCOL, "/kovanica/block-sync/1.1.0");
-        assert_eq!(BLOCK_SYNC_PROTOCOL_LEGACY, "/kovanica/block-sync/1.0.0");
-        let protocols = block_sync_protocols();
-        assert_eq!(protocols[0].0.as_ref(), BLOCK_SYNC_PROTOCOL);
-        assert_eq!(protocols[1].0.as_ref(), BLOCK_SYNC_PROTOCOL_LEGACY);
+    fn block_sync_advertises_only_the_chain_scoped_protocol() {
+        assert_eq!(BLOCK_SYNC_PROTOCOL, "block-sync/1.1.0");
+        let network = crate::NetworkId::default();
+        let protocols = block_sync_protocols(&network);
+        assert_eq!(protocols.len(), 1);
+        assert_eq!(
+            protocols[0].0.as_ref(),
+            format!("/kovanica/{}/block-sync/1.1.0", network.tag())
+        );
         assert!(protocols[0].1.inbound() && protocols[0].1.outbound());
-        assert!(protocols[1].1.inbound() && protocols[1].1.outbound());
+        assert!(protocols
+            .iter()
+            .all(|(p, _)| !p.as_ref().contains("block-sync/1.0.0")));
     }
 }

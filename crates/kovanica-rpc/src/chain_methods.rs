@@ -13,7 +13,9 @@
 //! `0x`-prefixed minimal hex ("quantity") strings.
 
 use crate::{RpcError, RpcState};
-use kovanica_storage::BlockStoreError;
+use kovanica_storage::{
+    query_tx_history, AddressTxIndexError, BlockStoreError, TxDirection, TxHistoryQuery,
+};
 use kovanica_types::{
     block::StatementBlock,
     hash::Hash,
@@ -103,21 +105,23 @@ fn parse_hash(value: &Value, what: &str) -> Result<Hash, RpcError> {
     Ok(Hash(parse_bytes32(value, what)?))
 }
 
-/// Parse an account address parameter.
-fn parse_address(value: &Value, what: &str) -> Result<Address, RpcError> {
+/// Parse an account address parameter for `chain_id`.
+///
+/// The canonical 64-character `kvnc…dag` base32 form is accepted on every
+/// chain. The legacy hex forms (`kvnc<hex>dag`, bare or `0x` hex) only where
+/// `kovanica_types::address::legacy_address_allowed` is true (devnet 3, chain
+/// 4, local 1337).
+fn parse_address(value: &Value, what: &str, chain_id: u64) -> Result<Address, RpcError> {
     let raw = value
         .as_str()
         .ok_or_else(|| RpcError::InvalidParams(format!("{what}: expected an address string")))?;
-    let raw = raw.trim();
-    // Canonical `kvnc…dag` encoding (checksum verified) or a raw 32-byte hex.
-    if raw.starts_with(kovanica_types::address::ADDRESS_PREFIX)
-        || raw.ends_with(kovanica_types::address::ADDRESS_SUFFIX)
-    {
-        return raw
-            .parse::<Address>()
-            .map_err(|e| RpcError::InvalidParams(format!("{what}: {e}")));
-    }
-    Ok(Address(parse_bytes32(value, what)?))
+    Address::parse_for_chain(raw, chain_id)
+        .map_err(|e| RpcError::InvalidParams(format!("{what}: {e}")))
+}
+
+/// Chain id this node serves (the mempool's signing context).
+fn served_chain_id(state: &RpcState) -> u64 {
+    state.mempool.signing_context().chain_id
 }
 
 /// Parse an integer parameter accepted as either a JSON number or a
@@ -470,6 +474,137 @@ pub async fn handle_get_transaction_by_hash(
     Ok(value)
 }
 
+/// `kovanica_getTransactionHistory` — newest-first committed transactions
+/// that touch an address.
+///
+/// Params is one object (or a one-element array containing that object):
+///
+/// - `address` (required): canonical `kvnc…dag` or a 32-byte hex address,
+///   parsed by the same chain-aware helper as the other account methods.
+/// - `limit` (optional): page size. Default 20. Values above 100 are clamped
+///   to 100. `0` returns an empty page. A string is a hex quantity, matching
+///   other integer parameters.
+/// - `cursor` (optional): opaque cursor from a previous `next_cursor`.
+///   A malformed cursor is `-32602`.
+/// - `direction` (optional): `sent`, `received`, or `all` (the default).
+///
+/// The read walks only that address's index and stops after one page.
+/// Block rewards are not transactions and are not in the history.
+/// `timestamp` is the leader-header producer time when it is non-zero, and
+/// `null` when the header is missing or still carries the consensus
+/// placeholder `0`. `amount` is atoms (`0` when the kind has no KUNA amount).
+/// `status` is `success` or `failed`.
+pub async fn handle_get_transaction_history(
+    params: Value,
+    state: RpcState,
+) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let obj = match args.first() {
+        Some(Value::Object(map)) => map,
+        Some(_) => {
+            return Err(RpcError::InvalidParams(
+                "getTransactionHistory: expected an object".into(),
+            ))
+        }
+        None => {
+            return Err(RpcError::InvalidParams(
+                "getTransactionHistory: missing parameters".into(),
+            ))
+        }
+    };
+
+    let address = parse_address(
+        obj.get("address")
+            .ok_or_else(|| RpcError::InvalidParams("missing parameter: address".into()))?,
+        "address",
+        served_chain_id(&state),
+    )?;
+    let limit = match obj.get("limit") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(parse_u64(value, "limit")?),
+    };
+    let cursor = match obj.get("cursor") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(raw)) => Some(raw.clone()),
+        Some(_) => return Err(RpcError::InvalidParams("cursor: expected a string".into())),
+    };
+    let direction = match obj.get("direction") {
+        None | Some(Value::Null) => TxDirection::All,
+        Some(Value::String(raw)) => match raw.as_str() {
+            "sent" => TxDirection::Sent,
+            "received" => TxDirection::Received,
+            "all" => TxDirection::All,
+            _ => {
+                return Err(RpcError::InvalidParams(
+                    "direction: expected sent, received, or all".into(),
+                ))
+            }
+        },
+        Some(_) => {
+            return Err(RpcError::InvalidParams(
+                "direction: expected sent, received, or all".into(),
+            ))
+        }
+    };
+
+    let txn = state.storage.begin_read().map_err(internal)?;
+    let page = query_tx_history(
+        &txn,
+        &TxHistoryQuery {
+            address,
+            limit,
+            cursor,
+            direction,
+        },
+    )
+    .map_err(|err| match err {
+        AddressTxIndexError::InvalidCursor => {
+            RpcError::InvalidParams("cursor: invalid transaction history cursor".into())
+        }
+        other => internal(other),
+    })?;
+
+    let mut timestamps: Vec<(u64, Value)> = Vec::new();
+    let mut entries = Vec::with_capacity(page.entries.len());
+    for entry in page.entries {
+        let timestamp = if let Some((_, ts)) = timestamps.iter().find(|(h, _)| *h == entry.height) {
+            ts.clone()
+        } else {
+            let ts = match state
+                .storage
+                .state()
+                .get_leader_header(&txn, entry.height)
+                .map_err(internal)?
+            {
+                Some(header) if header.timestamp != 0 => quantity(header.timestamp),
+                _ => Value::Null,
+            };
+            timestamps.push((entry.height, ts.clone()));
+            ts
+        };
+        let to = match entry.to {
+            Some(addr) => Value::String(addr.to_string()),
+            None => Value::Null,
+        };
+        entries.push(json!({
+            "hash": to_hex(&entry.tx_hash.0),
+            "height": quantity(entry.height),
+            "timestamp": timestamp,
+            "from": entry.from.to_string(),
+            "to": to,
+            "amount": quantity(entry.amount),
+            "fee": quantity(entry.fee),
+            "kind": entry.kind,
+            "status": if entry.success { "success" } else { "failed" },
+        }));
+    }
+
+    Ok(json!({
+        "entries": entries,
+        "next_cursor": page.next_cursor,
+    }))
+}
+
 // ============================================================================
 // Log query methods
 // ============================================================================
@@ -530,7 +665,7 @@ pub async fn handle_get_logs(params: Value, state: RpcState) -> Result<Value, Rp
         )));
     }
 
-    let addresses = parse_address_filter(filter.get("address"))?;
+    let addresses = parse_address_filter(filter.get("address"), served_chain_id(&state))?;
     let topics = parse_topics_filter(filter.get("topics"))?;
 
     let scanned =
@@ -617,14 +752,19 @@ fn parse_topic(value: &Value, what: &str) -> Result<Option<Vec<u8>>, RpcError> {
 
 /// Parse the `address` filter: a single address, an array of addresses, or
 /// absent/null for "no address constraint".
-fn parse_address_filter(value: Option<&Value>) -> Result<Option<Vec<Address>>, RpcError> {
+fn parse_address_filter(
+    value: Option<&Value>,
+    chain_id: u64,
+) -> Result<Option<Vec<Address>>, RpcError> {
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(value @ Value::String(_)) => Ok(Some(vec![parse_address(value, "address")?])),
+        Some(value @ Value::String(_)) => {
+            Ok(Some(vec![parse_address(value, "address", chain_id)?]))
+        }
         Some(Value::Array(items)) => Ok(Some(
             items
                 .iter()
-                .map(|item| parse_address(item, "address"))
+                .map(|item| parse_address(item, "address", chain_id))
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         Some(_) => Err(RpcError::InvalidParams(
@@ -691,7 +831,11 @@ fn topics_match(filter: &[Option<Vec<Vec<u8>>>], topic: &[u8]) -> bool {
 /// `kovanica_getBalance(address)` — native KUNA balance in atoms.
 pub async fn handle_get_balance(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
 
     let txn = state.storage.begin_read().map_err(internal)?;
     let account = state
@@ -705,7 +849,11 @@ pub async fn handle_get_balance(params: Value, state: RpcState) -> Result<Value,
 /// `kovanica_getNonce(address)` — account nonce.
 pub async fn handle_get_nonce(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
 
     let txn = state.storage.begin_read().map_err(internal)?;
     let account = state
@@ -719,7 +867,11 @@ pub async fn handle_get_nonce(params: Value, state: RpcState) -> Result<Value, R
 /// `kovanica_getCode(address)` — contract bytecode as hex.
 pub async fn handle_get_code(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
 
     let txn = state.storage.begin_read().map_err(internal)?;
     let account = state
@@ -744,7 +896,11 @@ pub async fn handle_get_code(params: Value, state: RpcState) -> Result<Value, Rp
 /// `kovanica_getStorageAt(address, key)` — raw contract storage slot as hex.
 pub async fn handle_get_storage_at(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
     let key = parse_storage_key(required(&args, 1, "storage key")?, "storage key")?;
 
     let txn = state.storage.begin_read().map_err(internal)?;
@@ -786,7 +942,11 @@ pub async fn handle_get_validators(_params: Value, state: RpcState) -> Result<Va
 /// has made.
 pub async fn handle_get_stake(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
 
     let staking = state.staking.read().await;
     let own_stake: u64 = staking
@@ -807,7 +967,11 @@ pub async fn handle_get_stake(params: Value, state: RpcState) -> Result<Value, R
 /// `kovanica_getRewards(address)` — cumulative rewards for an address.
 pub async fn handle_get_rewards(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
     let rewards = state.staking.read().await.reward_total(&address);
     Ok(quantity(rewards as u128))
 }
@@ -1099,7 +1263,11 @@ fn leader_tx_proof(state: &RpcState, header: &LeaderHeader, tx_hash: &Hash) -> V
 /// not the account rows. A requested older height is rejected.
 pub async fn handle_get_account_proof(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
-    let address = parse_address(required(&args, 0, "address")?, "address")?;
+    let address = parse_address(
+        required(&args, 0, "address")?,
+        "address",
+        served_chain_id(&state),
+    )?;
     let requested = match args.get(1) {
         Some(value) => Some(parse_u64(value, "height")?),
         None => None,
@@ -1155,13 +1323,13 @@ pub async fn handle_get_light_set(_params: Value, state: RpcState) -> Result<Val
     };
     // Light-set epoch is derived from the committed leader HEIGHT, matching
     // execution's beacon indexing (`note_light_beacon` / `pay_light_escrow`
-    // index the light set by `committed_height / EPOCH_ROUNDS`). It is a
+    // index the light set by `epoch_for_height(committed_height)`). It is a
     // deliberately distinct unit from the round-based committee epoch: the
     // light-set beacon must line up with the height at which execution wrote
     // it, not with the leader round of any seal. The arithmetic is the same
-    // `height / EPOCH_ROUNDS`; using the shared helper keeps the divisor
-    // canonical.
-    let epoch = kovanica_types::epoch_for_round(height);
+    // 8 h epoch length (2 400 heights); using the shared helper keeps the
+    // divisor canonical.
+    let epoch = kovanica_types::epoch_for_height(height);
     let Some(set) = state
         .storage
         .state()
@@ -1364,6 +1532,11 @@ pub struct SyncStatus {
     pub peer_count: usize,
     /// Connected peers, bounded by the node's `max_peers`.
     pub peers: Vec<SyncPeerStatus>,
+    /// `<chain_id>-<first 16 hex chars of the genesis digest>`. The same
+    /// string the node logs at startup (`network identity: peers must share
+    /// this tag`). `None` only when the process has no sync-status source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_tag: Option<String>,
 }
 
 /// Callable the node installs into [`RpcState`] to produce a fresh
@@ -1378,8 +1551,9 @@ pub type SyncStatusSource = Arc<dyn Fn() -> SyncStatus + Send + Sync>;
 /// `kovanica_syncStatus()` — read-only sync / catch-up and peer status.
 ///
 /// Reports the local DAG tip, the committed height, whether the node is
-/// catching up (and how far behind), and the connected peers with their last
-/// reported tip rounds. No parameters; needs no auth token (read-only).
+/// catching up (and how far behind), the connected peers with their last
+/// reported tip rounds, and this process's `networkTag`. No parameters; needs
+/// no auth token (read-only).
 pub async fn handle_sync_status(_params: Value, state: RpcState) -> Result<Value, RpcError> {
     let status = match &state.sync_status {
         Some(source) => source(),
@@ -1402,11 +1576,17 @@ mod tests {
     use kovanica_staking::{StakingState, MIN_VALIDATOR_STAKE};
     use kovanica_storage::Storage;
     use kovanica_types::crypto::PublicKey;
+    use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET, TESTNET_V2};
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
     fn hex32(byte: u8) -> String {
         format!("0x{}", hex::encode([byte; 32]))
+    }
+
+    /// Canonical (base32) address string. Every chain accepts this form.
+    fn addr32(byte: u8) -> String {
+        Address([byte; 32]).to_string()
     }
 
     fn test_state(storage: Arc<Storage>) -> RpcState {
@@ -1453,7 +1633,7 @@ mod tests {
         let value = Value::String(hex32(0xab));
         assert_eq!(parse_hash(&value, "hash").unwrap(), Hash([0xab; 32]));
         assert_eq!(
-            parse_address(&value, "address").unwrap(),
+            parse_address(&value, "address", TESTNET_V2).unwrap(),
             Address([0xab; 32])
         );
 
@@ -1465,18 +1645,34 @@ mod tests {
     fn parses_canonical_and_hex_addresses() {
         let address = Address([0x2a; 32]);
         assert_eq!(address.to_string(), address.encode());
-        assert_eq!(
-            parse_address(&json!(address.to_string()), "address").unwrap(),
-            address
-        );
-        assert_eq!(
-            parse_address(&json!(hex32(0x2a)), "address").unwrap(),
-            address
-        );
+        assert_eq!(address.to_string().len(), 64);
+        for chain in [MAINNET, TESTNET_V2, LOCAL] {
+            assert_eq!(
+                parse_address(&json!(address.to_string()), "address", chain).unwrap(),
+                address
+            );
+        }
+        // Legacy hex: devnet, chain 4, and local. Refused on mainnet and testnet.
+        for legacy in [hex32(0x2a), address.encode_legacy_hex()] {
+            for chain in [DEVNET, TESTNET_V2, LOCAL] {
+                assert_eq!(
+                    parse_address(&json!(legacy), "address", chain).unwrap(),
+                    address,
+                    "{legacy} on chain {chain}"
+                );
+            }
+            for chain in [MAINNET, TESTNET] {
+                let err = parse_address(&json!(legacy), "address", chain).unwrap_err();
+                assert!(format!("{err:?}").contains("legacy"), "{err:?}");
+            }
+        }
 
-        // Correct affixes/length but a wrong checksum must be rejected.
-        let bad = json!(format!("kvnc{}dag", "00".repeat(36)));
-        assert!(parse_address(&bad, "address").is_err());
+        // Correct affixes but a wrong checksum must be rejected.
+        let mut bad = address.encode();
+        bad.replace_range(10..11, if &bad[10..11] == "q" { "p" } else { "q" });
+        assert!(parse_address(&json!(bad), "address", MAINNET).is_err());
+        let bad_legacy = json!(format!("kvnc{}dag", "00".repeat(36)));
+        assert!(parse_address(&bad_legacy, "address", TESTNET_V2).is_err());
     }
 
     #[test]
@@ -1517,21 +1713,21 @@ mod tests {
         assert!(parse_block_ref(&json!("nope"), 0, "b").is_err());
 
         // Address filter: single, list, absent, invalid.
-        assert!(parse_address_filter(None).unwrap().is_none());
+        assert!(parse_address_filter(None, TESTNET_V2).unwrap().is_none());
         assert_eq!(
-            parse_address_filter(Some(&json!(hex32(0x11))))
+            parse_address_filter(Some(&json!(hex32(0x11))), TESTNET_V2)
                 .unwrap()
                 .unwrap(),
             vec![Address([0x11; 32])]
         );
         assert_eq!(
-            parse_address_filter(Some(&json!([hex32(0x11), hex32(0x22)])))
+            parse_address_filter(Some(&json!([hex32(0x11), hex32(0x22)])), TESTNET_V2)
                 .unwrap()
                 .unwrap()
                 .len(),
             2
         );
-        assert!(parse_address_filter(Some(&json!(5))).is_err());
+        assert!(parse_address_filter(Some(&json!(5)), TESTNET_V2).is_err());
 
         // Topic matching: empty/None wildcard, exact, and out-of-range position.
         assert!(topics_match(&[], events::TOKEN_TRANSFER));
@@ -1571,19 +1767,19 @@ mod tests {
             json!("0x0")
         );
         assert_eq!(
-            handle_get_balance(json!([hex32(0x11)]), state.clone())
+            handle_get_balance(json!([addr32(0x11)]), state.clone())
                 .await
                 .unwrap(),
             json!("0x0")
         );
         assert_eq!(
-            handle_get_nonce(json!([hex32(0x11)]), state.clone())
+            handle_get_nonce(json!([addr32(0x11)]), state.clone())
                 .await
                 .unwrap(),
             json!("0x0")
         );
         assert_eq!(
-            handle_get_code(json!([hex32(0x11)]), state.clone())
+            handle_get_code(json!([addr32(0x11)]), state.clone())
                 .await
                 .unwrap(),
             json!("0x")
@@ -2164,7 +2360,7 @@ mod tests {
         .unwrap();
         assert_eq!(by_addr.as_array().unwrap().len(), 1);
         let stranger = handle_get_logs(
-            json!([{ "fromBlock": "0x0", "address": hex32(0x77) }]),
+            json!([{ "fromBlock": "0x0", "address": addr32(0x77) }]),
             state.clone(),
         )
         .await
@@ -2308,6 +2504,7 @@ mod tests {
         // Absent optional fields are omitted rather than emitted as null.
         assert!(got.get("catchUpTarget").is_none());
         assert!(got.get("behindBy").is_none());
+        assert!(got.get("networkTag").is_none());
     }
 
     #[tokio::test]
@@ -2332,6 +2529,7 @@ mod tests {
                     reported_tip_round: None,
                 },
             ],
+            network_tag: Some("4-0123456789abcdef".to_string()),
         }));
 
         let got = handle_sync_status(Value::Null, state).await.unwrap();
@@ -2344,6 +2542,7 @@ mod tests {
         assert_eq!(got["peerCount"], json!(2));
         assert_eq!(got["peers"][0]["peerId"], json!("12D3KooWpeer-a"));
         assert_eq!(got["peers"][0]["reportedTipRound"], json!(200));
+        assert_eq!(got["networkTag"], json!("4-0123456789abcdef"));
         // Peer b has no tip: those fields are omitted.
         assert!(got["peers"][1].get("reportedTipRound").is_none());
         // listenAddr should not be present
@@ -2404,6 +2603,324 @@ mod tests {
         // Every entry is a leader round and strictly after the anchor.
         assert!(rounds.iter().all(|r| *r % WAVE_LENGTH == 0));
         assert!(rounds.iter().all(|r| *r > 7));
+    }
+
+    fn history_tx(
+        sender: Address,
+        to: Address,
+        amount: u64,
+        n: u64,
+        success: bool,
+    ) -> (kovanica_types::Transaction, bool) {
+        let mut raw = [0u8; 32];
+        raw[24..].copy_from_slice(&n.to_be_bytes());
+        let tx = kovanica_types::Transaction {
+            sender,
+            nonce: n,
+            kind: TransactionKind::Transfer { to, amount },
+            fee: 9,
+            signature: kovanica_types::Signature([0u8; 64]),
+            hash: Hash(raw),
+        };
+        (tx, success)
+    }
+
+    fn index_rows(storage: &Storage, rows: &[(u64, kovanica_types::Transaction, bool)]) {
+        let mut by_height: Vec<(u64, Vec<(&kovanica_types::Transaction, bool)>)> = Vec::new();
+        for (height, tx, success) in rows {
+            if let Some(group) = by_height.iter_mut().find(|(h, _)| h == height) {
+                group.1.push((tx, *success));
+            } else {
+                by_height.push((*height, vec![(tx, *success)]));
+            }
+        }
+        for (height, txs) in by_height {
+            let txn = storage.begin_write().unwrap();
+            kovanica_storage::index_committed_txs(&txn, height, &txs).unwrap();
+            txn.commit().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn transaction_history_pages_filters_and_rejects_bad_input() {
+        let (_dir, storage) = open_storage();
+        let alice = Address([0x11; 32]);
+        let bob = Address([0x22; 32]);
+        let mut owned = Vec::new();
+        for n in 1..=110u64 {
+            let (tx, success) = history_tx(alice, bob, n, n, n != 110);
+            owned.push((n, tx, success));
+        }
+        let stake = kovanica_types::Transaction {
+            sender: alice,
+            nonce: 200,
+            kind: TransactionKind::Stake { amount: 8 },
+            fee: 2,
+            signature: kovanica_types::Signature([0u8; 64]),
+            hash: Hash([0xab; 32]),
+        };
+        owned.push((111, stake, true));
+        index_rows(
+            &storage,
+            &owned
+                .iter()
+                .map(|(h, tx, ok)| (*h, tx.clone(), *ok))
+                .collect::<Vec<_>>(),
+        );
+
+        let state = test_state(storage.clone());
+        let params = json!({
+            "address": alice.to_string(),
+            "limit": 2,
+            "direction": "sent",
+        });
+        let first = handle_get_transaction_history(params, state.clone())
+            .await
+            .unwrap();
+        assert_eq!(first["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(first["entries"][0]["height"], json!("0x6f"));
+        assert_eq!(first["entries"][0]["kind"], json!("stake"));
+        assert_eq!(first["entries"][0]["status"], json!("success"));
+        assert_eq!(first["entries"][0]["to"], Value::Null);
+        assert_eq!(first["entries"][0]["timestamp"], Value::Null);
+        assert_eq!(first["entries"][0]["from"], json!(alice.to_string()));
+        assert!(first["next_cursor"].is_string());
+
+        let mut cursor = first["next_cursor"].as_str().unwrap().to_string();
+        let mut seen = vec![
+            first["entries"][0]["hash"].as_str().unwrap().to_string(),
+            first["entries"][1]["hash"].as_str().unwrap().to_string(),
+        ];
+        loop {
+            let page = handle_get_transaction_history(
+                json!({
+                    "address": hex32(0x11),
+                    "limit": 10,
+                    "cursor": cursor,
+                    "direction": "sent",
+                }),
+                state.clone(),
+            )
+            .await
+            .unwrap();
+            let entries = page["entries"].as_array().unwrap();
+            assert!(entries.len() <= 10);
+            for entry in entries {
+                let hash = entry["hash"].as_str().unwrap().to_string();
+                assert!(!seen.contains(&hash), "duplicate {hash}");
+                seen.push(hash);
+            }
+            match page["next_cursor"].as_str() {
+                Some(next) => cursor = next.to_string(),
+                None => break,
+            }
+        }
+        assert_eq!(seen.len(), 111);
+
+        let received = handle_get_transaction_history(
+            json!([{ "address": bob.to_string(), "direction": "received" }]),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(received["entries"].as_array().unwrap().len(), 20);
+        assert!(received["next_cursor"].is_string());
+        assert_eq!(received["entries"][0]["kind"], json!("transfer"));
+        assert_eq!(received["entries"][0]["to"], json!(bob.to_string()));
+        assert_eq!(received["entries"][0]["amount"], json!("0x6e"));
+        assert_eq!(received["entries"][0]["status"], json!("failed"));
+        assert!(received["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["kind"] == json!("transfer")));
+
+        let clamped = handle_get_transaction_history(
+            json!({ "address": alice.to_string(), "limit": 10_000 }),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(clamped["entries"].as_array().unwrap().len(), 100);
+        assert!(clamped["next_cursor"].is_string());
+
+        let zero = handle_get_transaction_history(
+            json!({ "address": alice.to_string(), "limit": 0 }),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(zero["entries"].as_array().unwrap().is_empty());
+        assert!(zero["next_cursor"].is_null());
+
+        assert!(matches!(
+            handle_get_transaction_history(json!({ "address": "not-an-address" }), state.clone())
+                .await,
+            Err(RpcError::InvalidParams(_))
+        ));
+        let bad_checksum = format!("kvnc{}dag", "00".repeat(36));
+        assert!(matches!(
+            handle_get_transaction_history(json!({ "address": bad_checksum }), state.clone()).await,
+            Err(RpcError::InvalidParams(_))
+        ));
+        assert!(matches!(
+            handle_get_transaction_history(
+                json!({ "address": alice.to_string(), "cursor": "zz" }),
+                state.clone()
+            )
+            .await,
+            Err(RpcError::InvalidParams(_))
+        ));
+        assert!(matches!(
+            handle_get_transaction_history(
+                json!({ "address": alice.to_string(), "direction": "outgoing" }),
+                state.clone()
+            )
+            .await,
+            Err(RpcError::InvalidParams(_))
+        ));
+        assert!(matches!(
+            handle_get_transaction_history(json!(["0x11"]), state.clone()).await,
+            Err(RpcError::InvalidParams(_))
+        ));
+
+        // A non-zero leader-header timestamp is returned; the placeholder 0 is not.
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_leader_header(
+                    &txn,
+                    &LeaderHeader {
+                        committed_height: 111,
+                        leader_round: 3,
+                        leader_digest: Hash([1u8; 32]),
+                        leader_author: 0,
+                        parent_leader_digest: Hash([0u8; 32]),
+                        tx_merkle_root: Hash([0u8; 32]),
+                        executed_tx_root: Hash([0u8; 32]),
+                        non_blue_root: Hash([0u8; 32]),
+                        blue_root: Hash([0u8; 32]),
+                        mysticghost: false,
+                        state_root: Hash([2u8; 32]),
+                        epoch: 0,
+                        committee_hash: Hash([3u8; 32]),
+                        timestamp: 42,
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let stamped = handle_get_transaction_history(
+            json!({ "address": alice.to_string(), "limit": 1 }),
+            state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(stamped["entries"][0]["timestamp"], json!("0x2a"));
+        assert_eq!(stamped["entries"][0]["fee"], json!("0x2"));
+        assert_eq!(stamped["entries"][0]["amount"], json!("0x8"));
+    }
+
+    #[tokio::test]
+    async fn transaction_history_follows_an_executed_commit() {
+        let (_dir, storage) = open_storage();
+        let key = kovanica_types::SigningKey::from_bytes(&[0x31; 32]);
+        let sender = Address(key.verifying_key().to_bytes());
+        let bob = Address([0x44; 32]);
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .set_account(
+                    &txn,
+                    &sender,
+                    &kovanica_storage::state_store::Account {
+                        balance: 1_000,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let sign_ctx =
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL);
+        let mut transfer = kovanica_types::Transaction {
+            sender,
+            nonce: 0,
+            kind: TransactionKind::Transfer {
+                to: bob,
+                amount: 15,
+            },
+            fee: 1,
+            signature: kovanica_types::Signature([0u8; 64]),
+            hash: Hash([0u8; 32]),
+        };
+        transfer.hash = transfer.signing_hash(&sign_ctx);
+        transfer.signature = kovanica_crypto::sign(&key, &transfer.signing_hash(&sign_ctx).0);
+        let parents = Vec::new();
+        let txs = vec![transfer.clone()];
+        let digest = StatementBlock::compute_digest(0, 1, &parents, &txs);
+        let block = StatementBlock {
+            author: 0,
+            round: 1,
+            parents,
+            transactions: txs,
+            statements: Vec::new(),
+            signature: kovanica_types::Signature([0u8; 64]),
+            digest,
+            merkle_root: Hash([0u8; 32]),
+        };
+        let leader_digest = StatementBlock::compute_digest(0, 1, &[], &[]);
+        let leader = StatementBlock {
+            author: 0,
+            round: 1,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_types::Signature([0u8; 64]),
+            digest: leader_digest,
+            merkle_root: Hash([0u8; 32]),
+        };
+        let subdag = kovanica_types::CommittedSubDag {
+            blocks: vec![block],
+            leader,
+            leader_round: 1,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        kovanica_execution::ExecutionContext::new()
+            .execute_committed_subdag(&subdag, &storage)
+            .expect("execute");
+
+        let state = test_state(storage);
+        let page = handle_get_transaction_history(
+            json!({ "address": sender.to_string(), "direction": "sent" }),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(page["entries"][0]["kind"], json!("transfer"));
+        assert_eq!(page["entries"][0]["amount"], json!("0xf"));
+        assert_eq!(page["entries"][0]["fee"], json!("0x1"));
+        assert_eq!(page["entries"][0]["status"], json!("success"));
+        assert_eq!(page["entries"][0]["from"], json!(sender.to_string()));
+        assert_eq!(page["entries"][0]["to"], json!(bob.to_string()));
+        assert_eq!(page["entries"][0]["height"], json!("0x0"));
+        assert!(page["next_cursor"].is_null());
+
+        let bob_page = handle_get_transaction_history(
+            json!({ "address": bob.to_string(), "direction": "received" }),
+            state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(bob_page["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            bob_page["entries"][0]["hash"],
+            json!(to_hex(&transfer.hash.0))
+        );
     }
 
     #[test]

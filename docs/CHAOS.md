@@ -5,10 +5,10 @@ It complements the existing in-process partition tests (`multi_node_integration`
 and the graceful `SIGTERM` restart test with **real process kills** and **real
 network impairment**.
 
-> **These tests are opt-in and never run on PR CI.** Run them by hand with the
+> **These tests are opt-in and executed manually or in scheduled test harnesses.** Run them by hand with the
 > scripts in `ops/chaos/` (see the quick reference). The `.github/workflows/chaos.yml`
 > workflow that could dispatch them was removed 2026-10-23 (kvnc PR #78); CI moves to KovanicaDAG/kovanica-protocol (PRO-14). It was
-> `workflow_dispatch`-only, never nightly. They require a release binary (see below).
+> `workflow_dispatch`-only, never nightly. They use `ops/chaos/docker-compose.chaos.yml` and require a release binary (see below).
 
 ---
 

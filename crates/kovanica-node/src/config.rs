@@ -124,6 +124,35 @@ pub struct NodeConfig {
     /// tests do not have to mutate process-global state. Never loaded from TOML.
     #[serde(skip)]
     pub forbidden_override: Option<&'static str>,
+    /// `KOVANICA_ALLOW_GENESIS_MISMATCH` was set to an enabling value.
+    ///
+    /// Recorded by [`NodeConfig::apply_env_overrides`] and rejected by
+    /// [`NodeConfig::validate`] on every chain that is not devnet (3) or local
+    /// (1337). Checked before the data directory is created. Never loaded from
+    /// TOML.
+    #[serde(skip)]
+    pub allow_genesis_mismatch: bool,
+}
+
+/// Env override that disables the genesis fork/contamination guard.
+///
+/// Enabling values are `1`, `true`, `yes` and `on`. Only dev chains may set
+/// it; [`NodeConfig::validate`] refuses it on every other chain before the
+/// data directory is created.
+pub const ALLOW_GENESIS_MISMATCH_ENV: &str = "KOVANICA_ALLOW_GENESIS_MISMATCH";
+
+/// True when `value` enables [`ALLOW_GENESIS_MISMATCH_ENV`].
+///
+/// Pure so the accepted spellings can be tested without the process environment.
+pub fn genesis_mismatch_override_enabled(value: Option<&str>) -> bool {
+    matches!(
+        value
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 fn default_retention_interval() -> u64 {
@@ -165,6 +194,7 @@ impl Default for NodeConfig {
             retention_interval_secs: 300,
             retention_batch: 10_000,
             forbidden_override: None,
+            allow_genesis_mismatch: false,
         }
     }
 }
@@ -365,6 +395,12 @@ impl NodeConfig {
                 Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_RETENTION_BATCH"),
             }
         }
+        // Recorded here and rejected in `validate` so a non-dev chain fails
+        // before `run_node` creates the data directory. Dev chains (3, 1337)
+        // keep the override; every other chain must not set it.
+        self.allow_genesis_mismatch = genesis_mismatch_override_enabled(
+            std::env::var(ALLOW_GENESIS_MISMATCH_ENV).ok().as_deref(),
+        );
         // Record (do not yet reject) a consensus-parameter override that the
         // final chain_id forbids. This runs last because `chain_id` is itself an
         // override; validation then turns the record into a hard error, so the
@@ -421,6 +457,18 @@ impl NodeConfig {
         if !kovanica_types::signing::chain_id::is_registered(self.chain_id) {
             anyhow::bail!(
                 "chain_id {} is not registered (expected 1 mainnet, 2 testnet, 3 devnet, 4 testnet v2 or 1337 local)",
+                self.chain_id
+            );
+        }
+        // Before any data directory is created: the override is dev-only.
+        // `!is_dev` covers chain 2 and every other non-dev chain, not only 1 and 4.
+        if self.allow_genesis_mismatch && !kovanica_types::signing::chain_id::is_dev(self.chain_id)
+        {
+            anyhow::bail!(
+                "{ALLOW_GENESIS_MISMATCH_ENV} must not be set on chain_id {}: it is only \
+                 available on dev chains (3 devnet, 1337 local). Unset \
+                 {ALLOW_GENESIS_MISMATCH_ENV}. On a shared chain a mismatched data dir \
+                 is fixed by a wipe",
                 self.chain_id
             );
         }
@@ -611,6 +659,50 @@ treasury_address = "treasury-address-placeholder"
         let mut c = base;
         c.rpc_addr = "not an ip".into();
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn genesis_mismatch_override_is_refused_on_non_dev_chains() {
+        let _guard = env_guard();
+        std::env::set_var(ALLOW_GENESIS_MISMATCH_ENV, "1");
+        let mut config = NodeConfig {
+            run_validator: false,
+            chain_id: 1,
+            ..NodeConfig::default()
+        };
+        config.apply_env_overrides();
+        std::env::remove_var(ALLOW_GENESIS_MISMATCH_ENV);
+        assert!(config.allow_genesis_mismatch);
+
+        for chain_id in [1, 2, 4] {
+            config.chain_id = chain_id;
+            let err = config
+                .validate()
+                .expect_err("non-dev chain must refuse the override");
+            let msg = err.to_string();
+            assert!(
+                msg.contains(ALLOW_GENESIS_MISMATCH_ENV),
+                "{chain_id}: {msg}"
+            );
+            assert!(msg.contains("must not be set"), "{chain_id}: {msg}");
+            assert!(msg.contains("dev chains"), "{chain_id}: {msg}");
+        }
+        for chain_id in [3, 1337] {
+            config.chain_id = chain_id;
+            config
+                .validate()
+                .unwrap_or_else(|e| panic!("chain {chain_id} may set the override: {e}"));
+        }
+
+        // A disabling spelling does not request the override.
+        std::env::set_var(ALLOW_GENESIS_MISMATCH_ENV, "false");
+        config.chain_id = 2;
+        config.apply_env_overrides();
+        std::env::remove_var(ALLOW_GENESIS_MISMATCH_ENV);
+        assert!(!config.allow_genesis_mismatch);
+        config
+            .validate()
+            .expect("chain 2 without the override is valid");
     }
 
     #[test]

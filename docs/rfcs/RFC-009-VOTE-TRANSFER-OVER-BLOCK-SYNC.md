@@ -130,7 +130,9 @@ is unchanged.
 
 `Vote::signature_data` commits to the committee epoch
 (`docs/SIGNATURE_FORMAT.md` §1), and the epoch is a pure function of the round
-(`kovanica_types::epoch_for_round`, `EPOCH_ROUNDS = 7_200`). The engine already
+(`kovanica_types::epoch_for_round`, `EPOCH_ROUNDS = 7_200` DAG rounds ≈ 8 h; the
+height-based staking epoch `epoch_for_height` is a different counter and is
+not used for vote signing). The engine already
 derives the verification context from the *leader round*, not from wall-clock
 now (`ConsensusEngine::vote_signing_ctx`). A vote cast in epoch 3 therefore
 verifies correctly when replayed in epoch 9.
@@ -256,7 +258,8 @@ this, transferring votes alone would have moved the joiner from "no votes" to
 - **Wire compatibility.** Both variants are *appended* to their enums, so the
   bincode variant indices of existing variants are unchanged.
 - **Historical signature validity.** `vote_signing_ctx(leader_round)` derives
-  the epoch from the round via `epoch_for_round` (`EPOCH_ROUNDS = 7200`), not
+  the epoch from the round via `epoch_for_round` (`EPOCH_ROUNDS = 7200` DAG
+  rounds ≈ 8 h), not from committed height and not
   from wall clock, so a vote cast in an earlier epoch still verifies.
 
 ### 8.4 New tests
