@@ -3,17 +3,12 @@
 //! Status, balance, stake, and rewards read the node JSON-RPC. Governance
 //! proposal commands are still a TODO: the node has no proposal RPC.
 
-<<<<<<< HEAD
 use anyhow::{anyhow, bail, Context, Result};
-=======
-use anyhow::{anyhow, Result};
->>>>>>> origin/main
 use serde_json::{json, Value};
 
-use crate::amount::{format_kuna_decimal, format_kuna_fixed};
+use crate::amount::{format_kuna, format_kuna_decimal, format_kuna_fixed};
 use crate::output::{print_json, print_kv, print_table};
 use crate::rpc::{parse_quantity, RpcClient};
-use crate::tui::format_kuna;
 use crate::wallet::parse_address;
 use kovanica_types::Address;
 

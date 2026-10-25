@@ -6,11 +6,6 @@
 //! commands. Contracts stay on the `kovanica htlc`, `vault`, `multisig`, and `token`
 //! commands.
 
-<<<<<<< HEAD
-=======
-mod amount;
-pub(crate) use amount::format_kuna;
->>>>>>> origin/main
 mod app;
 mod net;
 mod ui;
