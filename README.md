@@ -232,9 +232,9 @@ curl -s -X POST http://127.0.0.1:8545/rpc \
   -d '{"jsonrpc":"2.0","id":2,"method":"kovanica_syncStatus","params":[]}'
 ```
 
-**Supported JSON-RPC Methods (26 Core Methods):**
+**Supported JSON-RPC Methods (27 Core Methods):**
 - **Chain & Block:** `kovanica_blockNumber`, `kovanica_getBlockByHash`, `kovanica_getBlockByNumber`, `kovanica_syncStatus`
-- **Transactions & Accounts:** `kovanica_sendRawTransaction`, `kovanica_getTransactionReceipt`, `kovanica_getTransactionByHash`, `kovanica_getPendingTransactions`, `kovanica_estimateFee`, `kovanica_getBalance`, `kovanica_getNonce`, `kovanica_getCode`, `kovanica_getStorageAt`, `kovanica_getLogs`
+- **Transactions & Accounts:** `kovanica_sendRawTransaction`, `kovanica_getTransactionReceipt`, `kovanica_getTransactionByHash`, `kovanica_getTransactionHistory`, `kovanica_getPendingTransactions`, `kovanica_estimateFee`, `kovanica_getBalance`, `kovanica_getNonce`, `kovanica_getCode`, `kovanica_getStorageAt`, `kovanica_getLogs`
 - **Consensus & Staking:** `kovanica_getValidators`, `kovanica_getStake`, `kovanica_getRewards`, `kovanica_getLeaderSchedule`, `kovanica_getCommittee`, `kovanica_getCommitteeInfo`
 - **Light Client & Verification:** `kovanica_getLeaderHeader`, `kovanica_getCommitSeals`, `kovanica_getTxProof`, `kovanica_getAccountProof`, `kovanica_getLightSet`, `kovanica_lightClientCheckpoint`
 
@@ -347,6 +347,7 @@ Detailed architectural specifications and operational runbooks:
 - **Governance Specification:** [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md)
 - **Audit Scope & Threat Model:** [`docs/AUDIT-SCOPE.md`](docs/AUDIT-SCOPE.md)
 - **Documentation Archive Index:** [`docs/archive/README.md`](docs/archive/README.md)
+- **JSON-RPC Reference:** [`docs/RPC.md`](docs/RPC.md)
 - **Comprehensive 2026 Audit Report:** [`docs/AUDIT_REPORT_2026.md`](docs/AUDIT_REPORT_2026.md)
 
 ---
