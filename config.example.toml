@@ -22,7 +22,7 @@
 #   retention_batch                 -> KOVANICA_RETENTION_BATCH
 
 # Extra env-only overrides without a TOML equivalent:
-#   KOVANICA_CHAIN_ID                   (1 mainnet, 2 testnet, 3 devnet, 1337 local)
+#   KOVANICA_CHAIN_ID                   (1 mainnet, 2 legacy testnet, 3 devnet, 4 public testnet, 1337 local)
 #   KOVANICA_RPC_AUTH                   (disable|on, default on)
 #   KOVANICA_RPC_WRITE_TOKENS
 #   KOVANICA_HEALTH_COMMIT_STALL_SECS   (default 120; 0 disables the /health stall check)

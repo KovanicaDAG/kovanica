@@ -29,7 +29,7 @@ x-node: &node
     KOVANICA_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "30"
     KOVANICA_MEMPOOL_MIN_FEE_RATE: "0"
     KOVANICA_BOOTNODES: "testnet.kovanica.online:8000"
-    KOVANICA_CHAIN_ID: "2"
+    KOVANICA_CHAIN_ID: "4"
     RUST_LOG: "info"
 
 x-healthcheck: &healthcheck
