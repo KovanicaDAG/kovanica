@@ -129,8 +129,12 @@ impl Host for WasmHost {
         if rc == 0 {
             Ok(())
         } else {
-            // Host-supplied error code → Custom (signed magnitudes folded).
-            Err(ContractError::Custom(rc.unsigned_abs()))
+            let code = -1 - rc;
+            if let Some(err) = ContractError::from_code(code) {
+                Err(err)
+            } else {
+                Err(ContractError::Custom(rc.unsigned_abs()))
+            }
         }
     }
 

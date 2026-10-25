@@ -99,6 +99,11 @@ pub fn min_gas_for_module(byte_len: usize) -> u64 {
     (byte_len as u64).saturating_mul(GAS_PER_MODULE_BYTE)
 }
 
+/// Default linear memory page cap for contract execution (256 pages = 16 MiB).
+/// Standard Rust-compiled contracts require more than the legacy 16-page (1 MiB) limit
+/// for their stack and data segments.
+pub const DEFAULT_CONTRACT_MEMORY_PAGES: u32 = 256;
+
 /// Configuration for a single contract execution.
 pub struct ExecutionConfig {
     pub gas_limit: u64,
@@ -109,7 +114,7 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             gas_limit: MAX_TX_GAS_LIMIT,
-            memory_limit_pages: 16, // 1 MiB
+            memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
         }
     }
 }
@@ -139,6 +144,34 @@ impl Runtime {
     /// Compile a WASM module (should be cached in production).
     pub fn compile(&self, wasm_bytes: &[u8]) -> Result<Module, RuntimeError> {
         Module::new(&self.engine, wasm_bytes).map_err(|e| RuntimeError::Compilation(e.to_string()))
+    }
+
+    /// Verify that `wasm_bytes` compiles as a valid module and confirms that it
+    /// exports the required symbols for contract execution: `"memory"`,
+    /// `"kovanica_alloc"`, and `"kovanica_dealloc"`.
+    pub fn validate_contract_module(&self, wasm_bytes: &[u8]) -> Result<(), RuntimeError> {
+        let module = self.compile(wasm_bytes)?;
+        let mut has_memory = false;
+        let mut has_alloc = false;
+        let mut has_dealloc = false;
+        for export in module.exports() {
+            match export.name() {
+                "memory" => has_memory = true,
+                "kovanica_alloc" => has_alloc = true,
+                "kovanica_dealloc" => has_dealloc = true,
+                _ => {}
+            }
+        }
+        if !has_memory {
+            return Err(RuntimeError::MissingExport("memory".to_string()));
+        }
+        if !has_alloc {
+            return Err(RuntimeError::MissingExport("kovanica_alloc".to_string()));
+        }
+        if !has_dealloc {
+            return Err(RuntimeError::MissingExport("kovanica_dealloc".to_string()));
+        }
+        Ok(())
     }
 
     /// Execute a contract call with gas metering.
@@ -345,9 +378,9 @@ fn read_guest(
         return Ok(Vec::new());
     }
     let memory = guest_memory(caller)?;
-    // Check against total memory size *before* allocating — `ptr`/`len` are
-    // guest-controlled.
-    if len as usize > memory.data_size(caller) {
+    // Check full pointer + length against total memory size *before* allocating —
+    // `ptr`/`len` are guest-controlled.
+    if (ptr as usize).saturating_add(len as usize) > memory.data_size(caller) {
         return Err(wasmi::Error::new(
             "guest memory slice exceeds linear memory size",
         ));
@@ -369,6 +402,11 @@ fn write_guest(
         return Err(wasmi::Error::new("negative guest memory offset"));
     }
     let memory = guest_memory(caller)?;
+    if (ptr as usize).saturating_add(bytes.len()) > memory.data_size(&*caller) {
+        return Err(wasmi::Error::new(
+            "guest memory slice exceeds linear memory size",
+        ));
+    }
     memory
         .write(caller, ptr as usize, bytes)
         .map_err(|e| wasmi::Error::new(format!("guest memory write out of bounds: {e}")))?;
@@ -1015,5 +1053,54 @@ mod tests {
             matches!(error, RuntimeError::Execution(_)),
             "memory limiter should reject growth as an execution trap: {error:?}"
         );
+    }
+
+    #[test]
+    fn validate_contract_module_checks_required_exports() {
+        let runtime = Runtime::new();
+        let body = [0, 0x42, 0, 0x0b];
+
+        // Valid module with memory, kovanica_alloc, and kovanica_dealloc
+        let valid_wasm = test_module(&body, ModuleOptions::default());
+        assert!(runtime.validate_contract_module(&valid_wasm).is_ok());
+
+        // Missing memory
+        let no_memory = test_module(
+            &body,
+            ModuleOptions {
+                memory: false,
+                ..ModuleOptions::default()
+            },
+        );
+        assert!(matches!(
+            runtime.validate_contract_module(&no_memory),
+            Err(RuntimeError::MissingExport(name)) if name == "memory"
+        ));
+
+        // Missing kovanica_alloc
+        let no_alloc = test_module(
+            &body,
+            ModuleOptions {
+                alloc_export: false,
+                ..ModuleOptions::default()
+            },
+        );
+        assert!(matches!(
+            runtime.validate_contract_module(&no_alloc),
+            Err(RuntimeError::MissingExport(name)) if name == "kovanica_alloc"
+        ));
+
+        // Missing kovanica_dealloc
+        let no_dealloc = test_module(
+            &body,
+            ModuleOptions {
+                dealloc_export: false,
+                ..ModuleOptions::default()
+            },
+        );
+        assert!(matches!(
+            runtime.validate_contract_module(&no_dealloc),
+            Err(RuntimeError::MissingExport(name)) if name == "kovanica_dealloc"
+        ));
     }
 }

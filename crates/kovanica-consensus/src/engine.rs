@@ -46,6 +46,12 @@ const MAX_COMMIT_DRAIN_STEPS: usize = 4096;
 /// per node.
 pub const LATE_VOTE_AWAITED_SLOTS: u64 = 2;
 
+/// Maximum number of leader rounds buffered in `pending_votes` ahead of `last_decided_round` (PRO-40 (a)).
+pub const MAX_PENDING_VOTE_ROUNDS: usize = 16;
+
+/// Maximum number of unanchored votes buffered per leader round (PRO-40 (a)).
+pub const MAX_PENDING_VOTES_PER_ROUND: usize = 32;
+
 /// Trait for broadcasting blocks to the network.
 pub trait BlockBroadcaster: Send + Sync {
     fn broadcast_block(&self, block: &StatementBlock);
@@ -483,6 +489,9 @@ where
     /// limit answers to lagging peers.
     cert_served: Mutex<HashMap<Round, Instant>>,
     timeout_broadcaster: RwLock<Option<Arc<dyn TimeoutBroadcaster>>>,
+    /// Bounded buffer for unanchored/early votes on awaited or future leader rounds (PRO-40 (a)).
+    /// Holds votes that arrived before the corresponding leader block was ingested.
+    pending_votes: Mutex<std::collections::BTreeMap<Round, Vec<kovanica_types::Vote>>>,
 }
 
 impl<D, B> ConsensusEngine<D, B>
@@ -554,6 +563,7 @@ where
             stall_timer: Mutex::new(None),
             cert_served: Mutex::new(HashMap::new()),
             timeout_broadcaster: RwLock::new(None),
+            pending_votes: Mutex::new(std::collections::BTreeMap::new()),
         }
     }
 
@@ -1733,6 +1743,50 @@ where
         }
     }
 
+    /// Ingest and apply any buffered unanchored votes for `round` that match `digest` (PRO-40 (a)).
+    fn apply_buffered_votes(&self, round: Round, digest: Hash) -> Result<(), ConsensusError> {
+        let buffered = self.pending_votes.lock().remove(&round);
+        let Some(votes) = buffered else {
+            return Ok(());
+        };
+        let mut quorum_reached = false;
+        for vote in votes {
+            if vote.leader_hash == digest {
+                match self
+                    .committer
+                    .add_verified_vote(round, vote.voter, vote.leader_hash)
+                {
+                    Ok(reached) => {
+                        if reached {
+                            quorum_reached = true;
+                        }
+                        if let Err(e) = self.dag_store.as_ref().put_vote(&vote) {
+                            warn!(
+                                leader_round = round,
+                                voter = vote.voter,
+                                error = %e,
+                                "buffered vote could not be persisted"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        debug!(
+                            leader_round = round,
+                            voter = vote.voter,
+                            error = %e,
+                            "buffered vote could not be applied"
+                        );
+                    }
+                }
+            }
+        }
+        if quorum_reached {
+            info!("Leader round {} reached quorum from buffered votes", round);
+            self.drain_commits()?;
+        }
+        Ok(())
+    }
+
     /// Process a received block from another validator.
     pub fn process_block(
         &self,
@@ -1765,6 +1819,7 @@ where
                         };
                         self.committer.update_leader(leader_info);
                         self.note_leader_block_seen(block.round);
+                        self.apply_buffered_votes(block.round, block.digest)?;
                         self.try_commit_and_deliver()?;
                         self.vote_if_late(block.round)?;
                         return Ok(());
@@ -1818,6 +1873,7 @@ where
             };
             self.committer.update_leader(leader_info);
             self.note_leader_block_seen(block.round);
+            self.apply_buffered_votes(block.round, block.digest)?;
         }
 
         // Clear timeout if this block resolves the current leader slot
@@ -1887,6 +1943,48 @@ where
             }
         }
 
+        let leader_opt = self.committer.get_leader(leader_round);
+        let is_unanchored = match &leader_opt {
+            None => true,
+            Some(info) => info.block_hash.is_none(),
+        };
+
+        if is_unanchored {
+            let last_decided = self.committer.last_decided_round();
+            let current_round = self.current_round();
+            if leader_round > last_decided
+                && leader_round <= current_round.saturating_add(3 * crate::WAVE_LENGTH)
+            {
+                let mut pending = self.pending_votes.lock();
+                // Evict votes for rounds <= last_decided
+                pending.retain(|&r, _| r > last_decided);
+
+                // Enforce bounds: retain at most MAX_PENDING_VOTE_ROUNDS rounds ahead of last_decided
+                if pending.len() >= MAX_PENDING_VOTE_ROUNDS && !pending.contains_key(&leader_round)
+                {
+                    if let Some(&max_r) = pending.keys().next_back() {
+                        if leader_round < max_r {
+                            pending.remove(&max_r);
+                        }
+                    }
+                }
+                if pending.len() < MAX_PENDING_VOTE_ROUNDS || pending.contains_key(&leader_round) {
+                    let votes = pending.entry(leader_round).or_default();
+                    if votes.len() < MAX_PENDING_VOTES_PER_ROUND
+                        && !votes.iter().any(|v| v.voter == voter)
+                    {
+                        votes.push(vote.clone());
+                        debug!(
+                            leader_round,
+                            voter, "buffered unanchored vote for future/awaited leader round"
+                        );
+                    }
+                }
+                return Ok(());
+            }
+            return Err(VoteRejection::UnknownLeaderRound(leader_round).into());
+        }
+
         let has_quorum = self
             .committer
             .add_verified_vote(leader_round, voter, vote.leader_hash)?;
@@ -1904,7 +2002,7 @@ where
         }
         if has_quorum {
             info!("Leader round {} now has quorum", leader_round);
-            self.try_commit_and_deliver()?;
+            self.drain_commits()?;
         }
         Ok(())
     }
@@ -1928,10 +2026,14 @@ where
                 record_skipped_leader(SkipReason::Certified);
                 self.timeout_pool.lock().prune_through(round);
                 self.leader_first_seen.write().remove(&round);
+                self.pending_votes.lock().retain(|&r, _| r > round);
             }
             return Ok(());
         };
         self.timeout_pool.lock().prune_through(subdag.leader_round);
+        self.pending_votes
+            .lock()
+            .retain(|&r, _| r > subdag.leader_round);
         let commit_elapsed_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
 
         // The committer persists before publication. On restart, the node
@@ -2012,6 +2114,20 @@ where
     /// applicable".
     pub fn registered_leader(&self, round: Round) -> Option<LeaderInfo> {
         self.committer.get_leader(round)
+    }
+
+    /// Returns the number of buffered unanchored votes for `round` (PRO-40 (a)).
+    pub fn pending_votes_count(&self, round: Round) -> usize {
+        self.pending_votes
+            .lock()
+            .get(&round)
+            .map(|v| v.len())
+            .unwrap_or(0)
+    }
+
+    /// Returns the rounds currently present in the pending vote buffer (PRO-40 (a)).
+    pub fn pending_vote_rounds(&self) -> Vec<Round> {
+        self.pending_votes.lock().keys().copied().collect()
     }
 
     /// Commit every leader the registered votes already justify.
@@ -3106,9 +3222,13 @@ mod tests {
             merkle_root: Default::default(),
         };
         engine.process_block(&block).unwrap();
-        // A vote for a leader round nobody registered.
-        let vote = signed_vote(&key, 6, 0, digest);
-        assert!(engine.process_vote(&vote).is_err());
+        // A vote for a non-leader round (rejected by consensus).
+        let not_leader = signed_vote(&key, 4, 0, digest);
+        assert!(engine.process_vote(&not_leader).is_err());
+        // An unanchored vote for round 6 is buffered, not persisted.
+        let vote6 = signed_vote(&key, 6, 0, digest);
+        assert!(engine.process_vote(&vote6).is_ok());
+        assert_eq!(engine.pending_votes_count(6), 1);
         // A vote with a broken signature.
         let mut bad = signed_vote(&key, 3, 0, digest);
         bad.signature = kovanica_types::Signature([1u8; 64]);
@@ -3155,20 +3275,17 @@ mod tests {
             "the commit walk must not pass an undecided leader"
         );
 
-        // The earlier leader reaches quorum: it commits, and the later one
-        // stays behind it.
+        // The earlier leader reaches quorum: under PRO-40 (a) cascade commit draining,
+        // it commits immediately and cascades to commit the waiting later leader.
         engine
             .process_vote(&signed_vote(&key, 3, 0, digest3))
             .unwrap();
         assert_eq!(receiver.try_recv().unwrap().leader.digest, digest3);
-        assert!(
-            receiver.try_recv().is_err(),
-            "the later leader is still waiting behind the earlier one"
-        );
-
-        // Draining commits the leader that was already at quorum.
-        engine.drain_commits().unwrap();
         assert_eq!(receiver.try_recv().unwrap().leader.digest, digest6);
+        assert!(receiver.try_recv().is_err());
+
+        // Draining again is idempotent when nothing is left to commit.
+        engine.drain_commits().unwrap();
         assert!(receiver.try_recv().is_err());
         assert_eq!(
             dag.decisions.lock().as_slice(),
@@ -3256,16 +3373,14 @@ mod tests {
         );
 
         // Even with a later quorum available, the earlier failed decision is
-        // retried and delivered first; the later one follows it.
+        // retried and delivered first; under PRO-40 (a) cascade draining, both
+        // round 3 and round 6 are committed and delivered in order.
         engine
             .process_vote(&signed_vote(&key, 6, 0, later_digest))
             .unwrap();
         assert_eq!(receiver.try_recv().unwrap().leader_round, 3);
-        assert!(receiver.try_recv().is_err());
-        // A repeated vote is now rejected as a duplicate, so drive the next
-        // commit attempt directly.
-        engine.try_commit_and_deliver().unwrap();
         assert_eq!(receiver.try_recv().unwrap().leader_round, 6);
+        assert!(receiver.try_recv().is_err());
         assert_eq!(
             dag.decisions.lock().as_slice(),
             &[(3, digest), (6, later_digest)]
