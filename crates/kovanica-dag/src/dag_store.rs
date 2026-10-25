@@ -459,6 +459,25 @@ impl DagStore {
         Ok(())
     }
 
+    /// Record `round` as a certified skip (PRO-40 (b)): decided, no leader.
+    ///
+    /// Idempotent for a round that is already skipped. A round that already
+    /// holds a leader decision is never overwritten:
+    /// [`DagStoreError::ConflictingDecision`].
+    pub fn mark_round_skipped(&self, round: Round) -> Result<(), DagStoreError> {
+        let txn = self.storage.begin_write()?;
+        if !self.storage.consensus().mark_round_skipped(&txn, round)? {
+            drop(txn);
+            return Err(DagStoreError::ConflictingDecision {
+                round,
+                existing: self.get_decided_leaders(round)?,
+                new: Hash::zero(),
+            });
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
     /// Increment the committed leader height and set last committed.
     pub fn commit_leader(&self, leader_hash: &Hash) -> Result<u64, DagStoreError> {
         let txn = self.storage.begin_write()?;
@@ -1182,5 +1201,28 @@ mod tests {
         assert_eq!(store.get_committed_leader_height().unwrap(), 1);
         assert_eq!(store.get_decided_leaders(3).unwrap(), vec![a.digest]);
         assert_eq!(store.get_last_committed().unwrap(), Some(a.digest));
+    }
+
+    // PRO-40 (b): a certified skip is a decided round without leaders, it
+    // survives a reopen, and it never overrides a commit.
+    #[test]
+    fn mark_round_skipped_survives_reopen_and_never_overrides_a_commit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dag.redb");
+        let leader = Hash::new(b"kovanica-dag-test/skip/leader");
+        {
+            let store = DagStore::new(Storage::new(&path).unwrap()).unwrap();
+            store.mark_round_skipped(3).unwrap();
+            store.mark_round_skipped(3).unwrap();
+            store.mark_decided_and_commit_leader(6, &leader).unwrap();
+            assert!(matches!(
+                store.mark_round_skipped(6),
+                Err(DagStoreError::ConflictingDecision { round: 6, .. })
+            ));
+        }
+        let store = DagStore::new(Storage::new(&path).unwrap()).unwrap();
+        assert_eq!(store.get_decided_rounds(u64::MAX).unwrap(), vec![3, 6]);
+        assert!(store.get_decided_leaders(3).unwrap().is_empty());
+        assert_eq!(store.get_decided_leaders(6).unwrap(), vec![leader]);
     }
 }

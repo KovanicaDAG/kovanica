@@ -21,8 +21,9 @@ data class RegistryEntry(
  * `kovanica_getStorageAt`. Nothing is ever signed or submitted, and the app never
  * deploys a contract. Call it off the UI thread.
  *
- * @param contractAddress `kvnc…dag` string or raw 32-byte hex. Blank means the
- *   registry is not configured and every lookup returns null.
+ * @param contractAddress canonical 64-character `kvnc…dag` address. Blank means
+ *   the registry is not configured and every lookup returns null. The caller
+ *   applies the chain policy before this string is sent.
  */
 class RegistryClient(
     private val node: NodeClient,
