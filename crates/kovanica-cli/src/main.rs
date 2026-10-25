@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
 
+use kovanica_cli::amount::{format_kuna_fixed, parse_cli_amount};
 use kovanica_cli::contracts::{
     ContractCommand, HtlcCommand, MultisigCommand, TokenCommand, VaultCommand,
 };
@@ -74,7 +75,15 @@ enum Commands {
     /// Show chain info (alias of `status`)
     Info,
     /// Query an account balance
-    Balance { address: String },
+    Balance {
+        /// Kovanica address
+        address: String,
+    },
+    /// Show stake, delegations, and rewards for a Kovanica address
+    Staking {
+        /// Kovanica address
+        address: String,
+    },
     /// List committed transactions for an address, newest first
     History(HistoryArgs),
     /// Stake KUNA (builds and submits a signed Stake transaction)
@@ -233,11 +242,11 @@ struct SignArgs {
 /// Arguments for `kovanica transfer`.
 #[derive(Args)]
 struct TransferArgs {
-    /// Recipient address (32-byte hex)
+    /// Recipient Kovanica address
     #[arg(long)]
     to: String,
-    /// Amount in atoms
-    #[arg(long)]
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -250,8 +259,8 @@ struct TransferArgs {
 /// Arguments carrying a single amount plus the signing keystore.
 #[derive(Args)]
 struct AmountArgs {
-    /// Amount in atoms
-    #[arg(long)]
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -267,8 +276,8 @@ struct RegisterLightNodeArgs {
     /// VRF public key (32-byte hex)
     #[arg(long)]
     vrf_public_key: String,
-    /// Bond amount in atoms (minimum 100 KUNA = 100_000_000_000)
-    #[arg(long)]
+    /// Bond of at least 100 KUNA (`100KUNA` or `100.0`). Atoms need a suffix (`5atoms`). A bare integer is rejected.
+    #[arg(long, value_parser = parse_cli_amount)]
     stake: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -281,11 +290,11 @@ struct RegisterLightNodeArgs {
 /// Arguments for `kovanica delegate`.
 #[derive(Args)]
 struct DelegateArgs {
-    /// Validator address (32-byte hex)
+    /// Validator Kovanica address
     #[arg(long)]
     validator: String,
-    /// Amount in atoms
-    #[arg(long)]
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -298,7 +307,7 @@ struct DelegateArgs {
 /// Arguments for `kovanica claim-rewards`.
 #[derive(Args)]
 struct ClaimRewardsArgs {
-    /// Validator address (32-byte hex, optional - claims all if omitted)
+    /// Validator Kovanica address (optional — claims all if omitted)
     #[arg(long)]
     validator: Option<String>,
     /// Keystore file path
@@ -312,7 +321,7 @@ struct ClaimRewardsArgs {
 /// Arguments for `kovanica set-commission`.
 #[derive(Args)]
 struct SetCommissionArgs {
-    /// Validator address (32-byte hex)
+    /// Validator Kovanica address
     #[arg(long)]
     validator: String,
     /// Commission in basis points (10000 = 100%)
@@ -329,8 +338,8 @@ struct SetCommissionArgs {
 /// Arguments for `kovanica claim-treasury`.
 #[derive(Args)]
 struct ClaimTreasuryArgs {
-    /// Amount in atoms
-    #[arg(long)]
+    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -381,7 +390,7 @@ struct DeployArgs {
 /// Arguments for `kovanica call` — call a contract method.
 #[derive(Args)]
 struct CallArgs {
-    /// Contract address (32-byte hex)
+    /// Contract Kovanica address
     #[arg(long)]
     contract: String,
     /// Method name (e.g., htlc_create, token_transfer)
@@ -390,8 +399,8 @@ struct CallArgs {
     /// Arguments as JSON array (will be bincode encoded)
     #[arg(long)]
     args: String,
-    /// Native KUNA value to attach (base units)
-    #[arg(long, default_value_t = 0)]
+    /// Native KUNA to attach (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    #[arg(long, default_value = "0atoms", value_parser = parse_cli_amount)]
     value: u64,
     /// Gas limit for execution
     #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
@@ -438,8 +447,9 @@ async fn main() -> Result<()> {
             .await
         }
         Commands::Transfer(args) => cmd_transfer(&client, chain_id, args, json).await,
-        Commands::Status | Commands::Info => node::status(&client, json).await,
+        Commands::Status | Commands::Info => node::status(&client, chain_id, json).await,
         Commands::Balance { address } => node::balance(&client, &address, chain_id, json).await,
+        Commands::Staking { address } => node::staking(&client, &address, chain_id, json).await,
         Commands::History(args) => {
             node::history(
                 &client,
@@ -477,16 +487,22 @@ async fn main() -> Result<()> {
         Commands::Deploy(args) => cmd_deploy(&client, chain_id, args, json).await,
         Commands::Call(args) => cmd_call(&client, chain_id, args, json).await,
         Commands::Htlc { command } => {
-            contracts::run(&client, ContractCommand::Htlc { command }, json).await
+            contracts::run(&client, chain_id, ContractCommand::Htlc { command }, json).await
         }
         Commands::Vault { command } => {
-            contracts::run(&client, ContractCommand::Vault { command }, json).await
+            contracts::run(&client, chain_id, ContractCommand::Vault { command }, json).await
         }
         Commands::Multisig { command } => {
-            contracts::run(&client, ContractCommand::Multisig { command }, json).await
+            contracts::run(
+                &client,
+                chain_id,
+                ContractCommand::Multisig { command },
+                json,
+            )
+            .await
         }
         Commands::Token { command } => {
-            contracts::run(&client, ContractCommand::Token { command }, json).await
+            contracts::run(&client, chain_id, ContractCommand::Token { command }, json).await
         }
         Commands::Comms { command } => comms::run(command, json),
     }
@@ -617,11 +633,12 @@ async fn cmd_transfer(
     json_output: bool,
 ) -> Result<()> {
     let ctx = tx::signing_context(chain_id)?;
+    let recipient = wallet::parse_address(&args.to, "to", ctx.chain_id)?;
+    node::ensure_node_chain_matches(client, Some(ctx.chain_id)).await?;
     let keystore = wallet::load(&args.keystore)?;
     let password = prompt_keystore_password(&keystore)?;
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let sender = wallet::address(&keystore)?;
-    let recipient = wallet::parse_address(&args.to, "to", ctx.chain_id)?;
 
     // The account nonce is the next unused nonce, so it is used as-is.
     let nonce_value = client
@@ -655,7 +672,7 @@ async fn cmd_transfer(
     println!("Submitted transaction {tx_hash}");
     println!("  from:   {}", sender);
     println!("  to:     {}", recipient);
-    println!("  amount: {} atoms", args.amount);
+    println!("  amount: {}", format_kuna_fixed(args.amount));
     println!("  fee:    {} atoms", args.fee);
     println!("  nonce:  {nonce}");
     Ok(())
@@ -675,6 +692,7 @@ async fn sign_and_submit_self(
     fee: u64,
 ) -> Result<(String, kovanica_types::Address, u64)> {
     let ctx = tx::signing_context(chain_id)?;
+    node::ensure_node_chain_matches(client, Some(ctx.chain_id)).await?;
     let keystore = wallet::load(keystore_path)?;
     let password = prompt_keystore_password(&keystore)?;
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
@@ -725,7 +743,7 @@ async fn cmd_stake(
 
     println!("Submitted transaction {tx_hash}");
     println!("  from:   {}", sender);
-    println!("  amount: {} atoms", args.amount);
+    println!("  amount: {}", format_kuna_fixed(args.amount));
     println!("  fee:    {} atoms", args.fee);
     println!("  nonce:  {nonce}");
     Ok(())
@@ -760,7 +778,7 @@ async fn cmd_unstake(
 
     println!("Submitted transaction {tx_hash}");
     println!("  from:   {}", sender);
-    println!("  amount: {} atoms", args.amount);
+    println!("  amount: {}", format_kuna_fixed(args.amount));
     println!("  fee:    {} atoms", args.fee);
     println!("  nonce:  {nonce}");
     Ok(())
@@ -808,7 +826,7 @@ async fn cmd_register_light_node(
     println!("Submitted transaction {tx_hash}");
     println!("  from:         {}", sender);
     println!("  vrfPublicKey: {}", args.vrf_public_key);
-    println!("  stake:        {} atoms", args.stake);
+    println!("  stake:        {}", format_kuna_fixed(args.stake));
     println!("  fee:          {} atoms", args.fee);
     println!("  nonce:        {nonce}");
     Ok(())
@@ -820,7 +838,8 @@ async fn cmd_delegate(
     args: DelegateArgs,
     json_output: bool,
 ) -> Result<()> {
-    let validator = args.validator.parse::<kovanica_types::Address>()?;
+    let chain = tx::signing_context(chain_id)?.chain_id;
+    let validator = wallet::parse_address(&args.validator, "validator", chain)?;
     let (tx_hash, sender, nonce) = sign_and_submit_self(
         client,
         chain_id,
@@ -847,7 +866,7 @@ async fn cmd_delegate(
     println!("Submitted transaction {tx_hash}");
     println!("  from:      {}", sender);
     println!("  validator: {}", validator);
-    println!("  amount:    {} atoms", args.amount);
+    println!("  amount:    {}", format_kuna_fixed(args.amount));
     println!("  fee:       {} atoms", args.fee);
     println!("  nonce:     {nonce}");
     Ok(())
@@ -859,10 +878,11 @@ async fn cmd_claim_rewards(
     args: ClaimRewardsArgs,
     json_output: bool,
 ) -> Result<()> {
-    let validator = args
-        .validator
-        .map(|v| v.parse::<kovanica_types::Address>())
-        .transpose()?;
+    let chain = tx::signing_context(chain_id)?.chain_id;
+    let validator = match args.validator {
+        Some(value) => Some(wallet::parse_address(&value, "validator", chain)?),
+        None => None,
+    };
     let (tx_hash, sender, nonce) = sign_and_submit_self(
         client,
         chain_id,
@@ -968,7 +988,7 @@ async fn cmd_claim_treasury(
 
     println!("Submitted transaction {tx_hash}");
     println!("  from:    {}", sender);
-    println!("  amount:  {} atoms", args.amount);
+    println!("  amount:  {}", format_kuna_fixed(args.amount));
     println!("  fee:     {} atoms", args.fee);
     println!("  nonce:   {nonce}");
     Ok(())
@@ -1073,7 +1093,7 @@ async fn cmd_call(
     println!("  from:      {}", sender);
     println!("  contract:  {}", contract);
     println!("  method:    {}", method);
-    println!("  value:     {} atoms", args.value);
+    println!("  value:     {}", format_kuna_fixed(args.value));
     println!("  gas_limit: {}", args.gas_limit);
     println!("  fee:       {} atoms", args.fee);
     println!("  nonce:     {nonce}");
@@ -1244,6 +1264,40 @@ mod wallet_cli_security_tests {
     use clap::Parser;
 
     #[test]
+    fn amount_flag_requires_a_unit() {
+        let to = "placeholder";
+        let decimal =
+            Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "1.5KUNA"])
+                .unwrap();
+        let Commands::Transfer(args) = decimal.command else {
+            panic!("expected transfer");
+        };
+        assert_eq!(args.amount, 1_500_000_000);
+
+        let atoms =
+            Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "42atoms"])
+                .unwrap();
+        let Commands::Transfer(args) = atoms.command else {
+            panic!("expected transfer");
+        };
+        assert_eq!(args.amount, 42);
+
+        // `5` does not say KUNA or atoms.
+        let bare = Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "5"]);
+        assert!(bare.is_err(), "a bare integer must be rejected");
+
+        assert!(Cli::try_parse_from([
+            "kovanica",
+            "transfer",
+            "--to",
+            to,
+            "--amount",
+            "0.0000000001",
+        ])
+        .is_err());
+    }
+
+    #[test]
     fn secret_passphrases_are_not_cli_arguments() {
         let recipient = "00".repeat(32);
         for args in [
@@ -1405,7 +1459,7 @@ mod wallet_cli_security_tests {
             "kovanica",
             "stake",
             "--amount",
-            "42",
+            "42atoms",
             "--fee",
             "3",
             "--keystore",
@@ -1421,7 +1475,7 @@ mod wallet_cli_security_tests {
             _ => panic!("expected stake command"),
         }
 
-        let cli = Cli::try_parse_from(["kovanica", "unstake", "--amount", "7"]).unwrap();
+        let cli = Cli::try_parse_from(["kovanica", "unstake", "--amount", "7atoms"]).unwrap();
         match cli.command {
             Commands::Unstake(args) => {
                 assert_eq!(args.amount, 7);
@@ -1476,9 +1530,72 @@ mod wallet_cli_security_tests {
             Commands::Call(args) => {
                 assert_eq!(args.gas_limit, 77);
                 assert_eq!(args.method, "token_transfer");
+                // Omitted `--value` is zero atoms, not a bare `0` that needs a unit.
+                assert_eq!(args.value, 0);
             }
             _ => panic!("expected call command"),
         }
+    }
+
+    #[tokio::test]
+    async fn transfer_and_stake_refuse_chain_mismatch_reported_by_node() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await.unwrap();
+                let body = r#"{"jsonrpc":"2.0","id":1,"result":{"committedHeight":1,"catchingUp":false,"networkTag":"4-0123456789abcdef"}}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let client = RpcClient::new(format!("http://{addr}"));
+        let recipient = Address([0x22; 32]).to_string();
+
+        let transfer_err = cmd_transfer(
+            &client,
+            Some(1),
+            TransferArgs {
+                to: recipient,
+                amount: 1_000_000_000,
+                keystore: PathBuf::from("unused-keystore.json"),
+                fee: 1,
+            },
+            true,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(transfer_err.contains("--chain-id 1"), "{transfer_err}");
+        assert!(transfer_err.contains("node's chain 4"), "{transfer_err}");
+
+        let stake_err = cmd_stake(
+            &client,
+            Some(1),
+            AmountArgs {
+                amount: 50_000_000_000_000,
+                keystore: PathBuf::from("unused-keystore.json"),
+                fee: 1,
+            },
+            true,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(stake_err.contains("--chain-id 1"), "{stake_err}");
+        assert!(stake_err.contains("node's chain 4"), "{stake_err}");
+
+        server.await.unwrap();
     }
 
     #[test]

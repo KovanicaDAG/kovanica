@@ -14,7 +14,7 @@ use kovanica_types::transaction::TransactionKind;
 use kovanica_types::{Address, SigningKey};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::tui::amount::{self, format_atoms_pair, format_fee};
+use crate::amount::{self, format_atoms_pair, format_fee};
 use crate::tui::net::{Snapshot, ValidatorRow};
 use crate::tx;
 use crate::wallet;

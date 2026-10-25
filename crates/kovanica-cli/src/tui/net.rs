@@ -218,6 +218,7 @@ pub(crate) async fn submit(
     review: Review,
 ) -> Result<String> {
     let context = tx::signing_context(Some(chain_id))?;
+    crate::node::ensure_node_chain_matches(client, Some(context.chain_id)).await?;
     let kind: TransactionKind = review.action.kind();
     let transaction = tx::build_signed(
         &context,
