@@ -2526,6 +2526,52 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn verified_import_rejects_forged_contract_code_or_storage() {
+        let (_src_dir, src) = seeded_storage_with_staking("src.redb", Some(5), true);
+        let bytes = {
+            let txn = src.begin_read().unwrap();
+            src.state().snapshot_bytes(&txn).unwrap()
+        };
+
+        // 1. Tamper with contract code in an otherwise sealed snapshot
+        let mut data = StateStore::decode_snapshot(&bytes).unwrap();
+        assert!(
+            !data.contract_code.is_empty(),
+            "snapshot must carry contract code"
+        );
+        data.contract_code[0].1.push(0xef);
+        let mut tampered = SNAPSHOT_MAGIC.to_vec();
+        tampered.extend_from_slice(&bincode::serialize(&data).unwrap());
+
+        let (_dst_dir, dst) = seeded_storage("dst.redb", None);
+        let txn = dst.begin_write().unwrap();
+        let err = dst
+            .state()
+            .import_verified_snapshot(&txn, &tampered, 0, TEST_CHAIN)
+            .unwrap_err();
+        assert!(
+            matches!(err, StateStoreError::SnapshotVerify(_)),
+            "snapshot with forged contract code must be rejected: {err:?}"
+        );
+
+        // 2. Tamper by injecting unauthorized contract storage
+        let mut data2 = StateStore::decode_snapshot(&bytes).unwrap();
+        let key_bytes = bincode::serialize(&([5u8; 32], [1u8; 32])).unwrap();
+        data2.contract_storage.push((key_bytes, vec![4, 5, 6]));
+        let mut tampered2 = SNAPSHOT_MAGIC.to_vec();
+        tampered2.extend_from_slice(&bincode::serialize(&data2).unwrap());
+
+        let err2 = dst
+            .state()
+            .import_verified_snapshot(&txn, &tampered2, 0, TEST_CHAIN)
+            .unwrap_err();
+        assert!(
+            matches!(err2, StateStoreError::SnapshotVerify(_)),
+            "snapshot with forged contract storage must be rejected: {err2:?}"
+        );
+    }
+
+    #[test]
     fn verified_import_rejects_wrong_chain_seals() {
         let (_src_dir, src) = seeded_storage("src.redb", Some(5));
         let bytes = {
