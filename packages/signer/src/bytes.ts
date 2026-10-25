@@ -29,7 +29,11 @@ export function u64le(value: bigint): Uint8Array {
 }
 
 export function hexToBytes(hex: string): Uint8Array {
-  const raw = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  // Rust strips a lowercase `0x` only. `0X` is not a prefix.
+  if (hex.startsWith("0X")) {
+    throw new Error("invalid hex");
+  }
+  const raw = hex.startsWith("0x") ? hex.slice(2) : hex;
   if (raw.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(raw)) {
     throw new Error("invalid hex");
   }

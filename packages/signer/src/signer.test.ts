@@ -168,7 +168,7 @@ describe("addresses and amounts", () => {
       for (const chain of [3, 4, 1337]) {
         expect(bytesToHex(parseAddress(legacy, chain))).toBe(fixture.publicKeyHex);
       }
-      expect(bytesToHex(parseAddress(legacy))).toBe(fixture.publicKeyHex);
+      expect(() => parseAddress(legacy)).toThrow(/chain id is omitted/);
       expect(() => parseAddress(legacy, 1)).toThrow(/not accepted on chain 1/);
       expect(() => parseAddress(legacy, 2)).toThrow(/not accepted on chain 2/);
       expect(() => parseAddress(legacy, 99)).toThrow(/not accepted on chain 99/);
@@ -195,6 +195,16 @@ describe("addresses and amounts", () => {
       fixture.senderAddress[letter].toUpperCase() +
       fixture.senderAddress.slice(letter + 1);
     expect(() => parseAddress(upperBody, 4)).toThrow(/alphabet/);
+  });
+
+  it("refuses an omitted chain id, 0X, and kvnc0x (PRO-21)", () => {
+    expect(bytesToHex(parseAddress(fixture.senderAddress))).toBe(fixture.publicKeyHex);
+    expect(bytesToHex(hexToBytes(`0x${fixture.publicKeyHex}`))).toBe(fixture.publicKeyHex);
+    expect(() => hexToBytes(`0X${fixture.publicKeyHex}`)).toThrow(/invalid hex/);
+    expect(() => parseAddress(`0X${fixture.publicKeyHex}`, 4)).toThrow(/invalid hex/);
+    const body = fixture.senderAddressLegacy.slice(4, -3);
+    expect(() => parseAddress(`kvnc0x${body}dag`, 4)).toThrow(/invalid hex/);
+    expect(() => parseAddress(`kvnc0x${body}dag`, 1)).toThrow(/invalid hex/);
   });
 
   it("parses KUNA with 9 decimal places", () => {

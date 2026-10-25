@@ -427,7 +427,7 @@ class CreateTokenActivity : Activity() {
         val deployHash = node.call("kovanica_sendRawTransaction", JSONArray().put(deploy))?.toString()
 
         // The node does not return the new address, so derive it from sender + deploy nonce.
-        val contractHex = contractAddressForRaw(sender, nonce)
+        val contractHex = contractAddressForRaw(sender, nonce, chainId)
         val contract = KvncAddress.canonical(contractHex)
             ?: return Outcome.Failed("The new token address could not be encoded.")
 

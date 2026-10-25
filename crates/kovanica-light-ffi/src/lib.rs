@@ -494,15 +494,20 @@ pub fn change_passphrase_raw(
 
 /// Derive the address a `Deploy` transaction will create on-chain, off-node.
 ///
-/// `sender_hex` is the `kvnc…dag` address or a bare / `0x`-prefixed 64-hex
-/// payload. `nonce` is the sender's account nonce **as it stands while the
-/// `Deploy` tx is being signed** (i.e. the `tx.nonce`); the `+1` the node bakes
-/// into the address is applied inside. Returns the bare 64-hex contract address.
+/// `sender_hex` is the `kvnc…dag` address, or a legacy hex form where
+/// `chain_id` allows it (devnet 3, chain 4, local 1337). `nonce` is the
+/// sender's account nonce **as it stands while the `Deploy` tx is being
+/// signed** (i.e. the `tx.nonce`); the `+1` the node bakes into the address is
+/// applied inside. Returns the bare 64-hex contract address.
 ///
 /// **Note:** Pure BLAKE3 — safe to call on the UI thread.
 #[uniffi::export]
-pub fn contract_address_for_raw(sender_hex: String, nonce: u64) -> Result<String, LightFfiError> {
-    contract_address_for(&sender_hex, nonce).map_err(failed)
+pub fn contract_address_for_raw(
+    sender_hex: String,
+    nonce: u64,
+    chain_id: u64,
+) -> Result<String, LightFfiError> {
+    contract_address_for(&sender_hex, nonce, chain_id).map_err(failed)
 }
 
 /// Derive comms identity hex from public key hex.
@@ -758,6 +763,27 @@ mod tests {
         let held = SecretString::new(String::from("hunter2-phrase!!"));
         assert_eq!(held.as_str(), "hunter2-phrase!!");
         drop(held);
+    }
+
+    #[test]
+    fn contract_address_for_raw_takes_a_chain_id() {
+        use kovanica_light::contract_address_for;
+        use kovanica_types::signing::chain_id;
+        use kovanica_types::Address;
+        let sender = Address([0x11; 32]);
+        let on_chain4 =
+            contract_address_for_raw(sender.to_hex(), 41, chain_id::TESTNET_V2).unwrap();
+        assert_eq!(
+            on_chain4,
+            contract_address_for(&sender.encode(), 41, chain_id::MAINNET).unwrap()
+        );
+        assert!(contract_address_for_raw(sender.to_hex(), 41, chain_id::MAINNET).is_err());
+        assert!(contract_address_for_raw(
+            format!("0X{}", sender.to_hex()),
+            41,
+            chain_id::TESTNET_V2
+        )
+        .is_err());
     }
 
     use kovanica_types::{
