@@ -1,4 +1,4 @@
-# Kovanica Testnet — Seed node + 3 validators
+# Kovanica Testnet — Seed node + 5 validators
 # Bootnode: testnet.kovanica.online:8000
 # Validator keys: ceremony-generated (testnet/genesis/keys/)
 name: kovanica-testnet
@@ -125,8 +125,57 @@ services:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8548/health"]
 
+  val4:
+    <<: *node
+    container_name: kovanica-testnet-val4
+    depends_on:
+      seed:
+        condition: service_healthy
+    environment:
+      <<: *node-env
+      KOVANICA_RPC_PORT: "8549"
+      KOVANICA_RUN_VALIDATOR: "true"
+      KOVANICA_VALIDATOR_KEY: "/var/lib/kovanica/validator.pem"
+      KOVANICA_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
+    ports:
+      - "127.0.0.1:8549:8549"
+    volumes:
+      - val4-data:/var/lib/kovanica
+      - ./ops/docker/validators/val4.pem:/var/lib/kovanica/validator.pem:ro
+      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8549/health"]
+
+  val5:
+    <<: *node
+    container_name: kovanica-testnet-val5
+    depends_on:
+      seed:
+        condition: service_healthy
+    environment:
+      <<: *node-env
+      KOVANICA_RPC_PORT: "8550"
+      KOVANICA_RUN_VALIDATOR: "true"
+      KOVANICA_VALIDATOR_KEY: "/var/lib/kovanica/validator.pem"
+      KOVANICA_BOOTNODES: "testnet.kovanica.online:8000,seed:8000"
+    ports:
+      - "127.0.0.1:8550:8550"
+    volumes:
+      - val5-data:/var/lib/kovanica
+      - ./ops/docker/validators/val5.pem:/var/lib/kovanica/validator.pem:ro
+      - ./ops/docker/validators/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ./ops/docker/validators/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8550/health"]
+
 volumes:
   seed-data:
   val1-data:
   val2-data:
   val3-data:
+  val4-data:
+  val5-data:
+

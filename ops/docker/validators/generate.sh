@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Phase 16.6 — generate the four validator seed files + genesis_validators.toml.
+# Chain 4 — generate the five validator seed files + genesis_validators.toml.
 #
 # Produces exactly the files docker-compose.yml mounts:
-#   ops/docker/validators/val1.pem .. val4.pem      (raw 32-byte hex seeds, gitignored)
+#   ops/docker/validators/val1.pem .. val5.pem      (raw 32-byte hex seeds, gitignored)
 #   ops/docker/validators/genesis_validators.toml   (gitignored; regenerate, never commit)
 #
-# A node's address is its raw Ed25519 public key, so its address hex equals its
-# public-key hex; `kovanica address --key-file` derives both without ever echoing the
+# Canonical address format (PRO-21): kvnc + 57 base32 chars + dag = 64 chars.
+# `kovanica address --key-file` derives both address and public key without ever echoing the
 # seed. Existing valN.pem files are reused, so re-running only rebuilds genesis.
 #
-# These are DEVNET keys. Never reuse them on public infrastructure.
+# These are DEVNET / TESTNET keys. Never reuse them on public infrastructure.
 set -euo pipefail
 
 BIN="${KOVANICA_BIN:-./target/release/kovanica}"
@@ -43,12 +43,14 @@ TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
 {
-  echo "# Phase 16.6 — 4-node validator set for genesis (generated $(date -u +%Y-%m-%dT%H:%M:%SZ))."
-  echo "# DEVNET KEYS ONLY. Produced by ops/docker/validators/generate.sh; do not commit."
+  echo "# Chain 4 — 5-node validator set for genesis (generated $(date -u +%Y-%m-%dT%H:%M:%SZ))."
+  echo "# DEVNET / TESTNET KEYS ONLY. Produced by ops/docker/validators/generate.sh; do not commit."
   echo "# Stakes = MIN_VALIDATOR_STAKE = 50_000 KUNA = $STAKE atoms."
+  echo "chain_id = 4"
+  echo
 } > "$TMP"
 
-for i in 1 2 3 4; do
+for i in 1 2 3 4 5; do
   KEY="$OUTDIR/val${i}.pem"
   if [ -s "$KEY" ]; then
     echo "-> reusing existing $KEY"
@@ -60,15 +62,16 @@ for i in 1 2 3 4; do
   own_for_container "$KEY"
 
   IDENTITY="$("$BIN" address --allow-raw-hex --key-file "$KEY")"
+  ADDR="$(printf '%s\n' "$IDENTITY" | awk -F': *' '/^Address:/ {print $2}')"
   PK_HEX="$(printf '%s\n' "$IDENTITY" | awk -F': *' '/^Public key:/ {print $2}')"
-  if [ -z "$PK_HEX" ]; then
+  if [ -z "$ADDR" ] || [ -z "$PK_HEX" ]; then
     echo "error: could not derive identity from $KEY" >&2
     exit 1
   fi
 
   {
     echo "[[validator]]"
-    echo "address = \"$PK_HEX\""
+    echo "address = \"$ADDR\""
     echo "stake = $STAKE"
     echo "public_key = \"$PK_HEX\""
     echo
@@ -84,5 +87,6 @@ chmod 600 "$GENESIS"
 own_for_container "$GENESIS"
 
 echo
-echo "wrote $GENESIS and $OUTDIR/val1..4.pem"
+echo "wrote $GENESIS and $OUTDIR/val1..5.pem"
 echo "next: docker compose up --build"
+

@@ -27,7 +27,7 @@ cargo build --release -p kovanica-cli
 ```
 
 This creates:
-- `ops/docker/validators/val1.pem` through `val4.pem` (32-byte hex seeds, mode 0600)
+- `ops/docker/validators/val1.pem` through `val5.pem` (32-byte hex seeds, mode 0600)
 - `ops/docker/validators/genesis_validators.toml` (shared genesis validator declarations)
 - `ops/docker/validators/funded_accounts.toml` (initial account allocations)
 
@@ -45,7 +45,7 @@ docker compose down -v           # stop and wipe all data volumes
 
 ### Topology (`docker-compose.yml`)
 
-The compose stack runs **1 seed / bootnode + 3 active validators**:
+The compose stack runs **1 seed / bootnode + 5 active validators**:
 
 | Service | Container Name | Role | Host RPC Endpoint | P2P Listen |
 |---------|----------------|------|-------------------|------------|
@@ -53,8 +53,10 @@ The compose stack runs **1 seed / bootnode + 3 active validators**:
 | `val1`  | `kovanica-testnet-val1` | Active Validator 1 | `127.0.0.1:8546` | `8000` |
 | `val2`  | `kovanica-testnet-val2` | Active Validator 2 | `127.0.0.1:8547` | `8000` |
 | `val3`  | `kovanica-testnet-val3` | Active Validator 3 | `127.0.0.1:8548` | `8000` |
+| `val4`  | `kovanica-testnet-val4` | Active Validator 4 | `127.0.0.1:8549` | `8000` |
+| `val5`  | `kovanica-testnet-val5` | Active Validator 5 | `127.0.0.1:8550` | `8000` |
 
-All four nodes publish their respective JSON-RPC ports to loopback (`127.0.0.1`).
+All six nodes publish their respective JSON-RPC ports to loopback (`127.0.0.1`).
 
 ### Interacting with the Stack
 

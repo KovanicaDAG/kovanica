@@ -1,5 +1,5 @@
 #!/usr/bin/env rust
-//! Generate 4 validator keystores and genesis_validators.toml for Phase 16.6
+//! Generate 5 validator keystores and genesis_validators.toml for Chain 4 testnet
 
 use std::fs;
 use std::path::Path;
@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut validators = Vec::new();
 
-    for i in 1..=4 {
+    for i in 1..=5 {
         println!("Generating validator {i}...");
         let keystore = wallet::keygen(PASSPHRASE)?;
 
@@ -40,14 +40,15 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Generate genesis_validators.toml with [[validator]] array-of-tables format
-    let mut toml = String::from("# Phase 16.6 — 4-node validator set for genesis\n");
+    let mut toml = String::from("# Chain 4 — 5-node validator set for genesis\n");
     toml.push_str("# Stakes = MIN_VALIDATOR_STAKE = 50_000 KUNA (50_000_000_000_000 atoms)\n");
-    toml.push_str("# Generated from keystores\n\n");
+    toml.push_str("# Generated from keystores\n");
+    toml.push_str("chain_id = 4\n\n");
 
-    for (_address, public_key_hex, _seed) in &validators {
+    for (address, public_key_hex, _seed) in &validators {
         toml.push_str("[[validator]]\n");
-        // Use raw public key hex (64 chars) as address - parse_address_hex expects 32-byte hex
-        toml.push_str(&format!("address = \"{public_key_hex}\"\n"));
+        // Canonical 64-character base32 address (PRO-21)
+        toml.push_str(&format!("address = \"{address}\"\n"));
         toml.push_str("stake = 50000000000000\n");
         toml.push_str(&format!("public_key = \"{public_key_hex}\"\n\n"));
     }
@@ -56,19 +57,22 @@ fn main() -> anyhow::Result<()> {
     fs::write(&toml_path, &toml)?;
     println!("Generated {toml_path}");
 
-    // Also copy to ops/docker/validators/ for docker-compose
-    let docker_toml_path = "/root/Projects/kvnc/ops/docker/validators/genesis_validators.toml";
-    fs::write(docker_toml_path, &toml)?;
-    println!("Updated {docker_toml_path}");
+    // Also copy to ops/docker/validators/ for docker-compose if present
+    let docker_dir = Path::new("ops/docker/validators");
+    if docker_dir.exists() {
+        let docker_toml_path = docker_dir.join("genesis_validators.toml");
+        fs::write(&docker_toml_path, &toml)?;
+        println!("Updated {}", docker_toml_path.display());
 
-    // Copy pem files to docker validators dir
-    for i in 1..=4 {
-        let src = format!("{OUTDIR}/validator{i}.pem");
-        let dst = format!("/root/Projects/kvnc/ops/docker/validators/val{i}.pem");
-        fs::copy(&src, &dst)?;
-        println!("Copied {src} -> {dst}");
+        // Copy pem files to docker validators dir
+        for i in 1..=5 {
+            let src = format!("{OUTDIR}/validator{i}.pem");
+            let dst = docker_dir.join(format!("val{i}.pem"));
+            fs::copy(&src, &dst)?;
+            println!("Copied {src} -> {}", dst.display());
+        }
     }
 
-    println!("\nAll 4 validator keys generated successfully!");
+    println!("\nAll 5 validator keys generated successfully!");
     Ok(())
 }
