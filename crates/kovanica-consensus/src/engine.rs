@@ -182,6 +182,20 @@ pub trait DagStoreTrait: Send + Sync {
     ) -> Result<Vec<kovanica_types::Vote>, kovanica_dag::DagStoreError> {
         Ok(Vec::new())
     }
+    /// Leader round certified by a quorum of `KUNA/commit/v1` commit seals or
+    /// by a verified state-sync checkpoint.
+    ///
+    /// `None` (the default) means this store has no certified point. The
+    /// commit walk then still stalls on a leader slot with no record.
+    ///
+    /// A `Some` round must be a leader round (`round % WAVE_LENGTH == 0`) and
+    /// must be returned only after the seals or the checkpoint have been
+    /// verified **and** local execution state already reflects that commit.
+    /// A node whose cursor is behind the prune window advances to this round
+    /// and continues from the next slot. It does not re-execute the gap.
+    fn certified_catchup_anchor(&self) -> Result<Option<Round>, kovanica_dag::DagStoreError> {
+        Ok(None)
+    }
     /// Record `round` as decided by a quorum skip certificate: a decided
     /// round with no leader (PRO-40 (b)). Durable stores must persist it, so
     /// a restart resumes the cursor after the skip. Must refuse a round that
@@ -731,6 +745,10 @@ where
             .max()
             .unwrap_or(0);
         self.committer.restore_last_decided_round(cursor);
+        // A certified seal or state-sync checkpoint may sit further ahead than
+        // the decision index when the rounds in between were pruned.
+        self.committer
+            .catch_up_to_certified_anchor(self.dag_store.as_ref())?;
         let cursor = self.committer.last_decided_round();
 
         // Replay, then ingest, then select. Ingest with an empty manager
@@ -2056,6 +2074,11 @@ where
     pub fn committee(&self) -> &CommitteeInfo {
         &self.committee
     }
+
+    /// Configured prune window in waves (`WAVE_LENGTH` rounds per wave).
+    pub fn prune_window_waves(&self) -> u64 {
+        self.config.prune_window_waves
+    }
 }
 
 /// Errors that can occur in consensus operations.
@@ -2125,6 +2148,8 @@ mod tests {
         stored_tip: RwLock<Option<Round>>,
         /// Votes persisted through `DagStoreTrait::put_vote`, in write order.
         persisted_votes: Mutex<Vec<kovanica_types::Vote>>,
+        /// Certified catch-up anchor (leader round), if the test sets one.
+        catchup_anchor: RwLock<Option<Round>>,
         /// Digests whose `process_block` records a VRF output without checking
         /// a signature. Empty unless a test is replaying stored carriers.
         replay_vrf: RwLock<HashMap<Hash, [u8; 32]>>,
@@ -2406,6 +2431,10 @@ mod tests {
                 .filter(|v| v.leader_round == round)
                 .cloned()
                 .collect())
+        }
+
+        fn certified_catchup_anchor(&self) -> Result<Option<Round>, kovanica_dag::DagStoreError> {
+            Ok(*self.catchup_anchor.read())
         }
 
         fn prune_non_blue(
@@ -2815,6 +2844,87 @@ mod tests {
         assert!(
             receiver.try_recv().is_err(),
             "round 9 must not be committed over the unseen slot 6"
+        );
+    }
+
+    /// A node whose cursor is further back than the prune window catches up
+    /// from a certified anchor instead of stalling on the deleted slots.
+    ///
+    /// The production window is 100 waves (about 300 rounds, about 20 minutes).
+    /// This fixture uses a window of one wave and an anchor three waves ahead,
+    /// with the slots in between absent, which is the same gap: the walk would
+    /// stall on the first missing slot and the node would never commit again.
+    #[test]
+    fn restart_behind_the_prune_window_catches_up_from_a_certified_anchor() {
+        let (engine, dag, key) = test_engine_with(
+            100,
+            ConsensusConfig {
+                prune_window_waves: 1,
+                ..ConsensusConfig::default()
+            },
+        );
+        let anchor = 9;
+        let gap_waves = anchor / kovanica_types::WAVE_LENGTH;
+        assert!(
+            gap_waves > engine.config.prune_window_waves,
+            "the fixture must sit further ahead than the prune window"
+        );
+        *dag.catchup_anchor.write() = Some(anchor);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        engine.set_commit_sender(sender);
+        // Slots 3 and 6 are inside the gap and are not in the store (pruned
+        // on every peer). Slot 12 is the next leader after the anchor.
+        let later = stored_leader_block(&key, 12);
+        dag.blocks.write().insert(later.digest, later.clone());
+        dag.persisted_votes
+            .lock()
+            .push(signed_vote(&key, 12, 0, later.digest));
+        *dag.stored_tip.write() = Some(13);
+
+        engine.resume_from_store().expect("resume");
+
+        let sub = receiver
+            .try_recv()
+            .expect("the leader after the anchor commits");
+        assert_eq!(sub.leader_round, 12);
+        assert_eq!(engine.committer.last_decided_round(), 12);
+        assert!(
+            engine.committer.get_leader(3).is_none(),
+            "pruned slots are not reconstructed"
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    /// The anchor covers the gap up to itself. A later hole still stalls.
+    #[test]
+    fn catchup_anchor_does_not_skip_a_hole_after_the_anchor() {
+        let (engine, dag, key) = test_engine_with(
+            100,
+            ConsensusConfig {
+                prune_window_waves: 1,
+                ..ConsensusConfig::default()
+            },
+        );
+        *dag.catchup_anchor.write() = Some(9);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        engine.set_commit_sender(sender);
+        // Slot 12 is missing. Slot 15 has quorum but must not be committed
+        // over it.
+        let later = stored_leader_block(&key, 15);
+        dag.blocks.write().insert(later.digest, later.clone());
+        dag.persisted_votes
+            .lock()
+            .push(signed_vote(&key, 15, 0, later.digest));
+        *dag.stored_tip.write() = Some(16);
+
+        engine.resume_from_store().expect("resume");
+
+        assert_eq!(engine.committer.last_decided_round(), 9);
+        assert!(engine.committer.get_leader(15).is_some());
+        assert!(engine.committer.get_leader(12).is_none());
+        assert!(
+            receiver.try_recv().is_err(),
+            "round 15 must not be committed over the unseen slot 12"
         );
     }
 

@@ -53,6 +53,12 @@ pub enum DagStoreError {
 const DAG_PRUNE_BOUNDARY: TableDefinition<&str, u64> = TableDefinition::new("dag_prune_boundary");
 const DAG_PRUNE_BOUNDARY_KEY: &str = "round";
 
+/// Durable catch-up anchor: a leader round certified by a commit-seal quorum
+/// or a verified state-sync checkpoint. The consensus engine advances a
+/// lagging cursor to this round. Monotonic. Absent until one is noted.
+const DAG_CATCHUP_ANCHOR: TableDefinition<&str, u64> = TableDefinition::new("dag_catchup_anchor");
+const DAG_CATCHUP_ANCHOR_KEY: &str = "leader_round";
+
 /// DAG store for high-level DAG operations.
 #[derive(Clone)]
 pub struct DagStore {
@@ -128,6 +134,43 @@ impl DagStore {
         if boundary > current {
             table.insert(DAG_PRUNE_BOUNDARY_KEY, boundary)?;
         }
+        Ok(())
+    }
+
+    /// Leader round of a verified commit-seal quorum or state-sync checkpoint.
+    ///
+    /// `None` when no anchor has been noted. Survives restarts.
+    pub fn certified_catchup_anchor(&self) -> Result<Option<Round>, DagStoreError> {
+        let txn = self.storage.begin_read()?;
+        let table = match txn.open_table(DAG_CATCHUP_ANCHOR) {
+            Ok(table) => table,
+            Err(TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(table.get(DAG_CATCHUP_ANCHOR_KEY)?.map(|v| v.value()))
+    }
+
+    /// Raise (never lower) the certified catch-up anchor.
+    ///
+    /// Rounds that are not leader slots (`round % WAVE_LENGTH == 0`, and not
+    /// genesis) are ignored. The engine refuses those too, so a caller cannot
+    /// park the cursor in the middle of a wave.
+    pub fn note_certified_catchup_anchor(&self, leader_round: Round) -> Result<(), DagStoreError> {
+        if leader_round == 0 || !leader_round.is_multiple_of(kovanica_types::WAVE_LENGTH) {
+            return Ok(());
+        }
+        let txn = self.storage.begin_write()?;
+        {
+            let mut table = txn.open_table(DAG_CATCHUP_ANCHOR)?;
+            let current = table
+                .get(DAG_CATCHUP_ANCHOR_KEY)?
+                .map(|v| v.value())
+                .unwrap_or(0);
+            if leader_round > current {
+                table.insert(DAG_CATCHUP_ANCHOR_KEY, leader_round)?;
+            }
+        }
+        txn.commit()?;
         Ok(())
     }
 

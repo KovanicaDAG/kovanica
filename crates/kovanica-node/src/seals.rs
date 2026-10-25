@@ -234,6 +234,50 @@ pub fn store_matching_seal(storage: &Storage, announcement: &SealAnnouncement) -
     Ok(true)
 }
 
+/// Leader round certified by a quorum of seals on the latest local header.
+///
+/// Returns `Ok(None)` when there is no header, the epoch committee is
+/// missing, or the stored seals do not verify for `chain_id`. The round is
+/// `LeaderHeader::leader_round`, which stays correct once skip certificates
+/// advance the round without a height. The caller notes it on the consensus
+/// store only; this function does not move a commit cursor by itself.
+pub fn certified_leader_round(storage: &Storage, chain_id: u64) -> Result<Option<u64>> {
+    let read = storage.begin_read()?;
+    let Some(header) = storage.state().get_latest_leader_header(&read)? else {
+        return Ok(None);
+    };
+    let seals = storage.state().seals_for(&read, header.committed_height)?;
+    if seals.is_empty() {
+        return Ok(None);
+    }
+    let Some(members) = storage.state().get_epoch_committee(&read, header.epoch)? else {
+        return Ok(None);
+    };
+    let authorities = members
+        .into_iter()
+        .map(|member| kovanica_types::Authority {
+            index: member.index,
+            public_key: member.public_key,
+            vrf_public_key: member.vrf_public_key,
+            address: kovanica_types::Address::from_public_key(&member.public_key),
+            stake: member.stake,
+            network_address: String::new(),
+        })
+        .collect();
+    let committee = kovanica_types::Committee::new(header.epoch, authorities);
+    match kovanica_crypto::verify_commit_seals(chain_id, &header, &seals, &committee) {
+        Ok(()) => Ok(Some(header.leader_round)),
+        Err(e) => {
+            warn!(
+                error = %e,
+                leader_round = header.leader_round,
+                "latest leader header has no verified seal quorum"
+            );
+            Ok(None)
+        }
+    }
+}
+
 fn parent_digest(storage: &Storage, committed_height: u64) -> Result<Hash> {
     if committed_height == 0 {
         return Ok(Hash::zero());
@@ -368,6 +412,25 @@ mod tests {
             .get_leader_header(&read, 0)
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn certified_leader_round_follows_a_quorum_seal() {
+        let (storage, key) = storage_with_validator();
+        assert!(certified_leader_round(&storage, 1337).unwrap().is_none());
+
+        let ctx = context(Some((0, key)));
+        publish_local_seal(&storage, &ctx, &subdag(3), 0, Hash::new([1u8])).unwrap();
+        assert_eq!(certified_leader_round(&storage, 1337).unwrap(), Some(3));
+        // A seal for another network is not a certificate on this chain.
+        assert!(certified_leader_round(&storage, 1).unwrap().is_none());
+
+        publish_local_seal(&storage, &ctx, &subdag(6), 1, Hash::new([2u8])).unwrap();
+        assert_eq!(
+            certified_leader_round(&storage, 1337).unwrap(),
+            Some(6),
+            "the latest verified header is the anchor"
+        );
     }
 
     #[test]

@@ -203,12 +203,21 @@ pub fn uncommitted_history<D: DagStoreTrait + ?Sized>(
         }
     }
 
+    // A certified catch-up anchor means execution state already includes every
+    // block at or below that leader round. Those ancestors must not be
+    // delivered again when the next leader after the anchor commits.
+    let anchor_round = dag_store.certified_catchup_anchor()?;
+
     let mut history = Vec::new();
     for hash in dag_store.get_ancestors(&leader.digest, 0)? {
         if hash == leader.digest || committed.contains(&hash) {
             continue;
         }
-        history.push(dag_store.get_block(&hash)?);
+        let block = dag_store.get_block(&hash)?;
+        if anchor_round.is_some_and(|anchor| block.round <= anchor) {
+            continue;
+        }
+        history.push(block);
     }
     Ok(history)
 }
@@ -488,6 +497,40 @@ impl UniversalCommitter {
         }
     }
 
+    /// Advance the cursor to a certified catch-up anchor when one is ahead.
+    ///
+    /// Peers delete DAG blocks older than `prune_window_waves` (default 100
+    /// waves, about 20 minutes). A node whose cursor is further back must
+    /// otherwise hold a record for every leader slot from the cursor up
+    /// ([`Self::try_commit_with_leader`]), and those blocks are gone, so it
+    /// can never commit again. The anchor is a leader round a quorum of
+    /// `KUNA/commit/v1` seals or a verified state-sync checkpoint has already
+    /// committed. Slots at or below it are not walked.
+    ///
+    /// The cursor only moves forward. A round that is not a leader slot is
+    /// ignored, so a bad anchor cannot land in the middle of a wave.
+    pub fn catch_up_to_certified_anchor<D: DagStoreTrait>(
+        &self,
+        dag_store: &D,
+    ) -> Result<bool, kovanica_dag::DagStoreError> {
+        let Some(anchor) = dag_store.certified_catchup_anchor()? else {
+            return Ok(false);
+        };
+        if anchor == 0 || !crate::is_leader_round(anchor) {
+            return Ok(false);
+        }
+        let cursor = self.last_decided_round();
+        if anchor <= cursor {
+            return Ok(false);
+        }
+        info!(
+            anchor,
+            cursor, "catch-up anchor advances the commit cursor past pruned history"
+        );
+        self.restore_last_decided_round(anchor);
+        Ok(true)
+    }
+
     /// Record that `round` has a verified skip certificate (PRO-40 (b)).
     ///
     /// The caller has verified the certificate (`crate::skip`). Nothing moves
@@ -579,6 +622,14 @@ impl UniversalCommitter {
         &self,
         dag_store: &D,
     ) -> Option<(CommittedSubDag, LeaderInfo, Option<ColouringResult>)> {
+        // A joiner that learned a certified anchor while running (state sync
+        // or a seal quorum) has to move the cursor before this walk. An
+        // unreadable anchor fails closed: return nothing rather than commit
+        // over a gap that should have been anchored.
+        if let Err(e) = self.catch_up_to_certified_anchor(dag_store) {
+            warn!(error = %e, "certified catch-up anchor unreadable; not committing");
+            return None;
+        }
         let last_decided = self.last_decided_round();
         let leaders = self.leaders.read().clone();
         let decided = self.decided_leaders.read().clone();

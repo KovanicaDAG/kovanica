@@ -295,12 +295,40 @@ impl ExecutionContext {
         result
     }
 
+    /// Replace in-memory staking when the database is strictly ahead.
+    ///
+    /// State sync imports a verified snapshot into the database without
+    /// restarting this context. The next commit has to use that height.
+    /// `NotFound` is a fresh database and is not an error.
+    fn adopt_stored_staking_if_ahead(&mut self, storage: &Storage) -> Result<(), ExecutionError> {
+        let txn = storage.begin_read()?;
+        let stored = match storage.state().load_staking_state(&txn) {
+            Ok(state) => state,
+            Err(StateStoreError::NotFound(_)) => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        if stored.committed_leader_height > self.staking.committed_leader_height {
+            info!(
+                stored = stored.committed_leader_height,
+                local = self.staking.committed_leader_height,
+                "execution adopts staking state from a verified snapshot"
+            );
+            self.staking = stored;
+        }
+        Ok(())
+    }
+
     fn execute_committed_subdag_inner(
         &mut self,
         subdag: &CommittedSubDag,
         storage: &Storage,
         commit: impl FnOnce(WriteTransaction) -> Result<(), ExecutionError>,
     ) -> Result<ExecutionResult, ExecutionError> {
+        // A verified state snapshot replaces on-disk staking while this
+        // context still holds the pre-sync copy. Continue from the stored
+        // height. A stored height that is not ahead is left alone.
+        self.adopt_stored_staking_if_ahead(storage)?;
+
         // 1. Check idempotency first (before any execution). A replayed
         // sub-DAG must not freeze a committee snapshot: the live state is now
         // past that epoch, so a late snapshot would poison the epoch.
@@ -521,7 +549,10 @@ impl ExecutionContext {
         }
 
         // 5. Account sparse Merkle over balance and nonce, then mark executed.
-        let state_root = storage.state().commit_account_smt(&txn, committed_height)?;
+        let commit_full = kovanica_types::state_commitment_active_from(subdag.leader_round);
+        let state_root = storage
+            .state()
+            .commit_state_smt(&txn, committed_height, commit_full)?;
         txn.open_table(EXECUTED_SUBDAGS)
             .map_err(StorageError::Table)?
             .insert(subdag.leader.digest.0, 1)
@@ -3052,6 +3083,44 @@ mod tests {
         };
         ctx.execute_committed_subdag(&subdag, storage)
             .expect("execute")
+    }
+
+    /// State sync writes a higher `committed_leader_height` into the database
+    /// while this context still holds the pre-sync copy. The next commit must
+    /// continue from the stored height.
+    #[test]
+    fn execution_adopts_a_higher_stored_staking_height() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("state.redb")).expect("storage");
+        let commits = 101u64;
+        {
+            let mut stored = StakingState::new();
+            stored.committed_leader_height = commits;
+            let txn = storage.begin_write().expect("write");
+            storage
+                .state()
+                .save_staking_state(&txn, &stored)
+                .expect("save staking");
+            txn.commit().expect("commit");
+        }
+
+        let mut ctx = ExecutionContext::new();
+        assert_eq!(ctx.staking.committed_leader_height, 0);
+        let subdag = CommittedSubDag {
+            leader: sample_block(0),
+            blocks: vec![sample_block(0)],
+            leader_round: commits * kovanica_types::WAVE_LENGTH + kovanica_types::WAVE_LENGTH,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        let result = ctx
+            .execute_committed_subdag(&subdag, &storage)
+            .expect("commit after the snapshot");
+        assert_eq!(
+            result.reward.expect("height still advances").height,
+            commits
+        );
+        assert_eq!(ctx.staking.committed_leader_height, commits + 1);
     }
 
     // Regression: the executor used to skip verification for any signature

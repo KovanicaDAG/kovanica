@@ -640,6 +640,34 @@ where
         txn.commit()?;
     }
 
+    // A partial wipe can keep state.redb (headers and seals) and drop
+    // consensus.redb. The seal quorum is a certified cursor: note it before
+    // the engine starts so `restore_undecided_leaders` does not stall inside
+    // the pruned gap. A missing quorum is not a boot failure.
+    match seals::certified_leader_round(&state_storage, config.chain_id) {
+        Ok(Some(anchor)) => {
+            if let Err(e) = dag_store.note_certified_catchup_anchor(anchor) {
+                warn!(
+                    error = %e,
+                    anchor,
+                    "certified commit seal was not stored as a catch-up anchor"
+                );
+            } else {
+                info!(
+                    anchor,
+                    "noted certified catch-up anchor from local commit seals"
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            warn!(
+                error = %e,
+                "could not read a certified commit seal; catch-up anchor unchanged"
+            );
+        }
+    }
+
     // ------------------------------------------------------------------
     // 3. Mempool + validator identity
     // ------------------------------------------------------------------
@@ -975,6 +1003,7 @@ where
         state_storage.clone(),
         catch_up_handle.clone(),
         shutdown_rx.clone(),
+        config.chain_id,
     ));
 
     // The consensus engine now handles block production internally with mempool transactions
@@ -2276,6 +2305,7 @@ async fn run_event_handler(
     state_storage: Arc<Storage>,
     catch_up: Arc<Mutex<CatchUpTracker>>,
     mut shutdown: watch::Receiver<bool>,
+    chain_id: u64,
 ) {
     let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
     let mut state_sync_sessions = StateSyncSessions::new();
@@ -2296,6 +2326,7 @@ async fn run_event_handler(
                             dag_store: &dag_store,
                             network_cmd_tx: &network_cmd_tx,
                             events: &events,
+                            chain_id,
                         },
                         &mut orphans,
                         &mut catch_up_guard,
@@ -2320,6 +2351,7 @@ struct BlockIngest<'a> {
     dag_store: &'a DagStore,
     network_cmd_tx: &'a mpsc::UnboundedSender<NetworkCommand>,
     events: &'a EventBus,
+    chain_id: u64,
 }
 
 /// Process a received block (gossip or sync). If it is rejected because
@@ -3119,6 +3151,8 @@ struct StateSyncSessions {
     sessions: HashMap<PeerId, StateSyncSession>,
     /// When a transfer toward a peer last started (rate limiting).
     last_started: HashMap<PeerId, Instant>,
+    /// Unauthenticated tip claims reported by connected peers.
+    peer_tips: HashMap<PeerId, Round>,
 }
 
 impl StateSyncSessions {
@@ -3146,7 +3180,14 @@ impl StateSyncSessions {
             debug_peer,
             sessions: HashMap::new(),
             last_started: HashMap::new(),
+            peer_tips: HashMap::new(),
         }
+    }
+
+    /// Drop sessions and recorded tips for a disconnected peer.
+    fn remove_peer(&mut self, peer: &PeerId) {
+        self.sessions.remove(peer);
+        self.peer_tips.remove(peer);
     }
 
     /// Start a transfer toward `peer` if the debug entry point targets it and
@@ -3157,13 +3198,74 @@ impl StateSyncSessions {
         now: Instant,
         cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
     ) {
-        if self.debug_peer != Some(peer) || self.sessions.contains_key(&peer) {
+        if self.debug_peer != Some(peer) {
             return;
+        }
+        self.start_session(peer, now, cmd_tx, "debug entry point");
+    }
+
+    /// Automatically start a state-sync transfer toward `peer` when a quorum of
+    /// peers (at least `required_peers`) independently report tip rounds
+    /// further ahead of `local_round` than `prune_window_rounds`.
+    ///
+    /// Automatic state sync is never triggered by a single unauthenticated tip
+    /// claim: an attacker could otherwise trigger costly snapshot downloads.
+    #[allow(clippy::too_many_arguments)]
+    fn maybe_start_for_gap(
+        &mut self,
+        peer: PeerId,
+        peer_tip_round: Round,
+        local_round: Option<Round>,
+        prune_window_rounds: Round,
+        required_peers: usize,
+        now: Instant,
+        cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) -> bool {
+        self.peer_tips.insert(peer, peer_tip_round);
+        let Some(local) = local_round else {
+            return false;
+        };
+        if prune_window_rounds == 0 {
+            return false;
+        }
+        let ahead_peers = self
+            .peer_tips
+            .values()
+            .filter(|&&tip| tip.saturating_sub(local) > prune_window_rounds)
+            .count();
+        if ahead_peers < required_peers {
+            debug!(
+                %peer,
+                peer_tip_round,
+                local,
+                prune_window_rounds,
+                ahead_peers,
+                required_peers,
+                "peer tip ahead past prune window but awaiting peer quorum"
+            );
+            return false;
+        }
+        // Only one automatic state-sync transfer is needed in flight at a time.
+        if !self.sessions.is_empty() {
+            return false;
+        }
+        self.start_session(peer, now, cmd_tx, "peer quorum ahead past prune window")
+    }
+
+    fn start_session(
+        &mut self,
+        peer: PeerId,
+        now: Instant,
+        cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+        reason: &'static str,
+    ) -> bool {
+        if self.sessions.contains_key(&peer) {
+            return false;
         }
         if let Some(last) = self.last_started.get(&peer) {
             if now.saturating_duration_since(*last) < STATE_SYNC_MIN_INTERVAL {
-                debug!(%peer, "state sync start rate-limited; skipping");
-                return;
+                debug!(%peer, reason, "state sync start rate-limited; skipping");
+                return false;
             }
         }
         self.last_started.insert(peer, now);
@@ -3178,7 +3280,7 @@ impl StateSyncSessions {
                 last_activity: now,
             },
         );
-        debug!(%peer, "starting state sync (debug entry point)");
+        info!(%peer, reason, "starting state sync");
         if cmd_tx
             .send(NetworkCommand::RequestStateSync(
                 peer,
@@ -3187,7 +3289,9 @@ impl StateSyncSessions {
             .is_err()
         {
             debug!(%peer, "network command channel closed; state sync not started");
+            return false;
         }
+        true
     }
 
     /// Ingest one chunk of a session.
@@ -3280,6 +3384,60 @@ impl StateSyncSessions {
     }
 }
 
+/// Leader round already executed when `committed_leaders` commits are in state.
+///
+/// Zero commits have no anchor. Since skip certificates (PRO-40 PR #92) can
+/// advance the round without a commit, `committed_leaders * WAVE_LENGTH` is
+/// wrong: the anchor is taken from the sealed [`kovanica_types::LeaderHeader`]'s
+/// `leader_round` stored for that exact commit (`committed_leaders - 1` for
+/// 0-based reward heights, or `committed_leaders` if indexed 1-based). If no
+/// header is stored at that height, returns `None` rather than guessing from
+/// `committed_leaders * WAVE_LENGTH`.
+#[allow(dead_code)]
+fn leader_round_for_synced_commits(
+    state_storage: &Storage,
+    committed_leaders: u64,
+) -> Option<Round> {
+    if committed_leaders == 0 {
+        return None;
+    }
+    let read = match state_storage.begin_read() {
+        Ok(read) => read,
+        Err(e) => {
+            warn!(
+                error = %e,
+                committed_leaders,
+                "could not open read transaction for synced commit header; catch-up anchor unchanged"
+            );
+            return None;
+        }
+    };
+    let state = state_storage.state();
+    let header = match state.get_leader_header(&read, committed_leaders) {
+        Ok(Some(header)) => Some(header),
+        Ok(None) => match state.get_leader_header(&read, committed_leaders - 1) {
+            Ok(header) => header,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    committed_leaders,
+                    "could not read sealed header for synced commits; catch-up anchor unchanged"
+                );
+                return None;
+            }
+        },
+        Err(e) => {
+            warn!(
+                error = %e,
+                committed_leaders,
+                "could not read sealed header for synced commits; catch-up anchor unchanged"
+            );
+            return None;
+        }
+    }?;
+    (header.leader_round > 0).then_some(header.leader_round)
+}
+
 /// Verify and apply a fully reassembled state snapshot.
 ///
 /// Nothing is applied unless [`kovanica_storage::StateStore::import_verified_snapshot`]
@@ -3288,7 +3446,13 @@ impl StateSyncSessions {
 /// must not be below the local committed height (no silent rollback). The
 /// write transaction commits only after verification succeeds, so a reject
 /// leaves local state untouched.
-fn apply_state_snapshot(state_storage: &Arc<Storage>, peer: PeerId, bytes: &[u8]) {
+fn apply_state_snapshot(
+    state_storage: &Arc<Storage>,
+    dag_store: &DagStore,
+    chain_id: u64,
+    peer: PeerId,
+    bytes: &[u8],
+) {
     let min_height = match state_storage.begin_read() {
         Ok(txn) => {
             let state = state_storage.state();
@@ -3324,14 +3488,32 @@ fn apply_state_snapshot(state_storage: &Arc<Storage>, peer: PeerId, bytes: &[u8]
     };
     match state_storage
         .state()
-        .import_verified_snapshot(&txn, bytes, min_height)
+        .import_verified_snapshot(&txn, bytes, min_height, chain_id)
     {
-        Ok(height) => {
+        Ok(verified) => {
             if let Err(e) = txn.commit() {
                 error!(error = %e, "failed to commit state sync import");
                 return;
             }
-            info!(%peer, height, min_height, "state snapshot verified and imported");
+            info!(
+                %peer,
+                height = verified.height,
+                min_height,
+                leader_round = verified.leader_round,
+                "state snapshot verified and imported"
+            );
+            // P1-b: take leader_round directly from the verified snapshot header.
+            // Staking state is forgeable data; the consensus catch-up anchor MUST
+            // be anchored to the quorum-sealed leader header round from the snapshot.
+            if verified.leader_round > 0 {
+                if let Err(e) = dag_store.note_certified_catchup_anchor(verified.leader_round) {
+                    warn!(
+                        error = %e,
+                        anchor = verified.leader_round,
+                        "state snapshot imported but the catch-up anchor was not stored"
+                    );
+                }
+            }
         }
         Err(e) => {
             // The transaction is dropped uncommitted: local state is untouched.
@@ -3452,6 +3634,7 @@ fn handle_network_event(
             info!(%peer, "peer disconnected");
             catch_up.remove(peer);
             vote_sync.peer_disconnected(peer);
+            state_sync_sessions.remove_peer(&peer);
         }
         NetworkEvent::PeerDiscovered(peer, addr) => debug!(%peer, %addr, "peer discovered"),
         NetworkEvent::SyncRequest {
@@ -3502,15 +3685,14 @@ fn handle_network_event(
                     warn!(%peer, "block sync request was invalid");
                 }
                 BlockSyncResponse::Status { tip_round } => {
-                    // A height advertisement is only a fetch trigger: it decides
-                    // whether we start pulling ranges, never what we accept —
-                    // every fetched block is still fully validated.
-                    catch_up.on_status(
+                    on_block_sync_status(
                         peer,
                         tip_round,
-                        local_dag_tip(io.dag_store),
+                        engine,
+                        io,
+                        catch_up,
+                        state_sync_sessions,
                         now,
-                        network_cmd_tx,
                     );
                 }
                 BlockSyncResponse::RoundHashes {
@@ -3566,35 +3748,106 @@ fn handle_network_event(
             request_id: _,
             response,
         } => {
-            debug!(%peer, ?response, "state sync response received");
-            match response {
-                StateSyncResponse::Chunk(chunk) => {
-                    debug!(
-                        %peer,
-                        offset = chunk.offset,
-                        len = chunk.data.len(),
-                        total = chunk.total_len,
-                        height = chunk.height,
-                        "received state snapshot chunk"
-                    );
-                    match state_sync_sessions.on_chunk(peer, chunk, now) {
-                        // Transfer complete: verify (state root + height)
-                        // before applying; a reject never touches local state.
-                        Some(bytes) => apply_state_snapshot(state_storage, peer, &bytes),
-                        // Still incomplete and the session survived: ask for
-                        // the next chunk. Rejected sessions are already gone.
-                        None => state_sync_sessions.request_next(peer, network_cmd_tx),
+            handle_state_sync_response(
+                peer,
+                response,
+                engine,
+                io,
+                state_sync_sessions,
+                state_storage,
+                now,
+            );
+        }
+    }
+}
+
+/// Handle a `BlockSyncResponse::Status` advertisement from `peer`.
+#[allow(clippy::too_many_arguments)]
+fn on_block_sync_status(
+    peer: PeerId,
+    tip_round: Round,
+    engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>,
+    io: &BlockIngest<'_>,
+    catch_up: &mut CatchUpTracker,
+    state_sync_sessions: &mut StateSyncSessions,
+    now: Instant,
+) {
+    // A height advertisement is only a fetch trigger: it decides
+    // whether we start pulling ranges, never what we accept —
+    // every fetched block is still fully validated.
+    let local_tip = local_dag_tip(io.dag_store);
+    catch_up.on_status(peer, tip_round, local_tip, now, io.network_cmd_tx);
+    // When the peer is ahead by more than the prune window
+    // (e.g. a node that is hours behind), block sync alone
+    // cannot bridge the pruned waves: automatically start a
+    // verified state-sync transfer.
+    let local_progress = local_tip.map(|tip| tip.max(engine.last_decided_round()));
+    let prune_window_rounds = engine
+        .prune_window_waves()
+        .max(1)
+        .saturating_mul(kovanica_types::WAVE_LENGTH);
+    let committee_size = engine.committee().size();
+    let required_peers = if committee_size <= 1 {
+        1
+    } else {
+        (committee_size / 3 + 1).max(2).min(committee_size)
+    };
+    state_sync_sessions.maybe_start_for_gap(
+        peer,
+        tip_round,
+        local_progress,
+        prune_window_rounds,
+        required_peers,
+        now,
+        io.network_cmd_tx,
+    );
+}
+
+/// Handle a [`StateSyncResponse`] from `peer`.
+fn handle_state_sync_response(
+    peer: PeerId,
+    response: StateSyncResponse,
+    engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>,
+    io: &BlockIngest<'_>,
+    state_sync_sessions: &mut StateSyncSessions,
+    state_storage: &Arc<Storage>,
+    now: Instant,
+) {
+    debug!(%peer, ?response, "state sync response received");
+    match response {
+        StateSyncResponse::Chunk(chunk) => {
+            debug!(
+                %peer,
+                offset = chunk.offset,
+                len = chunk.data.len(),
+                total = chunk.total_len,
+                height = chunk.height,
+                "received state snapshot chunk"
+            );
+            match state_sync_sessions.on_chunk(peer, chunk, now) {
+                // Transfer complete: verify (state root + height + seal
+                // quorum) before applying; a reject never touches local state.
+                Some(bytes) => {
+                    apply_state_snapshot(state_storage, io.dag_store, io.chain_id, peer, &bytes);
+                    if let Err(e) = engine.drain_commits() {
+                        warn!(
+                            error = %e,
+                            "commit drain failed after importing state snapshot"
+                        );
                     }
                 }
-                StateSyncResponse::NotFound => {
-                    state_sync_sessions.drop_session(peer);
-                    debug!(%peer, "requested state snapshot not found on peer");
-                }
-                StateSyncResponse::InvalidRequest => {
-                    state_sync_sessions.drop_session(peer);
-                    warn!(%peer, "state sync request was invalid");
-                }
+                // Still incomplete and the session survived: ask for
+                // the next chunk. Rejected sessions are already gone.
+                None => state_sync_sessions.request_next(peer, io.network_cmd_tx),
             }
+        }
+        StateSyncResponse::NotFound => {
+            state_sync_sessions.drop_session(peer);
+            debug!(%peer, "requested state snapshot not found on peer");
+        }
+        StateSyncResponse::InvalidRequest => {
+            state_sync_sessions.drop_session(peer);
+            warn!(%peer, "state sync request was invalid");
         }
     }
 }
@@ -3892,6 +4145,10 @@ impl DagStoreTrait for NodeDagStore {
         let storage = self.inner.storage();
         let txn = storage.begin_read()?;
         Ok(storage.consensus().get_votes_for_round(&txn, round)?)
+    }
+
+    fn certified_catchup_anchor(&self) -> Result<Option<Round>, DagStoreError> {
+        self.inner.certified_catchup_anchor()
     }
 
     fn mark_round_skipped(&self, round: Round) -> Result<(), DagStoreError> {
@@ -7155,10 +7412,29 @@ mod tests {
         assert!(sessions.sessions.is_empty(), "empty claim abandoned");
     }
 
-    /// Export a snapshot from a throwaway storage with one seeded account.
-    fn exported_snapshot_bytes() -> Vec<u8> {
+    /// Export a snapshot from a throwaway storage with one seeded account and
+    /// a quorum-sealed leader header at height 0 (`committed_leader_height = 0`).
+    fn exported_snapshot_bytes() -> (Vec<u8>, Vec<kovanica_types::SealCommitteeSnapshotMember>) {
+        exported_snapshot_bytes_with_header_round(3)
+    }
+
+    fn exported_snapshot_bytes_with_header_round(
+        leader_round: u64,
+    ) -> (Vec<u8>, Vec<kovanica_types::SealCommitteeSnapshotMember>) {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::new(dir.path().join("src.redb")).unwrap();
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let pk = PublicKey(key.verifying_key().to_bytes());
+        let members = vec![kovanica_types::SealCommitteeSnapshotMember {
+            index: 0,
+            public_key: pk,
+            stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+            vrf_public_key: None,
+        }];
+        let committee_hash = kovanica_types::committee_seal_hash(
+            0,
+            &kovanica_types::snapshot_seal_members(&members),
+        );
         {
             let txn = storage.begin_write().unwrap();
             let acct = kovanica_storage::state_store::Account {
@@ -7171,19 +7447,60 @@ mod tests {
                 .state()
                 .set_account(&txn, &Address([7; 32]), &acct)
                 .unwrap();
+            let smt_root = storage.state().commit_state_smt(&txn, 0, true).unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            let header = kovanica_types::LeaderHeader {
+                committed_height: 0,
+                leader_round,
+                leader_digest: Hash::new([1u8]),
+                leader_author: 0,
+                parent_leader_digest: Hash::zero(),
+                tx_merkle_root: Hash::zero(),
+                executed_tx_root: Hash::zero(),
+                non_blue_root: Hash::zero(),
+                blue_root: Hash::zero(),
+                mysticghost: false,
+                state_root: smt_root,
+                epoch: 0,
+                committee_hash,
+                timestamp: 0,
+            };
+            let seal = kovanica_types::CommitSeal {
+                authority_index: 0,
+                signature: kovanica_crypto::sign(&key, &header.seal_message(1337)),
+            };
+            storage.state().save_leader_header(&txn, &header).unwrap();
+            storage.state().save_commit_seal(&txn, 0, &seal).unwrap();
             txn.commit().unwrap();
         }
         let txn = storage.begin_read().unwrap();
-        storage.state().snapshot_bytes(&txn).unwrap()
+        (storage.state().snapshot_bytes(&txn).unwrap(), members)
+    }
+
+    fn dag_for(dir: &tempfile::TempDir) -> DagStore {
+        let consensus = Arc::new(Storage::new(dir.path().join("consensus.redb")).unwrap());
+        DagStore::from_storage(consensus)
     }
 
     #[test]
     fn apply_state_snapshot_imports_a_verified_payload() {
-        let bytes = exported_snapshot_bytes();
+        let (bytes, members) = exported_snapshot_bytes();
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let dag = dag_for(&dir);
 
-        apply_state_snapshot(&storage, PeerId::random(), &bytes);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &bytes);
 
         let txn = storage.begin_read().unwrap();
         let acct = storage
@@ -7191,11 +7508,12 @@ mod tests {
             .get_account(&txn, &Address([7; 32]))
             .unwrap();
         assert_eq!(acct.balance, 42, "verified snapshot must be applied");
+        assert_eq!(dag.certified_catchup_anchor().unwrap(), Some(3));
     }
 
     #[test]
     fn apply_state_snapshot_rejects_tampered_payload() {
-        let bytes = exported_snapshot_bytes();
+        let (bytes, members) = exported_snapshot_bytes();
         // Tamper with a table value while keeping the claimed header intact:
         // the recomputed state root no longer matches.
         let mut data = kovanica_storage::StateStore::decode_snapshot(&bytes).unwrap();
@@ -7205,7 +7523,16 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
-        apply_state_snapshot(&storage, PeerId::random(), &tampered);
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let dag = dag_for(&dir);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &tampered);
 
         let txn = storage.begin_read().unwrap();
         assert!(
@@ -7217,11 +7544,12 @@ mod tests {
                 == 0,
             "tampered snapshot must never be applied"
         );
+        assert!(dag.certified_catchup_anchor().unwrap().is_none());
     }
 
     #[test]
     fn apply_state_snapshot_rejects_height_regression() {
-        let mut bytes = exported_snapshot_bytes();
+        let (mut bytes, members) = exported_snapshot_bytes();
         // Re-stamp the snapshot at a height below the caller's expectation.
         let mut data = kovanica_storage::StateStore::decode_snapshot(&bytes).unwrap();
         data.height = 3;
@@ -7230,6 +7558,15 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let dag = dag_for(&dir);
         // Local state is ahead of the snapshot: importing would roll back.
         {
             let txn = storage.begin_write().unwrap();
@@ -7239,7 +7576,7 @@ mod tests {
                 .unwrap();
             txn.commit().unwrap();
         }
-        apply_state_snapshot(&storage, PeerId::random(), &bytes);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &bytes);
 
         let txn = storage.begin_read().unwrap();
         assert!(
@@ -7251,6 +7588,534 @@ mod tests {
                 == 0,
             "a snapshot below local height must never be applied"
         );
+        assert!(dag.certified_catchup_anchor().unwrap().is_none());
+    }
+
+    /// A joiner more than the prune window behind anchors on the sealed
+    /// header's `leader_round` at that committed height, not on
+    /// `committed_leader_height * WAVE_LENGTH`.
+    ///
+    /// With skip certificates (PRO-40 #92), skipped leader slots advance the
+    /// round without incrementing `committed_leader_height`, so 101 commits
+    /// with 4 skipped slots lands at leader round 315 (not 303).
+    #[test]
+    fn apply_state_snapshot_anchors_past_the_prune_window() {
+        let commits = 101u64;
+        let skipped_slots = 4u64;
+        let anchor = (commits + skipped_slots) * kovanica_types::WAVE_LENGTH;
+        assert_ne!(anchor, commits * kovanica_types::WAVE_LENGTH);
+
+        let dir = tempfile::tempdir().unwrap();
+        let src = Storage::new(dir.path().join("src.redb")).unwrap();
+        let members: Vec<kovanica_types::SealCommitteeSnapshotMember>;
+        {
+            let key = SigningKey::from_bytes(&[7u8; 32]);
+            let pk = PublicKey(key.verifying_key().to_bytes());
+            let addr = Address::from_public_key(&pk);
+            let txn = src.begin_write().unwrap();
+            let mut staking = StakingState::new();
+            staking.init_treasury(Address([0xcc; 32]));
+            staking
+                .join_validator(
+                    addr,
+                    kovanica_staking::MIN_VALIDATOR_STAKE,
+                    0,
+                    Some(addr),
+                    Some(pk),
+                    None,
+                )
+                .unwrap();
+            staking.committed_leader_height = commits;
+            src.state().save_staking_state(&txn, &staking).unwrap();
+            members = vec![kovanica_types::SealCommitteeSnapshotMember {
+                index: 0,
+                public_key: pk,
+                stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+                vrf_public_key: None,
+            }];
+            let committee_hash = kovanica_types::committee_seal_hash(
+                0,
+                &kovanica_types::snapshot_seal_members(&members),
+            );
+            src.state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            // Header height is the state-root key, one behind the commit count.
+            let state_root = src
+                .state()
+                .commit_state_smt(&txn, commits - 1, true)
+                .unwrap();
+            let header = kovanica_types::LeaderHeader {
+                committed_height: commits - 1,
+                leader_round: anchor,
+                leader_digest: Hash::new([1u8]),
+                leader_author: 0,
+                parent_leader_digest: Hash::zero(),
+                tx_merkle_root: Hash::zero(),
+                executed_tx_root: Hash::zero(),
+                non_blue_root: Hash::zero(),
+                blue_root: Hash::zero(),
+                mysticghost: false,
+                state_root,
+                epoch: 0,
+                committee_hash,
+                timestamp: 0,
+            };
+            let seal = kovanica_types::CommitSeal {
+                authority_index: 0,
+                signature: kovanica_crypto::sign(&key, &header.seal_message(1337)),
+            };
+            src.state().save_leader_header(&txn, &header).unwrap();
+            src.state()
+                .save_commit_seal(&txn, commits - 1, &seal)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let read = src.begin_read().unwrap();
+        let bytes = src.state().snapshot_bytes(&read).unwrap();
+        drop(read);
+        let decoded = kovanica_storage::StateStore::decode_snapshot(&bytes).unwrap();
+        assert_eq!(decoded.height, commits - 1);
+
+        let dst_dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dst_dir.path().join("state.redb")).unwrap());
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let dag = dag_for(&dst_dir);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &bytes);
+
+        assert!(
+            commits > 100,
+            "101 commits must sit past the default 100-wave prune window"
+        );
+        assert_eq!(dag.certified_catchup_anchor().unwrap(), Some(anchor));
+        let txn = storage.begin_read().unwrap();
+        assert_eq!(
+            storage
+                .state()
+                .load_staking_state(&txn)
+                .unwrap()
+                .committed_leader_height,
+            commits
+        );
+    }
+
+    #[test]
+    fn apply_state_snapshot_anchors_from_verified_header_round_not_forged_staking() {
+        let (bytes, members) = exported_snapshot_bytes_with_header_round(42);
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let dag = dag_for(&dir);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &bytes);
+
+        // Header claims leader_round = 42; catch-up anchor MUST be Some(42).
+        assert_eq!(dag.certified_catchup_anchor().unwrap(), Some(42));
+    }
+
+    #[test]
+    fn state_sync_sessions_requires_peer_quorum_for_gap() {
+        let mut sessions = StateSyncSessions::new();
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+        let now = Instant::now();
+
+        // 1. Single peer advertising tip round 1000 ahead of local 0, prune window 300, required_peers 2:
+        let started = sessions.maybe_start_for_gap(peer1, 1000, Some(0), 300, 2, now, &cmd_tx);
+        assert!(
+            !started,
+            "single unauthenticated peer must not trigger gap state sync"
+        );
+        assert!(cmd_rx.try_recv().is_err(), "no network commands sent");
+
+        // 2. Second peer reports tip round 1000. Quorum is reached (2 peers):
+        let started = sessions.maybe_start_for_gap(peer2, 1000, Some(0), 300, 2, now, &cmd_tx);
+        assert!(started, "peer quorum triggers state sync");
+        assert!(cmd_rx.try_recv().is_ok(), "RequestStateSync sent");
+
+        // 3. Peer disconnect cleans up its tip
+        sessions.remove_peer(&peer1);
+        assert_eq!(sessions.peer_tips.len(), 1);
+    }
+
+    #[test]
+    fn leader_round_for_synced_commits_uses_sealed_header_at_exact_height() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+
+        assert_eq!(leader_round_for_synced_commits(&storage, 0), None);
+        // Without a sealed header, never guess `committed_leaders * WAVE_LENGTH`.
+        assert_eq!(leader_round_for_synced_commits(&storage, 10), None);
+
+        // A header at an unrelated height (5) must not be used for commit count 10.
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_leader_header(
+                    &txn,
+                    &kovanica_types::LeaderHeader {
+                        committed_height: 5,
+                        leader_round: 21,
+                        leader_digest: Hash::new([5u8]),
+                        leader_author: 0,
+                        parent_leader_digest: Hash::zero(),
+                        tx_merkle_root: Hash::zero(),
+                        executed_tx_root: Hash::zero(),
+                        non_blue_root: Hash::zero(),
+                        blue_root: Hash::zero(),
+                        mysticghost: false,
+                        state_root: Hash::zero(),
+                        epoch: 0,
+                        committee_hash: Hash::zero(),
+                        timestamp: 0,
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        assert_eq!(leader_round_for_synced_commits(&storage, 10), None);
+
+        // Save the header for the 10th commit (height 9, with 4 skipped waves -> round 42 != 30).
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_leader_header(
+                    &txn,
+                    &kovanica_types::LeaderHeader {
+                        committed_height: 9,
+                        leader_round: 42,
+                        leader_digest: Hash::new([9u8]),
+                        leader_author: 0,
+                        parent_leader_digest: Hash::zero(),
+                        tx_merkle_root: Hash::zero(),
+                        executed_tx_root: Hash::zero(),
+                        non_blue_root: Hash::zero(),
+                        blue_root: Hash::zero(),
+                        mysticghost: false,
+                        state_root: Hash::zero(),
+                        epoch: 0,
+                        committee_hash: Hash::zero(),
+                        timestamp: 0,
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        assert_eq!(leader_round_for_synced_commits(&storage, 10), Some(42));
+    }
+
+    #[test]
+    fn state_sync_auto_triggers_when_peer_is_hours_ahead_and_resumes_commits_e2e() {
+        // End-to-end test: a node with NO debug peer configured (`debug_peer = None`)
+        // is hours behind a peer (gap > prune window; 4 hours = 3,600 rounds = 1,200 waves
+        // with skipped slots). When `BlockSyncResponse::Status` arrives from the peer:
+        // 1. State sync triggers automatically (emitting `RequestStateSync`).
+        // 2. The chunked snapshot is verified (including its commit-seal quorum) and imported.
+        // 3. `leader_round_for_synced_commits` anchors consensus at the sealed header's
+        //    `leader_round` (even with skipped slots so `leader_round != commits * 3`).
+        // 4. The next leader block after the anchor and its quorum votes arrive, and the
+        //    node commits and executes that block despite all earlier waves being pruned.
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, dag, key) = vote_sync_test_engine(&dir);
+        let pk = PublicKey(key.verifying_key().to_bytes());
+        kovanica_crypto::set_validator_keys_from_public(vec![pk]);
+        let validator_addr = Address::from_public_key(&pk);
+
+        let (commit_tx, mut commit_rx) = mpsc::unbounded_channel();
+        engine.set_commit_sender(commit_tx);
+
+        // Peer state: 1,200 committed leaders (~4 hours) plus 5 skipped leader slots,
+        // so the sealed leader round is (1200 + 5) * 3 = 3615 (not 1200 * 3 = 3600).
+        let peer_commits = 1_200u64;
+        let skipped_slots = 5u64;
+        let anchor_round = (peer_commits + skipped_slots) * kovanica_types::WAVE_LENGTH;
+        let next_leader_round = anchor_round + kovanica_types::WAVE_LENGTH;
+
+        let peer_dir = tempfile::tempdir().unwrap();
+        let peer_storage = Storage::new(peer_dir.path().join("peer_state.redb")).unwrap();
+        let members: Vec<kovanica_types::SealCommitteeSnapshotMember>;
+        {
+            let txn = peer_storage.begin_write().unwrap();
+            let mut staking = StakingState::new();
+            staking.init_treasury(Address([0xcc; 32]));
+            staking
+                .join_validator(
+                    validator_addr,
+                    kovanica_staking::MIN_VALIDATOR_STAKE,
+                    0,
+                    Some(validator_addr),
+                    Some(pk),
+                    None,
+                )
+                .unwrap();
+            staking.committed_leader_height = peer_commits;
+            peer_storage
+                .state()
+                .save_staking_state(&txn, &staking)
+                .unwrap();
+            peer_storage
+                .state()
+                .set_account(
+                    &txn,
+                    &validator_addr,
+                    &kovanica_storage::state_store::Account {
+                        balance: 500 * kovanica_staking::ONE_KUNA,
+                        nonce: 3,
+                        code_hash: [0; 32],
+                        code: Vec::new(),
+                    },
+                )
+                .unwrap();
+            members = vec![kovanica_types::SealCommitteeSnapshotMember {
+                index: 0,
+                public_key: pk,
+                stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+                vrf_public_key: None,
+            }];
+            let committee_hash = kovanica_types::committee_seal_hash(
+                0,
+                &kovanica_types::snapshot_seal_members(&members),
+            );
+            peer_storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            let smt_root = peer_storage
+                .state()
+                .commit_state_smt(&txn, peer_commits - 1, true)
+                .unwrap();
+            let header = kovanica_types::LeaderHeader {
+                committed_height: peer_commits - 1,
+                leader_round: anchor_round,
+                leader_digest: Hash::new([0xaa; 32]),
+                leader_author: 0,
+                parent_leader_digest: Hash::zero(),
+                tx_merkle_root: Hash::zero(),
+                executed_tx_root: Hash::zero(),
+                non_blue_root: Hash::zero(),
+                blue_root: Hash::zero(),
+                mysticghost: false,
+                state_root: smt_root,
+                epoch: 0,
+                committee_hash,
+                timestamp: 0,
+            };
+            let seal = kovanica_types::CommitSeal {
+                authority_index: 0,
+                signature: kovanica_crypto::sign(&key, &header.seal_message(1337)),
+            };
+            peer_storage
+                .state()
+                .save_leader_header(&txn, &header)
+                .unwrap();
+            peer_storage
+                .state()
+                .save_commit_seal(&txn, peer_commits - 1, &seal)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let snapshot_bytes = {
+            let read = peer_storage.begin_read().unwrap();
+            peer_storage.state().snapshot_bytes(&read).unwrap()
+        };
+        let decoded = kovanica_storage::StateStore::decode_snapshot(&snapshot_bytes).unwrap();
+
+        // Joiner node state: fresh storage, no debug peer (`with_debug_peer(None)`).
+        let state_storage = Arc::new(Storage::new(dir.path().join("joiner_state.redb")).unwrap());
+        {
+            let txn = state_storage.begin_write().unwrap();
+            state_storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let mempool = Mempool::new(
+            Default::default(),
+            state_storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL),
+        );
+        let events = EventBus::new();
+        let (net_tx, mut net_rx) = mpsc::unbounded_channel();
+        let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
+        let mut catch_up = CatchUpTracker::new();
+        let mut state_sync_sessions = StateSyncSessions::with_debug_peer(None);
+        let mut vote_sync = VoteSync::new();
+        let peer = PeerId::random();
+
+        // 1. Peer connects: probes status, does NOT fire debug state sync.
+        handle_network_event(
+            NetworkEvent::PeerConnected(peer),
+            &mempool,
+            &engine,
+            &BlockIngest {
+                dag_store: &dag,
+                network_cmd_tx: &net_tx,
+                events: &events,
+                chain_id: 1337,
+            },
+            &mut orphans,
+            &mut catch_up,
+            &mut state_sync_sessions,
+            &mut vote_sync,
+            &state_storage,
+        );
+        assert!(
+            state_sync_sessions.sessions.is_empty(),
+            "connect alone must not start state sync when debug_peer is None"
+        );
+        assert!(matches!(
+            net_rx.try_recv(),
+            Ok(NetworkCommand::RequestSync(p, BlockSyncRequest::Status)) if p == peer
+        ));
+
+        // 2. Peer reports tip_round hours ahead (next_leader_round = 3618 > 300-round prune window):
+        //    automatic state sync MUST start.
+        on_block_sync_status(
+            peer,
+            next_leader_round,
+            &engine,
+            &BlockIngest {
+                dag_store: &dag,
+                network_cmd_tx: &net_tx,
+                events: &events,
+                chain_id: 1337,
+            },
+            &mut catch_up,
+            &mut state_sync_sessions,
+            Instant::now(),
+        );
+        assert!(
+            state_sync_sessions.sessions.contains_key(&peer),
+            "state sync session must start automatically when peer is hours ahead"
+        );
+        let mut saw_state_sync_req = false;
+        while let Ok(cmd) = net_rx.try_recv() {
+            if matches!(
+                cmd,
+                NetworkCommand::RequestStateSync(p, ref req)
+                    if p == peer && *req == StateSyncRequest::latest()
+            ) {
+                saw_state_sync_req = true;
+            }
+        }
+        assert!(
+            saw_state_sync_req,
+            "expected automatic RequestStateSync toward peer"
+        );
+
+        // 3. Deliver the snapshot chunk: verified import + catch-up anchor + cursor advance.
+        let chunk = SnapshotChunk {
+            height: decoded.height,
+            state_root: decoded.state_root,
+            total_len: snapshot_bytes.len() as u64,
+            offset: 0,
+            data: snapshot_bytes,
+        };
+        handle_state_sync_response(
+            peer,
+            StateSyncResponse::Chunk(chunk),
+            &engine,
+            &BlockIngest {
+                dag_store: &dag,
+                network_cmd_tx: &net_tx,
+                events: &events,
+                chain_id: 1337,
+            },
+            &mut state_sync_sessions,
+            &state_storage,
+            Instant::now(),
+        );
+        assert_eq!(
+            dag.certified_catchup_anchor().unwrap(),
+            Some(anchor_round),
+            "anchor must equal the sealed header's leader_round (3615), not commits * 3 (3600)"
+        );
+        assert_eq!(engine.last_decided_round(), anchor_round);
+
+        // 4. Ingest the next leader block at `next_leader_round` (3618) and its quorum vote:
+        //    consensus commits it without needing any pruned blocks <= 3615, and execution
+        //    continues from `peer_commits` (1200 -> 1201).
+        let digest = StatementBlock::compute_digest(0, next_leader_round, &[], &[]);
+        let mut next_leader = StatementBlock {
+            author: 0,
+            round: next_leader_round,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: Signature([0; 64]),
+            digest,
+            merkle_root: Hash::zero(),
+        };
+        next_leader.signature = kovanica_crypto::sign(&key, next_leader.digest.as_ref());
+        let vote = vote_sync_test_vote(&key, next_leader_round, next_leader.digest);
+
+        handle_network_event(
+            NetworkEvent::BlockReceived {
+                peer,
+                block: next_leader,
+            },
+            &mempool,
+            &engine,
+            &BlockIngest {
+                dag_store: &dag,
+                network_cmd_tx: &net_tx,
+                events: &events,
+                chain_id: 1337,
+            },
+            &mut orphans,
+            &mut catch_up,
+            &mut state_sync_sessions,
+            &mut vote_sync,
+            &state_storage,
+        );
+        handle_network_event(
+            NetworkEvent::VoteReceived { peer, vote },
+            &mempool,
+            &engine,
+            &BlockIngest {
+                dag_store: &dag,
+                network_cmd_tx: &net_tx,
+                events: &events,
+                chain_id: 1337,
+            },
+            &mut orphans,
+            &mut catch_up,
+            &mut state_sync_sessions,
+            &mut vote_sync,
+            &state_storage,
+        );
+
+        let committed_subdag = commit_rx
+            .try_recv()
+            .expect("leader slot immediately after the synced anchor must commit");
+        assert_eq!(committed_subdag.leader_round, next_leader_round);
+        assert_eq!(engine.last_decided_round(), next_leader_round);
+
+        let mut exec_ctx = ExecutionContext::with_signing_context(
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL),
+        );
+        let exec_res = exec_ctx
+            .execute_committed_subdag(&committed_subdag, &state_storage)
+            .expect("execution continues from the synced snapshot state");
+        assert_eq!(exec_res.reward.expect("reward").height, peer_commits);
+        assert_eq!(exec_ctx.staking.committed_leader_height, peer_commits + 1);
     }
 
     /// A parentless block at `round` (digest recomputed so `put_block` accepts

@@ -245,6 +245,36 @@ pub fn slashing_active_from(round: Round) -> bool {
     round >= SLASHING_ACTIVE_FROM_ROUND
 }
 
+/// Round from which the sealed `LeaderHeader::state_root` also commits to
+/// the contract code, contract storage and staking tables.
+///
+/// Before this round the header root is the account sparse Merkle root over
+/// balance and nonce only, so a commit-seal quorum authenticates accounts and
+/// nothing else. A state-sync snapshot additionally carries staking and
+/// contract rows that no seal covers, and the importer therefore cannot trust
+/// them. From this round the account tree carries one reserved leaf that
+/// holds a digest of those tables (see
+/// `kovanica_storage::state_store::AUX_STATE_LEAF_ADDRESS`), so the same seal
+/// quorum authenticates the full state and `import_verified_snapshot` can
+/// reject forged staking or contract rows.
+///
+/// Changing the header root is a consensus change: a node without it would
+/// compute a different root and its seals would not match. It therefore
+/// defaults to `u64::MAX` (inert; state sync refuses every snapshot because
+/// none can be authenticated) and is set to `0` at the next genesis / testnet
+/// reset, after every validator runs a build containing it. Do not activate it
+/// on a running chain without the owner's approval.
+pub const STATE_COMMITMENT_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+
+/// Whether the leader header at `round` commits to the full state.
+///
+/// Equivalent to `round >= STATE_COMMITMENT_ACTIVE_FROM_ROUND`; the single
+/// predicate execution uses when it computes the sealed state root.
+#[allow(clippy::absurd_extreme_comparisons)]
+pub fn state_commitment_active_from(round: Round) -> bool {
+    round >= STATE_COMMITMENT_ACTIVE_FROM_ROUND
+}
+
 /// Maximum serialized size of a single transaction, in bytes (512 KiB).
 ///
 /// Measured on the bincode encoding, which is what storage and the network
