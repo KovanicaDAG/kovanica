@@ -549,7 +549,10 @@ impl ExecutionContext {
         }
 
         // 5. Account sparse Merkle over balance and nonce, then mark executed.
-        let state_root = storage.state().commit_account_smt(&txn, committed_height)?;
+        let commit_full = kovanica_types::state_commitment_active_from(subdag.leader_round);
+        let state_root = storage
+            .state()
+            .commit_state_smt(&txn, committed_height, commit_full)?;
         txn.open_table(EXECUTED_SUBDAGS)
             .map_err(StorageError::Table)?
             .insert(subdag.leader.digest.0, 1)

@@ -2819,6 +2819,7 @@ dependencies = [
  "bincode",
  "blake3",
  "hex",
+ "kovanica-crypto",
  "kovanica-staking",
  "kovanica-types",
  "redb",

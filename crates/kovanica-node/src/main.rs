@@ -1000,6 +1000,7 @@ where
         state_storage.clone(),
         catch_up_handle.clone(),
         shutdown_rx.clone(),
+        config.chain_id,
     ));
 
     // The consensus engine now handles block production internally with mempool transactions
@@ -2295,6 +2296,7 @@ async fn run_event_handler(
     state_storage: Arc<Storage>,
     catch_up: Arc<Mutex<CatchUpTracker>>,
     mut shutdown: watch::Receiver<bool>,
+    chain_id: u64,
 ) {
     let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
     let mut state_sync_sessions = StateSyncSessions::new();
@@ -2315,6 +2317,7 @@ async fn run_event_handler(
                             dag_store: &dag_store,
                             network_cmd_tx: &network_cmd_tx,
                             events: &events,
+                            chain_id,
                         },
                         &mut orphans,
                         &mut catch_up_guard,
@@ -2339,6 +2342,7 @@ struct BlockIngest<'a> {
     dag_store: &'a DagStore,
     network_cmd_tx: &'a mpsc::UnboundedSender<NetworkCommand>,
     events: &'a EventBus,
+    chain_id: u64,
 }
 
 /// Process a received block (gossip or sync). If it is rejected because
@@ -3138,6 +3142,8 @@ struct StateSyncSessions {
     sessions: HashMap<PeerId, StateSyncSession>,
     /// When a transfer toward a peer last started (rate limiting).
     last_started: HashMap<PeerId, Instant>,
+    /// Unauthenticated tip claims reported by connected peers.
+    peer_tips: HashMap<PeerId, Round>,
 }
 
 impl StateSyncSessions {
@@ -3165,7 +3171,14 @@ impl StateSyncSessions {
             debug_peer,
             sessions: HashMap::new(),
             last_started: HashMap::new(),
+            peer_tips: HashMap::new(),
         }
+    }
+
+    /// Drop sessions and recorded tips for a disconnected peer.
+    fn remove_peer(&mut self, peer: &PeerId) {
+        self.sessions.remove(peer);
+        self.peer_tips.remove(peer);
     }
 
     /// Start a transfer toward `peer` if the debug entry point targets it and
@@ -3182,30 +3195,52 @@ impl StateSyncSessions {
         self.start_session(peer, now, cmd_tx, "debug entry point");
     }
 
-    /// Automatically start a state-sync transfer toward `peer` when its
-    /// advertised `peer_tip_round` is further ahead of `local_round` than
-    /// `prune_window_rounds` (for example, a node that is hours behind and
-    /// whose missing DAG waves have already been pruned by peers).
+    /// Automatically start a state-sync transfer toward `peer` when a quorum of
+    /// peers (at least `required_peers`) independently report tip rounds
+    /// further ahead of `local_round` than `prune_window_rounds`.
+    ///
+    /// Automatic state sync is never triggered by a single unauthenticated tip
+    /// claim: an attacker could otherwise trigger costly snapshot downloads.
+    #[allow(clippy::too_many_arguments)]
     fn maybe_start_for_gap(
         &mut self,
         peer: PeerId,
         peer_tip_round: Round,
         local_round: Option<Round>,
         prune_window_rounds: Round,
+        required_peers: usize,
         now: Instant,
         cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
     ) -> bool {
+        self.peer_tips.insert(peer, peer_tip_round);
         let Some(local) = local_round else {
             return false;
         };
-        if prune_window_rounds == 0 || peer_tip_round.saturating_sub(local) <= prune_window_rounds {
+        if prune_window_rounds == 0 {
+            return false;
+        }
+        let ahead_peers = self
+            .peer_tips
+            .values()
+            .filter(|&&tip| tip.saturating_sub(local) > prune_window_rounds)
+            .count();
+        if ahead_peers < required_peers {
+            debug!(
+                %peer,
+                peer_tip_round,
+                local,
+                prune_window_rounds,
+                ahead_peers,
+                required_peers,
+                "peer tip ahead past prune window but awaiting peer quorum"
+            );
             return false;
         }
         // Only one automatic state-sync transfer is needed in flight at a time.
         if !self.sessions.is_empty() {
             return false;
         }
-        self.start_session(peer, now, cmd_tx, "peer ahead past prune window")
+        self.start_session(peer, now, cmd_tx, "peer quorum ahead past prune window")
     }
 
     fn start_session(
@@ -3349,6 +3384,7 @@ impl StateSyncSessions {
 /// 0-based reward heights, or `committed_leaders` if indexed 1-based). If no
 /// header is stored at that height, returns `None` rather than guessing from
 /// `committed_leaders * WAVE_LENGTH`.
+#[allow(dead_code)]
 fn leader_round_for_synced_commits(
     state_storage: &Storage,
     committed_leaders: u64,
@@ -3404,6 +3440,7 @@ fn leader_round_for_synced_commits(
 fn apply_state_snapshot(
     state_storage: &Arc<Storage>,
     dag_store: &DagStore,
+    chain_id: u64,
     peer: PeerId,
     bytes: &[u8],
 ) {
@@ -3442,45 +3479,28 @@ fn apply_state_snapshot(
     };
     match state_storage
         .state()
-        .import_verified_snapshot(&txn, bytes, min_height)
+        .import_verified_snapshot(&txn, bytes, min_height, chain_id)
     {
-        Ok(height) => {
+        Ok(verified) => {
             if let Err(e) = txn.commit() {
                 error!(error = %e, "failed to commit state sync import");
                 return;
             }
-            info!(%peer, height, min_height, "state snapshot verified and imported");
-            // Staking state inside the verified snapshot is the commit count
-            // execution will continue from. Anchor the consensus cursor there
-            // so a joiner whose DAG gap is wider than the prune window can
-            // follow new leaders instead of stalling on blocks peers deleted.
-            // A read failure leaves the anchor unset: jumping without the
-            // executed height would skip commits this node still needs.
-            let committed_leaders = match state_storage.begin_read() {
-                Ok(read) => match state_storage.state().load_staking_state(&read) {
-                    Ok(state) => state.committed_leader_height,
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            "snapshot imported but staking state could not be read; catch-up anchor unchanged"
-                        );
-                        0
-                    }
-                },
-                Err(e) => {
+            info!(
+                %peer,
+                height = verified.height,
+                min_height,
+                leader_round = verified.leader_round,
+                "state snapshot verified and imported"
+            );
+            // P1-b: take leader_round directly from the verified snapshot header.
+            // Staking state is forgeable data; the consensus catch-up anchor MUST
+            // be anchored to the quorum-sealed leader header round from the snapshot.
+            if verified.leader_round > 0 {
+                if let Err(e) = dag_store.note_certified_catchup_anchor(verified.leader_round) {
                     warn!(
                         error = %e,
-                        "snapshot imported but staking state could not be read; catch-up anchor unchanged"
-                    );
-                    0
-                }
-            };
-            if let Some(anchor) = leader_round_for_synced_commits(state_storage, committed_leaders)
-            {
-                if let Err(e) = dag_store.note_certified_catchup_anchor(anchor) {
-                    warn!(
-                        error = %e,
-                        anchor,
+                        anchor = verified.leader_round,
                         "state snapshot imported but the catch-up anchor was not stored"
                     );
                 }
@@ -3605,6 +3625,7 @@ fn handle_network_event(
             info!(%peer, "peer disconnected");
             catch_up.remove(peer);
             vote_sync.peer_disconnected(peer);
+            state_sync_sessions.remove_peer(&peer);
         }
         NetworkEvent::PeerDiscovered(peer, addr) => debug!(%peer, %addr, "peer discovered"),
         NetworkEvent::SyncRequest {
@@ -3756,11 +3777,18 @@ fn on_block_sync_status(
         .prune_window_waves()
         .max(1)
         .saturating_mul(kovanica_types::WAVE_LENGTH);
+    let committee_size = engine.committee().size();
+    let required_peers = if committee_size <= 1 {
+        1
+    } else {
+        (committee_size / 3 + 1).max(2).min(committee_size)
+    };
     state_sync_sessions.maybe_start_for_gap(
         peer,
         tip_round,
         local_progress,
         prune_window_rounds,
+        required_peers,
         now,
         io.network_cmd_tx,
     );
@@ -3791,7 +3819,7 @@ fn handle_state_sync_response(
                 // Transfer complete: verify (state root + height + seal
                 // quorum) before applying; a reject never touches local state.
                 Some(bytes) => {
-                    apply_state_snapshot(state_storage, io.dag_store, peer, &bytes);
+                    apply_state_snapshot(state_storage, io.dag_store, io.chain_id, peer, &bytes);
                     if let Err(e) = engine.drain_commits() {
                         warn!(
                             error = %e,
@@ -7246,22 +7274,28 @@ mod tests {
 
     /// Export a snapshot from a throwaway storage with one seeded account and
     /// a quorum-sealed leader header at height 0 (`committed_leader_height = 0`).
-    fn exported_snapshot_bytes() -> Vec<u8> {
+    fn exported_snapshot_bytes() -> (Vec<u8>, Vec<kovanica_types::SealCommitteeSnapshotMember>) {
+        exported_snapshot_bytes_with_header_round(3)
+    }
+
+    fn exported_snapshot_bytes_with_header_round(
+        leader_round: u64,
+    ) -> (Vec<u8>, Vec<kovanica_types::SealCommitteeSnapshotMember>) {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::new(dir.path().join("src.redb")).unwrap();
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let pk = PublicKey(key.verifying_key().to_bytes());
+        let members = vec![kovanica_types::SealCommitteeSnapshotMember {
+            index: 0,
+            public_key: pk,
+            stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+            vrf_public_key: None,
+        }];
+        let committee_hash = kovanica_types::committee_seal_hash(
+            0,
+            &kovanica_types::snapshot_seal_members(&members),
+        );
         {
-            let key = SigningKey::from_bytes(&[7u8; 32]);
-            let pk = PublicKey(key.verifying_key().to_bytes());
-            let members = vec![kovanica_types::SealCommitteeSnapshotMember {
-                index: 0,
-                public_key: pk,
-                stake: kovanica_staking::MIN_VALIDATOR_STAKE,
-                vrf_public_key: None,
-            }];
-            let committee_hash = kovanica_types::committee_seal_hash(
-                0,
-                &kovanica_types::snapshot_seal_members(&members),
-            );
             let txn = storage.begin_write().unwrap();
             let acct = kovanica_storage::state_store::Account {
                 balance: 42,
@@ -7273,14 +7307,14 @@ mod tests {
                 .state()
                 .set_account(&txn, &Address([7; 32]), &acct)
                 .unwrap();
-            let smt_root = storage.state().commit_account_smt(&txn, 0).unwrap();
+            let smt_root = storage.state().commit_state_smt(&txn, 0, true).unwrap();
             storage
                 .state()
                 .put_epoch_committee_if_absent(&txn, 0, &members)
                 .unwrap();
             let header = kovanica_types::LeaderHeader {
                 committed_height: 0,
-                leader_round: 3,
+                leader_round,
                 leader_digest: Hash::new([1u8]),
                 leader_author: 0,
                 parent_leader_digest: Hash::zero(),
@@ -7303,7 +7337,7 @@ mod tests {
             txn.commit().unwrap();
         }
         let txn = storage.begin_read().unwrap();
-        storage.state().snapshot_bytes(&txn).unwrap()
+        (storage.state().snapshot_bytes(&txn).unwrap(), members)
     }
 
     fn dag_for(dir: &tempfile::TempDir) -> DagStore {
@@ -7313,12 +7347,20 @@ mod tests {
 
     #[test]
     fn apply_state_snapshot_imports_a_verified_payload() {
-        let bytes = exported_snapshot_bytes();
+        let (bytes, members) = exported_snapshot_bytes();
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
         let dag = dag_for(&dir);
 
-        apply_state_snapshot(&storage, &dag, PeerId::random(), &bytes);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &bytes);
 
         let txn = storage.begin_read().unwrap();
         let acct = storage
@@ -7326,13 +7368,12 @@ mod tests {
             .get_account(&txn, &Address([7; 32]))
             .unwrap();
         assert_eq!(acct.balance, 42, "verified snapshot must be applied");
-        // No staking commit count: nothing certified to jump to.
-        assert!(dag.certified_catchup_anchor().unwrap().is_none());
+        assert_eq!(dag.certified_catchup_anchor().unwrap(), Some(3));
     }
 
     #[test]
     fn apply_state_snapshot_rejects_tampered_payload() {
-        let bytes = exported_snapshot_bytes();
+        let (bytes, members) = exported_snapshot_bytes();
         // Tamper with a table value while keeping the claimed header intact:
         // the recomputed state root no longer matches.
         let mut data = kovanica_storage::StateStore::decode_snapshot(&bytes).unwrap();
@@ -7342,8 +7383,16 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
         let dag = dag_for(&dir);
-        apply_state_snapshot(&storage, &dag, PeerId::random(), &tampered);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &tampered);
 
         let txn = storage.begin_read().unwrap();
         assert!(
@@ -7360,7 +7409,7 @@ mod tests {
 
     #[test]
     fn apply_state_snapshot_rejects_height_regression() {
-        let mut bytes = exported_snapshot_bytes();
+        let (mut bytes, members) = exported_snapshot_bytes();
         // Re-stamp the snapshot at a height below the caller's expectation.
         let mut data = kovanica_storage::StateStore::decode_snapshot(&bytes).unwrap();
         data.height = 3;
@@ -7369,6 +7418,14 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
         let dag = dag_for(&dir);
         // Local state is ahead of the snapshot: importing would roll back.
         {
@@ -7379,7 +7436,7 @@ mod tests {
                 .unwrap();
             txn.commit().unwrap();
         }
-        apply_state_snapshot(&storage, &dag, PeerId::random(), &bytes);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &bytes);
 
         let txn = storage.begin_read().unwrap();
         assert!(
@@ -7410,6 +7467,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let src = Storage::new(dir.path().join("src.redb")).unwrap();
+        let members: Vec<kovanica_types::SealCommitteeSnapshotMember>;
         {
             let key = SigningKey::from_bytes(&[7u8; 32]);
             let pk = PublicKey(key.verifying_key().to_bytes());
@@ -7429,7 +7487,7 @@ mod tests {
                 .unwrap();
             staking.committed_leader_height = commits;
             src.state().save_staking_state(&txn, &staking).unwrap();
-            let members = vec![kovanica_types::SealCommitteeSnapshotMember {
+            members = vec![kovanica_types::SealCommitteeSnapshotMember {
                 index: 0,
                 public_key: pk,
                 stake: kovanica_staking::MIN_VALIDATOR_STAKE,
@@ -7443,7 +7501,10 @@ mod tests {
                 .put_epoch_committee_if_absent(&txn, 0, &members)
                 .unwrap();
             // Header height is the state-root key, one behind the commit count.
-            let state_root = src.state().commit_account_smt(&txn, commits - 1).unwrap();
+            let state_root = src
+                .state()
+                .commit_state_smt(&txn, commits - 1, true)
+                .unwrap();
             let header = kovanica_types::LeaderHeader {
                 committed_height: commits - 1,
                 leader_round: anchor,
@@ -7478,8 +7539,16 @@ mod tests {
 
         let dst_dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dst_dir.path().join("state.redb")).unwrap());
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
         let dag = dag_for(&dst_dir);
-        apply_state_snapshot(&storage, &dag, PeerId::random(), &bytes);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &bytes);
 
         assert!(
             commits > 100,
@@ -7495,6 +7564,52 @@ mod tests {
                 .committed_leader_height,
             commits
         );
+    }
+
+    #[test]
+    fn apply_state_snapshot_anchors_from_verified_header_round_not_forged_staking() {
+        let (bytes, members) = exported_snapshot_bytes_with_header_round(42);
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let dag = dag_for(&dir);
+        apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &bytes);
+
+        // Header claims leader_round = 42; catch-up anchor MUST be Some(42).
+        assert_eq!(dag.certified_catchup_anchor().unwrap(), Some(42));
+    }
+
+    #[test]
+    fn state_sync_sessions_requires_peer_quorum_for_gap() {
+        let mut sessions = StateSyncSessions::new();
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let peer1 = PeerId::random();
+        let peer2 = PeerId::random();
+        let now = Instant::now();
+
+        // 1. Single peer advertising tip round 1000 ahead of local 0, prune window 300, required_peers 2:
+        let started = sessions.maybe_start_for_gap(peer1, 1000, Some(0), 300, 2, now, &cmd_tx);
+        assert!(
+            !started,
+            "single unauthenticated peer must not trigger gap state sync"
+        );
+        assert!(cmd_rx.try_recv().is_err(), "no network commands sent");
+
+        // 2. Second peer reports tip round 1000. Quorum is reached (2 peers):
+        let started = sessions.maybe_start_for_gap(peer2, 1000, Some(0), 300, 2, now, &cmd_tx);
+        assert!(started, "peer quorum triggers state sync");
+        assert!(cmd_rx.try_recv().is_ok(), "RequestStateSync sent");
+
+        // 3. Peer disconnect cleans up its tip
+        sessions.remove_peer(&peer1);
+        assert_eq!(sessions.peer_tips.len(), 1);
     }
 
     #[test]
@@ -7594,6 +7709,7 @@ mod tests {
 
         let peer_dir = tempfile::tempdir().unwrap();
         let peer_storage = Storage::new(peer_dir.path().join("peer_state.redb")).unwrap();
+        let members: Vec<kovanica_types::SealCommitteeSnapshotMember>;
         {
             let txn = peer_storage.begin_write().unwrap();
             let mut staking = StakingState::new();
@@ -7626,7 +7742,7 @@ mod tests {
                     },
                 )
                 .unwrap();
-            let members = vec![kovanica_types::SealCommitteeSnapshotMember {
+            members = vec![kovanica_types::SealCommitteeSnapshotMember {
                 index: 0,
                 public_key: pk,
                 stake: kovanica_staking::MIN_VALIDATOR_STAKE,
@@ -7642,7 +7758,7 @@ mod tests {
                 .unwrap();
             let smt_root = peer_storage
                 .state()
-                .commit_account_smt(&txn, peer_commits - 1)
+                .commit_state_smt(&txn, peer_commits - 1, true)
                 .unwrap();
             let header = kovanica_types::LeaderHeader {
                 committed_height: peer_commits - 1,
@@ -7682,6 +7798,14 @@ mod tests {
 
         // Joiner node state: fresh storage, no debug peer (`with_debug_peer(None)`).
         let state_storage = Arc::new(Storage::new(dir.path().join("joiner_state.redb")).unwrap());
+        {
+            let txn = state_storage.begin_write().unwrap();
+            state_storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &members)
+                .unwrap();
+            txn.commit().unwrap();
+        }
         let mempool = Mempool::new(
             Default::default(),
             state_storage.clone(),
@@ -7704,6 +7828,7 @@ mod tests {
                 dag_store: &dag,
                 network_cmd_tx: &net_tx,
                 events: &events,
+                chain_id: 1337,
             },
             &mut orphans,
             &mut catch_up,
@@ -7730,6 +7855,7 @@ mod tests {
                 dag_store: &dag,
                 network_cmd_tx: &net_tx,
                 events: &events,
+                chain_id: 1337,
             },
             &mut catch_up,
             &mut state_sync_sessions,
@@ -7770,6 +7896,7 @@ mod tests {
                 dag_store: &dag,
                 network_cmd_tx: &net_tx,
                 events: &events,
+                chain_id: 1337,
             },
             &mut state_sync_sessions,
             &state_storage,
@@ -7810,6 +7937,7 @@ mod tests {
                 dag_store: &dag,
                 network_cmd_tx: &net_tx,
                 events: &events,
+                chain_id: 1337,
             },
             &mut orphans,
             &mut catch_up,
@@ -7825,6 +7953,7 @@ mod tests {
                 dag_store: &dag,
                 network_cmd_tx: &net_tx,
                 events: &events,
+                chain_id: 1337,
             },
             &mut orphans,
             &mut catch_up,
