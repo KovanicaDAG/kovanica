@@ -109,6 +109,8 @@ use std::collections::{BTreeMap, HashMap};
 use kovanica_common::{ContractError, ContractResult, Host};
 use kovanica_htlc::Htlc;
 use kovanica_multisig::Multisig;
+#[cfg(test)]
+use kovanica_runtime::DEFAULT_CONTRACT_MEMORY_PAGES;
 use kovanica_runtime::{ExecutionConfig, Runtime};
 use kovanica_storage::state_store::Account;
 use kovanica_storage::{tables, BincodeSerialize, Storage, StorageError};
@@ -1024,7 +1026,7 @@ impl ContractRunner {
     /// Used by the activation-gated `Deploy` bytecode check in
     /// [`crate::ExecutionContext`].
     pub fn validate_module(&self, wasm_bytes: &[u8]) -> Result<(), kovanica_runtime::RuntimeError> {
-        self.runtime.compile(wasm_bytes).map(|_| ())
+        self.runtime.validate_contract_module(wasm_bytes)
     }
 
     /// Execute `call.entry` inside the wasm module via [`kovanica_runtime::Runtime`].
@@ -1903,7 +1905,7 @@ pub(crate) mod tests {
         deploy(&storage, &contract);
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
-            memory_limit_pages: 256, // rust-std contracts need more than the 16-page default
+            memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
         };
         let mut runner = ContractRunner::new();
 
@@ -2001,7 +2003,7 @@ pub(crate) mod tests {
         fund(&storage, &sender, 5_000);
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
-            memory_limit_pages: 256,
+            memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
         };
         let mut runner = ContractRunner::new();
 
@@ -2225,7 +2227,7 @@ pub(crate) mod tests {
         fund(&storage, &creator, 10_000);
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
-            memory_limit_pages: 256,
+            memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
         };
         let mut runner = ContractRunner::new();
 
@@ -2396,7 +2398,7 @@ pub(crate) mod tests {
         fund(&storage, &contract, 50_000); // Multisig contract holds native balance to disburse
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
-            memory_limit_pages: 256,
+            memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
         };
         let mut runner = ContractRunner::new();
 

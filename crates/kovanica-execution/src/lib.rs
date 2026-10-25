@@ -22,7 +22,7 @@
 
 use kovanica_consensus::CommittedSubDag;
 use kovanica_crypto::{vrf_verify, VRFOutput};
-use kovanica_runtime::ExecutionConfig;
+use kovanica_runtime::{ExecutionConfig, DEFAULT_CONTRACT_MEMORY_PAGES};
 use kovanica_staking::{LightSet, LightSetError, RewardOutcome, StakingError, StakingState};
 use kovanica_storage::{
     address_to_bytes, state_store::Account, tables, BincodeSerialize, StateStoreError, Storage,
@@ -1180,7 +1180,7 @@ impl ExecutionContext {
         // Execute via ContractRunner (WASM)
         let config = ExecutionConfig {
             gas_limit,
-            memory_limit_pages: 256,
+            memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
         };
 
         let wasm_call = WasmCall {

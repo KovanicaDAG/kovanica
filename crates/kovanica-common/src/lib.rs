@@ -185,6 +185,26 @@ impl ContractError {
             Self::Custom(_) => 11,
         }
     }
+
+    /// Decode a numeric error code (as returned by the wasm entry-point ABI) back
+    /// into a typed [`ContractError`].
+    pub fn from_code(code: i32) -> Option<Self> {
+        match code {
+            0 => Some(Self::Unauthorized),
+            1 => Some(Self::InsufficientBalance),
+            2 => Some(Self::InvalidInput),
+            3 => Some(Self::AlreadyExists),
+            4 => Some(Self::NotFound),
+            5 => Some(Self::Expired),
+            6 => Some(Self::NotExpired),
+            7 => Some(Self::HashMismatch),
+            8 => Some(Self::ThresholdNotMet),
+            9 => Some(Self::Paused),
+            10 => Some(Self::Overflow),
+            11 => Some(Self::Custom(11)),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for ContractError {
@@ -246,4 +266,36 @@ use alloc::vec::Vec;
 /// prevent cross-domain collisions.
 pub fn hash(data: &[u8]) -> [u8; 32] {
     *blake3::hash(data).as_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contract_error_code_roundtrip() {
+        let errors = [
+            ContractError::Unauthorized,
+            ContractError::InsufficientBalance,
+            ContractError::InvalidInput,
+            ContractError::AlreadyExists,
+            ContractError::NotFound,
+            ContractError::Expired,
+            ContractError::NotExpired,
+            ContractError::HashMismatch,
+            ContractError::ThresholdNotMet,
+            ContractError::Paused,
+            ContractError::Overflow,
+            ContractError::Custom(11),
+        ];
+
+        for err in &errors {
+            let code = err.code();
+            let decoded = ContractError::from_code(code).expect("should decode valid code");
+            assert_eq!(&decoded, err);
+        }
+
+        assert_eq!(ContractError::from_code(-1), None);
+        assert_eq!(ContractError::from_code(12), None);
+    }
 }
