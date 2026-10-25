@@ -48,7 +48,7 @@ kovanica-cli key generate --output validator.keystore --with-vrf
 kovanica-cli key inspect --keystore validator.keystore
 ```
 
-> **Why VRF?** Kovanica uses stake-weighted VRF leader selection. The implementation is the `ecvrf` 0.4.3 crate (ristretto255 group + SHA3-512 hash-to-curve, 32-byte output, 96-byte proof) — it is **not** an RFC 9381 ciphersuite, despite the older "ECVRF-ED25519-SHA512-Elligator2" label that used to appear here. See `docs/VRF-PROOF-LENGTH.md` for the suite, the byte layout and why the RFC 9381 80-byte proof length does not apply. The VRF public key must be registered at genesis.
+> **Why VRF?** Kovanica uses stake-weighted VRF leader selection. The implementation is the `ecvrf` 0.4.3 crate (ristretto255 group + SHA3-512 hash-to-curve, 32-byte output, 96-byte proof) — it is **not** an RFC 9381 ciphersuite, despite the older "ECVRF-ED25519-SHA512-Elligator2" label that used to appear here. See `docs/archive/VRF-PROOF-LENGTH.md` for the suite, the byte layout and why the RFC 9381 80-byte proof length does not apply. The VRF public key must be registered at genesis.
 
 ---
 
@@ -73,6 +73,36 @@ Coordinators will:
 You will receive:
 - `genesis.json` — genesis block + initial staking state
 - `genesis_validators.toml` — validator set with VRF keys
+
+**Use the bundle byte for byte.** The node derives its network tag
+(`<chain_id>-<16 hex>`) from the chain id, the treasury address, the binary's
+genesis-block digest, and every genesis file in the data directory
+(`validators.json`, `founder_premine.hex`, `funded_accounts.toml`,
+`genesis_validators.toml`). Every node of the chain needs the same `chain_id`,
+the same binary and the same file set. A missing file changes the tag: a node
+that lacks one of those files does not match a node that has it. The treasury
+comes from `treasury_address` in the config, or from `KOVANICA_TREASURY_ADDRESS`
+when that variable is set. If both are unset, the all-zero address goes into
+the digest.
+
+This applies to validators, seeds, RPC nodes, the explorer and the faucet
+alike. In the data directory, before the first start:
+
+```sh
+sha256sum -c SHA256SUMS
+kovanica-node network-tag --config kovanica.toml
+```
+
+`SHA256SUMS` lists the bundle files. Off mainnet that can include
+`funded_accounts.toml`. On mainnet (chain 1) the file is forbidden, so the
+checksum list must not name it. `network-tag` prints the tag
+without starting a node; it must equal the tag published with the checksums.
+The publication place is chosen when the bundle is cut (it is not named in
+this repo). A running node returns the same value as `networkTag` on
+`kovanica_syncStatus` and logs
+`network identity: peers must share this tag … network_tag=…`.
+See `docs/TESTNET-RESET.md`. How the ceremony assembles the files is in
+`docs/GENESIS-CEREMONY.md`.
 
 ---
 
@@ -111,16 +141,13 @@ data_dir = "/var/lib/kovanica"
 ### 4.3 Environment Variables (Alternative to Config File)
 
 ```bash
-export KOVANICA_LISTEN=0.0.0.0:8000
-export KOVANICA_RPC=127.0.0.1:8545
-export KOVANICA_PEERS="seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"
-export KOVANICA_MINE=0                      # 1 only if you run a seed node
-export KOVANICA_FAUCET=0
-export KOVANICA_OPERATOR=0
-export KOVANICA_ALLOW_RESET=0
-export KOVANICA_DATA="/var/lib/kovanica"
-export KOVANICA_VALIDATOR_KEY="/path/to/validator.keystore"
-export KOVANICA_VALIDATOR_KEY_PASS="your-passphrase"
+export KOVANICA_LISTEN_ADDR=0.0.0.0:8000
+export KOVANICA_RPC_ADDR=127.0.0.1
+export KOVANICA_RPC_PORT=8545
+export KOVANICA_BOOTNODES="seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"
+export KOVANICA_DATA_DIR="/var/lib/kovanica"
+export KOVANICA_VALIDATOR_KEY="/path/to/validator.key"
+export KOVANICA_RUN_VALIDATOR=true
 ```
 
 ---
@@ -133,7 +160,7 @@ export KOVANICA_VALIDATOR_KEY_PASS="your-passphrase"
 |-----------|-------|
 | **Min stake** | 50,000 KUNA (50,000,000,000,000 atoms) |
 | **Active validators** | 15–21 |
-| **Epoch** | 7,200 committed leader blocks (~1 day) |
+| **Epoch** | 7,200 DAG rounds = 2,400 committed leader blocks (~8 h) |
 | **Unbonding** | 100 000 committed leader blocks (~13.9 days at 12 s/leader) — **not** 1 epoch |
 
 ### 5.2 Stake via CLI

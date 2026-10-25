@@ -7,7 +7,7 @@ import { useSession } from "../session";
 import { submitTransaction } from "../submit";
 import { useAccountFigures } from "./figures";
 
-type Action = "stake" | "unstake" | "delegate" | "claim";
+export type Action = "stake" | "unstake" | "delegate" | "claim";
 
 export function Stake() {
   const { key, client, network } = useSession();
@@ -45,7 +45,7 @@ export function Stake() {
     setError(null);
     setHash(null);
     try {
-      const next = buildKind(action, amount, validator);
+      const next = buildKind(action, amount, validator, network.chainId);
       const [nonce, rate] = await Promise.all([client.getNonce(key.address), client.estimateFee()]);
       const fee = feeForRate(
         { sender: key.publicKey, nonce, kind: next },
@@ -152,12 +152,17 @@ export function Stake() {
   );
 }
 
-function buildKind(action: Action, amount: string, validator: string): TxKind {
+export function buildKind(
+  action: Action,
+  amount: string,
+  validator: string,
+  chainId: number,
+): TxKind {
   if (action === "claim") {
     const target = validator.trim();
     return {
       type: "claimRewards",
-      validator: target ? parseAddress(target) : null,
+      validator: target ? parseAddress(target, chainId) : null,
     };
   }
   const atoms = parseKuna(amount);
@@ -165,7 +170,7 @@ function buildKind(action: Action, amount: string, validator: string): TxKind {
   if (action === "stake") return { type: "stake", amount: atoms };
   if (action === "unstake") return { type: "unstake", amount: atoms };
   if (!validator.trim()) throw new Error("choose a validator");
-  return { type: "delegate", validator: parseAddress(validator), amount: atoms };
+  return { type: "delegate", validator: parseAddress(validator, chainId), amount: atoms };
 }
 
 function label(action: Action): string {

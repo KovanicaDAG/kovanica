@@ -43,5 +43,7 @@ Ako korisnik pokuša miješati s drugim projektima – podsjeti ga na HARD RULE 
 
 ### Naming (rev. 2026-10-15)
 Prefix je `kovanica`: `kovanica-*` crate-ovi, `kovanica-node`, `KOVANICA_*` env.
-**Zaštićeno i nepromijenjeno:** adresa `kvnc<hex>dag`, VRF magic `KVNC-VRF1`, state-key prefiksi `b"kvnc/v1/*"` i `b"kvnc/host/*"`, keystore AAD `"KVNC keystore\0v2\0…"`, hash domain tagovi `b"KVNC-*-v1"`.
+**Zaštićeno i nepromijenjeno:** state-key prefiksi `b"kvnc/v1/*"` i `b"kvnc/host/*"`, keystore AAD `"KVNC keystore\0v2\0…"`, legacy `KVNC-TX-v1` test vektor.
+**Preimenovano za chain-4 reset (PR #81, Toni):** hash domain tagovi su sada `b"KUNA-*-v1"` (BLOCK, DIGEST, MERKLE, HEADER, ACCOUNT, ACCT-EMPTY, SMT, COMMITTEE, EVIDENCE, GENESIS), VRF magic je `KUNA-VRF1`. **Nikad ih ne vraćaj na `KVNC-*`.**
+**Adresa:** 64-znakovni base32 oblik (`kvnc` + 57 znakova bech32-alfabet base32 + `dag`; puni 32 B ključ + 29-bitni blake3 checksum; Toni 2026-10-23) je **PLANIRAN pod PRO-21 i još NIJE implementiran**. Dok PRO-21 ne sleti, `kvnc<hex>dag` u `address.rs` je **trenutni kanonski encoder** i ne smije se "popravljati" izvan PRO-21 PR-a. Nakon PRO-21 hex oblik ostaje legacy, dopušten samo na chainu 4.
 Nikad ne koristi `KVNC` kao naziv valute (valuta je **KUNA**).

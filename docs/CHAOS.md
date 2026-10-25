@@ -5,9 +5,8 @@ It complements the existing in-process partition tests (`multi_node_integration`
 and the graceful `SIGTERM` restart test with **real process kills** and **real
 network impairment**.
 
-> **These tests are opt-in and never run on PR CI.** They are executed via the
-> scheduled `ops/chaos/chaos.yml` workflow (nightly) or manual
-> `workflow_dispatch`. They require a release binary (see below).
+> **These tests are opt-in and executed manually or in scheduled test harnesses.**
+> They use `ops/chaos/docker-compose.chaos.yml` and require a release binary (see below).
 
 ---
 

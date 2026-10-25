@@ -270,7 +270,7 @@ impl LightSet {
     /// Bond `stake` at `height`. The node becomes active at the next epoch.
     ///
     /// `height` is a committed leader height; the light-set epoch is
-    /// `height / EPOCH_ROUNDS`, the same height-based unit execution uses to
+    /// `kovanica_types::epoch_for_height(height)`, 2 400 heights ≈ 8 h, the same height-based unit execution uses to
     /// index the beacon (deliberately distinct from the round-based committee
     /// epoch).
     pub fn register(
@@ -289,7 +289,7 @@ impl LightSet {
         if self.nodes.len() >= MAX_LIGHT_NODES {
             return Err(LightSetError::CapReached);
         }
-        let epoch = kovanica_types::epoch_for_round(height);
+        let epoch = kovanica_types::epoch_for_height(height);
         self.nodes.push(LightNode {
             address,
             vrf_public_key,
@@ -306,14 +306,14 @@ impl LightSet {
     /// An active node stays in the current epoch and unbonds after
     /// [`UNBONDING_ROUNDS`] committed leaders. Returns `(refund_now, unbond_height)`.
     /// The epoch here is the same height-based light-set epoch as
-    /// [`Self::register`] (`height / EPOCH_ROUNDS`), not the round-based
+    /// [`Self::register`] (`kovanica_types::epoch_for_height(height)`, 2 400 heights ≈ 8 h), not the round-based
     /// committee epoch.
     pub fn exit(
         &mut self,
         address: Address,
         height: u64,
     ) -> Result<(u64, Option<u64>), LightSetError> {
-        let epoch = kovanica_types::epoch_for_round(height);
+        let epoch = kovanica_types::epoch_for_height(height);
         let index = self
             .nodes
             .iter()
@@ -511,7 +511,7 @@ fn node_is_active(node: &LightNode, epoch: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{block_reward, EPOCH_ROUNDS};
+    use crate::{block_reward, EPOCH_LEADER_HEIGHTS};
 
     fn addr(byte: u8) -> Address {
         Address([byte; 32])
@@ -534,19 +534,36 @@ mod tests {
         assert!(set.nodes().is_empty());
     }
 
+    /// The light-set epoch is 8 h of committed leaders (2 400 heights), not
+    /// 7 200: a registration at the last height of epoch 0 is active in
+    /// epoch 1, one at height 2 400 only in epoch 2.
+    #[test]
+    fn light_set_epoch_boundary_is_2400_heights() {
+        assert_eq!(EPOCH_LEADER_HEIGHTS, 2_400);
+        let mut set = LightSet::default();
+        set.register(addr(1), key(1), MIN_LIGHT_BOND, EPOCH_LEADER_HEIGHTS - 1)
+            .unwrap();
+        set.register(addr(2), key(2), MIN_LIGHT_BOND, EPOCH_LEADER_HEIGHTS)
+            .unwrap();
+        assert_eq!(set.nodes()[0].effective_epoch, 1);
+        assert_eq!(set.nodes()[1].effective_epoch, 2);
+        assert_eq!(set.active_nodes(1).len(), 1);
+        assert_eq!(set.active_nodes(2).len(), 2);
+    }
+
     #[test]
     fn an_active_exit_unbonds_and_can_still_witness_this_epoch() {
         let mut set = LightSet::default();
         set.register(addr(1), key(1), MIN_LIGHT_BOND, 0).unwrap();
-        let (refund, release) = set.exit(addr(1), EPOCH_ROUNDS).unwrap();
+        let (refund, release) = set.exit(addr(1), EPOCH_LEADER_HEIGHTS).unwrap();
         assert_eq!(refund, 0);
-        assert_eq!(release, Some(EPOCH_ROUNDS + UNBONDING_ROUNDS));
+        assert_eq!(release, Some(EPOCH_LEADER_HEIGHTS + UNBONDING_ROUNDS));
         assert_eq!(set.active_nodes(1).len(), 1);
         assert!(set.active_nodes(2).is_empty());
         assert!(set
-            .release_unbonded(EPOCH_ROUNDS + UNBONDING_ROUNDS - 1)
+            .release_unbonded(EPOCH_LEADER_HEIGHTS + UNBONDING_ROUNDS - 1)
             .is_empty());
-        let paid = set.release_unbonded(EPOCH_ROUNDS + UNBONDING_ROUNDS);
+        let paid = set.release_unbonded(EPOCH_LEADER_HEIGHTS + UNBONDING_ROUNDS);
         assert_eq!(paid, vec![(addr(1), MIN_LIGHT_BOND)]);
         assert!(set.nodes().is_empty());
     }

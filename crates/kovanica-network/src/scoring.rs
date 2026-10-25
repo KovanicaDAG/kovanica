@@ -86,24 +86,27 @@ impl PeerScoringConfig {
         }
     }
 
-    /// Gossipsub score parameters with per-topic params for blocks, votes
-    /// and transactions.
-    pub fn params(&self) -> PeerScoreParams {
+    /// Gossipsub score parameters with per-topic params for blocks, votes,
+    /// timeouts and transactions.
+    pub fn params(&self, network: &crate::NetworkId) -> PeerScoreParams {
         let mut params = PeerScoreParams {
             // Same-IP peers are normal in local/devnet setups; keep the
             // libp2p default threshold (10) but a mild weight.
             ip_colocation_factor_weight: -1.0,
             ..PeerScoreParams::default()
         };
-        // Blocks and votes are consensus-critical: a bad one weighs more.
+        // Blocks, votes and timeouts are consensus-critical: a bad one weighs
+        // more.
         for (name, weight) in [
             (topics::BLOCKS, 1.0),
             (topics::VOTES, 1.0),
+            (topics::TIMEOUTS, 1.0),
             (topics::TRANSACTIONS, 0.5),
         ] {
-            params
-                .topics
-                .insert(topics::ident(name).hash(), self.topic_params(weight));
+            params.topics.insert(
+                topics::ident(network, name).hash(),
+                self.topic_params(weight),
+            );
         }
         params
     }
@@ -138,20 +141,28 @@ mod tests {
     fn defaults_are_valid_for_gossipsub() {
         let cfg = PeerScoringConfig::default();
         cfg.validate().expect("default config valid");
-        cfg.params().validate().expect("params valid");
+        cfg.params(&crate::NetworkId::default())
+            .validate()
+            .expect("params valid");
         cfg.thresholds().validate().expect("thresholds valid");
         assert!(cfg.enabled);
     }
 
     #[test]
-    fn scored_topics_are_blocks_votes_transactions() {
-        let params = PeerScoringConfig::default().params();
-        for name in [topics::BLOCKS, topics::VOTES, topics::TRANSACTIONS] {
-            let p = &params.topics[&topics::ident(name).hash()];
+    fn scored_topics_are_blocks_votes_timeouts_transactions() {
+        let network = crate::NetworkId::default();
+        let params = PeerScoringConfig::default().params(&network);
+        for name in [
+            topics::BLOCKS,
+            topics::VOTES,
+            topics::TIMEOUTS,
+            topics::TRANSACTIONS,
+        ] {
+            let p = &params.topics[&topics::ident(&network, name).hash()];
             assert!(p.invalid_message_deliveries_weight < 0.0, "{name}");
             assert_eq!(p.mesh_message_deliveries_weight, 0.0, "{name}");
         }
-        assert_eq!(params.topics.len(), 3);
+        assert_eq!(params.topics.len(), 4);
     }
 
     #[test]

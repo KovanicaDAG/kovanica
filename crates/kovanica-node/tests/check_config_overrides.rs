@@ -13,10 +13,13 @@ use std::process::Command;
 fn config_file(chain_id: u64) -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("config.toml");
-    let body = format!(
-        "chain_id = {chain_id}\nrun_validator = false\ndata_dir = \"{}\"\n",
-        dir.path().join("data").display()
-    );
+    let data_str = dir
+        .path()
+        .join("data")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let body = format!("chain_id = {chain_id}\nrun_validator = false\ndata_dir = \"{data_str}\"\n");
     std::fs::write(&path, body).expect("write config");
     (dir, path.to_string_lossy().into_owned())
 }

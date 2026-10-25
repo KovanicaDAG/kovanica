@@ -1,15 +1,12 @@
-# KUNA Contract Examples
+# Kovanica Contract Examples
 
-Worked end-to-end flows for the four contract crates. All amounts are in
-**atoms** (base units): `1 KUNA = 1_000_000_000 atoms` (9 decimals).
+Worked end-to-end flows for the contract crates. All amounts are in
+**atoms** (base units): `1 KUNA = 1_000_000_000 atoms` (9 decimals). Addresses use the canonical PRO-21 64-character base32 format (`kvnc...dag`).
 
-> **CLI status.** `kovanica-cli` is currently a skeleton (`keygen`, `info`,
-> `transfer` only). The commands below are the planned CLI surface for the
-> contract subcommands — they map 1:1 onto the typed APIs in
-> [`docs/CONTRACTS.md`](CONTRACTS.md) §3 and the wasm entry points in §4.
-> Until the CLI wires them up, drive the same flows through the typed Rust
-> API or `POST /api/prepare` + sign + `POST /api/submit` (see
-> [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)).
+> **CLI status.** `kovanica-cli` provides native contract subcommands (`htlc`,
+> `vault`, `multisig`, `token`) implemented in `crates/kovanica-cli/src/contracts.rs`
+> that map 1:1 onto the contract entry points in [`docs/CONTRACTS.md`](CONTRACTS.md)
+> and JSON-RPC methods. Flows can be executed via the CLI or directly via JSON-RPC.
 
 ---
 

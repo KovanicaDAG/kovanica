@@ -19,8 +19,8 @@
 | **Medium Findings** | [COUNT] |
 | **Low Findings** | [COUNT] |
 | **Informational** | [COUNT] |
-| **Lines of Code Audited** | ~53,000 (Rust) |
-| **Crates in Scope** | 19 |
+| **Lines of Code Audited** | ~90,500 (crates) / ~95,500 (repo) |
+| **Crates in Scope** | 27 |
 
 **One-sentence summary:** [Concise assessment of the codebase security posture]
 
@@ -241,7 +241,7 @@
 | `kovanica-token` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
 | `kovanica-vault` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
 | `kovanica-htlc` | `args_slice` (WASM host) | FFI pointer deref | [ ] |
-| `kovanica-common/wasm.rs` | Host imports | WASM host FFI | [ ] |
+| `crates/kovanica-common/src/wasm.rs` | Host imports | WASM host FFI | [ ] |
 | `kovanica-light-ffi` | uniffi scaffolding | FFI bindings | [ ] |
 
 *All other crates: `#![deny(unsafe_code)]`*

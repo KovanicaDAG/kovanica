@@ -4,20 +4,21 @@ package io.kovanica.chain
  * The only chain-id constants for the Android apps.
  *
  * Network profiles, the legacy-address policy, and the chain text field all
- * read this object. The testnet profile stays 2 on this branch. Chain 4 is
- * the reset chain that still accepts legacy hex. It is not the testnet profile.
+ * read this object.
  */
 object ChainIds {
     const val MAINNET: Long = 1
-    const val TESTNET: Long = 2
+    const val TESTNET_V1: Long = 2
     const val DEVNET: Long = 3
     const val CHAIN_4: Long = 4
+    const val TESTNET_V2: Long = 4
+    const val TESTNET: Long = 4
     const val LOCAL: Long = 1337
 
     /** No chain was configured. Legacy hex stays refused. */
     const val UNSPECIFIED: Long = -1
 
-    /** Devnet 3, chain 4, local 1337. Same set as Rust `legacy_address_allowed`. */
+    /** Devnet 3, chain 4 (public testnet), local 1337. Same set as Rust `legacy_address_allowed`. */
     fun legacyAllowed(chainId: Long): Boolean =
         chainId == DEVNET || chainId == CHAIN_4 || chainId == LOCAL
 

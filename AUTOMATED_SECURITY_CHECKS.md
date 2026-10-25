@@ -1,8 +1,8 @@
 # Automated Security Checks — Results Summary
 
-**Date:** 2026-10-14  
-**Commit:** `main` @ `98d88cc`  
-**Workspace:** `kovanica` (19 crates, ~53k LOC)
+**Date:** 2026-10-14 (Updated 2026-10-24)  
+**Commit:** `main` @ `dd3aff9` (Baseline: `98d88cc`)  
+**Workspace:** `kovanica` (27 crates, ~95.5k repo LOC)
 
 ---
 
@@ -135,12 +135,12 @@ no gossip
 | `kovanica-token` | 8 | `args_slice` helper + 7 call sites | WASM host FFI pointer deref |
 | `kovanica-vault` | 6 | `args_slice` helper + 5 call sites | WASM host FFI pointer deref |
 | `kovanica-htlc` | 5 | `args_slice` helper + 4 call sites | WASM host FFI pointer deref |
-| `kovanica-common/wasm.rs` | 8 | Host import macros | WASM host FFI imports |
+| `crates/kovanica-common/src/wasm.rs` | 8 | Host import macros | WASM host FFI imports |
 | `kovanica-light-ffi` | 1 | Scaffolding macro | uniffi FFI bindings |
 
 ### Safety Notes
 
-- **All other 13 crates:** `#![deny(unsafe_code)]` enforced at crate root
+- **All other 21 crates:** `#![deny(unsafe_code)]` enforced at crate root
 - WASM host FFI is the **only** legitimate use of `unsafe` in this codebase
 - Pattern is consistent: `args_slice` validates pointer/length, returns `Option<&[u8]>`
 - No raw pointer arithmetic, no transmute, no FFI to C libraries

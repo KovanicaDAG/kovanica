@@ -1,5 +1,9 @@
-//! Gossipsub topic names shared by the whole crate.
+//! Gossipsub base topic names shared by the whole crate.
+//!
+//! On the wire every topic is scoped to the chain:
+//! `kovanica/<chain_id>-<genesis prefix>/<name>` ([`NetworkId::topic`]).
 
+use crate::NetworkId;
 use libp2p::gossipsub::IdentTopic;
 
 /// Topic carrying full [`kovanica_types::block::StatementBlock`]s.
@@ -23,14 +27,25 @@ pub const STATE_SYNC: &str = "state_sync";
 /// still commit. The topic is not peer-scored.
 pub const SEALS: &str = "seals";
 
-/// Every topic subscribed to at startup, in subscription order.
-pub const ALL: [&str; 6] = [BLOCKS, TRANSACTIONS, VOTES, SYNC, STATE_SYNC, SEALS];
+/// Topic carrying leader-slot timeouts and skip certificates
+/// ([`crate::TimeoutMessage`], PRO-40 (b)).
+pub const TIMEOUTS: &str = "timeouts";
 
-/// Topic handle for a topic name (round-trips through [`gossipsub::TopicHash`]).
-///
-/// [`gossipsub::TopicHash`]: libp2p::gossipsub::TopicHash
-pub fn ident(name: &str) -> IdentTopic {
-    IdentTopic::new(name)
+/// Every topic subscribed to at startup, in subscription order.
+pub const ALL: [&str; 7] = [
+    BLOCKS,
+    TRANSACTIONS,
+    VOTES,
+    SYNC,
+    STATE_SYNC,
+    SEALS,
+    TIMEOUTS,
+];
+
+/// Topic handle for a base topic name on `network`
+/// (`kovanica/<tag>/<name>`, see [`NetworkId::topic`]).
+pub fn ident(network: &NetworkId, name: &str) -> IdentTopic {
+    IdentTopic::new(network.topic(name))
 }
 
 #[cfg(test)]
@@ -44,13 +59,15 @@ mod tests {
         for name in ALL {
             assert!(seen.insert(name), "duplicate topic name: {name}");
         }
-        assert_eq!(ALL.len(), 6);
+        assert_eq!(ALL.len(), 7);
     }
 
     #[test]
     fn topic_handles_round_trip_to_their_names() {
+        let network = NetworkId::default();
         for name in ALL {
-            assert_eq!(ident(name).hash().as_str(), name);
+            let hash = ident(&network, name).hash();
+            assert_eq!(network.topic_kind(hash.as_str()), Some(name));
         }
     }
 }
