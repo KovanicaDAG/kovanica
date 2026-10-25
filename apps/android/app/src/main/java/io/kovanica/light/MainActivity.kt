@@ -28,6 +28,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import io.kovanica.chain.ChainIds
 import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.kovanica_light.confirmAccount
@@ -1860,7 +1861,8 @@ class MainActivity : Activity() {
         faucetRow.visibility = if (current.faucetUrl == null) View.GONE else View.VISIBLE
     }
 
-    private fun chainIdField(): ULong = chainField.text.toString().trim().toULongOrNull() ?: 0uL
+    private fun chainIdField(): ULong =
+        ChainIds.resolve(chainField.text.toString(), NetworkPrefs.chainId(this))
 
     // --- widgets -------------------------------------------------------------------------
 

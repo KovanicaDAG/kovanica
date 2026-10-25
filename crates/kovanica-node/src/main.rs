@@ -1440,6 +1440,7 @@ fn read_rss_bytes() -> Option<u64> {
 }
 
 /// Extract the `VmRSS` value (kB) from `/proc/self/status` contents.
+#[cfg(any(target_os = "linux", test))]
 fn parse_vmrss_kb(status: &str) -> Option<u64> {
     status.lines().find_map(|line| {
         let rest = line.strip_prefix("VmRSS:")?;
@@ -9213,8 +9214,11 @@ mod b1_epoch_restart_repro {
 
         // Node B — restarted; same persisted genesis AND the frozen snapshot
         // from A's seal must be visible to it, so copy B from A's database file.
+        let a_path = dir.path().join("leader-a.redb");
+        drop(a);
         let b_path = dir.path().join("leader-b.redb");
-        std::fs::copy(dir.path().join("leader-a.redb"), &b_path).unwrap();
+        std::fs::copy(&a_path, &b_path).unwrap();
+        let a = Storage::new(a_path).unwrap();
         let b = Storage::new(b_path).unwrap();
 
         let committee_a = build_committee_for_round(
