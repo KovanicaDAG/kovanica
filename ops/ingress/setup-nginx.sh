@@ -57,7 +57,7 @@ case "$NODE_ID" in
         DOMAINS="-d seed2.kovanica.online"
         ;;
     seed3)
-        DOMAINS="-d seed3.kovanica.online -d faucet.kovanica.online"
+        DOMAINS="-d seed3.kovanica.online"
         ;;
 esac
 
