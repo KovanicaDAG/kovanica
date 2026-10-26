@@ -20,11 +20,12 @@ echo "==> [1/6] Preparing system dependencies on $NODE_ID..."
 export DEBIAN_FRONTEND=noninteractive
 
 # Stop and disable conflicting web servers if present
-if systemctl is-active --quiet caddy; then
-    echo "Disabling conflicting Caddy service..."
-    systemctl stop caddy || true
-    systemctl disable caddy || true
-fi
+echo "Stopping any existing processes listening on ports 80 and 443..."
+systemctl stop caddy apache2 || true
+systemctl disable caddy apache2 || true
+pkill -9 -f caddy || true
+fuser -k 80/tcp || true
+fuser -k 443/tcp || true
 
 apt-get update -y
 apt-get install -y nginx certbot python3-certbot-nginx curl ufw
