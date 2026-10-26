@@ -12,8 +12,14 @@ use axum::response::Response;
 /// Same origins as the RPC server. No wildcard.
 pub const FAUCET_ALLOWED_ORIGINS: &[&str] = &[
     "https://console.kovanica.online",
+    "https://dash.kovanica.online",
+    "https://faucet.kovanica.online",
+    "https://kovanica.online",
+    "https://wallet.kovanica.online",
     "http://127.0.0.1:5173",
     "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
 ];
 
 const FAUCET_CORS_PATHS: &[&str] = &["/faucet", "/health"];
@@ -112,8 +118,14 @@ mod tests {
             FAUCET_ALLOWED_ORIGINS,
             [
                 "https://console.kovanica.online",
+                "https://dash.kovanica.online",
+                "https://faucet.kovanica.online",
+                "https://kovanica.online",
+                "https://wallet.kovanica.online",
                 "http://127.0.0.1:5173",
                 "http://localhost:5173",
+                "http://127.0.0.1:3000",
+                "http://localhost:3000",
             ]
         );
     }

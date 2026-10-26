@@ -7,7 +7,7 @@ use std::path::Path;
 use kovanica_cli::wallet;
 
 const PASSPHRASE: &str = "devnet-phase16.6";
-const OUTDIR: &str = "/tmp/kovanica-validators";
+const OUTDIR: &str = "genesis/chain4";
 
 fn main() -> anyhow::Result<()> {
     fs::create_dir_all(OUTDIR)?;
@@ -41,7 +41,7 @@ fn main() -> anyhow::Result<()> {
 
     // Generate genesis_validators.toml with [[validator]] array-of-tables format
     let mut toml = String::from("# Chain 4 — 5-node validator set for genesis\n");
-    toml.push_str("# Stakes = MIN_VALIDATOR_STAKE = 50_000 KUNA (50_000_000_000_000 atoms)\n");
+    toml.push_str("# Stakes = 100_000 KUNA (100_000_000_000_000 atoms)\n");
     toml.push_str("# Generated from keystores\n");
     toml.push_str("chain_id = 4\n\n");
 
@@ -49,13 +49,44 @@ fn main() -> anyhow::Result<()> {
         toml.push_str("[[validator]]\n");
         // Canonical 64-character base32 address (PRO-21)
         toml.push_str(&format!("address = \"{address}\"\n"));
-        toml.push_str("stake = 50000000000000\n");
+        toml.push_str("stake = 100000000000000\n");
         toml.push_str(&format!("public_key = \"{public_key_hex}\"\n\n"));
     }
 
     let toml_path = format!("{OUTDIR}/genesis_validators.toml");
     fs::write(&toml_path, &toml)?;
     println!("Generated {toml_path}");
+
+    // Generate Faucet keystore and funded_accounts.toml
+    println!("Generating faucet keystore...");
+    let faucet_keystore = wallet::keygen(PASSPHRASE)?;
+    let faucet_keystore_path = format!("{OUTDIR}/faucet.keystore");
+    wallet::save_replace(Path::new(&faucet_keystore_path), &faucet_keystore)?;
+
+    let faucet_seed = wallet::secret_seed(&faucet_keystore, Some(PASSPHRASE))?;
+    let faucet_seed_path = format!("{OUTDIR}/faucet.pem");
+    fs::write(&faucet_seed_path, hex::encode(&faucet_seed))?;
+
+    let faucet_address = wallet::address(&faucet_keystore)?;
+    println!("  Faucet Address: {}", faucet_address);
+    println!("  Faucet Seed: {}", hex::encode(&faucet_seed));
+
+    let mut funded_toml = String::from("# Chain 4 — Funded Accounts for Testnet\n");
+    funded_toml.push_str("# Pre-funded 1,000,000 KUNA for Faucet\n\n");
+    funded_toml.push_str("[[account]]\n");
+    funded_toml.push_str(&format!("address = \"{faucet_address}\"\n"));
+    funded_toml.push_str("balance = 1000000000000000\n");
+
+    let funded_path = format!("{OUTDIR}/funded_accounts.toml");
+    fs::write(&funded_path, &funded_toml)?;
+    println!("Generated {funded_path}");
+
+    // Generate founder_premine.hex
+    // Zero address KAT_ZERO = Address([0u8; 32])
+    let founder_address = "kvncqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqz4k5rcdag";
+    let founder_path = format!("{OUTDIR}/founder_premine.hex");
+    fs::write(&founder_path, format!("{founder_address}\n"))?;
+    println!("Generated {founder_path}");
 
     // Also copy to ops/docker/validators/ for docker-compose if present
     let docker_dir = Path::new("ops/docker/validators");
@@ -71,8 +102,13 @@ fn main() -> anyhow::Result<()> {
             fs::copy(&src, &dst)?;
             println!("Copied {src} -> {}", dst.display());
         }
+
+        let docker_funded = docker_dir.join("funded_accounts.toml");
+        fs::write(&docker_funded, &funded_toml)?;
+        let docker_founder = docker_dir.join("founder_premine.hex");
+        fs::write(&docker_founder, format!("{founder_address}\n"))?;
     }
 
-    println!("\nAll 5 validator keys generated successfully!");
+    println!("\nAll 5 validator keys, faucet, and genesis files generated successfully!");
     Ok(())
 }

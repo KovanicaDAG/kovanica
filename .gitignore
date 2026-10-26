@@ -86,3 +86,7 @@ apps/android-comms/local.properties
 **/v.dat
 **/validator*.key
 **/p2p_node.key
+
+.env.txt
+.env.*
+genesis/chain4/

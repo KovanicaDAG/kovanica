@@ -206,7 +206,7 @@ async fn main() -> Result<()> {
         dispense_amount: cli.dispense_kovanica * 1_000_000_000, // KUNA to atoms
         rate_limit_window: cli.rate_limit_window,
         max_requests_per_window: cli.max_requests,
-        rpc_url: cli.rpc_url.clone(),
+        rpc_url: normalize_rpc_url(&cli.rpc_url),
         signing_ctx: kovanica_types::SigningContext::new(cli.chain_id),
         trusted_proxies,
         min_balance_atoms: cli.min_balance_ku * 1_000_000_000, // KUNA to atoms
@@ -228,7 +228,11 @@ async fn main() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
     info!(addr = %cli.listen, "faucet server listening");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -440,7 +444,7 @@ async fn faucet_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(FaucetResponse {
                     success: false,
-                    message: "Failed to submit transaction".to_string(),
+                    message: format!("Failed to submit transaction: {e}"),
                     tx_hash: None,
                 }),
             )
@@ -458,18 +462,30 @@ fn parse_address(s: &str, chain_id: u64) -> Result<Address> {
     Address::parse_for_chain(s, chain_id).context("invalid address")
 }
 
+fn normalize_rpc_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    if trimmed.ends_with("/rpc") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/rpc")
+    }
+}
+
 async fn get_nonce(client: &reqwest::Client, rpc_url: &str, address: &Address) -> Result<u64> {
     let req = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "kovanica_getNonce",
-        "params": [hex::encode(address.0)],
+        "params": [address.to_string()],
         "id": 1
     });
     let resp: serde_json::Value = client.post(rpc_url).json(&req).send().await?.json().await?;
+    if let Some(err) = resp.get("error") {
+        anyhow::bail!("rpc error: {err}");
+    }
     let result = resp
         .get("result")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid nonce response"))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid nonce response: {resp}"))?;
     let nonce = u64::from_str_radix(result.strip_prefix("0x").unwrap_or(result), 16)?;
     Ok(nonce)
 }
@@ -478,14 +494,17 @@ async fn get_balance(client: &reqwest::Client, rpc_url: &str, address: &Address)
     let req = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "kovanica_getBalance",
-        "params": [hex::encode(address.0)],
+        "params": [address.to_string()],
         "id": 1
     });
     let resp: serde_json::Value = client.post(rpc_url).json(&req).send().await?.json().await?;
+    if let Some(err) = resp.get("error") {
+        anyhow::bail!("rpc error: {err}");
+    }
     let result = resp
         .get("result")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid balance response"))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid balance response: {resp}"))?;
     let balance = u64::from_str_radix(result.strip_prefix("0x").unwrap_or(result), 16)?;
     Ok(balance)
 }
@@ -515,10 +534,13 @@ async fn submit_transaction(
         "id": 1
     });
     let resp: serde_json::Value = client.post(rpc_url).json(&req).send().await?.json().await?;
+    if let Some(err) = resp.get("error") {
+        anyhow::bail!("rpc error: {err}");
+    }
     let result = resp
         .get("result")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid tx submit response"))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid tx submit response: {resp}"))?;
     Ok(result.to_string())
 }
 

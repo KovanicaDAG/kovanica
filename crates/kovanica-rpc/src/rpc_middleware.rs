@@ -312,8 +312,14 @@ pub async fn rate_limit_middleware(
 /// is rejected. There is no wildcard.
 pub const CONSOLE_ALLOWED_ORIGINS: &[&str] = &[
     "https://console.kovanica.online",
+    "https://dash.kovanica.online",
+    "https://faucet.kovanica.online",
+    "https://kovanica.online",
+    "https://wallet.kovanica.online",
     "http://127.0.0.1:5173",
     "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
 ];
 
 /// Routes a browser on the console is allowed to read. `/metrics` is left
