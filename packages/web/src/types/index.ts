@@ -79,8 +79,8 @@ export interface RpcConfig {
   chain_id: number;
 }
 
-export const DEFAULT_RPC_URL = 'http://127.0.0.1:8545';
-export const DEFAULT_CHAIN_ID = 1337;
+export const DEFAULT_RPC_URL = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_RPC_URL) || 'https://rpc-testnet.kovanica.online';
+export const DEFAULT_CHAIN_ID = Number((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_CHAIN_ID) || 4;
 
 export function formatAddress(address: string): string {
   if (address.length <= 16) return address;

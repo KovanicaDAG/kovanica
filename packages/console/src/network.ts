@@ -20,7 +20,7 @@ export const TESTNET: Network = {
   chainId: 4,
   rpcUrl: "https://rpc-testnet.kovanica.online/rpc",
   wsUrl: "wss://rpc-testnet.kovanica.online/ws",
-  faucetUrl: "https://faucet-testnet.kovanica.online/faucet",
+  faucetUrl: "https://seed3.kovanica.online/faucet",
   enabled: true,
 };
 

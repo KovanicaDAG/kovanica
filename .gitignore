@@ -90,3 +90,9 @@ apps/android-comms/local.properties
 .env.txt
 .env.*
 genesis/chain4/
+
+# Agent internals & scratch files
+scratch/
+.agents/
+ORIGINAL_REQUEST.md
+
