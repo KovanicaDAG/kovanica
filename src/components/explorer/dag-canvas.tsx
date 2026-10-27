@@ -65,22 +65,22 @@ export function DagCanvas({ blocks, selectedId, onSelect }: Props) {
 
   const handleZoomIn = () => {
     if (!svgRef.current || !zoomRef.current) return;
-    d3.select(svgRef.current).transition().duration(200).call(zoomRef.current.scaleBy, 1.3);
+    (d3.select(svgRef.current) as any).transition().duration(200).call(zoomRef.current.scaleBy, 1.3);
   };
   const handleZoomOut = () => {
     if (!svgRef.current || !zoomRef.current) return;
-    d3.select(svgRef.current).transition().duration(200).call(zoomRef.current.scaleBy, 0.75);
+    (d3.select(svgRef.current) as any).transition().duration(200).call(zoomRef.current.scaleBy, 0.75);
   };
   const handleReset = () => {
     if (!svgRef.current || !zoomRef.current) return;
-    d3.select(svgRef.current).transition().duration(300).call(
+    (d3.select(svgRef.current) as any).transition().duration(300).call(
       zoomRef.current.transform,
       zoomIdentity.translate(0, 0).scale(1)
     );
   };
   const handleFocusTip = () => {
     if (!svgRef.current || !zoomRef.current) return;
-    d3.select(svgRef.current).transition().duration(300).call(
+    (d3.select(svgRef.current) as any).transition().duration(300).call(
       zoomRef.current.translateTo,
       layout.width / 2,
       layout.height - size.h / 2

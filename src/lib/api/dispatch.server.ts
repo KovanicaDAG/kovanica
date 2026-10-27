@@ -19,7 +19,7 @@ import {
   localSubmit,
   localUtxos,
 } from "./node.server";
-import { isPublicSource, type ApiSource, type ApiState, type ApiHead } from "./contract";
+import { isPublicSource, type ApiSource, type ApiState, type ApiHead, type ApiBootstrap, type ApiDagBlock } from "./contract";
 import { parseAddr, toCanonicalAddress } from "../wallet/address";
 import { blake3 } from "@noble/hashes/blake3.js";
 
@@ -184,7 +184,7 @@ async function fetchLiveState(): Promise<ApiState> {
   }
   const rawHeaders = (await Promise.all(headerPromises)).filter(Boolean);
 
-  const dag = rawHeaders.map((h) => {
+  const dag: ApiDagBlock[] = rawHeaders.map((h): ApiDagBlock => {
     const height = parseInt(h.committedHeight, 16);
     const round = parseInt(h.leaderRound, 16);
     let colour: "genesis" | "chain" | "blue" | "red" = "blue";
@@ -309,15 +309,18 @@ async function fetchLiveBootstrap(): Promise<ApiBootstrap> {
     block_pruning_depth: 18446744073709551615,
     payload_pruning_depth: 1000,
     founder_amount: 200_000 * 1_000_000_000,
-    founder_seed: "0000000000000000000000000000000000000000000000000000000000000000",
+    founder_seed: 0,
     max_supply: 90_200_000 * 1_000_000_000,
     burned: 0,
     circulating: 1_000_000 * 1_000_000_000,
+    native_minted: 1_000_000 * 1_000_000_000,
+    total: 90_200_000 * 1_000_000_000,
+    listen: "0.0.0.0:8000",
+    peers: ["seed1.kovanica.online:8000", "seed2.kovanica.online:8000", "seed3.kovanica.online:8000"],
     upstream: {
       ok: true,
       head,
-      probe_ms: 12,
-    },
+      },
   };
 }
 
@@ -334,6 +337,7 @@ async function fetchLiveHead(): Promise<ApiHead> {
     blocks: currentHeight,
     min_fee: 10_000,
     atom: 1_000_000_000,
+    finality_depth: 180,
   };
 }
 

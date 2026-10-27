@@ -153,6 +153,7 @@ export type ApiHead = {
   finality_depth: number;
 };
 export type ApiBootstrap = {
+  blocks?: number;
   network: string;
   genesis: string;
   tip: string;
