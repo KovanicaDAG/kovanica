@@ -1,8 +1,7 @@
 /**
  * Shell — full protocol chrome (testnet / shared hosts only).
- * Not used on apex landing or mainnet gate.
- * NFT in desktop primary NAV (after Assets).
- * Mobile bottom bar stays ≤6 items; NFT via product card / direct URL.
+ * Cleaned to strictly reflect crates and contracts present in the codebase:
+ * Explorer, Wallet, Faucet, Multisig, HTLC, Vaults, Tokens, Network, Map, Roadmap, Docs.
  */
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
@@ -12,41 +11,28 @@ import {
   Coins,
   Users,
   FileText,
-  Pickaxe,
   Activity,
   Route,
-  Eye,
   Lock,
   Vault,
-  Layers,
   Droplets,
-  Image,
-  ArrowLeftRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SourceSwitch } from "@/components/layout/source-switch";
 import { NetworkBadge } from "@/components/layout/network-badge";
 import { getBadgeColor } from "@/lib/network";
 
-import { Gift } from "lucide-react";
-
 const NAV = [
   { to: "/", label: "Home", icon: Coins },
   { to: "/explorer", label: "Explorer", icon: Compass },
   { to: "/wallet", label: "Wallet", icon: Wallet },
+  { to: "/faucet", label: "Faucet", icon: Droplets },
   { to: "/multisig", label: "Multisig", icon: Users },
-  { to: "/multi-asset", label: "Assets", icon: Layers },
-  { to: "/nft", label: "NFT", icon: Image },
-  { to: "/stealth", label: "Stealth", icon: Eye },
   { to: "/htlc", label: "HTLC", icon: Lock },
-  { to: "/wallet/dex", label: "DEX", icon: ArrowLeftRight },
-  { to: "/wallet/token-listings", label: "Tokens", icon: Coins },
-  { to: "/wallet/airdrops", label: "Airdrops", icon: Gift },
   { to: "/vaults", label: "Vaults", icon: Vault },
+  { to: "/wallet/token-listings", label: "Tokens", icon: Coins },
   { to: "/network", label: "Network", icon: Activity },
   { to: "/map", label: "Map", icon: Map },
-  { to: "/pool", label: "Pool", icon: Pickaxe },
-  { to: "/faucet", label: "Faucet", icon: Droplets },
 ] as const;
 
 /** Bottom bar: keep ≤6 so labels stay readable on narrow phones. */
@@ -54,9 +40,9 @@ const MOBILE_NAV = [
   { to: "/", label: "Home", icon: Coins },
   { to: "/explorer", label: "Explorer", icon: Compass },
   { to: "/wallet", label: "Wallet", icon: Wallet },
-  { to: "/multi-asset", label: "Assets", icon: Layers },
-  { to: "/network", label: "Network", icon: Activity },
   { to: "/faucet", label: "Faucet", icon: Droplets },
+  { to: "/network", label: "Network", icon: Activity },
+  { to: "/docs", label: "Docs", icon: FileText },
 ] as const;
 
 export function Shell({ children }: { children: React.ReactNode }) {

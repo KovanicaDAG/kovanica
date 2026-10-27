@@ -1,4 +1,3 @@
-import { PRIMARY_SEED } from "@/lib/public-config";
 import { parseAddr } from "@/lib/wallet/address";
 import { hashHex } from "@/lib/ledger/hash";
 import {
@@ -286,7 +285,7 @@ export function localP2p(): { path: string; listen: string; peers: string[]; boo
     path: "tcp",
     listen: "local",
     peers: [],
-    bootstrap: PRIMARY_SEED,
+    bootstrap: "seed.kovanica.online:9000",
   };
 }
 

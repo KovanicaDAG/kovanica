@@ -69,7 +69,7 @@ export function WalletView() {
     null,
   );
   const [feeTier, setFeeTier] = useState<"slow" | "normal" | "fast">("normal");
-  /** RFC-002: null = native KVNC */
+  /** RFC-002: null = native KUNA */
   const [assetId, setAssetId] = useState<string | null>(null);
 
   // M-05: recovery phrase generation is two-phase — show the words, then
@@ -315,7 +315,7 @@ export function WalletView() {
     try {
       await api(`/api/faucet?to=${wallet.address}&amount=${ATOM}&kind=faucet`, "POST");
       await refreshChain(wallet.address);
-      toast.success("Faucet paid 1 KVNC");
+      toast.success("Faucet paid 1 KUNA");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Faucet failed");
     }
@@ -348,10 +348,15 @@ export function WalletView() {
     }
     setBusy(true);
     try {
-      const prep = await api<{ sighash: string }>(
+      const prep = await api<{ sighash?: string; ok?: boolean }>(
         prepareUrl(wallet.address, dest, atoms, assetId),
         "POST",
       );
+      if (!prep || !prep.sighash) {
+        toast.error(typeof prep === "string" ? prep : "Failed to prepare transaction");
+        setBusy(false);
+        return;
+      }
       if (wallet.type === "hardware") {
         setSignModalState({
           open: true,
@@ -411,10 +416,10 @@ export function WalletView() {
     return (
       <div className="mx-auto flex w-full max-w-lg flex-col gap-6 px-4 py-8 md:px-6">
         <header>
-          <p className="font-mono text-[10px] tracking-brand text-gold uppercase">KVNC</p>
+          <p className="font-mono text-[10px] tracking-brand text-gold uppercase">KUNA</p>
           <h1 className="font-display text-3xl tracking-tight text-fg">Wallet</h1>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            Secure your KVNC in this browser or connect a hardware wallet. Address is the Ed25519
+            Secure your KUNA in this browser or connect a hardware wallet. Address is the Ed25519
             public key.
           </p>
         </header>
@@ -425,7 +430,7 @@ export function WalletView() {
                 Write down your recovery phrase
               </p>
               <p className="mt-1 text-[11px] text-muted">
-                Anyone with these words controls your KVNC — keep them offline and never share them.
+                Anyone with these words controls your KUNA — keep them offline and never share them.
               </p>
               <div className="mt-3 grid grid-cols-3 gap-2">
                 {pendingMnemonic.split(" ").map((w, i) => (
@@ -563,7 +568,7 @@ export function WalletView() {
     return (
       <div className="mx-auto flex w-full max-w-lg flex-col gap-6 px-4 py-8 md:px-6">
         <header>
-          <p className="font-mono text-[10px] tracking-brand text-gold uppercase">KVNC</p>
+          <p className="font-mono text-[10px] tracking-brand text-gold uppercase">KUNA</p>
           <h1 className="font-display text-3xl tracking-tight text-fg">Wallet locked</h1>
           <p className="mt-2 text-sm text-muted">Enter your password to decrypt the seed.</p>
         </header>
@@ -666,7 +671,7 @@ export function WalletView() {
               <AddressQr value={hexToKvnc(wallet.address)} />
               {!live && (
                 <Button type="button" variant="outline" size="sm" onClick={() => void onFaucet()}>
-                  Faucet 1 KVNC
+                  Faucet 1 KUNA
                 </Button>
               )}
             </div>

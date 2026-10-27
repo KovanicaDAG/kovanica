@@ -10,8 +10,8 @@ import { cn } from "@/lib/utils";
 import { NETWORK_ID } from "@/lib/api/contract";
 import type { ApiState } from "@/lib/api/contract";
 
-const CAP_KVNC = 5;
-const AMOUNTS = [1, 2, 5] as const;
+const CAP_KUNA = 10;
+const AMOUNTS = [1, 5, 10] as const;
 const COOLDOWN_S = 60;
 
 type Phase = "idle" | "submitting" | "success";
@@ -27,7 +27,7 @@ type ErrorKind =
 const ERROR_COPY: Record<Exclude<ErrorKind, null>, string> = {
   "invalid-address":
     "That doesn't look like a Kovanica address. Paste a 64-hex public key or a kvnc…dag address.",
-  cap: "This address has already claimed its lifetime cap — 5 KVNC per address on testnet.",
+  cap: "This address has already claimed its lifetime cap — 10 KUNA per address on testnet.",
   dry: "The faucet is dry right now — the node has no funds to give. Try again in a bit.",
   offline: "The testnet node is unreachable. Check back in a moment.",
   cooldown: "The faucet is cooling down. Try again in a moment.",
@@ -174,14 +174,14 @@ export function FaucetView() {
       <main className="flex flex-1 justify-center px-4 py-10 md:py-16">
         <div className="w-full max-w-md">
           <div className="flex items-center justify-between gap-2">
-            <p className="eyebrow">{NETWORK_ID} · KVNC</p>
+            <p className="eyebrow">{NETWORK_ID} · KUNA</p>
             <NetworkBadge />
           </div>
           <h1 className="mt-1 font-display text-3xl tracking-tight text-fg italic">
             Testnet faucet
           </h1>
           <p className="mt-1 text-sm text-muted">
-            Per-address lifetime cap <strong className="text-fg">{CAP_KVNC} KVNC</strong>
+            Per-address lifetime cap <strong className="text-fg">{CAP_KUNA} KUNA</strong>
             {" · "}Chain head{" "}
             <span className="font-mono text-fg">#{head ? head.blocks.toLocaleString() : "—"}</span>
           </p>
@@ -233,7 +233,7 @@ export function FaucetView() {
                         : "border-border bg-bg text-muted hover:bg-surface-2 hover:text-fg",
                     )}
                   >
-                    {n} KVNC
+                    {n} KUNA
                   </button>
                 ))}
               </div>
@@ -246,7 +246,7 @@ export function FaucetView() {
               disabled={!canSubmit}
               onClick={() => void submit()}
             >
-              {phase === "submitting" ? "Sending…" : `Request ${chosenAmount} KVNC`}
+              {phase === "submitting" ? "Sending…" : `Request ${chosenAmount} KUNA`}
             </Button>
             {disabledReason && (
               <p className="mt-2 text-center text-xs text-subtle">{disabledReason}</p>
@@ -289,10 +289,10 @@ export function FaucetView() {
             <div className="mt-4 rounded-xl border border-ok/40 bg-ok/10 p-5">
               <p className="font-mono text-[10px] tracking-wide text-ok uppercase">Granted</p>
               <p className="mt-1 font-display text-2xl tracking-tight text-fg">
-                {(grantedAtoms / 100_000_000).toLocaleString(undefined, {
-                  maximumFractionDigits: 8,
+                {(grantedAtoms / 1_000_000_000).toLocaleString(undefined, {
+                  maximumFractionDigits: 9,
                 })}{" "}
-                KVNC
+                KUNA
               </p>
               <div className="mt-3 flex items-center justify-between gap-2 rounded-md bg-surface-2 px-3 py-2">
                 <code className="min-w-0 truncate font-mono text-xs text-muted">{txId}</code>
@@ -308,7 +308,7 @@ export function FaucetView() {
               <p className="mt-2 text-xs text-subtle">
                 Remaining cap for this address:{" "}
                 <span className="font-mono text-muted">
-                  {CAP_KVNC - chosenAmount} KVNC
+                  {CAP_KUNA - chosenAmount} KUNA
                 </span>
               </p>
               <div className="mt-4 flex flex-wrap gap-2">

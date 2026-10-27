@@ -36,7 +36,7 @@ export function MainnetLaunching() {
         />
         <div className="relative mx-auto w-full max-w-md text-center">
           <DagMark variant="gold" className="mx-auto size-12" />
-          <p className="eyebrow mt-6">kovanica-mainnet · KVNC</p>
+          <p className="eyebrow mt-6">kovanica-mainnet · KUNA</p>
           <h1 className="mt-2 font-display text-4xl tracking-tight text-fg italic md:text-5xl">
             Mainnet is launching soon.
           </h1>
@@ -61,7 +61,7 @@ export function MainnetLaunching() {
 
       <footer className="border-t border-border px-6 py-6">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-xs text-subtle md:flex-row">
-          <span className="font-mono">kovanica-mainnet · KVNC</span>
+          <span className="font-mono">kovanica-mainnet · KUNA</span>
           <span className="flex items-center gap-4 font-mono">
             <a className="transition-colors hover:text-fg" href={SURFACE.landing}>
               kovanica.online

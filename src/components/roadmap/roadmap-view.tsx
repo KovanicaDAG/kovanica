@@ -12,159 +12,172 @@ type Item = {
   note?: string;
 };
 
-/** Public KVP-10x labels (see docs/KVP.md). */
+/** Core Protocol Architecture & Wasmi Smart Contracts. */
 const PROTOCOL: Item[] = [
   {
-    id: "kvp-101",
-    title: "KVP-101 · Multisig (M-of-N P2SH)",
-    status: "done",
-    blurb: "RFC-001 — threshold redeem scripts, activation gating, node + FFI + web multisig UI.",
-  },
-  {
-    id: "kvp-102",
-    title: "KVP-102 · Native multi-asset tokens",
-    status: "done",
-    blurb: "RFC-002 — multi-asset UTXOs, per-asset conservation, coinbase mint, checkpoint v4.",
-    note: "Public token standard name for KVNC-ledger assets (not an ERC-20).",
-  },
-  {
-    id: "kvp-103",
-    title: "KVP-103 · Stealth + script v2",
+    id: "mysticeti-consensus",
+    title: "Mysticeti BlockDAG Consensus",
     status: "done",
     blurb:
-      "RFC-003 — one-time keys (ECDH), view tags, bounded script machine (CLTV/CSV/hash-lock).",
+      "Uncertified DAG consensus with 3-round commit waves, 4s round intervals, and 12s committed leaders with BFT finality.",
+    note: "Round-robin leader progression among active staked validator committee.",
   },
   {
-    id: "kvp-104",
-    title: "KVP-104 · HTLC atomic swaps",
-    status: "done",
-    blurb: "RFC-004 — hashed time-locked contracts, redeem/refund paths, swap session helpers.",
-  },
-  {
-    id: "kvp-105",
-    title: "KVP-105 · Time-lock vault + CSV",
+    id: "account-ledger",
+    title: "Account-Based Ledger & PRO-21 Addresses",
     status: "done",
     blurb:
-      "RFC-005 — check-lock-time-verify / check-sequence-verify vaults, escrow templates, node + FFI helpers.",
+      "Account-based state model with sequence nonces and canonical PRO-21 addresses (64 chars: kvnc + 57 base32 + dag).",
+    note: "BLAKE3 KUNA-TX-v1 sighashes signed client-side with Ed25519 keys.",
+  },
+  {
+    id: "wasmi-runtime",
+    title: "Wasmi Deterministic Execution Runtime",
+    status: "done",
+    blurb:
+      "Sandboxed WebAssembly runtime for deterministic smart contract execution, gas metering, and host storage interop.",
+  },
+  {
+    id: "contract-multisig",
+    title: "Multisig Contract (kovanica-multisig)",
+    status: "done",
+    blurb:
+      "M-of-N threshold multi-signature Wasmi smart contract supporting partial signature aggregation and activation gating.",
+  },
+  {
+    id: "contract-htlc",
+    title: "HTLC Atomic Swaps (kovanica-htlc)",
+    status: "done",
+    blurb:
+      "Hashed time-locked Wasmi smart contract for trustless cross-chain atomic swaps and conditional escrow release.",
+  },
+  {
+    id: "contract-vault",
+    title: "Time-Lock Vaults & Vesting (kovanica-vault)",
+    status: "done",
+    blurb:
+      "Deterministic time-lock vault contract supporting linear treasury vesting schedules and revocable time locks.",
+  },
+  {
+    id: "contract-token",
+    title: "Fungible Token Standard (kovanica-token)",
+    status: "done",
+    blurb:
+      "CW20-style deterministic WASM token contract with minting, transfers, allowances, and burn capabilities.",
   },
 ];
 
 const SURFACE: Item[] = [
   {
-    id: "web-core",
-    title: "Web explorer + browser wallet",
+    id: "web-explorer",
+    title: "Multi-Lane BlockDAG Explorer",
     status: "done",
-    blurb: "Graph, wallet, multisig, network status, native app download links.",
+    blurb:
+      "5-validator committee lanes visualizing BFT leader progression, interactive DAG canvas, zoom controls, and 18 live network metrics.",
   },
   {
-    id: "web-assets",
-    title: "Web KVP-102 UX",
+    id: "web-wallet",
+    title: "Web Wallet & Signer",
     status: "done",
-    blurb: "AssetPicker + explorer badges; utxos/history/prepare expose asset_id + balances map.",
+    blurb:
+      "Client-side wallet supporting BIP-39 mnemonic derivation, PRO-21 address generation, and in-browser transaction signing.",
   },
   {
-    id: "android-ios",
-    title: "Android APK + iOS IPA",
+    id: "web-faucet",
+    title: "Testnet Faucet",
     status: "done",
-    blurb: "CI builds debug APK and unsigned sideload IPA (AltStore / Sideloadly).",
+    blurb:
+      "Automated testnet faucet dispensing 10 KUNA with rate limiting and canonical PRO-21 address verification.",
   },
   {
-    id: "light-node",
-    title: "Mobile light-node + FFI",
+    id: "cli-tooling",
+    title: "Node CLI & Tooling (kovanica-cli)",
     status: "done",
-    blurb: "UniFFI bindings, Android light-node slices, SPV/filter path in node.",
+    blurb:
+      "Full command-line toolkit for node administration, key generation, RPC inspection, and genesis orchestration.",
   },
 ];
 
 const SDK: Item[] = [
   {
-    id: "sdk-types",
-    title: "SDK · typed domain models + /api/block",
+    id: "rust-crates",
+    title: "Rust Workspace Crates",
     status: "done",
     blurb:
-      "S-02 — Block/Tx/UTXO domain types, typed /api/block and /api/tx endpoints, sighash vectors pinned against kovanica-state.",
+      "27 modular crates: kovanica-types, kovanica-crypto, kovanica-dag, kovanica-consensus, kovanica-mempool, kovanica-network, kovanica-runtime, kovanica-staking, kovanica-node, kovanica-rpc.",
   },
   {
-    id: "sdk-multisig-rpc",
-    title: "SDK · multisig typed RPC",
+    id: "ts-packages",
+    title: "TypeScript SDK Packages",
     status: "done",
-    blurb: "S-07 — /api/multisig/create|build|sign|combine|submit with node-parity validation.",
+    blurb:
+      "Modular client libraries: @kovanica/api-client, @kovanica/signer, @kovanica/console, and @kovanica/web.",
   },
   {
     id: "sdk-wasm",
-    title: "SDK · WASM browser tx flow",
+    title: "WASM In-Browser Engine",
     status: "done",
-    blurb: "S-09 — build_signed_transfer: prepare → sign → submit entirely in the browser.",
+    blurb:
+      "Wasm-bindgen client engine for in-browser transaction preparation, BLAKE3 sighash derivation, and zero-knowledge seed protection.",
   },
   {
-    id: "sdk-mnemonic",
-    title: "SDK + CLI · SLIP-0010 mnemonic derivation",
+    id: "json-rpc",
+    title: "JSON-RPC 2.0 Interface",
     status: "done",
-    blurb: "Frozen path m/44'/3007'/0'/0'/i'; wallet new/restore/show; BIP-39 checksum validation.",
-  },
-  {
-    id: "sdk-publish",
-    title: "SDK · publish + cookbook",
-    status: "done",
-    blurb: "S-12/S-13 — crates.io/npm publish runbook, COOKBOOK.md recipes, release go/no-go gate.",
+    blurb:
+      "Node-parity RPC endpoints for syncStatus, getLeaderHeader, getBalance, getNonce, sendRawTransaction, and getValidators.",
   },
 ];
 
 const NEXT: Item[] = [
   {
-    id: "nft-kvp106",
-    title: "KVP-106 · NFT (RFC-007 draft)",
+    id: "staking-lifecycle",
+    title: "Validator Lifecycle & Active Set Expansion",
+    status: "active",
+    blurb:
+      "Expanding active validator committee from 5 to 15–21 staked nodes, dynamic bond/unbond lifecycle, and commission distribution.",
+  },
+  {
+    id: "node-hardening",
+    title: "P2P Network & State Snapshot Hardening",
+    status: "active",
+    blurb:
+      "Fast snapshot sync, DAG block payload pruning, multi-seed peer discovery, and catch-up validation under network turbulence.",
+  },
+  {
+    id: "contract-abi",
+    title: "Contract UX & Typed ABI Pipeline",
     status: "next",
     blurb:
-      "Non-fungible tokens: 1-unit assets, collections, IPFS metadata hashes. Detail + collection views ship in the web; standard is draft.",
+      "Typed ABI code-generation, extended Wasmi gas metering tables, and streamlined contract deployment workflows.",
   },
   {
-    id: "rwa",
-    title: "RWA issuance + explorer",
-    status: "done",
-    blurb:
-      "Issue flow (derive → IPFS metadata → mint) with asset classes; explorer detail view for issued assets.",
-  },
-  {
-    id: "staking-ui",
-    title: "Wallet staking UI",
+    id: "observability-indexer",
+    title: "Observability & Real-Time Indexer Hooks",
     status: "next",
     blurb:
-      "Bond/unbond flows over tagged KVB1/KVU1 transactions, bonded-stake display.",
+      "Committed subdag execution hooks, Prometheus metrics, structured tracing, and WebSocket event feeds.",
   },
   {
-    id: "token-staking",
-    title: "Token staking & sortition",
+    id: "mainnet-readiness",
+    title: "Mainnet Launch Readiness",
     status: "next",
     blurb:
-      "Extend the stake registry to native-token assets (KVP-102) so bonds can be denominated in any issued token.",
-  },
-  {
-    id: "asset-http",
-    title: "Node HTTP asset_id (KVP-102)",
-    status: "done",
-    blurb:
-      "asset_id on /api/utxos, /api/history, /api/prepare; balances map + wire KVNC/hex helpers.",
-  },
-  {
-    id: "mainnet",
-    title: "Mainnet readiness",
-    status: "next",
-    blurb: "Ops hardening, seed topology, fee market soak, release docs — see docs/LEGIT-BOARD.md.",
+      "15–20 genesis validator bootstrap (1M KUNA genesis allocation), 8.1M halving era schedule, and security audit sign-off.",
   },
 ];
 
 function StatusIcon({ status }: { status: Status }) {
   if (status === "done") {
     return (
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ok/15 text-ok">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-400">
         <Check className="size-4" strokeWidth={2.5} aria-hidden />
       </span>
     );
   }
   if (status === "active") {
     return (
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gold/15 text-gold">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-400">
         <Loader className="size-4 animate-spin" strokeWidth={2} aria-hidden />
       </span>
     );
@@ -199,8 +212,8 @@ function Section({ title, items }: { title: string; items: Item[] }) {
                 <span
                   className={cn(
                     "font-mono text-[10px] uppercase tracking-wide",
-                    item.status === "done" && "text-ok",
-                    item.status === "active" && "text-gold",
+                    item.status === "done" && "text-emerald-400 font-semibold",
+                    item.status === "active" && "text-amber-400 font-semibold",
                     item.status === "next" && "text-subtle",
                   )}
                 >
@@ -221,6 +234,8 @@ function Section({ title, items }: { title: string; items: Item[] }) {
 
 export function RoadmapView() {
   const done = [...PROTOCOL, ...SURFACE, ...SDK].filter((i) => i.status === "done").length;
+  const inProgress = NEXT.filter((i) => i.status === "active").length;
+  const queued = NEXT.filter((i) => i.status === "next").length;
   const total = PROTOCOL.length + SURFACE.length + SDK.length + NEXT.length;
 
   return (
@@ -229,35 +244,38 @@ export function RoadmapView() {
         <p className="font-mono text-[10px] tracking-brand text-subtle uppercase">Protocol</p>
         <h1 className="mt-1 font-display text-3xl tracking-tight text-fg md:text-4xl">Roadmap</h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
-          Public view of Kovanica Protocol standards (**KVP-101…105**), client surfaces, the
-          kovanica-sdk, and what lands next. Full legitimacy checklist:{" "}
-          <code className="text-fg/80">docs/LEGIT-BOARD.md</code> (P0–P2).
+          Development roadmap and architecture milestones for the Kovanica Layer-1 blockchain, core crates, Wasmi smart contracts, and mainnet launch focus areas.
         </p>
         <p className="mt-3 font-mono text-xs text-subtle">
-          {done} shipped ·{" "}
-          {PROTOCOL.filter((i) => i.status === "active").length +
-            SURFACE.filter((i) => i.status === "active").length +
-            SDK.filter((i) => i.status === "active").length}{" "}
-          in progress · {NEXT.length} queued · {total} tracked
+          <strong className="text-emerald-400">{done} shipped</strong> ·{" "}
+          <strong className="text-amber-400">{inProgress} in progress</strong> ·{" "}
+          <span>{queued} queued</span> · {total} tracked milestones
         </p>
       </header>
 
-      <Section title="KVP consensus standards" items={PROTOCOL} />
-      <Section title="Clients & surface" items={SURFACE} />
-      <Section title="SDK" items={SDK} />
-      <Section title="Next up" items={NEXT} />
+      <Section title="Consensus & Wasmi Smart Contracts" items={PROTOCOL} />
+      <Section title="Client Applications & Explorer" items={SURFACE} />
+      <Section title="SDK & Developer Tooling" items={SDK} />
+      <Section title="Next Focus Areas (Mainnet Roadmap)" items={NEXT} />
 
-      <p className="border-t border-border pt-6 text-xs leading-relaxed text-subtle">
-        Token standard: <strong className="text-muted">KVP-102</strong> (native multi-asset; not
-        ERC-20). NFT draft: <strong className="text-muted">KVP-106 / RFC-007</strong>. Specs:{" "}
-        <code className="text-muted">docs/KVP*.md</code>,{" "}
-        <code className="text-muted">docs/WHAT-IS-KOVANICA.md</code>,{" "}
-        <code className="text-muted">docs/TOKENOMICS.md</code>.{" "}
-        <Link to="/docs" className="text-blue underline-offset-2 hover:underline">
-          Technical details
-        </Link>{" "}
-        cover the HTTP API on testnet.
-      </p>
+      <div className="rounded-xl border border-border bg-surface p-4 text-xs leading-relaxed text-muted space-y-2">
+        <p>
+          <strong className="text-fg">Consensus:</strong> Mysticeti uncertified DAG (wave = 3, 4s round → 12s leader commit).
+        </p>
+        <p>
+          <strong className="text-fg">Execution:</strong> Deterministic Wasmi WebAssembly runtime.
+        </p>
+        <p>
+          <strong className="text-fg">Tokenomics:</strong> Native token <strong className="text-fg">KUNA</strong> (9 decimals, 90,200,000 hard cap, 81M mining subsidy budget, 2.5 KUNA leader reward).
+        </p>
+        <p className="border-t border-border/60 pt-2 text-subtle">
+          More details available in the{" "}
+          <Link to="/docs" className="text-amber-400 underline-offset-2 hover:underline">
+            Documentation
+          </Link>
+          .
+        </p>
+      </div>
     </main>
   );
 }

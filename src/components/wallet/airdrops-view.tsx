@@ -277,7 +277,7 @@ export function AirdropsView() {
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-muted">Total Amount</p>
-                <p className="font-mono text-fg">{(campaign?.total_amount || 0) / ATOM} KVNC</p>
+                <p className="font-mono text-fg">{(campaign?.total_amount || 0) / ATOM} KUNA</p>
               </div>
               <div>
                 <p className="text-muted">Asset</p>
@@ -393,7 +393,7 @@ export function AirdropsView() {
               </div>
               <div>
                 <p className="text-muted">Amount</p>
-                <p className="font-mono text-fg">{(proof?.leaf.amount || 0) / ATOM} KVNC</p>
+                <p className="font-mono text-fg">{(proof?.leaf.amount || 0) / ATOM} KUNA</p>
               </div>
               <div>
                 <p className="text-muted">Asset</p>

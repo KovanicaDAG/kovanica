@@ -65,14 +65,14 @@ export const Route = createRootRoute({
                 ? "Kovanica Dashboard"
                 : "Kovanica Testnet";
     const description = isLanding
-      ? "Kovanica Protocol — a BlockDAG Layer-1 with GHOSTDAG consensus, Proof-of-Authority, native multi-asset UTXOs and privacy primitives. Testnet live."
+      ? "Kovanica Protocol — a BlockDAG Layer-1 with Mysticeti DAG consensus, Wasmi runtime, staked validators, native KUNA and privacy primitives. Testnet live."
       : isMainnet
         ? "Kovanica Protocol mainnet — launching soon. Explore the BlockDAG, wallet and protocol on testnet meanwhile."
         : role === "playground"
           ? "Kovanica Playground — interactive onboarding, live API console, and code snippets for the Kovanica Protocol."
           : role === "dash"
             ? "Kovanica network dashboard — live node stats, block height, metrics and network status for testnet and mainnet."
-            : "Kovanica Protocol testnet — BlockDAG explorer, wallet, origins map and protocol tools for KVNC on kovanica-testnet.";
+            : "Kovanica Protocol testnet — BlockDAG explorer, wallet, origins map and protocol tools for KUNA on Chain 4 testnet.";
     return {
       meta: [
         { charSet: "utf-8" },

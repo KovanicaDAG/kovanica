@@ -1,4 +1,3 @@
-import { P2P_PORT, PRIMARY_SEED, SEED_PEERS_CSV } from "../public-config";
 import {
   ATOM,
   FOUNDER_AMOUNT,
@@ -27,12 +26,12 @@ Engine is the Rust node; this app speaks the same HTTP contract.
 || Map | ${LIVE_MAP} |
 || Site | ${LIVE_SITE} |
 || Network | \`${NETWORK_ID}\` |
-|| Premine | ${FOUNDER_AMOUNT / ATOM} KVNC (founder / treasury) |
-|| Subsidy cap | ${SUBSIDY / ATOM} KVNC / block, halves every ${HALVING_ERA.toLocaleString()} blocks |
-|| Hard cap | ${MAX_SUPPLY / Number(ATOM.toLocaleString().replace(/,/g, ''))} KVNC (90.2M) |
-|| Min fee | ${MIN_FEE} atoms (${MIN_FEE / ATOM} KVNC) — burned |
+|| Premine | ${FOUNDER_AMOUNT / ATOM} KUNA (founder / treasury) |
+|| Subsidy cap | ${SUBSIDY / ATOM} KUNA / block, halves every ${HALVING_ERA.toLocaleString()} blocks |
+|| Hard cap | ${MAX_SUPPLY / Number(ATOM.toLocaleString().replace(/,/g, ''))} KUNA (90.2M) |
+|| Min fee | ${MIN_FEE} atoms (${MIN_FEE / ATOM} KUNA) — burned |
 || k | ${K} (GHOSTDAG) |
-|| Atom | 1 KVNC = 10^8 atoms |
+|| Atom | 1 KUNA = 10^9 atoms |
 || Finality depth | 100 blue score |
 || Payload pruning | 1000 blue score |
 
@@ -71,7 +70,7 @@ GET /api/p2p
   { path: "tcp", listen, peers, bootstrap } — Rust node only
 
 GET /api/blocks
-  octet-stream dump of every block (same bytes a clone pulls on :${P2P_PORT})
+  octet-stream dump of every block (same bytes a clone pulls on :9000)
 
 GET /api/download/install.sh
   node installer script (Linux x64/arm64)
@@ -96,7 +95,7 @@ POST /api/produce
 
 POST /api/fee_estimate?amount=
   mempool fee estimate in atoms: p90 of pending fees, min-fee when empty;
-  amounts over 1 KVNC scale by 1.2
+  amounts over 1 KUNA scale by 1.2
 
 POST /api/mine
   operator: append one block (pack mempool, else empty coinbase)
@@ -108,7 +107,7 @@ POST /api/miner?addr=
   operator: set coinbase payee
 
 POST /api/faucet?to=&amount=
-  testnet open faucet. kind=faucet (default). Per-address lifetime cap: 5 KVNC.
+  testnet open faucet. kind=faucet (default). Per-address lifetime cap: 10 KUNA.
 
 POST /api/reset
   local only (chain wipe is locked on the public testnet)
@@ -145,13 +144,13 @@ Live CORS is closed — this app proxies it server-side.
   cargo build --release -p kovanica-node
   KOVANICA_MINE=0 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 \\
   KOVANICA_OPERATOR=0 KOVANICA_POW=1 \\
-  KOVANICA_LISTEN=0.0.0.0:${P2P_PORT} \\
-  KOVANICA_PEERS=${SEED_PEERS_CSV} \\
+  KOVANICA_LISTEN=0.0.0.0:9000 \\
+  KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 \\
   ./target/release/kovanica-node explorer 127.0.0.1:8080
 
-TCP :${P2P_PORT} is the only P2P path. Do not set peers to explorer.kovanica.online:${P2P_PORT}
+TCP :9000 is the only P2P path. Do not set peers to explorer.kovanica.online:9000
 — that name is Cloudflare-proxied and never reaches the seed. Use a DNS-only
-A record (${PRIMARY_SEED.split(":")[0]}) or the origin IP.
+A record (seed.kovanica.online) or the origin IP.
 After sync, GET /api/head on the clone matches the public genesis (and tip, once
 the seed has served its blocks).
 

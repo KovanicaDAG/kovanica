@@ -8,7 +8,7 @@ export type WhatsNewItem = {
   date: string;
   title: string;
   body: string;
-  tag: "Protocol" | "Wallet" | "Infra" | "NFT" | "DeFi" | "Docs";
+  tag: "Protocol" | "Wallet" | "Infra" | "DeFi" | "Docs";
   href?: string;
 };
 
@@ -17,37 +17,45 @@ const DOCS = "https://docs.kovanica.online";
 
 export const WHATS_NEW: readonly WhatsNewItem[] = [
   {
-    date: "2026-09",
-    title: "RFC-006 live on testnet",
-    body: "New genesis, full supply fields on /api/head (subsidy, circulating, burned, max_supply). Maturity rules active.",
+    date: "2026-10",
+    title: "Chain 4 Testnet live",
+    body: "Mysticeti-style uncertified DAG (wave = 3), 4s round interval (12s committed leaders), deterministic Wasmi runtime, active staked validators, and native KUNA.",
+    tag: "Protocol",
+    href: `${TESTNET}/explorer`,
+  },
+  {
+    date: "2026-10",
+    title: "Tokenomics locked",
+    body: "90.2M total supply (9 decimals), 81M subsidy budget, 8M linear treasury, 1M genesis validators, and 2.5 KUNA initial block reward minted only on committed leaders.",
     tag: "Protocol",
     href: DOCS,
   },
   {
-    date: "2026-09",
-    title: "KVP-102 Multi-asset",
-    body: "Native multi-asset UTXOs, balances map, AssetPicker, prepare with explicit asset_id. Fees always in KVNC.",
+    date: "2026-10",
+    title: "Smart contracts & Wasmi",
+    body: "Deterministic WASM smart contracts: HTLC atomic swaps, CLTV/CSV vaults, M-of-N Multisig, and KVP-102 native tokens.",
     tag: "Wallet",
-    href: `${TESTNET}/multi-asset`,
+    href: `${TESTNET}/multisig`,
   },
   {
-    date: "2026-09",
-    title: "Domain architecture",
-    body: "kovanica.online = Landing · testnet. = app · mainnet. = gate · docs. · api. Host-role chrome live.",
+    date: "2026-10",
+    title: "Domain & Node Ingress",
+    body: "Clean host routing across kovanica.online, testnet, explorer, and seed RPC nodes with automated Let's Encrypt SSL and high-performance Nginx reverse proxy.",
     tag: "Infra",
+    href: `${TESTNET}/network`,
   },
   {
-    date: "2026-09",
-    title: "Stealth · HTLC · Vaults",
-    body: "KVP-103 / 104 / 105 surfaces on testnet: one-time addresses, atomic swaps, CLTV/CSV vaults.",
-    tag: "Wallet",
-    href: TESTNET,
+    date: "2026-10",
+    title: "Staked Validators & BFT",
+    body: "15–21 active validator set, min 50,000 KUNA stake, 8-hour validator rotation epochs, and uncertified DAG consensus with sub-second finality.",
+    tag: "Protocol",
+    href: DOCS,
   },
   {
     date: "Coming",
-    title: "KVP-106 Native NFTs",
-    body: "AssetKind::Nft, max_supply = 1, metadata URI. Design complete (RFC-007 draft). Ledger Phase 1 next.",
-    tag: "NFT",
-    href: `${TESTNET}/nft`,
+    title: "Mainnet Genesis",
+    body: "Mainnet bootstrap with 15–20 genesis validators, 1M KUNA initial distribution, and 8.1M committed leader halving eras.",
+    tag: "Protocol",
+    href: DOCS,
   },
 ] as const;

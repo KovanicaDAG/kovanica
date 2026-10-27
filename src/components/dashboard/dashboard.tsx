@@ -1,4 +1,3 @@
-import { PRIMARY_SEED } from "@/lib/public-config";
 import { useEffect, useRef, useState } from "react";
 import {
   Activity,
@@ -37,7 +36,7 @@ type HeightSample = { at: number; blocks: number };
 
 const HISTORY_LEN = 60;
 
-/** Atoms → KVNC string (no symbol; the card label carries it). */
+/** Atoms → KUNA string (no symbol; the card label carries it). */
 function kvnc(atoms: number): string {
   return (atoms / ATOM).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
@@ -241,7 +240,7 @@ export function Dashboard() {
             <div>
               <dt className="text-[10px] tracking-wide text-subtle uppercase">Bootstrap seeds</dt>
               <dd className="mt-0.5 break-all font-mono text-xs text-fg">
-                {b.peers.length > 0 ? b.peers.join(" · ") : PRIMARY_SEED}
+                {b.peers.length > 0 ? b.peers.join(" · ") : "seed.kovanica.online:9000"}
               </dd>
             </div>
           </dl>
@@ -292,7 +291,7 @@ function MainnetPlaceholder() {
 
       <div className="rounded-xl border border-border bg-surface px-6 py-12 text-center">
         <DagMark variant="gold" className="mx-auto size-10" />
-        <p className="eyebrow mt-5">{MAINNET_ID} · KVNC</p>
+        <p className="eyebrow mt-5">{MAINNET_ID} · KUNA</p>
         <h2 className="mt-2 font-display text-3xl tracking-tight text-fg italic">
           Mainnet is launching soon.
         </h2>

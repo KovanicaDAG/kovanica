@@ -17,8 +17,8 @@
  * broker env var and this constant together.
  */
 export const PREVIEW_CLIENT_ID = "grok_preview";
-export const PREVIEW_CLIENT_SECRET: string =
-  (typeof process !== "undefined" ? process.env.GROK_PREVIEW_CLIENT_SECRET : undefined) ?? "";
+export const PREVIEW_CLIENT_SECRET =
+  process.env.GROK_PREVIEW_CLIENT_SECRET || "";
 
 /** The shared auth broker issuer (OIDC discovery lives under it). */
 export const GROK_ISSUER_DEFAULT = "https://auth.grok.me";

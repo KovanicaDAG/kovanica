@@ -1,10 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { AirdropsView } from "@/components/wallet/airdrops-view";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/wallet/airdrops")({
-  component: AirdropsRoute,
+  beforeLoad: () => {
+    throw redirect({ to: "/wallet" });
+  },
 });
-
-function AirdropsRoute() {
-  return <AirdropsView />;
-}

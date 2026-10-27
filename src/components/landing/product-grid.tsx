@@ -7,9 +7,6 @@ import { Link } from "@tanstack/react-router";
 import {
   Activity,
   Compass,
-  Eye,
-  Image,
-  Layers,
   Lock,
   Map,
   Route,
@@ -26,13 +23,10 @@ type ProductTo =
   | "/wallet"
   | "/map"
   | "/multisig"
-  | "/multi-asset"
   | "/network"
   | "/roadmap"
-  | "/stealth"
   | "/htlc"
   | "/vaults"
-  | "/nft"
   | "/faucet";
 
 type Product = {
@@ -50,7 +44,7 @@ const PRODUCTS: Product[] = [
     external: `${TESTNET}/explorer`,
     icon: Compass,
     title: "Explorer",
-    body: "GHOSTDAG graph, selected chain, live mine and pause — buttons are no longer operator-gated.",
+    body: "Mysticeti DAG rounds, committed leaders, sub-DAG batches, validator committee and live transaction stream.",
   },
   {
     to: "/wallet",
@@ -60,32 +54,11 @@ const PRODUCTS: Product[] = [
     body: "Create or import a seed, hardware wallets, accounts 0–2, QR, faucet and Ed25519 sends.",
   },
   {
-    to: "/multi-asset",
-    external: `${TESTNET}/multi-asset`,
-    icon: Layers,
-    title: "Multi-asset",
-    body: "Native multi-asset UTXOs, AssetPicker, per-asset balances and prepare — KVP-102.",
-  },
-  {
-    to: "/nft",
-    external: `${TESTNET}/nft`,
-    icon: Image,
-    title: "NFTs",
-    body: "Native NFTs (KVP-106). AssetKind::Nft, max_supply = 1, metadata URI. Design complete — ledger next.",
-  },
-  {
     to: "/multisig",
     external: `${TESTNET}/multisig`,
     icon: Users,
     title: "Multisig",
     body: "M-of-N P2SH addresses, spend proposals, partial signatures and combine — RFC-001.",
-  },
-  {
-    to: "/stealth",
-    external: `${TESTNET}/stealth`,
-    icon: Eye,
-    title: "Stealth",
-    body: "One-time ECDH addresses, view tags, scan & spend — KVP-103 / RFC-003.",
   },
   {
     to: "/htlc",
@@ -106,7 +79,7 @@ const PRODUCTS: Product[] = [
     external: `${TESTNET}/network`,
     icon: Activity,
     title: "Network",
-    body: "Live head, peers, PoW, subsidy, finality and bootstrap seeds for the selected source.",
+    body: "Live head, peers, validators, committed leaders, finality and bootstrap seeds.",
   },
   {
     to: "/roadmap",
@@ -137,7 +110,7 @@ export function ProductGrid({
       >
         Surfaces
       </h2>
-      <ul className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <ul className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {PRODUCTS.map((p) => (
           <ProductCard key={p.title} product={p} variant={variant} />
         ))}

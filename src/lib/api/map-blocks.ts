@@ -12,7 +12,7 @@ export function dagToBlocks(dag: ApiDagBlock[], order: string[]): Block[] {
     nonce: d.nonce,
     blueScore: d.blue_score,
     colour: d.colour,
-    height: heightOf.get(d.id) ?? 0,
+    height: typeof d.work === "number" ? d.work : (heightOf.get(d.id) ?? 0),
     txs: d.txs.map((t) => ({
       id: t.id,
       coinbase: t.coinbase,

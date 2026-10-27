@@ -150,7 +150,7 @@ export function HtlcView() {
                 className="rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                placeholder="Amount KVNC"
+                placeholder="Amount KUNA"
               />
               <input
                 type="number"
@@ -170,7 +170,7 @@ export function HtlcView() {
               </p>
             )}
             <p className="text-xs text-subtle">
-              POST /api/htlc/create · 1 KVNC = {ATOM.toLocaleString()} atoms
+              POST /api/htlc/create · 1 KUNA = {ATOM.toLocaleString()} atoms
             </p>
           </>
         )}

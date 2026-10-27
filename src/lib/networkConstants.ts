@@ -1,8 +1,6 @@
 // Network-specific constants and spec text generation
 // This file is imported by both network.ts and contract.ts to avoid circular dependencies
 
-import { P2P_PORT, PRIMARY_SEED, SEED_PEERS_CSV } from "./public-config";
-
 export const LIVE_EXPLORER = "https://explorer.kovanica.online";
 export const LIVE_WALLET = "https://wallet.kovanica.online";
 export const LIVE_MAP = "https://map.kovanica.online";
@@ -15,22 +13,22 @@ export const NETWORK_PROXIES: Record<PublicSource, string> = {
   testnet: LIVE_EXPLORER,
   mainnet: "",
 };
-export const TOKEN = "KVNC";
-export const ATOM = 100_000_000;
-export const DECIMALS = 8;
-export const SUBSIDY = 10 * ATOM;
+export const TOKEN = "KUNA";
+export const ATOM = 1_000_000_000;
+export const DECIMALS = 9;
+export const SUBSIDY = Math.floor(2.5 * ATOM);
 export const FOUNDER_AMOUNT = 200_000 * ATOM;
 export const FOUNDER_SEED = 1;
-export const HALVING_ERA = 2_000_000;
+export const HALVING_ERA = 8_100_000;
 export const MAX_SUPPLY = 90_200_000 * ATOM;
 // Mirrors the node: min_fee = max(subsidy / 500_000, 1) atoms.
-// RFC-006: subsidy = 10 KVNC → min_fee = max(10/500000 * 10^8, 1) = 2000 atoms.
+// RFC-006: subsidy = 10 KUNA → min_fee = max(10/500000 * 10^8, 1) = 2000 atoms.
 // Note: 500_000 here is the fee-floor divider, not HALVING_ERA (2_000_000).
 export const MIN_FEE = Math.max(Math.floor(SUBSIDY / 500_000), 1);
 export const K = 3;
 export const TREASURY = "cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc";
 
-/** Native KVNC is represented as null / omitted asset_id (RFC-002). */
+/** Native KUNA is represented as null / omitted asset_id (RFC-002). */
 export type AssetIdHex = string; // 64-char lowercase hex, or empty/null for native
 
 export type LocalSource = "local";
@@ -53,7 +51,7 @@ export function assetLabel(assetId: string | null | undefined): string {
 export type ApiOutput = {
   value: number;
   owner: string;
-  /** RFC-002: omitted or null = native KVNC */
+  /** RFC-002: omitted or null = native KUNA */
   asset_id?: string | null;
 };
 export type ApiTx = {
@@ -77,7 +75,7 @@ export type ApiUtxo = {
   tx: string;
   index: number;
   value: number;
-  /** RFC-002: omitted or null = native KVNC */
+  /** RFC-002: omitted or null = native KUNA */
   asset_id?: string | null;
   /** KVP-106: asset kind */
   kind?: "fungible" | "nft";
@@ -91,7 +89,7 @@ export type ApiHistoryTx = {
   tx: string;
   kind: "coinbase" | "in" | "out" | "faucet";
   delta: number;
-  /** RFC-002: omitted or null = native KVNC */
+  /** RFC-002: omitted or null = native KUNA */
   asset_id?: string | null;
   /** KVP-106: asset kind */
   asset_kind?: "fungible" | "nft";
@@ -184,7 +182,7 @@ export type ApiBootstrap = {
 };
 export type ApiUtxos = {
   address: string;
-  /** Native KVNC balance only (RFC-002) */
+  /** Native KUNA balance only (RFC-002) */
   balance: number;
   utxos: ApiUtxo[];
   /** Per-asset balances when node supports RFC-002 */
@@ -259,12 +257,12 @@ Engine is the Rust node; this app speaks the same HTTP contract.
 ||| Map | ${liveMap} ||
 ||| Site | ${liveSite} ||
 ||| Network | \`${networkId}\` ||
-||| Premine | ${FOUNDER_AMOUNT / ATOM} KVNC (founder / treasury) ||
-||| Subsidy cap | ${SUBSIDY / ATOM} KVNC / block, halves every ${HALVING_ERA.toLocaleString()} blocks ||
-||| Hard cap | ${MAX_SUPPLY / Number(ATOM.toLocaleString().replace(/,/g, ''))} KVNC (90.2M) ||
-||| Min fee | ${MIN_FEE} atoms (${MIN_FEE / ATOM} KVNC) — burned ||
+||| Premine | ${FOUNDER_AMOUNT / ATOM} KUNA (founder / treasury) ||
+||| Subsidy cap | ${SUBSIDY / ATOM} KUNA / block, halves every ${HALVING_ERA.toLocaleString()} blocks ||
+||| Hard cap | ${MAX_SUPPLY / Number(ATOM.toLocaleString().replace(/,/g, ''))} KUNA (90.2M) ||
+||| Min fee | ${MIN_FEE} atoms (${MIN_FEE / ATOM} KUNA) — burned ||
 ||| k | ${K} (GHOSTDAG) ||
-||| Atom | 1 KVNC = 10^8 atoms ||
+||| Atom | 1 KUNA = 10^9 atoms ||
 ||| Finality depth | 100 blue score ||
 ||| Payload pruning | 1000 blue score ||
 
@@ -303,7 +301,7 @@ GET /api/p2p
   { path: "tcp", listen, peers, bootstrap } — Rust node only
 
 GET /api/blocks
-  octet-stream dump of every block (same bytes a clone pulls on :${P2P_PORT})
+  octet-stream dump of every block (same bytes a clone pulls on :9000)
 
 GET /api/download/install.sh
   node installer script (Linux x64/arm64)
@@ -328,7 +326,7 @@ POST /api/produce
 
 POST /api/fee_estimate?amount=
   mempool fee estimate in atoms: p90 of pending fees, min-fee when empty;
-  amounts over 1 KVNC scale by 1.2
+  amounts over 1 KUNA scale by 1.2
 
 POST /api/mine
   operator: append one block (pack mempool, else empty coinbase)
@@ -340,7 +338,7 @@ POST /api/miner?addr=
   operator: set coinbase payee
 
 POST /api/faucet?to=&amount=
-  ${network === "testnet" ? "testnet open faucet. kind=faucet (default). Per-address lifetime cap: 5 KVNC." : "mainnet faucet (closed)"}
+  ${network === "testnet" ? "testnet open faucet. kind=faucet (default). Per-address lifetime cap: 10 KUNA." : "mainnet faucet (closed)"}
 
 POST /api/reset
   local only (chain wipe is locked on the public testnet)
@@ -377,13 +375,13 @@ Live CORS is closed — this app proxies it server-side.
   cargo build --release -p kovanica-node
   KOVANICA_MINE=0 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 \\\\
   KOVANICA_OPERATOR=0 KOVANICA_POW=1 \\\\
-  KOVANICA_LISTEN=0.0.0.0:${P2P_PORT} \\\\
-  KOVANICA_PEERS=${SEED_PEERS_CSV} \\\\
+  KOVANICA_LISTEN=0.0.0.0:9000 \\\\
+  KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 \\\\
   ./target/release/kovanica-node explorer 127.0.0.1:8080
 
-TCP :${P2P_PORT} is the only P2P path. Do not set peers to explorer.kovanica.online:${P2P_PORT}
+TCP :9000 is the only P2P path. Do not set peers to explorer.kovanica.online:9000
 — that name is Cloudflare-proxied and never reaches the seed. Use a DNS-only
-A record (${PRIMARY_SEED.split(":")[0]}) or the origin IP.
+A record (seed.kovanica.online) or the origin IP.
 After sync, GET /api/head on the clone matches the public genesis (and tip, once
 the seed has served its blocks).
 

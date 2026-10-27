@@ -1,119 +1,219 @@
-import { Download, Smartphone } from "lucide-react";
+import { Download, Smartphone, Cpu, MessageSquare, Shield, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-/** CI artifacts from `.github/workflows/wallet.yml` (Actions → latest green run). */
-export const WALLET_DOWNLOADS = {
-  /** Android debug APK, served publicly by the web host (explorer.kovanica.online/download/). */
-  androidApk: "https://explorer.kovanica.online/download/kovanica-wallet-debug.apk",
-  /** iOS unsigned IPA (sideload), served publicly by the web host. */
-  iosIpa: "https://explorer.kovanica.online/download/kovanica-wallet-ios-unsigned.ipa",
-  /** Latest build run (requires GitHub access to the private repo). */
-  workflow: "https://github.com/KovanicaDAG/kovanica-protocol/actions/workflows/wallet.yml",
-  iosGuide:
-    "https://github.com/KovanicaDAG/kovanica-protocol/blob/main/kovanica-wallet/ios/README.md#install-on-a-real-iphone--no-mac-needed",
-  androidGuide:
-    "https://github.com/KovanicaDAG/kovanica-protocol/blob/main/kovanica-wallet/README.md",
+export const APP_DOWNLOADS = {
+  wallet: {
+    name: "Kovanica Wallet",
+    description: "Non-custodial mobile wallet with PRO-21 addresses, deterministic key derivation, and instant KUNA transfers.",
+    androidApk: "/download/kovanica-wallet-latest.apk",
+    iosIpa: "/download/kovanica-wallet-ios-unsigned.ipa",
+    repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-wallet",
+    tag: "v0.3.2 · arm64 / iOS",
+  },
+  lightnode: {
+    name: "Kovanica Lightnode",
+    description: "Embedded DAG light client. Verifies Mysticeti DAG consensus headers, tracks account balances locally, and syncs trustlessly.",
+    androidApk: "/download/kovanica-lightnode-latest.apk",
+    linuxBin: "/download/kovanica-node-linux-x64",
+    repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-chain",
+    tag: "v0.8.3 · 4s DAG sync",
+  },
+  comms: {
+    name: "Kovanica Comms",
+    description: "Decentralized P2P messaging and encrypted peer communication powered by Kovanica DAG transport and cryptographic identity.",
+    androidApk: "/download/kovanica-comms-latest.apk",
+    repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-comms",
+    tag: "v0.1.0 · E2E encrypted",
+  },
 } as const;
 
 type Props = {
   className?: string;
-  /** Compact strip (wallet page) vs card (landing). */
   variant?: "card" | "strip";
 };
 
-/**
- * Native wallet downloads — APK + unsigned IPA from the `kovanica wallet` workflow.
- * Artifacts require GitHub access to the private repo; links land on the Actions run list.
- */
 export function WalletDownloads({ className, variant = "card" }: Props) {
   const isCard = variant === "card";
 
-  return (
-    <section
-      className={cn(
-        isCard
-          ? "rounded-xl border border-border bg-surface p-4 md:p-5"
-          : "rounded-lg border border-border/80 bg-surface/80 p-3",
-        className,
-      )}
-      aria-label="Download native wallet"
-    >
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md bg-surface-2 text-gold">
-          <Smartphone className="size-4" aria-hidden />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className={cn("font-medium text-fg", isCard ? "text-base" : "text-sm")}>
-            Native wallet
-          </h2>
-          <p className={cn("mt-1 text-muted", isCard ? "text-sm leading-relaxed" : "text-xs leading-relaxed")}>
-            Android APK and iOS IPA (sideload) build on every relevant push via GitHub Actions —
-            copies are hosted here for direct download.
-          </p>
-
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-            <Button asChild variant="outline" className="h-11 justify-start sm:min-w-[11rem]">
-              <a
-                href={WALLET_DOWNLOADS.androidApk}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <Download className="size-4 text-teal" aria-hidden />
-                Android APK
+  if (!isCard) {
+    return (
+      <section
+        className={cn(
+          "rounded-lg border border-border/80 bg-surface/80 p-3",
+          className,
+        )}
+        aria-label="Download native applications"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Smartphone className="size-4 text-gold" aria-hidden />
+            <span className="text-xs font-medium text-fg">Native Apps (APK):</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild size="sm" variant="outline" className="h-7 text-xs">
+              <a href={APP_DOWNLOADS.wallet.androidApk} download>
+                <Download className="mr-1.5 size-3.5 text-gold" />
+                Wallet APK
               </a>
             </Button>
-            <Button asChild variant="outline" className="h-11 justify-start sm:min-w-[11rem]">
-              <a href={WALLET_DOWNLOADS.iosIpa} target="_blank" rel="noopener noreferrer">
-                <Download className="size-4 text-gold" aria-hidden />
-                iOS IPA
+            <Button asChild size="sm" variant="outline" className="h-7 text-xs">
+              <a href={APP_DOWNLOADS.lightnode.androidApk} download>
+                <Download className="mr-1.5 size-3.5 text-teal" />
+                Lightnode APK
+              </a>
+            </Button>
+            <Button asChild size="sm" variant="outline" className="h-7 text-xs">
+              <a href={APP_DOWNLOADS.comms.androidApk} download>
+                <Download className="mr-1.5 size-3.5 text-blue" />
+                Comms APK
               </a>
             </Button>
           </div>
+        </div>
+      </section>
+    );
+  }
 
-          <ul className={cn("mt-3 space-y-1 text-subtle", isCard ? "text-xs" : "text-[11px]")}>
-            <li>
-              <strong className="font-medium text-muted">Android:</strong> artifact{" "}
-              <code className="rounded bg-bg px-1 font-mono text-[10px] text-fg/80">kovanica-wallet-apk</code>
-              {" "}· debug build, sideload OK
-            </li>
-            <li>
-              <strong className="font-medium text-muted">iOS:</strong> artifact{" "}
-              <code className="rounded bg-bg px-1 font-mono text-[10px] text-fg/80">kovanica-wallet-ios-ipa</code>
-              {" "}· unsigned; re-sign with AltStore / Sideloadly + free Apple ID (7-day trust)
-            </li>
-            <li>
-              <a
-                href={WALLET_DOWNLOADS.iosGuide}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue underline-offset-2 hover:underline"
-              >
-                iOS install guide (no Mac)
-              </a>
-              {" · "}
-              <a
-                href={WALLET_DOWNLOADS.androidGuide}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue underline-offset-2 hover:underline"
-              >
-                wallet README
-              </a>
-            </li>
-            <li>
-              Built by the{" "}
-              <a
-                href={WALLET_DOWNLOADS.workflow}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue underline-offset-2 hover:underline"
-              >
-                kovanica wallet
-              </a>{" "}
-              GitHub Actions workflow (copy hosted on the explorer; latest green run lives in the GitHub repo).
-            </li>
-          </ul>
+  return (
+    <section
+      className={cn("mt-8 space-y-4", className)}
+      aria-label="Kovanica native ecosystem applications"
+    >
+      <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight text-fg">
+            Native Client Suite
+          </h2>
+          <p className="text-xs text-muted">
+            Direct sideload builds for Android & iOS — connected to Chain 4 Testnet.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Wallet */}
+        <div className="flex flex-col justify-between rounded-xl border border-border/80 bg-surface/90 p-4 transition-colors hover:border-gold/40">
+          <div>
+            <div className="flex items-center justify-between">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-gold/10 text-gold">
+                <Smartphone className="size-4" aria-hidden />
+              </div>
+              <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                {APP_DOWNLOADS.wallet.tag}
+              </span>
+            </div>
+            <h3 className="mt-3 font-medium text-fg text-sm">
+              {APP_DOWNLOADS.wallet.name}
+            </h3>
+            <p className="mt-1 text-xs text-muted leading-relaxed">
+              {APP_DOWNLOADS.wallet.description}
+            </p>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-border/50 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
+                <a href={APP_DOWNLOADS.wallet.androidApk} download>
+                  <Download className="mr-1 size-3 text-gold" />
+                  Android APK
+                </a>
+              </Button>
+              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
+                <a href={APP_DOWNLOADS.wallet.iosIpa} download>
+                  <Download className="mr-1 size-3 text-gold/80" />
+                  iOS IPA
+                </a>
+              </Button>
+            </div>
+            <p className="text-[10px] text-subtle text-center">
+              Re-sign IPA with AltStore / Sideloadly
+            </p>
+          </div>
+        </div>
+
+        {/* Lightnode */}
+        <div className="flex flex-col justify-between rounded-xl border border-border/80 bg-surface/90 p-4 transition-colors hover:border-teal/40">
+          <div>
+            <div className="flex items-center justify-between">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-teal/10 text-teal">
+                <Cpu className="size-4" aria-hidden />
+              </div>
+              <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                {APP_DOWNLOADS.lightnode.tag}
+              </span>
+            </div>
+            <h3 className="mt-3 font-medium text-fg text-sm">
+              {APP_DOWNLOADS.lightnode.name}
+            </h3>
+            <p className="mt-1 text-xs text-muted leading-relaxed">
+              {APP_DOWNLOADS.lightnode.description}
+            </p>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-border/50 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
+                <a href={APP_DOWNLOADS.lightnode.androidApk} download>
+                  <Download className="mr-1 size-3 text-teal" />
+                  Android APK
+                </a>
+              </Button>
+              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
+                <a href={APP_DOWNLOADS.lightnode.linuxBin} download>
+                  <Terminal className="mr-1 size-3 text-teal" />
+                  Linux x64
+                </a>
+              </Button>
+            </div>
+            <p className="text-[10px] text-subtle text-center">
+              Embedded P2P light client for mobile & desktop
+            </p>
+          </div>
+        </div>
+
+        {/* Comms */}
+        <div className="flex flex-col justify-between rounded-xl border border-border/80 bg-surface/90 p-4 transition-colors hover:border-blue/40">
+          <div>
+            <div className="flex items-center justify-between">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-blue/10 text-blue">
+                <MessageSquare className="size-4" aria-hidden />
+              </div>
+              <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                {APP_DOWNLOADS.comms.tag}
+              </span>
+            </div>
+            <h3 className="mt-3 font-medium text-fg text-sm">
+              {APP_DOWNLOADS.comms.name}
+            </h3>
+            <p className="mt-1 text-xs text-muted leading-relaxed">
+              {APP_DOWNLOADS.comms.description}
+            </p>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-border/50 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
+                <a href={APP_DOWNLOADS.comms.androidApk} download>
+                  <Download className="mr-1 size-3 text-blue" />
+                  Android APK
+                </a>
+              </Button>
+              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
+                <a
+                  href={APP_DOWNLOADS.comms.repo}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Shield className="mr-1 size-3 text-blue" />
+                  Source
+                </a>
+              </Button>
+            </div>
+            <p className="text-[10px] text-subtle text-center">
+              P2P encrypted messaging over DAG transport
+            </p>
+          </div>
         </div>
       </div>
     </section>

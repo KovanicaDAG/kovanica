@@ -5,7 +5,7 @@
  * the "selected parent" path (the GHOSTDAG anchor). Reads clearly at 16px.
  *
  * Two marks, two meanings: this DAG glyph is the PROTOCOL mark; the gold coin
- * (coin.webp) remains the KVNC token mark.
+ * (coin.webp) remains the KUNA token mark.
  */
 type DagMarkProps = {
   variant?: "gold" | "ivory";

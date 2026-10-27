@@ -64,7 +64,7 @@ export function TokenListingsView() {
 
     setBusy(true);
     try {
-      const amountAtoms = Math.round(parseFloat(tradeAmount) * 100_000_000);
+      const amountAtoms = Math.round(parseFloat(tradeAmount) * 1_000_000_000);
       const prepared = await apiPostJson<{ tx_hex: string; sighash: string }>(
         "/api/dex/trade",
         {
@@ -234,7 +234,7 @@ export function TokenListingsView() {
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-xs text-muted">Amount (KVNC)</label>
+                <label className="mb-1 block text-xs text-muted">Amount (KUNA)</label>
                 <input
                   value={tradeAmount}
                   onChange={(e) => setTradeAmount(e.target.value)}

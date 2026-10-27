@@ -123,7 +123,7 @@ export function MultiAssetView() {
       <p className="mt-2 max-w-lg text-sm leading-relaxed text-muted">
         Native multi-asset UTXOs with per-asset conservation. Balances are maps keyed by{" "}
         <code className="text-fg">asset_id</code> (native is{" "}
-        <span className="font-mono text-fg">KVNC</span>). Fees are always paid in KVNC. Coin
+        <span className="font-mono text-fg">KUNA</span>). Fees are always paid in KUNA. Coin
         selection never mixes assets.
       </p>
 
@@ -204,7 +204,7 @@ export function MultiAssetView() {
           <div className="space-y-4">
             <p className="text-sm text-muted">
               Prefer the <code className="text-fg">balances</code> map. Scalar{" "}
-              <code className="text-fg">balance</code> remains the KVNC alias.
+              <code className="text-fg">balance</code> remains the KUNA alias.
             </p>
             {balances && (
               <>
@@ -263,7 +263,7 @@ export function MultiAssetView() {
         {tab === "transfer" && (
           <div className="space-y-4">
             <p className="text-sm text-muted">
-              Prepare is asset-scoped. Fees always in KVNC. Omitted{" "}
+              Prepare is asset-scoped. Fees always in KUNA. Omitted{" "}
               <code className="text-fg">asset_id</code> defaults to native on the node; we always
               send it explicitly.
             </p>

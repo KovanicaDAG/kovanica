@@ -1,10 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { DexView } from "@/components/wallet/dex-view";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/wallet/dex")({
-  component: DexRoute,
+  beforeLoad: () => {
+    throw redirect({ to: "/wallet" });
+  },
 });
-
-function DexRoute() {
-  return <DexView />;
-}

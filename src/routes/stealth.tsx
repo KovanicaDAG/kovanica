@@ -1,13 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { Shell } from "@/components/layout/shell";
-import { StealthView } from "@/components/protocol/stealth-view";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-function StealthPage() {
-  return (
-    <Shell>
-      <StealthView />
-    </Shell>
-  );
-}
-
-export const Route = createFileRoute("/stealth")({ component: StealthPage });
+export const Route = createFileRoute("/stealth")({
+  beforeLoad: () => {
+    throw redirect({ to: "/wallet" });
+  },
+});
