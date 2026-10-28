@@ -789,15 +789,31 @@ where
             let Some(block) = self.dag_store.get_block_by_author_round(author, slot)? else {
                 continue;
             };
+            let digest = block.digest;
             self.committer.update_leader(LeaderInfo {
                 round: slot,
                 author,
-                block_hash: Some(block.digest),
+                block_hash: Some(digest),
                 status: LeaderStatus::Undecided,
                 votes: HashMap::new(),
             });
+            // The vote-xor-timeout lock is restored before this loop, so
+            // `process_vote` below refuses this node's own persisted vote as a
+            // duplicate and it would never enter the tally. A restarted
+            // validator would then miss its own stake on every leader it had
+            // already voted for and stop reaching quorum (chain 4: round 51474
+            // stayed at 3 of the 4 votes it needed). Count it here instead: the
+            // vote is this node's own signature and was persisted only after it
+            // verified.
+            let stored_votes = self.dag_store.get_votes_for_round(slot)?;
+            let our = self.state.read().our_authority;
+            for vote in &stored_votes {
+                if vote.voter == our && vote.leader_hash == digest {
+                    let _ = self.committer.add_verified_vote(slot, our, digest);
+                }
+            }
             restored += 1;
-            for vote in self.dag_store.get_votes_for_round(slot)? {
+            for vote in stored_votes {
                 if let Err(e) = self.process_vote(&vote) {
                     debug!(round = slot, error = %e, "persisted vote not re-applied");
                 }
@@ -1136,6 +1152,15 @@ where
     /// If the leader block is not known yet nothing is recorded, so a later
     /// call can still vote.
     fn vote_for_leader(&self, leader_round: Round) -> Result<bool, ConsensusError> {
+        // Only a staked authority may vote. A follow-mode node has no
+        // committee entry: `our_authority` is the `u16::MAX` sentinel and
+        // `our_stake` is 0. Signing with that index produced votes the
+        // validators rejected as "unknown authority 65535" and banned the
+        // sender for, so a public node poisoned its own peering by simply
+        // running. Such a node still ingests, executes and serves RPC.
+        if self.state.read().our_stake == 0 {
+            return Ok(false);
+        }
         // A round is *final* once the commit cursor has moved past it: the
         // decision walk starts above `last_decided_round` and will never
         // revisit it, so a late vote could only let a lagging peer commit a

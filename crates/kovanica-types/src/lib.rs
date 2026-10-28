@@ -63,6 +63,15 @@ pub type AuthorityIndex = u16;
 /// Wave length used by the consensus (Mysticeti-style = 3).
 pub const WAVE_LENGTH: u64 = 3;
 
+/// The first leader slot strictly above `round`.
+///
+/// Leader slots are the rounds at offset 0 of a wave (`round % WAVE_LENGTH ==
+/// 0`), and round 0 is genesis, so the first slot above round 0 is
+/// [`WAVE_LENGTH`].
+pub const fn next_leader_slot(round: Round) -> Round {
+    (round / WAVE_LENGTH + 1).saturating_mul(WAVE_LENGTH)
+}
+
 /// Epoch length in **DAG rounds**: 7 200 rounds × 4 s ≈ **8 h**.
 ///
 /// Toni's decision of 2026-10-23 (option a): an epoch is 7 200 DAG rounds,

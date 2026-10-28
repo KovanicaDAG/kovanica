@@ -139,7 +139,7 @@ impl BaseCommitter {
 /// Leader slots are the rounds at offset 0 of a wave (`round % WAVE_LENGTH ==
 /// 0`), and round 0 is genesis, so the first slot is `WAVE_LENGTH`.
 pub(crate) fn next_leader_slot(round: Round) -> Round {
-    (round / WAVE_LENGTH + 1).saturating_mul(WAVE_LENGTH)
+    kovanica_types::next_leader_slot(round)
 }
 
 /// Helper: registered leaders strictly after `round`, in round order.
