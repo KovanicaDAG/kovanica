@@ -38,6 +38,37 @@ the network tag (`<chain_id>-<16 hex of the genesis config digest>`) is mixed
 into all libp2p protocol ids and gossip topics. A node with a different tag
 silently has no peers. See `docs/TESTNET-RESET.md`.
 
+## Known limitation on chain 4: a fresh node cannot import state yet
+
+A node installed by this script starts at height 0 with the chain-4 genesis
+file set. It peers correctly (correct tag, seed nodes reachable) but it cannot
+advance, because the only bootstrap path for a pruned chain is the chunked
+state snapshot, and every snapshot is refused with:
+
+```
+rejected state snapshot ... sealed header state_root ... != full-state
+commitment ... recomputed from the snapshot accounts, contracts and staking
+```
+
+The cause is not the download or the bundle. Sealed header roots on chain 4 are
+account-only because `STATE_COMMITMENT_ACTIVE_FROM_ROUND` is still `u64::MAX`
+(`crates/kovanica-types/src/lib.rs`), while `snapshot_committed_root()` always
+recomputes the full-state root that includes the reserved
+`AUX_STATE_LEAF_ADDRESS` leaf. The two can never be equal, so
+`import_verified_snapshot()` fails closed for every peer — by design, until the
+sealed root covers the full state. Weakening that check would let a peer forge
+staking and contract rows.
+
+The fix is the documented one: activate full-state commitment at the next
+genesis / testnet reset (`STATE_COMMITMENT_ACTIVE_FROM_ROUND = 0`) with every
+validator on a build that contains it. That is a consensus change and a new
+network tag, so it needs the owner's approval and the full reset procedure in
+`docs/TESTNET-RESET.md`. Until then, a chain-4 node can peer, serve the API and
+hold the genesis file set, but cannot sync balances or produce blocks.
+
+Validators that already hold the state are unaffected; this only blocks *new*
+nodes joining the mesh.
+
 ## Validators
 
 The installer never generates or handles validator keys — it produces a

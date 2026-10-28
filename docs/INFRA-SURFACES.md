@@ -44,6 +44,7 @@ Notes:
 | `monitor.kovanica.online` | **nothing** — no enabled vhost ⚠️ see §5.1 |
 | `console.kovanica.online` | Cloudflare Pages (not on these hosts) |
 | `status.kovanica.online` | Cloudflare Pages (not on these hosts) |
+| `faucet-testnet.kovanica.online` | nginx → `127.0.0.1:3010` (same web app as `kovanica.online`; usable while `faucet.kovanica.online` is being retired) |
 
 ### Present — DNS-only (grey cloud, → `seed1.kovanica.online`)
 
@@ -56,17 +57,17 @@ Notes:
 ### Absent (no DNS record — do not re-add without a reason)
 
 `api.kovanica.online`, `opencode.kovanica.online`, `kovanica.kovanica.online`,
-`nft.kovanica.online`, `pool.kovanica.online`, `faucet-testnet.kovanica.online`,
-`rpc.kovanica.online`.
+`nft.kovanica.online`, `pool.kovanica.online`, `rpc.kovanica.online`.
 
-There is no Cloudflare API token on any of these hosts, so record changes must be
-made in the Cloudflare dashboard by hand.
+The only Cloudflare API token lives in the workspace `.env` (line 11); it is
+**IP-restricted to VPS#1 over IPv4**, so record changes work from there with
+`curl -4` and fail with 401 everywhere else.
 
 ---
 
 ## 3. nginx vhosts (VPS#1) — current state
 
-Nine enabled vhosts. `sites-available` contains exactly these nine plus the stock
+Ten enabled vhosts. `sites-available` contains exactly these ten plus the stock
 `default`.
 
 | vhost | Behaviour |
@@ -80,6 +81,7 @@ Nine enabled vhosts. `sites-available` contains exactly these nine plus the stoc
 | `mainnet.kovanica.online` | proxy → `127.0.0.1:3010` |
 | `testnet.kovanica.online` | proxy → `127.0.0.1:3010` |
 | `rpc-testnet.kovanica.online` | proxy → `http://127.0.0.1:8545/rpc` |
+| `faucet-testnet.kovanica.online` | proxy → `127.0.0.1:3010` (web app; added 2026-10-28 for `/faucet` and `/download/*`) |
 
 The `/api/ { return 404; }` rule on the explorer vhost is **deliberate**: the old
 public API service (port 3001) was retired, and the node now exposes JSON-RPC on
