@@ -2861,6 +2861,13 @@ struct VoteSync {
     /// Last undecided leader round the periodic re-arm covered, and when it
     /// ran.
     rearm: Option<(Round, Instant)>,
+    /// The awaited leader slot whose block this node has not ingested, with its
+    /// expected author, so the block itself can be fetched.
+    leader_block: Option<(Round, AuthorityIndex)>,
+    /// The in-flight request for that leader block.
+    leader_request: Option<VoteRequest>,
+    /// When the last request cycle for the leader block was given up on.
+    leader_cooldown: Option<Instant>,
 }
 
 impl VoteSync {
@@ -2872,6 +2879,9 @@ impl VoteSync {
             peers: Vec::new(),
             peer_cursor: 0,
             rearm: None,
+            leader_block: None,
+            leader_request: None,
+            leader_cooldown: None,
         }
     }
 
@@ -2889,6 +2899,13 @@ impl VoteSync {
     fn peer_disconnected(&mut self, peer: PeerId) {
         self.peers.retain(|p| *p != peer);
         self.outstanding.retain(|_, request| request.peer != peer);
+        if self
+            .leader_request
+            .as_ref()
+            .is_some_and(|request| request.peer == peer)
+        {
+            self.leader_request = None;
+        }
     }
 
     /// Record that the node ingested the leader block of `round`.
@@ -2930,6 +2947,30 @@ impl VoteSync {
         }
         self.rearm = Some((round, now));
         self.want_votes(round);
+    }
+
+    /// Ask for the leader block of `round`, which this node has not ingested.
+    ///
+    /// A node that missed the block of an awaited slot can never vote for that
+    /// slot (`vote_if_late` needs the leader block), so the slot cannot reach
+    /// quorum from this node's side and the commit walk stops — even while the
+    /// rest of the network is healthy. Votes cannot help without the block, so
+    /// the block itself is requested by author and round; ingesting it casts
+    /// the late vote through the normal path.
+    fn want_leader_block(&mut self, round: Round, author: AuthorityIndex) {
+        if self.leader_block != Some((round, author)) {
+            self.leader_block = Some((round, author));
+            self.leader_request = None;
+            self.leader_cooldown = None;
+        }
+    }
+
+    /// The awaited leader block is no longer missing.
+    fn leader_block_ingested(&mut self) {
+        if self.leader_block.take().is_some() {
+            self.leader_request = None;
+            self.leader_cooldown = None;
+        }
     }
 
     /// The peer to ask next, rotating through the connected peers.
@@ -3017,6 +3058,7 @@ impl VoteSync {
         if self.peers.is_empty() {
             return;
         }
+        self.pump_leader_block(now, network_cmd_tx);
         // Retry the requests that got no answer.
         let due: Vec<Round> = self
             .outstanding
@@ -3074,6 +3116,67 @@ impl VoteSync {
             );
             self.send_vote_request(peer, round, network_cmd_tx);
         }
+    }
+
+    /// Issue the outstanding leader-block request.
+    ///
+    /// Same bounds as the vote requests: at most [`VOTE_SYNC_MAX_ATTEMPTS`]
+    /// asks per missing block, one ask per [`VOTE_SYNC_RETRY_INTERVAL`], and a
+    /// different peer each time. A block no peer serves (it may have been
+    /// pruned everywhere) waits [`VOTE_SYNC_REARM_INTERVAL`] before a fresh
+    /// cycle, so a missing block cannot turn into a request loop.
+    fn pump_leader_block(
+        &mut self,
+        now: Instant,
+        network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>,
+    ) {
+        let Some((round, author)) = self.leader_block else {
+            return;
+        };
+        if let Some(until) = self.leader_cooldown {
+            if now < until {
+                return;
+            }
+            self.leader_cooldown = None;
+        }
+        let due = match self.leader_request {
+            None => true,
+            Some(ref request) => {
+                now.saturating_duration_since(request.issued_at) >= VOTE_SYNC_RETRY_INTERVAL
+            }
+        };
+        if !due {
+            return;
+        }
+        let attempts = self
+            .leader_request
+            .as_ref()
+            .map(|request| request.attempts)
+            .unwrap_or(0);
+        if attempts >= VOTE_SYNC_MAX_ATTEMPTS {
+            self.leader_request = None;
+            self.leader_cooldown = Some(now + VOTE_SYNC_REARM_INTERVAL);
+            warn!(round, author, "giving up on the leader block for this round");
+            return;
+        }
+        let Some(peer) = self.next_peer() else {
+            return;
+        };
+        if network_cmd_tx
+            .send(NetworkCommand::RequestSync(
+                peer,
+                BlockSyncRequest::ByAuthorRound { author, round },
+            ))
+            .is_err()
+        {
+            warn!(%peer, round, "failed to queue leader block request");
+            return;
+        }
+        self.leader_request = Some(VoteRequest {
+            peer,
+            issued_at: now,
+            attempts: attempts + 1,
+        });
     }
 
     /// Send one vote request.
@@ -3595,6 +3698,32 @@ fn undecided_vote_round(
     Some(round)
 }
 
+/// The awaited leader slot whose block this node has not ingested yet, with its
+/// expected author.
+///
+/// The commit walk cannot move past a leader whose block is missing, and a node
+/// without the block cannot vote for the slot either (the late vote needs the
+/// leader block), so only fetching the block itself can restore quorum. Nodes
+/// that have committed nothing yet are excluded: they bootstrap through block
+/// or state sync, not by pulling single ancient rounds.
+fn missing_leader_block(
+    engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>,
+) -> Option<(Round, AuthorityIndex)> {
+    let cursor = engine.last_decided_round();
+    if cursor == 0 {
+        return None;
+    }
+    let round = next_leader_slot(cursor);
+    if engine.current_round() < round.saturating_add(kovanica_types::WAVE_LENGTH) {
+        return None;
+    }
+    if engine.registered_leader(round).is_some() {
+        return None;
+    }
+    let author = engine.scheduled_leader_for_round(round)?;
+    Some((round, author))
+}
+
 /// Handle a single [`NetworkEvent`].
 // 8 args: the state-sync session registry is a distinct concern from the
 // catch-up tracker; grouping them into a struct would obscure call sites.
@@ -3625,6 +3754,11 @@ fn handle_network_event(
     // commit walk.
     if let Some(round) = undecided_vote_round(engine) {
         vote_sync.want_undecided(round, now);
+    }
+    if let Some((round, author)) = missing_leader_block(engine) {
+        vote_sync.want_leader_block(round, author);
+    } else {
+        vote_sync.leader_block_ingested();
     }
     vote_sync.pump(now, network_cmd_tx);
     orphans.expire(now);
@@ -8800,10 +8934,58 @@ mod tests {
         );
     }
 
+    /// A missing leader block for the awaited slot is fetched by author and
+    /// round, one peer at a time, and requested no more once it is ingested.
+    #[tokio::test]
+    async fn vote_sync_fetches_a_missing_leader_block() {
+        let mut tracker = VoteSync::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let first = PeerId::random();
+        let second = PeerId::random();
+        tracker.peer_connected(first);
+        tracker.peer_connected(second);
+
+        let t0 = Instant::now();
+        tracker.want_leader_block(51474, 3);
+        tracker.pump(t0, &tx);
+        match rx.try_recv() {
+            Ok(NetworkCommand::RequestSync(
+                peer,
+                BlockSyncRequest::ByAuthorRound { author, round },
+            )) => {
+                assert_eq!((author, round), (3, 51474));
+                assert_eq!(peer, first);
+            }
+            _ => panic!("expected a leader block request"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "a block is asked for once per retry interval"
+        );
+
+        tracker.pump(t0 + VOTE_SYNC_RETRY_INTERVAL, &tx);
+        match rx.try_recv() {
+            Ok(NetworkCommand::RequestSync(
+                peer,
+                BlockSyncRequest::ByAuthorRound { author, round },
+            )) => {
+                assert_eq!((author, round), (3, 51474));
+                assert_ne!(peer, first, "the retry rotates to the next peer");
+            }
+            _ => panic!("expected a retried leader block request"),
+        }
+
+        tracker.leader_block_ingested();
+        tracker.pump(t0 + 2 * VOTE_SYNC_RETRY_INTERVAL, &tx);
+        assert!(
+            rx.try_recv().is_err(),
+            "an ingested leader block is not fetched again"
+        );
+    }
+
     /// Without a connected peer nothing is requested.
     #[tokio::test]
-    async fn vote_sync_requests_nothing_without_a_peer() {
-        let dir = tempfile::tempdir().unwrap();
+    async fn vote_sync_requests_nothing_without_a_peer() {        let dir = tempfile::tempdir().unwrap();
         let (engine, _dag, _key) = vote_sync_test_engine(&dir);
         let mut tracker = VoteSync::new();
         let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
