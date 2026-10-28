@@ -132,7 +132,9 @@ jobs:
         run: |
           set -eu
           cd dist
-          sha256sum ./*.tar.gz >SHA256SUMS
+          # Strip the `./` that `sha256sum ./*` puts in front of each name so
+          # install.sh can match on the bare asset name.
+          sha256sum ./*.tar.gz | sed 's| \./| |' >SHA256SUMS
           cat SHA256SUMS
 
       - name: Create the GitHub release

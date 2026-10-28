@@ -174,7 +174,14 @@ fetch "${RELEASE_BASE}/SHA256SUMS" "${TMPDIR_INSTALL}/SHA256SUMS" \
     || die "cannot download SHA256SUMS for v${VERSION}-node (is that release published?)"
 
 expected_sum() {
-    awk -v want="$1" '$2 == want || $2 == "*" want { print $1; exit }' "${TMPDIR_INSTALL}/SHA256SUMS"
+    # Accept both `name` and the `./name` form that `sha256sum ./*` emits, and
+    # the `*name` binary marker some tools use.
+    awk -v want="$1" '{
+        n = $2
+        sub(/^\*/, "", n)
+        sub(/^\.\//, "", n)
+        if (n == want) { print $1; exit }
+    }' "${TMPDIR_INSTALL}/SHA256SUMS"
 }
 
 verify() {
