@@ -193,3 +193,32 @@ input[type="password"],
   border-color: transparent;
   font-weight: 650;
 }
+
+.network-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.network-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.network-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.network-btn:hover {
+  background: rgba(245, 166, 35, 0.08);
+}
+
+#custom-rpc-row {
+  margin-top: 8px;
+}

@@ -116,3 +116,28 @@ button:disabled {
   font-size: 0.85rem;
   margin: 0;
 }
+
+.network-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.network-switch .network-btn {
+  align-self: auto;
+  padding: 0.35rem 0.7rem;
+  border-color: var(--border);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.network-switch .network-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.network-switch .muted {
+  margin: 0;
+  font-size: 0.8rem;
+}

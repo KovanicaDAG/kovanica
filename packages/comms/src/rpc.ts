@@ -32,6 +32,23 @@ export type { BlockResponse, HealthStatus } from "@kovanica/api-client";
 /** Loopback node default. The URL must include `/rpc`. */
 export const LOCAL_RPC_URL = "http://127.0.0.1:8545/rpc";
 
+/** Live public testnet (chain 4). The URL must include `/rpc`. */
+export const TESTNET_RPC_URL = "https://rpc-testnet.kovanica.online/rpc";
+
+/** One selectable endpoint. `chainId` is what the network signs with. */
+export interface NetworkPreset {
+  id: "testnet" | "local";
+  label: string;
+  chainId: number;
+  rpcUrl: string;
+}
+
+/** Built-in endpoints, live testnet first (mirrors `packages/console/src/network.ts`). */
+export const NETWORK_PRESETS: readonly NetworkPreset[] = [
+  { id: "testnet", label: "Testnet (chain 4)", chainId: 4, rpcUrl: TESTNET_RPC_URL },
+  { id: "local", label: "Local", chainId: 1337, rpcUrl: LOCAL_RPC_URL },
+];
+
 /** Subscription names accepted by the node (see `subscriptions.rs`). */
 export const SUBSCRIPTION_METHODS = [
   "newHeads",

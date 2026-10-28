@@ -17,6 +17,12 @@ apps/console-desktop/
 The endpoint comes from a setting saved in the app data directory, then from
 `KOVANICA_RPC_URL`, then from `https://rpc-testnet.kovanica.online/rpc`.
 
+Above the endpoint field the screen offers the built-in networks:
+**Testnet (chain 4)** — the live public testnet, **Mainnet (chain 1)** —
+listed and not open yet, **Local (1337)** — a node on this machine, and
+**Custom**, which keeps the field editable. Picking one saves that endpoint and
+reads the node again.
+
 The screen shows chain id, committed height, leader round, epoch, and peers.
 Chain id is proven only when commit seals verify through `kovanica-light-ffi`
 for one registered id and the committee matches a pinned genesis checkpoint

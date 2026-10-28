@@ -31,6 +31,10 @@ data class Network(
  * Chain ids are mainnet 1, testnet 4, devnet 3, and local 1337. Devnet has no
  * preset here. Mainnet stays listed but disabled until it is open. Every
  * endpoint stays editable once selected.
+ *
+ * The live public testnet is chain 4, so it is the default a fresh install
+ * opens on. [LOCAL] (`10.0.2.2`, the emulator loopback) stays selectable for
+ * development.
  */
 object Networks {
     val MAINNET: Network = Network(
@@ -39,7 +43,7 @@ object Networks {
         soon = "Mainnet is not open yet.",
     )
     val TESTNET: Network = Network(
-        "testnet", "Testnet", ChainIds.TESTNET,
+        "testnet", "Testnet (chain 4)", ChainIds.TESTNET,
         "https://rpc-testnet.kovanica.online/rpc",
         "https://faucet-testnet.kovanica.online/faucet", enabled = true,
     )
@@ -49,7 +53,7 @@ object Networks {
     )
 
     val ALL: List<Network> = listOf(MAINNET, TESTNET, LOCAL)
-    val DEFAULT: Network = LOCAL
+    val DEFAULT: Network = TESTNET
 
     /** Look up a profile by id; `null` when unknown (including `null`). */
     fun byId(id: String?): Network? = ALL.firstOrNull { it.id == id }

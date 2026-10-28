@@ -1,6 +1,8 @@
 export { COMMS_ID_DOMAIN, deriveCommsId, deriveCommsIdBytes } from "./identity.js";
 export {
   LOCAL_RPC_URL,
+  NETWORK_PRESETS,
+  TESTNET_RPC_URL,
   SUBSCRIPTION_METHODS,
   createRpcClient,
   fetchChainHead,
@@ -8,7 +10,7 @@ export {
   subscribeNewHeads,
   subscriptionHead,
 } from "./rpc.js";
-export type { ChainHead, SubscriptionMethod } from "./rpc.js";
+export type { ChainHead, NetworkPreset, SubscriptionMethod } from "./rpc.js";
 export { powCompute, powVerify, type PowProof } from "./pow.js";
 export {
   buildPaymentProof,

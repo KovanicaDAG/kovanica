@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { deriveCommsId, createRpcClient, fetchChainHead, LOCAL_RPC_URL } from "@kovanica/comms";
+import {
+  deriveCommsId,
+  createRpcClient,
+  fetchChainHead,
+  LOCAL_RPC_URL,
+  NETWORK_PRESETS,
+} from "@kovanica/comms";
 import type { ChainHead } from "@kovanica/comms";
 import { encodeAddress, keyFromHexSeed } from "@kovanica/signer";
 
@@ -18,6 +24,9 @@ export function App() {
   const [head, setHead] = useState<ChainHead | null>(null);
   const [headError, setHeadError] = useState<string | null>(null);
   const [headLoading, setHeadLoading] = useState(false);
+
+  /** The preset whose endpoint matches the field, or null for a custom URL. */
+  const activePreset = NETWORK_PRESETS.find((preset) => preset.rpcUrl === rpcUrl.trim()) ?? null;
 
   const loadIdentity = useCallback(async () => {
     setIdentityError(null);
@@ -88,6 +97,20 @@ export function App() {
 
       <section className="panel">
         <h2>Chain head</h2>
+        <div className="network-switch" role="group" aria-label="Network">
+          {NETWORK_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className={activePreset?.id === preset.id ? "network-btn active" : "network-btn"}
+              aria-pressed={activePreset?.id === preset.id}
+              onClick={() => setRpcUrl(preset.rpcUrl)}
+            >
+              {preset.label}
+            </button>
+          ))}
+          <span className="muted">{activePreset ? `Chain ${activePreset.chainId}` : "Custom endpoint"}</span>
+        </div>
         <label htmlFor="rpc">JSON-RPC URL</label>
         <input
           id="rpc"

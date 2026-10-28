@@ -11,8 +11,8 @@ android {
         applicationId = "io.kovanica.light"
         minSdk = 24
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.8.3"
+        versionCode = 14
+        versionName = "0.8.4"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

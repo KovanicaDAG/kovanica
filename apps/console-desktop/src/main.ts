@@ -8,41 +8,32 @@ import {
   type NodeStatus,
   type StatusRow,
 } from "./connection";
+import { presetById, presetFor } from "./networks";
 import { mountWallet } from "./wallet-view";
 import "./styles.css";
 
 let shownChainId: string | null = null;
 
-const rpcInput = document.querySelector<HTMLInputElement>("#rpc");
-const endpoint = document.querySelector<HTMLParagraphElement>("#endpoint");
-const errorBox = document.querySelector<HTMLParagraphElement>("#error");
-const statusList = document.querySelector<HTMLDListElement>("#status");
-const peerList = document.querySelector<HTMLUListElement>("#peers");
-const saveButton = document.querySelector<HTMLButtonElement>("#save");
-const resetButton = document.querySelector<HTMLButtonElement>("#reset");
-const refreshButton = document.querySelector<HTMLButtonElement>("#refresh");
-
-if (
-  !rpcInput ||
-  !endpoint ||
-  !errorBox ||
-  !statusList ||
-  !peerList ||
-  !saveButton ||
-  !resetButton ||
-  !refreshButton
-) {
-  throw new Error("Connection screen is missing a control.");
+/** One control from `index.html`; a missing id is a build error, not a null check. */
+function control<T extends Element>(selector: string): T {
+  const found = document.querySelector<T>(selector);
+  if (!found) throw new Error(`Connection screen is missing ${selector}.`);
+  return found;
 }
 
-const rpc: HTMLInputElement = rpcInput;
-const endpointText: HTMLParagraphElement = endpoint;
-const errorText: HTMLParagraphElement = errorBox;
-const statusNode: HTMLDListElement = statusList;
-const peersNode: HTMLUListElement = peerList;
-const save: HTMLButtonElement = saveButton;
-const reset: HTMLButtonElement = resetButton;
-const refresh: HTMLButtonElement = refreshButton;
+const rpc = control<HTMLInputElement>("#rpc");
+const endpointText = control<HTMLParagraphElement>("#endpoint");
+const errorText = control<HTMLParagraphElement>("#error");
+const statusNode = control<HTMLDListElement>("#status");
+const peersNode = control<HTMLUListElement>("#peers");
+const save = control<HTMLButtonElement>("#save");
+const reset = control<HTMLButtonElement>("#reset");
+const refresh = control<HTMLButtonElement>("#refresh");
+
+const netTestnet = control<HTMLButtonElement>("#net-testnet");
+const netMainnet = control<HTMLButtonElement>("#net-mainnet");
+const netLocal = control<HTMLButtonElement>("#net-local");
+const netCustom = control<HTMLButtonElement>("#net-custom");
 
 function showError(message: string): void {
   errorText.hidden = false;
@@ -82,6 +73,22 @@ function fillPeers(lines: string[]): void {
 function applyConfig(config: ConnectionConfig): void {
   rpc.value = config.rpcUrl;
   endpointText.textContent = endpointLine(config.endpointLabel);
+  updateNetworkButtons(config.rpcUrl);
+}
+
+function updateNetworkButtons(url: string): void {
+  const active = presetFor(url)?.id ?? null;
+  netTestnet.classList.toggle("active", active === "testnet");
+  netMainnet.classList.toggle("active", active === "mainnet");
+  netLocal.classList.toggle("active", active === "local");
+  netCustom.classList.toggle("active", active === null);
+}
+
+/** The switch labels come from `networks.ts`, the page only holds the buttons. */
+function labelNetworkButtons(): void {
+  netTestnet.textContent = presetById("testnet")?.label ?? "Testnet";
+  netMainnet.textContent = presetById("mainnet")?.label ?? "Mainnet";
+  netLocal.textContent = presetById("local")?.label ?? "Local";
 }
 
 function messageFrom(error: unknown): string {
@@ -139,6 +146,40 @@ refresh.addEventListener("click", () => {
   void refreshStatus();
 });
 
+/** Save a built-in endpoint and read the node again. */
+function selectPreset(url: string): void {
+  rpc.value = url;
+  void (async () => {
+    clearError();
+    try {
+      applyConfig(await invoke<ConnectionConfig>("save_connection", { rpcUrl: url }));
+      await refreshStatus();
+    } catch (error) {
+      showError(messageFrom(error));
+    }
+  })();
+}
+
+netTestnet.addEventListener("click", () => {
+  const preset = presetById("testnet");
+  if (preset) selectPreset(preset.rpcUrl);
+});
+netMainnet.addEventListener("click", () => {
+  const preset = presetById("mainnet");
+  if (preset) selectPreset(preset.rpcUrl);
+});
+netLocal.addEventListener("click", () => {
+  const preset = presetById("local");
+  if (preset) selectPreset(preset.rpcUrl);
+});
+
+netCustom.addEventListener("click", () => {
+  rpc.focus();
+  rpc.select();
+  updateNetworkButtons(rpc.value);
+});
+
+labelNetworkButtons();
 mountWallet(() => shownChainId);
 
 void (async () => {

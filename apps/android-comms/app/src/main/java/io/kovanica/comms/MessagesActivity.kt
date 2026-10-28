@@ -55,6 +55,8 @@ class MessagesActivity : Activity() {
     private lateinit var pubkeyValue: TextView
     private lateinit var relayField: EditText
     private lateinit var rpcField: EditText
+    private lateinit var networkChips: LinearLayout
+    private val networkButtons = mutableMapOf<String, Button>()
     private lateinit var passField: EditText
     private lateinit var mnemonicField: EditText
     private lateinit var recipientField: EditText
@@ -111,8 +113,18 @@ class MessagesActivity : Activity() {
         relayField = field(CommsStore.DEFAULT_RELAY_URL, store.relayUrl)
         rpcField = field(
             "Node RPC for name lookup",
-            prefs().getString(KEY_RPC, DEFAULT_RPC) ?: DEFAULT_RPC,
+            prefs().getString(KEY_RPC, null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: NetworkPrefs.selected(this).rpcUrl,
         )
+        rpcField.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                styleNetworkChips()
+            }
+        })
+        networkChips = networkRow()
+        styleNetworkChips()
         mnemonicField = field("24-word seed, only when importing")
         commsIdValue = monoValue("Unlock to reveal")
         commsIdValue.setTextColor(MUTED)
@@ -157,6 +169,8 @@ class MessagesActivity : Activity() {
         val relay = card().apply {
             addStack(sectionLabel("Relay"))
             addStack(relayField, 2)
+            addStack(caption("Network"), 14)
+            addStack(networkChips, 8)
             addStack(rpcField, 10)
         }
         root.addStack(relay, 18)
@@ -424,7 +438,7 @@ class MessagesActivity : Activity() {
             )
             return
         }
-        val rpc = rpcField.text.toString().trim().ifEmpty { DEFAULT_RPC }
+        val rpc = rpcField.text.toString().trim().ifEmpty { Networks.DEFAULT.rpcUrl }
         saveRpc(rpc)
         task("Looking up \"$name\"…", work = {
             try {
@@ -940,6 +954,56 @@ class MessagesActivity : Activity() {
         )
     }
 
+    /** One chip per built-in network, with the active endpoint highlighted. */
+    private fun networkRow(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        Networks.ALL.forEach { network ->
+            val chip = chip(network.label) { selectNetwork(network) }
+            networkButtons[network.id] = chip
+            addView(
+                chip,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { rightMargin = dp(8) },
+            )
+        }
+    }
+
+    private fun chip(caption: String, action: () -> Unit): Button = Button(this).apply {
+        text = caption
+        isAllCaps = false
+        textSize = 13f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(ACCENT)
+        background = rounded(SURFACE_2, 12, LINE, 1)
+        setPadding(dp(12), dp(8), dp(12), dp(8))
+        minHeight = dp(36)
+        minWidth = 0
+        stateListAnimator = null
+        setOnClickListener { action() }
+    }
+
+    /** Persist [network] and point the lookup RPC at it. */
+    private fun selectNetwork(network: Network) {
+        NetworkPrefs.select(this, network)
+        rpcField.setText(network.rpcUrl)
+        saveRpc(network.rpcUrl)
+        styleNetworkChips()
+        setStatus("Network switched to ${network.label} — chain id ${network.chainId}.", Tone.OK)
+    }
+
+    /** Highlight the chip whose endpoint matches the field; a custom endpoint selects none. */
+    private fun styleNetworkChips() {
+        val active = Networks.byRpc(rpcField.text.toString())
+        networkButtons.forEach { (id, chip) ->
+            val selected = id == active?.id
+            chip.background =
+                if (selected) rounded(ACCENT, 12) else rounded(SURFACE_2, 12, LINE, 1)
+            chip.setTextColor(if (selected) ACCENT_INK else ACCENT)
+        }
+    }
+
     private fun caption(text: String): TextView = TextView(this).apply {
         this.text = text
         setTextColor(MUTED)
@@ -1053,7 +1117,7 @@ class MessagesActivity : Activity() {
     }
 
     private fun saveRpc(rpc: String) {
-        val value = rpc.ifEmpty { DEFAULT_RPC }
+        val value = rpc.ifEmpty { Networks.DEFAULT.rpcUrl }
         prefs().edit().putString(KEY_RPC, value).apply()
     }
 
@@ -1095,7 +1159,6 @@ class MessagesActivity : Activity() {
 
         /** Node RPC address, set on the main screen under the same prefs key. */
         private const val KEY_RPC = "rpc"
-        private const val DEFAULT_RPC = "http://10.0.2.2:8545"
 
         private val PUBKEY_PATTERN = Regex("^[0-9a-f]{64}$")
         private val NAME_PATTERN = Regex("^[a-z0-9-]+$")
