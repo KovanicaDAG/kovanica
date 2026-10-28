@@ -1,53 +1,72 @@
-﻿# Chain 4 testnet â€” launch copy for Facebook, X and Discord
+﻿# Chain 4 testnet — launch pack for X, Facebook and Discord
 
-Ready-to-paste copy for the release that makes **Testnet (chain 4)** the default
-network in every Kovanica app. Replace the bracketed placeholders once the APKs
-are uploaded.
+Everything here is copy-paste ready. No placeholders: the links are live and were
+checked on 2026-10-28, the images are in `docs/marketing/`.
 
-## Fill these in first
+**What is being announced:** the public testnet (chain id **4**) is now the
+default network on a fresh install of every Kovanica app — Android wallet,
+lightnode, comms — and the desktop console and comms app got the same network
+switch. Previously you had to paste an RPC endpoint by hand, and the faucet
+button pointed at a host that did not resolve.
 
-| Placeholder | Value |
+**Download links used below** (short, branded, they 302 to the pinned release
+asset, so they always serve the current build):
+
+| App | Link |
 |---|---|
-| `[LIGHTNODE_APK]` | https://github.com/KovanicaDAG/kovanica/releases/download/v0.8.4-android/Kovanica-Lightnode-0.8.4-arm64-v8a.apk |
-| `[WALLET_APK]` | https://github.com/KovanicaDAG/kovanica/releases/download/v0.3.3-wallet/Kovanica-Wallet-0.3.3-arm64-v8a.apk |
-| `[COMMS_APK]` | https://github.com/KovanicaDAG/kovanica/releases/download/v0.2.0-comms/kovanica-comms-0.2.0.apk |
-| `[RELEASES]` | `https://github.com/KovanicaDAG/kovanica/releases` |
-| Website | `https://kovanica.online` |
-| Web wallet | `https://kovanica.online/wallet` |
-| Explorer | `https://explorer.kovanica.online` |
-| Faucet | `https://faucet.kovanica.online/faucet` |
-| Docs | `https://docs.kovanica.online` |
+| Wallet 0.3.3 | https://kovanica.online/download/kovanica-wallet-0.3.3.apk |
+| Lightnode 0.8.4 | https://kovanica.online/download/kovanica-lightnode-0.8.4.apk |
+| Comms 0.2.0 | https://kovanica.online/download/kovanica-comms-0.2.0.apk |
+| All releases | https://github.com/KovanicaDAG/kovanica/releases |
 
-Facts used below, so nothing gets oversold:
+Canonical GitHub assets, if someone wants to verify a hash:
 
-- Chain id **4** is the live public testnet. Mainnet is chain **1** and is **not open**.
-- Round interval **4 s**, so a committed leader every **12 s** (Mysticeti-style
-  uncertified DAG, wave = 3).
-- Native coin **KUNA**, **9 decimals**, **90.2 M** total supply, **2.5 KUNA**
-  initial block reward, era **8.1 M** committed leaders, decay **Ă—3/4**.
-- **15â€“21** active validators, minimum stake **50 000 KUNA**.
-- Faucet: **1 KUNA** per request, **10 KUNA lifetime cap per address**.
-- No audit claims, no mainnet date, no price talk.
+| App | Asset | sha256 |
+|---|---|---|
+| Wallet 0.3.3 | `v0.3.3-wallet/Kovanica-Wallet-0.3.3-arm64-v8a.apk` | `945aede119f650a382c6d6eda0e1902a1d98a7dd2ea72f3d045f2a7d10b95d4c` |
+| Lightnode 0.8.4 | `v0.8.4-android/Kovanica-Lightnode-0.8.4-arm64-v8a.apk` | `b288873eeda80fd50745b676575345a661fe12005d4e3a08ad887f69a139be9b` |
+| Comms 0.2.0 | `v0.2.0-comms/kovanica-comms-0.2.0.apk` | `0255fa08e14ac430dceae9fd4fd435f5df97b362d3693221043f96ff167cd902` |
+
+All three are signed with the same release certificate as earlier builds
+(SHA-256 `630a6308e7790287e32f396e97bf5555e355031b1cef2b9c3a263a92673c4562`), so
+they install over 0.8.3 / 0.3.2 / 0.1.0 without uninstalling and the phone wallet
+survives.
+
+## Guardrails (do not break these)
+
+- Chain **4** is testnet. Mainnet is chain **1** and is **not open** — say that
+  plainly, never imply a date.
+- Testnet KUNA is **worthless**. Contracts are **not audited**. Say both in every
+  long post; it buys credibility and pre-empts the "when moon" replies.
+- No price talk, no listing talk, no "production ready", no audit claims.
+- The coin is **KUNA**. Never write `KVNC` as the currency. Addresses are
+  `kvnc…dag`.
+- Numbers you may use: 4 s round, committed leader every 12 s, 15–21 active
+  validators, minimum stake 50 000 KUNA, 9 decimals, 90.2 M total supply,
+  2.5 KUNA initial block reward, faucet 1 KUNA per request / 10 KUNA lifetime.
 
 ---
 
 ## X (Twitter)
 
-### Single post
+Character counts below are Twitter-weighted (URL = 23, emoji = 2). All fit a
+single tweet.
+
+### Single post — 249 chars
 
 ```
-Kovanica Chain 4 testnet is live â€” and it's now the default in every app.
+Kovanica Chain 4 testnet is live — and now the default network in every app we ship.
 
-4s rounds, a committed leader every 12s, KUNA at 9 decimals, deterministic WASM execution.
+4s rounds, committed leader every 12s, KUNA at 9 decimals, deterministic WASM execution.
 
-Wallet, lightnode and comms: install, open, you're on testnet. No config.
+Install, open, you're on testnet. No RPC config.
 
 https://kovanica.online
 ```
 
-### Thread
+Attach: `chain4-x-1600x900.png`.
 
-**1/**
+### Thread — post 1 of 5, 198 chars
 
 ```
 Kovanica Chain 4 testnet is live.
@@ -57,51 +76,67 @@ And as of today it's the default network in every app we ship: mobile wallet, li
 No RPC hunting. Install, open, you're on chain 4.
 ```
 
-**2/**
+### 2/5 — 247 chars
 
 ```
 What changed in the apps:
 
-â€˘ Testnet (chain 4) is preselected on a fresh install
-â€˘ Mainnet (chain 1) is listed and clearly closed
-â€˘ Local (1337) stays one tap away for devs
-â€˘ Custom RPC still there for anyone who wants it
+• Testnet (chain 4) preselected on a fresh install
+• Mainnet (chain 1) listed and clearly closed
+• Local (1337) stays one tap away for devs
+• Custom RPC still there
+
+Plus a faucet button that actually reaches the faucet.
 ```
 
-**3/**
+### 3/5 — 205 chars
 
 ```
 Start with the wallet:
 
-â†’ create a PRO-21 address (kvncâ€¦dag)
-â†’ claim 1 KUNA from the faucet, 10 KUNA lifetime cap per address
-â†’ send, receive, check history
+→ create a PRO-21 address (kvnc…dag)
+→ claim 1 KUNA from the faucet, 10 KUNA lifetime cap per address
+→ send, receive, check history
 
-Web wallet if you don't want to install anything: https://kovanica.online/wallet
+No install? Web wallet: https://kovanica.online/wallet
 ```
 
-**4/**
+### 4/5 — 235 chars
 
 ```
 Want to verify instead of trust?
 
-The lightnode follows the DAG on your phone: committed leader height, epoch, validators, balances. 4s rounds, 12s committed leaders.
+The lightnode follows the DAG from your phone: committed leader height, epoch, validator set, balances. 4s rounds, 12s committed leaders.
 
-Comms adds encrypted peer-to-peer messaging on top of the same chain.
+Comms puts encrypted peer-to-peer messaging on the same chain.
 ```
 
-**5/**
+### 5/5 — 222 chars
 
 ```
 Everything is open:
 
-Explorer  https://explorer.kovanica.online
-Faucet    https://faucet.kovanica.online/faucet
-Docs      https://docs.kovanica.online
-Code      https://github.com/KovanicaDAG/kovanica
+Explorer https://explorer.kovanica.online
+Faucet https://faucet.kovanica.online/faucet
+Docs https://docs.kovanica.online
+Code https://github.com/KovanicaDAG/kovanica
 
-Found a bug? Tell us â€” testnet feedback is the whole point.
+Testnet coins are worthless and contracts are unaudited. Break it and tell us.
 ```
+
+### Replies to have ready
+
+> **"Is this mainnet?"** — No. Chain 4 is the public testnet. Mainnet is chain 1
+> and it is not open. No date announced.
+
+> **"How do I get coins?"** — Faucet: https://faucet.kovanica.online/faucet —
+> 1 KUNA per request, 10 KUNA lifetime per address. It is testnet money.
+
+> **"iOS?"** — Android arm64 today. The web wallet runs in any mobile browser:
+> https://kovanica.online/wallet
+
+> **"Why no app store?"** — Sideload only for now, signed with our release key,
+> source is on GitHub.
 
 ---
 
@@ -110,64 +145,70 @@ Found a bug? Tell us â€” testnet feedback is the whole point.
 ### English
 
 ```
-Kovanica Chain 4 testnet is live â€” and it's now the default in every app.
+Kovanica Chain 4 testnet is live — and it is now the default in every app.
 
-If you installed an earlier build, you had to type an RPC endpoint by hand.
-That's gone. Open the wallet, the lightnode, the comms app or the desktop
-console and you are already on Testnet (chain 4). Mainnet is visible but
-closed, and Local (1337) is still one tap away if you run your own node.
+If you installed an earlier build, you had to type an RPC endpoint by hand. That
+is gone. Open the wallet, the lightnode, the comms app or the desktop console and
+you are already on Testnet (chain 4). Mainnet is visible but closed, and Local
+(1337) is still one tap away if you run your own node.
 
 What you can do right now, for free:
 
-â€˘ Create a wallet with a native PRO-21 address (kvncâ€¦dag)
-â€˘ Claim test KUNA from the faucet â€” 1 KUNA per request, 10 KUNA lifetime cap
-â€˘ Send and receive KUNA in seconds
-â€˘ Run a lightnode and follow the DAG on your phone
-â€˘ Send encrypted peer-to-peer messages with Comms
-â€˘ Deploy HTLC, Vault, Multisig and Token contracts
+• Create a wallet with a native PRO-21 address (kvnc…dag)
+• Claim test KUNA from the faucet — 1 KUNA per request, 10 KUNA lifetime cap
+• Send and receive KUNA in seconds
+• Follow the DAG from your phone with the lightnode
+• Send encrypted peer-to-peer messages with Comms
+• Deploy HTLC, Vault, Multisig and Token contracts
 
 Under the hood: Mysticeti-style uncertified DAG, a 4-second round with a
-committed leader every 12 seconds, deterministic WASM execution, 15â€“21 staked
+committed leader every 12 seconds, deterministic WASM execution, 15–21 staked
 validators, and KUNA with 9 decimals.
 
-This is still testnet. Coins are worthless, contracts are not audited, and
-things will break. That's what we're here for â€” try to break it and tell us
-what you find.
+This is still testnet. Coins are worthless, contracts are not audited, and things
+will break. That is what we are here for — try to break it and tell us what you
+find.
 
-Downloads: [RELEASES]
+Wallet: https://kovanica.online/download/kovanica-wallet-0.3.3.apk
+Lightnode: https://kovanica.online/download/kovanica-lightnode-0.8.4.apk
+Comms: https://kovanica.online/download/kovanica-comms-0.2.0.apk
 Web wallet: https://kovanica.online/wallet
 Explorer: https://explorer.kovanica.online
 Faucet: https://faucet.kovanica.online/faucet
 Docs: https://docs.kovanica.online
 ```
 
+Attach: `chain4-launch-1200x630.png` (or the square for a two-image post).
+
 ### Hrvatski
 
 ```
-Kovanica Chain 4 testnet je Ĺľiv â€” i od sada je zadana mreĹľa u svakoj aplikaciji.
+Kovanica Chain 4 testnet je živ — i od sada je zadana mreža u svakoj aplikaciji.
 
-Ako ste instalirali stariju verziju, RPC endpoint ste morali upisivati ruÄŤno.
-To viĹˇe ne treba. Otvorite wallet, lightnode, comms ili desktop konzolu i veÄ‡
-ste na Testnetu (chain 4). Mainnet je vidljiv, ali zatvoren, a Local (1337)
-ostaje na jedan klik ako vrtite vlastiti node.
+Ako ste instalirali stariju verziju, RPC endpoint ste morali upisivati ručno. To
+više ne treba. Otvorite wallet, lightnode, comms ili desktop konzolu i već ste na
+Testnetu (chain 4). Mainnet je vidljiv, ali zatvoren, a Local (1337) ostaje na
+jedan klik ako vrtite vlastiti node.
 
-Ĺ to moĹľete odmah, besplatno:
+Što možete odmah, besplatno:
 
-â€˘ Napraviti wallet s PRO-21 adresom (kvncâ€¦dag)
-â€˘ PodiÄ‡i testne KUNE s fauceta â€” 1 KUNA po zahtjevu, 10 KUNA ukupno po adresi
-â€˘ Slati i primati KUNE u nekoliko sekundi
-â€˘ Vrtjeti lightnode i pratiti DAG na mobitelu
-â€˘ Slati Ĺˇifrirane peer-to-peer poruke preko Commsa
-â€˘ Deployati HTLC, Vault, Multisig i Token ugovore
+• Napraviti wallet s PRO-21 adresom (kvnc…dag)
+• Podići testne KUNE s fauceta — 1 KUNA po zahtjevu, 10 KUNA ukupno po adresi
+• Slati i primati KUNE u nekoliko sekundi
+• Pratiti DAG na mobitelu preko lightnodea
+• Slati šifrirane peer-to-peer poruke preko Commsa
+• Deployati HTLC, Vault, Multisig i Token ugovore
 
 Ispod haube: Mysticeti-stil neovjereni DAG, runda 4 s (committed leader svakih
-12 s), deterministiÄŤko WASM izvrĹˇavanje, 15â€“21 stakani validator i KUNA s 9
+12 s), determinističko WASM izvršavanje, 15–21 stakani validator i KUNA s 9
 decimala.
 
-Ovo je joĹˇ testnet. NovÄŤiÄ‡i nemaju vrijednost, ugovori nisu auditirani i stvari
-Ä‡e pucati. Zato smo tu â€” pokuĹˇajte ga slomiti i javite nam Ĺˇto naÄ‘ete.
+Ovo je još testnet. Novčići nemaju vrijednost, ugovori nisu auditirani i stvari
+će pucati. Zato smo tu — pokušajte ga slomiti i javite nam što nađete.
 
-Download: [RELEASES]
+Wallet: https://kovanica.online/download/kovanica-wallet-0.3.3.apk
+Lightnode: https://kovanica.online/download/kovanica-lightnode-0.8.4.apk
+Comms: https://kovanica.online/download/kovanica-comms-0.2.0.apk
 Web wallet: https://kovanica.online/wallet
 Explorer: https://explorer.kovanica.online
 Faucet: https://faucet.kovanica.online/faucet
@@ -178,97 +219,115 @@ Dokumentacija: https://docs.kovanica.online
 
 ## Discord
 
-### Announcement (main channel)
+### Announcement — #announcements
 
 ```
-@here Kovanica Chain 4 testnet is live â€” and it's now the default in every app
+@here **Kovanica Chain 4 testnet is live — and it's now the default in every app**
 
-You no longer have to paste an RPC endpoint. Fresh installs open on
-**Testnet (chain 4)**. Mainnet (chain 1) is listed and closed, Local (1337)
-is one tap away for devs, and Custom RPC is still there.
+No more pasting an RPC endpoint. A fresh install opens on **Testnet (chain 4)**.
+Mainnet (chain 1) is listed and closed, Local (1337) is one tap away for devs, and
+Custom RPC is still there.
 
-**What's new**
-â€˘ Wallet 0.3.3 â€” testnet preselected, faucet button now reaches the live faucet
-â€˘ Lightnode 0.8.4 â€” same, plus chain/epoch/faucet prefill
-â€˘ Comms 0.2.0 â€” new network switch for the relay RPC (Testnet / Local)
-â€˘ Desktop console + Comms desktop â€” network switch above the endpoint field
+**What shipped**
+• Wallet 0.3.3 — testnet preselected, faucet button now reaches the live faucet
+• Lightnode 0.8.4 — same, plus chain / epoch / validator view
+• Comms 0.2.0 — network switch for the relay RPC
+• Desktop console + Comms desktop — network switch above the endpoint field
 
 **Try it in 3 steps**
-1. Install: [WALLET_APK] (or the web wallet: https://kovanica.online/wallet)
-2. Create a wallet â†’ copy your kvncâ€¦dag address
-3. Claim 1 KUNA: https://faucet.kovanica.online/faucet (10 KUNA lifetime cap per address)
+1. Install the wallet: <https://kovanica.online/download/kovanica-wallet-0.3.3.apk>
+2. Create a wallet, copy your `kvnc…dag` address
+3. Claim 1 KUNA: <https://faucet.kovanica.online/faucet> (10 KUNA lifetime cap per address)
 
 **Network**
-â€˘ Chain id: 4
-â€˘ RPC: https://rpc-testnet.kovanica.online/rpc
-â€˘ Explorer: https://explorer.kovanica.online
-â€˘ Docs: https://docs.kovanica.online
+• Chain id: **4**
+• RPC: `https://rpc-testnet.kovanica.online/rpc`
+• Explorer: <https://explorer.kovanica.online>
+• Docs: <https://docs.kovanica.online>
 
-Testnet coins are worthless and contracts are unaudited. Break things and
-report them in #bugs â€” include app version, phone/OS, what you tapped and the
-exact error text.
+Testnet coins are worthless and contracts are unaudited. Break things and report
+them in #bugs — include app version, phone/OS, what you tapped and the exact
+error text.
 ```
 
-### Short version (#general / other servers)
+Attach: `chain4-discord-1200x400.png`.
+
+### Short version — other servers / #general
 
 ```
-Kovanica Chain 4 testnet is live and now the default network in every app â€”
+Kovanica Chain 4 testnet is live and now the default network in every app —
 wallet, lightnode, comms, desktop console. Install, open, you're on testnet.
 
-Wallet: [WALLET_APK]
-Lightnode: [LIGHTNODE_APK]
-Comms: [COMMS_APK]
-Faucet: https://faucet.kovanica.online/faucet
-Explorer: https://explorer.kovanica.online
+Wallet <https://kovanica.online/download/kovanica-wallet-0.3.3.apk>
+Lightnode <https://kovanica.online/download/kovanica-lightnode-0.8.4.apk>
+Comms <https://kovanica.online/download/kovanica-comms-0.2.0.apk>
+Faucet <https://faucet.kovanica.online/faucet>
+Explorer <https://explorer.kovanica.online>
 ```
 
-### Embed-ready fields
+### Embed (webhook / bot)
 
 ```
-Title:       Chain 4 testnet is now the default
-Description: Every app ships with Testnet (chain 4) preselected â€” wallet, lightnode, comms, desktop console. Faucet fixed, mainnet still closed, local dev untouched.
-Fields:
-  Wallet 0.3.3      Â· Testnet preselected, reachable faucet
-  Lightnode 0.8.4   Â· Chain/epoch/faucet prefill, 4s DAG sync
-  Comms 0.2.0       Â· Relay RPC network switch
-  Desktop 0.1.0     Â· Network switch in console + comms
-Footer:        https://kovanica.online Â· chain id 4 Â· KUNA, 9 decimals
+title:       Chain 4 testnet is now the default
+description: Every Kovanica app opens on Testnet (chain 4) — wallet, lightnode, comms, desktop console. Faucet fixed, mainnet still closed, local dev untouched.
+color:       0xF2A900
+fields:
+  Wallet 0.3.3     · Testnet preselected, faucet button reaches the live faucet
+  Lightnode 0.8.4  · Chain / epoch / validator view, 4s DAG sync
+  Comms 0.2.0      · Relay RPC network switch
+  Desktop          · Same switch in console and comms desktop
+footer:      kovanica.online · chain id 4
 ```
 
-### Pinned message
+### Pinned message — #testnet
 
 ```
-Testnet quickstart
-1. Wallet â†’ create â†’ copy kvncâ€¦dag address
-2. Faucet â†’ https://faucet.kovanica.online/faucet â†’ 1 KUNA (10 KUNA lifetime cap)
-3. Explorer â†’ https://explorer.kovanica.online
+**Testnet quickstart**
+1. Wallet → create → copy your `kvnc…dag` address
+2. Faucet → <https://faucet.kovanica.online/faucet> → 1 KUNA (10 KUNA lifetime cap)
+3. Explorer → <https://explorer.kovanica.online>
 
-Network: Testnet (chain 4) Â· https://rpc-testnet.kovanica.online/rpc
-Local dev: Local (1337) Â· http://127.0.0.1:8545/rpc (10.0.2.2 on the emulator)
+Network: Testnet (chain 4) · `https://rpc-testnet.kovanica.online/rpc`
+Local dev: Local (1337) · `http://127.0.0.1:8545/rpc` (`10.0.2.2` on the emulator)
 Mainnet (chain 1) is closed.
 ```
 
 ---
 
-## Visuals
+## Images
 
-| Asset | Size | Idea |
+Generated from the site palette (`#09090b` background, gold `#F2A900`, teal
+`#2fbaa4`, blue `#8aa0b4`, text `#f2f1ee`). Re-render at any size with
+`docs/marketing/make-cards.sh` (ImageMagick + DejaVu fonts).
+
+| File | Size | Use |
 |---|---|---|
-| Facebook / LinkedIn | 1200Ă—630 | Dark brand background, KUNA mark, headline "Chain 4 testnet is now the default", three app names |
-| X post | 1600Ă—900 | Phone screenshot of the network switch with Testnet (chain 4) active, headline in the top third |
-| X thread | 1600Ă—900 | #2: switch screenshot Â· #3: wallet balance after the faucet Â· #4: lightnode status card Â· #5: link card |
-| Discord banner | 1200Ă—400 | "Testnet (chain 4)" plus the RPC host, thin mono line |
-| Discord embed image | 1200Ă—630 | Same as the Facebook card |
+| `chain4-launch-1200x630.png` | 1200×630 | Facebook post, LinkedIn, X link card, Discord embed image |
+| `chain4-x-1600x900.png` | 1600×900 | X single post / thread header |
+| `chain4-discord-1200x400.png` | 1200×400 | Discord announcement banner |
+| `chain4-square-1080x1080.png` | 1080×1080 | Instagram, Facebook square, Discord embed |
 
-Alt text for the switch screenshot: "Kovanica app network switch with Testnet
-(chain 4), Mainnet (Chain 1), Local (1337) and Custom buttons, Testnet active."
+Alt text (use it — it is also what screen readers announce):
 
-## Posting order
+> Dark card with a gold top rule. Headline: "Chain 4 testnet is now the default."
+> Subline lists Wallet, Lightnode, Comms and Desktop console, with
+> kovanica.online and "chain id 4 · 4s rounds · 12s committed leader" underneath.
 
-1. Discord announcement first â€” the community gets the links before the public.
-2. X thread, pinned to the profile for the week.
-3. Facebook post 1â€“2 hours later, same day.
-4. Reply to the X thread with the first user screenshot or a fix shipped that day.
+## Posting plan
 
-Hashtags, sparingly: `#Kovanica #KUNA #Layer1 #DAG #Testnet`
+1. **Discord first** — #announcements with the banner, then pin the quickstart in
+   #testnet. The community gets the links before the public.
+2. **X** — single post + the 5-tweet thread an hour later, thread pinned for the
+   week. Reply to your own single post with the thread link.
+3. **Facebook** — 1–2 hours after X, English first, Croatian the same day (or the
+   next morning for reach).
+4. **Follow-up** — 48 h later, quote-post the best user screenshot with the first
+   bug that got fixed. That is the post that convinces developers.
 
+Hashtags, sparingly: `#Kovanica #KUNA #Layer1 #DAG #Testnet`.
+
+## After posting, watch
+
+- Faucet queue length and 10-KUNA cap complaints (`seed3` logs).
+- Crash reports naming an app version — check `adb logcat` output pasted in #bugs.
+- Explorer search queries for chain 1 addresses (people testing "is mainnet on?").
