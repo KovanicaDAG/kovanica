@@ -1,0 +1,30 @@
+# Chain 4 — 5-node validator set for genesis
+# Stakes = 100_000 KUNA (100_000_000_000_000 atoms)
+# Generated from keystores
+chain_id = 4
+
+[[validator]]
+address = "kvncd7aa7xv4kq7zz4mfqu6fd9vuuu9wvwlx6c24t6794zhq6339jlqjynnsjdag"
+stake = 100000000000000
+public_key = "6fbbdf1995b03c215769073496959ce70ae63be6d61555ebc5a8ae0d462597c1"
+
+[[validator]]
+address = "kvnc2ud53ny05ly3glyazquljudhdjruun6mm45kl93lwke88j3x96sjmaknrdag"
+stake = 100000000000000
+public_key = "571b48cc8fa7c9147c9d1039f971b76c87ce4f5bdd696f963f75b273ca262ea1"
+
+[[validator]]
+address = "kvnc49reml5w2xx2z77krf5rwha2at2ytxr7uhy7yprfxrm9seapamx7y4ep3dag"
+stake = 100000000000000
+public_key = "a9479dfe8e518ca17bd61a68375faaead445987ee5c9e2046930f65867a1eecd"
+
+[[validator]]
+address = "kvncvwr2sdp0h78cgnw0fcpnjv5k67v90xa8hya2342fltzywq0ne5upzw6pqdag"
+stake = 100000000000000
+public_key = "6386a8342fbf8f844dcf4e03393296d798579ba7b93aa8d549fac44701f3cd38"
+
+[[validator]]
+address = "kvncpwjner9j3kxs4esgavpff03eys0rdelhaa8smu6xph8rvx5gk9rav5as2dag"
+stake = 100000000000000
+public_key = "0ba53c8cb28d8d0ae608eb0294be39241e36e7f7ef4f0df3460dce361a88b147"
+

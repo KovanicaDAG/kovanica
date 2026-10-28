@@ -73,10 +73,14 @@ rpc_port = 8545
 # a Cloudflare-proxied (orange-cloud) hostname for TCP. No hosts are hard-coded
 # in the node — supply kovanica-native seeds here or via KOVANICA_BOOTNODES.
 #
-# Testnet:
-# bootnodes = ["testnet.kovanica.online:8000"]
+# Testnet (chain_id 4) — all three seeds are grey-cloud DNS-only:
+# bootnodes = [
+#     "seed1.kovanica.online:8000",
+#     "seed2.kovanica.online:8000",
+#     "seed3.kovanica.online:8000",
+# ]
 #
-# Mainnet:
+# Mainnet (chain 1):
 # bootnodes = ["mainnet.kovanica.online:8000"]
 bootnodes = []
 

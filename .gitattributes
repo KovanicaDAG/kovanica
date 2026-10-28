@@ -1,0 +1,8 @@
+# Chain-4 genesis bundle: these files are hashed into the network tag, so they
+# must stay byte-identical on every checkout. Never let Git convert line
+# endings here.
+testnet/chain4/*.toml -text -diff
+testnet/chain4/*.hex -text -diff
+
+# Installer is piped into `sh` on Linux; keep LF.
+node/scripts/install.sh text eol=lf

@@ -1,0 +1,177 @@
+name: Release node
+
+# Builds the prebuilt Linux node binaries that /download/kovanica-node-linux-*
+# and node/scripts/install.sh serve, plus the chain-4 genesis bundle every node
+# must share. Every build is checked against the live testnet network tag, so a
+# binary that cannot peer with the mesh fails here instead of after download.
+#
+#   git tag v0.1.0-node && git push origin v0.1.0-node
+#
+# The tag must be <version>-node; install.sh downloads from
+# releases/download/v<version>-node.
+
+on:
+  push:
+    tags: ["v*-node"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Live public testnet (chain 4). Every published binary and the genesis
+  # bundle must reproduce this tag; see docs/TESTNET-RESET.md.
+  EXPECTED_NETWORK_TAG: "4-0eacd5699210b145"
+
+jobs:
+  build:
+    name: node ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Install Rust (version from rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      - name: Build kovanica-node
+        run: cargo build --release --locked -p kovanica-node
+
+      - name: Check the network tag against the published chain-4 bundle
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/tagcheck"
+          rm -rf "$work"
+          mkdir -p "$work/data"
+          cp testnet/chain4/genesis_validators.toml \
+             testnet/chain4/founder_premine.hex \
+             testnet/chain4/funded_accounts.toml "$work/data/"
+          cat >"$work/kovanica.toml" <<EOF
+          chain_id = 4
+          data_dir = "$work/data"
+          run_validator = false
+          rpc_addr = "127.0.0.1"
+          rpc_port = 8545
+          bootnodes = []
+          round_duration_ms = 4000
+          EOF
+          tag="$(target/release/kovanica-node network-tag --config "$work/kovanica.toml")"
+          echo "network tag: $tag (expected $EXPECTED_NETWORK_TAG)"
+          if [ "$tag" != "$EXPECTED_NETWORK_TAG" ]; then
+            echo "::error::network tag $tag does not match the live testnet; this binary or bundle would fork off the mesh"
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          set -eu
+          mkdir -p dist
+          install -m 0755 target/release/kovanica-node dist/kovanica-node
+          strip dist/kovanica-node
+          cp LICENSE dist/
+          tar -C dist -czf "kovanica-node-${{ matrix.arch }}-linux.tar.gz" .
+          ls -l "kovanica-node-${{ matrix.arch }}-linux.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ matrix.arch }}
+          path: kovanica-node-${{ matrix.arch }}-linux.tar.gz
+          if-no-files-found: error
+
+  bundle:
+    name: chain-4 genesis bundle
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package the bundle
+        run: |
+          set -eu
+          mkdir -p dist
+          cp testnet/chain4/genesis_validators.toml \
+             testnet/chain4/founder_premine.hex \
+             testnet/chain4/funded_accounts.toml dist/
+          tar -C dist -czf kovanica-chain4-genesis.tar.gz .
+          ls -l kovanica-chain4-genesis.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: genesis-bundle
+          path: kovanica-chain4-genesis.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: [build, bundle]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        run: |
+          set -eu
+          cd dist
+          sha256sum ./*.tar.gz >SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Kovanica node ${GITHUB_REF_NAME%-node} - Linux (testnet, chain 4)" \
+            --notes "$(cat <<'EOF'
+          Prebuilt `kovanica-node` for the public Kovanica testnet (chain 4).
+
+          | Asset | Target |
+          |---|---|
+          | `kovanica-node-x86_64-linux.tar.gz` | Linux x86_64 (glibc) |
+          | `kovanica-node-aarch64-linux.tar.gz` | Linux aarch64/arm64 (glibc) |
+          | `kovanica-chain4-genesis.tar.gz` | genesis bundle every chain-4 node must share |
+          | `SHA256SUMS` | checksums for all assets above |
+
+          Install (non-validating full node, RPC on loopback):
+
+          ```sh
+          curl -fsSL https://kovanica.online/download/install.sh | sh
+          ```
+
+          Or download `install.sh` next to the assets and run it with
+          `KOVANICA_RELEASE_BASE` pointing at this directory:
+
+          ```sh
+          KOVANICA_RELEASE_BASE="$(pwd)" sh install.sh --no-service
+          ```
+
+          The installer verifies the checksums, installs the chain-4 genesis
+          bundle and refuses to start if the local network tag is not
+          `4-0eacd5699210b145`.
+
+          Each asset is built from the tagged commit, and the build fails
+          unless `kovanica-node network-tag` reproduces the live testnet tag.
+          Docs: https://docs.kovanica.online
+          EOF
+          )"

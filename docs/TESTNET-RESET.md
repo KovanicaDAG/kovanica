@@ -78,9 +78,14 @@ Do not let each operator re-type or regenerate files.
 ### Check the bundle before the first start
 
 Coordinators publish two things with the bundle: a `SHA256SUMS` file and the
-expected network tag. **Where those are published is not fixed in this
-repository** — the person who cuts the bundle names the place and announces
-it with the bundle. Do not invent a host for it.
+expected network tag. For chain 4 the bundle is cut from
+`testnet/chain4/` in this repository and shipped twice:
+
+- in the repository (the canonical bytes, with the expected sha256 sums),
+- as `kovanica-chain4-genesis.tar.gz` on the `v<version>-node` GitHub release,
+  next to the prebuilt binaries and the same `SHA256SUMS`.
+
+Do not invent another host for it, and do not re-generate the files.
 
 From the directory that holds the bundle files.
 

@@ -1,0 +1,6 @@
+# Chain 4 — Funded Accounts for Testnet
+# Pre-funded 1,000,000 KUNA for Faucet
+
+[[account]]
+address = "kvncfm7atz5l8r7w77mzypjkhkzty98pcslfxjfqjjsgtxfpjfach5dtgynxrdag"
+balance = 1000000000000000
