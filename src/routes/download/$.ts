@@ -27,6 +27,11 @@ const DOWNLOADS: Record<string, string> = {
   "kovanica-node-linux-arm64": `${RELEASE}/kovanica-node-aarch64-linux.tar.gz`,
   "kovanica-wallet-debug.apk": `${RELEASE}/kovanica-wallet-debug.apk`,
   "kovanica-wallet-ios-unsigned.ipa": `${RELEASE}/kovanica-wallet-ios-unsigned.ipa`,
+  // Versioned aliases: the CDN caches 404s, so a new path per build keeps
+  // downloads working the moment a release lands.
+  "kovanica-wallet-0.3.3.apk": ANDROID_RELEASE.wallet,
+  "kovanica-lightnode-0.8.4.apk": ANDROID_RELEASE.lightnode,
+  "kovanica-comms-0.2.0.apk": ANDROID_RELEASE.comms,
   "kovanica-wallet-latest.apk": ANDROID_RELEASE.wallet,
   "kovanica-lightnode-latest.apk": ANDROID_RELEASE.lightnode,
   "kovanica-comms-latest.apk": ANDROID_RELEASE.comms,

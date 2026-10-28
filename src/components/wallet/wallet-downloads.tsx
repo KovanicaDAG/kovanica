@@ -6,7 +6,7 @@ export const APP_DOWNLOADS = {
   wallet: {
     name: "Kovanica Wallet",
     description: "Non-custodial mobile wallet with PRO-21 addresses, deterministic key derivation, and instant KUNA transfers.",
-    androidApk: "/download/kovanica-wallet-latest.apk",
+    androidApk: "/download/kovanica-wallet-0.3.3.apk",
     iosIpa: "/download/kovanica-wallet-ios-unsigned.ipa",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-wallet",
     tag: "v0.3.3 · arm64 / iOS",
@@ -14,7 +14,7 @@ export const APP_DOWNLOADS = {
   lightnode: {
     name: "Kovanica Lightnode",
     description: "Embedded DAG light client. Verifies Mysticeti DAG consensus headers, tracks account balances locally, and syncs trustlessly.",
-    androidApk: "/download/kovanica-lightnode-latest.apk",
+    androidApk: "/download/kovanica-lightnode-0.8.4.apk",
     linuxBin: "/download/kovanica-node-linux-x64",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-chain",
     tag: "v0.8.4 · 4s DAG sync",
@@ -22,7 +22,7 @@ export const APP_DOWNLOADS = {
   comms: {
     name: "Kovanica Comms",
     description: "Decentralized P2P messaging and encrypted peer communication powered by Kovanica DAG transport and cryptographic identity.",
-    androidApk: "/download/kovanica-comms-latest.apk",
+    androidApk: "/download/kovanica-comms-0.2.0.apk",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-comms",
     tag: "v0.2.0 · E2E encrypted",
   },
