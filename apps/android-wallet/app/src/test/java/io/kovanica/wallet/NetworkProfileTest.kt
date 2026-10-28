@@ -14,6 +14,11 @@ class NetworkProfileTest {
     }
 
     @Test
+    fun theLiveTestnetHasAReachableFaucet() {
+        assertEquals("https://seed3.kovanica.online/faucet", Networks.TESTNET.faucetUrl)
+    }
+
+    @Test
     fun otherProfilesKeepTheirChainIds() {
         assertEquals(1L, Networks.MAINNET.chainId)
         assertEquals(1337L, Networks.LOCAL.chainId)

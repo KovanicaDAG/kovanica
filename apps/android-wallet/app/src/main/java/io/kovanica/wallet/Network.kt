@@ -45,7 +45,10 @@ object Networks {
     val TESTNET: Network = Network(
         "testnet", "Testnet (chain 4)", ChainIds.TESTNET,
         "https://rpc-testnet.kovanica.online/rpc",
-        "https://faucet-testnet.kovanica.online/faucet", enabled = true,
+        // The faucet answers `POST {"address": …}` on seed3 today;
+        // `faucet-testnet.kovanica.online` has no DNS record, so the Request
+        // faucet button would always fail on a fresh install.
+        "https://seed3.kovanica.online/faucet", enabled = true,
     )
     val LOCAL: Network = Network(
         "local", "Local", ChainIds.LOCAL,
