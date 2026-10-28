@@ -1,4 +1,4 @@
-import { Download, Smartphone, Cpu, MessageSquare, Shield, Terminal } from "lucide-react";
+import { Download, Smartphone, Cpu, MessageSquare, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -7,24 +7,25 @@ export const APP_DOWNLOADS = {
     name: "Kovanica Wallet",
     description: "Non-custodial mobile wallet with PRO-21 addresses, deterministic key derivation, and instant KUNA transfers.",
     androidApk: "/download/kovanica-wallet-0.3.3.apk",
-    iosIpa: "/download/kovanica-wallet-ios-unsigned.ipa",
+    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.3.3-wallet",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-wallet",
-    tag: "v0.3.3 · arm64 / iOS",
+    tag: "v0.3.3 · Android",
   },
   lightnode: {
     name: "Kovanica Lightnode",
     description: "Embedded DAG light client. Verifies Mysticeti DAG consensus headers, tracks account balances locally, and syncs trustlessly.",
     androidApk: "/download/kovanica-lightnode-0.8.4.apk",
-    linuxBin: "/download/kovanica-node-linux-x64",
+    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.8.4-android",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-chain",
-    tag: "v0.8.4 · 4s DAG sync",
+    tag: "v0.8.4 · Android",
   },
   comms: {
     name: "Kovanica Comms",
     description: "Decentralized P2P messaging and encrypted peer communication powered by Kovanica DAG transport and cryptographic identity.",
     androidApk: "/download/kovanica-comms-0.2.0.apk",
+    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.2.0-comms",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-comms",
-    tag: "v0.2.0 · E2E encrypted",
+    tag: "v0.2.0 · Android",
   },
 } as const;
 
@@ -120,14 +121,18 @@ export function WalletDownloads({ className, variant = "card" }: Props) {
                 </a>
               </Button>
               <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
-                <a href={APP_DOWNLOADS.wallet.iosIpa} download>
-                  <Download className="mr-1 size-3 text-gold/80" />
-                  iOS IPA
+                <a
+                  href={APP_DOWNLOADS.wallet.releases}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Shield className="mr-1 size-3 text-gold/80" />
+                  Release notes
                 </a>
               </Button>
             </div>
             <p className="text-[10px] text-subtle text-center">
-              Re-sign IPA with AltStore / Sideloadly
+              Signed with the Kovanica release key · arm64-v8a
             </p>
           </div>
         </div>
@@ -160,9 +165,13 @@ export function WalletDownloads({ className, variant = "card" }: Props) {
                 </a>
               </Button>
               <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
-                <a href={APP_DOWNLOADS.lightnode.linuxBin} download>
-                  <Terminal className="mr-1 size-3 text-teal" />
-                  Linux x64
+                <a
+                  href={APP_DOWNLOADS.lightnode.releases}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Shield className="mr-1 size-3 text-teal" />
+                  Release notes
                 </a>
               </Button>
             </div>
