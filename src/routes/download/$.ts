@@ -1,13 +1,19 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 // /download/* - redirect to the canonical artifact locations:
-//   install.sh            -> raw.githubusercontent (monorepo)
-//   kovanica-node-linux-* -> GitHub Releases (built by .github/workflows/releases.yml)
+//   install.sh            -> raw.githubusercontent (monorepo, always current)
+//   kovanica-node-linux-* -> GitHub Releases, v<version>-node tag (see
+//                            .github/workflows/release-node.yml)
 //   wallet artifacts      -> GitHub Releases (when published)
 // Redirects (302) keep binary traffic off the Nitro server.
 
 const RAW = "https://raw.githubusercontent.com/KovanicaDAG/kovanica/main";
-const RELEASE = "https://github.com/KovanicaDAG/kovanica/releases/latest/download";
+
+// Node binaries ship on their own tag; `releases/latest` is the wallet APK.
+// Bump NODE_RELEASE together with the default VERSION in
+// node/scripts/install.sh.
+const NODE_RELEASE =
+  "https://github.com/KovanicaDAG/kovanica/releases/download/v0.1.0-node";
 
 // The Android apps ship as three separate releases (one app per tag), so
 // releases/latest/download only ever contains one of them. Pin the tag and
@@ -23,10 +29,9 @@ const ANDROID_RELEASE = {
 
 const DOWNLOADS: Record<string, string> = {
   "install.sh": `${RAW}/node/scripts/install.sh`,
-  "kovanica-node-linux-x64": `${RELEASE}/kovanica-node-x86_64-linux.tar.gz`,
-  "kovanica-node-linux-arm64": `${RELEASE}/kovanica-node-aarch64-linux.tar.gz`,
-  "kovanica-wallet-debug.apk": `${RELEASE}/kovanica-wallet-debug.apk`,
-  "kovanica-wallet-ios-unsigned.ipa": `${RELEASE}/kovanica-wallet-ios-unsigned.ipa`,
+  "kovanica-node-linux-x64": `${NODE_RELEASE}/kovanica-node-x86_64-linux.tar.gz`,
+  "kovanica-node-linux-arm64": `${NODE_RELEASE}/kovanica-node-aarch64-linux.tar.gz`,
+  "kovanica-chain4-genesis.tar.gz": `${NODE_RELEASE}/kovanica-chain4-genesis.tar.gz`,
   // Versioned aliases: the CDN caches 404s, so a new path per build keeps
   // downloads working the moment a release lands.
   "kovanica-wallet-0.3.3.apk": ANDROID_RELEASE.wallet,
