@@ -1,13 +1,25 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-// /download/* — redirect to the canonical artifact locations:
-//   install.sh            → raw.githubusercontent (monorepo)
-//   kovanica-node-linux-* → GitHub Releases (built by .github/workflows/releases.yml)
-//   wallet artifacts      → GitHub Releases (when published)
+// /download/* - redirect to the canonical artifact locations:
+//   install.sh            -> raw.githubusercontent (monorepo)
+//   kovanica-node-linux-* -> GitHub Releases (built by .github/workflows/releases.yml)
+//   wallet artifacts      -> GitHub Releases (when published)
 // Redirects (302) keep binary traffic off the Nitro server.
 
 const RAW = "https://raw.githubusercontent.com/KovanicaDAG/kovanica/main";
 const RELEASE = "https://github.com/KovanicaDAG/kovanica/releases/latest/download";
+
+// The Android apps ship as three separate releases (one app per tag), so
+// releases/latest/download only ever contains one of them. Pin the tag and
+// bump these three URLs together with the version tags in wallet-downloads.tsx.
+const ANDROID_RELEASE = {
+  wallet:
+    "https://github.com/KovanicaDAG/kovanica/releases/download/v0.3.3-wallet/Kovanica-Wallet-0.3.3-arm64-v8a.apk",
+  lightnode:
+    "https://github.com/KovanicaDAG/kovanica/releases/download/v0.8.4-android/Kovanica-Lightnode-0.8.4-arm64-v8a.apk",
+  comms:
+    "https://github.com/KovanicaDAG/kovanica/releases/download/v0.2.0-comms/kovanica-comms-0.2.0.apk",
+};
 
 const DOWNLOADS: Record<string, string> = {
   "install.sh": `${RAW}/node/scripts/install.sh`,
@@ -15,6 +27,9 @@ const DOWNLOADS: Record<string, string> = {
   "kovanica-node-linux-arm64": `${RELEASE}/kovanica-node-aarch64-linux.tar.gz`,
   "kovanica-wallet-debug.apk": `${RELEASE}/kovanica-wallet-debug.apk`,
   "kovanica-wallet-ios-unsigned.ipa": `${RELEASE}/kovanica-wallet-ios-unsigned.ipa`,
+  "kovanica-wallet-latest.apk": ANDROID_RELEASE.wallet,
+  "kovanica-lightnode-latest.apk": ANDROID_RELEASE.lightnode,
+  "kovanica-comms-latest.apk": ANDROID_RELEASE.comms,
 };
 
 export const Route = createFileRoute("/download/$")({

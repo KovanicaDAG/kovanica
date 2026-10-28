@@ -9,7 +9,7 @@ export const APP_DOWNLOADS = {
     androidApk: "/download/kovanica-wallet-latest.apk",
     iosIpa: "/download/kovanica-wallet-ios-unsigned.ipa",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-wallet",
-    tag: "v0.3.2 · arm64 / iOS",
+    tag: "v0.3.3 · arm64 / iOS",
   },
   lightnode: {
     name: "Kovanica Lightnode",
@@ -17,14 +17,14 @@ export const APP_DOWNLOADS = {
     androidApk: "/download/kovanica-lightnode-latest.apk",
     linuxBin: "/download/kovanica-node-linux-x64",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-chain",
-    tag: "v0.8.3 · 4s DAG sync",
+    tag: "v0.8.4 · 4s DAG sync",
   },
   comms: {
     name: "Kovanica Comms",
     description: "Decentralized P2P messaging and encrypted peer communication powered by Kovanica DAG transport and cryptographic identity.",
     androidApk: "/download/kovanica-comms-latest.apk",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-comms",
-    tag: "v0.1.0 · E2E encrypted",
+    tag: "v0.2.0 · E2E encrypted",
   },
 } as const;
 
