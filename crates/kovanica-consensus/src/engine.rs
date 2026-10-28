@@ -1136,6 +1136,15 @@ where
     /// If the leader block is not known yet nothing is recorded, so a later
     /// call can still vote.
     fn vote_for_leader(&self, leader_round: Round) -> Result<bool, ConsensusError> {
+        // Only a staked authority may vote. A follow-mode node has no
+        // committee entry: `our_authority` is the `u16::MAX` sentinel and
+        // `our_stake` is 0. Signing with that index produced votes the
+        // validators rejected as "unknown authority 65535" and banned the
+        // sender for, so a public node poisoned its own peering by simply
+        // running. Such a node still ingests, executes and serves RPC.
+        if self.state.read().our_stake == 0 {
+            return Ok(false);
+        }
         // A round is *final* once the commit cursor has moved past it: the
         // decision walk starts above `last_decided_round` and will never
         // revisit it, so a late vote could only let a lagging peer commit a

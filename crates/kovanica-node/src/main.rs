@@ -76,7 +76,8 @@ use kovanica_staking::{
 use kovanica_storage::{StateStoreError, Storage};
 use kovanica_types::{
     block::{BlockReference, StatementBlock},
-    Address, AuthorityIndex, Hash, PublicKey, Round, Signature, SigningKey, Transaction,
+    next_leader_slot, Address, AuthorityIndex, Hash, PublicKey, Round, Signature, SigningKey,
+    Transaction,
 };
 
 /// Command line arguments.
@@ -2817,6 +2818,10 @@ const VOTE_SYNC_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 /// the round is given up on.
 const VOTE_SYNC_MAX_ATTEMPTS: u8 = 8;
 
+/// How long the tracker waits before it starts a fresh request cycle for the
+/// first undecided leader round after a full cycle produced no votes.
+const VOTE_SYNC_REARM_INTERVAL: Duration = Duration::from_secs(30);
+
 /// One in-flight vote request.
 struct VoteRequest {
     /// The peer the request was sent to.
@@ -2850,6 +2855,12 @@ struct VoteSync {
     buffered: BTreeMap<Round, Vec<Vote>>,
     /// Currently connected peers, in connection order.
     peers: Vec<PeerId>,
+    /// Next peer index to ask, so consecutive requests rotate through the
+    /// peers instead of retrying whichever peer connected first.
+    peer_cursor: usize,
+    /// Last undecided leader round the periodic re-arm covered, and when it
+    /// ran.
+    rearm: Option<(Round, Instant)>,
 }
 
 impl VoteSync {
@@ -2859,6 +2870,8 @@ impl VoteSync {
             outstanding: HashMap::new(),
             buffered: BTreeMap::new(),
             peers: Vec::new(),
+            peer_cursor: 0,
+            rearm: None,
         }
     }
 
@@ -2895,14 +2908,49 @@ impl VoteSync {
         }
     }
 
+    /// Keep the votes of `round` wanted, at most once every
+    /// [`VOTE_SYNC_REARM_INTERVAL`] while the round stays undecided.
+    ///
+    /// RFC-009 only asked for the votes of leader blocks fetched by block sync.
+    /// A leader block that arrived by gossip and whose votes were lost was
+    /// never fetched, and re-broadcasting the same vote is rejected by
+    /// gossipsub as a duplicate, so a single lost vote could stop the commit
+    /// walk for good while every node still looked healthy.
+    ///
+    /// No decision rule changes: every transferred vote still passes
+    /// [`ConsensusEngine::process_vote`], which authenticates the signer and
+    /// the leader hash.
+    fn want_undecided(&mut self, round: Round, now: Instant) {
+        if let Some((covered, since)) = self.rearm {
+            if covered == round
+                && now.saturating_duration_since(since) < VOTE_SYNC_REARM_INTERVAL
+            {
+                return;
+            }
+        }
+        self.rearm = Some((round, now));
+        self.want_votes(round);
+    }
+
+    /// The peer to ask next, rotating through the connected peers.
+    fn next_peer(&mut self) -> Option<PeerId> {
+        if self.peers.is_empty() {
+            return None;
+        }
+        let index = self.peer_cursor % self.peers.len();
+        self.peer_cursor = index + 1;
+        Some(self.peers[index])
+    }
+
     /// Record the votes a peer sent for `round`.
     fn on_votes(&mut self, round: Round, votes: Vec<Vote>) {
-        self.outstanding.remove(&round);
         if votes.is_empty() {
-            // The peer holds no votes for this round. Keep the round wanted:
-            // another peer may hold them.
+            // The peer holds no votes for this round. Keep the request
+            // outstanding so the retry loop asks another peer after
+            // [`VOTE_SYNC_RETRY_INTERVAL`] instead of restarting the round.
             return;
         }
+        self.outstanding.remove(&round);
         let entry = self.buffered.entry(round).or_default();
         for vote in votes {
             // One vote per voter: the first one that arrives wins.
@@ -2962,7 +3010,9 @@ impl VoteSync {
     /// Every bound is explicit: at most [`VOTE_SYNC_MAX_OUTSTANDING`] requests
     /// are in flight, a round is asked at most [`VOTE_SYNC_MAX_ATTEMPTS`]
     /// times, and a request for the same round is never repeated within
-    /// [`VOTE_SYNC_RETRY_INTERVAL`].
+    /// [`VOTE_SYNC_RETRY_INTERVAL`]. Requests rotate through the connected
+    /// peers, so a round whose votes one peer does not hold is asked from the
+    /// next one.
     fn pump(&mut self, now: Instant, network_cmd_tx: &mpsc::UnboundedSender<NetworkCommand>) {
         if self.peers.is_empty() {
             return;
@@ -2977,23 +3027,26 @@ impl VoteSync {
             .map(|(round, _)| *round)
             .collect();
         for round in due {
-            let Some(request) = self.outstanding.get_mut(&round) else {
+            let Some(attempts) = self.outstanding.get(&round).map(|request| request.attempts)
+            else {
                 continue;
             };
-            if request.attempts >= VOTE_SYNC_MAX_ATTEMPTS {
-                // The peer has nothing for this round; another peer may.
+            if attempts >= VOTE_SYNC_MAX_ATTEMPTS {
+                // No peer produced the votes; the undecided-round re-arm
+                // starts a fresh cycle if the slot is still stuck.
                 self.outstanding.remove(&round);
                 self.wanted.remove(&round);
                 warn!(round, "giving up on the votes for this leader round");
                 continue;
             }
-            let peer = request.peer;
-            if !self.peers.contains(&peer) {
-                self.outstanding.remove(&round);
-                continue;
+            let Some(peer) = self.next_peer() else {
+                break;
+            };
+            if let Some(request) = self.outstanding.get_mut(&round) {
+                request.peer = peer;
+                request.attempts = attempts + 1;
+                request.issued_at = now;
             }
-            request.attempts += 1;
-            request.issued_at = now;
             self.send_vote_request(peer, round, network_cmd_tx);
         }
         // Ask for the rounds nobody asked about yet.
@@ -3008,7 +3061,7 @@ impl VoteSync {
             if self.outstanding.len() >= VOTE_SYNC_MAX_OUTSTANDING {
                 break;
             }
-            let Some(peer) = self.peers.first().copied() else {
+            let Some(peer) = self.next_peer() else {
                 break;
             };
             self.outstanding.insert(
@@ -3522,6 +3575,26 @@ fn apply_state_snapshot(
     }
 }
 
+/// The leader round whose votes should be re-fetched, if the commit walk is
+/// stuck at it.
+///
+/// The walk stops at the first leader slot above the commit cursor. Its votes
+/// are only worth re-fetching once the leader block is known and the wave in
+/// which the slot should have been decided has passed; before that the normal
+/// gossip path is still delivering them.
+fn undecided_vote_round(
+    engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>,
+) -> Option<Round> {
+    let round = next_leader_slot(engine.last_decided_round());
+    if engine.current_round() < round.saturating_add(kovanica_types::WAVE_LENGTH) {
+        return None;
+    }
+    if engine.registered_leader(round).is_none() {
+        return None;
+    }
+    Some(round)
+}
+
 /// Handle a single [`NetworkEvent`].
 // 8 args: the state-sync session registry is a distinct concern from the
 // catch-up tracker; grouping them into a struct would obscure call sites.
@@ -3545,6 +3618,14 @@ fn handle_network_event(
     // Vote requests are issued from the event path (the tracker is only
     // advanced by network events), so an idle swarm defers them like the
     // catch-up work.
+    //
+    // The first undecided leader round is re-armed here: the block-sync path
+    // below only covers leader blocks fetched by sync, so a gossiped leader
+    // whose votes were lost would otherwise stay unfetched and stall the
+    // commit walk.
+    if let Some(round) = undecided_vote_round(engine) {
+        vote_sync.want_undecided(round, now);
+    }
     vote_sync.pump(now, network_cmd_tx);
     orphans.expire(now);
     state_sync_sessions.expire(now);
@@ -8648,6 +8729,75 @@ mod tests {
             other => panic!("expected a vote request, got {other:?}"),
         }
         let _ = engine;
+    }
+
+    /// A round the peers had no votes for is re-armed after the interval
+    /// instead of being abandoned: a single lost vote must not stall the
+    /// commit walk for good (RFC-009 only fetched votes for block-sync
+    /// fetches).
+    #[tokio::test]
+    async fn vote_sync_rearms_a_round_after_giving_up() {
+        let mut tracker = VoteSync::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let peer = PeerId::random();
+        tracker.peer_connected(peer);
+
+        let t0 = Instant::now();
+        tracker.want_undecided(3, t0);
+
+        // Every answer is empty: the round is retried until the attempt limit
+        // and then dropped from `wanted`.
+        let mut now = t0;
+        for _ in 0..=VOTE_SYNC_MAX_ATTEMPTS {
+            tracker.pump(now, &tx);
+            while rx.try_recv().is_ok() {}
+            tracker.on_votes(3, Vec::new());
+            now += VOTE_SYNC_RETRY_INTERVAL;
+        }
+        assert!(
+            !tracker.wanted.contains(&3),
+            "the round is given up on after the attempt limit"
+        );
+
+        // The re-arm brings it back once the interval has passed.
+        tracker.want_undecided(3, t0 + VOTE_SYNC_REARM_INTERVAL);
+        assert!(
+            tracker.wanted.contains(&3),
+            "the stuck round is asked for again"
+        );
+    }
+
+    /// Consecutive requests rotate through the connected peers, so a round a
+    /// peer does not hold is asked from another one.
+    #[tokio::test]
+    async fn vote_sync_rotates_between_peers() {
+        let mut tracker = VoteSync::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let first = PeerId::random();
+        let second = PeerId::random();
+        tracker.peer_connected(first);
+        tracker.peer_connected(second);
+
+        let t0 = Instant::now();
+        tracker.want_undecided(3, t0);
+        tracker.want_votes(6);
+        tracker.pump(t0, &tx);
+
+        let mut requested = Vec::new();
+        while let Ok(NetworkCommand::RequestSync(
+            peer,
+            BlockSyncRequest::VotesForRound { round },
+        )) = rx.try_recv()
+        {
+            requested.push((peer, round));
+        }
+        assert_eq!(requested.len(), 2);
+        assert_eq!(requested[0].1, 3);
+        assert_eq!(requested[1].1, 6);
+        assert_ne!(
+            requested[0].0, requested[1].0,
+            "consecutive requests go to different peers"
+        );
     }
 
     /// Without a connected peer nothing is requested.
