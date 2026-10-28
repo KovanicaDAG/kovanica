@@ -152,9 +152,25 @@ tr:hover td {
 }
 
 .navbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
   font-weight: 700;
   font-size: 1.25rem;
   color: var(--color-primary);
+}
+
+.navbar-brand-name {
+  letter-spacing: 0.01em;
+}
+
+.navbar-logo {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
 }
 
 .navbar-nav {
