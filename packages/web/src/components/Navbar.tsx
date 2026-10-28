@@ -14,7 +14,15 @@ export function Navbar({ items }: NavbarProps) {
   return (
     <nav className="navbar" role="navigation" aria-label="Main navigation">
       <Link to="/" className="navbar-brand">
-        Kovanica
+        <img
+          src="/kuna-logo-128.png"
+          alt=""
+          className="navbar-logo"
+          width={28}
+          height={28}
+          decoding="async"
+        />
+        <span className="navbar-brand-name">Kovanica</span>
       </Link>
       <nav className="navbar-nav" aria-label="Main">
         {items.map(item => (
