@@ -236,6 +236,11 @@ Bump `apps/android/app/build.gradle.kts` to `versionCode 4` / `versionName "0.4.
 
 ## §8 v0.5.0 — network switch (mainnet / testnet / local) + live chain data
 
+> **Shipped in 0.2.0 (2026-10-28):** testnet is **chain 4**, it is the default on a fresh install, and the
+> faucet button posts to `https://seed3.kovanica.online/faucet`. Mainnet (chain 1) stays disabled and Local
+> (1337) stays selectable. The section below is the original design note; values in the code block are the
+> shipped ones.
+
 Goal: make the app usable against a real network. Today it has **no network concept** — only free-text
 `rpc` / `chainId` / `epoch` boxes defaulting to the emulator loopback, and the faucet button is mis-wired
 (it POSTs to `rpcBase + "/faucet"`, but the faucet is a **separate** process on `:8080`). This cut mirrors
@@ -248,7 +253,7 @@ ledger, node, or ops change**, and no transaction is added.
 data class Network(
     val id: String,          // "mainnet" | "testnet" | "local"
     val label: String,       // "Mainnet" | "Testnet" | "Local / dev"
-    val chainId: Long,       // 1 | 2 | 1337
+    val chainId: Long,       // 1 | 4 | 1337
     val rpcUrl: String,      // full RPC base, WITH "/rpc" (NodeClient tolerates either form)
     val faucetUrl: String?,  // full faucet URL, or null => no faucet on this network
     val enabled: Boolean,
@@ -259,22 +264,23 @@ object Networks {
     val MAINNET = Network("mainnet", "Mainnet", 1L,
         "https://rpc.kovanica.online/rpc", null, enabled = false,
         soon = "Mainnet is not open yet.")
-    val TESTNET = Network("testnet", "Testnet", 2L,
+    val TESTNET = Network("testnet", "Testnet (chain 4)", 4L,
         "https://rpc-testnet.kovanica.online/rpc",
-        "https://faucet-testnet.kovanica.online/faucet", enabled = true)
+        "https://seed3.kovanica.online/faucet", enabled = true)
     val LOCAL = Network("local", "Local / dev", 1337L,
         "http://10.0.2.2:8545/rpc", "http://10.0.2.2:8080/faucet", enabled = true)
     val ALL: List<Network> = listOf(MAINNET, TESTNET, LOCAL)
-    val DEFAULT: Network = LOCAL
+    val DEFAULT: Network = TESTNET
     fun byId(id: String?): Network? = ALL.firstOrNull { it.id == id }
 }
 ```
 
-- **Chain-id truth:** mainnet `1`, testnet `2`, local `1337` — taken from the in-repo
+- **Chain-id truth:** mainnet `1`, testnet `4`, local `1337` — taken from the in-repo
   `packages/console/src/network.ts` and `crates/kovanica-types/src/signing.rs`. (Note: `docs/TESTNET-SEED-NODES.md`
   calls testnet `1337`; that discrepancy is a docs bug — the console and the type registry win.)
-- **Endpoint values are the in-repo console's and are UNVERIFIED for the `kovanica` chain.** They are defaults
-  only; every field stays editable, and the default selected network is **Local**.
+- **Endpoint values follow the shipped app presets.** They are defaults only; every field stays editable, and
+  the default selected network is **Testnet (chain 4)** — Local points at the emulator loopback and cannot work
+  on a real phone.
 - Mainnet is **disabled** (`enabled = false`, `soon`) until audited/open — mirrors the console.
 
 ### §8.2 Persistence (SharedPreferences file `"kvnc"`, same file the app already uses)
@@ -284,7 +290,7 @@ object Networks {
 - Existing keys keep working and become the **effective, editable override values**: `rpc`, `chainId`,
   `epoch`. Selecting a network writes `network_id` + prefills `rpc` / `chainId` / `faucet`.
 - No migration needed — old installs simply have no `network_id` and fall back to `Networks.DEFAULT`.
-- The FFI `faucet_allowed(chain_id)` needs **no change** (true for `2` and `1337`, false for `1`).
+- The FFI `faucet_allowed(chain_id)` needs **no change** (true for `4` and `1337`, false for `1`).
 
 Helper API (in `Network.kt`, lane android-net) so the UI lane never hand-rolls prefs:
 

@@ -167,7 +167,7 @@ export KOVANICA_RUN_VALIDATOR=true
 
 ```bash
 # Get testnet KUNA from faucet first
-curl -X POST https://faucet-testnet.kovanica.online/faucet \
+curl -X POST https://seed3.kovanica.online/faucet \
   -H "Content-Type: application/json" \
   -d '{"address": "kvnc<your-address>dag"}'
 
@@ -175,7 +175,7 @@ curl -X POST https://faucet-testnet.kovanica.online/faucet \
 kovanica-cli stake \
   --keystore /path/to/validator.keystore \
   --amount 50000000000000 \
-  --chain-id 2 \
+  --chain-id 4 \
   --rpc-url http://127.0.0.1:8545
 ```
 
@@ -187,7 +187,7 @@ kovanica-cli delegate \
   --keystore /path/to/delegator.keystore \
   --validator <validator-address> \
   --amount 10000000000000 \
-  --chain-id 2
+  --chain-id 4
 ```
 
 ---
@@ -345,10 +345,10 @@ Thresholds match `ops/prometheus/alerts.yml`.
 
 | Parameter | Value |
 |-----------|-------|
-| **Chain ID** | `2` |
-| **RPC endpoint** | `http://<your-ip>:8545` (local) / `https://rpc-testnet.kovanica.online` (public) |
+| **Chain ID** | `4` |
+| **RPC endpoint** | `http://<your-ip>:8545` (local) / `https://rpc-testnet.kovanica.online/rpc` (public) |
 | **Explorer** | `https://explorer.kovanica.online` |
-| **Faucet** | `https://faucet-testnet.kovanica.online` (3 req/hr/IP, 10 KUNA) |
+| **Faucet** | `https://faucet.kovanica.online` (UI) / `https://seed3.kovanica.online/faucet` (JSON API), 10 KUNA lifetime cap |
 | **Seed nodes** | `seed1.kovanica.online:8000`, `seed2.kovanica.online:8000`, `seed3.kovanica.online:8000` |
 | **Genesis file** | Distributed by coordinators |
 
@@ -356,10 +356,10 @@ Thresholds match `ops/prometheus/alerts.yml`.
 
 ```bash
 # Via CLI
-kovanica-cli faucet --address kvnc<your-address>dag --chain-id 2
+kovanica-cli faucet --address kvnc<your-address>dag --chain-id 4
 
 # Via HTTP
-curl -X POST https://faucet-testnet.kovanica.online/faucet \
+curl -X POST https://seed3.kovanica.online/faucet \
   -H "Content-Type: application/json" \
   -d '{"address": "kvnc<your-address>dag"}'
 ```
@@ -389,7 +389,7 @@ curl -X POST https://faucet-testnet.kovanica.online/faucet \
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `connection refused` | RPC not bound | Check `rpc_addr = "127.0.0.1:8545"` and firewall |
-| `chain_id mismatch` | Wrong chain ID | Use `--chain-id 2` for testnet |
+| `chain_id mismatch` | Wrong chain ID | Use `--chain-id 4` for testnet |
 | `nonce too low` | Stale local state | Restart node to resync |
 
 ### 9.4 Validator Not Producing Blocks
@@ -437,4 +437,4 @@ journalctl -u kovanica -f
 
 ---
 
-*Last updated: 2026-10-14 for testnet chain ID 2*
+*Last updated: 2026-10-28 for testnet chain ID 4*
