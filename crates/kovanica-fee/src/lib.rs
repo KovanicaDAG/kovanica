@@ -73,15 +73,11 @@ pub const GAS_KOVANICA_BLOCK_HEIGHT: u64 =
     HOST_BLOCK_HEIGHT_BASE_GAS + HOST_BLOCK_HEIGHT_PER_CALL_GAS;
 pub const GAS_KOVANICA_TIMESTAMP: u64 = HOST_TIMESTAMP_BASE_GAS + HOST_TIMESTAMP_PER_CALL_GAS;
 pub const GAS_KOVANICA_CALL_VALUE: u64 = HOST_CALL_VALUE_BASE_GAS + HOST_CALL_VALUE_PER_CALL_GAS;
-pub const GAS_KOVANICA_BALANCE_OF: u64 =
-    HOST_BALANCE_OF_BASE_GAS + HOST_BALANCE_OF_PER_CALL_GAS;
+pub const GAS_KOVANICA_BALANCE_OF: u64 = HOST_BALANCE_OF_BASE_GAS + HOST_BALANCE_OF_PER_CALL_GAS;
 pub const GAS_KOVANICA_TRANSFER: u64 = HOST_TRANSFER_BASE_GAS + HOST_TRANSFER_PER_CALL_GAS;
-pub const GAS_KOVANICA_STORAGE_GET: u64 =
-    HOST_STORAGE_GET_BASE_GAS + HOST_STORAGE_GET_PER_CALL_GAS;
-pub const GAS_KOVANICA_STORAGE_SET: u64 =
-    HOST_STORAGE_SET_BASE_GAS + HOST_STORAGE_SET_PER_CALL_GAS;
-pub const GAS_KOVANICA_EMIT_EVENT: u64 =
-    HOST_EMIT_EVENT_BASE_GAS + HOST_EMIT_EVENT_PER_CALL_GAS;
+pub const GAS_KOVANICA_STORAGE_GET: u64 = HOST_STORAGE_GET_BASE_GAS + HOST_STORAGE_GET_PER_CALL_GAS;
+pub const GAS_KOVANICA_STORAGE_SET: u64 = HOST_STORAGE_SET_BASE_GAS + HOST_STORAGE_SET_PER_CALL_GAS;
+pub const GAS_KOVANICA_EMIT_EVENT: u64 = HOST_EMIT_EVENT_BASE_GAS + HOST_EMIT_EVENT_PER_CALL_GAS;
 
 /// Minimum interpreter gas a `Call` must carry per byte of target module
 /// bytecode.
@@ -180,7 +176,8 @@ impl GasSchedule {
     }
 
     pub fn host_caller_cost(&self) -> u64 {
-        self.host_caller_base.saturating_add(self.host_caller_per_call)
+        self.host_caller_base
+            .saturating_add(self.host_caller_per_call)
     }
     pub fn host_contract_address_cost(&self) -> u64 {
         self.host_contract_address_base
@@ -191,26 +188,34 @@ impl GasSchedule {
             .saturating_add(self.host_block_height_per_call)
     }
     pub fn host_timestamp_cost(&self) -> u64 {
-        self.host_timestamp_base.saturating_add(self.host_timestamp_per_call)
+        self.host_timestamp_base
+            .saturating_add(self.host_timestamp_per_call)
     }
     pub fn host_call_value_cost(&self) -> u64 {
-        self.host_call_value_base.saturating_add(self.host_call_value_per_call)
+        self.host_call_value_base
+            .saturating_add(self.host_call_value_per_call)
     }
     pub fn host_balance_of_cost(&self) -> u64 {
-        self.host_balance_of_base.saturating_add(self.host_balance_of_per_call)
+        self.host_balance_of_base
+            .saturating_add(self.host_balance_of_per_call)
     }
     pub fn host_transfer_cost(&self) -> u64 {
-        self.host_transfer_base.saturating_add(self.host_transfer_per_call)
+        self.host_transfer_base
+            .saturating_add(self.host_transfer_per_call)
     }
     pub fn host_storage_get_cost(&self, bytes_copied: usize) -> u64 {
         self.host_storage_get_base
             .saturating_add(self.host_storage_get_per_call)
-            .saturating_add(chunks_32(bytes_copied).saturating_mul(self.host_storage_get_per_32_bytes))
+            .saturating_add(
+                chunks_32(bytes_copied).saturating_mul(self.host_storage_get_per_32_bytes),
+            )
     }
     pub fn host_storage_set_cost(&self, bytes_written: usize) -> u64 {
         self.host_storage_set_base
             .saturating_add(self.host_storage_set_per_call)
-            .saturating_add(chunks_32(bytes_written).saturating_mul(self.host_storage_set_per_32_bytes))
+            .saturating_add(
+                chunks_32(bytes_written).saturating_mul(self.host_storage_set_per_32_bytes),
+            )
     }
     pub fn host_emit_event_cost(&self, topic_and_data_bytes: usize) -> u64 {
         self.host_emit_event_base
@@ -219,8 +224,7 @@ impl GasSchedule {
     }
 
     pub fn estimate_call_gas(&self, code_len: usize) -> u64 {
-        self.call_base
-            .saturating_add(min_gas_for_module(code_len))
+        self.call_base.saturating_add(min_gas_for_module(code_len))
     }
 }
 
@@ -242,7 +246,10 @@ impl Default for FeePolicy {
 
 impl FeePolicy {
     pub fn new(schedule: GasSchedule, min_fee_rate: u64) -> Self {
-        Self { schedule, min_fee_rate }
+        Self {
+            schedule,
+            min_fee_rate,
+        }
     }
 
     pub fn min_fee_for_tx(&self, size_bytes: usize) -> u64 {
@@ -300,28 +307,44 @@ pub trait IntoCodeLen {
 }
 
 impl IntoCodeLen for usize {
-    fn code_len(&self) -> usize { *self }
+    fn code_len(&self) -> usize {
+        *self
+    }
 }
 impl IntoCodeLen for u64 {
-    fn code_len(&self) -> usize { *self as usize }
+    fn code_len(&self) -> usize {
+        *self as usize
+    }
 }
 impl IntoCodeLen for u32 {
-    fn code_len(&self) -> usize { *self as usize }
+    fn code_len(&self) -> usize {
+        *self as usize
+    }
 }
 impl IntoCodeLen for i32 {
-    fn code_len(&self) -> usize { *self as usize }
+    fn code_len(&self) -> usize {
+        *self as usize
+    }
 }
 impl IntoCodeLen for &[u8] {
-    fn code_len(&self) -> usize { self.len() }
+    fn code_len(&self) -> usize {
+        self.len()
+    }
 }
 impl IntoCodeLen for Vec<u8> {
-    fn code_len(&self) -> usize { self.len() }
+    fn code_len(&self) -> usize {
+        self.len()
+    }
 }
 impl<const N: usize> IntoCodeLen for [u8; N] {
-    fn code_len(&self) -> usize { N }
+    fn code_len(&self) -> usize {
+        N
+    }
 }
 impl IntoCodeLen for &Vec<u8> {
-    fn code_len(&self) -> usize { self.len() }
+    fn code_len(&self) -> usize {
+        self.len()
+    }
 }
 
 /// Estimate gas for a contract call given target module size or bytecode.
@@ -340,14 +363,33 @@ pub fn fee_from_gas(gas_price: u64, gas_used: u64) -> u64 {
 }
 
 // Free host-cost helpers (default schedule).
-pub fn host_caller_cost() -> u64 { DEFAULT_GAS_SCHEDULE.host_caller_cost() }
-pub fn host_contract_address_cost() -> u64 { DEFAULT_GAS_SCHEDULE.host_contract_address_cost() }
-pub fn host_block_height_cost() -> u64 { DEFAULT_GAS_SCHEDULE.host_block_height_cost() }
-pub fn host_timestamp_cost() -> u64 { DEFAULT_GAS_SCHEDULE.host_timestamp_cost() }
-pub fn host_call_value_cost() -> u64 { DEFAULT_GAS_SCHEDULE.host_call_value_cost() }
-pub fn host_balance_of_cost() -> u64 { DEFAULT_GAS_SCHEDULE.host_balance_of_cost() }
-pub fn host_transfer_cost() -> u64 { DEFAULT_GAS_SCHEDULE.host_transfer_cost() }
-pub fn host_storage_get_cost(bytes_copied: usize) -> u64 { DEFAULT_GAS_SCHEDULE.host_storage_get_cost(bytes_copied) }
-pub fn host_storage_set_cost(bytes_written: usize) -> u64 { DEFAULT_GAS_SCHEDULE.host_storage_set_cost(bytes_written) }
-pub fn host_emit_event_cost(topic_and_data_bytes: usize) -> u64 { DEFAULT_GAS_SCHEDULE.host_emit_event_cost(topic_and_data_bytes) }
-
+pub fn host_caller_cost() -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_caller_cost()
+}
+pub fn host_contract_address_cost() -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_contract_address_cost()
+}
+pub fn host_block_height_cost() -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_block_height_cost()
+}
+pub fn host_timestamp_cost() -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_timestamp_cost()
+}
+pub fn host_call_value_cost() -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_call_value_cost()
+}
+pub fn host_balance_of_cost() -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_balance_of_cost()
+}
+pub fn host_transfer_cost() -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_transfer_cost()
+}
+pub fn host_storage_get_cost(bytes_copied: usize) -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_storage_get_cost(bytes_copied)
+}
+pub fn host_storage_set_cost(bytes_written: usize) -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_storage_set_cost(bytes_written)
+}
+pub fn host_emit_event_cost(topic_and_data_bytes: usize) -> u64 {
+    DEFAULT_GAS_SCHEDULE.host_emit_event_cost(topic_and_data_bytes)
+}
