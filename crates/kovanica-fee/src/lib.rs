@@ -90,7 +90,7 @@ fn chunks_32(bytes: usize) -> u64 {
     if bytes == 0 {
         0
     } else {
-        ((bytes + 31) / 32) as u64
+        (bytes as u64).div_ceil(32)
     }
 }
 
