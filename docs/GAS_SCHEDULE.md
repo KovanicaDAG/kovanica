@@ -128,6 +128,7 @@ exactly as before.
 | `kovanica_contract_address` | 0 | 50 |
 | `kovanica_block_height` | 0 | 10 |
 | `kovanica_timestamp` | 0 | 10 |
+| Signed value (`kovanica_call_value`) | 50 | per call |
 | `kovanica_balance_of` | 100 | 50 |
 | `kovanica_transfer` | 1,500 | 200 |
 | `kovanica_storage_get` | 200 | 50 (+ 2 per 32 bytes copied) |

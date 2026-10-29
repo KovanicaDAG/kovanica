@@ -11,6 +11,7 @@
 //! kovanica_contract_address(out_ptr: i32)                // writes 32 bytes
 //! kovanica_block_height() -> i64
 //! kovanica_timestamp() -> i64
+//! kovanica_call_value() -> i64                           // u64 value as i64; -1 = overflow
 //! kovanica_balance_of(ptr: i32, len: i32) -> i64         // u64 balance as i64; -1 = error
 //! kovanica_transfer(fp, fl, tp, tl: i32, amount: i64) -> i32   // 0 = ok
 //! kovanica_storage_get(kp, kl, out_ptr: i32, out_cap: i32) -> i32
@@ -47,6 +48,7 @@ mod imports {
         pub fn kovanica_contract_address(out_ptr: i32);
         pub fn kovanica_block_height() -> i64;
         pub fn kovanica_timestamp() -> i64;
+        pub fn kovanica_call_value() -> i64;
         pub fn kovanica_balance_of(ptr: i32, len: i32) -> i64;
         pub fn kovanica_transfer(fp: i32, fl: i32, tp: i32, tl: i32, amount: i64) -> i32;
         pub fn kovanica_storage_get(kp: i32, kl: i32, out_ptr: i32, out_cap: i32) -> i32;
@@ -108,6 +110,16 @@ impl Host for WasmHost {
             0
         } else {
             v as u64 as Amount
+        }
+    }
+
+    fn call_value(&self) -> Amount {
+        // Negative (runtime clamp / overflow) → 0, so a buy then fails the
+        // `amount_in != 0` check. Values >= 2^63 atoms are practically
+        // impossible (total supply is 9.02e16 atoms).
+        match u64::try_from(unsafe { imports::kovanica_call_value() }) {
+            Ok(v) => Amount::from(v),
+            Err(_) => 0,
         }
     }
 
