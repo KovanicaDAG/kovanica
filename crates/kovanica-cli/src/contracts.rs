@@ -613,6 +613,15 @@ pub struct TokenBuyArgs {
     pub timeout: u64,
 }
 
+/// Parse `token sell --min-out` as a KUNA amount (`0.4` / `0.4KUNA` /
+/// `400000000atoms`), the same grammar as `--kuna`.
+///
+/// The value is a `u128` like every other token amount, but the parser speaks
+/// `u64` atoms, so widen here instead of at the call sites.
+fn parse_kuna_atoms(input: &str) -> Result<Amount, crate::amount::AmountError> {
+    crate::amount::parse_cli_amount(input).map(Amount::from)
+}
+
 /// Arguments for `kovanica token sell`.
 #[derive(Args)]
 pub struct TokenSellArgs {
@@ -622,8 +631,8 @@ pub struct TokenSellArgs {
     /// Tokens to sell, in token base units
     #[arg(long)]
     pub tokens: Amount,
-    /// Minimum KUNA to receive, in atoms
-    #[arg(long = "min-out", default_value_t = 0)]
+    /// Minimum KUNA to receive (`0.4` / `0.4KUNA` / `400000000atoms`)
+    #[arg(long = "min-out", default_value = "0atoms", value_parser = parse_kuna_atoms)]
     pub min_out: Amount,
     /// Keystore file path
     #[arg(long, short, default_value = "keystore.json")]
@@ -1099,11 +1108,44 @@ async fn token_call(
     Ok((hash, sender, contract, token))
 }
 
-/// Pure post-call check for `token_buy`. Returns why the state does not match
-/// the trade, or `None` when it does.
+/// Outcome of the post-call state check for a pool swap.
+///
+/// `failure` is a hard mismatch: the committed state cannot be the result of
+/// the swap this CLI signed, so the command must exit non-zero. `warnings` are
+/// advisory: each one means the pre-submit snapshot no longer matches the pool
+/// (another trade or a donation landed in between), which is normal on a live
+/// pool and never changes the exit code.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Verification {
+    /// Hard mismatch, if any.
+    pub failure: Option<String>,
+    /// Advisory snapshot mismatches, in the order they were found.
+    pub warnings: Vec<String>,
+}
+
+impl Verification {
+    fn fail(message: String) -> Self {
+        Self {
+            failure: Some(message),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn at(mut self, warning: String) -> Self {
+        self.warnings.push(warning);
+        self
+    }
+}
+
+/// Pure post-call check for `token_buy` (see `CONTRACTS.md` §7a/§7b).
 ///
 /// The node has no receipt the CLI can trust for a call result, so the swap is
-/// verified from the committed state (see `CONTRACTS.md` §7a/§7b).
+/// checked against the committed state. Only facts that must hold for *any*
+/// successful buy are hard failures — the buyer's token delta and the reserve
+/// invariant. Everything that compares against the pre-submit snapshot is a
+/// warning, because the window between the snapshot and the commit spans
+/// signing, the keystore passphrase, the nonce read and the commit wait, and
+/// another trade may land inside it.
 // Flat on purpose: it reads like the checklist it is, one state fact per line.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_buy(
@@ -1115,72 +1157,87 @@ pub fn verify_buy(
     before_pool: &kovanica_token::Pool,
     after_token: &kovanica_token::Token,
     after_pool: &kovanica_token::Pool,
-) -> Option<String> {
-    let expected = kovanica_token::quote(
-        kuna_in,
-        before_pool.kuna_reserve,
-        before_pool.token_reserve,
-        before_pool.fee_bps,
-    );
-    let Some(expected) = expected else {
-        return Some(format!(
-            "the pool reserves do not quote a trade (kuna {}, token {})",
-            before_pool.kuna_reserve, before_pool.token_reserve
-        ));
-    };
-    if expected < min_out {
-        return Some(format!(
-            "the pool quotes {expected}, below --min-out {min_out}"
-        ));
-    }
-
-    let received = balance_of(after_token, buyer);
+) -> Verification {
+    // ---- hard checks: true of every successful buy ----
     let held_before = balance_of(before_token, buyer);
+    let received = balance_of(after_token, buyer);
     if received < held_before {
-        return Some(format!(
+        return Verification::fail(format!(
             "buyer balance fell from {held_before} to {received}"
         ));
     }
     let delta = received - held_before;
+    if delta == 0 {
+        return Verification::fail("the buyer received no tokens".to_string());
+    }
+    // The one `min_out` check: the contract already enforces it on-chain and
+    // reverts the call, so a committed buy below the floor is a real anomaly.
     if delta < min_out {
-        return Some(format!("buyer received {delta}, below --min-out {min_out}"));
-    }
-    if after_pool.token_reserve > before_pool.token_reserve {
-        return Some(format!(
-            "token reserve rose from {} to {}",
-            before_pool.token_reserve, after_pool.token_reserve
-        ));
-    }
-    let token_drop = before_pool.token_reserve - after_pool.token_reserve;
-    if token_drop != delta {
-        return Some(format!(
-            "buyer received {delta} but the token reserve fell by {token_drop}"
-        ));
-    }
-    let expected_kuna = before_pool.kuna_reserve.saturating_add(kuna_in);
-    if after_pool.kuna_reserve < expected_kuna {
-        return Some(format!(
-            "kuna reserve is {}, expected at least {expected_kuna}",
-            after_pool.kuna_reserve
-        ));
-    }
-    if after_pool.lp_total != before_pool.lp_total {
-        return Some(format!(
-            "lp_total moved from {} to {}",
-            before_pool.lp_total, after_pool.lp_total
-        ));
+        return Verification::fail(format!("buyer received {delta}, below --min-out {min_out}"));
     }
     let contract_tokens = balance_of(after_token, contract);
     if after_pool.token_reserve != contract_tokens {
-        return Some(format!(
+        return Verification::fail(format!(
             "token reserve {} does not equal the contract balance {contract_tokens}",
             after_pool.token_reserve
         ));
     }
-    None
+    if after_pool.lp_total != before_pool.lp_total {
+        return Verification::fail(format!(
+            "lp_total moved from {} to {}",
+            before_pool.lp_total, after_pool.lp_total
+        ));
+    }
+
+    // ---- warnings: comparisons against the pre-submit snapshot ----
+    let mut verification = Verification::default();
+    match kovanica_token::quote(
+        kuna_in,
+        before_pool.kuna_reserve,
+        before_pool.token_reserve,
+        before_pool.fee_bps,
+    ) {
+        Some(expected) if expected != delta => {
+            verification = verification.at(format!(
+                "the pre-submit snapshot quoted {expected}, the buyer received {delta}"
+            ));
+        }
+        None => {
+            verification = verification.at(format!(
+                "the pre-submit snapshot did not quote a trade (kuna {}, token {})",
+                before_pool.kuna_reserve, before_pool.token_reserve
+            ));
+        }
+        Some(_) => {}
+    }
+    if after_pool.token_reserve > before_pool.token_reserve {
+        verification = verification.at(format!(
+            "token reserve rose from {} to {}",
+            before_pool.token_reserve, after_pool.token_reserve
+        ));
+    } else {
+        let token_drop = before_pool.token_reserve - after_pool.token_reserve;
+        if token_drop != delta {
+            verification = verification.at(format!(
+                "buyer received {delta} but the token reserve fell by {token_drop}"
+            ));
+        }
+    }
+    let expected_kuna = before_pool.kuna_reserve.saturating_add(kuna_in);
+    if after_pool.kuna_reserve != expected_kuna {
+        verification = verification.at(format!(
+            "kuna reserve is {}, not the {expected_kuna} this trade alone implies",
+            after_pool.kuna_reserve
+        ));
+    }
+    verification
 }
 
 /// Pure post-call check for `token_sell`; see [`verify_buy`].
+///
+/// The payout cannot be measured from the reserves (a concurrent trade moves
+/// them), so the hard checks are the seller's token delta and the reserve
+/// invariant; the quote is only an advisory comparison.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_sell(
     contract: Address,
@@ -1191,61 +1248,71 @@ pub fn verify_sell(
     before_pool: &kovanica_token::Pool,
     after_token: &kovanica_token::Token,
     after_pool: &kovanica_token::Pool,
-) -> Option<String> {
-    let expected = kovanica_token::quote(
-        tokens_in,
-        before_pool.token_reserve,
-        before_pool.kuna_reserve,
-        before_pool.fee_bps,
-    );
-    let Some(paid) = expected else {
-        return Some(format!(
-            "the pool reserves do not quote a trade (token {}, kuna {})",
-            before_pool.token_reserve, before_pool.kuna_reserve
-        ));
-    };
-    if paid < min_out {
-        return Some(format!(
-            "the pool quotes {paid} atoms, below --min-out {min_out}"
-        ));
-    }
-
+) -> Verification {
+    // ---- hard checks: true of every successful sell ----
     let held_before = balance_of(before_token, seller);
     let held_after = balance_of(after_token, seller);
     let expected_after = held_before.saturating_sub(tokens_in);
     if held_after != expected_after {
-        return Some(format!(
+        return Verification::fail(format!(
             "seller balance is {held_after}, expected {expected_after}"
-        ));
-    }
-    let expected_reserve = before_pool.token_reserve.saturating_add(tokens_in);
-    if after_pool.token_reserve != expected_reserve {
-        return Some(format!(
-            "token reserve is {}, expected {expected_reserve}",
-            after_pool.token_reserve
-        ));
-    }
-    let expected_kuna = before_pool.kuna_reserve.saturating_sub(paid);
-    if after_pool.kuna_reserve != expected_kuna {
-        return Some(format!(
-            "kuna reserve is {}, expected {expected_kuna}",
-            after_pool.kuna_reserve
-        ));
-    }
-    if after_pool.lp_total != before_pool.lp_total {
-        return Some(format!(
-            "lp_total moved from {} to {}",
-            before_pool.lp_total, after_pool.lp_total
         ));
     }
     let contract_tokens = balance_of(after_token, contract);
     if after_pool.token_reserve != contract_tokens {
-        return Some(format!(
+        return Verification::fail(format!(
             "token reserve {} does not equal the contract balance {contract_tokens}",
             after_pool.token_reserve
         ));
     }
-    None
+    if after_pool.lp_total != before_pool.lp_total {
+        return Verification::fail(format!(
+            "lp_total moved from {} to {}",
+            before_pool.lp_total, after_pool.lp_total
+        ));
+    }
+
+    // ---- warnings: comparisons against the pre-submit snapshot ----
+    let mut verification = Verification::default();
+    // Best-effort payout: another trade in the window moves this too, so it is
+    // only ever compared for advice.
+    let observed_payout = before_pool
+        .kuna_reserve
+        .saturating_sub(after_pool.kuna_reserve);
+    match kovanica_token::quote(
+        tokens_in,
+        before_pool.token_reserve,
+        before_pool.kuna_reserve,
+        before_pool.fee_bps,
+    ) {
+        Some(expected) if expected != observed_payout => {
+            verification = verification.at(format!(
+                "the pre-submit snapshot quoted {expected} atoms out, the reserves moved by \
+                 {observed_payout}"
+            ));
+        }
+        None => {
+            verification = verification.at(format!(
+                "the pre-submit snapshot did not quote a trade (token {}, kuna {})",
+                before_pool.token_reserve, before_pool.kuna_reserve
+            ));
+        }
+        Some(_) => {}
+    }
+    if observed_payout < min_out {
+        verification = verification.at(format!(
+            "the observed payout {observed_payout} is below --min-out {min_out}; another trade \
+             moved the reserve"
+        ));
+    }
+    let expected_reserve = before_pool.token_reserve.saturating_add(tokens_in);
+    if after_pool.token_reserve != expected_reserve {
+        verification = verification.at(format!(
+            "token reserve is {}, not the {expected_reserve} this trade alone implies",
+            after_pool.token_reserve
+        ));
+    }
+    verification
 }
 
 fn token_contract(chain_id: Option<u64>, text: &str) -> Result<Address> {
@@ -1377,7 +1444,7 @@ async fn token_buy(
     let pool_after = read_pool(client, contract)
         .await?
         .ok_or_else(|| anyhow!("{contract} holds no pool state after token_buy {hash}"))?;
-    if let Some(problem) = verify_buy(
+    let verification = verify_buy(
         contract,
         sender,
         Amount::from(args.kuna),
@@ -1386,11 +1453,15 @@ async fn token_buy(
         &pool_before,
         &token_after,
         &pool_after,
-    ) {
+    );
+    if let Some(problem) = verification.failure {
         bail!(
-            "token_buy {hash} committed but the pool state did not follow: {problem}; the fee was \
+            "token_buy {hash} committed but the reserve check failed: {problem}; the fee was \
              charged and the nonce consumed"
         );
+    }
+    for warning in &verification.warnings {
+        eprintln!("warning: token_buy {hash}: {warning}");
     }
 
     let received =
@@ -1406,6 +1477,7 @@ async fn token_buy(
         "token_reserve": pool_after.token_reserve.to_string(),
         "symbol": token_after.symbol,
         "decimals": token_after.decimals,
+        "warnings": verification.warnings,
     });
     emit(
         json_output,
@@ -1461,7 +1533,7 @@ async fn token_sell(
     let pool_after = read_pool(client, contract)
         .await?
         .ok_or_else(|| anyhow!("{contract} holds no pool state after token_sell {hash}"))?;
-    if let Some(problem) = verify_sell(
+    let verification = verify_sell(
         contract,
         sender,
         args.tokens,
@@ -1470,11 +1542,15 @@ async fn token_sell(
         &pool_before,
         &token_after,
         &pool_after,
-    ) {
+    );
+    if let Some(problem) = verification.failure {
         bail!(
-            "token_sell {hash} committed but the pool state did not follow: {problem}; the fee was \
+            "token_sell {hash} committed but the reserve check failed: {problem}; the fee was \
              charged and the nonce consumed"
         );
+    }
+    for warning in &verification.warnings {
+        eprintln!("warning: token_sell {hash}: {warning}");
     }
 
     let paid = pool_before
@@ -1490,6 +1566,7 @@ async fn token_sell(
         "kuna_reserve": pool_after.kuna_reserve.to_string(),
         "token_reserve": pool_after.token_reserve.to_string(),
         "symbol": token_after.symbol,
+        "warnings": verification.warnings,
     });
     emit(
         json_output,
@@ -2053,22 +2130,26 @@ mod tests {
         after_pool.kuna_reserve += kuna_in;
         after_pool.token_reserve -= out;
 
-        assert_eq!(
-            verify_buy(
-                contract,
-                alice,
-                kuna_in,
-                out,
-                &before_token,
-                &before_pool,
-                &after_token,
-                &after_pool
-            ),
-            None
+        let clean = verify_buy(
+            contract,
+            alice,
+            kuna_in,
+            out,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &after_pool,
+        );
+        assert_eq!(clean.failure, None);
+        assert!(
+            clean.warnings.is_empty(),
+            "a state that follows the quote has nothing to warn about: {:?}",
+            clean.warnings
         );
 
-        // A state that did not follow the quote is refused (this is what turns
-        // a "committed" transaction into a non-zero CLI exit).
+        // A reserve that no longer mirrors the contract balance is a hard
+        // failure (this is what turns a "committed" transaction into a
+        // non-zero CLI exit).
         let mut wrong = after_pool.clone();
         wrong.token_reserve -= 1;
         assert!(verify_buy(
@@ -2081,9 +2162,10 @@ mod tests {
             &after_token,
             &wrong
         )
+        .failure
         .is_some());
 
-        // A slippage floor above the quote is refused before looking at state.
+        // A buyer delta below the signed floor is a hard failure.
         assert!(verify_buy(
             contract,
             alice,
@@ -2094,7 +2176,64 @@ mod tests {
             &after_token,
             &after_pool
         )
+        .failure
         .is_some());
+
+        // Minting LP shares on a swap is a hard failure.
+        let mut lp_moved = after_pool.clone();
+        lp_moved.lp_total += 1;
+        assert!(verify_buy(
+            contract,
+            alice,
+            kuna_in,
+            out,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &lp_moved
+        )
+        .failure
+        .is_some());
+    }
+
+    // A trade that lands between the pre-submit snapshot and the commit must
+    // not look like a failed swap: the hard facts still hold, only the
+    // snapshot comparisons are off.
+    #[test]
+    fn buy_verification_warns_but_does_not_fail_on_a_concurrent_trade() {
+        let (before_token, before_pool, contract, alice) = pool_fixture();
+        let kuna_in = 10_000u128;
+        let min_out = 1_000u128;
+        // Our buy took 4_000 tokens; someone else bought 2_000 tokens for
+        // 5_000 KUNA in the same window, so neither reserve matches a
+        // single-trade quote any more.
+        let delta = 4_000u128;
+
+        let mut after_token = before_token.clone();
+        after_token.balances.insert(alice.0, 10_000 + delta);
+        after_token
+            .balances
+            .insert(contract.0, before_pool.token_reserve - delta - 2_000);
+        let mut after_pool = before_pool.clone();
+        after_pool.token_reserve = before_pool.token_reserve - delta - 2_000;
+        after_pool.kuna_reserve = before_pool.kuna_reserve + kuna_in + 5_000;
+
+        let verification = verify_buy(
+            contract,
+            alice,
+            kuna_in,
+            min_out,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &after_pool,
+        );
+        assert_eq!(verification.failure, None);
+        assert!(
+            !verification.warnings.is_empty(),
+            "a concurrent trade must be reported as a warning"
+        );
+        assert!(verification.warnings.iter().any(|w| w.contains("quoted")));
     }
 
     #[test]
@@ -2118,22 +2257,42 @@ mod tests {
         after_pool.token_reserve += tokens_in;
         after_pool.kuna_reserve -= paid;
 
-        assert_eq!(
-            verify_sell(
-                contract,
-                alice,
-                tokens_in,
-                paid,
-                &before_token,
-                &before_pool,
-                &after_token,
-                &after_pool
-            ),
-            None
+        let clean = verify_sell(
+            contract,
+            alice,
+            tokens_in,
+            paid,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &after_pool,
+        );
+        assert_eq!(clean.failure, None);
+        assert!(
+            clean.warnings.is_empty(),
+            "a state that follows the quote has nothing to warn about: {:?}",
+            clean.warnings
         );
 
-        let mut wrong = after_pool.clone();
-        wrong.kuna_reserve += 1;
+        // The seller's own token delta is the hard fact.
+        let mut wrong = after_token.clone();
+        wrong.balances.insert(alice.0, 10_000);
+        assert!(verify_sell(
+            contract,
+            alice,
+            tokens_in,
+            paid,
+            &before_token,
+            &before_pool,
+            &wrong,
+            &after_pool
+        )
+        .failure
+        .is_some());
+
+        // So is the reserve mirror and the LP total.
+        let mut wrong_pool = after_pool.clone();
+        wrong_pool.token_reserve -= 1;
         assert!(verify_sell(
             contract,
             alice,
@@ -2142,21 +2301,60 @@ mod tests {
             &before_token,
             &before_pool,
             &after_token,
-            &wrong
+            &wrong_pool
         )
+        .failure
         .is_some());
 
+        let mut lp_moved = after_pool.clone();
+        lp_moved.lp_total += 1;
         assert!(verify_sell(
             contract,
             alice,
             tokens_in,
-            paid + 1,
+            paid,
             &before_token,
             &before_pool,
             &after_token,
-            &after_pool
+            &lp_moved
         )
+        .failure
         .is_some());
+    }
+
+    // Someone bought between our snapshot and the commit, so the reserve fell
+    // by less than the quote said. The sell itself is fine: warn, do not fail.
+    #[test]
+    fn sell_verification_warns_but_does_not_fail_on_a_concurrent_trade() {
+        let (before_token, before_pool, contract, alice) = pool_fixture();
+        let tokens_in = 5_000u128;
+
+        let mut after_token = before_token.clone();
+        after_token.balances.insert(alice.0, 10_000 - tokens_in);
+        after_token
+            .balances
+            .insert(contract.0, before_pool.token_reserve + tokens_in - 1_000);
+        let mut after_pool = before_pool.clone();
+        after_pool.token_reserve = before_pool.token_reserve + tokens_in - 1_000;
+        // A concurrent buy lifted the reserve, so it dropped by 3_000 instead
+        // of the ~4_960 the snapshot quoted.
+        after_pool.kuna_reserve = before_pool.kuna_reserve - 3_000;
+
+        let verification = verify_sell(
+            contract,
+            alice,
+            tokens_in,
+            0,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &after_pool,
+        );
+        assert_eq!(verification.failure, None);
+        assert!(
+            !verification.warnings.is_empty(),
+            "a concurrent trade must be reported as a warning"
+        );
     }
 
     #[test]

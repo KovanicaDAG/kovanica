@@ -1281,6 +1281,87 @@ mod wallet_cli_security_tests {
     }
 
     #[test]
+    fn token_sell_min_out_takes_a_kuna_amount() {
+        // `token sell --min-out` is a KUNA amount, so the documented
+        // `0.4KUNA` form must parse (it used to be a bare-integer `Amount`).
+        let contract = "kvncd7aa7xv4kq7zz4mfqu6fd9vuuu9wvwlx6c24t6794zhq6339jlqjynnsjdag";
+
+        let parse = |min_out: &str| {
+            Cli::try_parse_from([
+                "kovanica",
+                "token",
+                "sell",
+                "--contract",
+                contract,
+                "--tokens",
+                "300000",
+                "--min-out",
+                min_out,
+            ])
+        };
+
+        for (text, atoms) in [
+            ("0.4KUNA", 400_000_000u128),
+            ("0.4", 400_000_000),
+            ("400000000atoms", 400_000_000),
+            ("5atoms", 5),
+        ] {
+            let cli = parse(text).unwrap_or_else(|err| panic!("--min-out {text}: {err}"));
+            let Commands::Token {
+                command: TokenCommand::Sell(args),
+            } = cli.command
+            else {
+                panic!("expected token sell");
+            };
+            assert_eq!(args.min_out, atoms, "--min-out {text}");
+        }
+
+        // Omitted: the default is still 0, just spelled with its unit.
+        let cli = Cli::try_parse_from([
+            "kovanica",
+            "token",
+            "sell",
+            "--contract",
+            contract,
+            "--tokens",
+            "300000",
+        ])
+        .unwrap();
+        let Commands::Token {
+            command: TokenCommand::Sell(args),
+        } = cli.command
+        else {
+            panic!("expected token sell");
+        };
+        assert_eq!(args.min_out, 0);
+
+        // A bare integer still does not say KUNA or atoms, same as `--kuna`.
+        assert!(parse("400000000").is_err());
+
+        // `token buy --min-out` is token base units and stays a bare integer.
+        let cli = Cli::try_parse_from([
+            "kovanica",
+            "token",
+            "buy",
+            "--contract",
+            contract,
+            "--kuna",
+            "0.5KUNA",
+            "--min-out",
+            "300000",
+        ])
+        .unwrap();
+        let Commands::Token {
+            command: TokenCommand::Buy(args),
+        } = cli.command
+        else {
+            panic!("expected token buy");
+        };
+        assert_eq!(args.min_out, 300_000);
+        assert_eq!(args.kuna, 500_000_000);
+    }
+
+    #[test]
     fn secret_passphrases_are_not_cli_arguments() {
         let recipient = "00".repeat(32);
         for args in [

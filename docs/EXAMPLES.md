@@ -132,12 +132,18 @@ kovanica token reserves --contract <kvnc…>
 Notes:
 
 - `--kuna` accepts the same units as every other amount (`1.5`, `1.5KUNA`,
-  `5atoms`); `--tokens` and `--min-out` for `buy` are token base units.
+  `5atoms`), and so does `sell --min-out`; `--tokens` and `buy --min-out` are
+  token base units.
 - Each mutation waits for its nonce, then re-reads the pool at
   `blake3("kvnc/v1/pool")` and the token state at `blake3("kvnc/v1/state")`.
-  It **exits non-zero** if the observed reserves, the caller's token balance or
-  the emitted event disagree with the local quote — a rejected body still pays
-  the fee, so a silent success would be a lie.
+  It **exits non-zero** unless the committed reserves and the caller's token
+  balance satisfy the swap — exact deltas, `token_reserve ==
+  balances[contract]`, unchanged `lp_total`. Comparisons against the
+  pre-submit snapshot (the local quote, the reserve movement this trade alone
+  implies) are printed as `warning:` lines and never change the exit code: on a
+  live pool another trade can land between the snapshot and the commit. Events
+  are for indexers, not for this check. A rejected body still pays the fee, so
+  a silent success would be a lie.
 - Pricing is `out = in_after * r_out / (r_in + in_after)` with
   `in_after = in * (10_000 - fee_bps) / 10_000`, all integer and floored; the
   fee stays in the reserve for LPs.

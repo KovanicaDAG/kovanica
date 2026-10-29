@@ -442,10 +442,15 @@ kovanica token reserves --contract <kvnc…>
 
 Every mutation waits for its nonce, then re-reads `kovanica_getStorageAt(
 contract, blake3("kvnc/v1/pool"))` (`kovanica_token::pool_slot()`) and the token
-state at `blake3("kvnc/v1/state")` and **exits non-zero** unless the observed
-reserves, the caller's token balance and the event agree with the quote — a
-rejected body still charges the fee and burns the nonce, so silence would look
-like success.
+state at `blake3("kvnc/v1/state")` and **exits non-zero** unless the committed
+reserves and the caller's token balance satisfy the swap: exact deltas are
+checked (the buyer's token gain for `buy`, the seller's token loss for `sell`)
+along with `token_reserve == balances[contract]` and an unchanged `lp_total`.
+Comparisons against the pre-submit snapshot — the local quote, the reserve
+movement for this trade alone — are reported as warnings instead, because
+another trade may land between that read and the commit. Events are for
+indexers (§9), not for this check. A rejected body still charges the fee and
+burns the nonce, so a silent "committed" would look like success.
 
 There is still **no** remove-liquidity path, no token↔token pool, no upgrade
 hook and no pause setter; those are PR-2/PR-3 scope.
