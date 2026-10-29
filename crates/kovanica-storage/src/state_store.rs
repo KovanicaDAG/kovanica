@@ -2294,7 +2294,10 @@ mod snapshot_tests {
         );
         let txn = dst.begin_read().unwrap();
         assert_eq!(
-            dst.state().get_account(&txn, &Address([4; 32])).unwrap().balance,
+            dst.state()
+                .get_account(&txn, &Address([4; 32]))
+                .unwrap()
+                .balance,
             1234,
             "the seeded row must be untouched: nothing may be applied"
         );
@@ -2553,9 +2556,10 @@ mod snapshot_tests {
                 .expect("3-of-4 quorum snapshot must import");
             assert_eq!(verified.height, 4);
             assert_eq!(
-            verified.leader_round,
-            kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND + 5 * kovanica_types::WAVE_LENGTH
-        );
+                verified.leader_round,
+                kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND
+                    + 5 * kovanica_types::WAVE_LENGTH
+            );
             txn.commit().unwrap();
         }
     }

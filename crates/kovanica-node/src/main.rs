@@ -2944,9 +2944,7 @@ impl VoteSync {
     /// the leader hash.
     fn want_undecided(&mut self, round: Round, now: Instant) {
         if let Some((covered, since)) = self.rearm {
-            if covered == round
-                && now.saturating_duration_since(since) < VOTE_SYNC_REARM_INTERVAL
-            {
+            if covered == round && now.saturating_duration_since(since) < VOTE_SYNC_REARM_INTERVAL {
                 return;
             }
         }
@@ -3161,7 +3159,10 @@ impl VoteSync {
         if attempts >= VOTE_SYNC_MAX_ATTEMPTS {
             self.leader_request = None;
             self.leader_cooldown = Some(now + VOTE_SYNC_REARM_INTERVAL);
-            warn!(round, author, "giving up on the leader block for this round");
+            warn!(
+                round,
+                author, "giving up on the leader block for this round"
+            );
             return;
         }
         let Some(peer) = self.next_peer() else {
@@ -3690,9 +3691,7 @@ fn apply_state_snapshot(
 /// are only worth re-fetching once the leader block is known and the wave in
 /// which the slot should have been decided has passed; before that the normal
 /// gossip path is still delivering them.
-fn undecided_vote_round(
-    engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>,
-) -> Option<Round> {
+fn undecided_vote_round(engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>) -> Option<Round> {
     let round = next_leader_slot(engine.last_decided_round());
     if engine.current_round() < round.saturating_add(kovanica_types::WAVE_LENGTH) {
         return None;
@@ -7842,7 +7841,10 @@ mod tests {
         // Sealed at a round the full-state commitment covers: below the
         // activation round a snapshot is refused and there is nothing to anchor.
         let anchor = post_activation_round((commits + skipped_slots) * kovanica_types::WAVE_LENGTH);
-        assert_ne!(anchor, post_activation_round(commits * kovanica_types::WAVE_LENGTH));
+        assert_ne!(
+            anchor,
+            post_activation_round(commits * kovanica_types::WAVE_LENGTH)
+        );
 
         let dir = tempfile::tempdir().unwrap();
         let src = Storage::new(dir.path().join("src.redb")).unwrap();
@@ -8950,10 +8952,8 @@ mod tests {
         tracker.pump(t0, &tx);
 
         let mut requested = Vec::new();
-        while let Ok(NetworkCommand::RequestSync(
-            peer,
-            BlockSyncRequest::VotesForRound { round },
-        )) = rx.try_recv()
+        while let Ok(NetworkCommand::RequestSync(peer, BlockSyncRequest::VotesForRound { round })) =
+            rx.try_recv()
         {
             requested.push((peer, round));
         }
@@ -9017,7 +9017,8 @@ mod tests {
 
     /// Without a connected peer nothing is requested.
     #[tokio::test]
-    async fn vote_sync_requests_nothing_without_a_peer() {        let dir = tempfile::tempdir().unwrap();
+    async fn vote_sync_requests_nothing_without_a_peer() {
+        let dir = tempfile::tempdir().unwrap();
         let (engine, _dag, _key) = vote_sync_test_engine(&dir);
         let mut tracker = VoteSync::new();
         let (tx, mut rx) = mpsc::unbounded_channel::<NetworkCommand>();
