@@ -78,7 +78,7 @@ blocks validate and execute exactly as before.
 - a `Deploy` is rejected unless its bytecode compiles as a valid wasm module
   (the same wasmi engine the interpreter uses) **and** the derived contract
   address holds no code; both checks run before any storage write;
-- a `Call` whose `method` is not one of the 16 `ENTRY_POINTS` is rejected
+- a `Call` whose `method` is not one of the 19 `ENTRY_POINTS` is rejected
   **before** the interpreter runs (so it charges no fuel and writes nothing).
 
 All checks are deterministic. A rejected deploy/call still charges fee and

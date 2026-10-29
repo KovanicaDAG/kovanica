@@ -146,6 +146,25 @@ pub fn encode_token_burn(amount: Amount) -> Result<Vec<u8>, EncodeError> {
     enc(&amount)
 }
 
+/// `token_init_pool(kuna_in, tokens_in, fee_bps)`.
+pub fn encode_token_init_pool(
+    kuna_in: Amount,
+    tokens_in: Amount,
+    fee_bps: u16,
+) -> Result<Vec<u8>, EncodeError> {
+    enc(&(kuna_in, tokens_in, fee_bps))
+}
+
+/// `token_buy(amount_in, min_out)`.
+pub fn encode_token_buy(amount_in: Amount, min_out: Amount) -> Result<Vec<u8>, EncodeError> {
+    enc(&(amount_in, min_out))
+}
+
+/// `token_sell(amount_in, min_out)`.
+pub fn encode_token_sell(amount_in: Amount, min_out: Amount) -> Result<Vec<u8>, EncodeError> {
+    enc(&(amount_in, min_out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +284,21 @@ mod tests {
         assert_eq!(
             bincode::deserialize::<Amount>(&encode_token_burn(4).unwrap()).unwrap(),
             4
+        );
+        assert_eq!(
+            bincode::deserialize::<(Amount, Amount, u16)>(
+                &encode_token_init_pool(10, 20, 30).unwrap()
+            )
+            .unwrap(),
+            (10, 20, 30)
+        );
+        assert_eq!(
+            bincode::deserialize::<(Amount, Amount)>(&encode_token_buy(10, 9).unwrap()).unwrap(),
+            (10, 9)
+        );
+        assert_eq!(
+            bincode::deserialize::<(Amount, Amount)>(&encode_token_sell(10, 9).unwrap()).unwrap(),
+            (10, 9)
         );
         assert_eq!(
             bincode::deserialize::<[u8; 32]>(&encode_vault_claim(id).unwrap()).unwrap(),

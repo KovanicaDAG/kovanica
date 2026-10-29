@@ -106,6 +106,44 @@ kovanica token burn     --contract <kvnc…> --amount 1000000000
 kovanica token balance --contract <kvnc…> --address <address>
 ```
 
+## KUNA ↔ token pool (P0a)
+
+A token contract can host **one** constant-product pool against native KUNA.
+Conversion is reserve-backed: no KUNA is minted or burned and the token supply
+never changes (see [`docs/CONTRACTS.md`](CONTRACTS.md) §7b).
+
+```bash
+# 1. Seed the pool. `--kuna` is sent as the call's attached value; `--tokens`
+#    moves out of the owner/minter's balance. Fee is in basis points (default 30).
+kovanica token init-pool --contract <kvnc…> --kuna 1.5KUNA \
+  --tokens 1000000 --fee-bps 30
+# → prints the LP shares minted, floor(sqrt(kuna_in * tokens_in))
+
+# 2. Buy tokens with KUNA. `--min-out` is the slippage floor in token base units.
+kovanica token buy --contract <kvnc…> --kuna 0.5KUNA --min-out 300000
+
+# 3. Sell tokens back for KUNA. `--min-out` is a KUNA amount here.
+kovanica token sell --contract <kvnc…> --tokens 300000 --min-out 0.4KUNA
+
+# 4. Read-only: reserves plus locally computed quotes for both directions.
+kovanica token reserves --contract <kvnc…>
+```
+
+Notes:
+
+- `--kuna` accepts the same units as every other amount (`1.5`, `1.5KUNA`,
+  `5atoms`); `--tokens` and `--min-out` for `buy` are token base units.
+- Each mutation waits for its nonce, then re-reads the pool at
+  `blake3("kvnc/v1/pool")` and the token state at `blake3("kvnc/v1/state")`.
+  It **exits non-zero** if the observed reserves, the caller's token balance or
+  the emitted event disagree with the local quote — a rejected body still pays
+  the fee, so a silent success would be a lie.
+- Pricing is `out = in_after * r_out / (r_in + in_after)` with
+  `in_after = in * (10_000 - fee_bps) / 10_000`, all integer and floored; the
+  fee stays in the reserve for LPs.
+- Only one pool per token contract, and it cannot be re-seeded. Removing
+  liquidity, token↔token pools and pause control are not implemented (PR-2/PR-3).
+
 ---
 
 ## Indexer hooks
@@ -114,4 +152,5 @@ Every flow above emits events with the canonical topics defined in
 `kovanica_common::events` (see [`docs/CONTRACTS.md`](CONTRACTS.md) §9). Match on
 the topic bytes and decode the data payload — e.g. `htlc_created` carries the
 32-byte swap id, `multisig_proposed` carries the 8-byte tx id (little-endian),
-and the token topics carry empty data.
+and the token topics (`token_created`, `transfer`, `approval`, `mint`, `burn`,
+`token_pool_initialized`, `token_swap_buy`, `token_swap_sell`) carry empty data.

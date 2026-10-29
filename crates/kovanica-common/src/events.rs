@@ -14,6 +14,7 @@
 //! | `multisig_created` | 32-byte config-fingerprint id |
 //! | `multisig_proposed` / `multisig_confirmed` / `multisig_executed` | 8-byte tx id, little-endian |
 //! | `token_created` / `transfer` / `approval` / `mint` / `burn` | empty |
+//! | `token_pool_initialized` / `token_swap_buy` / `token_swap_sell` | empty |
 //!
 //! This module is plain constants only — no dependencies, `no_std` friendly.
 
@@ -58,6 +59,12 @@ pub const TOKEN_APPROVAL: &[u8] = b"approval";
 pub const TOKEN_MINT: &[u8] = b"mint";
 /// Emitted by `Token::burn` with empty data.
 pub const TOKEN_BURN: &[u8] = b"burn";
+/// Emitted by `Token::init_pool` with empty data.
+pub const TOKEN_POOL_INITIALIZED: &[u8] = b"token_pool_initialized";
+/// Emitted by `Token::buy` with empty data.
+pub const TOKEN_SWAP_BUY: &[u8] = b"token_swap_buy";
+/// Emitted by `Token::sell` with empty data.
+pub const TOKEN_SWAP_SELL: &[u8] = b"token_swap_sell";
 
 #[cfg(test)]
 mod tests {
@@ -84,5 +91,8 @@ mod tests {
         assert_eq!(TOKEN_APPROVAL, b"approval");
         assert_eq!(TOKEN_MINT, b"mint");
         assert_eq!(TOKEN_BURN, b"burn");
+        assert_eq!(TOKEN_POOL_INITIALIZED, b"token_pool_initialized");
+        assert_eq!(TOKEN_SWAP_BUY, b"token_swap_buy");
+        assert_eq!(TOKEN_SWAP_SELL, b"token_swap_sell");
     }
 }

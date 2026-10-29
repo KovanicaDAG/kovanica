@@ -453,6 +453,14 @@ pub enum TokenCommand {
     Balance(TokenBalanceArgs),
     /// Approve an allowance
     Approve(TokenApproveArgs),
+    /// Seed the KUNA ↔ token pool (owner/minter only)
+    InitPool(TokenInitPoolArgs),
+    /// Buy tokens with KUNA from the pool
+    Buy(TokenBuyArgs),
+    /// Sell tokens for KUNA into the pool
+    Sell(TokenSellArgs),
+    /// Show pool reserves and local quotes (read-only)
+    Reserves(TokenReservesArgs),
 }
 
 /// Arguments for `kovanica token create`.
@@ -550,6 +558,95 @@ pub struct TokenBalanceArgs {
     pub address: String,
 }
 
+/// Arguments for `kovanica token init-pool`.
+#[derive(Args)]
+pub struct TokenInitPoolArgs {
+    /// Token contract address
+    #[arg(long)]
+    pub contract: String,
+    /// KUNA to seed the pool with (`1.5` / `1.5KUNA` / `5atoms`; sent as Call.value)
+    #[arg(long, value_parser = crate::amount::parse_cli_amount)]
+    pub kuna: u64,
+    /// Tokens to seed the pool with, in token base units
+    #[arg(long)]
+    pub tokens: Amount,
+    /// Swap fee in basis points (0–1000)
+    #[arg(long = "fee-bps", default_value_t = 30)]
+    pub fee_bps: u16,
+    /// Keystore file path (must hold the token owner/minter)
+    #[arg(long, short, default_value = "keystore.json")]
+    pub keystore: PathBuf,
+    /// Fee in atoms
+    #[arg(long, default_value_t = 1)]
+    pub fee: u64,
+    /// Gas limit for the call
+    #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
+    pub gas_limit: u64,
+    /// Seconds to wait for the transaction to commit
+    #[arg(long, default_value_t = 300)]
+    pub timeout: u64,
+}
+
+/// Arguments for `kovanica token buy`.
+#[derive(Args)]
+pub struct TokenBuyArgs {
+    /// Token contract address
+    #[arg(long)]
+    pub contract: String,
+    /// KUNA to spend (`1.5` / `1.5KUNA` / `5atoms`; sent as Call.value)
+    #[arg(long, value_parser = crate::amount::parse_cli_amount)]
+    pub kuna: u64,
+    /// Minimum tokens to receive, in token base units
+    #[arg(long = "min-out", default_value_t = 0)]
+    pub min_out: Amount,
+    /// Keystore file path
+    #[arg(long, short, default_value = "keystore.json")]
+    pub keystore: PathBuf,
+    /// Fee in atoms
+    #[arg(long, default_value_t = 1)]
+    pub fee: u64,
+    /// Gas limit for the call
+    #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
+    pub gas_limit: u64,
+    /// Seconds to wait for the transaction to commit
+    #[arg(long, default_value_t = 300)]
+    pub timeout: u64,
+}
+
+/// Arguments for `kovanica token sell`.
+#[derive(Args)]
+pub struct TokenSellArgs {
+    /// Token contract address
+    #[arg(long)]
+    pub contract: String,
+    /// Tokens to sell, in token base units
+    #[arg(long)]
+    pub tokens: Amount,
+    /// Minimum KUNA to receive, in atoms
+    #[arg(long = "min-out", default_value_t = 0)]
+    pub min_out: Amount,
+    /// Keystore file path
+    #[arg(long, short, default_value = "keystore.json")]
+    pub keystore: PathBuf,
+    /// Fee in atoms
+    #[arg(long, default_value_t = 1)]
+    pub fee: u64,
+    /// Gas limit for the call
+    #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
+    pub gas_limit: u64,
+    /// Seconds to wait for the transaction to commit
+    #[arg(long, default_value_t = 300)]
+    pub timeout: u64,
+}
+
+/// Arguments for `kovanica token reserves`.
+#[derive(Args)]
+pub struct TokenReservesArgs {
+    /// Token contract address
+    #[arg(long)]
+    pub contract: String,
+}
+
 /// Arguments for `kovanica token approve`.
 #[derive(Args)]
 pub struct TokenApproveArgs {
@@ -626,6 +723,21 @@ pub fn token_amount_args(amount: Amount) -> Result<Vec<u8>> {
     bincode::serialize(&amount).context("encoding token_burn arguments")
 }
 
+/// Bincode args for `token_init_pool(kuna_in, tokens_in, fee_bps)`.
+pub fn token_init_pool_args(kuna_in: Amount, tokens_in: Amount, fee_bps: u16) -> Result<Vec<u8>> {
+    bincode::serialize(&(kuna_in, tokens_in, fee_bps)).context("encoding token_init_pool arguments")
+}
+
+/// Bincode args for `token_buy(amount_in, min_out)`.
+pub fn token_buy_args(amount_in: Amount, min_out: Amount) -> Result<Vec<u8>> {
+    bincode::serialize(&(amount_in, min_out)).context("encoding token_buy arguments")
+}
+
+/// Bincode args for `token_sell(amount_in, min_out)`.
+pub fn token_sell_args(amount_in: Amount, min_out: Amount) -> Result<Vec<u8>> {
+    bincode::serialize(&(amount_in, min_out)).context("encoding token_sell arguments")
+}
+
 /// Render `amount` base units of a token with `decimals` as whole units,
 /// trimming trailing zeros. `12_340_000_000` at 9 decimals is `12.34`.
 pub fn format_token_amount(amount: Amount, decimals: u8) -> String {
@@ -682,6 +794,21 @@ async fn read_token(
         return Ok(None);
     };
     Ok(kovanica_token::decode_state(&bytes))
+}
+
+/// Decode the KUNA ↔ token pool stored at `contract`, `None` when absent.
+async fn read_pool(client: &RpcClient, contract: Address) -> Result<Option<kovanica_token::Pool>> {
+    let slot = hex::encode(kovanica_token::pool_slot());
+    let value = client
+        .call("kovanica_getStorageAt", json!([contract.to_string(), slot]))
+        .await
+        .with_context(|| format!("reading pool state at {contract}"))?;
+    let text = value.as_str().unwrap_or_default();
+    let text = text.strip_prefix("0x").unwrap_or(text);
+    let Ok(bytes) = hex::decode(text) else {
+        return Ok(None);
+    };
+    Ok(kovanica_token::decode_pool(&bytes))
 }
 
 /// Load the keystore and prompt for its passphrase.
@@ -928,12 +1055,16 @@ async fn confirm_token_state(
 }
 
 /// Submit one token call to an existing contract and wait for it to commit.
+// Deliberately flat: every parameter is a distinct transaction field, and a
+// struct here would only move the same list one level down.
+#[allow(clippy::too_many_arguments)]
 async fn token_call(
     client: &RpcClient,
     chain_id: Option<u64>,
     keystore_path: &Path,
     contract_text: &str,
     method: &str,
+    value: u64,
     call_args: Vec<u8>,
     fee: u64,
     gas_limit: u64,
@@ -954,7 +1085,7 @@ async fn token_call(
         nonce,
         TransactionKind::Call {
             contract,
-            value: 0,
+            value,
             method: method.to_string(),
             args: call_args,
             gas_limit,
@@ -966,6 +1097,488 @@ async fn token_call(
         .await
         .with_context(|| format!("{method} {hash} did not commit"))?;
     Ok((hash, sender, contract, token))
+}
+
+/// Pure post-call check for `token_buy`. Returns why the state does not match
+/// the trade, or `None` when it does.
+///
+/// The node has no receipt the CLI can trust for a call result, so the swap is
+/// verified from the committed state (see `CONTRACTS.md` §7a/§7b).
+// Flat on purpose: it reads like the checklist it is, one state fact per line.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_buy(
+    contract: Address,
+    buyer: Address,
+    kuna_in: Amount,
+    min_out: Amount,
+    before_token: &kovanica_token::Token,
+    before_pool: &kovanica_token::Pool,
+    after_token: &kovanica_token::Token,
+    after_pool: &kovanica_token::Pool,
+) -> Option<String> {
+    let expected = kovanica_token::quote(
+        kuna_in,
+        before_pool.kuna_reserve,
+        before_pool.token_reserve,
+        before_pool.fee_bps,
+    );
+    let Some(expected) = expected else {
+        return Some(format!(
+            "the pool reserves do not quote a trade (kuna {}, token {})",
+            before_pool.kuna_reserve, before_pool.token_reserve
+        ));
+    };
+    if expected < min_out {
+        return Some(format!(
+            "the pool quotes {expected}, below --min-out {min_out}"
+        ));
+    }
+
+    let received = balance_of(after_token, buyer);
+    let held_before = balance_of(before_token, buyer);
+    if received < held_before {
+        return Some(format!(
+            "buyer balance fell from {held_before} to {received}"
+        ));
+    }
+    let delta = received - held_before;
+    if delta < min_out {
+        return Some(format!("buyer received {delta}, below --min-out {min_out}"));
+    }
+    if after_pool.token_reserve > before_pool.token_reserve {
+        return Some(format!(
+            "token reserve rose from {} to {}",
+            before_pool.token_reserve, after_pool.token_reserve
+        ));
+    }
+    let token_drop = before_pool.token_reserve - after_pool.token_reserve;
+    if token_drop != delta {
+        return Some(format!(
+            "buyer received {delta} but the token reserve fell by {token_drop}"
+        ));
+    }
+    let expected_kuna = before_pool.kuna_reserve.saturating_add(kuna_in);
+    if after_pool.kuna_reserve < expected_kuna {
+        return Some(format!(
+            "kuna reserve is {}, expected at least {expected_kuna}",
+            after_pool.kuna_reserve
+        ));
+    }
+    if after_pool.lp_total != before_pool.lp_total {
+        return Some(format!(
+            "lp_total moved from {} to {}",
+            before_pool.lp_total, after_pool.lp_total
+        ));
+    }
+    let contract_tokens = balance_of(after_token, contract);
+    if after_pool.token_reserve != contract_tokens {
+        return Some(format!(
+            "token reserve {} does not equal the contract balance {contract_tokens}",
+            after_pool.token_reserve
+        ));
+    }
+    None
+}
+
+/// Pure post-call check for `token_sell`; see [`verify_buy`].
+#[allow(clippy::too_many_arguments)]
+pub fn verify_sell(
+    contract: Address,
+    seller: Address,
+    tokens_in: Amount,
+    min_out: Amount,
+    before_token: &kovanica_token::Token,
+    before_pool: &kovanica_token::Pool,
+    after_token: &kovanica_token::Token,
+    after_pool: &kovanica_token::Pool,
+) -> Option<String> {
+    let expected = kovanica_token::quote(
+        tokens_in,
+        before_pool.token_reserve,
+        before_pool.kuna_reserve,
+        before_pool.fee_bps,
+    );
+    let Some(paid) = expected else {
+        return Some(format!(
+            "the pool reserves do not quote a trade (token {}, kuna {})",
+            before_pool.token_reserve, before_pool.kuna_reserve
+        ));
+    };
+    if paid < min_out {
+        return Some(format!(
+            "the pool quotes {paid} atoms, below --min-out {min_out}"
+        ));
+    }
+
+    let held_before = balance_of(before_token, seller);
+    let held_after = balance_of(after_token, seller);
+    let expected_after = held_before.saturating_sub(tokens_in);
+    if held_after != expected_after {
+        return Some(format!(
+            "seller balance is {held_after}, expected {expected_after}"
+        ));
+    }
+    let expected_reserve = before_pool.token_reserve.saturating_add(tokens_in);
+    if after_pool.token_reserve != expected_reserve {
+        return Some(format!(
+            "token reserve is {}, expected {expected_reserve}",
+            after_pool.token_reserve
+        ));
+    }
+    let expected_kuna = before_pool.kuna_reserve.saturating_sub(paid);
+    if after_pool.kuna_reserve != expected_kuna {
+        return Some(format!(
+            "kuna reserve is {}, expected {expected_kuna}",
+            after_pool.kuna_reserve
+        ));
+    }
+    if after_pool.lp_total != before_pool.lp_total {
+        return Some(format!(
+            "lp_total moved from {} to {}",
+            before_pool.lp_total, after_pool.lp_total
+        ));
+    }
+    let contract_tokens = balance_of(after_token, contract);
+    if after_pool.token_reserve != contract_tokens {
+        return Some(format!(
+            "token reserve {} does not equal the contract balance {contract_tokens}",
+            after_pool.token_reserve
+        ));
+    }
+    None
+}
+
+fn token_contract(chain_id: Option<u64>, text: &str) -> Result<Address> {
+    let chain = crate::tx::signing_context(chain_id)?.chain_id;
+    parse_address(text, "contract", chain)
+}
+
+/// `token init-pool`: seed the pool with KUNA (as `Call.value`) and tokens.
+async fn token_init_pool(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: TokenInitPoolArgs,
+    json_output: bool,
+) -> Result<()> {
+    let call_args = token_init_pool_args(Amount::from(args.kuna), args.tokens, args.fee_bps)?;
+    let (hash, sender, contract, before) = token_call(
+        client,
+        chain_id,
+        &args.keystore,
+        &args.contract,
+        "token_init_pool",
+        args.kuna,
+        call_args,
+        args.fee,
+        args.gas_limit,
+        Duration::from_secs(args.timeout),
+    )
+    .await?;
+
+    let after = read_token(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("{contract} holds no token state after token_init_pool {hash}"))?;
+    let pool = read_pool(client, contract).await?.ok_or_else(|| {
+        anyhow!(
+            "token_init_pool {hash} committed but {contract} holds no pool state; the fee was \
+                 charged and the nonce consumed"
+        )
+    })?;
+
+    let contract_tokens = balance_of(&after, contract);
+    if pool.token_reserve != contract_tokens {
+        bail!(
+            "token_init_pool {hash} committed but the token reserve {} does not equal the \
+             contract balance {contract_tokens}",
+            pool.token_reserve
+        );
+    }
+    if pool.kuna_reserve < Amount::from(args.kuna) {
+        bail!(
+            "token_init_pool {hash} committed but the kuna reserve is {}, below the seeded {}",
+            pool.kuna_reserve,
+            args.kuna
+        );
+    }
+    if pool.fee_bps != args.fee_bps {
+        bail!(
+            "token_init_pool {hash} committed with fee {} bps, expected {}",
+            pool.fee_bps,
+            args.fee_bps
+        );
+    }
+    if pool.lp_total == 0 {
+        bail!("token_init_pool {hash} committed without minting LP shares");
+    }
+    let expected_sender = balance_of(&before, sender).saturating_sub(args.tokens);
+    let sender_tokens = balance_of(&after, sender);
+    if sender_tokens != expected_sender {
+        bail!(
+            "token_init_pool {hash} committed but the owner balance is {sender_tokens}, expected \
+             {expected_sender}"
+        );
+    }
+
+    let result = json!({
+        "transactionHash": hash,
+        "contract": contract.to_string(),
+        "owner": sender.to_string(),
+        "kuna_reserve": pool.kuna_reserve.to_string(),
+        "token_reserve": pool.token_reserve.to_string(),
+        "fee_bps": pool.fee_bps,
+        "lp_total": pool.lp_total.to_string(),
+        "symbol": after.symbol,
+    });
+    emit(
+        json_output,
+        &result,
+        &[
+            ("transaction", hash),
+            ("contract", contract.to_string()),
+            ("kuna_reserve", pool.kuna_reserve.to_string()),
+            ("token_reserve", pool.token_reserve.to_string()),
+            ("fee_bps", pool.fee_bps.to_string()),
+            ("lp_total", pool.lp_total.to_string()),
+        ],
+    )
+}
+
+/// `token buy`: spend KUNA (`Call.value`) for tokens and verify the committed
+/// reserves moved as quoted locally.
+async fn token_buy(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: TokenBuyArgs,
+    json_output: bool,
+) -> Result<()> {
+    let contract = token_contract(chain_id, &args.contract)?;
+    let pool_before = read_pool(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("no pool at {contract}: run `kovanica token init-pool` first"))?;
+
+    let call_args = token_buy_args(Amount::from(args.kuna), args.min_out)?;
+    let (hash, sender, contract, token_before) = token_call(
+        client,
+        chain_id,
+        &args.keystore,
+        &args.contract,
+        "token_buy",
+        args.kuna,
+        call_args,
+        args.fee,
+        args.gas_limit,
+        Duration::from_secs(args.timeout),
+    )
+    .await?;
+
+    let token_after = read_token(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("{contract} holds no token state after token_buy {hash}"))?;
+    let pool_after = read_pool(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("{contract} holds no pool state after token_buy {hash}"))?;
+    if let Some(problem) = verify_buy(
+        contract,
+        sender,
+        Amount::from(args.kuna),
+        args.min_out,
+        &token_before,
+        &pool_before,
+        &token_after,
+        &pool_after,
+    ) {
+        bail!(
+            "token_buy {hash} committed but the pool state did not follow: {problem}; the fee was \
+             charged and the nonce consumed"
+        );
+    }
+
+    let received =
+        balance_of(&token_after, sender).saturating_sub(balance_of(&token_before, sender));
+    let result = json!({
+        "transactionHash": hash,
+        "contract": contract.to_string(),
+        "buyer": sender.to_string(),
+        "kuna_in": args.kuna.to_string(),
+        "tokens_out": received.to_string(),
+        "min_out": args.min_out.to_string(),
+        "kuna_reserve": pool_after.kuna_reserve.to_string(),
+        "token_reserve": pool_after.token_reserve.to_string(),
+        "symbol": token_after.symbol,
+        "decimals": token_after.decimals,
+    });
+    emit(
+        json_output,
+        &result,
+        &[
+            ("transaction", hash),
+            ("contract", contract.to_string()),
+            (
+                "bought",
+                format!(
+                    "{} {}",
+                    format_token_amount(received, token_after.decimals),
+                    token_after.symbol
+                ),
+            ),
+            ("kuna_in", args.kuna.to_string()),
+            ("kuna_reserve", pool_after.kuna_reserve.to_string()),
+            ("token_reserve", pool_after.token_reserve.to_string()),
+        ],
+    )
+}
+
+/// `token sell`: sell tokens for KUNA and verify the payout left the reserve.
+async fn token_sell(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: TokenSellArgs,
+    json_output: bool,
+) -> Result<()> {
+    let contract = token_contract(chain_id, &args.contract)?;
+    let pool_before = read_pool(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("no pool at {contract}: run `kovanica token init-pool` first"))?;
+
+    let call_args = token_sell_args(args.tokens, args.min_out)?;
+    let (hash, sender, contract, token_before) = token_call(
+        client,
+        chain_id,
+        &args.keystore,
+        &args.contract,
+        "token_sell",
+        0,
+        call_args,
+        args.fee,
+        args.gas_limit,
+        Duration::from_secs(args.timeout),
+    )
+    .await?;
+
+    let token_after = read_token(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("{contract} holds no token state after token_sell {hash}"))?;
+    let pool_after = read_pool(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("{contract} holds no pool state after token_sell {hash}"))?;
+    if let Some(problem) = verify_sell(
+        contract,
+        sender,
+        args.tokens,
+        args.min_out,
+        &token_before,
+        &pool_before,
+        &token_after,
+        &pool_after,
+    ) {
+        bail!(
+            "token_sell {hash} committed but the pool state did not follow: {problem}; the fee was \
+             charged and the nonce consumed"
+        );
+    }
+
+    let paid = pool_before
+        .kuna_reserve
+        .saturating_sub(pool_after.kuna_reserve);
+    let result = json!({
+        "transactionHash": hash,
+        "contract": contract.to_string(),
+        "seller": sender.to_string(),
+        "tokens_in": args.tokens.to_string(),
+        "kuna_out": paid.to_string(),
+        "min_out": args.min_out.to_string(),
+        "kuna_reserve": pool_after.kuna_reserve.to_string(),
+        "token_reserve": pool_after.token_reserve.to_string(),
+        "symbol": token_after.symbol,
+    });
+    emit(
+        json_output,
+        &result,
+        &[
+            ("transaction", hash),
+            ("contract", contract.to_string()),
+            ("kuna_out", paid.to_string()),
+            ("tokens_in", args.tokens.to_string()),
+            ("kuna_reserve", pool_after.kuna_reserve.to_string()),
+            ("token_reserve", pool_after.token_reserve.to_string()),
+        ],
+    )
+}
+
+/// `token reserves`: read-only pool snapshot plus locally computed quotes.
+async fn token_reserves(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: TokenReservesArgs,
+    json_output: bool,
+) -> Result<()> {
+    let contract = token_contract(chain_id, &args.contract)?;
+    let token = read_token(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("no token state at {contract}"))?;
+    let pool = read_pool(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("no pool at {contract}: run `kovanica token init-pool` first"))?;
+
+    let invariant = pool.token_reserve == balance_of(&token, contract);
+    let one_kuna = Amount::from(crate::amount::ATOMS_PER_KUNA);
+    let one_token = 10u128.pow(u32::from(token.decimals));
+    let kuna_to_token = kovanica_token::quote(
+        one_kuna,
+        pool.kuna_reserve,
+        pool.token_reserve,
+        pool.fee_bps,
+    );
+    let token_to_kuna = kovanica_token::quote(
+        one_token,
+        pool.token_reserve,
+        pool.kuna_reserve,
+        pool.fee_bps,
+    );
+
+    let result = json!({
+        "contract": contract.to_string(),
+        "symbol": token.symbol,
+        "decimals": token.decimals,
+        "kuna_reserve": pool.kuna_reserve.to_string(),
+        "token_reserve": pool.token_reserve.to_string(),
+        "fee_bps": pool.fee_bps,
+        "lp_total": pool.lp_total.to_string(),
+        "paused": pool.paused,
+        "token_reserve_matches_contract_balance": invariant,
+        "one_kuna_in_tokens": kuna_to_token.map(|v| v.to_string()),
+        "one_token_in_kuna_atoms": token_to_kuna.map(|v| v.to_string()),
+    });
+    emit(
+        json_output,
+        &result,
+        &[
+            ("contract", contract.to_string()),
+            ("kuna_reserve", pool.kuna_reserve.to_string()),
+            ("token_reserve", pool.token_reserve.to_string()),
+            ("fee_bps", pool.fee_bps.to_string()),
+            ("lp_total", pool.lp_total.to_string()),
+            ("invariant", invariant.to_string()),
+            (
+                "1 KUNA buys",
+                kuna_to_token
+                    .map(|v| {
+                        format!(
+                            "{} {}",
+                            format_token_amount(v, token.decimals),
+                            token.symbol
+                        )
+                    })
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            (
+                "1 token pays",
+                token_to_kuna
+                    .map(|v| format!("{v} atoms"))
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+        ],
+    )
 }
 
 async fn run_token(
@@ -986,6 +1599,7 @@ async fn run_token(
                 &args.keystore,
                 &args.contract,
                 "token_transfer",
+                0,
                 call_args,
                 args.fee,
                 args.gas_limit,
@@ -1060,6 +1674,7 @@ async fn run_token(
                 &args.keystore,
                 &args.contract,
                 "token_mint",
+                0,
                 call_args,
                 args.fee,
                 args.gas_limit,
@@ -1121,6 +1736,7 @@ async fn run_token(
                 &args.keystore,
                 &args.contract,
                 "token_burn",
+                0,
                 call_args,
                 args.fee,
                 args.gas_limit,
@@ -1182,6 +1798,7 @@ async fn run_token(
                 &args.keystore,
                 &args.contract,
                 "token_approve",
+                0,
                 call_args,
                 args.fee,
                 args.gas_limit,
@@ -1225,6 +1842,10 @@ async fn run_token(
                 ],
             )
         }
+        TokenCommand::InitPool(args) => token_init_pool(client, chain_id, args, json_output).await,
+        TokenCommand::Buy(args) => token_buy(client, chain_id, args, json_output).await,
+        TokenCommand::Sell(args) => token_sell(client, chain_id, args, json_output).await,
+        TokenCommand::Reserves(args) => token_reserves(client, chain_id, args, json_output).await,
         TokenCommand::Balance(args) => {
             let chain = crate::tx::signing_context(chain_id)?.chain_id;
             let contract = parse_address(&args.contract, "contract", chain)?;
@@ -1361,6 +1982,181 @@ mod tests {
         // Beyond 18 decimals the contract refuses the token; render raw instead
         // of overflowing the scale.
         assert_eq!(format_token_amount(42, 19), "42");
+    }
+
+    #[test]
+    fn token_pool_args_are_the_wasm_abi_tuples() {
+        let decoded: (Amount, Amount, u16) =
+            bincode::deserialize(&token_init_pool_args(10, 20, 30).unwrap()).unwrap();
+        assert_eq!(decoded, (10, 20, 30));
+
+        let decoded: (Amount, Amount) =
+            bincode::deserialize(&token_buy_args(10, 9).unwrap()).unwrap();
+        assert_eq!(decoded, (10, 9));
+
+        let decoded: (Amount, Amount) =
+            bincode::deserialize(&token_sell_args(20, 19).unwrap()).unwrap();
+        assert_eq!(decoded, (20, 19));
+    }
+
+    fn pool_fixture() -> (
+        kovanica_token::Token,
+        kovanica_token::Pool,
+        Address,
+        Address,
+    ) {
+        let contract = Address([9; 32]);
+        let alice = Address([1; 32]);
+        let mut balances = std::collections::BTreeMap::new();
+        balances.insert(contract.0, 1_000_000u128);
+        balances.insert(alice.0, 10_000u128);
+        let token = kovanica_token::Token {
+            name: "Test".to_string(),
+            symbol: "TST".to_string(),
+            decimals: 9,
+            total_supply: 1_010_000,
+            owner: alice.0,
+            minter: alice.0,
+            balances,
+            allowances: Default::default(),
+            paused: false,
+            icon: String::new(),
+        };
+        let pool = kovanica_token::Pool {
+            kuna_reserve: 1_000_000,
+            token_reserve: 1_000_000,
+            fee_bps: 30,
+            lp_total: 1_000_000,
+            paused: false,
+        };
+        (token, pool, contract, alice)
+    }
+
+    #[test]
+    fn buy_verification_accepts_the_quoted_state_and_rejects_a_mismatch() {
+        let (before_token, before_pool, contract, alice) = pool_fixture();
+        let kuna_in = 10_000u128;
+        let out = kovanica_token::quote(
+            kuna_in,
+            before_pool.kuna_reserve,
+            before_pool.token_reserve,
+            before_pool.fee_bps,
+        )
+        .unwrap();
+
+        let mut after_token = before_token.clone();
+        let alice_balance = after_token.balances.get(&alice.0).copied().unwrap() + out;
+        after_token.balances.insert(alice.0, alice_balance);
+        let contract_balance = after_token.balances.get(&contract.0).copied().unwrap() - out;
+        after_token.balances.insert(contract.0, contract_balance);
+        let mut after_pool = before_pool.clone();
+        after_pool.kuna_reserve += kuna_in;
+        after_pool.token_reserve -= out;
+
+        assert_eq!(
+            verify_buy(
+                contract,
+                alice,
+                kuna_in,
+                out,
+                &before_token,
+                &before_pool,
+                &after_token,
+                &after_pool
+            ),
+            None
+        );
+
+        // A state that did not follow the quote is refused (this is what turns
+        // a "committed" transaction into a non-zero CLI exit).
+        let mut wrong = after_pool.clone();
+        wrong.token_reserve -= 1;
+        assert!(verify_buy(
+            contract,
+            alice,
+            kuna_in,
+            out,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &wrong
+        )
+        .is_some());
+
+        // A slippage floor above the quote is refused before looking at state.
+        assert!(verify_buy(
+            contract,
+            alice,
+            kuna_in,
+            out + 1,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &after_pool
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn sell_verification_accepts_the_quoted_state_and_rejects_a_mismatch() {
+        let (before_token, before_pool, contract, alice) = pool_fixture();
+        let tokens_in = 5_000u128;
+        let paid = kovanica_token::quote(
+            tokens_in,
+            before_pool.token_reserve,
+            before_pool.kuna_reserve,
+            before_pool.fee_bps,
+        )
+        .unwrap();
+
+        let mut after_token = before_token.clone();
+        after_token.balances.insert(alice.0, 10_000 - tokens_in);
+        after_token
+            .balances
+            .insert(contract.0, 1_000_000 + tokens_in);
+        let mut after_pool = before_pool.clone();
+        after_pool.token_reserve += tokens_in;
+        after_pool.kuna_reserve -= paid;
+
+        assert_eq!(
+            verify_sell(
+                contract,
+                alice,
+                tokens_in,
+                paid,
+                &before_token,
+                &before_pool,
+                &after_token,
+                &after_pool
+            ),
+            None
+        );
+
+        let mut wrong = after_pool.clone();
+        wrong.kuna_reserve += 1;
+        assert!(verify_sell(
+            contract,
+            alice,
+            tokens_in,
+            paid,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &wrong
+        )
+        .is_some());
+
+        assert!(verify_sell(
+            contract,
+            alice,
+            tokens_in,
+            paid + 1,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &after_pool
+        )
+        .is_some());
     }
 
     #[test]
