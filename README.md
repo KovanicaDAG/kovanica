@@ -152,18 +152,31 @@ cd kovanica
 # Build the complete Rust workspace
 cargo build --workspace
 
-# Run the test suite (excluding long-running stress tests)
-cargo test --workspace -- --skip sustained_liveness
+# Run the test suite (excluding the tests that spawn real nodes; libtest
+# matches test-function names, so those four are named explicitly)
+cargo test --workspace -- --skip live_transaction_commit --skip live_two_node_vote_commit_execute --skip three_validators_rotate_leaders_and_sustain_commits --skip four_validators_sustain_commits_past_pruning_boundary
 
-# Local quality gate (GitHub Actions workflows removed 2026-10-23; run locally)
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo test --doc
-cargo doc --no-deps --all-features
-cargo audit
-cargo +1.90 build --all-targets
+# ...and those four on their own, one test at a time (each starts a 2-4 node
+# cluster on localhost and expects to reach a committed height in time):
+bash scripts/ci-local.sh cluster
+
+# Local quality gate — the same subcommands CI runs (scripts/ci-local.sh)
+bash scripts/ci-local.sh all
+
+# ...or one at a time:
+bash scripts/ci-local.sh fmt      # cargo fmt --all -- --check
+bash scripts/ci-local.sh clippy   # cargo clippy --workspace --all-targets --locked -- -D warnings
+bash scripts/ci-local.sh test     # cargo test --workspace --locked (minus the cluster tests)
+bash scripts/ci-local.sh cluster  # the cluster tests on their own, one at a time
+bash scripts/ci-local.sh secrets  # gitleaks over the whole git history
+bash scripts/ci-local.sh audit    # cargo audit (nightly in CI; needs cargo-audit)
+
+# MSRV spot check (not in CI: rust-toolchain.toml pins 1.91)
+cargo +1.90 build --workspace --all-targets
 ```
+
+On Windows, run the gate from Git Bash: the WSL `bash` cannot see the Windows Rust
+toolchain.
 
 ---
 
@@ -364,6 +377,6 @@ Detailed architectural specifications and operational runbooks:
 ## 7. Status, Security & License
 
 - **Project Status:** Pre-Alpha. Active testnets are running with ongoing stress testing and performance tuning.
-- **Quality Gates & CI:** GitHub Actions workflows were decommissioned on 2026-10-23 (Toni). CI moves to the public `KovanicaDAG/kovanica-protocol` repo once the frozen code is there. Until then, quality checks are run locally via the local gate commands (`cargo fmt`, `clippy`, `cargo test`, `cargo test --doc`, `cargo doc`, `cargo audit`, and `cargo +1.90 build`).
+- **Quality Gates & CI:** A minimal gate lives in `.github/workflows/ci.yml` (fmt, clippy with `-D warnings`, the workspace test suite minus the localhost cluster tests (those run via `bash scripts/ci-local.sh cluster`), full-history gitleaks; `cargo audit` nightly). It runs `scripts/ci-local.sh`, so `bash scripts/ci-local.sh all` reproduces CI locally. The 2026-10-23 decommission still stands for the rest of the tooling: the long-term home for CI is the public `KovanicaDAG/kovanica-protocol` repo once the frozen code is there (PRO-14). If an Actions run fails within seconds with no runner, that is the account-level Actions billing block (PRO-14), not the workflow — run the gate locally in that case.
 - **Security Audit:** Automated security checks (`AUTOMATED_SECURITY_CHECKS.md`) and pre-audit vulnerability catalogues (`AUDIT_REPORT.md`) are maintained. Professional third-party security audits are planned prior to mainnet launch.
 - **License:** The Kovanica codebase is distributed under the **Apache License, Version 2.0**.

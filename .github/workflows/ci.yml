@@ -1,0 +1,125 @@
+name: CI
+
+# The quality gate: formatting, lints, tests, secret scan. Every step is the
+# matching subcommand of scripts/ci-local.sh, so CI and a local run cannot
+# drift (`bash scripts/ci-local.sh all` reproduces this workflow).
+#
+# If a run fails within seconds, with no runner assigned and a "recent account
+# payments have failed" annotation, that is GitHub Actions billing (PRO-14),
+# not this file. Run the gate locally in that case; do not "fix" the YAML.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  # Nightly: the advisory DB and the gitleaks ruleset move without a commit.
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  gate:
+    name: fmt / clippy / test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Install Rust (version, components and targets from rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # rust-toolchain.toml pins 1.91 and lists rustfmt, clippy and
+          # wasm32-unknown-unknown; the wasm target is what makes the
+          # kovanica-execution contract e2e test run instead of silently skip.
+          # Repeating them here keeps a future edit to that file from turning
+          # that test into a no-op on CI. The input is `target` (singular):
+          # `targets` is silently ignored, which is how a "pinned" wasm target
+          # can quietly disappear.
+          components: rustfmt, clippy
+          target: wasm32-unknown-unknown
+          cache: true
+
+      - name: Formatting
+        run: bash scripts/ci-local.sh fmt
+
+      - name: Clippy (deny warnings)
+        run: bash scripts/ci-local.sh clippy
+
+      - name: Tests
+        # `scripts/ci-local.sh test` skips the four tests that spawn real nodes
+        # on localhost and assert on wall-clock liveness; they need an idle
+        # machine and run via `bash scripts/ci-local.sh cluster` before a
+        # release. See the script.
+        run: bash scripts/ci-local.sh test
+
+  secrets:
+    name: gitleaks (full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The scan covers history, not the diff: a secret removed in a later
+          # commit is still leaked. A shallow clone would hide it.
+          fetch-depth: 0
+
+      - name: Install gitleaks 8.24.3 (checksum-pinned)
+        env:
+          GITLEAKS_VERSION: 8.24.3
+          # sha256 of gitleaks_8.24.3_linux_x64.tar.gz, from the release's own
+          # checksums file. Bump both when upgrading; .gitleaksignore
+          # fingerprints are tied to the version.
+          GITLEAKS_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL "$url" -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan
+        env:
+          # A missing gitleaks must fail CI, not warn like the pre-commit hook.
+          GITLEAKS_STRICT: "1"
+        run: bash scripts/ci-local.sh secrets
+
+  audit:
+    name: cargo audit
+    # Advisory-database churn would block unrelated pull requests, so this runs
+    # on the nightly schedule and on demand only. Ignore entries are justified
+    # in .cargo/audit.toml.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit
+        run: bash scripts/ci-local.sh audit
