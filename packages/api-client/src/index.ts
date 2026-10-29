@@ -335,3 +335,5 @@ export function subscribeNewHeads(
     ws.close();
   };
 }
+
+export * from "./indexer";
