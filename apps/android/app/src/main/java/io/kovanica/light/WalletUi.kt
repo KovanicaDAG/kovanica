@@ -124,8 +124,8 @@ object WalletUi {
             contentDescription = "KUNA"
             scaleType = ImageView.ScaleType.FIT_CENTER
             setImageBitmap(art)
-            minWidth = dp(ctx, sizeDp)
-            minHeight = dp(ctx, sizeDp)
+            minimumWidth = dp(ctx, sizeDp)
+            minimumHeight = dp(ctx, sizeDp)
         }
     }
 
