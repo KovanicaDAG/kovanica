@@ -511,6 +511,9 @@ pub struct TokenAmountToArgs {
     /// Gas limit for the call
     #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
     pub gas_limit: u64,
+    /// Seconds to wait for the transaction to commit
+    #[arg(long, default_value_t = 300)]
+    pub timeout: u64,
 }
 
 /// Arguments for `kovanica token burn`.
@@ -531,6 +534,9 @@ pub struct TokenBurnArgs {
     /// Gas limit for the call
     #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
     pub gas_limit: u64,
+    /// Seconds to wait for the transaction to commit
+    #[arg(long, default_value_t = 300)]
+    pub timeout: u64,
 }
 
 /// Arguments for `kovanica token balance`.
@@ -565,6 +571,9 @@ pub struct TokenApproveArgs {
     /// Gas limit for the call
     #[arg(long, default_value_t = kovanica_types::MAX_TX_GAS_LIMIT)]
     pub gas_limit: u64,
+    /// Seconds to wait for the transaction to commit
+    #[arg(long, default_value_t = 300)]
+    pub timeout: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -663,15 +672,10 @@ async fn read_token(
     contract: Address,
 ) -> Result<Option<kovanica_token::Token>> {
     let slot = hex::encode(kovanica_token::state_slot());
-    let value = match client
+    let value = client
         .call("kovanica_getStorageAt", json!([contract.to_string(), slot]))
         .await
-    {
-        Ok(value) => value,
-        // A node that has never seen the account answers with an error; that is
-        // "no token here", not a failed command.
-        Err(_) => return Ok(None),
-    };
+        .with_context(|| format!("reading token state at {contract}"))?;
     let text = value.as_str().unwrap_or_default();
     let text = text.strip_prefix("0x").unwrap_or(text);
     let Ok(bytes) = hex::decode(text) else {
@@ -892,7 +896,21 @@ async fn token_create(
     )
 }
 
-/// Submit one token call to an existing contract.
+/// Execution status the node recorded for `hash`, `None` when it has no receipt.
+async fn transaction_success(client: &RpcClient, hash: &str) -> Result<Option<bool>> {
+    let receipt = match client
+        .call("kovanica_getTransactionReceipt", json!([hash]))
+        .await
+    {
+        Ok(receipt) => receipt,
+        // Not every node build indexes receipts; the nonce wait already proved
+        // the transaction committed, so a missing receipt is not an error.
+        Err(_) => return Ok(None),
+    };
+    Ok(receipt.get("success").and_then(Value::as_bool))
+}
+
+/// Submit one token call to an existing contract and wait for it to commit.
 async fn token_call(
     client: &RpcClient,
     chain_id: Option<u64>,
@@ -902,6 +920,7 @@ async fn token_call(
     call_args: Vec<u8>,
     fee: u64,
     gas_limit: u64,
+    timeout: Duration,
 ) -> Result<(String, Address, Address, kovanica_token::Token)> {
     let ctx = signing_setup(client, chain_id).await?;
     let contract = parse_address(contract_text, "contract", ctx.chain_id)?;
@@ -926,6 +945,17 @@ async fn token_call(
         fee,
     )
     .await?;
+    wait_for_nonce(client, sender, nonce, timeout)
+        .await
+        .with_context(|| format!("{method} {hash} did not commit"))?;
+    // The nonce advances even when the contract itself rejects the call, so a
+    // receipt status of 0x0 has to be reported as a failure, not a success.
+    if transaction_success(client, &hash).await? == Some(false) {
+        bail!(
+            "{method} {hash} committed but the contract rejected it (status 0x0); the fee was \
+             charged and the nonce consumed"
+        );
+    }
     Ok((hash, sender, contract, token))
 }
 
@@ -950,6 +980,7 @@ async fn run_token(
                 call_args,
                 args.fee,
                 args.gas_limit,
+                Duration::from_secs(args.timeout),
             )
             .await?;
             let result = json!({
@@ -991,6 +1022,7 @@ async fn run_token(
                 call_args,
                 args.fee,
                 args.gas_limit,
+                Duration::from_secs(args.timeout),
             )
             .await?;
             let result = json!({
@@ -1030,6 +1062,7 @@ async fn run_token(
                 call_args,
                 args.fee,
                 args.gas_limit,
+                Duration::from_secs(args.timeout),
             )
             .await?;
             let result = json!({
@@ -1069,6 +1102,7 @@ async fn run_token(
                 call_args,
                 args.fee,
                 args.gas_limit,
+                Duration::from_secs(args.timeout),
             )
             .await?;
             let result = json!({
