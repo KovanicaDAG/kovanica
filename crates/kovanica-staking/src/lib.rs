@@ -8,7 +8,7 @@
 //! - Mining subsidy: 81_000_000 KUNA
 //! - Initial block reward: 2.5 KUNA (paid to the author of a committed leader block)
 //! - Decay: × 3/4 every 8_100_000 committed leaders
-//! - Active validators: 15–21
+//! - Active validators: no maximum (anyone meeting the minimum stake)
 //!
 //! All canonical numbers above are shared with the tokenomics skeleton
 //! (`kovanica-skeleton/staking/src/lib.rs`); this crate keeps them as `u64`
@@ -101,15 +101,13 @@ pub const DECAY_DEN: u64 = 4;
 /// Minimum stake required to become a validator (in base units).
 pub const MIN_VALIDATOR_STAKE: Stake = 50_000 * ONE_KUNA; // 50 000 KUNA
 
-/// Minimum number of active validators (target range 15–21).
+/// Minimum number of active validators for the mainnet genesis floor.
 ///
-/// The set is considered under-provisioned below this size; new validators
-/// should be admitted while active count < `MAX_ACTIVE_VALIDATORS`.
+/// There is no maximum; anyone meeting `MIN_VALIDATOR_STAKE` may join.
 pub const MIN_ACTIVE_VALIDATORS: u32 = 15;
 
-/// Maximum number of active validators (target range 15-21).
-pub const MAX_ACTIVE_VALIDATORS: usize = 21;
-
+// MAX_ACTIVE_VALIDATORS removed: no cap on active validators; anyone meeting
+// MIN_VALIDATOR_STAKE can join and participate in the committee.
 /// Unbonding period, counted in **committed leader blocks** (≈ 13.9 days at
 /// 12 s per committed leader: `1_200_000 s / 86_400`).
 ///
@@ -442,8 +440,6 @@ pub struct DoubleSignEvidence {
 pub enum StakingError {
     #[error("Insufficient stake")]
     InsufficientStake,
-    #[error("Validator set full")]
-    ValidatorSetFull,
     #[error("Not a validator")]
     NotValidator,
     #[error("Still unbonding")]
@@ -737,9 +733,6 @@ impl StakingState {
         if self.validators.iter().any(|v| v.address == address) {
             return Err(StakingError::ValidatorExists);
         }
-        if self.validators.iter().filter(|v| v.active).count() >= MAX_ACTIVE_VALIDATORS {
-            return Err(StakingError::ValidatorSetFull);
-        }
 
         self.validators.push(ValidatorInfo {
             address,
@@ -777,8 +770,8 @@ impl StakingState {
     ///   slashed record (whose stake fell below the minimum) therefore stays out
     ///   until it is topped back up to the minimum, and is never silently
     ///   reactivated with too little at stake.
-    /// * Reactivation counts toward [`MAX_ACTIVE_VALIDATORS`]; a full set
-    ///   returns [`StakingError::ValidatorSetFull`].
+    /// * There is no cap on the active set; reactivation is allowed whenever
+    ///   the stake requirements above are met.
     /// * `missed_leader_count` is reset so the reactivated validator starts a
     ///   clean liveness window.
     pub fn reactivate_validator(
@@ -814,9 +807,6 @@ impl StakingState {
         if topped_up < MIN_VALIDATOR_STAKE {
             return Err(StakingError::InsufficientStake);
         }
-        if self.validators.iter().filter(|v| v.active).count() >= MAX_ACTIVE_VALIDATORS {
-            return Err(StakingError::ValidatorSetFull);
-        }
         let committed_height = self.committed_leader_height;
         let v = &mut self.validators[v_idx];
         v.stake = topped_up;
@@ -830,10 +820,10 @@ impl StakingState {
         Ok(())
     }
 
-    /// Validators in consensus committee order: active with
-    /// `stake >= MIN_VALIDATOR_STAKE`, top [`MAX_ACTIVE_VALIDATORS`] by stake
-    /// (ties by address), then sorted by address. The position in this list
-    /// is the authority index. Mirrors `kovanica-node::build_committee` exactly.
+    /// Validators in consensus committee order: all active validators with
+    /// `stake >= MIN_VALIDATOR_STAKE`, sorted by stake desc (ties by address),
+    /// then sorted by address. The position in this list is the authority
+    /// index. Mirrors `kovanica-node::build_committee` exactly.
     pub fn committee_order(&self) -> Vec<&ValidatorInfo> {
         let mut active: Vec<&ValidatorInfo> = self
             .validators
@@ -845,7 +835,6 @@ impl StakingState {
                 .cmp(&a.stake)
                 .then_with(|| a.address.0.cmp(&b.address.0))
         });
-        active.truncate(MAX_ACTIVE_VALIDATORS);
         active.sort_by_key(|v| v.address.0);
         active
     }
@@ -887,7 +876,7 @@ impl StakingState {
     /// shape persisted in the `EPOCH_COMMITTEE` table.
     ///
     /// `committee_order()` is the single source of the ordering (stake desc,
-    /// ties by address, top [`MAX_ACTIVE_VALIDATORS`], re-sorted by address);
+    /// ties by address, re-sorted by address);
     /// the enumerate position is the authority index. Returns `None` when the
     /// committee is empty or a member has no consensus public key — such a
     /// committee cannot be frozen, so callers must fall back rather than store
@@ -1813,7 +1802,6 @@ mod tests {
         assert_eq!(EPOCH_ROUNDS, 7_200);
         assert_eq!(MIN_VALIDATOR_STAKE, 50_000 * ONE_KUNA);
         assert_eq!(MIN_ACTIVE_VALIDATORS, 15);
-        assert_eq!(MAX_ACTIVE_VALIDATORS, 21);
         assert_eq!(UNBONDING_ROUNDS, 100_000); // skeleton UNBONDING_PERIOD
                                                // Supply book must close exactly.
         assert_eq!(

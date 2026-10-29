@@ -148,9 +148,9 @@ impl BlockSyncResponse {
 
     /// Maximum number of votes in one [`BlockSyncResponse::Votes`] response.
     ///
-    /// A committee has at most `MAX_ACTIVE_VALIDATORS` members, so this is a
-    /// generous bound; it exists so a hostile or buggy peer cannot inflate one
-    /// response past the frame cap.
+    /// A committee may have many members, so this is a generous bound; it
+    /// exists so a hostile or buggy peer cannot inflate one response past the
+    /// frame cap.
     pub const MAX_VOTES_PER_ROUND: usize = 64;
 }
 

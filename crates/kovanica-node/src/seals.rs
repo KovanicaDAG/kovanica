@@ -44,7 +44,7 @@ pub(crate) fn build_committee_for_seal_epoch(
 ) -> Result<CommitteeInfo> {
     // The committee order lives in ONE place: `StakingState::committee_order`
     // (active and stake >= MIN, stake desc with address tie-break, top
-    // MAX_ACTIVE_VALIDATORS, re-sorted by address). Reusing it keeps the seal
+    // committee, re-sorted by address). Reusing it keeps the seal
     // snapshot, the RPC committee and execution's authority indices on the
     // same ordering.
     let committee = staking_state.committee_order();

@@ -60,11 +60,11 @@ Status: mapped to `node::not_implemented("vote","kovanica_vote",...)` at `main.r
 
 ### 3.2 Weight calculation (planned — uses `StakingState`)
 
-Weight = validator's self-stake (after unbonding / delegation) + delegated amounts from `Delegation` entries (`kovanica-staking/src/lib.rs:349-353`). The committee is ordered by total stake (`committee_order()`), truncated to `MAX_ACTIVE_VALIDATORS = 21`, with tie-break by address (`lib.rs:497-511`).
+Weight = validator's self-stake (after unbonding / delegation) + delegated amounts from `Delegation` entries (`kovanica-staking/src/lib.rs:349-353`). The committee is ordered by total stake (`committee_order()`), with tie-break by address (`lib.rs:497-511`). There is no maximum number of active validators.
 
 ### 3.3 Quorum and validity thresholds (from `kovanica-types/src/committee.rs`)
 
-- **Quorum (approval)**: `floor(2/3 * total_stake) + 1` = `total_stake * 2 / 3 + 1` (`Committee::new`, `committee.rs`). For the planned 15–21 validator range (`MIN_ACTIVE_VALIDATORS=15`, `MAX_ACTIVE_VALIDATORS=21`, `lib.rs:104-107`), this yields ~67% of total staked.
+- **Quorum (approval)**: `floor(2/3 * total_stake) + 1` = `total_stake * 2 / 3 + 1` (`Committee::new`, `committee.rs`). `MIN_ACTIVE_VALIDATORS=15` is the mainnet genesis floor; there is no maximum. This yields ~67% of total staked.
 - **Validity (minimum turnout)**: `floor(total_stake / 3) + 1` (`committee.rs`). No proposal can execute unless at least ~33% of stake participates.
 - **Vote threshold for approval**: >50% of *voted* stakes must be `approve` (`B-TREASURY-PROPOSAL.md`). This is separate from quorum; both must pass.
 

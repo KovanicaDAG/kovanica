@@ -70,8 +70,8 @@ impl LogPublisher for EventLogPublisher {
     }
 }
 use kovanica_staking::{
-    StakingState, FOUNDER_PREMINE, GENESIS_VALIDATOR_ALLOCATION, MAX_ACTIVE_VALIDATORS,
-    MIN_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE, ONE_KUNA,
+    StakingState, FOUNDER_PREMINE, GENESIS_VALIDATOR_ALLOCATION, MIN_ACTIVE_VALIDATORS,
+    MIN_VALIDATOR_STAKE, ONE_KUNA,
 };
 use kovanica_storage::{StateStoreError, Storage};
 use kovanica_types::{
@@ -1510,12 +1510,10 @@ mod rss_metric_tests {
     }
 }
 
-/// Steady-state active validator bounds are
-/// `MIN_ACTIVE_VALIDATORS ..= MAX_ACTIVE_VALIDATORS` (15..=21), but a *genesis*
-/// set is additionally bounded by money: every genesis validator locks
+/// A *genesis* set is bounded by money: every genesis validator locks
 /// `MIN_VALIDATOR_STAKE` out of `GENESIS_VALIDATOR_ALLOCATION`, so at most 20
-/// can be funded at genesis. 21 is reachable later through staking, not at the
-/// ceremony.
+/// can be funded at genesis. There is no maximum number of active validators
+/// in steady state; anyone meeting `MIN_VALIDATOR_STAKE` may join.
 ///
 /// Returns `(min, max)` for a mainnet genesis set.
 fn mainnet_genesis_validator_bounds() -> (usize, usize) {
@@ -4721,19 +4719,16 @@ fn build_committee(
     // Sort by address for deterministic ordering across all nodes
     active_validators.sort_by_key(|a| a.address.0);
 
-    // Take up to MAX_ACTIVE_VALIDATORS top validators by stake (then by address for tie-breaking)
-    // Sort by stake desc, take top 21, then sort by address for index assignment.
+    // Sort by stake desc (ties by address) for deterministic ordering, then
+    // include ALL active validators (no maximum cap).
     active_validators.sort_by(|a, b| {
         b.stake
             .cmp(&a.stake)
             .then_with(|| a.address.0.cmp(&b.address.0))
     });
-    let top_validators = active_validators
-        .into_iter()
-        .take(MAX_ACTIVE_VALIDATORS)
-        .collect::<Vec<_>>();
+    let top_validators = active_validators;
 
-    // Re-sort by address for stable index assignment
+    // Sort by address for stable index assignment
     let mut top_validators = top_validators;
     top_validators.sort_by_key(|a| a.address.0);
 
@@ -5854,7 +5849,7 @@ mod tests {
         assert!(body.chars().all(|c| c.is_ascii_hexdigit()), "{body}");
     }
 
-    use kovanica_staking::{StakingState, MAX_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE, ONE_KUNA};
+    use kovanica_staking::{StakingState, MIN_VALIDATOR_STAKE, ONE_KUNA};
     use kovanica_storage::BincodeSerialize;
     use redb::{Database, TableDefinition};
     use std::collections::HashMap;
@@ -7042,14 +7037,14 @@ mod tests {
     }
 
     #[test]
-    fn build_committee_limits_to_max_active_validators() {
+    fn build_committee_includes_all_active_validators() {
         let dir = tempfile::tempdir().unwrap();
         let state_storage = Storage::new(dir.path().join("state.redb")).unwrap();
 
         let mut staking = StakingState::new();
         staking.init_treasury(Address([0xcc; 32]));
 
-        // Create 25 validators (MAX_ACTIVE_VALIDATORS = 21) - manually bypass join_validator limit
+        // Create 25 validators - no cap, all should be admitted.
         let mut validators = Vec::new();
         for _ in 0..25 {
             let (_sk, pk) = kovanica_crypto::generate_keypair();
@@ -7092,11 +7087,11 @@ mod tests {
         )
         .expect("committee should be built");
 
-        // Should only have MAX_ACTIVE_VALIDATORS (21)
+        // No maximum cap: all 25 validators included.
         assert_eq!(
             committee.size(),
-            MAX_ACTIVE_VALIDATORS,
-            "committee should be limited to MAX_ACTIVE_VALIDATORS"
+            25,
+            "committee should include all active validators"
         );
     }
 
@@ -9314,12 +9309,10 @@ mod tests {
             max,
             (kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::MIN_VALIDATOR_STAKE)
                 as usize,
-            "the genesis set is capped by the allocation, not by MAX_ACTIVE_VALIDATORS"
+            "the genesis set is capped by the allocation"
         );
-        // 21 active validators is the steady-state ceiling; at genesis the 1M
-        // allocation can only back 20 staking the 50k minimum.
+        // At genesis the 1M allocation can only back 20 staking the 50k minimum.
         assert_eq!(max, 20);
-        assert!(max < kovanica_staking::MAX_ACTIVE_VALIDATORS);
 
         // Mainnet: bounds are enforced at both ends.
         for count in [min, 16, max] {
