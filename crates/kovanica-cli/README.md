@@ -137,3 +137,12 @@ Columns: `HEIGHT`, `TIMESTAMP`, `KIND`, `STATUS`, `FROM`, `TO`, `AMOUNT`, `FEE`,
 value from a previous page to paginate backwards in history. Direction can be
 filtered with `--sent` or `--received` (default is all).
 
+
+## Dependencies on kovanica-wallet-core + kovanica-sdk
+
+As of this change, `kovanica-cli` is the first real consumer of
+`kovanica-wallet-core` (account/key lifecycle, balance/nonce tracking, and
+high-level send flows) and `kovanica-sdk` (transaction builders, signing
+helpers, address parsing, and HTTP RPC). Transaction construction and the
+JSON-RPC transport are delegated to those crates; the CLI only parses
+arguments, calls into them, and prints results.

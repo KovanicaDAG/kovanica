@@ -4,16 +4,19 @@
 //! JSON-RPC request to `/rpc` and unwraps the `result`, translating an `error`
 //! object into an [`anyhow::Error`].
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 
-/// Async JSON-RPC client bound to a single endpoint.
+pub use kovanica_sdk::RpcClient as SdkRpcClient;
+
+/// Thin adapter over `kovanica_sdk::RpcClient`.
+///
+/// Retains the CLI's `/rpc` path normalization and helper methods while
+/// delegating all HTTP/JSON-RPC transport to the SDK.
+#[derive(Clone)]
 pub struct RpcClient {
+    inner: kovanica_sdk::RpcClient,
     url: String,
-    http: reqwest::Client,
-    next_id: AtomicU64,
 }
 
 impl RpcClient {
@@ -24,11 +27,8 @@ impl RpcClient {
         if !url.ends_with("/rpc") {
             url = format!("{}/rpc", url.trim_end_matches('/'));
         }
-        Self {
-            url,
-            http: reqwest::Client::new(),
-            next_id: AtomicU64::new(1),
-        }
+        let inner = kovanica_sdk::RpcClient::new(url.clone());
+        Self { url, inner }
     }
 
     /// The endpoint this client posts to.
@@ -37,53 +37,16 @@ impl RpcClient {
     }
 
     /// Invoke `method` with `params` and return the JSON `result` value.
-    ///
-    /// `params` should be a JSON array (positional) or object (named).
     pub async fn call(&self, method: &str, params: Value) -> Result<Value> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let body = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-            "id": id,
-        });
-
-        let response = self
-            .http
-            .post(&self.url)
-            .json(&body)
-            .send()
+        self.inner
+            .call(method, params)
             .await
-            .with_context(|| format!("POST {}", self.url))?;
-
-        let status = response.status();
-        let value: Value = response
-            .json()
-            .await
-            .with_context(|| format!("decoding JSON-RPC response from {}", self.url))?;
-
-        if let Some(error) = value.get("error").filter(|e| !e.is_null()) {
-            return Err(anyhow!("RPC `{method}` failed: {error}"));
-        }
-
-        value
-            .get("result")
-            .cloned()
-            .ok_or_else(|| anyhow!("RPC `{method}`: response had no `result` (HTTP {status})"))
+            .map_err(|e| anyhow::anyhow!("RPC `{method}` failed: {e}"))
     }
 
     /// Read the node's `/health` peer count.
-    ///
-    /// Health is supplementary to the JSON-RPC status data, so transport errors,
-    /// non-success responses, and malformed payloads are reported as `None`.
     pub async fn health_peer_count(&self) -> Option<usize> {
-        let url = format!("{}/health", self.url.strip_suffix("/rpc")?);
-        let response = self.http.get(url).send().await.ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-        let value: Value = response.json().await.ok()?;
-        parse_health_peer_count(&value)
+        self.inner.health_peer_count().await
     }
 }
 

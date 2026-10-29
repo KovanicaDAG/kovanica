@@ -24,3 +24,5 @@ mod version {
         assert_ne!(version, "1.0.0");
     }
 }
+
+pub mod balance_provider;

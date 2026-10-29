@@ -19,9 +19,10 @@ use kovanica_cli::contracts::{
     ContractCommand, HtlcCommand, MultisigCommand, TokenCommand, VaultCommand,
 };
 use kovanica_cli::rpc::RpcClient;
-use kovanica_cli::{comms, contracts, node, output, rpc, tui, tx, wallet};
+use kovanica_cli::{comms, contracts, node, output, tui, tx, wallet};
 use kovanica_types::transaction::TransactionKind;
 use kovanica_types::{crypto::PublicKey, crypto::SigningKey, Address};
+use kovanica_wallet_core::BalanceProvider;
 use zeroize::Zeroizing;
 
 const UNSAFE_SIGN_WARNING: &str = "WARNING: arbitrary message signing is unsafe and cross-context; signatures may be replayed or misinterpreted by other protocols.";
@@ -513,7 +514,10 @@ fn cmd_keygen(args: KeygenArgs, json_output: bool) -> Result<()> {
         confirm_typed(&format!("OVERWRITE {}", args.out.display()))?;
     }
     let passphrase = prompt_confirmed_passphrase("New keystore passphrase: ")?;
-    let keystore = wallet::keygen(&passphrase)?;
+    // Route key creation through kovanica-wallet-core; persist via keystore.
+    let account = kovanica_wallet_core::WalletAccount::new();
+    let seed = account.signing_key.to_bytes();
+    let keystore = wallet::from_seed(&seed, &passphrase)?;
     if args.force {
         wallet::save_replace(&args.out, &keystore)?;
     } else {
@@ -640,23 +644,33 @@ async fn cmd_transfer(
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let sender = wallet::address(&keystore)?;
 
-    // The account nonce is the next unused nonce, so it is used as-is.
-    let nonce_value = client
-        .call("kovanica_getNonce", json!([sender.to_string()]))
-        .await?;
-    let nonce = rpc::parse_quantity(&nonce_value)?;
+    // Route balance/nonce through wallet-core's BalanceProvider fed by the SDK
+    // RPC client.
+    let provider = kovanica_cli::balance_provider::RpcBalanceProvider::new(client.clone());
+    let nonce = provider
+        .get_nonce(&sender)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-    let kind = TransactionKind::Transfer {
-        to: recipient,
-        amount: args.amount,
-    };
-    let transaction = tx::build_signed(&ctx, sender, nonce, kind, args.fee, &signing_key)?;
+    // Keep a local wallet view for balance/nonce tracking.
+    let mut wallet = kovanica_wallet_core::Wallet::new();
+    if let Ok(bal) = provider.get_balance(&sender).await {
+        wallet.set_balance(&sender, bal);
+    }
+    wallet.set_nonce(&sender, nonce);
+
+    let transaction =
+        kovanica_sdk::tx::transfer(&signing_key, &ctx, recipient, args.amount, nonce, args.fee);
     let raw = tx::encode_raw(&transaction)?;
 
     let result = client
         .call("kovanica_sendRawTransaction", json!([raw]))
         .await?;
     let tx_hash = result.as_str().unwrap_or_default().to_string();
+
+    // Update local view after successful send.
+    wallet.set_nonce(&sender, nonce + 1);
+    let _ = wallet;
 
     if json_output {
         return output::print_json(&json!({
@@ -698,13 +712,14 @@ async fn sign_and_submit_self(
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let sender = wallet::address(&keystore)?;
 
-    // The account nonce is the next unused nonce, so it is used as-is.
-    let nonce_value = client
-        .call("kovanica_getNonce", json!([sender.to_string()]))
-        .await?;
-    let nonce = rpc::parse_quantity(&nonce_value)?;
+    // Route nonce through wallet-core's BalanceProvider fed by the SDK RPC client.
+    let provider = kovanica_cli::balance_provider::RpcBalanceProvider::new(client.clone());
+    let nonce = provider
+        .get_nonce(&sender)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-    let transaction = tx::build_signed(&ctx, sender, nonce, kind, fee, &signing_key)?;
+    let transaction = kovanica_sdk::tx::build(&signing_key, &ctx, kind, nonce, fee);
     let raw = tx::encode_raw(&transaction)?;
 
     let result = client

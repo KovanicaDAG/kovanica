@@ -54,6 +54,24 @@ impl RpcClient {
         serde_json::from_value(result).map_err(|e| SdkError::Serialization(e.to_string()))
     }
 
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub async fn health_peer_count(&self) -> Option<usize> {
+        let base = self.url.strip_suffix("/rpc").unwrap_or(&self.url);
+        let url = format!("{}/health", base.trim_end_matches('/'));
+        let response = self.client.get(url).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let value: Value = response.json().await.ok()?;
+        if value.get("status")?.as_str()? != "ok" {
+            return None;
+        }
+        usize::try_from(value.get("peer_count")?.as_u64()?).ok()
+    }
+
     pub async fn block_number(&self) -> Result<u64, SdkError> {
         // returns hex quantity string possibly
         let raw: Value = self.call("kovanica_blockNumber", json!([])).await?;

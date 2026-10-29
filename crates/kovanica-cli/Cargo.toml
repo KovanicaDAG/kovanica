@@ -24,6 +24,8 @@ path = "src/bin/bench.rs"
 [dependencies]
 kovanica-types = { path = "../kovanica-types" }
 kovanica-keystore = { path = "../kovanica-keystore" }
+kovanica-sdk = { path = "../kovanica-sdk" }
+kovanica-wallet-core = { path = "../kovanica-wallet-core" }
 kovanica-crypto = { path = "../kovanica-crypto" }
 kovanica-common = { path = "../kovanica-common" }
 kovanica-htlc = { path = "../kovanica-htlc" }
@@ -33,6 +35,7 @@ kovanica-token = { path = "../kovanica-token" }
 kovanica-comms-core = { path = "../kovanica-comms-core" }
 clap = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
