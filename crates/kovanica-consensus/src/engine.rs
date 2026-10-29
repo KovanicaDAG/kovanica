@@ -1601,6 +1601,11 @@ where
                 }
                 self.drain_commits()?;
             }
+        } else {
+            // No certificate yet, but this timeout may complete the
+            // union-quorum evidence for a slot whose votes are short of the
+            // quorum (PRO-41). Re-run the walk so the rule sees it.
+            self.drain_commits()?;
         }
         Ok(())
     }
@@ -2038,9 +2043,13 @@ where
         // or delivered ahead of an earlier pending decision.
         let _guard = self.commit_trigger_lock.lock();
         let commit_started = Instant::now();
+        // Snapshot the timeout stake per slot once per attempt: the union-quorum
+        // rule decides a slot when its votes plus these timeouts cover quorum
+        // and the voters are the strict majority of that union.
+        let timeout_stake = self.timeout_pool.lock().stake_by_round(&self.committee);
         let Some(subdag) = self
             .committer
-            .try_commit_and_mark_durable(self.dag_store.as_ref())?
+            .try_commit_and_mark_durable_with_timeouts(self.dag_store.as_ref(), &timeout_stake)?
         else {
             // No commit: the first undecided slot may have a skip certificate
             // (PRO-40 (b)). `drain_commits` then continues with the next slot.

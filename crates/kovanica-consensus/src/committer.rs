@@ -11,7 +11,7 @@ use crate::metrics::{record_pruned_blocks, record_pruned_waves};
 use crate::mysticghost::{order_committed_wave, MysticGhostConfig, MysticGhostOrder};
 use crate::types::{CommitResult, CommitteeInfo, LeaderInfo, LeaderStatus};
 use kovanica_types::{
-    block::StatementBlock, hash::Hash, AuthorityIndex, CommittedSubDag, Round, WAVE_LENGTH,
+    block::StatementBlock, hash::Hash, AuthorityIndex, CommittedSubDag, Round, Stake, WAVE_LENGTH,
 };
 use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -65,6 +65,97 @@ impl BaseCommitter {
         }
 
         LeaderStatus::Undecided
+    }
+
+    /// Decide a leader with the **union-quorum** fallback (PRO-41).
+    ///
+    /// A slot whose vote stake is short of the quorum but whose voters *and*
+    /// timeout signers together cover it is decided — as a commit — when the
+    /// voters are a strict majority of that union. This is the case that
+    /// stalled chain 4 for 16 minutes at round 51474 (3 votes = 300 000,
+    /// 2 timeouts = 200 000, quorum 333 334): the voters plainly carried the
+    /// slot, yet neither a vote quorum nor a skip quorum existed.
+    ///
+    /// # Why a commit is the safe side here
+    ///
+    /// A timeout only states "this signer did not vote for the slot"; it names
+    /// no block and so cannot contradict any vote. Committing therefore needs
+    /// the voters to be a strict majority of everyone who expressed a
+    /// preference, plus a stake floor that no skip certificate can intersect
+    /// in faulty stake alone:
+    ///
+    /// `votes > total_stake + max_stake - quorum_threshold`
+    ///
+    /// i.e. `votes + quorum_threshold - total_stake > max_stake`, so the
+    /// voters intersect any `quorum_threshold` skip certificate in more stake
+    /// than a single Byzantine validator holds — at least one honest signer
+    /// would have to sign both a vote and a timeout for the slot, which
+    /// [`crate::engine::ConsensusEngine::vote_for_leader`] and `sign_timeout`
+    /// never do. Two different blocks at the same slot are likewise impossible
+    /// under this floor: their vote sets would have to be disjoint quorums
+    /// minus one, leaving too much stake for the union rule to close.
+    ///
+    /// The decision needs no new wire artifact: every node re-derives it from
+    /// the same gossiped (and persisted) votes and timeouts, so peers that
+    /// hold the same evidence decide identically and a lagging node simply
+    /// stays undecided until the missing timeouts reach it.
+    ///
+    /// The **skip** side is deliberately not widened: moving the cursor past a
+    /// slot still needs a verifiable quorum [`kovanica_types::SkipCert`],
+    /// because a locally-inferred skip would not be reproducible by peers.
+    pub fn try_direct_decide_with_timeouts(
+        &self,
+        dag_store: &dyn DagStoreTrait,
+        leader_info: &LeaderInfo,
+        timeout_stake: Stake,
+    ) -> LeaderStatus {
+        let status = self.try_direct_decide(dag_store, leader_info);
+        if status == LeaderStatus::Commit
+            || !self.union_quorum_decides_commit(leader_info, timeout_stake)
+        {
+            return status;
+        }
+        info!(
+            round = leader_info.round,
+            author = leader_info.author,
+            votes = leader_info.votes.len(),
+            timeout_stake,
+            "Union-quorum commit: voters are a strict majority of the slot's vote plus timeout stake"
+        );
+        crate::metrics::record_union_quorum_commit();
+        LeaderStatus::Commit
+    }
+
+    /// Whether the union-quorum rule commits `leader_info` given the stake that
+    /// signed timeouts for its round. See
+    /// [`Self::try_direct_decide_with_timeouts`] for the safety argument.
+    fn union_quorum_decides_commit(&self, leader_info: &LeaderInfo, timeout_stake: Stake) -> bool {
+        let Some(leader_hash) = leader_info.block_hash.as_ref() else {
+            // A slot without a leader block has nothing to commit.
+            return false;
+        };
+        let votes = self
+            .committee
+            .vote_stake(&leader_info.votes, Some(leader_hash));
+        if votes == 0 {
+            return false;
+        }
+        // Votes and timeouts together must cover the quorum, ...
+        if votes.saturating_add(timeout_stake) < self.committee.quorum_threshold() {
+            return false;
+        }
+        // ... the voters must be the strict majority of that union, ...
+        if votes <= timeout_stake {
+            return false;
+        }
+        // ... and must beat the stake floor that makes every skip certificate
+        // intersect them in at least one honest signer.
+        let floor = self
+            .committee
+            .total_stake()
+            .saturating_add(self.committee.max_stake())
+            .saturating_sub(self.committee.quorum_threshold());
+        votes > floor
     }
 
     /// Try to make an indirect decision on a leader round.
@@ -556,6 +647,12 @@ impl UniversalCommitter {
     /// timeout. A slot that has its own vote quorum is committed, never
     /// skipped (with honest signers both cannot exist; this is defensive).
     ///
+    /// The union-quorum commit rule (PRO-41) needs no check here: a skip
+    /// certificate means timeouts alone reached the quorum, while the union
+    /// rule requires the voters to be a *strict majority* of votes plus
+    /// timeouts — which would make the votes alone a quorum, i.e. the direct
+    /// commit path above.
+    ///
     /// The skip is written to the decided-round index as a decision with no
     /// leaders before the cursor moves, so a restart resumes after it and
     /// replay commits nothing for it. The skipped leader block, if any, stays
@@ -622,6 +719,18 @@ impl UniversalCommitter {
         &self,
         dag_store: &D,
     ) -> Option<(CommittedSubDag, LeaderInfo, Option<ColouringResult>)> {
+        self.try_commit_with_leader_and_timeouts(dag_store, &HashMap::new())
+    }
+
+    /// Like [`Self::try_commit_with_leader`], but with the timeout stake this
+    /// node holds per leader slot, so the walk can apply the union-quorum rule
+    /// ([`BaseCommitter::try_direct_decide_with_timeouts`]). An empty map gives
+    /// the vote-quorum-only behaviour.
+    fn try_commit_with_leader_and_timeouts<D: DagStoreTrait>(
+        &self,
+        dag_store: &D,
+        timeout_stake: &HashMap<Round, Stake>,
+    ) -> Option<(CommittedSubDag, LeaderInfo, Option<ColouringResult>)> {
         // A joiner that learned a certified anchor while running (state sync
         // or a seal quorum) has to move the cursor before this walk. An
         // unreadable anchor fails closed: return nothing rather than commit
@@ -672,8 +781,13 @@ impl UniversalCommitter {
                 break;
             };
 
-            // Try direct decision
-            let direct_status = self.base.try_direct_decide(dag_store, leader_info);
+            // Try direct decision (quorum of votes, or the union-quorum rule
+            // when this node also holds timeouts for the slot).
+            let direct_status = self.base.try_direct_decide_with_timeouts(
+                dag_store,
+                leader_info,
+                timeout_stake.get(&slot).copied().unwrap_or(0),
+            );
 
             if direct_status == LeaderStatus::Commit {
                 // Construct only; candidate-only callers do not publish it.
@@ -710,8 +824,22 @@ impl UniversalCommitter {
         &self,
         dag_store: &D,
     ) -> Result<Option<CommittedSubDag>, kovanica_dag::DagStoreError> {
+        self.try_commit_and_mark_durable_with_timeouts(dag_store, &HashMap::new())
+    }
+
+    /// Like [`Self::try_commit_and_mark_durable`], but tells the commit walk
+    /// how much stake signed timeouts for each leader slot, enabling the
+    /// union-quorum rule ([`BaseCommitter::try_direct_decide_with_timeouts`]).
+    /// Callers with a [`crate::skip::TimeoutPool`] should use this variant; an
+    /// empty map is exactly the old vote-quorum-only behaviour.
+    pub fn try_commit_and_mark_durable_with_timeouts<D: DagStoreTrait>(
+        &self,
+        dag_store: &D,
+        timeout_stake: &HashMap<Round, Stake>,
+    ) -> Result<Option<CommittedSubDag>, kovanica_dag::DagStoreError> {
         let _guard = self.durable_commit_lock.lock();
-        let Some((subdag, mut decided_leader, colouring)) = self.try_commit_with_leader(dag_store)
+        let Some((subdag, mut decided_leader, colouring)) =
+            self.try_commit_with_leader_and_timeouts(dag_store, timeout_stake)
         else {
             return Ok(None);
         };
@@ -1496,6 +1624,152 @@ mod tests {
         }
         assert_eq!(seen, expected);
         assert_eq!(committer.last_decided_round(), 120);
+    }
+
+    // -----------------------------------------------------------------
+    // PRO-41: union-quorum commit (votes + timeouts)
+    // -----------------------------------------------------------------
+
+    fn stake_committee(stakes: &[u64]) -> CommitteeInfo {
+        let authorities = stakes
+            .iter()
+            .enumerate()
+            .map(|(index, stake)| AuthorityInfo {
+                index: index as AuthorityIndex,
+                stake: *stake,
+                public_key: PublicKey([index as u8; 32]),
+                vrf_public_key: None,
+                address: Address([index as u8; 32]),
+                network_address: String::new(),
+            })
+            .collect();
+        CommitteeInfo::try_new(0, authorities).expect("valid committee")
+    }
+
+    /// The chain-4 shape in miniature: five equal validators, three votes
+    /// (3/5) and two timeouts (2/5). The votes alone are short of the quorum,
+    /// the union is not, and the voters are the strict majority -> commit.
+    #[test]
+    fn union_quorum_commits_when_votes_are_short_but_the_majority() {
+        let leader_block = make_block(0, 3, vec![], "leader-3");
+        let mut dag = RecordingDag::default();
+        dag.insert(leader_block.clone());
+
+        let base = BaseCommitter::new(committee(5));
+        let mut info = leader(3, 0, Some(leader_block.digest));
+        for voter in [0u16, 1, 2] {
+            info.votes.insert(voter, leader_block.digest);
+        }
+
+        // Vote quorum alone is still missing, so the old rule stalls.
+        assert_eq!(base.try_direct_decide(&dag, &info), LeaderStatus::Undecided);
+        // With the two timeouts the union rule decides the slot.
+        assert_eq!(
+            base.try_direct_decide_with_timeouts(&dag, &info, 2),
+            LeaderStatus::Commit
+        );
+    }
+
+    /// Equal vote and timeout stake is not a majority: the rule must stall
+    /// rather than guess. Two votes plus two timeouts cover 4/5 of the stake.
+    #[test]
+    fn union_quorum_refuses_a_split_without_a_voter_majority() {
+        let leader_block = make_block(0, 3, vec![], "leader-3");
+        let mut dag = RecordingDag::default();
+        dag.insert(leader_block.clone());
+
+        let base = BaseCommitter::new(committee(5));
+        let mut info = leader(3, 0, Some(leader_block.digest));
+        for voter in [0u16, 1] {
+            info.votes.insert(voter, leader_block.digest);
+        }
+
+        assert_eq!(
+            base.try_direct_decide_with_timeouts(&dag, &info, 2),
+            LeaderStatus::Undecided,
+            "votes equal to the timeout stake must never decide"
+        );
+    }
+
+    /// The voters must beat `total + max - quorum` so that any skip
+    /// certificate intersects them in more stake than one validator holds.
+    /// Here the votes are the majority of the union but still under the floor.
+    #[test]
+    fn union_quorum_refuses_below_the_skip_intersection_floor() {
+        let leader_block = make_block(0, 3, vec![], "leader-3");
+        let mut dag = RecordingDag::default();
+        dag.insert(leader_block.clone());
+
+        // total 15, quorum 11, max stake 4 => floor 8.
+        let base = BaseCommitter::new(stake_committee(&[4, 4, 2, 4, 1]));
+        let mut info = leader(3, 0, Some(leader_block.digest));
+        // Votes: 4 + 2 = 6; timeouts: 4 + 1 = 5. Union 11 >= 11 and 6 > 5,
+        // but 6 <= 8, so no honest signer is forced into the intersection.
+        for voter in [0u16, 2] {
+            info.votes.insert(voter, leader_block.digest);
+        }
+        assert_eq!(
+            base.try_direct_decide_with_timeouts(&dag, &info, 5),
+            LeaderStatus::Undecided,
+            "votes under the floor must never decide, even as a majority"
+        );
+
+        // One more 4-stake voter: 10 > 5 and 10 > 8 -> decided.
+        info.votes.insert(3, leader_block.digest);
+        assert_eq!(
+            base.try_direct_decide_with_timeouts(&dag, &info, 5),
+            LeaderStatus::Commit
+        );
+    }
+
+    /// A slot with no leader block cannot be committed by the rule.
+    #[test]
+    fn union_quorum_never_commits_an_empty_slot() {
+        let dag = RecordingDag::default();
+        let base = BaseCommitter::new(committee(5));
+        let mut info = leader(3, 0, None);
+        info.votes.insert(0, Hash::new(b"no-block"));
+
+        assert_eq!(
+            base.try_direct_decide_with_timeouts(&dag, &info, 1),
+            LeaderStatus::Undecided
+        );
+    }
+
+    /// End to end through the commit walk: the union rule is what moves the
+    /// cursor, and it is visible to `try_commit_and_mark_durable_with_timeouts`.
+    #[test]
+    fn commit_walk_uses_the_union_rule() {
+        let genesis = make_block(0, 0, vec![], "genesis");
+        let leader_block = make_block(0, 3, vec![block_ref(&genesis)], "leader-3");
+        let mut dag = RecordingDag::default();
+        dag.insert(genesis.clone());
+        dag.insert(leader_block.clone());
+        dag.set_ancestors(leader_block.digest, vec![genesis.digest]);
+
+        let committer = UniversalCommitter::new(committee(5), false, 100);
+        committer.update_leader(leader(3, 0, Some(leader_block.digest)));
+        for voter in [0u16, 1, 2] {
+            committer.add_vote(3, voter, leader_block.digest);
+        }
+
+        // Without the timeout evidence the walk stalls.
+        assert!(
+            committer
+                .try_commit_and_mark_durable(&dag)
+                .expect("no storage error")
+                .is_none(),
+            "three of five votes are short of the quorum"
+        );
+
+        let mut timeout_stake = HashMap::new();
+        timeout_stake.insert(3, 2u64);
+        let committed = committer
+            .try_commit_and_mark_durable_with_timeouts(&dag, &timeout_stake)
+            .expect("no storage error")
+            .expect("union quorum commits the slot");
+        assert_eq!(committed.leader_round, 3);
+        assert_eq!(committer.last_decided_round(), 3);
     }
 
     // -----------------------------------------------------------------

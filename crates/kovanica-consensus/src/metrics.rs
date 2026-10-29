@@ -309,18 +309,36 @@ static KOVANICA_COMMITTED_LEADERS_TOTAL: Lazy<Counter> = Lazy::new(|| {
 /// Leader slots whose block did not arrive by this node's leader deadline, by
 /// reason.
 ///
-/// Since PRO-35 a timeout is **not** a decision: the committer stalls at the
-/// round instead of skipping it. The counter therefore measures missed leader
-/// blocks, not rounds the chain moved past.
+/// A timeout is **not** itself a decision (PRO-35): the slot is committed only
+/// when the votes still carry it — a vote quorum, or the union-quorum rule —
+/// and moved past only with a verifiable quorum skip certificate. The counter
+/// therefore measures missed leader blocks, not rounds the chain moved past.
 static KOVANICA_SKIPPED_LEADERS_TOTAL: Lazy<Family<SkipReasonLabels, Counter>> = Lazy::new(|| {
     let family = Family::<SkipReasonLabels, Counter>::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
         "kovanica_skipped_leaders",
-        "Leader slots that timed out (block missed the deadline); the chain stalls, it does not skip",
+        "Leader slots that hit this node's leader deadline without a block quorum (a timeout alone is not a decision: the slot still commits by union quorum or a certified skip)",
         family.clone(),
     );
     family
+});
+
+/// Leader slots committed by the union-quorum rule instead of a vote quorum.
+///
+/// A slot counted here had votes below the quorum on their own, but the voters
+/// plus the timeout signers covered it and the voters were a strict majority
+/// of that union (see `BaseCommitter::try_direct_decide_with_timeouts`). Each
+/// one is a stall the rule prevented.
+static KOVANICA_UNION_QUORUM_COMMITS_TOTAL: Lazy<Counter> = Lazy::new(|| {
+    let counter = Counter::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "kovanica_union_quorum_commits",
+        "Leaders committed by the union-quorum rule (votes plus timeout stake covered the quorum with the voters in the majority)",
+        counter.clone(),
+    );
+    counter
 });
 
 /// Time from first sighting the leader block to committing it, in seconds.
@@ -478,6 +496,11 @@ pub fn record_skipped_leader(reason: SkipReason) {
             reason: reason.as_str(),
         })
         .inc();
+}
+
+/// Record a leader committed by the union-quorum rule (votes plus timeouts).
+pub fn record_union_quorum_commit() {
+    KOVANICA_UNION_QUORUM_COMMITS_TOTAL.inc();
 }
 
 /// Observe node-local finality latency in seconds.

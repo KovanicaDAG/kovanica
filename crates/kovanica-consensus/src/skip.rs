@@ -18,7 +18,7 @@
 use crate::is_leader_round;
 use crate::types::CommitteeInfo;
 use kovanica_types::{AuthorityIndex, Hash, Round, SkipCert, Timeout};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Why a timeout or a skip certificate was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -150,6 +150,32 @@ impl TimeoutPool {
             round,
             timeouts: slot.values().cloned().collect(),
         })
+    }
+
+    /// Stake of the timeout signers recorded for `round`.
+    ///
+    /// Feeds the commit walk's union-quorum rule; signers outside the
+    /// committee count for zero.
+    pub fn stake_for_round(&self, committee: &CommitteeInfo, round: Round) -> u64 {
+        self.by_round
+            .get(&round)
+            .map(|slot| {
+                slot.keys()
+                    .map(|voter| committee.stake_of(*voter).unwrap_or(0))
+                    .fold(0u64, u64::saturating_add)
+            })
+            .unwrap_or(0)
+    }
+
+    /// Timeout stake per slot, for the commit walk's union-quorum rule.
+    ///
+    /// Built once per commit attempt so the walk can apply the rule without
+    /// knowing about the pool.
+    pub fn stake_by_round(&self, committee: &CommitteeInfo) -> HashMap<Round, u64> {
+        self.by_round
+            .keys()
+            .map(|round| (*round, self.stake_for_round(committee, *round)))
+            .collect()
     }
 
     /// Drop every slot at or below `round` (decided).
