@@ -6,3 +6,8 @@ testnet/chain4/*.hex -text -diff
 
 # Installer is piped into `sh` on Linux; keep LF.
 node/scripts/install.sh text eol=lf
+
+# Shell scripts run under bash on Linux CI and Git Bash on Windows; a checkout
+# with CRLF endings fails there with `\r: command not found`. Force LF so a
+# green local run means a green CI run.
+*.sh text eol=lf
