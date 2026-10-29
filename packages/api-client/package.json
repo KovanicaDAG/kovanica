@@ -1,6 +1,6 @@
 {
   "name": "@kovanica/api-client",
-  "version": "0.0.31",
+  "version": "0.0.32",
   "description": "Minimal typed fetch wrapper for kovanica-rpc",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
