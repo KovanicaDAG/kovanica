@@ -7,6 +7,10 @@ export interface Network {
   /** JSON-RPC URL including the `/rpc` path. */
   rpcUrl: string;
   wsUrl: string;
+  /** Optional indexer HTTP base URL. Null disables indexer features. */
+  indexerHttpUrl: string | null;
+  /** Optional indexer WebSocket URL. Null disables live indexer events. */
+  indexerWsUrl: string | null;
   /** `POST` target. Null hides the faucet. */
   faucetUrl: string | null;
   enabled: boolean;
@@ -20,6 +24,10 @@ export const TESTNET: Network = {
   chainId: 4,
   rpcUrl: "https://rpc-testnet.kovanica.online/rpc",
   wsUrl: "wss://rpc-testnet.kovanica.online/ws",
+  indexerHttpUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_HTTP_URL) || null,
+  indexerWsUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_WS_URL) || null,
   faucetUrl: "https://seed3.kovanica.online/faucet",
   enabled: true,
 };
@@ -30,6 +38,10 @@ export const MAINNET: Network = {
   chainId: 1,
   rpcUrl: "https://rpc.kovanica.online/rpc",
   wsUrl: "wss://rpc.kovanica.online/ws",
+  indexerHttpUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_HTTP_URL) || null,
+  indexerWsUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_WS_URL) || null,
   faucetUrl: null,
   enabled: false,
   soon: "Mainnet is not open yet.",
@@ -41,6 +53,12 @@ export const LOCAL: Network = {
   chainId: 1337,
   rpcUrl: "http://127.0.0.1:8545/rpc",
   wsUrl: "ws://127.0.0.1:8545/ws",
+  indexerHttpUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_HTTP_URL) ||
+    "http://127.0.0.1:8787",
+  indexerWsUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_WS_URL) ||
+    "ws://127.0.0.1:8787/ws",
   faucetUrl: "http://127.0.0.1:8080/faucet",
   enabled: true,
 };

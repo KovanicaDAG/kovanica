@@ -24,7 +24,7 @@ pub struct Config {
 }
 
 fn default_listen() -> String {
-    "0.0.0.0:8090".into()
+    "0.0.0.0:8787".into()
 }
 fn default_data_dir() -> String {
     "./data/indexer".into()
@@ -58,6 +58,6 @@ impl Config {
     pub fn listen_addr(&self) -> SocketAddr {
         self.listen
             .parse()
-            .unwrap_or_else(|_| "0.0.0.0:8090".parse().unwrap())
+            .unwrap_or_else(|_| "0.0.0.0:8787".parse().unwrap())
     }
 }
