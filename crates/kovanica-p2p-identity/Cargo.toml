@@ -1,0 +1,16 @@
+[package]
+name = "kovanica-p2p-identity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kovanica-types = { path = "../kovanica-types" }
+kovanica-crypto = { path = "../kovanica-crypto" }
+serde = { workspace = true }
+bincode = { workspace = true }
+libp2p = { version = "0.57", features = ["ed25519"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
