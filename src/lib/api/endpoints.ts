@@ -23,6 +23,12 @@ export const ENDPOINTS: EndpointRow[] = [
   { method: "GET", path: "/api/state", note: "full DAG + flags", read: true },
   { method: "GET", path: "/api/utxos?address=", note: "spendable outputs", read: true },
   { method: "GET", path: "/api/history?address=", note: "deltas per address", read: true },
+  {
+    method: "GET",
+    path: "/api/tokens?address=",
+    note: "KVP-102 tokens on chain, with the caller's balance",
+    read: true,
+  },
   { method: "GET", path: "/api/fee_estimate", note: "RFC-006 fee floor, atoms/byte", read: true },
   { method: "GET", path: "/api/origins", note: "ISO3 pulses", read: true },
   { method: "GET", path: "/api/spec", note: "full protocol spec, text/plain", read: true },

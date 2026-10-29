@@ -30,7 +30,6 @@ const NAV = [
   { to: "/multisig", label: "Multisig", icon: Users },
   { to: "/htlc", label: "HTLC", icon: Lock },
   { to: "/vaults", label: "Vaults", icon: Vault },
-  { to: "/wallet/token-listings", label: "Tokens", icon: Coins },
   { to: "/network", label: "Network", icon: Activity },
   { to: "/map", label: "Map", icon: Map },
 ] as const;

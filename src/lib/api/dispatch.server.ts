@@ -21,6 +21,7 @@ import {
 } from "./node.server";
 import { isPublicSource, type ApiSource, type ApiState, type ApiHead, type ApiBootstrap, type ApiDagBlock } from "./contract";
 import { parseAddr, toCanonicalAddress } from "../wallet/address";
+import { listTokens } from "./tokens.server";
 import { blake3 } from "@noble/hashes/blake3.js";
 
 const CORS: Record<string, string> = {
@@ -465,6 +466,14 @@ export async function dispatchApi(req: Request): Promise<Response> {
     }
     if (name === "fee_estimate") {
       return json(await fetchLiveFeeEstimate());
+    }
+    if (name === "tokens") {
+      try {
+        const holder = parseAddr(q.get("address") ?? "");
+        return json(await listTokens(holder ?? undefined));
+      } catch (e) {
+        return text(`token scan failed: ${e instanceof Error ? e.message : e}`, 502);
+      }
     }
     if (name === "faucet") {
       try {

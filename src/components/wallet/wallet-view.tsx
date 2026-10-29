@@ -9,11 +9,13 @@ import { HardwareSignModal } from "@/components/wallet/hardware-sign-modal";
 import { api, useApiSource, isPublic } from "@/lib/api/client";
 import { MIN_FEE, TOKEN, isNativeAsset, assetLabel } from "@/lib/api/contract";
 import type { ApiHistory, ApiUtxos } from "@/lib/api/contract";
+import type { ApiToken } from "@/lib/tokens/codec";
+import { formatTokenAmount } from "@/lib/tokens/codec";
 import { prepareUrl, submitUrl, assetOptionsFromUtxos, balanceForAsset } from "@/lib/api/assets";
 import { ATOM } from "@/lib/ledger/types";
 import type { HardwareWalletRec, SoftwareWalletRec, WalletRec } from "@/lib/ledger/types";
 import { fmtKvnc, parseKvnc } from "@/lib/ledger/format";
-import { isRepeatedHex, shortId } from "@/lib/ledger/hash";
+import { shortId } from "@/lib/ledger/hash";
 import { useLedger } from "@/lib/ledger/store";
 import {
   addressFromMnemonic,
@@ -23,16 +25,8 @@ import {
 } from "@/lib/wallet/keys";
 import { hexToKvnc, parseAddr } from "@/lib/wallet/address";
 import { encryptMnemonic, decryptMnemonic } from "@/lib/wallet/vault";
-import {
-  formatDerivationPath,
-  getActiveHardwareProvider,
-  getHardwareProvider,
-  disconnectActiveHardwareProvider,
-} from "@/lib/wallet/hardware";
+import { disconnectActiveHardwareProvider } from "@/lib/wallet/hardware";
 import { useHydrated } from "@/lib/use-hydrated";
-import { cn } from "@/lib/utils";
-
-const ACCOUNTS = [0, 1, 2] as const;
 
 function isLocked(w: WalletRec | null): w is SoftwareWalletRec & {
   encryptedMnemonic: NonNullable<SoftwareWalletRec["encryptedMnemonic"]>;
@@ -71,12 +65,13 @@ export function WalletView() {
   const [feeTier, setFeeTier] = useState<"slow" | "normal" | "fast">("normal");
   /** RFC-002: null = native KUNA */
   const [assetId, setAssetId] = useState<string | null>(null);
+  /** KVP-102 tokens discovered on chain (all of them, not only ones this wallet holds). */
+  const [tokens, setTokens] = useState<ApiToken[]>([]);
 
   // M-05: recovery phrase generation is two-phase — show the words, then
   // require an explicit "I wrote it down" confirmation before wallet creation.
   const [pendingMnemonic, setPendingMnemonic] = useState<string | null>(null);
   const [wroteItDown, setWroteItDown] = useState(false);
-  const [wordCount, setWordCount] = useState<12 | 24>(24);
 
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [signModalState, setSignModalState] = useState<{
@@ -118,28 +113,35 @@ export function WalletView() {
         const rate = f.fee_rate;
         setFeeRates({ slow: rate, normal: rate, fast: rate });
       }
+      // Token discovery is a log scan; never let it hold up the balance.
+      void api<ApiToken[]>(`/api/tokens?address=${address}`)
+        .then(setTokens)
+        .catch(() => setTokens([]));
     } catch {
       /* keep last */
     }
   }
 
+  // One phrase = one wallet. Re-derive the address from the stored phrase and
+  // repair wallets created by the old SLIP-0010 build (which showed three
+  // "accounts" per phrase, each with a different address).
   useEffect(() => {
     if (!walletStore) return;
     if (walletStore.type === "hardware") return;
-    if (!isRepeatedHex(walletStore.address)) return;
-    if (walletStore.mnemonic) {
-      void addressFromMnemonic(walletStore.mnemonic, walletStore.index).then((address) => {
-        if (address !== walletStore.address) {
-          setWallet({ ...walletStore, address });
-        }
-      });
-    }
+    if (walletStore.kind === "watch") return;
+    if (!walletStore.mnemonic) return;
+    void addressFromMnemonic(walletStore.mnemonic).then((address) => {
+      if (address !== walletStore.address || walletStore.index !== 0) {
+        setWallet({ ...walletStore, address, index: 0 });
+      }
+    });
   }, [walletStore, setWallet]);
 
   useEffect(() => {
     if (!wallet) {
       setUtxos(null);
       setHist(null);
+      setTokens([]);
       return;
     }
     void (async () => {
@@ -156,7 +158,7 @@ export function WalletView() {
     }
     setBusy(true);
     try {
-      const mnemonic = await createMnemonic(wordCount);
+      const mnemonic = await createMnemonic();
       setPendingMnemonic(mnemonic);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not generate recovery phrase");
@@ -264,31 +266,6 @@ export function WalletView() {
       toast.success("Seed encrypted — wallet will lock on reload");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Encryption failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onAccount(index: number) {
-    if (!wallet || wallet.index === index) return;
-    setBusy(true);
-    try {
-      if (wallet.type === "hardware") {
-        const provider = getActiveHardwareProvider() || getHardwareProvider(wallet.deviceType);
-        if (!provider.isConnected()) {
-          const path = formatDerivationPath(index, 0, 0);
-          await provider.connect({ accountIndex: index, path });
-        }
-        const pubResult = await provider.getPublicKey(index);
-        setWallet({ ...wallet, address: pubResult.address, index, path: pubResult.path });
-        toast.success(`Switched to Hardware Account ${index}`);
-      } else {
-        if (!wallet.mnemonic) return;
-        const address = await addressFromMnemonic(wallet.mnemonic, index);
-        setWallet({ ...wallet, address, index });
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not switch account");
     } finally {
       setBusy(false);
     }
@@ -477,21 +454,10 @@ export function WalletView() {
             </div>
           ) : (
             <>
-              <div className="flex rounded-lg border border-border p-1">
-                {([12, 24] as const).map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setWordCount(n)}
-                    className={cn(
-                      "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                      wordCount === n ? "bg-gold text-black" : "text-muted hover:text-fg",
-                    )}
-                  >
-                    {n} words
-                  </button>
-                ))}
-              </div>
+              <p className="text-xs text-muted">
+                Your wallet is one 24-word phrase. The same phrase always restores the same
+                address, here and in the Android wallets.
+              </p>
               <Button
                 type="button"
                 className="h-12 bg-gold text-black hover:bg-gold/90"
@@ -525,7 +491,7 @@ export function WalletView() {
           <textarea
             value={phrase}
             onChange={(e) => setPhrase(e.target.value)}
-            placeholder="12 or 24 recovery words, or a kvnc1… address"
+            placeholder="24 recovery words, or a kvnc1… address"
             rows={3}
             className="min-h-20 rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm text-fg outline-none"
           />
@@ -675,20 +641,6 @@ export function WalletView() {
                 </Button>
               )}
             </div>
-            <div className="mt-3 flex gap-1">
-              {ACCOUNTS.map((i) => (
-                <Button
-                  key={i}
-                  type="button"
-                  variant={wallet.index === i ? "default" : "ghost"}
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void onAccount(i)}
-                >
-                  Acct {i}
-                </Button>
-              ))}
-            </div>
           </div>
 
           <form
@@ -785,6 +737,42 @@ export function WalletView() {
         </div>
 
         <div className="flex min-w-0 flex-col gap-6">
+          <section>
+            <p className="mb-2 text-[10px] tracking-wide text-subtle uppercase">Tokens</p>
+            {tokens.length === 0 ? (
+              <p className="text-sm text-muted">
+                No KVP-102 tokens on {live ? "Testnet" : "this chain"} yet.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border rounded-xl border border-border">
+                {tokens.slice(0, 8).map((token) => (
+                  <li key={token.address} className="flex items-center gap-3 px-4 py-3">
+                    {token.icon ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={token.icon}
+                        alt=""
+                        className="size-8 shrink-0 rounded-full border border-border object-cover"
+                      />
+                    ) : (
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-surface-2 font-mono text-[11px] text-teal">
+                        {token.symbol.slice(0, 2).toUpperCase()}
+                      </span>
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm text-fg">{token.symbol}</span>
+                      <span className="block truncate text-[11px] text-subtle">{token.name}</span>
+                    </span>
+                    <span className="shrink-0 text-right font-mono text-xs tabular-nums text-muted">
+                      {formatTokenAmount(BigInt(token.balance ?? "0"), token.decimals)}
+                      {token.paused ? <span className="ml-1 text-[10px] text-gold">paused</span> : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <section>
             <p className="mb-2 text-[10px] tracking-wide text-subtle uppercase">History</p>
             {history.length === 0 ? (
