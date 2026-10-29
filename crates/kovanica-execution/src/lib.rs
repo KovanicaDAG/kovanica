@@ -568,13 +568,18 @@ impl ExecutionContext {
 
         info!(
             target: "kovanica-execution",
-            "Committed leader round={} author={} reward={} {} (height={}) paid to {:?}",
-            subdag.leader_round,
-            subdag.leader_author,
-            reward.amount / kovanica_staking::ONE_KUNA,
-            kovanica_staking::TICKER,
-            reward.height,
-            reward.recipient,
+            round = subdag.leader_round,
+            author = subdag.leader_author,
+            reward_kuna = reward.amount / kovanica_staking::ONE_KUNA,
+            ticker = kovanica_staking::TICKER,
+            // The committed-leader height the reward formula was evaluated at,
+            // *before* this commit is numbered (height N is paid for the block
+            // that becomes committed height N). It is not the sub-DAG height
+            // `committed_height`, which is N + 1 here.
+            reward_height = reward.height,
+            committed_height,
+            recipient = ?reward.recipient,
+            "committed leader",
         );
 
         debug!(

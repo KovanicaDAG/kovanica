@@ -1379,7 +1379,11 @@ impl StateStore {
     ///    committed height), so a snapshot can never roll state backwards,
     /// 4. a sealed [`kovanica_types::LeaderHeader`] at `height` with a verified
     ///    commit-seal quorum (`floor(2T/3) + 1` stake, signed for
-    ///    `chain_id` only) must certify the state, and the header's
+    ///    `chain_id` only) must certify the state, the header's `leader_round`
+    ///    must be at or above
+    ///    [`kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND`] (below it the
+    ///    seal covers accounts only, so staking/contract rows are
+    ///    unauthenticated and the snapshot is refused), and the header's
     ///    `state_root` must be the **full-state commitment** recomputed from
     ///    the received accounts, contract code/storage and staking rows (see
     ///    [`AUX_STATE_LEAF_ADDRESS`]). A sealed header with real accounts but
@@ -1632,7 +1636,7 @@ fn snapshot_state_root(data: &SnapshotData) -> Result<Hash, StateStoreError> {
 ///
 /// A header root without that leaf (the pre-activation account-only root)
 /// never equals this value, so such a snapshot cannot be authenticated and is
-/// refused.
+/// refused (see the activation gate in [`verify_snapshot_seal_quorum`]).
 fn snapshot_committed_root(data: &SnapshotData) -> Result<Hash, StateStoreError> {
     let mut tree = kovanica_types::AccountSmt::empty();
     for (key, value) in &data.accounts {
@@ -1844,6 +1848,21 @@ fn verify_snapshot_seal_quorum(
         return Err(StateStoreError::SnapshotVerify(
             "snapshot has no commit seals; refusing uncertified import".to_string(),
         ));
+    }
+    // The seal only covers what the header root commits to. Below the
+    // full-state activation round that root is the account tree alone, so the
+    // staking, contract and code rows in the payload are covered by nothing: a
+    // peer could forge them while every signature still verifies. Fail closed
+    // with the reason instead of comparing against a root that cannot match.
+    if !kovanica_types::state_commitment_active_from(header.leader_round) {
+        return Err(StateStoreError::SnapshotVerify(format!(
+            "sealed header at round {} predates the full-state commitment (active from round {}, \
+             chain {}); below it the seal covers accounts only, so staking, contract and code rows \
+             cannot be authenticated and the snapshot is refused",
+            header.leader_round,
+            kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND,
+            chain_id
+        )));
     }
     let committed_root = snapshot_committed_root(data)?;
     if header.state_root != committed_root {
@@ -2177,7 +2196,8 @@ mod snapshot_tests {
                 .unwrap();
             let header = kovanica_types::LeaderHeader {
                 committed_height: h,
-                leader_round: (h + 1) * kovanica_types::WAVE_LENGTH,
+                leader_round: kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND
+                    + (h + 1) * kovanica_types::WAVE_LENGTH,
                 leader_digest: Hash::new([h as u8]),
                 leader_author: 0,
                 parent_leader_digest: Hash::zero(),
@@ -2230,12 +2250,54 @@ mod snapshot_tests {
                 .import_verified_snapshot(&txn, &bytes, 0, TEST_CHAIN)
                 .expect("verified import");
             assert_eq!(verified.height, 5);
-            assert_eq!(verified.leader_round, 6 * kovanica_types::WAVE_LENGTH);
+            assert_eq!(
+                verified.leader_round,
+                kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND
+                    + 6 * kovanica_types::WAVE_LENGTH
+            );
             txn.commit().unwrap();
         }
         let txn = dst.begin_read().unwrap();
         let restored = dst.state().get_account(&txn, &Address([4; 32])).unwrap();
         assert_eq!(restored.balance, 1234);
+    }
+
+    /// A snapshot sealed below the full-state activation round cannot
+    /// authenticate its staking/contract rows, so the importer must refuse it
+    /// with the activation reason instead of a root mismatch.
+    #[test]
+    fn verified_import_refuses_a_pre_activation_snapshot() {
+        let (_src_dir, src) = seeded_storage("preact-src.redb", Some(5));
+        let bytes = {
+            let txn = src.begin_read().unwrap();
+            src.state().snapshot_bytes(&txn).unwrap()
+        };
+        let mut data = StateStore::decode_snapshot(&bytes).unwrap();
+        let mut header = data.leader_header.clone().expect("sealed header");
+        header.leader_round = kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND
+            .saturating_sub(kovanica_types::WAVE_LENGTH);
+        data.leader_header = Some(header);
+        let mut pre_activation = SNAPSHOT_MAGIC.to_vec();
+        pre_activation.extend_from_slice(&bincode::serialize(&data).unwrap());
+
+        let (_dst_dir, dst) = seeded_storage("preact-dst.redb", None);
+        let err = {
+            let txn = dst.begin_write().unwrap();
+            dst.state()
+                .import_verified_snapshot(&txn, &pre_activation, 0, TEST_CHAIN)
+                .expect_err("a pre-activation snapshot must be refused")
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("predates the full-state commitment"),
+            "unexpected error: {message}"
+        );
+        let txn = dst.begin_read().unwrap();
+        assert_eq!(
+            dst.state().get_account(&txn, &Address([4; 32])).unwrap().balance,
+            1234,
+            "the seeded row must be untouched: nothing may be applied"
+        );
     }
 
     #[test]
@@ -2490,7 +2552,10 @@ mod snapshot_tests {
                 .import_verified_snapshot(&txn, &full_quorum_bytes, 0, TEST_CHAIN)
                 .expect("3-of-4 quorum snapshot must import");
             assert_eq!(verified.height, 4);
-            assert_eq!(verified.leader_round, 5 * kovanica_types::WAVE_LENGTH);
+            assert_eq!(
+            verified.leader_round,
+            kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND + 5 * kovanica_types::WAVE_LENGTH
+        );
             txn.commit().unwrap();
         }
     }

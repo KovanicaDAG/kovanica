@@ -174,6 +174,27 @@ impl CommitteeInfo {
         self.stake_for(votes, leader_hash) >= self.validity_threshold
     }
 
+    /// Stake of the votes that name `leader_hash`.
+    ///
+    /// Exactly the accounting [`Self::has_quorum`] and [`Self::has_validity`]
+    /// use, exposed so the union-quorum commit rule can compare vote stake
+    /// against timeout stake instead of only thresholding it.
+    pub fn vote_stake(
+        &self,
+        votes: &HashMap<AuthorityIndex, kovanica_types::hash::Hash>,
+        leader_hash: Option<&kovanica_types::hash::Hash>,
+    ) -> Stake {
+        self.stake_for(votes, leader_hash)
+    }
+
+    /// Stake held by the single heaviest authority (0 for an empty committee).
+    ///
+    /// Used as "the most one Byzantine validator can hold" when a rule needs
+    /// a stake set that cannot be made of faulty validators alone.
+    pub fn max_stake(&self) -> Stake {
+        self.authorities.iter().map(|a| a.stake).max().unwrap_or(0)
+    }
+
     /// Sum the stake of voters whose vote hash matches `leader_hash`.
     /// Returns 0 when the leader block is unknown.
     fn stake_for(
