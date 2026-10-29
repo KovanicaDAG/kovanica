@@ -13,7 +13,7 @@ const RAW = "https://raw.githubusercontent.com/KovanicaDAG/kovanica/main";
 // Bump NODE_RELEASE together with the default VERSION in
 // node/scripts/install.sh.
 const NODE_RELEASE =
-  "https://github.com/KovanicaDAG/kovanica/releases/download/v0.1.0-node";
+  "https://github.com/KovanicaDAG/kovanica/releases/download/v0.2.0-node";
 
 // The Android apps ship as three separate releases (one app per tag), so
 // releases/latest/download only ever contains one of them. Pin the tag and
