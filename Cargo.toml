@@ -25,6 +25,8 @@ members = [
     "crates/kovanica-htlc",
     "crates/kovanica-vault",
     "crates/kovanica-multisig",
+    "crates/kovanica-escrow",
+    "crates/kovanica-hw-signer",
     "crates/kovanica-nft",
     "crates/kovanica-oracle",
     "crates/kovanica-token",

@@ -66,6 +66,17 @@ pub const TOKEN_SWAP_BUY: &[u8] = b"token_swap_buy";
 /// Emitted by `Token::sell` with empty data.
 pub const TOKEN_SWAP_SELL: &[u8] = b"token_swap_sell";
 
+// ---------- Escrow ----------
+
+/// Emitted by `Escrow::create` with the 32-byte escrow id as data.
+pub const ESCROW_CREATED: &[u8] = b"escrow_created";
+/// Emitted by `Escrow::approve` with the 32-byte escrow id as data.
+pub const ESCROW_APPROVED: &[u8] = b"escrow_approved";
+/// Emitted by `Escrow::release` with the 32-byte escrow id as data.
+pub const ESCROW_RELEASED: &[u8] = b"escrow_released";
+/// Emitted by `Escrow::refund` with the 32-byte escrow id as data.
+pub const ESCROW_REFUNDED: &[u8] = b"escrow_refunded";
+
 // ---------- NFT ----------
 pub const NFT_COLLECTION_CREATED: &[u8] = b"nft_collection_created";
 pub const NFT_MINT: &[u8] = b"nft_mint";

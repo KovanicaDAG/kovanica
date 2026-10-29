@@ -10,12 +10,17 @@ kovanica-sdk = { path = "../kovanica-sdk" }
 kovanica-types = { path = "../kovanica-types" }
 kovanica-crypto = { path = "../kovanica-crypto" }
 kovanica-keystore = { path = "../kovanica-keystore" }
+kovanica-hw-signer = { path = "../kovanica-hw-signer", optional = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 async-trait = { workspace = true }
+
+[features]
+default = []
+hw-signer = ["dep:kovanica-hw-signer"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
