@@ -35,6 +35,7 @@ members = [
     "crates/kovanica-p2p-identity",
     "crates/kovanica-faucet",
     "crates/kovanica-fee",
+    "crates/kovanica-governance",
     "crates/kovanica-params",
     "crates/kovanica-indexer",
     "crates/kovanica-sdk",
