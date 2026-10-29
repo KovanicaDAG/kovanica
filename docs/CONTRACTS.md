@@ -347,6 +347,13 @@ paid. The rest of the family works against an existing contract:
 `token balance --contract <kvnc…> --address <kvnc…>` (a direct state read, no
 transaction).
 
+Each mutation waits for its own nonce to commit (`--timeout`, 300 s) and then
+re-reads the contract and requires the state it asked for: sender/recipient
+balance and an unchanged supply for a transfer, the recipient balance and the
+supply for a mint, the burner balance and the supply for a burn, the allowance
+for an approve. A rejected body still charges the fee and consumes the nonce, so
+without that check a failed call would look like a successful one.
+
 The `token_*` **RPC** methods are deliberately not implemented: a server holds
 no keys, and token state only changes through an executed signed transaction.
 They answer `-32004` with a pointer to the CLI instead of reporting success.
