@@ -825,6 +825,13 @@ where
                 restored, "restored the commit cursor and undecided leaders from the store"
             );
         }
+        // A slot whose restored votes already carry quorum is decided here, not
+        // at the next round tick: `drain_commits` emits exactly the commits the
+        // next trigger would have produced, in the same order, and a walk that
+        // stalls on a missing slot simply stops where it is — the gap cases
+        // (`restart_with_a_missing_slot_stalls_instead_of_skipping`,
+        // `catchup_anchor_does_not_skip_a_hole_after_the_anchor`) rely on that.
+        self.drain_commits()?;
         Ok(())
     }
 

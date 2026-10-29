@@ -3696,9 +3696,8 @@ fn undecided_vote_round(engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>
     if engine.current_round() < round.saturating_add(kovanica_types::WAVE_LENGTH) {
         return None;
     }
-    if engine.registered_leader(round).is_none() {
-        return None;
-    }
+    // No leader block for this slot yet: nothing to vote on.
+    engine.registered_leader(round)?;
     Some(round)
 }
 
