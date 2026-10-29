@@ -12,6 +12,7 @@ members = [
     "crates/kovanica-runtime",
     "crates/kovanica-execution",
     "crates/kovanica-staking",
+    "crates/kovanica-sync",
     "crates/kovanica-node",
     "crates/kovanica-cli",
     "crates/kovanica-keystore",
