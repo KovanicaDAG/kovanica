@@ -2388,6 +2388,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-bench"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "clap",
+ "kovanica-crypto",
+ "kovanica-sdk",
+ "kovanica-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kovanica-cli"
 version = "0.1.0"
 dependencies = [
@@ -2792,6 +2810,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zeroize",
+]
+
+[[package]]
+name = "kovanica-p2p-identity"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-crypto",
+ "kovanica-types",
+ "libp2p 0.57.0",
+ "rand 0.8.8",
+ "serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

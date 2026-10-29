@@ -27,11 +27,13 @@ members = [
     "crates/kovanica-comms-crypto",
     "crates/kovanica-comms-relay",
     "crates/kovanica-name-registry",
+    "crates/kovanica-p2p-identity",
     "crates/kovanica-faucet",
     "crates/kovanica-fee",
     "crates/kovanica-params",
     "crates/kovanica-indexer",
     "crates/kovanica-sdk",
+    "crates/kovanica-bench",
     "crates/kovanica-wallet-core",
 ]
 

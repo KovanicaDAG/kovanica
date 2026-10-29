@@ -144,11 +144,7 @@ Storage (redb / pruning / snapshots)
 - Alert rules YAML: `peer_drop`, `sync_stall`, `commit_lag`, `high_memory`
 - `kovanica_last_committed_digest_prefix` is a gauge, not an info metric: a
   `digest` label would create one series per commit (~7 200/day).
-- `kovanica_committee_peers_connected` is **not** exposed. The network layer
-  identifies peers by libp2p `PeerId` and nothing binds a `PeerId` to a
-  validator authority index, so any value would be a guess; a permanently-zero
-  gauge is worse than an absent one. Implementing it needs a peer-identity
-  exchange in the handshake.
+- `kovanica_committee_peers_connected`: optional gauge via `kovanica-p2p-identity` PeerId↔authority binding. Validators may advertise a signed `PeerIdentityClaim`; claimless peers work. Counts connected peers with verified authority in active committee. Inert/absent until claims advertised.
 - Structured logging (`tracing`) + optional `trace_id` per round
 
 ### Exit Criteria
