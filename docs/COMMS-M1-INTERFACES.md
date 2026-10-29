@@ -292,8 +292,8 @@ Shared-file rule: only the orchestrator edits root `Cargo.toml` (adding the thre
   always `-12..=-1`). Mirror `crates/kovanica-token` and its `wasmi_e2e_kovanica_token_wasm` test
   (isolated `CARGO_TARGET_DIR=target/contract-wasm-e2e`, `memory_limit_pages: 256`).
 - **No `kovanica-execution` change needed (decisive):** `ENTRY_POINTS`/`is_entry_point`
-  (`crates/kovanica-execution/src/contracts.rs:145-167`; exactly 16 names, pinned by
-  `dispatch_covers_all_16_entry_points`) gate **only the native dispatcher**. The WASM call path
+  (`crates/kovanica-execution/src/contracts.rs:147-167`; exactly 19 names, pinned by
+  `dispatch_covers_all_entry_points`) gate **only the native dispatcher**. The WASM call path
   (`TransactionKind::Call` → `execute_call` at `src/lib.rs:856` → `execute_wasm_call(entry: method)`)
   performs **no** entry-name validation — it only requires the export to exist in the module. So the
   name registry is deployed/called through the existing `deploy`/`call` transaction path with

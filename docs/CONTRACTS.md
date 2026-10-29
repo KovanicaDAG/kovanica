@@ -142,22 +142,26 @@ Singleton per contract address; the proposer auto-confirms; `execute` requires
 | `Token::transfer_from` | `from: Address, to: Address, amount: Amount` | `()` |
 | `Token::mint` | `to: Address, amount: Amount` | `()` |
 | `Token::burn` | `amount: Amount` | `()` |
+| `Token::init_pool` | `kuna_in: Amount, tokens_in: Amount, fee_bps: u16` | `Amount` (LP minted) |
+| `Token::buy` | `amount_in: Amount, min_out: Amount` | `Amount` (tokens out) |
+| `Token::sell` | `amount_in: Amount, min_out: Amount` | `Amount` (KUNA out) |
 
 Singleton per contract address; caller becomes owner + minter. Token balances
 are internal to the token record — they do **not** touch native account
-balances.
+balances, except for the optional KUNA pool (§7b), where the native side is the
+contract's own account and the token side is `balances[contract_address]`.
 
 `icon` is optional artwork fixed **at creation** (there is no second entry point
-for it, so the 16-name ABI stays unchanged). It must be empty, `https://…`, or a
+for it, so the ABI stays unchanged). It must be empty, `https://…`, or a
 `data:image/…` URI, at most 8 KiB, with no control characters; anything else is
 `InvalidInput`. Wallets that decode the state read it as a trailing `String`
 after `paused` and treat its absence as "no icon".
 
-## 4. Dispatch entry points (the 16 names)
+## 4. Dispatch entry points (the 19 names)
 
 `kovanica-execution::contracts::ENTRY_POINTS` is the authoritative list. The native
 dispatcher, the wasm exports, and this table must stay in sync (enforced by the
-`dispatch_covers_all_16_entry_points` test). Arguments and results are
+`dispatch_covers_all_entry_points` test). Arguments and results are
 **bincode 1.x** encodings of the tuples below.
 
 | Entry | bincode args | bincode result |
@@ -178,10 +182,13 @@ dispatcher, the wasm exports, and this table must stay in sync (enforced by the
 | `token_transfer_from` | `(Address, Address, Amount)` | `()` |
 | `token_mint` | `(Address, Amount)` | `()` |
 | `token_burn` | `(Amount,)` | `()` |
+| `token_init_pool` | `(Amount kuna_in, Amount tokens_in, u16 fee_bps)` | `Amount` (LP) |
+| `token_buy` | `(Amount amount_in, Amount min_out)` | `Amount` (tokens out) |
+| `token_sell` | `(Amount amount_in, Amount min_out)` | `Amount` (KUNA out) |
 
 **Entry-point gating is activation-gated.** From
 `kovanica_types::CONTRACT_HARDENING_ACTIVE_FROM_ROUND` on (default `u64::MAX`,
-i.e. inert), a wasm `Call` whose `method` is not one of the 16 names above is
+i.e. inert), a wasm `Call` whose `method` is not one of the 19 names above is
 rejected **before** the interpreter runs — the same set the native
 `dispatch_entry` path already enforced. Below the activation round the check is
 skipped and any export the deployed module defines is callable (the pre-gate
@@ -238,6 +245,8 @@ Contracts pass **raw, variable-length** keys. Current keys:
 | `kovanica-multisig` | `b"kvnc/v1/state"` (singleton) | 13 |
 | `kovanica-multisig` | `b"kvnc/v1/mtx/" ++ tx_id.to_le_bytes()` | 12 + 8 |
 | `kovanica-token` | `b"kvnc/v1/state"` (singleton) | 13 |
+| `kovanica-token` | `b"kvnc/v1/pool"` (singleton AMM) | 13 |
+| `kovanica-token` | `b"kvnc/v1/lp/" ++ address` | 12 + 32 |
 
 ### Namespacing (fixed)
 
@@ -277,7 +286,7 @@ and a too-small `out_cap` returns `-2`.
 
 - `kovanica_alloc(len: i32) -> i32` / `kovanica_dealloc(ptr: i32, len: i32)` — guest
   allocator used by the host to place arguments and to release results.
-- The 16 entry points, each `(args_ptr: i32, args_len: i32) -> i64`.
+- The 19 entry points, each `(args_ptr: i32, args_len: i32) -> i64`.
 
 ### Return packing
 
@@ -358,6 +367,120 @@ The `token_*` **RPC** methods are deliberately not implemented: a server holds
 no keys, and token state only changes through an executed signed transaction.
 They answer `-32004` with a pointer to the CLI instead of reporting success.
 
+## 7b. KUNA ↔ token pool (P0a)
+
+One token contract can host **one** constant-product pool against native KUNA.
+It is reserve-backed conversion only: no KUNA is minted or burned, the token
+supply is untouched, and there are no cross-contract calls or new host imports.
+State lives beside the token — `b"kvnc/v1/pool"` for the singleton `Pool` and
+`b"kvnc/v1/lp/" ++ address` for LP shares — so the bincode `Token` layout is
+unchanged.
+
+### Entry points
+
+| Export | Args (bincode tuple) | Result | Caller |
+|--------|----------------------|--------|--------|
+| `token_init_pool` | `(kuna_in: u128, tokens_in: u128, fee_bps: u16)` | `lp: u128` | owner or minter |
+| `token_buy` | `(amount_in: u128, min_out: u128)` | `tokens_out: u128` | anyone |
+| `token_sell` | `(amount_in: u128, min_out: u128)` | `kuna_out: u128` | anyone |
+
+`token_init_pool` is one-shot (`AlreadyExists` afterwards), requires a non-zero
+`kuna_in`/`tokens_in` and `fee_bps <= MAX_FEE_BPS` (1000 = 10 %), moves
+`tokens_in` from the caller into the contract's own token balance, and returns
+`floor(sqrt(kuna_in * tokens_in))` LP shares to the caller. The native side is
+the value attached to the call: the contract's whole KUNA surplus over the
+recorded reserve is swept into `kuna_reserve`, so a donation that arrived before
+initialization is not lost and any value attached to `token_buy` is folded in
+the same way.
+
+`token_buy` bounds `amount_in` by the contract's KUNA surplus over the recorded
+reserve (`balance_of(contract) - kuna_reserve`), not by the value this call
+attached: the wasm ABI has no `msg.value`, so the attached value is inferred
+from the balance delta. Consequence: a KUNA donation that lands after
+initialization (a plain `Transfer` to the pool, or KUNA attached to a different
+entry point) can be claimed by the next `token_buy` caller that declares
+`amount_in` up to the surplus *without paying it*. This is inherent to P0a and
+is closed by P0b (`kovanica_call_value()`); until then, never send KUNA to the
+pool with a plain transfer expecting tokens.
+
+`token_buy` and `token_sell` are disabled by either the pool's or the token's
+`paused` flag. Both reject `amount_in == 0`, a zero quote, and a quote below
+`min_out`; `token_buy` re-checks that `out <= token_reserve`. `token_sell` requires
+`out <= u64::MAX` (`Overflow`) because the host transfers in `u64` atoms, and
+debits the reserve *before* calling `host.transfer`, so a failed transfer
+aborts the whole overlay instead of leaking pool state.
+
+### Pricing
+
+```text
+in_after = amount_in * (10_000 - fee_bps) / 10_000     // integer, floored
+out      = in_after * r_out / (r_in + in_after)        // floored
+```
+
+The fee stays inside the reserve (LP yield) and every division floors, so the
+pool never pays out more than the constant-product curve allows. All arithmetic
+is `u128` with `checked_*`; there are no floats and `isqrt` is a deterministic
+Newton descent.
+
+### Invariant
+
+After every successful operation:
+
+```text
+pool.token_reserve <= token.balances[contract_address]
+```
+
+Equality holds at the end of every successful operation: `token_buy` debits the
+contract's token balance as it credits the buyer (a purchase that only credited
+the buyer would break the mirror), and `token_sell` credits it as it takes the
+seller's tokens, so both sides move by the same amount.
+
+The inequality is one-sided because a plain `token_transfer` to the pool address
+raises only the ledger side — `token_reserve` is untouched and the difference
+stays forever (there is no sweep and no remove-liquidity path). Those tokens are
+a donation: **not claimable** by anyone, and they do not move the price.
+
+The opposite inequality (`pool.token_reserve > token.balances[contract_address]`)
+would mean the pool owes more than the contract holds — corruption, not a
+donation. The CLI treats it as a hard failure (see below).
+
+### CLI
+
+```sh
+# Seed the pool: 1.5 KUNA (attached as Call.value) + 1 000 000 token base units.
+kovanica token init-pool --contract <kvnc…> --kuna 1.5KUNA \
+  --tokens 1000000 --fee-bps 30
+
+# Swap with a slippage floor; the KUNA spent is the call's attached value.
+kovanica token buy  --contract <kvnc…> --kuna 0.5KUNA --min-out 300000
+kovanica token sell --contract <kvnc…> --tokens 300000 --min-out 0.4KUNA
+
+# Read-only: decoded reserves + local quotes for both directions.
+kovanica token reserves --contract <kvnc…>
+```
+
+Every mutation waits for its nonce, then re-reads `kovanica_getStorageAt(
+contract, blake3("kvnc/v1/pool"))` (`kovanica_token::pool_slot()`) and the token
+state at `blake3("kvnc/v1/state")` and **exits non-zero** unless the committed
+reserves and the caller's token balance satisfy the swap: exact deltas are
+checked (the buyer's token gain for `buy`, the seller's token loss for `sell`)
+along with `token_reserve <= balances[contract]` and an unchanged `lp_total`.
+A ledger *above* the reserve is a token donation and only produces a warning;
+a ledger *below* it is corruption and fails. Comparisons against the pre-submit
+snapshot — the local quote, the reserve movement for this trade alone — are
+reported as warnings instead, because another trade may land between that read
+and the commit. Events are for indexers (§9), not for this check. A rejected
+body still charges the fee and burns the nonce, so a silent "committed" would
+look like success.
+
+`--min-out` defaults to `0` for both directions, which means no slippage
+protection at all: the swap still runs and exits zero, but the CLI prints
+`warning: --min-out 0: no slippage protection; any pool movement between submit
+and commit is accepted`.
+
+There is still **no** remove-liquidity path, no token↔token pool, no upgrade
+hook and no pause setter; those are PR-2/PR-3 scope.
+
 ## 8. Module cache
 
 `ContractRunner` keeps a `HashMap<blake3(wasm), Module>` so a wasm module is
@@ -388,6 +511,9 @@ bytes, and the emitted bytes must never change.
 | `approval` | `Token::approve` | empty |
 | `mint` | `Token::mint` | empty |
 | `burn` | `Token::burn` | empty |
+| `token_pool_initialized` | `Token::init_pool` | empty |
+| `token_swap_buy` | `Token::buy` | empty |
+| `token_swap_sell` | `Token::sell` | empty |
 
 The contract crates reference these constants directly (no byte-string
 literals at the call sites), and `kovanica-common` has a unit test guarding each

@@ -1172,7 +1172,7 @@ impl ExecutionContext {
             }
         }
 
-        // Entry-point gating (activation-gated): only the 16 canonical entry
+        // Entry-point gating (activation-gated): only the 19 canonical entry
         // points may be called. Checked before the interpreter starts, after
         // the module-size floor so the gas floor still reports first for a
         // tiny-gas call to a large module when both gates are active.
@@ -5581,7 +5581,7 @@ mod tests {
         }
     }
 
-    // Only the 16 canonical entry points are callable from activation on; below
+    // Only the 19 canonical entry points are callable from activation on; below
     // activation any export the module defines is callable (old behavior).
     #[test]
     fn wasm_entry_point_is_gated() {

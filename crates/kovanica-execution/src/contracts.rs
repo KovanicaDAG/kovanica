@@ -139,11 +139,11 @@ fn custody_key(address: &[u8; 32]) -> Vec<u8> {
     key
 }
 
-/// The 16 dispatchable contract entry points (FIXED ABI, Lane 3a).
+/// The 19 dispatchable contract entry points (FIXED ABI, Lane 3a + P0a).
 ///
 /// The native [`execute_contract_call`] dispatcher, the wasm exports of the
 /// four contract crates, and `docs/CONTRACTS.md` must stay in sync with this
-/// table (enforced by `dispatch_covers_all_16_entry_points`).
+/// table (enforced by `dispatch_covers_all_entry_points`).
 pub const ENTRY_POINTS: &[&str] = &[
     "htlc_create",
     "htlc_claim",
@@ -161,9 +161,12 @@ pub const ENTRY_POINTS: &[&str] = &[
     "token_transfer_from",
     "token_mint",
     "token_burn",
+    "token_init_pool",
+    "token_buy",
+    "token_sell",
 ];
 
-/// Returns whether `name` is one of the 16 dispatchable entry points.
+/// Returns whether `name` is one of the 19 dispatchable entry points.
 pub fn is_entry_point(name: &str) -> bool {
     ENTRY_POINTS.contains(&name)
 }
@@ -913,6 +916,24 @@ fn dispatch_entry(
             Token::burn(host, amount)?;
             enc(&())
         }
+        "token_init_pool" => {
+            let (kuna_in, tokens_in, fee_bps): (
+                kovanica_common::Amount,
+                kovanica_common::Amount,
+                u16,
+            ) = dec(args)?;
+            enc(&Token::init_pool(host, kuna_in, tokens_in, fee_bps)?)
+        }
+        "token_buy" => {
+            let (amount_in, min_out): (kovanica_common::Amount, kovanica_common::Amount) =
+                dec(args)?;
+            enc(&Token::buy(host, amount_in, min_out)?)
+        }
+        "token_sell" => {
+            let (amount_in, min_out): (kovanica_common::Amount, kovanica_common::Amount) =
+                dec(args)?;
+            enc(&Token::sell(host, amount_in, min_out)?)
+        }
 
         other => Err(ExecutionError::Other(format!(
             "unknown contract entry point: {other}"
@@ -1276,6 +1297,18 @@ pub(crate) mod tests {
             .expect("storage read")
             .expect("token singleton state after a successful call");
         bincode::deserialize(&raw).expect("token state deserializes")
+    }
+
+    /// Read the KUNA ↔ token pool straight out of persistent storage.
+    fn pool_state(storage: &Storage, contract: &Address) -> kovanica_token::Pool {
+        let txn = storage.begin_read().expect("read txn");
+        let key = kovanica_common::hash(kovanica_token::POOL_KEY);
+        let raw = storage
+            .state()
+            .get_storage(&txn, contract, &key)
+            .expect("storage read")
+            .expect("pool state after a successful call");
+        bincode::deserialize(&raw).expect("pool state deserializes")
     }
 
     fn token_create_args(supply: Amount) -> Vec<u8> {
@@ -1850,20 +1883,171 @@ pub(crate) mod tests {
         assert_eq!(native_balance(&storage, &recipient), 200);
     }
 
+    // P0a: a signed `Call.value` is already in the contract's real account
+    // before the entry point runs, so `token_init_pool` / `token_buy` can see
+    // it as surplus and settle against the recorded reserve.
+    #[test]
+    fn call_value_funds_the_kuna_pool_and_buys() {
+        let (_dir, storage) = open_storage();
+        let owner = addr(1);
+        let buyer = addr(2);
+        let contract = addr(50);
+        deploy(&storage, &contract);
+        fund(&storage, &owner, 1_000_000);
+        fund(&storage, &buyer, 100_000);
+
+        execute_contract_call(
+            "token_create",
+            contract,
+            owner,
+            1,
+            100,
+            &token_create_args(1_000_000),
+            &storage,
+        )
+        .expect("token_create");
+
+        let init = call_args::encode_token_init_pool(10_000, 1_000_000, 30).expect("encode");
+        let lp_bytes = execute_contract_call_with_value(
+            "token_init_pool",
+            contract,
+            owner,
+            2,
+            200,
+            &init,
+            10_000,
+            &storage,
+        )
+        .expect("token_init_pool");
+        let lp: Amount = bincode::deserialize(&lp_bytes).expect("lp");
+        assert_eq!(lp, 100_000);
+        assert_eq!(native_balance(&storage, &owner), 990_000);
+        assert_eq!(native_balance(&storage, &contract), 10_000);
+        let pool = pool_state(&storage, &contract);
+        assert_eq!(pool.kuna_reserve, 10_000);
+        assert_eq!(pool.token_reserve, 1_000_000);
+        assert_eq!(pool.lp_total, lp);
+
+        // The value is booked before the entry point: the buy needs no other
+        // source of KUNA, and the contract balance grows by exactly the value.
+        let buy = call_args::encode_token_buy(5_000, 0).expect("encode");
+        let out_bytes = execute_contract_call_with_value(
+            "token_buy",
+            contract,
+            buyer,
+            3,
+            300,
+            &buy,
+            5_000,
+            &storage,
+        )
+        .expect("token_buy");
+        let out: Amount = bincode::deserialize(&out_bytes).expect("out");
+        assert!(out > 0);
+        assert_eq!(native_balance(&storage, &buyer), 95_000);
+        assert_eq!(native_balance(&storage, &contract), 15_000);
+        let token = token_state(&storage, &contract);
+        assert_eq!(token.balances.get(&buyer.0), Some(&out));
+        let pool = pool_state(&storage, &contract);
+        assert_eq!(pool.kuna_reserve, 15_000);
+        assert_eq!(pool.token_reserve, 1_000_000 - out);
+        assert_eq!(
+            pool.token_reserve,
+            *token.balances.get(&contract.0).expect("contract holds")
+        );
+
+        // Sell pays out of the contract's own account (no mint, no burn).
+        let sell = call_args::encode_token_sell(out / 2, 0).expect("encode");
+        let paid_bytes =
+            execute_contract_call("token_sell", contract, buyer, 4, 400, &sell, &storage)
+                .expect("token_sell");
+        let paid: Amount = bincode::deserialize(&paid_bytes).expect("paid");
+        assert!(paid > 0);
+        assert_eq!(native_balance(&storage, &buyer), 95_000 + paid as u64);
+        assert_eq!(native_balance(&storage, &contract), 15_000 - paid as u64);
+    }
+
+    // A failed buy over the full `Call` path commits nothing: attached value,
+    // token/pool writes and events all live in the host overlay that is
+    // dropped on `Err`.
+    #[test]
+    fn failed_buy_commits_no_balance_storage_or_event() {
+        let (_dir, storage) = open_storage();
+        let owner = addr(1);
+        let buyer = addr(2);
+        let contract = addr(51);
+        deploy(&storage, &contract);
+        fund(&storage, &owner, 1_000_000);
+        fund(&storage, &buyer, 100_000);
+
+        execute_contract_call(
+            "token_create",
+            contract,
+            owner,
+            1,
+            100,
+            &token_create_args(1_000_000),
+            &storage,
+        )
+        .expect("token_create");
+        let init = call_args::encode_token_init_pool(10_000, 1_000_000, 30).expect("encode");
+        execute_contract_call_with_value(
+            "token_init_pool",
+            contract,
+            owner,
+            2,
+            200,
+            &init,
+            10_000,
+            &storage,
+        )
+        .expect("token_init_pool");
+
+        let token_before = token_state(&storage, &contract);
+        let pool_before = pool_state(&storage, &contract);
+        let buy = call_args::encode_token_buy(5_000, Amount::MAX).expect("encode");
+        let err = execute_contract_call_with_value(
+            "token_buy",
+            contract,
+            buyer,
+            3,
+            300,
+            &buy,
+            5_000,
+            &storage,
+        )
+        .expect_err("min_out is unreachable");
+        assert!(
+            matches!(err, ExecutionError::Contract(ContractError::InvalidInput)),
+            "{err:?}"
+        );
+
+        assert_eq!(native_balance(&storage, &buyer), 100_000);
+        assert_eq!(native_balance(&storage, &contract), 10_000);
+        assert_eq!(token_state(&storage, &contract), token_before);
+        assert_eq!(pool_state(&storage, &contract), pool_before);
+
+        // Direct proof that the failed entry point also emitted no event.
+        let mut host = ContractHost::new(&storage, contract, buyer, 4, 400).expect("host");
+        host.attach_value(5_000).expect("attach");
+        assert!(dispatch_entry("token_buy", &mut host, &buy).is_err());
+        assert!(host.events.is_empty(), "failed buy emitted an event");
+    }
+
     // Every advertised entry point reaches the dispatcher: with an empty
     // argument buffer each one fails during argument decoding (InvalidInput),
     // never with "unknown entry point". This pins the native table to the
-    // 16 names of the FIXED ABI.
+    // 19 names of the FIXED ABI.
     #[test]
-    fn dispatch_covers_all_16_entry_points() {
+    fn dispatch_covers_all_entry_points() {
         let (_dir, storage) = open_storage();
         let contract = addr(30);
         let caller = addr(1);
         deploy(&storage, &contract);
-        assert_eq!(ENTRY_POINTS.len(), 16);
+        assert_eq!(ENTRY_POINTS.len(), 19);
         assert_eq!(
             ENTRY_POINTS.iter().filter(|e| is_entry_point(e)).count(),
-            16
+            19
         );
         for entry in ENTRY_POINTS {
             let err = execute_contract_call(entry, contract, caller, 1, 100, &[], &storage)
@@ -1910,6 +2094,8 @@ pub(crate) mod tests {
         let recipient = addr(2);
         let contract = addr(40);
         deploy(&storage, &contract);
+        fund(&storage, &creator, 1_000_000);
+        fund(&storage, &recipient, 100_000);
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
             memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
@@ -1974,6 +2160,122 @@ pub(crate) mod tests {
         let token = token_state(&storage, &contract);
         assert_eq!(token.balances.get(&creator.0), Some(&500));
         assert_eq!(token.balances.get(&recipient.0), Some(&500));
+
+        // Pool entry points through wasm: the guest sees the attached value
+        // as the contract's real balance and the same reserve invariant the
+        // native path maintains.
+        let init = call_args::encode_token_init_pool(1_000, 500, 30).expect("encode pool");
+        let (lp_bytes, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_init_pool",
+                contract,
+                caller: creator,
+                height: 4,
+                timestamp: 1_300,
+                args: &init,
+                storage: &storage,
+                txn: None,
+                value: 1_000,
+                config: &config,
+            })
+            .expect("wasm token_init_pool");
+        let lp: Amount = bincode::deserialize(&lp_bytes).expect("lp");
+        assert_eq!(lp, 707);
+        let pool = pool_state(&storage, &contract);
+        assert_eq!(pool.kuna_reserve, 1_000);
+        assert_eq!(pool.token_reserve, 500);
+
+        let buy = call_args::encode_token_buy(1_000, 0).expect("encode buy");
+        let (out_bytes, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_buy",
+                contract,
+                caller: recipient,
+                height: 5,
+                timestamp: 1_400,
+                args: &buy,
+                storage: &storage,
+                txn: None,
+                value: 1_000,
+                config: &config,
+            })
+            .expect("wasm token_buy");
+        let out: Amount = bincode::deserialize(&out_bytes).expect("out");
+        assert!(out > 0);
+        assert_eq!(native_balance(&storage, &contract), 2_000);
+        assert_eq!(native_balance(&storage, &recipient), 99_000);
+        let token = token_state(&storage, &contract);
+        assert_eq!(token.balances.get(&recipient.0), Some(&(500 + out)));
+        let pool = pool_state(&storage, &contract);
+        assert_eq!(pool.kuna_reserve, 2_000);
+        assert_eq!(pool.token_reserve, 500 - out);
+        assert_eq!(
+            pool.token_reserve,
+            *token.balances.get(&contract.0).expect("contract holds")
+        );
+
+        // wasm `token_sell`: the export itself, on the pool the wasm buy left.
+        let sell_wasm = call_args::encode_token_sell(out / 2, 0).expect("encode sell");
+        let (paid_wasm_bytes, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_sell",
+                contract,
+                caller: recipient,
+                height: 6,
+                timestamp: 1_500,
+                args: &sell_wasm,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm token_sell");
+        let paid_wasm: Amount = bincode::deserialize(&paid_wasm_bytes).expect("paid_wasm");
+        assert!(paid_wasm > 0);
+        assert_eq!(
+            native_balance(&storage, &contract),
+            2_000 - paid_wasm as u64
+        );
+        assert_eq!(
+            native_balance(&storage, &recipient),
+            99_000 + paid_wasm as u64
+        );
+        let pool = pool_state(&storage, &contract);
+        assert_eq!(pool.kuna_reserve, 2_000 - paid_wasm);
+        assert_eq!(pool.token_reserve, 500 - out + out / 2);
+        let token = token_state(&storage, &contract);
+        assert_eq!(
+            pool.token_reserve,
+            *token.balances.get(&contract.0).expect("contract holds")
+        );
+
+        // Cross-path interop the other way: native dispatch reads the exact
+        // pool the wasm sell just wrote.
+        let sell = call_args::encode_token_sell(out / 4, 0).expect("encode sell");
+        let paid_bytes =
+            execute_contract_call("token_sell", contract, recipient, 7, 1_600, &sell, &storage)
+                .expect("native token_sell over wasm-written pool");
+        let paid: Amount = bincode::deserialize(&paid_bytes).expect("paid");
+        assert!(paid > 0);
+        assert_eq!(
+            native_balance(&storage, &contract),
+            2_000 - paid_wasm as u64 - paid as u64
+        );
+        assert_eq!(
+            native_balance(&storage, &recipient),
+            99_000 + paid_wasm as u64 + paid as u64
+        );
+        let pool = pool_state(&storage, &contract);
+        assert_eq!(pool.kuna_reserve, 2_000 - paid_wasm - paid);
+        assert_eq!(pool.token_reserve, 500 - out + out / 2 + out / 4);
+        let token = token_state(&storage, &contract);
+        assert_eq!(
+            pool.token_reserve,
+            *token.balances.get(&contract.0).expect("contract holds")
+        );
     }
 
     /// Helper to assert contract errors across both native and wasmi dispatch.

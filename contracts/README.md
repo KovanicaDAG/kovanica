@@ -6,7 +6,7 @@ checkout, a Rust toolchain, or network access.
 
 | File | Source crate | sha256 |
 |------|--------------|--------|
-| `kovanica-token.wasm` | `crates/kovanica-token` | `0f49693acb60caf3c098037d211d57de16010172cab3741de0d431e19cc1b942` |
+| `kovanica-token.wasm` | `crates/kovanica-token` | `c3aa7ba49f1070e4cc00860c81b7a579df16a1d462acac5b7e24e6b4d7817adf` |
 
 ## Rebuilding
 
