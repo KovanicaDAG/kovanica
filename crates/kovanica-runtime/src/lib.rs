@@ -679,7 +679,7 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         let chunks = if value.is_empty() {
             0
         } else {
-            (value.len() + 31) / 32
+            value.len().div_ceil(32)
         };
         let per_byte =
             kovanica_fee::HOST_STORAGE_GET_PER_32_BYTES_GAS.saturating_mul(chunks as u64);
@@ -705,7 +705,7 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         let chunks = if value.is_empty() {
             0
         } else {
-            (value.len() + 31) / 32
+            value.len().div_ceil(32)
         };
         let cost = kovanica_fee::HOST_STORAGE_SET_BASE_GAS
             .saturating_add(kovanica_fee::HOST_STORAGE_SET_PER_CALL_GAS)
