@@ -70,8 +70,8 @@ impl LogPublisher for EventLogPublisher {
     }
 }
 use kovanica_staking::{
-    StakingState, FOUNDER_PREMINE, GENESIS_VALIDATOR_ALLOCATION,
-    MIN_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE, ONE_KUNA,
+    StakingState, FOUNDER_PREMINE, GENESIS_VALIDATOR_ALLOCATION, MIN_ACTIVE_VALIDATORS,
+    MIN_VALIDATOR_STAKE, ONE_KUNA,
 };
 use kovanica_storage::{StateStoreError, Storage};
 use kovanica_types::{
