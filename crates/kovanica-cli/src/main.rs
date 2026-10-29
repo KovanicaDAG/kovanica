@@ -532,7 +532,7 @@ fn cmd_keygen(args: KeygenArgs, json_output: bool) -> Result<()> {
 
 fn cmd_import(args: KeystoreArgs, json_output: bool) -> Result<()> {
     let keystore = wallet::load(&args.keystore)?;
-    let password = prompt_keystore_password(&keystore)?;
+    let password = wallet::prompt_keystore_password(&keystore)?;
     // Inspection is not accepted as import until its seed-derived identity is verified.
     let _ = wallet::secret_seed(&keystore, password.as_ref().map(|p| p.as_str()))?;
 
@@ -553,7 +553,7 @@ fn cmd_export(args: ExportArgs, json_output: bool) -> Result<()> {
         anyhow::bail!("secret export is disabled in JSON mode");
     }
     let keystore = wallet::load(&args.keystore.keystore)?;
-    let password = prompt_keystore_password(&keystore)?;
+    let password = wallet::prompt_keystore_password(&keystore)?;
     let seed = wallet::secret_seed(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let label = match args.format {
         SecretFormat::Raw => "raw seed",
@@ -592,7 +592,7 @@ fn keystore_summary_json(
 
 fn cmd_sign(args: SignArgs, json_output: bool) -> Result<()> {
     let keystore = wallet::load(&args.keystore)?;
-    let password = prompt_keystore_password(&keystore)?;
+    let password = wallet::prompt_keystore_password(&keystore)?;
 
     let message = if args.hex {
         let raw = args.message.strip_prefix("0x").unwrap_or(&args.message);
@@ -636,7 +636,7 @@ async fn cmd_transfer(
     let recipient = wallet::parse_address(&args.to, "to", ctx.chain_id)?;
     node::ensure_node_chain_matches(client, Some(ctx.chain_id)).await?;
     let keystore = wallet::load(&args.keystore)?;
-    let password = prompt_keystore_password(&keystore)?;
+    let password = wallet::prompt_keystore_password(&keystore)?;
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let sender = wallet::address(&keystore)?;
 
@@ -694,7 +694,7 @@ async fn sign_and_submit_self(
     let ctx = tx::signing_context(chain_id)?;
     node::ensure_node_chain_matches(client, Some(ctx.chain_id)).await?;
     let keystore = wallet::load(keystore_path)?;
-    let password = prompt_keystore_password(&keystore)?;
+    let password = wallet::prompt_keystore_password(&keystore)?;
     let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
     let sender = wallet::address(&keystore)?;
 
@@ -1135,7 +1135,7 @@ fn cmd_migrate(args: MigrateArgs, json_output: bool) -> Result<()> {
         anyhow::bail!("migration is interactive and disabled in JSON mode");
     }
     let old = wallet::load_v1_for_migration(&args.keystore)?;
-    let old_password = prompt_password_if_encrypted(old.is_encrypted())?;
+    let old_password = wallet::prompt_password_if_encrypted(old.is_encrypted())?;
     let seed = wallet::migration_seed(&old, old_password.as_ref().map(|p| p.as_str()))?;
     let destination = args.out.unwrap_or_else(|| {
         let mut name = args.keystore.as_os_str().to_os_string();
@@ -1215,23 +1215,6 @@ fn prompt_confirmed_passphrase(prompt: &str) -> Result<Zeroizing<String>> {
         anyhow::bail!("passphrases do not match");
     }
     Ok(first)
-}
-
-fn prompt_keystore_password(keystore: &wallet::Keystore) -> Result<Option<Zeroizing<String>>> {
-    prompt_password_if_encrypted(keystore.encrypted)
-}
-
-fn prompt_password_if_encrypted(encrypted: bool) -> Result<Option<Zeroizing<String>>> {
-    if !encrypted {
-        return Ok(None);
-    }
-    // Allow password via env var for non-interactive use
-    if let Ok(pass) = std::env::var("KOVANICA_KEYSTORE_PASSWORD") {
-        return Ok(Some(Zeroizing::new(pass)));
-    }
-    Ok(Some(Zeroizing::new(rpassword::prompt_password(
-        "Keystore passphrase: ",
-    )?)))
 }
 
 fn confirm_typed(expected: &str) -> Result<()> {

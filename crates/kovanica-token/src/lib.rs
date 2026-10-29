@@ -51,7 +51,28 @@ use kovanica_common::events::{
 use kovanica_common::{Address, Amount, ContractError, ContractResult, Host};
 
 /// Singleton state key (FIXED): one token instance per contract address.
-const STATE_KEY: &[u8] = b"kvnc/v1/state";
+///
+/// The host stores a contract key at `blake3(key)`, so an off-chain reader asks
+/// the node for `blake3(STATE_KEY)` (see [`state_slot`]).
+pub const STATE_KEY: &[u8] = b"kvnc/v1/state";
+
+/// Storage slot the state is readable at: `blake3(STATE_KEY)`.
+///
+/// This is the key an operator passes to `kovanica_getStorageAt` to get the raw
+/// bytes [`decode_state`] expects, and the key the web wallet uses.
+pub fn state_slot() -> [u8; 32] {
+    kovanica_common::hash(STATE_KEY)
+}
+
+/// Decode raw contract storage into a [`Token`].
+///
+/// Reads the current layout first, then the v1 layout written before `icon`
+/// existed, so every token ever created stays readable off chain.
+pub fn decode_state(bytes: &[u8]) -> Option<Token> {
+    bincode::deserialize::<Token>(bytes)
+        .ok()
+        .or_else(|| bincode::deserialize::<TokenV1>(bytes).ok().map(Token::from))
+}
 
 /// Largest accepted icon payload, in bytes. A 96×96 PNG data URI is ~3–8 KiB;
 /// 8 KiB keeps the whole token state (and every wallet's decode) small.
@@ -269,8 +290,11 @@ impl Token {
         Ok(())
     }
 
-    /// Icon payload rule for `create`.
-    fn validate_icon(icon: &str) -> ContractResult<()> {
+    /// Icon payload rule for `create`: empty, an `https://` URL, or a
+    /// `data:image/…` URI, at most [`MAX_ICON_BYTES`], no control characters.
+    ///
+    /// Public so a client can reject a bad `--icon` before it pays a fee.
+    pub fn validate_icon(icon: &str) -> ContractResult<()> {
         if icon.is_empty() {
             return Ok(());
         }
@@ -299,14 +323,10 @@ impl Token {
 
     fn load(host: &impl Host) -> ContractResult<Token> {
         let bytes = host.storage_get(STATE_KEY).ok_or(ContractError::NotFound)?;
-        // Current layout first; then the v1 layout without `icon`, so tokens
-        // created by the previous contract build stay readable.
-        if let Ok(token) = bincode::deserialize::<Token>(&bytes) {
-            return Ok(token);
-        }
-        bincode::deserialize::<TokenV1>(&bytes)
-            .map(Token::from)
-            .map_err(|_| ContractError::Custom(ERR_BINCODE_DESERIALIZE))
+        // Current layout first, then the v1 layout (shared with off-chain
+        // readers through `decode_state`), so tokens created by the previous
+        // contract build stay readable.
+        decode_state(&bytes).ok_or(ContractError::Custom(ERR_BINCODE_DESERIALIZE))
     }
 }
 
@@ -631,6 +651,35 @@ mod tests {
         let loaded = Token::load(&host).unwrap();
         assert_eq!(loaded.icon, "");
         assert_eq!(loaded.total_supply, 100);
+
+        // The same bytes decode off chain, which is what a wallet does with
+        // `kovanica_getStorageAt`.
+        let decoded = decode_state(&v1).expect("v1 decodes");
+        assert_eq!(decoded.symbol, "KUNA");
+        assert_eq!(decoded.icon, "");
+    }
+
+    #[test]
+    fn decode_state_reads_both_layouts_and_rejects_garbage() {
+        let host = new_token(addr(A), 700);
+        let bytes = host.storage_get(STATE_KEY).unwrap();
+        let decoded = decode_state(&bytes).expect("v2 decodes");
+        assert_eq!(decoded.total_supply, 700);
+        assert_eq!(decoded.owner, addr(A));
+        assert!(decode_state(b"not a token").is_none());
+    }
+
+    #[test]
+    fn state_slot_is_the_host_storage_key() {
+        // The host namespaces every contract key as blake3(key); the slot the
+        // web wallet and the CLI query must match it byte for byte, so this
+        // asserts the published value instead of re-deriving it.
+        const HOST_SLOT: [u8; 32] = [
+            0xd4, 0x90, 0x05, 0x9b, 0x20, 0xa5, 0x1c, 0xd3, 0x1a, 0xd8, 0x72, 0x40, 0x21, 0x23,
+            0x1c, 0x58, 0x1d, 0x67, 0xa6, 0x2d, 0x29, 0x46, 0xf7, 0xf2, 0xa4, 0x40, 0x5d, 0xd8,
+            0xae, 0x73, 0x8d, 0xf1,
+        ];
+        assert_eq!(state_slot(), HOST_SLOT);
     }
 
     #[test]
