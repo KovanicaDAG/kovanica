@@ -168,3 +168,82 @@ that `KOVANICA_ALLOW_RESET=0` does nothing — there is no such switch in this
 codebase. The correct remedy was, and remains, the manual procedure above:
 stop all nodes, wipe the data directories, deploy one build everywhere, start
 together.
+
+---
+
+# Testnet-reset activation plan (gated hardening flags)
+
+This section is an operator runbook for the **next testnet genesis reset**.
+It activates the currently inert hardening gates by resetting them to `0` on a
+fresh genesis. It does **not** fork the live network today and does **not**
+change any numeric tokenomics.
+
+## 1. Preconditions
+
+- Every validator runs a build that contains:
+  - fee host-call charging (`GAS_HARDENING_ACTIVE_FROM_ROUND` path),
+  - `kovanica-params` (single source of truth for constants),
+  - VRF C1 leader determinism (this change),
+  - gate support (`*_ACTIVE_FROM_ROUND`).
+- Indexer / SDK / CLI / wallet builds are compatible with the reset commit:
+  - indexer queries bounded as on main,
+  - SDK entry-point list includes AMM pool entry points,
+  - CLI `network-tag`, `check-config` work.
+- Data dirs backed up (tar of `KOVANICA_DATA_DIR`) on every node before wipe.
+- All nodes stopped before wiping (consensus.redb / state.redb are held open).
+
+## 2. Genesis ceremony steps
+
+1. Pick the frozen commit; record `sha256sum kovanica-node`.
+2. Rotate validator keys only if planned; otherwise reuse. Ensure each
+   validator's `vrf_public_key` is populated in `genesis_validators.toml`
+   (required for VRF C1 to be live from genesis).
+3. Set `chain_id` (testnet = 4) and treasury address consistently.
+4. Wipe every data dir, deploy the bundle (`validators.json`,
+   `founder_premine.hex`, `funded_accounts.toml`, `genesis_validators.toml`),
+   verify `sha256sum -c SHA256SUMS` and `kovanica-node network-tag`.
+5. Constants that flip from `u64::MAX` to `0` on the new genesis:
+   - `GAS_HARDENING_ACTIVE_FROM_ROUND` → `0`
+   - `CONTRACT_HARDENING_ACTIVE_FROM_ROUND` → `0`
+   - `SIZE_LIMITS_ACTIVE_FROM_ROUND` → `0`
+   - `SLASHING_ACTIVE_FROM_ROUND` → `0`
+   (These are activation-round constants in `kovanica-params`; the live
+   mainnet/testnet values stay `u64::MAX` until this reset.)
+
+## 3. Activation matrix
+
+| Flag | Current (live) | Post-reset | Behavior that turns on |
+|------|----------------|------------|------------------------|
+| `GAS_HARDENING_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Host-call gas charging on every call; block gas budget enforcement |
+| `CONTRACT_HARDENING_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Invalid deploy / non-entry WASM calls rejected; contract hardening checks |
+| `SIZE_LIMITS_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Block/tx size limits enforced |
+| `SLASHING_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Slashing evidence path live |
+| VRF keys in `genesis_validators.toml` | optional/null | populated | VRF leader schedule live from genesis |
+
+## 4. Verification
+
+- Host-call gas: submit a contract call; confirm fee deducted and receipt
+  shows charged host-call gas (not zero).
+- Invalid deploy / non-entry: deploy malformed or call a non-entry function;
+  expect rejection.
+- Size limits: submit an oversized tx/block; expect rejection at the gate.
+- Slashing: submit evidence tx; confirm validator jailed and not paid.
+- VRF leader schedule: restart a validator; confirm `scheduled_leader_for_round`
+  and committed leader sequence identical before/after restart; compare
+  across nodes.
+
+## 5. Rollback / failure
+
+- "Abort reset" means: stop all nodes, wipe data dirs again, redeploy the
+  previous bundle/binary, restart. Valid only before the new genesis is
+  shared beyond the operator set.
+- Once the new genesis is shared (validators started, tag published), it is
+  non-rollbackable: chain state, balances, and history on the new chain are
+  authoritative. Do not attempt to reuse old data dirs.
+- A single node that fails to converge must be wiped and restarted from the
+  bundle; do not use genesis-mismatch overrides on the live mesh.
+
+## 6. Out of scope
+
+- Mainnet freeze (handled by `docs/MAINNET-FREEZE-CHECKLIST.md`).
+- Changing numeric tokenomics (locked).
