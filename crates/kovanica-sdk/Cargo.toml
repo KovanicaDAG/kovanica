@@ -1,0 +1,36 @@
+[package]
+name = "kovanica-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Official Rust (and WASM) client library for Kovanica"
+
+[dependencies]
+kovanica-types = { path = "../kovanica-types" }
+kovanica-crypto = { path = "../kovanica-crypto" }
+kovanica-keystore = { path = "../kovanica-keystore", optional = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+bincode = { workspace = true }
+async-trait = { workspace = true }
+
+# HTTP RPC client (native only).
+reqwest = { workspace = true, optional = true }
+
+# WASM bindings (optional).
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+
+[features]
+default = ["http", "keystore"]
+http = ["dep:reqwest"]
+keystore = ["dep:kovanica-keystore"]
+wasm = ["dep:wasm-bindgen", "dep:js-sys"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3.8"
+axum = { workspace = true }

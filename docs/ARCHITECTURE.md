@@ -95,7 +95,7 @@ Storage (redb / pruning / snapshots)
 | OpenAPI / JSON schema generator | Implemented | `crates/kovanica-rpc/src/openapi.rs` |
 | Contract SDK (Rust + TS) | Implemented | `kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`, `kovanica-token` |
 | Dev faucet service | Implemented | `crates/kovanica-faucet` |
-| Indexer skeleton | Planned | WebSocket push subscriptions (`/ws`) |
+| Indexer (v0.1) | Implemented (skeleton) | crates/kovanica-indexer: REST /logs, /events, /status + WS /ws |
 
 ---
 

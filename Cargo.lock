@@ -2583,6 +2583,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-indexer"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bincode",
+ "blake3",
+ "clap",
+ "futures",
+ "hex",
+ "kovanica-common",
+ "kovanica-crypto",
+ "kovanica-execution",
+ "kovanica-storage",
+ "kovanica-types",
+ "redb",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-tungstenite",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kovanica-keystore"
 version = "0.1.0"
 dependencies = [
@@ -2801,6 +2831,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-sdk"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bincode",
+ "hex",
+ "js-sys",
+ "kovanica-crypto",
+ "kovanica-keystore",
+ "kovanica-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "kovanica-staking"
 version = "0.0.31"
 dependencies = [
@@ -2860,6 +2911,23 @@ dependencies = [
  "bincode",
  "kovanica-common",
  "serde",
+]
+
+[[package]]
+name = "kovanica-wallet-core"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "hex",
+ "kovanica-crypto",
+ "kovanica-keystore",
+ "kovanica-sdk",
+ "kovanica-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
