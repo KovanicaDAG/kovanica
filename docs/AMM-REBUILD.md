@@ -30,7 +30,7 @@ What changes is therefore the **artifacts that embed or describe the contract**.
 | 5 | Console | `packages/console` | **yes**, indirectly — depends on `@kovanica/api-client` + `@kovanica/signer` | rebuild/redistribute after 4 |
 | 6 | Comms package | `packages/comms` | **yes**, indirectly — depends on `@kovanica/api-client` + `@kovanica/signer` | rebuild after 4 |
 | 7 | Desktop app | `apps/desktop` (Tauri, `frontendDist: ../dist`) | **yes**, indirectly — imports `@kovanica/comms`/`@kovanica/signer` | rebuild the installer after 4/6 |
-| 8 | Web | `packages/web` (`Explorer.tsx`, `Wallet.tsx`) | **no** — talks to `/rpc` directly, no `api-client`, no pool UI | no rebuild for the AMM; rebuild only when a swap/liquidity view lands |
+| 8 | Web | separate repo `KovanicaDAG/kovanica-web` (deployed site), not `packages/web` | **yes, read path** — `/api/pools` decodes the pool slot and `/pool` renders reserves, fee, LP supply and an exact quote | rebuild + `pm2 reload kovanica-web`; `packages/web` itself still has no pool UI |
 | 9 | Signer | `packages/signer` | **no** — no token entry points; the AMM needs a signed `Call.value`, which the CLI builds in Rust | no change |
 | 10 | Android comms / iOS | `apps/android-comms`, `apps/ios` | **no** — no wasm asset, no token references | no rebuild |
 | 11 | Docs | `contracts/README.md`, `docs/CONTRACTS.md`, `docs/EXAMPLES.md`, `docs/GAS_SCHEDULE.md` | **yes** — updated in #134/#135 | only re-check if the artifact or the gas table changes |
@@ -55,3 +55,19 @@ git grep -n -E "token_init_pool|token_buy|token_sell" -- packages apps
 At the time of writing the last command matches only the wasm binaries: no
 TypeScript or app code calls the pool yet, so rows 2 and 3 are the only
 mandatory rebuilds and row 4 is the only code change.
+
+## Web surface (`KovanicaDAG/kovanica-web`)
+
+The deployed site is the separate `kovanica-web` repo, not `packages/web`. It now:
+
+- reads pools via `GET /api/pools` (`src/lib/api/tokens.server.ts` → `listPools`,
+  decoding `blake3("kvnc/v1/pool")` with the shared 51-byte bincode layout);
+- renders `/pool` (`src/components/protocol/pool-view.tsx`) with reserves, fee,
+  LP supply and a quote computed by the same constant-product formula as
+  `kovanica_token::quote`;
+- sends any KVP-102 token from the wallet through `POST /api/token_prepare` →
+  offline Ed25519 signature → `POST /api/token_submit`, which encodes a
+  `TransactionKind::Call { method: "token_transfer" }` exactly like the CLI.
+
+Executing a swap (`token_buy` / `token_sell`) is still CLI/Android only; the web
+page quotes, it does not sign swaps.

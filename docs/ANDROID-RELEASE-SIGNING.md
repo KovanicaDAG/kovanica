@@ -1,0 +1,75 @@
+# Android release signing
+
+Both apps (`apps/android` = Lightnode, `apps/android-wallet` = Wallet) build
+`app-release-unsigned.apk`; signing happens on the build box after Gradle.
+
+## Current signing identity
+
+| Field | Value |
+|---|---|
+| Keystore | `/root/keys/kvnc-release.p12` (PKCS12, mode 600) |
+| Alias | `kvnc` |
+| Passphrase | `/root/keys/kvnc-release.pass` (mode 600, **not** in git) |
+| Subject | `CN=Kovanica, OU=Release, O=KovanicaDAG, C=US` |
+| Key | RSA 4096, 10 000 days, SHA384withRSA |
+| Certificate SHA-256 | `fbb7abeb78346989418bbd24146f0d3b4ec3da3672c1d4de75e6f56ebc56617f` |
+
+> **Rotation.** The original release key (`/tmp/opencode/kvnc-release.p12`,
+> cert SHA-256 `630a6308…4562`) was lost with the box's `/tmp`. Releases
+> `v0.3.6-wallet` and `v0.8.7-android` are the first signed with the key above.
+> Android ties in-place updates to the signing certificate, so installs of
+> 0.3.5 / 0.8.6 or older must be **uninstalled before installing 0.3.6 / 0.8.7**.
+> Back the keystore and passphrase up off-box; losing them again means another
+> forced reinstall.
+
+## Build + sign
+
+```bash
+export ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk
+cd apps/android-wallet && ./gradlew --no-daemon assembleRelease   # or apps/android
+cd -   # back to the repo root
+
+BT=/opt/android-sdk/build-tools/34.0.0
+OUT=dist/android && mkdir -p "$OUT"
+
+sign() { # <unsigned.apk> <output.apk>
+  "$BT/zipalign" -p -f 4 "$1" "$OUT/aligned.tmp.apk"
+  "$BT/apksigner" sign \
+    --ks /root/keys/kvnc-release.p12 --ks-key-alias kvnc \
+    --ks-pass file:/root/keys/kvnc-release.pass \
+    --key-pass file:/root/keys/kvnc-release.pass \
+    --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+    --out "$2" "$OUT/aligned.tmp.apk"
+  rm -f "$OUT/aligned.tmp.apk"
+}
+
+sign apps/android-wallet/app/build/outputs/apk/release/app-release-unsigned.apk \
+     "$OUT/Kovanica-Wallet-0.3.6-arm64-v8a.apk"
+sign apps/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+     "$OUT/Kovanica-Lightnode-0.8.7-arm64-v8a.apk"
+```
+
+The passphrase file holds the password **twice**, one line each: `apksigner`
+reads the store password and the key password sequentially from the same
+reader, so a single line fails with `end of file reached`.
+
+## Verify before publishing
+
+```bash
+"$BT/apksigner" verify --print-certs "$OUT/Kovanica-Wallet-0.3.6-arm64-v8a.apk"
+"$BT/zipalign" -c -p 4 "$OUT/Kovanica-Wallet-0.3.6-arm64-v8a.apk"
+"$BT/aapt" dump badging "$OUT/Kovanica-Wallet-0.3.6-arm64-v8a.apk" | head -1
+# the AMM artifact must be the current one
+unzip -p "$OUT/Kovanica-Wallet-0.3.6-arm64-v8a.apk" assets/kovanica_token.wasm | sha256sum
+```
+
+Expected wasm sha256: `a6988f5e1742b1ac0a069a3ef274d7590a54266dee57435438664e23036dc49b`
+(91 797 bytes) — see `docs/AMM-REBUILD.md`.
+
+## Publish
+
+Releases live on `KovanicaDAG/kovanica`, tags `v<version>-wallet` and
+`v<version>-android`, assets `Kovanica-Wallet-<version>-arm64-v8a.apk` and
+`Kovanica-Lightnode-<version>-arm64-v8a.apk`. After publishing, bump the pins in
+`kovanica-web` (`src/routes/download/$.ts` and the wallet download component) in
+the same change.
