@@ -7,6 +7,7 @@ members = [
     "crates/kovanica-dag",
     "crates/kovanica-consensus",
     "crates/kovanica-mempool",
+    "crates/kovanica-migrate",
     "crates/kovanica-network",
     "crates/kovanica-runtime",
     "crates/kovanica-execution",

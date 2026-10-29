@@ -1,0 +1,15 @@
+[package]
+name = "kovanica-migrate"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kovanica-storage = { path = "../kovanica-storage" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+
+[[bin]]
+name = "kovanica-migrate"
+path = "src/main.rs"
