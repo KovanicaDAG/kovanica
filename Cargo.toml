@@ -34,6 +34,7 @@ members = [
     "crates/kovanica-params",
     "crates/kovanica-indexer",
     "crates/kovanica-sdk",
+    "crates/kovanica-snapshot",
     "crates/kovanica-bench",
     "crates/kovanica-wallet-core",
 ]

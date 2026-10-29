@@ -1,0 +1,17 @@
+[package]
+name = "kovanica-snapshot"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kovanica-storage = { path = "../kovanica-storage" }
+kovanica-types = { path = "../kovanica-types" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tempfile = "3"
+
+[[bin]]
+name = "kovanica-snapshot"
+path = "src/main.rs"
