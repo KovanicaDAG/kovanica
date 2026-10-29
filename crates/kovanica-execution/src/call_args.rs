@@ -97,18 +97,23 @@ pub fn encode_multisig_execute(id: [u8; 32], tx_id: u64) -> Result<Vec<u8>, Enco
     enc(&(id, tx_id))
 }
 
-/// `token_create(name, symbol, decimals, initial_supply)`.
+/// `token_create(name, symbol, decimals, initial_supply, icon)`.
+///
+/// `icon` is optional artwork (`https://…` or `data:image/…`); pass `""` for a
+/// token without one. The contract rejects anything else.
 pub fn encode_token_create(
     name: &str,
     symbol: &str,
     decimals: u8,
     initial_supply: Amount,
+    icon: &str,
 ) -> Result<Vec<u8>, EncodeError> {
     enc(&(
         name.to_string(),
         symbol.to_string(),
         decimals,
         initial_supply,
+        icon.to_string(),
     ))
 }
 
@@ -231,9 +236,9 @@ mod tests {
             (id, 4)
         );
 
-        let token = encode_token_create("N", "S", 9, 1_000).unwrap();
-        let decoded: (String, String, u8, Amount) = bincode::deserialize(&token).unwrap();
-        assert_eq!(decoded, ("N".into(), "S".into(), 9, 1_000));
+        let token = encode_token_create("N", "S", 9, 1_000, "").unwrap();
+        let decoded: (String, String, u8, Amount, String) = bincode::deserialize(&token).unwrap();
+        assert_eq!(decoded, ("N".into(), "S".into(), 9, 1_000, String::new()));
 
         assert_eq!(
             bincode::deserialize::<([u8; 32], Amount)>(&encode_token_transfer(other, 4).unwrap())
@@ -280,7 +285,7 @@ mod tests {
         let recipient = [4u8; 32];
         deploy(&storage, &contract);
 
-        let create = encode_token_create("Test", "TST", 9, 1_000).unwrap();
+        let create = encode_token_create("Test", "TST", 9, 1_000, "").unwrap();
         execute_contract_call("token_create", contract, caller, 1, 1, &create, &storage)
             .expect("token_create");
 

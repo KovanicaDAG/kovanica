@@ -878,13 +878,14 @@ fn dispatch_entry(
 
         // --- kovanica-token ----------------------------------------------------
         "token_create" => {
-            let (name, symbol, decimals, initial_supply): (
+            let (name, symbol, decimals, initial_supply, icon): (
                 String,
                 String,
                 u8,
                 kovanica_common::Amount,
+                String,
             ) = dec(args)?;
-            Token::create(host, name, symbol, decimals, initial_supply)?;
+            Token::create(host, name, symbol, decimals, initial_supply, icon)?;
             enc(&())
         }
         "token_transfer" => {
@@ -1278,8 +1279,14 @@ pub(crate) mod tests {
     }
 
     fn token_create_args(supply: Amount) -> Vec<u8> {
-        bincode::serialize(&("KUNA Test".to_string(), "TKT".to_string(), 9u8, supply))
-            .expect("encode")
+        bincode::serialize(&(
+            "KUNA Test".to_string(),
+            "TKT".to_string(),
+            9u8,
+            supply,
+            String::new(),
+        ))
+        .expect("encode")
     }
 
     // (a) Native dispatch e2e: create → transfer, persisted across runner

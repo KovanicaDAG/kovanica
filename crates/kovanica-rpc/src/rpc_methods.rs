@@ -362,6 +362,9 @@ pub struct TokenCreateParams {
     pub symbol: String,
     pub decimals: u8,
     pub initial_supply: Amount,
+    /// Optional artwork (`https://…` or `data:image/…`), empty when absent.
+    #[serde(default)]
+    pub icon: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -420,7 +423,7 @@ pub async fn handle_token_create(params: Value, _state: RpcState) -> Result<Valu
     let height: Height = 0;
     let timestamp: Timestamp = 0;
 
-    let args = bincode::serialize(&(p.name, p.symbol, p.decimals, p.initial_supply))
+    let args = bincode::serialize(&(p.name, p.symbol, p.decimals, p.initial_supply, p.icon))
         .map_err(|e| RpcError::InternalError(format!("encode args: {}", e)))?;
 
     execute_contract_call("token_create", contract, caller, height, timestamp, &args).await?;

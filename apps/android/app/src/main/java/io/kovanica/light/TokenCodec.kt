@@ -19,6 +19,8 @@ data class TokenInfo(
     /** Holder address (64-hex, lowercase) -> amount, exactly as stored on chain. */
     val balances: Map<String, BigInteger>,
     val paused: Boolean,
+    /** Optional artwork carried on chain: `https://…` or `data:image/…`. */
+    val icon: String = "",
 ) {
     /** Balance of [addressHex] (64-hex, lowercase, no `0x`); zero when absent. */
     fun balanceOf(addressHex: String): BigInteger =
@@ -56,7 +58,12 @@ data class TokenInfo(
  * allowances    BTreeMap<([u8;32],[u8;32]), u128>
  *                                          u64le count + count×(32 + 32 + 16)
  * paused        bool                       1 byte
+ * icon          String                     u64le len + utf8 bytes
  * ```
+ *
+ * `icon` was added after the first release. State written by the older
+ * contract ends after `paused`; [decode] accepts both layouts and reports an
+ * empty icon for the old one.
  *
  * `[u8; 32]` serialises as a bare 32-byte array (serde treats arrays as fixed
  * tuples), so map keys carry no length prefix. `owner`/`minter`/`paused` and
@@ -92,6 +99,9 @@ object TokenCodec {
 
     /** Longest name/symbol we will accept, as a guard against absurd lengths. */
     private const val MAX_TEXT_BYTES = 512
+
+    /** Largest icon payload the contract itself accepts. */
+    private const val MAX_ICON_BYTES = 8 * 1024
 
     /** Bincode entry sizes, used to clamp map counts to what can physically fit. */
     private const val BALANCE_ENTRY_BYTES = 32 + 16
@@ -129,6 +139,13 @@ object TokenCodec {
 
         val paused = r.bool() ?: return null
 
+        // Newer contracts append the artwork; older state simply ends here.
+        val icon = if (r.remaining() == 0) {
+            ""
+        } else {
+            r.text(MAX_ICON_BYTES) ?: return null
+        }
+
         // A token always has a symbol; a missing one means this is not Token.
         if (symbol.isBlank()) return null
 
@@ -141,13 +158,21 @@ object TokenCodec {
             minterHex = hex(minter),
             balances = balances,
             paused = paused,
+            icon = icon.takeIf { isRenderableIcon(it) }.orEmpty(),
         )
     }
+
+    /** Only `https://` and `data:image/` payloads are ever handed to the UI. */
+    private fun isRenderableIcon(icon: String): Boolean =
+        icon.startsWith("https://") || icon.startsWith("data:image/")
 
     // --- byte helpers --------------------------------------------------------------------
 
     private class Reader(private val bytes: ByteArray) {
         private var pos = 0
+
+        /** Bytes left after the last read; 0 means the value had no icon tail. */
+        fun remaining(): Int = bytes.size - pos
 
         private fun want(n: Int): Boolean = n >= 0 && pos + n <= bytes.size
 

@@ -467,6 +467,9 @@ pub struct TokenCreateArgs {
     /// Initial supply in token base units, not KUNA
     #[arg(long = "initial-supply")]
     pub initial_supply: u64,
+    /// Optional artwork: an https:// URL or a data:image/… URI (≤8 KiB)
+    #[arg(long, default_value = "")]
+    pub icon: String,
 }
 
 /// Arguments for `kovanica token transfer` / `mint`.
@@ -520,6 +523,7 @@ async fn run_token(
                 "symbol": args.symbol,
                 "decimals": args.decimals,
                 "initial_supply": args.initial_supply,
+                "icon": args.icon,
             });
             let result = client.call("token_create", params).await?;
             emit(

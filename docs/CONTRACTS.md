@@ -136,7 +136,7 @@ Singleton per contract address; the proposer auto-confirms; `execute` requires
 
 | Function | Arguments | Result |
 |----------|-----------|--------|
-| `Token::create` | `name: String, symbol: String, decimals: u8, initial_supply: Amount` | `()` |
+| `Token::create` | `name: String, symbol: String, decimals: u8, initial_supply: Amount, icon: String` | `()` |
 | `Token::transfer` | `to: Address, amount: Amount` | `()` |
 | `Token::approve` | `spender: Address, amount: Amount` | `()` |
 | `Token::transfer_from` | `from: Address, to: Address, amount: Amount` | `()` |
@@ -146,6 +146,12 @@ Singleton per contract address; the proposer auto-confirms; `execute` requires
 Singleton per contract address; caller becomes owner + minter. Token balances
 are internal to the token record — they do **not** touch native account
 balances.
+
+`icon` is optional artwork fixed **at creation** (there is no second entry point
+for it, so the 16-name ABI stays unchanged). It must be empty, `https://…`, or a
+`data:image/…` URI, at most 8 KiB, with no control characters; anything else is
+`InvalidInput`. Wallets that decode the state read it as a trailing `String`
+after `paused` and treat its absence as "no icon".
 
 ## 4. Dispatch entry points (the 16 names)
 
@@ -166,7 +172,7 @@ dispatcher, the wasm exports, and this table must stay in sync (enforced by the
 | `multisig_propose` | `(MultisigId, Address, Amount, Vec<u8>)` | `TxId` |
 | `multisig_confirm` | `(MultisigId, TxId)` | `()` |
 | `multisig_execute` | `(MultisigId, TxId)` | `()` |
-| `token_create` | `(String, String, u8, Amount)` | `()` |
+| `token_create` | `(String, String, u8, Amount, String icon)` | `()` |
 | `token_transfer` | `(Address, Amount)` | `()` |
 | `token_approve` | `(Address, Amount)` | `()` |
 | `token_transfer_from` | `(Address, Address, Amount)` | `()` |

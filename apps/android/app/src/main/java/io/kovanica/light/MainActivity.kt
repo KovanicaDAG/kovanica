@@ -178,7 +178,7 @@ class MainActivity : Activity() {
                 InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         }
         toField = field("Recipient address", "", mono = true)
-        amountField = field("Amount (atoms)", "1", mono = true)
+        amountField = field("Amount (KUNA)", "1", mono = true)
         loading = false
 
         status = TextView(this).apply {
@@ -284,7 +284,7 @@ class MainActivity : Activity() {
             addStack(button("Send") { send() }, 12)
             addStack(
                 caption(
-                    "Amounts are in atoms — 1 KUNA is 1,000,000,000 atoms. Contacts fills the " +
+                    "Amounts are in KUNA — 1 KUNA is 1,000,000,000 atoms. Contacts fills the " +
                         "field from your saved list; Scan QR reads an address from a code.",
                 ),
                 12,
@@ -678,7 +678,9 @@ class MainActivity : Activity() {
      */
     private fun send() {
         val to = toField.text.toString().trim()
-        val amount = amountField.text.toString().trim().toULongOrNull()
+        // The field is typed in KUNA; the chain stores atoms (9 decimals).
+        val parsed = Amounts.parse(amountField.text.toString(), NATIVE_DECIMALS)
+        val amount = parsed?.toString()?.toULongOrNull()
         val passphrase = passField.text.toString()
         if (to.isEmpty()) {
             setStatus("Enter the recipient address.", Tone.ERROR)
@@ -693,8 +695,12 @@ class MainActivity : Activity() {
             setStatus("Enter a valid recipient address.", Tone.ERROR)
             return
         }
+        if (parsed == null) {
+            setStatus("Amount must be a KUNA value, like 1 or 0.5.", Tone.ERROR)
+            return
+        }
         if (amount == null) {
-            setStatus("Amount must be a whole number of atoms, like 1.", Tone.ERROR)
+            setStatus("That amount is too large.", Tone.ERROR)
             return
         }
         if (amount == 0uL) {
@@ -1373,7 +1379,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         val coin = if (info != null) {
-            WalletUi.tokenCoin(this, info.symbol, contract)
+            WalletUi.tokenMark(this, info.symbol, contract, info.icon)
         } else {
             WalletUi.coinMark(this, "?", SURFACE, MUTED, description = "Token")
         }
@@ -1532,7 +1538,7 @@ class MainActivity : Activity() {
             )
             val to = field("Recipient address", "", mono = true)
             addStack(to, 10)
-            val amount = field("Amount (base units)", "1", mono = true)
+            val amount = field("Amount ($symbol)", "1", mono = true)
             addStack(amount, 8)
             addStack(
                 button("Send $symbol") {
@@ -1549,9 +1555,12 @@ class MainActivity : Activity() {
             setStatus("Enter a valid recipient address.", Tone.ERROR)
             return
         }
-        val amount = amountText.trim().toBigIntegerOrNull()
+        val decimals = info?.decimals ?: 0
+        val symbol = info?.symbol ?: "token"
+        // Typed in the token's own units; the contract stores integer base units.
+        val amount = Amounts.parse(amountText, decimals)
         if (amount == null || amount.signum() <= 0) {
-            setStatus("Enter an amount in the token's base units, like 1.", Tone.ERROR)
+            setStatus("Enter a $symbol amount, like 1 or 0.5.", Tone.ERROR)
             return
         }
         val keystore = keystoreOrNull()
@@ -1561,8 +1570,6 @@ class MainActivity : Activity() {
         }
         // Snapshot the UI-only inputs before hopping to the IO thread.
         val passphrase = passField.text.toString()
-        val decimals = info?.decimals ?: 0
-        val symbol = info?.symbol ?: "token"
         val env = env()
         background("Preparing token transfer…") { _ ->
             val hash = TokenClient(client(env)).sendTransfer(
@@ -1776,12 +1783,12 @@ class MainActivity : Activity() {
     }
 
     private fun renderAmountPreview() {
-        val atoms = amountField.text.toString().trim().toULongOrNull()
-        if (atoms == null) {
+        val atoms = Amounts.parse(amountField.text.toString(), NATIVE_DECIMALS)
+        if (atoms == null || atoms.signum() <= 0) {
             amountPreview.visibility = View.GONE
             return
         }
-        amountPreview.text = "= ${Amounts.format(BigInteger(atoms.toString()), NATIVE_DECIMALS)} KUNA"
+        amountPreview.text = "= ${atoms.toString()} atoms"
         amountPreview.visibility = View.VISIBLE
     }
 
