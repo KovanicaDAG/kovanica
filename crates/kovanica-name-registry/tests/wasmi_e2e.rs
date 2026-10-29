@@ -118,6 +118,7 @@ fn wasmi_e2e_name_registry_wasm() {
     let config = ExecutionConfig {
         gas_limit: 100_000_000,
         memory_limit_pages: 256, // rust-std contracts need more than the 16-page default
+        gas_hardening_active: false,
     };
     let mut runner = ContractRunner::new();
 
