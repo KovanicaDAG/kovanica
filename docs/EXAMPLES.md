@@ -137,13 +137,18 @@ Notes:
 - Each mutation waits for its nonce, then re-reads the pool at
   `blake3("kvnc/v1/pool")` and the token state at `blake3("kvnc/v1/state")`.
   It **exits non-zero** unless the committed reserves and the caller's token
-  balance satisfy the swap — exact deltas, `token_reserve ==
-  balances[contract]`, unchanged `lp_total`. Comparisons against the
+  balance satisfy the swap — exact deltas, `token_reserve <=
+  balances[contract]`, unchanged `lp_total`. A ledger above the reserve is a
+  token donation (warning, those tokens are trapped); a ledger below it is
+  corruption and fails. Comparisons against the
   pre-submit snapshot (the local quote, the reserve movement this trade alone
   implies) are printed as `warning:` lines and never change the exit code: on a
   live pool another trade can land between the snapshot and the commit. Events
   are for indexers, not for this check. A rejected body still pays the fee, so
   a silent success would be a lie.
+- `--min-out` defaults to `0`, i.e. no slippage protection; the swap still
+  runs, but the CLI prints a warning that any pool movement between submit and
+  commit is accepted.
 - Pricing is `out = in_after * r_out / (r_in + in_after)` with
   `in_after = in * (10_000 - fee_bps) / 10_000`, all integer and floored; the
   fee stays in the reserve for LPs.

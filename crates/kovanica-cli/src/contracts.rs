@@ -1137,6 +1137,11 @@ impl Verification {
     }
 }
 
+/// Printed by `token buy` / `token sell` when `--min-out` was left at its
+/// default of zero: the swap goes through with no floor at all.
+const ZERO_SLIPPAGE_WARNING: &str =
+    "--min-out 0: no slippage protection; any pool movement between submit and commit is accepted";
+
 /// Pure post-call check for `token_buy` (see `CONTRACTS.md` §7a/§7b).
 ///
 /// The node has no receipt the CLI can trust for a call result, so the swap is
@@ -1176,9 +1181,10 @@ pub fn verify_buy(
         return Verification::fail(format!("buyer received {delta}, below --min-out {min_out}"));
     }
     let contract_tokens = balance_of(after_token, contract);
-    if after_pool.token_reserve != contract_tokens {
+    if contract_tokens < after_pool.token_reserve {
         return Verification::fail(format!(
-            "token reserve {} does not equal the contract balance {contract_tokens}",
+            "the contract holds {contract_tokens} tokens but the pool claims {}: the ledger is \
+             below the reserve",
             after_pool.token_reserve
         ));
     }
@@ -1191,6 +1197,14 @@ pub fn verify_buy(
 
     // ---- warnings: comparisons against the pre-submit snapshot ----
     let mut verification = Verification::default();
+    if contract_tokens > after_pool.token_reserve {
+        verification = verification.at(format!(
+            "{} tokens were donated to the pool contract; the reserve is {} and the surplus is \
+             not claimable",
+            contract_tokens - after_pool.token_reserve,
+            after_pool.token_reserve
+        ));
+    }
     match kovanica_token::quote(
         kuna_in,
         before_pool.kuna_reserve,
@@ -1259,9 +1273,10 @@ pub fn verify_sell(
         ));
     }
     let contract_tokens = balance_of(after_token, contract);
-    if after_pool.token_reserve != contract_tokens {
+    if contract_tokens < after_pool.token_reserve {
         return Verification::fail(format!(
-            "token reserve {} does not equal the contract balance {contract_tokens}",
+            "the contract holds {contract_tokens} tokens but the pool claims {}: the ledger is \
+             below the reserve",
             after_pool.token_reserve
         ));
     }
@@ -1274,6 +1289,14 @@ pub fn verify_sell(
 
     // ---- warnings: comparisons against the pre-submit snapshot ----
     let mut verification = Verification::default();
+    if contract_tokens > after_pool.token_reserve {
+        verification = verification.at(format!(
+            "{} tokens were donated to the pool contract; the reserve is {} and the surplus is \
+             not claimable",
+            contract_tokens - after_pool.token_reserve,
+            after_pool.token_reserve
+        ));
+    }
     // Best-effort payout: another trade in the window moves this too, so it is
     // only ever compared for advice.
     let observed_payout = before_pool
@@ -1444,7 +1467,7 @@ async fn token_buy(
     let pool_after = read_pool(client, contract)
         .await?
         .ok_or_else(|| anyhow!("{contract} holds no pool state after token_buy {hash}"))?;
-    let verification = verify_buy(
+    let mut verification = verify_buy(
         contract,
         sender,
         Amount::from(args.kuna),
@@ -1459,6 +1482,11 @@ async fn token_buy(
             "token_buy {hash} committed but the reserve check failed: {problem}; the fee was \
              charged and the nonce consumed"
         );
+    }
+    if args.min_out == 0 {
+        verification
+            .warnings
+            .push(ZERO_SLIPPAGE_WARNING.to_string());
     }
     for warning in &verification.warnings {
         eprintln!("warning: token_buy {hash}: {warning}");
@@ -1533,7 +1561,7 @@ async fn token_sell(
     let pool_after = read_pool(client, contract)
         .await?
         .ok_or_else(|| anyhow!("{contract} holds no pool state after token_sell {hash}"))?;
-    let verification = verify_sell(
+    let mut verification = verify_sell(
         contract,
         sender,
         args.tokens,
@@ -1548,6 +1576,11 @@ async fn token_sell(
             "token_sell {hash} committed but the reserve check failed: {problem}; the fee was \
              charged and the nonce consumed"
         );
+    }
+    if args.min_out == 0 {
+        verification
+            .warnings
+            .push(ZERO_SLIPPAGE_WARNING.to_string());
     }
     for warning in &verification.warnings {
         eprintln!("warning: token_sell {hash}: {warning}");
@@ -2147,11 +2180,11 @@ mod tests {
             clean.warnings
         );
 
-        // A reserve that no longer mirrors the contract balance is a hard
-        // failure (this is what turns a "committed" transaction into a
-        // non-zero CLI exit).
+        // A reserve *above* the contract balance means the pool owes more than
+        // the ledger holds — corruption, and a hard failure (this is what turns
+        // a "committed" transaction into a non-zero CLI exit).
         let mut wrong = after_pool.clone();
-        wrong.token_reserve -= 1;
+        wrong.token_reserve += 1;
         assert!(verify_buy(
             contract,
             alice,
@@ -2194,6 +2227,49 @@ mod tests {
         )
         .failure
         .is_some());
+    }
+
+    // A plain `token_transfer` to the pool address raises only the ledger side,
+    // so `balances[contract]` runs ahead of `token_reserve` forever. That is a
+    // donation, not a broken swap: warn, keep the exit code at zero.
+    #[test]
+    fn buy_verification_tolerates_a_token_donation() {
+        let (before_token, before_pool, contract, alice) = pool_fixture();
+        let kuna_in = 10_000u128;
+        let out = kovanica_token::quote(
+            kuna_in,
+            before_pool.kuna_reserve,
+            before_pool.token_reserve,
+            before_pool.fee_bps,
+        )
+        .unwrap();
+
+        let mut after_token = before_token.clone();
+        after_token.balances.insert(alice.0, 10_000 + out);
+        // One atom donated to the contract on top of the swap's own movement.
+        after_token
+            .balances
+            .insert(contract.0, before_pool.token_reserve - out + 1);
+        let mut after_pool = before_pool.clone();
+        after_pool.kuna_reserve += kuna_in;
+        after_pool.token_reserve -= out;
+
+        let verification = verify_buy(
+            contract,
+            alice,
+            kuna_in,
+            out,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &after_pool,
+        );
+        assert_eq!(verification.failure, None);
+        assert!(
+            verification.warnings.iter().any(|w| w.contains("donated")),
+            "a token donation must be reported: {:?}",
+            verification.warnings
+        );
     }
 
     // A trade that lands between the pre-submit snapshot and the commit must
@@ -2290,9 +2366,10 @@ mod tests {
         .failure
         .is_some());
 
-        // So is the reserve mirror and the LP total.
+        // So is a reserve above the ledger (the pool claiming more than the
+        // contract holds) and the LP total.
         let mut wrong_pool = after_pool.clone();
-        wrong_pool.token_reserve -= 1;
+        wrong_pool.token_reserve += 1;
         assert!(verify_sell(
             contract,
             alice,
@@ -2320,6 +2397,48 @@ mod tests {
         )
         .failure
         .is_some());
+    }
+
+    // Same donation case on the sell side: the seller's delta still holds and
+    // the reserve is below the ledger, which is not corruption.
+    #[test]
+    fn sell_verification_tolerates_a_token_donation() {
+        let (before_token, before_pool, contract, alice) = pool_fixture();
+        let tokens_in = 5_000u128;
+        let paid = kovanica_token::quote(
+            tokens_in,
+            before_pool.token_reserve,
+            before_pool.kuna_reserve,
+            before_pool.fee_bps,
+        )
+        .unwrap();
+
+        let mut after_token = before_token.clone();
+        after_token.balances.insert(alice.0, 10_000 - tokens_in);
+        // One atom donated to the contract on top of the seller's tokens.
+        after_token
+            .balances
+            .insert(contract.0, before_pool.token_reserve + tokens_in + 1);
+        let mut after_pool = before_pool.clone();
+        after_pool.token_reserve += tokens_in;
+        after_pool.kuna_reserve -= paid;
+
+        let verification = verify_sell(
+            contract,
+            alice,
+            tokens_in,
+            paid,
+            &before_token,
+            &before_pool,
+            &after_token,
+            &after_pool,
+        );
+        assert_eq!(verification.failure, None);
+        assert!(
+            verification.warnings.iter().any(|w| w.contains("donated")),
+            "a token donation must be reported: {:?}",
+            verification.warnings
+        );
     }
 
     // Someone bought between our snapshot and the commit, so the reserve fell

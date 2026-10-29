@@ -464,12 +464,19 @@ contract, blake3("kvnc/v1/pool"))` (`kovanica_token::pool_slot()`) and the token
 state at `blake3("kvnc/v1/state")` and **exits non-zero** unless the committed
 reserves and the caller's token balance satisfy the swap: exact deltas are
 checked (the buyer's token gain for `buy`, the seller's token loss for `sell`)
-along with `token_reserve == balances[contract]` and an unchanged `lp_total`.
-Comparisons against the pre-submit snapshot — the local quote, the reserve
-movement for this trade alone — are reported as warnings instead, because
-another trade may land between that read and the commit. Events are for
-indexers (§9), not for this check. A rejected body still charges the fee and
-burns the nonce, so a silent "committed" would look like success.
+along with `token_reserve <= balances[contract]` and an unchanged `lp_total`.
+A ledger *above* the reserve is a token donation and only produces a warning;
+a ledger *below* it is corruption and fails. Comparisons against the pre-submit
+snapshot — the local quote, the reserve movement for this trade alone — are
+reported as warnings instead, because another trade may land between that read
+and the commit. Events are for indexers (§9), not for this check. A rejected
+body still charges the fee and burns the nonce, so a silent "committed" would
+look like success.
+
+`--min-out` defaults to `0` for both directions, which means no slippage
+protection at all: the swap still runs and exits zero, but the CLI prints
+`warning: --min-out 0: no slippage protection; any pool movement between submit
+and commit is accepted`.
 
 There is still **no** remove-liquidity path, no token↔token pool, no upgrade
 hook and no pause setter; those are PR-2/PR-3 scope.
