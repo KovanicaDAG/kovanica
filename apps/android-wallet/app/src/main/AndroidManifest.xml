@@ -8,6 +8,7 @@
         android:required="false" />
     <application
         android:label="Kovanica Wallet"
+        android:icon="@drawable/ic_kuna"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
