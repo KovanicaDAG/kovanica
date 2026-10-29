@@ -393,10 +393,19 @@ recorded reserve is swept into `kuna_reserve`, so a donation that arrived before
 initialization is not lost and any value attached to `token_buy` is folded in
 the same way.
 
+`token_buy` bounds `amount_in` by the contract's KUNA surplus over the recorded
+reserve (`balance_of(contract) - kuna_reserve`), not by the value this call
+attached: the wasm ABI has no `msg.value`, so the attached value is inferred
+from the balance delta. Consequence: a KUNA donation that lands after
+initialization (a plain `Transfer` to the pool, or KUNA attached to a different
+entry point) can be claimed by the next `token_buy` caller that declares
+`amount_in` up to the surplus *without paying it*. This is inherent to P0a and
+is closed by P0b (`kovanica_call_value()`); until then, never send KUNA to the
+pool with a plain transfer expecting tokens.
+
 `token_buy` and `token_sell` are disabled by either the pool's or the token's
 `paused` flag. Both reject `amount_in == 0`, a zero quote, and a quote below
-`min_out`; `token_buy` additionally refuses an `amount_in` above the attached
-value and re-checks that `out <= token_reserve`. `token_sell` requires
+`min_out`; `token_buy` re-checks that `out <= token_reserve`. `token_sell` requires
 `out <= u64::MAX` (`Overflow`) because the host transfers in `u64` atoms, and
 debits the reserve *before* calling `host.transfer`, so a failed transfer
 aborts the whole overlay instead of leaking pool state.
@@ -418,12 +427,22 @@ Newton descent.
 After every successful operation:
 
 ```text
-pool.token_reserve == token.balances[contract_address]
+pool.token_reserve <= token.balances[contract_address]
 ```
 
-`token_buy` debits the contract's token balance as it credits the buyer (a
-purchase that only credited the buyer would break the mirror), and
-`token_sell` credits it as it takes the seller's tokens.
+Equality holds at the end of every successful operation: `token_buy` debits the
+contract's token balance as it credits the buyer (a purchase that only credited
+the buyer would break the mirror), and `token_sell` credits it as it takes the
+seller's tokens, so both sides move by the same amount.
+
+The inequality is one-sided because a plain `token_transfer` to the pool address
+raises only the ledger side — `token_reserve` is untouched and the difference
+stays forever (there is no sweep and no remove-liquidity path). Those tokens are
+a donation: **not claimable** by anyone, and they do not move the price.
+
+The opposite inequality (`pool.token_reserve > token.balances[contract_address]`)
+would mean the pool owes more than the contract holds — corruption, not a
+donation. The CLI treats it as a hard failure (see below).
 
 ### CLI
 

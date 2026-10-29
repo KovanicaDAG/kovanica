@@ -36,6 +36,15 @@
 //! signed `Call.value` is what actually funds it. No KUNA is ever minted or
 //! burned here — the reserve covers every payout.
 //!
+//! That bound is the surplus, not the value attached to the call: a KUNA
+//! donation that arrives after initialization (a plain `Transfer`, or value
+//! attached to another entry point) can be claimed by the next `token_buy`
+//! caller that declares it as `amount_in` without paying for it. This is
+//! inherent to P0a and closed by P0b (`kovanica_call_value()`). Token donations
+//! are different: a `token_transfer` to the pool address only raises the ledger
+//! side, so `token_reserve <= balances[contract_address]` and the surplus is
+//! trapped forever (there is no sweep).
+//!
 //! ## WASM entry points (wasm32 only; bincode args in, bincode results out)
 //!
 //! | export             | args tuple                                        | Ok result |
@@ -1390,6 +1399,33 @@ mod tests {
 
         let after = Pool::load(&host).unwrap();
         assert_eq!(after.kuna_reserve, before.kuna_reserve + 10_500);
+    }
+
+    // P0a hazard: the caller declares the donation as `amount_in`. P0b
+    // (`kovanica_call_value`) makes this impossible; flip this test then.
+    #[test]
+    fn an_unbooked_donation_can_be_claimed_by_the_next_buyer() {
+        let mut host = new_token(addr(A), 1_000_000);
+        init_pool(&mut host, 1_000, 1_000, 30);
+        let before = Pool::load(&host).unwrap();
+
+        // KUNA arrives without a `token_buy` call: a plain transfer, or value
+        // attached to some other entry point. `MemHost` has no attach, so the
+        // balance is the whole story.
+        host.set_balance(addr(CONTRACT), before.kuna_reserve + 500);
+        let surplus = host.balance_of(&addr(CONTRACT)) - before.kuna_reserve;
+        assert_eq!(surplus, 500);
+
+        host.set_caller(addr(B));
+        let out = Token::buy(&mut host, surplus, 0).expect("the donation funds the buy");
+        assert!(out > 0);
+
+        let token = Token::load(&host).unwrap();
+        assert_eq!(token.balances.get(&addr(B)).copied(), Some(out));
+        // The whole balance, donation included, is now the recorded reserve.
+        let after = Pool::load(&host).unwrap();
+        assert_eq!(after.kuna_reserve, host.balance_of(&addr(CONTRACT)));
+        assert_eq!(after.kuna_reserve, before.kuna_reserve + 500);
     }
 
     #[test]
