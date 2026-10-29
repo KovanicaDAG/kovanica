@@ -115,6 +115,9 @@ use kovanica_runtime::{ExecutionConfig, Runtime};
 use kovanica_storage::state_store::Account;
 use kovanica_storage::{tables, BincodeSerialize, Storage, StorageError};
 use kovanica_token::Token;
+use kovanica_nft::Nft;
+
+
 use kovanica_types::Address;
 use kovanica_vault::Vault;
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
@@ -161,6 +164,14 @@ pub const ENTRY_POINTS: &[&str] = &[
     "token_transfer_from",
     "token_mint",
     "token_burn",
+    "nft_create_collection",
+    "nft_mint",
+    "nft_transfer",
+    "nft_approve",
+    "nft_transfer_from",
+    "nft_set_base_uri",
+    "nft_burn",
+
     "token_init_pool",
     "token_buy",
     "token_sell",
@@ -926,7 +937,43 @@ fn dispatch_entry(
             Token::burn(host, amount)?;
             enc(&())
         }
-        "token_init_pool" => {
+
+        // --- kovanica-nft ------------------------------------------------------
+        "nft_create_collection" => {
+            let (name, symbol, base_uri): (String, String, String) = dec(args)?;
+            enc(&Nft::create_collection(host, name, symbol, base_uri)?)
+        }
+        "nft_mint" => {
+            let (collection, to, token_id, token_uri): ([u8; 32], [u8; 32], u128, String) = dec(args)?;
+            Nft::mint(host, collection, to, token_id, token_uri)?;
+            enc(&())
+        }
+        "nft_transfer" => {
+            let (collection, to, token_id): ([u8; 32], [u8; 32], u128) = dec(args)?;
+            Nft::transfer(host, collection, to, token_id)?;
+            enc(&())
+        }
+        "nft_approve" => {
+            let (collection, spender, token_id): ([u8; 32], [u8; 32], u128) = dec(args)?;
+            Nft::approve(host, collection, spender, token_id)?;
+            enc(&())
+        }
+        "nft_transfer_from" => {
+            let (collection, from, to, token_id): ([u8; 32], [u8; 32], [u8; 32], u128) = dec(args)?;
+            Nft::transfer_from(host, collection, from, to, token_id)?;
+            enc(&())
+        }
+        "nft_set_base_uri" => {
+            let (collection, base_uri): ([u8; 32], String) = dec(args)?;
+            Nft::set_base_uri(host, collection, base_uri)?;
+            enc(&())
+        }
+        "nft_burn" => {
+            let (collection, token_id): ([u8; 32], u128) = dec(args)?;
+            Nft::burn(host, collection, token_id)?;
+            enc(&())
+        }
+
             let (kuna_in, tokens_in, fee_bps): (
                 kovanica_common::Amount,
                 kovanica_common::Amount,
@@ -2054,7 +2101,7 @@ pub(crate) mod tests {
         let contract = addr(30);
         let caller = addr(1);
         deploy(&storage, &contract);
-        assert_eq!(ENTRY_POINTS.len(), 19);
+        assert_eq!(ENTRY_POINTS.len(), 26);
         assert_eq!(
             ENTRY_POINTS.iter().filter(|e| is_entry_point(e)).count(),
             19
