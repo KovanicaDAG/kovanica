@@ -50,3 +50,10 @@ zeroizing memory and wiped right after the keystore is decrypted.
 
 Docker/compose: mount a secret file (e.g. `/run/secrets/faucet_passphrase`, mode 0400) and pass
 `--passphrase-file /run/secrets/faucet_passphrase`.
+
+
+## Post-reset refill runbook
+
+1. Ensure faucet balance > `min_balance_atoms`.
+2. Restart faucet; verify `/health` and low-balance guard (503 when low).
+3. Monitor metrics and refill before depletion.
