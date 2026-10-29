@@ -414,86 +414,61 @@ pub struct TokenBalanceResult {
     pub amount: Amount,
 }
 
+/// Token mutation over RPC is impossible: the server holds no keys, and token
+/// state lives in the contract's storage, written only by an executed
+/// transaction. Answer honestly instead of faking a zero contract address.
+fn token_needs_signature(method: &str, cli: &str) -> RpcError {
+    RpcError::NotImplemented(format!(
+        "{method}: token state changes only through signed transactions, and this RPC server \
+         holds no keys; use `{cli}` (or sign a Call and submit it with \
+         kovanica_sendRawTransaction)"
+    ))
+}
+
 pub async fn handle_token_create(params: Value, _state: RpcState) -> Result<Value, RpcError> {
-    let p: TokenCreateParams = serde_json::from_value(params)
+    let _p: TokenCreateParams = serde_json::from_value(params)
         .map_err(|e| RpcError::InvalidParams(format!("token_create: {}", e)))?;
 
-    let contract: Address = [0u8; 32];
-    let caller: Address = [0u8; 32];
-    let height: Height = 0;
-    let timestamp: Timestamp = 0;
-
-    let args = bincode::serialize(&(p.name, p.symbol, p.decimals, p.initial_supply, p.icon))
-        .map_err(|e| RpcError::InternalError(format!("encode args: {}", e)))?;
-
-    execute_contract_call("token_create", contract, caller, height, timestamp, &args).await?;
-
-    Ok(json!({ "contract_address": contract }))
+    Err(token_needs_signature(
+        "token_create",
+        "kovanica token create",
+    ))
 }
 
 pub async fn handle_token_transfer(params: Value, _state: RpcState) -> Result<Value, RpcError> {
-    let p: TokenTransferParams = serde_json::from_value(params)
+    let _p: TokenTransferParams = serde_json::from_value(params)
         .map_err(|e| RpcError::InvalidParams(format!("token_transfer: {}", e)))?;
 
-    let contract: Address = [0u8; 32];
-    let caller: Address = [0u8; 32];
-    let height: Height = 0;
-    let timestamp: Timestamp = 0;
-
-    let args = bincode::serialize(&(p.to, p.amount))
-        .map_err(|e| RpcError::InternalError(format!("encode args: {}", e)))?;
-
-    execute_contract_call("token_transfer", contract, caller, height, timestamp, &args).await?;
-
-    Ok(json!({ "ok": true }))
+    Err(token_needs_signature(
+        "token_transfer",
+        "kovanica token transfer",
+    ))
 }
 
 pub async fn handle_token_mint(params: Value, _state: RpcState) -> Result<Value, RpcError> {
-    let p: TokenMintParams = serde_json::from_value(params)
+    let _p: TokenMintParams = serde_json::from_value(params)
         .map_err(|e| RpcError::InvalidParams(format!("token_mint: {}", e)))?;
 
-    let contract: Address = [0u8; 32];
-    let caller: Address = [0u8; 32];
-    let height: Height = 0;
-    let timestamp: Timestamp = 0;
-
-    let args = bincode::serialize(&(p.to, p.amount))
-        .map_err(|e| RpcError::InternalError(format!("encode args: {}", e)))?;
-
-    execute_contract_call("token_mint", contract, caller, height, timestamp, &args).await?;
-
-    Ok(json!({ "ok": true }))
+    Err(token_needs_signature("token_mint", "kovanica token mint"))
 }
 
 pub async fn handle_token_burn(params: Value, _state: RpcState) -> Result<Value, RpcError> {
-    let p: TokenBurnParams = serde_json::from_value(params)
+    let _p: TokenBurnParams = serde_json::from_value(params)
         .map_err(|e| RpcError::InvalidParams(format!("token_burn: {}", e)))?;
 
-    let contract: Address = [0u8; 32];
-    let caller: Address = [0u8; 32];
-    let height: Height = 0;
-    let timestamp: Timestamp = 0;
-
-    let args = bincode::serialize(&p.amount)
-        .map_err(|e| RpcError::InternalError(format!("encode args: {}", e)))?;
-
-    execute_contract_call("token_burn", contract, caller, height, timestamp, &args).await?;
-
-    Ok(json!({ "ok": true }))
+    Err(token_needs_signature("token_burn", "kovanica token burn"))
 }
 
 pub async fn handle_token_balance(params: Value, _state: RpcState) -> Result<Value, RpcError> {
     let _p: TokenBalanceParams = serde_json::from_value(params)
         .map_err(|e| RpcError::InvalidParams(format!("token_balance: {}", e)))?;
 
-    let _contract: Address = [0u8; 32];
-    let _caller: Address = [0u8; 32];
-    let _height: Height = 0;
-    let _timestamp: Timestamp = 0;
-
-    // token_balance is a view call that the dispatcher does not support yet.
-    // It used to answer a fake `amount: 0`; fail explicitly instead.
+    // A read, but scoped by contract address rather than by holder: the shape
+    // this handler advertises cannot answer it. The CLI reads the contract's
+    // state slot directly, which needs no node upgrade.
     Err(RpcError::NotImplemented(
-        "token_balance: view calls are not implemented".into(),
+        "token_balance: balances are per token contract; read the contract's state slot with \
+         kovanica_getStorageAt or run `kovanica token balance --contract`"
+            .into(),
     ))
 }

@@ -308,6 +308,49 @@ This requires the `wasm32-unknown-unknown` target
 > The previous workaround (`RUSTFLAGS="-C link-arg=--allow-undefined"`) is
 > no longer needed.
 
+## 7a. Creating a token from the CLI
+
+One contract instance is one token, so creating a token is a **deploy followed
+by a call**. `kovanica token …` performs both as ordinary signed transactions
+(the same path as `kovanica deploy` / `kovanica call`), which means it works
+against any node that accepts `kovanica_sendRawTransaction` — no node upgrade
+needed.
+
+```sh
+kovanica token create \
+  --name "Kovanica Gold" --symbol KGOLD --decimals 9 \
+  --initial-supply 1000000000000000 \
+  --icon 'data:image/png;base64,AA…' \
+  --keystore keystore.json --chain-id 4
+```
+
+The command:
+
+1. reads the sender nonce and derives the contract address
+   `hash(sender || (nonce + 1) LE)` — the node bumps the nonce *before* running
+   the deploy body (`docs/CONTRACTS.md` §4a);
+2. submits `Deploy` with the token bytecode baked into the CLI
+   (`contracts/kovanica-token.wasm`, embedded with `include_bytes!`; `--wasm`
+   overrides it);
+3. waits for `kovanica_getCode` at that address to become non-empty;
+4. signs `Call { method: "token_create", args: bincode(name, symbol, decimals,
+   initial_supply: u128, icon) }` with the **next** nonce, so the call cannot
+   race its own contract;
+5. decodes the resulting state from `kovanica_getStorageAt(contract,
+   blake3("kvnc/v1/state"))` and verifies name, symbol, decimals, supply and
+   icon before printing the address and both transaction hashes.
+
+`--icon` accepts `""` (no artwork), an `https://` URL, or a `data:image/…` URI
+of at most [`MAX_ICON_BYTES`] (8 KiB), and is validated locally before any fee is
+paid. The rest of the family works against an existing contract:
+`token transfer|mint|burn|approve --contract <kvnc…>` and
+`token balance --contract <kvnc…> --address <kvnc…>` (a direct state read, no
+transaction).
+
+The `token_*` **RPC** methods are deliberately not implemented: a server holds
+no keys, and token state only changes through an executed signed transaction.
+They answer `-32004` with a pointer to the CLI instead of reporting success.
+
 ## 8. Module cache
 
 `ContractRunner` keeps a `HashMap<blake3(wasm), Module>` so a wasm module is

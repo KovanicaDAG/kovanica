@@ -86,16 +86,24 @@ kovanica multisig execute --id <multisig_id> --tx-id <tx_id>
 
 ## Token (KVP-102)
 
-```bash
-# Deploy a token; caller becomes owner + minter and receives the supply.
-kovanica token create --name "My Token" --symbol MTK --decimals 9 \
-  --initial-supply 1000000000000000
+One contract instance is one token, so `token create` deploys the token contract
+and then calls `token_create` — two signed transactions, both reported (see
+[`docs/CONTRACTS.md`](CONTRACTS.md) §7a).
 
-# Standard ERC-20-style flows.
-kovanica token transfer --to <address> --amount 5000000000
-kovanica token approve --spender <address> --amount 5000000000
-kovanica token mint --to <address> --amount 1000000000   # minter only
-kovanica token burn --amount 1000000000
+```bash
+# Create a token; the keystore's address becomes owner + minter and receives the
+# supply. `--icon` takes an https:// URL or a data:image/… URI (≤8 KiB).
+kovanica token create --name "My Token" --symbol MTK --decimals 9 \
+  --initial-supply 1000000000000000 --icon 'https://example.com/mtk.png'
+
+# Standard ERC-20-style flows, all against the contract address create printed.
+kovanica token transfer --contract <kvnc…> --to <address> --amount 5000000000
+kovanica token approve  --contract <kvnc…> --spender <address> --amount 5000000000
+kovanica token mint     --contract <kvnc…> --to <address> --amount 1000000000   # minter only
+kovanica token burn     --contract <kvnc…> --amount 1000000000
+
+# Read-only: decodes the contract's own state, no transaction.
+kovanica token balance --contract <kvnc…> --address <address>
 ```
 
 ---
