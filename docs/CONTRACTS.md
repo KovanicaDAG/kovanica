@@ -271,6 +271,7 @@ kovanica_caller(out_ptr: i32)                            // writes 32 bytes
 kovanica_contract_address(out_ptr: i32)                  // writes 32 bytes
 kovanica_block_height() -> i64
 kovanica_timestamp() -> i64
+kovanica_call_value() -> i64                            // signed Call.value in atoms; -1 = cannot fit
 kovanica_balance_of(ptr: i32, len: i32) -> i64           // u64 balance as i64; -1 = error
 kovanica_transfer(fp, fl, tp, tl: i32, amount: i64) -> i32   // 0 = ok
 kovanica_storage_get(kp, kl, out_ptr: i32, out_cap: i32) -> i32
@@ -281,6 +282,14 @@ kovanica_emit_event(tp, tl, dp, dl: i32)
 `kovanica_storage_get` is two-step: `out_cap = 0` returns the needed length (or `-1`
 when absent); a subsequent call with a sufficient `out_cap` returns the length,
 and a too-small `out_cap` returns `-2`.
+
+`kovanica_call_value` reports the `Call.value` the transaction signed — the
+native KUNA the caller actually paid, in atoms. It is read-only (a contract can
+observe it, never change it) and the guest maps a negative (overflow) result to
+`0`, which fails closed: a module that requires value cannot be satisfied by a
+host that cannot report it. The import is **additive** — modules that do not
+declare it link and run exactly as before, but a module that does import it can
+only be instantiated on a runtime that registers the import.
 
 ### Exports
 
@@ -371,10 +380,11 @@ They answer `-32004` with a pointer to the CLI instead of reporting success.
 
 One token contract can host **one** constant-product pool against native KUNA.
 It is reserve-backed conversion only: no KUNA is minted or burned, the token
-supply is untouched, and there are no cross-contract calls or new host imports.
-State lives beside the token — `b"kvnc/v1/pool"` for the singleton `Pool` and
-`b"kvnc/v1/lp/" ++ address` for LP shares — so the bincode `Token` layout is
-unchanged.
+supply is untouched, and there are no cross-contract calls; the only host
+import beyond the base ABI is `kovanica_call_value` (§6), which the pool entry
+points use to read the value the call actually paid. State lives beside the
+token — `b"kvnc/v1/pool"` for the singleton `Pool` and `b"kvnc/v1/lp/" ++ address`
+for LP shares — so the bincode `Token` layout is unchanged.
 
 ### Entry points
 
@@ -388,20 +398,20 @@ unchanged.
 `kuna_in`/`tokens_in` and `fee_bps <= MAX_FEE_BPS` (1000 = 10 %), moves
 `tokens_in` from the caller into the contract's own token balance, and returns
 `floor(sqrt(kuna_in * tokens_in))` LP shares to the caller. The native side is
-the value attached to the call: the contract's whole KUNA surplus over the
-recorded reserve is swept into `kuna_reserve`, so a donation that arrived before
-initialization is not lost and any value attached to `token_buy` is folded in
-the same way.
+the signed `Call.value`: `kuna_in` must be **exactly equal** to it, and
+`kuna_reserve` is then set to the contract's whole balance, so a donation that
+arrived before initialization is folded in rather than lost (safe, because
+seeding is restricted to the owner/minter, i.e. the only LP at that point).
 
-`token_buy` bounds `amount_in` by the contract's KUNA surplus over the recorded
-reserve (`balance_of(contract) - kuna_reserve`), not by the value this call
-attached: the wasm ABI has no `msg.value`, so the attached value is inferred
-from the balance delta. Consequence: a KUNA donation that lands after
-initialization (a plain `Transfer` to the pool, or KUNA attached to a different
-entry point) can be claimed by the next `token_buy` caller that declares
-`amount_in` up to the surplus *without paying it*. This is inherent to P0a and
-is closed by P0b (`kovanica_call_value()`); until then, never send KUNA to the
-pool with a plain transfer expecting tokens.
+`token_buy` likewise requires `amount_in` to be **exactly equal** to the signed
+`Call.value` (`kovanica_call_value()`), and `token_sell` requires the value to
+be zero — a sale takes nothing native and any value attached to it would be
+stranded. That closes the P0a hazard: a KUNA donation that arrives as an
+ordinary transfer (or as value attached to some other entry point) does not
+raise `call_value()`, so it cannot be declared as `amount_in`. The surplus is
+instead swept into `kuna_reserve` by the next `token_buy` — the donation
+accrues to the LPs and can never be claimed back by a caller. Token donations
+run the other way and stay one-sided (see the invariant below).
 
 `token_buy` and `token_sell` are disabled by either the pool's or the token's
 `paused` flag. Both reject `amount_in == 0`, a zero quote, and a quote below
@@ -438,7 +448,10 @@ seller's tokens, so both sides move by the same amount.
 The inequality is one-sided because a plain `token_transfer` to the pool address
 raises only the ledger side — `token_reserve` is untouched and the difference
 stays forever (there is no sweep and no remove-liquidity path). Those tokens are
-a donation: **not claimable** by anyone, and they do not move the price.
+a donation: **not claimable** by anyone, and they do not move the price. The
+native side behaves the other way: a KUNA donation is swept into `kuna_reserve`
+by the next `token_buy`, so it is not claimable either, but it does accrue to
+the LPs.
 
 The opposite inequality (`pool.token_reserve > token.balances[contract_address]`)
 would mean the pool owes more than the contract holds — corruption, not a
