@@ -58,9 +58,9 @@ pub use kovanica_params::FOUNDER_PREMINE;
 /// liquid in its account.
 pub use kovanica_params::GENESIS_VALIDATOR_ALLOCATION;
 
+pub use kovanica_params::TREASURY_ANNUAL;
 /// Treasury allocation: 8 × 1_000_000 KUNA over 8 years.
 pub use kovanica_params::TREASURY_TOTAL;
-pub use kovanica_params::TREASURY_ANNUAL;
 pub use kovanica_params::TREASURY_YEARS;
 
 /// Seconds between consecutive **committed leader** blocks.
@@ -89,9 +89,9 @@ pub use kovanica_params::INITIAL_BLOCK_REWARD;
 /// (Skeleton name: `ERA_LENGTH` — same value: 8_100_000.)
 pub use kovanica_params::SUBSIDY_ERA_BLOCKS;
 
+pub use kovanica_params::DECAY_DEN;
 /// Decay factor numerator / denominator = 3/4.
 pub use kovanica_params::DECAY_NUM;
-pub use kovanica_params::DECAY_DEN;
 
 // ============================================================
 // Staking constants

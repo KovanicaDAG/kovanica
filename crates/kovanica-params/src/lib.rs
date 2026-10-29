@@ -85,18 +85,22 @@ pub const SLASHING_ACTIVE_FROM_ROUND: u64 = u64::MAX;
 pub const STATE_COMMITMENT_ACTIVE_FROM_ROUND: u64 = 500_000;
 pub const SIZE_LIMITS_ACTIVE_FROM_ROUND: u64 = u64::MAX;
 
+#[allow(clippy::absurd_extreme_comparisons)]
 pub fn gas_hardening_active_from(round: u64) -> bool {
     round >= GAS_HARDENING_ACTIVE_FROM_ROUND
 }
+#[allow(clippy::absurd_extreme_comparisons)]
 pub fn contract_hardening_active_from(round: u64) -> bool {
     round >= CONTRACT_HARDENING_ACTIVE_FROM_ROUND
 }
+#[allow(clippy::absurd_extreme_comparisons)]
 pub fn slashing_active_from(round: u64) -> bool {
     round >= SLASHING_ACTIVE_FROM_ROUND
 }
 pub fn state_commitment_active_from(round: u64) -> bool {
     round >= STATE_COMMITMENT_ACTIVE_FROM_ROUND
 }
+#[allow(clippy::absurd_extreme_comparisons)]
 pub fn size_limits_active_from(round: u64) -> bool {
     round >= SIZE_LIMITS_ACTIVE_FROM_ROUND
 }
@@ -105,6 +109,7 @@ pub fn size_limits_active_from(round: u64) -> bool {
 // Tests
 // ============================================================
 #[cfg(test)]
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 

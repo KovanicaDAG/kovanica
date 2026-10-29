@@ -77,6 +77,8 @@ pub enum RuntimeError {
 /// [`ExecutionConfig::default`] uses the same value.
 pub use kovanica_types::MAX_TX_GAS_LIMIT;
 
+/// Re-exported from `kovanica-fee` (single source of truth).
+pub use kovanica_fee::min_gas_for_module;
 /// Minimum interpreter gas a `Call` must carry, per byte of target module
 /// bytecode, for the call to be allowed to compile and instantiate the module.
 ///
@@ -90,8 +92,6 @@ pub use kovanica_types::MAX_TX_GAS_LIMIT;
 /// with a gas limit below [`MAX_TX_GAS_LIMIT`].
 /// Re-exported from `kovanica-fee` (single source of truth).
 pub use kovanica_fee::GAS_PER_MODULE_BYTE;
-/// Re-exported from `kovanica-fee` (single source of truth).
-pub use kovanica_fee::min_gas_for_module;
 
 /// Default linear memory page cap for contract execution (256 pages = 16 MiB).
 /// Standard Rust-compiled contracts require more than the legacy 16-page (1 MiB) limit
@@ -242,7 +242,14 @@ impl Runtime {
             .trap_on_grow_failure(true)
             .build();
         let gas_hardening_active = config.gas_hardening_active;
-        let mut store = Store::new(&self.engine, ExecState { host, limits, gas_hardening_active });
+        let mut store = Store::new(
+            &self.engine,
+            ExecState {
+                host,
+                limits,
+                gas_hardening_active,
+            },
+        );
         // Enforces `memory_limit_pages` on memory creation and `memory.grow`.
         store.limiter(|state| &mut state.limits);
         store
@@ -367,10 +374,7 @@ fn guest_memory(caller: &Caller<'_, ExecState<'_>>) -> Result<Memory, wasmi::Err
 
 /// Charge `cost` fuel against the store when gas hardening is active.
 /// Returns an out-of-fuel trap when insufficient fuel remains.
-fn charge_host_gas(
-    caller: &mut Caller<'_, ExecState<'_>>,
-    cost: u64,
-) -> Result<(), wasmi::Error> {
+fn charge_host_gas(caller: &mut Caller<'_, ExecState<'_>>, cost: u64) -> Result<(), wasmi::Error> {
     if !caller.data().gas_hardening_active || cost == 0 {
         return Ok(());
     }
@@ -529,7 +533,6 @@ fn map_call_error(e: wasmi::Error) -> RuntimeError {
 // The `env` linker (FIXED ABI — see kovanica-common/src/wasm.rs)
 // ---------------------------------------------------------------------------
 
-
 fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeError> {
     let mut linker: Linker<ExecState<'a>> = Linker::new(engine);
 
@@ -583,13 +586,14 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
     });
 
     // kovanica_timestamp() -> i64
-    define!(
-        "kovanica_timestamp",
-        |mut caller: Caller<'_, ExecState<'_>>| -> Result<i64, wasmi::Error> {
-            charge_host_gas(&mut caller, kovanica_fee::GAS_KOVANICA_TIMESTAMP)?;
-            Ok(i64::try_from(caller.data().host.timestamp()).unwrap_or(-1))
-        }
-    );
+    define!("kovanica_timestamp", |mut caller: Caller<
+        '_,
+        ExecState<'_>,
+    >|
+     -> Result<i64, wasmi::Error> {
+        charge_host_gas(&mut caller, kovanica_fee::GAS_KOVANICA_TIMESTAMP)?;
+        Ok(i64::try_from(caller.data().host.timestamp()).unwrap_or(-1))
+    });
 
     // kovanica_call_value() -> i64 — signed Call.value in atoms, -1 when it
     // cannot fit in i64 (the guest maps negatives to 0, fail-closed).
@@ -655,7 +659,10 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
                                      out_ptr: i32,
                                      out_cap: i32|
      -> Result<i32, wasmi::Error> {
-        charge_host_gas(&mut caller, kovanica_fee::HOST_STORAGE_GET_BASE_GAS + kovanica_fee::HOST_STORAGE_GET_PER_CALL_GAS)?;
+        charge_host_gas(
+            &mut caller,
+            kovanica_fee::HOST_STORAGE_GET_BASE_GAS + kovanica_fee::HOST_STORAGE_GET_PER_CALL_GAS,
+        )?;
         let key = read_guest(&caller, kp, kl)?;
         let Some(value) = caller.data().host.storage_get(&key) else {
             return Ok(-1);
@@ -669,8 +676,13 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         if out_cap < 0 || value.len() > out_cap as usize {
             return Ok(-2);
         }
-        let chunks = if value.is_empty() { 0 } else { (value.len() + 31) / 32 };
-        let per_byte = kovanica_fee::HOST_STORAGE_GET_PER_32_BYTES_GAS.saturating_mul(chunks as u64);
+        let chunks = if value.is_empty() {
+            0
+        } else {
+            value.len().div_ceil(32)
+        };
+        let per_byte =
+            kovanica_fee::HOST_STORAGE_GET_PER_32_BYTES_GAS.saturating_mul(chunks as u64);
         charge_host_gas(&mut caller, per_byte)?;
         write_guest(&mut caller, out_ptr, &value)?;
         Ok(value.len() as i32)
@@ -690,10 +702,16 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
      -> Result<i32, wasmi::Error> {
         let key = read_guest(&caller, kp, kl)?;
         let value = read_guest(&caller, vp, vl)?;
-        let chunks = if value.is_empty() { 0 } else { (value.len() + 31) / 32 };
+        let chunks = if value.is_empty() {
+            0
+        } else {
+            value.len().div_ceil(32)
+        };
         let cost = kovanica_fee::HOST_STORAGE_SET_BASE_GAS
             .saturating_add(kovanica_fee::HOST_STORAGE_SET_PER_CALL_GAS)
-            .saturating_add(kovanica_fee::HOST_STORAGE_SET_PER_32_BYTES_GAS.saturating_mul(chunks as u64));
+            .saturating_add(
+                kovanica_fee::HOST_STORAGE_SET_PER_32_BYTES_GAS.saturating_mul(chunks as u64),
+            );
         charge_host_gas(&mut caller, cost)?;
         caller.data_mut().host.storage_set(&key, &value);
         Ok(0)
@@ -714,7 +732,9 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         let total_bytes = topic.len().saturating_add(data.len());
         let cost = kovanica_fee::HOST_EMIT_EVENT_BASE_GAS
             .saturating_add(kovanica_fee::HOST_EMIT_EVENT_PER_CALL_GAS)
-            .saturating_add(kovanica_fee::HOST_EMIT_EVENT_PER_BYTE_GAS.saturating_mul(total_bytes as u64));
+            .saturating_add(
+                kovanica_fee::HOST_EMIT_EVENT_PER_BYTE_GAS.saturating_mul(total_bytes as u64),
+            );
         charge_host_gas(&mut caller, cost)?;
         caller.data_mut().host.emit_event(&topic, &data);
         Ok(())
