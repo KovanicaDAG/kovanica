@@ -61,7 +61,7 @@ pub type Round = u64;
 pub type AuthorityIndex = u16;
 
 /// Wave length used by the consensus (Mysticeti-style = 3).
-pub const WAVE_LENGTH: u64 = 3;
+pub use kovanica_params::WAVE_LENGTH;
 
 /// The first leader slot strictly above `round`.
 ///
@@ -99,11 +99,11 @@ pub const fn next_leader_slot(round: Round) -> Round {
 /// problem: a height-based epoch is never shorter than 8 h of wall-clock
 /// time, but it is longer when leader slots are skipped.
 /// `kovanica_staking` re-exports this constant for backward-compatible paths.
-pub const EPOCH_ROUNDS: u64 = 7_200;
+pub use kovanica_params::EPOCH_ROUNDS;
 
 /// Epoch length in committed leader heights: `EPOCH_ROUNDS / WAVE_LENGTH` =
 /// 2 400 (one leader per wave, 12 s per leader ≈ 8 h).
-pub const EPOCH_LEADER_HEIGHTS: u64 = EPOCH_ROUNDS / WAVE_LENGTH;
+pub use kovanica_params::EPOCH_LEADER_HEIGHTS;
 
 /// Consensus epoch of a DAG round: `round / EPOCH_ROUNDS`.
 ///
@@ -140,10 +140,10 @@ pub fn is_epoch_start_height(height: u64) -> bool {
 /// Parent selection walks backwards from `round - 1` until it finds the most
 /// recent populated round; validation rejects any parent further back than
 /// this, keeping the DAG causally connected without unbounded edges.
-pub const MAX_PARENT_ROUND_GAP: u64 = 300;
+pub use kovanica_params::MAX_PARENT_ROUND_GAP;
 
 /// Maximum number of transactions per block (tunable).
-pub const MAX_TXS_PER_BLOCK: usize = 10_000;
+pub use kovanica_params::MAX_TXS_PER_BLOCK;
 
 /// Canonical per-transaction gas cap for `Call` transactions.
 ///
@@ -152,7 +152,7 @@ pub const MAX_TXS_PER_BLOCK: usize = 10_000;
 /// truth**: `kovanica-runtime` re-exports it, `kovanica-dag`'s block manager
 /// enforces it on the consensus path, and the mempool's default
 /// `MempoolConfig::max_gas_limit` is derived from it. Change it here only.
-pub const MAX_TX_GAS_LIMIT: u64 = 10_000_000;
+pub use kovanica_params::MAX_TX_GAS_LIMIT;
 
 /// Round from which the gas-hardening consensus rules take effect.
 ///
@@ -170,7 +170,7 @@ pub const MAX_TX_GAS_LIMIT: u64 = 10_000_000;
 /// fork it, because a node that has not yet been updated would still accept an
 /// over-cap block that an updated node rejects. Set to `0` at the next genesis /
 /// testnet reset, after every validator runs a build containing the hardening.
-pub const GAS_HARDENING_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+pub use kovanica_params::GAS_HARDENING_ACTIVE_FROM_ROUND;
 
 /// Whether the gas-hardening consensus rules apply to a block/leader at
 /// `round`.
@@ -210,7 +210,7 @@ pub fn gas_hardening_active_from(round: Round) -> bool {
 /// fork it, because a node that has not yet been updated would still accept a
 /// deploy/call that an updated node rejects. Set to `0` at the next genesis /
 /// testnet reset, after every validator runs a build containing the hardening.
-pub const CONTRACT_HARDENING_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+pub use kovanica_params::CONTRACT_HARDENING_ACTIVE_FROM_ROUND;
 
 /// Whether the contract-hardening consensus rules apply to a block/leader at
 /// `round`.
@@ -242,7 +242,7 @@ pub fn contract_hardening_active_from(round: Round) -> bool {
 /// activated on a running chain without a coordinated upgrade. Defaults to
 /// `u64::MAX`; set to `0` at the next genesis / testnet reset, after every
 /// validator runs a build containing the slashing implementation.
-pub const SLASHING_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+pub use kovanica_params::SLASHING_ACTIVE_FROM_ROUND;
 
 /// Whether production slashing applies to a block/leader at `round`.
 ///
@@ -287,7 +287,7 @@ pub fn slashing_active_from(round: Round) -> bool {
 /// disagrees about every header from the activation round on.
 ///
 /// Do not change this value on a running chain without the owner's approval.
-pub const STATE_COMMITMENT_ACTIVE_FROM_ROUND: u64 = 500_000;
+pub use kovanica_params::STATE_COMMITMENT_ACTIVE_FROM_ROUND;
 
 /// Whether the leader header at `round` commits to the full state.
 ///
@@ -305,14 +305,14 @@ pub fn state_commitment_active_from(round: Round) -> bool {
 /// cap keeps a hostile or buggy sender from forcing peers to buffer, relay
 /// and store arbitrarily large payloads; a wasm `Deploy` is the only kind
 /// that can realistically approach it.
-pub const MAX_TX_BYTES: usize = 512 * 1024;
+pub use kovanica_params::MAX_TX_BYTES;
 
 /// Maximum serialized size of a block, in bytes (960 KiB).
 ///
 /// Must stay comfortably below the network frame cap (`MAX_TRANSMIT_SIZE`,
 /// 1 MiB) so a block that passes consensus validation always fits in one
 /// message; `kovanica-network` asserts that relationship in a test.
-pub const MAX_BLOCK_BYTES: usize = 960 * 1024;
+pub use kovanica_params::MAX_BLOCK_BYTES;
 
 /// Round from which the consensus size limits take effect.
 ///
@@ -329,7 +329,7 @@ pub const MAX_BLOCK_BYTES: usize = 960 * 1024;
 /// accept an oversized block that an updated node rejects. Set to `0` at the
 /// next genesis / testnet reset, after every validator runs a build containing
 /// the limits.
-pub const SIZE_LIMITS_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+pub use kovanica_params::SIZE_LIMITS_ACTIVE_FROM_ROUND;
 
 /// Whether the consensus size limits apply to a block at `round`.
 ///
@@ -346,7 +346,7 @@ pub fn size_limits_active_from(round: Round) -> bool {
 }
 
 /// Genesis round.
-pub const GENESIS_ROUND: Round = 0;
+pub use kovanica_params::GENESIS_ROUND;
 
 #[cfg(test)]
 mod epoch_tests {

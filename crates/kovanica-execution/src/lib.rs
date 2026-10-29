@@ -1186,6 +1186,7 @@ impl ExecutionContext {
         let config = ExecutionConfig {
             gas_limit,
             memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
+            gas_hardening_active,
         };
 
         let wasm_call = WasmCall {

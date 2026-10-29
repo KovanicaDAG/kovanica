@@ -33,7 +33,7 @@ use bincode;
 /// The cap and this budget are enforced only from
 /// [`kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND`] on — see
 /// `validate_block_content`.
-const BLOCK_GAS_BUDGET: u64 = MAX_TX_GAS_LIMIT * 8;
+const BLOCK_GAS_BUDGET: u64 = kovanica_types::MAX_TX_GAS_LIMIT * kovanica_params::BLOCK_GAS_BUDGET_FACTOR;
 
 /// The `gas_limit` a transaction asks the interpreter for, or `0` for native
 /// kinds (they never touch wasmi fuel).

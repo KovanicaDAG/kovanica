@@ -1,5 +1,7 @@
 # KUNA Tokenomics Specification
 
+Canonical constants: `crates/kovanica-params`.
+
 **Version:** 0.2.0  
 **Status:** Locked for implementation (revised 2026-10-13)
 

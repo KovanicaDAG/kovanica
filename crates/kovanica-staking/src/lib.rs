@@ -38,17 +38,17 @@ use tracing::info;
 
 /// Ticker / display symbol of the native currency (display only; not
 /// persisted, not part of any hash or signature domain).
-pub const TICKER: &str = "KUNA";
+pub use kovanica_params::TICKER;
 
 /// Number of base units in 1 KUNA.
-pub const DECIMALS: u32 = 9;
-pub const ONE_KUNA: u64 = 1_000_000_000; // 10^9
+pub use kovanica_params::DECIMALS;
+pub use kovanica_params::ONE_KUNA;
 
 /// Total maximum supply: 90.2 million KUNA.
-pub const TOTAL_SUPPLY: u64 = 90_200_000 * ONE_KUNA;
+pub use kovanica_params::TOTAL_SUPPLY;
 
 /// Founder premine: 200_000 KUNA.
-pub const FOUNDER_PREMINE: u64 = 200_000 * ONE_KUNA;
+pub use kovanica_params::FOUNDER_PREMINE;
 
 /// Genesis validator allocation: 1_000_000 KUNA.
 ///
@@ -56,55 +56,54 @@ pub const FOUNDER_PREMINE: u64 = 200_000 * ONE_KUNA;
 /// [`genesis_validator_shares`]) and minted exactly once, at genesis. Each
 /// validator locks `MIN_VALIDATOR_STAKE` from its share; the remainder stays
 /// liquid in its account.
-pub const GENESIS_VALIDATOR_ALLOCATION: u64 = 1_000_000 * ONE_KUNA;
+pub use kovanica_params::GENESIS_VALIDATOR_ALLOCATION;
 
 /// Treasury allocation: 8 × 1_000_000 KUNA over 8 years.
-pub const TREASURY_TOTAL: u64 = 8_000_000 * ONE_KUNA;
-pub const TREASURY_ANNUAL: u64 = 1_000_000 * ONE_KUNA;
-pub const TREASURY_YEARS: u32 = 8;
+pub use kovanica_params::TREASURY_TOTAL;
+pub use kovanica_params::TREASURY_ANNUAL;
+pub use kovanica_params::TREASURY_YEARS;
 
 /// Seconds between consecutive **committed leader** blocks.
 ///
 /// One leader is committed per wave; a wave is `WAVE_LENGTH = 3` rounds and a
 /// round is targeted at 4 s, hence 12 s per committed leader.
-pub const LEADER_INTERVAL_SECS: u64 = 12;
+pub use kovanica_params::LEADER_INTERVAL_SECS;
 
 /// Number of committed-leader blocks that correspond to one year.
 ///
 /// Used only for the treasury vesting schedule (tunable later via governance).
 /// `31_536_000 / 12 = 2_628_000`.
-pub const BLOCKS_PER_YEAR: u64 = 31_536_000 / LEADER_INTERVAL_SECS;
+pub use kovanica_params::BLOCKS_PER_YEAR;
 
 /// Mining subsidy budget: everything that is not premine, genesis validator
 /// allocation or treasury.
-pub const MINING_SUBSIDY_BUDGET: u64 =
-    TOTAL_SUPPLY - FOUNDER_PREMINE - TREASURY_TOTAL - GENESIS_VALIDATOR_ALLOCATION; // 81M
+pub use kovanica_params::MINING_SUBSIDY_BUDGET;
 
 /// Initial block reward: 2.5 KUNA.
 ///
 /// (Skeleton name: `INITIAL_REWARD` — same value.)
-pub const INITIAL_BLOCK_REWARD: u64 = 5 * ONE_KUNA / 2;
+pub use kovanica_params::INITIAL_BLOCK_REWARD;
 
 /// Subsidy era length in committed leaders (chosen so cumulative issuance ≈ 81M).
 ///
 /// (Skeleton name: `ERA_LENGTH` — same value: 8_100_000.)
-pub const SUBSIDY_ERA_BLOCKS: u64 = 8_100_000;
+pub use kovanica_params::SUBSIDY_ERA_BLOCKS;
 
 /// Decay factor numerator / denominator = 3/4.
-pub const DECAY_NUM: u64 = 3;
-pub const DECAY_DEN: u64 = 4;
+pub use kovanica_params::DECAY_NUM;
+pub use kovanica_params::DECAY_DEN;
 
 // ============================================================
 // Staking constants
 // ============================================================
 
 /// Minimum stake required to become a validator (in base units).
-pub const MIN_VALIDATOR_STAKE: Stake = 50_000 * ONE_KUNA; // 50 000 KUNA
+pub use kovanica_params::MIN_VALIDATOR_STAKE;
 
 /// Minimum number of active validators for the mainnet genesis floor.
 ///
 /// There is no maximum; anyone meeting `MIN_VALIDATOR_STAKE` may join.
-pub const MIN_ACTIVE_VALIDATORS: u32 = 15;
+pub use kovanica_params::MIN_ACTIVE_VALIDATORS;
 
 // MAX_ACTIVE_VALIDATORS removed: no cap on active validators; anyone meeting
 // MIN_VALIDATOR_STAKE can join and participate in the committee.
@@ -117,7 +116,7 @@ pub const MIN_ACTIVE_VALIDATORS: u32 = 15;
 /// (3) rounds, so 100 000 committed leaders is 300 000 DAG rounds.
 ///
 /// (Skeleton name: `UNBONDING_PERIOD` — same value: 100_000.)
-pub const UNBONDING_ROUNDS: u64 = 100_000;
+pub use kovanica_params::UNBONDING_ROUNDS;
 
 /// Jail length for a slashed validator, in committed leader heights (PRO-19).
 ///
@@ -135,7 +134,7 @@ pub const UNBONDING_ROUNDS: u64 = 100_000;
 ///
 /// The field is compared against `committed_leader_height` (heights), not DAG
 /// rounds — see the note on `UNBONDING_ROUNDS` about the historical name.
-pub const JAIL_ROUNDS: u64 = 7_200;
+pub use kovanica_params::JAIL_ROUNDS;
 
 /// Epoch length in **DAG rounds** (7 200 × 4 s ≈ 8 h; Toni 2026-10-23).
 /// Staking state is keyed by committed height, so it uses
@@ -154,7 +153,7 @@ pub use kovanica_types::{EPOCH_LEADER_HEIGHTS, EPOCH_ROUNDS};
 ///
 /// At 12 s/leader, 100 missed leaders = 20 minutes of missed blocks.
 /// This threshold balances liveness against transient network issues.
-pub const MAX_MISSED_LEADERS_BEFORE_OFFLINE: u64 = 100;
+pub use kovanica_params::MAX_MISSED_LEADERS_BEFORE_OFFLINE;
 
 /// Commission change cooldown in committed leader blocks.
 ///
@@ -163,7 +162,7 @@ pub const MAX_MISSED_LEADERS_BEFORE_OFFLINE: u64 = 100;
 /// is unchanged by the 8 h epoch decision (it used to be written as
 /// `EPOCH_ROUNDS`, which only coincided with one day while the epoch was
 /// thought to be 7 200 leaders).
-pub const COMMISSION_CHANGE_COOLDOWN: u64 = 3 * EPOCH_LEADER_HEIGHTS; // 7_200 blocks ≈ 24h
+pub use kovanica_params::COMMISSION_CHANGE_COOLDOWN;
 
 // ============================================================
 // Emission schedule (mining rewards)
@@ -404,7 +403,7 @@ pub struct Delegation {
 }
 
 /// Fixed slash percentage (basis points); 500 bps = 5%.
-pub const SLASH_PCT_BPS: u16 = 500;
+pub use kovanica_params::SLASH_PCT_BPS;
 
 /// VRF public key for verifiable leader selection (optional).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]

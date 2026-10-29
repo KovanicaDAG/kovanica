@@ -1,0 +1,10 @@
+[package]
+name = "kovanica-params"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# pure data only
+
+[dev-dependencies]

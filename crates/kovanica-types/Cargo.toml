@@ -11,6 +11,7 @@ ed25519-dalek = { workspace = true }
 hex = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
+kovanica-params = { path = "../kovanica-params" }
 chrono = { workspace = true }
 
 [dev-dependencies]

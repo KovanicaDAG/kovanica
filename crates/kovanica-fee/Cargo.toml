@@ -1,0 +1,11 @@
+[package]
+name = "kovanica-fee"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kovanica-types = { path = "../kovanica-types" }
+kovanica-params = { path = "../kovanica-params" }
+
+[dev-dependencies]
