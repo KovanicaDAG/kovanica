@@ -17,6 +17,7 @@ members = [
     "crates/kovanica-cli",
     "crates/kovanica-keystore",
     "crates/kovanica-light",
+    "crates/kovanica-light-proofs",
     "crates/kovanica-light-ffi",
     "crates/kovanica-lightnode",
     "crates/kovanica-rpc",
