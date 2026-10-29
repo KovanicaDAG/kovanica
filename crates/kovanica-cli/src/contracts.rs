@@ -834,12 +834,12 @@ async fn submit_signed(
     client: &RpcClient,
     ctx: &SigningContext,
     signing_key: &SigningKey,
-    sender: Address,
+    _sender: Address,
     nonce: u64,
     kind: TransactionKind,
     fee: u64,
 ) -> Result<String> {
-    let transaction = crate::tx::build_signed(ctx, sender, nonce, kind, fee, signing_key)?;
+    let transaction = kovanica_sdk::tx::build(signing_key, ctx, kind, nonce, fee);
     let raw = crate::tx::encode_raw(&transaction)?;
     let result = client
         .call("kovanica_sendRawTransaction", json!([raw]))

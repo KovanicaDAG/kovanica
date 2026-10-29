@@ -2392,6 +2392,7 @@ name = "kovanica-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bincode",
  "clap",
  "hex",
@@ -2401,9 +2402,11 @@ dependencies = [
  "kovanica-htlc",
  "kovanica-keystore",
  "kovanica-multisig",
+ "kovanica-sdk",
  "kovanica-token",
  "kovanica-types",
  "kovanica-vault",
+ "kovanica-wallet-core",
  "ratatui",
  "reqwest",
  "rpassword",

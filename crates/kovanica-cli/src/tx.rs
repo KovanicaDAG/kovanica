@@ -7,10 +7,9 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use kovanica_types::crypto::Signature;
 use kovanica_types::signing::{self, SigningContext};
 use kovanica_types::transaction::{Transaction, TransactionKind};
-use kovanica_types::{Address, Hash, SigningKey};
+use kovanica_types::{Address, SigningKey};
 
 /// Build the network signing context for transaction signing from the
 /// `--chain-id` / `KOVANICA_CHAIN_ID` setting.
@@ -40,18 +39,11 @@ pub fn build_signed(
     fee: u64,
     signing_key: &SigningKey,
 ) -> Result<Transaction> {
-    let mut transaction = Transaction {
-        sender,
-        nonce,
-        kind,
-        fee,
-        signature: Signature([0u8; 64]),
-        hash: Hash::zero(),
-    };
-    let hash = transaction.signing_hash(ctx);
-    transaction.signature = kovanica_crypto::sign(signing_key, hash.as_ref());
-    transaction.hash = hash;
-    Ok(transaction)
+    // Route through the shared SDK builder so transaction construction and
+    // signing live in one place. `sender` is retained for API compatibility;
+    // the SDK derives it from the signing key and they must agree.
+    let _ = sender;
+    Ok(kovanica_sdk::tx::build(signing_key, ctx, kind, nonce, fee))
 }
 
 /// Bincode-encode a signed transaction as a hex string for
