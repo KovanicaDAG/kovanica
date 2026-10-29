@@ -11,8 +11,8 @@ android {
         applicationId = "io.kovanica.wallet"
         minSdk = 24
         targetSdk = 34
-        versionCode = 10
-        versionName = "0.3.6"
+        versionCode = 11
+        versionName = "0.3.7"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

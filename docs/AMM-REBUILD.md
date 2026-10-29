@@ -71,3 +71,13 @@ The deployed site is the separate `kovanica-web` repo, not `packages/web`. It no
 
 Executing a swap (`token_buy` / `token_sell`) is still CLI/Android only; the web
 page quotes, it does not sign swaps.
+
+## Native library must be rebuilt before the Android APK is packaged
+
+The Android `jniLibs` directories (`apps/android*/jniLibs/**/*.so`) are **not**
+tracked in git, so an `./gradlew assembleRelease` packages whatever `.so` is on
+disk. After the AMM rebuilds of 0.8.7 / 0.3.6 the packager shipped the stale
+pre-PRO-21 `libkovanica_light_ffi.so`, which rendered addresses in legacy hex and
+refused canonical base32 `kvnc…dag` addresses — users reinstalling those builds
+saw a new-looking address for the same wallet. Releases 0.8.8 / 0.3.7 rebuild the
+native lib from source first; see `docs/ANDROID-RELEASE-SIGNING.md`.
