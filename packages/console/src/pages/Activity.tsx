@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 
+import { KovanicaIndexerClient, type IndexedEvent } from "@kovanica/api-client";
 import { loadActivity, saveActivity, type ActivityItem } from "../activity";
 import { useSession } from "../session";
 
 export function Activity() {
   const { network, client, headTick } = useSession();
   const [items, setItems] = useState<ActivityItem[]>(() => loadActivity(network.id));
+  const [indexerEvents, setIndexerEvents] = useState<IndexedEvent[]>([]);
+  const [indexerError, setIndexerError] = useState<string | null>(null);
 
   useEffect(() => {
     setItems(loadActivity(network.id));
@@ -37,6 +40,34 @@ export function Activity() {
       cancel = true;
     };
   }, [client, headTick, items, network.id]);
+
+  useEffect(() => {
+    const url = network.indexerHttpUrl;
+    if (!url) {
+      setIndexerEvents([]);
+      setIndexerError(null);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const indexer = new KovanicaIndexerClient(url);
+        const logs = await indexer.getLogs({ limit: 20 });
+        if (cancelled) return;
+        setIndexerEvents(logs);
+        setIndexerError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setIndexerError(err instanceof Error ? err.message : "Indexer unavailable");
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [network.indexerHttpUrl]);
 
   return (
     <section>
@@ -72,6 +103,44 @@ export function Activity() {
           </tbody>
         </table>
       )}
+      {network.indexerHttpUrl ? (
+        <section style={{ marginTop: "24px" }}>
+          <h2>Recent contract events (indexer)</h2>
+          {indexerError ? <p className="error">{indexerError}</p> : null}
+          {indexerEvents.length === 0 ? (
+            <p className="muted">No indexed events.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Height</th>
+                  <th>Address</th>
+                  <th>Topic</th>
+                  <th>TX</th>
+                </tr>
+              </thead>
+              <tbody>
+                {indexerEvents.map((ev) => (
+                  <tr key={ev.id}>
+                    <td className="mono">{ev.height}</td>
+                    <td className="mono">{ev.address.map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 12)}…</td>
+                    <td className="mono">
+                      {(() => {
+                        try {
+                          return new TextDecoder().decode(new Uint8Array(ev.topic));
+                        } catch {
+                          return ev.topic.map((b) => b.toString(16).padStart(2, "0")).join("");
+                        }
+                      })()}
+                    </td>
+                    <td className="mono">{ev.tx_hash.map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 12)}…</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      ) : null}
     </section>
   );
 }

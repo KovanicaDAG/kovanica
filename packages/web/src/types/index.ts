@@ -80,6 +80,12 @@ export interface RpcConfig {
 }
 
 export const DEFAULT_RPC_URL = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_RPC_URL) || 'https://rpc-testnet.kovanica.online';
+export const DEFAULT_INDEXER_HTTP_URL =
+  ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_HTTP_URL) ||
+  'http://127.0.0.1:8787';
+export const DEFAULT_INDEXER_WS_URL =
+  ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_WS_URL) ||
+  'ws://127.0.0.1:8787/ws';
 export const DEFAULT_CHAIN_ID = Number((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_CHAIN_ID) || 4;
 
 export function formatAddress(address: string): string {

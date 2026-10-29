@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { ExplorerBlock, ExplorerTransaction } from '../types'
-import { formatAddress, formatAmount, formatRelativeTime, DEFAULT_RPC_URL } from '../types'
+import { formatAddress, formatAmount, formatRelativeTime, DEFAULT_RPC_URL, DEFAULT_INDEXER_HTTP_URL, DEFAULT_INDEXER_WS_URL } from '../types'
+import { KovanicaIndexerClient, IndexerWebSocketClient, type IndexedEvent } from '@kovanica/api-client'
 
 export function Explorer() {
   const [blocks, setBlocks] = useState<ExplorerBlock[]>([])
@@ -9,12 +10,64 @@ export function Explorer() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [rpcUrl, setRpcUrl] = useState(DEFAULT_RPC_URL)
+  const [indexerHttpUrl, setIndexerHttpUrl] = useState(DEFAULT_INDEXER_HTTP_URL)
+  const [indexerWsUrl, setIndexerWsUrl] = useState(DEFAULT_INDEXER_WS_URL)
+  const [indexerLogs, setIndexerLogs] = useState<IndexedEvent[]>([])
+  const [indexerLive, setIndexerLive] = useState<IndexedEvent[]>([])
+  const [indexerError, setIndexerError] = useState<string | null>(null)
+  const [indexerAvailable, setIndexerAvailable] = useState<boolean | null>(null)
 
   useEffect(() => {
     fetchData()
     const interval = setInterval(fetchData, 10000)
     return () => clearInterval(interval)
   }, [rpcUrl])
+
+  useEffect(() => {
+    if (!indexerHttpUrl) {
+      setIndexerAvailable(false)
+      return
+    }
+    let cancelled = false
+    const load = async () => {
+      try {
+        const client = new KovanicaIndexerClient(indexerHttpUrl)
+        await client.getStatus()
+        const logs = await client.getLogs({ limit: 50 })
+        if (cancelled) return
+        setIndexerAvailable(true)
+        setIndexerLogs(logs)
+        setIndexerError(null)
+      } catch (e) {
+        if (cancelled) return
+        setIndexerAvailable(false)
+        setIndexerError(e instanceof Error ? e.message : 'Indexer unavailable')
+      }
+    }
+    load()
+    const interval = setInterval(load, 15000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [indexerHttpUrl])
+
+  useEffect(() => {
+    if (!indexerWsUrl) return
+    const client = new IndexerWebSocketClient(indexerWsUrl)
+    const offEvent = client.onEvent((ev) => {
+      setIndexerLive((prev) => [ev, ...prev].slice(0, 50))
+    })
+    const offError = client.onError(() => {
+      setIndexerError('Indexer WebSocket error')
+    })
+    client.connect()
+    return () => {
+      offEvent()
+      offError()
+      client.close()
+    }
+  }, [indexerWsUrl])
 
   const fetchData = async () => {
     try {
@@ -209,8 +262,73 @@ export function Explorer() {
           </table>
         </div>
       </div>
+      <div className="card" style={{ marginTop: '24px' }}>
+        <h3 style={{ marginBottom: '16px' }}>
+          Indexer Events
+          {indexerAvailable === false ? ' (indexer unavailable - node RPC fallback)' : ''}
+        </h3>
+        <div style={{ display: 'flex', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Indexer HTTP</label>
+            <input type="text" value={indexerHttpUrl} onChange={(e) => setIndexerHttpUrl(e.target.value)} style={{ width: '260px' }} />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Indexer WS</label>
+            <input type="text" value={indexerWsUrl} onChange={(e) => setIndexerWsUrl(e.target.value)} style={{ width: '260px' }} />
+          </div>
+        </div>
+        {indexerError && (
+          <div className="card" style={{ backgroundColor: 'rgba(248, 81, 73, 0.1)', borderColor: 'var(--color-danger)', marginBottom: '12px' }}>
+            <strong style={{ color: 'var(--color-danger)' }}>Indexer:</strong> {indexerError}
+          </div>
+        )}
+        <div style={{ marginBottom: '8px' }}>
+          <strong>Live events:</strong> {indexerLive.length}
+        </div>
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Height</th>
+                <th>Address</th>
+                <th>Topic</th>
+                <th>Data</th>
+                <th>TX</th>
+              </tr>
+            </thead>
+            <tbody>
+              {indexerLogs.length === 0 && indexerLive.length === 0 ? (
+                <tr><td colSpan={5} className="empty-state">No indexer events</td></tr>
+              ) : (
+                [...indexerLive, ...indexerLogs].slice(0, 50).map((ev, i) => (
+                  <tr key={`${ev.id}-${i}`}>
+                    <td className="monospace">{ev.height}</td>
+                    <td className="address monospace">{formatAddress(bytesToHex(ev.address))}</td>
+                    <td className="monospace">{bytesToText(ev.topic) || bytesToHex(ev.topic)}</td>
+                    <td className="monospace">{ev.data.length} bytes</td>
+                    <td className="address">{formatAddress(bytesToHex(ev.tx_hash))}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   )
+}
+
+
+function bytesToHex(bytes: number[]): string {
+  return bytes.map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+function bytesToText(bytes: number[]): string {
+  try {
+    return new TextDecoder().decode(new Uint8Array(bytes))
+  } catch {
+    return ''
+  }
 }
 
 function parseTxKind(tx: any): ExplorerTransaction['kind'] {
