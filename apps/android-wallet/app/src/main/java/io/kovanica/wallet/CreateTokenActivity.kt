@@ -1,16 +1,23 @@
 package io.kovanica.wallet
 
 import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
+import android.util.Base64
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -53,6 +60,8 @@ class CreateTokenActivity : Activity() {
     private lateinit var symbolField: EditText
     private lateinit var decimalsField: EditText
     private lateinit var supplyField: EditText
+    private lateinit var iconPreview: ImageView
+    private lateinit var iconButton: Button
     private lateinit var passField: EditText
     private lateinit var validation: TextView
     private lateinit var createButton: Button
@@ -61,6 +70,9 @@ class CreateTokenActivity : Activity() {
     private lateinit var resultMeta: TextView
 
     private var busy = false
+
+    /** On-chain artwork as a `data:image/…` URI; empty when none was chosen. */
+    private var iconDataUri = ""
 
     /** Set once the screen is going away, so late background work stops touching the view. */
     @Volatile
@@ -154,6 +166,43 @@ class CreateTokenActivity : Activity() {
         ).apply { inputType = InputType.TYPE_CLASS_NUMBER }
         addStack(supplyField, 8)
 
+        addStack(
+            WalletUi.caption(
+                this@CreateTokenActivity,
+                "Icon (optional) — any image from this phone is center-cropped and shrunk to " +
+                    "96 px, then stored with the token so every wallet shows the same artwork.",
+            ),
+            14,
+        )
+        val iconRow = LinearLayout(this@CreateTokenActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        iconPreview = ImageView(this@CreateTokenActivity).apply {
+            contentDescription = "Token icon"
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = WalletUi.rounded(
+                this@CreateTokenActivity,
+                WalletUi.SURFACE_2,
+                12,
+                WalletUi.LINE,
+                1,
+            )
+            clipToOutline = true
+        }
+        iconRow.addView(iconPreview, LinearLayout.LayoutParams(dp(48), dp(48)))
+        iconButton = WalletUi.button(this@CreateTokenActivity, "Choose icon", filled = false) {
+            pickIcon()
+        }
+        iconRow.addView(
+            iconButton,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { leftMargin = dp(12) },
+        )
+        addStack(iconRow, 8)
+
         validation = TextView(this@CreateTokenActivity).apply {
             textSize = 12f
             setLineSpacing(0f, 1.3f)
@@ -246,6 +295,7 @@ class CreateTokenActivity : Activity() {
         val symbol: String,
         val decimals: Int,
         val supplyAtoms: BigInteger,
+        val icon: String,
     )
 
     /** A validation message and whether it is a hard format error (red) or just guidance. */
@@ -293,7 +343,14 @@ class CreateTokenActivity : Activity() {
             return null to Problem("That starting supply is larger than a token can hold.", severe = true)
         }
 
-        return Input(name, symbol, decimals, atoms) to null
+        if (iconDataUri.toByteArray(Charsets.UTF_8).size > ICON_MAX_BYTES) {
+            return null to Problem(
+                "That icon is too large — choose a smaller or simpler image.",
+                severe = true,
+            )
+        }
+
+        return Input(name, symbol, decimals, atoms, iconDataUri) to null
     }
 
     private fun renderValidation() {
@@ -454,8 +511,15 @@ class CreateTokenActivity : Activity() {
 
         note("Deploy mined. Sending the create call…")
 
-        // Tx 2 — Call `token_create` with bincode `(name, symbol, decimals, initial_supply)`.
-        val argsHex = tokenCreateArgsHex(input.name, input.symbol, input.decimals, input.supplyAtoms)
+        // Tx 2 — Call `token_create` with bincode
+        // `(name, symbol, decimals, initial_supply, icon)`.
+        val argsHex = tokenCreateArgsHex(
+            input.name,
+            input.symbol,
+            input.decimals,
+            input.supplyAtoms,
+            input.icon,
+        )
         val call = signCallRaw(
             keystore,
             passphrase,
@@ -476,19 +540,22 @@ class CreateTokenActivity : Activity() {
     /**
      * The `token_create` calldata, exactly as `kovanica-execution` writes it:
      * bincode 1.3 with fixint + little-endian over
-     * `(String name, String symbol, u8 decimals, u128 initial_supply)`.
+     * `(String name, String symbol, u8 decimals, u128 initial_supply, String icon)`.
      *
      * A `String` is a `u64` little-endian **byte** length then its UTF-8 bytes; a
-     * `u8` is one byte; a `u128` is 16 little-endian bytes.
+     * `u8` is one byte; a `u128` is 16 little-endian bytes. `icon` is `""` when
+     * the creator skipped artwork.
      */
     private fun tokenCreateArgsHex(
         name: String,
         symbol: String,
         decimals: Int,
         supplyAtoms: BigInteger,
+        icon: String,
     ): String {
         val nameBytes = name.toByteArray(Charsets.UTF_8)
         val symbolBytes = symbol.toByteArray(Charsets.UTF_8)
+        val iconBytes = icon.toByteArray(Charsets.UTF_8)
         val out = ByteArrayOutputStream()
         out.write(u64le(nameBytes.size))
         out.write(nameBytes)
@@ -496,7 +563,90 @@ class CreateTokenActivity : Activity() {
         out.write(symbolBytes)
         out.write(decimals and 0xFF)
         out.write(u128le(supplyAtoms))
+        out.write(u64le(iconBytes.size))
+        out.write(iconBytes)
         return TokenCodec.hex(out.toByteArray())
+    }
+
+    // --- icon picker ---------------------------------------------------------------------
+
+    @Suppress("DEPRECATION") // no AndroidX dependency in this app
+    private fun pickIcon() {
+        if (busy) return
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
+        startActivityForResult(Intent.createChooser(intent, "Choose a token icon"), REQ_ICON)
+    }
+
+    @Suppress("DEPRECATION") // no AndroidX dependency in this app
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_ICON || resultCode != RESULT_OK) return
+        val uri: Uri = data?.data ?: return
+        iconButton.isEnabled = false
+        io.execute {
+            val encoded = runCatching { iconFrom(uri) }.getOrNull()
+            ui {
+                iconButton.isEnabled = true
+                when {
+                    encoded == null ->
+                        setStatus("That file isn't an image this phone can read.", Tone.ERROR)
+                    encoded.toByteArray(Charsets.UTF_8).size > ICON_MAX_BYTES ->
+                        setStatus(
+                            "That icon is too large even after shrinking — try a simpler image.",
+                            Tone.ERROR,
+                        )
+                    else -> {
+                        iconDataUri = encoded
+                        previewBitmap(encoded)?.let { iconPreview.setImageBitmap(it) }
+                        setStatus("Icon attached. It will be stored with the token.", Tone.NEUTRAL)
+                        renderValidation()
+                    }
+                }
+            }
+        }
+    }
+
+    /** Center-crop to a square, shrink to [ICON_PX], and encode as a data URI. */
+    private fun iconFrom(uri: Uri): String? {
+        val source = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+        val decoded = BitmapFactory.decodeByteArray(source, 0, source.size) ?: return null
+        val side = minOf(decoded.width, decoded.height)
+        if (side <= 0) return null
+        val square = Bitmap.createBitmap(
+            decoded,
+            (decoded.width - side) / 2,
+            (decoded.height - side) / 2,
+            side,
+            side,
+        )
+        val scaled = Bitmap.createScaledBitmap(square, ICON_PX, ICON_PX, true)
+        // PNG keeps transparency, so prefer it; fall back to JPEG when its
+        // base64 form does not fit the contract's 8 KiB cap. The caller still
+        // checks the final length, because the cap is on the string, not on
+        // the decoded image.
+        val png = dataUri("image/png", scaled, Bitmap.CompressFormat.PNG, 100)
+        if (png != null && png.length <= ICON_MAX_BYTES) return png
+        return dataUri("image/jpeg", scaled, Bitmap.CompressFormat.JPEG, 80)
+    }
+
+    private fun dataUri(
+        mime: String,
+        bitmap: Bitmap,
+        format: Bitmap.CompressFormat,
+        quality: Int,
+    ): String? {
+        val out = ByteArrayOutputStream()
+        if (!bitmap.compress(format, quality, out)) return null
+        return "data:$mime;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    }
+
+    private fun previewBitmap(dataUri: String): Bitmap? {
+        val comma = dataUri.indexOf(',')
+        if (comma <= 0) return null
+        return runCatching {
+            val bytes = Base64.decode(dataUri.substring(comma + 1), Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        }.getOrNull()
     }
 
     /** A 64-bit little-endian integer, as bincode writes an `u64` length. */
@@ -548,6 +698,7 @@ class CreateTokenActivity : Activity() {
         listOf(nameField, symbolField, decimalsField, supplyField, passField).forEach {
             it.isEnabled = !working
         }
+        if (::iconButton.isInitialized) iconButton.isEnabled = !working
     }
 
     private fun ui(block: () -> Unit) {
@@ -612,5 +763,14 @@ class CreateTokenActivity : Activity() {
         /** How long to wait for the deploy to be mined before giving up. */
         const val DEPLOY_POLL_MS = 3_000L
         const val DEPLOY_POLLS = 30
+
+        /** `startActivityForResult` code for the icon picker. */
+        const val REQ_ICON = 41
+
+        /** Icons are shrunk to this square before being stored on chain. */
+        const val ICON_PX = 96
+
+        /** The contract refuses icons larger than 8 KiB; keep the data URI under it. */
+        const val ICON_MAX_BYTES = 8 * 1024
     }
 }

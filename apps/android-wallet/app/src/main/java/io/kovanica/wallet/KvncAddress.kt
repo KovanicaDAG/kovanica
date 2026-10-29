@@ -359,6 +359,28 @@ object Amounts {
     /** Values with more than this many fractional digits are shown as raw base units. */
     private const val MAX_DECIMALS = 30
 
+    /**
+     * Parse a human amount typed in token units (`12.34`, `1`, `0.5`) into the
+     * integer base units the chain stores. Returns `null` for anything that is
+     * not a plain non-negative decimal with at most [decimals] fractional
+     * digits, so the caller can show one clear error instead of silently
+     * rounding someone's money.
+     */
+    fun parse(text: String, decimals: Int): BigInteger? {
+        if (decimals < 0 || decimals > MAX_DECIMALS) return null
+        val value = text.trim()
+        if (value.isEmpty()) return null
+        val parts = value.split('.')
+        if (parts.size > 2) return null
+        val whole = parts[0]
+        val fraction = if (parts.size == 2) parts[1] else ""
+        if (whole.isEmpty() && fraction.isEmpty()) return null
+        if (!whole.all { it in '0'..'9' } || !fraction.all { it in '0'..'9' }) return null
+        if (fraction.length > decimals) return null
+        val scaled = whole.ifEmpty { "0" } + fraction.padEnd(decimals, '0')
+        return scaled.toBigIntegerOrNull()
+    }
+
     /** `1234` at 2 decimals -> `12.34`; trailing zeros are dropped. */
     fun format(value: BigInteger, decimals: Int): String {
         if (decimals <= 0) return value.toString()

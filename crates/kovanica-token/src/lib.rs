@@ -27,7 +27,7 @@
 //!
 //! | export             | args tuple                                        | Ok result |
 //! |--------------------|---------------------------------------------------|-----------|
-//! | `token_create`     | `(String name, String symbol, u8 decimals, u128 initial_supply)` | `()` |
+//! | `token_create`     | `(String name, String symbol, u8 decimals, u128 initial_supply, String icon)` | `()` |
 //! | `token_transfer`   | `([u8;32] to, u128 amount)`                       | `()`      |
 //! | `token_approve`    | `([u8;32] spender, u128 amount)`                  | `()`      |
 //! | `token_transfer_from` | `([u8;32] from, [u8;32] to, u128 amount)`       | `()`      |
@@ -53,6 +53,10 @@ use kovanica_common::{Address, Amount, ContractError, ContractResult, Host};
 /// Singleton state key (FIXED): one token instance per contract address.
 const STATE_KEY: &[u8] = b"kvnc/v1/state";
 
+/// Largest accepted icon payload, in bytes. A 96×96 PNG data URI is ~3–8 KiB;
+/// 8 KiB keeps the whole token state (and every wallet's decode) small.
+pub const MAX_ICON_BYTES: usize = 8 * 1024;
+
 /// bincode failed while serializing token state — infallible for these
 /// field types in practice; surfaces state-layer corruption.
 const ERR_BINCODE_SERIALIZE: u32 = 1;
@@ -70,17 +74,55 @@ pub struct Token {
     pub balances: BTreeMap<Address, Amount>,
     pub allowances: BTreeMap<(Address, Address), Amount>, // owner → spender → amount
     pub paused: bool,
+    /// Optional artwork: `https://…` or a `data:image/…` URI. Empty when the
+    /// token has none (wallets fall back to a generated mark).
+    pub icon: String,
+}
+
+/// State layout written before `icon` existed (v1). Kept so a v2 contract can
+/// still read reserves/tokens created by the previous wasm build.
+#[derive(serde::Deserialize, serde::Serialize)]
+#[allow(dead_code)] // fields exist only to consume the v1 byte layout
+struct TokenV1 {
+    name: String,
+    symbol: String,
+    decimals: u8,
+    total_supply: Amount,
+    owner: Address,
+    minter: Address,
+    balances: BTreeMap<Address, Amount>,
+    allowances: BTreeMap<(Address, Address), Amount>,
+    paused: bool,
+}
+
+impl From<TokenV1> for Token {
+    fn from(v1: TokenV1) -> Self {
+        Token {
+            name: v1.name,
+            symbol: v1.symbol,
+            decimals: v1.decimals,
+            total_supply: v1.total_supply,
+            owner: v1.owner,
+            minter: v1.minter,
+            balances: v1.balances,
+            allowances: v1.allowances,
+            paused: v1.paused,
+            icon: String::new(),
+        }
+    }
 }
 
 impl Token {
     /// Deploy a new token (singleton state — one per contract address).
     /// Caller becomes owner + minter and receives the initial supply.
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         host: &mut impl Host,
         name: String,
         symbol: String,
         decimals: u8,
         initial_supply: Amount,
+        icon: String,
     ) -> ContractResult<()> {
         if decimals > 18 {
             return Err(ContractError::InvalidInput);
@@ -89,6 +131,7 @@ impl Token {
             // Singleton model: never silently replace an existing token.
             return Err(ContractError::AlreadyExists);
         }
+        Self::validate_icon(&icon)?;
 
         let caller = host.caller();
         let mut balances = BTreeMap::new();
@@ -106,6 +149,7 @@ impl Token {
             balances,
             allowances: BTreeMap::new(),
             paused: false,
+            icon,
         };
 
         Self::store(host, &token)?;
@@ -225,6 +269,27 @@ impl Token {
         Ok(())
     }
 
+    /// Icon payload rule for `create`.
+    fn validate_icon(icon: &str) -> ContractResult<()> {
+        if icon.is_empty() {
+            return Ok(());
+        }
+        if icon.len() > MAX_ICON_BYTES {
+            return Err(ContractError::InvalidInput);
+        }
+        if !(icon.starts_with("https://") || icon.starts_with("data:image/")) {
+            return Err(ContractError::InvalidInput);
+        }
+        // No control characters: a wallet may render this verbatim.
+        if icon
+            .chars()
+            .any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f)
+        {
+            return Err(ContractError::InvalidInput);
+        }
+        Ok(())
+    }
+
     fn store(host: &mut impl Host, token: &Token) -> ContractResult<()> {
         let bytes =
             bincode::serialize(token).map_err(|_| ContractError::Custom(ERR_BINCODE_SERIALIZE))?;
@@ -234,7 +299,14 @@ impl Token {
 
     fn load(host: &impl Host) -> ContractResult<Token> {
         let bytes = host.storage_get(STATE_KEY).ok_or(ContractError::NotFound)?;
-        bincode::deserialize(&bytes).map_err(|_| ContractError::Custom(ERR_BINCODE_DESERIALIZE))
+        // Current layout first; then the v1 layout without `icon`, so tokens
+        // created by the previous contract build stay readable.
+        if let Ok(token) = bincode::deserialize::<Token>(&bytes) {
+            return Ok(token);
+        }
+        bincode::deserialize::<TokenV1>(&bytes)
+            .map(Token::from)
+            .map_err(|_| ContractError::Custom(ERR_BINCODE_DESERIALIZE))
     }
 }
 
@@ -311,13 +383,13 @@ mod wasm {
         let Some(bytes) = (unsafe { args_slice(args_ptr, args_len) }) else {
             return error_code(ContractError::InvalidInput);
         };
-        let (name, symbol, decimals, initial_supply): (String, String, u8, Amount) =
+        let (name, symbol, decimals, initial_supply, icon): (String, String, u8, Amount, String) =
             match decode_args(bytes) {
                 Ok(v) => v,
                 Err(c) => return c,
             };
         let mut host = WasmHost::new();
-        match Token::create(&mut host, name, symbol, decimals, initial_supply) {
+        match Token::create(&mut host, name, symbol, decimals, initial_supply, icon) {
             Ok(()) => ok_out(&()),
             Err(e) => error_code(e),
         }
@@ -428,6 +500,7 @@ mod tests {
             String::from("KUNA"),
             8,
             supply,
+            String::new(),
         )
         .unwrap();
         host
@@ -450,7 +523,14 @@ mod tests {
     fn duplicate_create_rejected() {
         let mut host = new_token(addr(A), 1_000);
         assert_eq!(
-            Token::create(&mut host, String::from("X"), String::from("X"), 8, 500),
+            Token::create(
+                &mut host,
+                String::from("X"),
+                String::from("X"),
+                8,
+                500,
+                String::new()
+            ),
             Err(ContractError::AlreadyExists)
         );
     }
@@ -459,9 +539,98 @@ mod tests {
     fn create_rejects_invalid_decimals() {
         let mut host = MemHost::new(addr(A), addr(CONTRACT));
         assert_eq!(
-            Token::create(&mut host, String::from("X"), String::from("X"), 19, 0),
+            Token::create(
+                &mut host,
+                String::from("X"),
+                String::from("X"),
+                19,
+                0,
+                String::new()
+            ),
             Err(ContractError::InvalidInput)
         );
+    }
+
+    #[test]
+    fn create_stores_the_icon() {
+        let mut host = MemHost::new(addr(A), addr(CONTRACT));
+        let icon = "data:image/png;base64,iVBORw0KGgo=";
+        Token::create(
+            &mut host,
+            String::from("Art"),
+            String::from("ART"),
+            2,
+            10,
+            String::from(icon),
+        )
+        .unwrap();
+        assert_eq!(Token::load(&host).unwrap().icon, icon);
+    }
+
+    #[test]
+    fn create_without_icon_is_allowed() {
+        let host = new_token(addr(A), 1);
+        assert_eq!(Token::load(&host).unwrap().icon, "");
+    }
+
+    #[test]
+    fn create_rejects_bad_icon_payloads() {
+        for bad in [
+            "http://example.com/a.png",       // not https
+            "javascript:alert(1)",            // not an image scheme
+            "data:text/html,<script>",        // not an image data URI
+            "data:image/png;base64,\u{0}bad", // control character
+        ] {
+            let mut host = MemHost::new(addr(A), addr(CONTRACT));
+            assert_eq!(
+                Token::create(
+                    &mut host,
+                    String::from("X"),
+                    String::from("X"),
+                    8,
+                    0,
+                    String::from(bad)
+                ),
+                Err(ContractError::InvalidInput),
+                "icon [{bad}] must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn create_rejects_oversized_icon() {
+        let mut host = MemHost::new(addr(A), addr(CONTRACT));
+        let icon = alloc::format!("data:image/png;base64,{}", "A".repeat(MAX_ICON_BYTES));
+        assert_eq!(
+            Token::create(&mut host, String::from("X"), String::from("X"), 8, 0, icon),
+            Err(ContractError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn v1_state_without_icon_still_loads() {
+        // Bytes written by the previous build: the same struct minus `icon`.
+        let mut host = new_token(addr(A), 100);
+        let v2 = host.storage_get(STATE_KEY).unwrap();
+        let mut token = Token::load(&host).unwrap();
+        token.icon = String::new();
+        let v1 = bincode::serialize(&TokenV1 {
+            name: token.name.clone(),
+            symbol: token.symbol.clone(),
+            decimals: token.decimals,
+            total_supply: token.total_supply,
+            owner: token.owner,
+            minter: token.minter,
+            balances: token.balances.clone(),
+            allowances: token.allowances.clone(),
+            paused: token.paused,
+        })
+        .unwrap();
+        assert!(v1.len() < v2.len(), "v1 has no icon bytes");
+        host.storage_set(STATE_KEY, &v1);
+        let loaded = Token::load(&host).unwrap();
+        assert_eq!(loaded.icon, "");
+        assert_eq!(loaded.total_supply, 100);
     }
 
     #[test]
