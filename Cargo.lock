@@ -2545,6 +2545,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-devnet"
+version = "0.2.0"
+
+[[package]]
+name = "kovanica-escrow"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "serde",
+]
+
+[[package]]
 name = "kovanica-execution"
 version = "0.2.0"
 dependencies = [
@@ -2606,12 +2619,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-governance"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "kovanica-htlc"
 version = "0.2.0"
 dependencies = [
  "bincode",
  "kovanica-common",
  "serde",
+]
+
+[[package]]
+name = "kovanica-hw-signer"
+version = "0.2.0"
+dependencies = [
+ "kovanica-common",
+ "kovanica-crypto",
 ]
 
 [[package]]
@@ -2697,6 +2725,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-light-proofs"
+version = "0.2.0"
+dependencies = [
+ "blake3",
+ "kovanica-crypto",
+ "kovanica-types",
+]
+
+[[package]]
 name = "kovanica-lightnode"
 version = "0.1.0"
 dependencies = [
@@ -2728,6 +2765,15 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
+]
+
+[[package]]
+name = "kovanica-migrate"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "kovanica-storage",
 ]
 
 [[package]]
@@ -2823,6 +2869,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-oracle"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "kovanica-p2p-identity"
 version = "0.2.0"
 dependencies = [
@@ -2913,6 +2966,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-snapshot"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "kovanica-storage",
+ "kovanica-types",
+ "tempfile",
+]
+
+[[package]]
 name = "kovanica-staking"
 version = "0.0.31"
 dependencies = [
@@ -2940,6 +3004,13 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
+]
+
+[[package]]
+name = "kovanica-sync"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]
@@ -2983,6 +3054,7 @@ dependencies = [
  "async-trait",
  "hex",
  "kovanica-crypto",
+ "kovanica-hw-signer",
  "kovanica-keystore",
  "kovanica-sdk",
  "kovanica-types",
