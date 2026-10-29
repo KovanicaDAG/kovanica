@@ -30,7 +30,7 @@
 
 set -eu
 
-VERSION="${KOVANICA_VERSION:-0.1.0}"
+VERSION="${KOVANICA_VERSION:-0.2.0}"
 REPO="KovanicaDAG/kovanica"
 RELEASE_BASE="${KOVANICA_RELEASE_BASE:-https://github.com/${REPO}/releases/download/v${VERSION}-node}"
 CHAIN_ID=4
