@@ -896,18 +896,35 @@ async fn token_create(
     )
 }
 
-/// Execution status the node recorded for `hash`, `None` when it has no receipt.
-async fn transaction_success(client: &RpcClient, hash: &str) -> Result<Option<bool>> {
-    let receipt = match client
-        .call("kovanica_getTransactionReceipt", json!([hash]))
-        .await
-    {
-        Ok(receipt) => receipt,
-        // Not every node build indexes receipts; the nonce wait already proved
-        // the transaction committed, so a missing receipt is not an error.
-        Err(_) => return Ok(None),
-    };
-    Ok(receipt.get("success").and_then(Value::as_bool))
+/// Balance the token holds for `address`, `0` when it never held any.
+fn balance_of(token: &kovanica_token::Token, address: Address) -> Amount {
+    token.balances.get(&address.0).copied().unwrap_or(0)
+}
+
+/// Re-read the contract after a call and refuse to report success unless the
+/// state actually moved as asked.
+///
+/// The node has no receipt index for `kovanica_getTransactionReceipt` on every
+/// build, and a rejected body still consumes the nonce, so a committed
+/// transaction is not a successful one. The contract's own state is the only
+/// proof that works against every node.
+async fn confirm_token_state(
+    client: &RpcClient,
+    contract: Address,
+    hash: &str,
+    method: &str,
+    check: impl FnOnce(&kovanica_token::Token) -> Option<String>,
+) -> Result<()> {
+    let after = read_token(client, contract)
+        .await?
+        .ok_or_else(|| anyhow!("{contract} holds no token state after {method} {hash}"))?;
+    if let Some(problem) = check(&after) {
+        bail!(
+            "{method} {hash} committed but the contract state did not follow: {problem}; the fee \
+             was charged and the nonce consumed"
+        );
+    }
+    Ok(())
 }
 
 /// Submit one token call to an existing contract and wait for it to commit.
@@ -948,14 +965,6 @@ async fn token_call(
     wait_for_nonce(client, sender, nonce, timeout)
         .await
         .with_context(|| format!("{method} {hash} did not commit"))?;
-    // The nonce advances even when the contract itself rejects the call, so a
-    // receipt status of 0x0 has to be reported as a failure, not a success.
-    if transaction_success(client, &hash).await? == Some(false) {
-        bail!(
-            "{method} {hash} committed but the contract rejected it (status 0x0); the fee was \
-             charged and the nonce consumed"
-        );
-    }
     Ok((hash, sender, contract, token))
 }
 
@@ -982,6 +991,38 @@ async fn run_token(
                 args.gas_limit,
                 Duration::from_secs(args.timeout),
             )
+            .await?;
+            let amount = args.amount;
+            let from_before = balance_of(&token, sender);
+            let to_before = balance_of(&token, to);
+            confirm_token_state(client, contract, &hash, "token_transfer", |after| {
+                let from_now = balance_of(after, sender);
+                let to_now = balance_of(after, to);
+                let expected_from = from_before.saturating_sub(amount);
+                let expected_to = to_before.saturating_add(amount);
+                // A self transfer moves nothing; only the supply must hold.
+                if sender == to {
+                    return (from_now != from_before)
+                        .then(|| format!("a self transfer changed the balance to {from_now}"));
+                }
+                if from_now != expected_from {
+                    return Some(format!(
+                        "sender balance is {from_now}, expected {expected_from}"
+                    ));
+                }
+                if to_now != expected_to {
+                    return Some(format!(
+                        "recipient balance is {to_now}, expected {expected_to}"
+                    ));
+                }
+                if after.total_supply != token.total_supply {
+                    return Some(format!(
+                        "total supply moved from {} to {}",
+                        token.total_supply, after.total_supply
+                    ));
+                }
+                None
+            })
             .await?;
             let result = json!({
                 "transactionHash": hash,
@@ -1025,6 +1066,27 @@ async fn run_token(
                 Duration::from_secs(args.timeout),
             )
             .await?;
+            let amount = args.amount;
+            let supply_before = token.total_supply;
+            let to_before = balance_of(&token, to);
+            confirm_token_state(client, contract, &hash, "token_mint", |after| {
+                let to_now = balance_of(after, to);
+                let expected_to = to_before.saturating_add(amount);
+                if to_now != expected_to {
+                    return Some(format!(
+                        "recipient balance is {to_now}, expected {expected_to}"
+                    ));
+                }
+                let expected_supply = supply_before.saturating_add(amount);
+                if after.total_supply != expected_supply {
+                    return Some(format!(
+                        "total supply is {}, expected {expected_supply}",
+                        after.total_supply
+                    ));
+                }
+                None
+            })
+            .await?;
             let result = json!({
                 "transactionHash": hash,
                 "contract": contract.to_string(),
@@ -1065,6 +1127,27 @@ async fn run_token(
                 Duration::from_secs(args.timeout),
             )
             .await?;
+            let amount = args.amount;
+            let supply_before = token.total_supply;
+            let balance_before = balance_of(&token, sender);
+            confirm_token_state(client, contract, &hash, "token_burn", |after| {
+                let balance_now = balance_of(after, sender);
+                let expected = balance_before.saturating_sub(amount);
+                if balance_now != expected {
+                    return Some(format!(
+                        "burner balance is {balance_now}, expected {expected}"
+                    ));
+                }
+                let expected_supply = supply_before.saturating_sub(amount);
+                if after.total_supply != expected_supply {
+                    return Some(format!(
+                        "total supply is {}, expected {expected_supply}",
+                        after.total_supply
+                    ));
+                }
+                None
+            })
+            .await?;
             let result = json!({
                 "transactionHash": hash,
                 "contract": contract.to_string(),
@@ -1104,6 +1187,17 @@ async fn run_token(
                 args.gas_limit,
                 Duration::from_secs(args.timeout),
             )
+            .await?;
+            let amount = args.amount;
+            confirm_token_state(client, contract, &hash, "token_approve", |after| {
+                let allowance = after
+                    .allowances
+                    .get(&(sender.0, spender.0))
+                    .copied()
+                    .unwrap_or(0);
+                (allowance != amount)
+                    .then(|| format!("allowance is {allowance}, expected {amount}"))
+            })
             .await?;
             let result = json!({
                 "transactionHash": hash,
