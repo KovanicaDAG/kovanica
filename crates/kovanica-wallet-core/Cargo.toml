@@ -1,0 +1,23 @@
+[package]
+name = "kovanica-wallet-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared pure-Rust wallet logic for Kovanica CLI and mobile"
+
+[dependencies]
+kovanica-sdk = { path = "../kovanica-sdk" }
+kovanica-types = { path = "../kovanica-types" }
+kovanica-crypto = { path = "../kovanica-crypto" }
+kovanica-keystore = { path = "../kovanica-keystore" }
+kovanica-execution = { path = "../kovanica-execution" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3.8"
