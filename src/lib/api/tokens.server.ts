@@ -166,8 +166,20 @@ async function collect(): Promise<{ entries: Entry[] }> {
   }
 
   const entries = [...byAddress.values()].sort((a, b) => b.height - a.height);
-  cache = { at: Date.now(), scannedTo: height, entries };
-  return { entries };
+
+  // Balances, supply, `paused` and the icon all change without a new
+  // `token_created`, so a warm entry must not keep the state it was discovered
+  // with: refreshing only the newly found contracts froze every balance and
+  // holder count at discovery time. One storage read per token per rebuild.
+  const fresh = await Promise.all(
+    entries.map(async (entry) => {
+      const state = await readToken(entry.address);
+      return state ? { ...entry, state } : entry;
+    }),
+  );
+
+  cache = { at: Date.now(), scannedTo: height, entries: fresh };
+  return { entries: fresh };
 }
 
 /**
