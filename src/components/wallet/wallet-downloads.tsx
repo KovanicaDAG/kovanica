@@ -6,18 +6,18 @@ export const APP_DOWNLOADS = {
   wallet: {
     name: "Kovanica Wallet",
     description: "Non-custodial mobile wallet with PRO-21 addresses, deterministic key derivation, and instant KUNA transfers.",
-    androidApk: "/download/kovanica-wallet-0.3.6.apk",
-    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.3.6-wallet",
+    androidApk: "/download/kovanica-wallet-0.3.7.apk",
+    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.3.7-wallet",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-wallet",
-    tag: "v0.3.6 · Android",
+    tag: "v0.3.7 · Android",
   },
   lightnode: {
     name: "Kovanica Lightnode",
     description: "Embedded DAG light client. Verifies Mysticeti DAG consensus headers, tracks account balances locally, and syncs trustlessly.",
-    androidApk: "/download/kovanica-lightnode-0.8.7.apk",
-    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.8.7-android",
+    androidApk: "/download/kovanica-lightnode-0.8.8.apk",
+    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.8.8-android",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-chain",
-    tag: "v0.8.7 · Android",
+    tag: "v0.8.8 · Android",
   },
   comms: {
     name: "Kovanica Comms",
@@ -90,7 +90,7 @@ export function WalletDownloads({ className, variant = "card" }: Props) {
             Direct sideload builds for Android & iOS — connected to Chain 4 Testnet.
           </p>
           <p className="mt-1 text-xs text-gold/80">
-            Wallet 0.3.6 and Lightnode 0.8.7 are signed with a new certificate:
+            Wallet 0.3.7 and Lightnode 0.8.8 are signed with a new certificate:
             uninstall the previous build before installing.
           </p>
         </div>
