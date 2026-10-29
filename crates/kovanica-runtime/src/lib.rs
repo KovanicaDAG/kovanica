@@ -568,6 +568,16 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         }
     );
 
+    // kovanica_call_value() -> i64 — signed Call.value in atoms, -1 when it
+    // cannot fit in i64 (the guest maps negatives to 0, fail-closed).
+    define!("kovanica_call_value", |caller: Caller<
+        '_,
+        ExecState<'_>,
+    >|
+     -> i64 {
+        i64::try_from(caller.data().host.call_value()).unwrap_or(-1)
+    });
+
     // kovanica_balance_of(ptr: i32, len: i32) -> i64 — u64 balance as i64, -1 = error.
     define!("kovanica_balance_of", |caller: Caller<
         '_,

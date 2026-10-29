@@ -50,6 +50,7 @@ pub struct MemHost {
     contract_address: Address,
     block_height: Height,
     timestamp: Timestamp,
+    call_value: Amount,
 }
 
 impl MemHost {
@@ -70,6 +71,7 @@ impl MemHost {
             contract_address,
             block_height: 0,
             timestamp: 0,
+            call_value: 0,
         }
     }
 
@@ -93,6 +95,11 @@ impl MemHost {
 
     pub fn set_timestamp(&mut self, timestamp: Timestamp) {
         self.timestamp = timestamp;
+    }
+
+    /// Set the signed `Call.value` this host reports ([`Host::call_value`]).
+    pub fn set_call_value(&mut self, value: Amount) {
+        self.call_value = value;
     }
 
     /// Directly set a native balance (test funding helper).
@@ -121,6 +128,10 @@ impl Host for MemHost {
 
     fn timestamp(&self) -> Timestamp {
         self.timestamp
+    }
+
+    fn call_value(&self) -> Amount {
+        self.call_value
     }
 
     fn balance_of(&self, addr: &Address) -> Amount {

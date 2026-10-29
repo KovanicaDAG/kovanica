@@ -217,6 +217,9 @@ pub struct ContractHost<'a> {
     /// Remaining signed attached value (`Call.value`) the contract may book
     /// into custody on behalf of the caller.
     attached_value: u64,
+    /// The signed `Call.value` as authored (never decremented). [`Self::attached_value`]
+    /// is what is left to spend; this is what the caller actually paid.
+    signed_value: u64,
 }
 
 impl<'a> ContractHost<'a> {
@@ -244,6 +247,7 @@ impl<'a> ContractHost<'a> {
             events: Vec::new(),
             read_error: RefCell::new(None),
             attached_value: 0,
+            signed_value: 0,
         })
     }
 
@@ -274,6 +278,7 @@ impl<'a> ContractHost<'a> {
             events: Vec::new(),
             read_error: RefCell::new(None),
             attached_value: 0,
+            signed_value: 0,
         }
     }
 
@@ -292,6 +297,7 @@ impl<'a> ContractHost<'a> {
         let balance = self.load_account(&caller)?.balance;
         self.move_real(&caller, &contract, value, balance)?;
         self.attached_value = value;
+        self.signed_value = value;
         Ok(())
     }
 
@@ -597,6 +603,10 @@ impl Host for ContractHost<'_> {
 
     fn timestamp(&self) -> u64 {
         self.timestamp
+    }
+
+    fn call_value(&self) -> u128 {
+        u128::from(self.signed_value)
     }
 
     fn balance_of(&self, addr: &[u8; 32]) -> u128 {

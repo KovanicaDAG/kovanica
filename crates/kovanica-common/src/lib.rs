@@ -244,6 +244,15 @@ pub trait Host {
     fn balance_of(&self, addr: &Address) -> Amount;
     fn transfer(&mut self, from: &Address, to: &Address, amount: Amount) -> ContractResult<()>;
     fn emit_event(&mut self, topic: &[u8], data: &[u8]);
+    /// The signed `Call.value` (in atoms) attached to this transaction.
+    ///
+    /// Read-only: a contract can observe the value but never change it. The
+    /// default of `0` is deliberate — a host that cannot report the value can
+    /// never satisfy the `amount_in == call_value()` check in `kovanica-token`,
+    /// so such hosts fail closed instead of letting a caller book a donation.
+    fn call_value(&self) -> Amount {
+        0
+    }
     // Optional: storage get/set if contracts use host storage instead of pure WASM memory
     fn storage_get(&self, key: &[u8]) -> Option<Vec<u8>>;
     fn storage_set(&mut self, key: &[u8], value: &[u8]);
