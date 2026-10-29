@@ -22,6 +22,7 @@ members = [
     "crates/kovanica-htlc",
     "crates/kovanica-vault",
     "crates/kovanica-multisig",
+    "crates/kovanica-nft",
     "crates/kovanica-token",
     "crates/kovanica-comms-core",
     "crates/kovanica-comms-crypto",

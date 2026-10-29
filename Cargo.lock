@@ -2537,6 +2537,7 @@ dependencies = [
  "kovanica-fee",
  "kovanica-htlc",
  "kovanica-multisig",
+ "kovanica-nft",
  "kovanica-runtime",
  "kovanica-staking",
  "kovanica-storage",
@@ -2755,6 +2756,15 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "kovanica-nft"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "serde",
 ]
 
 [[package]]

@@ -66,6 +66,13 @@ pub const TOKEN_SWAP_BUY: &[u8] = b"token_swap_buy";
 /// Emitted by `Token::sell` with empty data.
 pub const TOKEN_SWAP_SELL: &[u8] = b"token_swap_sell";
 
+// ---------- NFT ----------
+pub const NFT_COLLECTION_CREATED: &[u8] = b"nft_collection_created";
+pub const NFT_MINT: &[u8] = b"nft_mint";
+pub const NFT_TRANSFER: &[u8] = b"nft_transfer";
+pub const NFT_APPROVAL: &[u8] = b"nft_approval";
+pub const NFT_BURN: &[u8] = b"nft_burn";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +101,10 @@ mod tests {
         assert_eq!(TOKEN_POOL_INITIALIZED, b"token_pool_initialized");
         assert_eq!(TOKEN_SWAP_BUY, b"token_swap_buy");
         assert_eq!(TOKEN_SWAP_SELL, b"token_swap_sell");
+        assert_eq!(NFT_COLLECTION_CREATED, b"nft_collection_created");
+        assert_eq!(NFT_MINT, b"nft_mint");
+        assert_eq!(NFT_TRANSFER, b"nft_transfer");
+        assert_eq!(NFT_APPROVAL, b"nft_approval");
+        assert_eq!(NFT_BURN, b"nft_burn");
     }
 }

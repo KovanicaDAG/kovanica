@@ -17,6 +17,8 @@ kovanica-htlc = { path = "../kovanica-htlc" }
 kovanica-vault = { path = "../kovanica-vault" }
 kovanica-multisig = { path = "../kovanica-multisig" }
 kovanica-token = { path = "../kovanica-token" }
+kovanica-nft = { path = "../kovanica-nft" }
+
 bincode = { workspace = true }
 redb = { workspace = true }
 serde = { workspace = true }
