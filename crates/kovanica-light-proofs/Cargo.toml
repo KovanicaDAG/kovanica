@@ -1,0 +1,11 @@
+[package]
+name = "kovanica-light-proofs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kovanica-types = { path = "../kovanica-types" }
+kovanica-crypto = { path = "../kovanica-crypto" }
+blake3 = { workspace = true }
