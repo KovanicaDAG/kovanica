@@ -29,8 +29,8 @@ import kotlin.math.roundToInt
  * screen, the token rows) build from here so the palette cannot drift.
  *
  * XML-free and dependency-free â€” plain `android.widget.*` on the ink surface
- * the rest of the app already uses. Coin marks are drawn here until the
- * official KUNA artwork replaces the native disc.
+ * the rest of the app already uses. Token marks are drawn here; the native
+ * KUNA mark is the official artwork bundled in `assets/kuna-logo.webp`.
  */
 object WalletUi {
     // Ink-toned surface. Explicit so the screen reads the same on any device theme.
@@ -79,10 +79,10 @@ object WalletUi {
     }
 
     /**
-     * Round coin mark. Native KUNA is the amber "K" disc from [kunaCoin].
-     * That disc is interim: the official KUNA artwork replaces it. A token
-     * uses [tokenCoin], the first two letters of its symbol on a colour
-     * chosen from the contract address.
+     * Round coin mark. Native KUNA is the official artwork from [kunaCoin];
+     * this disc is its fallback and the shape every token mark shares. A token
+     * uses [tokenCoin], the first two letters of its symbol on a colour chosen
+     * from the contract address.
      */
     fun coinMark(
         ctx: Context,
@@ -111,9 +111,49 @@ object WalletUi {
         }
     }
 
-    /** Interim native mark. Swap this view when the official KUNA logo lands. */
-    fun kunaCoin(ctx: Context, sizeDp: Int = 40): TextView =
-        coinMark(ctx, "K", ACCENT, ACCENT_INK, sizeDp, "KUNA")
+    /**
+     * The KUNA mark: `assets/kuna-logo.webp`, the official artwork with its
+     * backdrop clipped away, decoded once and shared by every row. A build
+     * that lost the asset keeps the amber "K" disc so the native coin still
+     * has a mark.
+     */
+    fun kunaCoin(ctx: Context, sizeDp: Int = 40): View {
+        val art = kunaArt(ctx)
+            ?: return coinMark(ctx, "K", ACCENT, ACCENT_INK, sizeDp, "KUNA")
+        return ImageView(ctx).apply {
+            contentDescription = "KUNA"
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setImageBitmap(art)
+            minWidth = dp(ctx, sizeDp)
+            minHeight = dp(ctx, sizeDp)
+        }
+    }
+
+    /**
+     * Bundled artwork, decoded at icon size and kept for the process. Read
+     * through the application context so a cached bitmap never pins an
+     * Activity.
+     */
+    private fun kunaArt(ctx: Context): Bitmap? {
+        if (kunaArtLoaded) return kunaArtCache
+        return synchronized(this) {
+            if (!kunaArtLoaded) {
+                kunaArtCache = runCatching {
+                    ctx.applicationContext.assets.open(KUNA_ART).use { input ->
+                        decodeBitmap(input.readBytes())
+                    }
+                }.getOrNull()
+                kunaArtLoaded = true
+            }
+            kunaArtCache
+        }
+    }
+
+    @Volatile
+    private var kunaArtCache: Bitmap? = null
+
+    @Volatile
+    private var kunaArtLoaded = false
 
     /** Token mark. The same contract keeps the same fill. */
     fun tokenCoin(ctx: Context, symbol: String, contract: String, sizeDp: Int = 36): TextView =
@@ -210,6 +250,9 @@ object WalletUi {
 
     /** Icon marks are drawn at 36â€“40 dp; decode anything larger at ~[ICON_PX]. */
     private const val ICON_PX = 96
+
+    /** The official KUNA mark, shipped in `app/src/main/assets/`. */
+    private const val KUNA_ART = "kuna-logo.webp"
 
     /** Refuse to buffer a remote icon larger than this. */
     private const val ICON_FETCH_LIMIT = 512 * 1024

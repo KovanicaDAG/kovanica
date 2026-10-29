@@ -220,7 +220,7 @@ class HistoryActivity : Activity() {
         else -> WalletUi.ACCENT to WalletUi.ACCENT_BG
     }
 
-    private fun coinFor(entry: HistoryEntry): TextView {
+    private fun coinFor(entry: HistoryEntry): View {
         val symbol = entry.symbol
         return if (symbol.isNullOrBlank() || symbol.equals("KUNA", ignoreCase = true)) {
             WalletUi.kunaCoin(this, 28)
