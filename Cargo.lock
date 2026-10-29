@@ -2545,6 +2545,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-devnet"
+version = "0.2.0"
+
+[[package]]
 name = "kovanica-escrow"
 version = "0.2.0"
 dependencies = [
