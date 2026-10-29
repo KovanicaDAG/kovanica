@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 kovanica-types = { path = "../kovanica-types" }
+kovanica-params = { path = "../kovanica-params" }
+kovanica-fee = { path = "../kovanica-fee" }
 kovanica-common = { path = "../kovanica-common" }
 wasmi = { workspace = true }
 thiserror = { workspace = true }

@@ -88,26 +88,23 @@ pub use kovanica_types::MAX_TX_GAS_LIMIT;
 /// to compile. The value is deliberately small enough that any deployable
 /// contract (bounded by the mempool's ~1 MiB transaction size) stays callable
 /// with a gas limit below [`MAX_TX_GAS_LIMIT`].
-pub const GAS_PER_MODULE_BYTE: u64 = 8;
-
-/// The minimum `gas_limit` a `Call` must carry for a target module of
-/// `byte_len` bytes (`byte_len * GAS_PER_MODULE_BYTE`, saturating).
-///
-/// See [`GAS_PER_MODULE_BYTE`] for the rationale. Deterministic: it depends
-/// only on the bytecode length.
-pub fn min_gas_for_module(byte_len: usize) -> u64 {
-    (byte_len as u64).saturating_mul(GAS_PER_MODULE_BYTE)
-}
+/// Re-exported from `kovanica-fee` (single source of truth).
+pub use kovanica_fee::GAS_PER_MODULE_BYTE;
+/// Re-exported from `kovanica-fee` (single source of truth).
+pub use kovanica_fee::min_gas_for_module;
 
 /// Default linear memory page cap for contract execution (256 pages = 16 MiB).
 /// Standard Rust-compiled contracts require more than the legacy 16-page (1 MiB) limit
 /// for their stack and data segments.
-pub const DEFAULT_CONTRACT_MEMORY_PAGES: u32 = 256;
+pub use kovanica_params::DEFAULT_CONTRACT_MEMORY_PAGES;
 
 /// Configuration for a single contract execution.
 pub struct ExecutionConfig {
     pub gas_limit: u64,
     pub memory_limit_pages: u32, // 64 KiB pages
+    /// Whether gas-hardening host-call charges apply. Defaults to false so
+    /// legacy behavior is preserved unless explicitly activated.
+    pub gas_hardening_active: bool,
 }
 
 impl Default for ExecutionConfig {
@@ -115,6 +112,7 @@ impl Default for ExecutionConfig {
         Self {
             gas_limit: MAX_TX_GAS_LIMIT,
             memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
+            gas_hardening_active: false,
         }
     }
 }
@@ -124,6 +122,7 @@ impl Default for ExecutionConfig {
 struct ExecState<'a> {
     host: &'a mut dyn Host,
     limits: StoreLimits,
+    gas_hardening_active: bool,
 }
 
 /// The Kovanica WASM runtime.
@@ -242,7 +241,8 @@ impl Runtime {
             .memory_size(config.memory_limit_pages as usize * WASM_PAGE_BYTES)
             .trap_on_grow_failure(true)
             .build();
-        let mut store = Store::new(&self.engine, ExecState { host, limits });
+        let gas_hardening_active = config.gas_hardening_active;
+        let mut store = Store::new(&self.engine, ExecState { host, limits, gas_hardening_active });
         // Enforces `memory_limit_pages` on memory creation and `memory.grow`.
         store.limiter(|state| &mut state.limits);
         store
@@ -363,6 +363,24 @@ fn guest_memory(caller: &Caller<'_, ExecState<'_>>) -> Result<Memory, wasmi::Err
         .get_export("memory")
         .and_then(Extern::into_memory)
         .ok_or_else(|| wasmi::Error::new("module does not export `memory`"))
+}
+
+/// Charge `cost` fuel against the store when gas hardening is active.
+/// Returns an out-of-fuel trap when insufficient fuel remains.
+fn charge_host_gas(
+    caller: &mut Caller<'_, ExecState<'_>>,
+    cost: u64,
+) -> Result<(), wasmi::Error> {
+    if !caller.data().gas_hardening_active || cost == 0 {
+        return Ok(());
+    }
+    let remaining = caller.get_fuel().unwrap_or(0);
+    if cost > remaining {
+        let _ = caller.set_fuel(0);
+        return Err(wasmi::Error::from(TrapCode::OutOfFuel));
+    }
+    caller.set_fuel(remaining - cost)?;
+    Ok(())
 }
 
 /// Bounds-checked read of `len` bytes at `ptr` from the caller's memory.
@@ -511,6 +529,7 @@ fn map_call_error(e: wasmi::Error) -> RuntimeError {
 // The `env` linker (FIXED ABI — see kovanica-common/src/wasm.rs)
 // ---------------------------------------------------------------------------
 
+
 fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeError> {
     let mut linker: Linker<ExecState<'a>> = Linker::new(engine);
 
@@ -531,6 +550,7 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
     >,
                                 out_ptr: i32|
      -> Result<(), wasmi::Error> {
+        charge_host_gas(&mut caller, kovanica_fee::GAS_KOVANICA_CALLER)?;
         let addr = caller.data().host.caller();
         write_guest(&mut caller, out_ptr, &addr)
     });
@@ -545,47 +565,52 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         (),
         wasmi::Error,
     > {
+        charge_host_gas(&mut caller, kovanica_fee::GAS_KOVANICA_CONTRACT_ADDRESS)?;
         let addr = caller.data().host.contract_address();
         write_guest(&mut caller, out_ptr, &addr)
     });
 
     // kovanica_block_height() -> i64
-    define!("kovanica_block_height", |caller: Caller<
+    define!("kovanica_block_height", |mut caller: Caller<
         '_,
         ExecState<'_>,
     >|
-     -> i64 {
+     -> Result<i64, wasmi::Error> {
+        charge_host_gas(&mut caller, kovanica_fee::GAS_KOVANICA_BLOCK_HEIGHT)?;
         // Values that do not fit the i64 host slot report -1; the guest
         // treats negatives as 0 (see kovanica-common/src/wasm.rs notes).
-        i64::try_from(caller.data().host.block_height()).unwrap_or(-1)
+        Ok(i64::try_from(caller.data().host.block_height()).unwrap_or(-1))
     });
 
     // kovanica_timestamp() -> i64
     define!(
         "kovanica_timestamp",
-        |caller: Caller<'_, ExecState<'_>>| -> i64 {
-            i64::try_from(caller.data().host.timestamp()).unwrap_or(-1)
+        |mut caller: Caller<'_, ExecState<'_>>| -> Result<i64, wasmi::Error> {
+            charge_host_gas(&mut caller, kovanica_fee::GAS_KOVANICA_TIMESTAMP)?;
+            Ok(i64::try_from(caller.data().host.timestamp()).unwrap_or(-1))
         }
     );
 
     // kovanica_call_value() -> i64 — signed Call.value in atoms, -1 when it
     // cannot fit in i64 (the guest maps negatives to 0, fail-closed).
-    define!("kovanica_call_value", |caller: Caller<
+    define!("kovanica_call_value", |mut caller: Caller<
         '_,
         ExecState<'_>,
     >|
-     -> i64 {
-        i64::try_from(caller.data().host.call_value()).unwrap_or(-1)
+     -> Result<i64, wasmi::Error> {
+        charge_host_gas(&mut caller, kovanica_fee::GAS_KOVANICA_CALL_VALUE)?;
+        Ok(i64::try_from(caller.data().host.call_value()).unwrap_or(-1))
     });
 
     // kovanica_balance_of(ptr: i32, len: i32) -> i64 — u64 balance as i64, -1 = error.
-    define!("kovanica_balance_of", |caller: Caller<
+    define!("kovanica_balance_of", |mut caller: Caller<
         '_,
         ExecState<'_>,
     >,
                                     ptr: i32,
                                     len: i32|
      -> Result<i64, wasmi::Error> {
+        charge_host_gas(&mut caller, kovanica_fee::GAS_KOVANICA_BALANCE_OF)?;
         let addr = read_address(&caller, ptr, len)?;
         let balance = caller.data().host.balance_of(&addr);
         // ABI slot is i64: balances >= 2^63 read as -1 → guest sees 0.
@@ -604,6 +629,7 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
                                   tl: i32,
                                   amount: i64|
      -> Result<i32, wasmi::Error> {
+        charge_host_gas(&mut caller, kovanica_fee::GAS_KOVANICA_TRANSFER)?;
         if amount < 0 {
             return Ok(pack_contract_error(
                 kovanica_common::ContractError::Overflow,
@@ -629,6 +655,7 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
                                      out_ptr: i32,
                                      out_cap: i32|
      -> Result<i32, wasmi::Error> {
+        charge_host_gas(&mut caller, kovanica_fee::HOST_STORAGE_GET_BASE_GAS + kovanica_fee::HOST_STORAGE_GET_PER_CALL_GAS)?;
         let key = read_guest(&caller, kp, kl)?;
         let Some(value) = caller.data().host.storage_get(&key) else {
             return Ok(-1);
@@ -642,6 +669,9 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
         if out_cap < 0 || value.len() > out_cap as usize {
             return Ok(-2);
         }
+        let chunks = if value.is_empty() { 0 } else { (value.len() + 31) / 32 };
+        let per_byte = kovanica_fee::HOST_STORAGE_GET_PER_32_BYTES_GAS.saturating_mul(chunks as u64);
+        charge_host_gas(&mut caller, per_byte)?;
         write_guest(&mut caller, out_ptr, &value)?;
         Ok(value.len() as i32)
     });
@@ -660,6 +690,11 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
      -> Result<i32, wasmi::Error> {
         let key = read_guest(&caller, kp, kl)?;
         let value = read_guest(&caller, vp, vl)?;
+        let chunks = if value.is_empty() { 0 } else { (value.len() + 31) / 32 };
+        let cost = kovanica_fee::HOST_STORAGE_SET_BASE_GAS
+            .saturating_add(kovanica_fee::HOST_STORAGE_SET_PER_CALL_GAS)
+            .saturating_add(kovanica_fee::HOST_STORAGE_SET_PER_32_BYTES_GAS.saturating_mul(chunks as u64));
+        charge_host_gas(&mut caller, cost)?;
         caller.data_mut().host.storage_set(&key, &value);
         Ok(0)
     });
@@ -676,6 +711,11 @@ fn build_linker<'a>(engine: &Engine) -> Result<Linker<ExecState<'a>>, RuntimeErr
      -> Result<(), wasmi::Error> {
         let topic = read_guest(&caller, tp, tl)?;
         let data = read_guest(&caller, dp, dl)?;
+        let total_bytes = topic.len().saturating_add(data.len());
+        let cost = kovanica_fee::HOST_EMIT_EVENT_BASE_GAS
+            .saturating_add(kovanica_fee::HOST_EMIT_EVENT_PER_CALL_GAS)
+            .saturating_add(kovanica_fee::HOST_EMIT_EVENT_PER_BYTE_GAS.saturating_mul(total_bytes as u64));
+        charge_host_gas(&mut caller, cost)?;
         caller.data_mut().host.emit_event(&topic, &data);
         Ok(())
     });
@@ -894,6 +934,7 @@ mod tests {
         ExecutionConfig {
             gas_limit: 100_000,
             memory_limit_pages: 2,
+            gas_hardening_active: false,
         }
     }
 
@@ -946,6 +987,7 @@ mod tests {
         let config = ExecutionConfig {
             gas_limit: 100,
             memory_limit_pages: 1,
+            gas_hardening_active: false,
         };
         let error = execute(&wasm, &[], &config, &mut TestHost::default())
             .expect_err("the loop must exhaust its fuel");
@@ -980,6 +1022,7 @@ mod tests {
         let config = ExecutionConfig {
             gas_limit: 100,
             memory_limit_pages: 1,
+            gas_hardening_active: false,
         };
         let mut gas_used = 0u64;
         let error = runtime
@@ -1056,6 +1099,7 @@ mod tests {
         let config = ExecutionConfig {
             gas_limit: 10_000,
             memory_limit_pages: 1,
+            gas_hardening_active: false,
         };
         let error = execute(&wasm, &[], &config, &mut TestHost::default())
             .expect_err("memory.grow past the configured page cap must trap");

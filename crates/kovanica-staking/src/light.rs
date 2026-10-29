@@ -13,22 +13,22 @@ use kovanica_types::{Address, Hash, PublicKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{ONE_KUNA, UNBONDING_ROUNDS};
+use crate::UNBONDING_ROUNDS;
 
 /// Fraction of `block_reward` escrowed for light nodes, in basis points.
 ///
 /// 2_000 is 20%. The leader side is the rest. The two sides sum to the
 /// scheduled reward, and dust from the division stays with the leader.
-pub const LIGHT_REWARD_BPS: u16 = 2_000;
+pub use kovanica_params::LIGHT_REWARD_BPS;
 
 /// Minimum light-node bond: 100 KUNA.
-pub const MIN_LIGHT_BOND: u64 = 100 * ONE_KUNA;
+pub use kovanica_params::MIN_LIGHT_BOND;
 
 /// Cap on light identities stored by a full node.
-pub const MAX_LIGHT_NODES: usize = 4_096;
+pub use kovanica_params::MAX_LIGHT_NODES;
 
 /// Winning witness slots in one epoch.
-pub const LIGHT_WITNESS_SLOTS: usize = 32;
+pub use kovanica_params::LIGHT_WITNESS_SLOTS;
 
 /// One registered light node.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

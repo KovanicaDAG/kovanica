@@ -28,6 +28,8 @@ members = [
     "crates/kovanica-comms-relay",
     "crates/kovanica-name-registry",
     "crates/kovanica-faucet",
+    "crates/kovanica-fee",
+    "crates/kovanica-params",
     "crates/kovanica-indexer",
     "crates/kovanica-sdk",
     "crates/kovanica-wallet-core",

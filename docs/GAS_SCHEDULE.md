@@ -13,10 +13,13 @@
 | **Gated** | Implemented but inert until `kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND` is reached (currently `u64::MAX`, so inert; set to `0` at the next genesis / testnet reset). |
 | **PLANNED** | Target design only. Not implemented anywhere in the repo. |
 
-The host-call and base-cost tables below are **PLANNED**: today contracts pay
-only for the instructions they execute (wasmi fuel), not for host-call work.
+The host-call and base-cost tables below are **Gated**: implemented behind
+`GAS_HARDENING_ACTIVE_FROM_ROUND` (currently inert). Contracts still pay only
+wasmi instruction fuel until the gate activates.
 
 ## 1. Canonical constants
+
+Canonical source: `crates/kovanica-params` (re-exported by `kovanica-types`).
 
 | Constant | Value | Where | Status |
 |----------|-------|-------|--------|
@@ -99,11 +102,11 @@ exactly as before.
 - **No refunds**: unused gas is not returned to the caller.
 - The receipt's `gas_used` reports fuel actually consumed.
 
-## 6. PLANNED: base / intrinsic costs
+## 6. Gated: base / intrinsic costs
 
-> **PLANNED — not implemented.** These values are a target schedule only;
-> today the runtime charges no per-call base cost or per-operation cost beyond
-> wasmi instruction fuel. Do not build fee or DoS estimates on them.
+> **Gated — implemented behind `GAS_HARDENING_ACTIVE_FROM_ROUND`.** Host-call
+> charges are applied by `kovanica-runtime` when the gate is active; below the
+> gate behavior is bit-identical to legacy (no charges).
 
 | Operation | Target gas cost | Notes |
 |-----------|-----------------|-------|
@@ -116,11 +119,11 @@ exactly as before.
 | Event emit (`kovanica_emit_event`) | 500 | per call |
 | Contract creation (`Deploy`) | 32,000 | code hash, account init |
 
-## 7. PLANNED: host-function per-call costs
+## 7. Gated: host-function per-call costs
 
-> **PLANNED — not implemented.** The `env` host functions in
-> `kovanica-runtime` currently charge no explicit fuel; only the guest's own
-> instructions cost fuel.
+> **Gated — implemented behind `GAS_HARDENING_ACTIVE_FROM_ROUND`.** The `env`
+> host functions in `kovanica-runtime` now debit fuel per `kovanica-fee` when
+> the gate is active.
 
 | Host function | Target base gas | Target per-call cost |
 |---------------|-----------------|----------------------|

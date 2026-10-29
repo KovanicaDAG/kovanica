@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 kovanica-types = { path = "../kovanica-types" }
+kovanica-params = { path = "../kovanica-params" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

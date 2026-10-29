@@ -2514,6 +2514,7 @@ version = "0.2.0"
 dependencies = [
  "bincode",
  "kovanica-crypto",
+ "kovanica-params",
  "kovanica-storage",
  "kovanica-types",
  "parking_lot",
@@ -2533,6 +2534,7 @@ dependencies = [
  "kovanica-common",
  "kovanica-consensus",
  "kovanica-crypto",
+ "kovanica-fee",
  "kovanica-htlc",
  "kovanica-multisig",
  "kovanica-runtime",
@@ -2574,6 +2576,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zeroize",
+]
+
+[[package]]
+name = "kovanica-fee"
+version = "0.2.0"
+dependencies = [
+ "kovanica-params",
+ "kovanica-types",
 ]
 
 [[package]]
@@ -2785,6 +2795,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-params"
+version = "0.2.0"
+
+[[package]]
 name = "kovanica-rpc"
 version = "0.2.0"
 dependencies = [
@@ -2826,6 +2840,8 @@ version = "0.2.0"
 dependencies = [
  "bytes",
  "kovanica-common",
+ "kovanica-fee",
+ "kovanica-params",
  "kovanica-types",
  "parking_lot",
  "thiserror 1.0.69",
@@ -2843,6 +2859,7 @@ dependencies = [
  "hex",
  "js-sys",
  "kovanica-crypto",
+ "kovanica-fee",
  "kovanica-keystore",
  "kovanica-types",
  "reqwest",
@@ -2859,6 +2876,7 @@ name = "kovanica-staking"
 version = "0.0.31"
 dependencies = [
  "bincode",
+ "kovanica-params",
  "kovanica-types",
  "proptest",
  "serde",
@@ -2902,6 +2920,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek 2.2.0",
  "hex",
+ "kovanica-params",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

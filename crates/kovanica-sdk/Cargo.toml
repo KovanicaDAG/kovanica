@@ -7,6 +7,7 @@ description = "Official Rust (and WASM) client library for Kovanica"
 
 [dependencies]
 kovanica-types = { path = "../kovanica-types" }
+kovanica-fee = { path = "../kovanica-fee" }
 kovanica-crypto = { path = "../kovanica-crypto" }
 kovanica-keystore = { path = "../kovanica-keystore", optional = true }
 

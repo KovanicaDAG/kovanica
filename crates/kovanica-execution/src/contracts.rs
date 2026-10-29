@@ -2109,6 +2109,7 @@ pub(crate) mod tests {
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
             memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
+            gas_hardening_active: false,
         };
         let mut runner = ContractRunner::new();
 
@@ -2309,6 +2310,7 @@ pub(crate) mod tests {
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
             memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
+            gas_hardening_active: false,
         };
         let mut runner = ContractRunner::new();
 
@@ -2524,6 +2526,7 @@ pub(crate) mod tests {
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
             memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
+            gas_hardening_active: false,
         };
         let mut runner = ContractRunner::new();
 
@@ -2748,6 +2751,7 @@ pub(crate) mod tests {
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
             memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
+            gas_hardening_active: false,
         };
         let mut runner = ContractRunner::new();
 
@@ -2919,6 +2923,7 @@ pub(crate) mod tests {
         let config = ExecutionConfig {
             gas_limit: 100_000_000,
             memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
+            gas_hardening_active: false,
         };
         let mut runner = ContractRunner::new();
 
