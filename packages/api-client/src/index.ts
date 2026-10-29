@@ -33,6 +33,9 @@ export const ENTRY_POINTS = [
   "token_transfer_from",
   "token_mint",
   "token_burn",
+  "token_init_pool",
+  "token_buy",
+  "token_sell",
 ] as const;
 
 export type EntryPoint = (typeof ENTRY_POINTS)[number];
