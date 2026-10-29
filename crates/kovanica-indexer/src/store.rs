@@ -249,7 +249,9 @@ impl IndexerStore {
             return Ok(Vec::new());
         }
         if to_h - from_h + 1 > 500 {
-            return Err(StoreError::Other("block range exceeds maximum of 500".into()));
+            return Err(StoreError::Other(
+                "block range exceeds maximum of 500".into(),
+            ));
         }
         // collect ids from heights in range
         let mut height_ids: Vec<u64> = Vec::new();

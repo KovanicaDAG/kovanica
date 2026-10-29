@@ -49,7 +49,12 @@ fn synthetic_receipts() -> Vec<(u64, Vec<TransactionReceipt>)> {
 
 #[tokio::test]
 async fn indexes_and_serves_over_ws() {
-    let store = Arc::new(IndexerStore::new(std::env::temp_dir().join(format!("idx_test_{}.redb", std::process::id()))).unwrap());
+    let store = Arc::new(
+        IndexerStore::new(
+            std::env::temp_dir().join(format!("idx_test_{}.redb", std::process::id())),
+        )
+        .unwrap(),
+    );
     let reader = Arc::new(FakeReader {
         receipts: synthetic_receipts(),
     });
@@ -73,7 +78,11 @@ async fn indexes_and_serves_over_ws() {
     indexer.sync_once().await.unwrap();
 
     // receive pushed event
-    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await.unwrap().unwrap().unwrap();
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     let text = msg.into_text().unwrap();
     let ev: IndexedEvent = serde_json::from_str(&text).unwrap();
     assert_eq!(ev.topic, b"transfer");
