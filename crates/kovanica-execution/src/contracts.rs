@@ -2216,18 +2216,66 @@ pub(crate) mod tests {
             *token.balances.get(&contract.0).expect("contract holds")
         );
 
-        // Native dispatch reads the exact pool the wasm path wrote.
-        let sell = call_args::encode_token_sell(out / 2, 0).expect("encode sell");
+        // wasm `token_sell`: the export itself, on the pool the wasm buy left.
+        let sell_wasm = call_args::encode_token_sell(out / 2, 0).expect("encode sell");
+        let (paid_wasm_bytes, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_sell",
+                contract,
+                caller: recipient,
+                height: 6,
+                timestamp: 1_500,
+                args: &sell_wasm,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm token_sell");
+        let paid_wasm: Amount = bincode::deserialize(&paid_wasm_bytes).expect("paid_wasm");
+        assert!(paid_wasm > 0);
+        assert_eq!(
+            native_balance(&storage, &contract),
+            2_000 - paid_wasm as u64
+        );
+        assert_eq!(
+            native_balance(&storage, &recipient),
+            99_000 + paid_wasm as u64
+        );
+        let pool = pool_state(&storage, &contract);
+        assert_eq!(pool.kuna_reserve, 2_000 - paid_wasm);
+        assert_eq!(pool.token_reserve, 500 - out + out / 2);
+        let token = token_state(&storage, &contract);
+        assert_eq!(
+            pool.token_reserve,
+            *token.balances.get(&contract.0).expect("contract holds")
+        );
+
+        // Cross-path interop the other way: native dispatch reads the exact
+        // pool the wasm sell just wrote.
+        let sell = call_args::encode_token_sell(out / 4, 0).expect("encode sell");
         let paid_bytes =
-            execute_contract_call("token_sell", contract, recipient, 6, 1_500, &sell, &storage)
+            execute_contract_call("token_sell", contract, recipient, 7, 1_600, &sell, &storage)
                 .expect("native token_sell over wasm-written pool");
         let paid: Amount = bincode::deserialize(&paid_bytes).expect("paid");
         assert!(paid > 0);
-        assert_eq!(native_balance(&storage, &contract), 2_000 - paid as u64);
-        assert_eq!(native_balance(&storage, &recipient), 99_000 + paid as u64);
+        assert_eq!(
+            native_balance(&storage, &contract),
+            2_000 - paid_wasm as u64 - paid as u64
+        );
+        assert_eq!(
+            native_balance(&storage, &recipient),
+            99_000 + paid_wasm as u64 + paid as u64
+        );
         let pool = pool_state(&storage, &contract);
-        assert_eq!(pool.kuna_reserve, 2_000 - paid);
-        assert_eq!(pool.token_reserve, 500 - out + out / 2);
+        assert_eq!(pool.kuna_reserve, 2_000 - paid_wasm - paid);
+        assert_eq!(pool.token_reserve, 500 - out + out / 2 + out / 4);
+        let token = token_state(&storage, &contract);
+        assert_eq!(
+            pool.token_reserve,
+            *token.balances.get(&contract.0).expect("contract holds")
+        );
     }
 
     /// Helper to assert contract errors across both native and wasmi dispatch.

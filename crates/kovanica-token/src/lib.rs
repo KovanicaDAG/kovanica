@@ -1473,7 +1473,7 @@ mod tests {
     }
 
     #[test]
-    fn huge_amounts_overflow_cleanly() {
+    fn overflowing_amounts_are_rejected_without_state_change() {
         let mut host = new_token(addr(A), Amount::MAX);
         // kuna_in * tokens_in overflows → Overflow, no panic.
         host.set_balance(addr(CONTRACT), Amount::MAX);
@@ -1481,14 +1481,26 @@ mod tests {
             Token::init_pool(&mut host, Amount::MAX, Amount::MAX, 30),
             Err(ContractError::Overflow)
         );
-        // A sane pool, then a quote whose multiplication overflows → InvalidInput.
+
+        // A pool whose token side is huge, then a buy whose `in_after * r_out`
+        // overflows u128 inside `quote()` (the surplus check passes, so this is
+        // the multiplication, not the amount check) → InvalidInput, and no
+        // state moves.
         init_pool(&mut host, 1_000, 1_000, 30);
+        let mut huge = Pool::load(&host).unwrap();
+        huge.token_reserve = Amount::MAX;
+        huge.fee_bps = 0;
+        Pool::store(&mut host, &huge).unwrap();
         host.set_balance(addr(CONTRACT), Amount::MAX);
+        let token_before = Token::load(&host).unwrap();
+        let balance_before = host.balance_of(&addr(CONTRACT));
         assert_eq!(
-            Token::buy(&mut host, Amount::MAX, 0),
+            Token::buy(&mut host, 10_000, 0),
             Err(ContractError::InvalidInput)
         );
-        assert_eq!(Pool::load(&host).unwrap().token_reserve, 1_000);
+        assert_eq!(Pool::load(&host).unwrap().token_reserve, Amount::MAX);
+        assert_eq!(Token::load(&host).unwrap().balances, token_before.balances);
+        assert_eq!(host.balance_of(&addr(CONTRACT)), balance_before);
     }
 
     #[test]
