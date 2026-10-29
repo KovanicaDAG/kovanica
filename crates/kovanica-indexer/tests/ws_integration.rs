@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use axum::Router;
 use kovanica_execution::TransactionReceipt;
 use kovanica_indexer::indexer::Indexer;
 use kovanica_indexer::node_reader::{NodeReader, NodeReaderError};
@@ -50,14 +49,13 @@ fn synthetic_receipts() -> Vec<(u64, Vec<TransactionReceipt>)> {
 
 #[tokio::test]
 async fn indexes_and_serves_over_ws() {
-    let store = Arc::new(IndexerStore::new(std::env::temp_dir().join("idx_test.redb")).unwrap());
+    let store = Arc::new(IndexerStore::new(std::env::temp_dir().join(format!("idx_test_{}.redb", std::process::id()))).unwrap());
     let reader = Arc::new(FakeReader {
         receipts: synthetic_receipts(),
     });
     // Need Arc<dyn NodeReader>
     let reader_dyn: Arc<dyn NodeReader> = reader;
     let indexer = Arc::new(Indexer::new(store.clone(), reader_dyn));
-    indexer.sync_once().await.unwrap();
 
     let app = kovanica_indexer::http::router(indexer.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -66,18 +64,24 @@ async fn indexes_and_serves_over_ws() {
         axum::serve(listener, app).await.unwrap();
     });
 
-    // WS connect
+    // WS connect first, then sync to exercise push.
     use tokio_tungstenite::connect_async;
     let url = format!("ws://{}/ws", addr);
     let (mut ws, _) = connect_async(&url).await.unwrap();
-    use futures::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
-    // There may be no push because sync already done before connect; query REST instead
-    // Check REST /logs
+    use futures::StreamExt;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    indexer.sync_once().await.unwrap();
+
+    // receive pushed event
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await.unwrap().unwrap().unwrap();
+    let text = msg.into_text().unwrap();
+    let ev: IndexedEvent = serde_json::from_str(&text).unwrap();
+    assert_eq!(ev.topic, b"transfer");
+
+    // REST check
     let resp = reqwest::get(format!("http://{}/logs", addr)).await.unwrap();
     let logs: Vec<IndexedEvent> = resp.json().await.unwrap();
     assert_eq!(logs.len(), 1);
-    assert_eq!(logs[0].topic, b"transfer");
 
     let _ = ws.close(None).await;
 }

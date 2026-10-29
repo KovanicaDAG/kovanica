@@ -10,7 +10,6 @@ kovanica-sdk = { path = "../kovanica-sdk" }
 kovanica-types = { path = "../kovanica-types" }
 kovanica-crypto = { path = "../kovanica-crypto" }
 kovanica-keystore = { path = "../kovanica-keystore" }
-kovanica-execution = { path = "../kovanica-execution" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

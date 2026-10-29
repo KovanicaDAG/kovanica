@@ -2920,7 +2920,6 @@ dependencies = [
  "async-trait",
  "hex",
  "kovanica-crypto",
- "kovanica-execution",
  "kovanica-keystore",
  "kovanica-sdk",
  "kovanica-types",

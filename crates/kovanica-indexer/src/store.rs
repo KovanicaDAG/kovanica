@@ -242,8 +242,15 @@ impl IndexerStore {
 
         // Determine candidate ids
         // height range
+        let latest = self.latest_indexed_height();
         let from_h = filter.from_height.unwrap_or(0);
-        let to_h = filter.to_height.unwrap_or(u64::MAX);
+        let to_h = filter.to_height.unwrap_or(latest);
+        if from_h > to_h {
+            return Ok(Vec::new());
+        }
+        if to_h - from_h + 1 > 500 {
+            return Err(StoreError::Other("block range exceeds maximum of 500".into()));
+        }
         // collect ids from heights in range
         let mut height_ids: Vec<u64> = Vec::new();
         for row in heights_table

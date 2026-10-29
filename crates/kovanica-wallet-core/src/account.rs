@@ -122,14 +122,9 @@ impl Wallet {
         self.nonces.insert(*address, nonce);
     }
 
-    /// Apply a mock receipt to update balance/nonce locally.
-    pub fn apply_receipt(
-        &mut self,
-        receipt: &kovanica_execution::TransactionReceipt,
-        _ctx: &SigningContext,
-    ) {
-        // naive: increment nonce for sender? We don't have sender in receipt. Skip.
-        let _ = receipt;
+    pub fn update_from_provider_result(&mut self, address: &Address, balance: u64, nonce: u64) {
+        self.set_balance(address, balance);
+        self.set_nonce(address, nonce);
     }
 
     pub fn apply_balance_update(&mut self, address: &Address, delta: i64) {
