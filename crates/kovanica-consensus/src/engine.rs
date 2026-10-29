@@ -1041,8 +1041,9 @@ where
                 }
             }
         }
-        // Try to commit after skip so downstream can progress
-        self.try_commit_and_deliver()?;
+        // Try to commit after skip so downstream can progress, draining so a
+        // certified skip that unblocks later slots cascades (PRO-40).
+        self.drain_commits()?;
         Ok(())
     }
 
@@ -1330,8 +1331,9 @@ where
             }
         }
 
-        // Try to commit after voting
-        self.try_commit_and_deliver()?;
+        // Try to commit after voting, draining so a cascade of already-quorum
+        // later slots is not left waiting behind this one (PRO-40).
+        self.drain_commits()?;
 
         Ok(true)
     }
@@ -1819,8 +1821,12 @@ where
         }
         if quorum_reached {
             info!("Leader round {} reached quorum from buffered votes", round);
-            self.drain_commits()?;
         }
+        // Drain on every apply, not only on full quorum: buffered votes can tip
+        // the union-quorum rule (votes + recorded timeout stake) for an awaited
+        // slot without reaching full vote quorum, and later slots that are
+        // already at quorum must not sit behind an earlier undecided hole.
+        self.drain_commits()?;
         Ok(())
     }
 
@@ -1857,7 +1863,7 @@ where
                         self.committer.update_leader(leader_info);
                         self.note_leader_block_seen(block.round);
                         self.apply_buffered_votes(block.round, block.digest)?;
-                        self.try_commit_and_deliver()?;
+                        self.drain_commits()?;
                         self.vote_if_late(block.round)?;
                         return Ok(());
                     }
@@ -1886,7 +1892,7 @@ where
                         }
                     }
                 }
-                self.try_commit_and_deliver()?;
+                self.drain_commits()?;
                 self.vote_if_late(block.round)?;
                 return Ok(());
             }
@@ -1923,8 +1929,9 @@ where
             }
         }
 
-        // Try to commit after processing
-        self.try_commit_and_deliver()?;
+        // Try to commit after processing, draining so a late leader block that
+        // completes the union-quorum rule cascades to already-quorum later slots.
+        self.drain_commits()?;
 
         if self.scheduled_leader_for_round(block.round) == Some(block.author) {
             self.vote_if_late(block.round)?;
@@ -2039,8 +2046,15 @@ where
         }
         if has_quorum {
             info!("Leader round {} now has quorum", leader_round);
-            self.drain_commits()?;
         }
+        // Re-run the commit walk on every accepted vote, not only on a full
+        // vote quorum: a slot whose vote stake is short of quorum can still be
+        // decided by the union-quorum rule (votes + recorded timeout stake),
+        // and a new vote is exactly what can tip that rule. Draining here also
+        // cascades commits for later slots that were already at quorum, so a
+        // round cannot sit behind an earlier undecided hole waiting for an
+        // unrelated trigger (PRO-40 / PRO-41).
+        self.drain_commits()?;
         Ok(())
     }
 
