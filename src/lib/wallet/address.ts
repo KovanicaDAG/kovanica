@@ -132,6 +132,11 @@ export function parseAddr(raw: string): string | null {
     return t.toLowerCase();
   }
 
+  // 1b. `0x`-prefixed 64 hex (the token API returns contract addresses this way)
+  if (/^0x[0-9a-f]{64}$/i.test(t)) {
+    return t.slice(2).toLowerCase();
+  }
+
   // 2. Versioned 66 hex (00 + 64 hex)
   if (/^00[0-9a-f]{64}$/i.test(t)) {
     return t.slice(2).toLowerCase();

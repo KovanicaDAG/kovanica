@@ -16,6 +16,7 @@ import {
   Lock,
   Vault,
   Droplets,
+  Waves,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SourceSwitch } from "@/components/layout/source-switch";
@@ -30,6 +31,7 @@ const NAV = [
   { to: "/multisig", label: "Multisig", icon: Users },
   { to: "/htlc", label: "HTLC", icon: Lock },
   { to: "/vaults", label: "Vaults", icon: Vault },
+  { to: "/pool", label: "Pools", icon: Waves },
   { to: "/network", label: "Network", icon: Activity },
   { to: "/map", label: "Map", icon: Map },
 ] as const;

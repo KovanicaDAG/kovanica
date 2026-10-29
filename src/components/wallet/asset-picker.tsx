@@ -7,6 +7,10 @@ export type AssetOption = {
   assetId: string | null;
   balance: number;
   label?: string;
+  /** KVP-102: token symbol, shown instead of a truncated id. */
+  symbol?: string;
+  /** KVP-102: artwork URL (already validated by the decoder). */
+  icon?: string;
   /** KVP-106: asset kind for visual distinction */
   kind?: "fungible" | "nft";
   /** KVP-106: metadata hash for NFTs */
@@ -51,7 +55,8 @@ const isNft = (opt: AssetOption) => opt.kind === "nft";
           const selected = isSelected(id);
           const nft = isNft(opt);
           const rwa = isRwa(opt);
-          const label = opt.label ?? assetLabel(id);
+          const label = opt.label ?? opt.symbol ?? assetLabel(id);
+          const icon = opt.icon && opt.icon.length > 0 ? opt.icon : null;
 
           return (
             <button
@@ -89,7 +94,11 @@ const isNft = (opt: AssetOption) => opt.kind === "nft";
                 </>
               ) : (
                 <>
-                  <Coins className="size-3.5" />
+                  {icon ? (
+                    <img src={icon} alt="" className="size-4 rounded-full object-cover" />
+                  ) : (
+                    <Coins className="size-3.5" />
+                  )}
                   <span className="font-mono text-xs">{label}</span>
                 </>
               )}
@@ -98,7 +107,9 @@ const isNft = (opt: AssetOption) => opt.kind === "nft";
         })}
       </div>
       {!isNativeAsset(value) && (
-        <p className="break-all font-mono text-[10px] text-subtle">{value}</p>
+        <p className="break-all font-mono text-[10px] text-subtle">
+          {value?.replace(/^token:/, "")}
+        </p>
       )}
     </div>
   );

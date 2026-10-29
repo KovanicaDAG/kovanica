@@ -236,6 +236,24 @@ export function formatTokenAmount(atoms: bigint, decimals: number): string {
   return `${negative ? "-" : ""}${whole.toString()}${frac ? `.${frac}` : ""}`;
 }
 
+/**
+ * Display string → base units, or `null` when the input is not a positive
+ * decimal with at most `decimals` fraction digits.
+ *
+ * Unlike `parseKvnc` this stays in `bigint` end to end: token supplies are
+ * `u128` and a `number` round-trip silently loses the low digits.
+ */
+export function parseTokenAmount(input: string, decimals: number): bigint | null {
+  const raw = input.trim();
+  if (!/^\d+(\.\d+)?$/.test(raw)) return null;
+  const d = Math.min(Math.max(decimals, 0), 30);
+  const [whole, frac = ""] = raw.split(".");
+  if (frac.length > d) return null;
+  const fracAtoms = d === 0 ? 0n : BigInt(frac.padEnd(d, "0"));
+  const atoms = BigInt(whole) * 10n ** BigInt(d) + fracAtoms;
+  return atoms > 0n ? atoms : null;
+}
+
 export function bytesToHex(bytes: Uint8Array): string {
   let out = "";
   for (const byte of bytes) out += byte.toString(16).padStart(2, "0");

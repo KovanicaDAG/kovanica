@@ -1,7 +1,13 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+import { Shell } from "@/components/layout/shell";
+import { PoolView } from "@/components/protocol/pool-view";
 
-export const Route = createFileRoute("/pool")({
-  beforeLoad: () => {
-    throw redirect({ to: "/network" });
-  },
-});
+function PoolPage() {
+  return (
+    <Shell>
+      <PoolView />
+    </Shell>
+  );
+}
+
+export const Route = createFileRoute("/pool")({ component: PoolPage });

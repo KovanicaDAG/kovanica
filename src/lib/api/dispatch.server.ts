@@ -21,7 +21,8 @@ import {
 } from "./node.server";
 import { isPublicSource, type ApiSource, type ApiState, type ApiHead, type ApiBootstrap, type ApiDagBlock } from "./contract";
 import { parseAddr, toCanonicalAddress } from "../wallet/address";
-import { listTokens } from "./tokens.server";
+import { listPools, listTokens, getTokenState } from "./tokens.server";
+import { balanceOf } from "../tokens/codec";
 import { blake3 } from "@noble/hashes/blake3.js";
 
 const CORS: Record<string, string> = {
@@ -66,6 +67,12 @@ function action(pathname: string): string {
 
 const LOCAL_RPC = "http://127.0.0.1:8545/rpc";
 const LIVE_FAUCET = "https://seed3.kovanica.online/faucet";
+
+/** Same flat fee the native prepare path uses; token calls are one storage write. */
+const TOKEN_FEE = 10_000;
+/** Fuel cap, not a charge. 5M is far above a transfer and below MAX_TX_GAS_LIMIT. */
+const TOKEN_GAS_LIMIT = 5_000_000;
+const MAX_U128 = (1n << 128n) - 1n;
 
 async function callRpc(method: string, params: unknown[] = []): Promise<any> {
   const res = await fetch(LOCAL_RPC, {
@@ -120,6 +127,20 @@ function signingHash(
   chainId = 4,
 ): Uint8Array {
   const kindBytes = concat([Uint8Array.of(0), to, u64le(amount)]);
+  return signingHashForKind(sender, nonce, kindBytes, fee, chainId);
+}
+
+/**
+ * Signing preimage shared by every kind: domain tag, chain id, sender, nonce,
+ * the kind bytes exactly as `Transaction::signing_hash` serializes them, fee.
+ */
+function signingHashForKind(
+  sender: Uint8Array,
+  nonce: bigint | number,
+  kindBytes: Uint8Array,
+  fee: bigint | number,
+  chainId = 4,
+): Uint8Array {
   const preimage = concat([
     TX_DOMAIN,
     u64le(chainId),
@@ -129,6 +150,16 @@ function signingHash(
     u64le(fee),
   ]);
   return blake3(preimage, { key: TX_KEY });
+}
+
+function u128le(value: bigint): Uint8Array {
+  const out = new Uint8Array(16);
+  let rest = value;
+  for (let i = 0; i < 16; i += 1) {
+    out[i] = Number(rest & 0xffn);
+    rest >>= 8n;
+  }
+  return out;
 }
 
 function encodeRawTransaction(
@@ -141,6 +172,18 @@ function encodeRawTransaction(
   hash: Uint8Array,
 ): string {
   const kindBytes = concat([u32le(0), to, u64le(amount)]);
+  return encodeRawTransactionForKind(sender, nonce, kindBytes, fee, signature, hash);
+}
+
+/** bincode of `Transaction`: sender ‖ nonce ‖ kind ‖ fee ‖ bytes(sig) ‖ hash. */
+function encodeRawTransactionForKind(
+  sender: Uint8Array,
+  nonce: bigint | number,
+  kindBytes: Uint8Array,
+  fee: bigint | number,
+  signature: Uint8Array,
+  hash: Uint8Array,
+): string {
   const body = concat([
     sender,
     u64le(nonce),
@@ -473,6 +516,121 @@ export async function dispatchApi(req: Request): Promise<Response> {
         return json(await listTokens(holder ?? undefined));
       } catch (e) {
         return text(`token scan failed: ${e instanceof Error ? e.message : e}`, 502);
+      }
+    }
+    if (name === "pools") {
+      try {
+        return json(await listPools());
+      } catch (e) {
+        return text(`pool scan failed: ${e instanceof Error ? e.message : e}`, 502);
+      }
+    }
+    if (name === "token_prepare" || name === "token_submit") {
+      try {
+        const from = q.get("from") ?? "";
+        const token = q.get("token") ?? "";
+        const to = q.get("to") ?? "";
+        const amountText = (q.get("amount") ?? "").trim();
+
+        const fromHex = parseAddr(from);
+        const toHex = parseAddr(to);
+        const tokenHex = parseAddr(token);
+        if (!fromHex) return text("invalid sender address", 400);
+        if (!toHex) return text("invalid recipient address", 400);
+        if (!tokenHex) return text("invalid token contract address", 400);
+        if (!/^\d+$/.test(amountText)) {
+          return text("amount must be a whole number of token base units", 400);
+        }
+
+        const amount = BigInt(amountText);
+        if (amount <= 0n || amount > MAX_U128) return text("amount out of range", 400);
+
+        const tokenCanonical = toCanonicalAddress(tokenHex)!;
+        const state = await getTokenState(tokenCanonical);
+        if (!state) return text("no token at that contract address", 400);
+        if (state.paused) return text(`${state.symbol} is paused`, 400);
+
+        const held = balanceOf(state, fromHex);
+        if (held < amount) {
+          return text(`Insufficient ${state.symbol}: balance ${held}, need ${amount}`, 400);
+        }
+
+        const fromCanonical = toCanonicalAddress(fromHex)!;
+        const nativeHex = await callRpc("kovanica_getBalance", [fromCanonical]);
+        const nativeBalance = BigInt(nativeHex ?? "0x0");
+        if (nativeBalance < BigInt(TOKEN_FEE)) {
+          return text(`Need at least ${TOKEN_FEE} atoms of KUNA for the fee`, 400);
+        }
+
+        const nonceHex = await callRpc("kovanica_getNonce", [fromCanonical]);
+        const nonce = BigInt(nonceHex || "0x0");
+
+        const fromBytes = hexToBytes(fromHex);
+        const toBytes = hexToBytes(toHex);
+        const contractBytes = hexToBytes(tokenHex);
+        const methodBytes = new TextEncoder().encode("token_transfer");
+        // `token_transfer` takes bincode `([u8; 32] to, u128 amount)`.
+        const args = concat([toBytes, u128le(amount)]);
+
+        const sighashKind = concat([
+          Uint8Array.of(4),
+          contractBytes,
+          u64le(0),
+          u64le(BigInt(methodBytes.length)),
+          methodBytes,
+          u64le(BigInt(args.length)),
+          args,
+          u64le(TOKEN_GAS_LIMIT),
+        ]);
+        const hash = signingHashForKind(fromBytes, nonce, sighashKind, TOKEN_FEE, 4);
+        const sighashHex = bytesToHex(hash);
+
+        if (name === "token_prepare") {
+          return json({
+            ok: true,
+            sighash: sighashHex,
+            token: tokenCanonical,
+            symbol: state.symbol,
+            decimals: state.decimals,
+            amount: amount.toString(),
+            fee: TOKEN_FEE,
+            gas_limit: TOKEN_GAS_LIMIT,
+          });
+        }
+
+        let sig = q.get("sig") ?? "";
+        if (!sig && method === "POST") {
+          try {
+            const body = await req.json();
+            sig = body.sig || body.signature || "";
+          } catch {}
+        }
+        if (!sig) return text("missing signature", 400);
+        const sigBytes = hexToBytes(sig);
+        if (sigBytes.length !== 64) return text("signature must be 64 bytes", 400);
+
+        const rawKind = concat([
+          u32le(4),
+          contractBytes,
+          u64le(0),
+          u64le(BigInt(methodBytes.length)),
+          methodBytes,
+          u64le(BigInt(args.length)),
+          args,
+          u64le(TOKEN_GAS_LIMIT),
+        ]);
+        const rawHex = encodeRawTransactionForKind(
+          fromBytes,
+          nonce,
+          rawKind,
+          TOKEN_FEE,
+          sigBytes,
+          hash,
+        );
+        const txHash = await callRpc("kovanica_sendRawTransaction", [rawHex]);
+        return json({ ok: true, tx: txHash });
+      } catch (e) {
+        return text(e instanceof Error ? e.message : "token send failed", 400);
       }
     }
     if (name === "faucet") {

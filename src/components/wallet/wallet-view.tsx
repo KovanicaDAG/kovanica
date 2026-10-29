@@ -10,8 +10,13 @@ import { api, useApiSource, isPublic } from "@/lib/api/client";
 import { MIN_FEE, TOKEN, isNativeAsset, assetLabel } from "@/lib/api/contract";
 import type { ApiHistory, ApiUtxos } from "@/lib/api/contract";
 import type { ApiToken } from "@/lib/tokens/codec";
-import { formatTokenAmount } from "@/lib/tokens/codec";
+import { formatTokenAmount, parseTokenAmount } from "@/lib/tokens/codec";
 import { prepareUrl, submitUrl, assetOptionsFromUtxos, balanceForAsset } from "@/lib/api/assets";
+import {
+  TOKEN_SEND_FEE,
+  tokenPrepareUrl,
+  tokenSubmitUrl,
+} from "@/lib/api/token-send";
 import { ATOM } from "@/lib/ledger/types";
 import type { HardwareWalletRec, SoftwareWalletRec, WalletRec } from "@/lib/ledger/types";
 import { fmtKvnc, parseKvnc } from "@/lib/ledger/format";
@@ -65,6 +70,8 @@ export function WalletView() {
   const [feeTier, setFeeTier] = useState<"slow" | "normal" | "fast">("normal");
   /** RFC-002: null = native KUNA */
   const [assetId, setAssetId] = useState<string | null>(null);
+  /** KVP-102: contract address of the token selected in the send form. */
+  const [tokenAddr, setTokenAddr] = useState<string | null>(null);
   /** KVP-102 tokens discovered on chain (all of them, not only ones this wallet holds). */
   const [tokens, setTokens] = useState<ApiToken[]>([]);
 
@@ -81,13 +88,47 @@ export function WalletView() {
     atoms: number;
     amountKvnc: string;
     feeKvnc: string;
+    /** Set for a KVP-102 token call; `atoms` is the u128 base-unit amount. */
+    token?: { address: string; symbol: string; decimals: number; atoms: string };
   } | null>(null);
 
   const balance = utxos?.balance ?? 0;
   const assetBalance = utxos ? balanceForAsset(utxos.utxos, assetId) : 0;
-  const spendable = isNativeAsset(assetId) ? balance : assetBalance;
+  const selectedToken = tokenAddr
+    ? (tokens.find((t) => t.address.toLowerCase() === tokenAddr.toLowerCase()) ?? null)
+    : null;
+  const tokenBalance = selectedToken ? BigInt(selectedToken.balance ?? "0") : 0n;
+  const spendable = selectedToken
+    ? Number(formatTokenAmount(tokenBalance, selectedToken.decimals))
+    : isNativeAsset(assetId)
+      ? balance
+      : assetBalance;
   const fee = feeRates ? feeRates[feeTier] : MIN_FEE;
-  const assetOptions: AssetOption[] = assetOptionsFromUtxos(utxos?.utxos ?? []);
+
+  // UTXO assets (RFC-002) + every KVP-102 contract token discovered on chain.
+  // A contract token is not a UTXO, so it only shows up here because the token
+  // scan found it — not because the wallet's UTXO set mentions it.
+  const assetOptions: AssetOption[] = [
+    ...assetOptionsFromUtxos(utxos?.utxos ?? []),
+    ...tokens.map((t) => ({
+      assetId: `token:${t.address}`,
+      balance: Number(formatTokenAmount(BigInt(t.balance ?? "0"), t.decimals)),
+      label: t.symbol,
+      symbol: t.symbol,
+      icon: t.icon,
+    })),
+  ];
+  const pickerValue = selectedToken ? `token:${selectedToken.address}` : assetId;
+
+  function onPickAsset(id: string | null) {
+    if (id && id.startsWith("token:")) {
+      setTokenAddr(id.slice("token:".length));
+      setAssetId(null);
+      return;
+    }
+    setTokenAddr(null);
+    setAssetId(id);
+  }
 
   // KVP-106: Check if selected asset is an NFT
   const selectedAssetOpt = assetOptions.find(
@@ -95,7 +136,7 @@ export function WalletView() {
       (isNativeAsset(assetId) && isNativeAsset(opt.assetId)) ||
       (!isNativeAsset(assetId) && opt.assetId === assetId),
   );
-  const isNftSelected = selectedAssetOpt?.kind === "nft";
+  const isNftSelected = !selectedToken && selectedAssetOpt?.kind === "nft";
 
   async function refreshChain(address: string) {
     try {
@@ -301,6 +342,10 @@ export function WalletView() {
   async function onSend(e: React.FormEvent) {
     e.preventDefault();
     if (!wallet) return;
+    if (selectedToken) {
+      await onSendToken(selectedToken);
+      return;
+    }
     const atoms = parseKvnc(amount);
     if (atoms === null) {
       toast.error("Enter a positive amount");
@@ -382,10 +427,109 @@ export function WalletView() {
     }
   }
 
+  async function onSendToken(token: ApiToken) {
+    if (!wallet) return;
+    const atoms = parseTokenAmount(amount, token.decimals);
+    if (atoms === null) {
+      toast.error(`Enter a positive ${token.symbol} amount (max ${token.decimals} decimals)`);
+      return;
+    }
+    const dest = parseAddr(to);
+    if (!dest) {
+      toast.error("Need a kvnc…dag or 64-hex address");
+      return;
+    }
+    const held = BigInt(token.balance ?? "0");
+    if (held < atoms) {
+      toast.error(
+        `Insufficient ${token.symbol}: balance ${formatTokenAmount(held, token.decimals)}`,
+      );
+      return;
+    }
+    if (balance < TOKEN_SEND_FEE) {
+      toast.error(`Need at least ${fmtKvnc(TOKEN_SEND_FEE)} ${TOKEN} for the fee`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const prep = await api<{ sighash?: string; fee?: number }>(
+        tokenPrepareUrl(wallet.address, token.address, dest, atoms),
+        "POST",
+      );
+      if (!prep || !prep.sighash) {
+        toast.error(typeof prep === "string" ? prep : "Failed to prepare token transfer");
+        setBusy(false);
+        return;
+      }
+      if (wallet.type === "hardware") {
+        setSignModalState({
+          open: true,
+          sighash: prep.sighash,
+          dest,
+          atoms: 0,
+          amountKvnc: `${formatTokenAmount(atoms, token.decimals)} ${token.symbol}`,
+          feeKvnc: fmtKvnc(prep.fee ?? TOKEN_SEND_FEE),
+          token: {
+            address: token.address,
+            symbol: token.symbol,
+            decimals: token.decimals,
+            atoms: atoms.toString(),
+          },
+        });
+        setBusy(false);
+        return;
+      }
+      if (!wallet.mnemonic) {
+        toast.error("Wallet is locked or watch-only");
+        setBusy(false);
+        return;
+      }
+      const sig = await signSighash(wallet.mnemonic, wallet.index, prep.sighash);
+      await submitToken(token, dest, atoms, sig);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Send failed");
+      setBusy(false);
+    }
+  }
+
+  async function submitToken(
+    token: { address: string; symbol: string; decimals: number },
+    dest: string,
+    atoms: bigint,
+    sig: string,
+  ) {
+    if (!wallet) return;
+    setBusy(true);
+    try {
+      const sub = await api<{ tx: string }>(
+        tokenSubmitUrl(wallet.address, token.address, dest, atoms, sig),
+        "POST",
+      );
+      try {
+        await api("/api/produce", "POST");
+      } catch {
+        /* ignore */
+      }
+      await refreshChain(wallet.address);
+      toast.success(
+        `Sent ${formatTokenAmount(atoms, token.decimals)} ${token.symbol} · ${shortId(sub.tx)}`,
+      );
+      setTo("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Send failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onHardwareSignSuccess(sig: string) {
     if (!signModalState || !wallet) return;
-    const { dest, atoms } = signModalState;
+    const { dest, atoms, token } = signModalState;
     setSignModalState(null);
+    if (token) {
+      await submitToken(token, dest, BigInt(token.atoms), sig);
+      return;
+    }
     await submitTransaction(dest, atoms, sig);
   }
 
@@ -599,10 +743,16 @@ export function WalletView() {
           <p className="mt-1 font-display text-4xl tabular-nums tracking-tight text-fg">
             {fmtKvnc(balance)}
           </p>
-          {!isNativeAsset(assetId) && (
+          {selectedToken ? (
             <p className="mt-1 font-mono text-xs text-gold">
-              Selected asset: {fmtKvnc(assetBalance)} · {assetLabel(assetId)}
+              {formatTokenAmount(tokenBalance, selectedToken.decimals)} {selectedToken.symbol}
             </p>
+          ) : (
+            !isNativeAsset(assetId) && (
+              <p className="mt-1 font-mono text-xs text-gold">
+                Selected asset: {fmtKvnc(assetBalance)} · {assetLabel(assetId)}
+              </p>
+            )
           )}
         </div>
         <div className="flex gap-1">
@@ -659,8 +809,8 @@ export function WalletView() {
 
             <AssetPicker
               options={assetOptions}
-              value={assetId}
-              onChange={setAssetId}
+              value={pickerValue}
+              onChange={onPickAsset}
               disabled={busy}
             />
 
@@ -678,7 +828,14 @@ export function WalletView() {
 
             <label className="text-xs text-muted">
               Amount (
-              {isNativeAsset(assetId) ? TOKEN : isNftSelected ? "NFT (fixed: 1)" : "asset units"})
+              {selectedToken
+                ? selectedToken.symbol
+                : isNativeAsset(assetId)
+                  ? TOKEN
+                  : isNftSelected
+                    ? "NFT (fixed: 1)"
+                    : "asset units"}
+              )
               <div className="mt-1 flex gap-2">
                 <input
                   value={amount}
@@ -697,6 +854,12 @@ export function WalletView() {
                     className="h-11 px-3"
                     disabled={busy || !utxos}
                     onClick={() => {
+                      if (selectedToken) {
+                        setAmount(
+                          formatTokenAmount(tokenBalance, selectedToken.decimals) || "0",
+                        );
+                        return;
+                      }
                       const feeDeduct = isNativeAsset(assetId) ? fee : 0;
                       const v = Math.max(0, spendable - feeDeduct) / ATOM;
                       setAmount(v.toFixed(8).replace(/\.?0+$/, "") || "0");
@@ -722,7 +885,9 @@ export function WalletView() {
                 </Button>
               ))}
             </div>
-            <p className="text-[11px] text-muted text-center">Fee ≈ {fmtKvnc(fee)}</p>
+            <p className="text-[11px] text-muted text-center">
+              Fee ≈ {fmtKvnc(selectedToken ? TOKEN_SEND_FEE : fee)} {TOKEN}
+            </p>
 
             <Button type="submit" className="h-12" disabled={busy}>
               {busy

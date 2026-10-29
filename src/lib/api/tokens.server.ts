@@ -21,9 +21,11 @@ import {
   type ApiToken,
   type TokenState,
 } from "../tokens/codec";
+import { decodePool, POOL_SLOT_HEX, spotPriceKuna, type ApiPool, type PoolState } from "../tokens/pool";
 import { parseAddr } from "../wallet/address";
 
 export type { ApiToken };
+export type { ApiPool };
 
 const RPC_URL = "http://127.0.0.1:8545/rpc";
 
@@ -137,6 +139,14 @@ async function readToken(address: string): Promise<TokenState | null> {
   }
 }
 
+/**
+ * Decoded state of one token contract, or `null` when the address holds no
+ * token. Accepts canonical `kvnc…dag` or 64-hex, exactly like the RPC does.
+ */
+export async function getTokenState(address: string): Promise<TokenState | null> {
+  return readToken(address);
+}
+
 async function collect(): Promise<{ entries: Entry[] }> {
   const height = await latestHeight();
 
@@ -212,4 +222,61 @@ export async function listTokens(holderHex?: string): Promise<ApiToken[]> {
       },
     ];
   });
+}
+
+/** Read and decode the AMM pool of one token contract, `null` when uninitialized. */
+async function readPool(address: string): Promise<PoolState | null> {
+  try {
+    const raw = await rpc<string>("kovanica_getStorageAt", [address, POOL_SLOT_HEX]);
+    const bytes = hexToBytes(raw);
+    if (!bytes || bytes.length === 0) return null;
+    return decodePool(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every token contract that has an initialized AMM pool, largest KUNA reserve
+ * first.
+ *
+ * Pools are not indexed: a token is a pool iff its `kvnc/v1/pool` slot decodes,
+ * so this reuses the token discovery scan and adds one storage read per token.
+ */
+export async function listPools(): Promise<ApiPool[]> {
+  const { entries } = await (inflight ??= collect().finally(() => {
+    inflight = null;
+  }));
+
+  const rows = await Promise.all(
+    entries.map(async (entry): Promise<ApiPool | null> => {
+      const pool = await readPool(entry.address);
+      if (!pool) return null;
+      const hex = parseAddr(entry.address);
+      if (!hex) return null;
+      return {
+        address: `0x${hex}`,
+        name: entry.state.name,
+        symbol: entry.state.symbol,
+        decimals: entry.state.decimals,
+        icon: entry.state.icon,
+        // Either switch stops swaps; the UI only needs to know it is closed.
+        paused: pool.paused || entry.state.paused,
+        fee_bps: pool.feeBps,
+        kuna_reserve: pool.kunaReserve.toString(),
+        token_reserve: pool.tokenReserve.toString(),
+        lp_total: pool.lpTotal.toString(),
+        price_kuna: spotPriceKuna(pool, entry.state.decimals),
+      };
+    }),
+  );
+
+  return rows
+    .filter((row): row is ApiPool => row !== null)
+    .sort((a, b) => {
+      const left = BigInt(b.kuna_reserve);
+      const right = BigInt(a.kuna_reserve);
+      if (left !== right) return left > right ? 1 : -1;
+      return a.symbol.localeCompare(b.symbol);
+    });
 }
