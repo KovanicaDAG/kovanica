@@ -719,6 +719,11 @@ where
         committee = committee.authorities().len(),
         "committee public keys registered with batch verifier"
     );
+    info!(
+        state_commitment_active_from_round = kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND,
+        "sealed headers commit to the full state from this leader round; \
+         run this build on every validator before the network reaches it"
+    );
 
     // Determine our authority index from the committee (match local public key)
     let our_authority = if config.run_validator {
@@ -7630,7 +7635,21 @@ mod tests {
     /// Export a snapshot from a throwaway storage with one seeded account and
     /// a quorum-sealed leader header at height 0 (`committed_leader_height = 0`).
     fn exported_snapshot_bytes() -> (Vec<u8>, Vec<kovanica_types::SealCommitteeSnapshotMember>) {
-        exported_snapshot_bytes_with_header_round(3)
+        exported_snapshot_bytes_with_header_round(post_activation_round(3))
+    }
+
+    /// First leader round at or after which the sealed header commits to the
+    /// full state, plus `offset` leader slots. A snapshot sealed below it
+    /// cannot authenticate staking/contract rows and is refused by design.
+    ///
+    /// Leader slots are multiples of [`kovanica_types::WAVE_LENGTH`] and the
+    /// activation round itself need not be one, so round up to the first slot;
+    /// the consensus catch-up anchor rejects a round that is not a leader slot.
+    fn post_activation_round(offset: u64) -> u64 {
+        let first = kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND
+            .div_ceil(kovanica_types::WAVE_LENGTH)
+            * kovanica_types::WAVE_LENGTH;
+        first + offset * kovanica_types::WAVE_LENGTH
     }
 
     fn exported_snapshot_bytes_with_header_round(
@@ -7723,7 +7742,10 @@ mod tests {
             .get_account(&txn, &Address([7; 32]))
             .unwrap();
         assert_eq!(acct.balance, 42, "verified snapshot must be applied");
-        assert_eq!(dag.certified_catchup_anchor().unwrap(), Some(3));
+        assert_eq!(
+            dag.certified_catchup_anchor().unwrap(),
+            Some(post_activation_round(3))
+        );
     }
 
     #[test]
@@ -7817,8 +7839,10 @@ mod tests {
     fn apply_state_snapshot_anchors_past_the_prune_window() {
         let commits = 101u64;
         let skipped_slots = 4u64;
-        let anchor = (commits + skipped_slots) * kovanica_types::WAVE_LENGTH;
-        assert_ne!(anchor, commits * kovanica_types::WAVE_LENGTH);
+        // Sealed at a round the full-state commitment covers: below the
+        // activation round a snapshot is refused and there is nothing to anchor.
+        let anchor = post_activation_round((commits + skipped_slots) * kovanica_types::WAVE_LENGTH);
+        assert_ne!(anchor, post_activation_round(commits * kovanica_types::WAVE_LENGTH));
 
         let dir = tempfile::tempdir().unwrap();
         let src = Storage::new(dir.path().join("src.redb")).unwrap();
@@ -7923,7 +7947,7 @@ mod tests {
 
     #[test]
     fn apply_state_snapshot_anchors_from_verified_header_round_not_forged_staking() {
-        let (bytes, members) = exported_snapshot_bytes_with_header_round(42);
+        let (bytes, members) = exported_snapshot_bytes_with_header_round(post_activation_round(42));
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("dst.redb")).unwrap());
         {
@@ -7937,8 +7961,11 @@ mod tests {
         let dag = dag_for(&dir);
         apply_state_snapshot(&storage, &dag, 1337, PeerId::random(), &bytes);
 
-        // Header claims leader_round = 42; catch-up anchor MUST be Some(42).
-        assert_eq!(dag.certified_catchup_anchor().unwrap(), Some(42));
+        // Header claims that leader round; catch-up anchor MUST be Some(it).
+        assert_eq!(
+            dag.certified_catchup_anchor().unwrap(),
+            Some(post_activation_round(42))
+        );
     }
 
     #[test]
@@ -8059,7 +8086,8 @@ mod tests {
         // so the sealed leader round is (1200 + 5) * 3 = 3615 (not 1200 * 3 = 3600).
         let peer_commits = 1_200u64;
         let skipped_slots = 5u64;
-        let anchor_round = (peer_commits + skipped_slots) * kovanica_types::WAVE_LENGTH;
+        let anchor_round =
+            post_activation_round((peer_commits + skipped_slots) * kovanica_types::WAVE_LENGTH);
         let next_leader_round = anchor_round + kovanica_types::WAVE_LENGTH;
 
         let peer_dir = tempfile::tempdir().unwrap();
@@ -8780,11 +8808,15 @@ mod tests {
             voter: 0,
             signature: kovanica_types::Signature([0; 64]),
         };
+        // Votes are signed for the epoch of the leader round (a pure function
+        // of the round), so a fixture at any round signs the same way a
+        // validator would there.
         vote.signature = kovanica_crypto::sign(
             key,
-            &vote.signature_data(&kovanica_types::SigningContext::new(
-                kovanica_types::signing::chain_id::LOCAL,
-            )),
+            &vote.signature_data(&kovanica_types::SigningContext {
+                chain_id: kovanica_types::signing::chain_id::LOCAL,
+                epoch: kovanica_types::epoch_for_round(leader_round),
+            }),
         );
         vote
     }

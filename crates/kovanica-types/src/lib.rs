@@ -267,13 +267,27 @@ pub fn slashing_active_from(round: Round) -> bool {
 /// quorum authenticates the full state and `import_verified_snapshot` can
 /// reject forged staking or contract rows.
 ///
+/// # Activation on a running chain (chain 4, owner decision 2026-10-28)
+///
 /// Changing the header root is a consensus change: a node without it would
-/// compute a different root and its seals would not match. It therefore
-/// defaults to `u64::MAX` (inert; state sync refuses every snapshot because
-/// none can be authenticated) and is set to `0` at the next genesis / testnet
-/// reset, after every validator runs a build containing it. Do not activate it
-/// on a running chain without the owner's approval.
-pub const STATE_COMMITMENT_ACTIVE_FROM_ROUND: u64 = u64::MAX;
+/// compute a different root and its seals would not match. Chain 4 therefore
+/// activates it at round **500 000 without a reset**: the rule is a pure
+/// function of the leader round, so every node reproduces the account-only root
+/// below the activation round (a re-executed old sub-DAG is bit-identical) and
+/// the full-state root from it on. Every validator must run a build containing
+/// this constant **before** the activation round; a node still on the old build
+/// computes the account-only root from that round on and its leader headers stop
+/// matching the committee (its seals are rejected, it falls out of consensus
+/// until it is upgraded).
+///
+/// Round 500 000 is roughly five days after the constant was chosen (~1 round
+/// per second), which leaves room to upgrade the whole validator set, and it is
+/// far above every round the chain had reached (≈53 000). The value is chosen
+/// once, here, and never tuned at runtime: a node that disagrees about it
+/// disagrees about every header from the activation round on.
+///
+/// Do not change this value on a running chain without the owner's approval.
+pub const STATE_COMMITMENT_ACTIVE_FROM_ROUND: u64 = 500_000;
 
 /// Whether the leader header at `round` commits to the full state.
 ///
