@@ -31,19 +31,20 @@
 //! market between the native KUNA account of the contract and this token. The
 //! native side is the contract's real account balance (`Host::balance_of`);
 //! the token side is `Token::balances[contract_address]`. There is no
-//! `msg.value` in the wasm ABI, so the KUNA input is passed in `args` and
-//! checked against the contract's surplus over the recorded reserve; the
-//! signed `Call.value` is what actually funds it. No KUNA is ever minted or
-//! burned here — the reserve covers every payout.
+//! `msg.value` in the wasm ABI, so the KUNA input is passed in `args` and must
+//! be **exactly equal** to the signed `Call.value` the host reports through
+//! [`Host::call_value`] (`kovanica_call_value()` in the wasm ABI). Anything
+//! else is `InvalidInput`. No KUNA is ever minted or burned here — the reserve
+//! covers every payout.
 //!
-//! That bound is the surplus, not the value attached to the call: a KUNA
-//! donation that arrives after initialization (a plain `Transfer`, or value
-//! attached to another entry point) can be claimed by the next `token_buy`
-//! caller that declares it as `amount_in` without paying for it. This is
-//! inherent to P0a and closed by P0b (`kovanica_call_value()`). Token donations
-//! are different: a `token_transfer` to the pool address only raises the ledger
-//! side, so `token_reserve <= balances[contract_address]` and the surplus is
-//! trapped forever (there is no sweep).
+//! Because the bound is the signed value, a KUNA donation *cannot* be claimed:
+//! an ordinary transfer into the pool raises `balance_of(contract)` without
+//! raising `call_value()`, and the next `token_buy` sweeps that surplus into
+//! `kuna_reserve` (LP yield) instead of letting the caller book it. Token
+//! donations are one-sided in the other direction — a `token_transfer` to the
+//! pool address only raises the ledger side, so
+//! `token_reserve <= balances[contract_address]` and the surplus is trapped
+//! forever (there is no sweep).
 //!
 //! ## WASM entry points (wasm32 only; bincode args in, bincode results out)
 //!
@@ -424,10 +425,13 @@ impl Token {
     /// Initialize the KUNA ↔ token pool and mint the first LP shares.
     ///
     /// Only `owner` / `minter` may seed it. The native KUNA side is funded by
-    /// the signed `Call.value` that precedes this entry point; because the
-    /// wasm ABI has no `msg.value`, `kuna_in` is validated against the
-    /// contract's balance surplus over its recorded reserve and the whole
-    /// surplus is swept into the reserve. Returns the LP shares minted.
+    /// the signed `Call.value` that precedes this entry point: `kuna_in` must
+    /// equal [`Host::call_value`] exactly, because the wasm ABI has no
+    /// `msg.value` and the value is the only unforgeable statement of what the
+    /// caller paid. `kuna_reserve` is then set to the contract's whole balance,
+    /// so a donation that arrived *before* initialization is folded in too —
+    /// that is safe here because seeding is restricted to the owner/minter, who
+    /// is the only LP at that point. Returns the LP shares minted.
     pub fn init_pool(
         host: &mut impl Host,
         kuna_in: Amount,
@@ -445,13 +449,11 @@ impl Token {
         if kuna_in == 0 || tokens_in == 0 || fee_bps > MAX_FEE_BPS {
             return Err(ContractError::InvalidInput);
         }
-
-        let contract = host.contract_address();
-        let surplus = host.balance_of(&contract);
-        if kuna_in > surplus {
+        if kuna_in != host.call_value() {
             return Err(ContractError::InvalidInput);
         }
 
+        let contract = host.contract_address();
         let lp = isqrt(
             kuna_in
                 .checked_mul(tokens_in)
@@ -478,23 +480,22 @@ impl Token {
         Ok(lp)
     }
 
-    /// Buy tokens with KUNA: `amount_in` is the native amount attached to the
-    /// call, `min_out` the slippage floor. Returns the tokens received.
+    /// Buy tokens with KUNA: `amount_in` must equal the signed `Call.value`,
+    /// `min_out` the slippage floor. Returns the tokens received.
     pub fn buy(host: &mut impl Host, amount_in: Amount, min_out: Amount) -> ContractResult<Amount> {
         let mut token = Self::load(host)?;
         let mut pool = Pool::load(host)?;
         if pool.paused || token.paused {
             return Err(ContractError::Paused);
         }
-        if amount_in == 0 {
+        // `amount_in` must be exactly what the caller paid. Anything else would
+        // let a caller book an unbooked donation (a plain transfer into the
+        // pool) as if it had paid for it.
+        if amount_in == 0 || amount_in != host.call_value() {
             return Err(ContractError::InvalidInput);
         }
 
         let contract = host.contract_address();
-        let surplus = host.balance_of(&contract).saturating_sub(pool.kuna_reserve);
-        if amount_in > surplus {
-            return Err(ContractError::InvalidInput);
-        }
 
         let out = quote(
             amount_in,
@@ -520,7 +521,9 @@ impl Token {
         token.balances.insert(caller, new_balance);
         token.balances.insert(contract, new_contract);
         pool.token_reserve -= out;
-        // The attached value (plus any donation) is now the reserve.
+        // The signed value is already in the contract's balance; sweeping the
+        // whole balance also folds any stray donation into the reserve (LP
+        // yield — nobody can claim it back).
         pool.kuna_reserve = host.balance_of(&contract);
 
         Self::store(host, &token)?;
@@ -542,6 +545,10 @@ impl Token {
             return Err(ContractError::Paused);
         }
         if amount_in == 0 {
+            return Err(ContractError::InvalidInput);
+        }
+        // Selling takes no native value: an attached value would be stranded.
+        if host.call_value() != 0 {
             return Err(ContractError::InvalidInput);
         }
 
@@ -1263,7 +1270,11 @@ mod tests {
 
     fn init_pool(host: &mut MemHost, kuna_in: Amount, tokens_in: Amount, fee: u16) -> Amount {
         host.set_balance(addr(CONTRACT), kuna_in);
-        Token::init_pool(host, kuna_in, tokens_in, fee).expect("init_pool")
+        host.set_call_value(kuna_in);
+        let lp = Token::init_pool(host, kuna_in, tokens_in, fee).expect("init_pool");
+        // `init_pool` needs the value; a later `sell` must see none.
+        host.set_call_value(0);
+        lp
     }
 
     #[test]
@@ -1314,7 +1325,7 @@ mod tests {
             Token::init_pool(&mut host, 1_000, 1_000, 1_001),
             Err(ContractError::InvalidInput)
         );
-        // More KUNA than the contract account holds (no attached value).
+        // `kuna_in` must equal the signed value; none is attached here.
         assert_eq!(
             Token::init_pool(&mut host, 1_000_001, 1_000, 30),
             Err(ContractError::InvalidInput)
@@ -1336,6 +1347,7 @@ mod tests {
         let expected = quote(10_000, before.kuna_reserve, before.token_reserve, 30).unwrap();
         // Simulate `Call.value`: the contract account grows by amount_in.
         host.set_balance(addr(CONTRACT), before.kuna_reserve + 10_000);
+        host.set_call_value(10_000);
         host.set_caller(addr(B));
         let out = Token::buy(&mut host, 10_000, expected).unwrap();
         assert_eq!(out, expected);
@@ -1368,6 +1380,7 @@ mod tests {
         .unwrap();
 
         host.set_balance(addr(CONTRACT), before_pool.kuna_reserve + 10_000);
+        host.set_call_value(10_000);
         host.set_caller(addr(B));
         assert_eq!(
             Token::buy(&mut host, 10_000, expected + 1),
@@ -1377,7 +1390,7 @@ mod tests {
         assert_eq!(Pool::load(&host).unwrap(), before_pool);
         assert_eq!(host.balance_of(&addr(B)), 0);
 
-        // Claiming more than the contract's surplus over the reserve fails.
+        // Claiming more than the signed value fails.
         assert_eq!(
             Token::buy(&mut host, 10_001, 0),
             Err(ContractError::InvalidInput)
@@ -1394,6 +1407,7 @@ mod tests {
 
         // Attached value plus a 500-atom donation.
         host.set_balance(addr(CONTRACT), before.kuna_reserve + 10_000 + 500);
+        host.set_call_value(10_000);
         host.set_caller(addr(B));
         Token::buy(&mut host, 10_000, 0).unwrap();
 
@@ -1401,13 +1415,12 @@ mod tests {
         assert_eq!(after.kuna_reserve, before.kuna_reserve + 10_500);
     }
 
-    // P0a hazard: the caller declares the donation as `amount_in`. P0b
-    // (`kovanica_call_value`) makes this impossible; flip this test then.
     #[test]
-    fn an_unbooked_donation_can_be_claimed_by_the_next_buyer() {
+    fn an_unbooked_donation_is_not_claimable() {
         let mut host = new_token(addr(A), 1_000_000);
         init_pool(&mut host, 1_000, 1_000, 30);
         let before = Pool::load(&host).unwrap();
+        let before_token = Token::load(&host).unwrap();
 
         // KUNA arrives without a `token_buy` call: a plain transfer, or value
         // attached to some other entry point. `MemHost` has no attach, so the
@@ -1416,16 +1429,89 @@ mod tests {
         let surplus = host.balance_of(&addr(CONTRACT)) - before.kuna_reserve;
         assert_eq!(surplus, 500);
 
+        // Declaring the donation as `amount_in` with no value attached is
+        // exactly the P0a claim, and it now fails.
         host.set_caller(addr(B));
-        let out = Token::buy(&mut host, surplus, 0).expect("the donation funds the buy");
+        assert_eq!(
+            Token::buy(&mut host, surplus, 0),
+            Err(ContractError::InvalidInput)
+        );
+        assert_eq!(Token::load(&host).unwrap(), before_token);
+        assert_eq!(Pool::load(&host).unwrap(), before);
+        assert_eq!(host.balance_of(&addr(B)), 0);
+
+        // A buyer who actually pays still gets tokens — and the sweep folds
+        // the donation into the reserve, i.e. to the LPs, not to the buyer.
+        host.set_balance(addr(CONTRACT), before.kuna_reserve + 500 + 1_000);
+        host.set_call_value(1_000);
+        let out = Token::buy(&mut host, 1_000, 0).expect("a funded buy passes");
         assert!(out > 0);
 
         let token = Token::load(&host).unwrap();
         assert_eq!(token.balances.get(&addr(B)).copied(), Some(out));
-        // The whole balance, donation included, is now the recorded reserve.
         let after = Pool::load(&host).unwrap();
         assert_eq!(after.kuna_reserve, host.balance_of(&addr(CONTRACT)));
-        assert_eq!(after.kuna_reserve, before.kuna_reserve + 500);
+        assert_eq!(after.kuna_reserve, before.kuna_reserve + 1_500);
+    }
+
+    #[test]
+    fn buy_rejects_a_mismatched_call_value() {
+        let mut host = new_token(addr(A), 1_000_000);
+        init_pool(&mut host, 1_000_000, 1_000_000, 30);
+        let before_token = Token::load(&host).unwrap();
+        let before_pool = Pool::load(&host).unwrap();
+
+        // Paid 1_000 but declares 999.
+        host.set_balance(addr(CONTRACT), before_pool.kuna_reserve + 1_000);
+        host.set_call_value(1_000);
+        host.set_caller(addr(B));
+        assert_eq!(
+            Token::buy(&mut host, 999, 0),
+            Err(ContractError::InvalidInput)
+        );
+        assert_eq!(Token::load(&host).unwrap(), before_token);
+        assert_eq!(Pool::load(&host).unwrap(), before_pool);
+        assert_eq!(host.balance_of(&addr(B)), 0);
+    }
+
+    #[test]
+    fn buy_rejects_a_value_below_amount_in() {
+        let mut host = new_token(addr(A), 1_000_000);
+        init_pool(&mut host, 1_000_000, 1_000_000, 30);
+        let before_token = Token::load(&host).unwrap();
+        let before_pool = Pool::load(&host).unwrap();
+
+        // Paid 1_000 but declares 1_001 — the classic donation claim.
+        host.set_balance(addr(CONTRACT), before_pool.kuna_reserve + 1_000);
+        host.set_call_value(1_000);
+        host.set_caller(addr(B));
+        assert_eq!(
+            Token::buy(&mut host, 1_001, 0),
+            Err(ContractError::InvalidInput)
+        );
+        assert_eq!(Token::load(&host).unwrap(), before_token);
+        assert_eq!(Pool::load(&host).unwrap(), before_pool);
+    }
+
+    #[test]
+    fn init_pool_rejects_value_mismatch() {
+        let mut host = new_token(addr(A), 1_000_000);
+        host.set_balance(addr(CONTRACT), 1_000);
+
+        // More than was attached.
+        host.set_call_value(999);
+        assert_eq!(
+            Token::init_pool(&mut host, 1_000, 1_000, 30),
+            Err(ContractError::InvalidInput)
+        );
+        // Less than was attached (the surplus would be an unearned gift).
+        host.set_call_value(1_001);
+        assert_eq!(
+            Token::init_pool(&mut host, 1_000, 1_000, 30),
+            Err(ContractError::InvalidInput)
+        );
+
+        assert!(host.storage_get(POOL_KEY).is_none());
     }
 
     #[test]
@@ -1433,6 +1519,7 @@ mod tests {
         let mut host = new_token(addr(A), 1_000_000);
         init_pool(&mut host, 1_000_000, 1_000_000, 30);
         host.set_balance(addr(CONTRACT), 1_000_000 + 10_000);
+        host.set_call_value(10_000);
         host.set_caller(addr(B));
         let bought = Token::buy(&mut host, 10_000, 0).unwrap();
 
@@ -1446,6 +1533,8 @@ mod tests {
         )
         .unwrap();
         let native_before = host.balance_of(&addr(B));
+        // Selling attaches nothing.
+        host.set_call_value(0);
         let out = Token::sell(&mut host, sell, expected).unwrap();
         assert_eq!(out, expected);
 
@@ -1461,6 +1550,27 @@ mod tests {
             balance_of_token(&token, addr(CONTRACT))
         );
         assert_eq!(host.events().last().unwrap().0, TOKEN_SWAP_SELL);
+    }
+
+    #[test]
+    fn sell_rejects_attached_value() {
+        let mut host = new_token(addr(A), 1_000_000);
+        init_pool(&mut host, 1_000_000, 1_000_000, 30);
+        host.set_balance(addr(CONTRACT), 1_000_000 + 10_000);
+        host.set_call_value(10_000);
+        host.set_caller(addr(B));
+        let bought = Token::buy(&mut host, 10_000, 0).unwrap();
+
+        let before_token = Token::load(&host).unwrap();
+        let before_pool = Pool::load(&host).unwrap();
+        // A sale takes no native value; attaching any would strand it.
+        host.set_call_value(1);
+        assert_eq!(
+            Token::sell(&mut host, bought / 2, 0),
+            Err(ContractError::InvalidInput)
+        );
+        assert_eq!(Token::load(&host).unwrap(), before_token);
+        assert_eq!(Pool::load(&host).unwrap(), before_pool);
     }
 
     #[test]
@@ -1511,8 +1621,10 @@ mod tests {
     #[test]
     fn overflowing_amounts_are_rejected_without_state_change() {
         let mut host = new_token(addr(A), Amount::MAX);
-        // kuna_in * tokens_in overflows → Overflow, no panic.
+        // kuna_in * tokens_in overflows → Overflow, no panic. The value check
+        // must pass first, so attach exactly `kuna_in`.
         host.set_balance(addr(CONTRACT), Amount::MAX);
+        host.set_call_value(Amount::MAX);
         assert_eq!(
             Token::init_pool(&mut host, Amount::MAX, Amount::MAX, 30),
             Err(ContractError::Overflow)
@@ -1528,6 +1640,7 @@ mod tests {
         huge.fee_bps = 0;
         Pool::store(&mut host, &huge).unwrap();
         host.set_balance(addr(CONTRACT), Amount::MAX);
+        host.set_call_value(10_000);
         let token_before = Token::load(&host).unwrap();
         let balance_before = host.balance_of(&addr(CONTRACT));
         assert_eq!(

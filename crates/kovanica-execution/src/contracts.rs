@@ -2288,6 +2288,207 @@ pub(crate) mod tests {
         );
     }
 
+    // P0b: the pool entry points read the signed `Call.value` through the new
+    // `kovanica_call_value` import, so an unbooked KUNA donation can no longer
+    // be declared as `amount_in`. Everything below runs through the real wasm
+    // module and the real `ContractHost` value path.
+    #[test]
+    fn wasmi_e2e_kovanica_token_call_value() {
+        let wasm = match build_contract_wasm("kovanica-token") {
+            Some(w) => w,
+            None => return,
+        };
+
+        let (_dir, storage) = open_storage();
+        let creator = addr(1);
+        let buyer = addr(2);
+        let contract = addr(42);
+        deploy(&storage, &contract);
+        fund(&storage, &creator, 1_000_000);
+        fund(&storage, &buyer, 100_000);
+        let config = ExecutionConfig {
+            gas_limit: 100_000_000,
+            memory_limit_pages: DEFAULT_CONTRACT_MEMORY_PAGES,
+        };
+        let mut runner = ContractRunner::new();
+
+        let create = token_create_args(1_000_000);
+        runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_create",
+                contract,
+                caller: creator,
+                height: 1,
+                timestamp: 100,
+                args: &create,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm token_create");
+
+        let init = call_args::encode_token_init_pool(10_000, 1_000_000, 30).expect("encode");
+        runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_init_pool",
+                contract,
+                caller: creator,
+                height: 2,
+                timestamp: 200,
+                args: &init,
+                storage: &storage,
+                txn: None,
+                value: 10_000,
+                config: &config,
+            })
+            .expect("wasm token_init_pool");
+        let token_after_init = token_state(&storage, &contract);
+        let pool_after_init = pool_state(&storage, &contract);
+        assert_eq!(pool_after_init.kuna_reserve, 10_000);
+        assert_eq!(native_balance(&storage, &contract), 10_000);
+
+        // 1. Declares more than it paid: rejected, and the value move is
+        //    rolled back with the overlay (atomicity).
+        let over = call_args::encode_token_buy(1_001, 0).expect("encode");
+        let err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_buy",
+                contract,
+                caller: buyer,
+                height: 3,
+                timestamp: 300,
+                args: &over,
+                storage: &storage,
+                txn: None,
+                value: 1_000,
+                config: &config,
+            })
+            .expect_err("amount_in above the signed value must fail");
+        assert_contract_err(&err, ContractError::InvalidInput);
+        assert_eq!(native_balance(&storage, &buyer), 100_000);
+        assert_eq!(native_balance(&storage, &contract), 10_000);
+        assert_eq!(token_state(&storage, &contract), token_after_init);
+        assert_eq!(pool_state(&storage, &contract), pool_after_init);
+
+        // 2. No value attached at all: rejected.
+        let unattached = call_args::encode_token_buy(100, 0).expect("encode");
+        let err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_buy",
+                contract,
+                caller: buyer,
+                height: 4,
+                timestamp: 400,
+                args: &unattached,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect_err("a buy with no value must fail");
+        assert_contract_err(&err, ContractError::InvalidInput);
+
+        // 3. A plain transfer into the pool is a donation, and the next buyer
+        //    cannot declare it as `amount_in`.
+        fund(&storage, &contract, 10_500);
+        let claim = call_args::encode_token_buy(1_500, 0).expect("encode");
+        let err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_buy",
+                contract,
+                caller: buyer,
+                height: 5,
+                timestamp: 500,
+                args: &claim,
+                storage: &storage,
+                txn: None,
+                value: 1_000,
+                config: &config,
+            })
+            .expect_err("a donation must not be claimable");
+        assert_contract_err(&err, ContractError::InvalidInput);
+        assert_eq!(native_balance(&storage, &buyer), 100_000);
+        assert_eq!(native_balance(&storage, &contract), 10_500);
+        assert_eq!(pool_state(&storage, &contract), pool_after_init);
+
+        // 4. A buyer that really pays 1_000 succeeds, and the sweep folds the
+        //    500-atom donation into the reserve (LP yield, not buyer yield).
+        let real = call_args::encode_token_buy(1_000, 0).expect("encode");
+        let (out_bytes, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_buy",
+                contract,
+                caller: buyer,
+                height: 6,
+                timestamp: 600,
+                args: &real,
+                storage: &storage,
+                txn: None,
+                value: 1_000,
+                config: &config,
+            })
+            .expect("wasm token_buy");
+        let out: Amount = bincode::deserialize(&out_bytes).expect("out");
+        assert!(out > 0);
+        assert_eq!(native_balance(&storage, &buyer), 99_000);
+        assert_eq!(native_balance(&storage, &contract), 11_500);
+        let pool = pool_state(&storage, &contract);
+        assert_eq!(pool.kuna_reserve, 11_500);
+        assert_eq!(pool.token_reserve, 1_000_000 - out);
+        let token = token_state(&storage, &contract);
+        assert_eq!(token.balances.get(&buyer.0), Some(&out));
+
+        // 5. `token_sell` takes no value: attaching one is rejected soundly.
+        let sell = call_args::encode_token_sell(out, 0).expect("encode");
+        let err = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_sell",
+                contract,
+                caller: buyer,
+                height: 7,
+                timestamp: 700,
+                args: &sell,
+                storage: &storage,
+                txn: None,
+                value: 1,
+                config: &config,
+            })
+            .expect_err("a sale must not carry value");
+        assert_contract_err(&err, ContractError::InvalidInput);
+        assert_eq!(native_balance(&storage, &buyer), 99_000);
+        assert_eq!(native_balance(&storage, &contract), 11_500);
+        assert_eq!(pool_state(&storage, &contract), pool);
+        assert_eq!(token_state(&storage, &contract), token);
+
+        // ... and the same sale with no value goes through.
+        let (paid_bytes, _) = runner
+            .execute_wasm_call(WasmCall {
+                wasm: &wasm,
+                entry: "token_sell",
+                contract,
+                caller: buyer,
+                height: 8,
+                timestamp: 800,
+                args: &sell,
+                storage: &storage,
+                txn: None,
+                value: 0,
+                config: &config,
+            })
+            .expect("wasm token_sell");
+        let paid: Amount = bincode::deserialize(&paid_bytes).expect("paid");
+        assert!(paid > 0);
+        assert_eq!(native_balance(&storage, &buyer), 99_000 + paid as u64);
+    }
+
     /// Helper to assert contract errors across both native and wasmi dispatch.
     fn assert_contract_err(err: &ExecutionError, expected: ContractError) {
         match err {
