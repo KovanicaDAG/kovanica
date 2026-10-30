@@ -175,7 +175,7 @@ pub const ENTRY_POINTS: &[&str] = &[
     "token_sell",
 ];
 
-/// Returns whether `name` is one of the 19 dispatchable entry points.
+/// Returns whether `name` is one of the 26 dispatchable entry points.
 pub fn is_entry_point(name: &str) -> bool {
     ENTRY_POINTS.contains(&name)
 }
@@ -2104,7 +2104,7 @@ pub(crate) mod tests {
         assert_eq!(ENTRY_POINTS.len(), 26);
         assert_eq!(
             ENTRY_POINTS.iter().filter(|e| is_entry_point(e)).count(),
-            19
+            26
         );
         for entry in ENTRY_POINTS {
             let err = execute_contract_call(entry, contract, caller, 1, 100, &[], &storage)
