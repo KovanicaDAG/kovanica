@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kovanica_storage::Storage;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -35,7 +35,7 @@ enum Cmd {
     },
 }
 
-fn db_path(data_dir: &PathBuf) -> PathBuf {
+fn db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("state.redb")
 }
 
