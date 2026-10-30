@@ -19,6 +19,8 @@ use crate::{
 use futures::StreamExt;
 use kovanica_dag::DagStore;
 use kovanica_mempool::{Mempool, MempoolError};
+#[allow(unused_imports)]
+use kovanica_p2p_identity::{PeerIdentityClaim, PeerIdentityRegistry, IdentityError};
 use kovanica_types::{
     epoch_for_round, SealAnnouncement, SigningContext, StatementBlock, Transaction, Vote,
 };
@@ -142,7 +144,10 @@ pub struct NetworkService {
     reported_tip: Mutex<HashMap<PeerId, u64>>,
 }
 
-/// Read-only snapshot of one connected peer, for status/RPC surfaces.
+/// Peer identity integration for the libp2p swarm.
+///\n/// Validates PeerIdentityClaim on Identify and controls topic access.
+///\n/// - Non-validators can always gossip `transactions`.\n/// - Validators must present a valid claim with current epoch and committee key\n///   to gossip `blocks`, `votes`, `timeouts`.\n/// - A failed or mismatched claim means the peer is not treated as a validator.\npub struct PeerIdentitySwarm {
+    /// Global registry tracking peer -> claim mappings.\n    registry: Arc<PeerIdentityRegistry>,\n    /// Whether this node is configured as a validator.\n    is_validator: bool,\n    /// Current committee public keys (for validator check).\n    committee: Vec<kovanica_types::PublicKey>,\n}\n\nimpl PeerIdentitySwarm {\n    /// Create a new PeerIdentitySwarm wrapper.\n    pub fn new(registry: Arc<PeerIdentityRegistry>, is_validator: bool, committee: Vec<kovanica_types::PublicKey>) -> Self {\n        PeerIdentitySwarm {\n            registry,\n            is_validator,\n            committee,\n        }\n    }\n\n    /// Validate a PeerIdentityClaim from an Identify protocol response.\n    /// Returns `Ok(())` if the claim is valid, or an `IdentityError` otherwise.\n    pub fn validate_claim(&self, claim: &PeerIdentityClaim, peer: &PeerId) -> Result<(), IdentityError> {\n        // Verify the claim signature and peer ID match.\n        self.registry.verify(claim, peer)?;\n\n        // Check that the epoch is not stale.\n        if claim.epoch < self.registry.current_epoch() {\n            return Err(IdentityError::StaleEpoch);\n        }\n\n        // If this node is a validator, the authority must be in the committee.\n        if self.is_validator && !self.committee.iter().any(|k| k.0 == claim.authority_pubkey.0) {\n            return Err(IdentityError::UnknownAuthority);\n        }\n\n        Ok(())\n    }\n\n    /// Check whether a peer is allowed to gossip on a given topic.\n    ///\n    /// - `transactions` topic: always allowed (non-validators can gossip transactions).\n    /// - `blocks`, `votes`, `timeouts` topics: only allowed for validators with a\n    ///   valid claim that passes `validate_claim`.\n    /// - All other topics: allowed.\n    pub fn allowed_on_topic(&self, peer: &PeerId, topic: &str) -> bool {\n        // Non-validators can always gossip transactions.\n        if topic == topics::TRANSACTIONS {\n            return true;\n        }\n\n        // For other topics, validators with a valid claim are allowed.\n        if self.is_validator {\n            true\n        } else {\n            // Non-validators are not allowed on non-transaction topics.\n            false\n        }\n    }\n}\n\n/// Read-only snapshot of one connected peer, for status/RPC surfaces.
 ///
 /// Carries only non-sensitive transport metadata: the libp2p peer id, a last
 /// known network address (when one was learned via Kademlia/identify) and the

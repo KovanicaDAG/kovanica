@@ -2437,6 +2437,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovanica-codec"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-types",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "kovanica-common"
 version = "0.2.0"
 dependencies = [
@@ -2510,6 +2520,36 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "kovanica-consensus-sim"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "kovanica-consensus",
+ "kovanica-crypto",
+ "kovanica-dag",
+ "kovanica-staking",
+ "kovanica-storage",
+ "kovanica-types",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "kovanica-contract-sdk"
+version = "0.2.0"
+dependencies = [
+ "bincode",
+ "kovanica-common",
+ "kovanica-types",
+ "serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2810,6 +2850,7 @@ dependencies = [
  "kovanica-crypto",
  "kovanica-dag",
  "kovanica-mempool",
+ "kovanica-p2p-identity",
  "kovanica-storage",
  "kovanica-types",
  "libp2p 0.57.0",

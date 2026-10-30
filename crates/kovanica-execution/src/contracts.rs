@@ -173,6 +173,10 @@ pub const ENTRY_POINTS: &[&str] = &[
     "token_init_pool",
     "token_buy",
     "token_sell",
+    "escrow_create",
+    "escrow_approve",
+    "escrow_release",
+    "escrow_refund",
 ];
 
 /// Returns whether `name` is one of the 26 dispatchable entry points.

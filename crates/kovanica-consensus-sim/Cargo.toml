@@ -1,0 +1,23 @@
+[package]
+name = "kovanica-consensus-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kovanica-types = { path = "../kovanica-types" }
+kovanica-consensus = { path = "../kovanica-consensus" }
+kovanica-dag = { path = "../kovanica-dag" }
+kovanica-staking = { path = "../kovanica-staking" }
+kovanica-crypto = { path = "../kovanica-crypto" }
+kovanica-storage = { path = "../kovanica-storage" }
+kovanica-common = { path = "../kovanica-common" }
+serde = { workspace = true }
+bincode = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+kovanica-types = { path = "../kovanica-types" }
+tempfile = "3.8"
