@@ -7,9 +7,9 @@ pub mod config;
 pub mod http;
 pub mod indexer;
 pub mod node_reader;
+pub mod projections;
 pub mod store;
 pub mod types;
-pub mod projections;
 
 pub use config::Config;
 pub use indexer::Indexer;

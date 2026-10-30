@@ -3,6 +3,7 @@
 #![deny(unsafe_code)]
 
 pub mod address;
+pub mod contracts;
 pub mod error;
 pub mod fee;
 pub mod tx;
@@ -14,6 +15,7 @@ pub mod keystore;
 pub mod rpc;
 
 pub use address::{canonical as canonical_address, parse_address};
+pub use contracts::*;
 pub use error::SdkError;
 pub use fee::*;
 pub use tx::*;

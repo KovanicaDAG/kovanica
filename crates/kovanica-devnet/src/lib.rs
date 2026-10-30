@@ -3,7 +3,9 @@ pub fn node_config(i: usize, n: usize, base_rpc: u16, base_p2p: u16) -> String {
     let p2p_port = base_p2p + i as u16;
     let mut bootnodes = Vec::new();
     for j in 0..n {
-        if j == i { continue; }
+        if j == i {
+            continue;
+        }
         bootnodes.push(format!("127.0.0.1:{}", base_p2p + j as u16));
     }
     format!(
@@ -13,7 +15,11 @@ pub fn node_config(i: usize, n: usize, base_rpc: u16, base_p2p: u16) -> String {
          rpc_addr = \"127.0.0.1\"\n\
          rpc_port = {rpc_port}\n\
          bootnodes = [{}]\n",
-        bootnodes.iter().map(|b| format!("\"{b}\"")).collect::<Vec<_>>().join(", ")
+        bootnodes
+            .iter()
+            .map(|b| format!("\"{b}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
 
@@ -30,6 +36,6 @@ mod tests {
     #[test]
     fn no_self_bootnode() {
         let c = node_config(1, 3, 8545, 8000);
-        assert!(!c.contains("8001\"") || c.contains("8000") );
+        assert!(!c.contains("8001\"") || c.contains("8000"));
     }
 }

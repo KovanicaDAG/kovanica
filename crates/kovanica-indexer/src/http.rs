@@ -5,7 +5,7 @@ use crate::types::{IndexedEvent, LogFilter, WsFilter};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        Path, Query, State,
     },
     http::StatusCode,
     response::IntoResponse,
@@ -42,6 +42,7 @@ pub fn router(indexer: Arc<Indexer>) -> Router {
     Router::new()
         .route("/logs", get(handle_logs))
         .route("/events", get(handle_logs))
+        .route("/contracts/:address/logs", get(handle_contract_logs))
         .route("/status", get(handle_status))
         .route("/ws", get(handle_ws))
         .with_state(indexer)
@@ -52,6 +53,20 @@ async fn handle_logs(
     Query(f): Query<HttpFilter>,
 ) -> Result<Json<Vec<IndexedEvent>>, StatusCode> {
     let filter: LogFilter = f.into();
+    let events = idx
+        .store
+        .query(&filter)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(events))
+}
+
+async fn handle_contract_logs(
+    State(idx): State<Arc<Indexer>>,
+    Path(address): Path<String>,
+    Query(f): Query<HttpFilter>,
+) -> Result<Json<Vec<IndexedEvent>>, StatusCode> {
+    let mut filter: LogFilter = f.into();
+    filter.address = Some(address);
     let events = idx
         .store
         .query(&filter)

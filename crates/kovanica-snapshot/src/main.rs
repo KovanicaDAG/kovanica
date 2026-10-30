@@ -1,10 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kovanica_storage::Storage;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(name = "kovanica-snapshot", about = "State snapshot export/verify/import")]
+#[command(
+    name = "kovanica-snapshot",
+    about = "State snapshot export/verify/import"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -32,7 +35,7 @@ enum Cmd {
     },
 }
 
-fn db_path(data_dir: &PathBuf) -> PathBuf {
+fn db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("state.redb")
 }
 
@@ -54,7 +57,11 @@ fn main() -> Result<()> {
                 .context("decode snapshot")?;
             println!("height={} state_root={:?}", data.height, data.state_root);
         }
-        Cmd::Import { data_dir, file, force } => {
+        Cmd::Import {
+            data_dir,
+            file,
+            force,
+        } => {
             if !force {
                 anyhow::bail!("import requires --force");
             }

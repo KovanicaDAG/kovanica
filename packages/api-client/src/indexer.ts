@@ -76,10 +76,18 @@ export class KovanicaIndexerClient {
     return (await res.json()) as IndexedEvent[];
   }
 
+  async getContractLogs(address: string, filter?: Omit<IndexerLogFilter, "address">): Promise<IndexedEvent[]> {
+    return this.getLogs({ ...filter, address });
+  }
+
   async getEvents(filter?: IndexerLogFilter): Promise<IndexedEvent[]> {
     const res = await fetch(`${this.endpoint("/events")}${this.buildQuery(filter)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()) as IndexedEvent[];
+  }
+
+  async getContractEvents(address: string, filter?: Omit<IndexerLogFilter, "address">): Promise<IndexedEvent[]> {
+    return this.getEvents({ ...filter, address });
   }
 }
 

@@ -109,14 +109,13 @@ use std::collections::{BTreeMap, HashMap};
 use kovanica_common::{ContractError, ContractResult, Host};
 use kovanica_htlc::Htlc;
 use kovanica_multisig::Multisig;
+use kovanica_nft::Nft;
 #[cfg(test)]
 use kovanica_runtime::DEFAULT_CONTRACT_MEMORY_PAGES;
 use kovanica_runtime::{ExecutionConfig, Runtime};
 use kovanica_storage::state_store::Account;
 use kovanica_storage::{tables, BincodeSerialize, Storage, StorageError};
 use kovanica_token::Token;
-use kovanica_nft::Nft;
-
 
 use kovanica_types::Address;
 use kovanica_vault::Vault;
@@ -171,13 +170,12 @@ pub const ENTRY_POINTS: &[&str] = &[
     "nft_transfer_from",
     "nft_set_base_uri",
     "nft_burn",
-
     "token_init_pool",
     "token_buy",
     "token_sell",
 ];
 
-/// Returns whether `name` is one of the 19 dispatchable entry points.
+/// Returns whether `name` is one of the 26 dispatchable entry points.
 pub fn is_entry_point(name: &str) -> bool {
     ENTRY_POINTS.contains(&name)
 }
@@ -944,7 +942,8 @@ fn dispatch_entry(
             enc(&Nft::create_collection(host, name, symbol, base_uri)?)
         }
         "nft_mint" => {
-            let (collection, to, token_id, token_uri): ([u8; 32], [u8; 32], u128, String) = dec(args)?;
+            let (collection, to, token_id, token_uri): ([u8; 32], [u8; 32], u128, String) =
+                dec(args)?;
             Nft::mint(host, collection, to, token_id, token_uri)?;
             enc(&())
         }
@@ -974,6 +973,7 @@ fn dispatch_entry(
             enc(&())
         }
 
+        "token_init_pool" => {
             let (kuna_in, tokens_in, fee_bps): (
                 kovanica_common::Amount,
                 kovanica_common::Amount,
@@ -2104,7 +2104,7 @@ pub(crate) mod tests {
         assert_eq!(ENTRY_POINTS.len(), 26);
         assert_eq!(
             ENTRY_POINTS.iter().filter(|e| is_entry_point(e)).count(),
-            19
+            26
         );
         for entry in ENTRY_POINTS {
             let err = execute_contract_call(entry, contract, caller, 1, 100, &[], &storage)

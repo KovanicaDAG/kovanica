@@ -37,7 +37,13 @@ fn escrow_address(id: &EscrowId) -> Address {
     hash(&buf)
 }
 
-fn derive_id(creator: &Address, parties: &[Address], threshold: u8, amount: Amount, deadline: Timestamp) -> EscrowId {
+fn derive_id(
+    creator: &Address,
+    parties: &[Address],
+    threshold: u8,
+    amount: Amount,
+    deadline: Timestamp,
+) -> EscrowId {
     let mut parties_sorted = parties.to_vec();
     parties_sorted.sort();
     let mut buf = Vec::new();
@@ -65,7 +71,13 @@ fn store(host: &mut impl Host, id: &EscrowId, e: &Escrow) -> ContractResult<()> 
     Ok(())
 }
 
-pub fn create(host: &mut impl Host, parties: Vec<Address>, threshold: u8, amount: Amount, deadline: Timestamp) -> ContractResult<EscrowId> {
+pub fn create(
+    host: &mut impl Host,
+    parties: Vec<Address>,
+    threshold: u8,
+    amount: Amount,
+    deadline: Timestamp,
+) -> ContractResult<EscrowId> {
     if parties.is_empty() || threshold == 0 || threshold as usize > parties.len() || amount == 0 {
         return Err(ContractError::InvalidInput);
     }
@@ -155,14 +167,17 @@ pub fn refund(host: &mut impl Host, id: EscrowId) -> ContractResult<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use kovanica_common::MemHost;
     use kovanica_common::{Address, Amount, ContractError, Timestamp};
 
-    fn addr(n: u8) -> Address { let mut a = [0u8; 32]; a[0] = n; a }
+    fn addr(n: u8) -> Address {
+        let mut a = [0u8; 32];
+        a[0] = n;
+        a
+    }
     fn funded_host(sender: Address, contract: Address, balance: Amount, ts: Timestamp) -> MemHost {
         let mut h = MemHost::new(sender, contract);
         h.set_balance(sender, balance);
@@ -219,7 +234,10 @@ mod tests {
         approve(&mut host, id).unwrap();
 
         host.set_caller(addr(1));
-        assert_eq!(release(&mut host, id, addr(4)), Err(ContractError::ThresholdNotMet));
+        assert_eq!(
+            release(&mut host, id, addr(4)),
+            Err(ContractError::ThresholdNotMet)
+        );
     }
 
     #[test]
