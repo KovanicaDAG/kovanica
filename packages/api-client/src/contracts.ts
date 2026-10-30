@@ -53,6 +53,42 @@ export function hexToBytes(hex: string): number[] {
   return out;
 }
 
+export interface DecodedContractEvent {
+  addressHex: string;
+  topicHex: string;
+  dataHex: string;
+  dataText: string | null;
+  json: unknown | null;
+}
+
+export function decodeContractEvent(event: {
+  address: number[];
+  topic: number[];
+  data: number[];
+}): DecodedContractEvent {
+  const dataBytes = new Uint8Array(event.data);
+  let dataText: string | null = null;
+  let json: unknown | null = null;
+  try {
+    dataText = new TextDecoder("utf-8", { fatal: true }).decode(dataBytes);
+  } catch {
+    dataText = null;
+  }
+  if (dataText !== null) {
+    try {
+      json = JSON.parse(dataText);
+    } catch {
+      json = null;
+    }
+  }
+  return {
+    addressHex: bytesToHex(event.address),
+    topicHex: bytesToHex(event.topic),
+    dataHex: bytesToHex(event.data),
+    dataText,
+    json,
+  };
+}
 export function entryPoint(kind: ContractKind, method: string): string {
   return `${kind}_${method}`;
 }

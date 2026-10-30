@@ -10,6 +10,8 @@ import {
   isContractEvent,
   bytesToHex,
   hexToBytes,
+  entryPoint,
+  decodeContractEvent,
 } from "./contracts.js";
 
 describe("contracts helpers", () => {
@@ -46,5 +48,26 @@ describe("contracts helpers", () => {
 
   it("hexToBytes rejects odd length", () => {
     expect(() => hexToBytes("abc")).toThrow();
+  });
+
+  it("entryPoint builds snake_case name", () => {
+    expect(entryPoint(ContractKind.Token, TokenMethod.TRANSFER)).toBe("token_transfer");
+  });
+
+  it("decodeContractEvent decodes utf8/json and hex", () => {
+    const ev = {
+      address: [1, 2],
+      topic: [3],
+      data: Array.from(new TextEncoder().encode('{"a":1}')),
+    };
+    const d = decodeContractEvent(ev);
+    expect(d.addressHex).toBe("0102");
+    expect(d.topicHex).toBe("03");
+    expect(d.json).toEqual({ a: 1 });
+    expect(d.dataText).toBe('{"a":1}');
+
+    const bin = decodeContractEvent({ address: [], topic: [], data: [0xff, 0x00] });
+    expect(bin.dataText).toBeNull();
+    expect(bin.dataHex).toBe("ff00");
   });
 });
