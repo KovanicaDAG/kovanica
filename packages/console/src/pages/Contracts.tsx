@@ -145,6 +145,32 @@ export function Contracts() {
     }
   }
 
+  useEffect(() => {
+    if (!txHash) return;
+    let cancelled = false;
+    const poll = async () => {
+      for (let i = 0; i < 5 && !cancelled; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (cancelled) return;
+        try {
+          const receipt = await client.getTransactionReceipt(txHash);
+          if (receipt) {
+            setTxStatus(
+              receipt.status ?? (receipt.success ? "committed" : "failed"),
+            );
+            return;
+          }
+        } catch {
+          /* keep polling */
+        }
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [txHash, client]);
+
   const eventsDisabled = !indexerUrl;
 
   return (
