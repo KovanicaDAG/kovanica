@@ -173,6 +173,10 @@ pub const ENTRY_POINTS: &[&str] = &[
     "token_init_pool",
     "token_buy",
     "token_sell",
+    "escrow_create",
+    "escrow_approve",
+    "escrow_release",
+    "escrow_refund",
 ];
 
 /// Returns whether `name` is one of the 26 dispatchable entry points.
@@ -970,6 +974,32 @@ fn dispatch_entry(
         "nft_burn" => {
             let (collection, token_id): ([u8; 32], u128) = dec(args)?;
             Nft::burn(host, collection, token_id)?;
+            enc(&())
+        }
+
+        // --- kovanica-escrow ---------------------------------------------------
+        "escrow_create" => {
+            let (parties, threshold, amount, deadline): (
+                Vec<[u8; 32]>,
+                u8,
+                kovanica_common::Amount,
+                kovanica_common::Timestamp,
+            ) = dec(args)?;
+            enc(&Escrow::create(host, parties, threshold, amount, deadline)?)
+        }
+        "escrow_approve" => {
+            let id: kovanica_escrow::EscrowId = dec(args)?;
+            Escrow::approve(host, id)?;
+            enc(&())
+        }
+        "escrow_release" => {
+            let (id, to): (kovanica_escrow::EscrowId, [u8; 32]) = dec(args)?;
+            Escrow::release(host, id, to)?;
+            enc(&())
+        }
+        "escrow_refund" => {
+            let id: kovanica_escrow::EscrowId = dec(args)?;
+            Escrow::refund(host, id)?;
             enc(&())
         }
 

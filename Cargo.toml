@@ -45,6 +45,9 @@ members = [
     "crates/kovanica-snapshot",
     "crates/kovanica-bench",
     "crates/kovanica-wallet-core",
+    "crates/kovanica-contract-sdk",
+    "crates/kovanica-codec",
+    "crates/kovanica-consensus-sim",
 ]
 
 [workspace.package]

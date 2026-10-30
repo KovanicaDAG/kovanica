@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 kovanica-types = { path = "../kovanica-types" }
+kovanica-p2p-identity = { path = "../kovanica-p2p-identity" }
 kovanica-dag = { path = "../kovanica-dag" }
 kovanica-mempool = { path = "../kovanica-mempool" }
 kovanica-crypto = { path = "../kovanica-crypto" }
