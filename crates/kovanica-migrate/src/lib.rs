@@ -10,8 +10,8 @@ pub struct Registry {
     pub migrations: Vec<Box<dyn Migration>>,
 }
 
-impl Registry {
-    pub fn default() -> Self {
+impl Default for Registry {
+    fn default() -> Self {
         Self {
             migrations: vec![Box::new(NoopMigration)],
         }
