@@ -55,8 +55,8 @@ mod tests {
 
     #[test]
     fn method_constants_nonempty() {
-        assert!(!method::HTLC_CREATE.is_empty());
-        assert!(!method::TOKEN_TRANSFER.is_empty());
+        assert_eq!(method::HTLC_CREATE, "htlc_create");
+        assert_eq!(method::TOKEN_TRANSFER, "token_transfer");
     }
 
     #[test]
