@@ -23,6 +23,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <NavLink to="/transfer">Transfer</NavLink>
           <NavLink to="/stake">Stake</NavLink>
           <NavLink to="/activity">Activity</NavLink>
+          <NavLink to="/contracts">Contracts</NavLink>
           {session.network.faucetUrl ? <NavLink to="/faucet">Faucet</NavLink> : null}
         </nav>
         <div className="top-actions">

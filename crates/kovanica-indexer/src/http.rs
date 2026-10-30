@@ -43,6 +43,7 @@ pub fn router(indexer: Arc<Indexer>) -> Router {
         .route("/logs", get(handle_logs))
         .route("/events", get(handle_logs))
         .route("/contracts/:address/logs", get(handle_contract_logs))
+        .route("/contracts/:address/events", get(handle_contract_logs))
         .route("/status", get(handle_status))
         .route("/ws", get(handle_ws))
         .with_state(indexer)

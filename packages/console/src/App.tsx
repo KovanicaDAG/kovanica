@@ -6,6 +6,7 @@ import { Activity } from "./pages/Activity";
 import { Faucet } from "./pages/Faucet";
 import { Overview } from "./pages/Overview";
 import { Stake } from "./pages/Stake";
+import { Contracts } from "./pages/Contracts";
 import { Transfer } from "./pages/Transfer";
 import { useSession } from "./session";
 
@@ -19,6 +20,7 @@ export function App() {
         <Route path="/transfer" element={<Transfer />} />
         <Route path="/stake" element={<Stake />} />
         <Route path="/activity" element={<Activity />} />
+        <Route path="/contracts" element={<Contracts />} />
         <Route
           path="/faucet"
           element={network.faucetUrl ? <Faucet /> : <Navigate to="/" replace />}
