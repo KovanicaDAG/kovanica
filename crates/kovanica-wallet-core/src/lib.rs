@@ -14,4 +14,3 @@ pub use provider::BalanceProvider;
 pub mod hw_signer {
     pub use kovanica_hw_signer::*;
 }
-

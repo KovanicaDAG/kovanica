@@ -12,8 +12,16 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     List,
-    Status { #[arg(long)] data_dir: PathBuf },
-    Apply { #[arg(long)] data_dir: PathBuf, #[arg(long)] dry_run: bool },
+    Status {
+        #[arg(long)]
+        data_dir: PathBuf,
+    },
+    Apply {
+        #[arg(long)]
+        data_dir: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {

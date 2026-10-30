@@ -16,7 +16,7 @@ pub fn verify(proof: &InclusionProof, root: &[u8; 32]) -> bool {
     let mut cur = hash_leaf(&proof.leaf);
     for sib in &proof.siblings {
         let mut h = Hasher::new();
-        if cur <= *sib.as_slice().try_into().unwrap_or(&[0u8;32]) {
+        if cur <= *sib.as_slice().try_into().unwrap_or(&[0u8; 32]) {
             h.update(&cur);
             h.update(sib);
         } else {
@@ -35,7 +35,7 @@ mod tests {
     fn honest() {
         let leaf = b"abc";
         let lh = hash_leaf(leaf);
-        let sibling = [9u8;32];
+        let sibling = [9u8; 32];
         let mut h = Hasher::new();
         if lh <= sibling {
             h.update(&lh);
@@ -45,13 +45,19 @@ mod tests {
             h.update(&lh);
         }
         let root = *h.finalize().as_bytes();
-        let proof = InclusionProof { leaf: leaf.to_vec(), siblings: vec![sibling.to_vec()] };
+        let proof = InclusionProof {
+            leaf: leaf.to_vec(),
+            siblings: vec![sibling.to_vec()],
+        };
         assert!(verify(&proof, &root));
     }
     #[test]
     fn tampered() {
         let leaf = b"abc";
-        let proof = InclusionProof { leaf: leaf.to_vec(), siblings: vec![vec![9u8;32]] };
-        assert!(!verify(&proof, &[0u8;32]));
+        let proof = InclusionProof {
+            leaf: leaf.to_vec(),
+            siblings: vec![vec![9u8; 32]],
+        };
+        assert!(!verify(&proof, &[0u8; 32]));
     }
 }
