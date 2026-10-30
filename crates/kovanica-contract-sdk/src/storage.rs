@@ -20,14 +20,12 @@ pub fn storage_key(table: &[u8], record: &[u8]) -> Vec<u8> {
 
 /// Pack a value exactly like every other native contract does.
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ContractError> {
-    bincode::serialize(value)
-        .map_err(|_| ContractError::Overflow)
+    bincode::serialize(value).map_err(|_| ContractError::Overflow)
 }
 
 /// Unpack a value exactly like every other native contract does.
 pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, ContractError> {
-    bincode::deserialize(bytes)
-        .map_err(|_| ContractError::InvalidInput)
+    bincode::deserialize(bytes).map_err(|_| ContractError::InvalidInput)
 }
 
 /// Pack a contract error into the wasm entry-point status word.
@@ -41,10 +39,7 @@ mod tests {
 
     #[test]
     fn storage_key_roundtrip() {
-        assert_eq!(
-            storage_key(b"state", b"abc"),
-            b"kvnc/v1/state/abc".to_vec()
-        );
+        assert_eq!(storage_key(b"state", b"abc"), b"kvnc/v1/state/abc".to_vec());
         assert_eq!(storage_key(b"", b""), b"kvnc/v1//".to_vec());
     }
 }

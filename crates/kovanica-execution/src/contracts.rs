@@ -977,6 +977,32 @@ fn dispatch_entry(
             enc(&())
         }
 
+        // --- kovanica-escrow ---------------------------------------------------
+        "escrow_create" => {
+            let (parties, threshold, amount, deadline): (
+                Vec<[u8; 32]>,
+                u8,
+                kovanica_common::Amount,
+                kovanica_common::Timestamp,
+            ) = dec(args)?;
+            enc(&Escrow::create(host, parties, threshold, amount, deadline)?)
+        }
+        "escrow_approve" => {
+            let id: kovanica_escrow::EscrowId = dec(args)?;
+            Escrow::approve(host, id)?;
+            enc(&())
+        }
+        "escrow_release" => {
+            let (id, to): (kovanica_escrow::EscrowId, [u8; 32]) = dec(args)?;
+            Escrow::release(host, id, to)?;
+            enc(&())
+        }
+        "escrow_refund" => {
+            let id: kovanica_escrow::EscrowId = dec(args)?;
+            Escrow::refund(host, id)?;
+            enc(&())
+        }
+
         "token_init_pool" => {
             let (kuna_in, tokens_in, fee_bps): (
                 kovanica_common::Amount,
