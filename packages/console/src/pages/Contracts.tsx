@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ContractKind,
   HtlcMethod,
@@ -22,7 +22,7 @@ const METHODS: Record<ContractKind, readonly string[]> = {
 };
 
 export function Contracts() {
-  const { client } = useSession();
+  const { client, network } = useSession();
   const [kind, setKind] = useState<ContractKind>(ContractKind.HTLC);
   const [method, setMethod] = useState<string>(HtlcMethod.CREATE);
   const [argsText, setArgsText] = useState("");
@@ -30,10 +30,14 @@ export function Contracts() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
 
-  const [indexerUrl, setIndexerUrl] = useState("");
+  const [indexerUrl, setIndexerUrl] = useState<string>(network.indexerHttpUrl ?? "");
   const [contractAddr, setContractAddr] = useState("");
   const [events, setEvents] = useState<DecodedContractEvent[]>([]);
   const [eventsError, setEventsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIndexerUrl(network.indexerHttpUrl ?? "");
+  }, [network.id, network.indexerHttpUrl]);
 
   function onKindChange(next: ContractKind) {
     setKind(next);
