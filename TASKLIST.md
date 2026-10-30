@@ -391,9 +391,9 @@ VRF keys stored, genesis/staking/staking-tx wired (`build_committee` reads them)
 
 - [x] TypeScript API client (`packages/api-client/src/index.ts`, 7 RPC metoda: blockNumber/getBlockByHash/getBalance/getValidators/sendRawTransaction/getPendingTransactions/estimateFee)
 - [x] OpenAPI/JSON schema (22 metode, oneOf)
-- [ ] Contract SDK (Rust+TS) — **nema**
+- [x] Contract SDK (Rust+TS) — skeletons + helpers (`crates/kovanica-sdk`, `packages/api-client/src/contracts.ts`, `packages/console/src/contracts.ts`)
 - [x] Dev faucet CLI
-- [ ] Indexer service — **nema**
+- [x] Indexer service — skeleton + contract route (`crates/kovanica-indexer`: redb store, REST /logs /events /status /contracts/:address/logs, WS push)
 
 ## PHASE 23: Explorer & Wallet UI — `[x]` DONE
 

@@ -93,7 +93,7 @@ Storage (redb / pruning / snapshots)
 |-----------|--------|----------|
 | TypeScript API client | Implemented | `packages/api-client/src/index.ts` |
 | OpenAPI / JSON schema generator | Implemented | `crates/kovanica-rpc/src/openapi.rs` |
-| Contract SDK (Rust + TS) | Implemented | `kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`, `kovanica-token` |
+| Contract SDK (Rust + TS) | In progress | `kovanica-htlc`, `kovanica-vault`, `kovanica-multisig`, `kovanica-token`, `kovanica-sdk`, `packages/api-client/src/contracts.ts` |
 | Dev faucet service | Implemented | `crates/kovanica-faucet` |
 | Indexer (v0.1) | Implemented (skeleton) | crates/kovanica-indexer: REST /logs, /events, /status + WS /ws |
 
