@@ -59,7 +59,7 @@ export interface ValidatorInfo {
 interface RpcRequest {
   jsonrpc: "2.0";
   method: string;
-  params?: unknown[];
+  params?: unknown;
   id?: number | string;
 }
 
@@ -102,7 +102,7 @@ export class KovanicaRpcClient {
     if (url.length === 0) throw new Error("RPC URL is required");
   }
 
-  private async call<T>(method: string, params?: unknown[]): Promise<T> {
+  async call<T>(method: string, params?: unknown): Promise<T> {
     const req: RpcRequest = { jsonrpc: "2.0", method, params, id: 1 };
     const res = await fetch(this.url, {
       method: "POST",
@@ -337,3 +337,4 @@ export function subscribeNewHeads(
 }
 
 export * from "./indexer";
+export * from "./contracts";
