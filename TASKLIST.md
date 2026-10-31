@@ -2,7 +2,7 @@
 
 Historical completed items moved to `docs/dev/NOTED*` and `docs/archive/`. This file lists only remaining work as of 2026-10-31.
 
-Base tip when trimmed: `a78e3ac9ce5c99a0c4014c51f3763c87f93e821d`. Full prior checklist: `docs/archive/TASKLIST-pre-baf41511.md`.
+Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full prior checklist: `docs/archive/TASKLIST-pre-baf41511.md`.
 
 ## Protocol / consensus
 
