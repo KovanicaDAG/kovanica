@@ -1,4 +1,10 @@
-# PRO-40 — late leader votes: commit walk stall (observed 2026-10-29)
+# NOTED — PRO-40 late vote / commit-walk stall
+
+Living note for pickup. Original pickup doc moved from `docs/PRO-40-LATE-VOTE-STALL.md` on 2026-10-31.
+Open acceptance criteria at the bottom remain open work unless closed in code + TASKLIST.
+
+---
+
 
 This branch is the **team pickup point** for the uncovered consensus stall:
 
