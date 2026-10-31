@@ -79,13 +79,45 @@ struct SettingsDto {
 | `node_logs` | — | `Vec<String>` | last 200 lines, oldest→newest |
 | `validator_state` | — | `ValidatorDto` | reads self-stake over RPC |
 | `set_run_validator` | `enabled: bool` | `ValidatorDto` | **refuses** `true` unless eligible; writes config + restarts; `false` never unbonds |
-| `stake` | `amount_kuna: String` | `ActionResult` | submits the chain's existing stake tx; does not set `run_validator` |
-| `unbond` | — | `ActionResult` | existing unbond tx; honors 100_000-block period |
+| `stake` | `amount_kuna: String` | `ActionResult` | submits the chain's existing stake tx; does not set `run_validator`; chain guard + RPC fee, see *Sign-path refusals* |
+| `unbond` | — | `ActionResult` | existing unbond tx; honors 100_000-block period; chain guard + RPC fee, see *Sign-path refusals* |
 | `key_status` | — | `KeyDto` | |
 | `key_create` | `passphrase: String` | `KeyDto` | keystore v2; never logged |
 | `key_import` | `secret: String, passphrase: String` | `KeyDto` | secret zeroized |
 | `settings_get` | — | `SettingsDto` | |
 | `set_keep_running` | `enabled: bool` | `SettingsDto` | |
+
+## Sign-path refusals (`stake`, `unbond`)
+
+Before a key signs anything, both commands run the chain guard, in this order:
+
+1. node `state == "running"` (the sidecar is up);
+2. `kovanica_syncStatus` answers and reports `networkTag`;
+3. the reported chain id is `CHAIN_ID` (numeric `chainId`/`chain_id` when
+   present, else the `<chain_id>-` prefix of `networkTag`);
+4. `networkTag == EXPECTED_NETWORK_TAG`.
+
+Then `kovanica_getNonce`, then `kovanica_estimateFee` (atoms per byte, must be
+`>= 1`). The fee is `rate × bincode size` of the transaction (same rule as
+`packages/signer` `feeForRate` and the light FFI). There is **no** hardcoded
+or fallback fee.
+
+Any failure returns `Ok(ActionResult { ok: false, message: Some(..), tx_id: None })`:
+nothing is signed and `kovanica_sendRawTransaction` is never called. Messages
+(UI may display them verbatim):
+
+| condition | `message` |
+|---|---|
+| node not running | `Node is not running. Start the node before signing.` |
+| `kovanica_syncStatus` failed | `Cannot verify chain: kovanica_syncStatus failed (<rpc error>). Refusing to sign.` |
+| no `networkTag` | `Cannot verify chain: node did not report a network tag. Refusing to sign.` |
+| chain id not parseable | `Cannot verify chain: node did not report a chain id. Refusing to sign.` |
+| chain id ≠ 4 | `Chain id mismatch: node reports <id>, expected 4. Refusing to sign.` |
+| tag ≠ expected | `Network tag mismatch: node reports '<tag>', expected '4-0eacd5699210b145'. Refusing to sign.` |
+| `kovanica_estimateFee` failed | `Fee estimate unavailable: kovanica_estimateFee failed (<rpc error>). Refusing to sign.` |
+| fee rate missing / `0` | `Fee estimate invalid: kovanica_estimateFee returned <value>. Refusing to sign.` |
+
+`unbond` runs the guard before it reads `kovanica_getStake`.
 
 ## Frontend rules
 

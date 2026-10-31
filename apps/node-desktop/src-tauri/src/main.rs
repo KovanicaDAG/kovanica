@@ -834,42 +834,171 @@ async fn stake(
         });
     }
 
-    // chain id check
-    node::ensure_chain(&state).await;
+    let running = state_running(&state).await;
+    Ok(stake_flow(&HttpRpc, running, &signing_key, sender, amount_atoms).await)
+}
 
-    // nonce
-    let nonce_val = match rpc_call(
-        RPC_URL,
-        "kovanica_getNonce",
-        serde_json::json!([sender.to_string()]),
-    )
-    .await
+// ============================================================================
+// Chain guard + signing (stake / unbond)
+// ============================================================================
+//
+// Every sign path goes through `ensure_chain` and `estimate_fee_rate` before a
+// key touches a transaction. Any failure returns `ActionResult { ok: false }`
+// with one of the refusal messages in IPC-CONTRACT.md ("Sign-path refusals"):
+// nothing is signed and `kovanica_sendRawTransaction` is never called.
+
+/// JSON-RPC transport for the sign paths. `HttpRpc` talks to the local node;
+/// tests use a recording mock.
+trait Rpc {
+    fn call(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send;
+}
+
+struct HttpRpc;
+
+impl Rpc for HttpRpc {
+    fn call(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send {
+        let method = method.to_string();
+        async move { rpc_call(RPC_URL, &method, params).await }
+    }
+}
+
+fn refuse(message: String) -> ActionResult {
+    ActionResult {
+        ok: false,
+        message: Some(message),
+        tx_id: None,
+    }
+}
+
+/// Chain id reported by a `kovanica_syncStatus` object: numeric `chainId` /
+/// `chain_id` when present, else the `<chain_id>-` prefix of `networkTag`.
+fn reported_chain_id(sync: &serde_json::Value, tag: &str) -> Option<u64> {
+    for key in ["chainId", "chain_id"] {
+        if let Some(v) = sync.get(key) {
+            return parse_quantity_value(v);
+        }
+    }
+    tag.split_once('-')
+        .and_then(|(id, _)| id.parse::<u64>().ok())
+}
+
+/// Refuse to sign unless the node is running, `kovanica_syncStatus` reports
+/// chain id `CHAIN_ID`, and its `networkTag` equals `EXPECTED_NETWORK_TAG`.
+async fn ensure_chain<R: Rpc>(rpc: &R, running: bool) -> Result<(), String> {
+    if !running {
+        return Err("Node is not running. Start the node before signing.".to_string());
+    }
+    let sync = rpc
+        .call("kovanica_syncStatus", serde_json::json!([]))
+        .await
+        .map_err(|e| {
+            format!("Cannot verify chain: kovanica_syncStatus failed ({e}). Refusing to sign.")
+        })?;
+    let tag = sync
+        .get("networkTag")
+        .or_else(|| sync.get("network_tag"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            "Cannot verify chain: node did not report a network tag. Refusing to sign.".to_string()
+        })?;
+    match reported_chain_id(&sync, tag) {
+        Some(id) if id == CHAIN_ID as u64 => {}
+        Some(id) => {
+            return Err(format!(
+                "Chain id mismatch: node reports {id}, expected {CHAIN_ID}. Refusing to sign."
+            ));
+        }
+        None => {
+            return Err(
+                "Cannot verify chain: node did not report a chain id. Refusing to sign."
+                    .to_string(),
+            );
+        }
+    }
+    if tag != EXPECTED_NETWORK_TAG {
+        return Err(format!(
+            "Network tag mismatch: node reports '{tag}', expected '{EXPECTED_NETWORK_TAG}'. Refusing to sign."
+        ));
+    }
+    Ok(())
+}
+
+/// Fee rate (atoms per byte) from `kovanica_estimateFee`. No fallback.
+async fn estimate_fee_rate<R: Rpc>(rpc: &R) -> Result<u64, String> {
+    let v = rpc
+        .call("kovanica_estimateFee", serde_json::json!([]))
+        .await
+        .map_err(|e| {
+            format!(
+                "Fee estimate unavailable: kovanica_estimateFee failed ({e}). Refusing to sign."
+            )
+        })?;
+    match parse_quantity_value(&v) {
+        Some(rate) if rate >= 1 => Ok(rate),
+        _ => Err(format!(
+            "Fee estimate invalid: kovanica_estimateFee returned {v}. Refusing to sign."
+        )),
+    }
+}
+
+/// Fee in atoms: `rate` x encoded size, the same rule as `packages/signer`
+/// `feeForRate` and the light FFI (bincode size does not depend on the fee).
+fn fee_for_rate(
+    rate: u64,
+    sender: Address,
+    nonce: u64,
+    kind: &TransactionKind,
+) -> Result<u64, String> {
+    let draft = Transaction {
+        sender,
+        nonce,
+        kind: kind.clone(),
+        fee: 1,
+        signature: Signature([0u8; 64]),
+        hash: Hash::zero(),
+    };
+    let size = bincode::serialize(&draft)
+        .map_err(|e| format!("encode: {e}"))?
+        .len() as u64;
+    Ok(rate.saturating_mul(size).max(1))
+}
+
+/// Nonce + RPC fee, then sign and submit. Callers must pass `ensure_chain` first.
+async fn sign_and_submit<R: Rpc>(
+    rpc: &R,
+    signing_key: &SigningKey,
+    sender: Address,
+    kind: TransactionKind,
+) -> ActionResult {
+    let nonce_val = match rpc
+        .call("kovanica_getNonce", serde_json::json!([sender.to_string()]))
+        .await
     {
         Ok(v) => v,
-        Err(e) => {
-            return Ok(ActionResult {
-                ok: false,
-                message: Some(e),
-                tx_id: None,
-            })
-        }
+        Err(e) => return refuse(e),
     };
     let nonce = match parse_quantity_value(&nonce_val) {
         Some(n) => n,
-        None => {
-            return Ok(ActionResult {
-                ok: false,
-                message: Some("Bad nonce.".into()),
-                tx_id: None,
-            })
-        }
+        None => return refuse("Bad nonce.".into()),
+    };
+    let rate = match estimate_fee_rate(rpc).await {
+        Ok(r) => r,
+        Err(e) => return refuse(e),
+    };
+    let fee = match fee_for_rate(rate, sender, nonce, &kind) {
+        Ok(f) => f,
+        Err(e) => return refuse(e),
     };
 
     let ctx = SigningContext::new(CHAIN_ID as u64);
-    let kind = TransactionKind::Stake {
-        amount: amount_atoms,
-    };
-    let fee = 1u64;
     let mut tx = Transaction {
         sender,
         nonce,
@@ -879,44 +1008,79 @@ async fn stake(
         hash: Hash::zero(),
     };
     let hash = tx.signing_hash(&ctx);
-    tx.signature = kovanica_crypto::sign(&signing_key, hash.as_ref());
+    tx.signature = kovanica_crypto::sign(signing_key, hash.as_ref());
     tx.hash = hash;
     let raw = match bincode::serialize(&tx) {
         Ok(b) => hex::encode(b),
-        Err(e) => {
-            return Ok(ActionResult {
-                ok: false,
-                message: Some(format!("encode: {e}")),
-                tx_id: None,
-            })
-        }
+        Err(e) => return refuse(format!("encode: {e}")),
     };
 
-    match rpc_call(
-        RPC_URL,
-        "kovanica_sendRawTransaction",
-        serde_json::json!([raw]),
-    )
-    .await
+    match rpc
+        .call("kovanica_sendRawTransaction", serde_json::json!([raw]))
+        .await
     {
         Ok(v) => {
             let tx_id = v.as_str().map(|s| s.to_string());
-            Ok(ActionResult {
+            ActionResult {
                 ok: true,
                 message: Some("Submitted.".into()),
                 tx_id,
-            })
+            }
         }
-        Err(e) => Ok(ActionResult {
-            ok: false,
-            message: Some(e),
-            tx_id: None,
-        }),
+        Err(e) => refuse(e),
     }
 }
 
-mod node {
-    pub async fn ensure_chain(_state: &super::NodeApp) {}
+async fn stake_flow<R: Rpc>(
+    rpc: &R,
+    running: bool,
+    signing_key: &SigningKey,
+    sender: Address,
+    amount_atoms: u64,
+) -> ActionResult {
+    if let Err(e) = ensure_chain(rpc, running).await {
+        return refuse(e);
+    }
+    sign_and_submit(
+        rpc,
+        signing_key,
+        sender,
+        TransactionKind::Stake {
+            amount: amount_atoms,
+        },
+    )
+    .await
+}
+
+async fn unbond_flow<R: Rpc>(
+    rpc: &R,
+    running: bool,
+    signing_key: &SigningKey,
+    sender: Address,
+) -> ActionResult {
+    if let Err(e) = ensure_chain(rpc, running).await {
+        return refuse(e);
+    }
+    // Unbond the current stake in full.
+    let stake_res = rpc
+        .call("kovanica_getStake", serde_json::json!([sender.to_string()]))
+        .await;
+    let amount_atoms = stake_res
+        .ok()
+        .and_then(|v| parse_quantity_value(&v))
+        .unwrap_or(0);
+    if amount_atoms == 0 {
+        return refuse("No stake to unbond.".into());
+    }
+    sign_and_submit(
+        rpc,
+        signing_key,
+        sender,
+        TransactionKind::Unstake {
+            amount: amount_atoms,
+        },
+    )
+    .await
 }
 
 fn parse_kuna_to_atoms(s: &str) -> Result<u64, String> {
@@ -968,101 +1132,9 @@ async fn unbond(app: tauri::AppHandle, state: State<'_, NodeApp>) -> Result<Acti
         }
     };
 
-    // Determine current stake to unbond in full.
-    let stake_res = rpc_call(
-        RPC_URL,
-        "kovanica_getStake",
-        serde_json::json!([sender.to_string()]),
-    )
-    .await;
-    let amount_atoms = stake_res
-        .ok()
-        .and_then(|v| parse_quantity_value(&v))
-        .unwrap_or(0);
-    if amount_atoms == 0 {
-        return Ok(ActionResult {
-            ok: false,
-            message: Some("No stake to unbond.".into()),
-            tx_id: None,
-        });
-    }
-
-    let nonce_val = match rpc_call(
-        RPC_URL,
-        "kovanica_getNonce",
-        serde_json::json!([sender.to_string()]),
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            return Ok(ActionResult {
-                ok: false,
-                message: Some(e),
-                tx_id: None,
-            })
-        }
-    };
-    let nonce = match parse_quantity_value(&nonce_val) {
-        Some(n) => n,
-        None => {
-            return Ok(ActionResult {
-                ok: false,
-                message: Some("Bad nonce.".into()),
-                tx_id: None,
-            })
-        }
-    };
-
-    let ctx = SigningContext::new(CHAIN_ID as u64);
-    let kind = TransactionKind::Unstake {
-        amount: amount_atoms,
-    };
-    let fee = 1u64;
-    let mut tx = Transaction {
-        sender,
-        nonce,
-        kind,
-        fee,
-        signature: Signature([0u8; 64]),
-        hash: Hash::zero(),
-    };
-    let hash = tx.signing_hash(&ctx);
-    tx.signature = kovanica_crypto::sign(&signing_key, hash.as_ref());
-    tx.hash = hash;
-    let raw = match bincode::serialize(&tx) {
-        Ok(b) => hex::encode(b),
-        Err(e) => {
-            return Ok(ActionResult {
-                ok: false,
-                message: Some(format!("encode: {e}")),
-                tx_id: None,
-            })
-        }
-    };
-
     let _ = app;
-    match rpc_call(
-        RPC_URL,
-        "kovanica_sendRawTransaction",
-        serde_json::json!([raw]),
-    )
-    .await
-    {
-        Ok(v) => {
-            let tx_id = v.as_str().map(|s| s.to_string());
-            Ok(ActionResult {
-                ok: true,
-                message: Some("Submitted.".into()),
-                tx_id,
-            })
-        }
-        Err(e) => Ok(ActionResult {
-            ok: false,
-            message: Some(e),
-            tx_id: None,
-        }),
-    }
+    let running = state_running(&state).await;
+    Ok(unbond_flow(&HttpRpc, running, &signing_key, sender).await)
 }
 
 #[tauri::command]
@@ -1269,5 +1341,221 @@ mod tests {
     #[test]
     fn min_stake_constant() {
         assert_eq!(MIN_STAKE_ATOMS, 50_000_000_000_000);
+    }
+
+    // ---- chain guard / fee (sign paths) ------------------------------------
+
+    /// Recording JSON-RPC mock: canned result per method, every call logged.
+    struct MockRpc {
+        responses: std::collections::HashMap<&'static str, Result<serde_json::Value, String>>,
+        calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    }
+
+    impl MockRpc {
+        fn new(responses: Vec<(&'static str, Result<serde_json::Value, String>)>) -> Self {
+            MockRpc {
+                responses: responses.into_iter().collect(),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        /// Healthy chain-4 node with the given network tag and fee rate.
+        fn chain(tag: &str, fee: Result<serde_json::Value, String>) -> Self {
+            Self::new(vec![
+                (
+                    "kovanica_syncStatus",
+                    Ok(serde_json::json!({ "networkTag": tag, "catchingUp": false })),
+                ),
+                ("kovanica_getNonce", Ok(serde_json::json!("0x7"))),
+                ("kovanica_getStake", Ok(serde_json::json!("0x2d79883d2000"))),
+                ("kovanica_estimateFee", fee),
+                (
+                    "kovanica_sendRawTransaction",
+                    Ok(serde_json::json!("0xabc")),
+                ),
+            ])
+        }
+
+        fn methods(&self) -> Vec<String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(m, _)| m.clone())
+                .collect()
+        }
+
+        fn sent_raw(&self) -> Option<String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(m, _)| m == "kovanica_sendRawTransaction")
+                .and_then(|(_, p)| p[0].as_str().map(|s| s.to_string()))
+        }
+    }
+
+    impl Rpc for MockRpc {
+        fn call(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((method.to_string(), params));
+            let out = self
+                .responses
+                .get(method)
+                .cloned()
+                .unwrap_or_else(|| Err(format!("unexpected method {method}")));
+            async move { out }
+        }
+    }
+
+    fn test_key() -> (SigningKey, Address) {
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let addr = Address(sk.verifying_key().to_bytes());
+        (sk, addr)
+    }
+
+    fn assert_refused_unsigned(r: &ActionResult, rpc: &MockRpc, needle: &str) {
+        assert!(!r.ok, "must refuse");
+        assert!(r.tx_id.is_none());
+        let msg = r.message.clone().unwrap_or_default();
+        assert!(
+            msg.contains(needle),
+            "message {msg:?} should contain {needle:?}"
+        );
+        let methods = rpc.methods();
+        assert!(
+            !methods.iter().any(|m| m == "kovanica_sendRawTransaction"),
+            "sent: {methods:?}"
+        );
+        // Nonce/fee are read only after the guard passes; signing comes after both.
+        assert!(
+            !methods.iter().any(|m| m == "kovanica_getNonce"),
+            "signed path reached: {methods:?}"
+        );
+        assert!(rpc.sent_raw().is_none());
+    }
+
+    #[tokio::test]
+    async fn wrong_network_tag_refuses_stake_and_unbond_without_signing() {
+        let (sk, addr) = test_key();
+        let rpc = MockRpc::chain("4-0123456789abcdef", Ok(serde_json::json!("0x1")));
+        let r = stake_flow(&rpc, true, &sk, addr, 50_000_000_000_000).await;
+        assert_refused_unsigned(&r, &rpc, "Network tag mismatch");
+
+        let rpc = MockRpc::chain("4-0123456789abcdef", Ok(serde_json::json!("0x1")));
+        let r = unbond_flow(&rpc, true, &sk, addr).await;
+        assert_refused_unsigned(&r, &rpc, "Network tag mismatch");
+        assert!(!rpc.methods().iter().any(|m| m == "kovanica_getStake"));
+    }
+
+    #[tokio::test]
+    async fn wrong_chain_id_refuses() {
+        let (sk, addr) = test_key();
+        let rpc = MockRpc::chain("5-0eacd5699210b145", Ok(serde_json::json!("0x1")));
+        let r = stake_flow(&rpc, true, &sk, addr, 1).await;
+        assert_refused_unsigned(&r, &rpc, "Chain id mismatch");
+
+        let rpc = MockRpc::new(vec![(
+            "kovanica_syncStatus",
+            Ok(serde_json::json!({ "networkTag": EXPECTED_NETWORK_TAG, "chainId": 5 })),
+        )]);
+        let r = unbond_flow(&rpc, true, &sk, addr).await;
+        assert_refused_unsigned(&r, &rpc, "Chain id mismatch");
+    }
+
+    #[tokio::test]
+    async fn missing_tag_or_sync_failure_refuses() {
+        let (sk, addr) = test_key();
+        let rpc = MockRpc::new(vec![(
+            "kovanica_syncStatus",
+            Ok(serde_json::json!({ "catchingUp": false })),
+        )]);
+        let r = stake_flow(&rpc, true, &sk, addr, 1).await;
+        assert_refused_unsigned(&r, &rpc, "did not report a network tag");
+
+        let rpc = MockRpc::new(vec![(
+            "kovanica_syncStatus",
+            Err("rpc send failed: refused".into()),
+        )]);
+        let r = stake_flow(&rpc, true, &sk, addr, 1).await;
+        assert_refused_unsigned(&r, &rpc, "kovanica_syncStatus failed");
+    }
+
+    #[tokio::test]
+    async fn stopped_node_refuses_before_any_rpc() {
+        let (sk, addr) = test_key();
+        let rpc = MockRpc::chain(EXPECTED_NETWORK_TAG, Ok(serde_json::json!("0x1")));
+        let r = stake_flow(&rpc, false, &sk, addr, 1).await;
+        assert_refused_unsigned(&r, &rpc, "Node is not running");
+        let r = unbond_flow(&rpc, false, &sk, addr).await;
+        assert_refused_unsigned(&r, &rpc, "Node is not running");
+        assert!(
+            rpc.methods().is_empty(),
+            "no RPC when stopped: {:?}",
+            rpc.methods()
+        );
+    }
+
+    #[tokio::test]
+    async fn fee_estimate_failure_refuses_without_fallback() {
+        let (sk, addr) = test_key();
+        for fee in [
+            Err("rpc error: boom".to_string()),
+            Ok(serde_json::json!("0x0")),
+            Ok(serde_json::Value::Null),
+        ] {
+            let rpc = MockRpc::chain(EXPECTED_NETWORK_TAG, fee);
+            let r = stake_flow(&rpc, true, &sk, addr, 1).await;
+            assert!(!r.ok);
+            assert!(
+                r.message.clone().unwrap().contains("Fee estimate"),
+                "{:?}",
+                r.message
+            );
+            assert!(
+                rpc.sent_raw().is_none(),
+                "must not submit with a fallback fee"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fee_comes_from_rpc_rate_times_size() {
+        let (sk, addr) = test_key();
+        for (flow, rate) in [("stake", 3u64), ("unbond", 5u64)] {
+            let rpc = MockRpc::chain(
+                EXPECTED_NETWORK_TAG,
+                Ok(serde_json::json!(format!("0x{rate:x}"))),
+            );
+            let r = if flow == "stake" {
+                stake_flow(&rpc, true, &sk, addr, 50_000_000_000_000).await
+            } else {
+                unbond_flow(&rpc, true, &sk, addr).await
+            };
+            assert!(r.ok, "{flow}: {:?}", r.message);
+            assert_eq!(r.tx_id.as_deref(), Some("0xabc"));
+            let raw = hex::decode(rpc.sent_raw().expect("submitted")).unwrap();
+            let tx: Transaction = bincode::deserialize(&raw).unwrap();
+            assert_eq!(tx.nonce, 7);
+            assert_eq!(tx.fee, rate * raw.len() as u64, "{flow}: fee = rate x size");
+            assert_ne!(tx.fee, 1);
+            assert_eq!(
+                tx.hash,
+                tx.signing_hash(&SigningContext::new(CHAIN_ID as u64))
+            );
+            let m = rpc.methods();
+            assert_eq!(
+                m.first().map(String::as_str),
+                Some("kovanica_syncStatus"),
+                "{flow}: guard first: {m:?}"
+            );
+            assert!(m.iter().any(|x| x == "kovanica_estimateFee"));
+        }
     }
 }
