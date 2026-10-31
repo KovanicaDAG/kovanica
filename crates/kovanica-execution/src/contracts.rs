@@ -142,10 +142,10 @@ fn custody_key(address: &[u8; 32]) -> Vec<u8> {
     key
 }
 
-/// The 19 dispatchable contract entry points (FIXED ABI, Lane 3a + P0a).
+/// The dispatchable contract entry points (FIXED ABI, Lane 3a + P0a + escrow).
 ///
 /// The native [`execute_contract_call`] dispatcher, the wasm exports of the
-/// four contract crates, and `docs/CONTRACTS.md` must stay in sync with this
+/// contract crates, and `docs/CONTRACTS.md` must stay in sync with this
 /// table (enforced by `dispatch_covers_all_entry_points`).
 pub const ENTRY_POINTS: &[&str] = &[
     "htlc_create",
@@ -180,7 +180,7 @@ pub const ENTRY_POINTS: &[&str] = &[
     "escrow_refund",
 ];
 
-/// Returns whether `name` is one of the 26 dispatchable entry points.
+/// Returns whether `name` is one of the 30 dispatchable entry points.
 pub fn is_entry_point(name: &str) -> bool {
     ENTRY_POINTS.contains(&name)
 }
@@ -2125,17 +2125,17 @@ pub(crate) mod tests {
     // Every advertised entry point reaches the dispatcher: with an empty
     // argument buffer each one fails during argument decoding (InvalidInput),
     // never with "unknown entry point". This pins the native table to the
-    // 19 names of the FIXED ABI.
+    // ENTRY_POINTS names of the FIXED ABI (currently 30, incl. escrow_*).
     #[test]
     fn dispatch_covers_all_entry_points() {
         let (_dir, storage) = open_storage();
         let contract = addr(30);
         let caller = addr(1);
         deploy(&storage, &contract);
-        assert_eq!(ENTRY_POINTS.len(), 26);
+        assert_eq!(ENTRY_POINTS.len(), 30);
         assert_eq!(
             ENTRY_POINTS.iter().filter(|e| is_entry_point(e)).count(),
-            26
+            30
         );
         for entry in ENTRY_POINTS {
             let err = execute_contract_call(entry, contract, caller, 1, 100, &[], &storage)
