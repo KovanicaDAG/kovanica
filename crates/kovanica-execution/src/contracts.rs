@@ -107,6 +107,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
 use kovanica_common::{ContractError, ContractResult, Host};
+use kovanica_escrow::{approve, create, refund, release};
 use kovanica_htlc::Htlc;
 use kovanica_multisig::Multisig;
 use kovanica_nft::Nft;
@@ -141,10 +142,10 @@ fn custody_key(address: &[u8; 32]) -> Vec<u8> {
     key
 }
 
-/// The 19 dispatchable contract entry points (FIXED ABI, Lane 3a + P0a).
+/// The dispatchable contract entry points (FIXED ABI, Lane 3a + P0a + escrow).
 ///
 /// The native [`execute_contract_call`] dispatcher, the wasm exports of the
-/// four contract crates, and `docs/CONTRACTS.md` must stay in sync with this
+/// contract crates, and `docs/CONTRACTS.md` must stay in sync with this
 /// table (enforced by `dispatch_covers_all_entry_points`).
 pub const ENTRY_POINTS: &[&str] = &[
     "htlc_create",
@@ -179,7 +180,7 @@ pub const ENTRY_POINTS: &[&str] = &[
     "escrow_refund",
 ];
 
-/// Returns whether `name` is one of the 26 dispatchable entry points.
+/// Returns whether `name` is one of the 30 dispatchable entry points.
 pub fn is_entry_point(name: &str) -> bool {
     ENTRY_POINTS.contains(&name)
 }
@@ -985,21 +986,21 @@ fn dispatch_entry(
                 kovanica_common::Amount,
                 kovanica_common::Timestamp,
             ) = dec(args)?;
-            enc(&Escrow::create(host, parties, threshold, amount, deadline)?)
+            enc(&create(host, parties, threshold, amount, deadline)?)
         }
         "escrow_approve" => {
             let id: kovanica_escrow::EscrowId = dec(args)?;
-            Escrow::approve(host, id)?;
+            approve(host, id)?;
             enc(&())
         }
         "escrow_release" => {
             let (id, to): (kovanica_escrow::EscrowId, [u8; 32]) = dec(args)?;
-            Escrow::release(host, id, to)?;
+            release(host, id, to)?;
             enc(&())
         }
         "escrow_refund" => {
             let id: kovanica_escrow::EscrowId = dec(args)?;
-            Escrow::refund(host, id)?;
+            refund(host, id)?;
             enc(&())
         }
 
@@ -2124,17 +2125,17 @@ pub(crate) mod tests {
     // Every advertised entry point reaches the dispatcher: with an empty
     // argument buffer each one fails during argument decoding (InvalidInput),
     // never with "unknown entry point". This pins the native table to the
-    // 19 names of the FIXED ABI.
+    // ENTRY_POINTS names of the FIXED ABI (currently 30, incl. escrow_*).
     #[test]
     fn dispatch_covers_all_entry_points() {
         let (_dir, storage) = open_storage();
         let contract = addr(30);
         let caller = addr(1);
         deploy(&storage, &contract);
-        assert_eq!(ENTRY_POINTS.len(), 26);
+        assert_eq!(ENTRY_POINTS.len(), 30);
         assert_eq!(
             ENTRY_POINTS.iter().filter(|e| is_entry_point(e)).count(),
-            26
+            30
         );
         for entry in ENTRY_POINTS {
             let err = execute_contract_call(entry, contract, caller, 1, 100, &[], &storage)

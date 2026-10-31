@@ -2605,6 +2605,7 @@ dependencies = [
  "kovanica-common",
  "kovanica-consensus",
  "kovanica-crypto",
+ "kovanica-escrow",
  "kovanica-fee",
  "kovanica-htlc",
  "kovanica-multisig",
