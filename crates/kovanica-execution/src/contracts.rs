@@ -107,6 +107,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
 use kovanica_common::{ContractError, ContractResult, Host};
+use kovanica_escrow::{approve, create, refund, release};
 use kovanica_htlc::Htlc;
 use kovanica_multisig::Multisig;
 use kovanica_nft::Nft;
@@ -985,21 +986,21 @@ fn dispatch_entry(
                 kovanica_common::Amount,
                 kovanica_common::Timestamp,
             ) = dec(args)?;
-            enc(&Escrow::create(host, parties, threshold, amount, deadline)?)
+            enc(&create(host, parties, threshold, amount, deadline)?)
         }
         "escrow_approve" => {
             let id: kovanica_escrow::EscrowId = dec(args)?;
-            Escrow::approve(host, id)?;
+            approve(host, id)?;
             enc(&())
         }
         "escrow_release" => {
             let (id, to): (kovanica_escrow::EscrowId, [u8; 32]) = dec(args)?;
-            Escrow::release(host, id, to)?;
+            release(host, id, to)?;
             enc(&())
         }
         "escrow_refund" => {
             let id: kovanica_escrow::EscrowId = dec(args)?;
-            Escrow::refund(host, id)?;
+            refund(host, id)?;
             enc(&())
         }
 
