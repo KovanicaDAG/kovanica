@@ -1,6 +1,6 @@
 # STATE — living source of truth
 
-**Tip (docs hygiene base):** `a78e3ac9ce5c99a0c4014c51f3763c87f93e821d` (`main`, 2026-10-31).
+**Tip (docs hygiene base):** `abacfb922132e3e7b3084cfe75cdebc46a72cbdf` (from `main` base `a78e3ac9ce5c99a0c4014c51f3763c87f93e821d`, 2026-10-31).
 Update this file when frozen params or open product gaps change. Point-in-time dumps live under `docs/archive/`; they are not SoT.
 
 ## Chain 4 (public testnet track)
