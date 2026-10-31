@@ -30,10 +30,12 @@ Mesh fully connected (3 nodes, each sees 2 peers), all executing.
 ### Start / stop
 ```
 # VPS#1 (this node)
-systemctl start kovanica-node.service  # or nohup /root/Projects/kvnc/run-seed1-wrapper.sh
+systemctl start kovanica-node.service  # or nohup /root/Projects/kovanica/run-seed1-wrapper.sh
 # below VPS via SSH
 systemctl start kovanica-node.service
 ```
+
+> **Ops note (unit & env naming):** Seed systemd units and wrapper scripts must use `kovanica-*` unit names (e.g. `kovanica-node.service` / `kovanica-testnet-seedN.service`) and `KOVANICA_*` environment variables, with checkout path `/root/Projects/kovanica` (or `${KOVANICA_ROOT}`). Coordinate any live VPS cutover from legacy `kvnc-*` / `KVNC_*` units with Seed Ops separately.
 
 ### Health checks
 ```bash
@@ -47,17 +49,18 @@ curl -s -X POST http://127.0.0.1:8545/rpc \
 - seed1.kovanica.online → seed1.kovanica.online (A record, grey cloud)
 - seed2.kovanica.online → seed2.kovanica.online
 - seed3.kovanica.online → seed3.kovanica.online
+- For mainnet DNS seed requirements (3+ kovanica-native DNS-only seed records), see `docs/SEED-DNS-AUDIT.md`.
 
 ### Logs
-- VPS#1: /root/Projects/kvnc/seed1.log
-- VPS#2: /root/Projects/kvnc/seed2.log
-- VPS#3: /root/Projects/kvnc/seed3.log
+- VPS#1: /root/Projects/kovanica/seed1.log
+- VPS#2: /root/Projects/kovanica/seed2.log
+- VPS#3: /root/Projects/kovanica/seed3.log
 
 ### Binaries
 - VPS#1: /usr/local/bin/kovanica-node (built from c44f672)
 - VPS#2, VPS#3: /usr/local/bin/kovanica-node (scp'd from VPS#1 build)
 
 ### Data dirs (all VPS)
-- /root/Projects/kvnc/node-data: contains genesis_validators.toml + v.dat (0600 seed)
+- /root/Projects/kovanica/node-data: contains genesis_validators.toml + v.dat (0600 seed)
 
 ## Block

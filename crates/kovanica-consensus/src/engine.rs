@@ -1701,18 +1701,19 @@ where
         Ok(())
     }
 
-    /// Signing context for votes (v1, domain tag `KUNA/vote/v1`).
+    /// Signing context for votes (v2, domain tag `KUNA/vote/v2`).
     ///
-    /// Built ONLY from local state: the node's configured `chain_id` and the
-    /// epoch derived from the voted `leader_round` (pure function of round).
-    /// This ensures all nodes compute the SAME epoch for the same leader round,
-    /// regardless of local committee state. A vote signed for another chain
-    /// or epoch boundary never verifies.
+    /// Built ONLY from local state: the node's configured `chain_id`,
+    /// `genesis_hash`, and the epoch derived from the voted `leader_round`
+    /// (pure function of round). This ensures all nodes compute the SAME epoch
+    /// for the same leader round, regardless of local committee state. A vote
+    /// signed for another chain, genesis, or epoch boundary never verifies.
     fn vote_signing_ctx(&self, leader_round: Round) -> kovanica_types::SigningContext {
         let epoch = kovanica_types::epoch_for_round(leader_round);
         kovanica_types::SigningContext {
             chain_id: self.signing_ctx.chain_id,
             epoch,
+            genesis_hash: self.signing_ctx.genesis_hash,
         }
     }
 
@@ -4568,10 +4569,7 @@ mod tests {
 
     fn local_v1_ctx() -> kovanica_types::SigningContext {
         // With new epoch derivation (leader_round / EPOCH_ROUNDS), round 3 -> epoch 0
-        kovanica_types::SigningContext {
-            chain_id: TEST_CTX.chain_id,
-            epoch: 3 / kovanica_staking::EPOCH_ROUNDS,
-        }
+        TEST_CTX.with_epoch(3 / kovanica_staking::EPOCH_ROUNDS)
     }
 
     #[tokio::test]
@@ -4579,19 +4577,28 @@ mod tests {
         let (engine, key, digest, mut receiver) = engine_with_leader_at_epoch();
         engine
             .process_vote(&vote_with_ctx(&key, &local_v1_ctx(), 3, digest))
-            .expect("v1 vote for local chain_id + committee epoch is accepted");
+            .expect("v2 vote for local chain_id + genesis_hash + committee epoch is accepted");
         assert_eq!(receiver.try_recv().unwrap().leader.digest, digest);
     }
 
     #[tokio::test]
     async fn sig_v1_vote_for_other_chain_id_rejected() {
         let (engine, key, digest, mut receiver) = engine_with_leader_at_epoch();
-        let other_chain = kovanica_types::SigningContext {
-            chain_id: TEST_CTX.chain_id + 1,
-            epoch: SIG_V1_EPOCH,
-        };
+        let other_chain =
+            kovanica_types::SigningContext::new(TEST_CTX.chain_id + 1).with_epoch(SIG_V1_EPOCH);
         assert!(matches!(
             engine.process_vote(&vote_with_ctx(&key, &other_chain, 3, digest)),
+            Err(ConsensusError::VoteRejected(VoteRejection::BadSignature(0)))
+        ));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn sig_v2_vote_for_other_genesis_hash_rejected() {
+        let (engine, key, digest, mut receiver) = engine_with_leader_at_epoch();
+        let other_genesis = local_v1_ctx().with_genesis_hash(Hash([0x99; 32]));
+        assert!(matches!(
+            engine.process_vote(&vote_with_ctx(&key, &other_genesis, 3, digest)),
             Err(ConsensusError::VoteRejected(VoteRejection::BadSignature(0)))
         ));
         assert!(receiver.try_recv().is_err());
@@ -4603,10 +4610,7 @@ mod tests {
         // With EPOCH_ROUNDS = 7200, round 36000 -> epoch 5
         let (engine, key, digest, mut receiver) = engine_with_leader_at_epoch_for_epoch(5);
         // Vote signed for epoch 0 (wrong epoch) while leader round maps to epoch 5
-        let other_epoch = kovanica_types::SigningContext {
-            chain_id: TEST_CTX.chain_id,
-            epoch: 0,
-        };
+        let other_epoch = TEST_CTX.with_epoch(0);
         assert!(matches!(
             engine.process_vote(&vote_with_ctx(&key, &other_epoch, 36000, digest)),
             Err(ConsensusError::VoteRejected(VoteRejection::BadSignature(0)))
@@ -4622,10 +4626,7 @@ mod tests {
     #[tokio::test]
     async fn b1_review_restarted_engine_accepts_vote_from_running_engine() {
         let (engine, key, digest, _receiver) = engine_with_leader_at_epoch(); // committee epoch 5, round 3
-        let running_ctx = kovanica_types::SigningContext {
-            chain_id: TEST_CTX.chain_id,
-            epoch: 3 / kovanica_staking::EPOCH_ROUNDS,
-        };
+        let running_ctx = TEST_CTX.with_epoch(3 / kovanica_staking::EPOCH_ROUNDS);
         let res = engine.process_vote(&vote_with_ctx(&key, &running_ctx, 3, digest));
         assert!(
             !matches!(

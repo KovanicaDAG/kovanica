@@ -120,10 +120,7 @@ mod tests {
     use super::*;
     use kovanica_types::signing::SigningContext;
 
-    const CTX: SigningContext = SigningContext {
-        chain_id: 4,
-        epoch: 0,
-    };
+    const CTX: SigningContext = SigningContext::new(4);
 
     #[test]
     fn transfer_signs_and_verifies() {

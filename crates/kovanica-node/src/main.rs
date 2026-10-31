@@ -705,11 +705,15 @@ where
         .collect();
     kovanica_crypto::set_validator_keys_from_public(committee_keys);
 
-    // v1 signing context: chain id from config (verified against genesis).
-    // Epoch is derived per-leader-round as leader_round / EPOCH_ROUNDS
-    // (see `vote_signing_ctx` and `publish_local_seal`). The value here is a
-    // placeholder and NOT used for consensus decisions.
-    let signing_ctx = kovanica_types::SigningContext::new(config.chain_id).with_epoch(0);
+    // Signing context: chain id and genesis digest from config (verified
+    // against genesis). Epoch is derived per-leader-round as
+    // leader_round / EPOCH_ROUNDS (see `vote_signing_ctx` and
+    // `publish_local_seal`). The epoch value here is a placeholder and NOT used
+    // for consensus decisions.
+    let genesis_hash = genesis_config_digest(&config)?;
+    let signing_ctx = kovanica_types::SigningContext::new(config.chain_id)
+        .with_epoch(0)
+        .with_genesis_hash(genesis_hash);
     let mempool = Arc::new(Mempool::new(
         build_mempool_config(),
         state_storage.clone(),
@@ -8809,10 +8813,10 @@ mod tests {
         // validator would there.
         vote.signature = kovanica_crypto::sign(
             key,
-            &vote.signature_data(&kovanica_types::SigningContext {
-                chain_id: kovanica_types::signing::chain_id::LOCAL,
-                epoch: kovanica_types::epoch_for_round(leader_round),
-            }),
+            &vote.signature_data(
+                &kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL)
+                    .with_epoch(kovanica_types::epoch_for_round(leader_round)),
+            ),
         );
         vote
     }

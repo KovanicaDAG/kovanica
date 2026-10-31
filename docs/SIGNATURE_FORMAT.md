@@ -33,25 +33,27 @@ not match the one in its genesis config.
 
 Registry (**final**): `1` = mainnet, `2` = testnet, `3` = devnet, `1337` = local. The test vectors below use `chain_id = 2`.
 
-## 1. Vote `signature_data` v1 (74 bytes, signed directly)
+## 1. Vote `signature_data` v2 (106 bytes, signed directly)
 
 | Offset | Size | Field          | Encoding                                  |
 |-------:|-----:|----------------|-------------------------------------------|
-| 0      | 16   | domain tag     | `DomainTag16("KUNA/vote/v1")`             |
+| 0      | 16   | domain tag     | `DomainTag16("KUNA/vote/v2")`             |
 | 16     | 8    | chain_id       | u64 LE                                    |
-| 24     | 8    | epoch          | u64 LE (committee epoch; `0` until epochs are live) |
-| 32     | 2    | voter          | u16 LE (`AuthorityIndex` = u16)           |
-| 34     | 8    | leader_round   | u64 LE (`Round` = u64)                    |
-| 42     | 32   | leader_hash    | raw 32 bytes                              |
+| 24     | 32   | genesis_hash   | raw 32 bytes                              |
+| 56     | 8    | epoch          | u64 LE (committee epoch)                  |
+| 64     | 2    | voter          | u16 LE (`AuthorityIndex` = u16)           |
+| 66     | 8    | leader_round   | u64 LE (`Round` = u64)                    |
+| 74     | 32   | leader_hash    | raw 32 bytes                              |
 
-`signature = Ed25519.sign(sk_voter, signature_data)` (the 74 bytes are signed without prehashing).
-The verifier MUST rebuild the bytes from its **own** `chain_id` and current `epoch`, and take
+`signature = Ed25519.sign(sk_voter, signature_data)` (the 106 bytes are signed without prehashing).
+The verifier MUST rebuild the bytes from its **own** `chain_id`, `genesis_hash`, and current `epoch`, and take
 `voter` from the message, then look up `pubkey = committee[epoch][voter]`. It must never
-take chain_id or epoch from the network message.
+take chain_id, genesis_hash, or epoch from the network message.
 
-The API contract is now `verify_vote_signature(ctx: &SigningContext, vote: &Vote, pubkey: &PublicKey) -> Result<(), SigError>`
-(`SigningContext { chain_id, epoch }` lives in `kovanica_types::signing`, together with the `chain_id` registry constants).
+The API contract is `verify_vote_signature(ctx: &SigningContext, vote: &Vote, pubkey: &PublicKey) -> Result<(), SigError>`
+(`SigningContext { chain_id, epoch, genesis_hash }` lives in `kovanica_types::signing`, together with the `chain_id` registry constants).
 
+Former (v1) format, retired: `DomainTag16("KUNA/vote/v1") ‖ chain_id (8 B) ‖ epoch (8 B) ‖ voter (2 B) ‖ leader_round (8 B) ‖ leader_hash (32 B)` (74 bytes, without `genesis_hash`).
 Former (pre-v1) PROVISIONAL format, for reference: `leader_round u64 LE ‖ leader_hash` (40 bytes).
 
 ## 2. Transaction signing hash v1
@@ -113,11 +115,11 @@ Key: seed = `07` × 32 →
 pubkey/sender = `ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c`.
 Ed25519 is deterministic, so the signatures can be reproduced.
 
-### V1: Vote (chain_id=2, epoch=7, voter=3, leader_round=42, leader_hash=`11`×32)
+### V1: Vote v2 (chain_id=2, genesis_hash=`22`×32, epoch=7, voter=3, leader_round=42, leader_hash=`11`×32)
 ```
-len      = 74
-preimage = 4b554e412f766f74652f7631000000000200000000000000070000000000000003002a000000000000001111111111111111111111111111111111111111111111111111111111111111
-sig      = 04edabde7c75345b9c4e12a793b2a4f05948c6edb5cbd197056fd68ef87d2a4c5311ff5df6eb6322c8fc229097079410873af37dceb4b43af66722005415a70b
+len      = 106
+preimage = 4b554e412f766f74652f76320000000002000000000000002222222222222222222222222222222222222222222222222222222222222222070000000000000003002a000000000000001111111111111111111111111111111111111111111111111111111111111111
+sig      = c84668f3c6a1773677388514b797e32a930e617d36e97bca3a9de428e87553ecd6db02841bb4404182abbf76a51d5639b6dbea44f621a9ece3e7901ada40250d
 ```
 
 ### T1: Transfer (chain_id=2, nonce=5, to=`22`×32, amount=1000000, fee=1000)

@@ -251,10 +251,7 @@ mod tests {
     use super::*;
     use crate::crypto::SigningKey;
 
-    const CTX: SigningContext = SigningContext {
-        chain_id: 2,
-        epoch: 0,
-    };
+    const CTX: SigningContext = SigningContext::new(2);
 
     fn key() -> SigningKey {
         SigningKey::from_bytes(&[7u8; 32])

@@ -21,9 +21,7 @@ use kovanica_dag::DagStore;
 use kovanica_mempool::{Mempool, MempoolError};
 #[allow(unused_imports)]
 use kovanica_p2p_identity::{IdentityError, PeerIdentityClaim, PeerIdentityRegistry};
-use kovanica_types::{
-    epoch_for_round, SealAnnouncement, SigningContext, StatementBlock, Transaction, Vote,
-};
+use kovanica_types::{epoch_for_round, SealAnnouncement, StatementBlock, Transaction, Vote};
 use libp2p::{
     gossipsub::{self, MessageAcceptance},
     identify, kad, request_response,
@@ -1613,10 +1611,10 @@ impl NetworkService {
         // boot-time epoch (0) made every vote past the first epoch boundary fail
         // with BadSignature, so honest peers lost score and banned each other.
         // Derive the SAME round-based epoch here from the vote itself.
-        let vote_ctx = SigningContext {
-            chain_id: self.mempool.signing_context().chain_id,
-            epoch: epoch_for_round(vote.leader_round),
-        };
+        let vote_ctx = self
+            .mempool
+            .signing_context()
+            .with_epoch(epoch_for_round(vote.leader_round));
         if let Err(rejection) = self.validator.verify_vote(&vote, &vote_ctx) {
             warn!(%peer, voter = vote.voter, leader_round = vote.leader_round, %rejection, "rejected vote gossip");
             return Verdict::rejected("vote", rejection);
@@ -2448,10 +2446,7 @@ mod tests {
             voter: 1,
             signature: Signature([0; 64]),
         };
-        let epoch_ctx = SigningContext {
-            chain_id: test_support::TEST_CTX.chain_id,
-            epoch: epoch_for_round(leader_round),
-        };
+        let epoch_ctx = test_support::TEST_CTX.with_epoch(epoch_for_round(leader_round));
         assert_ne!(
             epoch_ctx.epoch,
             test_support::TEST_CTX.epoch,
