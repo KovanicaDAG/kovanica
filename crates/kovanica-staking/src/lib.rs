@@ -100,6 +100,9 @@ pub use kovanica_params::DECAY_NUM;
 /// Minimum stake required to become a validator (in base units).
 pub use kovanica_params::MIN_VALIDATOR_STAKE;
 
+/// Minimum delegation amount required per delegation (in base units).
+pub use kovanica_params::MIN_DELEGATION;
+
 /// Minimum number of active validators for the mainnet genesis floor.
 ///
 /// There is no maximum; anyone meeting `MIN_VALIDATOR_STAKE` may join.
@@ -1316,8 +1319,8 @@ impl StakingState {
         validator: Address,
         amount: Stake,
     ) -> Result<(), StakingError> {
-        if amount == 0 {
-            return Ok(());
+        if amount < MIN_DELEGATION {
+            return Err(StakingError::InsufficientStake);
         }
         let v_idx = self
             .validators
@@ -1800,6 +1803,7 @@ mod tests {
         assert_eq!(LEADER_INTERVAL_SECS, 12);
         assert_eq!(EPOCH_ROUNDS, 7_200);
         assert_eq!(MIN_VALIDATOR_STAKE, 50_000 * ONE_KUNA);
+        assert_eq!(MIN_DELEGATION, 50_000 * ONE_KUNA);
         assert_eq!(MIN_ACTIVE_VALIDATORS, 15);
         assert_eq!(UNBONDING_ROUNDS, 100_000); // skeleton UNBONDING_PERIOD
                                                // Supply book must close exactly.
@@ -2017,6 +2021,33 @@ mod tests {
     }
 
     #[test]
+    fn delegate_enforces_min_delegation() {
+        let mut state = StakingState::new();
+        let validator = Address([1u8; 32]);
+        let delegator = Address([2u8; 32]);
+        state
+            .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None, None)
+            .unwrap();
+        assert!(matches!(
+            state.delegate(delegator, validator, 0),
+            Err(StakingError::InsufficientStake)
+        ));
+        assert!(matches!(
+            state.delegate(delegator, validator, MIN_DELEGATION - 1),
+            Err(StakingError::InsufficientStake)
+        ));
+        assert!(state.delegations.is_empty());
+        assert_eq!(state.total_staked, MIN_VALIDATOR_STAKE);
+
+        state
+            .delegate(delegator, validator, MIN_DELEGATION)
+            .unwrap();
+        assert_eq!(state.delegations.len(), 1);
+        assert_eq!(state.delegations[0].amount, MIN_DELEGATION);
+        assert_eq!(state.total_staked, MIN_VALIDATOR_STAKE + MIN_DELEGATION);
+    }
+
+    #[test]
     fn delegate_unbond_wait_withdraw_and_slash_reduces_stake() {
         let mut state = StakingState::new();
         let validator = Address([1u8; 32]);
@@ -2024,7 +2055,7 @@ mod tests {
         state
             .join_validator(validator, MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
-        let delegate_amount = 10_000 * ONE_KUNA;
+        let delegate_amount = MIN_DELEGATION;
         state
             .delegate(delegator, validator, delegate_amount)
             .unwrap();
@@ -2073,9 +2104,9 @@ mod tests {
             .join_validator(validator, self_stake, 0, None, None, None)
             .unwrap();
         state
-            .delegate(delegator, validator, 10_000 * ONE_KUNA)
+            .delegate(delegator, validator, MIN_DELEGATION)
             .unwrap();
-        // 60k self + 10k delegated staked; move 10k self into the queue while
+        // 60k self + 50k delegated staked; move 10k self into the queue while
         // staying above MIN_VALIDATOR_STAKE (so the validator is still active).
         state
             .unbond_validator(validator, 10_000 * ONE_KUNA)
@@ -2087,11 +2118,11 @@ mod tests {
 
         let slashed = state.slash_validator(validator).unwrap();
 
-        // 5% of 50k self + 5% of 10k delegation + 5% of the 10k queued entry.
-        assert_eq!(slashed, 3_500 * ONE_KUNA);
+        // 5% of 50k self + 5% of 50k delegation + 5% of the 10k queued entry.
+        assert_eq!(slashed, 5_500 * ONE_KUNA);
         // The queued cut was never part of `total_staked`, so only the staked
-        // part reduces it (57k = 60k - 3k).
-        assert_eq!(state.total_staked, staked_before - 3_000 * ONE_KUNA);
+        // part reduces it (95k = 100k - 5k).
+        assert_eq!(state.total_staked, staked_before - 5_000 * ONE_KUNA);
         assert_eq!(
             state.unbonding_queue[0].amount,
             queued_before - queued_before / 20
@@ -2178,7 +2209,7 @@ mod tests {
             .join_validator(Address([1u8; 32]), MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
         state
-            .delegate(Address([2u8; 32]), Address([1u8; 32]), 5_000 * ONE_KUNA)
+            .delegate(Address([2u8; 32]), Address([1u8; 32]), MIN_DELEGATION)
             .unwrap();
         state
             .unbond(Address([2u8; 32]), Address([1u8; 32]), 5_000 * ONE_KUNA)
@@ -2689,18 +2720,18 @@ mod tests {
         let mut st = StakingState::new();
         st.join_validator(a(1), MIN_VALIDATOR_STAKE, 0, None, None, None)
             .unwrap();
-        st.delegate(a(5), a(1), 10_000 * ONE_KUNA).unwrap();
+        st.delegate(a(5), a(1), MIN_DELEGATION).unwrap();
         let slashed = st
             .slash(DoubleSignEvidence {
                 validator: a(1),
                 height: 7,
             })
             .unwrap();
-        assert_eq!(slashed, 3_000 * ONE_KUNA); // 5% of 60k
-        assert_eq!(st.validators[0].stake, 57_000 * ONE_KUNA);
-        assert_eq!(st.total_staked, 57_000 * ONE_KUNA);
+        assert_eq!(slashed, 5_000 * ONE_KUNA); // 5% of 100k
+        assert_eq!(st.validators[0].stake, 95_000 * ONE_KUNA);
+        assert_eq!(st.total_staked, 95_000 * ONE_KUNA);
         assert_eq!(st.self_stake(a(1)), 47_500 * ONE_KUNA);
-        assert_eq!(st.delegations[0].amount, 9_500 * ONE_KUNA);
+        assert_eq!(st.delegations[0].amount, 47_500 * ONE_KUNA);
     }
 
     #[derive(Debug, Clone)]
@@ -2716,8 +2747,8 @@ mod tests {
     fn op() -> impl Strategy<Value = Op> {
         prop_oneof![
             (0u8..4).prop_map(Op::Join),
-            (10u8..13, 0u8..4, 1u64..20_000).prop_map(|(d, v, x)| Op::Delegate(d, v, x)),
-            (10u8..13, 0u8..4, 1u64..20_000).prop_map(|(d, v, x)| Op::Unbond(d, v, x)),
+            (10u8..13, 0u8..4, 1u64..100_000).prop_map(|(d, v, x)| Op::Delegate(d, v, x)),
+            (10u8..13, 0u8..4, 1u64..100_000).prop_map(|(d, v, x)| Op::Unbond(d, v, x)),
             (0u16..4).prop_map(Op::Leader),
             (0u8..4).prop_map(Op::Slash),
             Just(Op::Advance),

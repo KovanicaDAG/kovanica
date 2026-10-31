@@ -174,15 +174,16 @@ pub enum CommitSealError {
     Structure(kovanica_types::SealError),
 }
 
-/// Verify a consensus vote signature (signature format **v1**).
+/// Verify a consensus vote signature (signature format **v2**).
 ///
 /// API contract (owned by Exec-Foundation, spec `docs/SIGNATURE_FORMAT.md` §1):
 /// - The message is exactly [`Vote::signature_data(ctx)`](kovanica_types::Vote::signature_data):
-///   the 74-byte v1 encoding with domain tag `KUNA/vote/v1`, `chain_id`,
-///   `epoch`, `voter`, `leader_round` and `leader_hash`. The producer passes the
-///   same bytes to [`sign`].
+///   the 106-byte v2 encoding with domain tag `KUNA/vote/v2`, `chain_id`,
+///   `genesis_hash`, `epoch`, `voter`, `leader_round` and `leader_hash`. The
+///   producer passes the same bytes to [`sign`].
 /// - `ctx` MUST be built by the verifier from its **own** configured
-///   `chain_id` and its current committee epoch, never from a network message.
+///   `chain_id`, `genesis_hash` and its current committee epoch, never from a
+///   network message.
 /// - `pubkey` MUST be `committee[epoch][vote.voter]`; the caller maps the
 ///   index to the key. `voter` is covered by the signature, so a signature
 ///   cannot be moved to another committee slot.
@@ -270,6 +271,7 @@ mod vote_sig_tests {
     const CTX: SigningContext = SigningContext {
         chain_id: 2,
         epoch: 7,
+        genesis_hash: Hash([0x22; 32]),
     };
 
     fn signed_vote(sk: &SigningKey) -> Vote {
@@ -388,6 +390,36 @@ mod vote_sig_tests {
     }
 
     #[test]
+    fn wrong_genesis_hash_fails() {
+        let (sk, pk) = generate_keypair();
+        let vote = signed_vote(&sk);
+        let other = CTX.with_genesis_hash(Hash([0x33; 32]));
+        assert_eq!(
+            verify_vote_signature(&other, &vote, &pk),
+            Err(SigError::VerificationFailed)
+        );
+    }
+
+    #[test]
+    fn v1_74_byte_vote_signature_rejected() {
+        let (sk, pk) = generate_keypair();
+        let mut vote = signed_vote(&sk);
+        // Construct legacy 74-byte v1 preimage ("KUNA/vote/v1" without genesis_hash).
+        let mut legacy = kovanica_types::signing::domain_tag16(b"KUNA/vote/v1").to_vec();
+        legacy.extend_from_slice(&CTX.chain_id.to_le_bytes());
+        legacy.extend_from_slice(&CTX.epoch.to_le_bytes());
+        legacy.extend_from_slice(&vote.voter.to_le_bytes());
+        legacy.extend_from_slice(&vote.leader_round.to_le_bytes());
+        legacy.extend_from_slice(&vote.leader_hash.0);
+        assert_eq!(legacy.len(), 74);
+        vote.signature = sign(&sk, &legacy);
+        assert_eq!(
+            verify_vote_signature(&CTX, &vote, &pk),
+            Err(SigError::VerificationFailed)
+        );
+    }
+
+    #[test]
     fn reassigned_voter_index_fails() {
         let (sk, pk) = generate_keypair();
         let mut vote = signed_vote(&sk);
@@ -398,10 +430,10 @@ mod vote_sig_tests {
         );
     }
 
-    /// Golden vector V1 from `docs/SIGNATURE_FORMAT.md` §4 (deterministic
-    /// Ed25519 signature by the spec key, seed `07` x 32).
+    /// Golden vector V1 (v2 vote format) from `docs/SIGNATURE_FORMAT.md` §4
+    /// (deterministic Ed25519 signature by the spec key, seed `07` x 32).
     #[test]
-    fn spec_vector_v1_verifies_and_reproduces() {
+    fn spec_vector_v2_verifies_and_reproduces() {
         let sk = SigningKey::from_bytes(&[7u8; 32]);
         let pk = PublicKey(sk.verifying_key().to_bytes());
         let mut vote = Vote {
@@ -413,7 +445,7 @@ mod vote_sig_tests {
         vote.signature = sign(&sk, &vote.signature_data(&CTX));
         assert_eq!(
             hex::encode(vote.signature.0),
-            "04edabde7c75345b9c4e12a793b2a4f05948c6edb5cbd197056fd68ef87d2a4c5311ff5df6eb6322c8fc229097079410873af37dceb4b43af66722005415a70b"
+            "c84668f3c6a1773677388514b797e32a930e617d36e97bca3a9de428e87553ecd6db02841bb4404182abbf76a51d5639b6dbea44f621a9ece3e7901ada40250d"
         );
         assert_eq!(verify_vote_signature(&CTX, &vote, &pk), Ok(()));
     }

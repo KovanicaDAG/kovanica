@@ -247,10 +247,7 @@ pub async fn run_transfer_load(config: &BenchConfig) -> Result<RunStats> {
     use tokio::task::JoinSet;
 
     let client = Arc::new(RpcClient::new(config.rpc_url.clone()));
-    let ctx = SigningContext {
-        chain_id: config.chain_id,
-        epoch: config.epoch,
-    };
+    let ctx = SigningContext::new(config.chain_id).with_epoch(config.epoch);
     let dest = config.dest.unwrap_or(Address([1u8; 32]));
     let concurrency = config.concurrency.max(1);
     let per_worker = if config.duration.as_secs() > 0 {

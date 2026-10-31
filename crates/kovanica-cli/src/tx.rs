@@ -58,10 +58,7 @@ mod tests {
     use super::*;
     use kovanica_types::transaction::TransactionKind;
 
-    const CTX: SigningContext = SigningContext {
-        chain_id: 2,
-        epoch: 0,
-    };
+    const CTX: SigningContext = SigningContext::new(2);
 
     #[test]
     fn signed_transaction_roundtrips_through_bincode() {

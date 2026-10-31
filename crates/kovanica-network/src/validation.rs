@@ -159,8 +159,8 @@ pub trait VoteVerifier: Send + Sync {
     ) -> Result<(), SigError>;
 }
 
-/// Default verifier: Foundation's v1 `kovanica_crypto::verify_vote_signature`
-/// (domain tag `KUNA/vote/v1`, chain id, epoch, voter; Ed25519 strict).
+/// Default verifier: Foundation's v2 `kovanica_crypto::verify_vote_signature`
+/// (domain tag `KUNA/vote/v2`, chain id, genesis_hash, epoch, voter; Ed25519 strict).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Ed25519VoteVerifier;
 

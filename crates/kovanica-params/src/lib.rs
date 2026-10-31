@@ -46,6 +46,7 @@ pub const DECAY_DEN: u64 = 4;
 // Staking
 // ============================================================
 pub const MIN_VALIDATOR_STAKE: u64 = 50_000 * ONE_KUNA;
+pub const MIN_DELEGATION: u64 = 50_000 * ONE_KUNA;
 pub const MIN_ACTIVE_VALIDATORS: u32 = 15;
 pub const UNBONDING_ROUNDS: u64 = 100_000;
 pub const JAIL_ROUNDS: u64 = 7_200;
@@ -124,6 +125,8 @@ mod tests {
     #[test]
     fn committee_bounds() {
         assert!(MIN_ACTIVE_VALIDATORS >= 1);
+        assert_eq!(MIN_VALIDATOR_STAKE, 50_000 * ONE_KUNA);
+        assert_eq!(MIN_DELEGATION, 50_000 * ONE_KUNA);
     }
 
     #[test]

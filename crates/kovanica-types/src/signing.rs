@@ -1,10 +1,11 @@
-//! Signing context for signature format v1 (see `docs/SIGNATURE_FORMAT.md`).
+//! Signing context for signature format v1/v2 (see `docs/SIGNATURE_FORMAT.md`).
 //!
 //! Every signed message (vote or transaction) commits to the network
-//! (`chain_id`). Votes also commit to the committee `epoch`. The verifier must
-//! build the context from its **own** configuration, never from a network
-//! message.
+//! (`chain_id`). Votes also commit to `genesis_hash` and the committee `epoch`
+//! (`KUNA/vote/v2`, 106 bytes). The verifier must build the context from its
+//! **own** configuration, never from a network message.
 
+use crate::hash::Hash;
 use serde::{Deserialize, Serialize};
 
 /// Registered `chain_id` values (see the registry in `docs/SIGNATURE_FORMAT.md`).
@@ -37,8 +38,8 @@ pub mod chain_id {
     }
 }
 
-/// Domain tag (16 bytes, `0x00`-padded) of vote `signature_data` v1.
-pub const VOTE_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/vote/v1");
+/// Domain tag (16 bytes, `0x00`-padded) of vote `signature_data` v2.
+pub const VOTE_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/vote/v2");
 /// Domain tag (16 bytes, `0x00`-padded) of the transaction signing preimage v1.
 pub const TX_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/tx/v1");
 /// Domain tag (16 bytes, `0x00`-padded) of a post-execution commit seal.
@@ -62,24 +63,39 @@ pub const fn domain_tag16(s: &[u8]) -> [u8; 16] {
     out
 }
 
-/// Network context every v1 signature commits to.
+/// Network context every signature commits to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SigningContext {
     /// Network identifier (`u64` LE in the signed bytes). See [`chain_id`].
     pub chain_id: u64,
     /// Committee epoch (`0` until epochs are live). Only votes commit to it.
     pub epoch: u64,
+    /// Genesis configuration digest (`32` raw bytes). Votes commit to it in v2 (`KUNA/vote/v2`).
+    #[serde(default)]
+    pub genesis_hash: Hash,
 }
 
 impl SigningContext {
-    /// Context for `chain_id` at epoch `0`.
+    /// Context for `chain_id` at epoch `0` with a zero genesis digest.
     pub const fn new(chain_id: u64) -> Self {
-        Self { chain_id, epoch: 0 }
+        Self {
+            chain_id,
+            epoch: 0,
+            genesis_hash: Hash([0u8; 32]),
+        }
     }
 
     /// Same network, given committee epoch.
     pub const fn with_epoch(self, epoch: u64) -> Self {
         Self { epoch, ..self }
+    }
+
+    /// Same network and epoch, given `genesis_hash`.
+    pub const fn with_genesis_hash(self, genesis_hash: Hash) -> Self {
+        Self {
+            genesis_hash,
+            ..self
+        }
     }
 }
 
@@ -89,7 +105,7 @@ mod tests {
 
     #[test]
     fn tags_are_16_bytes_zero_padded() {
-        assert_eq!(&VOTE_DOMAIN_TAG[..12], b"KUNA/vote/v1");
+        assert_eq!(&VOTE_DOMAIN_TAG[..12], b"KUNA/vote/v2");
         assert!(VOTE_DOMAIN_TAG[12..].iter().all(|b| *b == 0));
         assert_eq!(&TX_DOMAIN_TAG[..10], b"KUNA/tx/v1");
         assert!(TX_DOMAIN_TAG[10..].iter().all(|b| *b == 0));

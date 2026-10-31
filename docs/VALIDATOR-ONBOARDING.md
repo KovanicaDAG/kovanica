@@ -32,7 +32,7 @@ kovanica-cli key generate --output validator.keystore
 
 # Or manually with openssl
 openssl genpkey -algorithm ed25519 -out validator.key
-# Convert to KVNC keystore format if needed
+# Convert to kovanica keystore format if needed
 ```
 
 The keystore file is encrypted with a passphrase. **Store the passphrase securely.**
@@ -159,6 +159,7 @@ export KOVANICA_RUN_VALIDATOR=true
 | Parameter | Value |
 |-----------|-------|
 | **Min stake** | 50,000 KUNA (50,000,000,000,000 atoms) |
+| **Min delegation** | 50,000 KUNA (50,000,000,000,000 atoms) |
 | **Active validators** | 15–21 |
 | **Epoch** | 7,200 DAG rounds = 2,400 committed leader blocks (~8 h) |
 | **Unbonding** | 100 000 committed leader blocks (~13.9 days at 12 s/leader) — **not** 1 epoch |
@@ -182,11 +183,11 @@ kovanica-cli stake \
 ### 5.3 Delegate (Optional)
 
 ```bash
-# Delegate to another validator
+# Delegate to another validator (min 50,000 KUNA = 50000000000000 atoms)
 kovanica-cli delegate \
   --keystore /path/to/delegator.keystore \
   --validator <validator-address> \
-  --amount 10000000000000 \
+  --amount 50000000000000 \
   --chain-id 4
 ```
 
@@ -349,7 +350,7 @@ Thresholds match `ops/prometheus/alerts.yml`.
 | **RPC endpoint** | `http://<your-ip>:8545` (local) / `https://rpc-testnet.kovanica.online/rpc` (public) |
 | **Explorer** | `https://explorer.kovanica.online` |
 | **Faucet** | `https://faucet.kovanica.online` (UI) / `https://seed3.kovanica.online/faucet` (JSON API), 10 KUNA lifetime cap |
-| **Seed nodes** | `seed1.kovanica.online:8000`, `seed2.kovanica.online:8000`, `seed3.kovanica.online:8000` |
+| **Seed nodes** | `seed1.kovanica.online:8000`, `seed2.kovanica.online:8000`, `seed3.kovanica.online:8000` (for mainnet DNS seed requirements, see `docs/SEED-DNS-AUDIT.md`) |
 | **Genesis file** | Distributed by coordinators |
 
 ### 8.1 Get Test KUNA

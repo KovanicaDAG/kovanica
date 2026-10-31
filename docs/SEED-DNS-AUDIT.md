@@ -32,7 +32,7 @@ All validator and regular nodes should configure their `bootnodes` / `KOVANICA_B
 - **Testnet**: `testnet.kovanica.online:8000`
 - **Mainnet**: `mainnet.kovanica.online:8000`
 
-The single seed node per network acts as the bootstrap entry point; all other nodes connect to it and then peer with each other via Kademlia/Gossipsub.
+The single seed node per network acts as the bootstrap entry point; all other nodes connect to it and then peer with each other via Kademlia/Gossipsub. For mainnet launch, provision **3+ kovanica-native DNS-only (grey-cloud) seed records** (e.g. `seed1..3.kovanica.io` or dedicated mainnet `KOVANICA_BOOTNODES` hostnames) resolving directly to distinct seed IPs on TCP 8000.
 
 ---
 

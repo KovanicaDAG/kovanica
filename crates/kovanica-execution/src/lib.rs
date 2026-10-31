@@ -970,8 +970,11 @@ impl ExecutionContext {
         }
         self.staking
             .delegate(*from, validator, amount)
-            .map_err(|_| {
-                ExecutionError::Validation("Validator not found or inactive".to_string())
+            .map_err(|e| match e {
+                StakingError::NotValidator => {
+                    ExecutionError::Validation("Validator not found or inactive".to_string())
+                }
+                other => ExecutionError::Staking(other),
             })?;
         sub_balance_mapped(storage, txn, from, amount)?;
         Ok(vec![ContractEvent {
@@ -3238,7 +3241,7 @@ mod tests {
         let storage = Storage::new(dir.path().join("test.redb")).expect("storage");
         let key = test_keypair(1);
         let sender = address_of(&key);
-        let initial = 1000 * kovanica_staking::ONE_KUNA;
+        let initial = 100_000 * kovanica_staking::ONE_KUNA;
         let fee = 1000;
         let mut ctx = setup_funded_sender(&storage, &sender, initial);
         let staked_before = ctx.staking.total_staked;
@@ -3247,7 +3250,7 @@ mod tests {
         let tx = delegate_tx(
             &key,
             Address([0xEE; 32]),
-            100 * kovanica_staking::ONE_KUNA,
+            kovanica_staking::MIN_DELEGATION,
             0,
         );
         let result = execute_single_tx(&mut ctx, &storage, tx);
@@ -3353,11 +3356,22 @@ mod tests {
         let run = || {
             let dir = tempfile::tempdir().expect("tempdir");
             let storage = Storage::new(dir.path().join("r.redb")).expect("storage");
-            let mut ctx = setup_funded_sender(&storage, &sender, 1000 * kovanica_staking::ONE_KUNA);
+            let mut ctx =
+                setup_funded_sender(&storage, &sender, 100_000 * kovanica_staking::ONE_KUNA);
             let txs = vec![
                 create_transfer_tx(&key, &recipient, kovanica_staking::ONE_KUNA, 0, 1000),
-                delegate_tx(&key, Address([0xEE; 32]), kovanica_staking::ONE_KUNA, 1),
-                delegate_tx(&key, Address([3u8; 32]), kovanica_staking::ONE_KUNA, 2),
+                delegate_tx(
+                    &key,
+                    Address([0xEE; 32]),
+                    kovanica_staking::MIN_DELEGATION,
+                    1,
+                ),
+                delegate_tx(
+                    &key,
+                    Address([3u8; 32]),
+                    kovanica_staking::MIN_DELEGATION,
+                    2,
+                ),
                 create_transfer_tx(&key, &recipient, u64::MAX / 2, 3, 1000),
             ];
             let subdag = CommittedSubDag {
@@ -4409,7 +4423,7 @@ mod tests {
         let key = test_keypair(1);
         let me = address_of(&key);
         let validator = Address([3u8; 32]);
-        let mut ctx = setup_funded_sender(&storage, &me, 1_000 * K);
+        let mut ctx = setup_funded_sender(&storage, &me, 100_000 * K);
         let r = run(
             &mut ctx,
             &storage,
@@ -4419,16 +4433,21 @@ mod tests {
                     &key,
                     TransactionKind::Delegate {
                         validator,
-                        amount: 400 * K,
+                        amount: 60_000 * K,
                     },
                     0,
                     1000,
                 ),
-                signed_tx(&key, TransactionKind::Unstake { amount: 150 * K }, 1, 1000),
+                signed_tx(
+                    &key,
+                    TransactionKind::Unstake { amount: 15_000 * K },
+                    1,
+                    1000,
+                ),
             ],
         );
         assert!(r.iter().all(|r| r.success), "{r:?}");
-        assert_eq!(ctx.staking.delegated_to(validator), 250 * K);
+        assert_eq!(ctx.staking.delegated_to(validator), 45_000 * K);
         assert_eq!(ctx.staking.unbonding_queue.len(), 1);
         let release = ctx.staking.unbonding_queue[0].release_height;
         assert_eq!(
@@ -4437,15 +4456,59 @@ mod tests {
             "unbonded at height 0"
         );
         let liquid = read_balance(&storage, &me);
-        assert_eq!(liquid, 600 * K - 2000, "unstaked funds are not liquid yet");
+        assert_eq!(
+            liquid,
+            40_000 * K - 2000,
+            "unstaked funds are not liquid yet"
+        );
         // Not yet matured.
         run(&mut ctx, &storage, 2, vec![]);
         assert_eq!(read_balance(&storage, &me), liquid);
         // Jump to just before maturity; the next commit pays out.
         ctx.staking.committed_leader_height = release - 1;
         run(&mut ctx, &storage, 3, vec![]);
-        assert_eq!(read_balance(&storage, &me), liquid + 150 * K);
+        assert_eq!(read_balance(&storage, &me), liquid + 15_000 * K);
         assert!(ctx.staking.unbonding_queue.is_empty());
+    }
+
+    #[test]
+    fn delegate_tx_below_min_delegation_is_rejected_and_rolled_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
+        let key = test_keypair(1);
+        let me = address_of(&key);
+        let validator = Address([3u8; 32]);
+        let initial = 100_000 * K;
+        let mut ctx = setup_funded_sender(&storage, &me, initial);
+        let staked_before = ctx.staking.total_staked;
+
+        let r = run(
+            &mut ctx,
+            &storage,
+            1,
+            vec![signed_tx(
+                &key,
+                TransactionKind::Delegate {
+                    validator,
+                    amount: kovanica_staking::MIN_DELEGATION - 1,
+                },
+                0,
+                1000,
+            )],
+        );
+        assert!(!r[0].success, "{r:?}");
+        assert!(
+            r[0].error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Insufficient stake"),
+            "{:?}",
+            r[0].error
+        );
+        assert_eq!(ctx.staking.total_staked, staked_before);
+        assert!(ctx.staking.delegations.is_empty());
+        assert_eq!(read_balance(&storage, &me), initial - 1000);
+        assert_eq!(read_nonce(&storage, &me), 1);
     }
 
     // Old behaviour: ClaimRewards only emitted events, delegators were never paid.
@@ -4534,12 +4597,16 @@ mod tests {
 
     const TREASURY: Address = Address([0x7E; 32]);
 
-    /// Validator [3;32] (50k self) + one 10k delegation, treasury configured.
+    /// Validator [3;32] (50k self) + one 50k delegation, treasury configured.
     fn slash_fixture(storage: &Storage) -> ExecutionContext {
         let mut ctx = setup_funded_sender(storage, &Address([9u8; 32]), 0);
         ctx.init_treasury(TREASURY);
         ctx.staking
-            .delegate(Address([9u8; 32]), Address([3u8; 32]), 10_000 * K)
+            .delegate(
+                Address([9u8; 32]),
+                Address([3u8; 32]),
+                kovanica_staking::MIN_DELEGATION,
+            )
             .expect("delegate");
         ctx
     }
@@ -4581,14 +4648,14 @@ mod tests {
         let slashed = ctx
             .apply_double_sign_evidence(ev.clone(), &storage)
             .expect("slash");
-        assert_eq!(slashed, 3_000 * K);
+        assert_eq!(slashed, 5_000 * K);
         assert_eq!(read_balance(&storage, &TREASURY), treasury_before + slashed);
         assert_eq!(
             total_supply(&ctx, &storage),
             supply_before,
             "nothing burned"
         );
-        assert_eq!(ctx.staking.total_staked, 57_000 * K);
+        assert_eq!(ctx.staking.total_staked, 95_000 * K);
         assert_eq!(slashed_counter(&storage), Some(slashed));
         assert_eq!(
             bincode::serialize(&ctx.staking.treasury).expect("t"),
@@ -4688,7 +4755,7 @@ mod tests {
             )
             .expect("join validator");
         ctx.staking
-            .delegate(reporter, v, 10_000 * K)
+            .delegate(reporter, v, kovanica_staking::MIN_DELEGATION)
             .expect("delegate");
         (ctx, v)
     }
@@ -4737,15 +4804,15 @@ mod tests {
         assert!(r[0].success, "{:?}", r[0].error);
         assert_eq!(r[0].events[0].topic, b"evidence_slash");
 
-        // 5% of 50k self + 5% of 10k delegation.
-        let slashed = 3_000 * K;
+        // 5% of 50k self + 5% of 50k delegation.
+        let slashed = 5_000 * K;
         assert_eq!(read_balance(&storage, &TREASURY), treasury_before + slashed);
         assert_eq!(
             total_supply(&ctx, &storage),
             supply_before,
             "nothing burned"
         );
-        assert_eq!(ctx.staking.total_staked, 57_000 * K);
+        assert_eq!(ctx.staking.total_staked, 95_000 * K);
         assert!(ctx.staking.validators[0].slashed);
         assert_eq!(slashed_counter(&storage), Some(slashed));
         // Persisted, not just in memory.
@@ -4858,10 +4925,10 @@ mod tests {
         let storage = Storage::new(dir.path().join("t.redb")).expect("storage");
         let k = test_keypair(3);
         let (mut ctx, v) = keyed_slash_fixture(&storage, &k);
-        // 60k self + 10k delegated, so 10k can unbond and the validator
+        // 60k self + 50k delegated, so 10k can unbond and the validator
         // stays at MIN_VALIDATOR_STAKE (and thus active).
-        ctx.staking.validators[0].stake = 70_000 * K;
-        ctx.staking.total_staked += 20_000 * K;
+        ctx.staking.validators[0].stake = 110_000 * K;
+        ctx.staking.total_staked += 10_000 * K;
         ctx.staking.unbond_validator(v, 10_000 * K).expect("unbond");
         assert_eq!(ctx.staking.unbonding_queue[0].amount, 10_000 * K);
         assert!(ctx.staking.validators[0].active);
@@ -4876,8 +4943,8 @@ mod tests {
         );
         assert!(r[0].success, "{:?}", r[0].error);
 
-        // 5% of 50k self + 5% of 10k delegation + 5% of the 10k queued.
-        let slashed = 3_500 * K;
+        // 5% of 50k self + 5% of 50k delegation + 5% of the 10k queued.
+        let slashed = 5_500 * K;
         assert_eq!(read_balance(&storage, &TREASURY), treasury_before + slashed);
         assert_eq!(
             total_supply(&ctx, &storage),
@@ -4952,7 +5019,7 @@ mod tests {
                         &key,
                         TransactionKind::Delegate {
                             validator,
-                            amount: 1_000 * K,
+                            amount: kovanica_staking::MIN_DELEGATION,
                         },
                         0,
                         1000,

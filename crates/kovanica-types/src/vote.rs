@@ -15,12 +15,12 @@ pub struct Vote {
     pub leader_hash: Hash,
     /// The authority index of the voter.
     pub voter: AuthorityIndex,
-    /// Signature of the voter over [`Vote::signature_data`] (format v1).
+    /// Signature of the voter over [`Vote::signature_data`] (format v2).
     pub signature: Signature,
 }
 
 impl Vote {
-    /// Canonical bytes signed for a vote (signature format **v1**, 74 bytes).
+    /// Canonical bytes signed for a vote (signature format **v2**, 106 bytes).
     ///
     /// This is the single canonical vote encoding, used both for signing
     /// (`kovanica-consensus`) and for verification
@@ -29,19 +29,22 @@ impl Vote {
     ///
     /// | offset | len | field                                       |
     /// |-------:|----:|---------------------------------------------|
-    /// | 0      | 16  | `"KUNA/vote/v1"` zero-padded domain tag      |
+    /// | 0      | 16  | `"KUNA/vote/v2"` zero-padded domain tag      |
     /// | 16     | 8   | `ctx.chain_id`, `u64` little-endian         |
-    /// | 24     | 8   | `ctx.epoch`, `u64` little-endian            |
-    /// | 32     | 2   | `voter`, `u16` little-endian                |
-    /// | 34     | 8   | `leader_round`, `u64` little-endian         |
-    /// | 42     | 32  | `leader_hash` raw bytes                     |
+    /// | 24     | 32  | `ctx.genesis_hash` raw bytes                |
+    /// | 56     | 8   | `ctx.epoch`, `u64` little-endian            |
+    /// | 64     | 2   | `voter`, `u16` little-endian                |
+    /// | 66     | 8   | `leader_round`, `u64` little-endian         |
+    /// | 74     | 32  | `leader_hash` raw bytes                     |
     ///
     /// `signature` is not covered. The verifier must build `ctx` from its own
-    /// configuration and current epoch, never from a network message.
+    /// configuration (`chain_id`, `genesis_hash`) and current epoch, never from
+    /// a network message.
     pub fn signature_data(&self, ctx: &SigningContext) -> Vec<u8> {
         let mut data = Vec::with_capacity(Self::SIGNATURE_DATA_LEN);
         data.extend_from_slice(&VOTE_DOMAIN_TAG);
         data.extend_from_slice(&ctx.chain_id.to_le_bytes());
+        data.extend_from_slice(&ctx.genesis_hash.0);
         data.extend_from_slice(&ctx.epoch.to_le_bytes());
         data.extend_from_slice(&self.voter.to_le_bytes());
         data.extend_from_slice(&self.leader_round.to_le_bytes());
@@ -50,7 +53,7 @@ impl Vote {
     }
 
     /// Length in bytes of [`Vote::signature_data`].
-    pub const SIGNATURE_DATA_LEN: usize = 74;
+    pub const SIGNATURE_DATA_LEN: usize = 106;
 }
 
 #[cfg(test)]
@@ -61,6 +64,7 @@ mod tests {
     const CTX: SigningContext = SigningContext {
         chain_id: 2,
         epoch: 7,
+        genesis_hash: Hash([0x22; 32]),
     };
 
     fn golden_vote() -> Vote {
@@ -78,14 +82,15 @@ mod tests {
         assert_eq!(vote.signature_data(&CTX), vote.signature_data(&CTX));
     }
 
-    /// Golden vector V1 from `docs/SIGNATURE_FORMAT.md` §4.
+    /// Golden vector V2 from `docs/SIGNATURE_FORMAT.md` §4 (106-byte v2 layout).
     #[test]
-    fn vote_signature_data_v1_golden_vector() {
+    fn vote_signature_data_v2_golden_vector() {
         let data = golden_vote().signature_data(&CTX);
         assert_eq!(data.len(), Vote::SIGNATURE_DATA_LEN);
+        assert_eq!(data.len(), 106);
         assert_eq!(
             hex::encode(&data),
-            "4b554e412f766f74652f7631000000000200000000000000070000000000000003002a000000000000001111111111111111111111111111111111111111111111111111111111111111"
+            "4b554e412f766f74652f76320000000002000000000000002222222222222222222222222222222222222222222222222222222222222222070000000000000003002a000000000000001111111111111111111111111111111111111111111111111111111111111111"
         );
     }
 
@@ -93,19 +98,20 @@ mod tests {
     fn vote_signature_data_commits_to_context_and_voter() {
         let vote = golden_vote();
         let base = vote.signature_data(&CTX);
-        // Different chain, epoch or voter must change the signed bytes.
+        // Different chain, genesis_hash, epoch or voter must change the signed bytes.
         assert_ne!(
             base,
-            vote.signature_data(&SigningContext {
-                chain_id: 3,
-                epoch: 7
-            })
+            vote.signature_data(&SigningContext { chain_id: 3, ..CTX })
+        );
+        assert_ne!(
+            base,
+            vote.signature_data(&SigningContext { epoch: 8, ..CTX })
         );
         assert_ne!(
             base,
             vote.signature_data(&SigningContext {
-                chain_id: 2,
-                epoch: 8
+                genesis_hash: Hash([0x33; 32]),
+                ..CTX
             })
         );
         let mut other = vote.clone();
