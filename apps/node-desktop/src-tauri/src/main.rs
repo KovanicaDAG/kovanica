@@ -3,15 +3,13 @@
 //
 // Supervises the real `kovanica-node` binary as a Tauri sidecar and exposes
 // the IPC contract documented in `apps/node-desktop/IPC-CONTRACT.md`.
-
-
 use anyhow::Context;
 use kovanica_crypto;
 use kovanica_keystore;
-use kovanica_types::{self, Address, Hash, SigningKey};
 use kovanica_types::crypto::Signature;
 use kovanica_types::signing::SigningContext;
 use kovanica_types::transaction::{Transaction, TransactionKind};
+use kovanica_types::{self, Address, Hash, SigningKey};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -136,7 +134,11 @@ fn node_binary() -> String {
     "kovanica-node".to_string()
 }
 
-async fn rpc_call(url: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+async fn rpc_call(
+    url: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::new();
     let resp = client
         .post(url)
@@ -149,11 +151,17 @@ async fn rpc_call(url: &str, method: &str, params: serde_json::Value) -> Result<
         .send()
         .await
         .map_err(|e| format!("rpc send failed: {e}"))?;
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("rpc parse failed: {e}"))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("rpc parse failed: {e}"))?;
     if let Some(err) = body.get("error") {
         return Err(format!("rpc error: {err}"));
     }
-    Ok(body.get("result").cloned().unwrap_or(serde_json::Value::Null))
+    Ok(body
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
 }
 
 fn parse_quantity_value(v: &serde_json::Value) -> Option<u64> {
@@ -175,13 +183,19 @@ fn atom_to_kuna_str(atoms: u64) -> String {
 }
 
 fn keystore_path_for(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| format!("app data dir: {e}"))?;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create data dir: {e}"))?;
     Ok(dir.join("keystore.json"))
 }
 
 fn settings_path_for(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| format!("app data dir: {e}"))?;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create data dir: {e}"))?;
     Ok(dir.join("settings.json"))
 }
@@ -189,11 +203,16 @@ fn settings_path_for(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 fn read_settings(path: &PathBuf) -> SettingsDto {
     if let Ok(text) = std::fs::read_to_string(path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-            let kr = v.get("keep_running").and_then(|x| x.as_bool()).unwrap_or(false);
+            let kr = v
+                .get("keep_running")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
             return SettingsDto { keep_running: kr };
         }
     }
-    SettingsDto { keep_running: false }
+    SettingsDto {
+        keep_running: false,
+    }
 }
 
 fn write_settings(path: &PathBuf, s: &SettingsDto) -> Result<(), String> {
@@ -205,10 +224,7 @@ fn address_to_string(a: &Address) -> String {
     a.to_string()
 }
 
-async fn ensure_config(
-    app: &tauri::AppHandle,
-    state: &NodeApp,
-) -> Result<PathBuf, String> {
+async fn ensure_config(app: &tauri::AppHandle, state: &NodeApp) -> Result<PathBuf, String> {
     // If already set, return it.
     {
         let guard = state.config_path.lock().await;
@@ -216,14 +232,20 @@ async fn ensure_config(
             return Ok(p);
         }
     }
-    let data_dir = app.path().app_data_dir().map_err(|e| format!("app data dir: {e}"))?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {e}"))?;
     let data_dir = data_dir.join("data");
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("create data dir: {e}"))?;
 
     // Copy genesis files from bundle if data dir is empty (never overwrite).
     // Try a few candidate locations.
     let genesis_candidates = [
-        app.path().resource_dir().ok().map(|p| p.join("testnet").join("chain4")),
+        app.path()
+            .resource_dir()
+            .ok()
+            .map(|p| p.join("testnet").join("chain4")),
         Some(PathBuf::from("testnet/chain4")),
         Some(PathBuf::from("../testnet/chain4")),
     ];
@@ -241,7 +263,11 @@ async fn ensure_config(
         }
     }
 
-    let config_path = app.path().app_data_dir().map_err(|e| format!("app data dir: {e}"))?.join("kovanica.toml");
+    let config_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {e}"))?
+        .join("kovanica.toml");
     let content = DEFAULT_CONFIG.replace("<DATA_DIR>", data_dir.to_str().unwrap_or("."));
     std::fs::write(&config_path, &content).map_err(|e| format!("write config: {e}"))?;
 
@@ -278,32 +304,49 @@ async fn node_status(
     };
     drop(sidecar);
 
-    let cfg_str = config_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-    let data_str = data_dir.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    let cfg_str = config_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let data_str = data_dir
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
 
     // If running, fetch sync status from RPC
-    let (committed_height, local_round, peer_count, catching_up, network_tag) = if state_str == "running" {
-        match rpc_call(RPC_URL, "kovanica_syncStatus", serde_json::json!([])).await {
-            Ok(v) => {
-                let ch = v.get("committedHeight").and_then(|x| x.as_u64())
-                    .or_else(|| v.get("committed_height").and_then(|x| x.as_u64()));
-                let lr = v.get("localTipRound").and_then(|x| x.as_u64())
-                    .or_else(|| v.get("local_tip_round").and_then(|x| x.as_u64()));
-                let pc = v.get("peerCount").and_then(|x| x.as_u64())
-                    .or_else(|| v.get("peer_count").and_then(|x| x.as_u64()))
-                    .map(|x| x as u32);
-                let cu = v.get("catchingUp").and_then(|x| x.as_bool())
-                    .or_else(|| v.get("catching_up").and_then(|x| x.as_bool()));
-                let nt = v.get("networkTag").and_then(|x| x.as_str())
-                    .or_else(|| v.get("network_tag").and_then(|x| x.as_str()))
-                    .map(|s| s.to_string());
-                (ch, lr, pc, cu, nt)
+    let (committed_height, local_round, peer_count, catching_up, network_tag) =
+        if state_str == "running" {
+            match rpc_call(RPC_URL, "kovanica_syncStatus", serde_json::json!([])).await {
+                Ok(v) => {
+                    let ch = v
+                        .get("committedHeight")
+                        .and_then(|x| x.as_u64())
+                        .or_else(|| v.get("committed_height").and_then(|x| x.as_u64()));
+                    let lr = v
+                        .get("localTipRound")
+                        .and_then(|x| x.as_u64())
+                        .or_else(|| v.get("local_tip_round").and_then(|x| x.as_u64()));
+                    let pc = v
+                        .get("peerCount")
+                        .and_then(|x| x.as_u64())
+                        .or_else(|| v.get("peer_count").and_then(|x| x.as_u64()))
+                        .map(|x| x as u32);
+                    let cu = v
+                        .get("catchingUp")
+                        .and_then(|x| x.as_bool())
+                        .or_else(|| v.get("catching_up").and_then(|x| x.as_bool()));
+                    let nt = v
+                        .get("networkTag")
+                        .and_then(|x| x.as_str())
+                        .or_else(|| v.get("network_tag").and_then(|x| x.as_str()))
+                        .map(|s| s.to_string());
+                    (ch, lr, pc, cu, nt)
+                }
+                Err(_) => (None, None, None, None, None),
             }
-            Err(_) => (None, None, None, None, None),
-        }
-    } else {
-        (None, None, None, None, None)
-    };
+        } else {
+            (None, None, None, None, None)
+        };
 
     Ok(StatusDto {
         state: state_str,
@@ -323,10 +366,7 @@ async fn node_status(
 }
 
 #[tauri::command]
-async fn node_start(
-    app: tauri::AppHandle,
-    state: State<'_, NodeApp>,
-) -> Result<StatusDto, String> {
+async fn node_start(app: tauri::AppHandle, state: State<'_, NodeApp>) -> Result<StatusDto, String> {
     {
         let sidecar = state.sidecar.lock().await;
         if sidecar.is_some() {
@@ -363,7 +403,10 @@ async fn node_start(
         .map_err(|e| format!("failed to run network-tag: {e}"))?;
     let tag = String::from_utf8_lossy(&tag_out.stdout).trim().to_string();
     if tag != EXPECTED_NETWORK_TAG {
-        let msg = format!("Network tag mismatch: got '{}', expected '{}'", tag, EXPECTED_NETWORK_TAG);
+        let msg = format!(
+            "Network tag mismatch: got '{}', expected '{}'",
+            tag, EXPECTED_NETWORK_TAG
+        );
         let mut le = state.last_error.lock().await;
         *le = Some(msg.clone());
         return Err(msg);
@@ -389,7 +432,9 @@ async fn node_start(
         // nothing special; kill via taskkill later
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("failed to start node: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to start node: {e}"))?;
 
     // Pipe stdout/stderr to logs
     let logs = Arc::clone(&state.logs);
@@ -400,12 +445,17 @@ async fn node_start(
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
             while let Ok(n) = reader.read_line(&mut line).await {
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 let trimmed = line.trim().to_string();
                 if !trimmed.is_empty() {
                     let mut l = logs_clone.lock().await;
                     l.push(trimmed);
-                    let excess = l.len().saturating_sub(LOG_LINES); if excess > 0 { l.drain(..excess); }
+                    let excess = l.len().saturating_sub(LOG_LINES);
+                    if excess > 0 {
+                        l.drain(..excess);
+                    }
                 }
                 line.clear();
             }
@@ -418,12 +468,17 @@ async fn node_start(
             let mut reader = BufReader::new(stderr);
             let mut line = String::new();
             while let Ok(n) = reader.read_line(&mut line).await {
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 let trimmed = line.trim().to_string();
                 if !trimmed.is_empty() {
                     let mut l = logs_clone.lock().await;
                     l.push(trimmed);
-                    let excess = l.len().saturating_sub(LOG_LINES); if excess > 0 { l.drain(..excess); }
+                    let excess = l.len().saturating_sub(LOG_LINES);
+                    if excess > 0 {
+                        l.drain(..excess);
+                    }
                 }
                 line.clear();
             }
@@ -455,9 +510,7 @@ fn libc_setsid() {
 }
 
 #[tauri::command]
-async fn node_stop(
-    state: State<'_, NodeApp>,
-) -> Result<StatusDto, String> {
+async fn node_stop(state: State<'_, NodeApp>) -> Result<StatusDto, String> {
     let mut sidecar_guard = state.sidecar.lock().await;
     if let Some(mut child) = sidecar_guard.take() {
         // Kill process group on unix via setsid; child.kill kills the process.
@@ -490,7 +543,10 @@ async fn node_stop(
 
     // Wait for RPC port free (best effort, up to 5s)
     for _ in 0..50 {
-        if tokio::net::TcpStream::connect("127.0.0.1:8545").await.is_err() {
+        if tokio::net::TcpStream::connect("127.0.0.1:8545")
+            .await
+            .is_err()
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -517,8 +573,12 @@ async fn node_stop(
         peer_count: None,
         catching_up: None,
         rpc_url: RPC_URL.to_string(),
-        data_dir: data_dir.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        config_path: config_path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        data_dir: data_dir
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        config_path: config_path
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
         last_error,
     })
 }
@@ -552,7 +612,8 @@ async fn validator_state(
 ) -> Result<ValidatorDto, String> {
     let key_path = {
         let g = state.key_path.lock().await;
-        g.clone().unwrap_or_else(|| keystore_path_for(&app).unwrap_or_default())
+        g.clone()
+            .unwrap_or_else(|| keystore_path_for(&app).unwrap_or_default())
     };
     // ensure key_path stored
     {
@@ -579,9 +640,14 @@ async fn validator_state(
     let (stake_atoms, catching_up) = if let Some(addr) = &key_address {
         let stake_res = rpc_call(RPC_URL, "kovanica_getStake", serde_json::json!([addr])).await;
         let stake = stake_res.ok().and_then(|v| parse_quantity_value(&v));
-        let sync = rpc_call(RPC_URL, "kovanica_syncStatus", serde_json::json!([])).await.ok();
-        let cu = sync.as_ref().and_then(|v| v.get("catchingUp").and_then(|x| x.as_bool())
-            .or_else(|| v.get("catching_up").and_then(|x| x.as_bool())));
+        let sync = rpc_call(RPC_URL, "kovanica_syncStatus", serde_json::json!([]))
+            .await
+            .ok();
+        let cu = sync.as_ref().and_then(|v| {
+            v.get("catchingUp")
+                .and_then(|x| x.as_bool())
+                .or_else(|| v.get("catching_up").and_then(|x| x.as_bool()))
+        });
         (stake, cu)
     } else {
         (None, None)
@@ -673,14 +739,34 @@ async fn set_run_validator(
 }
 
 async fn write_run_validator(state: &NodeApp, val: bool) -> Result<(), String> {
-    let cfg = state.config_path.lock().await.clone().ok_or("no config path")?;
+    let cfg = state
+        .config_path
+        .lock()
+        .await
+        .clone()
+        .ok_or("no config path")?;
     let text = std::fs::read_to_string(&cfg).map_err(|e| format!("read config: {e}"))?;
-    let new_text = if text.contains("run_validator = true") || text.contains("run_validator = false") {
-        text.replace("run_validator = true", if val { "run_validator = true" } else { "run_validator = false" })
-            .replace("run_validator = false", if val { "run_validator = true" } else { "run_validator = false" })
-    } else {
-        format!("{text}\nrun_validator = {}", val)
-    };
+    let new_text =
+        if text.contains("run_validator = true") || text.contains("run_validator = false") {
+            text.replace(
+                "run_validator = true",
+                if val {
+                    "run_validator = true"
+                } else {
+                    "run_validator = false"
+                },
+            )
+            .replace(
+                "run_validator = false",
+                if val {
+                    "run_validator = true"
+                } else {
+                    "run_validator = false"
+                },
+            )
+        } else {
+            format!("{text}\nrun_validator = {}", val)
+        };
     // The above double-replace is wrong; redo cleanly:
     let new_text = if val {
         text.replace("run_validator = false", "run_validator = true")
@@ -705,7 +791,11 @@ async fn stake(
     // Convert "50000" (KUNA) to atoms.
     let amount_atoms = parse_kuna_to_atoms(&amount_kuna)?;
     if amount_atoms == 0 {
-        return Ok(ActionResult { ok: false, message: Some("Amount must be > 0.".into()), tx_id: None });
+        return Ok(ActionResult {
+            ok: false,
+            message: Some("Amount must be > 0.".into()),
+            tx_id: None,
+        });
     }
 
     // Need cached signing key
@@ -721,31 +811,64 @@ async fn stake(
         (Some(sk), Some(addr)) => (sk, addr),
         _ => {
             // Try loading from keystore with empty passphrase? No. Return not ready.
-            return Ok(ActionResult { ok: false, message: Some("No unlocked key. Create or import a key first.".into()), tx_id: None });
+            return Ok(ActionResult {
+                ok: false,
+                message: Some("No unlocked key. Create or import a key first.".into()),
+                tx_id: None,
+            });
         }
     };
 
-    let keystore_path = state.key_path.lock().await.clone().unwrap_or_else(|| keystore_path_for(&app).unwrap());
+    let keystore_path = state
+        .key_path
+        .lock()
+        .await
+        .clone()
+        .unwrap_or_else(|| keystore_path_for(&app).unwrap());
     // verify keystore exists
     if !keystore_path.exists() {
-        return Ok(ActionResult { ok: false, message: Some("No keystore file.".into()), tx_id: None });
+        return Ok(ActionResult {
+            ok: false,
+            message: Some("No keystore file.".into()),
+            tx_id: None,
+        });
     }
 
     // chain id check
     node::ensure_chain(&state).await;
 
     // nonce
-    let nonce_val = match rpc_call(RPC_URL, "kovanica_getNonce", serde_json::json!([sender.to_string()])).await {
+    let nonce_val = match rpc_call(
+        RPC_URL,
+        "kovanica_getNonce",
+        serde_json::json!([sender.to_string()]),
+    )
+    .await
+    {
         Ok(v) => v,
-        Err(e) => return Ok(ActionResult { ok: false, message: Some(e), tx_id: None }),
+        Err(e) => {
+            return Ok(ActionResult {
+                ok: false,
+                message: Some(e),
+                tx_id: None,
+            })
+        }
     };
     let nonce = match parse_quantity_value(&nonce_val) {
         Some(n) => n,
-        None => return Ok(ActionResult { ok: false, message: Some("Bad nonce.".into()), tx_id: None }),
+        None => {
+            return Ok(ActionResult {
+                ok: false,
+                message: Some("Bad nonce.".into()),
+                tx_id: None,
+            })
+        }
     };
 
     let ctx = SigningContext::new(CHAIN_ID as u64);
-    let kind = TransactionKind::Stake { amount: amount_atoms };
+    let kind = TransactionKind::Stake {
+        amount: amount_atoms,
+    };
     let fee = 1u64;
     let mut tx = Transaction {
         sender,
@@ -760,15 +883,35 @@ async fn stake(
     tx.hash = hash;
     let raw = match bincode::serialize(&tx) {
         Ok(b) => hex::encode(b),
-        Err(e) => return Ok(ActionResult { ok: false, message: Some(format!("encode: {e}")), tx_id: None }),
+        Err(e) => {
+            return Ok(ActionResult {
+                ok: false,
+                message: Some(format!("encode: {e}")),
+                tx_id: None,
+            })
+        }
     };
 
-    match rpc_call(RPC_URL, "kovanica_sendRawTransaction", serde_json::json!([raw])).await {
+    match rpc_call(
+        RPC_URL,
+        "kovanica_sendRawTransaction",
+        serde_json::json!([raw]),
+    )
+    .await
+    {
         Ok(v) => {
             let tx_id = v.as_str().map(|s| s.to_string());
-            Ok(ActionResult { ok: true, message: Some("Submitted.".into()), tx_id })
+            Ok(ActionResult {
+                ok: true,
+                message: Some("Submitted.".into()),
+                tx_id,
+            })
         }
-        Err(e) => Ok(ActionResult { ok: false, message: Some(e), tx_id: None }),
+        Err(e) => Ok(ActionResult {
+            ok: false,
+            message: Some(e),
+            tx_id: None,
+        }),
     }
 }
 
@@ -784,12 +927,18 @@ fn parse_kuna_to_atoms(s: &str) -> Result<u64, String> {
     if s.contains('.') {
         // parse as f64-ish manually
         let parts: Vec<&str> = s.split('.').collect();
-        if parts.len() != 2 { return Err("bad amount".to_string()); }
+        if parts.len() != 2 {
+            return Err("bad amount".to_string());
+        }
         let whole: u64 = parts[0].parse().map_err(|_| "bad amount".to_string())?;
         let frac_str = parts[1];
         let mut frac = frac_str.to_string();
-        while frac.len() < 9 { frac.push('0'); }
-        if frac.len() > 9 { frac.truncate(9); }
+        while frac.len() < 9 {
+            frac.push('0');
+        }
+        if frac.len() > 9 {
+            frac.truncate(9);
+        }
         let frac: u64 = frac.parse().map_err(|_| "bad amount".to_string())?;
         Ok(whole * 1_000_000_000 + frac)
     } else {
@@ -799,10 +948,7 @@ fn parse_kuna_to_atoms(s: &str) -> Result<u64, String> {
 }
 
 #[tauri::command]
-async fn unbond(
-    app: tauri::AppHandle,
-    state: State<'_, NodeApp>,
-) -> Result<ActionResult, String> {
+async fn unbond(app: tauri::AppHandle, state: State<'_, NodeApp>) -> Result<ActionResult, String> {
     let signing_key = {
         let g = state.cached_signing_key.lock().await;
         g.clone()
@@ -813,27 +959,65 @@ async fn unbond(
     };
     let (signing_key, sender) = match (signing_key, sender) {
         (Some(sk), Some(addr)) => (sk, addr),
-        _ => return Ok(ActionResult { ok: false, message: Some("No unlocked key. Create or import a key first.".into()), tx_id: None }),
+        _ => {
+            return Ok(ActionResult {
+                ok: false,
+                message: Some("No unlocked key. Create or import a key first.".into()),
+                tx_id: None,
+            })
+        }
     };
 
     // Determine current stake to unbond in full.
-    let stake_res = rpc_call(RPC_URL, "kovanica_getStake", serde_json::json!([sender.to_string()])).await;
-    let amount_atoms = stake_res.ok().and_then(|v| parse_quantity_value(&v)).unwrap_or(0);
+    let stake_res = rpc_call(
+        RPC_URL,
+        "kovanica_getStake",
+        serde_json::json!([sender.to_string()]),
+    )
+    .await;
+    let amount_atoms = stake_res
+        .ok()
+        .and_then(|v| parse_quantity_value(&v))
+        .unwrap_or(0);
     if amount_atoms == 0 {
-        return Ok(ActionResult { ok: false, message: Some("No stake to unbond.".into()), tx_id: None });
+        return Ok(ActionResult {
+            ok: false,
+            message: Some("No stake to unbond.".into()),
+            tx_id: None,
+        });
     }
 
-    let nonce_val = match rpc_call(RPC_URL, "kovanica_getNonce", serde_json::json!([sender.to_string()])).await {
+    let nonce_val = match rpc_call(
+        RPC_URL,
+        "kovanica_getNonce",
+        serde_json::json!([sender.to_string()]),
+    )
+    .await
+    {
         Ok(v) => v,
-        Err(e) => return Ok(ActionResult { ok: false, message: Some(e), tx_id: None }),
+        Err(e) => {
+            return Ok(ActionResult {
+                ok: false,
+                message: Some(e),
+                tx_id: None,
+            })
+        }
     };
     let nonce = match parse_quantity_value(&nonce_val) {
         Some(n) => n,
-        None => return Ok(ActionResult { ok: false, message: Some("Bad nonce.".into()), tx_id: None }),
+        None => {
+            return Ok(ActionResult {
+                ok: false,
+                message: Some("Bad nonce.".into()),
+                tx_id: None,
+            })
+        }
     };
 
     let ctx = SigningContext::new(CHAIN_ID as u64);
-    let kind = TransactionKind::Unstake { amount: amount_atoms };
+    let kind = TransactionKind::Unstake {
+        amount: amount_atoms,
+    };
     let fee = 1u64;
     let mut tx = Transaction {
         sender,
@@ -848,36 +1032,62 @@ async fn unbond(
     tx.hash = hash;
     let raw = match bincode::serialize(&tx) {
         Ok(b) => hex::encode(b),
-        Err(e) => return Ok(ActionResult { ok: false, message: Some(format!("encode: {e}")), tx_id: None }),
+        Err(e) => {
+            return Ok(ActionResult {
+                ok: false,
+                message: Some(format!("encode: {e}")),
+                tx_id: None,
+            })
+        }
     };
 
     let _ = app;
-    match rpc_call(RPC_URL, "kovanica_sendRawTransaction", serde_json::json!([raw])).await {
+    match rpc_call(
+        RPC_URL,
+        "kovanica_sendRawTransaction",
+        serde_json::json!([raw]),
+    )
+    .await
+    {
         Ok(v) => {
             let tx_id = v.as_str().map(|s| s.to_string());
-            Ok(ActionResult { ok: true, message: Some("Submitted.".into()), tx_id })
+            Ok(ActionResult {
+                ok: true,
+                message: Some("Submitted.".into()),
+                tx_id,
+            })
         }
-        Err(e) => Ok(ActionResult { ok: false, message: Some(e), tx_id: None }),
+        Err(e) => Ok(ActionResult {
+            ok: false,
+            message: Some(e),
+            tx_id: None,
+        }),
     }
 }
 
 #[tauri::command]
-async fn key_status(
-    app: tauri::AppHandle,
-    state: State<'_, NodeApp>,
-) -> Result<KeyDto, String> {
+async fn key_status(app: tauri::AppHandle, state: State<'_, NodeApp>) -> Result<KeyDto, String> {
     let path = {
         let g = state.key_path.lock().await;
-        g.clone().unwrap_or_else(|| keystore_path_for(&app).unwrap_or_default())
+        g.clone()
+            .unwrap_or_else(|| keystore_path_for(&app).unwrap_or_default())
     };
     {
         let mut g = state.key_path.lock().await;
-        if g.is_none() { *g = Some(path.clone()); }
+        if g.is_none() {
+            *g = Some(path.clone());
+        }
     }
     if !path.exists() {
-        return Ok(KeyDto { exists: false, path: None, address: None });
+        return Ok(KeyDto {
+            exists: false,
+            path: None,
+            address: None,
+        });
     }
-    let addr = kovanica_keystore::load(&path).ok().and_then(|ks| kovanica_keystore::address(&ks).ok().map(|a| a.to_string()));
+    let addr = kovanica_keystore::load(&path)
+        .ok()
+        .and_then(|ks| kovanica_keystore::address(&ks).ok().map(|a| a.to_string()));
     Ok(KeyDto {
         exists: true,
         path: Some(path.to_string_lossy().to_string()),
@@ -896,7 +1106,8 @@ async fn key_create(
     kovanica_keystore::save(&path, &ks).map_err(|e| format!("save: {e}"))?;
     // tighten perms
     // cache signing key
-    let sk = kovanica_keystore::signing_key(&ks, Some(&passphrase)).map_err(|e| format!("signing_key: {e}"))?;
+    let sk = kovanica_keystore::signing_key(&ks, Some(&passphrase))
+        .map_err(|e| format!("signing_key: {e}"))?;
     let addr = kovanica_keystore::address(&ks).map_err(|e| format!("address: {e}"))?;
     {
         let mut g = state.cached_signing_key.lock().await;
@@ -931,9 +1142,11 @@ async fn key_import(
     } else {
         kovanica_keystore::seed_from_raw_hex(&secret).map_err(|e| format!("seed: {e}"))?
     };
-    let ks = kovanica_keystore::from_seed(&seed, &passphrase).map_err(|e| format!("from_seed: {e}"))?;
+    let ks =
+        kovanica_keystore::from_seed(&seed, &passphrase).map_err(|e| format!("from_seed: {e}"))?;
     kovanica_keystore::save(&path, &ks).map_err(|e| format!("save: {e}"))?;
-    let sk = kovanica_keystore::signing_key(&ks, Some(&passphrase)).map_err(|e| format!("signing_key: {e}"))?;
+    let sk = kovanica_keystore::signing_key(&ks, Some(&passphrase))
+        .map_err(|e| format!("signing_key: {e}"))?;
     let addr = kovanica_keystore::address(&ks).map_err(|e| format!("address: {e}"))?;
     {
         let mut g = state.cached_signing_key.lock().await;
@@ -961,11 +1174,14 @@ async fn settings_get(
 ) -> Result<SettingsDto, String> {
     let path = {
         let g = state.settings_path.lock().await;
-        g.clone().unwrap_or_else(|| settings_path_for(&app).unwrap_or_default())
+        g.clone()
+            .unwrap_or_else(|| settings_path_for(&app).unwrap_or_default())
     };
     {
         let mut g = state.settings_path.lock().await;
-        if g.is_none() { *g = Some(path.clone()); }
+        if g.is_none() {
+            *g = Some(path.clone());
+        }
     }
     Ok(read_settings(&path))
 }
@@ -978,13 +1194,18 @@ async fn set_keep_running(
 ) -> Result<SettingsDto, String> {
     let path = {
         let g = state.settings_path.lock().await;
-        g.clone().unwrap_or_else(|| settings_path_for(&app).unwrap_or_default())
+        g.clone()
+            .unwrap_or_else(|| settings_path_for(&app).unwrap_or_default())
     };
     {
         let mut g = state.settings_path.lock().await;
-        if g.is_none() { *g = Some(path.clone()); }
+        if g.is_none() {
+            *g = Some(path.clone());
+        }
     }
-    let s = SettingsDto { keep_running: enabled };
+    let s = SettingsDto {
+        keep_running: enabled,
+    };
     write_settings(&path, &s)?;
     state.keep_running.store(enabled, Ordering::Relaxed);
     Ok(s)
