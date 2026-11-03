@@ -11,5 +11,5 @@ export const SURFACE = {
   dash: "https://dash.kovanica.online",
   api: "https://api.kovanica.online",
   docs: "https://docs.kovanica.online",
-  pool: "https://pool.kovanica.online",
+  pool: "https://testnet.kovanica.online/pool",
 } as const;

@@ -57,7 +57,7 @@ export const ENDPOINTS: EndpointRow[] = [
   },
   { method: "POST", path: "/api/submit_tx", note: 'submit with {"tx_hex": …} (SDK parity)' },
   { method: "POST", path: "/api/produce", note: "pack mempool" },
-  { method: "POST", path: "/api/mine", note: "mine a coinbase block on the selected node" },
+  { method: "POST", path: "/api/mine", note: "local playground block mint simulation" },
   { method: "POST", path: "/api/faucet", note: "testnet open faucet" },
   { method: "POST", path: "/api/origin", note: "pulse a country" },
   { method: "POST", path: "/api/multisig/create", note: "M-of-N P2SH address from pubkeys" },

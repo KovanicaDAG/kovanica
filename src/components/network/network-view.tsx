@@ -129,7 +129,7 @@ export function NetworkView() {
               <Row label="Founder amount" value={fmtKvnc(b.founder_amount)} />
               <Row label="Founder seed" value={String(b.founder_seed)} />
               <Row label="Atom" value={`1 ${TOKEN} = ${h.atom.toLocaleString()} atoms`} />
-              <Row label="GHOSTDAG k" value={String(b.k)} />
+              <Row label="MysticGhost k" value={String(b.k)} />
               {"finality_depth" in b && (
                 <Row label="Finality depth" value={String((b as Record<string, unknown>).finality_depth)} />
               )}
@@ -149,19 +149,22 @@ export function NetworkView() {
             </div>
             <dl className="mt-3 grid gap-3 sm:grid-cols-2">
               <Row label="Listen" value={p2p?.listen ?? b.listen ?? "—"} mono />
-              <Row label="Bootstrap" value={p2p?.bootstrap ?? "seed.kovanica.online:9000,seed2.kovanica.online:9000"} mono />
+              <Row label="Bootstrap" value={p2p?.bootstrap ?? "seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"} mono />
             </dl>
             <p className="mt-4 text-[10px] tracking-wide text-subtle uppercase">Bootstrap seeds</p>
             <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
               <li className="break-all px-3 py-2 font-mono text-xs text-fg">
-                seed.kovanica.online:9000 <span className="text-subtle">(145.223.116.178 · grey-cloud DNS)</span>
+                seed1.kovanica.online:8000 <span className="text-subtle">(grey-cloud DNS)</span>
               </li>
               <li className="break-all px-3 py-2 font-mono text-xs text-fg">
-                seed2.kovanica.online:9000 <span className="text-subtle">(76.13.250.65 · grey-cloud DNS)</span>
+                seed2.kovanica.online:8000 <span className="text-subtle">(grey-cloud DNS)</span>
+              </li>
+              <li className="break-all px-3 py-2 font-mono text-xs text-fg">
+                seed3.kovanica.online:8000 <span className="text-subtle">(grey-cloud DNS)</span>
               </li>
             </ul>
             <p className="mt-3 text-[11px] leading-relaxed text-subtle">
-              Dial the DNS names or origin IPs on TCP 9000 — never the Cloudflare-proxied explorer
+              Dial the DNS names on TCP 8000 — never the Cloudflare-proxied explorer
               hostnames.
             </p>
             <p className="mt-4 text-[10px] tracking-wide text-subtle uppercase">Connected peers</p>

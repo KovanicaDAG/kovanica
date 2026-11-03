@@ -5,8 +5,16 @@
 import { ABOUT } from "@/lib/content/about";
 
 export function About() {
-  const { mission, founder, foundation, links, personalGithub, transparency } =
-    ABOUT;
+  const {
+    mission,
+    founder,
+    foundation,
+    links,
+    personalGithub,
+    xFounder,
+    xKovanica,
+    transparency,
+  } = ABOUT;
 
   return (
     <section className="mt-12 md:mt-16" aria-labelledby="about-heading">
@@ -71,7 +79,27 @@ export function About() {
                 rel="noreferrer"
                 className="inline-flex h-8 items-center rounded-md border border-border bg-bg px-3 text-xs font-medium text-fg transition-colors hover:bg-surface-2"
               >
-                @BetterCallDzuks
+                GitHub @BetterCallDzuks
+              </a>
+            </li>
+            <li>
+              <a
+                href={xFounder}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-8 items-center rounded-md border border-border bg-bg px-3 text-xs font-medium text-fg transition-colors hover:bg-surface-2"
+              >
+                X @BetterCallDzuks
+              </a>
+            </li>
+            <li>
+              <a
+                href={xKovanica}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-8 items-center rounded-md border border-border bg-bg px-3 text-xs font-medium text-fg transition-colors hover:bg-surface-2"
+              >
+                X @KovanicaDAG
               </a>
             </li>
           </ul>

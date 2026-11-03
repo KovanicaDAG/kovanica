@@ -81,7 +81,8 @@ export async function buildMultisigSpend(
 /**
  * Create one partial Ed25519 signature for a multisig transaction.
  *
- * Client-side only: derives the key from the phrase via SLIP-0010 and signs the
+ * Client-side only: uses the 24-word BIP-39 entropy as the Ed25519 seed under
+ * ADR-0002 (one phrase = one wallet, no HD derivation) and signs the
  * sighash locally with @noble/ed25519. The key material never leaves the
  * browser — nothing is sent to the node (see `docs/backlog/ADDRESS-AND-SIGHASH-SPEC.md`).
  *

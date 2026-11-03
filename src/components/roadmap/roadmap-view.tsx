@@ -135,7 +135,7 @@ const NEXT: Item[] = [
     title: "Validator Lifecycle & Active Set Expansion",
     status: "active",
     blurb:
-      "Expanding active validator committee from 5 to 15–21 staked nodes, dynamic bond/unbond lifecycle, and commission distribution.",
+      "Expanding active validator committee beyond 5 toward mainnet 15–20 genesis validators and an uncapped staked set, dynamic bond/unbond lifecycle, and commission distribution.",
   },
   {
     id: "node-hardening",

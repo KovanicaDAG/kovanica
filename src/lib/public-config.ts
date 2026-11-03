@@ -9,9 +9,10 @@
 
 type EnvBag = Record<string, string | undefined>;
 
-export const DEFAULT_SEED_PEERS = "seed.kovanica.online:9000,seed2.kovanica.online:9000";
-export const DEFAULT_P2P_PORT = 9000;
-export const DEFAULT_POOL_STRATUM_URL = "stratum+tcp://pool.kovanica.online:3333";
+export const DEFAULT_SEED_PEERS =
+  "seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000";
+export const DEFAULT_P2P_PORT = 8000;
+
 
 /** Read an env var from Vite (`import.meta.env`) or Node (`process.env`); blank = unset. */
 function readEnv(key: string): string | undefined {
@@ -55,6 +56,6 @@ export const PRIMARY_SEED: string = SEED_PEERS[0] ?? "";
 /** TCP port of the P2P protocol. */
 export const P2P_PORT: number = parsePort(readEnv("KOVANICA_PUBLIC_P2P_PORT"), DEFAULT_P2P_PORT);
 
-/** Mining pool stratum endpoint shown on the pool page. */
-export const POOL_STRATUM_URL: string =
-  readEnv("KOVANICA_PUBLIC_POOL_STRATUM_URL") ?? DEFAULT_POOL_STRATUM_URL;
+
+
+

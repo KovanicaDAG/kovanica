@@ -33,7 +33,6 @@ test(".env.example documents the KOVANICA_* config", () => {
   for (const k of [
     "KOVANICA_PUBLIC_SEED_PEERS",
     "KOVANICA_PUBLIC_P2P_PORT",
-    "KOVANICA_PUBLIC_POOL_STRATUM_URL",
     "KOVANICA_NODE_API_URL",
   ]) {
     assert.ok(keys.has(k), `${k} missing`);
