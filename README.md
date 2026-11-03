@@ -35,10 +35,10 @@ Kovanica is engineered from scratch in Rust for high throughput and predictable 
    - **MysticGhost Hybrid Colouring:** Scoped GHOSTDAG ($k=3$) sub-DAG topological sort for transactions; uncoloured (non-blue) blocks are safely recycled back to the mempool without transaction loss.
 2. **Account Model & Staking:**
    - Account-based ledger tracking nonces, balances, contract storage, and validator stakes.
-   - Active validator set target: **15 to 21 active validators** with a minimum self-stake of **50,000 KUNA**.
+   - Active validator set: **uncapped active set** with a minimum self-stake of **50,000 KUNA** (`MIN_VALIDATOR_STAKE`) and minimum delegation of **50,000 KUNA** (`MIN_DELEGATION`); genesis committee sizing testnet ~5, mainnet 15–20 (minimum active floor 15).
    - Deterministic committee epoch rotation every **8 hours** (`EPOCH_ROUNDS = 7,200` DAG rounds = `EPOCH_LEADER_HEIGHTS = 2,400` committed leader heights).
    - Stake unbonding cooldown: **100,000 committed leader blocks** ($\approx 13.9$ days at 12 s/leader).
-   - Evidence-based slashing (RFC-010) with fixed 500 bps (5%) penalty and 7,200 committed heights jail.
+   - Evidence-based slashing (RFC-010) with fixed 500 bps (5%) penalty and 7,200 committed leader heights jail (`JAIL_ROUNDS = 7,200`, $\approx 1$ day = 3 epochs).
 3. **Execution & WebAssembly Runtime:**
    - Deterministic smart contract sandbox powered by **Wasmi** (v0.40) with instruction-level fuel metering, strict memory paging limits (16 pages = 1 MiB), and isolated host call ABI (`Host` trait).
    - Native built-in contracts with shared execution semantics: **HTLC** (hash time-locked swaps), **Vault** (linear/cliff vesting), **Multisig** ($M$-of-$N$ threshold multi-signature), **Token** (fungible token standard), and **Name Registry** (RFC-008 decentralized comms naming).
@@ -67,9 +67,11 @@ Canonical parameters implemented in `crates/kovanica-staking/src/lib.rs` and doc
 | **Initial Block Reward** | **2.5 KUNA** | Minted exclusively on committed leader blocks ($5 \times 10^9 / 2$ atoms) |
 | **Subsidy Era Length** | **8,100,000 blocks** | Committed leader blocks per era |
 | **Reward Decay Rate** | **$\times 3/4$** | Emission multiplies by $3/4$ (25% decay) at each era boundary |
-| **Minimum Validator Stake** | **50,000 KUNA** | Minimum self-bond required to enter the active validator committee |
-| **Active Committee Size** | **15–21** | Active consensus validator range |
+| **Minimum Validator Stake** | **50,000 KUNA** | Minimum self-bond required to enter the active validator committee (`MIN_VALIDATOR_STAKE`) |
+| **Minimum Delegation** | **50,000 KUNA** | Minimum stake required for validator delegation (`MIN_DELEGATION`) |
+| **Active Validator Set** | **Uncapped** | Uncapped stake set (genesis: testnet ~5, mainnet 15–20; min active floor 15) |
 | **Unbonding Period** | **100,000 blocks** | Committed leader blocks ($\approx 13.9$ days at 12 s/leader) |
+| **Jail Duration** | **7,200 blocks** | Committed leader heights (`JAIL_ROUNDS`, $\approx 1$ day = 3 epochs) |
 | **Epoch Duration** | **8 hours** | 7,200 DAG rounds = 2,400 committed leader heights (independent of era) |
 | **Slashing Penalty** | **500 bps (5%)** | Penalty applied on verifiable equivocation evidence |
 | **Light-Node Reward Share** | **20% (2,000 bps)** | Escrowed for light-node witnesses across 32 winning slots per epoch |
@@ -348,10 +350,10 @@ Default network configuration parameters (`crates/kovanica-node/src/config.rs`):
 | `rpc_rate_limit_per_min` | `KOVANICA_RPC_RATE_LIMIT_PER_MIN` | `60` | Token-bucket rate limit per client IP |
 
 ### Chain ID Registry
-- **`1`**: **Mainnet** (`MAINNET`) — strictly enforces PRO-21 canonical base32 addresses; consensus parameters frozen.
+- **`1`**: **Mainnet** (`MAINNET`) — strictly enforces PRO-21 canonical base32 addresses; consensus parameters frozen. `funded_accounts.toml` strictly forbidden.
 - **`2`**: **Testnet (legacy)** (`TESTNET`) — not the public testnet; enforces PRO-21 addresses.
 - **`3`**: **Devnet** (`DEVNET`) — lenient address parsing; allows parameter overrides.
-- **`4`**: **Public Testnet** (`TESTNET_V2`) — the public testnet; supports PRO-21 and legacy migration.
+- **`4`**: **Internal Testnet** (`TESTNET_V2`) — internal testnet until public launch 25.11.2026; supports PRO-21 and legacy migration.
 - **`1337`**: **Local Devnet** (`LOCAL`) — single-node / local cluster testing.
 
 ---

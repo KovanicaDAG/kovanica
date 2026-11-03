@@ -3,11 +3,11 @@
 **Tip:** `d951da451c9982fc8924c4c7f2ec08e06f549d64` (merge of #165 on 2026-10-31; prior living tip `abacfb922132e3e7b3084cfe75cdebc46a72cbdf` / hygiene base `a78e3ac9ce5c99a0c4014c51f3763c87f93e821d`).
 Update this file when frozen params or open product gaps change. Point-in-time dumps live under `docs/archive/`; they are not SoT.
 
-## Chain 4 (public testnet track)
+## Chain 4 (internal testnet track until public launch 2026-11-25)
 
 - `chain_id = 4`. Network tag form: `<chain_id>-<16 hex genesis digest>` (see `docs/TESTNET-SEED-NODES.md` for topology).
-- Target launch window: public testnet **2026-11-25** as product **1.0.0** if apps are solid; mainnet target **2027-01-01** as **2.0.0**.
-- Genesis for testnet: **5** validators (growing toward 15–21 active via staking). Mainnet genesis requires **≥15** (15–20 in ceremony; 21 via staking later).
+- Target launch window: internal testnet until public launch **2026-11-25** as product **1.0.0** if apps are solid; mainnet target **2027-01-01** as **2.0.0**.
+- Genesis for testnet: **5** validators (uncapped active set via staking). Mainnet genesis requires **≥15** (15–20 in ceremony; uncapped active set via staking later).
 - Ordering default on testnet: MysticGhost (GHOSTDAG). Round duration **4 s** (leader ~12 s). Consensus env overrides (`KOVANICA_ROUND_DURATION_MS`, `KOVANICA_MYSTICGHOST`, `KOVANICA_VRF_LEADER`) are hard-rejected on non-dev chains.
 - Topology, seeds, and ops runbooks: `docs/TESTNET-SEED-NODES.md`, `docs/TESTNET-RESET.md`, `docs/VALIDATOR-ONBOARDING.md`. Do not treat archived `sync-*.md` tables as live inventory.
 

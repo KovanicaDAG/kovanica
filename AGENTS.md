@@ -8,12 +8,21 @@
 codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-node`, `KOVANICA_*`). Adresa je
 `kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3, 4 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Nikad ne koristi `KVNC` kao naziv valute.
 
+**Chain ID Registry (Toni 1A):**
+- `1` = **Mainnet** (`MAINNET`) — canonical PRO-21 base32 address, frozen consensus parameters. `funded_accounts.toml` strictly forbidden.
+- `2` = **Testnet (legacy ID)** (`TESTNET`) — not public testnet; enforces PRO-21 addresses.
+- `3` = **Devnet** (`DEVNET`) — devnet; legacy hex addresses allowed, dev parameter overrides.
+- `4` = **Internal testnet until 25.11.2026** (`TESTNET_V2`) — internal testnet until public launch 25.11.2026; supports PRO-21 and legacy migration.
+- `1337` = **Local devnet** (`LOCAL`) — single-node / local cluster testing (legacy hex allowed).
+
+*Params SoT:* `kovanica-params`. `funded_accounts.toml` allowed on every chain except mainnet (1).
+
 | Layer              | Choice                                      |
 |--------------------|---------------------------------------------|
 | Consensus          | Mysticeti-style uncertified DAG (wave = 3)  |
 | Execution          | Wasmi (deterministic WASM)                  |
 | Account model      | Account-based + staked validators           |
-| Validators         | 15–21 active, min stake 50 000 KUNA         |
+| Validators         | Uncapped active set, min stake 50 000 KUNA (genesis: testnet ~5, mainnet 15–20) |
 | Resource target    | Comfortable on 2–4 GB RAM VPS               |
 | Native token       | KUNA (9 decimals)                           |
 
@@ -42,8 +51,10 @@ codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-no
 | Decay                     | **× 3/4** each era                             |
 | Round / leader interval   | round 4 s → committed leader svakih 12 s       |
 | Epoch (validator rotacija)| epoch = 8 h = 7 200 DAG rundi = 2 400 leader visina (committed leader svakih 12 s), neovisno o eri (PRO-37) |
-| Active validators         | 15–21                                          |
-| Min validator stake       | 50 000 KUNA                                    |
+| Active validators         | Uncapped stake set (genesis: testnet ~5, mainnet 15–20; min active 15) |
+| Min validator stake       | 50 000 KUNA (`MIN_VALIDATOR_STAKE`)            |
+| Min delegation            | 50 000 KUNA (`MIN_DELEGATION`)                 |
+| Jail duration             | 7 200 committed leader heights (`JAIL_ROUNDS`, ~1 day = 3 epochs) |
 
 Reward se mint-a **samo** na committed leader (CommittedSubDag → StakingState::on_leader_committed). Genesis validatorima se alocira 1M KUNA (ravnomjerni split, dust deterministički), od čega svaki stake-a min 50 000 KUNA.
 
