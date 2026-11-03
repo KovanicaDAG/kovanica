@@ -913,7 +913,6 @@ export function WalletView() {
                 {tokens.slice(0, 8).map((token) => (
                   <li key={token.address} className="flex items-center gap-3 px-4 py-3">
                     {token.icon ? (
-                      // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={token.icon}
                         alt=""
