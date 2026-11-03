@@ -447,11 +447,14 @@ fn certified_skip_is_identical_on_every_node_and_the_chain_continues() {
     );
 }
 
-/// I3 / C3 (in-process): an even split, two votes and two timeouts for slot
-/// 3. Neither a vote quorum nor a skip certificate exists, so no node commits
-/// or skips anything: a safe stall, never a fork.
+/// I3 / C3 (in-process): an even split, two votes (`[0, 1]`) and two timeouts
+/// (`[2, 3]`) for slot 3. In a 4-validator committee (`quorum = 3`,
+/// skip-complement floor `T - Q = 1`), `votes = 2 > 1` makes a 3-of-4 skip
+/// certificate impossible while `votes + timeout_stake = 4 >= 3` reaches the
+/// PRO-40 union quorum. All four nodes union-commit slot 3 and then drain slots
+/// 6 and 9 in the identical commit sequence with no fork.
 #[test]
-fn a_vote_timeout_split_stalls_safely_on_every_node() {
+fn a_vote_timeout_split_union_commits_on_every_node() {
     let chain = canonical_chain(9);
     let mut nodes = cluster();
     for block in &chain {
@@ -468,8 +471,20 @@ fn a_vote_timeout_split_stalls_safely_on_every_node() {
     }
     cast_votes(&mut nodes, &all_targets, &[0, 1, 2, 3], &chain, &[6, 9]);
     drain_all(&mut nodes);
+
+    let baseline = fingerprints(&nodes[0]);
+    assert_eq!(baseline.len(), LEADER_ROUNDS.len());
     for (i, node) in nodes.iter().enumerate() {
-        assert!(node.commits.is_empty(), "node {i} moved past a split slot");
-        assert_eq!(node.engine.last_decided_round(), 0);
+        assert_eq!(
+            committed_rounds(node),
+            LEADER_ROUNDS.to_vec(),
+            "node {i} must union-commit slot 3 and drain slots 6 and 9"
+        );
+        assert_eq!(
+            fingerprints(node),
+            baseline,
+            "node {i} diverged on committed sub-DAG sequence"
+        );
+        assert_eq!(node.engine.last_decided_round(), 9);
     }
 }
