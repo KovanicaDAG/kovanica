@@ -157,10 +157,27 @@ impl TimeoutPool {
     /// Feeds the commit walk's union-quorum rule; signers outside the
     /// committee count for zero.
     pub fn stake_for_round(&self, committee: &CommitteeInfo, round: Round) -> u64 {
+        self.stake_for_round_excluding(committee, round, |_| false)
+    }
+
+    /// Stake of the timeout signers recorded for `round`, excluding any signer
+    /// matched by `exclude` (so a Byzantine validator that signed both a vote
+    /// and a timeout for the same slot is never counted twice in the union
+    /// quorum).
+    pub fn stake_for_round_excluding<F>(
+        &self,
+        committee: &CommitteeInfo,
+        round: Round,
+        mut exclude: F,
+    ) -> u64
+    where
+        F: FnMut(AuthorityIndex) -> bool,
+    {
         self.by_round
             .get(&round)
             .map(|slot| {
                 slot.keys()
+                    .filter(|voter| !exclude(**voter))
                     .map(|voter| committee.stake_of(*voter).unwrap_or(0))
                     .fold(0u64, u64::saturating_add)
             })
@@ -172,9 +189,29 @@ impl TimeoutPool {
     /// Built once per commit attempt so the walk can apply the rule without
     /// knowing about the pool.
     pub fn stake_by_round(&self, committee: &CommitteeInfo) -> HashMap<Round, u64> {
+        self.stake_by_round_excluding(committee, |_, _| false)
+    }
+
+    /// Timeout stake per slot, excluding any `(round, voter)` matched by
+    /// `exclude` so an equivocating validator cannot contribute both vote
+    /// stake and timeout stake to the same slot's union quorum.
+    pub fn stake_by_round_excluding<F>(
+        &self,
+        committee: &CommitteeInfo,
+        mut exclude: F,
+    ) -> HashMap<Round, u64>
+    where
+        F: FnMut(Round, AuthorityIndex) -> bool,
+    {
         self.by_round
             .keys()
-            .map(|round| (*round, self.stake_for_round(committee, *round)))
+            .map(|round| {
+                let r = *round;
+                (
+                    r,
+                    self.stake_for_round_excluding(committee, r, |voter| exclude(r, voter)),
+                )
+            })
             .collect()
     }
 

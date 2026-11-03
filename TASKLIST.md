@@ -8,7 +8,7 @@ Base tip when trimmed: `a78e3ac9ce5c99a0c4014c51f3763c87f93e821d`. Full prior ch
 
 - [x] **MIN_DELEGATION** — **50_000 KUNA** (`MIN_DELEGATION = 50_000 * ONE_KUNA`) wired in `kovanica-params`, enforced in `kovanica-staking::StakingState::delegate` and `kovanica-execution`.
 - [x] **Vote signature v2** — `KUNA/vote/v2` + `genesis_hash` in preimage (106 B; retired 74 B v1) across `kovanica-types`, `kovanica-crypto`, `kovanica-consensus`, `kovanica-network`, and `kovanica-node`.
-- [ ] **PRO-40 follow-up** — deterministic late leader past `T_skip`: skip-cert quorum or union-quorum with timeout stake; cluster green (`docs/dev/NOTED-pro-40-late-vote.md`).
+- [x] **PRO-40 follow-up** — deterministic late leader past `T_skip`: skip-cert quorum or union-quorum with non-overlapping timeout stake above the skip-complement floor (`votes > total_stake - quorum_threshold`); cluster green (`docs/dev/NOTED-pro-40-late-vote.md`).
 - [~] **Fork handling** — `use_min_digest_fork` default **on** and reachable; only tests set `false`. Keep as partial until product wants a dedicated fork-policy doc/test pack.
 - [~] **Light-client checkpoint** — `kovanica_lightClientCheckpoint` wired as minimal stub; not full state-backed lookup.
 

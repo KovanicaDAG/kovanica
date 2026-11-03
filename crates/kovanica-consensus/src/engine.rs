@@ -2040,6 +2040,13 @@ where
             return Err(VoteRejection::UnknownLeaderRound(leader_round).into());
         }
 
+        if self.timeout_pool.lock().contains(leader_round, voter) {
+            record_vote_timeout_equivocation();
+            warn!(
+                round = leader_round,
+                voter, "validator signed both a vote and a timeout for one slot"
+            );
+        }
         let has_quorum = self
             .committer
             .add_verified_vote(leader_round, voter, vote.leader_hash)?;
@@ -2075,10 +2082,20 @@ where
         // or delivered ahead of an earlier pending decision.
         let _guard = self.commit_trigger_lock.lock();
         let commit_started = Instant::now();
-        // Snapshot the timeout stake per slot once per attempt: the union-quorum
-        // rule decides a slot when its votes plus these timeouts cover quorum
-        // and the voters are the strict majority of that union.
-        let timeout_stake = self.timeout_pool.lock().stake_by_round(&self.committee);
+        // Snapshot the non-voting timeout stake per slot once per attempt: the
+        // union-quorum rule decides a slot when its votes exceed the
+        // skip-complement floor (`total - quorum`) and votes plus non-overlapping
+        // timeout stake cover `quorum_threshold`. Excluding any signer that
+        // also voted for the slot ensures a Byzantine equivocator is never
+        // counted twice.
+        let timeout_stake =
+            self.timeout_pool
+                .lock()
+                .stake_by_round_excluding(&self.committee, |round, voter| {
+                    self.committer
+                        .get_leader(round)
+                        .is_some_and(|l| l.votes.contains_key(&voter))
+                });
         let Some(subdag) = self
             .committer
             .try_commit_and_mark_durable_with_timeouts(self.dag_store.as_ref(), &timeout_stake)?
@@ -5716,6 +5733,133 @@ mod tests {
                 b.scheduled_leader_for_round(round),
                 "slot {round} must agree across nodes"
             );
+        }
+    }
+
+    /// PRO-40 follow-up deterministic reproduction: a late leader proposal
+    /// past `T_skip` with a full committee either reaches a verified
+    /// skip-certificate quorum (when only the late leader voted) or commits
+    /// under the union-quorum rule with the recorded timeout stake (when the
+    /// committee split across `T_skip` prevents a skip certificate), and
+    /// `drain_commits` immediately commits later quorum slots without wedging.
+    #[test]
+    fn late_leader_past_t_skip_either_skips_or_union_commits_without_wedging() {
+        // Case A: single late leader (authority 0) proposes and votes for
+        // slot 3, while the other 4 validators time out slot 3 past T_skip ->
+        // verified 4/5 SkipCert skips slot 3 and drains already-quorum slot 6.
+        {
+            let mut f = skip_fixture();
+            *f.engine.current_round.write() = 10;
+
+            let block3 = leader_block(&f.committee, &f.keys[0], 3);
+            f.engine.process_block(&block3).unwrap();
+            assert_eq!(*f.votes.lock(), vec![3], "late leader voted for slot 3");
+
+            // Slot 6 already has a full vote quorum sitting behind slot 3.
+            let block6 = leader_block(&f.committee, &f.keys[0], 6);
+            f.engine.process_block(&block6).unwrap();
+            for voter in [1u16, 2, 3] {
+                f.engine
+                    .process_vote(&signed_vote(
+                        &f.keys[voter as usize],
+                        6,
+                        voter,
+                        block6.digest,
+                    ))
+                    .unwrap();
+            }
+            assert_eq!(
+                f.engine.committer.last_decided_round(),
+                0,
+                "slot 6 waits behind undecided slot 3"
+            );
+
+            // The remaining 4 validators timed out slot 3 past T_skip.
+            for voter in [1u16, 2, 3, 4] {
+                f.engine
+                    .process_timeout(&signed_timeout(
+                        &f.keys[voter as usize],
+                        voter,
+                        3,
+                        &SKIP_GENESIS,
+                    ))
+                    .unwrap();
+            }
+            assert_eq!(*f.dag.skipped.lock(), vec![3], "slot 3 skipped by SkipCert");
+            let committed = f
+                .commits
+                .try_recv()
+                .expect("slot 6 drains immediately after slot 3 skips");
+            assert_eq!(committed.leader_round, 6);
+            assert_eq!(f.engine.committer.last_decided_round(), 6);
+        }
+
+        // Case B: late leader (authority 1) + one peer (authority 2) vote for
+        // slot 3 (2/5 votes), while the other 3 validators (0, 3, 4) time out
+        // slot 3 past T_skip (3/5 timeouts). Neither votes (2 < 4) nor
+        // timeouts (3 < 4) reach quorum alone; union quorum commits slot 3 and
+        // drains already-quorum slot 6 without wedging.
+        {
+            let mut f = skip_fixture();
+            *f.engine.current_round.write() = 10;
+
+            // Authority 0 (this node) timed out slot 3 past T_skip before
+            // seeing the late leader proposal.
+            assert!(f.engine.sign_timeout(3).unwrap());
+            let block3 = leader_block(&f.committee, &f.keys[0], 3);
+            f.engine.process_block(&block3).unwrap();
+
+            // Slot 6 reaches a full vote quorum while slot 3 is still split.
+            let block6 = leader_block(&f.committee, &f.keys[0], 6);
+            f.engine.process_block(&block6).unwrap();
+            for voter in [1u16, 2, 3] {
+                f.engine
+                    .process_vote(&signed_vote(
+                        &f.keys[voter as usize],
+                        6,
+                        voter,
+                        block6.digest,
+                    ))
+                    .unwrap();
+            }
+
+            // Two validators (1, 2) voted for slot 3; two more (3, 4) timed out.
+            for voter in [1u16, 2] {
+                f.engine
+                    .process_vote(&signed_vote(
+                        &f.keys[voter as usize],
+                        3,
+                        voter,
+                        block3.digest,
+                    ))
+                    .unwrap();
+            }
+            // A Byzantine validator (1) that also sends a timeout must not have
+            // its stake counted twice (voters {1, 2} + timeout {0, 1} is only
+            // 3 distinct validators, short of quorum 4).
+            f.engine
+                .process_timeout(&signed_timeout(&f.keys[1], 1, 3, &SKIP_GENESIS))
+                .unwrap();
+            assert_eq!(
+                f.engine.committer.last_decided_round(),
+                0,
+                "equivocating voter+timeout must not be double-counted"
+            );
+
+            // Once an honest fourth validator (3) times out, disjoint union
+            // stake reaches 4/5 with votes (2) > floor (1) -> slot 3 commits
+            // and slot 6 drains immediately behind it.
+            f.engine
+                .process_timeout(&signed_timeout(&f.keys[3], 3, 3, &SKIP_GENESIS))
+                .unwrap();
+            let first = f.commits.try_recv().expect("slot 3 commits via union rule");
+            let second = f
+                .commits
+                .try_recv()
+                .expect("slot 6 drains in the same pass");
+            assert_eq!(first.leader_round, 3);
+            assert_eq!(second.leader_round, 6);
+            assert_eq!(f.engine.committer.last_decided_round(), 6);
         }
     }
 }
