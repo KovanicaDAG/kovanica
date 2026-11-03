@@ -920,7 +920,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_kovanica_light_ffi_checksum_func_derive_comms_id() != 30377) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kovanica_light_ffi_checksum_func_faucet_allowed() != 38864) {
+    if (lib.uniffi_kovanica_light_ffi_checksum_func_faucet_allowed() != 22913) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_kovanica_light_ffi_checksum_func_import_wallet() != 17509) {
@@ -1654,9 +1654,9 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         /**
          * True when the app may show the testnet faucet.
          *
-         * The live testnet chain id is still [`LOCAL_CHAIN_ID`] (1337). [`TESTNET_CHAIN_ID`]
-         * is included so a future network does not need a client change to hide or
-         * show the faucet.
+         * Allowed exclusively on testnet (chain 4, [`TESTNET_CHAIN_ID`]), which remains
+         * an internal network until 25.11.2026. Mainnet (1), legacy testnet (2),
+         * devnet (3), and local (1337) are refused.
          */ fun `faucetAllowed`(`chainId`: kotlin.ULong): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->

@@ -25,10 +25,10 @@ use zeroize::Zeroize;
 
 uniffi::setup_scaffolding!("kovanica_light");
 
-/// Local chain id. The live testnet still uses this value.
+/// Local development chain id.
 pub const LOCAL_CHAIN_ID: u64 = chain_id::LOCAL;
-/// Reserved testnet id. It is not the live testnet.
-pub const TESTNET_CHAIN_ID: u64 = chain_id::TESTNET;
+/// Testnet chain id (chain 4, TESTNET_V2). Internal network until 25.11.2026.
+pub const TESTNET_CHAIN_ID: u64 = chain_id::TESTNET_V2;
 
 /// Domain separation prefix for comms message signing.
 /// Matches `COMMS_MSG_DOMAIN` in the comms stack.
@@ -162,12 +162,12 @@ pub fn wallet_address(keystore_json: String) -> Result<String, LightFfiError> {
 
 /// True when the app may show the testnet faucet.
 ///
-/// The live testnet chain id is still [`LOCAL_CHAIN_ID`] (1337). [`TESTNET_CHAIN_ID`]
-/// is included so a future network does not need a client change to hide or
-/// show the faucet.
+/// Allowed exclusively on testnet (chain 4, [`TESTNET_CHAIN_ID`]), which remains
+/// an internal network until 25.11.2026. Mainnet (1), legacy testnet (2),
+/// devnet (3), and local (1337) are refused.
 #[uniffi::export]
 pub fn faucet_allowed(chain_id: u64) -> bool {
-    chain_id == LOCAL_CHAIN_ID || chain_id == TESTNET_CHAIN_ID
+    chain_id == chain_id::TESTNET_V2
 }
 
 /// Verify one sealed header.
@@ -885,9 +885,18 @@ mod tests {
 
     #[test]
     fn three_seals_verify_and_the_faucet_follows_chain_id() {
-        assert!(faucet_allowed(LOCAL_CHAIN_ID));
+        assert!(faucet_allowed(4));
+        assert!(faucet_allowed(chain_id::TESTNET_V2));
         assert!(faucet_allowed(TESTNET_CHAIN_ID));
+        assert!(!faucet_allowed(1));
         assert!(!faucet_allowed(chain_id::MAINNET));
+        assert!(!faucet_allowed(2));
+        assert!(!faucet_allowed(chain_id::TESTNET));
+        assert!(!faucet_allowed(3));
+        assert!(!faucet_allowed(chain_id::DEVNET));
+        assert!(!faucet_allowed(1337));
+        assert!(!faucet_allowed(chain_id::LOCAL));
+        assert!(!faucet_allowed(LOCAL_CHAIN_ID));
         let (signers, committee) = keys(4);
         let (header_json, header) = header_json(0, Hash::zero(), Hash::new([4u8]), &committee);
         let seals = seals_json(&signers, &header, 3);
