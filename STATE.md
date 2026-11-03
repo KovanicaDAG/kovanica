@@ -30,9 +30,8 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 ## Open product gaps (not archived noise)
 
 1. CI move into `KovanicaDAG/kovanica-protocol` (fmt/clippy/test + pinned gitleaks).
-2. PRO-40 follow-up: deterministic late-leader / skip-cert vs union-quorum (see `docs/dev/NOTED-pro-40-late-vote.md`).
-3. Ops drift (live fleet): VPS systemd units still `kvnc-*` / `KVNC_*` (repo seed scripts & docs updated to `KOVANICA_*` and `${KOVANICA_ROOT:-/root/Projects/kovanica}`; coordinate live VPS cutover + physical directory rename with Seed Ops); DNS seed names for mainnet (`docs/SEED-DNS-AUDIT.md`).
-4. Governance (Phase 25), BIP32 HD, external audit, mainnet launch runbook — see root `TASKLIST.md`.
+2. Ops drift (live fleet): VPS systemd units still `kvnc-*` / `KVNC_*` (repo seed scripts & docs updated to `KOVANICA_*` and `${KOVANICA_ROOT:-/root/Projects/kovanica}`; coordinate live VPS cutover + physical directory rename with Seed Ops); DNS seed names for mainnet (`docs/SEED-DNS-AUDIT.md`).
+3. Governance (Phase 25), BIP32 HD, external audit, mainnet launch runbook — see root `TASKLIST.md`.
 
 **Done, do not re-open as missing:**
 - Contract SDK (`crates/kovanica-contract-sdk`) and Indexer (`crates/kovanica-indexer`).
@@ -40,3 +39,4 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 - `MIN_DELEGATION = 50_000 KUNA` wired in `kovanica-params`, `kovanica-staking`, and `kovanica-execution`.
 - Vote signature **v2** (`KUNA/vote/v2` + `genesis_hash` in 106 B preimage; 74 B v1 retired).
 - Light-client checkpoint (`kovanica_lightClientCheckpoint` state-backed lookup in `kovanica-rpc` with `verify_quorum` / `verify_colouring`).
+- PRO-40 late-leader rule: union-quorum commit with non-overlapping timeout stake above the skip-complement floor (`votes > total_stake - quorum_threshold`), partitioning late proposals past `T_skip` between verified `SkipCert` quorum and union-quorum commit (`docs/dev/NOTED-pro-40-late-vote.md`).

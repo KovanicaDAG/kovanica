@@ -67,33 +67,42 @@ impl BaseCommitter {
         LeaderStatus::Undecided
     }
 
-    /// Decide a leader with the **union-quorum** fallback (PRO-41).
+    /// Decide a leader with the **union-quorum** fallback (PRO-40 / PRO-41).
     ///
     /// A slot whose vote stake is short of the quorum but whose voters *and*
-    /// timeout signers together cover it is decided — as a commit — when the
-    /// voters are a strict majority of that union. This is the case that
-    /// stalled chain 4 for 16 minutes at round 51474 (3 votes = 300 000,
-    /// 2 timeouts = 200 000, quorum 333 334): the voters plainly carried the
-    /// slot, yet neither a vote quorum nor a skip quorum existed.
+    /// non-voting timeout signers together cover `quorum_threshold` is decided
+    /// — as a commit — whenever the voters strictly exceed the skip-complement
+    /// floor (`total_stake - quorum_threshold`). This closes both the
+    /// majority-voter split (e.g. 3 votes + 2 timeouts on a 5-validator
+    /// committee) and the late-leader split around `T_skip` (e.g. 2 votes + 2
+    /// timeouts on a 4-validator committee in `1793256534`, or 2 votes + 3
+    /// timeouts on a 5-validator committee).
     ///
-    /// # Why a commit is the safe side here
+    /// # Why a commit is the safe side here (and never conflicts with a skip)
     ///
-    /// A timeout only states "this signer did not vote for the slot"; it names
-    /// no block and so cannot contradict any vote. Committing therefore needs
-    /// the voters to be a strict majority of everyone who expressed a
-    /// preference, plus a stake floor that no skip certificate can intersect
-    /// in faulty stake alone:
+    /// Honest validators enforce durable vote-xor-timeout for each slot
+    /// ([`crate::engine::ConsensusEngine::vote_for_leader`] and `sign_timeout`),
+    /// and [`crate::skip::TimeoutPool::stake_by_round_excluding`] excludes any
+    /// voter recorded on the slot from `timeout_stake`. A timeout only states
+    /// "this signer did not vote for the slot"; it names no block and cannot
+    /// contradict a vote.
     ///
-    /// `votes > total_stake + max_stake - quorum_threshold`
+    /// Requiring
     ///
-    /// i.e. `votes + quorum_threshold - total_stake > max_stake`, so the
-    /// voters intersect any `quorum_threshold` skip certificate in more stake
-    /// than a single Byzantine validator holds — at least one honest signer
-    /// would have to sign both a vote and a timeout for the slot, which
-    /// [`crate::engine::ConsensusEngine::vote_for_leader`] and `sign_timeout`
-    /// never do. Two different blocks at the same slot are likewise impossible
-    /// under this floor: their vote sets would have to be disjoint quorums
-    /// minus one, leaving too much stake for the union rule to close.
+    /// `votes > total_stake - quorum_threshold`
+    ///
+    /// means the remaining non-voting stake in the committee is
+    /// `total_stake - votes < quorum_threshold`: the non-voters are strictly
+    /// short of the stake needed to form a [`kovanica_types::SkipCert`].
+    /// Conversely, when a single late leader proposes past `T_skip` and
+    /// `votes <= total_stake - quorum_threshold` (for instance 1 vote + 3
+    /// timeouts on a 4-validator committee, or 1 vote + 4 timeouts on a
+    /// 5-validator committee), the non-voting validators hold at least
+    /// `quorum_threshold` stake and form a verified [`kovanica_types::SkipCert`]
+    /// while this rule refuses to commit. Every full-committee split past
+    /// `T_skip` therefore either reaches a verified skip-certificate quorum or
+    /// falls under this union-quorum commit rule, with no dead zone that can
+    /// wedge the commit walk.
     ///
     /// The decision needs no new wire artifact: every node re-derives it from
     /// the same gossiped (and persisted) votes and timeouts, so peers that
@@ -120,7 +129,7 @@ impl BaseCommitter {
             author = leader_info.author,
             votes = leader_info.votes.len(),
             timeout_stake,
-            "Union-quorum commit: voters are a strict majority of the slot's vote plus timeout stake"
+            "Union-quorum commit: slot's vote plus timeout stake reaches quorum above the skip-complement floor"
         );
         crate::metrics::record_union_quorum_commit();
         LeaderStatus::Commit
@@ -144,16 +153,14 @@ impl BaseCommitter {
         if votes.saturating_add(timeout_stake) < self.committee.quorum_threshold() {
             return false;
         }
-        // ... the voters must be the strict majority of that union, ...
-        if votes <= timeout_stake {
-            return false;
-        }
-        // ... and must beat the stake floor that makes every skip certificate
-        // intersect them in at least one honest signer.
+        // ... and the votes must beat the skip-complement floor
+        // (`total_stake - quorum_threshold`), so the remaining non-voting stake
+        // in the committee (`total_stake - votes`) is strictly below
+        // `quorum_threshold` and cannot form a skip certificate without
+        // intersecting the voters.
         let floor = self
             .committee
             .total_stake()
-            .saturating_add(self.committee.max_stake())
             .saturating_sub(self.committee.quorum_threshold());
         votes > floor
     }
@@ -647,11 +654,11 @@ impl UniversalCommitter {
     /// timeout. A slot that has its own vote quorum is committed, never
     /// skipped (with honest signers both cannot exist; this is defensive).
     ///
-    /// The union-quorum commit rule (PRO-41) needs no check here: a skip
-    /// certificate means timeouts alone reached the quorum, while the union
-    /// rule requires the voters to be a *strict majority* of votes plus
-    /// timeouts — which would make the votes alone a quorum, i.e. the direct
-    /// commit path above.
+    /// The union-quorum commit rule (PRO-40 / PRO-41) cannot conflict with an
+    /// honest skip certificate: a skip certificate requires at least
+    /// `quorum_threshold` timeout stake, leaving at most
+    /// `total_stake - quorum_threshold` stake to vote, whereas the union rule
+    /// requires `votes > total_stake - quorum_threshold`.
     ///
     /// The skip is written to the decided-round index as a decision with no
     /// leaders before the cursor moves, so a restart resumes after it and
@@ -1670,52 +1677,90 @@ mod tests {
         );
     }
 
-    /// Equal vote and timeout stake is not a majority: the rule must stall
-    /// rather than guess. Two votes plus two timeouts cover 4/5 of the stake.
+    /// Single late leader + full committee (PRO-40 follow-up): when a late
+    /// proposal past `T_skip` splits a 4-validator committee into 2 votes + 2
+    /// timeouts (as in `1793256534`) or a 5-validator committee into 2 votes +
+    /// 3 timeouts, the non-voting validators hold strictly less than
+    /// `quorum_threshold` stake (`votes > total - quorum`), so a skip
+    /// certificate can never form and the union rule commits the slot. When
+    /// only the single late leader votes (`votes <= total - quorum`), the
+    /// remaining validators form a verified skip certificate and the union
+    /// rule stays `Undecided` so the slot skips cleanly.
     #[test]
-    fn union_quorum_refuses_a_split_without_a_voter_majority() {
+    fn late_leader_split_past_t_skip_either_skips_or_union_commits() {
         let leader_block = make_block(0, 3, vec![], "leader-3");
         let mut dag = RecordingDag::default();
         dag.insert(leader_block.clone());
 
-        let base = BaseCommitter::new(committee(5));
-        let mut info = leader(3, 0, Some(leader_block.digest));
-        for voter in [0u16, 1] {
-            info.votes.insert(voter, leader_block.digest);
-        }
-
+        // 4 equal validators (quorum = 3, floor = 4 - 3 = 1):
+        // - 1 late-leader vote + 3 timeouts: timeouts reach skip-cert quorum
+        //   (3 >= 3), union rule refuses to commit (1 <= 1).
+        // - 2 votes + 2 timeouts (`1793256534` repro): neither side reaches 3
+        //   alone, 2 > 1 and 2 + 2 >= 3 -> union rule commits.
+        let base4 = BaseCommitter::new(committee(4));
+        let mut one_vote = leader(3, 0, Some(leader_block.digest));
+        one_vote.votes.insert(0, leader_block.digest);
         assert_eq!(
-            base.try_direct_decide_with_timeouts(&dag, &info, 2),
+            base4.try_direct_decide_with_timeouts(&dag, &one_vote, 3),
             LeaderStatus::Undecided,
-            "votes equal to the timeout stake must never decide"
+            "1/4 vote + 3/4 timeouts must yield to the 3/4 skip certificate"
+        );
+        let mut two_votes = one_vote.clone();
+        two_votes.votes.insert(1, leader_block.digest);
+        assert_eq!(
+            base4.try_direct_decide_with_timeouts(&dag, &two_votes, 2),
+            LeaderStatus::Commit,
+            "2/4 votes + 2/4 timeouts must commit via union quorum"
+        );
+
+        // 5 equal validators (quorum = 4, floor = 5 - 4 = 1):
+        // - 1 late-leader vote + 4 timeouts: 4 timeouts form a skip cert,
+        //   union rule stays Undecided (1 <= 1).
+        // - 2 votes + 3 timeouts (or 2 timeouts): 2 > 1 and union >= 4 -> Commit.
+        let base5 = BaseCommitter::new(committee(5));
+        assert_eq!(
+            base5.try_direct_decide_with_timeouts(&dag, &one_vote, 4),
+            LeaderStatus::Undecided,
+            "1/5 vote + 4/5 timeouts must yield to the 4/5 skip certificate"
+        );
+        assert_eq!(
+            base5.try_direct_decide_with_timeouts(&dag, &two_votes, 2),
+            LeaderStatus::Commit,
+            "2/5 votes + 2/5 timeouts reaches union quorum above floor 1"
+        );
+        assert_eq!(
+            base5.try_direct_decide_with_timeouts(&dag, &two_votes, 3),
+            LeaderStatus::Commit,
+            "2/5 votes + 3/5 timeouts must commit when skip quorum (4) is unreachable"
         );
     }
 
-    /// The voters must beat `total + max - quorum` so that any skip
-    /// certificate intersects them in more stake than one validator holds.
-    /// Here the votes are the majority of the union but still under the floor.
+    /// The voters must beat the skip-complement floor (`total - quorum`) so
+    /// the remaining non-voting stake in the committee is strictly below
+    /// `quorum_threshold` and cannot form a skip certificate.
     #[test]
     fn union_quorum_refuses_below_the_skip_intersection_floor() {
         let leader_block = make_block(0, 3, vec![], "leader-3");
         let mut dag = RecordingDag::default();
         dag.insert(leader_block.clone());
 
-        // total 15, quorum 11, max stake 4 => floor 8.
+        // total 15, quorum 11 => floor = 15 - 11 = 4.
         let base = BaseCommitter::new(stake_committee(&[4, 4, 2, 4, 1]));
         let mut info = leader(3, 0, Some(leader_block.digest));
-        // Votes: 4 + 2 = 6; timeouts: 4 + 1 = 5. Union 11 >= 11 and 6 > 5,
-        // but 6 <= 8, so no honest signer is forced into the intersection.
-        for voter in [0u16, 2] {
-            info.votes.insert(voter, leader_block.digest);
-        }
+        // Single 4-stake voter + 11 timeout stake: union is 15 >= 11, but
+        // votes (4) <= floor (4), so the remaining 11 stake can form a skip
+        // certificate and the union rule must not commit.
+        info.votes.insert(0, leader_block.digest);
         assert_eq!(
-            base.try_direct_decide_with_timeouts(&dag, &info, 5),
+            base.try_direct_decide_with_timeouts(&dag, &info, 11),
             LeaderStatus::Undecided,
-            "votes under the floor must never decide, even as a majority"
+            "votes at or below total - quorum must yield to the skip certificate"
         );
 
-        // One more 4-stake voter: 10 > 5 and 10 > 8 -> decided.
-        info.votes.insert(3, leader_block.digest);
+        // Adding the 2-stake voter brings votes to 6 > 4 (only 9 non-voting
+        // stake remains, short of the 11-stake skip quorum); with 5 timeout
+        // stake the union reaches 11 -> Commit.
+        info.votes.insert(2, leader_block.digest);
         assert_eq!(
             base.try_direct_decide_with_timeouts(&dag, &info, 5),
             LeaderStatus::Commit

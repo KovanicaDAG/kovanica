@@ -68,11 +68,20 @@ Related landed fix: the same PR drained restored quorum at startup
 bash scripts/ci-local.sh cluster
 ```
 
+## Resolution (PRO-40 follow-up)
+
+- **Decision (union-quorum with non-overlapping timeout stake above the skip-complement floor)**:
+  - `BaseCommitter::union_quorum_decides_commit` (`crates/kovanica-consensus/src/committer.rs`) now commits a leader block when `votes + timeout_stake >= quorum_threshold` and `votes > total_stake - quorum_threshold` (the skip-complement floor).
+  - `TimeoutPool::stake_by_round_excluding` (`crates/kovanica-consensus/src/skip.rs`), called from `ConsensusEngine::try_commit_and_deliver` (`crates/kovanica-consensus/src/engine.rs`), excludes any authority that also voted for the slot so a Byzantine equivocator cannot contribute both vote stake and timeout stake to the union quorum.
+  - Because honest validators enforce durable vote-xor-timeout (`vote_for_leader` / `sign_timeout`), every full-committee outcome past `T_skip` is partitioned with no dead zone:
+    - When `votes <= total_stake - quorum_threshold` (e.g. a single late leader voting `1/4` or `1/5` while the remaining validators time out), the non-voting validators hold `total_stake - votes >= quorum_threshold` stake and form a verified `SkipCert`, while the union-quorum rule stays `Undecided` so `try_skip_and_mark_durable` skips the slot cleanly.
+    - When `votes > total_stake - quorum_threshold` (e.g. the `2/4` votes + `2/4` timeouts split from `1793256534`, or `2/5` votes + `3/5` timeouts on a 5-validator committee), the non-voting validators hold strictly less than `quorum_threshold` stake (`total_stake - votes < quorum_threshold`) so no honest `SkipCert` can form, and `try_commit_and_mark_durable_with_timeouts` commits the slot under the union-quorum rule and drains subsequent quorum slots.
+
 ## Acceptance criteria for the follow-up work
 
-- [ ] Reproduce the stall deterministically (single late leader + full committee).
-- [ ] Decide: a late proposal past `T_skip` must either reach skip-cert quorum or
+- [x] Reproduce the stall deterministically (single late leader + full committee): `committer::tests::late_leader_split_past_t_skip_either_skips_or_union_commits` and `engine::tests::late_leader_past_t_skip_either_skips_or_union_commits_without_wedging`.
+- [x] Decide: a late proposal past `T_skip` must either reach skip-cert quorum or
       fall under the union-quorum commit rule with the recorded timeout stake — not
       wedge the walk.
-- [ ] Cluster tests green via `bash scripts/ci-local.sh cluster`
+- [x] Cluster tests green via `bash scripts/ci-local.sh cluster`
       (`live_vote_integration`, `sustained_liveness_integration`, `--test-threads=1`).
