@@ -54,7 +54,7 @@ export function MainnetLaunching() {
             </Button>
           </div>
           <p className="mt-6 font-mono text-[10px] tracking-wide text-subtle uppercase">
-            mainnet.kovanica.online · GHOSTDAG · Proof-of-Authority
+            mainnet.kovanica.online · Mysticeti / MysticGhost · Staked Validators
           </p>
         </div>
       </main>
@@ -74,6 +74,12 @@ export function MainnetLaunching() {
             </a>
             <a className="transition-colors hover:text-fg" href={SURFACE.api}>
               api
+            </a>
+            <a className="transition-colors hover:text-fg" href="https://x.com/KovanicaDAG" target="_blank" rel="noreferrer">
+              @KovanicaDAG
+            </a>
+            <a className="transition-colors hover:text-fg" href="https://x.com/BetterCallDzuks" target="_blank" rel="noreferrer">
+              @BetterCallDzuks
             </a>
             <a className="transition-colors hover:text-fg" href={SURFACE.dash}>
               dash

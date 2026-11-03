@@ -32,6 +32,8 @@ export const ABOUT = {
 
   /** Personal GitHub (founder) */
   personalGithub: "https://github.com/BetterCallDzuks",
+  xKovanica: "https://x.com/KovanicaDAG",
+  xFounder: "https://x.com/BetterCallDzuks",
 
   transparency:
     "Early control is intentional and documented. Tokenomics (90.2M KUNA total supply, 81M subsidy budget, 8M treasury, 1M genesis validators, 0.2M founder premine, 2.5 KUNA leader reward) are public and locked. The goal is progressive decentralisation under transparent rules.",

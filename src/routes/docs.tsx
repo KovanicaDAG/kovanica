@@ -155,7 +155,7 @@ function DocsBody() {
           <h2 className="font-display text-2xl tracking-tight text-fg">Wallet</h2>
           <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
             <Fact k="Addresses" v="Canonical PRO-21 address (64 chars: kvnc + 57 base32 + dag)" />
-            <Fact k="Derivation" v="SLIP-0010 m/44'/3007'/0'/0'/i' (coin type 3007)" />
+            <Fact k="Derivation" v="ADR-0002: 24-word BIP-39 entropy IS Ed25519 seed; no PBKDF2; no HD; one phrase = one address" />
             <Fact k="Account Model" v="Account-based + staked validators (sequence nonces)" />
             <Fact k="Signing" v="Client-side Ed25519 + BLAKE3 — keys never leave the browser" />
           </dl>
@@ -187,7 +187,7 @@ function DocsBody() {
           <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
             <Fact
               k="Derivation"
-              v="SLIP-0010 m/44'/3007'/0'/0'/i' with deterministic test vectors"
+              v="ADR-0002: 24-word BIP-39 entropy IS Ed25519 seed (no PBKDF2; no HD; one phrase = one address)"
             />
             <Fact
               k="Sighash"
@@ -234,9 +234,10 @@ function DocsBody() {
             <Fact k="Consensus" v="Mysticeti DAG (wave = 3)" />
             <Fact k="Round Duration" v="4.0s per DAG round" />
             <Fact k="Leader Commit" v="12.0s per committed leader" />
-            <Fact k="Active Validators" v="15–21 (Testnet: 5 active staked)" />
+            <Fact k="Active Validators" v="Mainnet genesis 15–20 (Testnet: 5 active staked; no hard cap)" />
             <Fact k="Min Validator Stake" v="50,000 KUNA" />
             <Fact k="Epoch Rotation" v="8h (7,200 rounds = 2,400 leaders)" />
+            <Fact k="Jail Period" v="JAIL_ROUNDS = 7,200 committed leaders (~1 day = 3 epochs)" />
           </dl>
         </section>
 
@@ -279,7 +280,7 @@ function DocsBody() {
         <section id="node-ops" className="mt-10 scroll-mt-20">
           <h2 className="font-display text-2xl tracking-tight text-fg">Node operations</h2>
           <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-muted">
-            <li>Public testnet RPC is available on port 8545 and proxied via <code>https://rpc-testnet.kovanica.online</code>.</li>
+            <li>Testnet RPC is available on port 8545 and proxied via <code>https://rpc-testnet.kovanica.online</code>.</li>
             <li>Transactions require an Ed25519 signature over the BLAKE3 <code>sighash</code>. All nodes verify 64-byte signatures.</li>
             <li>
               P2P nodes listen on TCP <code>0.0.0.0:8000</code>. Bootstrap seed peers:

@@ -22,8 +22,8 @@ export const FOUNDER_SEED = 1;
 export const HALVING_ERA = 8_100_000;
 export const MAX_SUPPLY = 90_200_000 * ATOM;
 // Mirrors the node: min_fee = max(subsidy / 500_000, 1) atoms.
-// RFC-006: subsidy = 10 KUNA → min_fee = max(10/500000 * 10^8, 1) = 2000 atoms.
-// Note: 500_000 here is the fee-floor divider, not HALVING_ERA (2_000_000).
+// subsidy = 2.5 KUNA (s₀) → min_fee = max(2.5 * 10^9 / 500_000, 1) = 5,000 atoms.
+// Note: 500_000 here is the fee-floor divider, not HALVING_ERA (8_100_000).
 export const MIN_FEE = Math.max(Math.floor(SUBSIDY / 500_000), 1);
 export const K = 3;
 export const TREASURY = "cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc";
@@ -248,7 +248,7 @@ export function getSpecText(network: PublicSource): string {
 
   return `# ${networkId}
 
-Public BlockDAG ${isMainnet ? "mainnet" : "testnet"}. Native token **${TOKEN}** (8 decimals).
+BlockDAG ${isMainnet ? "mainnet" : "testnet"}. Native token **${TOKEN}** (9 decimals). Canonical chain IDs: mainnet=1, testnet=2, devnet=3 (chain 4 is internal testnet).
 Engine is the Rust node; this app speaks the same HTTP contract.
 
 ||| | |
@@ -259,10 +259,10 @@ Engine is the Rust node; this app speaks the same HTTP contract.
 ||| Site | ${liveSite} ||
 ||| Network | \`${networkId}\` ||
 ||| Premine | ${FOUNDER_AMOUNT / ATOM} KUNA (founder / treasury) ||
-||| Subsidy cap | ${SUBSIDY / ATOM} KUNA / block, halves every ${HALVING_ERA.toLocaleString()} blocks ||
+||| Subsidy cap | ${SUBSIDY / ATOM} KUNA / leader block, decays × 3/4 every ${HALVING_ERA.toLocaleString()} committed leaders ||
 ||| Hard cap | ${MAX_SUPPLY / Number(ATOM.toLocaleString().replace(/,/g, ''))} KUNA (90.2M) ||
-||| Min fee | ${MIN_FEE} atoms (${MIN_FEE / ATOM} KUNA) — burned ||
-||| k | ${K} (GHOSTDAG) ||
+||| Min fee | ${MIN_FEE} atoms (${MIN_FEE / ATOM} KUNA) ||
+||| Consensus | Mysticeti DAG (wave = 3, MysticGhost ordering) ||
 ||| Atom | 1 KUNA = 10^9 atoms ||
 ||| Finality depth | 100 blue score ||
 ||| Payload pruning | 1000 blue score ||
@@ -302,7 +302,7 @@ GET /api/p2p
   { path: "tcp", listen, peers, bootstrap } — Rust node only
 
 GET /api/blocks
-  octet-stream dump of every block (same bytes a clone pulls on :9000)
+  octet-stream dump of every block (same bytes a clone pulls on :8000)
 
 GET /api/download/install.sh
   node installer script (Linux x64/arm64)
@@ -330,13 +330,13 @@ POST /api/fee_estimate?amount=
   amounts over 1 KUNA scale by 1.2
 
 POST /api/mine
-  operator: append one block (pack mempool, else empty coinbase)
+  local playground / operator: simulate block creation (rewards mint strictly to committed wave leaders)
 
 POST /api/mining?on=1
-  operator: start/stop auto-mine on the selected node
+  local playground: toggle simulated block production
 
 POST /api/miner?addr=
-  operator: set coinbase payee
+  local playground: set block proposer / validator address
 
 POST /api/faucet?to=&amount=
   ${network === "testnet" ? "testnet open faucet. kind=faucet (default). Per-address lifetime cap: 10 KUNA." : "mainnet faucet (closed)"}
@@ -349,8 +349,8 @@ POST /api/origin?iso3=HRV
 
 ## Wallet
 
-Address = Ed25519 public key (64 hex) or kvnc…dag (versioned + base58).
-BIP44 path: m/44'/3007'/account'/change/index (coin type 3007, unregistered).
+Address: PRO-21 canonical format = kvnc + 57 bech32-alphabet chars + dag (64 total), 29-bit BLAKE3 checksum. Legacy hex only where chain allows (chains 3, 4, 1337).
+Derivation: ADR-0002 — 24-word BIP-39 entropy IS the 32-byte Ed25519 seed; no PBKDF2 passphrase, no HD derivation, one phrase = one wallet address.
 Browser signs prepare's sighash; submit never receives the mnemonic.
 Faucet stays off on the public explorer. Hardware: Ledger (WebHID) + Trezor (WebUSB).
 
@@ -371,19 +371,19 @@ The GitHub crate still exposes a REPL, not HTTP:
 HTTP above is what explorer.kovanica.online actually serves.
 Live CORS is closed — this app proxies it server-side.
 
-## Run a public node
+## Run a node
 
   cargo build --release -p kovanica-node
   KOVANICA_MINE=0 KOVANICA_FAUCET=0 KOVANICA_ALLOW_RESET=0 \\\\
-  KOVANICA_OPERATOR=0 KOVANICA_POW=1 \\\\
-  KOVANICA_LISTEN=0.0.0.0:9000 \\\\
-  KOVANICA_PEERS=seed.kovanica.online:9000,seed2.kovanica.online:9000 \\\\
+  KOVANICA_OPERATOR=0 \\\\
+  KOVANICA_LISTEN=0.0.0.0:8000 \\\\
+  KOVANICA_PEERS=seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000 \\\\
   ./target/release/kovanica-node explorer 127.0.0.1:8080
 
-TCP :9000 is the only P2P path. Do not set peers to explorer.kovanica.online:9000
+TCP :8000 is the P2P swarm path. Do not set peers to explorer.kovanica.online:8000
 — that name is Cloudflare-proxied and never reaches the seed. Use a DNS-only
-A record (seed.kovanica.online) or the origin IP.
-After sync, GET /api/head on the clone matches the public genesis (and tip, once
+records (seed1.kovanica.online:8000, seed2.kovanica.online:8000, seed3.kovanica.online:8000).
+After sync, GET /api/head on the clone matches the genesis (and tip, once
 the seed has served its blocks).
 
 ## Live explorer downloads

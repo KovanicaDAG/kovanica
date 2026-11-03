@@ -47,7 +47,7 @@ export const WHATS_NEW: readonly WhatsNewItem[] = [
   {
     date: "2026-10",
     title: "Staked Validators & BFT",
-    body: "15–21 active validator set, min 50,000 KUNA stake, 8-hour validator rotation epochs, and uncertified DAG consensus with sub-second finality.",
+    body: "5 active staked validators on testnet, 15–20 mainnet genesis (no hard cap), min 50,000 KUNA stake, 8-hour validator rotation epochs, and uncertified DAG consensus with 12s committed leader finality (wave=3 × 4s).",
     tag: "Protocol",
     href: DOCS,
   },

@@ -35,7 +35,7 @@ export function LandingChrome({ children }: { children: React.ReactNode }) {
             Roadmap
           </a>
           <a
-            href="https://github.com/KovanicaDAG/kovanica-protocol"
+            href="https://github.com/KovanicaDAG"
             target="_blank"
             rel="noopener noreferrer"
             className="hidden h-9 items-center rounded-md px-2.5 text-sm font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg sm:inline-flex"
@@ -60,6 +60,37 @@ export function LandingChrome({ children }: { children: React.ReactNode }) {
         </nav>
       </header>
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+      <footer className="border-t border-border px-4 py-6 md:px-6">
+        <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-xs text-subtle md:flex-row">
+          <span className="font-mono">kovanica · KUNA</span>
+          <div className="flex flex-wrap items-center gap-4 font-mono">
+            <a
+              href="https://x.com/KovanicaDAG"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-fg"
+            >
+              @KovanicaDAG
+            </a>
+            <a
+              href="https://x.com/BetterCallDzuks"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-fg"
+            >
+              @BetterCallDzuks
+            </a>
+            <a
+              href="https://github.com/KovanicaDAG"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-fg"
+            >
+              GitHub
+            </a>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

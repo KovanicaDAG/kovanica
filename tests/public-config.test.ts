@@ -2,8 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_P2P_PORT,
-  DEFAULT_POOL_STRATUM_URL,
-  POOL_STRATUM_URL,
   DEFAULT_SEED_PEERS,
   P2P_PORT,
   PRIMARY_SEED,
@@ -38,7 +36,7 @@ test("parsePort accepts 1..65535 and rejects everything else", () => {
 
 test("defaults are DNS names, never IP literals", () => {
   assert.ok(!IPV4.test(DEFAULT_SEED_PEERS));
-  assert.equal(DEFAULT_P2P_PORT, 9000);
+  assert.equal(DEFAULT_P2P_PORT, 8000);
 });
 
 test("resolved config is consistent", () => {
@@ -46,9 +44,4 @@ test("resolved config is consistent", () => {
   assert.equal(SEED_PEERS_CSV, SEED_PEERS.join(","));
   assert.equal(PRIMARY_SEED, SEED_PEERS[0]);
   assert.ok(P2P_PORT >= 1 && P2P_PORT <= 65535);
-});
-
-test("pool stratum endpoint is a stratum URL on a DNS name", () => {
-  assert.ok(!IPV4.test(DEFAULT_POOL_STRATUM_URL));
-  assert.match(POOL_STRATUM_URL, /^stratum\+tcp:\/\/[^\s/]+:\d+$/);
 });

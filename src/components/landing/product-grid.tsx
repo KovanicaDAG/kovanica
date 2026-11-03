@@ -51,7 +51,7 @@ const PRODUCTS: Product[] = [
     external: `${TESTNET}/wallet`,
     icon: Wallet,
     title: "Wallet",
-    body: "Create or import a seed, hardware wallets, accounts 0–2, QR, faucet and Ed25519 sends.",
+    body: "Create or import a seed, one phrase = one address, hardware wallets, QR, faucet and Ed25519 sends.",
   },
   {
     to: "/multisig",

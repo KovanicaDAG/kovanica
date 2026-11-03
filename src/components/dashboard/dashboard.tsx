@@ -15,7 +15,7 @@ import {
 import { api, useApiSource } from "@/lib/api/client";
 import {
   ATOM,
-  K,
+
   MAINNET_ID,
   MAX_SUPPLY,
   NETWORK_ID,
@@ -163,7 +163,7 @@ export function Dashboard() {
             icon={Globe}
             label="Network"
             value={h.network}
-            sub={`k = ${K} · poa · ${h.atom.toLocaleString()} atoms`}
+            sub={`Mysticeti · stake-DAG · ${h.atom.toLocaleString()} atoms`}
           />
           <StatCard
             icon={Blocks}
@@ -261,7 +261,7 @@ export function Dashboard() {
       )}
 
       <p className="text-center font-mono text-[11px] text-subtle">
-        {NETWORK_ID} · {TOKEN} · GHOSTDAG k={K} · finality 100 · fee 75% burned · maturity 100
+        {NETWORK_ID} · {TOKEN} · Mysticeti (MysticGhost ordering) · wave 3 (12s leaders) · staked validators
       </p>
     </div>
   );
@@ -300,12 +300,12 @@ function MainnetPlaceholder() {
           the moment the mainnet node opens its public endpoint.
         </p>
         <ul className="mx-auto mt-6 flex max-w-xl flex-wrap items-center justify-center gap-2 font-mono text-[10px] tracking-wide text-muted uppercase">
-          <li className="rounded-md border border-border px-2 py-1">k = {K}</li>
-          <li className="rounded-md border border-border px-2 py-1">GHOSTDAG</li>
-          <li className="rounded-md border border-border px-2 py-1">poa</li>
-          <li className="rounded-md border border-border px-2 py-1">finality 100</li>
-          <li className="rounded-md border border-border px-2 py-1">maturity 100</li>
-          <li className="rounded-md border border-border px-2 py-1">fee 75% burned</li>
+          <li className="rounded-md border border-border px-2 py-1">Mysticeti</li>
+          <li className="rounded-md border border-border px-2 py-1">MysticGhost ordering</li>
+          <li className="rounded-md border border-border px-2 py-1">wave = 3</li>
+          <li className="rounded-md border border-border px-2 py-1">12s leader finality</li>
+          <li className="rounded-md border border-border px-2 py-1">staked validators</li>
+          <li className="rounded-md border border-border px-2 py-1">2.5 KUNA leader reward</li>
           <li className="rounded-md border border-border px-2 py-1">cap {kvnc(MAX_SUPPLY)}M</li>
         </ul>
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">

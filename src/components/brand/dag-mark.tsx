@@ -2,7 +2,7 @@
  * Kovanica protocol mark — a 3-node directed acyclic graph glyph.
  *
  * Two parent diamonds converge on one child diamond; the emphasized edge is
- * the "selected parent" path (the GHOSTDAG anchor). Reads clearly at 16px.
+ * the "selected parent" path (the DAG anchor). Reads clearly at 16px.
  *
  * Two marks, two meanings: this DAG glyph is the PROTOCOL mark; the gold coin
  * (coin.webp) remains the KUNA token mark.
