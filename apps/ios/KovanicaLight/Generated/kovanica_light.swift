@@ -1112,9 +1112,9 @@ public func deriveCommsId(pubkeyHex: String)throws  -> String  {
 /**
  * True when the app may show the testnet faucet.
  *
- * The live testnet chain id is still [`LOCAL_CHAIN_ID`] (1337). [`TESTNET_CHAIN_ID`]
- * is included so a future network does not need a client change to hide or
- * show the faucet.
+ * Allowed exclusively on testnet (chain 4, [`TESTNET_CHAIN_ID`]), which remains
+ * an internal network until 25.11.2026. Mainnet (1), legacy testnet (2),
+ * devnet (3), and local (1337) are refused.
  */
 public func faucetAllowed(chainId: UInt64) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
@@ -1396,7 +1396,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kovanica_light_ffi_checksum_func_derive_comms_id() != 30377) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kovanica_light_ffi_checksum_func_faucet_allowed() != 38864) {
+    if (uniffi_kovanica_light_ffi_checksum_func_faucet_allowed() != 22913) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kovanica_light_ffi_checksum_func_import_wallet() != 17509) {
