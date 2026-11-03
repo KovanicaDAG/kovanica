@@ -39,3 +39,4 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 - Escrow E0433 (`kovanica-escrow` wired into `kovanica-execution/src/contracts.rs`, merged in #163).
 - `MIN_DELEGATION = 50_000 KUNA` wired in `kovanica-params`, `kovanica-staking`, and `kovanica-execution`.
 - Vote signature **v2** (`KUNA/vote/v2` + `genesis_hash` in 106 B preimage; 74 B v1 retired).
+- Light-client checkpoint (`kovanica_lightClientCheckpoint` state-backed lookup in `kovanica-rpc` with `verify_quorum` / `verify_colouring`).

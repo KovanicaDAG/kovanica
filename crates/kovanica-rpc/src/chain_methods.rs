@@ -18,8 +18,11 @@ use kovanica_storage::{
 };
 use kovanica_types::{
     block::StatementBlock,
+    colouring::ColourBlock,
     hash::Hash,
-    light_client::{LightClientCheckpoint, WaveCommitCertificate},
+    light_client::{
+        verify_colouring, ColouringCertificate, LightClientCheckpoint, WaveCommitCertificate,
+    },
     merkle::{self, MerkleProof, MerkleStep},
     transaction::{Transaction, TransactionKind},
     Address, CommitSeal, LeaderHeader, WAVE_LENGTH,
@@ -1441,40 +1444,359 @@ pub async fn handle_get_committee_info(_params: Value, state: RpcState) -> Resul
 // Light Client (client-only / read-only) — P15 B-lane
 // ============================================================================
 
-/// Minimal read-only light-client checkpoint endpoint.
-/// Accepts block hash or height; returns existing [`LightClientCheckpoint`]
-/// structure plus a verification-status flag. No consensus rule changed.
+/// Parse `kovanica_lightClientCheckpoint` parameters into `(height, hash)`.
+///
+/// Accepts:
+/// - `null`, `[]`, `[null]`, `{}` -> `(None, None)` (latest committed checkpoint)
+/// - `[height]` or bare scalar `height` -> `(Some(height), None)`
+/// - `[hash]` or bare 32-byte hex `hash` -> `(None, Some(hash))`
+/// - `[height, hash]` -> `(Some(height), Some(hash))` (with `null` allowed in either slot)
+/// - `{ "height": ..., "hash": ... }` -> optional height and/or hash
+fn parse_light_client_checkpoint_params(
+    params: &Value,
+) -> Result<(Option<u64>, Option<Hash>), RpcError> {
+    if params.is_null() {
+        return Ok((None, None));
+    }
+    if let Some(obj) = params.as_object() {
+        let height = match obj.get("height") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(parse_u64(v, "height")?),
+        };
+        let hash = match obj.get("hash") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(parse_hash(v, "hash")?),
+        };
+        return Ok((height, hash));
+    }
+    let args = params_vec(params);
+    if args.is_empty() {
+        return Ok((None, None));
+    }
+    if args.len() == 1 {
+        let first = &args[0];
+        if first.is_null() {
+            return Ok((None, None));
+        }
+        if let Some(obj) = first.as_object() {
+            let height = match obj.get("height") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(parse_u64(v, "height")?),
+            };
+            let hash = match obj.get("hash") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(parse_hash(v, "hash")?),
+            };
+            return Ok((height, hash));
+        }
+        // Distinguish a 32-byte block/header hash string from a height quantity.
+        if let Some(s) = first.as_str() {
+            let raw = s.strip_prefix("0x").unwrap_or(s);
+            if raw.len() == 64 {
+                return Ok((None, Some(parse_hash(first, "hash")?)));
+            }
+        }
+        return Ok((Some(parse_u64(first, "height")?), None));
+    }
+    if args.len() > 2 {
+        return Err(RpcError::InvalidParams(
+            "expected at most 2 parameters: [height?, hash?]".into(),
+        ));
+    }
+    let height = match &args[0] {
+        Value::Null => None,
+        v => Some(parse_u64(v, "height")?),
+    };
+    let hash = match &args[1] {
+        Value::Null => None,
+        v => {
+            let parsed = parse_hash(v, "hash")?;
+            if parsed == Hash::zero() && height.is_some() {
+                None
+            } else {
+                Some(parsed)
+            }
+        }
+    };
+    Ok((height, hash))
+}
+
+/// Find a committed [`LeaderHeader`] by leader block digest or header hash.
+fn find_leader_header_by_hash(
+    storage: &kovanica_storage::Storage,
+    target: &Hash,
+) -> Result<Option<LeaderHeader>, RpcError> {
+    if *target == Hash::zero() {
+        return Ok(None);
+    }
+    let txn = storage.begin_read().map_err(internal)?;
+    let state_store = storage.state();
+    let Some(latest) = state_store
+        .get_latest_leader_header(&txn)
+        .map_err(internal)?
+    else {
+        return Ok(None);
+    };
+    if latest.leader_digest == *target || latest.hash() == *target {
+        return Ok(Some(latest));
+    }
+    for h in (0..latest.committed_height).rev() {
+        if let Some(hdr) = state_store.get_leader_header(&txn, h).map_err(internal)? {
+            if hdr.leader_digest == *target || hdr.hash() == *target {
+                return Ok(Some(hdr));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Resolve the [`kovanica_types::Committee`] for `epoch` from persisted epoch
+/// snapshots first, falling back to the live committee when its epoch matches.
+async fn resolve_epoch_committee(
+    state: &RpcState,
+    epoch: u64,
+) -> Result<Option<kovanica_types::Committee>, RpcError> {
+    let snapshot = {
+        let txn = state.storage.begin_read().map_err(internal)?;
+        state
+            .storage
+            .state()
+            .get_epoch_committee(&txn, epoch)
+            .map_err(internal)?
+    };
+    if let Some(snapshot) = snapshot {
+        let authorities = snapshot
+            .into_iter()
+            .map(|m| kovanica_types::Authority {
+                index: m.index,
+                public_key: m.public_key,
+                vrf_public_key: m.vrf_public_key,
+                address: Address::from_public_key(&m.public_key),
+                stake: m.stake,
+                network_address: String::new(),
+            })
+            .collect();
+        return Ok(Some(kovanica_types::Committee::new(epoch, authorities)));
+    }
+    let live = committee_from_state(state).await;
+    if live.epoch() == epoch {
+        let authorities = live
+            .authorities()
+            .iter()
+            .map(|a| kovanica_types::Authority {
+                index: a.index,
+                public_key: a.public_key,
+                vrf_public_key: a.vrf_public_key,
+                address: a.address,
+                stake: a.stake,
+                network_address: a.network_address.clone(),
+            })
+            .collect();
+        return Ok(Some(kovanica_types::Committee::new(epoch, authorities)));
+    }
+    Ok(None)
+}
+
+/// Reconstruct a [`ColouringCertificate`] for `header` from the local DAG store
+/// so [`verify_colouring`] can re-verify MysticGhost blue and non-blue roots.
+fn build_colouring_certificate(
+    state: &RpcState,
+    header: &LeaderHeader,
+) -> Option<ColouringCertificate> {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut prior_committed = HashSet::new();
+    if header.parent_leader_digest != Hash::zero() {
+        let mut queue = VecDeque::from([header.parent_leader_digest]);
+        while let Some(digest) = queue.pop_front() {
+            if !prior_committed.insert(digest) {
+                continue;
+            }
+            if let Ok(block) = state.consensus_store.get_block(&digest) {
+                for parent in &block.parents {
+                    if !prior_committed.contains(&parent.digest) {
+                        queue.push_back(parent.digest);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut visited = HashSet::new();
+    let mut blocks = Vec::new();
+    let mut previous_tips = Vec::new();
+    let mut tip_set = HashSet::new();
+    let mut queue = VecDeque::from([header.leader_digest]);
+
+    while let Some(digest) = queue.pop_front() {
+        if !visited.insert(digest) {
+            continue;
+        }
+        let block = state.consensus_store.get_block(&digest).ok()?;
+        let mut parent_digests = Vec::with_capacity(block.parents.len());
+        for parent in &block.parents {
+            parent_digests.push(parent.digest);
+            if prior_committed.contains(&parent.digest) {
+                if tip_set.insert(parent.digest) {
+                    previous_tips.push(parent.digest);
+                }
+            } else if !visited.contains(&parent.digest) {
+                queue.push_back(parent.digest);
+            }
+        }
+        blocks.push(ColourBlock {
+            digest: block.digest,
+            round: block.round,
+            parents: parent_digests,
+        });
+    }
+
+    Some(ColouringCertificate {
+        blocks,
+        previous_tips,
+        leader: header.leader_digest,
+    })
+}
+
+/// Read-only light-client checkpoint endpoint (`kovanica_lightClientCheckpoint`).
+///
+/// Accepts committed height or block/header hash (or empty/`null` for latest),
+/// looks up the committed leader header, commit seals, consensus votes, and
+/// state root from storage, populates [`LightClientCheckpoint`] and
+/// [`WaveCommitCertificate`], and sets `verified` using [`WaveCommitCertificate::verify_quorum`]
+/// and [`verify_colouring`] (or linearizer root validation) against the epoch
+/// committee. Returns `null` when the requested point is not yet committed or
+/// not found.
 pub async fn handle_light_client_checkpoint(
     params: Value,
-    _state: RpcState,
+    state: RpcState,
 ) -> Result<Value, RpcError> {
-    let args = params_vec(&params);
-    let height = args
-        .first()
-        .and_then(|v| parse_u64(v, "height").ok())
-        .unwrap_or(0);
-    let hash_arg = args.get(1);
-    let leader_hash = hash_arg
-        .and_then(|v| parse_hash(v, "hash").ok())
-        .unwrap_or(Hash::zero());
-    // Minimal checkpoint built from existing types only (no new logic).
+    let (requested_height, requested_hash) = parse_light_client_checkpoint_params(&params)?;
+    let txn = state.storage.begin_read().map_err(internal)?;
+    let state_store = state.storage.state();
+
+    let header = match (requested_height, requested_hash) {
+        (Some(height), maybe_hash) => {
+            let Some(hdr) = state_store
+                .get_leader_header(&txn, height)
+                .map_err(internal)?
+            else {
+                return Ok(Value::Null);
+            };
+            if let Some(hash) = maybe_hash {
+                if hdr.leader_digest != hash && hdr.hash() != hash {
+                    return Err(RpcError::InvalidParams(format!(
+                        "leader at height 0x{height:x} has digest {}, not {}",
+                        to_hex(hdr.leader_digest.as_ref()),
+                        to_hex(hash.as_ref())
+                    )));
+                }
+            }
+            hdr
+        }
+        (None, Some(hash)) => {
+            let Some(hdr) = find_leader_header_by_hash(&state.storage, &hash)? else {
+                return Ok(Value::Null);
+            };
+            hdr
+        }
+        (None, None) => {
+            let Some(hdr) = state_store
+                .get_latest_leader_header(&txn)
+                .map_err(internal)?
+            else {
+                return Ok(Value::Null);
+            };
+            hdr
+        }
+    };
+
+    let height = header.committed_height;
+    let leader_round = header.leader_round;
+    let leader_hash = header.leader_digest;
+    let state_root = if header.state_root != Hash::zero() {
+        header.state_root
+    } else {
+        state_store
+            .get_state_root(&txn, height)
+            .map_err(internal)?
+            .unwrap_or(Hash::zero())
+    };
+
+    let seals = state_store.seals_for(&txn, height).map_err(internal)?;
+    let votes = state
+        .storage
+        .consensus()
+        .get_votes_for_round(&txn, leader_round)
+        .map_err(internal)?;
+    drop(txn);
+
+    let mut signatures = std::collections::BTreeMap::new();
+    for vote in &votes {
+        if vote.leader_hash == leader_hash {
+            signatures.insert(vote.voter, vote.signature);
+        }
+    }
+    for seal in &seals {
+        signatures
+            .entry(seal.authority_index)
+            .or_insert(seal.signature);
+    }
+
+    let committee = resolve_epoch_committee(&state, header.epoch).await?;
+    let computed_committee_hash = committee.as_ref().map(|c| {
+        let members: Vec<kovanica_types::SealCommitteeMember> = c
+            .authorities
+            .iter()
+            .map(|a| (a.index, a.public_key, a.stake))
+            .collect();
+        kovanica_types::committee_seal_hash(c.epoch, &members)
+    });
+    let committee_hash = if header.committee_hash != Hash::zero() {
+        header.committee_hash
+    } else {
+        computed_committee_hash.unwrap_or(Hash::zero())
+    };
+
     let wave = WaveCommitCertificate::new(
         leader_hash,
-        0,
+        leader_round,
         height,
-        std::collections::BTreeMap::new(),
-        Hash::zero(),
+        signatures,
+        committee_hash,
     );
-    let checkpoint =
-        LightClientCheckpoint::new(height, leader_hash, Hash::zero(), Hash::zero(), wave, 0);
-    // Verification exposes existing verify_quorum / verify_colouring (client-only,
-    // no new consensus logic). Callers supply a real Committee to run them.
-    let verified = false;
+
+    let quorum_ok = committee.as_ref().is_some_and(|c| wave.verify_quorum(c));
+    let colouring_ok = if header.mysticghost {
+        build_colouring_certificate(&state, &header)
+            .is_some_and(|cert| verify_colouring(&header, &cert).is_ok())
+    } else {
+        header.colouring_roots_match_flag()
+    };
+    let verified = quorum_ok && colouring_ok;
+
+    let mut checkpoint = LightClientCheckpoint::new(
+        height,
+        leader_hash,
+        state_root,
+        committee_hash,
+        wave,
+        header.timestamp,
+    );
+    checkpoint.header = Some(header.clone());
+    checkpoint.seals = seals;
+
     Ok(json!({
         "checkpoint": checkpoint,
         "verified": verified,
         "height": quantity(height),
         "hash": to_hex(leader_hash.as_ref()),
+        "headerHash": to_hex(header.hash().as_ref()),
+        "leaderRound": quantity(leader_round),
+        "stateRoot": to_hex(state_root.as_ref()),
+        "txMerkleRoot": to_hex(header.tx_merkle_root.as_ref()),
+        "executedTxRoot": to_hex(header.executed_tx_root.as_ref()),
+        "committeeHash": to_hex(committee_hash.as_ref()),
         "note": "read-only / client-only; no consensus change",
     }))
 }
@@ -2932,5 +3254,380 @@ mod tests {
         let rounds = leader_schedule_rounds(u64::MAX - 1, 3);
         assert_eq!(rounds.len(), 3);
         assert!(rounds.windows(2).all(|p| p[1] >= p[0]));
+    }
+
+    #[tokio::test]
+    async fn light_client_checkpoint_returns_null_for_missing_or_uncommitted() {
+        let (_dir, storage) = open_storage();
+        let state = test_state(storage.clone());
+
+        // Empty chain: latest, by height, and by hash all return null.
+        assert_eq!(
+            handle_light_client_checkpoint(Value::Null, state.clone())
+                .await
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            handle_light_client_checkpoint(json!([]), state.clone())
+                .await
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            handle_light_client_checkpoint(json!([0]), state.clone())
+                .await
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            handle_light_client_checkpoint(json!([hex32(0xaa)]), state.clone())
+                .await
+                .unwrap(),
+            Value::Null
+        );
+
+        // An uncommitted block present in the DAG / block store is not yet a
+        // committed checkpoint and must still return null.
+        let uncommitted_digest = StatementBlock::compute_digest(0, 3, &[], &[]);
+        let uncommitted = StatementBlock {
+            author: 0,
+            round: 3,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_types::Signature([0u8; 64]),
+            digest: uncommitted_digest,
+            merkle_root: Hash::zero(),
+        };
+        state
+            .consensus_store
+            .put_block(&uncommitted)
+            .expect("store uncommitted block in DAG");
+        assert_eq!(
+            handle_light_client_checkpoint(
+                json!([to_hex(uncommitted_digest.as_ref())]),
+                state.clone()
+            )
+            .await
+            .unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            handle_light_client_checkpoint(json!([0]), state.clone())
+                .await
+                .unwrap(),
+            Value::Null
+        );
+
+        // Malformed parameter shapes return InvalidParams.
+        assert!(matches!(
+            handle_light_client_checkpoint(json!(["not-a-height-or-hash"]), state.clone()).await,
+            Err(RpcError::InvalidParams(_))
+        ));
+        assert!(matches!(
+            handle_light_client_checkpoint(json!([0, hex32(0x11), 2]), state).await,
+            Err(RpcError::InvalidParams(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn light_client_checkpoint_populates_state_and_verifies_quorum() {
+        let (_dir, storage) = open_storage();
+
+        // Set up a 4-validator committee at epoch 0 so quorum requires 3 of 4.
+        let authorities: Vec<AuthorityInfo> = (0..4u16)
+            .map(|i| AuthorityInfo {
+                index: i,
+                stake: MIN_VALIDATOR_STAKE,
+                public_key: PublicKey([i as u8 + 1; 32]),
+                vrf_public_key: None,
+                address: Address([i as u8 + 1; 32]),
+                network_address: format!("127.0.0.1:900{i}"),
+            })
+            .collect();
+        let snapshot_members: Vec<kovanica_types::SealCommitteeSnapshotMember> = authorities
+            .iter()
+            .map(|a| kovanica_types::SealCommitteeSnapshotMember {
+                index: a.index,
+                public_key: a.public_key,
+                stake: a.stake,
+                vrf_public_key: a.vrf_public_key,
+            })
+            .collect();
+        let seal_members = kovanica_types::snapshot_seal_members(&snapshot_members);
+        let expected_committee_hash = kovanica_types::committee_seal_hash(0, &seal_members);
+
+        let tx_hash = Hash::new(b"checkpoint-tx-0");
+        let executed_root = merkle::root(&[tx_hash]);
+        let tx_merkle_root = Hash::new(b"leader-tx-merkle");
+        let leader_digest = Hash::new(b"committed-leader-3");
+        let state_root = Hash::new(b"state-root-height-1");
+        let header = LeaderHeader {
+            committed_height: 1,
+            leader_round: 3,
+            leader_digest,
+            leader_author: 0,
+            parent_leader_digest: Hash::zero(),
+            tx_merkle_root,
+            executed_tx_root: executed_root,
+            non_blue_root: Hash::zero(),
+            blue_root: Hash::zero(),
+            mysticghost: false,
+            state_root,
+            epoch: 0,
+            committee_hash: expected_committee_hash,
+            timestamp: 12_345,
+        };
+
+        // Write header, state root, epoch committee, and only 2 signatures (below 3-of-4 quorum).
+        {
+            let txn = storage.begin_write().unwrap();
+            storage.state().save_leader_header(&txn, &header).unwrap();
+            storage
+                .state()
+                .save_state_root(&txn, 1, &state_root)
+                .unwrap();
+            storage
+                .state()
+                .put_epoch_committee_if_absent(&txn, 0, &snapshot_members)
+                .unwrap();
+            storage
+                .state()
+                .save_commit_seal(
+                    &txn,
+                    1,
+                    &CommitSeal {
+                        authority_index: 0,
+                        signature: kovanica_types::Signature([0x10; 64]),
+                    },
+                )
+                .unwrap();
+            storage
+                .consensus()
+                .put_vote(
+                    &txn,
+                    &kovanica_types::Vote {
+                        leader_round: 3,
+                        leader_hash: leader_digest,
+                        voter: 1,
+                        signature: kovanica_types::Signature([0x11; 64]),
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        let mut state = test_state(storage.clone());
+        state.committee = Arc::new(RwLock::new(
+            CommitteeInfo::try_new(0, authorities).expect("4-validator committee"),
+        ));
+
+        // Sub-quorum (2 of 4 validators): checkpoint is returned with real roots, but verified == false.
+        let unverified = handle_light_client_checkpoint(json!([1]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(unverified["verified"], json!(false));
+        assert_eq!(unverified["height"], json!("0x1"));
+        assert_eq!(unverified["hash"], json!(to_hex(leader_digest.as_ref())));
+        assert_eq!(unverified["stateRoot"], json!(to_hex(state_root.as_ref())));
+        assert_eq!(
+            unverified["txMerkleRoot"],
+            json!(to_hex(tx_merkle_root.as_ref()))
+        );
+        assert_eq!(
+            unverified["executedTxRoot"],
+            json!(to_hex(executed_root.as_ref()))
+        );
+        assert_eq!(
+            unverified["committeeHash"],
+            json!(to_hex(expected_committee_hash.as_ref()))
+        );
+
+        // Add the 3rd validator's commit seal to reach quorum (3 of 4).
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_commit_seal(
+                    &txn,
+                    1,
+                    &CommitSeal {
+                        authority_index: 2,
+                        signature: kovanica_types::Signature([0x12; 64]),
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Lookup by height, by leader hash, by header hash, by object, and latest all return verified == true.
+        let by_height = handle_light_client_checkpoint(json!([1]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(by_height["verified"], json!(true));
+        let cp = &by_height["checkpoint"];
+        assert_eq!(cp["height"], json!(1));
+        assert_eq!(
+            cp["leader_hash"],
+            serde_json::to_value(leader_digest).unwrap()
+        );
+        assert_eq!(cp["state_root"], serde_json::to_value(state_root).unwrap());
+        assert_eq!(
+            cp["committee_hash"],
+            serde_json::to_value(expected_committee_hash).unwrap()
+        );
+        assert_eq!(cp["timestamp"], json!(12_345));
+        assert_eq!(cp["header"], serde_json::to_value(&header).unwrap());
+        assert_eq!(cp["seals"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            cp["wave_certificate"]["leader_hash"],
+            serde_json::to_value(leader_digest).unwrap()
+        );
+        assert_eq!(cp["wave_certificate"]["leader_round"], json!(3));
+        assert_eq!(cp["wave_certificate"]["committed_height"], json!(1));
+        assert_eq!(
+            cp["wave_certificate"]["signatures"]
+                .as_object()
+                .unwrap()
+                .len(),
+            3
+        );
+
+        let by_leader_hash =
+            handle_light_client_checkpoint(json!([to_hex(leader_digest.as_ref())]), state.clone())
+                .await
+                .unwrap();
+        assert_eq!(by_leader_hash, by_height);
+
+        let by_header_hash = handle_light_client_checkpoint(
+            json!({ "hash": to_hex(header.hash().as_ref()) }),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_header_hash, by_height);
+
+        let by_both = handle_light_client_checkpoint(
+            json!([1, to_hex(leader_digest.as_ref())]),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_both, by_height);
+
+        let latest = handle_light_client_checkpoint(Value::Null, state.clone())
+            .await
+            .unwrap();
+        assert_eq!(latest, by_height);
+
+        // Requesting an uncommitted future height returns null.
+        assert_eq!(
+            handle_light_client_checkpoint(json!([2]), state.clone())
+                .await
+                .unwrap(),
+            Value::Null
+        );
+
+        // Supplying a height and a hash that disagree returns InvalidParams.
+        assert!(matches!(
+            handle_light_client_checkpoint(json!([1, hex32(0xff)]), state).await,
+            Err(RpcError::InvalidParams(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn light_client_checkpoint_verifies_mysticghost_colouring() {
+        let (_dir, storage) = open_storage();
+        let state = test_state(storage.clone());
+
+        // Store a committed MysticGhost wave in the DAG store (1-validator committee in test_state).
+        let leader_digest = StatementBlock::compute_digest(0, 3, &[], &[]);
+        let leader_block = StatementBlock {
+            author: 0,
+            round: 3,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: kovanica_types::Signature([0u8; 64]),
+            digest: leader_digest,
+            merkle_root: Hash::zero(),
+        };
+        state
+            .consensus_store
+            .put_block(&leader_block)
+            .expect("store leader block");
+
+        let subdag = kovanica_types::CommittedSubDag {
+            blocks: vec![leader_block.clone()],
+            leader: leader_block,
+            leader_round: 3,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        let state_root = Hash::new(b"ghost-state-root");
+        let valid_ghost_header = kovanica_types::leader_header(
+            &subdag,
+            0,
+            Hash::zero(),
+            state_root,
+            0,
+            Hash::zero(),
+            true,
+        );
+
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_leader_header(&txn, &valid_ghost_header)
+                .unwrap();
+            storage
+                .state()
+                .save_commit_seal(
+                    &txn,
+                    0,
+                    &CommitSeal {
+                        authority_index: 0,
+                        signature: kovanica_types::Signature([0xaa; 64]),
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        let ok = handle_light_client_checkpoint(json!([0]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(ok["verified"], json!(true));
+
+        // Tamper with blue_root on a MysticGhost header at height 1: verify_colouring must fail.
+        let mut bad_ghost_header = valid_ghost_header.clone();
+        bad_ghost_header.committed_height = 1;
+        bad_ghost_header.blue_root = Hash::new(b"tampered-blue-root");
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_leader_header(&txn, &bad_ghost_header)
+                .unwrap();
+            storage
+                .state()
+                .save_commit_seal(
+                    &txn,
+                    1,
+                    &CommitSeal {
+                        authority_index: 0,
+                        signature: kovanica_types::Signature([0xbb; 64]),
+                    },
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        let bad = handle_light_client_checkpoint(json!([1]), state)
+            .await
+            .unwrap();
+        assert_eq!(bad["verified"], json!(false));
     }
 }
