@@ -205,7 +205,11 @@ pub fn verify_vote(
 ///
 /// The digest is recomputed first, so a valid signature cannot be replayed
 /// over modified transactions or parents.
-pub fn verify_block(keys: &AuthorityKeys, block: &StatementBlock) -> Result<(), Rejection> {
+pub fn verify_block(
+    keys: &AuthorityKeys,
+    chain_id: u64,
+    block: &StatementBlock,
+) -> Result<(), Rejection> {
     let digest = StatementBlock::compute_digest_statements(
         block.author,
         block.round,
@@ -226,7 +230,7 @@ pub fn verify_block(keys: &AuthorityKeys, block: &StatementBlock) -> Result<(), 
     let key = keys
         .get(&block.author)
         .ok_or(Rejection::UnknownAuthority(block.author))?;
-    kovanica_crypto::verify_block_signature(key, &block.digest, &block.signature)
+    kovanica_crypto::verify_block_signature(chain_id, key, &block.digest, &block.signature)
         .map_err(|_| Rejection::BadSignature(block.author))
 }
 
@@ -411,12 +415,17 @@ impl GossipValidator {
         )
     }
 
-    pub(crate) fn verify_block(&self, block: &StatementBlock) -> Result<(), Rejection> {
+    pub(crate) fn verify_block(
+        &self,
+        chain_id: u64,
+        block: &StatementBlock,
+    ) -> Result<(), Rejection> {
         verify_block(
             &self
                 .authority_keys
                 .read()
                 .unwrap_or_else(|e| e.into_inner()),
+            chain_id,
             block,
         )
     }
@@ -490,13 +499,14 @@ pub(crate) mod test_support {
 
     pub(crate) fn signed_block(signer: &kovanica_types::SigningKey, author: u16) -> StatementBlock {
         let digest = StatementBlock::compute_digest(author, 1, &[], &[]);
+        let msg = kovanica_types::block::block_signature_data(TEST_CTX.chain_id, &digest);
         StatementBlock {
             author,
             round: 1,
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(signer, digest.as_ref()),
+            signature: kovanica_crypto::sign(signer, &msg),
             digest,
             merkle_root: StatementBlock::compute_merkle_root(&[]),
         }
@@ -569,9 +579,22 @@ mod tests {
     }
 
     #[test]
+    fn block_for_other_chain_id_rejected() {
+        let (signers, keys) = committee(4);
+        let block = signed_block(&signers[1], 1);
+        assert_eq!(
+            verify_block(&keys, TEST_CTX.chain_id + 1, &block),
+            Err(Rejection::BadSignature(1))
+        );
+    }
+
+    #[test]
     fn valid_block_is_accepted() {
         let (signers, keys) = committee(4);
-        assert_eq!(verify_block(&keys, &signed_block(&signers[1], 1)), Ok(()));
+        assert_eq!(
+            verify_block(&keys, TEST_CTX.chain_id, &signed_block(&signers[1], 1)),
+            Ok(())
+        );
     }
 
     #[test]
@@ -582,7 +605,7 @@ mod tests {
         let mut tampered = original.clone();
         tampered.round = 2;
         assert_eq!(
-            verify_block(&keys, &tampered),
+            verify_block(&keys, TEST_CTX.chain_id, &tampered),
             Err(Rejection::DigestMismatch)
         );
     }
@@ -592,7 +615,10 @@ mod tests {
         let (signers, keys) = committee(4);
         let mut block = signed_block(&signers[1], 1);
         block.merkle_root = Hash::new(b"bogus");
-        assert_eq!(verify_block(&keys, &block), Err(Rejection::MerkleMismatch));
+        assert_eq!(
+            verify_block(&keys, TEST_CTX.chain_id, &block),
+            Err(Rejection::MerkleMismatch)
+        );
     }
 
     #[test]
@@ -600,11 +626,14 @@ mod tests {
         let (signers, keys) = committee(4);
         let mut block = signed_block(&signers[1], 1);
         block.signature = Signature([0; 64]);
-        assert_eq!(verify_block(&keys, &block), Err(Rejection::BadSignature(1)));
+        assert_eq!(
+            verify_block(&keys, TEST_CTX.chain_id, &block),
+            Err(Rejection::BadSignature(1))
+        );
 
         let block = signed_block(&signers[0], 7);
         assert_eq!(
-            verify_block(&keys, &block),
+            verify_block(&keys, TEST_CTX.chain_id, &block),
             Err(Rejection::UnknownAuthority(7))
         );
     }
@@ -618,7 +647,7 @@ mod tests {
             .verify_vote(&signed_vote(&signers[0], 0), &TEST_CTX)
             .is_err());
         assert!(validator
-            .verify_block(&signed_block(&signers[0], 0))
+            .verify_block(TEST_CTX.chain_id, &signed_block(&signers[0], 0))
             .is_err());
     }
 

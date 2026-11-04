@@ -1319,7 +1319,7 @@ impl NetworkService {
                     return Err("returned block does not match the request".to_string());
                 }
                 self.validator
-                    .verify_block(block)
+                    .verify_block(self.config.network_id.chain_id, block)
                     .map_err(|rejection| format!("synced block: {rejection}"))
             }
             BlockSyncResponse::MissingBlocks(hashes) if hashes.len() > MAX_MISSING_BLOCKS => {
@@ -1519,7 +1519,10 @@ impl NetworkService {
             debug!("committee keys not set; block gossip dropped unforwarded");
             return Verdict::Ignore;
         }
-        if let Err(rejection) = self.validator.verify_block(&block) {
+        if let Err(rejection) = self
+            .validator
+            .verify_block(self.config.network_id.chain_id, &block)
+        {
             warn!(round = block.round, author = block.author, %rejection, "rejected block gossip");
             return Verdict::rejected("block", rejection);
         }

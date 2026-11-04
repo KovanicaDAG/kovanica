@@ -2332,6 +2332,16 @@ mod tests {
     use super::*;
     const TEST_CTX: kovanica_types::SigningContext =
         kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL);
+
+    fn test_block_sig(
+        key: &kovanica_types::SigningKey,
+        digest: &Hash,
+    ) -> kovanica_types::Signature {
+        kovanica_crypto::sign(
+            key,
+            &kovanica_types::block::block_signature_data(TEST_CTX.chain_id, digest),
+        )
+    }
     use crate::types::AuthorityInfo;
     use kovanica_types::{block::BlockReference, crypto::PublicKey, Address};
     use parking_lot::Mutex;
@@ -2681,7 +2691,7 @@ mod tests {
                 parents: Vec::new(),
                 transactions: Vec::new(),
                 statements: Vec::new(),
-                signature: kovanica_crypto::sign(&self.key.read(), digest.as_ref()),
+                signature: test_block_sig(&self.key.read(), &digest),
                 digest,
                 merkle_root: Default::default(),
             };
@@ -2704,7 +2714,12 @@ mod tests {
                 return Ok(());
             }
             let public_key = PublicKey::from(self.key.read().verifying_key());
-            kovanica_crypto::verify_block_signature(&public_key, &block.digest, &block.signature)?;
+            kovanica_crypto::verify_block_signature(
+                TEST_CTX.chain_id,
+                &public_key,
+                &block.digest,
+                &block.signature,
+            )?;
             self.dag.put_block(block)?;
             Ok(())
         }
@@ -2909,8 +2924,13 @@ mod tests {
             .cloned()
             .expect("engine proposed a block");
         let public_key = PublicKey::from(key.verifying_key());
-        kovanica_crypto::verify_block_signature(&public_key, &proposal.digest, &proposal.signature)
-            .expect("proposal uses node-provided identity");
+        kovanica_crypto::verify_block_signature(
+            TEST_CTX.chain_id,
+            &public_key,
+            &proposal.digest,
+            &proposal.signature,
+        )
+        .expect("proposal uses node-provided identity");
     }
 
     /// A restarted node must resume after the rounds it already holds.
@@ -2984,7 +3004,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(key, digest.as_ref()),
+            signature: test_block_sig(key, &digest),
             digest,
             merkle_root: Default::default(),
         }
@@ -3139,7 +3159,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -3191,7 +3211,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -3249,7 +3269,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -3276,7 +3296,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -3300,7 +3320,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -3336,7 +3356,7 @@ mod tests {
                 parents: Vec::new(),
                 transactions: Vec::new(),
                 statements: Vec::new(),
-                signature: kovanica_crypto::sign(&key, digest.as_ref()),
+                signature: test_block_sig(&key, &digest),
                 digest,
                 merkle_root: Default::default(),
             }
@@ -3388,7 +3408,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -3414,7 +3434,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -3437,7 +3457,7 @@ mod tests {
             parents: vec![later_parent],
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, later_digest.as_ref()),
+            signature: test_block_sig(&key, &later_digest),
             digest: later_digest,
             merkle_root: Default::default(),
         };
@@ -3556,7 +3576,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, valid_digest.as_ref()),
+            signature: test_block_sig(&key, &valid_digest),
             digest: valid_digest,
             merkle_root: Default::default(),
         };
@@ -3575,7 +3595,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&wrong_key, invalid_digest.as_ref()),
+            signature: test_block_sig(&wrong_key, &invalid_digest),
             digest: invalid_digest,
             merkle_root: Default::default(),
         };
@@ -3583,6 +3603,30 @@ mod tests {
         // Process invalid block - should fail validation
         let result = engine.process_block(&invalid_block);
         assert!(result.is_err(), "Invalid block should be rejected");
+
+        // Block signed for different chain - should fail validation
+        let other_chain_digest = kovanica_types::StatementBlock::compute_digest(0, 5, &[], &[]);
+        let other_chain_sig = kovanica_crypto::sign(
+            &key,
+            &kovanica_types::block::block_signature_data(
+                TEST_CTX.chain_id + 1,
+                &other_chain_digest,
+            ),
+        );
+        let other_chain_block = kovanica_types::StatementBlock {
+            author: 0,
+            round: 5,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: other_chain_sig,
+            digest: other_chain_digest,
+            merkle_root: Default::default(),
+        };
+        assert!(
+            engine.process_block(&other_chain_block).is_err(),
+            "Block for different chain should be rejected"
+        );
 
         // Block should not be stored
         assert!(!dag.has_block(&invalid_digest).unwrap());
@@ -3701,7 +3745,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest_a.as_ref()),
+            signature: test_block_sig(&key, &digest_a),
             digest: digest_a,
             merkle_root: Default::default(),
         };
@@ -3720,7 +3764,7 @@ mod tests {
             parents: vec![fork_parent],
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest_b.as_ref()),
+            signature: test_block_sig(&key, &digest_b),
             digest: digest_b,
             merkle_root: Default::default(),
         };
@@ -3949,7 +3993,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, larger.as_ref()),
+            signature: test_block_sig(&key, &larger),
             digest: larger,
             merkle_root: Default::default(),
         };
@@ -3957,7 +4001,7 @@ mod tests {
 
         let block_small = kovanica_types::StatementBlock {
             digest: smaller,
-            signature: kovanica_crypto::sign(&key, smaller.as_ref()),
+            signature: test_block_sig(&key, &smaller),
             ..block_large.clone()
         };
         engine.process_block(&block_small).unwrap();
@@ -3975,7 +4019,7 @@ mod tests {
         let bigger = kovanica_types::Hash([0xff; 32]);
         let block_bigger = kovanica_types::StatementBlock {
             digest: bigger,
-            signature: kovanica_crypto::sign(&key, bigger.as_ref()),
+            signature: test_block_sig(&key, &bigger),
             ..block_large
         };
         let rejected = engine.process_block(&block_bigger);
@@ -4061,7 +4105,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&leader_key, digest_x.as_ref()),
+            signature: test_block_sig(&leader_key, &digest_x),
             digest: digest_x,
             merkle_root: Default::default(),
         };
@@ -4093,7 +4137,7 @@ mod tests {
 
         let block_y = kovanica_types::StatementBlock {
             digest: digest_y,
-            signature: kovanica_crypto::sign(&leader_key, digest_y.as_ref()),
+            signature: test_block_sig(&leader_key, &digest_y),
             ..block_x
         };
         engine.process_block(&block_y).unwrap();
@@ -4179,7 +4223,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -4410,7 +4454,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -4429,7 +4473,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -4549,7 +4593,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -4576,7 +4620,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -4750,7 +4794,7 @@ mod tests {
                 parents: Vec::new(),
                 transactions: Vec::new(),
                 statements: Vec::new(),
-                signature: kovanica_crypto::sign(&key, digest.as_ref()),
+                signature: test_block_sig(&key, &digest),
                 digest,
                 merkle_root: Default::default(),
             };
@@ -5142,7 +5186,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -5313,7 +5357,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(key, digest.as_ref()),
+            signature: test_block_sig(key, &digest),
             digest,
             merkle_root: Default::default(),
         }

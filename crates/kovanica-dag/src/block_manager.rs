@@ -411,8 +411,8 @@ impl BlockManager {
             .ok_or_else(|| BlockManagerError::Crypto(CryptoError::InvalidSignature))?
             .clone();
 
-        let digest_bytes = block.digest.as_ref();
-        let signature = crypto::sign(&signing_key, digest_bytes);
+        let sig_data = block.signature_data(self.signing_ctx.chain_id);
+        let signature = crypto::sign(&signing_key, &sig_data);
 
         block.signature = signature;
         Ok(block)
@@ -554,7 +554,12 @@ impl BlockManager {
             .ok_or_else(|| {
                 BlockManagerError::InvalidBlock(format!("unknown block author {}", block.author))
             })?;
-        crypto::verify_block_signature(&public_key, &block.digest, &block.signature)?;
+        crypto::verify_block_signature(
+            self.signing_ctx.chain_id,
+            &public_key,
+            &block.digest,
+            &block.signature,
+        )?;
         Ok(())
     }
 
@@ -750,6 +755,11 @@ mod tests {
     };
     const TEST_CTX: kovanica_types::SigningContext =
         kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::LOCAL);
+
+    fn test_block_sig(key: &SigningKey, digest: &Hash) -> Signature {
+        let msg = kovanica_types::block::block_signature_data(TEST_CTX.chain_id, digest);
+        crypto::sign(key, &msg)
+    }
     #[test]
     fn received_block_requires_committee_signature_and_matching_digest() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -766,7 +776,7 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -784,6 +794,47 @@ mod tests {
         unknown_author.author = 9;
         unknown_author.digest = StatementBlock::compute_digest(9, 1, &[], &[]);
         assert!(manager.validate_block(&unknown_author).is_err());
+    }
+
+    #[test]
+    fn block_signed_for_different_chain_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = kovanica_storage::Storage::new(dir.path().join("dag.redb")).unwrap();
+        let store = Arc::new(DagStore::new(storage).unwrap());
+        let manager = BlockManager::new(store, TEST_CTX);
+        let (key, public_key) = crypto::generate_keypair();
+        manager.set_authority_keys(HashMap::from([(0, public_key)]));
+
+        let digest = StatementBlock::compute_digest(0, 1, &[], &[]);
+        // Block signed for chain 1 (Mainnet) while manager is on chain 1337 (Local)
+        let other_chain_msg = kovanica_types::block::block_signature_data(
+            kovanica_types::signing::chain_id::MAINNET,
+            &digest,
+        );
+        let block_other_chain = StatementBlock {
+            author: 0,
+            round: 1,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: crypto::sign(&key, &other_chain_msg),
+            digest,
+            merkle_root: Default::default(),
+        };
+        assert!(manager.validate_block(&block_other_chain).is_err());
+
+        // Also raw digest signature must be rejected
+        let block_raw_sig = StatementBlock {
+            author: 0,
+            round: 1,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: crypto::sign(&key, digest.as_ref()),
+            digest,
+            merkle_root: Default::default(),
+        };
+        assert!(manager.validate_block(&block_raw_sig).is_err());
     }
 
     #[test]
@@ -822,7 +873,7 @@ mod tests {
             parents,
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(&key, child_digest.as_ref()),
+            signature: test_block_sig(&key, &child_digest),
             digest: child_digest,
             merkle_root: Default::default(),
         };
@@ -867,7 +918,7 @@ mod tests {
             parents,
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -908,7 +959,7 @@ mod tests {
             parents: genesis_parent,
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(&key, valid_digest.as_ref()),
+            signature: test_block_sig(&key, &valid_digest),
             digest: valid_digest,
             merkle_root: Default::default(),
         };
@@ -931,7 +982,7 @@ mod tests {
             parents: bad_parents,
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(&key, bad_digest.as_ref()),
+            signature: test_block_sig(&key, &bad_digest),
             digest: bad_digest,
             merkle_root: Default::default(),
         };
@@ -949,7 +1000,7 @@ mod tests {
             parents,
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(&key, digest.as_ref()),
+            signature: test_block_sig(&key, &digest),
             digest,
             merkle_root: Default::default(),
         };
@@ -1002,10 +1053,7 @@ mod tests {
             parents: parents.clone(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(
-                &key0,
-                StatementBlock::compute_digest(0, 1, &parents, &[]).as_ref(),
-            ),
+            signature: test_block_sig(&key0, &StatementBlock::compute_digest(0, 1, &parents, &[])),
             digest: StatementBlock::compute_digest(0, 1, &parents, &[]),
             merkle_root: Default::default(),
         };
@@ -1015,10 +1063,7 @@ mod tests {
             parents: parents.clone(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(
-                &key1,
-                StatementBlock::compute_digest(1, 1, &parents, &[]).as_ref(),
-            ),
+            signature: test_block_sig(&key1, &StatementBlock::compute_digest(1, 1, &parents, &[])),
             digest: StatementBlock::compute_digest(1, 1, &parents, &[]),
             merkle_root: Default::default(),
         };
@@ -1028,10 +1073,7 @@ mod tests {
             parents: parents.clone(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(
-                &key2,
-                StatementBlock::compute_digest(2, 1, &parents, &[]).as_ref(),
-            ),
+            signature: test_block_sig(&key2, &StatementBlock::compute_digest(2, 1, &parents, &[])),
             digest: StatementBlock::compute_digest(2, 1, &parents, &[]),
             merkle_root: Default::default(),
         };
@@ -1092,9 +1134,9 @@ mod tests {
                 parents: parents.clone(),
                 transactions: Vec::new(),
                 statements: Vec::new(),
-                signature: crypto::sign(
+                signature: test_block_sig(
                     key,
-                    StatementBlock::compute_digest(author, 1, &parents, &[]).as_ref(),
+                    &StatementBlock::compute_digest(author, 1, &parents, &[]),
                 ),
                 digest: StatementBlock::compute_digest(author, 1, &parents, &[]),
                 merkle_root: Default::default(),
@@ -1146,10 +1188,7 @@ mod tests {
             parents: parents.clone(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(
-                &key0,
-                StatementBlock::compute_digest(0, 1, &parents, &[]).as_ref(),
-            ),
+            signature: test_block_sig(&key0, &StatementBlock::compute_digest(0, 1, &parents, &[])),
             digest: StatementBlock::compute_digest(0, 1, &parents, &[]),
             merkle_root: Default::default(),
         };
@@ -1163,9 +1202,9 @@ mod tests {
             parents: parents.clone(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(
+            signature: test_block_sig(
                 &key99,
-                StatementBlock::compute_digest(99, 1, &parents, &[]).as_ref(),
+                &StatementBlock::compute_digest(99, 1, &parents, &[]),
             ),
             digest: StatementBlock::compute_digest(99, 1, &parents, &[]),
             merkle_root: Default::default(),
@@ -1258,7 +1297,7 @@ mod tests {
             parents: Vec::new(),
             transactions: txs,
             statements: Vec::new(),
-            signature: crypto::sign(key, digest.as_ref()),
+            signature: test_block_sig(key, &digest),
             digest,
             merkle_root,
         }
@@ -1581,7 +1620,7 @@ mod tests {
             parents,
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: crypto::sign(key, digest.as_ref()),
+            signature: test_block_sig(key, &digest),
             digest,
             merkle_root: Default::default(),
         }

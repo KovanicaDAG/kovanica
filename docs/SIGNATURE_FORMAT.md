@@ -1,17 +1,18 @@
 # KUNA Signature Format v1 (SPEC — FINAL)
 
 Status: **FINAL, implemented and merged on `main`** at `8170a82` as one release:
-#31 Foundation (`1a172cd`), #36 Execution (`6b18aef`), #37 Network (`a3ab81d`), #34 Consensus (`8170a82`).
-All crates use the v1 API; the golden vectors in §4 are unit tests in `kovanica-types`. CI on `8170a82` is green.
+#31 Foundation (`1a172cd`), #36 Execution (`6b18aef`), #37 Network (`a3ab81d`), #34 Consensus (`8170a82`),
+and PRO-20 (Block signature chain binding).
+All crates use the v1 API; the golden vectors in §5 are unit tests in `kovanica-types`. CI on `8170a82` is green.
 Owner: Exec-Foundation (kovanica-types / kovanica-crypto). Format decisions: Main.
 Address format (`kvnc…dag`) and `docs/TOKENOMICS.md` are not affected. Domain tags use the ticker **KUNA**. Crate and binary names are `kovanica-*`; the address prefix stays `kvnc`.
 
 ## Goals
 
-1. **Domain separation**: a vote signature can never be valid as a transaction signature, and the reverse is also true.
+1. **Domain separation**: a vote signature can never be valid as a transaction or block signature, and vice versa.
 2. **Replay protection across networks**: every signed message commits to `chain_id`.
 3. **Voter binding**: the vote commits to the voter's index and the epoch, so a signature cannot be reassigned to another committee slot or epoch.
-4. **Single format change**: everything that changes the signed bytes, including `Call.value`, lands in v1 at once.
+4. **Single format change**: everything that changes the signed bytes, including `Call.value` and block domain binding (PRO-20), lands in v1.
 
 ## Conventions
 
@@ -31,7 +32,7 @@ The downside (two networks could choose the same number) is handled by a registr
 in this document. The node MUST refuse to start if the configured `chain_id` does
 not match the one in its genesis config.
 
-Registry (**final**): `1` = mainnet, `2` = testnet, `3` = devnet, `1337` = local. The test vectors below use `chain_id = 2`.
+Registry (**final**): `1` = mainnet, `2` = testnet, `3` = devnet, `4` = testnet v2, `1337` = local. The test vectors below use `chain_id = 2` (or `chain_id = 1` for blocks).
 
 ## 1. Vote `signature_data` v2 (106 bytes, signed directly)
 
@@ -78,7 +79,7 @@ Preimage:
 | Stake          | 1      | `amount` u64 LE |
 | Unstake        | 2      | `amount` u64 LE |
 | Deploy         | 3      | `len(code)` u64 LE, `code` bytes |
-| Call           | 4      | `contract` 32 B, `value` u64 LE (new in v1, see §3), `len(method)` u64 LE, `method` UTF-8 bytes, `len(args)` u64 LE, `args`, `gas_limit` u64 LE |
+| Call           | 4      | `contract` 32 B, `value` u64 LE (new in v1, see §4), `len(method)` u64 LE, `method` UTF-8 bytes, `len(args)` u64 LE, `args`, `gas_limit` u64 LE |
 | Delegate       | 5      | `validator` 32 B, `amount` u64 LE |
 | ClaimRewards   | 6      | `0x00` (None) or `0x01` + `validator` 32 B |
 | RegisterLightNode | 7   | `vrf_public_key` 32 B, `stake` u64 LE |
@@ -101,14 +102,32 @@ stays equal to `signing_hash` (checked in `kovanica-dag/src/block_manager.rs:358
 Former (pre-v1) PROVISIONAL format, for reference: the same preimage **without** the first 24 bytes (tag + chain_id)
 and without `Call.value`. In v1 `kind` is byte-identical to PROVISIONAL **except** `Call`, which gains `value`.
 
-## 3. `value: u64` in `TransactionKind::Call` (decided: IN v1)
+## 3. Block `signature_data` v1 (56 bytes, signed directly) (PRO-20)
+
+| Offset | Size | Field          | Encoding                                  |
+|-------:|-----:|----------------|-------------------------------------------|
+| 0      | 16   | domain tag     | `DomainTag16("KUNA/block/v1")`            |
+| 16     | 8    | chain_id       | u64 LE                                    |
+| 24     | 32   | digest         | raw 32 bytes (`block.digest`)             |
+
+`signature = Ed25519.sign(sk_author, signature_data)` (the 56 bytes are signed directly without prehashing).
+The verifier MUST rebuild the message using its **own** configured `chain_id` and the block's `digest`, and look up
+`pubkey = committee[epoch][block.author]`. It must never take `chain_id` from the network message.
+
+The API contract is:
+- Single block: `verify_block_signature(chain_id: u64, public_key: &PublicKey, digest: &Hash, signature: &Signature) -> Result<(), CryptoError>`
+- Batch of blocks: `verify_batch(chain_id: u64, blocks: &[StatementBlock]) -> Result<bool, CryptoError>`
+
+Former (pre-PRO-20) format: `Ed25519.sign(sk_author, digest)` (32 raw bytes, without domain tag and without `chain_id`).
+
+## 4. `value: u64` in `TransactionKind::Call` (decided: IN v1)
 
 Requested by Exec-Execution and decided by Main. `Call` carries a signed `value: u64`, the native KUNA
 transferred to the contract. Position: right after `contract`, before `method`, 8 bytes u64 LE, **always present**
 (`0` when unused). There is no optional flag, so the encoding has a fixed shape. Adding the field to
 `TransactionKind::Call` is part of the v1 migration.
 
-## 4. Test vectors
+## 5. Test vectors
 
 Generated with a throwaway Rust program (`blake3 =1.5.1`, `ed25519-dalek 2.1`).
 Key: seed = `07` × 32 →
@@ -146,27 +165,38 @@ signing_hash = 9b76e7fc940641c6e11226b537841ace9ceb000a3943f6b3923b3cf2c6f4f794
 sig          = ce4e4d5dcc49159d2b6f72faa3210fe4db5b040e93eadbe315a159afe61f32ff66fc0abf9591c902500a1ce4e02d3816dbae80b8f1721725f03ed52b119f6608
 ```
 
+### B1: Block v1 (chain_id=1, digest=`11`×32)
+```
+len      = 56
+preimage = 4b554e412f626c6f636b2f763100000001000000000000001111111111111111111111111111111111111111111111111111111111111111
+sig      = 68c9290f99c396e18e2f65abb9d6b925de87a576d5fdef8a1c3e0c05dc9b23f7254deddbfd4dba99c6c3a30f30e59a9484920eb96b1ad40e6a40087228f02703
+```
+
 These vectors are golden tests in `kovanica-types`.
 
-## Migration
+## 6. Migration
 
 This is a hard fork of the signed bytes. Every node must switch at the same release, with no dual-acceptance
 window (accepting both formats would bring back the cross-chain replay that v1 removes).
 These changed **in the same release** (done, see status above):
 
-- **kovanica-types** (Foundation): `Vote::signature_data(ctx)`, `Transaction::signing_hash(ctx)`, `SigningContext { chain_id, epoch }`, `Hash::DOMAIN_TX` → `"KUNA-TX-v1"`, golden vectors. `TransactionKind::Call.value: u64`.
-- **kovanica-crypto** (Foundation): `verify_vote_signature(ctx, vote, pubkey)`.
-- **kovanica-consensus** (Consensus): `engine.rs:510` signs `vote.signature_data()`. `engine.rs:532` has a **duplicate** `vote_signature_data(leader_round, leader_hash)` helper with the old encoding. It must be deleted, not updated, so there is only one encoder. Vote verification must use the kovanica-crypto API.
+- **kovanica-types** (Foundation): `Vote::signature_data(ctx)`, `Transaction::signing_hash(ctx)`, `StatementBlock::signature_data(chain_id)`, `block_signature_data(chain_id, digest)`, `BLOCK_DOMAIN_TAG = "KUNA/block/v1"`, `SigningContext { chain_id, epoch }`, `Hash::DOMAIN_TX` → `"KUNA-TX-v1"`, golden vectors. `TransactionKind::Call.value: u64`.
+- **kovanica-crypto** (Foundation): `verify_vote_signature(ctx, vote, pubkey)`, `verify_block_signature(chain_id, pubkey, digest, signature)`, `verify_batch(chain_id, blocks)`.
+- **kovanica-consensus** (Consensus): `engine.rs:510` signs `vote.signature_data()`. `engine.rs:532` has a **duplicate** `vote_signature_data(leader_round, leader_hash)` helper with the old encoding. It must be deleted, not updated, so there is only one encoder. Vote and block verification must use the kovanica-crypto API with verifier-owned context/chain_id.
 - **kovanica-execution** (Execution): signing-hash callers (`lib.rs:904`), removal of the test-signature shortcut (`lib.rs:304-307`), and `Call.value` semantics (transfer `value` to the contract; insufficient balance = reject).
 - **kovanica-network / kovanica-rpc / kovanica-node** (Network): votes and txs on the wire stay the same shape except for `Call.value`. `chain_id` must be in node config and checked against genesis, and RPC `chain_methods.rs:795` must verify with the context.
 - **kovanica-mempool** (`lib.rs:410,451`), **kovanica-dag** (`block_manager.rs:358`), **kovanica-cli**, **kovanica-faucet** (`main.rs:341`), and test helpers in `kovanica-node/tests/live_vote_integration.rs:215`: pass the `chain_id`.
 - Genesis/config: add `chain_id`. Existing devnets must be reset (old signatures do not verify).
 
-### Call-site checklist (DONE, all merged in `8170a82`)
+*(Note: If downstream external packages like `kovanica-protocol` mirror these formats, they will be updated in their respective repository separately).*
+
+### Call-site checklist (DONE, all merged in `8170a82` + PRO-20)
 
 Implemented API (kovanica-types / kovanica-crypto): `Vote::signature_data(&ctx)`, `Transaction::signing_hash(&ctx)`,
 `Transaction::verify_signature(&ctx)`, `kovanica_crypto::verify_vote_signature(&ctx, &vote, &pubkey)`,
-`TransactionKind::Call { contract, value, method, args, gas_limit }`, `Hash::DOMAIN_TX = "KUNA-TX-v1"`.
+`StatementBlock::signature_data(chain_id)`, `kovanica_crypto::verify_block_signature(chain_id, &pk, &digest, &sig)`,
+`kovanica_crypto::verify_batch(chain_id, &blocks)`,
+`TransactionKind::Call { contract, value, method, args, gas_limit }`, `Hash::DOMAIN_TX = "KUNA-TX-v1"`, `BLOCK_DOMAIN_TAG = "KUNA/block/v1"`.
 `SigningContext::new(chain_id).with_epoch(epoch)` builds a context; the verifier must create it from its **own**
 config and epoch. `kovanica-cli` and `kovanica-faucet` need `--chain-id` (no default).
 Line numbers are historical (against `main` at the time of the migration PR); every row below is done.
@@ -182,3 +212,4 @@ Line numbers are historical (against `main` at the time of the migration PR); ev
 | Network | `kovanica-rpc/src/chain_methods.rs:173,814` | `Call.value` field; `signing_hash(&ctx)` | done |
 | Network | `kovanica-mempool/src/lib.rs:272,282,682,723`, `kovanica-dag/src/block_manager.rs:358` | `signing_hash(&ctx)` / `verify_signature(&ctx)` | done |
 | Execution | `kovanica-execution/src/lib.rs:381,904` | `Call.value` semantics; `signing_hash(&ctx)` | done |
+| Foundation | `kovanica-types` / `kovanica-crypto` | PRO-20: block signature binds `KUNA/block/v1` + `chain_id` | done |

@@ -40,25 +40,41 @@ fn check_block_vector(sig_hex: &str) {
     let bad_vk = VerifyingKey::from_bytes(&b32(SMALL_ORDER_PK)).unwrap();
     kovanica_crypto::set_validator_keys(vec![good_sk.verifying_key(), bad_vk]);
 
+    let chain_id = 1337;
     let digest = StatementBlock::compute_digest(0, 1, &[], &[]);
-    let n0 = block(0, digest, sign(&good_sk, digest.as_ref()));
+    let msg = kovanica_types::block::block_signature_data(chain_id, &digest);
+    let n0 = block(0, digest, sign(&good_sk, &msg));
     let nx = block(1, digest, Signature(b64(sig_hex)));
 
-    // Sanity: the dalek batch path really does accept this vector.
+    // Sanity: the dalek batch path really does accept this vector over the message.
     assert!(ed25519_dalek::verify_batch(
-        &[digest.as_ref()],
+        &[&msg],
         &[ed25519_dalek::Signature::from_bytes(&nx.signature.0)],
         &[bad_vk]
     )
     .is_ok());
 
-    assert!(
-        verify_block_signature(&PublicKey(b32(SMALL_ORDER_PK)), &digest, &nx.signature).is_err()
-    );
-    assert!(verify_batch(std::slice::from_ref(&n0)).is_ok());
-    assert!(verify_batch(std::slice::from_ref(&nx)).is_err());
-    assert!(verify_batch(&[n0.clone(), nx.clone()]).is_err());
-    assert!(verify_batch(&[nx, n0]).is_err());
+    assert!(verify_block_signature(
+        chain_id,
+        &PublicKey(b32(SMALL_ORDER_PK)),
+        &digest,
+        &nx.signature
+    )
+    .is_err());
+    assert!(verify_batch(chain_id, std::slice::from_ref(&n0)).is_ok());
+    assert!(verify_batch(chain_id, std::slice::from_ref(&nx)).is_err());
+    assert!(verify_batch(chain_id, &[n0.clone(), nx.clone()]).is_err());
+    assert!(verify_batch(chain_id, &[nx, n0.clone()]).is_err());
+
+    // Cross-chain verification must fail
+    assert!(verify_block_signature(
+        chain_id + 1,
+        &PublicKey(good_sk.verifying_key().to_bytes()),
+        &digest,
+        &n0.signature
+    )
+    .is_err());
+    assert!(verify_batch(chain_id + 1, std::slice::from_ref(&n0)).is_err());
 }
 
 fn check_tx_vector(sig_hex: &str) {

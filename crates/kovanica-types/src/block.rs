@@ -31,6 +31,22 @@ pub fn is_vrf_statement(statements: &[u8]) -> bool {
     statements.len() >= VRF_STATEMENT_LEN && statements[..9] == VRF_STATEMENT_MAGIC[..]
 }
 
+/// Length in bytes of the block signature preimage (`KUNA/block/v1` 16 B ‖ chain_id 8 B ‖ digest 32 B).
+pub const BLOCK_SIGNATURE_DATA_LEN: usize = 56;
+
+/// Canonical bytes signed for a block (signature format v1, 56 bytes).
+///
+/// Layout (PRO-20):
+/// `DomainTag16("KUNA/block/v1")` (16 bytes) || `chain_id` u64 LE (8 bytes) || `digest` (32 bytes).
+#[must_use]
+pub fn block_signature_data(chain_id: u64, digest: &Hash) -> [u8; BLOCK_SIGNATURE_DATA_LEN] {
+    let mut data = [0u8; BLOCK_SIGNATURE_DATA_LEN];
+    data[..16].copy_from_slice(&crate::signing::BLOCK_DOMAIN_TAG);
+    data[16..24].copy_from_slice(&chain_id.to_le_bytes());
+    data[24..56].copy_from_slice(&digest.0);
+    data
+}
+
 /// Reference to a block in the DAG (author + round + digest).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct BlockReference {
@@ -134,6 +150,12 @@ impl StatementBlock {
     pub fn verify_tx_inclusion(tx_hash: &Hash, proof: &MerkleProof, root: &Hash) -> bool {
         merkle::verify(tx_hash, proof, root)
     }
+
+    /// Canonical 56-byte message signed for this block on `chain_id` (signature format v1).
+    #[must_use]
+    pub fn signature_data(&self, chain_id: u64) -> [u8; BLOCK_SIGNATURE_DATA_LEN] {
+        block_signature_data(chain_id, &self.digest)
+    }
 }
 
 /// Simplified Block alias used in higher layers.
@@ -143,7 +165,8 @@ pub type Block = StatementBlock;
 mod tests {
     use super::*;
     use crate::address::Address;
-    use crate::crypto::Signature;
+    use crate::crypto::{PublicKey, Signature, SigningKey};
+    use ed25519_dalek::Signer;
 
     fn dummy_tx(hash: Hash) -> Transaction {
         Transaction {
@@ -157,6 +180,61 @@ mod tests {
             signature: Signature([0; 64]),
             hash,
         }
+    }
+
+    #[test]
+    fn block_signature_data_layout() {
+        let digest = Hash([0x11; 32]);
+        let data = block_signature_data(1, &digest);
+        assert_eq!(data.len(), BLOCK_SIGNATURE_DATA_LEN);
+        assert_eq!(data.len(), 56);
+        assert_eq!(&data[..16], &crate::signing::BLOCK_DOMAIN_TAG);
+        assert_eq!(&data[16..24], &1u64.to_le_bytes());
+        assert_eq!(&data[24..56], &digest.0);
+    }
+
+    #[test]
+    fn block_signature_data_binds_chain_id() {
+        let digest = Hash([0x11; 32]);
+        let mainnet_data = block_signature_data(crate::signing::chain_id::MAINNET, &digest);
+        let testnet4_data = block_signature_data(crate::signing::chain_id::TESTNET_V2, &digest);
+        assert_ne!(mainnet_data, testnet4_data);
+    }
+
+    #[test]
+    fn block_signature_golden_vector() {
+        // Standard test key: seed = 07 * 32
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let pk = PublicKey::from(sk.verifying_key());
+        assert_eq!(
+            hex::encode(pk.0),
+            "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c"
+        );
+
+        let digest = Hash([0x11; 32]);
+        let chain_id = 1u64; // Mainnet
+        let data = block_signature_data(chain_id, &digest);
+        assert_eq!(
+            hex::encode(data),
+            "4b554e412f626c6f636b2f763100000001000000000000001111111111111111111111111111111111111111111111111111111111111111"
+        );
+
+        let sig: Signature = sk.sign(&data).into();
+        let sig_hex = hex::encode(sig.0);
+        // Verify strict passes on matching chain
+        assert!(sig.verify_strict(&data, &pk));
+
+        // Verify fails on chain 4 (Testnet v2)
+        let data_chain4 = block_signature_data(4, &digest);
+        assert!(!sig.verify_strict(&data_chain4, &pk));
+
+        // Verify fails on raw digest
+        assert!(!sig.verify_strict(digest.as_ref(), &pk));
+
+        assert_eq!(
+            sig_hex,
+            "68c9290f99c396e18e2f65abb9d6b925de87a576d5fdef8a1c3e0c05dc9b23f7254deddbfd4dba99c6c3a30f30e59a9484920eb96b1ad40e6a40087228f02703"
+        );
     }
 
     #[test]

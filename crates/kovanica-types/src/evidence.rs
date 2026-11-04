@@ -68,6 +68,14 @@ impl SignedBlockHeader {
         self.signature
             .verify_strict(self.digest.as_ref(), &public_key)
     }
+
+    /// Whether the signature is a valid strict Ed25519 signature by `author`
+    /// bound to `chain_id` via PRO-20.
+    pub fn verify_chain(&self, chain_id: u64) -> bool {
+        let public_key = PublicKey(self.author.0);
+        let data = crate::block::block_signature_data(chain_id, &self.digest);
+        self.signature.verify_strict(&data, &public_key)
+    }
 }
 
 /// Why a pair of headers is not valid equivocation evidence.
@@ -125,10 +133,41 @@ impl EquivocationEvidence {
         if a.digest == b.digest {
             return Err(EvidenceError::SameDigest);
         }
-        if !a.verify() || !b.verify() {
-            return Err(EvidenceError::BadSignature);
+        // Valid if both verify under legacy raw digest, or both verify under the same chain ID.
+        if a.verify() && b.verify() {
+            return Ok(a.author);
         }
-        Ok(a.author)
+        for chain_id in [
+            crate::signing::chain_id::MAINNET,
+            crate::signing::chain_id::TESTNET,
+            crate::signing::chain_id::DEVNET,
+            crate::signing::chain_id::TESTNET_V2,
+            crate::signing::chain_id::LOCAL,
+        ] {
+            if a.verify_chain(chain_id) && b.verify_chain(chain_id) {
+                return Ok(a.author);
+            }
+        }
+        Err(EvidenceError::BadSignature)
+    }
+
+    /// Validate the evidence specifically for `chain_id`. Both headers must verify
+    /// under that chain's binding (or legacy raw digest).
+    pub fn offender_for_chain(&self, chain_id: u64) -> Result<Address, EvidenceError> {
+        let (a, b) = (&self.header_a, &self.header_b);
+        if a.author != b.author {
+            return Err(EvidenceError::AuthorMismatch);
+        }
+        if a.round != b.round {
+            return Err(EvidenceError::RoundMismatch);
+        }
+        if a.digest == b.digest {
+            return Err(EvidenceError::SameDigest);
+        }
+        if (a.verify_chain(chain_id) || a.verify()) && (b.verify_chain(chain_id) || b.verify()) {
+            return Ok(a.author);
+        }
+        Err(EvidenceError::BadSignature)
     }
 
     /// Round both headers belong to.
@@ -266,5 +305,74 @@ mod tests {
         assert!(ev.is_fresh_at(1_000));
         assert!(ev.is_fresh_at(1_000 + EVIDENCE_MAX_AGE_ROUNDS));
         assert!(!ev.is_fresh_at(1_000 + EVIDENCE_MAX_AGE_ROUNDS + 1));
+    }
+
+    #[test]
+    fn chain_bound_evidence_accepted_and_cross_chain_rejected() {
+        let k = key(5);
+        let author = Address(k.verifying_key().to_bytes());
+        let round = 10;
+        let d1 = Hash::new(b"chain-bound-1");
+        let d2 = Hash::new(b"chain-bound-2");
+
+        let sig1 = Signature(
+            ed25519_dalek::Signer::sign(&k, &crate::block::block_signature_data(1, &d1)).to_bytes(),
+        );
+        let sig2 = Signature(
+            ed25519_dalek::Signer::sign(&k, &crate::block::block_signature_data(1, &d2)).to_bytes(),
+        );
+
+        let ev_chain1 = EquivocationEvidence {
+            header_a: SignedBlockHeader {
+                author,
+                round,
+                digest: d1,
+                signature: sig1,
+            },
+            header_b: SignedBlockHeader {
+                author,
+                round,
+                digest: d2,
+                signature: sig2,
+            },
+        };
+
+        // Verifies for chain 1 and generic offender()
+        assert_eq!(ev_chain1.offender_for_chain(1), Ok(author));
+        assert_eq!(ev_chain1.offender(), Ok(author));
+
+        // Rejected on chain 4 (cross-chain replay)
+        assert_eq!(
+            ev_chain1.offender_for_chain(4),
+            Err(EvidenceError::BadSignature)
+        );
+
+        // Split-chain headers (header_a on chain 1, header_b on chain 4) rejected
+        let sig2_chain4 = Signature(
+            ed25519_dalek::Signer::sign(&k, &crate::block::block_signature_data(4, &d2)).to_bytes(),
+        );
+        let ev_split = EquivocationEvidence {
+            header_a: SignedBlockHeader {
+                author,
+                round,
+                digest: d1,
+                signature: sig1,
+            },
+            header_b: SignedBlockHeader {
+                author,
+                round,
+                digest: d2,
+                signature: sig2_chain4,
+            },
+        };
+        assert_eq!(ev_split.offender(), Err(EvidenceError::BadSignature));
+        assert_eq!(
+            ev_split.offender_for_chain(1),
+            Err(EvidenceError::BadSignature)
+        );
+        assert_eq!(
+            ev_split.offender_for_chain(4),
+            Err(EvidenceError::BadSignature)
+        );
     }
 }

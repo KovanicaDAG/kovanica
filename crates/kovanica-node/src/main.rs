@@ -3771,7 +3771,10 @@ fn handle_network_event(
     match event {
         NetworkEvent::BlockReceived { peer, block } => {
             // Hot-path validation (audit 3.1): verify signature before engine.process_block
-            if let Err(e) = kovanica_crypto::verify_batch(std::slice::from_ref(&block)) {
+            if let Err(e) = kovanica_crypto::verify_batch(
+                mempool.signing_context().chain_id,
+                std::slice::from_ref(&block),
+            ) {
                 warn!(digest = %block.digest, error = %e, "rejected invalid block signature in main hot path");
                 return;
             }
@@ -6372,7 +6375,13 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&signing_key, digest.as_ref()),
+            signature: kovanica_crypto::sign(
+                &signing_key,
+                &kovanica_types::block::block_signature_data(
+                    kovanica_types::signing::chain_id::LOCAL,
+                    &digest,
+                ),
+            ),
             digest,
             merkle_root: Default::default(),
         };
@@ -8306,7 +8315,10 @@ mod tests {
             digest,
             merkle_root: Hash::zero(),
         };
-        next_leader.signature = kovanica_crypto::sign(&key, next_leader.digest.as_ref());
+        next_leader.signature = kovanica_crypto::sign(
+            &key,
+            &kovanica_types::block::block_signature_data(1337, &next_leader.digest),
+        );
         let vote = vote_sync_test_vote(&key, next_leader_round, next_leader.digest);
 
         handle_network_event(
@@ -9092,7 +9104,13 @@ mod tests {
             parents: Vec::new(),
             transactions: Vec::new(),
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: kovanica_crypto::sign(
+                &key,
+                &kovanica_types::block::block_signature_data(
+                    kovanica_types::signing::chain_id::LOCAL,
+                    &digest,
+                ),
+            ),
             digest,
             merkle_root: Default::default(),
         };
