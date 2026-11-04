@@ -7,8 +7,9 @@
 #                                     # multi-process cluster tests (see gate_test)
 #   bash scripts/ci-local.sh cluster  # the cluster tests the gate leaves out
 #   bash scripts/ci-local.sh audit    # cargo audit against .cargo/audit.toml
+#   bash scripts/ci-local.sh licenses # cargo deny check licenses against deny.toml
 #   bash scripts/ci-local.sh secrets  # gitleaks over the whole git history
-#   bash scripts/ci-local.sh all      # fmt, clippy, test, secrets
+#   bash scripts/ci-local.sh all      # fmt, clippy, test, licenses, secrets
 #
 # .github/workflows/ci.yml runs these exact subcommands, so a green local run
 # means a green CI run (same toolchain from rust-toolchain.toml, same flags).
@@ -105,6 +106,16 @@ function gate_audit() {
     "$CARGO" audit
 }
 
+function gate_licenses() {
+    need "$CARGO"
+    if ! "$CARGO" deny --version >/dev/null 2>&1; then
+        echo "ERROR: cargo-deny not installed (cargo install cargo-deny --locked)" >&2
+        exit 1
+    fi
+    echo "== licenses: cargo deny check licenses (deny.toml)"
+    "$CARGO" deny check licenses
+}
+
 function gate_secrets() {
     if ! command -v gitleaks >/dev/null 2>&1; then
         if [[ "${GITLEAKS_STRICT:-0}" == "1" ]]; then
@@ -135,16 +146,18 @@ case "${1:-all}" in
     test) gate_test ;;
     cluster) gate_cluster ;;
     audit) gate_audit ;;
+    licenses) gate_licenses ;;
     secrets) gate_secrets ;;
     all)
         gate_fmt
         gate_clippy
         gate_test
+        gate_licenses
         gate_secrets
         echo "== gate passed"
         ;;
     *)
-        echo "usage: bash scripts/ci-local.sh [fmt|clippy|test|cluster|audit|secrets|all]" >&2
+        echo "usage: bash scripts/ci-local.sh [fmt|clippy|test|cluster|audit|licenses|secrets|all]" >&2
         exit 2
         ;;
 esac

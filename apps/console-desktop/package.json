@@ -22,5 +22,5 @@
     "vite": "^6.4.4",
     "vitest": "^4.1.12"
   },
-  "license": "Apache-2.0"
+  "license": "GPL-3.0-or-later"
 }

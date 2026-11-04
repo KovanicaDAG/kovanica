@@ -1,0 +1,42 @@
+# cargo-deny configuration (https://github.com/EmbarkStudios/cargo-deny)
+# PRO-36: Project license policy gate.
+# Written owner decision (Toni, 2026-11-03, Option 2):
+# - Project relicensed to GPL-3.0-or-later to match statically linked ecvrf 0.4.3.
+# - Rejects unexpected copyleft licenses (e.g. AGPL-*, GPL-2.0, LGPL-*, SSPL).
+# - Allows permissive dependency licenses and GPL-3.0-or-later (workspace + ecvrf 0.4.3).
+
+[graph]
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "wasm32-unknown-unknown" },
+]
+
+[licenses]
+confidence-threshold = 0.8
+
+# Allowed licenses list is exhaustive. Anything not listed here fails the gate.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    # GPL-3.0-or-later: Workspace packages and statically linked ecvrf 0.4.3 (PRO-36).
+    # All other copyleft families (AGPL, GPL-2.0, LGPL, etc.) are strictly forbidden.
+    "GPL-3.0-or-later",
+]
+
+# Explicit exception documentation for ecvrf 0.4.3 per PRO-36
+[[licenses.exceptions]]
+allow = ["GPL-3.0-or-later"]
+name = "ecvrf"
+version = "0.4.3"

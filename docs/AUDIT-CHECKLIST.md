@@ -17,6 +17,7 @@ Based on `docs/SEED-DNS-AUDIT.md` (port 8000 vs 9000 gap) and HARD RULES.
 - [ ] Crypto: Ed25519 signatures (64-byte / 128 hex), address derivation, key handling client-only
 - [ ] P2P: eclipse / Sybil resistance, peer discovery, gossip limits
 - [ ] Node / RPC: `KOVANICA_RPC_AUTH=disable` documented for test only; production must enforce auth; no key/seed passed to node
+- [ ] Licensing & Copyleft: verify GPL-3.0-or-later project relicensing (PRO-36 Option 2, written owner decision Toni 2026-11-03) and compatibility with statically linked `ecvrf` 0.4.3; license gate enforced via cargo-deny in CI
 
 ## 3. Live node verification (repeat before release)
 - [ ] Run `curl -s http://<kovanica-node>/api/bootstrap | jq` against a **kovanica** node (local or own testnet)
