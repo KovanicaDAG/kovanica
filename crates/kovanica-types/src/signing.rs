@@ -47,6 +47,8 @@ pub const TX_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/tx/v1");
 /// Distinct from [`VOTE_DOMAIN_TAG`]. A seal covers the executed state and
 /// the MysticGhost roots; a vote covers only the leader block hash.
 pub const COMMIT_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/commit/v1");
+/// Domain tag (16 bytes, `0x00`-padded) of block `signature_data` v1 (PRO-20).
+pub const BLOCK_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/block/v1");
 
 /// `DomainTag16(s)`: ASCII `s` right-padded with `0x00` to exactly 16 bytes.
 ///
@@ -109,6 +111,8 @@ mod tests {
         assert!(VOTE_DOMAIN_TAG[12..].iter().all(|b| *b == 0));
         assert_eq!(&TX_DOMAIN_TAG[..10], b"KUNA/tx/v1");
         assert!(TX_DOMAIN_TAG[10..].iter().all(|b| *b == 0));
+        assert_eq!(&BLOCK_DOMAIN_TAG[..13], b"KUNA/block/v1");
+        assert!(BLOCK_DOMAIN_TAG[13..].iter().all(|b| *b == 0));
     }
 
     #[test]

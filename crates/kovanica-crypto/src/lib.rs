@@ -78,13 +78,15 @@ pub fn verify(
         .map_err(|_| CryptoError::VerificationFailed)
 }
 
-/// Convenience: verify block signature.
+/// Convenience: verify block signature bound to `chain_id` (signature format v1, PRO-20).
 pub fn verify_block_signature(
+    chain_id: u64,
     public_key: &PublicKey,
     digest: &Hash,
     signature: &Signature,
 ) -> Result<(), CryptoError> {
-    verify(public_key, digest.as_ref(), signature)
+    let msg = kovanica_types::block::block_signature_data(chain_id, digest);
+    verify(public_key, &msg, signature)
 }
 
 /// Convenience: verify transaction signature.
@@ -201,7 +203,7 @@ pub fn verify_vote_signature(
         .map_err(|_| SigError::VerificationFailed)
 }
 
-/// Verify a set of block signatures.
+/// Verify a set of block signatures bound to `chain_id` (PRO-20).
 ///
 /// The only decisive check is per-item Ed25519 `verify_strict` (see
 /// `docs/BLOCK_SIGNATURE_V2.md`, "Strogo svugdje"). `ed25519_dalek::verify_batch`
@@ -212,13 +214,17 @@ pub fn verify_vote_signature(
 ///
 /// Returns `Ok(true)` iff every signature is valid; an invalid signature is a
 /// hard error (`CryptoError::VerificationFailed`).
-pub fn verify_batch(blocks: &[kovanica_types::block::StatementBlock]) -> Result<bool, CryptoError> {
+pub fn verify_batch(
+    chain_id: u64,
+    blocks: &[kovanica_types::block::StatementBlock],
+) -> Result<bool, CryptoError> {
     let mut ordered: Vec<&kovanica_types::block::StatementBlock> = blocks.iter().collect();
     ordered.sort_by_key(|b| b.round);
     for b in ordered {
         let vk = get_validator_key(b.author).ok_or(CryptoError::InvalidPublicKey)?;
         let sig = DalekSignature::from_bytes(&b.signature.0);
-        vk.verify_strict(b.digest.as_ref(), &sig)
+        let msg = kovanica_types::block::block_signature_data(chain_id, &b.digest);
+        vk.verify_strict(&msg, &sig)
             .map_err(|_| CryptoError::VerificationFailed)?;
     }
     Ok(true)
@@ -242,11 +248,13 @@ mod batch_tests {
 
         set_validator_keys(keys.iter().map(|(_, vk)| *vk).collect());
 
+        let chain_id = 1337;
         let msg = b"batch-test-4";
         let mut blocks: Vec<StatementBlock> = Vec::with_capacity(4);
         for (i, (sk, _vk)) in keys.iter().enumerate() {
             let digest = Hash::new_keyed(Hash::DOMAIN_BLOCK, msg);
-            let sig = sk.sign(digest.as_ref());
+            let sig_msg = kovanica_types::block::block_signature_data(chain_id, &digest);
+            let sig = sk.sign(&sig_msg);
             blocks.push(StatementBlock {
                 author: i as u16,
                 round: (i as u64) % 2,
@@ -258,7 +266,68 @@ mod batch_tests {
                 merkle_root: Default::default(),
             });
         }
-        assert!(verify_batch(&blocks).unwrap());
+        assert!(verify_batch(chain_id, &blocks).unwrap());
+        // Verify fails on other chain_id
+        assert!(verify_batch(chain_id + 1, &blocks).is_err());
+    }
+}
+
+#[cfg(test)]
+mod block_sig_tests {
+    use super::*;
+    use kovanica_types::block::{block_signature_data, StatementBlock};
+    use kovanica_types::signing::chain_id;
+
+    #[test]
+    fn block_signature_cross_chain_replay_rejected() {
+        let (sk, pk) = generate_keypair();
+        let digest = StatementBlock::compute_digest(0, 1, &[], &[]);
+
+        // Author signs for Mainnet (chain 1)
+        let mainnet_msg = block_signature_data(chain_id::MAINNET, &digest);
+        let sig = sign(&sk, &mainnet_msg);
+
+        // Verification on Mainnet succeeds
+        assert!(verify_block_signature(chain_id::MAINNET, &pk, &digest, &sig).is_ok());
+
+        // Replay on Testnet v2 (chain 4) fails
+        assert!(verify_block_signature(chain_id::TESTNET_V2, &pk, &digest, &sig).is_err());
+
+        // Author signs for Testnet v2 (chain 4)
+        let testnet4_msg = block_signature_data(chain_id::TESTNET_V2, &digest);
+        let sig4 = sign(&sk, &testnet4_msg);
+
+        // Verification on Testnet v2 succeeds
+        assert!(verify_block_signature(chain_id::TESTNET_V2, &pk, &digest, &sig4).is_ok());
+
+        // Replay on Mainnet fails
+        assert!(verify_block_signature(chain_id::MAINNET, &pk, &digest, &sig4).is_err());
+
+        // Old legacy signature over raw digest only must fail on any v2 chain
+        let raw_sig = sign(&sk, digest.as_ref());
+        assert!(verify_block_signature(chain_id::MAINNET, &pk, &digest, &raw_sig).is_err());
+        assert!(verify_block_signature(chain_id::TESTNET_V2, &pk, &digest, &raw_sig).is_err());
+    }
+
+    #[test]
+    fn block_signature_tampering_rejected() {
+        let (sk, pk) = generate_keypair();
+        let digest = StatementBlock::compute_digest(0, 1, &[], &[]);
+        let chain = chain_id::TESTNET_V2;
+        let sig = sign(&sk, &block_signature_data(chain, &digest));
+
+        // Wrong digest
+        let other_digest = StatementBlock::compute_digest(1, 1, &[], &[]);
+        assert!(verify_block_signature(chain, &pk, &other_digest, &sig).is_err());
+
+        // Wrong public key
+        let (_other_sk, other_pk) = generate_keypair();
+        assert!(verify_block_signature(chain, &other_pk, &digest, &sig).is_err());
+
+        // Tampered signature
+        let mut bad_sig = sig;
+        bad_sig.0[0] ^= 0x01;
+        assert!(verify_block_signature(chain, &pk, &digest, &bad_sig).is_err());
     }
 }
 

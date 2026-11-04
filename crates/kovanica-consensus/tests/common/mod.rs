@@ -461,7 +461,13 @@ impl BlockManagerTrait for MockBlockManager {
             parents,
             transactions,
             statements: Vec::new(),
-            signature: kovanica_crypto::sign(&key, digest.as_ref()),
+            signature: kovanica_crypto::sign(
+                &key,
+                &kovanica_types::block::block_signature_data(
+                    kovanica_types::signing::chain_id::LOCAL,
+                    &digest,
+                ),
+            ),
             digest,
         };
         self.dag.put(block.clone());

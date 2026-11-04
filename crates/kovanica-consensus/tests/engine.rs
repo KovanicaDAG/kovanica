@@ -275,8 +275,23 @@ async fn test_engine_round_loop_advances_proposes_and_stops() {
         .get_by_index(0)
         .expect("local validator is in committee")
         .public_key;
-    kovanica_crypto::verify_block_signature(&public_key, &proposal.digest, &proposal.signature)
-        .expect("startup installed the explicitly configured validator key");
+    kovanica_crypto::verify_block_signature(
+        kovanica_types::signing::chain_id::LOCAL,
+        &public_key,
+        &proposal.digest,
+        &proposal.signature,
+    )
+    .expect("startup installed the explicitly configured validator key");
+    assert!(
+        kovanica_crypto::verify_block_signature(
+            kovanica_types::signing::chain_id::LOCAL + 1,
+            &public_key,
+            &proposal.digest,
+            &proposal.signature,
+        )
+        .is_err(),
+        "proposal signature must be rejected for wrong chain"
+    );
 }
 
 fn make_block_received(round: kovanica_types::Round) -> kovanica_types::block::StatementBlock {

@@ -1581,7 +1581,7 @@ impl ExecutionContext {
             ));
         }
         let offender = evidence
-            .offender()
+            .offender_for_chain(self.signing_ctx.chain_id)
             .map_err(|e| ExecutionError::Validation(format!("invalid evidence: {e}")))?;
         if !evidence.is_fresh_at(leader_round) {
             return Err(ExecutionError::Validation(format!(

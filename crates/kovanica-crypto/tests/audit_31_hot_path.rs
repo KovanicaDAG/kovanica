@@ -9,26 +9,28 @@ fn reject_invalid_block_signature_at_hot_path() {
         ed25519_dalek::VerifyingKey::from_bytes(&vk.0).expect("vk valid")
     ]);
     let _pk = vk;
+    let chain_id = 1337;
     let digest = StatementBlock::compute_digest(0, 1, &[], &[]);
+    let msg = kovanica_types::block::block_signature_data(chain_id, &digest);
     let valid = StatementBlock {
         author: 0,
         round: 1,
         parents: vec![],
         transactions: vec![],
         statements: vec![],
-        signature: sign(&sk, digest.as_ref()),
+        signature: sign(&sk, &msg),
         digest,
         merkle_root: Default::default(),
     };
     assert!(
-        verify_batch(std::slice::from_ref(&valid)).is_ok(),
+        verify_batch(chain_id, std::slice::from_ref(&valid)).is_ok(),
         "valid passes"
     );
 
     let mut bad = valid.clone();
     bad.signature = Signature([0; 64]);
     assert!(
-        verify_batch(&[bad.clone()]).is_err(),
+        verify_batch(chain_id, &[bad.clone()]).is_err(),
         "INVALID BLOCK REJECTED AT HOT PATH (sig)"
     );
     // Audit 3.1 pass: bad signature rejected before engine.process_block
