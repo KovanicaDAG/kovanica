@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Kovanica Node desktop app"
 authors = ["Kovanica Team"]
 edition = "2021"
-license = "Apache-2.0"
+license = "GPL-3.0-or-later"
 
 [workspace]
 

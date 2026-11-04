@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Kovanica Console desktop app"
 authors = ["Kovanica Team"]
 edition = "2021"
-license = "Apache-2.0"
+license = "GPL-3.0-or-later"
 
 # Standalone app workspace. The repository root lists its members explicitly,
 # and this shell must not join that list.

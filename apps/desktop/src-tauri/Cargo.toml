@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Kovanica Comms desktop client (Tauri v2 shell)"
 authors = ["Kovanica Team"]
 edition = "2021"
-license = "Apache-2.0"
+license = "GPL-3.0-or-later"
 
 # This crate is intentionally NOT a member of the repository-root Cargo
 # workspace (whose `members` list names crates explicitly). Declaring an empty

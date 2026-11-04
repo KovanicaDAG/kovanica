@@ -1,6 +1,6 @@
 name: CI
 
-# The quality gate: formatting, lints, tests, secret scan. Every step is the
+# The quality gate: formatting, lints, tests, licenses, secret scan. Every step is the
 # matching subcommand of scripts/ci-local.sh, so CI and a local run cannot
 # drift (`bash scripts/ci-local.sh all` reproduces this workflow).
 #
@@ -69,6 +69,19 @@ jobs:
         # machine and run via `bash scripts/ci-local.sh cluster` before a
         # release. See the script.
         run: bash scripts/ci-local.sh test
+
+  licenses:
+    name: cargo deny (licenses)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: License check (cargo deny)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          command-arguments: licenses
 
   secrets:
     name: gitleaks (full history)

@@ -148,7 +148,17 @@ no gossip
 
 ---
 
-## 5. Summary & Recommendations
+## 5. `cargo-deny` — License Compliance & Copyleft Policy
+
+**Command:** `cargo deny check licenses`  
+**Configuration:** `deny.toml`  
+**Exit Code:** 0 (PASSED)  
+**Policy:** Rejects unexpected copyleft (AGPL-*, GPL-2.0, LGPL-*, SSPL). Exhaustive allowlist permits standard permissive licenses (`MIT`, `Apache-2.0`, `BSD-*`, `ISC`, `CC0-1.0`, `Zlib`, `Unlicense`, `Unicode-3.0`, `MPL-2.0`).  
+**Resolution (PRO-36):** Per written owner decision (Toni, 2026-11-03, Option 2), project relicensed to `GPL-3.0-or-later` to ensure legal compatibility with statically linked `ecvrf` 0.4.3 (used for consensus VRF leader election) while preserving proof wire format (96 B) and framing (`b"KUNA-VRF1"`). Explicitly documented in `deny.toml` and verified in CI.
+
+---
+
+## 6. Summary & Recommendations
 
 ### Immediate Actions (Pre-Audit)
 
@@ -177,7 +187,7 @@ no gossip
 
 ---
 
-## 6. Tool Versions
+## 7. Tool Versions
 
 ```
 rustc 1.81.0 (2024-09-04)

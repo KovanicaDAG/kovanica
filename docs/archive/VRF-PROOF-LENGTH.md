@@ -199,13 +199,12 @@ as *open* because they were out of the authorised edit scope.
    input differ. `beta` stays deterministic (verified by
    `crates/kovanica-crypto/src/vrf.rs` test `vrf_hash_deterministic`), so leader
    selection is unaffected.
-4. **Licence of the dependency (not previously flagged).** `ecvrf` 0.4.3 is
-   **GPL-3.0-or-later** (`ecvrf-0.4.3/Cargo.toml:20`), while the project root
-   `LICENSE` is **Apache-2.0**. The crate is statically linked into
-   `kovanica-node`/`kovanica-cli`, so this needs an owner/legal review — and an
-   external auditor should be told about it. Not mentioned in
-   `AUDIT_REPORT.md` / `AUTOMATED_SECURITY_CHECKS.md`; see
-   `docs/AUDIT-SCOPE.md` §2.6.
+4. **Licence of the dependency.** `ecvrf` 0.4.3 is
+   **GPL-3.0-or-later** (`ecvrf-0.4.3/Cargo.toml:20`). Because `ecvrf` is
+   statically linked into `kovanica-node`/`kovanica-cli`, the written owner
+   decision (Toni, 2026-11-03, PRO-36 Option 2) adopted **GPL-3.0-or-later**
+   for the Kovanica repository, resolving compatibility while preserving the
+   normative 96-byte proof layout and wire format. See `docs/AUDIT-SCOPE.md` §2.6.
 5. **Pinned `curve25519-dalek` 3.2.0.** `ecvrf` 0.4.3 depends on dalek 3.2.0
    (the tree otherwise uses 4.1.3 / 5.0.0), which carries **RUSTSEC-2024-0344**
    (timing variability in `Scalar` subtraction) — and the VRF response is
