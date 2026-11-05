@@ -45,6 +45,18 @@ pub const TARGET_BLOCK_MS: u64 = 4_000;
 /// Hybrid PoW + GHOSTDAG default parameter k (Toni 2026-11-05).
 pub const GHOSTDAG_K: u32 = 5;
 
+/// Initial/maximum target bits for hybrid PoW testnet (Chain 5).
+/// Compact representation `0x1f00ffff` (exponent 31, mantissa 0x00ffff).
+pub const INITIAL_TARGET_BITS_CHAIN5: u32 = 0x1f00_ffff;
+/// Minimum difficulty target bits (ceiling on target, easiest difficulty).
+pub const MAX_TARGET_BITS: u32 = 0x1f00_ffff;
+/// Maximum difficulty target bits (floor on target, hardest difficulty).
+pub const MIN_TARGET_BITS: u32 = 0x0100_0001;
+/// Default DAA adjustment window in blocks.
+pub const DAA_WINDOW_BLOCKS: u64 = 60;
+/// Maximum future timestamp drift in milliseconds (30 seconds).
+pub const MAX_FUTURE_TIMESTAMP_DRIFT_MS: u64 = 30_000;
+
 // Legacy Mysticeti timing constants (still in tree until hybrid flag):
 pub const WAVE_LENGTH: u64 = 3;
 pub const EPOCH_ROUNDS: u64 = 7_200;

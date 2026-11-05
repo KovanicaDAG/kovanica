@@ -1,7 +1,7 @@
-# PoW Block Header Specification (P1–P2)
+# PoW Block Header & Mining Specification (P1–P4)
 
-- **Status:** Implemented (P1–P2, Toni 2026-11-05, ADR 0003)
-- **Scope:** Block header primitives, preimage serialization, compact difficulty target conversion, and Chain ID 5 registry wiring.
+- **Status:** Implemented (P1–P4, Toni 2026-11-05, ADR 0003)
+- **Scope:** Block header primitives, preimage serialization, compact difficulty target conversion, KovanicaHash PoW algorithm, header verification wiring, mining worker, and difficulty adjustment algorithm (DAA) for Chain ID 5.
 
 ---
 
@@ -66,3 +66,68 @@ Functions in `kovanica_types::block`:
 - `compact_to_target(bits: u32) -> [u8; 32]`
 - `target_to_compact(target: &[u8; 32]) -> u32`
 - `check_pow_hash_meets_target(hash: &Hash, target_bits: u32) -> bool` (checks `hash.0 <= target` lexicographically as big-endian 256-bit unsigned integers)
+
+---
+
+## 4. KovanicaHash PoW Algorithm (P3)
+
+KovanicaHash is a memory-hard proof-of-work hasher combining BLAKE3 with a 2 MiB pseudo-random memory mix buffer. It is designed to be lightweight on 2–4 GB RAM VPS nodes while resisting ASIC/SRAM parallelization.
+
+### Algorithm Constants
+- Memory Size: `KOVANICA_HASH_MEMORY_SIZE = 2 * 1024 * 1024` (2,097,152 bytes)
+- Chunk Size: `KOVANICA_HASH_CHUNK_SIZE = 32` bytes
+- Total Chunks: `KOVANICA_HASH_NUM_CHUNKS = 65,536` ($2^{16}$)
+- Mix Rounds: `KOVANICA_HASH_MIX_ROUNDS = 1,024`
+- Seed Domain Tag: `KVNC-POW-SEED-v1`
+- Finalize Domain Tag: `KVNC-POW-FINL-v1`
+
+### Phases
+1. **Seed Phase:**
+   The 132+ byte canonical header preimage is hashed using BLAKE3 keyed mode under `KVNC-POW-SEED-v1` to generate a 32-byte initial seed.
+2. **Memory Mix Phase:**
+   - **Generation:** BLAKE3 in extendable output (XOF) mode keyed with the seed fills the 2 MiB buffer deterministically (65,536 chunks of 32 bytes).
+   - **Wandering & Mutation:** Running state starts at seed. For 1,024 rounds:
+     - Unbiased chunk index: `u16::from_le_bytes([state[0], state[1]])`.
+     - Chunk is read and mixed into state using non-linear 64-bit wrapping arithmetic, XORs, and bit-rotations (`rotate_left(17, 29, 37, 43)`).
+     - State is written back to the chunk offset, creating a read-write memory dependency.
+     - Step index is XOR-folded into state.
+3. **Finalize Phase:**
+   A final keyed BLAKE3 compression under `KVNC-POW-FINL-v1` digests the seed, mixed state, and boundary memory samples (first 32 bytes and last 32 bytes) to produce the final 32-byte `Hash`.
+
+### Golden Test Vectors
+- Empty Preimage (`b""`):
+  `05cca3939da23b1b771692875380dd70d953c98ba5498468a683add6aaa2a623`
+- 132-byte Preimage (`[0x5a; 132]`):
+  `cce556a21d6efee5463d39911877bab564d5fbe70f6b07fea1dfad2c1ccb2db4`
+- Fixed String (`b"KVNC-CHAIN5-HYBRID-POW-TEST-PREIMAGE"`):
+  `ba2bbe92ef378bdbf970bdde68a2d5cffaaea4c5aa02c9146ddd9b1765b8b262`
+
+---
+
+## 5. Header Verification & Timestamps (P3)
+
+Header verification in `kovanica_types::block` enforces:
+1. `pow_hash` must be present (`HeaderError::MissingPowHash`).
+2. Declared `pow_hash` must match `compute_pow_hash()` (`HeaderError::InvalidPowHash`).
+3. Declared `pow_hash` must meet `target_bits` via `check_pow_hash_meets_target` (`HeaderError::TargetNotMet`).
+4. `target_bits` must be non-zero and valid (`HeaderError::InvalidTargetBits`).
+5. Timestamp drift: header timestamp cannot exceed local wall-clock time plus `MAX_FUTURE_TIMESTAMP_DRIFT_MS = 30_000` ms (`HeaderError::TimestampDrift`).
+6. Monotonicity: header timestamp must be strictly greater than parent timestamps (`HeaderError::TimestampNotMonotonic`).
+
+---
+
+## 6. Mining Worker & DAA Primitives (P4)
+
+Implemented in `kovanica-consensus`:
+- `mine_header(mut header: BlockHeader, max_iterations: u64) -> Option<BlockHeader>`: Synchronous nonce search reusing a single 2 MiB context.
+- `mine_header_async(header: BlockHeader, max_iterations: u64) -> Option<BlockHeader>`: Async background mining.
+- `MiningWorker`: Reusable mining worker struct with preallocated memory buffer.
+- `NodeMiner`: Node-level mining wrapper with integrated DAA calculations.
+
+### Difficulty Adjustment Algorithm (DAA)
+- Target block time: `TARGET_BLOCK_MS = 4000` ms (4 s).
+- Adjustment window: `DAA_WINDOW_BLOCKS = 60` blocks.
+- Max adjustment factor: 4x / 0.25x clamping per window.
+- Ceiling: `MAX_TARGET_BITS = 0x1f00_ffff`.
+- Floor: `MIN_TARGET_BITS = 0x0100_0001`.
+- Math helper: `mul_div_u256(val, num, den)` provides exact 320-bit intermediate multi-limb arithmetic.

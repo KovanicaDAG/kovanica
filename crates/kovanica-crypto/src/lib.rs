@@ -9,6 +9,11 @@ pub use vrf::{
     vrf_verify, VRFError, VRFKeyPair, VRFOutput,
 };
 
+pub use kovanica_types::pow::{
+    kovanica_hash, KovanicaHasher, KOVANICA_HASH_CHUNK_SIZE, KOVANICA_HASH_MEMORY_SIZE,
+    KOVANICA_HASH_MIX_ROUNDS, KOVANICA_HASH_NUM_CHUNKS,
+};
+
 use ed25519_dalek::Signature as DalekSignature;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use kovanica_types::crypto::{PublicKey, Signature};

@@ -227,6 +227,52 @@ pub type PowHeader = BlockHeader;
 /// Alias for [`BlockHeader`].
 pub type HeaderV2 = BlockHeader;
 
+/// Errors that can occur during block header PoW verification.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
+pub enum HeaderError {
+    /// The header does not have a PoW hash declared.
+    #[error("Missing PoW hash on block header")]
+    MissingPowHash,
+    /// The declared PoW hash does not match the computed KovanicaHash.
+    #[error("Invalid PoW hash: computed {computed}, declared {declared}")]
+    InvalidPowHash {
+        /// Hash computed from the header preimage.
+        computed: Hash,
+        /// Hash declared on the block header.
+        declared: Hash,
+    },
+    /// The PoW hash does not satisfy the difficulty target.
+    #[error("PoW target not met: hash {hash} does not satisfy target_bits {target_bits:#010x}")]
+    TargetNotMet {
+        /// The PoW hash that failed the check.
+        hash: Hash,
+        /// The compact target bits that were not satisfied.
+        target_bits: u32,
+    },
+    /// The header timestamp is too far in the future relative to local clock.
+    #[error("Timestamp drift exceeded: header timestamp {timestamp} ms, local clock {now} ms")]
+    TimestampDrift {
+        /// Header timestamp in unix milliseconds.
+        timestamp: u64,
+        /// Current wall-clock time in unix milliseconds.
+        now: u64,
+    },
+    /// The header timestamp is not strictly greater than parent timestamps.
+    #[error("Timestamp not monotonic: header timestamp {timestamp} ms <= parent timestamp {parent_timestamp} ms")]
+    TimestampNotMonotonic {
+        /// Header timestamp in unix milliseconds.
+        timestamp: u64,
+        /// Offending parent timestamp in unix milliseconds.
+        parent_timestamp: u64,
+    },
+    /// Invalid target bits representation (e.g. zero or negative).
+    #[error("Invalid compact target bits: {0:#010x}")]
+    InvalidTargetBits(u32),
+    /// Invalid parent references or round sequence.
+    #[error("Invalid parent references")]
+    InvalidParents,
+}
+
 impl Default for BlockHeader {
     fn default() -> Self {
         Self {
@@ -348,6 +394,81 @@ impl BlockHeader {
             .pow_hash
             .unwrap_or_else(|| self.header_preimage_digest());
         check_pow_hash_meets_target(&hash, self.target_bits)
+    }
+
+    /// Compute the KovanicaHash PoW hash for this header's canonical preimage.
+    #[must_use]
+    pub fn compute_pow_hash(&self) -> Hash {
+        crate::pow::kovanica_hash(&self.preimage())
+    }
+
+    /// Compute the KovanicaHash PoW hash using an existing [`crate::pow::KovanicaHasher`] buffer.
+    pub fn compute_pow_hash_with(&self, hasher: &mut crate::pow::KovanicaHasher) -> Hash {
+        hasher.hash(&self.preimage())
+    }
+
+    /// Verify this header's PoW hash and difficulty target.
+    ///
+    /// Validates that:
+    /// 1. `pow_hash` is present.
+    /// 2. `target_bits` produces a non-zero valid target.
+    /// 3. Declared `pow_hash` equals `compute_pow_hash()`.
+    /// 4. Declared `pow_hash` meets `target_bits`.
+    pub fn verify_pow(&self) -> Result<(), HeaderError> {
+        self.verify_pow_with_clock(None)
+    }
+
+    /// Verify this header's PoW hash, difficulty target, and future timestamp drift.
+    pub fn verify_pow_with_clock(&self, now_ms: Option<u64>) -> Result<(), HeaderError> {
+        let declared = self.pow_hash.ok_or(HeaderError::MissingPowHash)?;
+
+        let target = compact_to_target(self.target_bits);
+        if target == [0u8; 32] {
+            return Err(HeaderError::InvalidTargetBits(self.target_bits));
+        }
+
+        let computed = self.compute_pow_hash();
+        if declared != computed {
+            return Err(HeaderError::InvalidPowHash { computed, declared });
+        }
+
+        if !check_pow_hash_meets_target(&declared, self.target_bits) {
+            return Err(HeaderError::TargetNotMet {
+                hash: declared,
+                target_bits: self.target_bits,
+            });
+        }
+
+        if let Some(now) = now_ms {
+            if self.timestamp > now.saturating_add(kovanica_params::MAX_FUTURE_TIMESTAMP_DRIFT_MS) {
+                return Err(HeaderError::TimestampDrift {
+                    timestamp: self.timestamp,
+                    now,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Full verification of this header against parent timestamps and current wall clock.
+    pub fn verify_pow_full(
+        &self,
+        parent_timestamps: &[u64],
+        now_ms: Option<u64>,
+    ) -> Result<(), HeaderError> {
+        self.verify_pow_with_clock(now_ms)?;
+
+        for &parent_ts in parent_timestamps {
+            if self.timestamp <= parent_ts {
+                return Err(HeaderError::TimestampNotMonotonic {
+                    timestamp: self.timestamp,
+                    parent_timestamp: parent_ts,
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// Return a [`BlockReference`] corresponding to this header.
@@ -893,5 +1014,86 @@ mod pow_header_tests {
 
         header.pow_hash = Some(Hash(greater));
         assert!(!header.meets_target());
+    }
+
+    #[test]
+    fn block_header_compute_and_verify_pow() {
+        let mut header = BlockHeader::new(
+            5,
+            1,
+            0,
+            vec![],
+            Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff, // Easiest target: top byte <= 0x7f (~50% pass rate)
+            0,
+        );
+
+        // Missing pow_hash fails
+        assert_eq!(header.verify_pow(), Err(HeaderError::MissingPowHash));
+
+        // Compute real pow hash
+        let pow_hash = header.compute_pow_hash();
+        assert_eq!(pow_hash, crate::pow::kovanica_hash(&header.preimage()));
+
+        // Invalid declared pow_hash fails
+        header.pow_hash = Some(Hash([0xaa; 32]));
+        assert!(matches!(
+            header.verify_pow(),
+            Err(HeaderError::InvalidPowHash { .. })
+        ));
+
+        // Set correct pow_hash
+        header.pow_hash = Some(pow_hash);
+
+        // If target is too strict, fails TargetNotMet
+        header.target_bits = 0x04000001; // extremely strict valid target
+        let strict_hash = header.compute_pow_hash();
+        header.pow_hash = Some(strict_hash);
+        assert_eq!(
+            header.verify_pow(),
+            Err(HeaderError::TargetNotMet {
+                hash: strict_hash,
+                target_bits: 0x04000001,
+            })
+        );
+
+        // Reset target_bits to maximum possible target ([0xff; 32]) and recompute hash
+        header.target_bits = 0x22010000;
+        header.pow_hash = Some(header.compute_pow_hash());
+
+        // Invalid target bits (zero)
+        let mut zero_target_header = header.clone();
+        zero_target_header.target_bits = 0;
+        zero_target_header.pow_hash = Some(zero_target_header.compute_pow_hash());
+        assert_eq!(
+            zero_target_header.verify_pow(),
+            Err(HeaderError::InvalidTargetBits(0))
+        );
+
+        // Valid header passes
+        assert!(header.verify_pow().is_ok());
+
+        // Timestamp drift check
+        let now = 1_700_000_000_000;
+        assert!(header.verify_pow_with_clock(Some(now)).is_ok());
+        // In past is ok
+        assert!(header.verify_pow_with_clock(Some(now + 100_000)).is_ok());
+        // Far in future (> 30s) fails
+        let drifted = header.verify_pow_with_clock(Some(now - 35_000));
+        assert!(matches!(drifted, Err(HeaderError::TimestampDrift { .. })));
+
+        // Parent timestamp monotonicity check
+        let parent_ts = 1_699_999_999_000;
+        assert!(header
+            .verify_pow_full(&[parent_ts], Some(now + 1_000))
+            .is_ok());
+
+        // Header timestamp <= parent timestamp fails
+        let non_monotonic = header.verify_pow_full(&[1_700_000_000_000], Some(now + 1_000));
+        assert!(matches!(
+            non_monotonic,
+            Err(HeaderError::TimestampNotMonotonic { .. })
+        ));
     }
 }
