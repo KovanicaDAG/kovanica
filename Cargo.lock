@@ -2955,6 +2955,7 @@ dependencies = [
  "kovanica-htlc",
  "kovanica-mempool",
  "kovanica-multisig",
+ "kovanica-params",
  "kovanica-staking",
  "kovanica-storage",
  "kovanica-token",

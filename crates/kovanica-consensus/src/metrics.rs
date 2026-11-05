@@ -77,6 +77,91 @@ static MYSTICGHOST_PRUNED_WAVES_TOTAL: Lazy<Counter> = Lazy::new(|| {
     counter
 });
 
+/// Estimated PoW hashrate in H/s.
+static POW_HASHRATE_ESTIMATE: Lazy<Gauge> = Lazy::new(|| {
+    let gauge = Gauge::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "pow_hashrate_estimate",
+        "Estimated PoW hashrate in hashes per second",
+        gauge.clone(),
+    );
+    gauge
+});
+
+/// Total number of PoW blocks mined locally.
+static POW_BLOCKS_MINED_TOTAL: Lazy<Counter> = Lazy::new(|| {
+    let counter = Counter::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "pow_blocks_mined_total",
+        "Total number of PoW blocks mined locally",
+        counter.clone(),
+    );
+    counter
+});
+
+/// Total number of blue blocks sequenced by GHOSTDAG.
+static GHOSTDAG_BLUE_BLOCKS_TOTAL: Lazy<Counter> = Lazy::new(|| {
+    let counter = Counter::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "ghostdag_blue_blocks_total",
+        "Total number of blue blocks sequenced by GHOSTDAG",
+        counter.clone(),
+    );
+    counter
+});
+
+/// Total number of red blocks sequenced by GHOSTDAG.
+static GHOSTDAG_RED_BLOCKS_TOTAL: Lazy<Counter> = Lazy::new(|| {
+    let counter = Counter::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "ghostdag_red_blocks_total",
+        "Total number of red blocks sequenced by GHOSTDAG",
+        counter.clone(),
+    );
+    counter
+});
+
+/// Number of active DAG tips tracked by GHOSTDAG committer.
+static GHOSTDAG_TIPS_COUNT: Lazy<Gauge> = Lazy::new(|| {
+    let gauge = Gauge::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "ghostdag_tips_count",
+        "Number of active DAG tips tracked by GHOSTDAG committer",
+        gauge.clone(),
+    );
+    gauge
+});
+
+/// Record one mined PoW block.
+pub fn record_pow_mined_block() {
+    POW_BLOCKS_MINED_TOTAL.inc();
+}
+
+/// Set estimated PoW hashrate in H/s.
+pub fn set_pow_hashrate(hashrate: i64) {
+    POW_HASHRATE_ESTIMATE.set(hashrate);
+}
+
+/// Record blue blocks count.
+pub fn record_ghostdag_blue_blocks(count: u64) {
+    GHOSTDAG_BLUE_BLOCKS_TOTAL.inc_by(count);
+}
+
+/// Record red blocks count.
+pub fn record_ghostdag_red_blocks(count: u64) {
+    GHOSTDAG_RED_BLOCKS_TOTAL.inc_by(count);
+}
+
+/// Set active DAG tips count.
+pub fn set_ghostdag_tips(count: usize) {
+    GHOSTDAG_TIPS_COUNT.set(count as i64);
+}
+
 /// Record mergeset size.
 pub fn record_mergeset_size(size: usize) {
     MYSTICGHOST_MERGESET_SIZE.set(size as i64);

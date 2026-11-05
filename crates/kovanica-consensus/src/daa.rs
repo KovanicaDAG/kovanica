@@ -178,6 +178,80 @@ pub fn calculate_next_target_bits(
     target_to_compact(&new_target)
 }
 
+use kovanica_dag::DagStore;
+use kovanica_types::hash::Hash;
+use std::collections::{HashSet, VecDeque};
+
+/// Select parent hashes from recent DAG tips for block authoring on Chain 5.
+#[must_use]
+pub fn select_parents_from_tips(dag_store: &DagStore, max_parents: usize) -> Vec<Hash> {
+    let max_round = match dag_store.max_dag_round() {
+        Ok(Some(r)) => r,
+        _ => return Vec::new(),
+    };
+
+    let mut parents = Vec::new();
+    let mut round = max_round;
+    loop {
+        if let Ok(blocks) = dag_store.get_blocks_by_round(round) {
+            for block in blocks {
+                if !parents.contains(&block.digest) {
+                    parents.push(block.digest);
+                    if parents.len() >= max_parents {
+                        return parents;
+                    }
+                }
+            }
+        }
+        if round == 0 || parents.len() >= max_parents {
+            break;
+        }
+        round = round.saturating_sub(1);
+        if max_round.saturating_sub(round) > 2 {
+            break;
+        }
+    }
+    parents
+}
+
+/// Extract timestamps in ascending order from ancestor blocks for DAA.
+#[must_use]
+pub fn extract_ancestor_timestamps(
+    dag_store: &DagStore,
+    parent_hashes: &[Hash],
+    chain_id: u64,
+    limit: usize,
+) -> Vec<u64> {
+    let mut timestamps = Vec::new();
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+
+    for h in parent_hashes {
+        if visited.insert(*h) {
+            queue.push_back(*h);
+        }
+    }
+
+    while let Some(h) = queue.pop_front() {
+        if let Ok(block) = dag_store.get_block(&h) {
+            if let Ok(header) = block.extract_pow_header(chain_id) {
+                timestamps.push(header.timestamp);
+            }
+            if timestamps.len() >= limit {
+                break;
+            }
+            for p in &block.parents {
+                if visited.insert(p.digest) {
+                    queue.push_back(p.digest);
+                }
+            }
+        }
+    }
+
+    timestamps.sort_unstable();
+    timestamps
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

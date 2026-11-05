@@ -41,14 +41,13 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 
 ## Open product gaps (not archived noise)
 
-1. Hybrid PoW + GHOSTDAG phases P7–P8 (P0 Spec delivered in ADR 0003; P1–P2 delivered in feat/hybrid-p1-p2-pow-header; P3–P4 delivered in feat/hybrid-p3-p4-kovanicahash-miner; P5–P6 delivered in feat/hybrid-p5-p6-pow-ghostdag-engine).
-2. CI move into `KovanicaDAG/kovanica-protocol` (fmt/clippy/test + pinned gitleaks).
-3. Ops drift (live fleet): VPS systemd units still `kvnc-*` / `KVNC_*`; DNS seed names for mainnet (`docs/SEED-DNS-AUDIT.md`).
-4. Governance (Phase 25), BIP32 HD, external audit, mainnet launch runbook — see root `TASKLIST.md`.
+1. CI move into `KovanicaDAG/kovanica-protocol` (fmt/clippy/test + pinned gitleaks).
+2. Ops drift (live fleet): VPS systemd units still `kvnc-*` / `KVNC_*`; DNS seed names for mainnet (`docs/SEED-DNS-AUDIT.md`).
+3. Governance (Phase 25), BIP32 HD, external audit, mainnet launch runbook — see root `TASKLIST.md`.
 
 **Done / frozen, do not re-open as missing:**
 - PRO-7 (Mysticeti VRF leader set + pin): **FROZEN** for hybrid.
-- Hybrid PoW + GHOSTDAG P1–P6 (PoW header primitives, preimages, target conversion, Chain ID 5 wiring, KovanicaHash BLAKE3+2MiB algorithm, header verification, CPU mining worker, DAA, P2P network anti-DoS ingress, GHOSTDAG k=5 committer, 2.5 KVNC reward minting, node miner loop).
+- Hybrid PoW + GHOSTDAG P1–P8 (PoW header primitives, preimages, target conversion, Chain ID 5 wiring, KovanicaHash BLAKE3+2MiB algorithm, header verification, CPU mining worker, DAA, P2P network anti-DoS ingress, GHOSTDAG k=5 committer, 2.5 KVNC reward minting, node miner loop, JSON-RPC getWork/submitWork/miningInfo/dagTips, CLI mining/dag commands, Prometheus metrics, multi-node simulation test suite). Milestone M8 ready.
 - Contract SDK (`crates/kovanica-contract-sdk`) and Indexer (`crates/kovanica-indexer`).
 - Escrow E0433 (`kovanica-escrow` wired into `kovanica-execution/src/contracts.rs`, merged in #163).
 - PRO-20 / PRO-36 merged code (kept).

@@ -876,6 +876,15 @@ where
         })
     };
 
+    let (rpc_block_gossip_tx, mut rpc_block_gossip_rx) =
+        tokio::sync::mpsc::unbounded_channel::<kovanica_types::Block>();
+    let rpc_net_tx = network_cmd_tx.clone();
+    tokio::spawn(async move {
+        while let Some(block) = rpc_block_gossip_rx.recv().await {
+            let _ = rpc_net_tx.send(NetworkCommand::BroadcastBlock(block));
+        }
+    });
+
     let rpc_state = RpcState {
         tx_gossip: Some(rpc_tx_gossip),
         health: node_health.clone(),
@@ -889,6 +898,9 @@ where
         rate_limiter: Arc::new(RateLimiterState::new(rate_limit_config.clone())),
         auth_config: Arc::new(auth_config.clone()),
         sync_status: Some(sync_status_source),
+        block_gossip: Some(rpc_block_gossip_tx),
+        mining_enabled: config.mining.enabled,
+        mining_threads: config.mining.threads,
     };
     let rpc_committee = rpc_state.committee.clone();
     let committee_for_metrics = rpc_state.committee.clone();

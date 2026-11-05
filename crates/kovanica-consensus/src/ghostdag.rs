@@ -158,6 +158,8 @@ impl GhostdagCommitter {
         if is_new_tip {
             self.selected_tip = Some(digest);
         }
+
+        crate::metrics::set_ghostdag_tips(self.tips().len());
     }
 
     /// Compute past cone ancestor hashes of `block_parents` excluding past cone of `sel_parent`.
@@ -275,6 +277,9 @@ impl GhostdagCommitter {
                 }
             }
 
+            crate::metrics::record_ghostdag_blue_blocks(ordered_blocks.len() as u64);
+            crate::metrics::record_ghostdag_red_blocks(uncommitted_red.len() as u64);
+
             subdags.push(CommittedSubDag {
                 leader: leader_block.clone(),
                 blocks: ordered_blocks,
@@ -287,6 +292,40 @@ impl GhostdagCommitter {
         }
 
         subdags
+    }
+
+    /// Return the active DAG tips (blocks with no children in memory).
+    #[must_use]
+    pub fn tips(&self) -> Vec<Hash> {
+        let mut referenced_parents = HashSet::new();
+        for b in self.blocks.values() {
+            for p in &b.parents {
+                referenced_parents.insert(p.digest);
+            }
+        }
+        self.blocks
+            .keys()
+            .filter(|h| !referenced_parents.contains(h))
+            .copied()
+            .collect()
+    }
+
+    /// Return the current selected tip.
+    #[must_use]
+    pub fn selected_tip(&self) -> Option<Hash> {
+        self.selected_tip
+    }
+
+    /// Return the blue score of a block if tracked.
+    #[must_use]
+    pub fn blue_score(&self, hash: &Hash) -> Option<u64> {
+        self.blue_score.get(hash).copied()
+    }
+
+    /// Return the cumulative PoW work of a block if tracked.
+    #[must_use]
+    pub fn cumulative_work(&self, hash: &Hash) -> Option<u128> {
+        self.cumulative_work.get(hash).copied()
     }
 }
 

@@ -1889,6 +1889,253 @@ pub async fn handle_sync_status(_params: Value, state: RpcState) -> Result<Value
     serde_json::to_value(&status).map_err(internal)
 }
 
+/// Generate a PoW mining work template for Chain 5.
+pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let chain_id = state.mempool.signing_context().chain_id;
+    let author: u16 = match params {
+        Value::Object(ref map) => map.get("author").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+        Value::Array(ref arr) if !arr.is_empty() => arr[0].as_u64().unwrap_or(0) as u16,
+        _ => 0,
+    };
+
+    let parent_hashes = kovanica_consensus::select_parents_from_tips(
+        &state.consensus_store,
+        kovanica_params::GHOSTDAG_K as usize,
+    );
+    let parent_refs: Vec<kovanica_types::BlockReference> = parent_hashes
+        .iter()
+        .map(|h| {
+            if let Ok(b) = state.consensus_store.get_block(h) {
+                b.reference()
+            } else {
+                kovanica_types::BlockReference {
+                    author: 0,
+                    round: 0,
+                    digest: *h,
+                }
+            }
+        })
+        .collect();
+
+    let max_parent_round = parent_refs.iter().map(|p| p.round).max().unwrap_or(0);
+    let round = max_parent_round + 1;
+
+    let timestamps = kovanica_consensus::extract_ancestor_timestamps(
+        &state.consensus_store,
+        &parent_hashes,
+        chain_id,
+        kovanica_params::DAA_WINDOW_BLOCKS as usize,
+    );
+
+    let current_target_bits = if let Some(last_parent) = parent_hashes.first() {
+        if let Ok(b) = state.consensus_store.get_block(last_parent) {
+            b.extract_pow_header(chain_id)
+                .map(|h| h.target_bits)
+                .unwrap_or(kovanica_params::MAX_TARGET_BITS)
+        } else {
+            kovanica_params::MAX_TARGET_BITS
+        }
+    } else {
+        kovanica_params::MAX_TARGET_BITS
+    };
+
+    let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+    let target_bits = kovanica_consensus::calculate_next_target_bits(
+        current_target_bits,
+        &timestamps,
+        &daa_config,
+    );
+
+    let txs = state.mempool.get_next_transactions(128);
+    let merkle_root = kovanica_types::StatementBlock::compute_merkle_root(&txs);
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let min_timestamp = timestamps.last().copied().unwrap_or(0) + 1;
+    let timestamp = now_ms.max(min_timestamp);
+
+    let target_bytes = kovanica_types::compact_to_target(target_bits);
+
+    let template_header = kovanica_types::BlockHeader::new(
+        chain_id,
+        round,
+        author,
+        parent_refs,
+        merkle_root,
+        timestamp,
+        target_bits,
+        0,
+    );
+    let preimage = template_header.preimage();
+
+    Ok(serde_json::json!({
+        "chain_id": chain_id,
+        "round": round,
+        "author": author,
+        "parents": parent_hashes.iter().map(|h| format!("0x{}", hex::encode(h.0))).collect::<Vec<_>>(),
+        "merkle_root": format!("0x{}", hex::encode(merkle_root.0)),
+        "timestamp": timestamp,
+        "target_bits": format!("0x{:08x}", target_bits),
+        "target": format!("0x{}", hex::encode(target_bytes)),
+        "preimage": format!("0x{}", hex::encode(preimage)),
+        "transactions_count": txs.len()
+    }))
+}
+
+/// Submit a solved PoW block header to the network.
+pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let chain_id = state.mempool.signing_context().chain_id;
+
+    let header: kovanica_types::BlockHeader = match params {
+        Value::Object(ref map) => {
+            if let Some(h) = map.get("header") {
+                serde_json::from_value(h.clone())
+                    .map_err(|e| RpcError::InvalidParams(format!("invalid header: {e}")))?
+            } else {
+                serde_json::from_value(params.clone())
+                    .map_err(|e| RpcError::InvalidParams(format!("invalid header: {e}")))?
+            }
+        }
+        Value::String(ref hex_str) => {
+            let hex_clean = hex_str.trim_start_matches("0x");
+            let bytes = hex::decode(hex_clean)
+                .map_err(|e| RpcError::InvalidParams(format!("invalid hex string: {e}")))?;
+            bincode::deserialize(&bytes)
+                .map_err(|e| RpcError::InvalidParams(format!("deserialize header failed: {e}")))?
+        }
+        Value::Array(ref arr) if !arr.is_empty() => {
+            if let Some(first_str) = arr[0].as_str() {
+                let hex_clean = first_str.trim_start_matches("0x");
+                let bytes = hex::decode(hex_clean)
+                    .map_err(|e| RpcError::InvalidParams(format!("invalid hex string: {e}")))?;
+                bincode::deserialize(&bytes).map_err(|e| {
+                    RpcError::InvalidParams(format!("deserialize header failed: {e}"))
+                })?
+            } else {
+                serde_json::from_value(arr[0].clone())
+                    .map_err(|e| RpcError::InvalidParams(format!("invalid header: {e}")))?
+            }
+        }
+        _ => {
+            return Err(RpcError::InvalidParams(
+                "expected header object or hex string".into(),
+            ))
+        }
+    };
+
+    if header.chain_id != chain_id {
+        return Err(RpcError::InvalidParams(format!(
+            "chain_id mismatch: header {} != node {}",
+            header.chain_id, chain_id
+        )));
+    }
+
+    header
+        .verify_pow()
+        .map_err(|e| RpcError::ExecutionError(format!("PoW verification failed: {e}")))?;
+
+    let block = header.to_statement_block(Vec::new());
+    let digest = block.digest;
+    let pow_hash = header.pow_hash.unwrap_or_default();
+
+    state
+        .consensus_store
+        .put_block(&block)
+        .map_err(|e| RpcError::InternalError(format!("store block failed: {e}")))?;
+
+    if let Some(ref tx) = state.block_gossip {
+        let _ = tx.send(block);
+    }
+
+    Ok(serde_json::json!({
+        "accepted": true,
+        "digest": format!("0x{}", hex::encode(digest.0)),
+        "pow_hash": format!("0x{}", hex::encode(pow_hash.0))
+    }))
+}
+
+/// Query current PoW mining metrics and parameters.
+pub async fn handle_get_mining_info(_params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let chain_id = state.mempool.signing_context().chain_id;
+    let parent_hashes = kovanica_consensus::select_parents_from_tips(
+        &state.consensus_store,
+        kovanica_params::GHOSTDAG_K as usize,
+    );
+
+    let timestamps = kovanica_consensus::extract_ancestor_timestamps(
+        &state.consensus_store,
+        &parent_hashes,
+        chain_id,
+        kovanica_params::DAA_WINDOW_BLOCKS as usize,
+    );
+
+    let current_target_bits = if let Some(last_parent) = parent_hashes.first() {
+        if let Ok(b) = state.consensus_store.get_block(last_parent) {
+            b.extract_pow_header(chain_id)
+                .map(|h| h.target_bits)
+                .unwrap_or(kovanica_params::MAX_TARGET_BITS)
+        } else {
+            kovanica_params::MAX_TARGET_BITS
+        }
+    } else {
+        kovanica_params::MAX_TARGET_BITS
+    };
+
+    let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+    let target_bits = kovanica_consensus::calculate_next_target_bits(
+        current_target_bits,
+        &timestamps,
+        &daa_config,
+    );
+
+    let work = kovanica_consensus::calculate_work_from_target(target_bits);
+    let target_sec = kovanica_params::TARGET_BLOCK_MS as u128 / 1000;
+    let hashrate_estimate = if target_sec > 0 {
+        work / target_sec
+    } else {
+        work
+    };
+    let target_bytes = kovanica_types::compact_to_target(target_bits);
+
+    Ok(serde_json::json!({
+        "chain_id": chain_id,
+        "mining_enabled": state.mining_enabled,
+        "mining_threads": state.mining_threads,
+        "target_bits": format!("0x{:08x}", target_bits),
+        "target": format!("0x{}", hex::encode(target_bytes)),
+        "difficulty": work.to_string(),
+        "target_block_time_ms": kovanica_params::TARGET_BLOCK_MS,
+        "ghostdag_k": kovanica_params::GHOSTDAG_K,
+        "network_hashrate_estimate": hashrate_estimate.min(u64::MAX as u128) as u64,
+        "dag_tips_count": parent_hashes.len()
+    }))
+}
+
+/// Query current active DAG tips on the network.
+pub async fn handle_get_dag_tips(_params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let chain_id = state.mempool.signing_context().chain_id;
+    let max_round = state
+        .consensus_store
+        .max_dag_round()
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+    let tips = kovanica_consensus::select_parents_from_tips(
+        &state.consensus_store,
+        kovanica_params::GHOSTDAG_K as usize,
+    );
+
+    Ok(serde_json::json!({
+        "chain_id": chain_id,
+        "tips": tips.iter().map(|h| format!("0x{}", hex::encode(h.0))).collect::<Vec<_>>(),
+        "count": tips.len(),
+        "max_round": max_round,
+        "ghostdag_k": kovanica_params::GHOSTDAG_K
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1941,6 +2188,9 @@ mod tests {
             auth_config: Arc::new(crate::AuthConfig::default()),
             tx_gossip: None,
             sync_status: None,
+            block_gossip: None,
+            mining_enabled: false,
+            mining_threads: 0,
         }
     }
 
@@ -3629,5 +3879,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bad["verified"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn mining_and_dag_rpc_methods_work() {
+        let (_dir, storage) = open_storage();
+        let mut state = test_state(storage.clone());
+        state.mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_params::CHAIN_ID_HYBRID_TESTNET),
+        ));
+        state.mining_enabled = true;
+        state.mining_threads = 4;
+
+        // 1. get_mining_info
+        let info = handle_get_mining_info(json!([]), state.clone())
+            .await
+            .expect("mining info");
+        assert_eq!(info["chain_id"], 5);
+        assert_eq!(info["mining_enabled"], true);
+        assert_eq!(info["mining_threads"], 4);
+        assert_eq!(info["target_block_time_ms"], 4000);
+        assert_eq!(info["ghostdag_k"], 5);
+
+        // 2. get_dag_tips (empty)
+        let tips = handle_get_dag_tips(json!([]), state.clone())
+            .await
+            .expect("dag tips");
+        assert_eq!(tips["chain_id"], 5);
+        assert_eq!(tips["count"], 0);
+
+        // 3. get_work
+        let work = handle_get_work(json!({ "author": 7 }), state.clone())
+            .await
+            .expect("get work");
+        assert_eq!(work["chain_id"], 5);
+        assert_eq!(work["author"], 7);
+        assert_eq!(work["round"], 1);
+
+        // 4. submit_work with a mined block
+        let header = kovanica_types::BlockHeader::new(
+            kovanica_params::CHAIN_ID_HYBRID_TESTNET,
+            1,
+            7,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff, // easy target
+            0,
+        );
+        let mined = kovanica_consensus::mine_header(header, 10_000).expect("should mine block");
+        let submit_res = handle_submit_work(json!({ "header": mined }), state.clone())
+            .await
+            .expect("submit work");
+        assert_eq!(submit_res["accepted"], true);
+
+        // Verify block is now in DAG store
+        let tips_after = handle_get_dag_tips(json!([]), state.clone())
+            .await
+            .expect("dag tips after submit");
+        assert_eq!(tips_after["count"], 1);
+
+        // Submitting an invalid block must fail
+        let mut bad_header = mined.clone();
+        bad_header.nonce = bad_header.nonce.wrapping_add(999_999);
+        assert!(handle_submit_work(json!({ "header": bad_header }), state)
+            .await
+            .is_err());
     }
 }
