@@ -4,7 +4,12 @@ version = "0.0.31"
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+hybrid-pow = ["kovanica-types/hybrid-pow"]
+
 [dependencies]
+kovanica-params = { path = "../kovanica-params" }
 kovanica-types = { path = "../kovanica-types" }
 kovanica-crypto = { path = "../kovanica-crypto" }
 kovanica-dag = { path = "../kovanica-dag" }

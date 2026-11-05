@@ -20,6 +20,7 @@
 #![allow(clippy::large_enum_variant)]
 
 mod config;
+mod miner;
 mod non_blue;
 mod orphans;
 mod seals;

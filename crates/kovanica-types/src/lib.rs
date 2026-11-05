@@ -18,6 +18,7 @@ pub mod evidence;
 pub mod hash;
 pub mod light_client;
 pub mod merkle;
+pub mod pow;
 pub mod signing;
 pub mod timeout;
 pub mod transaction;
@@ -29,7 +30,7 @@ pub use account_tree::{
 pub use address::Address;
 pub use block::{
     check_pow_hash_meets_target, compact_to_target, target_to_compact, Block, BlockHeader,
-    BlockReference, HeaderV2, PowHeader, StatementBlock, DOMAIN_POW_HEADER,
+    BlockReference, HeaderError, HeaderV2, PowHeader, StatementBlock, DOMAIN_POW_HEADER,
 };
 pub use colouring::{
     colour_mergeset, mysticghost_commitment, ColourBlock, ColourError, ColouringResult,
@@ -52,6 +53,10 @@ pub use light_client::{
     SNAPSHOT_MAGIC, STAKING_STATE_VERSION, STAKING_STATE_VERSION_PREVIOUS,
 };
 pub use merkle::{MerkleProof, MerkleStep};
+pub use pow::{
+    kovanica_hash, KovanicaHasher, KOVANICA_HASH_CHUNK_SIZE, KOVANICA_HASH_MEMORY_SIZE,
+    KOVANICA_HASH_MIX_ROUNDS, KOVANICA_HASH_NUM_CHUNKS,
+};
 pub use signing::SigningContext;
 pub use timeout::{SkipCert, Timeout};
 pub use transaction::{Transaction, TransactionKind};

@@ -13,17 +13,20 @@
 
 pub mod committer;
 pub mod committer_mysticghost;
+pub mod daa;
 pub mod engine;
 pub mod genesis;
 pub mod ghostdag_scoped;
 pub mod linearizer;
 pub mod metrics;
+pub mod mining;
 pub mod mysticghost;
 pub mod non_blue;
 pub mod skip;
 pub mod types;
 
 pub use committer::{uncommitted_history, BaseCommitter, UniversalCommitter};
+pub use daa::{calculate_next_target_bits, mul_div_u256, DaaConfig};
 pub use engine::{
     BlockBroadcaster, ConsensusConfig, ConsensusEngine, ConsensusError, TimeoutBroadcaster,
     ValidatorState, VoteBroadcaster, VoteRejection,
@@ -39,6 +42,7 @@ pub use metrics::{
     record_rss_bytes, record_rss_proxy, record_skipped_leader, record_sync_error,
     record_timeout_signed, record_vote_timeout_equivocation, registry, SkipReason, SyncErrorKind,
 };
+pub use mining::{mine_header, mine_header_async, MiningWorker};
 pub use non_blue::{non_blue_refs, non_blue_transactions};
 pub use types::{
     AuthorityInfo, CommitResult, CommittedSubDag, CommitteeInfo, CommitteeInfoError, LeaderInfo,
