@@ -8,13 +8,23 @@
 // ============================================================
 // Chain / identity
 // ============================================================
-pub const TICKER: &str = "KUNA";
+pub const TICKER: &str = "KVNC";
 pub const DECIMALS: u32 = 9;
+/// Legacy alias name for base unit multiplier (1 KVNC = 10^9 base units).
+/// Kept as `ONE_KUNA` until a follow-up rename PR across the workspace.
 pub const ONE_KUNA: u64 = 1_000_000_000;
+pub const ONE_KVNC: u64 = ONE_KUNA;
 
 // ============================================================
 // Consensus
 // ============================================================
+/// Hybrid PoW + GHOSTDAG default target block time in milliseconds (Toni 2026-11-05).
+/// Inactive until hybrid-pow consensus path is wired.
+pub const TARGET_BLOCK_MS: u64 = 4_000;
+/// Hybrid PoW + GHOSTDAG default parameter k (Toni 2026-11-05).
+pub const GHOSTDAG_K: u32 = 5;
+
+// Legacy Mysticeti timing constants (still in tree until hybrid flag):
 pub const WAVE_LENGTH: u64 = 3;
 pub const EPOCH_ROUNDS: u64 = 7_200;
 pub const EPOCH_LEADER_HEIGHTS: u64 = EPOCH_ROUNDS / WAVE_LENGTH;

@@ -1,5 +1,7 @@
 # ADR 0001: Paper-faithful Mysticeti-C with weighted stake thresholds
 
+> **SUPERSEDED (2026-11-05):** This ADR is superseded for product consensus direction by [ADR 0003: Hybrid PoW + GHOSTDAG Consensus](0003-hybrid-pow-ghostdag.md). The product architecture shifts to Hybrid PoW + GHOSTDAG with NO stake in the consensus path.
+
 **Status: DRAFT — NOT ACTIVATION READY / NOT A COMPLETE FORMAL PROOF**
 
 **Decision scope:** consensus protocol design only

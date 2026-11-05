@@ -37,7 +37,7 @@ impl ColouringResult {
 /// Colour the given mergeset with GHOSTDAG parameter `k`.
 ///
 /// `blocks` – the mergeset (and optionally previous tips already included)
-/// `k`      – must be 3 for the current safety claims
+/// `k`      – must be 3 or 5 (GHOSTDAG_K default is 5)
 /// `previous_tips` – tips of prior committed sub-dags (treated as already blue)
 ///
 /// The algorithm is [`kovanica_types::colouring::colour_mergeset`]. This wrapper
@@ -57,7 +57,7 @@ pub fn colour_mergeset(
         })
         .collect();
     let result = kovanica_types::colouring::colour_mergeset(&views, k, previous_tips)
-        .expect("MysticGhost currently requires k = 3");
+        .expect("MysticGhost currently requires k = 3 or k = 5");
     ColouringResult {
         blue: result.blue,
         selected_parent: result.selected_parent,

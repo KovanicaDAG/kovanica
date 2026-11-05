@@ -19,7 +19,7 @@ This comprehensive audit report documents the systematic review, updating, and v
 - **Configuration & Example Refresh (Requirement R4):** `Dockerfile` was updated to `EXPOSE 8000 8545`; `config.example.toml` was updated to document `run_validator = false` for non-validating RPC nodes; `ops/docker/README.md` was rewritten to document the 1-seed + 3-validator compose cluster and the required `generate.sh` step; and `scripts/validate-wasm.sh` was freed from hardcoded VPS paths.
 - **`AGENTS.md` Invariant Preservation (Requirement R4):** The Snapshot section was updated to commit `dd3aff9`, 27 workspace crates, ~90.5k LOC in crates (~95.5k repo-wide), 5 TS packages, and 1,101+ tests passing. The locked tokenomics table and project hard rules were preserved **100% byte-identical**.
 - **Top-Level README Overhaul (Requirement R3):** A fresh, comprehensive, polished English `README.md` was authored containing complete architectural flows, frozen tokenomics tables, 27-crate layout, tested quick-start instructions, JSON-RPC examples, and the compatibility anchor `<a id="adresni-format-kanonski"></a>`.
-- **Zero-Defect Verification:** Automated static analysis confirmed **0 broken relative links**, **0 broken heading anchors**, and **0 violations of forbidden currency naming** ("KVNC" as currency) across 407 repository files.
+- **Zero-Defect Verification:** Automated static analysis confirmed **0 broken relative links**, **0 broken heading anchors** (historical audit; note ticker renamed to KVNC per Toni 2026-11-05).
 
 ---
 
@@ -124,22 +124,24 @@ Errors found: 0
 
 ---
 
-## 5. Currency Naming & Forbidden Terms Verification
+> **NOTE (Superseded by Toni 2026-11-05 rename):** Section 5 below documents the historical audit state when KUNA was the temporary ticker. On 2026-11-05, project owner Toni locked the rename back to **KVNC** as the official product ticker. The prohibition on KVNC as currency is superseded.
+
+## 5. Currency Naming & Forbidden Terms Verification (Historical — Superseded)
 
 The standalone Python currency naming linter (`.agents/teamwork/explorer_survey_3/check_currency_naming.py`) was executed across 407 repository files (`.md`, `.toml`, `.rs`, `.ts`, `.tsx`, `.sh`, `.json`).
 
-The tool strictly verifies compliance with `AGENTS.md` naming rules:
-- **Rule:** Chain is **Kovanica**, native coin ticker is **KUNA** (9 decimals).
-- **Prohibited:** Any usage of "KVNC" as a currency ticker, coin name, balance denomination, or fee currency.
+The tool verified compliance with historical naming rules:
+- **Historical Rule (Superseded):** Chain was **Kovanica**, native coin ticker was **KUNA** (superseded by Toni 2026-11-05 rename to **KVNC**).
+- **Historical Prohibition:** Previous prohibition against "KVNC" as ticker is superseded; KVNC is now the canonical product ticker.
 - **Allowed:** Address prefix `kvnc...dag`, directory paths, Git URLs, crypto context tags (e.g. `b"KUNA-VRF1"` / legacy `b"KVNC-VRF1"`), and rule statements.
 
-### Verification Results:
+### Verification Results (Historical):
 ```text
 Scanning repository for forbidden currency usage at: C:\Users\LiveTony\Desktop\Antonio\kvnc
 Scanned 407 files.
 Findings: 0
 ```
-**Status: 100% PASS (Zero occurrences of "KVNC" used as currency).**
+**Status: Historical audit record; superseded by Toni 2026-11-05 rename to KVNC.**
 
 ---
 

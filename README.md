@@ -19,7 +19,7 @@ All tokenomics parameters and network protocols are binding per `AGENTS.md`.
   - `FromStr for Address` strictly enforces the 64-character base32 form.
   - Legacy hex formats (`kvnc<72hex>dag` and bare/`0x` 64-hex keys) are supported **only** on Devnet (`3`), Testnet v2 (`4`), and Local (`1337`).
   - Mainnet (`1`), Testnet (`2`), and all other chain IDs strictly reject legacy formats (`legacy_address_allowed = false`).
-  - **Rule:** Never use "KVNC" as a currency or token ticker (the currency is strictly **KUNA**).
+  - **Rule:** The native coin ticker is **KVNC** (renamed from KUNA per Toni 2026-11-05 lock). Remaining KVNC crypto tags and address prefix kvnc…dag align with the KVNC ticker.
 
 ---
 
