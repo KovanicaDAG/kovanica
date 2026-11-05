@@ -47,7 +47,7 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 
 **Done / frozen, do not re-open as missing:**
 - PRO-7 (Mysticeti VRF leader set + pin): **FROZEN** for hybrid.
-- Hybrid PoW + GHOSTDAG P1–P8 (PoW header primitives, preimages, target conversion, Chain ID 5 wiring, KovanicaHash BLAKE3+2MiB algorithm, header verification, CPU mining worker, DAA, P2P network anti-DoS ingress, GHOSTDAG k=5 committer, 2.5 KVNC reward minting, node miner loop, JSON-RPC getWork/submitWork/miningInfo/dagTips, CLI mining/dag commands, Prometheus metrics, multi-node simulation test suite). Milestone M8 ready.
+- Hybrid PoW + GHOSTDAG P1–P8 & Milestone M8 (PoW header primitives, preimages, target conversion, Chain ID 5 wiring, KovanicaHash BLAKE3+2MiB algorithm, header verification, CPU mining worker, DAA, P2P network anti-DoS ingress, GHOSTDAG k=5 committer, 2.5 KVNC reward minting, node miner loop, JSON-RPC getWork/submitWork/miningInfo/dagTips, CLI mining/dag commands, Prometheus metrics, live 3-node cluster integration test suite, faucet alignment, ops templates). Milestone M8 PASSED.
 - Contract SDK (`crates/kovanica-contract-sdk`) and Indexer (`crates/kovanica-indexer`).
 - Escrow E0433 (`kovanica-escrow` wired into `kovanica-execution/src/contracts.rs`, merged in #163).
 - PRO-20 / PRO-36 merged code (kept).

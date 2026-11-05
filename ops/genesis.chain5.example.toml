@@ -1,0 +1,14 @@
+# Genesis validator and allocation configuration for Hybrid PoW Testnet (Chain ID 5)
+chain_id = 5
+
+# Genesis validators receive an equal split of the 1,000,000 KVNC allocation,
+# locking MIN_VALIDATOR_STAKE (50,000 KVNC) from that share.
+[[validator]]
+address = "kvnc0000000000000000000000000000000000000000000000000000000000000dag"
+stake = 50000000000000
+public_key = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[validator]]
+address = "kvnc1111111111111111111111111111111111111111111111111111111111111dag"
+stake = 50000000000000
+public_key = "1111111111111111111111111111111111111111111111111111111111111111"

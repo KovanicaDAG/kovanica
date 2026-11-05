@@ -69,6 +69,7 @@ pub use kovanica_consensus::daa::{extract_ancestor_timestamps, select_parents_fr
 pub async fn run_mining_loop(
     mining_config: MiningConfig,
     chain_id: u64,
+    author: u16,
     dag_store: Arc<DagStore>,
     mempool: Arc<Mempool>,
     network_cmd_tx: mpsc::UnboundedSender<NetworkCommand>,
@@ -82,11 +83,26 @@ pub async fn run_mining_loop(
 
     info!(
         chain_id,
+        author,
         threads = mining_config.threads,
         "Chain 5 PoW mining worker loop started"
     );
 
-    let miner = NodeMiner::new();
+    let mut miner = NodeMiner::new();
+    let initial_target = std::env::var("KOVANICA_TEST_TARGET_BITS")
+        .ok()
+        .and_then(|v| {
+            let s = v.trim();
+            let stripped = s
+                .strip_prefix("0x")
+                .or_else(|| s.strip_prefix("0X"))
+                .unwrap_or(s);
+            u32::from_str_radix(stripped, 16).ok()
+        })
+        .unwrap_or(kovanica_params::MAX_TARGET_BITS);
+    if initial_target != kovanica_params::MAX_TARGET_BITS {
+        miner.daa_config.max_target_bits = initial_target;
+    }
 
     loop {
         if *shutdown_rx.borrow() {
@@ -123,7 +139,7 @@ pub async fn run_mining_loop(
             .collect();
 
         let target_bits = if parents.is_empty() {
-            kovanica_params::MAX_TARGET_BITS
+            initial_target
         } else {
             let timestamps = extract_ancestor_timestamps(
                 &dag_store,
@@ -131,7 +147,7 @@ pub async fn run_mining_loop(
                 chain_id,
                 kovanica_params::DAA_WINDOW_BLOCKS as usize,
             );
-            miner.next_target_bits(kovanica_params::MAX_TARGET_BITS, &timestamps)
+            miner.next_target_bits(initial_target, &timestamps)
         };
 
         let txs = mempool.get_next_transactions(kovanica_types::MAX_TXS_PER_BLOCK);
@@ -144,7 +160,7 @@ pub async fn run_mining_loop(
         let header = BlockHeader::new(
             chain_id,
             round,
-            0, // author
+            author,
             parent_refs,
             merkle_root,
             now_ms,
