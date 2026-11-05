@@ -9164,6 +9164,7 @@ mod tests {
             chain_id::TESTNET,
             chain_id::DEVNET,
             chain_id::TESTNET_V2,
+            chain_id::HYBRID_TESTNET,
             chain_id::LOCAL,
         ] {
             assert!(
@@ -9354,6 +9355,7 @@ mod tests {
         for other in [
             chain_id::TESTNET,
             chain_id::TESTNET_V2,
+            chain_id::HYBRID_TESTNET,
             chain_id::DEVNET,
             chain_id::LOCAL,
         ] {

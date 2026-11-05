@@ -46,6 +46,8 @@ impl Hash {
     pub const DOMAIN_COMMITTEE: &'static [u8] = b"KUNA-COMMITTEE-v1";
     /// Domain tag for an equivocation-evidence id.
     pub const DOMAIN_EVIDENCE: &'static [u8] = b"KUNA-EVIDENCE-v1";
+    /// Domain tag for PoW block header preimage hashing (ADR 0003).
+    pub const DOMAIN_POW_HEADER: &'static [u8] = b"KVNC-POW-HDR-v1";
 
     /// Zero hash (useful for genesis).
     pub fn zero() -> Self {

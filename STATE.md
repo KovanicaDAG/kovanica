@@ -1,6 +1,6 @@
 # STATE — living source of truth
 
-**Tip:** `559cc2014592e1c621da2df78d9671e7476972d1` (docs PR bases here; merge of chore/move-apps-to-kovanica-apps #176 on 2026-11-05; prior living tip `d951da451c9982fc8924c4c7f2ec08e06f549d64`).
+**Tip:** `89394a2da7d9fb119072aacd1ff7997f0e3225c4` (feat/hybrid-p1-p2-pow-header bases here; merge of docs/hybrid-p0-spec #177 on 2026-11-05; prior living tip `559cc2014592e1c621da2df78d9671e7476972d1`).
 Update this file when frozen params or open product gaps change. Point-in-time dumps live under `docs/archive/`; they are not SoT.
 
 ## Active Priority: Hybrid PoW + GHOSTDAG (P0–P8)
@@ -16,7 +16,7 @@ Update this file when frozen params or open product gaps change. Point-in-time d
 ## Chain 4 & Chain 5 (Testnet tracks)
 
 - `chain_id = 4`. Network tag form: `<chain_id>-<16 hex genesis digest>` (see `docs/TESTNET-SEED-NODES.md` for topology). Internal testnet track until public launch (gated on hybrid testnet M8 pass).
-- `chain_id = 5`. Planned Hybrid PoW + GHOSTDAG testnet track under feature/flag `hybrid-pow` (ADR 0003).
+- `chain_id = 5`. Planned Hybrid PoW + GHOSTDAG testnet track under feature/flag `hybrid-pow` (ADR 0003; `CHAIN_ID_HYBRID_TESTNET = 5`, network tag `hybrid-testnet`). Legacy hex allowed on chains 3, 4, 5, 1337.
 - Launch gating: public launch delayed from unconditional 2026-11-25 until hybrid testnet M8 passes.
 - Genesis for testnet: **5** validators (legacy). Mainnet genesis requires **≥15** (15–20 in ceremony).
 - Ordering default: GHOSTDAG (lifted k=3 hard-lock in P0 to allow `GHOSTDAG_K = 5`).
@@ -29,7 +29,7 @@ Update this file when frozen params or open product gaps change. Point-in-time d
 | Coin | KVNC, **9** decimals (`ONE_KVNC = 10^9`, legacy alias `ONE_KUNA`) |
 | Consensus | Hybrid PoW + GHOSTDAG (NO stake in consensus path; `TARGET_BLOCK_MS = 4000`, `GHOSTDAG_K = 5`; PoW: KovanicaHash) |
 | Cap / subsidy sketch | 90.2M total; mining budget 81M; treasury 8M; genesis validators 1M; founder premine 200k |
-| Address | `kvnc` + 57 bech32-alphabet base32 + `dag` (**64** chars); 32 B Ed25519 ‖ 29-bit blake3 checksum. Legacy hex only on chains **3, 4, 1337** |
+| Address | `kvnc` + 57 bech32-alphabet base32 + `dag` (**64** chars); 32 B Ed25519 ‖ 29-bit blake3 checksum. Legacy hex only on chains **3, 4, 5, 1337** |
 | Epoch (legacy) | **7200** DAG rounds ≈ 8 h ≈ **2400** leader heights (legacy Mysticeti constant still in tree until hybrid flag) |
 | Jail (legacy) | `JAIL_ROUNDS = 7200` committed leaders (legacy / non-consensus under hybrid) |
 | Min validator stake (legacy) | `50_000` KVNC (`MIN_VALIDATOR_STAKE = 50_000 * ONE_KUNA`; legacy / non-consensus) |
@@ -41,13 +41,14 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 
 ## Open product gaps (not archived noise)
 
-1. Hybrid PoW + GHOSTDAG phases P1–P8 (P0 Spec delivered in ADR 0003).
+1. Hybrid PoW + GHOSTDAG phases P3–P8 (P0 Spec delivered in ADR 0003; P1–P2 delivered in feat/hybrid-p1-p2-pow-header).
 2. CI move into `KovanicaDAG/kovanica-protocol` (fmt/clippy/test + pinned gitleaks).
 3. Ops drift (live fleet): VPS systemd units still `kvnc-*` / `KVNC_*`; DNS seed names for mainnet (`docs/SEED-DNS-AUDIT.md`).
 4. Governance (Phase 25), BIP32 HD, external audit, mainnet launch runbook — see root `TASKLIST.md`.
 
 **Done / frozen, do not re-open as missing:**
 - PRO-7 (Mysticeti VRF leader set + pin): **FROZEN** for hybrid.
+- Hybrid PoW + GHOSTDAG P1–P2 (PoW header primitives, preimages, target conversion, Chain ID 5 wiring).
 - Contract SDK (`crates/kovanica-contract-sdk`) and Indexer (`crates/kovanica-indexer`).
 - Escrow E0433 (`kovanica-escrow` wired into `kovanica-execution/src/contracts.rs`, merged in #163).
 - PRO-20 / PRO-36 merged code (kept).

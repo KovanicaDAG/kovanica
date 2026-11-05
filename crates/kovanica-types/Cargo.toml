@@ -4,6 +4,10 @@ version = "0.0.31"
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+hybrid-pow = ["kovanica-params/hybrid-pow"]
+
 [dependencies]
 serde = { workspace = true }
 blake3 = { workspace = true }
