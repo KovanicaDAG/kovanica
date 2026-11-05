@@ -155,6 +155,14 @@ graylist_threshold = -80.0
 ban_threshold = -100.0
 invalid_message_weight = -10.0
 
+# Proof-of-Work Mining (Chain 5 / Hybrid Testnet only).
+# When enabled, the node mines blocks using KovanicaHash on top of recent DAG tips.
+#   enabled -> KOVANICA_MINING_ENABLED
+#   threads -> KOVANICA_MINING_THREADS
+[mining]
+enabled = false
+threads = 1
+
 # Contract execution limits.
 #
 # NOTE: the node does not parse an `[execution]` table yet — it uses the

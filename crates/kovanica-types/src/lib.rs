@@ -29,8 +29,9 @@ pub use account_tree::{
 };
 pub use address::Address;
 pub use block::{
-    check_pow_hash_meets_target, compact_to_target, target_to_compact, Block, BlockHeader,
-    BlockReference, HeaderError, HeaderV2, PowHeader, StatementBlock, DOMAIN_POW_HEADER,
+    check_pow_hash_meets_target, compact_to_target, decode_pow_statement, encode_pow_statement,
+    is_pow_statement, target_to_compact, Block, BlockHeader, BlockReference, HeaderError, HeaderV2,
+    PowHeader, StatementBlock, DOMAIN_POW_HEADER, POW_STATEMENT_LEN, POW_STATEMENT_MAGIC,
 };
 pub use colouring::{
     colour_mergeset, mysticghost_commitment, ColourBlock, ColourError, ColouringResult,

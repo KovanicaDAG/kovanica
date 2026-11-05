@@ -158,7 +158,7 @@ struct SealDuty {
 
 /// Outbound network commands handled by the network task.
 #[derive(Debug)]
-enum NetworkCommand {
+pub(crate) enum NetworkCommand {
     /// Gossip a newly produced block.
     BroadcastBlock(StatementBlock),
     /// Gossip a consensus vote.
@@ -1003,6 +1003,10 @@ where
             .context("queueing a previously committed sub-DAG for replay")?;
     }
 
+    let ghostdag_committer = Arc::new(parking_lot::Mutex::new(
+        kovanica_consensus::ghostdag::GhostdagCommitter::new(kovanica_params::GHOSTDAG_K as usize),
+    ));
+
     let network_task = tokio::spawn(run_network(network, network_cmd_rx, shutdown_rx.clone()));
     let event_task = tokio::spawn(run_event_handler(
         network_events,
@@ -1015,7 +1019,30 @@ where
         catch_up_handle.clone(),
         shutdown_rx.clone(),
         config.chain_id,
+        exec_tx.clone(),
+        ghostdag_committer.clone(),
     ));
+
+    let _mining_task = if config.chain_id == kovanica_types::signing::chain_id::HYBRID_TESTNET
+        && config.mining.enabled
+    {
+        let m_config = config.mining.clone();
+        let m_chain_id = config.chain_id;
+        let m_dag = dag_store.clone();
+        let m_mempool = mempool.clone();
+        let m_net_tx = network_cmd_tx.clone();
+        let m_exec_tx = exec_tx.clone();
+        let m_ghostdag = ghostdag_committer.clone();
+        let m_shutdown = shutdown_rx.clone();
+        Some(tokio::spawn(async move {
+            miner::run_mining_loop(
+                m_config, m_chain_id, m_dag, m_mempool, m_net_tx, m_exec_tx, m_ghostdag, m_shutdown,
+            )
+            .await;
+        }))
+    } else {
+        None
+    };
 
     // The consensus engine now handles block production internally with mempool transactions
     // No separate builder task needed
@@ -2315,6 +2342,8 @@ async fn run_event_handler(
     catch_up: Arc<Mutex<CatchUpTracker>>,
     mut shutdown: watch::Receiver<bool>,
     chain_id: u64,
+    exec_tx: mpsc::UnboundedSender<kovanica_types::CommittedSubDag>,
+    ghostdag: Arc<parking_lot::Mutex<kovanica_consensus::ghostdag::GhostdagCommitter>>,
 ) {
     let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
     let mut state_sync_sessions = StateSyncSessions::new();
@@ -2336,6 +2365,8 @@ async fn run_event_handler(
                             network_cmd_tx: &network_cmd_tx,
                             events: &events,
                             chain_id,
+                            ghostdag: Some(ghostdag.clone()),
+                            exec_tx: Some(exec_tx.clone()),
                         },
                         &mut orphans,
                         &mut catch_up_guard,
@@ -2361,6 +2392,8 @@ struct BlockIngest<'a> {
     network_cmd_tx: &'a mpsc::UnboundedSender<NetworkCommand>,
     events: &'a EventBus,
     chain_id: u64,
+    ghostdag: Option<Arc<parking_lot::Mutex<kovanica_consensus::ghostdag::GhostdagCommitter>>>,
+    exec_tx: Option<mpsc::UnboundedSender<kovanica_types::CommittedSubDag>>,
 }
 
 /// Process a received block (gossip or sync). If it is rejected because
@@ -2376,6 +2409,30 @@ fn ingest_block(
 ) {
     let mut work = std::collections::VecDeque::from([(block, peer)]);
     while let Some((block, peer)) = work.pop_front() {
+        if io.chain_id == kovanica_types::signing::chain_id::HYBRID_TESTNET {
+            if let Ok(header) = block.extract_pow_header(io.chain_id) {
+                if header.verify_pow().is_ok() {
+                    let _ = io.dag_store.put_block(&block);
+                    io.events.publish_new_head(&block);
+                    if let (Some(gd), Some(exec_tx)) = (&io.ghostdag, &io.exec_tx) {
+                        let subdags = {
+                            let mut g = gd.lock();
+                            g.add_block(block.clone());
+                            g.commit_uncommitted_selected_chain()
+                        };
+                        for subdag in subdags {
+                            let _ = exec_tx.send(subdag);
+                        }
+                    }
+                    let released = orphans.parent_accepted(&block.digest);
+                    work.extend(released);
+                    continue;
+                }
+            }
+            warn!(digest = %block.digest, "rejected invalid Chain 5 PoW block in ingest");
+            continue;
+        }
+
         match engine.process_block(&block) {
             Ok(()) => {
                 debug!(digest = %block.digest, "validated received block into consensus");
@@ -3771,12 +3828,22 @@ fn handle_network_event(
     state_sync_sessions.expire(now);
     match event {
         NetworkEvent::BlockReceived { peer, block } => {
-            // Hot-path validation (audit 3.1): verify signature before engine.process_block
-            if let Err(e) = kovanica_crypto::verify_batch(
-                mempool.signing_context().chain_id,
-                std::slice::from_ref(&block),
-            ) {
-                warn!(digest = %block.digest, error = %e, "rejected invalid block signature in main hot path");
+            let is_chain5 = mempool.signing_context().chain_id
+                == kovanica_types::signing::chain_id::HYBRID_TESTNET;
+            if !is_chain5 {
+                // Hot-path validation (audit 3.1): verify signature before engine.process_block
+                if let Err(e) = kovanica_crypto::verify_batch(
+                    mempool.signing_context().chain_id,
+                    std::slice::from_ref(&block),
+                ) {
+                    warn!(digest = %block.digest, error = %e, "rejected invalid block signature in main hot path");
+                    return;
+                }
+            } else if let Err(e) = block
+                .extract_pow_header(mempool.signing_context().chain_id)
+                .and_then(|h| h.verify_pow())
+            {
+                warn!(digest = %block.digest, error = %e, "rejected invalid PoW block in main hot path");
                 return;
             }
             ingest_block(block, peer, engine, io, orphans);
@@ -8222,6 +8289,8 @@ mod tests {
                 network_cmd_tx: &net_tx,
                 events: &events,
                 chain_id: 1337,
+                ghostdag: None,
+                exec_tx: None,
             },
             &mut orphans,
             &mut catch_up,
@@ -8249,6 +8318,8 @@ mod tests {
                 network_cmd_tx: &net_tx,
                 events: &events,
                 chain_id: 1337,
+                ghostdag: None,
+                exec_tx: None,
             },
             &mut catch_up,
             &mut state_sync_sessions,
@@ -8290,6 +8361,8 @@ mod tests {
                 network_cmd_tx: &net_tx,
                 events: &events,
                 chain_id: 1337,
+                ghostdag: None,
+                exec_tx: None,
             },
             &mut state_sync_sessions,
             &state_storage,
@@ -8334,6 +8407,8 @@ mod tests {
                 network_cmd_tx: &net_tx,
                 events: &events,
                 chain_id: 1337,
+                ghostdag: None,
+                exec_tx: None,
             },
             &mut orphans,
             &mut catch_up,
@@ -8350,6 +8425,8 @@ mod tests {
                 network_cmd_tx: &net_tx,
                 events: &events,
                 chain_id: 1337,
+                ghostdag: None,
+                exec_tx: None,
             },
             &mut orphans,
             &mut catch_up,

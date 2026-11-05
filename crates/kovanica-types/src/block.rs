@@ -30,6 +30,52 @@ pub fn vrf_input(chain_id: u64, round: Round, author: AuthorityIndex) -> String 
 pub fn is_vrf_statement(statements: &[u8]) -> bool {
     statements.len() >= VRF_STATEMENT_LEN && statements[..9] == VRF_STATEMENT_MAGIC[..]
 }
+/// Magic prefix of the PoW header metadata blob carried in [`StatementBlock::statements`].
+pub const POW_STATEMENT_MAGIC: &[u8; 9] = b"KVNC-POW1";
+
+/// Length of the PoW statement blob: magic (9) ‖ timestamp (8) ‖ target_bits (4) ‖ nonce (8) ‖ pow_hash (32) = 61 bytes.
+pub const POW_STATEMENT_LEN: usize = 61;
+
+/// Whether `statements` carry the PoW header metadata blob (magic + at least [`POW_STATEMENT_LEN`] bytes).
+#[must_use]
+pub fn is_pow_statement(statements: &[u8]) -> bool {
+    statements.len() >= POW_STATEMENT_LEN && statements[..9] == POW_STATEMENT_MAGIC[..]
+}
+
+/// Encode PoW header metadata into a statements payload.
+#[must_use]
+pub fn encode_pow_statement(
+    timestamp: u64,
+    target_bits: u32,
+    nonce: u64,
+    pow_hash: Option<Hash>,
+) -> Vec<u8> {
+    let mut data = Vec::with_capacity(POW_STATEMENT_LEN);
+    data.extend_from_slice(POW_STATEMENT_MAGIC);
+    data.extend_from_slice(&timestamp.to_le_bytes());
+    data.extend_from_slice(&target_bits.to_le_bytes());
+    data.extend_from_slice(&nonce.to_le_bytes());
+    data.extend_from_slice(&pow_hash.unwrap_or(Hash::zero()).0);
+    data
+}
+
+/// Decode PoW header metadata from a statements payload.
+#[must_use]
+pub fn decode_pow_statement(statements: &[u8]) -> Option<(u64, u32, u64, Option<Hash>)> {
+    if !is_pow_statement(statements) {
+        return None;
+    }
+    let timestamp = u64::from_le_bytes(statements[9..17].try_into().ok()?);
+    let target_bits = u32::from_le_bytes(statements[17..21].try_into().ok()?);
+    let nonce = u64::from_le_bytes(statements[21..29].try_into().ok()?);
+    let hash_bytes: [u8; 32] = statements[29..61].try_into().ok()?;
+    let pow_hash = if hash_bytes == [0u8; 32] {
+        None
+    } else {
+        Some(Hash(hash_bytes))
+    };
+    Some((timestamp, target_bits, nonce, pow_hash))
+}
 
 /// Length in bytes of the block signature preimage (`KUNA/block/v1` 16 B ‖ chain_id 8 B ‖ digest 32 B).
 pub const BLOCK_SIGNATURE_DATA_LEN: usize = 56;
@@ -121,7 +167,7 @@ impl StatementBlock {
         // Any other statements content is outside the digest, so it is not
         // authenticated by the block signature and must never be interpreted.
         if let Some(s) = statements {
-            if is_vrf_statement(s) {
+            if is_vrf_statement(s) || is_pow_statement(s) {
                 data.extend_from_slice(s);
             }
         }
@@ -173,6 +219,37 @@ impl StatementBlock {
     /// Extract a default [`BlockHeader`] from this block bound to `chain_id`.
     pub fn pow_header(&self, chain_id: u64) -> BlockHeader {
         BlockHeader::from_statement_block(self, chain_id, 0, 0, 0)
+    }
+
+    /// Extract the [`BlockHeader`] from this block if it carries PoW statements.
+    pub fn extract_pow_header(&self, chain_id: u64) -> Result<BlockHeader, HeaderError> {
+        let (timestamp, target_bits, nonce, pow_hash) =
+            decode_pow_statement(&self.statements).ok_or(HeaderError::MissingPowHash)?;
+        Ok(BlockHeader {
+            chain_id,
+            round: self.round,
+            author: self.author,
+            parents: self.parents.clone(),
+            merkle_root: self.merkle_root,
+            timestamp,
+            target_bits,
+            nonce,
+            pow_hash,
+        })
+    }
+
+    /// Construct a [`StatementBlock`] from a [`BlockHeader`] and transaction payload.
+    pub fn from_pow_header(header: &BlockHeader, transactions: Vec<Transaction>) -> Self {
+        header.to_statement_block(transactions)
+    }
+
+    /// Return a [BlockReference] corresponding to this block.
+    pub fn reference(&self) -> BlockReference {
+        BlockReference {
+            author: self.author,
+            round: self.round,
+            digest: self.digest,
+        }
     }
 }
 
@@ -333,6 +410,30 @@ impl BlockHeader {
             target_bits,
             nonce,
             pow_hash: None,
+        }
+    }
+
+    /// Convert this [`BlockHeader`] into a full [`StatementBlock`].
+    pub fn to_statement_block(&self, transactions: Vec<Transaction>) -> StatementBlock {
+        let merkle_root = StatementBlock::compute_merkle_root(&transactions);
+        let statements =
+            encode_pow_statement(self.timestamp, self.target_bits, self.nonce, self.pow_hash);
+        let digest = StatementBlock::compute_digest_statements(
+            self.author,
+            self.round,
+            &self.parents,
+            &transactions,
+            Some(&statements),
+        );
+        StatementBlock {
+            author: self.author,
+            round: self.round,
+            parents: self.parents.clone(),
+            transactions,
+            statements,
+            signature: crate::crypto::Signature([0u8; 64]),
+            digest,
+            merkle_root,
         }
     }
 
@@ -1095,5 +1196,44 @@ mod pow_header_tests {
             non_monotonic,
             Err(HeaderError::TimestampNotMonotonic { .. })
         ));
+    }
+    #[test]
+    fn statement_block_pow_roundtrip() {
+        let mut header = BlockHeader::new(
+            5,
+            1,
+            2,
+            vec![],
+            Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            42,
+        );
+        header.pow_hash = Some(header.compute_pow_hash());
+
+        let block = header.to_statement_block(vec![]);
+        assert!(is_pow_statement(&block.statements));
+        assert_eq!(block.round, 1);
+        assert_eq!(block.author, 2);
+
+        let extracted = block.extract_pow_header(5).expect("must extract");
+        assert_eq!(extracted.chain_id, 5);
+        assert_eq!(extracted.round, 1);
+        assert_eq!(extracted.author, 2);
+        assert_eq!(extracted.timestamp, 1_700_000_000_000);
+        assert_eq!(extracted.target_bits, 0x207fffff);
+        assert_eq!(extracted.nonce, 42);
+        assert_eq!(extracted.pow_hash, header.pow_hash);
+        assert!(extracted.verify_pow().is_ok());
+
+        // Digest covers statements
+        let computed_digest = StatementBlock::compute_digest_statements(
+            block.author,
+            block.round,
+            &block.parents,
+            &block.transactions,
+            Some(&block.statements),
+        );
+        assert_eq!(block.digest, computed_digest);
     }
 }

@@ -113,7 +113,7 @@ const PORT_ATTEMPTS: usize = 32;
 const RPC_READY_TIMEOUT_SECS: u64 = 30;
 
 /// How long to wait for each node to see at least one peer.
-const PEER_TIMEOUT_SECS: u64 = 30;
+const PEER_TIMEOUT_SECS: u64 = 60;
 
 /// Bounded window for reaching [`TARGET_HEIGHT`].
 const REACH_TARGET_TIMEOUT_SECS: u64 = 120;

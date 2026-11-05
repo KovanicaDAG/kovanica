@@ -362,7 +362,11 @@ impl ExecutionContext {
         // this very sub-DAG (unbond, slash, liveness eviction) and must never
         // be used to decide who gets paid or who missed a leader slot.
         let leader_epoch = epoch_for_round(subdag.leader_round);
-        let epoch_committee = ensure_epoch_committee(storage, &self.staking, leader_epoch)?;
+        let epoch_committee = if self.signing_ctx.chain_id == chain_id::HYBRID_TESTNET {
+            Vec::new()
+        } else {
+            ensure_epoch_committee(storage, &self.staking, leader_epoch)?
+        };
         let leader_identity =
             resolve_leader_identity(&epoch_committee, &self.staking, subdag.leader_author);
 
@@ -410,82 +414,109 @@ impl ExecutionContext {
             }
         }
 
-        // 3. Pay the mining reward to the leader of this sub-DAG.
-        // Perform the transition on a candidate state. The live in-memory state
-        // is published only after all related storage writes commit successfully.
-        let mut candidate_staking = snapshot_staking(&self.staking);
-        // The leader identity was resolved from the epoch committee BEFORE the
-        // transactions ran. It may have left the active committee *during* this
-        // sub-DAG, e.g. it equivocated and was slashed by an evidence tx it
-        // carried (PRO-19 deactivates a slashed validator immediately), or it
-        // fully unbonded. In that case the reward is forfeited rather than
-        // aborting the commit — a misbehaving leader must not be able to halt
-        // the chain, and a departed validator must not be paid by accident.
-        let leader = leader_identity
-            .and_then(|address| candidate_staking.active_validator(address))
-            .cloned();
-        let reward = match (&leader, leader_identity) {
-            (Some(_), Some(address)) => {
-                candidate_staking.on_leader_committed_resolved(subdag.leader_author, address)?
+        // 3. Pay the mining reward to the blocks/leader of this sub-DAG.
+        // Under Hybrid PoW + GHOSTDAG (Chain 5, ADR 0003), 100% of INITIAL_BLOCK_REWARD (2.5 KVNC)
+        // is minted directly to the miner/author of each confirmed block without stake commission.
+        let (reward, candidate_staking, escrow_part) = if self.signing_ctx.chain_id
+            == chain_id::HYBRID_TESTNET
+        {
+            let mut candidate_staking = snapshot_staking(&self.staking);
+            let mut total_minted = 0u64;
+            let mut miner_recipient = Address::default();
+            for block in &subdag.blocks {
+                let miner = resolve_miner_address(block.author, &candidate_staking);
+                let reward_amount = kovanica_params::INITIAL_BLOCK_REWARD;
+                storage.state().add_balance(&txn, &miner, reward_amount)?;
+                total_minted = total_minted.saturating_add(reward_amount);
+                miner_recipient = miner;
             }
-            _ => candidate_staking
-                .on_leader_committed_forfeited_resolved(subdag.leader_author, leader_identity),
-        };
-        // Split the reward: commission + the validator's own pro-rata share
-        // go straight to its payout address; delegator shares accrue per
-        // (delegator, validator) and are paid by ClaimRewards.
-        // Production escrows [`kovanica_staking::LIGHT_REWARD_BPS`] (20%). The
-        // leader side is what delegators share. Escrow is settled at epoch
-        // close. `leader_amount + escrow_part` equals `reward.amount`.
-        if let Some(leader) = &leader {
-            let (leader_amount, _) =
-                kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
-            let shares = candidate_staking.reward_share(
-                leader.address,
-                leader_amount,
-                leader.commission_bps,
-            );
+            if !subdag
+                .blocks
+                .iter()
+                .any(|b| b.digest == subdag.leader.digest)
             {
-                let mut pending = txn.open_table(PENDING_REWARDS)?;
-                for (addr, amount) in &shares {
-                    if *addr != leader.address && *amount > 0 {
-                        let key = reward_key(addr, &leader.address);
-                        let cur = pending.get(key)?.map(|v| v.value()).unwrap_or(0);
-                        pending.insert(key, cur.saturating_add(*amount))?;
+                let miner = resolve_miner_address(subdag.leader.author, &candidate_staking);
+                let reward_amount = kovanica_params::INITIAL_BLOCK_REWARD;
+                storage.state().add_balance(&txn, &miner, reward_amount)?;
+                total_minted = total_minted.saturating_add(reward_amount);
+                miner_recipient = miner;
+            }
+            candidate_staking.committed_leader_height =
+                candidate_staking.committed_leader_height.saturating_add(1);
+            candidate_staking.total_mining_issued = candidate_staking
+                .total_mining_issued
+                .saturating_add(total_minted);
+            let reward_res = kovanica_staking::RewardOutcome {
+                leader_author: subdag.leader_author,
+                recipient: miner_recipient,
+                amount: total_minted,
+                height: candidate_staking.committed_leader_height,
+            };
+            (reward_res, candidate_staking, 0u64)
+        } else {
+            let mut candidate_staking = snapshot_staking(&self.staking);
+            let leader = leader_identity
+                .and_then(|address| candidate_staking.active_validator(address))
+                .cloned();
+            let reward = match (&leader, leader_identity) {
+                (Some(_), Some(address)) => {
+                    candidate_staking.on_leader_committed_resolved(subdag.leader_author, address)?
+                }
+                _ => candidate_staking
+                    .on_leader_committed_forfeited_resolved(subdag.leader_author, leader_identity),
+            };
+            if let Some(leader) = &leader {
+                let (leader_amount, _) =
+                    kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
+                let shares = candidate_staking.reward_share(
+                    leader.address,
+                    leader_amount,
+                    leader.commission_bps,
+                );
+                {
+                    let mut pending = txn.open_table(PENDING_REWARDS)?;
+                    for (addr, amount) in &shares {
+                        if *addr != leader.address && *amount > 0 {
+                            let key = reward_key(addr, &leader.address);
+                            let cur = pending.get(key)?.map(|v| v.value()).unwrap_or(0);
+                            pending.insert(key, cur.saturating_add(*amount))?;
+                        }
                     }
                 }
+                let validator_part: u64 = shares
+                    .iter()
+                    .filter(|(a, _)| *a == leader.address)
+                    .map(|(_, x)| *x)
+                    .sum();
+                storage
+                    .state()
+                    .add_balance(&txn, &reward.recipient, validator_part)?;
             }
-            let validator_part: u64 = shares
+            let (_, escrow_part) =
+                kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
+            let mut ready: Vec<(Address, Address)> = candidate_staking
+                .unbonding_ready()
                 .iter()
-                .filter(|(a, _)| *a == leader.address)
-                .map(|(_, x)| *x)
-                .sum();
-            storage
-                .state()
-                .add_balance(&txn, &reward.recipient, validator_part)?;
+                .map(|e| (e.delegator, e.validator))
+                .collect();
+            ready.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+            for (delegator, validator) in ready {
+                let amount = candidate_staking.withdraw_unbonded(delegator, validator)?;
+                storage.state().add_balance(&txn, &delegator, amount)?;
+            }
+            (reward, candidate_staking, escrow_part)
+        };
+
+        if self.signing_ctx.chain_id != chain_id::HYBRID_TESTNET {
+            self.pay_light_escrow(
+                &mut txn,
+                storage,
+                committed_height,
+                candidate_staking.committed_leader_height,
+                reward.recipient,
+                escrow_part,
+            )?;
         }
-        let (_, escrow_part) =
-            kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
-        // Pay out matured unbonding entries (UNBONDING_ROUNDS elapsed) via
-        // withdraw_unbonded, in deterministic (delegator, validator) order.
-        let mut ready: Vec<(Address, Address)> = candidate_staking
-            .unbonding_ready()
-            .iter()
-            .map(|e| (e.delegator, e.validator))
-            .collect();
-        ready.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-        for (delegator, validator) in ready {
-            let amount = candidate_staking.withdraw_unbonded(delegator, validator)?;
-            storage.state().add_balance(&txn, &delegator, amount)?;
-        }
-        self.pay_light_escrow(
-            &mut txn,
-            storage,
-            committed_height,
-            candidate_staking.committed_leader_height,
-            reward.recipient,
-            escrow_part,
-        )?;
         // Persist staking state (height, total_mining_issued, treasury vesting)
         storage
             .state()
@@ -1875,6 +1906,17 @@ fn ensure_epoch_committee(
         .commit()
         .map_err(|e| ExecutionError::Other(format!("commit epoch committee: {e}")))?;
     Ok(frozen)
+}
+
+/// Resolve a miner payout address from author index under Hybrid PoW (Chain 5).
+fn resolve_miner_address(author: u16, staking: &StakingState) -> Address {
+    if let Some(val) = staking.authority_validator(author) {
+        val.address
+    } else {
+        let mut bytes = [0u8; 32];
+        bytes[0..2].copy_from_slice(&author.to_le_bytes());
+        Address(bytes)
+    }
 }
 
 /// Map an authority index to the leader's identity address using the epoch
@@ -6089,6 +6131,46 @@ mod tests {
                 kovanica_common::events::MULTISIG_EXECUTED
             );
             assert_eq!(read_balance(&storage, &sender3), balance_before + 1_000_000);
+        }
+    }
+    #[test]
+    fn chain_5_hybrid_pow_block_reward_minting_without_commission() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path().join("chain5_test.redb")).unwrap();
+        let mut ctx =
+            ExecutionContext::with_signing_context(SigningContext::new(chain_id::HYBRID_TESTNET));
+
+        let author_miner: u16 = 7;
+        let miner_addr = resolve_miner_address(author_miner, &ctx.staking);
+
+        // Verify initial balance is None or zero
+        let read = storage.begin_read().unwrap();
+        assert!(storage.state().get_account(&read, &miner_addr).is_err());
+        drop(read);
+
+        let leader = sample_block_at(author_miner, 1);
+        let subdag = CommittedSubDag {
+            leader: leader.clone(),
+            blocks: vec![leader],
+            leader_round: 1,
+            leader_author: author_miner,
+            non_blue: vec![],
+        };
+
+        let result = ctx.execute_committed_subdag(&subdag, &storage).unwrap();
+        assert!(result.reward.is_some());
+        let reward = result.reward.unwrap();
+        assert_eq!(reward.amount, kovanica_params::INITIAL_BLOCK_REWARD);
+        assert_eq!(reward.recipient, miner_addr);
+
+        // Check miner balance in storage is exactly 2.5 KVNC
+        let read = storage.begin_read().unwrap();
+        let acct = storage.state().get_account(&read, &miner_addr).unwrap();
+        assert_eq!(acct.balance, kovanica_params::INITIAL_BLOCK_REWARD);
+
+        // Verify no pending rewards for staking/delegators exist
+        if let Ok(pending) = read.open_table(PENDING_REWARDS) {
+            assert_eq!(pending.iter().unwrap().count(), 0);
         }
     }
 }

@@ -13,6 +13,7 @@ kovanica-consensus = { path = "../kovanica-consensus" }
 kovanica-storage = { path = "../kovanica-storage" }
 kovanica-common = { path = "../kovanica-common" }
 kovanica-crypto = { path = "../kovanica-crypto" }
+kovanica-params = { path = "../kovanica-params" }
 kovanica-htlc = { path = "../kovanica-htlc" }
 kovanica-vault = { path = "../kovanica-vault" }
 kovanica-multisig = { path = "../kovanica-multisig" }

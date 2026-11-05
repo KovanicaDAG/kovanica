@@ -50,6 +50,10 @@ pub enum Rejection {
     /// A skip certificate is empty, oversized, mixes rounds or repeats a
     /// signer.
     MalformedCertificate,
+    /// PoW header verification failed (Chain 5).
+    BadPow(kovanica_types::block::HeaderError),
+    /// Missing PoW header on Chain 5 block.
+    MissingPow,
 }
 
 impl fmt::Display for Rejection {
@@ -73,6 +77,8 @@ impl fmt::Display for Rejection {
                 write!(f, "commit seal epoch does not match the local epoch")
             }
             Rejection::MalformedCertificate => write!(f, "malformed skip certificate"),
+            Rejection::BadPow(err) => write!(f, "PoW verification failed: {err}"),
+            Rejection::MissingPow => write!(f, "missing PoW header on hybrid block"),
         }
     }
 }
@@ -215,7 +221,9 @@ pub fn verify_block(
         block.round,
         &block.parents,
         &block.transactions,
-        if kovanica_types::block::is_vrf_statement(&block.statements) {
+        if kovanica_types::block::is_vrf_statement(&block.statements)
+            || kovanica_types::block::is_pow_statement(&block.statements)
+        {
             Some(&block.statements)
         } else {
             None
@@ -227,6 +235,19 @@ pub fn verify_block(
     if StatementBlock::compute_merkle_root(&block.transactions) != block.merkle_root {
         return Err(Rejection::MerkleMismatch);
     }
+
+    if chain_id == kovanica_types::signing::chain_id::HYBRID_TESTNET {
+        // Chain 5 (Hybrid PoW + GHOSTDAG):
+        // NO stake in consensus path per ADR 0003. Committee keys and Ed25519 signatures
+        // are NOT checked. Anti-DoS is enforced strictly by PoW verification:
+        // missing PoW or hash not meeting target is rejected immediately.
+        let header = block
+            .extract_pow_header(chain_id)
+            .map_err(|_| Rejection::MissingPow)?;
+        header.verify_pow().map_err(Rejection::BadPow)?;
+        return Ok(());
+    }
+
     let key = keys
         .get(&block.author)
         .ok_or(Rejection::UnknownAuthority(block.author))?;
@@ -896,5 +917,57 @@ mod tests {
                 &PublicKey::from(outsider.verifying_key())
             )))
         );
+    }
+    #[test]
+    fn chain_5_pow_block_validation_and_anti_dos() {
+        use kovanica_types::block::{BlockHeader, HeaderError};
+        use std::collections::HashMap;
+
+        let empty_keys: AuthorityKeys = HashMap::new();
+        let chain_id = kovanica_types::signing::chain_id::HYBRID_TESTNET;
+
+        // 1. Build a valid PoW block
+        let mut header = BlockHeader::new(
+            chain_id,
+            1,
+            99, // Author 99 is not in any committee!
+            vec![],
+            Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff, // Easy target
+            123,
+        );
+        header.pow_hash = Some(header.compute_pow_hash());
+        let valid_block = header.to_statement_block(vec![]);
+
+        // Must succeed without any committee keys
+        assert!(verify_block(&empty_keys, chain_id, &valid_block).is_ok());
+
+        // 2. Missing PoW statements is rejected
+        let (signers, _) = committee(1);
+        let block_without_pow = signed_block(&signers[0], 0);
+        assert_eq!(
+            verify_block(&empty_keys, chain_id, &block_without_pow),
+            Err(Rejection::MissingPow)
+        );
+
+        // 3. Invalid PoW hash is rejected
+        let mut invalid_header = header.clone();
+        invalid_header.pow_hash = Some(Hash([0xbb; 32]));
+        let invalid_block = invalid_header.to_statement_block(vec![]);
+        assert!(matches!(
+            verify_block(&empty_keys, chain_id, &invalid_block),
+            Err(Rejection::BadPow(HeaderError::InvalidPowHash { .. }))
+        ));
+
+        // 4. Target not met is rejected
+        let mut strict_header = header.clone();
+        strict_header.target_bits = 0x04000001; // Extremely hard target
+        strict_header.pow_hash = Some(strict_header.compute_pow_hash());
+        let strict_block = strict_header.to_statement_block(vec![]);
+        assert!(matches!(
+            verify_block(&empty_keys, chain_id, &strict_block),
+            Err(Rejection::BadPow(HeaderError::TargetNotMet { .. }))
+        ));
     }
 }

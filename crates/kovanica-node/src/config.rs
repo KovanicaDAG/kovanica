@@ -15,6 +15,25 @@ fn default_enabled() -> bool {
     true
 }
 
+/// Mining configuration for Chain 5 (Hybrid PoW testnet).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct MiningConfig {
+    /// Enable PoW mining worker loop.
+    pub enabled: bool,
+    /// Number of mining worker threads.
+    pub threads: usize,
+}
+
+impl Default for MiningConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threads: 1,
+        }
+    }
+}
+
 /// Runtime configuration for a Kovanica node.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -84,6 +103,9 @@ pub struct NodeConfig {
     /// Gossipsub peer scoring (`[peer_scoring]` table). Defaults are safe for
     /// a small validator network; see `kovanica_network::PeerScoringConfig`.
     pub peer_scoring: kovanica_network::PeerScoringConfig,
+    /// Mining configuration for Chain 5 (`[mining]` table).
+    #[serde(default)]
+    pub mining: MiningConfig,
 
     // ------------------------------------------------------------------
     // Retention / pruning (opt-in: with every window unset the node never
@@ -185,6 +207,7 @@ impl Default for NodeConfig {
             rpc_rate_limit_per_min: 60,
             health_commit_stall_secs: kovanica_rpc::health::DEFAULT_COMMIT_STALL_SECS,
             peer_scoring: kovanica_network::PeerScoringConfig::default(),
+            mining: MiningConfig::default(),
             chain_id: kovanica_types::signing::chain_id::LOCAL,
             // Pruning is opt-in: every retention window defaults to "keep
             // everything" so an unconfigured node never deletes data.
@@ -335,6 +358,19 @@ impl NodeConfig {
                 "1" | "true" | "yes" | "on" => self.run_validator = true,
                 "0" | "false" | "no" | "off" => self.run_validator = false,
                 _ => tracing::warn!(value = %v, "ignoring invalid KOVANICA_RUN_VALIDATOR"),
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_MINING_ENABLED") {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.mining.enabled = true,
+                "0" | "false" | "no" | "off" => self.mining.enabled = false,
+                _ => tracing::warn!(value = %v, "ignoring invalid KOVANICA_MINING_ENABLED"),
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_MINING_THREADS") {
+            match v.parse() {
+                Ok(n) => self.mining.threads = n,
+                Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_MINING_THREADS"),
             }
         }
         if let Ok(v) = std::env::var("KOVANICA_CHAIN_ID") {
@@ -950,5 +986,28 @@ treasury_address = "treasury-address-placeholder"
             assert!(err.to_string().contains(var), "{var}: {err}");
             std::env::remove_var(var);
         }
+    }
+    #[test]
+    fn test_mining_config_toml_and_env() {
+        let toml_str = r#"
+            [mining]
+            enabled = true
+            threads = 4
+        "#;
+        let config = NodeConfig::from_toml_str(toml_str).unwrap();
+        assert!(config.mining.enabled);
+        assert_eq!(config.mining.threads, 4);
+
+        let mut config_default = NodeConfig::default();
+        assert!(!config_default.mining.enabled);
+        assert_eq!(config_default.mining.threads, 1);
+
+        std::env::set_var("KOVANICA_MINING_ENABLED", "true");
+        std::env::set_var("KOVANICA_MINING_THREADS", "8");
+        config_default.apply_env_overrides();
+        assert!(config_default.mining.enabled);
+        assert_eq!(config_default.mining.threads, 8);
+        std::env::remove_var("KOVANICA_MINING_ENABLED");
+        std::env::remove_var("KOVANICA_MINING_THREADS");
     }
 }
