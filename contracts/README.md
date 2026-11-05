@@ -23,10 +23,13 @@ is reproducible.
 ## Copies that must stay identical
 
 - `contracts/kovanica-token.wasm` — embedded by `kovanica-cli` (`include_bytes!`).
-- `apps/android-wallet/app/src/main/assets/kovanica_token.wasm`
-- `apps/android/app/src/main/assets/kovanica_token.wasm`
+- `crates/kovanica-cli/fixtures/kovanica_token.wasm` — L1 pin of the bytes the apps ship.
+- [KovanicaDAG/kovanica-apps](https://github.com/KovanicaDAG/kovanica-apps):
+  `android-wallet/app/src/main/assets/kovanica_token.wasm` and
+  `android/app/src/main/assets/kovanica_token.wasm`
 
 The Android builds read their own asset, so they cannot point at this directory
-directly. `crates/kovanica-cli/src/contracts.rs` asserts that all three are
-byte-identical (`shipped_token_wasm_matches_the_repo_copies`), which fails the
-CLI test suite if a rebuild only updates one of them.
+directly. `crates/kovanica-cli/src/contracts.rs` asserts that the embedded
+contract and the fixture are byte-identical
+(`shipped_token_wasm_matches_the_repo_copies`), so a rebuild fails the CLI test
+suite until the fixture — and the kovanica-apps assets — are updated with it.
