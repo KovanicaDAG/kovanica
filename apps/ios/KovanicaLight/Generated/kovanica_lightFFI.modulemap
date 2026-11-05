@@ -1,7 +1,0 @@
-module kovanica_lightFFI {
-    header "kovanica_lightFFI.h"
-    export *
-    use "Darwin"
-    use "_Builtin_stdbool"
-    use "_Builtin_stdint"
-}

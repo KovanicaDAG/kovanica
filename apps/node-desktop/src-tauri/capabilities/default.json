@@ -1,6 +1,0 @@
-{
-  "identifier": "default",
-  "description": "Node window. No shell plugin and no filesystem plugin.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
-}
