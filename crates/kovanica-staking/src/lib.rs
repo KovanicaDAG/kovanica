@@ -1615,8 +1615,8 @@ mod tests {
     use proptest::prelude::*;
 
     #[test]
-    fn ticker_is_kuna() {
-        assert_eq!(TICKER, "KUNA");
+    fn ticker_is_kvnc() {
+        assert_eq!(TICKER, "KVNC");
         assert_eq!(DECIMALS, 9);
         assert_eq!(ONE_KUNA, 1_000_000_000);
     }

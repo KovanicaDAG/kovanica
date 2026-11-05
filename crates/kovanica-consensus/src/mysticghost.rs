@@ -14,7 +14,7 @@ use kovanica_types::hash::Hash;
 pub struct MysticGhostConfig {
     /// When false, the original linearizer is used (pure Mysticeti).
     pub enabled: bool,
-    /// GHOSTDAG parameter k (must be 3 for the current safety argument).
+    /// GHOSTDAG parameter k (must be 3 or 5; default 5).
     pub k: usize,
     /// Maximum number of blocks allowed in a mergeset before we refuse to
     /// colour (the safety valve returns `MysticGhostOrder::Fallback`, it does
@@ -30,7 +30,7 @@ impl Default for MysticGhostConfig {
     fn default() -> Self {
         Self {
             enabled: false, // start disabled – pure Mysticeti
-            k: 3,
+            k: 5,
             max_mergeset_blocks: 2_000,
         }
     }

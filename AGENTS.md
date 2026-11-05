@@ -4,27 +4,27 @@
 
 **kovanica** is a clean, from-scratch Rust Layer-1 blockchain.
 
-**Naming (zaključano):** chain = **Kovanica**, native coin ticker = **KUNA** (9 decimals),
+**Naming (zaključano):** chain = **Kovanica**, native coin ticker = **KVNC** (9 decimals; preimenovano natrag iz KUNA per Toni 2026-11-05),
 codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-node`, `KOVANICA_*`). Adresa je
-`kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3, 4 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Nikad ne koristi `KVNC` kao naziv valute.
+`kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3, 4 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Adresni prefiks `kvnc`...`dag` je usklađen s KVNC tickerom.
 
 **Chain ID Registry (Toni 1A):**
 - `1` = **Mainnet** (`MAINNET`) — canonical PRO-21 base32 address, frozen consensus parameters. `funded_accounts.toml` strictly forbidden.
 - `2` = **Testnet (legacy ID)** (`TESTNET`) — not public testnet; enforces PRO-21 addresses.
 - `3` = **Devnet** (`DEVNET`) — devnet; legacy hex addresses allowed, dev parameter overrides.
-- `4` = **Internal testnet until 25.11.2026** (`TESTNET_V2`) — internal testnet until public launch 25.11.2026; supports PRO-21 and legacy migration.
+- `4` = **Internal testnet** (`TESTNET_V2`) — internal testnet; public launch gated on hybrid testnet M8 pass (delayed from unconditional 25.11.2026); supports PRO-21 and legacy migration.
+- `5` = **Hybrid PoW Testnet** (`HYBRID_TESTNET`) — planned hybrid PoW + GHOSTDAG chain (intent documented in ADR 0003; feature/flag `hybrid-pow`).
 - `1337` = **Local devnet** (`LOCAL`) — single-node / local cluster testing (legacy hex allowed).
 
 *Params SoT:* `kovanica-params`. `funded_accounts.toml` allowed on every chain except mainnet (1).
 
 | Layer              | Choice                                      |
 |--------------------|---------------------------------------------|
-| Consensus          | Mysticeti-style uncertified DAG (wave = 3)  |
+| Consensus          | Hybrid PoW + GHOSTDAG (NO stake for consensus; target block 4 s, GHOSTDAG K=5; PoW hash: KovanicaHash) |
 | Execution          | Wasmi (deterministic WASM)                  |
-| Account model      | Account-based + staked validators           |
-| Validators         | Uncapped active set, min stake 50 000 KUNA (genesis: testnet ~5, mainnet 15–20) |
+| Account model      | Account-based                               |
 | Resource target    | Comfortable on 2–4 GB RAM VPS               |
-| Native token       | KUNA (9 decimals)                           |
+| Native token       | KVNC (9 decimals)                           |
 
 ## HARD RULES (NEKRŠIVA)
 
@@ -34,29 +34,39 @@ codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-no
 4. Ne diraj tokenomics parametre bez eksplicitnog odobrenja.
 5. Ciljaj uvijek na 2–4 GB RAM footprint.
 
+## Consensus & PoW Hash (zaključano Toni 2026-11-05)
+
+- **Product-of-record consensus:** Hybrid PoW + GHOSTDAG; **NO stake for consensus** (odluka Toni 2026-11-05).
+- **PoW Hash:** **KovanicaHash** (striktno NE KunaHash; planiran blake3 + 2 MiB memory mix; audit obavezan prije mainneta).
+- **Consensus defaults:** `TARGET_BLOCK_MS = 4000` (4 s) i `GHOSTDAG_K = 5`.
+- **Legacy Mysticeti constants (still in tree until hybrid flag):** `WAVE_LENGTH = 3`, `EPOCH_ROUNDS = 7200`, `LEADER_INTERVAL_SECS = 12`, `ROUND_SECS = 4`.
+- **Legacy / non-consensus under hybrid:** `MIN_VALIDATOR_STAKE`, `MIN_DELEGATION`, `JAIL_ROUNDS` (raniji Mysticeti-C parametri više nisu u konsenzusnom putu pod hibridom).
+- **Launch gating:** Javni launch je odgođen s 25.11.2026 do prolaska hibridnog testneta (milestone M8).
+- **PRO-7 Status:** FROZEN za hibridni konsenzus (Mysticeti VRF leader put je napušten u korist PoW + GHOSTDAG).
+
 ## Tokenomics (zaključano)
 
-> Revidirano 2026-10-13: s₀=2,5 KUNA, era=8 100 000, budget=81M, +1M genesis validatorska alokacija, round 4 s (leader 12 s). Sve potvrđeno od strane vlasnika projekta.
+> Revidirano 2026-10-13 / Ažurirano 2026-11-05: ticker KVNC, s₀=2,5 KVNC, era=8 100 000, budget=81M, +1M genesis validatorska alokacija, target block 4 s (`TARGET_BLOCK_MS = 4000`), GHOSTDAG K=5. Sve potvrđeno od strane vlasnika projekta.
 
 | Parameter                  | Value                                          |
 |---------------------------|------------------------------------------------|
-| Total supply              | **90 200 000 KUNA**                            |
+| Total supply              | **90 200 000 KVNC**                            |
 | Decimals                  | 9                                              |
-| Founder premine           | 200 000 KUNA                                   |
-| Treasury                  | 8 000 000 KUNA (1 M/year × 8 years, linear)    |
-| Genesis validator alloc.  | 1 000 000 KUNA (ravnomjerno na genesis validatore, **testnet: preporučeno 5, najviše 20; mainnet: 15–20 (provjereno u kodu)**) |
-| Mining subsidy budget     | **81 000 000 KUNA** (= 90.2M − 0.2M − 8M − 1M) |
-| Initial block reward      | **2,5 KUNA** (paid to committed leader author) |
-| Subsidy era length        | **8 100 000** committed leader blocks          |
+| Founder premine           | 200 000 KVNC                                   |
+| Treasury                  | 8 000 000 KVNC (1 M/year × 8 years, linear)    |
+| Genesis validator alloc.  | 1 000 000 KVNC (ravnomjerno na genesis validatore, **testnet: preporučeno 5, najviše 20; mainnet: 15–20 (provjereno u kodu)**; legacy staking) |
+| Mining subsidy budget     | **81 000 000 KVNC** (= 90.2M − 0.2M − 8M − 1M) |
+| Initial block reward      | **2,5 KVNC** (paid to committed block author)  |
+| Subsidy era length        | **8 100 000** committed leader/block heights   |
 | Decay                     | **× 3/4** each era                             |
-| Round / leader interval   | round 4 s → committed leader svakih 12 s       |
-| Epoch (validator rotacija)| epoch = 8 h = 7 200 DAG rundi = 2 400 leader visina (committed leader svakih 12 s), neovisno o eri (PRO-37) |
-| Active validators         | Uncapped stake set (genesis: testnet ~5, mainnet 15–20; min active 15) |
-| Min validator stake       | 50 000 KUNA (`MIN_VALIDATOR_STAKE`)            |
-| Min delegation            | 50 000 KUNA (`MIN_DELEGATION`)                 |
-| Jail duration             | 7 200 committed leader heights (`JAIL_ROUNDS`, ~1 day = 3 epochs) |
+| Target block time         | 4 s (`TARGET_BLOCK_MS = 4000`)                 |
+| GHOSTDAG parameter K      | 5 (`GHOSTDAG_K = 5`)                           |
+| Epoch (legacy Mysticeti)  | epoch = 8 h = 7 200 DAG rundi = 2 400 leader visina (legacy Mysticeti constant) |
+| Min validator stake       | 50 000 KVNC (`MIN_VALIDATOR_STAKE`; legacy / non-consensus) |
+| Min delegation            | 50 000 KVNC (`MIN_DELEGATION`; legacy / non-consensus)      |
+| Jail duration             | 7 200 heights (`JAIL_ROUNDS`; legacy / non-consensus)       |
 
-Reward se mint-a **samo** na committed leader (CommittedSubDag → StakingState::on_leader_committed). Genesis validatorima se alocira 1M KUNA (ravnomjerni split, dust deterministički), od čega svaki stake-a min 50 000 KUNA.
+Reward se mint-a na committed blokove. Genesis validatorima se alocira 1M KVNC (ravnomjerni split, dust deterministički).
 
 ## Workspace structure (poštuj postojeće)
 

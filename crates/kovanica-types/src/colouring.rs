@@ -94,7 +94,7 @@ pub enum ColourError {
     DuplicateDigest,
     /// The claimed leader digest is not in the mergeset.
     LeaderMissing,
-    /// `k` was not 3. MysticGhost refuses any other parameter.
+    /// `k` was not 3 or 5. GHOSTDAG refuses any other parameter.
     UnsupportedK,
     /// Re-colouring did not reproduce the header's blue or non-blue root.
     RootMismatch,
@@ -132,7 +132,7 @@ pub fn colour_mergeset(
     k: usize,
     previous_tips: &[Hash],
 ) -> Result<ColouringResult, ColourError> {
-    if k != 3 {
+    if k != 3 && k != 5 {
         return Err(ColourError::UnsupportedK);
     }
 
@@ -325,12 +325,13 @@ mod tests {
     }
 
     #[test]
-    fn k_other_than_3_is_rejected() {
+    fn k_other_than_3_or_5_is_rejected() {
         let genesis = block(0, 1, &[]);
         assert_eq!(
-            colour_mergeset(&[genesis], 2, &[]).unwrap_err(),
+            colour_mergeset(std::slice::from_ref(&genesis), 2, &[]).unwrap_err(),
             ColourError::UnsupportedK
         );
+        assert!(colour_mergeset(std::slice::from_ref(&genesis), 5, &[]).is_ok());
     }
 
     #[test]

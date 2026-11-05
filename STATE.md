@@ -1,42 +1,56 @@
 # STATE — living source of truth
 
-**Tip:** `d951da451c9982fc8924c4c7f2ec08e06f549d64` (merge of #165 on 2026-10-31; prior living tip `abacfb922132e3e7b3084cfe75cdebc46a72cbdf` / hygiene base `a78e3ac9ce5c99a0c4014c51f3763c87f93e821d`).
+**Tip:** `559cc2014592e1c621da2df78d9671e7476972d1` (docs PR bases here; merge of chore/move-apps-to-kovanica-apps #176 on 2026-11-05; prior living tip `d951da451c9982fc8924c4c7f2ec08e06f549d64`).
 Update this file when frozen params or open product gaps change. Point-in-time dumps live under `docs/archive/`; they are not SoT.
 
-## Chain 4 (internal testnet track until public launch 2026-11-25)
+## Active Priority: Hybrid PoW + GHOSTDAG (P0–P8)
 
-- `chain_id = 4`. Network tag form: `<chain_id>-<16 hex genesis digest>` (see `docs/TESTNET-SEED-NODES.md` for topology).
-- Target launch window: internal testnet until public launch **2026-11-25** as product **1.0.0** if apps are solid; mainnet target **2027-01-01** as **2.0.0**.
-- Genesis for testnet: **5** validators (uncapped active set via staking). Mainnet genesis requires **≥15** (15–20 in ceremony; uncapped active set via staking later).
-- Ordering default on testnet: MysticGhost (GHOSTDAG). Round duration **4 s** (leader ~12 s). Consensus env overrides (`KOVANICA_ROUND_DURATION_MS`, `KOVANICA_MYSTICGHOST`, `KOVANICA_VRF_LEADER`) are hard-rejected on non-dev chains.
+- **Consensus Direction (Toni 2026-11-05):** Hybrid PoW + GHOSTDAG. **NO stake for consensus**.
+- **Priority Rank:** Hybrid PoW + GHOSTDAG phases P0–P8 rank strictly above PRO-6, PRO-14, and Gate leftover 20/36/7.
+- **PRO-7:** **FROZEN** for hybrid (Mysticeti VRF leader path dead under hybrid PoW + GHOSTDAG).
+- **Public Launch:** Public launch is delayed from unconditional 2026-11-25 until **Hybrid Testnet M8** passes.
+- **PoW Hash:** Planned PoW hash name is **KovanicaHash** (strictly NOT KunaHash; blake3 + 2 MiB memory mix; audit required before mainnet).
+- **Consensus Defaults:** `TARGET_BLOCK_MS = 4000`, `GHOSTDAG_K = 5`.
+- **Product Ticker:** **KVNC** (renamed back from KUNA per Toni 2026-11-05).
+
+## Chain 4 & Chain 5 (Testnet tracks)
+
+- `chain_id = 4`. Network tag form: `<chain_id>-<16 hex genesis digest>` (see `docs/TESTNET-SEED-NODES.md` for topology). Internal testnet track until public launch (gated on hybrid testnet M8 pass).
+- `chain_id = 5`. Planned Hybrid PoW + GHOSTDAG testnet track under feature/flag `hybrid-pow` (ADR 0003).
+- Launch gating: public launch delayed from unconditional 2026-11-25 until hybrid testnet M8 passes.
+- Genesis for testnet: **5** validators (legacy). Mainnet genesis requires **≥15** (15–20 in ceremony).
+- Ordering default: GHOSTDAG (lifted k=3 hard-lock in P0 to allow `GHOSTDAG_K = 5`).
 - Topology, seeds, and ops runbooks: `docs/TESTNET-SEED-NODES.md`, `docs/TESTNET-RESET.md`, `docs/VALIDATOR-ONBOARDING.md`. Do not treat archived `sync-*.md` tables as live inventory.
 
 ## Frozen protocol params (code-true decisions)
 
 | Topic | Value |
 | --- | --- |
-| Coin | KUNA, **9** decimals (`ONE_KUNA = 10^9`) |
+| Coin | KVNC, **9** decimals (`ONE_KVNC = 10^9`, legacy alias `ONE_KUNA`) |
+| Consensus | Hybrid PoW + GHOSTDAG (NO stake in consensus path; `TARGET_BLOCK_MS = 4000`, `GHOSTDAG_K = 5`; PoW: KovanicaHash) |
 | Cap / subsidy sketch | 90.2M total; mining budget 81M; treasury 8M; genesis validators 1M; founder premine 200k |
 | Address | `kvnc` + 57 bech32-alphabet base32 + `dag` (**64** chars); 32 B Ed25519 ‖ 29-bit blake3 checksum. Legacy hex only on chains **3, 4, 1337** |
-| Epoch | **7200** DAG rounds ≈ 8 h ≈ **2400** leader heights (consensus + staking/light set) |
-| Jail | `JAIL_ROUNDS = 7200` committed leaders ≈ 1 day (= 3 epochs) |
-| Min validator stake | `50_000` KUNA (`MIN_VALIDATOR_STAKE = 50_000 * ONE_KUNA`) |
-| Min delegation | `50_000` KUNA (`MIN_DELEGATION = 50_000 * ONE_KUNA`; decided Toni 2026-10-31, enforced in `kovanica-staking` / `kovanica-execution`) |
+| Epoch (legacy) | **7200** DAG rounds ≈ 8 h ≈ **2400** leader heights (legacy Mysticeti constant still in tree until hybrid flag) |
+| Jail (legacy) | `JAIL_ROUNDS = 7200` committed leaders (legacy / non-consensus under hybrid) |
+| Min validator stake (legacy) | `50_000` KVNC (`MIN_VALIDATOR_STAKE = 50_000 * ONE_KUNA`; legacy / non-consensus) |
+| Min delegation (legacy) | `50_000` KVNC (`MIN_DELEGATION = 50_000 * ONE_KUNA`; legacy / non-consensus) |
 | `funded_accounts.toml` | Allowed on every chain **except** mainnet (chain 1) |
-| Hash / sig domains | `KUNA-*` (`KUNA/vote/v2` with `genesis_hash` in 106 B preimage; legacy 74 B `KUNA/vote/v1` retired) |
+| Hash / sig domains | `KUNA-*` / `KVNC-*` crypto context tags remain for protocol compatibility |
 
 Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_FROM_ROUND` to `0` (gas, contract, size limits, slashing).
 
 ## Open product gaps (not archived noise)
 
-1. CI move into `KovanicaDAG/kovanica-protocol` (fmt/clippy/test + pinned gitleaks).
-2. Ops drift (live fleet): VPS systemd units still `kvnc-*` / `KVNC_*` (repo seed scripts & docs updated to `KOVANICA_*` and `${KOVANICA_ROOT:-/root/Projects/kovanica}`; coordinate live VPS cutover + physical directory rename with Seed Ops); DNS seed names for mainnet (`docs/SEED-DNS-AUDIT.md`).
-3. Governance (Phase 25), BIP32 HD, external audit, mainnet launch runbook — see root `TASKLIST.md`.
+1. Hybrid PoW + GHOSTDAG phases P1–P8 (P0 Spec delivered in ADR 0003).
+2. CI move into `KovanicaDAG/kovanica-protocol` (fmt/clippy/test + pinned gitleaks).
+3. Ops drift (live fleet): VPS systemd units still `kvnc-*` / `KVNC_*`; DNS seed names for mainnet (`docs/SEED-DNS-AUDIT.md`).
+4. Governance (Phase 25), BIP32 HD, external audit, mainnet launch runbook — see root `TASKLIST.md`.
 
-**Done, do not re-open as missing:**
+**Done / frozen, do not re-open as missing:**
+- PRO-7 (Mysticeti VRF leader set + pin): **FROZEN** for hybrid.
 - Contract SDK (`crates/kovanica-contract-sdk`) and Indexer (`crates/kovanica-indexer`).
 - Escrow E0433 (`kovanica-escrow` wired into `kovanica-execution/src/contracts.rs`, merged in #163).
-- `MIN_DELEGATION = 50_000 KUNA` wired in `kovanica-params`, `kovanica-staking`, and `kovanica-execution`.
+- PRO-20 / PRO-36 merged code (kept).
 - Vote signature **v2** (`KUNA/vote/v2` + `genesis_hash` in 106 B preimage; 74 B v1 retired).
-- Light-client checkpoint (`kovanica_lightClientCheckpoint` state-backed lookup in `kovanica-rpc` with `verify_quorum` / `verify_colouring`).
-- PRO-40 late-leader rule: union-quorum commit with non-overlapping timeout stake above the skip-complement floor (`votes > total_stake - quorum_threshold`), partitioning late proposals past `T_skip` between verified `SkipCert` quorum and union-quorum commit (`docs/dev/NOTED-pro-40-late-vote.md`).
+- Light-client checkpoint (`kovanica_lightClientCheckpoint` state-backed lookup in `kovanica-rpc`).
+- PRO-40 late-leader rule: union-quorum commit with non-overlapping timeout stake above the skip-complement floor.
