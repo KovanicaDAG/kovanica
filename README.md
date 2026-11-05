@@ -31,7 +31,7 @@ Kovanica is engineered from scratch in Rust for high throughput and predictable 
    - Wave-based consensus progression with wave length `WAVE_LENGTH = 3` DAG rounds (Leader $\to$ Vote $\to$ Decide).
    - Direct quorum commits ($2f+1$ stake threshold) and recursive indirect causal commit rules without intermediate certificate synchronization.
    - Target consensus round duration: `4,000 ms` (4 s), yielding a committed leader block every `12 s` (`LEADER_INTERVAL_SECS = 12`).
-   - Leader election: stake-weighted verifiable random function via the `ecvrf` crate (Ristretto255 + SHA3-512, 96-byte proof; see `docs/archive/VRF-PROOF-LENGTH.md`), falling back to stake-weighted round-robin when VRF keys are unpopulated.
+   - Leader election: stake-weighted verifiable random function via the `ecvrf` crate (Ristretto255 + SHA3-512, 96-byte proof; see `docs/archive/VRF-PROOF-LENGTH.md`), falling back to round-robin when VRF keys are unpopulated.
    - **MysticGhost Hybrid Colouring:** Scoped GHOSTDAG ($k=3$) sub-DAG topological sort for transactions; uncoloured (non-blue) blocks are safely recycled back to the mempool without transaction loss.
 2. **Account Model & Staking:**
    - Account-based ledger tracking nonces, balances, contract storage, and validator stakes.
