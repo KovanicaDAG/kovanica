@@ -2611,6 +2611,7 @@ dependencies = [
  "kovanica-htlc",
  "kovanica-multisig",
  "kovanica-nft",
+ "kovanica-params",
  "kovanica-runtime",
  "kovanica-staking",
  "kovanica-storage",

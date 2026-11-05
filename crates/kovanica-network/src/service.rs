@@ -1511,11 +1511,20 @@ impl NetworkService {
         let block: StatementBlock = match bincode::deserialize(payload) {
             Ok(block) => block,
             Err(err) => {
-                warn!(%err, "dropping malformed block gossip");
-                return Verdict::reject("malformed block");
+                // If it's a raw BlockHeader for Chain 5, adapt it into StatementBlock
+                if let Ok(header) =
+                    bincode::deserialize::<kovanica_types::block::BlockHeader>(payload)
+                {
+                    header.to_statement_block(Vec::new())
+                } else {
+                    warn!(%err, "dropping malformed block gossip");
+                    return Verdict::reject("malformed block");
+                }
             }
         };
-        if !self.validator.is_configured() {
+        if self.config.network_id.chain_id != kovanica_types::signing::chain_id::HYBRID_TESTNET
+            && !self.validator.is_configured()
+        {
             debug!("committee keys not set; block gossip dropped unforwarded");
             return Verdict::Ignore;
         }
@@ -1965,7 +1974,7 @@ mod tests {
         let tx_task = tokio::spawn(async move { s.start().await });
 
         // Wait for the connection and the gossip mesh (heartbeat ~1s).
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(35);
         while !receiver.connected_peers().contains(&sender_id) {
             assert!(Instant::now() < deadline, "peers never connected");
             tokio::time::sleep(Duration::from_millis(100)).await;

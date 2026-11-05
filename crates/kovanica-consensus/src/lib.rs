@@ -16,6 +16,7 @@ pub mod committer_mysticghost;
 pub mod daa;
 pub mod engine;
 pub mod genesis;
+pub mod ghostdag;
 pub mod ghostdag_scoped;
 pub mod linearizer;
 pub mod metrics;
@@ -32,6 +33,7 @@ pub use engine::{
     ValidatorState, VoteBroadcaster, VoteRejection,
 };
 pub use genesis::is_genesis_subdag;
+pub use ghostdag::{calculate_work_from_target, GhostdagCommitter};
 pub use kovanica_types::Vote;
 pub use linearizer::Linearizer;
 pub use metrics::{

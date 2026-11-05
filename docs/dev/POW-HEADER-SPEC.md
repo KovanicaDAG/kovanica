@@ -1,7 +1,7 @@
-# PoW Block Header & Mining Specification (P1–P4)
+# PoW Block Header & Mining Specification (P1–P6)
 
-- **Status:** Implemented (P1–P4, Toni 2026-11-05, ADR 0003)
-- **Scope:** Block header primitives, preimage serialization, compact difficulty target conversion, KovanicaHash PoW algorithm, header verification wiring, mining worker, and difficulty adjustment algorithm (DAA) for Chain ID 5.
+- **Status:** Implemented (P1–P6, Toni 2026-11-05, ADR 0003)
+- **Scope:** Block header primitives, preimage serialization, compact difficulty target conversion, KovanicaHash PoW algorithm, header verification wiring, mining worker, difficulty adjustment algorithm (DAA), P2P anti-DoS network ingress, GHOSTDAG committer with reward minting, and node mining authoring loop for Chain ID 5.
 
 ---
 
@@ -131,3 +131,68 @@ Implemented in `kovanica-consensus`:
 - Ceiling: `MAX_TARGET_BITS = 0x1f00_ffff`.
 - Floor: `MIN_TARGET_BITS = 0x0100_0001`.
 - Math helper: `mul_div_u256(val, num, den)` provides exact 320-bit intermediate multi-limb arithmetic.
+
+
+---
+
+## 7. P2P Network Ingress & PoW Anti-DoS Boundary (P5)
+
+Implemented in `crates/kovanica-network`:
+- **Validation Pipeline:** In `validate_block` / `verify_block`, incoming blocks on Chain 5 (`HYBRID_TESTNET`) are validated against PoW requirements before being accepted or forwarded:
+  1. Merkle root integrity and block digest verification.
+  2. Header extraction via `StatementBlock::extract_pow_header(chain_id)`. If missing or malformed, the block is rejected with `Rejection::MissingPow` or `Rejection::BadPow`.
+  3. Header PoW verification via `header.verify_pow()` (enforcing valid `pow_hash`, target requirement check against `target_bits`, and timestamp sanity).
+  4. Skip committee authority checks: Chain 5 operates without validator signatures or committee authority lookups (NO stake in consensus path per ADR 0003).
+- **Anti-DoS Protection:**
+  - Blocks failing PoW verification are rejected immediately at the network ingress boundary.
+  - Invalid blocks are neither propagated to gossipsub peers nor stored in the DAG memory/disk stores.
+  - Sending peers are penalized with `invalid_message_weight` in gossipsub peer scoring.
+- **Message Parsing:** `NetworkService::on_block_message` admits both standard `StatementBlock` messages and raw `BlockHeader` structures (automatically converted to `StatementBlock` with empty transaction lists).
+
+---
+
+## 8. GHOSTDAG Committer & Execution Wiring (P6)
+
+Implemented in `crates/kovanica-consensus` and `crates/kovanica-execution`:
+- **GHOSTDAG Committer (`GhostdagCommitter`):**
+  - Parameter: `GHOSTDAG_K = 5` (ADR 0003).
+  - Parent Selection: Identifies the selected parent from candidate tips by maximizing:
+    1. Cumulative PoW work (sum of block work where `work = 2^256 / (target + 1)`).
+    2. Blue score (number of blue ancestors in the chosen parent DAG).
+    3. Lexicographical tie-breaking by block digest.
+  - Mergeset Construction: mergeset(B) = past(B) \ past(selected_parent(B)).
+  - Blue/Red Colouring: Evaluates each block in the mergeset topologically to verify whether adding it preserves the k=5 anti-chain limit against existing blue blocks.
+  - Sub-DAG Linearization: Commits the selected parent chain into `CommittedSubDag` containing blue-ordered blocks, plus uncommitted red blocks recorded in `non_blue_blocks`.
+  - Stake Isolation: Consensus operates completely free of stake weighting, vote quorums, committee signatures, or VRF tickets.
+- **Mining Subsidy & Reward Minting:**
+  - In `kovanica-execution::execute_committed_subdag_inner`:
+    - Chain 5 detects `chain_id::HYBRID_TESTNET` and bypasses epoch committee lookups.
+    - Each committed block in the linearized sequence mints `kovanica_params::INITIAL_BLOCK_REWARD` (2.5 KVNC = 2,500,000,000 atoms) to the block author address derived from `header.author`.
+    - No validator commission, delegator cuts, or light-client escrow deductions (`escrow_part = 0`).
+    - Total mining subsidy is tracked against the 81,000,000 KVNC mining budget.
+
+---
+
+## 9. Node Block Authoring & Miner Loop (P6)
+
+Implemented in `crates/kovanica-node`:
+- **Configuration:**
+  - `[mining]` section in `config.toml`:
+    ```toml
+    [mining]
+    enabled = false
+    threads = 1
+    ```
+  - Overridable via `KOVANICA_MINING_ENABLED` and `KOVANICA_MINING_THREADS`.
+- **DAG Tip & Ancestor Selection:**
+  - `select_parents_from_tips(dag_store, max_parents = 5)`: selects up to k=5 candidate parent tips from the DAG store at the highest DAG round.
+  - `extract_ancestor_timestamps`: collects past timestamps to evaluate the 60-block DAA window for difficulty calculation.
+- **Autonomous Authoring Loop (`run_mining_loop`):**
+  - Periodically pulls pending transactions from the mempool and computes the transaction Merkle root.
+  - Queries DAA to compute `target_bits` for the new round.
+  - Assembles `BlockHeader` and invokes `NodeMiner::mine_block` with multi-threaded KovanicaHash worker.
+  - Upon successful nonce discovery:
+    1. Converts `BlockHeader` to `StatementBlock` and saves to local `dag_store`.
+    2. Feeds block into `GhostdagCommitter` to produce a `CommittedSubDag`.
+    3. Submits committed sub-DAG to `kovanica-execution` via execution channel.
+    4. Broadcasts block to network peers via gossipsub `NetworkCommand::PublishBlock`.

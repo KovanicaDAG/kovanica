@@ -646,7 +646,12 @@ impl BlockManager {
                 keys.len()
             }
         };
-        let max_parents = committee_size.max(kovanica_types::WAVE_LENGTH as usize);
+        let max_parents =
+            if self.signing_ctx.chain_id == kovanica_types::signing::chain_id::HYBRID_TESTNET {
+                kovanica_params::GHOSTDAG_K as usize
+            } else {
+                committee_size.max(kovanica_types::WAVE_LENGTH as usize)
+            };
         if block.parents.len() > max_parents {
             return Err(BlockManagerError::ParentValidation(format!(
                 "too many parents: {} (max {})",
