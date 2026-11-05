@@ -94,7 +94,7 @@ static POW_BLOCKS_MINED_TOTAL: Lazy<Counter> = Lazy::new(|| {
     let counter = Counter::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
-        "pow_blocks_mined_total",
+        "pow_blocks_mined",
         "Total number of PoW blocks mined locally",
         counter.clone(),
     );
@@ -106,7 +106,7 @@ static GHOSTDAG_BLUE_BLOCKS_TOTAL: Lazy<Counter> = Lazy::new(|| {
     let counter = Counter::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
-        "ghostdag_blue_blocks_total",
+        "ghostdag_blue_blocks",
         "Total number of blue blocks sequenced by GHOSTDAG",
         counter.clone(),
     );
@@ -118,7 +118,7 @@ static GHOSTDAG_RED_BLOCKS_TOTAL: Lazy<Counter> = Lazy::new(|| {
     let counter = Counter::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
-        "ghostdag_red_blocks_total",
+        "ghostdag_red_blocks",
         "Total number of red blocks sequenced by GHOSTDAG",
         counter.clone(),
     );
