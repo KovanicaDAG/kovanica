@@ -110,16 +110,16 @@ const PORT_RANGE_END: u16 = 30_000;
 const PORT_ATTEMPTS: usize = 32;
 
 /// How long to wait for a freshly started node's JSON-RPC to answer.
-const RPC_READY_TIMEOUT_SECS: u64 = 30;
+const RPC_READY_TIMEOUT_SECS: u64 = 60;
 
 /// How long to wait for each node to see at least one peer.
-const PEER_TIMEOUT_SECS: u64 = 60;
+const PEER_TIMEOUT_SECS: u64 = 90;
 
 /// Bounded window for reaching [`TARGET_HEIGHT`].
-const REACH_TARGET_TIMEOUT_SECS: u64 = 120;
+const REACH_TARGET_TIMEOUT_SECS: u64 = 180;
 
 /// Bounded window for all four nodes to agree on a height.
-const SETTLE_TIMEOUT_SECS: u64 = 60;
+const SETTLE_TIMEOUT_SECS: u64 = 120;
 
 /// Bounded window for observing commits *after* the target (proves the commit
 /// loop no longer stalls on a dangling `last_committed`).

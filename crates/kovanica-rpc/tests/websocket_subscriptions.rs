@@ -58,6 +58,9 @@ fn test_state(storage: Arc<Storage>, events: EventBus) -> RpcState {
         auth_config: Arc::new(AuthConfig::default()),
         tx_gossip: None,
         sync_status: None,
+        block_gossip: None,
+        mining_enabled: false,
+        mining_threads: 0,
     }
 }
 

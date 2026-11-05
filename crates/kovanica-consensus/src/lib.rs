@@ -27,7 +27,10 @@ pub mod skip;
 pub mod types;
 
 pub use committer::{uncommitted_history, BaseCommitter, UniversalCommitter};
-pub use daa::{calculate_next_target_bits, mul_div_u256, DaaConfig};
+pub use daa::{
+    calculate_next_target_bits, extract_ancestor_timestamps, mul_div_u256,
+    select_parents_from_tips, DaaConfig,
+};
 pub use engine::{
     BlockBroadcaster, ConsensusConfig, ConsensusEngine, ConsensusError, TimeoutBroadcaster,
     ValidatorState, VoteBroadcaster, VoteRejection,

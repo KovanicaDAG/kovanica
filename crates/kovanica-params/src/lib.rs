@@ -51,7 +51,7 @@ pub const INITIAL_TARGET_BITS_CHAIN5: u32 = 0x1f00_ffff;
 /// Minimum difficulty target bits (ceiling on target, easiest difficulty).
 pub const MAX_TARGET_BITS: u32 = 0x1f00_ffff;
 /// Maximum difficulty target bits (floor on target, hardest difficulty).
-pub const MIN_TARGET_BITS: u32 = 0x0100_0001;
+pub const MIN_TARGET_BITS: u32 = 0x0101_0000;
 /// Default DAA adjustment window in blocks.
 pub const DAA_WINDOW_BLOCKS: u64 = 60;
 /// Maximum future timestamp drift in milliseconds (30 seconds).

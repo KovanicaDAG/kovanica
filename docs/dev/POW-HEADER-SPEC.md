@@ -1,6 +1,6 @@
-# PoW Block Header & Mining Specification (P1–P6)
+# PoW Block Header & Mining Specification (P1–P8)
 
-- **Status:** Implemented (P1–P6, Toni 2026-11-05, ADR 0003)
+- **Status:** Implemented (P1–P8, Toni 2026-11-05, ADR 0003, Milestone M8 Ready)
 - **Scope:** Block header primitives, preimage serialization, compact difficulty target conversion, KovanicaHash PoW algorithm, header verification wiring, mining worker, difficulty adjustment algorithm (DAA), P2P anti-DoS network ingress, GHOSTDAG committer with reward minting, and node mining authoring loop for Chain ID 5.
 
 ---
@@ -129,7 +129,7 @@ Implemented in `kovanica-consensus`:
 - Adjustment window: `DAA_WINDOW_BLOCKS = 60` blocks.
 - Max adjustment factor: 4x / 0.25x clamping per window.
 - Ceiling: `MAX_TARGET_BITS = 0x1f00_ffff`.
-- Floor: `MIN_TARGET_BITS = 0x0100_0001`.
+- Floor: `MIN_TARGET_BITS = 0x0101_0000`.
 - Math helper: `mul_div_u256(val, num, den)` provides exact 320-bit intermediate multi-limb arithmetic.
 
 
@@ -196,3 +196,54 @@ Implemented in `crates/kovanica-node`:
     2. Feeds block into `GhostdagCommitter` to produce a `CommittedSubDag`.
     3. Submits committed sub-DAG to `kovanica-execution` via execution channel.
     4. Broadcasts block to network peers via gossipsub `NetworkCommand::PublishBlock`.
+
+---
+
+## 10. JSON-RPC Mining & DAG Inspection Endpoints (P7)
+
+Implemented in crates/kovanica-rpc (chain_methods.rs):
+- kovanica_getWork:
+  - Returns mining template preimage, target compact bits (	arget_bits), target 256-bit hex, candidate DAG parent tips, and round for external miners or authoring loops.
+- kovanica_submitWork:
+  - Accepts a mined header (as JSON object or hex-encoded preimage + pow_hash).
+  - Validates PoW via header.verify_pow() and timestamp monotonicity.
+  - Ingests into local dag_store and broadcasts to P2P peers via gossip channel.
+- kovanica_getMiningInfo:
+  - Returns mining status (mining_enabled, mining_threads), target bits, target block time (4000 ms), GHOSTDAG parameter (=5$), difficulty, and network hashrate estimate.
+- kovanica_getDagTips:
+  - Returns active DAG tip digests, total tip count, max round, and GHOSTDAG =5$.
+
+---
+
+## 11. CLI Commands & Observability Metrics (P7)
+
+Implemented in crates/kovanica-cli and crates/kovanica-consensus:
+- **CLI Commands:**
+  - kovanica mining info: Displays formatted table (or --json) of mining difficulty, target bits, target block time, active tips, and estimated network hashrate.
+  - kovanica mining status: Displays node mining state (running vs disabled), worker threads, and current target bits.
+  - kovanica dag tips: Displays active DAG tips, tip count, max round, and GHOSTDAG =5$.
+- **Prometheus Metrics:**
+  - pow_hashrate_estimate (Gauge): Estimated network hashrate derived from current DAA target bits.
+  - pow_blocks_mined_total (Counter): Total PoW blocks mined by local worker.
+  - ghostdag_blue_blocks_total (Counter): Total blue blocks committed in the GHOSTDAG main chain.
+  - ghostdag_red_blocks_total (Counter): Total red (non-blue) blocks excluded from blue scores.
+  - ghostdag_tips_count (Gauge): Current count of active DAG tips.
+
+---
+
+## 12. Multi-Node Simulation Test Suite (P8)
+
+Implemented in crates/kovanica-consensus/tests/hybrid_pow_simulation.rs:
+- 	est_multi_miner_ghostdag_dag_convergence:
+  - Simulates 3 concurrent independent miners authoring blocks off shared tips across rounds.
+  - Validates DAG convergence under GHOSTDAG =5$, topological mergeset ordering, and linear reward minting of 2.5 KVNC (INITIAL_BLOCK_REWARD = 2_500_000_000 atoms) per block author without stake commission.
+- 	est_ghostdag_k5_blue_red_categorization:
+  - Generates 8 concurrent sibling blocks referencing the same parent (DAG width 8 > =5$).
+  - Validates that upon merging, exactly 5 siblings remain blue while 2 siblings are classified as red (
+on_blue), preserving the $-cluster anti-chain bound.
+- 	est_daa_difficulty_adaptation:
+  - Tests DAA response: fast block intervals (1,000 ms) increase difficulty (target decreases); slow intervals (10,000 ms) decrease difficulty (target increases).
+  - Enforces boundary clamping against MAX_TARGET_BITS (ceiling) and MIN_TARGET_BITS (floor).
+- 	est_pow_anti_dos_rejection:
+  - Verifies that tampered nonces, unmet difficulty targets, or blocks lacking PoW statements are rejected at ingress before entering consensus.
+

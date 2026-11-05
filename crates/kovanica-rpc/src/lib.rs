@@ -149,11 +149,20 @@ pub struct RpcState {
     /// method. `None` disables it beyond a bare peer count (tests, RPC-only
     /// setups).
     pub sync_status: Option<SyncStatusSource>,
+    /// Outbound gossip for blocks submitted via `kovanica_submitWork`.
+    pub block_gossip: Option<BlockGossipSender>,
+    /// Whether local mining is enabled on this node.
+    pub mining_enabled: bool,
+    /// Number of mining worker threads configured on this node.
+    pub mining_threads: usize,
 }
 
 /// Channel the node drains to publish RPC-submitted transactions on gossip,
 /// through the same path as re-gossip of accepted transactions.
 pub type TxGossipSender = tokio::sync::mpsc::UnboundedSender<kovanica_types::Transaction>;
+
+/// Channel the node drains to publish RPC-submitted blocks on gossip.
+pub type BlockGossipSender = tokio::sync::mpsc::UnboundedSender<kovanica_types::Block>;
 
 #[derive(Clone)]
 pub struct RpcServer {
@@ -304,6 +313,16 @@ impl RpcServer {
 
         // Node sync / catch-up status (read-only).
         self.register_stateful("kovanica_syncStatus", handle_sync_status)
+            .await;
+
+        // Mining & DAG methods (Hybrid PoW / Chain 5).
+        self.register_stateful("kovanica_getWork", handle_get_work)
+            .await;
+        self.register_stateful("kovanica_submitWork", handle_submit_work)
+            .await;
+        self.register_stateful("kovanica_getMiningInfo", handle_get_mining_info)
+            .await;
+        self.register_stateful("kovanica_getDagTips", handle_get_dag_tips)
             .await;
     }
 
@@ -676,6 +695,9 @@ mod tests {
             auth_config: Arc::new(AuthConfig::default()),
             tx_gossip: None,
             sync_status: None,
+            block_gossip: None,
+            mining_enabled: false,
+            mining_threads: 0,
         };
         (dir, state)
     }
@@ -770,6 +792,9 @@ mod tests {
             health: NodeHealth::new(),
             tx_gossip: None,
             sync_status: None,
+            block_gossip: None,
+            mining_enabled: false,
+            mining_threads: 0,
         }
     }
 
@@ -1162,6 +1187,9 @@ mod tests {
                 health: _,
                 tx_gossip: _,
                 sync_status: _,
+                block_gossip: _,
+                mining_enabled: _,
+                mining_threads: _,
             } = s;
         };
     }

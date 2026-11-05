@@ -19,7 +19,7 @@ use kovanica_cli::contracts::{
     ContractCommand, HtlcCommand, MultisigCommand, TokenCommand, VaultCommand,
 };
 use kovanica_cli::rpc::RpcClient;
-use kovanica_cli::{comms, contracts, node, output, tui, tx, wallet};
+use kovanica_cli::{comms, contracts, mining, node, output, tui, tx, wallet};
 use kovanica_types::transaction::TransactionKind;
 use kovanica_types::{crypto::PublicKey, crypto::SigningKey, Address};
 use kovanica_wallet_core::BalanceProvider;
@@ -134,6 +134,30 @@ enum Commands {
         #[command(subcommand)]
         command: comms::CommsCommand,
     },
+    /// Mining subcommands (PoW / Chain 5)
+    Mining {
+        #[command(subcommand)]
+        command: MiningCommand,
+    },
+    /// DAG subcommands (GHOSTDAG / Tips)
+    Dag {
+        #[command(subcommand)]
+        command: DagCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+enum MiningCommand {
+    /// Show mining info and network difficulty metrics
+    Info,
+    /// Show local node mining status
+    Status,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+enum DagCommand {
+    /// Show active DAG tips
+    Tips,
 }
 
 /// Arguments for `kovanica history`.
@@ -506,6 +530,13 @@ async fn main() -> Result<()> {
             contracts::run(&client, chain_id, ContractCommand::Token { command }, json).await
         }
         Commands::Comms { command } => comms::run(command, json),
+        Commands::Mining { command } => match command {
+            MiningCommand::Info => mining::info(&client, json).await,
+            MiningCommand::Status => mining::status(&client, json).await,
+        },
+        Commands::Dag { command } => match command {
+            DagCommand::Tips => mining::dag_tips(&client, json).await,
+        },
     }
 }
 
@@ -1709,5 +1740,32 @@ mod wallet_cli_security_tests {
             Cli::try_parse_from(["kovanica", "history", "abc", "--sent", "--received"]).is_err()
         );
         assert!(Cli::try_parse_from(["kovanica", "history"]).is_err());
+    }
+
+    #[test]
+    fn mining_and_dag_subcommands_parse() {
+        let cli = Cli::try_parse_from(["kovanica", "mining", "info"]).unwrap();
+        match cli.command {
+            Commands::Mining {
+                command: MiningCommand::Info,
+            } => {}
+            _ => panic!("expected mining info"),
+        }
+
+        let cli = Cli::try_parse_from(["kovanica", "mining", "status"]).unwrap();
+        match cli.command {
+            Commands::Mining {
+                command: MiningCommand::Status,
+            } => {}
+            _ => panic!("expected mining status"),
+        }
+
+        let cli = Cli::try_parse_from(["kovanica", "dag", "tips"]).unwrap();
+        match cli.command {
+            Commands::Dag {
+                command: DagCommand::Tips,
+            } => {}
+            _ => panic!("expected dag tips"),
+        }
     }
 }
