@@ -382,3 +382,10 @@ Detailed architectural specifications and operational runbooks:
 - **Quality Gates & CI:** A minimal gate lives in `.github/workflows/ci.yml` (fmt, clippy with `-D warnings`, the workspace test suite minus the localhost cluster tests (those run via `bash scripts/ci-local.sh cluster`), cargo-deny license check, full-history gitleaks; `cargo audit` nightly). It runs `scripts/ci-local.sh`, so `bash scripts/ci-local.sh all` reproduces CI locally. The 2026-10-23 decommission still stands for the rest of the tooling: the long-term home for CI is the public `KovanicaDAG/kovanica-protocol` repo once the frozen code is there (PRO-14). If an Actions run fails within seconds with no runner, that is the account-level Actions billing block (PRO-14), not the workflow — run the gate locally in that case.
 - **Security Audit:** Automated security checks (`AUTOMATED_SECURITY_CHECKS.md`) and pre-audit vulnerability catalogues (`AUDIT_REPORT.md`) are maintained. Professional third-party security audits are planned prior to mainnet launch.
 - **License:** The Kovanica codebase is distributed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)**.
+
+
+## Apps (moved)
+
+Client applications (Android / iOS / desktop / node-desktop) moved to **[KovanicaDAG/kovanica-apps](https://github.com/KovanicaDAG/kovanica-apps)**.  
+`kovanica-light-ffi` and the Rust L1 workspace remain in this repository. See [`apps/README.md`](apps/README.md).
+

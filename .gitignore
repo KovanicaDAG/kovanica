@@ -15,10 +15,9 @@ Thumbs.db
 # Build artifacts
 *.wasm
 
-# Bundled KVP-102 token contract, shipped inside both APKs and embedded in the
-# CLI — the three copies must stay byte-identical (see contracts/README.md).
-!apps/android/app/src/main/assets/kovanica_token.wasm
-!apps/android-wallet/app/src/main/assets/kovanica_token.wasm
+# Bundled KVP-102 token contract, embedded in the CLI; the fixture pins the bytes
+# shipped in both APKs (kovanica-apps) — must stay byte-identical (see contracts/README.md).
+!crates/kovanica-cli/fixtures/kovanica_token.wasm
 !contracts/kovanica-token.wasm
 
 # Android UniFFI debug libraries. Rebuild with:

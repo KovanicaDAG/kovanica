@@ -2478,15 +2478,13 @@ mod tests {
 
     #[test]
     fn shipped_token_wasm_matches_the_repo_copies() {
-        // Three copies ship: the CLI embeds `contracts/`, each Android app
-        // vendors its own asset. A rebuild that updates only one silently
-        // deploys different bytecode than the wallets, so compare bytes.
+        // The CLI embeds `contracts/`; the Android apps (now in
+        // KovanicaDAG/kovanica-apps, android/ and android-wallet/) vendor a
+        // byte-identical asset. `fixtures/kovanica_token.wasm` pins the bytes
+        // those apps ship, so a contract rebuild that skips the apps fails here
+        // until the fixture and kovanica-apps assets are updated together.
         assert!(TOKEN_WASM.starts_with(b"\0asm"), "not a wasm module");
-        let wallet =
-            include_bytes!("../../../apps/android-wallet/app/src/main/assets/kovanica_token.wasm");
-        let lightnode =
-            include_bytes!("../../../apps/android/app/src/main/assets/kovanica_token.wasm");
-        assert_eq!(TOKEN_WASM, wallet.as_slice());
-        assert_eq!(TOKEN_WASM, lightnode.as_slice());
+        let shipped = include_bytes!("../fixtures/kovanica_token.wasm");
+        assert_eq!(TOKEN_WASM, shipped.as_slice());
     }
 }
