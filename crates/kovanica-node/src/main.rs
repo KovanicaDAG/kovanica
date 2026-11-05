@@ -1046,9 +1046,17 @@ where
         let m_exec_tx = exec_tx.clone();
         let m_ghostdag = ghostdag_committer.clone();
         let m_shutdown = shutdown_rx.clone();
+        let m_author = if let Some(a) = config.mining.author {
+            a
+        } else if our_authority != u16::MAX {
+            our_authority
+        } else {
+            0
+        };
         Some(tokio::spawn(async move {
             miner::run_mining_loop(
-                m_config, m_chain_id, m_dag, m_mempool, m_net_tx, m_exec_tx, m_ghostdag, m_shutdown,
+                m_config, m_chain_id, m_author, m_dag, m_mempool, m_net_tx, m_exec_tx, m_ghostdag,
+                m_shutdown,
             )
             .await;
         }))

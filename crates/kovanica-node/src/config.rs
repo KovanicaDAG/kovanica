@@ -23,6 +23,8 @@ pub struct MiningConfig {
     pub enabled: bool,
     /// Number of mining worker threads.
     pub threads: usize,
+    /// Explicit mining author index (defaults to node authority index or 0).
+    pub author: Option<u16>,
 }
 
 impl Default for MiningConfig {
@@ -30,6 +32,7 @@ impl Default for MiningConfig {
         Self {
             enabled: false,
             threads: 1,
+            author: None,
         }
     }
 }
@@ -371,6 +374,12 @@ impl NodeConfig {
             match v.parse() {
                 Ok(n) => self.mining.threads = n,
                 Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_MINING_THREADS"),
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_MINING_AUTHOR") {
+            match v.trim().parse() {
+                Ok(a) => self.mining.author = Some(a),
+                Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_MINING_AUTHOR"),
             }
         }
         if let Ok(v) = std::env::var("KOVANICA_CHAIN_ID") {

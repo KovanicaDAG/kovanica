@@ -1,0 +1,53 @@
+# Kovanica Hybrid PoW Testnet (Chain ID 5) Node Configuration
+#
+# Consensus: Hybrid PoW + GHOSTDAG (NO stake for consensus per ADR 0003 / Toni 2026-11-05).
+# Mining: KovanicaHash (BLAKE3 + 2 MiB memory mix)
+# Parameters: TARGET_BLOCK_MS = 4000 (4 s), GHOSTDAG_K = 5
+# Native token: KVNC (9 decimals), initial block reward = 2.5 KVNC
+
+# Chain ID 5 designates HYBRID_TESTNET
+chain_id = 5
+
+# Directory where chain data is stored (consensus.redb + state.redb)
+data_dir = "./data/chain5"
+
+# P2P listen address: either host:port or full libp2p multiaddr
+listen_addr = "0.0.0.0:8000"
+
+# JSON-RPC bind address and port
+rpc_addr = "127.0.0.1"
+rpc_port = 8545
+
+# Maximum connected P2P peers
+max_peers = 50
+
+# Seed bootnodes (comma-separated list or leave empty for first seed node)
+# bootnodes = ["/ip4/127.0.0.1/tcp/8000"]
+
+# Path to the node validator / identity private key
+validator_key = "./validator.key"
+
+# Node participates as a network validator/relay
+run_validator = true
+
+# Proof-of-Work Mining configuration
+# When enabled, the node mines blocks using KovanicaHash on top of recent DAG tips
+# and commits the selected blue chain using GHOSTDAG k=5.
+[mining]
+enabled = true
+threads = 2
+# Optional explicit miner author index (defaults to node authority index or 0)
+author = 0
+
+# Gossipsub peer scoring safe for testnet
+[peer_scoring]
+enabled = true
+gossip_threshold = -10.0
+publish_threshold = -50.0
+graylist_threshold = -80.0
+ban_threshold = -100.0
+invalid_message_weight = -10.0
+
+# Database retention and pruning
+retention_interval_secs = 300
+retention_batch = 10000
