@@ -6,7 +6,7 @@
 
 **Naming (zaključano):** chain = **Kovanica**, native coin ticker = **KVNC** (9 decimals; preimenovano natrag iz KUNA per Toni 2026-11-05),
 codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-node`, `KOVANICA_*`). Adresa je
-`kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3, 4 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Adresni prefiks `kvnc`...`dag` je usklađen s KVNC tickerom.
+`kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3, 4, 5 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Adresni prefiks `kvnc`...`dag` je usklađen s KVNC tickerom.
 
 **Chain ID Registry (Toni 1A):**
 - `1` = **Mainnet** (`MAINNET`) — canonical PRO-21 base32 address, frozen consensus parameters. `funded_accounts.toml` strictly forbidden.

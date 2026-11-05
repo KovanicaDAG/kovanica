@@ -54,7 +54,9 @@ fn title_line(view: &View) -> Line<'static> {
 fn chain_style(chain_id: Option<u64>) -> Style {
     match chain_id {
         Some(chain_id::MAINNET) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        Some(chain_id::TESTNET) | Some(chain_id::TESTNET_V2) => Style::default().fg(Color::Yellow),
+        Some(chain_id::TESTNET) | Some(chain_id::TESTNET_V2) | Some(chain_id::HYBRID_TESTNET) => {
+            Style::default().fg(Color::Yellow)
+        }
         Some(_) => Style::default().fg(Color::Cyan),
         None => Style::default().fg(Color::DarkGray),
     }

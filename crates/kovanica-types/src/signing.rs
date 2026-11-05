@@ -20,10 +20,20 @@ pub mod chain_id {
     pub const LOCAL: u64 = 1337;
     /// Public testnet (new chain_id 4).
     pub const TESTNET_V2: u64 = 4;
+    /// Planned hybrid PoW + GHOSTDAG testnet (chain_id 5; ADR 0003; feature/flag `hybrid-pow`).
+    pub const HYBRID_TESTNET: u64 = 5;
+    /// Explicit alias conforming to prompt naming.
+    pub const CHAIN_ID_HYBRID_TESTNET: u64 = 5;
+
+    /// Canonical network tag for chain 5 hybrid testnet.
+    pub const NETWORK_TAG_HYBRID_TESTNET: &str = "hybrid-testnet";
 
     /// Whether `id` is in the registry.
     pub fn is_registered(id: u64) -> bool {
-        matches!(id, MAINNET | TESTNET | DEVNET | LOCAL | TESTNET_V2)
+        matches!(
+            id,
+            MAINNET | TESTNET | DEVNET | LOCAL | TESTNET_V2 | HYBRID_TESTNET
+        )
     }
 
     /// Whether `id` is a local development chain (devnet or local).
@@ -49,6 +59,8 @@ pub const TX_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/tx/v1");
 pub const COMMIT_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/commit/v1");
 /// Domain tag (16 bytes, `0x00`-padded) of block `signature_data` v1 (PRO-20).
 pub const BLOCK_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KUNA/block/v1");
+/// Domain tag (16 bytes, `0x00`-padded) of PoW block header v1 (ADR 0003).
+pub const POW_HEADER_DOMAIN_TAG: [u8; 16] = domain_tag16(b"KVNC-POW-HDR-v1");
 
 /// `DomainTag16(s)`: ASCII `s` right-padded with `0x00` to exactly 16 bytes.
 ///
@@ -113,11 +125,13 @@ mod tests {
         assert!(TX_DOMAIN_TAG[10..].iter().all(|b| *b == 0));
         assert_eq!(&BLOCK_DOMAIN_TAG[..13], b"KUNA/block/v1");
         assert!(BLOCK_DOMAIN_TAG[13..].iter().all(|b| *b == 0));
+        assert_eq!(&POW_HEADER_DOMAIN_TAG[..15], b"KVNC-POW-HDR-v1");
+        assert_eq!(POW_HEADER_DOMAIN_TAG[15], 0);
     }
 
     #[test]
     fn registry() {
-        for id in [1, 2, 3, 4, 1337] {
+        for id in [1, 2, 3, 4, 5, 1337] {
             assert!(chain_id::is_registered(id));
         }
         assert!(!chain_id::is_registered(0));
@@ -132,6 +146,7 @@ mod tests {
         assert!(!chain_id::is_dev(chain_id::MAINNET));
         assert!(!chain_id::is_dev(chain_id::TESTNET));
         assert!(!chain_id::is_dev(chain_id::TESTNET_V2));
+        assert!(!chain_id::is_dev(chain_id::HYBRID_TESTNET));
         // Fail closed: an unregistered id is not a dev chain either.
         assert!(!chain_id::is_dev(0));
     }

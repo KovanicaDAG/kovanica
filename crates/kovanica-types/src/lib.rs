@@ -27,7 +27,10 @@ pub use account_tree::{
     account_leaf_hash, account_root, verify_account_proof, AccountProof, AccountSmt,
 };
 pub use address::Address;
-pub use block::{Block, BlockReference, StatementBlock};
+pub use block::{
+    check_pow_hash_meets_target, compact_to_target, target_to_compact, Block, BlockHeader,
+    BlockReference, HeaderV2, PowHeader, StatementBlock, DOMAIN_POW_HEADER,
+};
 pub use colouring::{
     colour_mergeset, mysticghost_commitment, ColourBlock, ColourError, ColouringResult,
     GhostCommitment,

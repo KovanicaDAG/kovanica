@@ -32,7 +32,7 @@ The downside (two networks could choose the same number) is handled by a registr
 in this document. The node MUST refuse to start if the configured `chain_id` does
 not match the one in its genesis config.
 
-Registry (**final**): `1` = mainnet, `2` = testnet, `3` = devnet, `4` = testnet v2, `1337` = local. The test vectors below use `chain_id = 2` (or `chain_id = 1` for blocks).
+Registry (**final**): `1` = mainnet, `2` = testnet, `3` = devnet, `4` = testnet v2, `5` = hybrid testnet, `1337` = local. The test vectors below use `chain_id = 2` (or `chain_id = 1` for blocks).
 
 ## 1. Vote `signature_data` v2 (106 bytes, signed directly)
 

@@ -15,6 +15,27 @@ pub const DECIMALS: u32 = 9;
 pub const ONE_KUNA: u64 = 1_000_000_000;
 pub const ONE_KVNC: u64 = ONE_KUNA;
 
+/// Mainnet chain id (`1`). Canonical PRO-21 addresses only.
+pub const CHAIN_ID_MAINNET: u64 = 1;
+/// Legacy public testnet chain id (`2`).
+pub const CHAIN_ID_TESTNET: u64 = 2;
+/// Devnet chain id (`3`).
+pub const CHAIN_ID_DEVNET: u64 = 3;
+/// Internal testnet v2 chain id (`4`).
+pub const CHAIN_ID_TESTNET_V2: u64 = 4;
+/// Planned hybrid PoW + GHOSTDAG testnet chain id (`5`).
+///
+/// **Activation intent:** Chain ID 5 is dedicated to the hybrid PoW + GHOSTDAG
+/// testnet track (ADR 0003), gated under feature flag `hybrid-pow`.
+/// Under hybrid consensus, block authoring uses PoW mining (KovanicaHash)
+/// and block ordering uses GHOSTDAG (k=5, 4 s block time) without stake weighting.
+pub const CHAIN_ID_HYBRID_TESTNET: u64 = 5;
+/// Local development network chain id (`1337`).
+pub const CHAIN_ID_LOCAL: u64 = 1337;
+
+/// Canonical network tag for chain 5 hybrid testnet.
+pub const NETWORK_TAG_HYBRID_TESTNET: &str = "hybrid-testnet";
+
 // ============================================================
 // Consensus
 // ============================================================

@@ -17,13 +17,13 @@ use kovanica_types::{Address, SigningKey};
 /// There is no default: signing without knowing the network would either fail
 /// verification or, worse, produce a signature for the wrong network. The
 /// `chain_id` must be in the registry of `docs/SIGNATURE_FORMAT.md`
-/// (1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 1337 local).
+/// (1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 5 hybrid testnet, 1337 local).
 pub fn signing_context(chain_id: Option<u64>) -> Result<SigningContext> {
     let chain_id = chain_id.ok_or_else(|| {
-        anyhow!("--chain-id (or KOVANICA_CHAIN_ID) is required to sign transactions: 1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 1337 local")
+        anyhow!("--chain-id (or KOVANICA_CHAIN_ID) is required to sign transactions: 1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 5 hybrid testnet, 1337 local")
     })?;
     if !signing::chain_id::is_registered(chain_id) {
-        bail!("unknown chain id {chain_id}: expected 1 (mainnet), 2 (testnet), 3 (devnet), 4 (testnet v2) or 1337 (local)");
+        bail!("unknown chain id {chain_id}: expected 1 (mainnet), 2 (testnet), 3 (devnet), 4 (testnet v2), 5 (hybrid testnet) or 1337 (local)");
     }
     Ok(SigningContext::new(chain_id))
 }
