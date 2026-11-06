@@ -4,7 +4,7 @@
 #
 #   1. provision a persistent validator seed inside the data volume (unless the
 #      operator already points KOVANICA_VALIDATOR_KEY at their own file), and
-#   2. hand control to the node binary.
+#   2. hand control to the node binary or requested command.
 #
 # Validator seeds are never baked into the image or the repository: they are
 # generated on first boot and live only in the mounted data volume.
@@ -15,6 +15,9 @@ set -eu
 case "${1:-}" in
     --help|-h|--version|-V)
         exec kovanica-node "$@"
+        ;;
+    kovanica-faucet|kovanica|sh|bash)
+        exec "$@"
         ;;
 esac
 

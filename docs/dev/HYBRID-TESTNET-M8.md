@@ -99,3 +99,62 @@ The full live 3-node cluster test is automated in `crates/kovanica-node/tests/hy
 - Mines blocks with KovanicaHash and sequences them through GHOSTDAG $k=5$.
 - Verifies that 2.5 KVNC mining rewards are minted to block authors.
 - Submits and executes transactions on Chain 5 without any staking dependencies.
+
+---
+
+## 6. Docker Compose Multi-Node Testnet Cluster & Observability Suite
+
+For local multi-node evaluation, benchmarking, and real-time observability, a 1-command Docker Compose stack is provided in `ops/docker/docker-compose.chain5.yml`.
+
+### Stack Topology
+
+| Service | Container Name | Role | Host Endpoints |
+|---------|----------------|------|----------------|
+| `node1` | `kovanica-chain5-node1` | Bootnode & Miner (author 0) | RPC `127.0.0.1:8545`<br>P2P `8000`<br>Metrics `127.0.0.1:9100` |
+| `node2` | `kovanica-chain5-node2` | Peered Node & Miner (author 1) | RPC `127.0.0.1:8546` |
+| `node3` | `kovanica-chain5-node3` | Peered Node & Miner (author 2) | RPC `127.0.0.1:8547` |
+| `faucet` | `kovanica-chain5-faucet` | Chain 5 Token Dispenser | HTTP `127.0.0.1:3000` |
+| `prometheus` | `kovanica-chain5-prometheus` | Metrics Scraper (node1, node2, node3) | HTTP `127.0.0.1:9090` |
+| `grafana` | `kovanica-chain5-grafana` | Pre-provisioned Dashboards | HTTP `127.0.0.1:3001` (admin/admin) |
+
+### Starting the Cluster
+
+```bash
+docker compose -f ops/docker/docker-compose.chain5.yml up -d --build
+```
+
+Verify that all containers report healthy:
+```bash
+docker compose -f ops/docker/docker-compose.chain5.yml ps
+```
+
+### Automated Smoke Test
+
+Run the full end-to-end verification script:
+```bash
+./ops/docker/test-chain5-cluster.sh
+```
+
+The script verifies:
+1. Node healthchecks (`/health` on ports 8545, 8546, 8547).
+2. Faucet healthcheck (`/health` on port 3000).
+3. Live PoW block advancement via `kovanica_blockNumber`.
+4. GHOSTDAG blue block sequencing and metrics exportation on port 9100.
+5. Faucet KVNC dispensation on Chain 5.
+6. Prometheus and Grafana health.
+
+### Real-Time Grafana Dashboard
+
+Navigate to `http://localhost:3001` (credentials `admin` / `admin`). The dashboard `Kovanica Hybrid Testnet (Chain 5) Overview` is automatically provisioned and displays:
+- **Total PoW Blocks Mined (`pow_blocks_mined_total`) & Mining Rate**: Real-time rate of PoW blocks found across the cluster.
+- **GHOSTDAG Blue vs Red Blocks Breakdown (`ghostdag_blue_blocks_total`, `ghostdag_red_blocks_total`)**: Tracking DAG colouring, sub-DAG ordering, and active DAG tips (`ghostdag_tips_count`).
+- **Network Hashrate & Target Difficulty**: Estimated hashrate in H/s and current DAA target bits over time.
+- **Connected Peer Count (`peer_count`)**: P2P mesh connectivity.
+- **Mempool Size & Block Commit Latency**: Transaction queue depth and sub-DAG commit latency in ms.
+
+### Stopping the Cluster
+
+```bash
+docker compose -f ops/docker/docker-compose.chain5.yml down -v
+```
+

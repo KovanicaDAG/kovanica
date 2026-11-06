@@ -149,6 +149,7 @@ pub async fn run_mining_loop(
             );
             miner.next_target_bits(initial_target, &timestamps)
         };
+        kovanica_consensus::metrics::set_pow_target_bits(target_bits);
 
         let txs = mempool.get_next_transactions(kovanica_types::MAX_TXS_PER_BLOCK);
         let merkle_root = StatementBlock::compute_merkle_root(&txs);
