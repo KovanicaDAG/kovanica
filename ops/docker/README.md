@@ -80,3 +80,54 @@ curl -fsS http://127.0.0.1:8546/health
 {"status":"ok","peer_count":3,"is_healthy":true,...}
 ```
 The compose healthchecks monitor `/health` and report when nodes are running and synchronized.
+
+---
+
+## Chain 5 Hybrid PoW Testnet Cluster (`docker-compose.chain5.yml`)
+
+A standalone 1-command Docker Compose testnet cluster for **Chain 5** (`HYBRID_TESTNET`) featuring 3 peered hybrid testnet nodes with active KovanicaHash PoW mining, GHOSTDAG $k=5$ ordering, a dedicated faucet service, and pre-configured Prometheus + Grafana dashboards.
+
+### Topology
+
+| Service | Role | Container Port | Host Port |
+|---------|------|----------------|-----------|
+| `node1` | Seed / Bootnode & Miner (author 0) | `8545` (RPC), `8000` (P2P) | `127.0.0.1:8545`, `8000`, `127.0.0.1:9100` (metrics) |
+| `node2` | Peered Node & Miner (author 1) | `8546` (RPC) | `127.0.0.1:8546` |
+| `node3` | Peered Node & Miner (author 2) | `8547` (RPC) | `127.0.0.1:8547` |
+| `faucet` | Chain 5 KVNC Dispenser | `3000` | `127.0.0.1:3000` |
+| `prometheus` | Prometheus Metrics Scraper | `9090` | `127.0.0.1:9090` |
+| `grafana` | Grafana Dashboards | `3000` | `127.0.0.1:3001` (admin/admin) |
+
+### Quick Start
+
+```bash
+# Start all 6 services in the background
+docker compose -f ops/docker/docker-compose.chain5.yml up -d --build
+
+# Run automated smoke test
+./ops/docker/test-chain5-cluster.sh
+
+# View container status
+docker compose -f ops/docker/docker-compose.chain5.yml ps
+
+# Follow logs from node1
+docker compose -f ops/docker/docker-compose.chain5.yml logs -f node1
+
+# Dispense tokens from faucet
+curl -X POST http://127.0.0.1:3000/faucet \
+  -H "Content-Type: application/json" \
+  -d '{"address": "kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag"}'
+
+# Stop the cluster and wipe volumes
+docker compose -f ops/docker/docker-compose.chain5.yml down -v
+```
+
+### Observability
+
+- **Prometheus**: Accessible at `http://localhost:9090`. Scrapes `/metrics` from all three nodes every 2s.
+- **Grafana**: Accessible at `http://localhost:3001` (credentials `admin` / `admin`). The `Kovanica Hybrid Testnet (Chain 5) Overview` dashboard visualizes:
+  - Total PoW Blocks Mined (`pow_blocks_mined_total`) and mining rate
+  - GHOSTDAG Blue vs Red blocks breakdown (`ghostdag_blue_blocks_total`, `ghostdag_red_blocks_total`, `ghostdag_tips_count`)
+  - Estimated network hashrate (`pow_hashrate_estimate`) and target difficulty (`pow_target_bits`)
+  - Connected peers per node (`peer_count`)
+  - Mempool size (`mempool_size`) and block commit latency (`commit_latency_ms`)

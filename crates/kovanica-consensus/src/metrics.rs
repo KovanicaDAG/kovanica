@@ -147,6 +147,23 @@ pub fn set_pow_hashrate(hashrate: i64) {
     POW_HASHRATE_ESTIMATE.set(hashrate);
 }
 
+/// Current PoW target bits difficulty representation.
+static POW_TARGET_BITS: Lazy<Gauge> = Lazy::new(|| {
+    let gauge = Gauge::default();
+    let mut registry = REGISTRY.lock().unwrap();
+    registry.register(
+        "pow_target_bits",
+        "Current PoW target bits difficulty representation",
+        gauge.clone(),
+    );
+    gauge
+});
+
+/// Set current PoW target bits.
+pub fn set_pow_target_bits(bits: u32) {
+    POW_TARGET_BITS.set(bits as i64);
+}
+
 /// Record blue blocks count.
 pub fn record_ghostdag_blue_blocks(count: u64) {
     GHOSTDAG_BLUE_BLOCKS_TOTAL.inc_by(count);

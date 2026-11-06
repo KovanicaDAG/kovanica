@@ -11,5 +11,8 @@ path = '''(\.dat|\.key)$'''
 # ciphertext. A path-scoped allowlist works for any scan root; the
 # .gitleaksignore path fingerprint only matches a scan run from the repo root.
 [allowlist]
-description = "console-desktop encrypted keystore test fixture"
-paths = ['''(^|/)apps/console-desktop/src-tauri/tests/fixtures/cross-keystore\.json$''']
+description = "encrypted keystore test fixtures"
+paths = [
+    '''(^|/)apps/console-desktop/src-tauri/tests/fixtures/cross-keystore\.json$''',
+    '''(^|/)ops/docker/chain5/faucet\.keystore$''',
+]
