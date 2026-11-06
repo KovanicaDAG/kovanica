@@ -1,13 +1,31 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, lazyRouteComponent } from "@tanstack/react-router";
 import { Shell } from "@/components/layout/shell";
-import { OriginsDashboard } from "@/components/map/dashboard";
+import { RouteLoading } from "@/components/layout/route-loading";
+import { RouteError } from "@/components/layout/route-error";
 
-export const Route = createFileRoute("/map")({ component: MapPage });
+const LazyOriginsDashboard = lazyRouteComponent(
+  () => import("@/components/map/dashboard"),
+  "OriginsDashboard",
+);
+
+export const Route = createFileRoute("/map")({
+  component: MapPage,
+  pendingComponent: () => (
+    <Shell>
+      <RouteLoading message="Loading Origins Map..." />
+    </Shell>
+  ),
+  errorComponent: ({ error, reset }) => (
+    <Shell>
+      <RouteError error={error} reset={reset} title="Origins Map unavailable" />
+    </Shell>
+  ),
+});
 
 function MapPage() {
   return (
     <Shell>
-      <OriginsDashboard />
+      <LazyOriginsDashboard />
     </Shell>
   );
 }
