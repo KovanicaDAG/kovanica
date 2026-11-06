@@ -36,7 +36,7 @@ type HeightSample = { at: number; blocks: number };
 
 const HISTORY_LEN = 60;
 
-/** Atoms → KUNA string (no symbol; the card label carries it). */
+/** Atoms → KVNC string (no symbol; the card label carries it). */
 function kvnc(atoms: number): string {
   return (atoms / ATOM).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
@@ -103,17 +103,67 @@ export function Dashboard() {
       }
     };
 
-    void loadHead();
-    void loadBootstrap();
-    void loadState();
-    const idHead = window.setInterval(() => void loadHead(), 2_500);
-    const idBootstrap = window.setInterval(() => void loadBootstrap(), 5_000);
-    const idState = window.setInterval(() => void loadState(), 15_000);
+    let inFlight = false;
+    let delayMs = 2000;
+    let timerId: number | null = null;
+    let tickCount = 0;
+
+    const clearScheduled = () => {
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+    };
+
+    const scheduleNext = (ms: number) => {
+      clearScheduled();
+      if (!alive || (typeof document !== "undefined" && document.hidden)) return;
+      timerId = window.setTimeout(() => void poll(), ms);
+    };
+
+    const poll = async () => {
+      if (!alive || inFlight || (typeof document !== "undefined" && document.hidden)) return;
+      inFlight = true;
+      try {
+        const promises: Promise<unknown>[] = [loadHead()];
+        if (tickCount % 3 === 0) promises.push(loadBootstrap());
+        if (tickCount % 6 === 0) promises.push(loadState());
+        tickCount++;
+        await Promise.all(promises);
+        if (alive) {
+          delayMs = 2000;
+        }
+      } catch (e) {
+        if (alive) {
+          report(e);
+          delayMs = Math.min(delayMs * 2, 30000);
+        }
+      } finally {
+        inFlight = false;
+        if (alive) {
+          scheduleNext(delayMs);
+        }
+      }
+    };
+
+    void poll();
+
+    const handleVisibility = () => {
+      if (!document.hidden && alive) {
+        clearScheduled();
+        delayMs = 2000;
+        void poll();
+      } else {
+        clearScheduled();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+
     return () => {
       alive = false;
-      window.clearInterval(idHead);
-      window.clearInterval(idBootstrap);
-      window.clearInterval(idState);
+      clearScheduled();
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [source, isMainnet]);
 
@@ -163,7 +213,7 @@ export function Dashboard() {
             icon={Globe}
             label="Network"
             value={h.network}
-            sub={`Mysticeti · stake-DAG · ${h.atom.toLocaleString()} atoms`}
+            sub="Hybrid PoW + GHOSTDAG · 4s target"
           />
           <StatCard
             icon={Blocks}
@@ -261,7 +311,7 @@ export function Dashboard() {
       )}
 
       <p className="text-center font-mono text-[11px] text-subtle">
-        {NETWORK_ID} · {TOKEN} · Mysticeti (MysticGhost ordering) · wave 3 (12s leaders) · staked validators
+        {NETWORK_ID} · {TOKEN} · Hybrid PoW + GHOSTDAG · 4s target · k=5
       </p>
     </div>
   );
@@ -291,21 +341,21 @@ function MainnetPlaceholder() {
 
       <div className="rounded-xl border border-border bg-surface px-6 py-12 text-center">
         <DagMark variant="gold" className="mx-auto size-10" />
-        <p className="eyebrow mt-5">{MAINNET_ID} · KUNA</p>
+        <p className="eyebrow mt-5">{MAINNET_ID} · KVNC</p>
         <h2 className="mt-2 font-display text-3xl tracking-tight text-fg italic">
-          Mainnet is launching soon.
+          Public launch: 1.1.2027
         </h2>
         <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-muted">
           The production network is being finalized. Live stats will appear here
           the moment the mainnet node opens its public endpoint.
         </p>
         <ul className="mx-auto mt-6 flex max-w-xl flex-wrap items-center justify-center gap-2 font-mono text-[10px] tracking-wide text-muted uppercase">
-          <li className="rounded-md border border-border px-2 py-1">Mysticeti</li>
-          <li className="rounded-md border border-border px-2 py-1">MysticGhost ordering</li>
-          <li className="rounded-md border border-border px-2 py-1">wave = 3</li>
-          <li className="rounded-md border border-border px-2 py-1">12s leader finality</li>
-          <li className="rounded-md border border-border px-2 py-1">staked validators</li>
-          <li className="rounded-md border border-border px-2 py-1">2.5 KUNA leader reward</li>
+          <li className="rounded-md border border-border px-2 py-1">Hybrid PoW + GHOSTDAG</li>
+          <li className="rounded-md border border-border px-2 py-1">KovanicaHash PoW</li>
+          <li className="rounded-md border border-border px-2 py-1">GHOSTDAG k=5</li>
+          <li className="rounded-md border border-border px-2 py-1">4s target interval</li>
+          <li className="rounded-md border border-border px-2 py-1">no consensus stake</li>
+          <li className="rounded-md border border-border px-2 py-1">2.5 KVNC initial block reward</li>
           <li className="rounded-md border border-border px-2 py-1">cap {kvnc(MAX_SUPPLY)}M</li>
         </ul>
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">

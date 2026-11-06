@@ -21,7 +21,7 @@ const STEPS: Step[] = [
   {
     id: "fund",
     title: "Get testnet funds",
-    description: "Use the faucet to get free KUNA on testnet.",
+    description: "Use the faucet to get free KVNC on testnet.",
     action: "Open Faucet",
     href: `${SURFACE.testnet}/faucet`,
   },

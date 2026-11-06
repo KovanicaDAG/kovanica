@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { NETWORK_ID } from "@/lib/api/contract";
 import type { ApiState } from "@/lib/api/contract";
 
-const CAP_KUNA = 10;
+const CAP_KVNC = 10;
 const AMOUNTS = [1, 5, 10] as const;
 const COOLDOWN_S = 60;
 
@@ -27,7 +27,7 @@ type ErrorKind =
 const ERROR_COPY: Record<Exclude<ErrorKind, null>, string> = {
   "invalid-address":
     "That doesn't look like a Kovanica address. Paste a 64-hex public key or a kvnc…dag address.",
-  cap: "This address has already claimed its lifetime cap — 10 KUNA per address on testnet.",
+  cap: "This address has already claimed its lifetime cap — 10 KVNC per address on testnet.",
   dry: "The faucet is dry right now — the node has no funds to give. Try again in a bit.",
   offline: "The testnet node is unreachable. Check back in a moment.",
   cooldown: "The faucet is cooling down. Try again in a moment.",
@@ -46,6 +46,7 @@ export function FaucetView() {
   const [copied, setCopied] = useState(false);
   const [cooldownLeft, setCooldownLeft] = useState(0);
   const [head, setHead] = useState<{ blocks: number; faucet: boolean } | null>(null);
+  const [headLoading, setHeadLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
@@ -56,8 +57,10 @@ export function FaucetView() {
         const d = (await r.json()) as ApiState;
         if (!mounted) return;
         setHead({ blocks: d.node.blocks, faucet: d.faucet });
+        setHeadLoading(false);
       } catch {
-        /* offline — keep head null so the status line degrades gracefully */
+        setHead(null);
+        setHeadLoading(false);
       }
     }
     void load();
@@ -174,16 +177,38 @@ export function FaucetView() {
       <main className="flex flex-1 justify-center px-4 py-10 md:py-16">
         <div className="w-full max-w-md">
           <div className="flex items-center justify-between gap-2">
-            <p className="eyebrow">{NETWORK_ID} · KUNA</p>
+            <p className="eyebrow">{NETWORK_ID} · KVNC</p>
             <NetworkBadge />
           </div>
           <h1 className="mt-1 font-display text-3xl tracking-tight text-fg italic">
             Testnet faucet
           </h1>
           <p className="mt-1 text-sm text-muted">
-            Per-address lifetime cap <strong className="text-fg">{CAP_KUNA} KUNA</strong>
+            Per-address lifetime cap <strong className="text-fg">{CAP_KVNC} KVNC</strong>
             {" · "}Chain head{" "}
-            <span className="font-mono text-fg">#{head ? head.blocks.toLocaleString() : "—"}</span>
+            {headLoading ? (
+              <span className="font-mono text-muted">Loading…</span>
+            ) : head ? (
+              <span className="font-mono text-fg">#{head.blocks.toLocaleString()}</span>
+            ) : (
+              <span className="inline-flex items-center gap-1 font-mono text-muted">
+                Unavailable
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHeadLoading(true);
+                    void fetch("/api/state?source=testnet")
+                      .then((r) => r.json())
+                      .then((d: ApiState) => setHead({ blocks: d.node.blocks, faucet: d.faucet }))
+                      .catch(() => setHead(null))
+                      .finally(() => setHeadLoading(false));
+                  }}
+                  className="text-xs text-gold underline underline-offset-2 hover:text-gold/80"
+                >
+                  Retry
+                </button>
+              </span>
+            )}
           </p>
 
           <div className="mt-6 rounded-xl border border-border bg-surface p-5">
@@ -233,7 +258,7 @@ export function FaucetView() {
                         : "border-border bg-bg text-muted hover:bg-surface-2 hover:text-fg",
                     )}
                   >
-                    {n} KUNA
+                    {n} KVNC
                   </button>
                 ))}
               </div>
@@ -246,7 +271,7 @@ export function FaucetView() {
               disabled={!canSubmit}
               onClick={() => void submit()}
             >
-              {phase === "submitting" ? "Sending…" : `Request ${chosenAmount} KUNA`}
+              {phase === "submitting" ? "Sending…" : `Request ${chosenAmount} KVNC`}
             </Button>
             {disabledReason && (
               <p className="mt-2 text-center text-xs text-subtle">{disabledReason}</p>
@@ -292,7 +317,7 @@ export function FaucetView() {
                 {(grantedAtoms / 1_000_000_000).toLocaleString(undefined, {
                   maximumFractionDigits: 9,
                 })}{" "}
-                KUNA
+                KVNC
               </p>
               <div className="mt-3 flex items-center justify-between gap-2 rounded-md bg-surface-2 px-3 py-2">
                 <code className="min-w-0 truncate font-mono text-xs text-muted">{txId}</code>
@@ -308,7 +333,7 @@ export function FaucetView() {
               <p className="mt-2 text-xs text-subtle">
                 Remaining cap for this address:{" "}
                 <span className="font-mono text-muted">
-                  {CAP_KUNA - chosenAmount} KUNA
+                  {CAP_KVNC - chosenAmount} KVNC
                 </span>
               </p>
               <div className="mt-4 flex flex-wrap gap-2">

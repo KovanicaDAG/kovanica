@@ -129,12 +129,12 @@ export function HardwareSignModal({
             <div className="flex items-center justify-between pb-2.5">
               <span className="text-muted">Amount</span>
               <span className="font-mono text-sm font-semibold text-fg">
-                {amountKvnc} KUNA
+                {amountKvnc} KVNC
               </span>
             </div>
             <div className="flex items-center justify-between py-2.5">
               <span className="text-muted">Network Fee</span>
-              <span className="font-mono text-fg">{feeKvnc} KUNA</span>
+              <span className="font-mono text-fg">{feeKvnc} KVNC</span>
             </div>
             <div className="py-2.5">
               <span className="text-muted">Recipient</span>

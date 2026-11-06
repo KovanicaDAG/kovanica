@@ -3,7 +3,7 @@ import { TOKEN, assetLabel, isNativeAsset } from "@/lib/api/contract";
 import { cn } from "@/lib/utils";
 
 export type AssetOption = {
-  /** null = native KUNA */
+  /** null = native KVNC */
   assetId: string | null;
   balance: number;
   label?: string;
@@ -30,7 +30,7 @@ type Props = {
 };
 
 /**
- * Select which asset to spend. Native KUNA is always first.
+ * Select which asset to spend. Native KVNC is always first.
  * When the node only returns native UTXOs, options will be a single entry.
  * NFTs (kind="nft") get distinct visual treatment.
  */

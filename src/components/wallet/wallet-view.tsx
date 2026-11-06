@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, Eye, EyeOff, Gem, Lock, Unlock, Usb } from "lucide-react";
+import { ChevronDown, Copy, Eye, EyeOff, Gem, Lock, Unlock, Usb } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { AddressQr } from "@/components/wallet/address-qr";
@@ -28,7 +28,7 @@ import {
   importMnemonic,
   signSighash,
 } from "@/lib/wallet/keys";
-import { hexToKvnc, parseAddr } from "@/lib/wallet/address";
+import { hexToKvnc, parseAddr, isAddr } from "@/lib/wallet/address";
 import { encryptMnemonic, decryptMnemonic } from "@/lib/wallet/vault";
 import { disconnectActiveHardwareProvider } from "@/lib/wallet/hardware";
 import { useHydrated } from "@/lib/use-hydrated";
@@ -68,7 +68,7 @@ export function WalletView() {
     null,
   );
   const [feeTier, setFeeTier] = useState<"slow" | "normal" | "fast">("normal");
-  /** RFC-002: null = native KUNA */
+  /** RFC-002: null = native KVNC */
   const [assetId, setAssetId] = useState<string | null>(null);
   /** KVP-102: contract address of the token selected in the send form. */
   const [tokenAddr, setTokenAddr] = useState<string | null>(null);
@@ -245,7 +245,8 @@ export function WalletView() {
     setBusy(true);
     try {
       if (
-        phrase.trim().startsWith("kvnc1") ||
+        isAddr(phrase.trim()) ||
+        phrase.trim().toLowerCase().startsWith("kvnc") ||
         /^[0-9a-f]{64}$/i.test(phrase.trim()) ||
         /^[0-9a-f]{66}$/i.test(phrase.trim())
       ) {
@@ -333,7 +334,7 @@ export function WalletView() {
     try {
       await api(`/api/faucet?to=${wallet.address}&amount=${ATOM}&kind=faucet`, "POST");
       await refreshChain(wallet.address);
-      toast.success("Faucet paid 1 KUNA");
+      toast.success("Faucet paid 1 KVNC");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Faucet failed");
     }
@@ -537,134 +538,207 @@ export function WalletView() {
     return (
       <div className="mx-auto flex w-full max-w-lg flex-col gap-6 px-4 py-8 md:px-6">
         <header>
-          <p className="font-mono text-[10px] tracking-brand text-gold uppercase">KUNA</p>
+          <p className="font-mono text-xs uppercase tracking-wider text-muted">KVNC</p>
           <h1 className="font-display text-3xl tracking-tight text-fg">Wallet</h1>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            Secure your KUNA in this browser or connect a hardware wallet. Address is the Ed25519
-            public key.
+            Secure your KVNC in this browser or connect a hardware wallet. Addresses use canonical
+            PRO-21 encoding (<code className="font-mono text-xs text-fg">kvnc…dag</code>, 64 characters)
+            derived from an Ed25519 public key.
           </p>
         </header>
-        <div className="flex flex-col gap-3">
-          {pendingMnemonic ? (
-            <div className="rounded-xl border border-border bg-surface p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-gold">
-                Write down your recovery phrase
-              </p>
-              <p className="mt-1 text-[11px] text-muted">
-                Anyone with these words controls your KUNA — keep them offline and never share them.
-              </p>
-              <div className="mt-3 grid grid-cols-3 gap-2">
-                {pendingMnemonic.split(" ").map((w, i) => (
-                  <div
-                    key={`${w}-${i}`}
-                    className="rounded-md bg-bg px-2 py-1.5 font-mono text-[11px] text-fg"
-                  >
-                    <span className="mr-1 text-subtle">{i + 1}.</span>
-                    {w}
-                  </div>
-                ))}
-              </div>
-              <label className="mt-4 flex cursor-pointer items-start gap-2 text-xs text-muted">
+
+        {pendingMnemonic ? (
+          <div className="rounded-xl border border-border bg-surface p-5">
+            <p className="text-xs font-medium uppercase tracking-wide text-gold">
+              Write down your recovery phrase
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Anyone with these words controls your KVNC — keep them offline and never share them.
+            </p>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {pendingMnemonic.split(" ").map((w, i) => (
+                <div
+                  key={`${w}-${i}`}
+                  className="rounded-md bg-bg px-2.5 py-2 font-mono text-xs text-fg"
+                >
+                  <span className="mr-1.5 text-subtle">{i + 1}.</span>
+                  {w}
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-muted">Encryption password</label>
+              <div className="relative">
                 <input
-                  type="checkbox"
-                  checked={wroteItDown}
-                  onChange={(e) => setWroteItDown(e.target.checked)}
-                  className="mt-0.5 size-4 shrink-0 accent-gold"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password for browser encryption"
+                  className="h-11 w-full rounded-md border border-border bg-bg px-3 pr-10 font-mono text-sm text-fg outline-none focus:border-gold"
                 />
-                <span>
-                  I wrote down these {pendingMnemonic.split(" ").length} words and will keep them
-                  offline.
-                </span>
-              </label>
-              <div className="mt-3 flex gap-2">
-                <Button
+                <button
                   type="button"
-                  className="h-11 flex-1 bg-gold text-black hover:bg-gold/90"
-                  disabled={busy || !wroteItDown}
-                  onClick={() => void onConfirmBackup()}
+                  onClick={() => setShowPassword((s) => !s)}
+                  className="absolute inset-y-0 right-0 px-3 text-muted hover:text-fg"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
                 >
-                  {busy ? "Creating…" : "Create wallet"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-11 px-4"
-                  disabled={busy}
-                  onClick={onCancelPending}
-                >
-                  Cancel
-                </Button>
+                  {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
               </div>
             </div>
-          ) : (
-            <>
-              <p className="text-xs text-muted">
-                Your wallet is one 24-word phrase. The same phrase always restores the same
-                address, here and in the Android wallets.
-              </p>
+
+            <label className="mt-4 flex cursor-pointer items-start gap-2.5 text-xs text-muted">
+              <input
+                type="checkbox"
+                checked={wroteItDown}
+                onChange={(e) => setWroteItDown(e.target.checked)}
+                className="mt-0.5 size-4 shrink-0 accent-gold"
+              />
+              <span>
+                I wrote down these {pendingMnemonic.split(" ").length} words and will keep them
+                offline.
+              </span>
+            </label>
+
+            <div className="mt-4 flex gap-2">
               <Button
                 type="button"
-                className="h-12 bg-gold text-black hover:bg-gold/90"
-                disabled={busy}
-                onClick={() => void onCreate()}
+                className="h-11 flex-1 bg-gold font-medium text-black hover:bg-gold/90"
+                disabled={busy || !wroteItDown || !password}
+                onClick={() => void onConfirmBackup()}
               >
-                {busy ? "Working…" : "Create encrypted wallet"}
+                {busy ? "Creating…" : "Confirm & create wallet"}
               </Button>
-            </>
-          )}
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 px-4"
+                disabled={busy}
+                onClick={onCancelPending}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-5">
+            <div>
+              <h2 className="text-base font-medium text-fg">Create new wallet</h2>
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                Generates a 24-word recovery phrase. Encrypted client-side with PBKDF2 + AES-GCM
+                in your browser.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-muted">Encryption password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Choose an encryption password"
+                  className="h-11 w-full rounded-md border border-border bg-bg px-3 pr-10 font-mono text-sm text-fg outline-none focus:border-gold"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((s) => !s)}
+                  className="absolute inset-y-0 right-0 px-3 text-muted hover:text-fg"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                >
+                  {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
+              <p className="text-[11px] text-subtle">
+                Password encrypts your seed in this browser. Keep it safe.
+              </p>
+            </div>
+
+            <Button
+              type="button"
+              className="h-12 w-full bg-gold font-medium text-black hover:bg-gold/90"
+              disabled={busy || !password.trim()}
+              onClick={() => void onCreate()}
+            >
+              {busy ? "Generating…" : "Create encrypted wallet"}
+            </Button>
+          </div>
+        )}
+
+        {/* Secondary: Import disclosure */}
+        <details className="group rounded-xl border border-border bg-surface p-4 transition-colors">
+          <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium text-fg outline-none">
+            <span>Or import existing phrase / private key</span>
+            <ChevronDown className="size-4 text-muted transition-transform duration-200 group-open:rotate-180" />
+          </summary>
+          <form onSubmit={(e) => void onImport(e)} className="mt-4 flex flex-col gap-3">
+            <label className="text-[10px] tracking-wide text-subtle uppercase">
+              Recovery phrase (24 words) or Address
+            </label>
+            <textarea
+              value={phrase}
+              onChange={(e) => setPhrase(e.target.value)}
+              placeholder="24 recovery words, or a kvnc…dag address (64 chars)"
+              rows={3}
+              className="min-h-20 rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm text-fg outline-none focus:border-gold"
+            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Encryption password (for recovery phrase)"
+                className="h-11 w-full rounded-md border border-border bg-bg px-3 pr-10 font-mono text-sm text-fg outline-none focus:border-gold"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((s) => !s)}
+                className="absolute inset-y-0 right-0 px-3 text-muted hover:text-fg"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+            <p className="text-[11px] text-subtle">
+              Watch-only addresses (<code className="font-mono text-fg">kvnc…dag</code> or 64-hex pubkey) do not require a password.
+            </p>
+            <Button
+              type="submit"
+              variant="outline"
+              className="h-11"
+              disabled={busy || !phrase.trim()}
+            >
+              Import
+            </Button>
+          </form>
+        </details>
+
+        {/* Tertiary: Hardware Wallet */}
+        <div className="flex items-center justify-between rounded-xl border border-border bg-surface p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 items-center justify-center rounded-lg bg-surface-2">
+              <Usb className="size-4 text-teal" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-fg">Hardware wallet</p>
+              <p className="text-xs text-muted">Connect Ledger or Trezor via WebUSB / HID</p>
+            </div>
+          </div>
           <Button
             type="button"
             variant="outline"
-            className="h-12"
+            size="sm"
             disabled={busy}
             onClick={() => setShowConnectModal(true)}
           >
-            <Usb className="size-4 text-teal" /> Connect Hardware Wallet
+            Connect
           </Button>
         </div>
-        {busy ? null : (
-          <div className="rounded-lg bg-surface p-3 text-xs text-muted">
-            <p className="font-medium text-fg">Password protects your seed</p>
-            <p className="mt-1">The mnemonic is encrypted with PBKDF2 + AES-GCM in this browser.</p>
-          </div>
-        )}
-        <form onSubmit={(e) => void onImport(e)} className="flex flex-col gap-3">
-          <label className="text-[10px] tracking-wide text-subtle uppercase">
-            Import recovery phrase or Address
-          </label>
-          <textarea
-            value={phrase}
-            onChange={(e) => setPhrase(e.target.value)}
-            placeholder="24 recovery words, or a kvnc1… address"
-            rows={3}
-            className="min-h-20 rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm text-fg outline-none"
-          />
-          <div className="relative">
-            <input
-              type={showPassword ? "text" : "password"}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Encryption password"
-              className="h-11 w-full rounded-md border border-border bg-bg px-3 pr-10 font-mono text-sm text-fg outline-none"
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword((s) => !s)}
-              className="absolute inset-y-0 right-0 px-3 text-muted"
-              aria-label="Toggle password"
-            >
-              {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-            </button>
-          </div>
-          <Button
-            type="submit"
-            variant="outline"
-            className="h-12"
-            disabled={busy || !phrase.trim()}
-          >
-            Import
-          </Button>
-        </form>
+
         <ConnectHardwareModal
           open={showConnectModal}
           onOpenChange={setShowConnectModal}
@@ -678,7 +752,7 @@ export function WalletView() {
     return (
       <div className="mx-auto flex w-full max-w-lg flex-col gap-6 px-4 py-8 md:px-6">
         <header>
-          <p className="font-mono text-[10px] tracking-brand text-gold uppercase">KUNA</p>
+          <p className="font-mono text-xs uppercase tracking-wider text-muted">KVNC</p>
           <h1 className="font-display text-3xl tracking-tight text-fg">Wallet locked</h1>
           <p className="mt-2 text-sm text-muted">Enter your password to decrypt the seed.</p>
         </header>
@@ -703,7 +777,8 @@ export function WalletView() {
               type="button"
               onClick={() => setShowPassword((s) => !s)}
               className="absolute inset-y-0 right-0 px-3 text-muted"
-              aria-label="Toggle"
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
             >
               {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
@@ -787,7 +862,7 @@ export function WalletView() {
               <AddressQr value={hexToKvnc(wallet.address)} />
               {!live && (
                 <Button type="button" variant="outline" size="sm" onClick={() => void onFaucet()}>
-                  Faucet 1 KUNA
+                  Faucet 1 KVNC
                 </Button>
               )}
             </div>

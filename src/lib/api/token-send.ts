@@ -8,7 +8,7 @@
  * bincode-encoded transaction.
  */
 
-/** Flat fee the node charges for a token call, in KUNA atoms. Mirrors the server. */
+/** Flat fee the node charges for a token call, in KVNC atoms. Mirrors the server. */
 export const TOKEN_SEND_FEE = 10_000;
 
 /** `0x`-prefixed contract address → the 64-hex form the API expects. */

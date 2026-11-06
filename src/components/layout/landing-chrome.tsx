@@ -62,7 +62,7 @@ export function LandingChrome({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>
       <footer className="border-t border-border px-4 py-6 md:px-6">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-xs text-subtle md:flex-row">
-          <span className="font-mono">kovanica · KUNA</span>
+          <span className="font-mono">kovanica · KVNC</span>
           <div className="flex flex-wrap items-center gap-4 font-mono">
             <a
               href="https://x.com/KovanicaDAG"

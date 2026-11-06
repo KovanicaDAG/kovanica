@@ -34,7 +34,7 @@ Status key: ✅ done · 🟡 partial · ❌ missing · 🔒 node API not exposed
 
 | Feature | Status |
 | --- | --- |
-| Hybrid staking UI | ❌ |
+| Solo miner tooling / telemetry | ❌ |
 | SPV / light client in browser | ❌ |
 | Mobile download strip | 🟡 |
 | Metrics dashboard | ❌ |

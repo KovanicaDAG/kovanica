@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 export const APP_DOWNLOADS = {
   wallet: {
     name: "Kovanica Wallet",
-    description: "Non-custodial mobile wallet with PRO-21 addresses, deterministic key derivation, and instant KUNA transfers.",
+    description: "Non-custodial mobile wallet with PRO-21 addresses, deterministic key derivation, and instant KVNC transfers.",
     androidApk: "/download/kovanica-wallet-0.3.7.apk",
     releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.3.7-wallet",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-wallet",
@@ -13,7 +13,7 @@ export const APP_DOWNLOADS = {
   },
   lightnode: {
     name: "Kovanica Lightnode",
-    description: "Embedded DAG light client. Verifies Mysticeti DAG consensus headers, tracks account balances locally, and syncs trustlessly.",
+    description: "Embedded DAG light client. Tracks DAG headers, checks account balances locally, and connects trustlessly.",
     androidApk: "/download/kovanica-lightnode-0.8.8.apk",
     releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.8.8-android",
     repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-chain",

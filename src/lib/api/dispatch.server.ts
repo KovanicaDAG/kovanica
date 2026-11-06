@@ -247,37 +247,12 @@ async function fetchLiveState(): Promise<ApiState> {
       parents,
       selected_parent: h.parentLeaderDigest || null,
       work: height,
-      timestamp_ms: Date.now() - (currentHeight - height) * 12000,
+      timestamp_ms: Date.now() - (currentHeight - height) * 4000,
       nonce: h.leaderAuthor ?? 0,
       blue_score: round,
       colour,
       txs: [],
     };
-  });
-
-  // Link earliest window block to genesis if start > 1 so graph stays connected
-  if (start > 1 && dag.length > 1) {
-    const earliestWindowBlock = dag[1];
-    if (earliestWindowBlock && earliestWindowBlock.parents.length === 0) {
-      earliestWindowBlock.parents = [dag[0].id];
-      earliestWindowBlock.selected_parent = dag[0].id;
-    }
-  }
-
-  // Include uncommitted round proposal for current wave (Red ball)
-  const nextRound = parseInt(latest.leaderRound, 16) + 1;
-  const candidateAuthor = (latest.leaderAuthor + 1) % 5;
-  const uncommittedCandidateId = `0x${latest.hash.slice(2, 10)}_cand_r${nextRound}`;
-  dag.push({
-    id: uncommittedCandidateId,
-    parents: [latest.hash],
-    selected_parent: latest.hash,
-    work: currentHeight + 1,
-    timestamp_ms: Date.now() - 4000,
-    nonce: candidateAuthor,
-    blue_score: nextRound,
-    colour: "red" as const,
-    txs: [],
   });
 
   return {
@@ -307,18 +282,18 @@ async function fetchLiveState(): Promise<ApiState> {
       selected_tip: latest.hash,
       blue_score: currentHeight,
       blue_work: currentHeight * 100,
-      k: 3,
+      k: 5,
       subsidy: 81_000_000_000_000_000,
       issuance: 2_500_000_000,
       halving_era: 8_100_000,
       min_fee: 10_000,
       genesis: "0x17e79432dfbee3adad15d7a851ff78ebafcefbc547073883489cd9cbdaae60fa",
       supply: 90_200_000_000_000_000,
-      token: "KUNA",
+      token: "KVNC",
       decimals: 9,
-      miner: `Validator ${latest.leaderAuthor}`,
+      miner: `Miner ${latest.leaderAuthor}`,
       atom: 1_000_000_000,
-      ui: "mysticeti",
+      ui: "hybrid",
       utxos: 0,
       chain_len: parseInt(latest.leaderRound, 16),
       mempool: 0,
@@ -345,8 +320,8 @@ async function fetchLiveBootstrap(): Promise<ApiBootstrap> {
     admission: "open",
     poa_enabled: false,
     atom: 1_000_000_000,
-    token: "KUNA",
-    k: 3,
+    token: "KVNC",
+    k: 5,
     subsidy: 2_500_000_000,
     min_fee: 10_000,
     finality_depth: 3,
@@ -454,7 +429,7 @@ async function handleLiveFaucet(to: string): Promise<any> {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || data.error || `Faucet error: ${res.status}`);
-  return { ok: true, tx_hash: data.tx_hash, amount: 10_000_000_000, message: "Dispensed 10 KUNA" };
+  return { ok: true, tx_hash: data.tx_hash, amount: 10_000_000_000, message: "Dispensed 10 KVNC" };
 }
 
 export async function dispatchApi(req: Request): Promise<Response> {
@@ -559,7 +534,7 @@ export async function dispatchApi(req: Request): Promise<Response> {
         const nativeHex = await callRpc("kovanica_getBalance", [fromCanonical]);
         const nativeBalance = BigInt(nativeHex ?? "0x0");
         if (nativeBalance < BigInt(TOKEN_FEE)) {
-          return text(`Need at least ${TOKEN_FEE} atoms of KUNA for the fee`, 400);
+          return text(`Need at least ${TOKEN_FEE} atoms of KVNC for the fee`, 400);
         }
 
         const nonceHex = await callRpc("kovanica_getNonce", [fromCanonical]);
@@ -665,7 +640,7 @@ export async function dispatchApi(req: Request): Promise<Response> {
         const balance = parseInt(balHex, 16);
         const fee = 10_000;
         if (balance < amount + fee) {
-          return text(`Insufficient balance: available ${balance / 1e9} KUNA, need ${(amount + fee) / 1e9} KUNA`, 400);
+          return text(`Insufficient balance: available ${balance / 1e9} KVNC, need ${(amount + fee) / 1e9} KVNC`, 400);
         }
 
         const nonceHex = await callRpc("kovanica_getNonce", [fromCanonical]);

@@ -14,8 +14,8 @@ import { api } from "@/lib/api/client";
 import { formatTokenAmount, parseTokenAmount } from "@/lib/tokens/codec";
 import { priceImpactBps, quote, type ApiPool } from "@/lib/tokens/pool";
 
-/** Native KUNA always has 9 decimals. */
-const KUNA_DECIMALS = 9;
+/** Native KVNC always has 9 decimals. */
+const KVNC_DECIMALS = 9;
 
 export function PoolView() {
   const [pools, setPools] = useState<ApiPool[] | null>(null);
@@ -53,8 +53,8 @@ export function PoolView() {
 
   const kunaReserve = pool ? BigInt(pool.kuna_reserve) : 0n;
   const tokenReserve = pool ? BigInt(pool.token_reserve) : 0n;
-  const inDecimals = dir === "buy" ? KUNA_DECIMALS : (pool?.decimals ?? 0);
-  const outDecimals = dir === "buy" ? (pool?.decimals ?? 0) : KUNA_DECIMALS;
+  const inDecimals = dir === "buy" ? KVNC_DECIMALS : (pool?.decimals ?? 0);
+  const outDecimals = dir === "buy" ? (pool?.decimals ?? 0) : KVNC_DECIMALS;
   const atoms = pool ? parseTokenAmount(amount, inDecimals) : null;
   const out =
     pool && atoms !== null
@@ -93,7 +93,7 @@ export function PoolView() {
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted">
             Every token contract can hold a constant-product pool between its own token and
-            KUNA. Reserves, fee and LP supply are read straight from contract storage.
+            KVNC. Reserves, fee and LP supply are read straight from contract storage.
           </p>
         </div>
         <Button
@@ -122,7 +122,7 @@ export function PoolView() {
             <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-fg">
               token_init_pool
             </code>{" "}
-            on the token contract with an initial KUNA reserve, token reserve and fee (max 10%).
+            on the token contract with an initial KVNC reserve, token reserve and fee (max 10%).
             The token keeps working as a normal KVP-102 token until then.
           </p>
         </div>
@@ -153,7 +153,7 @@ export function PoolView() {
                       )}
                       <div className="min-w-0">
                         <p className="truncate font-display text-lg tracking-tight text-fg">
-                          {row.symbol} / KUNA
+                          {row.symbol} / KVNC
                         </p>
                         <p className="truncate font-mono text-[11px] text-subtle">{row.name}</p>
                       </div>
@@ -166,9 +166,9 @@ export function PoolView() {
                   </div>
 
                   <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[11px]">
-                    <dt className="text-subtle">KUNA reserve</dt>
+                    <dt className="text-subtle">KVNC reserve</dt>
                     <dd className="text-right text-fg">
-                      {formatTokenAmount(BigInt(row.kuna_reserve), KUNA_DECIMALS)}
+                      {formatTokenAmount(BigInt(row.kuna_reserve), KVNC_DECIMALS)}
                     </dd>
                     <dt className="text-subtle">{row.symbol} reserve</dt>
                     <dd className="text-right text-fg">
@@ -182,7 +182,7 @@ export function PoolView() {
                         ? "—"
                         : `${row.price_kuna.toLocaleString(undefined, {
                             maximumFractionDigits: 9,
-                          })} KUNA`}
+                          })} KVNC`}
                     </dd>
                   </dl>
                 </button>
@@ -213,7 +213,7 @@ export function PoolView() {
                   className="flex-1"
                   onClick={() => setDir("buy")}
                 >
-                  KUNA → {pool.symbol}
+                  KVNC → {pool.symbol}
                 </Button>
                 <Button
                   type="button"
@@ -222,12 +222,12 @@ export function PoolView() {
                   className="flex-1"
                   onClick={() => setDir("sell")}
                 >
-                  {pool.symbol} → KUNA
+                  {pool.symbol} → KVNC
                 </Button>
               </div>
 
               <label className="text-xs text-muted">
-                You pay ({dir === "buy" ? "KUNA" : pool.symbol})
+                You pay ({dir === "buy" ? "KVNC" : pool.symbol})
                 <input
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
@@ -243,7 +243,7 @@ export function PoolView() {
                   {out === null
                     ? "—"
                     : `${formatTokenAmount(out, outDecimals)} ${
-                        dir === "buy" ? pool.symbol : "KUNA"
+                        dir === "buy" ? pool.symbol : "KVNC"
                       }`}
                 </p>
                 <p className="mt-2 font-mono text-[10px] text-subtle">

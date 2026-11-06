@@ -13,7 +13,7 @@ export const NETWORK_PROXIES: Record<PublicSource, string> = {
   testnet: LIVE_EXPLORER,
   mainnet: "",
 };
-export const TOKEN = "KUNA";
+export const TOKEN = "KVNC";
 export const ATOM = 1_000_000_000;
 export const DECIMALS = 9;
 export const SUBSIDY = Math.floor(2.5 * ATOM);
@@ -22,13 +22,13 @@ export const FOUNDER_SEED = 1;
 export const HALVING_ERA = 8_100_000;
 export const MAX_SUPPLY = 90_200_000 * ATOM;
 // Mirrors the node: min_fee = max(subsidy / 500_000, 1) atoms.
-// subsidy = 2.5 KUNA (s₀) → min_fee = max(2.5 * 10^9 / 500_000, 1) = 5,000 atoms.
+// subsidy = 2.5 KVNC (s₀) → min_fee = max(2.5 * 10^9 / 500_000, 1) = 5,000 atoms.
 // Note: 500_000 here is the fee-floor divider, not HALVING_ERA (8_100_000).
 export const MIN_FEE = Math.max(Math.floor(SUBSIDY / 500_000), 1);
-export const K = 3;
+export const K = 5;
 export const TREASURY = "cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc";
 
-/** Native KUNA is represented as null / omitted asset_id (RFC-002). */
+/** Native KVNC is represented as null / omitted asset_id (RFC-002). */
 export type AssetIdHex = string; // 64-char lowercase hex, or empty/null for native
 
 export type LocalSource = "local";
@@ -51,7 +51,7 @@ export function assetLabel(assetId: string | null | undefined): string {
 export type ApiOutput = {
   value: number;
   owner: string;
-  /** RFC-002: omitted or null = native KUNA */
+  /** RFC-002: omitted or null = native KVNC */
   asset_id?: string | null;
 };
 export type ApiTx = {
@@ -75,7 +75,7 @@ export type ApiUtxo = {
   tx: string;
   index: number;
   value: number;
-  /** RFC-002: omitted or null = native KUNA */
+  /** RFC-002: omitted or null = native KVNC */
   asset_id?: string | null;
   /** KVP-106: asset kind */
   kind?: "fungible" | "nft";
@@ -89,7 +89,7 @@ export type ApiHistoryTx = {
   tx: string;
   kind: "coinbase" | "in" | "out" | "faucet";
   delta: number;
-  /** RFC-002: omitted or null = native KUNA */
+  /** RFC-002: omitted or null = native KVNC */
   asset_id?: string | null;
   /** KVP-106: asset kind */
   asset_kind?: "fungible" | "nft";
@@ -183,7 +183,7 @@ export type ApiBootstrap = {
 };
 export type ApiUtxos = {
   address: string;
-  /** Native KUNA balance only (RFC-002) */
+  /** Native KVNC balance only (RFC-002) */
   balance: number;
   utxos: ApiUtxo[];
   /** Per-asset balances when node supports RFC-002 */
@@ -248,7 +248,7 @@ export function getSpecText(network: PublicSource): string {
 
   return `# ${networkId}
 
-BlockDAG ${isMainnet ? "mainnet" : "testnet"}. Native token **${TOKEN}** (9 decimals). Canonical chain IDs: mainnet=1, testnet=2, devnet=3 (chain 4 is internal testnet).
+BlockDAG ${isMainnet ? "mainnet" : "testnet"}. Native token **${TOKEN}** (9 decimals). Canonical chain IDs: mainnet=1, testnet=2, devnet=3, testnet_v2=4, hybrid_testnet=5, local=1337.
 Engine is the Rust node; this app speaks the same HTTP contract.
 
 ||| | |
@@ -258,12 +258,12 @@ Engine is the Rust node; this app speaks the same HTTP contract.
 ||| Map | ${liveMap} ||
 ||| Site | ${liveSite} ||
 ||| Network | \`${networkId}\` ||
-||| Premine | ${FOUNDER_AMOUNT / ATOM} KUNA (founder / treasury) ||
-||| Subsidy cap | ${SUBSIDY / ATOM} KUNA / leader block, decays × 3/4 every ${HALVING_ERA.toLocaleString()} committed leaders ||
-||| Hard cap | ${MAX_SUPPLY / Number(ATOM.toLocaleString().replace(/,/g, ''))} KUNA (90.2M) ||
-||| Min fee | ${MIN_FEE} atoms (${MIN_FEE / ATOM} KUNA) ||
-||| Consensus | Mysticeti DAG (wave = 3, MysticGhost ordering) ||
-||| Atom | 1 KUNA = 10^9 atoms ||
+||| Premine | ${FOUNDER_AMOUNT / ATOM} KVNC (founder / treasury) ||
+||| Initial block reward | ${SUBSIDY / ATOM} KVNC / block, decays × 3/4 every ${HALVING_ERA.toLocaleString()} blocks ||
+||| Hard cap | ${MAX_SUPPLY / Number(ATOM.toLocaleString().replace(/,/g, ''))} KVNC (90.2M) ||
+||| Min fee | ${MIN_FEE} atoms (${MIN_FEE / ATOM} KVNC) ||
+||| Consensus | Hybrid PoW + GHOSTDAG (target block 4 s, GHOSTDAG K = 5, KovanicaHash PoW; no stake) ||
+||| Atom | 1 KVNC = 10^9 atoms ||
 ||| Finality depth | 100 blue score ||
 ||| Payload pruning | 1000 blue score ||
 
@@ -327,19 +327,19 @@ POST /api/produce
 
 POST /api/fee_estimate?amount=
   mempool fee estimate in atoms: p90 of pending fees, min-fee when empty;
-  amounts over 1 KUNA scale by 1.2
+  amounts over 1 KVNC scale by 1.2
 
 POST /api/mine
-  local playground / operator: simulate block creation (rewards mint strictly to committed wave leaders)
+  local playground / operator: simulate block creation (rewards mint to committed block authors)
 
 POST /api/mining?on=1
   local playground: toggle simulated block production
 
 POST /api/miner?addr=
-  local playground: set block proposer / validator address
+  local playground: set block proposer address
 
 POST /api/faucet?to=&amount=
-  ${network === "testnet" ? "testnet open faucet. kind=faucet (default). Per-address lifetime cap: 10 KUNA." : "mainnet faucet (closed)"}
+  ${network === "testnet" ? "testnet open faucet. kind=faucet (default). Per-address lifetime cap: 10 KVNC." : "mainnet faucet (closed)"}
 
 POST /api/reset
   local only (chain wipe is locked on the public testnet)
@@ -366,7 +366,7 @@ The GitHub crate still exposes a REPL, not HTTP:
   save <path> | load <path> | checkpoint | load_checkpoint
   faucet | faucet_to <addr> | faucet_cap | faucet_status
   mining [on|off] | produce | miner <addr>
-  vrf <prove|verify> … | staking [vrf-pk-hex]
+
 
 HTTP above is what explorer.kovanica.online actually serves.
 Live CORS is closed — this app proxies it server-side.

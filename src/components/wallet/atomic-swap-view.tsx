@@ -255,7 +255,7 @@ async function fundHtlcA() {
         { script_hex: target.script_hex, from_height: 0 }
       );
       setHtlcStatus(res);
-      toast.success(res.redeem_tx ? "HTLC redeemed!" : `HTLC locked — ${Number(res.balance) / ATOM} KUNA`);
+      toast.success(res.redeem_tx ? "HTLC redeemed!" : `HTLC locked — ${Number(res.balance) / ATOM} KVNC`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Status check failed");
     } finally {
@@ -498,7 +498,7 @@ async function fundHtlcA() {
                 <h2 className="mb-4 text-lg font-medium text-fg">Create Swap Offer</h2>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
-                    <label className="mb-1 block text-xs text-muted">Amount to Give (KUNA)</label>
+                    <label className="mb-1 block text-xs text-muted">Amount to Give (KVNC)</label>
                     <input
                       value={p1Amount}
                       onChange={(e) => setP1Amount(e.target.value)}
@@ -532,7 +532,7 @@ async function fundHtlcA() {
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs text-muted">Amount to Receive (KUNA)</label>
+                    <label className="mb-1 block text-xs text-muted">Amount to Receive (KVNC)</label>
                     <input
                       value={p2Amount}
                       onChange={(e) => setP2Amount(e.target.value)}
@@ -640,11 +640,11 @@ async function fundHtlcA() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted">Value</span>
-                      <span className="font-mono">{Number(htlcA.value) / ATOM} KUNA</span>
+                      <span className="font-mono">{Number(htlcA.value) / ATOM} KVNC</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted">Fee</span>
-                      <span className="font-mono">{Number(htlcA.fee) / ATOM} KUNA</span>
+                      <span className="font-mono">{Number(htlcA.fee) / ATOM} KVNC</span>
                     </div>
                     {offer && (
                       <div className="flex justify-between">
@@ -679,7 +679,7 @@ async function fundHtlcA() {
                     {htlcStatus && (
                       <div className="flex-1 rounded-lg border border-border bg-bg p-2 text-xs">
                         <span className="text-muted">Locked:</span>{" "}
-                        <span className="font-mono text-fg">{Number(htlcStatus.balance) / ATOM} KUNA</span>
+                        <span className="font-mono text-fg">{Number(htlcStatus.balance) / ATOM} KVNC</span>
                         {htlcStatus.redeem_tx && (
                           <div className="mt-1">
                             <span className="text-muted">Redeemed:</span>{" "}
@@ -722,11 +722,11 @@ async function fundHtlcA() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted">Value</span>
-                      <span className="font-mono">{Number(htlcB.value) / ATOM} KUNA</span>
+                      <span className="font-mono">{Number(htlcB.value) / ATOM} KVNC</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted">Fee</span>
-                      <span className="font-mono">{Number(htlcB.fee) / ATOM} KUNA</span>
+                      <span className="font-mono">{Number(htlcB.fee) / ATOM} KVNC</span>
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">

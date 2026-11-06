@@ -36,13 +36,13 @@ export function MainnetLaunching() {
         />
         <div className="relative mx-auto w-full max-w-md text-center">
           <DagMark variant="gold" className="mx-auto size-12" />
-          <p className="eyebrow mt-6">kovanica-mainnet · KUNA</p>
+          <p className="eyebrow mt-6">kovanica-mainnet · KVNC</p>
           <h1 className="mt-2 font-display text-4xl tracking-tight text-fg italic md:text-5xl">
-            Mainnet is launching soon.
+            Public launch: 1.1.2027
           </h1>
           <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-muted">
-            The production network is being finalized — genesis, node
-            distribution and the authority set. Meanwhile the full
+            The production network is scheduled for public launch on 1.1.2027
+            following the hybrid testnet and KovanicaHash audit. Meanwhile the full
             protocol is live on testnet.
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
@@ -54,14 +54,14 @@ export function MainnetLaunching() {
             </Button>
           </div>
           <p className="mt-6 font-mono text-[10px] tracking-wide text-subtle uppercase">
-            mainnet.kovanica.online · Mysticeti / MysticGhost · Staked Validators
+            mainnet.kovanica.online · Hybrid PoW + GHOSTDAG · KVNC
           </p>
         </div>
       </main>
 
       <footer className="border-t border-border px-6 py-6">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-xs text-subtle md:flex-row">
-          <span className="font-mono">kovanica-mainnet · KUNA</span>
+          <span className="font-mono">kovanica-mainnet · KVNC</span>
           <span className="flex items-center gap-4 font-mono">
             <a className="transition-colors hover:text-fg" href={SURFACE.landing}>
               kovanica.online

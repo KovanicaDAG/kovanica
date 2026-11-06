@@ -234,7 +234,7 @@ export function TokenListingsView() {
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-xs text-muted">Amount (KUNA)</label>
+                <label className="mb-1 block text-xs text-muted">Amount (KVNC)</label>
                 <input
                   value={tradeAmount}
                   onChange={(e) => setTradeAmount(e.target.value)}

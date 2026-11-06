@@ -308,7 +308,7 @@ export function DexView() {
             <h2 className="mb-4 text-lg font-medium text-fg">Create Offer</h2>
             <div className="grid gap-4">
               <div>
-                <label className="mb-1 block text-xs text-muted">You Give (KUNA)</label>
+                <label className="mb-1 block text-xs text-muted">You Give (KVNC)</label>
                 <input
                   value={giveAmount}
                   onChange={(e) => setGiveAmount(e.target.value)}
@@ -318,7 +318,7 @@ export function DexView() {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs text-muted">You Receive (KUNA)</label>
+                <label className="mb-1 block text-xs text-muted">You Receive (KVNC)</label>
                 <input
                   value={takeAmount}
                   onChange={(e) => setTakeAmount(e.target.value)}
@@ -450,7 +450,7 @@ export function DexView() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted">Value</span>
-                <span className="font-mono">{Number(htlc.value) / ATOM} KUNA</span>
+                <span className="font-mono">{Number(htlc.value) / ATOM} KVNC</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted">Outpoint</span>

@@ -40,7 +40,7 @@ export function LiveStats() {
     { label: "Blocks", value: head.blocks.toLocaleString() },
     { label: "Tip", value: shortId(head.tip) },
     { label: "Min fee", value: `${head.min_fee.toLocaleString()} atoms` },
-    { label: "Finality", value: `${head.finality_depth ?? 100} blue` },
+    { label: "Target", value: "4 s" },
   ];
 
   return (
@@ -53,7 +53,7 @@ export function LiveStats() {
           <p className="font-mono text-[10px] tracking-brand text-subtle uppercase">
             {c.label}
           </p>
-          <p className="mt-1 truncate font-mono text-sm text-gold">{c.value}</p>
+          <p className="mt-1 truncate font-mono text-sm text-fg">{c.value}</p>
         </div>
       ))}
     </div>
