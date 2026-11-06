@@ -1893,8 +1893,43 @@ pub async fn handle_sync_status(_params: Value, state: RpcState) -> Result<Value
 pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let chain_id = state.mempool.signing_context().chain_id;
     let author: u16 = match params {
-        Value::Object(ref map) => map.get("author").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
-        Value::Array(ref arr) if !arr.is_empty() => arr[0].as_u64().unwrap_or(0) as u16,
+        Value::Object(ref map) => {
+            if let Some(auth) = map.get("author").and_then(|v| v.as_u64()) {
+                auth as u16
+            } else if let Some(addr_str) = map.get("address").and_then(|v| v.as_str()) {
+                addr_str.parse::<u16>().unwrap_or_else(|_| {
+                    if let Ok(addr) = kovanica_types::Address::parse_for_chain(addr_str, chain_id) {
+                        u16::from_le_bytes([addr.0[0], addr.0[1]])
+                    } else {
+                        0
+                    }
+                })
+            } else {
+                0
+            }
+        }
+        Value::Array(ref arr) if !arr.is_empty() => {
+            if let Some(auth) = arr[0].as_u64() {
+                auth as u16
+            } else if let Some(addr_str) = arr[0].as_str() {
+                addr_str.parse::<u16>().unwrap_or_else(|_| {
+                    if let Ok(addr) = kovanica_types::Address::parse_for_chain(addr_str, chain_id) {
+                        u16::from_le_bytes([addr.0[0], addr.0[1]])
+                    } else {
+                        0
+                    }
+                })
+            } else {
+                0
+            }
+        }
+        Value::String(ref addr_str) => addr_str.parse::<u16>().unwrap_or_else(|_| {
+            if let Ok(addr) = kovanica_types::Address::parse_for_chain(addr_str, chain_id) {
+                u16::from_le_bytes([addr.0[0], addr.0[1]])
+            } else {
+                0
+            }
+        }),
         _ => 0,
     };
 
@@ -1975,12 +2010,14 @@ pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, Rp
         "round": round,
         "author": author,
         "parents": parent_hashes.iter().map(|h| format!("0x{}", hex::encode(h.0))).collect::<Vec<_>>(),
+        "parent_refs": template_header.parents,
         "merkle_root": format!("0x{}", hex::encode(merkle_root.0)),
         "timestamp": timestamp,
         "target_bits": format!("0x{:08x}", target_bits),
         "target": format!("0x{}", hex::encode(target_bytes)),
         "preimage": format!("0x{}", hex::encode(preimage)),
-        "transactions_count": txs.len()
+        "transactions_count": txs.len(),
+        "header": template_header
     }))
 }
 
@@ -3917,6 +3954,15 @@ mod tests {
         assert_eq!(work["chain_id"], 5);
         assert_eq!(work["author"], 7);
         assert_eq!(work["round"], 1);
+        assert!(work["header"].is_object());
+        assert!(work["parent_refs"].is_array());
+
+        let addr = kovanica_types::Address([0x42; 32]);
+        let work_by_addr = handle_get_work(serde_json::json!([addr.encode()]), state.clone())
+            .await
+            .expect("get work by address");
+        assert_eq!(work_by_addr["chain_id"], 5);
+        assert!(work_by_addr["header"].is_object());
 
         // 4. submit_work with a mined block
         let header = kovanica_types::BlockHeader::new(
