@@ -18,6 +18,7 @@ use kovanica_cli::amount::{format_kuna_fixed, parse_cli_amount};
 use kovanica_cli::contracts::{
     ContractCommand, HtlcCommand, MultisigCommand, TokenCommand, VaultCommand,
 };
+use kovanica_cli::miner::{run_miner, MinerCommand, MinerRunArgs};
 use kovanica_cli::rpc::RpcClient;
 use kovanica_cli::{comms, contracts, mining, node, output, tui, tx, wallet};
 use kovanica_types::transaction::TransactionKind;
@@ -134,6 +135,11 @@ enum Commands {
         #[command(subcommand)]
         command: comms::CommsCommand,
     },
+    /// Solo miner subcommands (PoW)
+    Miner {
+        #[command(subcommand)]
+        command: MinerCommand,
+    },
     /// Mining subcommands (PoW / Chain 5)
     Mining {
         #[command(subcommand)]
@@ -152,6 +158,8 @@ enum MiningCommand {
     Info,
     /// Show local node mining status
     Status,
+    /// Run standalone solo miner (alias of `kovanica miner run`)
+    Run(MinerRunArgs),
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -530,9 +538,13 @@ async fn main() -> Result<()> {
             contracts::run(&client, chain_id, ContractCommand::Token { command }, json).await
         }
         Commands::Comms { command } => comms::run(command, json),
+        Commands::Miner { command } => match command {
+            MinerCommand::Run(args) => run_miner(&client, &rpc_url, args, chain_id).await,
+        },
         Commands::Mining { command } => match command {
             MiningCommand::Info => mining::info(&client, json).await,
             MiningCommand::Status => mining::status(&client, json).await,
+            MiningCommand::Run(args) => run_miner(&client, &rpc_url, args, chain_id).await,
         },
         Commands::Dag { command } => match command {
             DagCommand::Tips => mining::dag_tips(&client, json).await,
@@ -1767,5 +1779,66 @@ mod wallet_cli_security_tests {
             } => {}
             _ => panic!("expected dag tips"),
         }
+    }
+
+    #[test]
+    fn solo_miner_subcommand_parses_defaults_and_custom_flags() {
+        let raw = Address([0x77; 32]);
+        let addr = raw.encode();
+
+        // 1. kovanica miner run with required --address and default flags
+        let cli = Cli::try_parse_from(["kovanica", "miner", "run", "--address", &addr]).unwrap();
+        assert_eq!(cli.rpc_url, "http://127.0.0.1:8545");
+        match cli.command {
+            Commands::Miner {
+                command: MinerCommand::Run(args),
+            } => {
+                assert_eq!(args.address, addr);
+                assert_eq!(args.threads, None);
+                assert_eq!(args.poll_interval_ms, 1000);
+            }
+            _ => panic!("expected miner run"),
+        }
+
+        // 2. kovanica miner run with all custom flags
+        let cli = Cli::try_parse_from([
+            "kovanica",
+            "--rpc-url",
+            "http://192.168.1.50:8545",
+            "miner",
+            "run",
+            "--address",
+            &addr,
+            "--threads",
+            "8",
+            "--poll-interval-ms",
+            "500",
+        ])
+        .unwrap();
+        assert_eq!(cli.rpc_url, "http://192.168.1.50:8545");
+        match cli.command {
+            Commands::Miner {
+                command: MinerCommand::Run(args),
+            } => {
+                assert_eq!(args.address, addr);
+                assert_eq!(args.threads, Some(8));
+                assert_eq!(args.poll_interval_ms, 500);
+            }
+            _ => panic!("expected miner run"),
+        }
+
+        // 3. kovanica mining run alias
+        let cli = Cli::try_parse_from(["kovanica", "mining", "run", "--address", &addr]).unwrap();
+        match cli.command {
+            Commands::Mining {
+                command: MiningCommand::Run(args),
+            } => {
+                assert_eq!(args.address, addr);
+            }
+            _ => panic!("expected mining run"),
+        }
+
+        // 4. Missing required --address fails parsing
+        assert!(Cli::try_parse_from(["kovanica", "miner", "run"]).is_err());
     }
 }

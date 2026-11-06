@@ -6,6 +6,7 @@
 pub mod amount;
 pub mod comms;
 pub mod contracts;
+pub mod miner;
 pub mod mining;
 pub mod node;
 pub mod output;
