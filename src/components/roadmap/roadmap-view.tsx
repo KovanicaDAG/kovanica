@@ -15,12 +15,12 @@ type Item = {
 /** Core Protocol Architecture & Wasmi Smart Contracts. */
 const PROTOCOL: Item[] = [
   {
-    id: "mysticeti-consensus",
-    title: "Mysticeti BlockDAG Consensus",
+    id: "hybrid-consensus",
+    title: "Hybrid PoW + GHOSTDAG Consensus",
     status: "done",
     blurb:
-      "Uncertified DAG consensus with 3-round commit waves, 4s round intervals, and 12s committed leaders with BFT finality.",
-    note: "Round-robin leader progression among active staked validator committee.",
+      "Hybrid Proof-of-Work block admission with GHOSTDAG graph ordering (4s target block interval, GHOSTDAG k=5, KovanicaHash PoW; no stake in consensus).",
+    note: "Native PoW admission and GHOSTDAG topological sorting.",
   },
   {
     id: "account-ledger",
@@ -28,7 +28,7 @@ const PROTOCOL: Item[] = [
     status: "done",
     blurb:
       "Account-based state model with sequence nonces and canonical PRO-21 addresses (64 chars: kvnc + 57 base32 + dag).",
-    note: "BLAKE3 KUNA-TX-v1 sighashes signed client-side with Ed25519 keys.",
+    note: "BLAKE3 KUNA-TX-v1 compatibility sighashes signed client-side with Ed25519 keys.",
   },
   {
     id: "wasmi-runtime",
@@ -70,10 +70,10 @@ const PROTOCOL: Item[] = [
 const SURFACE: Item[] = [
   {
     id: "web-explorer",
-    title: "Multi-Lane BlockDAG Explorer",
+    title: "BlockDAG Explorer",
     status: "done",
     blurb:
-      "5-validator committee lanes visualizing BFT leader progression, interactive DAG canvas, zoom controls, and 18 live network metrics.",
+      "Interactive DAG canvas ordered by GHOSTDAG K=5, zoom and pan controls, and truthful live network telemetry.",
   },
   {
     id: "web-wallet",
@@ -87,7 +87,7 @@ const SURFACE: Item[] = [
     title: "Testnet Faucet",
     status: "done",
     blurb:
-      "Automated testnet faucet dispensing 10 KUNA with rate limiting and canonical PRO-21 address verification.",
+      "Automated testnet faucet dispensing 10 KVNC with rate limiting and canonical PRO-21 address verification.",
   },
   {
     id: "cli-tooling",
@@ -125,17 +125,17 @@ const SDK: Item[] = [
     title: "JSON-RPC 2.0 Interface",
     status: "done",
     blurb:
-      "Node-parity RPC endpoints for syncStatus, getLeaderHeader, getBalance, getNonce, sendRawTransaction, and getValidators.",
+      "Node-parity RPC endpoints for syncStatus, getLeaderHeader, getBalance, getNonce, sendRawTransaction, and DAG inspection.",
   },
 ];
 
 const NEXT: Item[] = [
   {
-    id: "staking-lifecycle",
-    title: "Validator Lifecycle & Active Set Expansion",
+    id: "hybrid-testnet-m8",
+    title: "Chain 5 Hybrid Testnet & KovanicaHash Audit",
     status: "active",
     blurb:
-      "Expanding active validator committee beyond 5 toward mainnet 15–20 genesis validators and an uncapped staked set, dynamic bond/unbond lifecycle, and commission distribution.",
+      "Deployment and hardening of Chain 5 hybrid PoW + GHOSTDAG testnet, KovanicaHash audit sign-off, and solo miner tooling.",
   },
   {
     id: "node-hardening",
@@ -163,7 +163,7 @@ const NEXT: Item[] = [
     title: "Mainnet Launch Readiness",
     status: "next",
     blurb:
-      "15–20 genesis validator bootstrap (1M KUNA genesis allocation), 8.1M halving era schedule, and security audit sign-off.",
+      "Public launch planned for 1.1.2027 following hybrid testnet milestones and security audit sign-off (90.2M KVNC cap, 81M mining subsidy budget, 8.1M block halving eras with × 3/4 decay).",
   },
 ];
 
@@ -260,13 +260,13 @@ export function RoadmapView() {
 
       <div className="rounded-xl border border-border bg-surface p-4 text-xs leading-relaxed text-muted space-y-2">
         <p>
-          <strong className="text-fg">Consensus:</strong> Mysticeti uncertified DAG (wave = 3, 4s round → 12s leader commit).
+          <strong className="text-fg">Consensus:</strong> Hybrid PoW + GHOSTDAG (target block 4 s, GHOSTDAG K = 5, KovanicaHash PoW; no stake).
         </p>
         <p>
           <strong className="text-fg">Execution:</strong> Deterministic Wasmi WebAssembly runtime.
         </p>
         <p>
-          <strong className="text-fg">Tokenomics:</strong> Native token <strong className="text-fg">KUNA</strong> (9 decimals, 90,200,000 hard cap, 81M mining subsidy budget, 2.5 KUNA leader reward).
+          <strong className="text-fg">Tokenomics:</strong> Native token <strong className="text-fg">KVNC</strong> (9 decimals, 90,200,000 hard cap, 81M mining subsidy budget, 2.5 KVNC initial block reward).
         </p>
         <p className="border-t border-border/60 pt-2 text-subtle">
           More details available in the{" "}

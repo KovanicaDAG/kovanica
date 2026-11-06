@@ -18,17 +18,17 @@ export function Hero() {
         aria-hidden
       />
       <div className="relative flex w-full flex-col items-center">
-        <p className="font-mono text-[11px] tracking-brand text-gold uppercase md:text-xs">
-          kovanica · Mysticeti DAG · KUNA
+        <p className="font-mono text-[11px] tracking-brand text-muted uppercase md:text-xs">
+          kovanica · Hybrid PoW + GHOSTDAG · KVNC
         </p>
         <h1 className="mt-2 font-display text-4xl tracking-tight text-fg italic md:mt-3 md:text-6xl lg:text-7xl">
           Kovanica
         </h1>
-        <p className="mt-1 bg-gradient-to-r from-gold via-gold-dark to-gold bg-clip-text font-display text-xl tracking-tight text-transparent italic md:text-2xl">
+        <p className="mt-1 font-display text-xl tracking-tight text-fg italic md:text-2xl">
           BlockDAG, wide open.
         </p>
         <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-muted md:mt-4 md:max-w-lg md:text-base">
-          A high-performance Layer-1 blockchain powered by Mysticeti-style uncertified DAG consensus, deterministic Wasmi execution, staked validators, and native KUNA currency.
+          A high-performance Layer-1 blockchain powered by hybrid PoW + GHOSTDAG consensus, deterministic Wasmi execution, and native KVNC currency.
         </p>
         <div className="mt-6 w-full max-w-lg md:mt-8 md:max-w-none">
           <CtaRow />

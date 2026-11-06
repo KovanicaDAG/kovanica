@@ -12,13 +12,13 @@ export function HomeMainnet() {
   return (
     <main className="relative mx-auto flex w-full max-w-lg flex-1 flex-col items-center justify-center px-4 py-16 text-center md:px-8">
       <p className="font-mono text-[11px] tracking-brand text-subtle uppercase">
-        mainnet · KUNA
+        mainnet · KVNC
       </p>
       <h1 className="mt-3 font-display text-4xl tracking-tight text-fg italic md:text-5xl">
-        Mainnet soon
+        Public launch: 1.1.2027
       </h1>
       <p className="mt-4 text-sm leading-relaxed text-muted md:text-base">
-        Mainnet is not live yet. Use Testnet for explorer, wallet, faucet, and
+        Mainnet is not live yet. Public launch is planned for 1.1.2027. Use Testnet for explorer, wallet, faucet, and
         protocol surfaces. Follow the roadmap for activation status.
       </p>
 

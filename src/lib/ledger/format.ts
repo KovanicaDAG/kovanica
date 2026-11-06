@@ -1,9 +1,9 @@
 import { ATOM, DECIMALS } from "./types";
 
-export function fmtKvnc(atoms: number): string {
-  const v = atoms / ATOM;
+export function fmtKvnc(atoms: number | bigint): string {
+  const v = Number(atoms) / ATOM;
   const s = v.toFixed(DECIMALS).replace(/\.?0+$/, "");
-  return `${s || "0"} KUNA`;
+  return `${s || "0"} KVNC`;
 }
 
 export function parseKvnc(raw: string): number | null {

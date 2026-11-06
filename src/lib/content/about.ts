@@ -6,12 +6,12 @@
 
 export const ABOUT = {
   mission:
-    "Kovanica is a clean, from-scratch Layer-1 blockchain built for high-throughput payments, deterministic Wasmi smart contracts, staked validators, and native KUNA currency. Early stewardship is concentrated and accountable; long-term control moves to a transparent Foundation.",
+    "Kovanica is a clean, from-scratch Layer-1 blockchain built for high-throughput payments, deterministic Wasmi smart contracts, and native KVNC currency. Early stewardship is concentrated and accountable; long-term control moves to a transparent Foundation.",
 
   founder: {
     name: "Antonio Đuranec",
     role: "Founder & Protocol Steward",
-    bio: "Building Kovanica full-time. Focused on Mysticeti-style uncertified DAG consensus (wave = 3, 4s rounds -> 12s committed leaders), deterministic Wasmi runtime, Ed25519 cryptography, and a clean path from testnet to mainnet with progressive decentralisation.",
+    bio: "Building Kovanica full-time. Focused on hybrid PoW + GHOSTDAG consensus (4s target block interval, k=5, KovanicaHash PoW), deterministic Wasmi runtime, Ed25519 cryptography, and a clean path from testnet to mainnet with progressive decentralisation.",
     location: "Istra, Hrvatska",
   },
 
@@ -36,5 +36,5 @@ export const ABOUT = {
   xFounder: "https://x.com/BetterCallDzuks",
 
   transparency:
-    "Early control is intentional and documented. Tokenomics (90.2M KUNA total supply, 81M subsidy budget, 8M treasury, 1M genesis validators, 0.2M founder premine, 2.5 KUNA leader reward) are public and locked. The goal is progressive decentralisation under transparent rules.",
+    "Early control is intentional and documented. Tokenomics (90.2M KVNC total supply, 81M subsidy budget, 8M treasury, 1M genesis allocation, 0.2M founder premine, 2.5 KVNC initial block reward) are public and locked. The goal is progressive decentralisation under transparent rules.",
 } as const;

@@ -44,7 +44,7 @@ const PRODUCTS: Product[] = [
     external: `${TESTNET}/explorer`,
     icon: Compass,
     title: "Explorer",
-    body: "Mysticeti DAG rounds, committed leaders, sub-DAG batches, validator committee and live transaction stream.",
+    body: "BlockDAG topology, tips, transaction stream, and protocol consensus stats.",
   },
   {
     to: "/wallet",
@@ -79,7 +79,7 @@ const PRODUCTS: Product[] = [
     external: `${TESTNET}/network`,
     icon: Activity,
     title: "Network",
-    body: "Live head, peers, validators, committed leaders, finality and bootstrap seeds.",
+    body: "Live head, peers, connected seeds, and network bootstrap configuration.",
   },
   {
     to: "/roadmap",

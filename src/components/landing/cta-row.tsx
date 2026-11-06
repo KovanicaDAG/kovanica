@@ -39,9 +39,9 @@ export function CtaRow() {
         variant="ghost"
         className="h-12 px-6 text-subtle"
         disabled
-        title="Mainnet launching soon"
+        title="Public launch: 1.1.2027"
       >
-        Mainnet soon
+        Mainnet · 1.1.2027
       </Button>
     </div>
   );

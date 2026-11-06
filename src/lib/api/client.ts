@@ -43,9 +43,13 @@ function withSource(path: string, source: ApiSource): string {
   return `${u.pathname}${u.search}`;
 }
 
-export async function api<T = unknown>(path: string, method: "GET" | "POST" = "GET"): Promise<T> {
+export async function api<T = unknown>(
+  path: string,
+  method: "GET" | "POST" = "GET",
+  signal?: AbortSignal,
+): Promise<T> {
   const source = getApiSource();
-  const r = await fetch(withSource(path, source), { method });
+  const r = await fetch(withSource(path, source), { method, signal });
   if (!r.ok) throw new Error(await r.text());
   const ct = r.headers.get("content-type") ?? "";
   if (ct.includes("json")) return r.json() as Promise<T>;

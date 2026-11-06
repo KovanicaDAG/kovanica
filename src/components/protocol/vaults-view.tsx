@@ -84,7 +84,7 @@ export function VaultsView() {
         {tab === "create" && (
           <>
             <input className="w-full rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm" placeholder="Beneficiary pubkey" value={beneficiary} onChange={(e) => setBeneficiary(e.target.value)} />
-            <input className="w-full rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount KUNA" />
+            <input className="w-full rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount KVNC" />
             <select className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" value={lockType} onChange={(e) => setLockType(e.target.value as VaultLockType)}>
               <option value="cltv">CLTV</option>
               <option value="csv">CSV</option>
@@ -92,7 +92,7 @@ export function VaultsView() {
             <input type="number" className="w-full rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm" value={unlockAt} onChange={(e) => setUnlockAt(e.target.value)} />
             <Button disabled={busy} onClick={() => void onCreate()}>{busy ? "…" : "Create vault"}</Button>
             {created && <p className="break-all font-mono text-xs">{created.address} · {fmtKvnc(created.amountAtoms)}</p>}
-            <p className="text-xs text-subtle">POST /api/vault/create · 1 KUNA = {ATOM.toLocaleString()} atoms</p>
+            <p className="text-xs text-subtle">POST /api/vault/create · 1 KVNC = {ATOM.toLocaleString()} atoms</p>
           </>
         )}
         {tab === "status" && (

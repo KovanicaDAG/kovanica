@@ -186,7 +186,7 @@ export function CoinJoinView() {
             <h2 className="mb-4 text-lg font-medium text-fg">Participant 1 (You)</h2>
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <label className="mb-1 block text-xs text-muted">Amount (KUNA)</label>
+                <label className="mb-1 block text-xs text-muted">Amount (KVNC)</label>
                 <input
                   value={p1Amount}
                   onChange={(e) => setP1Amount(e.target.value)}
@@ -220,7 +220,7 @@ export function CoinJoinView() {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs text-muted">Amount (KUNA)</label>
+                <label className="mb-1 block text-xs text-muted">Amount (KVNC)</label>
                 <input
                   value={p2Amount}
                   onChange={(e) => setP2Amount(e.target.value)}

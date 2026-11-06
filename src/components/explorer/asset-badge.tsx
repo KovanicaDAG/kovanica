@@ -22,7 +22,7 @@ type Props = {
 
 /**
  * RFC-002 asset chip used in explorer (and reusable elsewhere).
- * Native KUNA is gold-accented; other assets use teal with a hash icon.
+ * Native KVNC is gold-accented; other assets use teal with a hash icon.
  */
 export function AssetBadge({
   assetId,

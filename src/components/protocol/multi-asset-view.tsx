@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Coins, Layers, ArrowRightLeft, History, Copy, Gem, Landmark, Lock } from "lucide-react";
+import { Coins, Layers, ArrowRightLeft, History, Copy, Gem, Landmark, Waves } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -123,11 +123,11 @@ export function MultiAssetView() {
       <p className="mt-2 max-w-lg text-sm leading-relaxed text-muted">
         Native multi-asset UTXOs with per-asset conservation. Balances are maps keyed by{" "}
         <code className="text-fg">asset_id</code> (native is{" "}
-        <span className="font-mono text-fg">KUNA</span>). Fees are always paid in KUNA. Coin
+        <span className="font-mono text-fg">KVNC</span>). Fees are always paid in KVNC. Coin
         selection never mixes assets.
       </p>
 
-      {/* Token tools — NFT, RWA, staking live on their own surfaces */}
+      {/* Token tools — NFT, RWA, Pools */}
       <div className="mt-4 flex flex-wrap gap-2">
         <Link
           to="/wallet/rwa-issue"
@@ -138,18 +138,18 @@ export function MultiAssetView() {
         </Link>
         <Link
           to="/docs"
+          hash="tokens"
           className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg"
         >
           <Gem className="size-3.5 text-purple" />
           NFT (KVP-106)
         </Link>
         <Link
-          to="/docs"
-          hash="staking"
+          to="/pool"
           className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg"
         >
-          <Lock className="size-3.5 text-teal" />
-          Staking
+          <Waves className="size-3.5 text-blue" />
+          Pools
         </Link>
       </div>
 
@@ -204,7 +204,7 @@ export function MultiAssetView() {
           <div className="space-y-4">
             <p className="text-sm text-muted">
               Prefer the <code className="text-fg">balances</code> map. Scalar{" "}
-              <code className="text-fg">balance</code> remains the KUNA alias.
+              <code className="text-fg">balance</code> remains the KVNC alias.
             </p>
             {balances && (
               <>
@@ -263,7 +263,7 @@ export function MultiAssetView() {
         {tab === "transfer" && (
           <div className="space-y-4">
             <p className="text-sm text-muted">
-              Prepare is asset-scoped. Fees always in KUNA. Omitted{" "}
+              Prepare is asset-scoped. Fees always in KVNC. Omitted{" "}
               <code className="text-fg">asset_id</code> defaults to native on the node; we always
               send it explicitly.
             </p>

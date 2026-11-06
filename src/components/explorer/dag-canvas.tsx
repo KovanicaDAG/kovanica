@@ -148,40 +148,6 @@ export function DagCanvas({ blocks, selectedId, onSelect }: Props) {
             </filter>
           </defs>
           <g ref={gRef}>
-            {/* 5 Validator Committee Guideline Tracks & Header Badges */}
-            {layout.columns.map((col) => (
-              <g key={`col-${col.idx}`} opacity={0.65}>
-                <line
-                  x1={col.cx}
-                  y1={36}
-                  x2={col.cx}
-                  y2={layout.height}
-                  stroke="var(--color-border)"
-                  strokeDasharray="4 6"
-                  strokeWidth={1}
-                />
-                <rect
-                  x={col.cx - 36}
-                  y={8}
-                  width={72}
-                  height={22}
-                  rx={6}
-                  fill="var(--color-surface)"
-                  stroke="var(--color-border)"
-                  strokeWidth={1}
-                />
-                <text
-                  x={col.cx}
-                  y={23}
-                  textAnchor="middle"
-                  fill="var(--color-muted)"
-                  style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}
-                >
-                  Val {col.idx}
-                </text>
-              </g>
-            ))}
-
             {/* Bezier Edges */}
             {layout.edges.map((e) => (
               <path
@@ -283,10 +249,10 @@ export function DagCanvas({ blocks, selectedId, onSelect }: Props) {
 
 export function DagLegend({ className }: { className?: string }) {
   const items: { colour: Colour; label: string; desc: string }[] = [
-    { colour: "chain", label: "Selected Tip", desc: "Active leader" },
-    { colour: "blue", label: "Committed Leader", desc: "BFT finalized" },
-    { colour: "genesis", label: "Genesis Block", desc: "Block #0" },
-    { colour: "red", label: "Uncommitted / Fork", desc: "Pending certification" },
+    { colour: "chain", label: "Selected Tip", desc: "Active GHOSTDAG tip" },
+    { colour: "blue", label: "Ordered Block", desc: "GHOSTDAG consensus order" },
+    { colour: "genesis", label: "Genesis Block", desc: "Block #0 anchor" },
+    { colour: "red", label: "Fork / Non-Selected", desc: "Alternative path" },
   ];
   return (
     <div className={cn("flex flex-wrap items-center justify-between gap-3 text-xs text-muted w-full", className)}>
@@ -307,9 +273,8 @@ export function DagLegend({ className }: { className?: string }) {
           </li>
         ))}
       </ul>
-      <div className="hidden sm:flex items-center gap-2 text-[11px] text-subtle">
-        <span className="inline-block size-1.5 rounded-full bg-emerald-400" />
-        <span>5 Validator Committee Lanes (Val 0 – 4)</span>
+      <div className="hidden sm:flex items-center gap-2 text-[11px] text-subtle font-mono">
+        <span>GHOSTDAG Topology · K=5</span>
       </div>
     </div>
   );
@@ -317,30 +282,33 @@ export function DagLegend({ className }: { className?: string }) {
 
 function layoutBlocks(blocks: Block[], measuredW: number, measuredH: number) {
   const width = Math.max(measuredW || 700, 600);
-  const padX = Math.max(36, Math.min(100, width * 0.06));
-  const colWidth = (width - padX * 2) / 5;
-  const colCenterX = (v: number) => padX + (v + 0.5) * colWidth;
-
-  const columns = Array.from({ length: 5 }).map((_, i) => ({
-    idx: i,
-    cx: colCenterX(i),
-  }));
-
-  // Sort blocks by height so Genesis (#0) is at top, proceeding down to Tip & uncommitted
   const sorted = [...blocks].sort((a, b) => a.height - b.height);
 
-  const startY = 64;
-  const rowH = 62;
-  const contentH = startY + sorted.length * rowH + 60;
+  const byHeight = new Map<number, Block[]>();
+  for (const b of sorted) {
+    const list = byHeight.get(b.height) || [];
+    list.push(b);
+    byHeight.set(b.height, list);
+  }
+
+  const uniqueHeights = Array.from(byHeight.keys()).sort((a, b) => a - b);
+  const startY = 56;
+  const rowH = 68;
+  const contentH = startY + uniqueHeights.length * rowH + 60;
   const height = Math.max(measuredH || 360, contentH);
 
   const pos = new Map<string, { x: number; y: number; colour: Colour; id: string; height: number; nonce: number }>();
 
-  sorted.forEach((b, idx) => {
-    const val = (b.nonce >= 0 && b.nonce < 5) ? b.nonce : (Math.abs(b.nonce) % 5);
-    const x = colCenterX(val);
-    const y = startY + idx * rowH;
-    pos.set(b.id, { x, y, colour: b.colour, id: b.id, height: b.height, nonce: val });
+  uniqueHeights.forEach((h, layerIdx) => {
+    const layer = byHeight.get(h) || [];
+    const count = layer.length;
+    const spacing = Math.min(140, Math.max(90, (width - 120) / Math.max(count, 1)));
+    const y = startY + layerIdx * rowH;
+
+    layer.forEach((b, colIdx) => {
+      const x = width / 2 + (colIdx - (count - 1) / 2) * spacing;
+      pos.set(b.id, { x, y, colour: b.colour, id: b.id, height: b.height, nonce: b.nonce });
+    });
   });
 
   const edges: { key: string; d: string; color?: string; width?: number; dash?: string }[] = [];
@@ -362,5 +330,5 @@ function layoutBlocks(blocks: Block[], measuredW: number, measuredH: number) {
     }
   }
 
-  return { width, height, columns, nodes: [...pos.values()], edges };
+  return { width, height, nodes: [...pos.values()], edges };
 }

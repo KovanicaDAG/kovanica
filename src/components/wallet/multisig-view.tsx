@@ -42,7 +42,7 @@ export function MultisigView() {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
       <header>
-        <p className="font-mono text-[10px] tracking-brand text-gold uppercase">KUNA</p>
+        <p className="font-mono text-xs uppercase tracking-wider text-muted">KVNC</p>
         <h1 className="font-display text-3xl tracking-tight text-fg">Multisig</h1>
         <p className="mt-2 text-sm leading-relaxed text-muted">
           M-of-N shared custody. Create a P2SH address, propose spends, and collect partial

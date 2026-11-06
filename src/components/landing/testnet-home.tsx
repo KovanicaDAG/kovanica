@@ -38,8 +38,8 @@ export function HomeTestnet() {
 
   return (
     <main className="relative mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 pb-12 pt-6 md:px-8 md:pt-10">
-      <p className="text-center font-mono text-[11px] tracking-brand text-gold uppercase">
-        testnet · KUNA
+      <p className="text-center font-mono text-[11px] tracking-brand text-muted uppercase">
+        testnet · KVNC
       </p>
       <h1 className="mt-2 text-center font-display text-3xl tracking-tight text-fg italic md:text-5xl">
         Testnet
