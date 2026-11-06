@@ -32,6 +32,8 @@ import { hexToKvnc, parseAddr, isAddr } from "@/lib/wallet/address";
 import { encryptMnemonic, decryptMnemonic } from "@/lib/wallet/vault";
 import { disconnectActiveHardwareProvider } from "@/lib/wallet/hardware";
 import { useHydrated } from "@/lib/use-hydrated";
+import { useWalletSync } from "@/lib/wallet/use-wallet-sync";
+import { validatePoolHandoff } from "@/lib/wallet/handoff";
 
 function isLocked(w: WalletRec | null): w is SoftwareWalletRec & {
   encryptedMnemonic: NonNullable<SoftwareWalletRec["encryptedMnemonic"]>;
@@ -62,18 +64,36 @@ export function WalletView() {
   const [showPassword, setShowPassword] = useState(false);
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("1");
-  const [utxos, setUtxos] = useState<ApiUtxos | null>(null);
-  const [hist, setHist] = useState<ApiHistory | null>(null);
-  const [feeRates, setFeeRates] = useState<{ slow: number; normal: number; fast: number } | null>(
-    null,
-  );
+  const {
+    utxos,
+    history: hist,
+    tokens,
+    feeRates,
+    isStale,
+    refresh: refreshChain,
+    notifyConfirmedTransaction,
+  } = useWalletSync(wallet?.address, source);
   const [feeTier, setFeeTier] = useState<"slow" | "normal" | "fast">("normal");
   /** RFC-002: null = native KVNC */
   const [assetId, setAssetId] = useState<string | null>(null);
   /** KVP-102: contract address of the token selected in the send form. */
   const [tokenAddr, setTokenAddr] = useState<string | null>(null);
-  /** KVP-102 tokens discovered on chain (all of them, not only ones this wallet holds). */
-  const [tokens, setTokens] = useState<ApiToken[]>([]);
+  const [handoffNotice, setHandoffNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const search = new URLSearchParams(window.location.search);
+    if (search.has("action") || search.has("token") || search.has("direction")) {
+      const res = validatePoolHandoff(search, source);
+      if (!res.ok) {
+        setHandoffNotice(`Handoff rejected: ${res.message}`);
+      } else if (!res.isSupported) {
+        setHandoffNotice(
+          "Pool Swap Handoff Blocked: AMM pool execution ('token_buy' / 'token_sell') is not supported by the web wallet. No swap transaction can be fabricated or executed. Pool remains quote-only.",
+        );
+      }
+    }
+  }, [source]);
 
   // M-05: recovery phrase generation is two-phase — show the words, then
   // require an explicit "I wrote it down" confirmation before wallet creation.
@@ -138,30 +158,7 @@ export function WalletView() {
   );
   const isNftSelected = !selectedToken && selectedAssetOpt?.kind === "nft";
 
-  async function refreshChain(address: string) {
-    try {
-      const [u, h, f] = await Promise.all([
-        api<ApiUtxos>(`/api/utxos?address=${address}`),
-        api<ApiHistory>(`/api/history?address=${address}`),
-        api<{ fee_rate: number; unit: string; mempool: number; bytes: number }>(
-          "/api/fee_estimate",
-          "GET",
-        ),
-      ]);
-      setUtxos(u);
-      setHist(h);
-      if (typeof f.fee_rate === "number") {
-        const rate = f.fee_rate;
-        setFeeRates({ slow: rate, normal: rate, fast: rate });
-      }
-      // Token discovery is a log scan; never let it hold up the balance.
-      void api<ApiToken[]>(`/api/tokens?address=${address}`)
-        .then(setTokens)
-        .catch(() => setTokens([]));
-    } catch {
-      /* keep last */
-    }
-  }
+
 
   // One phrase = one wallet. Re-derive the address from the stored phrase and
   // repair wallets created by the old SLIP-0010 build (which showed three
@@ -178,18 +175,7 @@ export function WalletView() {
     });
   }, [walletStore, setWallet]);
 
-  useEffect(() => {
-    if (!wallet) {
-      setUtxos(null);
-      setHist(null);
-      setTokens([]);
-      return;
-    }
-    void (async () => {
-      await refreshChain(wallet.address);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet?.address, source]);
+
 
   // M-05: phase 1 — generate the recovery phrase and show it for backup.
   async function onCreate() {
@@ -333,7 +319,7 @@ export function WalletView() {
     if (!wallet || live) return;
     try {
       await api(`/api/faucet?to=${wallet.address}&amount=${ATOM}&kind=faucet`, "POST");
-      await refreshChain(wallet.address);
+      await notifyConfirmedTransaction();
       toast.success("Faucet paid 1 KVNC");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Faucet failed");
@@ -418,7 +404,7 @@ export function WalletView() {
       } catch {
         /* ignore */
       }
-      await refreshChain(wallet.address);
+      await notifyConfirmedTransaction(sub.tx);
       toast.success(`Sent · ${shortId(sub.tx)}`);
       setTo("");
     } catch (err) {
@@ -511,7 +497,7 @@ export function WalletView() {
       } catch {
         /* ignore */
       }
-      await refreshChain(wallet.address);
+      await notifyConfirmedTransaction(sub.tx);
       toast.success(
         `Sent ${formatTokenAmount(atoms, token.decimals)} ${token.symbol} · ${shortId(sub.tx)}`,
       );
@@ -804,6 +790,15 @@ export function WalletView() {
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+      {handoffNotice && (
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200"
+        >
+          <p className="font-semibold text-amber-400">Capability Gap Notice</p>
+          <p className="mt-1 text-xs leading-relaxed text-amber-200/90">{handoffNotice}</p>
+        </div>
+      )}
       <header className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -812,6 +807,16 @@ export function WalletView() {
               <span className="flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[10px] text-teal">
                 <Usb className="size-3 text-teal" />
                 <span className="capitalize">{wallet.deviceType}</span>
+              </span>
+            )}
+            {isStale && (
+              <span
+                role="status"
+                aria-label="Balance data is stale"
+                className="flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-400"
+              >
+                <span className="size-1.5 rounded-full bg-amber-400" aria-hidden="true" />
+                Stale
               </span>
             )}
           </div>

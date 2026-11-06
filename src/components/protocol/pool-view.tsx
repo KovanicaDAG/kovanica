@@ -261,6 +261,26 @@ export function PoolView() {
                 CLI or the Android wallet.
               </p>
 
+              {/* Pool -> Wallet Handoff Action (Gated by wallet execution capability) */}
+              <div className="pt-2 border-t border-border flex flex-col gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled
+                  className="w-full cursor-not-allowed opacity-60 font-mono text-xs text-muted"
+                  aria-disabled="true"
+                  title="AMM pool swap execution (token_buy / token_sell) is not supported by the web wallet"
+                >
+                  Open in Wallet (Unsupported)
+                </Button>
+                <p className="text-[11px] leading-relaxed text-subtle">
+                  Notice: AMM pool execution is not supported by the web wallet. Swapping requires signed{" "}
+                  <code className="font-mono text-[10px] text-fg">token_buy</code> /{" "}
+                  <code className="font-mono text-[10px] text-fg">token_sell</code> smart contract
+                  calls. This page remains strictly quote-only.
+                </p>
+              </div>
+
               <p className="flex items-center gap-1.5 font-mono text-[10px] text-subtle">
                 <ArrowDownUp className="size-3" /> LP supply{" "}
                 {formatTokenAmount(BigInt(pool.lp_total), 0)}
