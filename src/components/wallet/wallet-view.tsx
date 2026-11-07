@@ -316,7 +316,7 @@ export function WalletView() {
   }
 
   async function onFaucet() {
-    if (!wallet || live) return;
+    if (!wallet || live || source === "mainnet") return;
     try {
       await api(`/api/faucet?to=${wallet.address}&amount=${ATOM}&kind=faucet`, "POST");
       await notifyConfirmedTransaction();
@@ -327,6 +327,11 @@ export function WalletView() {
   }
 
   async function onSend(e: React.FormEvent) {
+    if (source === "mainnet") {
+      e.preventDefault();
+      toast.error("Mainnet transactions are disabled prior to 1.1.2027 launch");
+      return;
+    }
     e.preventDefault();
     if (!wallet) return;
     if (selectedToken) {
@@ -595,7 +600,7 @@ export function WalletView() {
                 disabled={busy || !wroteItDown || !password}
                 onClick={() => void onConfirmBackup()}
               >
-                {busy ? "Creating…" : "Confirm & create wallet"}
+                {source === "mainnet" ? "Mainnet disabled (launch 1.1.2027)" : busy ? "Creating…" : "Confirm & create wallet"}
               </Button>
               <Button
                 type="button"
@@ -649,7 +654,7 @@ export function WalletView() {
               disabled={busy || !password.trim()}
               onClick={() => void onCreate()}
             >
-              {busy ? "Generating…" : "Create encrypted wallet"}
+              {source === "mainnet" ? "Mainnet disabled (launch 1.1.2027)" : busy ? "Generating…" : "Create encrypted wallet"}
             </Button>
           </div>
         )}
@@ -790,6 +795,17 @@ export function WalletView() {
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+      {source === "mainnet" && (
+        <div
+          role="status"
+          className="rounded-xl border border-gold/30 bg-gold/10 p-4 text-sm text-fg"
+        >
+          <p className="font-semibold text-gold">Mainnet Prelaunch · Launch Scheduled 1.1.2027</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            The Kovanica mainnet has not launched yet. Public genesis is scheduled for 1.1.2027 following the hybrid testnet and KovanicaHash audit. Wallet transfers, faucet claims, and transaction signing are strictly disabled on mainnet until launch. Please switch to Testnet to test wallet functions and transactions.
+          </p>
+        </div>
+      )}
       {handoffNotice && (
         <div
           role="alert"
@@ -969,8 +985,8 @@ export function WalletView() {
               Fee ≈ {fmtKvnc(selectedToken ? TOKEN_SEND_FEE : fee)} {TOKEN}
             </p>
 
-            <Button type="submit" className="h-12" disabled={busy}>
-              {busy
+            <Button type="submit" className="h-12" disabled={busy || source === "mainnet"}>
+              {source === "mainnet" ? "Mainnet disabled (launch 1.1.2027)" : busy
                 ? "Sending…"
                 : isHardware
                   ? `Confirm & send with ${wallet.deviceType}`

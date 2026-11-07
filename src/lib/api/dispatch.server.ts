@@ -1,4 +1,5 @@
 import { SPEC_TEXT } from "./spec";
+import { getSpecText, NETWORK_ID } from "../networkConstants";
 import {
   localBlocksDump,
   localBootstrap,
@@ -19,7 +20,7 @@ import {
   localSubmit,
   localUtxos,
 } from "./node.server";
-import { isPublicSource, type ApiSource, type ApiState, type ApiHead, type ApiBootstrap, type ApiDagBlock } from "./contract";
+import { type ApiSource, type ApiState, type ApiHead, type ApiBootstrap, type ApiDagBlock } from "./contract";
 import { parseAddr, toCanonicalAddress } from "../wallet/address";
 import { listPools, listTokens, getTokenState } from "./tokens.server";
 import { balanceOf } from "../tokens/codec";
@@ -313,7 +314,7 @@ async function fetchLiveBootstrap(): Promise<ApiBootstrap> {
   const sync = await callRpc("kovanica_syncStatus");
   return {
     ...head,
-    network: sync.networkTag || "Chain 4",
+    network: sync.networkTag || NETWORK_ID,
     genesis: head.genesis,
     tip: head.tip,
     blocks: head.blocks,
@@ -440,16 +441,26 @@ export async function dispatchApi(req: Request): Promise<Response> {
   const q = url.searchParams;
   const method = req.method.toUpperCase();
 
+  const source = sourceOf(req);
+
   if (name === "spec") {
+    const spec = source === "mainnet" ? getSpecText("mainnet") : SPEC_TEXT;
     return withCors(
-      new Response(SPEC_TEXT, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } }),
+      new Response(spec, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } }),
     );
   }
 
-  const source = sourceOf(req);
+  // Mainnet has no public RPC endpoint prior to 1.1.2027 genesis launch
+  // Network isolation: mainnet must not silently query testnet node or submit transactions.
+  if (source === "mainnet") {
+    if (method === "POST") {
+      return text("mainnet transactions disabled prior to 1.1.2027 launch", 403);
+    }
+    return text("mainnet launching soon", 503);
+  }
 
   // When querying testnet (or public by default)
-  if (source === "testnet" || isPublicSource(source)) {
+  if (source === "testnet") {
     if (name === "reset" || name === "mine" || name === "mining") {
       return text("not allowed on public testnet", 403);
     }

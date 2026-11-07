@@ -2,9 +2,10 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { SourceSwitch } from "@/components/layout/source-switch";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api/client";
+import { api, useApiSource } from "@/lib/api/client";
 import { type ApiBootstrap } from "@/lib/api/contract";
 import { getCurrentSpecText, getNetworkId } from "@/lib/network";
+import { shortId } from "@/lib/ledger/hash";
 import { SURFACE } from "@/lib/surfaces";
 
 export const SECTIONS = [
@@ -21,17 +22,49 @@ export const SECTIONS = [
 ];
 
 export function DocsView() {
+  const source = useApiSource();
   const [boot, setBoot] = useState<ApiBootstrap | null>(null);
-  const [_err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    void api<ApiBootstrap>("/api/bootstrap?source=testnet")
-      .then(setBoot)
-      .catch((e: unknown) => setErr(e instanceof Error ? e.message : "offline"));
-  }, []);
+    if (source === "mainnet") {
+      setBoot(null);
+      setErr(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setErr(null);
+    void api<ApiBootstrap>(`/api/bootstrap?source=${source}`)
+      .then((b) => {
+        setBoot(b);
+        setErr(null);
+      })
+      .catch((e: unknown) => {
+        setBoot(null);
+        setErr(e instanceof Error ? e.message : "offline");
+      })
+      .finally(() => setLoading(false));
+  }, [source]);
 
   const up = boot?.upstream;
   const _runNode = getCurrentSpecText().split("## Run a public node")[1]?.trim() ?? "";
+
+  const isMainnet = source === "mainnet";
+  const title = isMainnet ? "Mainnet" : "Testnet";
+  const ok = isMainnet ? false : (up?.ok === true || boot !== null);
+
+  const statusLines: string[] = isMainnet
+    ? ["Mainnet launch: 1.1.2027", "Pre-launch audit in progress", "No public node endpoint yet"]
+    : loading
+      ? ["Connecting to node telemetry…"]
+      : boot
+        ? [
+            `${typeof boot.blocks === "number" ? `${boot.blocks.toLocaleString()} blocks` : "Blocks —"} · ${boot.network ?? "Chain 5"}`,
+            `genesis ${boot.genesis ? shortId(boot.genesis, 6) : "—"}`,
+          ]
+        : ["Telemetry unavailable · Node offline", err ? `offline (${err})` : "offline"];
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 gap-8 px-4 py-8 md:px-6">
@@ -88,12 +121,10 @@ export function DocsView() {
 
         <section className="mt-6 overflow-hidden rounded-xl border border-border">
           <StatusCard
-            title="Testnet"
-            ok={up?.ok === true || boot !== null}
-            lines={[
-              `${boot?.blocks ?? 4650} blocks · ${boot?.network ?? "Chain 4"}`,
-              `genesis ${boot?.genesis?.slice(0, 10) ?? "0x17e79432"}… (Val 2)`,
-            ]}
+            title={title}
+            ok={ok}
+            lines={statusLines}
+            isMainnet={isMainnet}
           />
         </section>
 
@@ -365,12 +396,30 @@ function Fact({ k, v }: { k: string; v: string }) {
   );
 }
 
-function StatusCard({ title, ok, lines }: { title: string; ok: boolean; lines: string[] }) {
+function StatusCard({
+  title,
+  ok,
+  lines,
+  isMainnet,
+}: {
+  title: string;
+  ok: boolean;
+  lines: string[];
+  isMainnet?: boolean;
+}) {
   return (
     <article className="bg-bg p-4 flex items-center justify-between flex-wrap gap-4">
       <div>
         <p className="flex items-center gap-2 text-sm text-fg font-semibold">
-          <span className={ok ? "size-2 rounded-full bg-emerald-400 animate-pulse" : "size-2 rounded-full bg-danger"} />
+          <span
+            className={
+              ok
+                ? "size-2 rounded-full bg-emerald-400 animate-pulse"
+                : isMainnet
+                  ? "size-2 rounded-full bg-amber-400"
+                  : "size-2 rounded-full bg-danger"
+            }
+          />
           {title}
         </p>
         <div className="flex flex-wrap items-center gap-3 mt-1.5">
@@ -381,9 +430,25 @@ function StatusCard({ title, ok, lines }: { title: string; ok: boolean; lines: s
           ))}
         </div>
       </div>
-      <div className="font-mono text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-lg flex items-center gap-2">
-        <span className="size-1.5 rounded-full bg-emerald-400" />
-        Hybrid PoW + GHOSTDAG · 4s Target
+      <div
+        className={
+          isMainnet
+            ? "font-mono text-xs text-amber-400 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-lg flex items-center gap-2"
+            : ok
+              ? "font-mono text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-lg flex items-center gap-2"
+              : "font-mono text-xs text-muted bg-surface border border-border px-3 py-1.5 rounded-lg flex items-center gap-2"
+        }
+      >
+        <span
+          className={
+            isMainnet
+              ? "size-1.5 rounded-full bg-amber-400"
+              : ok
+                ? "size-1.5 rounded-full bg-emerald-400"
+                : "size-1.5 rounded-full bg-muted"
+          }
+        />
+        {isMainnet ? "Mainnet Scheduled · 1.1.2027" : "Hybrid PoW + GHOSTDAG · 4s Target"}
       </div>
     </article>
   );

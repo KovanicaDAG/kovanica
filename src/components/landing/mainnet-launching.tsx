@@ -23,7 +23,7 @@ export function MainnetLaunching() {
             Protocol
           </span>
         </a>
-        <NetworkBadge />
+        <NetworkBadge network="mainnet" />
       </header>
 
       <main className="relative flex flex-1 items-center justify-center px-4 py-16">
