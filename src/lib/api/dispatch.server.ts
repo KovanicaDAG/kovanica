@@ -496,6 +496,36 @@ export async function dispatchApi(req: Request): Promise<Response> {
     if (name === "fee_estimate") {
       return json(await fetchLiveFeeEstimate());
     }
+    if (name === "rwa") {
+      try {
+        const id = url.pathname.replace(/^\/api\/rwa\/?/, "");
+        const res = await callRpc("kovanica_getRwaAsset", [id]);
+        if (!res) return text("not found", 404);
+        return json(res);
+      } catch (e) {
+        return text(`testnet node error: ${e instanceof Error ? e.message : e}`, 502);
+      }
+    }
+    if (name === "collection") {
+      try {
+        const id = url.pathname.replace(/^\/api\/collection\/?/, "");
+        const res = await callRpc("kovanica_getCollection", [id]);
+        if (!res) return text("not found", 404);
+        return json(res);
+      } catch (e) {
+        return text(`testnet node error: ${e instanceof Error ? e.message : e}`, 502);
+      }
+    }
+    if (name === "nft") {
+      try {
+        const id = url.pathname.replace(/^\/api\/nft\/?/, "");
+        const res = await callRpc("kovanica_getNftAsset", [id]);
+        if (!res) return text("not found", 404);
+        return json(res);
+      } catch (e) {
+        return text(`testnet node error: ${e instanceof Error ? e.message : e}`, 502);
+      }
+    }
     if (name === "tokens") {
       try {
         const holder = parseAddr(q.get("address") ?? "");

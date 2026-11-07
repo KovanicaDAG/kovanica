@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SURFACE } from "@/lib/surfaces";
 import { Activity, Globe, Server, Radio, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -32,9 +32,17 @@ export function NetworkView() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const genRef = useRef(0);
+  const inFlightGenRef = useRef<number | null>(null);
+  const currentSourceRef = useRef(source);
+  currentSourceRef.current = source;
 
   async function load() {
-    if (source === "mainnet") return;
+    const reqSource = currentSourceRef.current;
+    if (reqSource === "mainnet") return;
+    const myGen = genRef.current;
+    if (inFlightGenRef.current === myGen) return;
+    inFlightGenRef.current = myGen;
     setBusy(true);
     setError(null);
     try {
@@ -43,21 +51,47 @@ export function NetworkView() {
         api<ApiBootstrap>("/api/bootstrap"),
         api<P2pInfo>("/api/p2p").catch(() => null),
       ]);
-      setSnap({ head, bootstrap, p2p, fetchedAt: Date.now() });
+      if (
+        !head ||
+        typeof head !== "object" ||
+        typeof head.blocks !== "number" ||
+        !bootstrap ||
+        typeof bootstrap !== "object"
+      ) {
+        throw new Error("Malformed network status response");
+      }
+      if (myGen === genRef.current && reqSource === currentSourceRef.current) {
+        setSnap({ head, bootstrap, p2p, fetchedAt: Date.now() });
+      }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to load network status";
-      setError(msg);
+      if (myGen === genRef.current && reqSource === currentSourceRef.current) {
+        const msg = e instanceof Error ? e.message : "Failed to load network status";
+        setError(msg);
+      }
     } finally {
-      setBusy(false);
+      if (inFlightGenRef.current === myGen) {
+        inFlightGenRef.current = null;
+      }
+      if (myGen === genRef.current && reqSource === currentSourceRef.current) {
+        setBusy(false);
+      }
     }
   }
 
   useEffect(() => {
+    genRef.current += 1;
+    inFlightGenRef.current = null;
+    setSnap(null);
+    setError(null);
+    setBusy(false);
     if (source === "mainnet") return;
     void load();
     const id = setInterval(() => void load(), 15_000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      genRef.current += 1;
+      inFlightGenRef.current = null;
+      clearInterval(id);
+    };
   }, [source]);
 
   if (source === "mainnet") {

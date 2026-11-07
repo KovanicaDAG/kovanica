@@ -199,6 +199,18 @@ export class WalletSyncManager {
         this.fetchAdapter.fetchFeeEstimate(targetNetwork),
       ]);
 
+      if (
+        !u ||
+        typeof u !== "object" ||
+        typeof u.balance !== "number" ||
+        !Array.isArray(u.utxos) ||
+        !h ||
+        typeof h !== "object" ||
+        !Array.isArray(h.txs)
+      ) {
+        throw new Error("Malformed wallet sync response");
+      }
+
       // Check if stale before applying
       if (
         gen !== this.currentGen ||
@@ -234,6 +246,7 @@ export class WalletSyncManager {
         .fetchTokens(targetAddress, targetNetwork)
         .then((tokens) => {
           if (
+            Array.isArray(tokens) &&
             gen === this.currentGen &&
             targetAddress === this.address &&
             targetNetwork === this.network

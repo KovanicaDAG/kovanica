@@ -6,11 +6,11 @@
  * `token_buy` / `token_sell` call, so this page deliberately stops at quoting —
  * the same formula the contract runs, so the numbers match on execution.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownUp, Copy, Info, RefreshCw, Waves } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api/client";
+import { api, useApiSource } from "@/lib/api/client";
 import { formatTokenAmount, parseTokenAmount } from "@/lib/tokens/codec";
 import { priceImpactBps, quote, type ApiPool } from "@/lib/tokens/pool";
 
@@ -18,6 +18,7 @@ import { priceImpactBps, quote, type ApiPool } from "@/lib/tokens/pool";
 const KVNC_DECIMALS = 9;
 
 export function PoolView() {
+  const source = useApiSource();
   const [pools, setPools] = useState<ApiPool[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -25,26 +26,65 @@ export function PoolView() {
   const [amount, setAmount] = useState("1");
   const [loading, setLoading] = useState(false);
 
+  const genRef = useRef(0);
+  const inFlightGenRef = useRef<number | null>(null);
+  const currentSourceRef = useRef(source);
+  currentSourceRef.current = source;
+
   async function load() {
+    const reqSource = currentSourceRef.current;
+    if (reqSource === "mainnet") {
+      setPools([]);
+      setSelected(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    const myGen = genRef.current;
+    if (inFlightGenRef.current === myGen) return;
+    inFlightGenRef.current = myGen;
     setLoading(true);
     setError(null);
     try {
       const rows = await api<ApiPool[]>("/api/pools");
-      setPools(rows);
-      setSelected((current) => current ?? rows[0]?.address ?? null);
+      if (!Array.isArray(rows)) {
+        throw new Error("Malformed pools response");
+      }
+      if (myGen === genRef.current && reqSource === currentSourceRef.current) {
+        setPools(rows);
+        setSelected((current) =>
+          current && rows.some((r) => r.address === current) ? current : (rows[0]?.address ?? null),
+        );
+      }
     } catch (e) {
-      setPools([]);
-      setError(e instanceof Error ? e.message : "Failed to load pools");
+      if (myGen === genRef.current && reqSource === currentSourceRef.current) {
+        setPools([]);
+        setError(e instanceof Error ? e.message : "Failed to load pools");
+      }
     } finally {
-      setLoading(false);
+      if (inFlightGenRef.current === myGen) {
+        inFlightGenRef.current = null;
+      }
+      if (myGen === genRef.current && reqSource === currentSourceRef.current) {
+        setLoading(false);
+      }
     }
   }
 
   useEffect(() => {
+    genRef.current += 1;
+    inFlightGenRef.current = null;
+    setPools(source === "mainnet" ? [] : null);
+    setSelected(null);
+    setError(null);
+    setLoading(false);
+    if (source === "mainnet") return;
     void load();
-    // Load once on mount; the button re-runs it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => {
+      genRef.current += 1;
+      inFlightGenRef.current = null;
+    };
+  }, [source]);
 
   const pool = useMemo(
     () => pools?.find((p) => p.address === selected) ?? pools?.[0] ?? null,

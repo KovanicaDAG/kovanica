@@ -9,6 +9,7 @@ dist/
 !.grok/app-env.json
 screenshots/
 artifacts/
+test-artifacts/
 attachments/
 *.log
 .env

@@ -16,7 +16,8 @@ export function useNode(pollMs = MIN_POLL_MS) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const inFlightRef = useRef(false);
+  const genRef = useRef(0);
+  const inFlightGenRef = useRef<number | null>(null);
   const currentDelayRef = useRef(pollMs);
   const timerRef = useRef<number | null>(null);
   const abortCtrlRef = useRef<AbortController | null>(null);
@@ -30,10 +31,13 @@ export function useNode(pollMs = MIN_POLL_MS) {
     }
   };
 
-  const scheduleNext = (delayMs: number) => {
+  const scheduleNext = (delayMs: number, expectedGen: number) => {
     clearTimer();
     if (typeof document !== "undefined" && document.hidden) {
       return; // Pause when document is hidden
+    }
+    if (expectedGen !== genRef.current || currentSourceRef.current === "mainnet") {
+      return;
     }
     timerRef.current = window.setTimeout(() => {
       void executePoll();
@@ -41,32 +45,45 @@ export function useNode(pollMs = MIN_POLL_MS) {
   };
 
   const executePoll = async () => {
-    if (inFlightRef.current) return;
+    const reqSource = currentSourceRef.current;
+    if (reqSource === "mainnet") return;
+    const myGen = genRef.current;
+    if (inFlightGenRef.current === myGen) return;
     if (typeof document !== "undefined" && document.hidden) return;
 
-    inFlightRef.current = true;
-    const reqSource = currentSourceRef.current;
+    inFlightGenRef.current = myGen;
     const ctrl = new AbortController();
     abortCtrlRef.current = ctrl;
 
     try {
       const next = await api<ApiState>("/api/state", "GET", ctrl.signal);
-      // Guard against responses for stale source or unmounted
-      if (reqSource === currentSourceRef.current) {
+      if (
+        !next ||
+        typeof next !== "object" ||
+        !next.node ||
+        typeof next.node !== "object" ||
+        !Array.isArray(next.node.dag)
+      ) {
+        throw new Error("Malformed node state response");
+      }
+      // Guard against responses for stale source/generation or unmounted
+      if (myGen === genRef.current && reqSource === currentSourceRef.current) {
         setState(next);
         setError(null);
         currentDelayRef.current = pollMs; // Reset backoff on success
       }
     } catch (e: any) {
       if (e?.name === "AbortError") return;
-      if (reqSource === currentSourceRef.current) {
+      if (myGen === genRef.current && reqSource === currentSourceRef.current) {
         setError(e instanceof Error ? e.message : "offline");
         currentDelayRef.current = nextBackoffMs(currentDelayRef.current, MAX_BACKOFF_MS);
       }
     } finally {
-      inFlightRef.current = false;
-      if (reqSource === currentSourceRef.current) {
-        scheduleNext(currentDelayRef.current);
+      if (inFlightGenRef.current === myGen) {
+        inFlightGenRef.current = null;
+      }
+      if (myGen === genRef.current && reqSource === currentSourceRef.current) {
+        scheduleNext(currentDelayRef.current, myGen);
       }
     }
   };
@@ -78,6 +95,20 @@ export function useNode(pollMs = MIN_POLL_MS) {
   }, [pollMs]);
 
   useEffect(() => {
+    genRef.current += 1;
+    inFlightGenRef.current = null;
+    clearTimer();
+    if (abortCtrlRef.current) {
+      abortCtrlRef.current.abort();
+      abortCtrlRef.current = null;
+    }
+    setState(null);
+    setError(null);
+
+    if (source === "mainnet") {
+      return;
+    }
+
     // Reset delay when source changes and execute poll
     currentDelayRef.current = pollMs;
     void executePoll();
@@ -96,10 +127,13 @@ export function useNode(pollMs = MIN_POLL_MS) {
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
+      genRef.current += 1;
+      inFlightGenRef.current = null;
       clearTimer();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (abortCtrlRef.current) {
         abortCtrlRef.current.abort();
+        abortCtrlRef.current = null;
       }
     };
   }, [source, pollMs]);
