@@ -68,6 +68,7 @@ check_health() {
 check_health "node1" "http://127.0.0.1:8545/health"
 check_health "node2" "http://127.0.0.1:8546/health"
 check_health "node3" "http://127.0.0.1:8547/health"
+check_health "observer" "http://127.0.0.1:8548/health"
 check_health "faucet" "http://127.0.0.1:3000/health"
 
 echo "==> Step 3: Verifying PoW block advancement across nodes..."

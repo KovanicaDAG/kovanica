@@ -53,7 +53,7 @@ services:
       KOVANICA_MINING_AUTHOR: "0"
     ports:
       - "127.0.0.1:8545:8545"
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
       - "127.0.0.1:9100:8545"
     volumes:
       - node1-data:/var/lib/kovanica
@@ -101,6 +101,28 @@ services:
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8547/health"]
+
+  observer:
+    <<: *node
+    container_name: kovanica-chain5-observer
+    depends_on:
+      node1:
+        condition: service_healthy
+    environment:
+      <<: *node-env
+      KOVANICA_RPC_PORT: "8548"
+      KOVANICA_BOOTNODES: "node1:8000"
+      KOVANICA_MINING_ENABLED: "false"
+      KOVANICA_RUN_VALIDATOR: "false"
+      KOVANICA_MINING_AUTHOR: ""
+    ports:
+      - "127.0.0.1:8548:8548"
+    volumes:
+      - observer-data:/var/lib/kovanica
+      - ./chain5/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8548/health"]
 
   faucet:
     <<: *node
@@ -171,5 +193,6 @@ volumes:
   node1-data:
   node2-data:
   node3-data:
+  observer-data:
   prometheus-data:
   grafana-data:

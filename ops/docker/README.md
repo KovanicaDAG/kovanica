@@ -91,12 +91,30 @@ A standalone 1-command Docker Compose testnet cluster for **Chain 5** (`HYBRID_T
 
 | Service | Role | Container Port | Host Port |
 |---------|------|----------------|-----------|
-| `node1` | Seed / Bootnode & Miner (author 0) | `8545` (RPC), `8000` (P2P) | `127.0.0.1:8545`, `8000`, `127.0.0.1:9100` (metrics) |
+| `node1` | Seed / Bootnode & Miner (author 0) | `8545` (RPC), `8000` (P2P) | `127.0.0.1:8545`, `127.0.0.1:8000`, `127.0.0.1:9100` (metrics) |
 | `node2` | Peered Node & Miner (author 1) | `8546` (RPC) | `127.0.0.1:8546` |
 | `node3` | Peered Node & Miner (author 2) | `8547` (RPC) | `127.0.0.1:8547` |
+| `observer` | Non-Mining Observer (Apps supervisor) | `8548` (RPC) | `127.0.0.1:8548` |
 | `faucet` | Chain 5 KVNC Dispenser | `3000` | `127.0.0.1:3000` |
 | `prometheus` | Prometheus Metrics Scraper | `9090` | `127.0.0.1:9090` |
 | `grafana` | Grafana Dashboards | `3000` | `127.0.0.1:3001` (admin/admin) |
+
+### External Producers (Solo Mining)
+
+Supported external miners connect via JSON-RPC `kovanica_getWork` / `kovanica_submitWork`:
+
+```bash
+# Run standalone solo miner against node1
+kovanica miner run --address kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag --threads 2
+```
+
+### Apps Supervisor Observer Node
+
+The non-mining observer node (`kovanica-chain5-observer`) provides dedicated, unburdened RPC access for explorers and wallets (such as `kovanica-web`):
+- Endpoint: `http://127.0.0.1:8548`
+- Healthcheck: `http://127.0.0.1:8548/health`
+- Mining disabled (`KOVANICA_MINING_ENABLED=false`) and validator disabled (`KOVANICA_RUN_VALIDATOR=false`).
+- Validates gossiped PoW blocks, admits to consensus DAG, and advances committed/executed state without CPU mining load.
 
 ### Quick Start
 
