@@ -43,6 +43,15 @@ function withSource(path: string, source: ApiSource): string {
   return `${u.pathname}${u.search}`;
 }
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export async function api<T = unknown>(
   path: string,
   method: "GET" | "POST" = "GET",
@@ -50,7 +59,7 @@ export async function api<T = unknown>(
 ): Promise<T> {
   const source = getApiSource();
   const r = await fetch(withSource(path, source), { method, signal });
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok) throw new ApiError(await r.text(), r.status);
   const ct = r.headers.get("content-type") ?? "";
   if (ct.includes("json")) return r.json() as Promise<T>;
   return (await r.text()) as T;
@@ -64,6 +73,6 @@ export async function apiPostJson<T = unknown>(path: string, body: unknown): Pro
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok) throw new ApiError(await r.text(), r.status);
   return r.json() as Promise<T>;
 }

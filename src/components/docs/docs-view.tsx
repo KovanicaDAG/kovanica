@@ -22,7 +22,7 @@ export const SECTIONS = [
 
 export function DocsView() {
   const [boot, setBoot] = useState<ApiBootstrap | null>(null);
-  const [_err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     void api<ApiBootstrap>("/api/bootstrap?source=testnet")
@@ -89,10 +89,10 @@ export function DocsView() {
         <section className="mt-6 overflow-hidden rounded-xl border border-border">
           <StatusCard
             title="Testnet"
-            ok={up?.ok === true || boot !== null}
+            ok={boot !== null}
             lines={[
-              `${boot?.blocks ?? 4650} blocks · ${boot?.network ?? "Chain 4"}`,
-              `genesis ${boot?.genesis?.slice(0, 10) ?? "0x17e79432"}… (Val 2)`,
+              typeof boot?.blocks === "number" ? `${boot.blocks.toLocaleString()} blocks · ${boot.network ?? "Chain 5"}` : err ? "Telemetry unavailable · Node offline" : "Connecting to node telemetry…",
+              boot?.genesis ? `genesis ${boot.genesis.slice(0, 10)}…` : "genesis —",
             ]}
           />
         </section>

@@ -1,6 +1,6 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { AlertCircle, ArrowLeft, Copy, ExternalLink, Landmark, Tag } from "lucide-react";
-import { api } from "@/lib/api/client";
+import { api, ApiError } from "@/lib/api/client";
 import { shortId } from "@/lib/ledger/hash";
 import { hexToKvnc } from "@/lib/wallet/address";
 
@@ -27,12 +27,107 @@ interface RwaDetailResponse {
 export const Route = createFileRoute("/explorer/rwa/$assetId")({
   loader: async ({ params }) => {
     const source = "local";
-    const url = `/api/rwa/${params.assetId}?source=${source}`;
-    const data = await api<RwaDetailResponse>(url);
-    return data;
+    const url = `/api/rwa/${encodeURIComponent(params.assetId)}?source=${source}`;
+    try {
+      const data = await api<RwaDetailResponse>(url);
+      if (!data || !data.asset_id) {
+        throw notFound();
+      }
+      return data;
+    } catch (err: any) {
+      if (
+        (err instanceof ApiError && err.status === 404) ||
+        err?.status === 404 ||
+        err?.message?.toLowerCase().includes("not found")
+      ) {
+        throw notFound();
+      }
+      throw err;
+    }
   },
   component: RwaDetailPage,
+  notFoundComponent: RwaNotFoundPage,
+  errorComponent: RwaErrorPage,
 });
+
+function RwaNotFoundPage() {
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-8 md:px-6 md:py-12">
+      <div className="mb-6 flex items-center gap-3">
+        <Link
+          to="/explorer"
+          className="text-muted hover:text-fg transition-colors"
+          aria-label="Back to explorer"
+        >
+          <ArrowLeft className="size-5" />
+        </Link>
+        <div>
+          <p className="font-mono text-[10px] tracking-wide text-amber uppercase">KVP-106 RWA</p>
+          <h1 className="font-display text-2xl tracking-tight text-fg">Asset Not Found</h1>
+        </div>
+      </div>
+      <div className="rounded-xl border border-border bg-surface p-8 text-center">
+        <AlertCircle className="mx-auto size-12 text-amber" />
+        <h2 className="mt-4 text-base font-semibold text-fg">RWA Asset Not Found</h2>
+        <p className="mt-2 text-sm text-muted">
+          No real-world asset matching this identifier could be found. Check the ID or return to the explorer.
+        </p>
+        <div className="mt-6 flex justify-center">
+          <Link
+            to="/explorer"
+            className="inline-flex h-9 items-center rounded-md bg-surface-2 px-4 text-xs font-medium text-fg hover:bg-surface-3 transition-colors"
+          >
+            Back to Explorer
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RwaErrorPage({ error }: { error?: unknown }) {
+  const message = error instanceof Error ? error.message : "Node service unavailable";
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-8 md:px-6 md:py-12">
+      <div className="mb-6 flex items-center gap-3">
+        <Link
+          to="/explorer"
+          className="text-muted hover:text-fg transition-colors"
+          aria-label="Back to explorer"
+        >
+          <ArrowLeft className="size-5" />
+        </Link>
+        <div>
+          <p className="font-mono text-[10px] tracking-wide text-danger uppercase">Node Outage</p>
+          <h1 className="font-display text-2xl tracking-tight text-fg">Service Unavailable</h1>
+        </div>
+      </div>
+      <div className="rounded-xl border border-danger/30 bg-danger/5 p-8 text-center">
+        <AlertCircle className="mx-auto size-12 text-danger" />
+        <h2 className="mt-4 text-base font-semibold text-fg">Unable to Reach RWA Endpoint</h2>
+        <p className="mt-2 text-sm text-muted">
+          The node endpoint is currently offline or unreachable. This is an infrastructure availability issue, not a missing entity.
+        </p>
+        <p className="mt-2 font-mono text-xs text-danger/80 break-all">{message}</p>
+        <div className="mt-6 flex justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="inline-flex h-9 items-center rounded-md bg-surface-2 px-4 text-xs font-medium text-fg hover:bg-surface-3 transition-colors"
+          >
+            Retry
+          </button>
+          <Link
+            to="/explorer"
+            className="inline-flex h-9 items-center rounded-md border border-border px-4 text-xs font-medium text-muted hover:text-fg transition-colors"
+          >
+            Back to Explorer
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function RwaDetailPage() {
   const rwa = Route.useLoaderData();

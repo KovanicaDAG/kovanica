@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SURFACE } from "@/lib/surfaces";
 import { Activity, Globe, Server, Shield, Radio, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,10 @@ function fmtKvnc(atoms: number): string {
 export function NetworkView() {
   const source = useApiSource();
   const live = isPublic(source);
+
+  if (source === "mainnet") {
+    return <MainnetNetworkView />;
+  }
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -232,6 +237,71 @@ function StatCard({
         {value}
       </p>
       {sub && <p className="mt-1 truncate font-mono text-[11px] text-subtle">{sub}</p>}
+    </div>
+  );
+}
+
+function MainnetNetworkView() {
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+      <header className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-[10px] tracking-brand text-emerald-400 uppercase">Status</p>
+          <h1 className="font-display text-3xl tracking-tight text-fg">Mainnet Network</h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            The production mainnet is scheduled for public launch on 1.1.2027 following the hybrid testnet and KovanicaHash audit.
+          </p>
+        </div>
+      </header>
+
+      <section className="rounded-xl border border-emerald-500/30 bg-surface p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="font-mono text-[10px] uppercase tracking-wider text-muted">Environment</span>
+            <h2 className="mt-1 font-display text-2xl text-fg">kovanica-mainnet</h2>
+          </div>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 font-mono text-xs text-emerald-400">
+            <span className="size-1.5 rounded-full bg-emerald-400" />
+            Launch: 1.1.2027
+          </span>
+        </div>
+
+        <dl className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="rounded-lg bg-bg/50 p-3">
+            <dt className="text-xs text-muted">Consensus</dt>
+            <dd className="mt-1 font-mono text-sm text-fg">Hybrid PoW + GHOSTDAG (k=5)</dd>
+          </div>
+          <div className="rounded-lg bg-bg/50 p-3">
+            <dt className="text-xs text-muted">Target Block Interval</dt>
+            <dd className="mt-1 font-mono text-sm text-gold">4 s</dd>
+          </div>
+          <div className="rounded-lg bg-bg/50 p-3">
+            <dt className="text-xs text-muted">Proof-of-Work</dt>
+            <dd className="mt-1 font-mono text-sm text-fg">KovanicaHash (audit required)</dd>
+          </div>
+          <div className="rounded-lg bg-bg/50 p-3">
+            <dt className="text-xs text-muted">Native Token</dt>
+            <dd className="mt-1 font-mono text-sm text-fg">KVNC (9 decimals)</dd>
+          </div>
+          <div className="rounded-lg bg-bg/50 p-3">
+            <dt className="text-xs text-muted">Public RPC Endpoint</dt>
+            <dd className="mt-1 font-mono text-sm text-muted">Not open yet (opens at genesis)</dd>
+          </div>
+          <div className="rounded-lg bg-bg/50 p-3">
+            <dt className="text-xs text-muted">Staking / Validators</dt>
+            <dd className="mt-1 font-mono text-sm text-fg">None (Zero-stake PoW consensus)</dd>
+          </div>
+        </dl>
+
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Button asChild variant="gold" className="h-10 px-5">
+            <a href={`${SURFACE.testnet}/network`}>View Testnet Network</a>
+          </Button>
+          <Button asChild variant="outline" className="h-10 px-5">
+            <a href={`${SURFACE.landing}/roadmap`}>Protocol Roadmap</a>
+          </Button>
+        </div>
+      </section>
     </div>
   );
 }

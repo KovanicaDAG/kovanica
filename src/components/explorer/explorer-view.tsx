@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { DagMark } from "@/components/brand/dag-mark";
+import { MAINNET_ID } from "@/lib/networkConstants";
+import { SURFACE } from "@/lib/surfaces";
 import { Compass, RefreshCw, AlertCircle, ShieldAlert } from "lucide-react";
 import { DagCanvas, DagLegend } from "@/components/explorer/dag-canvas";
 import { createDagBlocksCache } from "@/lib/api/map-blocks";
@@ -41,6 +45,10 @@ export function ExplorerView() {
     state?.network?.includes("5") ||
     state?.network?.toLowerCase().includes("hybrid") ||
     source === "local";
+
+  if (source === "mainnet") {
+    return <MainnetExplorerPlaceholder />;
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -110,11 +118,11 @@ export function ExplorerView() {
         />
         <Stat
           label="Connected Peers"
-          value={`${state?.peers?.length ?? 0} Peers`}
+          value={state?.peers !== undefined ? `${state.peers.length} Peers` : "—"}
         />
         <Stat
           label="Mempool"
-          value={`${n?.mempool ?? 0} Pending`}
+          value={n?.mempool !== undefined ? `${n.mempool} Pending` : "—"}
         />
         <Stat
           label="Genesis Anchor"
@@ -406,6 +414,53 @@ function ConsolePanel({ node }: { node: ApiNode | undefined }) {
         <p>• Security Audit: Required before mainnet launch</p>
         <p>• Reported Head Height: #{node?.blocks ?? 0}</p>
         <p>• Native Token: KVNC (9 decimals)</p>
+      </div>
+    </div>
+  );
+}
+
+function MainnetExplorerPlaceholder() {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 md:px-6">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="font-display text-2xl tracking-tight text-fg">BlockDAG Explorer</h1>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-400">
+              Mainnet · Launch Scheduled 1.1.2027
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-muted md:text-sm">
+            Native coin <strong className="text-fg">KVNC</strong> on {MAINNET_ID}. Target block interval: 4 s · GHOSTDAG K=5.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[11px] tracking-wide text-subtle uppercase">
+            source · mainnet
+          </span>
+        </div>
+      </div>
+
+      <div className="flex flex-1 items-center justify-center p-6 md:p-12">
+        <div className="mx-auto w-full max-w-lg text-center">
+          <DagMark variant="gold" className="mx-auto size-14" />
+          <p className="eyebrow mt-5 font-mono text-xs text-muted uppercase tracking-wider">{MAINNET_ID} · KVNC</p>
+          <h2 className="mt-2 font-display text-3xl tracking-tight text-fg italic md:text-4xl">
+            Public launch: 1.1.2027
+          </h2>
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            The mainnet BlockDAG has not opened its public RPC endpoint yet. The live DAG graph and block telemetry will begin streaming upon genesis launch on 1.1.2027 following the hybrid testnet and KovanicaHash audit.
+          </p>
+
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Button asChild variant="gold" className="h-11 px-6">
+              <a href={`${SURFACE.testnet}/explorer`}>Open Testnet Explorer</a>
+            </Button>
+            <Button asChild variant="outline" className="h-11 px-6">
+              <Link to="/roadmap">Protocol Roadmap</Link>
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );
