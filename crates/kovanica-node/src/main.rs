@@ -6010,7 +6010,7 @@ mod tests {
             output: output.to_string_lossy().into_owned(),
             validator_keys_out: Some(keys_dir.to_string_lossy().into_owned()),
             force: false,
-            emission_policy: None,
+            emission_policy: "legacy-81m".to_string(),
         };
         run_genesis(args).expect("ceremony runs");
 
