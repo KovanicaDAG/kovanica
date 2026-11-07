@@ -47,7 +47,7 @@ const RPC_READY_TIMEOUT_SECS: u64 = 60;
 const PEER_TIMEOUT_SECS: u64 = 90;
 const MINING_TIMEOUT_SECS: u64 = 90;
 const TX_TIMEOUT_SECS: u64 = 90;
-const POLL_INTERVAL_MS: u64 = 500;
+const POLL_INTERVAL_MS: u64 = 100;
 const PORT_ATTEMPTS: usize = 32;
 
 const TRANSFER_AMOUNT: u64 = ONE_KUNA;
@@ -465,14 +465,18 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
     let p2p_observer = base_port + 2;
     let rpc_observer = base_port + 3;
 
-    // Keys for 2 participants
-    let (sk0, pk0) = generate_keypair();
-    let addr0 = Address::from_public_key(&pk0);
+    // Keys for 2 participants, sorted by address bytes so validators[0] (addr0) is
+    // deterministically authority_validator(0) in StakingState::committee_order().
+    let (raw_sk0, raw_pk0) = generate_keypair();
+    let raw_addr0 = Address::from_public_key(&raw_pk0);
 
-    let (sk1, pk1) = generate_keypair();
-    let addr1 = Address::from_public_key(&pk1);
+    let (raw_sk1, raw_pk1) = generate_keypair();
+    let raw_addr1 = Address::from_public_key(&raw_pk1);
 
-    let validators = vec![(sk0.clone(), pk0, addr0), (sk1.clone(), pk1, addr1)];
+    let mut validators = vec![(raw_sk0, raw_pk0, raw_addr0), (raw_sk1, raw_pk1, raw_addr1)];
+    validators.sort_by_key(|(_, _, addr)| addr.0);
+    let (sk0, _pk0, addr0) = validators[0].clone();
+    let (sk1, _pk1, addr1) = validators[1].clone();
     let genesis = build_genesis_toml(&validators);
 
     let client = Client::builder()
@@ -485,28 +489,12 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
         p2p_producer, rpc_observer, p2p_observer, "assigned ports for isolated acceptance test"
     );
 
-    // 1. Start Producer Node (mining enabled)
-    let mut producer = ManagedNode::spawn(
-        0,
-        rpc_producer,
-        p2p_producer,
-        &[],
-        sk0.clone(),
-        addr0,
-        &binary,
-        &genesis,
-        &log_dir,
-        true, // mining enabled
-        true, // validator enabled
-    )?;
-
-    // 2. Start Non-mining Observer Node (suitable for Apps supervisor)
-    let observer_bootnodes = vec![format!("127.0.0.1:{p2p_producer}")];
+    // 1. Start Non-mining Observer Node first so its P2P listener is ready immediately
     let mut observer = ManagedNode::spawn(
         1,
         rpc_observer,
         p2p_observer,
-        &observer_bootnodes,
+        &[],
         sk1.clone(),
         addr1,
         &binary,
@@ -515,9 +503,61 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
         false, // NON-MINING
         false, // NON-VALIDATOR
     )?;
-
-    wait_ready(&client, rpc_producer).await?;
     wait_ready(&client, rpc_observer).await?;
+
+    // Verify observer is non-mining via getMiningInfo
+    let mining_info = rpc_call(&client, rpc_observer, "kovanica_getMiningInfo", json!([])).await?;
+    let min_res = mining_info.get("result").context("mining info result")?;
+    assert_eq!(
+        min_res.get("mining_enabled").and_then(Value::as_bool),
+        Some(false),
+        "observer node must have mining_enabled = false"
+    );
+
+    let (_sk_recip, pk_recip) = generate_keypair();
+    let recipient_addr = Address::from_public_key(&pk_recip);
+    let tx = create_transfer(
+        addr0,
+        recipient_addr,
+        TRANSFER_AMOUNT,
+        TRANSFER_FEE,
+        0,
+        &sk0,
+    );
+    let tx_bytes = bincode::serialize(&tx).context("serialize tx")?;
+    let raw_hex = format!("0x{}", hex::encode(tx_bytes));
+
+    // 2. Start Producer Node (mining enabled), dialing Observer immediately
+    let producer_bootnodes = vec![format!("127.0.0.1:{p2p_observer}")];
+    let mut producer = ManagedNode::spawn(
+        0,
+        rpc_producer,
+        p2p_producer,
+        &producer_bootnodes,
+        sk0.clone(),
+        addr0,
+        &binary,
+        &genesis,
+        &log_dir,
+        true, // mining enabled
+        true, // validator enabled
+    )?;
+    wait_ready(&client, rpc_producer).await?;
+
+    // Submit transfer immediately upon producer RPC readiness so it is included in early rounds
+    // (rounds 1..3) before DAA scales difficulty.
+    let tx_resp = rpc_call(
+        &client,
+        rpc_producer,
+        "kovanica_sendRawTransaction",
+        json!([raw_hex]),
+    )
+    .await?;
+    let tx_hash = tx_resp
+        .get("result")
+        .and_then(Value::as_str)
+        .context("tx hash")?;
+    info!(%tx_hash, "submitted transfer via producer mempool");
 
     // Verify peering between Producer and Observer
     let peer_deadline = Instant::now() + Duration::from_secs(PEER_TIMEOUT_SECS);
@@ -536,43 +576,6 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
         }
         sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
-
-    // Verify observer is non-mining via getMiningInfo
-    let mining_info = rpc_call(&client, rpc_observer, "kovanica_getMiningInfo", json!([])).await?;
-    let min_res = mining_info.get("result").context("mining info result")?;
-    assert_eq!(
-        min_res.get("mining_enabled").and_then(Value::as_bool),
-        Some(false),
-        "observer node must have mining_enabled = false"
-    );
-
-    let (_sk_recip, pk_recip) = generate_keypair();
-    let recipient_addr = Address::from_public_key(&pk_recip);
-
-    // Submit transfer immediately so it is included in early blocks before DAA scales difficulty
-    let tx = create_transfer(
-        addr0,
-        recipient_addr,
-        TRANSFER_AMOUNT,
-        TRANSFER_FEE,
-        0,
-        &sk0,
-    );
-    let tx_bytes = bincode::serialize(&tx).context("serialize tx")?;
-    let raw_hex = format!("0x{}", hex::encode(tx_bytes));
-
-    let tx_resp = rpc_call(
-        &client,
-        rpc_producer,
-        "kovanica_sendRawTransaction",
-        json!([raw_hex]),
-    )
-    .await?;
-    let tx_hash = tx_resp
-        .get("result")
-        .and_then(Value::as_str)
-        .context("tx hash")?;
-    info!(%tx_hash, "submitted transfer via producer mempool");
 
     // 3. Wait for Producer to mine blocks, include transaction, and Observer to admit and commit them
     let mine_deadline = Instant::now() + Duration::from_secs(MINING_TIMEOUT_SECS);
@@ -594,13 +597,19 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
         sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
 
-    // 4. Verify mining reward distribution on Observer (2.5 KVNC per block author)
+    // 4. Verify mining reward distribution on Observer (2.5 KVNC per block author).
+    // With 2 genesis validators under Legacy81M, each starts with 450,000 KVNC liquid
+    // (500,000 KVNC share minus 50,000 KVNC locked stake). After sending TRANSFER_AMOUNT +
+    // TRANSFER_FEE, author 0 must exceed that baseline by at least INITIAL_BLOCK_REWARD.
+    let genesis_liquid_baseline = 450_000 * ONE_KUNA - TRANSFER_AMOUNT - TRANSFER_FEE;
+    let min_expected_with_reward = genesis_liquid_baseline + INITIAL_BLOCK_REWARD;
     let reward_deadline = Instant::now() + Duration::from_secs(MINING_TIMEOUT_SECS);
     let producer_reward = loop {
         if let Ok(b) = get_balance(&client, rpc_observer, addr0).await {
-            if b >= INITIAL_BLOCK_REWARD {
+            if b >= min_expected_with_reward {
                 info!(
                     producer_reward = b,
+                    min_expected_with_reward,
                     "observer executed block reward distribution for author"
                 );
                 break b;
@@ -613,8 +622,8 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
     };
 
     assert!(
-        producer_reward >= INITIAL_BLOCK_REWARD,
-        "author must have received at least one 2.5 KVNC reward"
+        producer_reward >= min_expected_with_reward,
+        "author must have received at least one 2.5 KVNC reward above genesis liquid baseline"
     );
 
     // 5. Verify recipient balance received from executed transaction
@@ -632,6 +641,12 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
         sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     };
     assert_eq!(recipient_balance, TRANSFER_AMOUNT);
+
+    // Pause producer background mining before stopping observer so producer does not
+    // continue mining unthrottled blocks in the background while observer is offline.
+    producer.is_mining = false;
+    producer.stop()?;
+    sleep(Duration::from_millis(200)).await;
 
     // Record pre-shutdown state on observer
     let pre_stop_height = get_height(&client, rpc_observer).await?;
@@ -706,7 +721,7 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
         .json(&json!({
             "jsonrpc": "2.0",
             "method": "kovanica_submitWork",
-            "params": [{ "header": bad_header }],
+            "params": [bad_header],
             "id": 99,
         }))
         .send()
@@ -723,10 +738,11 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
         "rejected submitWork must not advance height"
     );
 
-    // 7. SUBSEQUENT PROGRESS: Reconnect observer to producer and verify progress
+    // 7. SUBSEQUENT PROGRESS: Reconnect observer to producer and verify progress via
+    // external solo-miner RPC path (kovanica_getWork + mine + kovanica_submitWork).
     info!("reconnecting observer to producer to verify subsequent progress...");
-    observer.restart_on_same_data_dir(&[format!("127.0.0.1:{p2p_producer}")])?;
-    wait_ready(&client, rpc_observer).await?;
+    producer.restart_on_same_data_dir(&[format!("127.0.0.1:{p2p_observer}")])?;
+    wait_ready(&client, rpc_producer).await?;
 
     // Wait for peering
     let reconnect_deadline = Instant::now() + Duration::from_secs(PEER_TIMEOUT_SECS);
@@ -742,7 +758,35 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
         sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
 
-    // Wait for height to advance beyond recovered height
+    // Produce the next block on producer via kovanica_getWork + MiningWorker + kovanica_submitWork
+    let work_val = rpc_call(&client, rpc_producer, "kovanica_getWork", json!([0])).await?;
+    let template_header: kovanica_types::block::BlockHeader = serde_json::from_value(
+        work_val
+            .get("result")
+            .and_then(|r| r.get("header"))
+            .cloned()
+            .context("missing header in producer getWork")?,
+    )
+    .context("deserialize producer getWork header")?;
+
+    let mut worker = kovanica_consensus::mining::MiningWorker::new();
+    let solved_header = worker
+        .mine_header(template_header, 500_000)
+        .context("failed to solve post-recovery PoW header within 500k iterations")?;
+
+    let submit_res = rpc_call(
+        &client,
+        rpc_producer,
+        "kovanica_submitWork",
+        json!([solved_header]),
+    )
+    .await?;
+    info!(
+        ?submit_res,
+        "submitted solved post-recovery block to producer via kovanica_submitWork"
+    );
+
+    // Wait for height to advance beyond recovered height on observer
     let progress_deadline = Instant::now() + Duration::from_secs(MINING_TIMEOUT_SECS);
     let mut advanced_height = recovered_height;
     while advanced_height <= recovered_height {
@@ -787,6 +831,21 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
     assert!(
         advanced_reward >= recovered_reward + INITIAL_BLOCK_REWARD,
         "author reward balance on observer must increase by at least 2.5 KVNC after post-recovery commit"
+    );
+
+    // Verify duplicate block submission / gossip does not issue duplicate rewards
+    let _dup_res = rpc_call(
+        &client,
+        rpc_producer,
+        "kovanica_submitWork",
+        json!([solved_header]),
+    )
+    .await?;
+    sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        get_balance(&client, rpc_observer, addr0).await?,
+        advanced_reward,
+        "duplicate submitWork must not issue duplicate block rewards"
     );
 
     // Stop all nodes cleanly
