@@ -290,10 +290,23 @@ pub(crate) fn block_to_json(block: &StatementBlock) -> Value {
 
 /// `kovanica_blockNumber` — latest committed leader height.
 pub async fn handle_block_number(_params: Value, state: RpcState) -> Result<Value, RpcError> {
-    let height = state
+    let h_dag = state
         .consensus_store
         .get_committed_leader_height()
-        .map_err(internal)?;
+        .unwrap_or(0);
+    let h_state = state
+        .storage
+        .begin_read()
+        .ok()
+        .and_then(|txn| {
+            state
+                .storage
+                .consensus()
+                .get_committed_leader_height(&txn)
+                .ok()
+        })
+        .unwrap_or(0);
+    let height = h_dag.max(h_state);
     Ok(quantity(height))
 }
 
@@ -644,10 +657,23 @@ pub async fn handle_get_logs(params: Value, state: RpcState) -> Result<Value, Rp
 
     // Same source as `kovanica_blockNumber`, so the range default and the
     // `"latest"` tag agree with the height clients already track.
-    let latest = state
+    let h_dag = state
         .consensus_store
         .get_committed_leader_height()
-        .map_err(internal)?;
+        .unwrap_or(0);
+    let h_state = state
+        .storage
+        .begin_read()
+        .ok()
+        .and_then(|txn| {
+            state
+                .storage
+                .consensus()
+                .get_committed_leader_height(&txn)
+                .ok()
+        })
+        .unwrap_or(0);
+    let latest = h_dag.max(h_state);
 
     let from = match filter.get("fromBlock") {
         Some(value) if !value.is_null() => parse_block_ref(value, latest, "fromBlock")?,
@@ -1892,6 +1918,11 @@ pub async fn handle_sync_status(_params: Value, state: RpcState) -> Result<Value
 /// Generate a PoW mining work template for Chain 5.
 pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let chain_id = state.mempool.signing_context().chain_id;
+    if !kovanica_types::signing::chain_id::is_hybrid(chain_id) {
+        return Err(RpcError::InvalidRequest(format!(
+            "kovanica_getWork is only available on hybrid PoW networks; node is running on chain_id {chain_id}"
+        )));
+    }
     let author: u16 = match params {
         Value::Object(ref map) => {
             if let Some(auth) = map.get("author").and_then(|v| v.as_u64()) {
@@ -1962,22 +1993,11 @@ pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, Rp
         kovanica_params::DAA_WINDOW_BLOCKS as usize,
     );
 
-    let current_target_bits = if let Some(last_parent) = parent_hashes.first() {
-        if let Ok(b) = state.consensus_store.get_block(last_parent) {
-            b.extract_pow_header(chain_id)
-                .map(|h| h.target_bits)
-                .unwrap_or(kovanica_params::MAX_TARGET_BITS)
-        } else {
-            kovanica_params::MAX_TARGET_BITS
-        }
-    } else {
-        kovanica_params::MAX_TARGET_BITS
-    };
-
     let daa_config = kovanica_consensus::DaaConfig::chain5_default();
-    let target_bits = kovanica_consensus::calculate_next_target_bits(
-        current_target_bits,
-        &timestamps,
+    let target_bits = kovanica_consensus::required_target_bits(
+        &state.consensus_store,
+        &parent_refs,
+        chain_id,
         &daa_config,
     );
 
@@ -2024,6 +2044,11 @@ pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, Rp
 /// Submit a solved PoW block header to the network.
 pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let chain_id = state.mempool.signing_context().chain_id;
+    if !kovanica_types::signing::chain_id::is_hybrid(chain_id) {
+        return Err(RpcError::InvalidRequest(format!(
+            "kovanica_submitWork is only available on hybrid PoW networks; node is running on chain_id {chain_id}"
+        )));
+    }
 
     let header: kovanica_types::BlockHeader = match params {
         Value::Object(ref map) => {
@@ -2073,6 +2098,79 @@ pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value,
         .verify_pow()
         .map_err(|e| RpcError::ExecutionError(format!("PoW verification failed: {e}")))?;
 
+    // Structural parent validation
+    if header.parents.len() > kovanica_params::GHOSTDAG_K as usize {
+        return Err(RpcError::InvalidParams(format!(
+            "too many parents: {} (max {})",
+            header.parents.len(),
+            kovanica_params::GHOSTDAG_K
+        )));
+    }
+    let mut parent_set = std::collections::HashSet::new();
+    for p in &header.parents {
+        if !parent_set.insert(p.digest) {
+            return Err(RpcError::InvalidParams("duplicate parent reference".into()));
+        }
+        if p.round >= header.round {
+            return Err(RpcError::InvalidParams(format!(
+                "parent round {} is not before header round {}",
+                p.round, header.round
+            )));
+        }
+        if header.round - p.round > kovanica_types::MAX_PARENT_ROUND_GAP {
+            return Err(RpcError::InvalidParams(format!(
+                "parent round {} is too far behind header round {}",
+                p.round, header.round
+            )));
+        }
+    }
+
+    // Missing parent check and parent metadata validation
+    if header.round > 0 {
+        for p in &header.parents {
+            let parent_blk = state.consensus_store.get_block(&p.digest).map_err(|_| {
+                RpcError::InvalidParams(format!("parent block {} not found", p.digest))
+            })?;
+            if parent_blk.author != p.author || parent_blk.round != p.round {
+                return Err(RpcError::InvalidParams(format!(
+                    "parent reference metadata mismatch for {}",
+                    p.digest
+                )));
+            }
+            if let Ok(parent_hdr) = parent_blk.extract_pow_header(chain_id) {
+                if header.timestamp <= parent_hdr.timestamp {
+                    return Err(RpcError::InvalidParams(format!(
+                        "timestamp {} not strictly greater than parent timestamp {}",
+                        header.timestamp, parent_hdr.timestamp
+                    )));
+                }
+            }
+        }
+    }
+
+    // Enforce required DAA target from deterministic block-bound ancestry
+    let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+    let required_bits = kovanica_consensus::required_target_bits(
+        &state.consensus_store,
+        &header.parents,
+        chain_id,
+        &daa_config,
+    );
+    if header.target_bits != required_bits {
+        return Err(RpcError::ExecutionError(format!(
+            "target bits 0x{:08x} does not match required DAA target 0x{:08x}",
+            header.target_bits, required_bits
+        )));
+    }
+    if !kovanica_types::check_pow_hash_meets_target(
+        &header.pow_hash.unwrap_or_default(),
+        required_bits,
+    ) {
+        return Err(RpcError::ExecutionError(
+            "PoW hash does not meet required DAA target".into(),
+        ));
+    }
+
     let block = header.to_statement_block(Vec::new());
     let digest = block.digest;
     let pow_hash = header.pow_hash.unwrap_or_default();
@@ -2096,34 +2194,35 @@ pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value,
 /// Query current PoW mining metrics and parameters.
 pub async fn handle_get_mining_info(_params: Value, state: RpcState) -> Result<Value, RpcError> {
     let chain_id = state.mempool.signing_context().chain_id;
+    if !kovanica_types::signing::chain_id::is_hybrid(chain_id) {
+        return Err(RpcError::InvalidRequest(format!(
+            "kovanica_getMiningInfo is only available on hybrid PoW networks; node is running on chain_id {chain_id}"
+        )));
+    }
     let parent_hashes = kovanica_consensus::select_parents_from_tips(
         &state.consensus_store,
         kovanica_params::GHOSTDAG_K as usize,
     );
-
-    let timestamps = kovanica_consensus::extract_ancestor_timestamps(
-        &state.consensus_store,
-        &parent_hashes,
-        chain_id,
-        kovanica_params::DAA_WINDOW_BLOCKS as usize,
-    );
-
-    let current_target_bits = if let Some(last_parent) = parent_hashes.first() {
-        if let Ok(b) = state.consensus_store.get_block(last_parent) {
-            b.extract_pow_header(chain_id)
-                .map(|h| h.target_bits)
-                .unwrap_or(kovanica_params::MAX_TARGET_BITS)
-        } else {
-            kovanica_params::MAX_TARGET_BITS
-        }
-    } else {
-        kovanica_params::MAX_TARGET_BITS
-    };
+    let parent_refs: Vec<kovanica_types::BlockReference> = parent_hashes
+        .iter()
+        .map(|h| {
+            if let Ok(b) = state.consensus_store.get_block(h) {
+                b.reference()
+            } else {
+                kovanica_types::BlockReference {
+                    author: 0,
+                    round: 0,
+                    digest: *h,
+                }
+            }
+        })
+        .collect();
 
     let daa_config = kovanica_consensus::DaaConfig::chain5_default();
-    let target_bits = kovanica_consensus::calculate_next_target_bits(
-        current_target_bits,
-        &timestamps,
+    let target_bits = kovanica_consensus::required_target_bits(
+        &state.consensus_store,
+        &parent_refs,
+        chain_id,
         &daa_config,
     );
 
@@ -3920,6 +4019,7 @@ mod tests {
 
     #[tokio::test]
     async fn mining_and_dag_rpc_methods_work() {
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let (_dir, storage) = open_storage();
         let mut state = test_state(storage.clone());
         state.mempool = Arc::new(Mempool::new(
@@ -3965,16 +4065,8 @@ mod tests {
         assert!(work_by_addr["header"].is_object());
 
         // 4. submit_work with a mined block
-        let header = kovanica_types::BlockHeader::new(
-            kovanica_params::CHAIN_ID_HYBRID_TESTNET,
-            1,
-            7,
-            vec![],
-            kovanica_types::Hash::zero(),
-            1_700_000_000_000,
-            0x207fffff, // easy target
-            0,
-        );
+        let header: kovanica_types::BlockHeader =
+            serde_json::from_value(work["header"].clone()).expect("valid header from template");
         let mined = kovanica_consensus::mine_header(header, 10_000).expect("should mine block");
         let submit_res = handle_submit_work(json!({ "header": mined }), state.clone())
             .await
@@ -3993,5 +4085,101 @@ mod tests {
         assert!(handle_submit_work(json!({ "header": bad_header }), state)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_submit_work_rejected_without_writes() {
+        let (_dir, storage) = open_storage();
+        let mut state = test_state(storage.clone());
+        // Node running on legacy Chain 4 (TESTNET_V2)
+        state.mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::TESTNET_V2),
+        ));
+
+        let header = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::TESTNET_V2,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined = kovanica_consensus::mine_header(header, 10_000).expect("mined header");
+
+        // submitWork must be rejected because Chain 4 is not hybrid
+        let res = handle_submit_work(json!({ "header": mined }), state.clone()).await;
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("only available on hybrid PoW networks"),
+            "Error was: {err_msg}"
+        );
+
+        // Verify NO blocks were written to consensus_store
+        assert!(!state
+            .consensus_store
+            .has_block(&mined.to_statement_block(vec![]).digest)
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn submit_work_easier_target_and_missing_parents_rejected() {
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let (_dir, storage) = open_storage();
+        let mut state = test_state(storage.clone());
+        state.mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_params::CHAIN_ID_HYBRID_TESTNET),
+        ));
+
+        // 1. Submit a block referencing a non-existent parent
+        let missing_parent = kovanica_types::BlockReference {
+            author: 1,
+            round: 1,
+            digest: kovanica_types::Hash([0x99; 32]),
+        };
+        let header_missing_parent = kovanica_types::BlockHeader::new(
+            kovanica_params::CHAIN_ID_HYBRID_TESTNET,
+            2,
+            0,
+            vec![missing_parent],
+            kovanica_types::Hash::zero(),
+            1_700_000_010_000,
+            0x207fffff,
+            0,
+        );
+        let mined_missing_parent =
+            kovanica_consensus::mine_header(header_missing_parent, 10_000).unwrap();
+        let err_missing =
+            handle_submit_work(json!({ "header": mined_missing_parent }), state.clone())
+                .await
+                .unwrap_err();
+        assert!(err_missing.to_string().contains("not found"));
+
+        // 2. Submit a block with an easier self-declared target bits than required
+        // Required for round 1 (empty parents) with test target is 0x207fffff.
+        // Declare an even easier target: 0x2100ffff.
+        let header_easy = kovanica_types::BlockHeader::new(
+            kovanica_params::CHAIN_ID_HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x2100ffff,
+            0,
+        );
+        let mined_easy = kovanica_consensus::mine_header(header_easy, 10_000).unwrap();
+        let err_easy = handle_submit_work(json!({ "header": mined_easy }), state.clone())
+            .await
+            .unwrap_err();
+        assert!(err_easy
+            .to_string()
+            .contains("does not match required DAA target"));
     }
 }

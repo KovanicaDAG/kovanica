@@ -28,6 +28,11 @@ pub mod chain_id {
     /// Canonical network tag for chain 5 hybrid testnet.
     pub const NETWORK_TAG_HYBRID_TESTNET: &str = "hybrid-testnet";
 
+    /// Whether `id` is a hybrid PoW + GHOSTDAG chain (Chain ID 5).
+    pub fn is_hybrid(id: u64) -> bool {
+        id == HYBRID_TESTNET
+    }
+
     /// Whether `id` is in the registry.
     pub fn is_registered(id: u64) -> bool {
         matches!(

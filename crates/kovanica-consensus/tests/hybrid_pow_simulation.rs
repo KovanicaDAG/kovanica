@@ -328,3 +328,76 @@ fn test_pow_anti_dos_rejection() {
         "block without PoW statements must be rejected on Chain 5 ingress"
     );
 }
+
+#[test]
+fn test_same_dag_different_arrival_orders_yields_same_required_target() {
+    use kovanica_consensus::daa::required_target_bits;
+    use kovanica_dag::DagStore;
+    use kovanica_storage::Storage;
+
+    let dir1 = tempfile::tempdir().unwrap();
+    let storage1 = Storage::new(dir1.path().join("dag1.redb")).unwrap();
+    let dag1 = DagStore::new(storage1).unwrap();
+
+    let dir2 = tempfile::tempdir().unwrap();
+    let storage2 = Storage::new(dir2.path().join("dag2.redb")).unwrap();
+    let dag2 = DagStore::new(storage2).unwrap();
+
+    let mut worker = MiningWorker::new();
+    let start_ts = 1_700_000_000_000u64;
+
+    // Genesis block (round 0)
+    let genesis = make_mined_block(&mut worker, 0, 0, vec![], start_ts, EASY_TEST_TARGET_BITS);
+
+    // Parallel blocks at round 1 (A and B)
+    let block_1a = make_mined_block(
+        &mut worker,
+        1,
+        0,
+        vec![genesis.reference()],
+        start_ts + 4_000,
+        EASY_TEST_TARGET_BITS,
+    );
+    let block_1b = make_mined_block(
+        &mut worker,
+        1,
+        1,
+        vec![genesis.reference()],
+        start_ts + 5_000,
+        EASY_TEST_TARGET_BITS,
+    );
+
+    // Block at round 2 merging 1A and 1B
+    let block_2 = make_mined_block(
+        &mut worker,
+        2,
+        0,
+        vec![block_1a.reference(), block_1b.reference()],
+        start_ts + 9_000,
+        EASY_TEST_TARGET_BITS,
+    );
+
+    // Node 1 receives: Genesis -> 1A -> 1B -> 2
+    dag1.put_block(&genesis).unwrap();
+    dag1.put_block(&block_1a).unwrap();
+    dag1.put_block(&block_1b).unwrap();
+    dag1.put_block(&block_2).unwrap();
+
+    // Node 2 receives: Genesis -> 1B -> 1A -> 2 (different arrival order for round 1 blocks)
+    dag2.put_block(&genesis).unwrap();
+    dag2.put_block(&block_1b).unwrap();
+    dag2.put_block(&block_1a).unwrap();
+    dag2.put_block(&block_2).unwrap();
+
+    // Now evaluate candidate block at round 3 referencing block 2
+    let candidate_parents = vec![block_2.reference()];
+    let config = DaaConfig::chain5_default();
+
+    let target1 = required_target_bits(&dag1, &candidate_parents, CHAIN_ID_HYBRID_TESTNET, &config);
+    let target2 = required_target_bits(&dag2, &candidate_parents, CHAIN_ID_HYBRID_TESTNET, &config);
+
+    assert_eq!(
+        target1, target2,
+        "Same DAG with different block arrival orders must yield the exact same required DAA target"
+    );
+}

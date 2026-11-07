@@ -41,10 +41,21 @@ impl DaaConfig {
     /// Standard consensus parameters for Chain ID 5 (Hybrid PoW testnet).
     #[must_use]
     pub fn chain5_default() -> Self {
+        let max_target_bits = std::env::var("KOVANICA_TEST_TARGET_BITS")
+            .ok()
+            .and_then(|v| {
+                let s = v.trim();
+                let stripped = s
+                    .strip_prefix("0x")
+                    .or_else(|| s.strip_prefix("0X"))
+                    .unwrap_or(s);
+                u32::from_str_radix(stripped, 16).ok()
+            })
+            .unwrap_or(kovanica_params::MAX_TARGET_BITS);
         Self {
             target_block_time_ms: kovanica_params::TARGET_BLOCK_MS,
             window_size: kovanica_params::DAA_WINDOW_BLOCKS,
-            max_target_bits: kovanica_params::MAX_TARGET_BITS,
+            max_target_bits,
             min_target_bits: kovanica_params::MIN_TARGET_BITS,
             max_adjustment_factor: 4,
         }
@@ -179,6 +190,7 @@ pub fn calculate_next_target_bits(
 }
 
 use kovanica_dag::DagStore;
+use kovanica_types::block::BlockReference;
 use kovanica_types::hash::Hash;
 use std::collections::{HashSet, VecDeque};
 
@@ -193,7 +205,11 @@ pub fn select_parents_from_tips(dag_store: &DagStore, max_parents: usize) -> Vec
     let mut parents = Vec::new();
     let mut round = max_round;
     loop {
-        if let Ok(blocks) = dag_store.get_blocks_by_round(round) {
+        if let Ok(mut blocks) = dag_store.get_blocks_by_round(round) {
+            // Sort deterministically: highest round first, then author, then digest
+            blocks.sort_by(|a, b| {
+                (b.round, a.author, a.digest.0).cmp(&(a.round, b.author, b.digest.0))
+            });
             for block in blocks {
                 if !parents.contains(&block.digest) {
                     parents.push(block.digest);
@@ -212,6 +228,56 @@ pub fn select_parents_from_tips(dag_store: &DagStore, max_parents: usize) -> Vec
         }
     }
     parents
+}
+
+/// Derive the required DAA difficulty target bits for a block given its parents and local DAG storage.
+///
+/// Consensus rules:
+/// - Exact ancestry/window: Evaluates up to [`DaaConfig::window_size`] (60) ancestor block timestamps
+///   reachable by following `parents` backwards through DAG history.
+/// - Deterministic ordering: Traversal is bound entirely to the block's parent cone. Timestamps are
+///   sorted chronologically in ascending order, ensuring that arrival order or current tip does not
+///   affect the required target.
+/// - Bootstrap:
+///   * Empty parents (round 0 canonical genesis): returns `config.max_target_bits`.
+///   * Fewer than 2 timestamps (e.g. round 1, whose only parent is round 0 genesis with no PoW timestamp):
+///     returns `current_target_bits` which defaults to `config.max_target_bits`.
+///   * For non-empty parents, `current_target_bits` is derived from the primary parent (`parents[0]`).
+/// - Missing history: Callers must verify all referenced parents exist in accepted consensus storage
+///   before calling this function.
+#[must_use]
+pub fn required_target_bits(
+    dag_store: &DagStore,
+    parents: &[BlockReference],
+    chain_id: u64,
+    config: &DaaConfig,
+) -> u32 {
+    if parents.is_empty() {
+        return config.max_target_bits;
+    }
+
+    let parent_hashes: Vec<Hash> = parents.iter().map(|p| p.digest).collect();
+
+    let current_target_bits = if let Some(first_parent) = parent_hashes.first() {
+        if let Ok(b) = dag_store.get_block(first_parent) {
+            b.extract_pow_header(chain_id)
+                .map(|h| h.target_bits)
+                .unwrap_or(config.max_target_bits)
+        } else {
+            config.max_target_bits
+        }
+    } else {
+        config.max_target_bits
+    };
+
+    let timestamps = extract_ancestor_timestamps(
+        dag_store,
+        &parent_hashes,
+        chain_id,
+        config.window_size as usize,
+    );
+
+    calculate_next_target_bits(current_target_bits, &timestamps, config)
 }
 
 /// Extract timestamps in ascending order from ancestor blocks for DAA.
