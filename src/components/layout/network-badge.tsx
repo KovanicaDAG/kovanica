@@ -5,8 +5,10 @@ import { getBadgeColor, getBadgeLabel, detectNetwork } from "@/lib/network";
  * Network environment badge. Amber = testnet, green = mainnet — the ONLY
  * places network color may appear as a signal (never on CTAs).
  */
-export function NetworkBadge() {
-  const isMainnet = detectNetwork() === "mainnet";
+export function NetworkBadge({ network }: { network?: "testnet" | "mainnet" } = {}) {
+  const isMainnet = network ? network === "mainnet" : detectNetwork() === "mainnet";
+  const badgeColor = network ? (isMainnet ? "#16a765" : "#f59e0b") : getBadgeColor();
+  const badgeLabel = network ? (isMainnet ? "MAINNET" : "TESTNET") : getBadgeLabel();
   return (
     <span
       className={cn(
@@ -16,8 +18,8 @@ export function NetworkBadge() {
           : "bg-net-testnet-soft text-net-testnet",
       )}
     >
-      <span className="size-1.5 rounded-full" style={{ backgroundColor: getBadgeColor() }} />
-      {getBadgeLabel()}
+      <span className="size-1.5 rounded-full" style={{ backgroundColor: badgeColor }} />
+      {badgeLabel}
     </span>
   );
 }

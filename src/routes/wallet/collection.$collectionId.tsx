@@ -1,8 +1,11 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { AlertCircle, ArrowLeft as ArrowLeftIcon, Sparkles as SparklesIcon } from "lucide-react";
-import { api, ApiError } from "@/lib/api/client";
+import { ArrowLeft as ArrowLeftIcon, Sparkles as SparklesIcon } from "lucide-react";
+import { api, ApiError, HttpError } from "@/lib/api/client";
 import { shortId } from "@/lib/ledger/hash";
 import { hexToKvnc } from "@/lib/wallet/address";
+import { Shell } from "@/components/layout/shell";
+import { RouteError } from "@/components/layout/route-error";
+import { Button } from "@/components/ui/button";
 
 interface CollectionDetailResponse {
   collection_id: string;
@@ -15,108 +18,58 @@ interface CollectionDetailResponse {
 
 export const Route = createFileRoute("/wallet/collection/$collectionId")({
   loader: async ({ params }) => {
-    const source = "local";
-    const url = `/api/collection/${encodeURIComponent(params.collectionId)}?source=${source}`;
     try {
-      const data = await api<CollectionDetailResponse>(url);
+      const data = await api<CollectionDetailResponse>(`/api/collection/${encodeURIComponent(params.collectionId)}`);
       if (!data || !data.collection_id) {
         throw notFound();
       }
       return data;
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (
         (err instanceof ApiError && err.status === 404) ||
-        err?.status === 404 ||
-        err?.message?.toLowerCase().includes("not found")
+        (err instanceof HttpError && err.status === 404) ||
+        (typeof err === "object" && err !== null && "status" in err && (err as { status: unknown }).status === 404) ||
+        (err instanceof Error && err.message.toLowerCase().includes("not found"))
       ) {
         throw notFound();
       }
       throw err;
     }
   },
+  notFoundComponent: () => <CollectionNotFound />,
+  errorComponent: ({ error, reset }) => (
+    <Shell>
+      <RouteError
+        title="Collection Endpoint Unavailable"
+        error={error}
+        reset={reset}
+      />
+    </Shell>
+  ),
   component: CollectionDetailPage,
-  notFoundComponent: CollectionNotFoundPage,
-  errorComponent: CollectionErrorPage,
 });
 
-function CollectionNotFoundPage() {
+function CollectionNotFound() {
+  const { collectionId } = Route.useParams();
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 md:px-6 md:py-12">
-      <div className="mb-6 flex items-center gap-3">
-        <Link
-          to="/wallet"
-          className="text-muted hover:text-fg transition-colors"
-          aria-label="Back to wallet"
-        >
-          <ArrowLeftIcon className="size-5" />
-        </Link>
-        <div>
-          <p className="font-mono text-[10px] tracking-wide text-purple uppercase">
-            KVP-106 Collection
+    <Shell>
+      <div className="mx-auto flex min-h-[40vh] max-w-md flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+        <div className="flex size-12 items-center justify-center rounded-full bg-purple-500/10 text-purple-400">
+          <SparklesIcon className="size-6" aria-hidden="true" />
+        </div>
+        <div className="space-y-1">
+          <h2 className="font-display text-lg font-medium text-fg">Collection Not Found</h2>
+          <p className="font-mono text-xs text-muted break-words">
+            No collection was found with ID &ldquo;{collectionId}&rdquo; on this network.
           </p>
-          <h1 className="font-display text-2xl tracking-tight text-fg">Collection Not Found</h1>
         </div>
+        <Button asChild variant="outline" size="sm" className="mt-2">
+          <Link to="/wallet">Back to Wallet</Link>
+        </Button>
       </div>
-      <div className="rounded-xl border border-border bg-surface p-8 text-center">
-        <AlertCircle className="size-12 mx-auto text-amber" />
-        <h2 className="mt-4 text-base font-semibold text-fg">Collection Not Found</h2>
-        <p className="mt-2 text-sm text-muted">
-          No NFT collection matching this identifier could be found.
-        </p>
-        <div className="mt-6 flex justify-center">
-          <Link
-            to="/wallet"
-            className="inline-flex h-9 items-center rounded-md bg-surface-2 px-4 text-xs font-medium text-fg hover:bg-surface-3 transition-colors"
-          >
-            Back to Wallet
-          </Link>
-        </div>
-      </div>
-    </div>
+    </Shell>
   );
 }
-
-function CollectionErrorPage({ error }: { error?: unknown }) {
-  const message = error instanceof Error ? error.message : "Node service unavailable";
-  return (
-    <div className="mx-auto max-w-5xl px-4 py-8 md:px-6 md:py-12">
-      <div className="mb-6 flex items-center gap-3">
-        <Link
-          to="/wallet"
-          className="text-muted hover:text-fg transition-colors"
-          aria-label="Back to wallet"
-        >
-          <ArrowLeftIcon className="size-5" />
-        </Link>
-        <div>
-          <p className="font-mono text-[10px] tracking-wide text-danger uppercase">Node Outage</p>
-          <h1 className="font-display text-2xl tracking-tight text-fg">Service Unavailable</h1>
-        </div>
-      </div>
-      <div className="rounded-xl border border-danger/30 bg-danger/5 p-8 text-center">
-        <AlertCircle className="size-12 mx-auto text-danger" />
-        <h2 className="mt-4 text-base font-semibold text-fg">Unable to Reach Collection Endpoint</h2>
-        <p className="mt-2 text-sm text-muted">
-          The node endpoint is currently offline or unreachable. This is an infrastructure availability issue, not a missing collection.
-        </p>
-        <p className="mt-2 font-mono text-xs text-danger/80 break-all">{message}</p>
-        <div className="mt-6 flex justify-center gap-3">
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            className="inline-flex h-9 items-center rounded-md bg-surface-2 px-4 text-xs font-medium text-fg hover:bg-surface-3 transition-colors"
-          >
-            Retry
-          </button>
-          <Link
-            to="/wallet"
-            className="inline-flex h-9 items-center rounded-md border border-border px-4 text-xs font-medium text-muted hover:text-fg transition-colors"
-          >
-            Back to Wallet
-          </Link>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -124,7 +77,8 @@ function CollectionDetailPage() {
   const collection = Route.useLoaderData();
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-6 md:px-6 md:py-8">
+    <Shell>
+      <div className="mx-auto max-w-5xl px-4 py-6 md:px-6 md:py-8">
       <div className="mb-6 flex items-center gap-3">
         <Link
           to="/wallet"
@@ -185,6 +139,7 @@ function CollectionDetailPage() {
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </Shell>
   );
 }

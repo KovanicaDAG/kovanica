@@ -7,6 +7,7 @@ import { Compass, RefreshCw, AlertCircle, ShieldAlert } from "lucide-react";
 import { DagCanvas, DagLegend } from "@/components/explorer/dag-canvas";
 import { createDagBlocksCache } from "@/lib/api/map-blocks";
 import { useNode } from "@/lib/api/use-node";
+import { setApiSource } from "@/lib/api/client";
 import { shortId } from "@/lib/ledger/hash";
 import { cn } from "@/lib/utils";
 import { getNetworkId } from "@/lib/network";

@@ -458,6 +458,12 @@ export async function dispatchApi(req: Request): Promise<Response> {
     return text("mainnet launching soon", 503);
   }
 
+  // Mainnet is not open yet (launch scheduled: 1.1.2027).
+  // Network isolation: mainnet must not silently query testnet node or submit transactions.
+  if (source === "mainnet") {
+    return text("mainnet launching soon", 503);
+  }
+
   // When querying testnet (or public by default)
   if (source === "testnet") {
     if (name === "reset" || name === "mine" || name === "mining") {
