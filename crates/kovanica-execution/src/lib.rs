@@ -28,6 +28,7 @@ use kovanica_storage::{
     address_to_bytes, state_store::Account, tables, BincodeSerialize, StateStoreError, Storage,
     StorageError,
 };
+use kovanica_types::emission::{EmissionPolicy, MiningRewardState};
 use kovanica_types::signing::{chain_id, SigningContext};
 use kovanica_types::{
     epoch_for_round, light_vrf_input, Address, Hash, PublicKey, SealCommitteeSnapshotMember,
@@ -194,6 +195,10 @@ pub struct ExecutionContext {
     /// Signature format v1 context (`chain_id`) every transaction signature
     /// is verified against. Built from local configuration only.
     signing_ctx: SigningContext,
+    /// Optional emission policy override/hint (e.g. from node configuration).
+    pub emission_policy: Option<EmissionPolicy>,
+    /// Persisted deterministic mining reward state (for NO-stake networks).
+    pub mining_reward_state: MiningRewardState,
 }
 
 /// Trait for publishing transaction execution logs.
@@ -239,12 +244,20 @@ impl ExecutionContext {
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: ctx,
+            emission_policy: None,
+            mining_reward_state: kovanica_types::emission::MiningRewardState::default(),
         }
     }
 
     /// The signing context transactions are verified against.
     pub fn signing_context(&self) -> SigningContext {
         self.signing_ctx
+    }
+
+    /// Set an explicit emission policy on this execution context.
+    pub fn with_emission_policy(mut self, policy: EmissionPolicy) -> Self {
+        self.emission_policy = Some(policy);
+        self
     }
 
     /// Configure treasury address at genesis.
@@ -288,9 +301,11 @@ impl ExecutionContext {
         // before the storage transaction commits, the in-memory staking state
         // must return to exactly what is persisted, so snapshot it here.
         let pre_subdag_staking = snapshot_staking(&self.staking);
+        let pre_subdag_mining = self.mining_reward_state;
         let result = self.execute_committed_subdag_inner(subdag, storage, commit);
         if result.is_err() {
             self.staking = pre_subdag_staking;
+            self.mining_reward_state = pre_subdag_mining;
         }
         result
     }
@@ -314,6 +329,14 @@ impl ExecutionContext {
                 "execution adopts staking state from a verified snapshot"
             );
             self.staking = stored;
+        }
+        if let Ok(Some(stored_mining)) = storage.state().load_mining_reward_state(&txn) {
+            if stored_mining.rewarded_block_count > self.mining_reward_state.rewarded_block_count {
+                self.mining_reward_state = stored_mining;
+            }
+        }
+        if let Ok(Some(policy)) = storage.state().load_emission_policy(&txn) {
+            self.emission_policy = Some(policy);
         }
         Ok(())
     }
@@ -345,10 +368,17 @@ impl ExecutionContext {
                 present
             };
             if executed {
+                let emission_policy = storage
+                    .state()
+                    .load_emission_policy_write(&check)?
+                    .or(self.emission_policy)
+                    .unwrap_or(EmissionPolicy::Legacy81M);
                 return Ok(ExecutionResult {
                     reward: None,
                     txs_applied: 0,
-                    circulating_supply: self.staking.circulating_supply(),
+                    circulating_supply: self
+                        .staking
+                        .circulating_supply_with_policy(emission_policy),
                     receipts: Vec::new(),
                     state_root: None,
                 });
@@ -414,98 +444,171 @@ impl ExecutionContext {
             }
         }
 
+        // Load the emission policy: first from storage, else from self.emission_policy, else default Legacy81M.
+        let emission_policy = storage
+            .state()
+            .load_emission_policy_write(&txn)?
+            .or(self.emission_policy)
+            .unwrap_or(EmissionPolicy::Legacy81M);
+
         // 3. Pay the mining reward to the blocks/leader of this sub-DAG.
-        // Under Hybrid PoW + GHOSTDAG (Chain 5, ADR 0003), 100% of INITIAL_BLOCK_REWARD (2.5 KVNC)
-        // is minted directly to the miner/author of each confirmed block without stake commission.
-        let (reward, candidate_staking, escrow_part) = if self.signing_ctx.chain_id
-            == chain_id::HYBRID_TESTNET
-        {
-            let mut candidate_staking = snapshot_staking(&self.staking);
-            let mut total_minted = 0u64;
-            let mut miner_recipient = Address::default();
-            for block in &subdag.blocks {
-                let miner = resolve_miner_address(block.author, &candidate_staking);
-                let reward_amount = kovanica_params::INITIAL_BLOCK_REWARD;
-                storage.state().add_balance(&txn, &miner, reward_amount)?;
-                total_minted = total_minted.saturating_add(reward_amount);
-                miner_recipient = miner;
-            }
-            if !subdag
-                .blocks
-                .iter()
-                .any(|b| b.digest == subdag.leader.digest)
-            {
-                let miner = resolve_miner_address(subdag.leader.author, &candidate_staking);
-                let reward_amount = kovanica_params::INITIAL_BLOCK_REWARD;
-                storage.state().add_balance(&txn, &miner, reward_amount)?;
-                total_minted = total_minted.saturating_add(reward_amount);
-                miner_recipient = miner;
-            }
-            candidate_staking.committed_leader_height =
-                candidate_staking.committed_leader_height.saturating_add(1);
-            candidate_staking.total_mining_issued = candidate_staking
-                .total_mining_issued
-                .saturating_add(total_minted);
-            let reward_res = kovanica_staking::RewardOutcome {
-                leader_author: subdag.leader_author,
-                recipient: miner_recipient,
-                amount: total_minted,
-                height: candidate_staking.committed_leader_height,
-            };
-            (reward_res, candidate_staking, 0u64)
-        } else {
-            let mut candidate_staking = snapshot_staking(&self.staking);
-            let leader = leader_identity
-                .and_then(|address| candidate_staking.active_validator(address))
-                .cloned();
-            let reward = match (&leader, leader_identity) {
-                (Some(_), Some(address)) => {
-                    candidate_staking.on_leader_committed_resolved(subdag.leader_author, address)?
+        // Under Hybrid PoW + GHOSTDAG (Chain 5, ADR 0003), mining rewards are minted directly
+        // to the miner/author of each confirmed block without stake commission.
+        let (reward, candidate_staking, candidate_mining_state, escrow_part) =
+            if self.signing_ctx.chain_id == chain_id::HYBRID_TESTNET {
+                if emission_policy == EmissionPolicy::NoStake82M {
+                    let mut candidate_staking = snapshot_staking(&self.staking);
+                    let mut mining_state = storage
+                        .state()
+                        .load_mining_reward_state_write(&txn)?
+                        .unwrap_or(self.mining_reward_state);
+
+                    let mut total_minted = 0u64;
+                    let mut miner_recipient = Address::default();
+
+                    // Collect unique eligible blocks in canonical consensus order:
+                    // blocks in subdag.blocks, followed by subdag.leader if not already in subdag.blocks.
+                    let mut eligible_authors = Vec::new();
+                    for block in &subdag.blocks {
+                        eligible_authors.push((block.author, block.digest));
+                    }
+                    if !subdag
+                        .blocks
+                        .iter()
+                        .any(|b| b.digest == subdag.leader.digest)
+                    {
+                        eligible_authors.push((subdag.leader.author, subdag.leader.digest));
+                    }
+
+                    for (author, _digest) in eligible_authors {
+                        let miner = resolve_miner_address(author, &candidate_staking);
+                        let (payout, term_done) =
+                            kovanica_staking::calculate_block_reward_no_stake_82m(
+                                mining_state.rewarded_block_count,
+                                mining_state.cumulative_mining_issued,
+                                mining_state.terminal_payout_done,
+                            );
+                        if !mining_state.terminal_payout_done && term_done {
+                            mining_state.terminal_payout_done = true;
+                            mining_state.terminal_payout_block_index =
+                                Some(mining_state.rewarded_block_count);
+                        }
+                        if payout > 0 {
+                            storage.state().add_balance(&txn, &miner, payout)?;
+                            mining_state.cumulative_mining_issued =
+                                mining_state.cumulative_mining_issued.saturating_add(payout);
+                            total_minted = total_minted.saturating_add(payout);
+                        }
+                        mining_state.rewarded_block_count =
+                            mining_state.rewarded_block_count.saturating_add(1);
+                        miner_recipient = miner;
+                    }
+
+                    // Persist mining reward state atomically with this sub-DAG execution
+                    storage
+                        .state()
+                        .save_mining_reward_state(&txn, &mining_state)?;
+
+                    candidate_staking.committed_leader_height =
+                        candidate_staking.committed_leader_height.saturating_add(1);
+                    candidate_staking.total_mining_issued = mining_state.cumulative_mining_issued;
+
+                    let reward_res = kovanica_staking::RewardOutcome {
+                        leader_author: subdag.leader_author,
+                        recipient: miner_recipient,
+                        amount: total_minted,
+                        height: candidate_staking.committed_leader_height,
+                    };
+                    (reward_res, candidate_staking, Some(mining_state), 0u64)
+                } else {
+                    let mut candidate_staking = snapshot_staking(&self.staking);
+                    let mut total_minted = 0u64;
+                    let mut miner_recipient = Address::default();
+                    for block in &subdag.blocks {
+                        let miner = resolve_miner_address(block.author, &candidate_staking);
+                        let reward_amount = kovanica_params::INITIAL_BLOCK_REWARD;
+                        storage.state().add_balance(&txn, &miner, reward_amount)?;
+                        total_minted = total_minted.saturating_add(reward_amount);
+                        miner_recipient = miner;
+                    }
+                    if !subdag
+                        .blocks
+                        .iter()
+                        .any(|b| b.digest == subdag.leader.digest)
+                    {
+                        let miner = resolve_miner_address(subdag.leader.author, &candidate_staking);
+                        let reward_amount = kovanica_params::INITIAL_BLOCK_REWARD;
+                        storage.state().add_balance(&txn, &miner, reward_amount)?;
+                        total_minted = total_minted.saturating_add(reward_amount);
+                        miner_recipient = miner;
+                    }
+                    candidate_staking.committed_leader_height =
+                        candidate_staking.committed_leader_height.saturating_add(1);
+                    candidate_staking.total_mining_issued = candidate_staking
+                        .total_mining_issued
+                        .saturating_add(total_minted);
+                    let reward_res = kovanica_staking::RewardOutcome {
+                        leader_author: subdag.leader_author,
+                        recipient: miner_recipient,
+                        amount: total_minted,
+                        height: candidate_staking.committed_leader_height,
+                    };
+                    (reward_res, candidate_staking, None, 0u64)
                 }
-                _ => candidate_staking
-                    .on_leader_committed_forfeited_resolved(subdag.leader_author, leader_identity),
-            };
-            if let Some(leader) = &leader {
-                let (leader_amount, _) =
-                    kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
-                let shares = candidate_staking.reward_share(
-                    leader.address,
-                    leader_amount,
-                    leader.commission_bps,
-                );
-                {
-                    let mut pending = txn.open_table(PENDING_REWARDS)?;
-                    for (addr, amount) in &shares {
-                        if *addr != leader.address && *amount > 0 {
-                            let key = reward_key(addr, &leader.address);
-                            let cur = pending.get(key)?.map(|v| v.value()).unwrap_or(0);
-                            pending.insert(key, cur.saturating_add(*amount))?;
+            } else {
+                let mut candidate_staking = snapshot_staking(&self.staking);
+                let leader = leader_identity
+                    .and_then(|address| candidate_staking.active_validator(address))
+                    .cloned();
+                let reward = match (&leader, leader_identity) {
+                    (Some(_), Some(address)) => candidate_staking
+                        .on_leader_committed_resolved(subdag.leader_author, address)?,
+                    _ => candidate_staking.on_leader_committed_forfeited_resolved(
+                        subdag.leader_author,
+                        leader_identity,
+                    ),
+                };
+                if let Some(leader) = &leader {
+                    let (leader_amount, _) =
+                        kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
+                    let shares = candidate_staking.reward_share(
+                        leader.address,
+                        leader_amount,
+                        leader.commission_bps,
+                    );
+                    {
+                        let mut pending = txn.open_table(PENDING_REWARDS)?;
+                        for (addr, amount) in &shares {
+                            if *addr != leader.address && *amount > 0 {
+                                let key = reward_key(addr, &leader.address);
+                                let cur = pending.get(key)?.map(|v| v.value()).unwrap_or(0);
+                                pending.insert(key, cur.saturating_add(*amount))?;
+                            }
                         }
                     }
+                    let validator_part: u64 = shares
+                        .iter()
+                        .filter(|(a, _)| *a == leader.address)
+                        .map(|(_, x)| *x)
+                        .sum();
+                    storage
+                        .state()
+                        .add_balance(&txn, &reward.recipient, validator_part)?;
                 }
-                let validator_part: u64 = shares
+                let (_, escrow_part) =
+                    kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
+                let mut ready: Vec<(Address, Address)> = candidate_staking
+                    .unbonding_ready()
                     .iter()
-                    .filter(|(a, _)| *a == leader.address)
-                    .map(|(_, x)| *x)
-                    .sum();
-                storage
-                    .state()
-                    .add_balance(&txn, &reward.recipient, validator_part)?;
-            }
-            let (_, escrow_part) =
-                kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
-            let mut ready: Vec<(Address, Address)> = candidate_staking
-                .unbonding_ready()
-                .iter()
-                .map(|e| (e.delegator, e.validator))
-                .collect();
-            ready.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-            for (delegator, validator) in ready {
-                let amount = candidate_staking.withdraw_unbonded(delegator, validator)?;
-                storage.state().add_balance(&txn, &delegator, amount)?;
-            }
-            (reward, candidate_staking, escrow_part)
-        };
+                    .map(|e| (e.delegator, e.validator))
+                    .collect();
+                ready.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+                for (delegator, validator) in ready {
+                    let amount = candidate_staking.withdraw_unbonded(delegator, validator)?;
+                    storage.state().add_balance(&txn, &delegator, amount)?;
+                }
+                (reward, candidate_staking, None, escrow_part)
+            };
 
         if self.signing_ctx.chain_id != chain_id::HYBRID_TESTNET {
             self.pay_light_escrow(
@@ -591,6 +694,9 @@ impl ExecutionContext {
 
         commit(txn)?;
         self.staking = candidate_staking;
+        if let Some(mining_state) = candidate_mining_state {
+            self.mining_reward_state = mining_state;
+        }
 
         // Publish transaction logs to WebSocket subscribers
         if let Some(publisher) = &self.log_publisher {
@@ -620,10 +726,12 @@ impl ExecutionContext {
             self.staking.circulating_supply()
         );
 
+        let circulating_supply = self.staking.circulating_supply_with_policy(emission_policy);
+
         Ok(ExecutionResult {
             reward: Some(reward),
             txs_applied,
-            circulating_supply: self.staking.circulating_supply(),
+            circulating_supply,
             receipts,
             state_root: Some(state_root),
         })
@@ -2440,6 +2548,8 @@ mod tests {
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: TEST_CTX,
+            emission_policy: None,
+            mining_reward_state: Default::default(),
         };
         let initial_bytes = staking_state_bytes(&ctx.staking);
         let subdag = sample_committed_subdag(1, 0);
@@ -2484,6 +2594,8 @@ mod tests {
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: TEST_CTX,
+            emission_policy: None,
+            mining_reward_state: Default::default(),
         };
         let mut context_b = ExecutionContext {
             staking: bincode::deserialize(&genesis_bytes).expect("genesis state b"),
@@ -2491,6 +2603,8 @@ mod tests {
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: TEST_CTX,
+            emission_policy: None,
+            mining_reward_state: Default::default(),
         };
         persist_initial_staking_state(&storage_a, &context_a.staking);
         persist_initial_staking_state(&storage_b, &context_b.staking);
@@ -2715,6 +2829,8 @@ mod tests {
                 contract_runner: ContractRunner::new(),
                 log_publisher: None,
                 signing_ctx: TEST_CTX,
+                emission_policy: None,
+                mining_reward_state: Default::default(),
             };
             persist_initial_staking_state(&storage, &context.staking);
             first_reward = context
@@ -2734,6 +2850,8 @@ mod tests {
             contract_runner: ContractRunner::new(),
             log_publisher: None,
             signing_ctx: TEST_CTX,
+            emission_policy: None,
+            mining_reward_state: Default::default(),
         };
         let replay = context
             .execute_committed_subdag(&subdag, &storage)
@@ -6172,5 +6290,278 @@ mod tests {
         if let Ok(pending) = read.open_table(PENDING_REWARDS) {
             assert_eq!(pending.iter().unwrap().count(), 0);
         }
+    }
+
+    #[test]
+    fn chain_5_no_stake_82m_reward_schedule_boundaries_and_multiple_blocks() {
+        use kovanica_types::emission::EmissionPolicy;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path().join("chain5_nostake.redb")).unwrap();
+
+        // Persist NoStake82M policy in storage
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_emission_policy(&txn, &EmissionPolicy::NoStake82M)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        let mut ctx =
+            ExecutionContext::with_signing_context(SigningContext::new(chain_id::HYBRID_TESTNET));
+
+        // SubDAG 1: two blocks at indices 0 and 1
+        let block1 = sample_block_at(1, 1);
+        let block2 = sample_block_at(2, 2);
+        let miner1 = resolve_miner_address(1, &ctx.staking);
+        let miner2 = resolve_miner_address(2, &ctx.staking);
+
+        let subdag1 = CommittedSubDag {
+            leader: block2.clone(),
+            blocks: vec![block1, block2],
+            leader_round: 2,
+            leader_author: 2,
+            non_blue: vec![],
+        };
+
+        let res1 = ctx.execute_committed_subdag(&subdag1, &storage).unwrap();
+        assert_eq!(
+            res1.reward.unwrap().amount,
+            5_000_000_000 // 2 blocks * 2.5 KVNC
+        );
+
+        let read = storage.begin_read().unwrap();
+        let acct1 = storage.state().get_account(&read, &miner1).unwrap();
+        let acct2 = storage.state().get_account(&read, &miner2).unwrap();
+        assert_eq!(acct1.balance, 2_500_000_000);
+        assert_eq!(acct2.balance, 2_500_000_000);
+
+        let state = storage
+            .state()
+            .load_mining_reward_state(&read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.rewarded_block_count, 2);
+        assert_eq!(state.cumulative_mining_issued, 5_000_000_000);
+        drop(read);
+
+        // Fast-forward to block index 8,199,999 (one block before era boundary)
+        {
+            let txn = storage.begin_write().unwrap();
+            let mut ff_state = storage
+                .state()
+                .load_mining_reward_state_write(&txn)
+                .unwrap()
+                .unwrap();
+            ff_state.rewarded_block_count = 8_199_999;
+            ff_state.cumulative_mining_issued = 8_199_999 * 2_500_000_000;
+            storage
+                .state()
+                .save_mining_reward_state(&txn, &ff_state)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        // SubDAG 2: two blocks crossing the era boundary (indices 8,199,999 and 8,200,000)
+        let block_boundary_0 = sample_block_at(3, 3);
+        let block_boundary_1 = sample_block_at(4, 4);
+        let miner3 = resolve_miner_address(3, &ctx.staking);
+        let miner4 = resolve_miner_address(4, &ctx.staking);
+
+        let subdag2 = CommittedSubDag {
+            leader: block_boundary_1.clone(),
+            blocks: vec![block_boundary_0, block_boundary_1],
+            leader_round: 4,
+            leader_author: 4,
+            non_blue: vec![],
+        };
+
+        let res2 = ctx.execute_committed_subdag(&subdag2, &storage).unwrap();
+        // Era 0 block gets 2.5 KVNC (2_500_000_000)
+        // Era 1 block gets 2.5 * 3/4 KVNC = 1.875 KVNC (1_875_000_000)
+        // Total = 4_375_000_000
+        assert_eq!(res2.reward.unwrap().amount, 4_375_000_000);
+
+        let read = storage.begin_read().unwrap();
+        let acct3 = storage.state().get_account(&read, &miner3).unwrap();
+        let acct4 = storage.state().get_account(&read, &miner4).unwrap();
+        assert_eq!(acct3.balance, 2_500_000_000);
+        assert_eq!(acct4.balance, 1_875_000_000);
+
+        let state2 = storage
+            .state()
+            .load_mining_reward_state(&read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state2.rewarded_block_count, 8_200_001);
+        assert_eq!(
+            state2.cumulative_mining_issued,
+            (8_199_999 * 2_500_000_000) + 4_375_000_000
+        );
+    }
+
+    #[test]
+    fn chain_5_no_stake_82m_terminal_remainder_once_then_zero() {
+        use kovanica_types::emission::EmissionPolicy;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path().join("chain5_term.redb")).unwrap();
+
+        let (total_scheduled, terminal_remainder) =
+            kovanica_staking::recompute_terminal_remainder_82m();
+        assert_eq!(total_scheduled, 81_999_999_147_200_000);
+        assert_eq!(terminal_remainder, 852_800_000);
+
+        // Fast forward to era 73 (block index 598_600_000) where scheduled reward decays to 0
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_emission_policy(&txn, &EmissionPolicy::NoStake82M)
+                .unwrap();
+            let state = MiningRewardState {
+                rewarded_block_count: 598_600_000,
+                cumulative_mining_issued: total_scheduled,
+                terminal_payout_done: false,
+                terminal_payout_block_index: None,
+            };
+            storage
+                .state()
+                .save_mining_reward_state(&txn, &state)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        let mut ctx =
+            ExecutionContext::with_signing_context(SigningContext::new(chain_id::HYBRID_TESTNET));
+
+        // Block at index 598_600_000 should receive the terminal remainder
+        let block_term = sample_block_at(10, 10);
+        let miner10 = resolve_miner_address(10, &ctx.staking);
+        let subdag_term = CommittedSubDag {
+            leader: block_term.clone(),
+            blocks: vec![block_term],
+            leader_round: 10,
+            leader_author: 10,
+            non_blue: vec![],
+        };
+
+        let res_term = ctx
+            .execute_committed_subdag(&subdag_term, &storage)
+            .unwrap();
+        assert_eq!(res_term.reward.unwrap().amount, terminal_remainder);
+
+        let read = storage.begin_read().unwrap();
+        let acct10 = storage.state().get_account(&read, &miner10).unwrap();
+        assert_eq!(acct10.balance, terminal_remainder);
+
+        let state = storage
+            .state()
+            .load_mining_reward_state(&read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.rewarded_block_count, 598_600_001);
+        assert_eq!(
+            state.cumulative_mining_issued,
+            kovanica_params::MINING_SUBSIDY_BUDGET_NO_STAKE_82M
+        );
+        assert!(state.terminal_payout_done);
+        assert_eq!(state.terminal_payout_block_index, Some(598_600_000));
+        drop(read);
+
+        // Subsequent blocks receive exactly 0
+        let block_subseq = sample_block_at(11, 11);
+        let miner11 = resolve_miner_address(11, &ctx.staking);
+        let subdag_subseq = CommittedSubDag {
+            leader: block_subseq.clone(),
+            blocks: vec![block_subseq],
+            leader_round: 11,
+            leader_author: 11,
+            non_blue: vec![],
+        };
+
+        let res_subseq = ctx
+            .execute_committed_subdag(&subdag_subseq, &storage)
+            .unwrap();
+        assert_eq!(res_subseq.reward.unwrap().amount, 0);
+
+        let read2 = storage.begin_read().unwrap();
+        assert!(storage.state().get_account(&read2, &miner11).is_err());
+        let state2 = storage
+            .state()
+            .load_mining_reward_state(&read2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state2.rewarded_block_count, 598_600_002);
+        assert_eq!(
+            state2.cumulative_mining_issued,
+            kovanica_params::MINING_SUBSIDY_BUDGET_NO_STAKE_82M
+        );
+    }
+
+    #[test]
+    fn chain_5_no_stake_82m_replay_and_idempotency() {
+        use kovanica_types::emission::EmissionPolicy;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(temp_dir.path().join("chain5_replay.redb")).unwrap();
+
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_emission_policy(&txn, &EmissionPolicy::NoStake82M)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        let mut ctx =
+            ExecutionContext::with_signing_context(SigningContext::new(chain_id::HYBRID_TESTNET));
+
+        let block = sample_block_at(5, 5);
+        let miner = resolve_miner_address(5, &ctx.staking);
+        let subdag = CommittedSubDag {
+            leader: block.clone(),
+            blocks: vec![block],
+            leader_round: 5,
+            leader_author: 5,
+            non_blue: vec![],
+        };
+
+        // First execution
+        let res1 = ctx.execute_committed_subdag(&subdag, &storage).unwrap();
+        assert!(res1.reward.is_some());
+        assert_eq!(res1.reward.unwrap().amount, 2_500_000_000);
+
+        let read1 = storage.begin_read().unwrap();
+        let bal1 = storage.state().get_account(&read1, &miner).unwrap().balance;
+        assert_eq!(bal1, 2_500_000_000);
+        let state1 = storage
+            .state()
+            .load_mining_reward_state(&read1)
+            .unwrap()
+            .unwrap();
+        drop(read1);
+
+        // Replay of identical subdag
+        let res2 = ctx.execute_committed_subdag(&subdag, &storage).unwrap();
+        assert!(res2.reward.is_none());
+        assert_eq!(res2.txs_applied, 0);
+
+        let read2 = storage.begin_read().unwrap();
+        let bal2 = storage.state().get_account(&read2, &miner).unwrap().balance;
+        assert_eq!(bal2, bal1, "balance must not change on replay");
+        let state2 = storage
+            .state()
+            .load_mining_reward_state(&read2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state2.rewarded_block_count, state1.rewarded_block_count);
+        assert_eq!(
+            state2.cumulative_mining_issued,
+            state1.cumulative_mining_issued
+        );
     }
 }

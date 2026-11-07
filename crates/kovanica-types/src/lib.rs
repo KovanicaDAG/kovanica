@@ -13,6 +13,7 @@ pub mod colouring;
 pub mod commit;
 pub mod committee;
 pub mod crypto;
+pub mod emission;
 pub mod error;
 pub mod evidence;
 pub mod hash;
@@ -40,6 +41,7 @@ pub use colouring::{
 pub use commit::CommittedSubDag;
 pub use committee::{Authority, Committee, Stake};
 pub use crypto::{PublicKey, Signature, SigningKey};
+pub use emission::{EmissionPolicy, MiningRewardState, ParseEmissionPolicyError};
 pub use error::TypesError;
 pub use evidence::{
     EquivocationEvidence, EvidenceError, SignedBlockHeader, EVIDENCE_MAX_AGE_ROUNDS,

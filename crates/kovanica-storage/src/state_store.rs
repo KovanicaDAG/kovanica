@@ -215,6 +215,8 @@ impl StateStore {
             let _ = write_txn.open_table(crate::tables::EXECUTED_TX_HASHES)?;
             let _ = write_txn.open_table(crate::tables::LIGHT_SET)?;
             let _ = write_txn.open_table(crate::tables::GENESIS_DIGEST)?;
+            let _ = write_txn.open_table(crate::tables::EMISSION_POLICY)?;
+            let _ = write_txn.open_table(crate::tables::MINING_REWARD_STATE)?;
         }
         write_txn.commit().map_err(StorageError::Commit)?;
         Ok(Self { pruning })
@@ -542,6 +544,102 @@ impl StateStore {
     ) -> Result<Option<Hash>, StateStoreError> {
         let table = txn.open_table(crate::tables::GENESIS_DIGEST)?;
         Ok(table.get("genesis")?.map(|v| Hash(v.value())))
+    }
+
+    // ============================================================
+    // Emission policy operations
+    // ============================================================
+
+    /// Persist the emission policy.
+    pub fn save_emission_policy(
+        &self,
+        txn: &WriteTransaction,
+        policy: &kovanica_types::emission::EmissionPolicy,
+    ) -> Result<(), StateStoreError> {
+        let mut table = txn.open_table(crate::tables::EMISSION_POLICY)?;
+        table.insert("emission_policy", bincode::serialize(policy)?)?;
+        Ok(())
+    }
+
+    /// Load the emission policy from a write transaction.
+    pub fn load_emission_policy_write(
+        &self,
+        txn: &WriteTransaction,
+    ) -> Result<Option<kovanica_types::emission::EmissionPolicy>, StateStoreError> {
+        let table = txn.open_table(crate::tables::EMISSION_POLICY)?;
+        let bytes = table.get("emission_policy")?.map(|g| g.value().to_vec());
+        match bytes {
+            Some(b) => Ok(Some(bincode::deserialize(&b)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Load the emission policy from a read transaction.
+    pub fn load_emission_policy(
+        &self,
+        txn: &ReadTransaction,
+    ) -> Result<Option<kovanica_types::emission::EmissionPolicy>, StateStoreError> {
+        let table_res = txn.open_table(crate::tables::EMISSION_POLICY);
+        let table = match table_res {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(StateStoreError::Table(e)),
+        };
+        let bytes = table.get("emission_policy")?.map(|g| g.value().to_vec());
+        match bytes {
+            Some(b) => Ok(Some(bincode::deserialize(&b)?)),
+            None => Ok(None),
+        }
+    }
+
+    // ============================================================
+    // Mining reward state operations
+    // ============================================================
+
+    /// Persist the deterministic mining reward state.
+    pub fn save_mining_reward_state(
+        &self,
+        txn: &WriteTransaction,
+        state: &kovanica_types::emission::MiningRewardState,
+    ) -> Result<(), StateStoreError> {
+        let mut table = txn.open_table(crate::tables::MINING_REWARD_STATE)?;
+        table.insert("mining_reward_state", bincode::serialize(state)?)?;
+        Ok(())
+    }
+
+    /// Load the mining reward state from a write transaction.
+    pub fn load_mining_reward_state_write(
+        &self,
+        txn: &WriteTransaction,
+    ) -> Result<Option<kovanica_types::emission::MiningRewardState>, StateStoreError> {
+        let table = txn.open_table(crate::tables::MINING_REWARD_STATE)?;
+        let bytes = table
+            .get("mining_reward_state")?
+            .map(|g| g.value().to_vec());
+        match bytes {
+            Some(b) => Ok(Some(bincode::deserialize(&b)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Load the mining reward state from a read transaction.
+    pub fn load_mining_reward_state(
+        &self,
+        txn: &ReadTransaction,
+    ) -> Result<Option<kovanica_types::emission::MiningRewardState>, StateStoreError> {
+        let table_res = txn.open_table(crate::tables::MINING_REWARD_STATE);
+        let table = match table_res {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(StateStoreError::Table(e)),
+        };
+        let bytes = table
+            .get("mining_reward_state")?
+            .map(|g| g.value().to_vec());
+        match bytes {
+            Some(b) => Ok(Some(bincode::deserialize(&b)?)),
+            None => Ok(None),
+        }
     }
 
     // ============================================================
@@ -2816,5 +2914,72 @@ mod prune_tests {
         let txn = db.begin_write().unwrap();
         assert_eq!(store.prune_state_roots_below(&txn, 15, 0).unwrap(), 0);
         txn.commit().unwrap();
+    }
+
+    #[test]
+    fn emission_policy_and_mining_reward_state_roundtrip() {
+        use kovanica_types::emission::{EmissionPolicy, MiningRewardState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::create(dir.path().join("emission.redb")).unwrap();
+        let store = StateStore::new(&db).unwrap();
+
+        // Initially absent
+        {
+            let txn = db.begin_read().unwrap();
+            assert_eq!(store.load_emission_policy(&txn).unwrap(), None);
+            assert_eq!(store.load_mining_reward_state(&txn).unwrap(), None);
+        }
+
+        // Save NoStake82M and MiningRewardState
+        {
+            let txn = db.begin_write().unwrap();
+            assert_eq!(store.load_emission_policy_write(&txn).unwrap(), None);
+            assert_eq!(store.load_mining_reward_state_write(&txn).unwrap(), None);
+
+            store
+                .save_emission_policy(&txn, &EmissionPolicy::NoStake82M)
+                .unwrap();
+            let state = MiningRewardState {
+                rewarded_block_count: 8_200_000,
+                cumulative_mining_issued: 20_500_000_000_000_000,
+                terminal_payout_done: false,
+                terminal_payout_block_index: None,
+            };
+            store.save_mining_reward_state(&txn, &state).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Verify read
+        {
+            let txn = db.begin_read().unwrap();
+            assert_eq!(
+                store.load_emission_policy(&txn).unwrap(),
+                Some(EmissionPolicy::NoStake82M)
+            );
+            let state = store.load_mining_reward_state(&txn).unwrap().unwrap();
+            assert_eq!(state.rewarded_block_count, 8_200_000);
+            assert_eq!(state.cumulative_mining_issued, 20_500_000_000_000_000);
+            assert!(!state.terminal_payout_done);
+            assert_eq!(state.terminal_payout_block_index, None);
+        }
+
+        // Update terminal payout state
+        {
+            let txn = db.begin_write().unwrap();
+            let mut state = store.load_mining_reward_state_write(&txn).unwrap().unwrap();
+            state.terminal_payout_done = true;
+            state.terminal_payout_block_index = Some(598_600_000);
+            store.save_mining_reward_state(&txn, &state).unwrap();
+            txn.commit().unwrap();
+        }
+
+        // Verify updated
+        {
+            let txn = db.begin_read().unwrap();
+            let state = store.load_mining_reward_state(&txn).unwrap().unwrap();
+            assert!(state.terminal_payout_done);
+            assert_eq!(state.terminal_payout_block_index, Some(598_600_000));
+        }
     }
 }

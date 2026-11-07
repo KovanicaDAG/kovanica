@@ -109,6 +109,9 @@ pub struct NodeConfig {
     /// Mining configuration for Chain 5 (`[mining]` table).
     #[serde(default)]
     pub mining: MiningConfig,
+    /// Explicit emission policy override ("legacy-81m" or "no-stake-82m").
+    /// Overridable with `KOVANICA_EMISSION_POLICY`.
+    pub emission_policy: Option<String>,
 
     // ------------------------------------------------------------------
     // Retention / pruning (opt-in: with every window unset the node never
@@ -211,6 +214,7 @@ impl Default for NodeConfig {
             health_commit_stall_secs: kovanica_rpc::health::DEFAULT_COMMIT_STALL_SECS,
             peer_scoring: kovanica_network::PeerScoringConfig::default(),
             mining: MiningConfig::default(),
+            emission_policy: None,
             chain_id: kovanica_types::signing::chain_id::LOCAL,
             // Pruning is opt-in: every retention window defaults to "keep
             // everything" so an unconfigured node never deletes data.
@@ -380,6 +384,12 @@ impl NodeConfig {
             match v.trim().parse() {
                 Ok(a) => self.mining.author = Some(a),
                 Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_MINING_AUTHOR"),
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_EMISSION_POLICY") {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                self.emission_policy = Some(trimmed.to_string());
             }
         }
         if let Ok(v) = std::env::var("KOVANICA_CHAIN_ID") {

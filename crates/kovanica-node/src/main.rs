@@ -71,8 +71,7 @@ impl LogPublisher for EventLogPublisher {
     }
 }
 use kovanica_staking::{
-    StakingState, FOUNDER_PREMINE, GENESIS_VALIDATOR_ALLOCATION, MIN_ACTIVE_VALIDATORS,
-    MIN_VALIDATOR_STAKE, ONE_KUNA,
+    StakingState, FOUNDER_PREMINE, MIN_ACTIVE_VALIDATORS, MIN_VALIDATOR_STAKE, ONE_KUNA,
 };
 use kovanica_storage::{StateStoreError, Storage};
 use kovanica_types::{
@@ -144,6 +143,10 @@ struct GenesisArgs {
     /// Output validator key files directory (optional)
     #[arg(long, value_name = "DIR")]
     validator_keys_out: Option<String>,
+
+    /// Emission policy for this genesis ceremony: "legacy-81m" (default) or "no-stake-82m".
+    #[arg(long, default_value = "legacy-81m")]
+    emission_policy: String,
 
     /// Overwrite existing output files
     #[arg(long)]
@@ -275,6 +278,16 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
     let validators_input: Vec<GenesisValidatorInput> =
         serde_json::from_str(&text).with_context(|| format!("parsing {}", args.validators))?;
 
+    let policy: kovanica_types::emission::EmissionPolicy = args
+        .emission_policy
+        .parse()
+        .map_err(|e: kovanica_types::emission::ParseEmissionPolicyError| anyhow::anyhow!("{e}"))?;
+    if policy == kovanica_types::emission::EmissionPolicy::NoStake82M
+        && args.chain_id == kovanica_types::signing::chain_id::MAINNET
+    {
+        anyhow::bail!("NoStake82M emission policy is not permitted on mainnet (chain 1)");
+    }
+
     // Build treasury
     let treasury = parse_address_hex(Some(&args.treasury_address), args.chain_id)?;
     let founder = parse_address_hex(Some(&args.founder_address), args.chain_id)?;
@@ -362,6 +375,7 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
         },
         "staking_state": staking,
         "allocations": {
+            "emission_policy": policy.as_str(),
             "treasury_address_hex": args.treasury_address,
             "treasury_address_bytes": hex::encode(treasury.0),
             "founder_address_hex": args.founder_address,
@@ -369,8 +383,10 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
             "founder_premine_atoms": FOUNDER_PREMINE,
             "founder_premine_kovanica": FOUNDER_PREMINE / ONE_KUNA,
             "founder_premine_kuna": FOUNDER_PREMINE / ONE_KUNA,
-            "genesis_validator_allocation_atoms": GENESIS_VALIDATOR_ALLOCATION,
-            "genesis_validator_allocation_kuna": GENESIS_VALIDATOR_ALLOCATION / ONE_KUNA,
+            "mining_subsidy_budget_atoms": policy.mining_budget(),
+            "mining_subsidy_budget_kovanica": policy.mining_budget() / ONE_KUNA,
+            "genesis_validator_allocation_atoms": policy.genesis_validator_allocation(),
+            "genesis_validator_allocation_kuna": policy.genesis_validator_allocation() / ONE_KUNA,
             "validators": staking.validators.iter().map(|v| {
                 let share = alloc_entries
                     .iter()
@@ -1689,7 +1705,14 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         Err(e) => return Err(e.into()),
     }
 
-    info!("initialising genesis state");
+    let policy = resolve_emission_policy(config)?;
+    if policy == kovanica_types::emission::EmissionPolicy::NoStake82M
+        && config.chain_id == kovanica_types::signing::chain_id::MAINNET
+    {
+        anyhow::bail!("NoStake82M emission policy is not permitted on mainnet (chain 1)");
+    }
+
+    info!(policy = %policy, "initialising genesis state");
     let treasury = parse_address_hex(config.treasury_address.as_deref(), config.chain_id)?;
     let mut staking = StakingState::new();
     staking.init_treasury(treasury);
@@ -1812,14 +1835,20 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     genesis_addresses.dedup();
     ensure_mainnet_genesis_validator_count(config.chain_id, genesis_addresses.len())?;
 
+    // Persist emission policy and initial mining reward state for NoStake82M
+    if policy == kovanica_types::emission::EmissionPolicy::NoStake82M {
+        state_storage.state().save_emission_policy(&txn, &policy)?;
+        state_storage.state().save_mining_reward_state(
+            &txn,
+            &kovanica_types::emission::MiningRewardState::default(),
+        )?;
+        info!("NoStake82M emission policy and mining reward state persisted");
+    }
+
     // Mint the genesis validator allocation (exactly once, at genesis).
-    //
-    // Deterministic across nodes: validators are deduplicated and processed in
-    // ascending address order, so every node derives identical balances from
-    // the same genesis set. `genesis_validator_shares` assigns the integer
-    // remainder one atom at a time, so the shares sum to exactly
-    // GENESIS_VALIDATOR_ALLOCATION.
-    if !genesis_stakes.is_empty() {
+    // Omitted under NoStake82M policy (NO stake or validator allocation in the new genesis path).
+    if policy != kovanica_types::emission::EmissionPolicy::NoStake82M && !genesis_stakes.is_empty()
+    {
         use kovanica_storage::state_store::Account;
 
         let mut entries: Vec<(Address, u64)> = genesis_stakes.clone();
@@ -1938,6 +1967,12 @@ fn genesis_config_digest(config: &NodeConfig) -> Result<Hash> {
     ensure_funded_accounts_allowed(config)?;
 
     let mut data: Vec<u8> = Vec::new();
+
+    let policy = resolve_emission_policy(config)?;
+    if policy == kovanica_types::emission::EmissionPolicy::NoStake82M {
+        data.push(b'P');
+        data.extend_from_slice(b"no-stake-82m");
+    }
 
     // Canonical genesis block digest.
     data.extend_from_slice(&canonical_genesis_digest().0);
@@ -4203,10 +4238,18 @@ async fn run_execution(
     let mut ctx = ExecutionContext::with_signing_context(signing_ctx);
     ctx.log_publisher = Some(Box::new(EventLogPublisher(events.clone())));
     match state_storage.begin_read() {
-        Ok(txn) => match state_storage.state().load_staking_state(&txn) {
-            Ok(state) => ctx.staking = state,
-            Err(e) => warn!(error = %e, "could not load staking state for execution"),
-        },
+        Ok(txn) => {
+            match state_storage.state().load_staking_state(&txn) {
+                Ok(state) => ctx.staking = state,
+                Err(e) => warn!(error = %e, "could not load staking state for execution"),
+            }
+            if let Ok(Some(policy)) = state_storage.state().load_emission_policy(&txn) {
+                ctx.emission_policy = Some(policy);
+            }
+            if let Ok(Some(mining_state)) = state_storage.state().load_mining_reward_state(&txn) {
+                ctx.mining_reward_state = mining_state;
+            }
+        }
         Err(e) => warn!(error = %e, "could not open read transaction for execution"),
     }
 
@@ -5081,7 +5124,43 @@ struct GenesisValidatorsFile {
     /// When present it must equal the node's configured `chain_id`.
     #[serde(default)]
     chain_id: Option<u64>,
+    /// Explicit emission policy ("legacy-81m" or "no-stake-82m").
+    #[serde(default)]
+    emission_policy: Option<String>,
+    #[serde(default)]
+    policy: Option<String>,
+    #[serde(default)]
     validator: Vec<GenesisValidatorEntry>,
+}
+
+/// Resolve the configured or genesis emission policy for this node.
+fn resolve_emission_policy(
+    config: &NodeConfig,
+) -> Result<kovanica_types::emission::EmissionPolicy> {
+    if let Some(ref p) = config.emission_policy {
+        let policy: kovanica_types::emission::EmissionPolicy =
+            p.parse()
+                .map_err(|e: kovanica_types::emission::ParseEmissionPolicyError| {
+                    anyhow::anyhow!("{e}")
+                })?;
+        return Ok(policy);
+    }
+    let genesis_validators_path = config.data_dir.join("genesis_validators.toml");
+    if genesis_validators_path.exists() {
+        if let Ok(text) = std::fs::read_to_string(&genesis_validators_path) {
+            if let Ok(file) = toml::from_str::<GenesisValidatorsFile>(&text) {
+                if let Some(p) = file.emission_policy.or(file.policy) {
+                    let policy: kovanica_types::emission::EmissionPolicy = p.parse().map_err(
+                        |e: kovanica_types::emission::ParseEmissionPolicyError| {
+                            anyhow::anyhow!("{e}")
+                        },
+                    )?;
+                    return Ok(policy);
+                }
+            }
+        }
+    }
+    Ok(kovanica_types::emission::EmissionPolicy::Legacy81M)
 }
 
 /// Pre-funded account entry for genesis.
@@ -5931,6 +6010,7 @@ mod tests {
             output: output.to_string_lossy().into_owned(),
             validator_keys_out: Some(keys_dir.to_string_lossy().into_owned()),
             force: false,
+            emission_policy: "legacy-81m".to_string(),
         };
         run_genesis(args).expect("ceremony runs");
 
@@ -11335,6 +11415,99 @@ mod b1_epoch_restart_repro {
         assert_eq!(
             truth, pr,
             "main-era snapshot row must give same seal committee hash"
+        );
+    }
+
+    #[test]
+    fn test_init_genesis_no_stake_82m() {
+        use kovanica_types::emission::{EmissionPolicy, MiningRewardState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("state.redb");
+        let storage = Storage::new(&db_path).unwrap();
+        let dag_dir = dir.path().join("dag.redb");
+        let dag_store = DagStore::new(Storage::new(&dag_dir).unwrap()).unwrap();
+
+        let founder_addr = Address([0xAA; 32]);
+        let founder_hex = hex::encode(founder_addr.0);
+        std::fs::write(dir.path().join("founder_premine.hex"), &founder_hex).unwrap();
+
+        let treasury_addr = Address([0x7E; 32]);
+        let config = NodeConfig {
+            data_dir: dir.path().to_path_buf(),
+            chain_id: kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            emission_policy: Some("no-stake-82m".to_string()),
+            treasury_address: Some(hex::encode(treasury_addr.0)),
+            ..Default::default()
+        };
+
+        init_genesis(&config, &dag_store, &storage).unwrap();
+
+        let read = storage.begin_read().unwrap();
+        let policy = storage.state().load_emission_policy(&read).unwrap();
+        assert_eq!(policy, Some(EmissionPolicy::NoStake82M));
+
+        let mining_state = storage.state().load_mining_reward_state(&read).unwrap();
+        assert_eq!(mining_state, Some(MiningRewardState::default()));
+
+        // Founder premine is 200,000 KVNC
+        let founder_acct = storage.state().get_account(&read, &founder_addr).unwrap();
+        assert_eq!(founder_acct.balance, kovanica_staking::FOUNDER_PREMINE);
+
+        // Staking state has 0 validator allocation and 0 total mining issued
+        let staking = storage.state().load_staking_state(&read).unwrap();
+        assert_eq!(staking.total_mining_issued, 0);
+        assert_eq!(
+            staking.circulating_supply_with_policy(EmissionPolicy::NoStake82M),
+            kovanica_staking::FOUNDER_PREMINE
+        );
+
+        // Total supply invariant:
+        // Founder (200k) + Treasury (8M) + Mining budget (82M) = 90.2M KVNC
+        let total_supply = kovanica_staking::FOUNDER_PREMINE
+            + kovanica_params::TREASURY_TOTAL
+            + kovanica_params::MINING_SUBSIDY_BUDGET_NO_STAKE_82M;
+        assert_eq!(total_supply, kovanica_params::TOTAL_SUPPLY);
+        assert_eq!(total_supply, 90_200_000 * kovanica_staking::ONE_KUNA);
+    }
+
+    #[test]
+    fn test_init_genesis_no_stake_82m_refused_on_mainnet() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("state.redb");
+        let storage = Storage::new(&db_path).unwrap();
+        let dag_dir = dir.path().join("dag.redb");
+        let dag_store = DagStore::new(Storage::new(&dag_dir).unwrap()).unwrap();
+
+        let config = NodeConfig {
+            data_dir: dir.path().to_path_buf(),
+            chain_id: kovanica_types::signing::chain_id::MAINNET,
+            emission_policy: Some("no-stake-82m".to_string()),
+            ..Default::default()
+        };
+
+        let err = init_genesis(&config, &dag_store, &storage).unwrap_err();
+        assert!(err.to_string().contains("not permitted on mainnet"));
+    }
+
+    #[test]
+    fn test_genesis_config_digest_binds_no_stake_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_legacy = NodeConfig {
+            data_dir: dir.path().to_path_buf(),
+            chain_id: kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            ..Default::default()
+        };
+
+        let digest_legacy = genesis_config_digest(&config_legacy).unwrap();
+
+        let mut config_nostake = config_legacy.clone();
+        config_nostake.emission_policy = Some("no-stake-82m".to_string());
+        let digest_nostake = genesis_config_digest(&config_nostake).unwrap();
+
+        assert_ne!(
+            digest_legacy, digest_nostake,
+            "no-stake-82m must change the genesis config digest"
         );
     }
 }
