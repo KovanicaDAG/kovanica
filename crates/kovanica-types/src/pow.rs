@@ -27,7 +27,24 @@
 //! - Exactly 2 MiB RAM footprint per [`KovanicaHasher`] context (safe for 2–4 GB VPS).
 //! - Zero memory allocations in [`KovanicaHasher::hash`] hot path (reusable buffer).
 
+use std::cell::Cell;
+
 use crate::hash::Hash;
+
+thread_local! {
+    static THREAD_POW_HASH_EVALUATION_COUNT: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Get the number of times KovanicaHash memory-hard computation was evaluated on the current thread.
+#[must_use]
+pub fn get_pow_hash_evaluations() -> u64 {
+    THREAD_POW_HASH_EVALUATION_COUNT.with(|c| c.get())
+}
+
+/// Reset the number of times KovanicaHash memory-hard computation was evaluated on the current thread.
+pub fn reset_pow_hash_evaluations() {
+    THREAD_POW_HASH_EVALUATION_COUNT.with(|c| c.set(0));
+}
 
 /// Total memory mix buffer size: 2 MiB (2,097,152 bytes).
 pub const KOVANICA_HASH_MEMORY_SIZE: usize = 2 * 1024 * 1024;
@@ -76,6 +93,8 @@ impl KovanicaHasher {
     ///
     /// Performs zero heap allocations.
     pub fn hash(&mut self, header_preimage: &[u8]) -> Hash {
+        THREAD_POW_HASH_EVALUATION_COUNT.with(|c| c.set(c.get().saturating_add(1)));
+
         // --- 1. Seed Phase ---
         let mut seed_key = [0u8; 32];
         seed_key[..DOMAIN_KOVANICA_HASH_SEED.len()].copy_from_slice(DOMAIN_KOVANICA_HASH_SEED);

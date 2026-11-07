@@ -207,14 +207,29 @@ pub fn verify_vote(
     verify_vote_with(&Ed25519VoteVerifier, keys, vote, ctx)
 }
 
-/// Verify a block's digest, merkle root and author signature under `keys`.
-///
-/// The digest is recomputed first, so a valid signature cannot be replayed
-/// over modified transactions or parents.
+/// Verify a block's digest, merkle root and author signature under `keys` using the local clock.
 pub fn verify_block(
     keys: &AuthorityKeys,
     chain_id: u64,
     block: &StatementBlock,
+) -> Result<(), Rejection> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .ok();
+    verify_block_with_clock(keys, chain_id, block, now_ms)
+}
+
+/// Verify a block's digest, merkle root, and either PoW header (Chain 5) or author signature (legacy).
+///
+/// When `now_ms` is `Some`, enforces the local wall-clock future drift admission limit
+/// (`MAX_FUTURE_TIMESTAMP_DRIFT_MS`). When `None` (such as during deterministic historical replay),
+/// wall-clock checks are bypassed so stored valid history does not expire.
+pub fn verify_block_with_clock(
+    keys: &AuthorityKeys,
+    chain_id: u64,
+    block: &StatementBlock,
+    now_ms: Option<u64>,
 ) -> Result<(), Rejection> {
     let digest = StatementBlock::compute_digest_statements(
         block.author,
@@ -240,11 +255,45 @@ pub fn verify_block(
         // Chain 5 (Hybrid PoW + GHOSTDAG):
         // NO stake in consensus path per ADR 0003. Committee keys and Ed25519 signatures
         // are NOT checked. Anti-DoS is enforced strictly by PoW verification:
-        // missing PoW or hash not meeting target is rejected immediately.
+        // missing PoW, timestamp drift, malformed parents, or hash not meeting target
+        // is rejected immediately before computing expensive memory-hard PoW.
         let header = block
             .extract_pow_header(chain_id)
             .map_err(|_| Rejection::MissingPow)?;
-        header.verify_pow().map_err(Rejection::BadPow)?;
+
+        // Cheap structural parent checks BEFORE expensive PoW hashing
+        if header.parents.len() > kovanica_types::GHOSTDAG_K as usize {
+            return Err(Rejection::BadPow(
+                kovanica_types::block::HeaderError::InvalidParents,
+            ));
+        }
+        let mut parent_set = std::collections::HashSet::new();
+        for p in &header.parents {
+            if !parent_set.insert(p.digest) {
+                return Err(Rejection::BadPow(
+                    kovanica_types::block::HeaderError::InvalidParents,
+                ));
+            }
+            if p.digest == block.digest {
+                return Err(Rejection::BadPow(
+                    kovanica_types::block::HeaderError::InvalidParents,
+                ));
+            }
+            if p.round >= block.round {
+                return Err(Rejection::BadPow(
+                    kovanica_types::block::HeaderError::InvalidParents,
+                ));
+            }
+            if block.round - p.round > kovanica_types::MAX_PARENT_ROUND_GAP {
+                return Err(Rejection::BadPow(
+                    kovanica_types::block::HeaderError::InvalidParents,
+                ));
+            }
+        }
+
+        header
+            .verify_pow_with_clock(now_ms)
+            .map_err(Rejection::BadPow)?;
         return Ok(());
     }
 
@@ -441,13 +490,27 @@ impl GossipValidator {
         chain_id: u64,
         block: &StatementBlock,
     ) -> Result<(), Rejection> {
-        verify_block(
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .ok();
+        self.verify_block_with_clock(chain_id, block, now_ms)
+    }
+
+    pub(crate) fn verify_block_with_clock(
+        &self,
+        chain_id: u64,
+        block: &StatementBlock,
+        now_ms: Option<u64>,
+    ) -> Result<(), Rejection> {
+        verify_block_with_clock(
             &self
                 .authority_keys
                 .read()
                 .unwrap_or_else(|e| e.into_inner()),
             chain_id,
             block,
+            now_ms,
         )
     }
 
@@ -972,16 +1035,15 @@ mod tests {
     }
 
     #[test]
-    fn repro_gossip_edge_accepts_far_future_timestamp_and_excess_parents() {
-        use kovanica_types::block::{BlockHeader, BlockReference};
+    fn test_gossip_edge_rejects_far_future_timestamp_and_excess_parents() {
+        use kovanica_types::block::{BlockHeader, BlockReference, HeaderError};
+        use kovanica_types::pow::get_pow_hash_evaluations;
         use std::collections::HashMap;
 
         let empty_keys: AuthorityKeys = HashMap::new();
         let chain_id = kovanica_types::signing::chain_id::HYBRID_TESTNET;
 
-        // 1. Far-future timestamp: year 2128 (5_000_000_000_000 ms)
-        // 2. Excess parents: 10 parents (exceeding GHOSTDAG_K = 5)
-        // 3. Trivial difficulty target: 0x22010000 (target is [0xff; 32], 0 difficulty)
+        // 1. Excess parents: 10 parents (exceeding GHOSTDAG_K = 5)
         let fake_parents: Vec<BlockReference> = (0..10)
             .map(|i| BlockReference {
                 author: i as u16,
@@ -990,25 +1052,99 @@ mod tests {
             })
             .collect();
 
-        let mut header = BlockHeader::new(
+        let mut header_excess_parents = BlockHeader::new(
             chain_id,
             2,
             0,
             fake_parents,
             Hash::zero(),
-            5_000_000_000_000u64,
-            0x22010000,
+            1_700_000_000_000u64,
+            0x207fffff,
             0,
         );
-        header.pow_hash = Some(header.compute_pow_hash());
-        let block = header.to_statement_block(vec![]);
+        header_excess_parents.pow_hash = Some(Hash([0x01; 32]));
+        let block_excess_parents = header_excess_parents.to_statement_block(vec![]);
 
-        // REPRODUCTION EVIDENCE:
-        // verify_block at the gossip edge accepts this block because it only runs verify_pow()
-        // without wall-clock future drift check, parent count check, or max_target_bits check.
+        let hashes_before = get_pow_hash_evaluations();
+        let res_excess = verify_block(&empty_keys, chain_id, &block_excess_parents);
         assert!(
-            verify_block(&empty_keys, chain_id, &block).is_ok(),
-            "gossip edge forwards block with future timestamp, 10 parents, and trivial difficulty"
+            matches!(
+                res_excess,
+                Err(Rejection::BadPow(HeaderError::InvalidParents))
+            ),
+            "gossip edge must reject blocks with excess parents (> GHOSTDAG_K)"
+        );
+        assert_eq!(
+            get_pow_hash_evaluations(),
+            hashes_before,
+            "must reject excess parents before performing expensive PoW computation"
+        );
+
+        // 2. Far-future timestamp: year 2128 (5_000_000_000_000 ms)
+        let mut header_future = BlockHeader::new(
+            chain_id,
+            1,
+            0,
+            vec![],
+            Hash::zero(),
+            5_000_000_000_000u64,
+            0x207fffff,
+            0,
+        );
+        header_future.pow_hash = Some(Hash([0x01; 32]));
+        let block_future = header_future.to_statement_block(vec![]);
+
+        let hashes_before_ts = get_pow_hash_evaluations();
+        let res_future = verify_block(&empty_keys, chain_id, &block_future);
+        assert!(
+            matches!(
+                res_future,
+                Err(Rejection::BadPow(HeaderError::TimestampDrift { .. }))
+            ),
+            "gossip edge must reject blocks with far-future timestamps exceeding MAX_FUTURE_TIMESTAMP_DRIFT_MS"
+        );
+        assert_eq!(
+            get_pow_hash_evaluations(),
+            hashes_before_ts,
+            "must reject future timestamp before performing expensive PoW computation"
+        );
+
+        // 3. Duplicate parents
+        let dup_parents = vec![
+            BlockReference {
+                author: 1,
+                round: 1,
+                digest: Hash([1u8; 32]),
+            },
+            BlockReference {
+                author: 1,
+                round: 1,
+                digest: Hash([1u8; 32]),
+            },
+        ];
+        let mut header_dup = BlockHeader::new(
+            chain_id,
+            2,
+            0,
+            dup_parents,
+            Hash::zero(),
+            1_700_000_000_000u64,
+            0x207fffff,
+            0,
+        );
+        header_dup.pow_hash = Some(Hash([0x01; 32]));
+        let block_dup = header_dup.to_statement_block(vec![]);
+
+        let hashes_before_dup = get_pow_hash_evaluations();
+        let res_dup = verify_block(&empty_keys, chain_id, &block_dup);
+        assert!(
+            matches!(res_dup, Err(Rejection::BadPow(HeaderError::InvalidParents))),
+            "gossip edge must reject blocks with duplicate parents"
+        );
+        assert_eq!(
+            get_pow_hash_evaluations(),
+            hashes_before_dup,
+            "must reject duplicate parents before performing expensive PoW computation"
         );
     }
 }

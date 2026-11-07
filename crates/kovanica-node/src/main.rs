@@ -2546,28 +2546,7 @@ fn ingest_block(
                 }
             };
 
-            // 2. Header self-verification (hash calculation, target satisfaction, timestamp future drift)
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            if let Err(e) = header.verify_pow_with_clock(Some(now_ms)) {
-                warn!(digest = %block.digest, error = %e, "rejected hybrid block: failed verify_pow_with_clock");
-                if current_is_initial {
-                    return Err(match e {
-                        kovanica_types::HeaderError::TargetNotMet { .. } => {
-                            kovanica_rpc::LocalBlockAdmissionError::TargetNotMet
-                        }
-                        kovanica_types::HeaderError::TimestampDrift { .. } => {
-                            kovanica_rpc::LocalBlockAdmissionError::TimestampDrift(e.to_string())
-                        }
-                        other => kovanica_rpc::LocalBlockAdmissionError::BadPow(other.to_string()),
-                    });
-                }
-                continue;
-            }
-
-            // 3. Structural validation of parent references
+            // 2. Cheap structural validation of parent references BEFORE expensive PoW hashing
             if header.parents.len() > kovanica_params::GHOSTDAG_K as usize {
                 warn!(digest = %block.digest, count = header.parents.len(), "rejected hybrid block: too many parents");
                 if current_is_initial {
@@ -2612,6 +2591,50 @@ fn ingest_block(
                     return Err(kovanica_rpc::LocalBlockAdmissionError::MalformedParents(
                         malformed_reason.into(),
                     ));
+                }
+                continue;
+            }
+
+            // 3. Cheap wall-clock future drift check BEFORE expensive PoW hashing
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if header.timestamp
+                > now_ms.saturating_add(kovanica_params::MAX_FUTURE_TIMESTAMP_DRIFT_MS)
+            {
+                warn!(
+                    digest = %block.digest,
+                    timestamp = header.timestamp,
+                    now = now_ms,
+                    "rejected hybrid block: timestamp in future exceeds drift allowance"
+                );
+                if current_is_initial {
+                    return Err(kovanica_rpc::LocalBlockAdmissionError::TimestampDrift(
+                        format!(
+                            "timestamp {} exceeds local clock {} + {} ms",
+                            header.timestamp,
+                            now_ms,
+                            kovanica_params::MAX_FUTURE_TIMESTAMP_DRIFT_MS
+                        ),
+                    ));
+                }
+                continue;
+            }
+
+            // 4. Expensive PoW verification (memory-hard KovanicaHash computation and declared check)
+            if let Err(e) = header.verify_pow_with_clock(Some(now_ms)) {
+                warn!(digest = %block.digest, error = %e, "rejected hybrid block: failed verify_pow_with_clock");
+                if current_is_initial {
+                    return Err(match e {
+                        kovanica_types::HeaderError::TargetNotMet { .. } => {
+                            kovanica_rpc::LocalBlockAdmissionError::TargetNotMet
+                        }
+                        kovanica_types::HeaderError::TimestampDrift { .. } => {
+                            kovanica_rpc::LocalBlockAdmissionError::TimestampDrift(e.to_string())
+                        }
+                        other => kovanica_rpc::LocalBlockAdmissionError::BadPow(other.to_string()),
+                    });
                 }
                 continue;
             }
@@ -12082,17 +12105,19 @@ mod b1_epoch_restart_repro {
     }
 
     #[test]
-    fn repro_cheap_checks_ordered_after_expensive_pow() {
+    fn test_cheap_checks_ordered_before_expensive_pow_with_instrumentation() {
+        use kovanica_types::pow::get_pow_hash_evaluations;
+
         std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
-        let (_engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
+        let (engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
         let (net_tx, _net_rx) = mpsc::unbounded_channel();
         let (exec_tx, _exec_rx) = mpsc::unbounded_channel();
         let events = EventBus::new();
         let ghostdag = Arc::new(parking_lot::Mutex::new(
             kovanica_consensus::ghostdag::GhostdagCommitter::new(5),
         ));
-        let _orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
+        let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
         let io = BlockIngest {
             dag_store: &dag,
             network_cmd_tx: &net_tx,
@@ -12101,9 +12126,9 @@ mod b1_epoch_restart_repro {
             ghostdag: Some(ghostdag),
             exec_tx: Some(exec_tx),
         };
-        let _peer = PeerId::random();
+        let peer = PeerId::random();
 
-        // Blatantly malformed parents (10 parents > GHOSTDAG_K 5) AND corrupt PoW hash.
+        // 1. Blatantly malformed parents (10 parents > GHOSTDAG_K 5) AND corrupt PoW hash.
         let fake_parents: Vec<kovanica_types::block::BlockReference> = (0..10)
             .map(|i| kovanica_types::block::BlockReference {
                 author: i as u16,
@@ -12111,7 +12136,7 @@ mod b1_epoch_restart_repro {
                 digest: Hash([i as u8 + 1; 32]),
             })
             .collect();
-        let header = kovanica_types::BlockHeader::new(
+        let header_excess = kovanica_types::BlockHeader::new(
             kovanica_types::signing::chain_id::HYBRID_TESTNET,
             2,
             0,
@@ -12121,24 +12146,95 @@ mod b1_epoch_restart_repro {
             0x207fffff,
             0,
         );
-        let mut block = header.to_statement_block(vec![]);
-        block.statements = kovanica_types::block::encode_pow_statement(
+        let mut block_excess = header_excess.to_statement_block(vec![]);
+        block_excess.statements = kovanica_types::block::encode_pow_statement(
             1_700_000_000_000,
             0x207fffff,
             0,
             Some(Hash([0xff; 32])),
         );
 
-        // REPRODUCTION EVIDENCE:
-        // In ingest_block, Step 2 verify_pow_with_clock runs BEFORE Step 3 parent checks.
-        // It computes memory-hard KovanicaHash first, even though parents.len() > 5 would
-        // reject it instantly.
-        let pow_hdr = block.extract_pow_header(io.chain_id).unwrap();
+        let hashes_before_excess = get_pow_hash_evaluations();
+        let res_excess = ingest_block(block_excess, peer, &engine, &io, &mut orphans);
         assert!(
-            pow_hdr
-                .verify_pow_with_clock(Some(1_700_000_000_000))
-                .is_err(),
-            "expensive PoW computation executes before parent bounds are checked"
+            matches!(
+                res_excess,
+                Err(kovanica_rpc::LocalBlockAdmissionError::MalformedParents(_))
+            ),
+            "ingest_block must reject blocks with excess parents"
+        );
+        assert_eq!(
+            get_pow_hash_evaluations(),
+            hashes_before_excess,
+            "must reject excess parents BEFORE evaluating expensive PoW"
+        );
+
+        // 2. Far-future timestamp
+        let header_future = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            5_000_000_000_000u64,
+            0x207fffff,
+            0,
+        );
+        let mut block_future = header_future.to_statement_block(vec![]);
+        block_future.statements = kovanica_types::block::encode_pow_statement(
+            5_000_000_000_000u64,
+            0x207fffff,
+            0,
+            Some(Hash([0xbb; 32])),
+        );
+
+        let hashes_before_future = get_pow_hash_evaluations();
+        let res_future = ingest_block(block_future, peer, &engine, &io, &mut orphans);
+        assert!(
+            matches!(
+                res_future,
+                Err(kovanica_rpc::LocalBlockAdmissionError::TimestampDrift(_))
+            ),
+            "ingest_block must reject blocks with far-future timestamps"
+        );
+        assert_eq!(
+            get_pow_hash_evaluations(),
+            hashes_before_future,
+            "must reject far-future timestamp BEFORE evaluating expensive PoW"
+        );
+
+        // 3. Well-formed block with invalid PoW hash -> evaluates PoW once and fails
+        let header_bad_pow = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mut block_bad_pow = header_bad_pow.to_statement_block(vec![]);
+        block_bad_pow.statements = kovanica_types::block::encode_pow_statement(
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+            Some(Hash([0x01; 32])),
+        );
+
+        let hashes_before_bad_pow = get_pow_hash_evaluations();
+        let res_bad_pow = ingest_block(block_bad_pow, peer, &engine, &io, &mut orphans);
+        assert!(
+            matches!(
+                res_bad_pow,
+                Err(kovanica_rpc::LocalBlockAdmissionError::BadPow(_))
+            ),
+            "ingest_block must reject bad PoW hash when all cheap checks pass"
+        );
+        assert_eq!(
+            get_pow_hash_evaluations(),
+            hashes_before_bad_pow + 1,
+            "must evaluate expensive PoW exactly once when all cheap checks pass"
         );
     }
 
@@ -12843,5 +12939,186 @@ mod b1_epoch_restart_repro {
                 || err_shut.to_string().contains("closed"),
             "shutdown must return shutdown error"
         );
+    }
+
+    #[tokio::test]
+    async fn test_edge_validation_gossip_and_ingest_live_paths() {
+        use kovanica_consensus::mining::MiningWorker;
+        use kovanica_network::validation::{verify_block, verify_block_with_clock, AuthorityKeys};
+        use std::collections::HashMap;
+
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, dag_store, _key) = crate::tests::vote_sync_test_engine(&dir);
+        let (net_cmd_tx, mut net_cmd_rx) = mpsc::unbounded_channel();
+        let (exec_tx, _exec_rx) = mpsc::unbounded_channel();
+        let events = EventBus::new();
+        let ghostdag = Arc::new(parking_lot::Mutex::new(
+            kovanica_consensus::ghostdag::GhostdagCommitter::new(5),
+        ));
+        let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
+        let io = BlockIngest {
+            dag_store: &dag_store,
+            network_cmd_tx: &net_cmd_tx,
+            events: &events,
+            chain_id: kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            ghostdag: Some(ghostdag),
+            exec_tx: Some(exec_tx),
+        };
+        let peer = PeerId::random();
+        let mut worker = MiningWorker::new();
+        let empty_keys: AuthorityKeys = HashMap::new();
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // 1. Far-future gossip rejection (exceeding MAX_FUTURE_TIMESTAMP_DRIFT_MS 30_000)
+        let header_far_future = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            now_ms + 60_000, // 60s in future > 30s limit
+            0x207fffff,
+            0,
+        );
+        let mined_far_future = worker.mine_header(header_far_future, 10_000).unwrap();
+        let block_far_future = mined_far_future.to_statement_block(vec![]);
+
+        // Gossip edge check: must reject far-future block
+        let gossip_res = verify_block(
+            &empty_keys,
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            &block_far_future,
+        );
+        assert!(matches!(
+            gossip_res,
+            Err(kovanica_network::validation::Rejection::BadPow(
+                kovanica_types::block::HeaderError::TimestampDrift { .. }
+            ))
+        ));
+
+        // Shared ingest check: must reject far-future block
+        let ingest_res = ingest_block(block_far_future, peer, &engine, &io, &mut orphans);
+        assert!(matches!(
+            ingest_res,
+            Err(kovanica_rpc::LocalBlockAdmissionError::TimestampDrift(_))
+        ));
+
+        // 2. Valid current block acceptance (timestamp = now_ms)
+        let header_valid = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            0,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            now_ms,
+            0x207fffff,
+            0,
+        );
+        let mined_valid = worker.mine_header(header_valid, 10_000).unwrap();
+        let block_valid = mined_valid.to_statement_block(vec![]);
+        let valid_digest = block_valid.digest;
+
+        // Gossip edge check: must accept valid current block
+        let gossip_valid_res = verify_block(
+            &empty_keys,
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            &block_valid,
+        );
+        assert!(
+            gossip_valid_res.is_ok(),
+            "gossip edge must accept valid current block"
+        );
+
+        // Shared ingest check: must admit valid current block
+        let ingest_valid_res = ingest_block(block_valid, peer, &engine, &io, &mut orphans);
+        assert!(
+            matches!(ingest_valid_res, Ok(kovanica_rpc::LocalBlockAdmissionOutcome::Admitted { digest }) if digest == valid_digest)
+        );
+        assert!(dag_store.has_block(&valid_digest).unwrap());
+
+        // 3. Unknown-parent revalidation: parent arrives later and releases orphan
+        let header_child = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            2,
+            0,
+            vec![kovanica_types::block::BlockReference {
+                author: 0,
+                round: 1,
+                digest: Hash([0x99; 32]), // unknown parent
+            }],
+            kovanica_types::Hash::zero(),
+            now_ms + 1000,
+            0x207fffff,
+            0,
+        );
+        let mined_child = worker.mine_header(header_child, 10_000).unwrap();
+        let block_child = mined_child.to_statement_block(vec![]);
+        let child_digest = block_child.digest;
+
+        // Child is buffered as orphan outside consensus state
+        let child_res = ingest_block(block_child.clone(), peer, &engine, &io, &mut orphans);
+        assert!(
+            matches!(child_res, Ok(kovanica_rpc::LocalBlockAdmissionOutcome::BufferedOrphan { digest }) if digest == child_digest)
+        );
+        assert!(!dag_store.has_block(&child_digest).unwrap());
+        assert!(orphans.contains(&child_digest));
+
+        // Now parent arrives (round 1 referencing round 0 valid_digest)
+        let header_parent = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![kovanica_types::block::BlockReference {
+                author: 0,
+                round: 0,
+                digest: valid_digest,
+            }],
+            kovanica_types::Hash::zero(),
+            now_ms + 500,
+            0x207fffff,
+            0,
+        );
+        let mined_parent = worker.mine_header(header_parent, 10_000).unwrap();
+        // Set parent digest to match child's reference
+        let block_parent = mined_parent.to_statement_block(vec![]);
+        let parent_digest = block_parent.digest;
+
+        // Ingest parent
+        let parent_res = ingest_block(block_parent, peer, &engine, &io, &mut orphans);
+        assert!(matches!(
+            parent_res,
+            Ok(kovanica_rpc::LocalBlockAdmissionOutcome::Admitted { .. })
+        ));
+        assert!(dag_store.has_block(&parent_digest).unwrap());
+
+        // 4. Historical replay without clock: past block must not expire
+        let historical_header = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            0,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_000_000, // very old timestamp
+            0x207fffff,
+            0,
+        );
+        let mined_historical = worker.mine_header(historical_header, 10_000).unwrap();
+        let block_historical = mined_historical.to_statement_block(vec![]);
+        // Deterministic replay with now_ms = None passes without checking wall-clock
+        assert!(verify_block_with_clock(
+            &empty_keys,
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            &block_historical,
+            None
+        )
+        .is_ok());
+
+        // Drain network commands
+        while net_cmd_rx.try_recv().is_ok() {}
     }
 }

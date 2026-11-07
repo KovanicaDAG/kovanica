@@ -2129,11 +2129,22 @@ pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value,
         }
     } else {
         // Fallback for isolated RPC tests without a running node event loop:
-        header
-            .verify_pow()
-            .map_err(|e| RpcError::ExecutionError(format!("PoW verification failed: {e}")))?;
+        // Cheap check 1: Timestamp future drift check against local clock
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        if header.timestamp > now_ms.saturating_add(kovanica_params::MAX_FUTURE_TIMESTAMP_DRIFT_MS)
+        {
+            return Err(RpcError::InvalidParams(format!(
+                "header timestamp {} ms exceeds maximum future drift (local clock {} ms + {} ms)",
+                header.timestamp,
+                now_ms,
+                kovanica_params::MAX_FUTURE_TIMESTAMP_DRIFT_MS
+            )));
+        }
 
-        // Structural parent validation
+        // Cheap check 2: Structural parent validation BEFORE expensive PoW hashing
         if header.parents.len() > kovanica_params::GHOSTDAG_K as usize {
             return Err(RpcError::InvalidParams(format!(
                 "too many parents: {} (max {})",
@@ -2159,6 +2170,11 @@ pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value,
                 )));
             }
         }
+
+        // Expensive check: Verify PoW with clock
+        header
+            .verify_pow_with_clock(Some(now_ms))
+            .map_err(|e| RpcError::ExecutionError(format!("PoW verification failed: {e}")))?;
 
         // Missing parent check and parent metadata validation
         if header.round > 0 {
@@ -4217,7 +4233,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repro_submit_work_accepts_far_future_timestamp_without_clock_drift_check() {
+    async fn test_submit_work_rejects_far_future_timestamp_with_clock_drift_check() {
         std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
@@ -4241,14 +4257,16 @@ mod tests {
         );
         let mined_future = kovanica_consensus::mine_header(header_future, 10_000).unwrap();
 
-        // REPRODUCTION EVIDENCE:
-        // handle_submit_work accepts the block because it only calls verify_pow() without clock drift checks.
         let res = handle_submit_work(json!({ "header": mined_future }), state).await;
         assert!(
-            res.is_ok(),
-            "submitWork accepts block with far-future timestamp (year 2128)"
+            res.is_err(),
+            "submitWork must reject block with far-future timestamp (year 2128)"
         );
-        assert_eq!(res.unwrap()["accepted"], true);
+        let err_msg = res.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("drift") || err_msg.contains("timestamp"),
+            "error must specify timestamp drift violation: {err_msg}"
+        );
     }
 
     #[tokio::test]
