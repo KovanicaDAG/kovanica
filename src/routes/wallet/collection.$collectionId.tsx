@@ -1,5 +1,5 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { ArrowLeft as ArrowLeftIcon, Sparkles as SparklesIcon } from "lucide-react";
+import { AlertCircle, ArrowLeft as ArrowLeftIcon, Sparkles as SparklesIcon } from "lucide-react";
 import { api, ApiError, HttpError } from "@/lib/api/client";
 import { shortId } from "@/lib/ledger/hash";
 import { hexToKvnc } from "@/lib/wallet/address";
@@ -36,20 +36,12 @@ export const Route = createFileRoute("/wallet/collection/$collectionId")({
       throw err;
     }
   },
-  notFoundComponent: () => <CollectionNotFound />,
-  errorComponent: ({ error, reset }) => (
-    <Shell>
-      <RouteError
-        title="Collection Endpoint Unavailable"
-        error={error}
-        reset={reset}
-      />
-    </Shell>
-  ),
+  notFoundComponent: CollectionNotFoundPage,
+  errorComponent: CollectionErrorPage,
   component: CollectionDetailPage,
 });
 
-function CollectionNotFound() {
+function CollectionNotFoundPage() {
   const { collectionId } = Route.useParams();
   return (
     <Shell>
@@ -70,6 +62,16 @@ function CollectionNotFound() {
     </Shell>
   );
 }
+
+function CollectionErrorPage({ error, reset }: { error?: unknown; reset?: () => void }) {
+  return (
+    <Shell>
+      <RouteError
+        title="Collection Endpoint Unavailable"
+        error={error}
+        reset={reset}
+      />
+    </Shell>
   );
 }
 

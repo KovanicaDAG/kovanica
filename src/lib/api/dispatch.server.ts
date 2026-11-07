@@ -451,16 +451,11 @@ export async function dispatchApi(req: Request): Promise<Response> {
   }
 
   // Mainnet has no public RPC endpoint prior to 1.1.2027 genesis launch
+  // Network isolation: mainnet must not silently query testnet node or submit transactions.
   if (source === "mainnet") {
     if (method === "POST") {
       return text("mainnet transactions disabled prior to 1.1.2027 launch", 403);
     }
-    return text("mainnet launching soon", 503);
-  }
-
-  // Mainnet is not open yet (launch scheduled: 1.1.2027).
-  // Network isolation: mainnet must not silently query testnet node or submit transactions.
-  if (source === "mainnet") {
     return text("mainnet launching soon", 503);
   }
 

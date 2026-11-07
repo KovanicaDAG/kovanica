@@ -39,7 +39,6 @@ export function NetworkView() {
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    if (source === "mainnet") return;
     setBusy(true);
     setError(null);
     try {
@@ -58,48 +57,11 @@ export function NetworkView() {
   }
 
   useEffect(() => {
-    if (source === "mainnet") {
-      setSnap(null);
-      setError(null);
-      setBusy(false);
-      return;
-    }
     void load();
     const id = setInterval(() => void load(), 15_000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
-
-  if (source === "mainnet") {
-    return (
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
-        <header className="flex items-start justify-between gap-3">
-          <div>
-            <p className="font-mono text-[10px] tracking-brand text-gold uppercase">Status</p>
-            <h1 className="font-display text-3xl tracking-tight text-fg">Network</h1>
-            <p className="mt-2 text-sm leading-relaxed text-muted">
-              kovanica-mainnet · Public launch: 1.1.2027
-            </p>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => setApiSource("testnet")}>
-            Switch to Testnet
-          </Button>
-        </header>
-        <div className="rounded-xl border border-border bg-surface p-8 text-center">
-          <Server className="mx-auto mb-3 size-10 text-gold" />
-          <h2 className="font-display text-xl text-fg">Mainnet Pre-Launch</h2>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">
-            The mainnet node endpoint is not open yet. Public launch is scheduled for 1.1.2027 following the hybrid testnet and security audit.
-          </p>
-          <div className="mt-6 flex justify-center">
-            <Button variant="gold" onClick={() => setApiSource("testnet")}>
-              View Live Testnet Status
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   const b = snap?.bootstrap;
   const h = snap?.head;
@@ -284,7 +246,7 @@ function MainnetNetworkView() {
       <header className="flex items-start justify-between gap-3">
         <div>
           <p className="font-mono text-[10px] tracking-brand text-emerald-400 uppercase">Status</p>
-          <h1 className="font-display text-3xl tracking-tight text-fg">Mainnet Network</h1>
+          <h1 className="font-display text-3xl tracking-tight text-fg">Mainnet Pre-Launch</h1>
           <p className="mt-2 text-sm leading-relaxed text-muted">
             The production mainnet is scheduled for public launch on 1.1.2027 following the hybrid testnet and KovanicaHash audit.
           </p>

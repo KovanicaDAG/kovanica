@@ -26,7 +26,7 @@ test("dispatchApi preserves network isolation: mainnet requests return 503 launc
     body: JSON.stringify({ tx: "test" }),
   });
   const resSubmit = await dispatchApi(reqSubmit);
-  assert.equal(resSubmit.status, 503);
+  assert.equal(resSubmit.status, 403);
 });
 
 test("HttpError captures HTTP status and message accurately", () => {

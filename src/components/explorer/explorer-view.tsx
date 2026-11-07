@@ -447,8 +447,9 @@ function MainnetExplorerPlaceholder() {
           <DagMark variant="gold" className="mx-auto size-14" />
           <p className="eyebrow mt-5 font-mono text-xs text-muted uppercase tracking-wider">{MAINNET_ID} · KVNC</p>
           <h2 className="mt-2 font-display text-3xl tracking-tight text-fg italic md:text-4xl">
-            Public launch: 1.1.2027
+            Mainnet Explorer Unavailable
           </h2>
+          <p className="mt-1 font-mono text-xs text-gold">Public launch: 1.1.2027</p>
           <p className="mt-3 text-sm leading-relaxed text-muted">
             The mainnet BlockDAG has not opened its public RPC endpoint yet. The live DAG graph and block telemetry will begin streaming upon genesis launch on 1.1.2027 following the hybrid testnet and KovanicaHash audit.
           </p>

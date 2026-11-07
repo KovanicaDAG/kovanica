@@ -1,5 +1,5 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { ArrowLeft, Copy, ExternalLink, Landmark, Tag } from "lucide-react";
+import { AlertCircle, ArrowLeft, Copy, ExternalLink, Landmark, Tag } from "lucide-react";
 import { api, ApiError, HttpError } from "@/lib/api/client";
 import { shortId } from "@/lib/ledger/hash";
 import { hexToKvnc } from "@/lib/wallet/address";
@@ -47,20 +47,12 @@ export const Route = createFileRoute("/explorer/rwa/$assetId")({
       throw err;
     }
   },
-  notFoundComponent: () => <RwaNotFound />,
-  errorComponent: ({ error, reset }) => (
-    <Shell>
-      <RouteError
-        title="RWA Endpoint Unavailable"
-        error={error}
-        reset={reset}
-      />
-    </Shell>
-  ),
+  notFoundComponent: RwaNotFoundPage,
+  errorComponent: RwaErrorPage,
   component: RwaDetailPage,
 });
 
-function RwaNotFound() {
+function RwaNotFoundPage() {
   const { assetId } = Route.useParams();
   return (
     <Shell>
@@ -81,6 +73,17 @@ function RwaNotFound() {
     </Shell>
   );
 }
+
+function RwaErrorPage({ error, reset }: { error?: unknown; reset?: () => void }) {
+  return (
+    <Shell>
+      <RouteError
+        title="RWA Endpoint Unavailable"
+        error={error}
+        reset={reset}
+      />
+    </Shell>
+  );
 }
 
 function RwaDetailPage() {

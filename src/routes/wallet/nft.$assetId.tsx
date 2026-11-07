@@ -1,5 +1,5 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { ArrowLeft, Copy, ExternalLink, Gem as GemIcon, Sparkles } from "lucide-react";
+import { AlertCircle, ArrowLeft, Copy, ExternalLink, Gem as GemIcon, Sparkles } from "lucide-react";
 import { api, ApiError, HttpError } from "@/lib/api/client";
 import { shortId } from "@/lib/ledger/hash";
 import { hexToKvnc } from "@/lib/wallet/address";
@@ -40,20 +40,12 @@ export const Route = createFileRoute("/wallet/nft/$assetId")({
       throw err;
     }
   },
-  notFoundComponent: () => <NftNotFound />,
-  errorComponent: ({ error, reset }) => (
-    <Shell>
-      <RouteError
-        title="NFT Endpoint Unavailable"
-        error={error}
-        reset={reset}
-      />
-    </Shell>
-  ),
+  notFoundComponent: NftNotFoundPage,
+  errorComponent: NftErrorPage,
   component: NftDetailPage,
 });
 
-function NftNotFound() {
+function NftNotFoundPage() {
   const { assetId } = Route.useParams();
   return (
     <Shell>
@@ -74,6 +66,16 @@ function NftNotFound() {
     </Shell>
   );
 }
+
+function NftErrorPage({ error, reset }: { error?: unknown; reset?: () => void }) {
+  return (
+    <Shell>
+      <RouteError
+        title="NFT Endpoint Unavailable"
+        error={error}
+        reset={reset}
+      />
+    </Shell>
   );
 }
 
