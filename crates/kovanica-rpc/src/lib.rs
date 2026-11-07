@@ -151,11 +151,64 @@ pub struct RpcState {
     pub sync_status: Option<SyncStatusSource>,
     /// Outbound gossip for blocks submitted via `kovanica_submitWork`.
     pub block_gossip: Option<BlockGossipSender>,
+    /// Inbound channel for local block admission (e.g. from `kovanica_submitWork`).
+    pub block_submission: Option<LocalBlockSubmissionSender>,
     /// Whether local mining is enabled on this node.
     pub mining_enabled: bool,
     /// Number of mining worker threads configured on this node.
     pub mining_threads: usize,
 }
+
+/// Bounded capacity for the local block admission queue.
+pub const LOCAL_BLOCK_SUBMISSION_CAPACITY: usize = 256;
+
+/// Outcome of local block admission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalBlockAdmissionOutcome {
+    /// The block was admitted to the DAG store and processed into consensus.
+    Admitted { digest: kovanica_types::Hash },
+    /// The block has missing parents and was buffered outside consensus state.
+    BufferedOrphan { digest: kovanica_types::Hash },
+}
+
+/// Error returned when local block admission rejects a block.
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum LocalBlockAdmissionError {
+    #[error("PoW header error: {0}")]
+    BadPow(String),
+    #[error("target bits 0x{declared:08x} does not match required DAA target 0x{required:08x}")]
+    TargetMismatch { declared: u32, required: u32 },
+    #[error("PoW hash does not meet required DAA target")]
+    TargetNotMet,
+    #[error("malformed parent references: {0}")]
+    MalformedParents(String),
+    #[error("parent reference metadata mismatch")]
+    ParentMetadataMismatch,
+    #[error("timestamp not strictly monotonic: header {header_ts} <= parent {parent_ts}")]
+    TimestampNotMonotonic { header_ts: u64, parent_ts: u64 },
+    #[error("timestamp drift exceeds acceptable window: {0}")]
+    TimestampDrift(String),
+    #[error("Merkle root mismatch")]
+    MerkleRootMismatch,
+    #[error("too many transactions: {0}")]
+    TooManyTransactions(usize),
+    #[error("storage failure: {0}")]
+    Storage(String),
+    #[error("local block admission queue is full")]
+    QueueFull,
+    #[error("node is shutting down")]
+    ShuttingDown,
+}
+
+/// A request to admit a locally submitted block (e.g. from `kovanica_submitWork`).
+pub struct LocalBlockSubmission {
+    pub block: kovanica_types::Block,
+    pub respond_to:
+        tokio::sync::oneshot::Sender<Result<LocalBlockAdmissionOutcome, LocalBlockAdmissionError>>,
+}
+
+/// Bounded sender for submitting blocks to the local admission pipeline.
+pub type LocalBlockSubmissionSender = tokio::sync::mpsc::Sender<LocalBlockSubmission>;
 
 /// Channel the node drains to publish RPC-submitted transactions on gossip,
 /// through the same path as re-gossip of accepted transactions.
@@ -696,6 +749,7 @@ mod tests {
             tx_gossip: None,
             sync_status: None,
             block_gossip: None,
+            block_submission: None,
             mining_enabled: false,
             mining_threads: 0,
         };
@@ -793,6 +847,7 @@ mod tests {
             tx_gossip: None,
             sync_status: None,
             block_gossip: None,
+            block_submission: None,
             mining_enabled: false,
             mining_threads: 0,
         }
@@ -1188,6 +1243,7 @@ mod tests {
                 tx_gossip: _,
                 sync_status: _,
                 block_gossip: _,
+                block_submission: _,
                 mining_enabled: _,
                 mining_threads: _,
             } = s;
