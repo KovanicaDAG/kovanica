@@ -57,8 +57,9 @@ pub use light_client::{
 };
 pub use merkle::{MerkleProof, MerkleStep};
 pub use pow::{
-    kovanica_hash, KovanicaHasher, KOVANICA_HASH_CHUNK_SIZE, KOVANICA_HASH_MEMORY_SIZE,
-    KOVANICA_HASH_MIX_ROUNDS, KOVANICA_HASH_NUM_CHUNKS,
+    get_pow_hash_evaluations, kovanica_hash, reset_pow_hash_evaluations, KovanicaHasher,
+    KOVANICA_HASH_CHUNK_SIZE, KOVANICA_HASH_MEMORY_SIZE, KOVANICA_HASH_MIX_ROUNDS,
+    KOVANICA_HASH_NUM_CHUNKS,
 };
 pub use signing::SigningContext;
 pub use timeout::{SkipCert, Timeout};
@@ -111,6 +112,9 @@ pub const fn next_leader_slot(round: Round) -> Round {
 /// time, but it is longer when leader slots are skipped.
 /// `kovanica_staking` re-exports this constant for backward-compatible paths.
 pub use kovanica_params::EPOCH_ROUNDS;
+
+/// GHOSTDAG parameter K for hybrid PoW + GHOSTDAG chains.
+pub use kovanica_params::GHOSTDAG_K;
 
 /// Epoch length in committed leader heights: `EPOCH_ROUNDS / WAVE_LENGTH` =
 /// 2 400 (one leader per wave, 12 s per leader ≈ 8 h).

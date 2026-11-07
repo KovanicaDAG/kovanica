@@ -520,6 +520,9 @@ impl BlockHeader {
     }
 
     /// Verify this header's PoW hash, difficulty target, and future timestamp drift.
+    ///
+    /// Performs cheap validation checks (compact target formatting, wall-clock drift)
+    /// BEFORE evaluating the memory-hard (2 MiB) KovanicaHash PoW.
     pub fn verify_pow_with_clock(&self, now_ms: Option<u64>) -> Result<(), HeaderError> {
         let declared = self.pow_hash.ok_or(HeaderError::MissingPowHash)?;
 
@@ -528,6 +531,17 @@ impl BlockHeader {
             return Err(HeaderError::InvalidTargetBits(self.target_bits));
         }
 
+        // Cheap Check: Future timestamp drift (local clock admission policy)
+        if let Some(now) = now_ms {
+            if self.timestamp > now.saturating_add(kovanica_params::MAX_FUTURE_TIMESTAMP_DRIFT_MS) {
+                return Err(HeaderError::TimestampDrift {
+                    timestamp: self.timestamp,
+                    now,
+                });
+            }
+        }
+
+        // Expensive Check: Compute memory-hard KovanicaHash and compare with declared hash
         let computed = self.compute_pow_hash();
         if declared != computed {
             return Err(HeaderError::InvalidPowHash { computed, declared });
@@ -540,15 +554,6 @@ impl BlockHeader {
             });
         }
 
-        if let Some(now) = now_ms {
-            if self.timestamp > now.saturating_add(kovanica_params::MAX_FUTURE_TIMESTAMP_DRIFT_MS) {
-                return Err(HeaderError::TimestampDrift {
-                    timestamp: self.timestamp,
-                    now,
-                });
-            }
-        }
-
         Ok(())
     }
 
@@ -558,8 +563,7 @@ impl BlockHeader {
         parent_timestamps: &[u64],
         now_ms: Option<u64>,
     ) -> Result<(), HeaderError> {
-        self.verify_pow_with_clock(now_ms)?;
-
+        // Cheap Check: Timestamp strictly greater than parent timestamps
         for &parent_ts in parent_timestamps {
             if self.timestamp <= parent_ts {
                 return Err(HeaderError::TimestampNotMonotonic {
@@ -569,7 +573,7 @@ impl BlockHeader {
             }
         }
 
-        Ok(())
+        self.verify_pow_with_clock(now_ms)
     }
 
     /// Return a [`BlockReference`] corresponding to this header.
