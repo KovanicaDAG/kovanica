@@ -132,6 +132,34 @@ Implemented in `kovanica-consensus`:
 - Floor: `MIN_TARGET_BITS = 0x0101_0000`.
 - Math helper: `mul_div_u256(val, num, den)` provides exact 320-bit intermediate multi-limb arithmetic.
 
+### Consensus Derivation & Admission Hardening Rules
+1. **Ancestry & Window Rules:**
+   - For every block $B$ on Chain 5 (`HYBRID_TESTNET`), the required DAA target difficulty is derived strictly from its declared parent DAG past cone ($B.\text{parents}$).
+   - Traversal evaluates up to $N = 60$ ancestor PoW blocks (`DAA_WINDOW_BLOCKS`).
+   - Ancestors are traversed deterministically from $B.\text{parents}$ back up to 60 ancestor blocks.
+2. **Ordering Rules:**
+   - Ancestor timestamps are collected deterministically and sorted in strictly ascending chronological order ($t_0 \le t_1 \le \dots \le t_{k-1}$).
+   - Because $B$'s ancestry graph is immutable and uniquely identified by block references within $B$'s signed header, the resulting sorted timestamp sequence is completely identical across all nodes regardless of local block arrival order or current node DAG tips.
+3. **Bootstrap Rules:**
+   - For round 0 (canonical genesis, $B.\text{parents} = \emptyset$), the required target is `MAX_TARGET_BITS` (`0x1f00_ffff`, or `KOVANICA_TEST_TARGET_BITS` when configured for test environments).
+   - If the ancestry window contains fewer than 2 timestamps ($k < 2$, e.g. round 1 blocks whose only parent is round 0 genesis with no PoW header), the target defaults to `current_target_bits` which is `MAX_TARGET_BITS`.
+   - For $k \ge 2$, `current_target_bits` is derived from the primary parent ($B.\text{parents}[0]$).
+   - The new target is scaled by:
+     $$\text{new\_target} = \text{current\_target} \times \frac{\text{clamped\_actual\_duration}}{\text{target\_duration}}$$
+     where $\text{actual\_duration} = \max(1, t_{k-1} - t_0)$, $\text{target\_duration} = (k - 1) \times 4000\text{ ms}$, clamped to $[0.25, 4.0] \times \text{target\_duration}$.
+     The target is clamped to $[\text{MIN\_TARGET\_BITS}, \text{MAX\_TARGET\_BITS}]$.
+4. **Missing-History & Orphan Rules:**
+   - If any parent in $B.\text{parents}$ is not present in accepted consensus storage (`dag_store`), block $B$ cannot be admitted into accepted consensus state, cannot be placed in `GhostdagCommitter`, and cannot execute or mint emission rewards.
+   - Block $B$ is retained in the bounded `OrphanBuffer` (bounded by `max_orphans = 1024`, `max_bytes = 32 MiB`, `max_per_peer = 256`, `ttl = 60s`, `max_in_flight = 256`).
+   - The node issues deduplicated `BlockSyncRequest::ByHash` requests to the peer for missing parents.
+   - When missing parents arrive and are successfully admitted to `dag_store`, `orphans.parent_accepted` iteratively releases ready blocks for full revalidation and admission.
+   - Malformed parent references (such as `parents.len() > GHOSTDAG_K = 5`, duplicate parent digests, self-parenting references, non-decreasing rounds `parent.round >= block.round`, or round gaps exceeding `MAX_PARENT_ROUND_GAP = 50`) are rejected immediately as invalid blocks and never buffered.
+5. **Legacy vs Hybrid submitWork Isolation:**
+   - RPC method `kovanica_submitWork` immediately rejects any submission if the serving node is running on a non-hybrid chain (e.g. `chain_id != HYBRID_TESTNET`), returning `RpcError::InvalidRequest`.
+   - Matching `header.chain_id == node.chain_id` is NOT sufficient; only registered hybrid networks may process `submitWork`.
+   - No block or consensus storage writes (`consensus_store.put_block`) occur before validation passes.
+
+
 
 ---
 

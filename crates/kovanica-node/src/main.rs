@@ -860,11 +860,23 @@ where
     let sync_status_source: SyncStatusSource = {
         let catch_up = catch_up_handle.clone();
         let dag_store = dag_store.clone();
+        let state_store = state_storage.clone();
         let network = network.clone();
         Arc::new(move || {
             let (catching_up, catch_up_target) = catch_up.lock().summary();
             let local_tip_round = local_dag_tip(&dag_store);
-            let committed_height = dag_store.get_committed_leader_height().ok();
+            let h_dag = dag_store.get_committed_leader_height().ok().unwrap_or(0);
+            let h_state = state_store
+                .begin_read()
+                .ok()
+                .and_then(|txn| {
+                    state_store
+                        .consensus()
+                        .get_committed_leader_height(&txn)
+                        .ok()
+                })
+                .unwrap_or(0);
+            let committed_height = Some(h_dag.max(h_state));
             let peers: Vec<SyncPeerStatus> = network
                 .peer_status_snapshot()
                 .into_iter()
@@ -935,7 +947,8 @@ where
     // The node-provided validator identity remains authoritative in the block
     // manager; consensus does not generate or replace a signing key.
     let block_manager = Arc::new(BlockManager::new(dag_store.clone(), signing_ctx));
-    if config.run_validator {
+    let is_hybrid = kovanica_types::signing::chain_id::is_hybrid(config.chain_id);
+    if config.run_validator && !is_hybrid {
         block_manager.set_authority(our_authority);
         block_manager.set_signing_key(signing_key.clone());
     } else {
@@ -1009,13 +1022,17 @@ where
     // Set up block broadcaster to gossip proposed blocks
     let broadcast_tx = network_cmd_tx.clone();
     engine.set_block_broadcaster(Arc::new(move |block: &StatementBlock| {
-        let _ = broadcast_tx.send(NetworkCommand::BroadcastBlock(block.clone()));
+        if !is_hybrid {
+            let _ = broadcast_tx.send(NetworkCommand::BroadcastBlock(block.clone()));
+        }
     }));
 
     // Set up vote broadcaster to gossip votes
     let vote_broadcast_tx = network_cmd_tx.clone();
     engine.set_vote_broadcaster(Arc::new(move |vote: &Vote| {
-        let _ = vote_broadcast_tx.send(NetworkCommand::BroadcastVote(vote.clone()));
+        if !is_hybrid {
+            let _ = vote_broadcast_tx.send(NetworkCommand::BroadcastVote(vote.clone()));
+        }
     }));
     engine.set_timeout_broadcaster(Arc::new(TimeoutGossip(network_cmd_tx.clone())));
 
@@ -2465,26 +2482,184 @@ fn ingest_block(
     let mut work = std::collections::VecDeque::from([(block, peer)]);
     while let Some((block, peer)) = work.pop_front() {
         if io.chain_id == kovanica_types::signing::chain_id::HYBRID_TESTNET {
-            if let Ok(header) = block.extract_pow_header(io.chain_id) {
-                if header.verify_pow().is_ok() {
-                    let _ = io.dag_store.put_block(&block);
-                    io.events.publish_new_head(&block);
-                    if let (Some(gd), Some(exec_tx)) = (&io.ghostdag, &io.exec_tx) {
-                        let subdags = {
-                            let mut g = gd.lock();
-                            g.add_block(block.clone());
-                            g.commit_uncommitted_selected_chain()
-                        };
-                        for subdag in subdags {
-                            let _ = exec_tx.send(subdag);
+            // 1. Extract PoW header
+            let header = match block.extract_pow_header(io.chain_id) {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!(digest = %block.digest, error = %e, "rejected hybrid block: missing/bad PoW header");
+                    continue;
+                }
+            };
+
+            // 2. Header self-verification (hash calculation, target satisfaction, timestamp future drift)
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if let Err(e) = header.verify_pow_with_clock(Some(now_ms)) {
+                warn!(digest = %block.digest, error = %e, "rejected hybrid block: failed verify_pow_with_clock");
+                continue;
+            }
+
+            // 3. Structural validation of parent references
+            if header.parents.len() > kovanica_params::GHOSTDAG_K as usize {
+                warn!(digest = %block.digest, count = header.parents.len(), "rejected hybrid block: too many parents");
+                continue;
+            }
+            let mut malformed_parents = false;
+            let mut parent_set = std::collections::HashSet::new();
+            for p in &header.parents {
+                if !parent_set.insert(p.digest) {
+                    malformed_parents = true;
+                    break;
+                }
+                if p.digest == block.digest {
+                    malformed_parents = true;
+                    break;
+                }
+                if p.round >= block.round {
+                    malformed_parents = true;
+                    break;
+                }
+                if block.round - p.round > kovanica_types::MAX_PARENT_ROUND_GAP {
+                    malformed_parents = true;
+                    break;
+                }
+            }
+            if malformed_parents {
+                warn!(digest = %block.digest, "rejected hybrid block: malformed parent references");
+                continue;
+            }
+
+            // 4. Missing parent check: Are all parents in accepted consensus state (dag_store)?
+            // (Round 0 canonical genesis has no parents)
+            if block.round > 0 {
+                let missing: Vec<Hash> = header
+                    .parents
+                    .iter()
+                    .map(|p| p.digest)
+                    .filter(|d| !io.dag_store.has_block(d).unwrap_or(false))
+                    .collect();
+
+                if !missing.is_empty() {
+                    let digest = block.digest;
+                    let out = orphans.insert(block, peer, missing, std::time::Instant::now());
+                    debug!(
+                        %digest, %peer, buffered = out.buffered, evicted = out.evicted,
+                        requests = out.requests.len(), orphans = orphans.len(),
+                        "hybrid PoW block has missing parents; buffering outside consensus state"
+                    );
+                    for hash in out.requests {
+                        let request = BlockSyncRequest::ByHash(hash);
+                        if let Err(e) = io
+                            .network_cmd_tx
+                            .send(NetworkCommand::RequestSync(peer, request))
+                        {
+                            debug!(error = %e, "failed to queue missing-parent request for hybrid block");
                         }
                     }
-                    let released = orphans.parent_accepted(&block.digest);
-                    work.extend(released);
                     continue;
                 }
             }
-            warn!(digest = %block.digest, "rejected invalid Chain 5 PoW block in ingest");
+
+            // 5. Full parent verification and monotonic timestamp check against loaded parents
+            let mut parent_valid = true;
+            for p in &header.parents {
+                match io.dag_store.get_block(&p.digest) {
+                    Ok(parent_block) => {
+                        if parent_block.author != p.author || parent_block.round != p.round {
+                            warn!(
+                                digest = %block.digest,
+                                parent = %p.digest,
+                                "rejected hybrid block: parent reference metadata mismatch"
+                            );
+                            parent_valid = false;
+                            break;
+                        }
+                        if let Ok(parent_hdr) = parent_block.extract_pow_header(io.chain_id) {
+                            if header.timestamp <= parent_hdr.timestamp {
+                                warn!(
+                                    digest = %block.digest,
+                                    header_ts = header.timestamp,
+                                    parent_ts = parent_hdr.timestamp,
+                                    "rejected hybrid block: timestamp not strictly monotonic"
+                                );
+                                parent_valid = false;
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        parent_valid = false;
+                        break;
+                    }
+                }
+            }
+            if !parent_valid {
+                continue;
+            }
+
+            // 6. Enforce required DAA target from deterministic block-bound ancestry
+            let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+            let required_bits = kovanica_consensus::required_target_bits(
+                io.dag_store,
+                &header.parents,
+                io.chain_id,
+                &daa_config,
+            );
+            if header.target_bits != required_bits {
+                warn!(
+                    digest = %block.digest,
+                    header_bits = format_args!("0x{:08x}", header.target_bits),
+                    required_bits = format_args!("0x{:08x}", required_bits),
+                    "rejected hybrid PoW block: target bits mismatch"
+                );
+                continue;
+            }
+            if !kovanica_types::check_pow_hash_meets_target(
+                &header.pow_hash.unwrap_or_default(),
+                required_bits,
+            ) {
+                warn!(
+                    digest = %block.digest,
+                    "rejected hybrid PoW block: pow hash does not meet required target"
+                );
+                continue;
+            }
+
+            // 7. Validate transactions & Merkle root
+            if block.transactions.len() > kovanica_types::MAX_TXS_PER_BLOCK {
+                warn!(digest = %block.digest, "rejected hybrid block: too many transactions");
+                continue;
+            }
+            if StatementBlock::compute_merkle_root(&block.transactions) != block.merkle_root {
+                warn!(digest = %block.digest, "rejected hybrid block: Merkle root mismatch");
+                continue;
+            }
+
+            // 8. ADMIT TO ACCEPTED CONSENSUS STATE
+            if let Err(e) = io.dag_store.put_block(&block) {
+                error!(digest = %block.digest, error = %e, "failed to persist accepted hybrid block to dag_store");
+                continue;
+            }
+            io.events.publish_new_head(&block);
+            if let (Some(gd), Some(exec_tx)) = (&io.ghostdag, &io.exec_tx) {
+                let subdags = {
+                    let mut g = gd.lock();
+                    g.add_block(block.clone());
+                    g.commit_uncommitted_selected_chain()
+                };
+                for subdag in subdags {
+                    let _ = exec_tx.send(subdag);
+                }
+            }
+
+            // 9. Release buffered orphans waiting on this block
+            let released = orphans.parent_accepted(&block.digest);
+            if !released.is_empty() {
+                debug!(parent = %block.digest, count = released.len(), "re-processing hybrid orphans");
+            }
+            work.extend(released);
             continue;
         }
 
@@ -8944,7 +9119,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     /// A minimal single-validator engine for the vote-transfer tests.
-    fn vote_sync_test_engine(
+    pub(crate) fn vote_sync_test_engine(
         dir: &tempfile::TempDir,
     ) -> (
         ConsensusEngine<NodeDagStore, NodeBlockManager>,
@@ -11508,6 +11683,337 @@ mod b1_epoch_restart_repro {
         assert_ne!(
             digest_legacy, digest_nostake,
             "no-stake-82m must change the genesis config digest"
+        );
+    }
+
+    #[test]
+    fn test_hybrid_admission_easier_target_rejected_valid_accepted() {
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
+        let (net_tx, _net_rx) = mpsc::unbounded_channel();
+        let (exec_tx, _exec_rx) = mpsc::unbounded_channel();
+        let events = EventBus::new();
+        let ghostdag = Arc::new(parking_lot::Mutex::new(
+            kovanica_consensus::ghostdag::GhostdagCommitter::new(5),
+        ));
+        let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
+        let io = BlockIngest {
+            dag_store: &dag,
+            network_cmd_tx: &net_tx,
+            events: &events,
+            chain_id: kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            ghostdag: Some(ghostdag),
+            exec_tx: Some(exec_tx),
+        };
+        let peer = PeerId::random();
+        let mut worker = kovanica_consensus::mining::MiningWorker::new();
+
+        // 1. Easier self-declared target (0x2100ffff vs required 0x207fffff)
+        let header_easy = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x2100ffff,
+            0,
+        );
+        let mined_easy = worker.mine_header(header_easy, 10_000).unwrap();
+        let block_easy = mined_easy.to_statement_block(vec![]);
+        let easy_digest = block_easy.digest;
+
+        ingest_block(block_easy, peer, &engine, &io, &mut orphans);
+
+        assert!(
+            !dag.has_block(&easy_digest).unwrap(),
+            "easier target must not be admitted to dag_store"
+        );
+        assert!(
+            !orphans.contains(&easy_digest),
+            "easier target must be rejected, not buffered"
+        );
+
+        // 2. Valid target (0x207fffff)
+        let header_valid = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined_valid = worker.mine_header(header_valid, 10_000).unwrap();
+        let block_valid = mined_valid.to_statement_block(vec![]);
+        let valid_digest = block_valid.digest;
+
+        ingest_block(block_valid, peer, &engine, &io, &mut orphans);
+
+        assert!(
+            dag.has_block(&valid_digest).unwrap(),
+            "valid target must be admitted to dag_store"
+        );
+    }
+
+    #[test]
+    fn test_hybrid_admission_unknown_parent_buffered_and_revalidated() {
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
+        let (net_tx, _net_rx) = mpsc::unbounded_channel();
+        let (exec_tx, mut exec_rx) = mpsc::unbounded_channel();
+        let events = EventBus::new();
+        let ghostdag = Arc::new(parking_lot::Mutex::new(
+            kovanica_consensus::ghostdag::GhostdagCommitter::new(5),
+        ));
+        let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
+        let io = BlockIngest {
+            dag_store: &dag,
+            network_cmd_tx: &net_tx,
+            events: &events,
+            chain_id: kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            ghostdag: Some(ghostdag),
+            exec_tx: Some(exec_tx),
+        };
+        let peer = PeerId::random();
+        let mut worker = kovanica_consensus::mining::MiningWorker::new();
+
+        // Round 1 parent block
+        let header1 = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined1 = worker.mine_header(header1, 10_000).unwrap();
+        let block1 = mined1.to_statement_block(vec![]);
+        let digest1 = block1.digest;
+
+        // Round 2 child block referencing block1
+        let header2 = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            2,
+            1,
+            vec![block1.reference()],
+            kovanica_types::Hash::zero(),
+            1_700_000_004_000,
+            0x207fffff,
+            0,
+        );
+        let mined2 = worker.mine_header(header2, 10_000).unwrap();
+        let block2 = mined2.to_statement_block(vec![]);
+        let digest2 = block2.digest;
+
+        // 1. Ingest child block2 FIRST before its parent block1 is known
+        ingest_block(block2, peer, &engine, &io, &mut orphans);
+
+        // Child must NOT be admitted to consensus state or rewarded early
+        assert!(
+            !dag.has_block(&digest2).unwrap(),
+            "unknown-parent block must not be stored in dag"
+        );
+        assert!(
+            orphans.contains(&digest2),
+            "unknown-parent block must be buffered in orphans"
+        );
+        assert!(
+            exec_rx.try_recv().is_err(),
+            "unknown-parent block must not emit sub-DAGs for execution"
+        );
+
+        // 2. Now ingest parent block1
+        ingest_block(block1, peer, &engine, &io, &mut orphans);
+
+        // Both parent block1 and released child block2 must now be in dag_store!
+        assert!(
+            dag.has_block(&digest1).unwrap(),
+            "parent block must be admitted to dag"
+        );
+        assert!(
+            dag.has_block(&digest2).unwrap(),
+            "child block must be revalidated and admitted to dag"
+        );
+        assert!(
+            !orphans.contains(&digest2),
+            "child block must be removed from orphan buffer"
+        );
+
+        // Execution sub-DAGs must now be delivered
+        assert!(
+            exec_rx.try_recv().is_ok(),
+            "committed sub-DAGs must be delivered to execution"
+        );
+    }
+
+    #[test]
+    fn test_hybrid_admission_malformed_parents_rejected_not_buffered() {
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
+        let (net_tx, _net_rx) = mpsc::unbounded_channel();
+        let (exec_tx, _exec_rx) = mpsc::unbounded_channel();
+        let events = EventBus::new();
+        let ghostdag = Arc::new(parking_lot::Mutex::new(
+            kovanica_consensus::ghostdag::GhostdagCommitter::new(5),
+        ));
+        let mut orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
+        let io = BlockIngest {
+            dag_store: &dag,
+            network_cmd_tx: &net_tx,
+            events: &events,
+            chain_id: kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            ghostdag: Some(ghostdag),
+            exec_tx: Some(exec_tx),
+        };
+        let peer = PeerId::random();
+        let mut worker = kovanica_consensus::mining::MiningWorker::new();
+
+        let bogus_parent = kovanica_types::BlockReference {
+            author: 1,
+            round: 5,
+            digest: kovanica_types::Hash([0xaa; 32]),
+        };
+
+        // Malformed: duplicate parents
+        let header_dup = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            6,
+            0,
+            vec![bogus_parent, bogus_parent],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined_dup = worker.mine_header(header_dup, 10_000).unwrap();
+        let block_dup = mined_dup.to_statement_block(vec![]);
+        let dup_digest = block_dup.digest;
+
+        ingest_block(block_dup, peer, &engine, &io, &mut orphans);
+        assert!(!dag.has_block(&dup_digest).unwrap());
+        assert!(
+            !orphans.contains(&dup_digest),
+            "duplicate parents must be rejected, not buffered"
+        );
+
+        // Malformed: parent round not strictly less than block round
+        let header_round = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            4,
+            0,
+            vec![bogus_parent], // bogus_parent.round is 5 >= block.round 4
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined_round = worker.mine_header(header_round, 10_000).unwrap();
+        let block_round = mined_round.to_statement_block(vec![]);
+        let round_digest = block_round.digest;
+
+        ingest_block(block_round, peer, &engine, &io, &mut orphans);
+        assert!(!dag.has_block(&round_digest).unwrap());
+        assert!(
+            !orphans.contains(&round_digest),
+            "non-decreasing parent round must be rejected, not buffered"
+        );
+    }
+
+    #[test]
+    fn test_restart_replay_cannot_duplicate_emission() {
+        use kovanica_types::EmissionPolicy;
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+        {
+            let w_txn = storage.begin_write().unwrap();
+            storage
+                .state()
+                .save_emission_policy(&w_txn, &EmissionPolicy::NoStake82M)
+                .unwrap();
+            w_txn.commit().unwrap();
+        }
+
+        let mut exec = ExecutionContext::with_signing_context(kovanica_types::SigningContext::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+        ));
+        exec.emission_policy = Some(EmissionPolicy::NoStake82M);
+
+        let mut worker = kovanica_consensus::mining::MiningWorker::new();
+        let header = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined = worker.mine_header(header, 10_000).unwrap();
+        let block = mined.to_statement_block(vec![]);
+
+        let subdag = kovanica_types::CommittedSubDag {
+            leader: block.clone(),
+            blocks: vec![block],
+            leader_round: 1,
+            leader_author: 0,
+            non_blue: vec![],
+        };
+
+        // 1. First execution
+        let res1 = exec.execute_committed_subdag(&subdag, &storage).unwrap();
+        assert!(
+            res1.reward.is_some(),
+            "first execution must mint block reward"
+        );
+        let initial_supply = res1.circulating_supply;
+        assert!(initial_supply > 0);
+
+        // 2. Replay the same sub-DAG on existing context (idempotency check)
+        let res2 = exec.execute_committed_subdag(&subdag, &storage).unwrap();
+        assert!(
+            res2.reward.is_none(),
+            "replayed sub-DAG must NOT mint duplicate reward"
+        );
+        assert_eq!(
+            res2.circulating_supply, initial_supply,
+            "circulating supply must not increase on replay"
+        );
+
+        // 3. Simulate node restart: create fresh ExecutionContext reading from storage
+        let mut exec_restarted = ExecutionContext::with_signing_context(
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::HYBRID_TESTNET),
+        );
+        {
+            let r_txn = storage.begin_read().unwrap();
+            if let Ok(Some(policy)) = storage.state().load_emission_policy(&r_txn) {
+                exec_restarted.emission_policy = Some(policy);
+            }
+            if let Ok(Some(mining_state)) = storage.state().load_mining_reward_state(&r_txn) {
+                exec_restarted.mining_reward_state = mining_state;
+            }
+            if let Ok(st) = storage.state().load_staking_state(&r_txn) {
+                exec_restarted.staking = st;
+            }
+        }
+        let res3 = exec_restarted
+            .execute_committed_subdag(&subdag, &storage)
+            .unwrap();
+        assert!(
+            res3.reward.is_none(),
+            "restarted node replaying sub-DAG must NOT mint duplicate reward"
+        );
+        assert_eq!(
+            res3.circulating_supply, initial_supply,
+            "circulating supply after restart must match original"
         );
     }
 }

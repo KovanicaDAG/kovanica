@@ -62,7 +62,7 @@ impl NodeMiner {
     }
 }
 
-pub use kovanica_consensus::daa::{extract_ancestor_timestamps, select_parents_from_tips};
+pub use kovanica_consensus::daa::select_parents_from_tips;
 
 /// Run the background PoW mining loop for Chain 5.
 #[allow(clippy::too_many_arguments)]
@@ -138,17 +138,12 @@ pub async fn run_mining_loop(
             })
             .collect();
 
-        let target_bits = if parents.is_empty() {
-            initial_target
-        } else {
-            let timestamps = extract_ancestor_timestamps(
-                &dag_store,
-                &parents,
-                chain_id,
-                kovanica_params::DAA_WINDOW_BLOCKS as usize,
-            );
-            miner.next_target_bits(initial_target, &timestamps)
-        };
+        let target_bits = kovanica_consensus::required_target_bits(
+            &dag_store,
+            &parent_refs,
+            chain_id,
+            &miner.daa_config,
+        );
         kovanica_consensus::metrics::set_pow_target_bits(target_bits);
 
         let txs = mempool.get_next_transactions(kovanica_types::MAX_TXS_PER_BLOCK);
@@ -208,6 +203,7 @@ pub async fn run_mining_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kovanica_consensus::daa::extract_ancestor_timestamps;
     use kovanica_storage::Storage;
     use kovanica_types::hash::Hash;
 
