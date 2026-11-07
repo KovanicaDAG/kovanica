@@ -465,14 +465,18 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
     let p2p_observer = base_port + 2;
     let rpc_observer = base_port + 3;
 
-    // Keys for 2 participants
-    let (sk0, pk0) = generate_keypair();
-    let addr0 = Address::from_public_key(&pk0);
+    // Keys for 2 participants, sorted by address bytes so validators[0] (addr0) is
+    // deterministically authority_validator(0) in StakingState::committee_order().
+    let (raw_sk0, raw_pk0) = generate_keypair();
+    let raw_addr0 = Address::from_public_key(&raw_pk0);
 
-    let (sk1, pk1) = generate_keypair();
-    let addr1 = Address::from_public_key(&pk1);
+    let (raw_sk1, raw_pk1) = generate_keypair();
+    let raw_addr1 = Address::from_public_key(&raw_pk1);
 
-    let validators = vec![(sk0.clone(), pk0, addr0), (sk1.clone(), pk1, addr1)];
+    let mut validators = vec![(raw_sk0, raw_pk0, raw_addr0), (raw_sk1, raw_pk1, raw_addr1)];
+    validators.sort_by_key(|(_, _, addr)| addr.0);
+    let (sk0, _pk0, addr0) = validators[0].clone();
+    let (sk1, _pk1, addr1) = validators[1].clone();
     let genesis = build_genesis_toml(&validators);
 
     let client = Client::builder()
@@ -594,13 +598,19 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
         sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
 
-    // 4. Verify mining reward distribution on Observer (2.5 KVNC per block author)
+    // 4. Verify mining reward distribution on Observer (2.5 KVNC per block author).
+    // With 2 genesis validators under Legacy81M, each starts with 450,000 KVNC liquid
+    // (500,000 KVNC share minus 50,000 KVNC locked stake). After sending TRANSFER_AMOUNT +
+    // TRANSFER_FEE, author 0 must exceed that baseline by at least INITIAL_BLOCK_REWARD.
+    let genesis_liquid_baseline = 450_000 * ONE_KUNA - TRANSFER_AMOUNT - TRANSFER_FEE;
+    let min_expected_with_reward = genesis_liquid_baseline + INITIAL_BLOCK_REWARD;
     let reward_deadline = Instant::now() + Duration::from_secs(MINING_TIMEOUT_SECS);
     let producer_reward = loop {
         if let Ok(b) = get_balance(&client, rpc_observer, addr0).await {
-            if b >= INITIAL_BLOCK_REWARD {
+            if b >= min_expected_with_reward {
                 info!(
                     producer_reward = b,
+                    min_expected_with_reward,
                     "observer executed block reward distribution for author"
                 );
                 break b;
@@ -613,8 +623,8 @@ async fn isolated_hybrid_acceptance_execution_and_recovery() -> Result<()> {
     };
 
     assert!(
-        producer_reward >= INITIAL_BLOCK_REWARD,
-        "author must have received at least one 2.5 KVNC reward"
+        producer_reward >= min_expected_with_reward,
+        "author must have received at least one 2.5 KVNC reward above genesis liquid baseline"
     );
 
     // 5. Verify recipient balance received from executed transaction
