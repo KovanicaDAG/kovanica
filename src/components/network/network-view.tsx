@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { SURFACE } from "@/lib/surfaces";
-import { Activity, Globe, Server, Shield, Radio, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
+import { Activity, Globe, Server, Radio, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { api, useApiSource, isPublic, setApiSource } from "@/lib/api/client";
+import { api, useApiSource, isPublic } from "@/lib/api/client";
 import type { ApiBootstrap, ApiHead } from "@/lib/api/contract";
 import { ATOM, TOKEN } from "@/lib/api/contract";
 import { shortId } from "@/lib/ledger/hash";
@@ -30,15 +29,12 @@ function fmtKvnc(atoms: number): string {
 export function NetworkView() {
   const source = useApiSource();
   const live = isPublic(source);
-
-  if (source === "mainnet") {
-    return <MainnetNetworkView />;
-  }
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
+    if (source === "mainnet") return;
     setBusy(true);
     setError(null);
     try {
@@ -57,11 +53,16 @@ export function NetworkView() {
   }
 
   useEffect(() => {
+    if (source === "mainnet") return;
     void load();
     const id = setInterval(() => void load(), 15_000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
+
+  if (source === "mainnet") {
+    return <MainnetNetworkView />;
+  }
 
   const b = snap?.bootstrap;
   const h = snap?.head;

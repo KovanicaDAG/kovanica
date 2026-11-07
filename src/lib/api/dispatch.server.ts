@@ -20,7 +20,7 @@ import {
   localSubmit,
   localUtxos,
 } from "./node.server";
-import { isPublicSource, type ApiSource, type ApiState, type ApiHead, type ApiBootstrap, type ApiDagBlock } from "./contract";
+import { type ApiSource, type ApiState, type ApiHead, type ApiBootstrap, type ApiDagBlock } from "./contract";
 import { parseAddr, toCanonicalAddress } from "../wallet/address";
 import { listPools, listTokens, getTokenState } from "./tokens.server";
 import { balanceOf } from "../tokens/codec";
