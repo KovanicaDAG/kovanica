@@ -11927,6 +11927,67 @@ mod b1_epoch_restart_repro {
     }
 
     #[test]
+    fn repro_cheap_checks_ordered_after_expensive_pow() {
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let (_engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
+        let (net_tx, _net_rx) = mpsc::unbounded_channel();
+        let (exec_tx, _exec_rx) = mpsc::unbounded_channel();
+        let events = EventBus::new();
+        let ghostdag = Arc::new(parking_lot::Mutex::new(
+            kovanica_consensus::ghostdag::GhostdagCommitter::new(5),
+        ));
+        let _orphans = orphans::OrphanBuffer::new(orphans::OrphanLimits::default());
+        let io = BlockIngest {
+            dag_store: &dag,
+            network_cmd_tx: &net_tx,
+            events: &events,
+            chain_id: kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            ghostdag: Some(ghostdag),
+            exec_tx: Some(exec_tx),
+        };
+        let _peer = PeerId::random();
+
+        // Blatantly malformed parents (10 parents > GHOSTDAG_K 5) AND corrupt PoW hash.
+        let fake_parents: Vec<kovanica_types::block::BlockReference> = (0..10)
+            .map(|i| kovanica_types::block::BlockReference {
+                author: i as u16,
+                round: 1,
+                digest: Hash([i as u8 + 1; 32]),
+            })
+            .collect();
+        let header = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            2,
+            0,
+            fake_parents,
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mut block = header.to_statement_block(vec![]);
+        block.statements = kovanica_types::block::encode_pow_statement(
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+            Some(Hash([0xff; 32])),
+        );
+
+        // REPRODUCTION EVIDENCE:
+        // In ingest_block, Step 2 verify_pow_with_clock runs BEFORE Step 3 parent checks.
+        // It computes memory-hard KovanicaHash first, even though parents.len() > 5 would
+        // reject it instantly.
+        let pow_hdr = block.extract_pow_header(io.chain_id).unwrap();
+        assert!(
+            pow_hdr
+                .verify_pow_with_clock(Some(1_700_000_000_000))
+                .is_err(),
+            "expensive PoW computation executes before parent bounds are checked"
+        );
+    }
+
+    #[test]
     fn test_restart_replay_cannot_duplicate_emission() {
         use kovanica_types::EmissionPolicy;
 

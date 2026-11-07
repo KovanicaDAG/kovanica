@@ -970,4 +970,45 @@ mod tests {
             Err(Rejection::BadPow(HeaderError::TargetNotMet { .. }))
         ));
     }
+
+    #[test]
+    fn repro_gossip_edge_accepts_far_future_timestamp_and_excess_parents() {
+        use kovanica_types::block::{BlockHeader, BlockReference};
+        use std::collections::HashMap;
+
+        let empty_keys: AuthorityKeys = HashMap::new();
+        let chain_id = kovanica_types::signing::chain_id::HYBRID_TESTNET;
+
+        // 1. Far-future timestamp: year 2128 (5_000_000_000_000 ms)
+        // 2. Excess parents: 10 parents (exceeding GHOSTDAG_K = 5)
+        // 3. Trivial difficulty target: 0x22010000 (target is [0xff; 32], 0 difficulty)
+        let fake_parents: Vec<BlockReference> = (0..10)
+            .map(|i| BlockReference {
+                author: i as u16,
+                round: 1,
+                digest: Hash([i as u8 + 1; 32]),
+            })
+            .collect();
+
+        let mut header = BlockHeader::new(
+            chain_id,
+            2,
+            0,
+            fake_parents,
+            Hash::zero(),
+            5_000_000_000_000u64,
+            0x22010000,
+            0,
+        );
+        header.pow_hash = Some(header.compute_pow_hash());
+        let block = header.to_statement_block(vec![]);
+
+        // REPRODUCTION EVIDENCE:
+        // verify_block at the gossip edge accepts this block because it only runs verify_pow()
+        // without wall-clock future drift check, parent count check, or max_target_bits check.
+        assert!(
+            verify_block(&empty_keys, chain_id, &block).is_ok(),
+            "gossip edge forwards block with future timestamp, 10 parents, and trivial difficulty"
+        );
+    }
 }

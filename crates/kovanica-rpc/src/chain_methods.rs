@@ -4182,4 +4182,85 @@ mod tests {
             .to_string()
             .contains("does not match required DAA target"));
     }
+
+    #[tokio::test]
+    async fn repro_submit_work_accepts_far_future_timestamp_without_clock_drift_check() {
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
+        let mut state = test_state(storage.clone());
+        state.mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_params::CHAIN_ID_HYBRID_TESTNET),
+        ));
+
+        // Far-future timestamp (year 2128, 5_000_000_000_000 ms) on round 0 (no parents)
+        let header_future = kovanica_types::BlockHeader::new(
+            kovanica_params::CHAIN_ID_HYBRID_TESTNET,
+            0,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            5_000_000_000_000u64,
+            0x207fffff,
+            0,
+        );
+        let mined_future = kovanica_consensus::mine_header(header_future, 10_000).unwrap();
+
+        // REPRODUCTION EVIDENCE:
+        // handle_submit_work accepts the block because it only calls verify_pow() without clock drift checks.
+        let res = handle_submit_work(json!({ "header": mined_future }), state).await;
+        assert!(
+            res.is_ok(),
+            "submitWork accepts block with far-future timestamp (year 2128)"
+        );
+        assert_eq!(res.unwrap()["accepted"], true);
+    }
+
+    #[tokio::test]
+    async fn repro_submit_work_does_not_commit_or_execute_locally() {
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
+        let mut state = test_state(storage.clone());
+        state.mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_params::CHAIN_ID_HYBRID_TESTNET),
+        ));
+
+        let header = kovanica_types::BlockHeader::new(
+            kovanica_params::CHAIN_ID_HYBRID_TESTNET,
+            0,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined = kovanica_consensus::mine_header(header, 10_000).unwrap();
+        let block = mined.to_statement_block(vec![]);
+        let digest = block.digest;
+
+        let res = handle_submit_work(json!({ "header": mined }), state.clone()).await;
+        assert!(res.is_ok());
+
+        // Block exists in dag_store (consensus_store)
+        assert!(state.consensus_store.has_block(&digest).unwrap());
+
+        // REPRODUCTION EVIDENCE:
+        // Local node's state_storage was never updated: committed_leader_height remains 0.
+        // The block was never fed to GhostdagCommitter or exec_tx.
+        let read_txn = storage.begin_read().unwrap();
+        let committed_h = storage
+            .consensus()
+            .get_committed_leader_height(&read_txn)
+            .unwrap_or(0);
+        assert_eq!(
+            committed_h, 0,
+            "submitWork does not commit or execute the block on the local node"
+        );
+    }
 }
