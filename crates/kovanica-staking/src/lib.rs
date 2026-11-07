@@ -92,6 +92,10 @@ pub use kovanica_params::SUBSIDY_ERA_BLOCKS;
 pub use kovanica_params::DECAY_DEN;
 /// Decay factor numerator / denominator = 3/4.
 pub use kovanica_params::DECAY_NUM;
+pub use kovanica_params::GENESIS_VALIDATOR_ALLOCATION_NO_STAKE;
+pub use kovanica_params::MINING_SUBSIDY_BUDGET_NO_STAKE_82M;
+pub use kovanica_params::SUBSIDY_ERA_BLOCKS_NO_STAKE_82M;
+pub use kovanica_types::{EmissionPolicy, MiningRewardState};
 
 // ============================================================
 // Staking constants
@@ -202,6 +206,100 @@ pub fn cumulative_mining_issuance(committed_leader_height: u64) -> u64 {
         reward = reward.saturating_mul(DECAY_NUM) / DECAY_DEN;
     }
     total.min(MINING_SUBSIDY_BUDGET)
+}
+
+/// Returns the scheduled block reward (in base units) for a given **rewarded block index**
+/// under the 82M NO-stake policy.
+///
+/// Reward starts at 2.5 KVNC and decays by x 3/4 every 8,200,000 rewarded blocks.
+/// When the decaying reward reaches 0 (at era 73, block index 598,600,000), scheduled
+/// reward returns 0.
+pub fn block_reward_no_stake_82m(rewarded_block_index: u64) -> u64 {
+    let era = rewarded_block_index / kovanica_params::SUBSIDY_ERA_BLOCKS_NO_STAKE_82M;
+    let mut reward = INITIAL_BLOCK_REWARD;
+
+    for _ in 0..era {
+        reward = reward.saturating_mul(DECAY_NUM) / DECAY_DEN;
+        if reward == 0 {
+            break;
+        }
+    }
+    reward
+}
+
+/// Recomputes the total scheduled mining issuance and the exact terminal remainder
+/// under the 82M NO-stake policy using actual integer rounding semantics (decay x 3/4 every 8.2M blocks).
+///
+/// Returns (total_scheduled_issuance, terminal_remainder) where:
+/// - total_scheduled_issuance is the exact sum of all scheduled era rewards (eras 0..72) = 81_999_999_147_200_000 base units (81,999,999.1472 KVNC).
+/// - terminal_remainder is the remaining budget = 852_800_000 base units (0.8528 KVNC).
+///
+/// The sum of total_scheduled_issuance + terminal_remainder is exactly MINING_SUBSIDY_BUDGET_NO_STAKE_82M (82M KVNC).
+pub fn recompute_terminal_remainder_82m() -> (u64, u64) {
+    let mut total_scheduled = 0u64;
+    let mut reward = INITIAL_BLOCK_REWARD;
+    while reward > 0 {
+        let era_issued = reward.saturating_mul(kovanica_params::SUBSIDY_ERA_BLOCKS_NO_STAKE_82M);
+        total_scheduled = total_scheduled.saturating_add(era_issued);
+        reward = reward.saturating_mul(DECAY_NUM) / DECAY_DEN;
+    }
+    let remainder =
+        kovanica_params::MINING_SUBSIDY_BUDGET_NO_STAKE_82M.saturating_sub(total_scheduled);
+    (total_scheduled, remainder)
+}
+
+/// Calculates the actual payout for a block under the 82M NO-stake policy, taking into
+/// account the remaining mining subsidy budget, scheduled decay, and one-time terminal remainder payout.
+///
+/// Returns (payout_amount, updated_terminal_payout_done):
+/// - While scheduled reward > 0 (eras 0..72): pays min(scheduled_reward, remaining_budget).
+/// - When scheduled reward reaches 0: pays the exact remaining mining budget ONCE to the next eligible
+///   rewarded block; thereafter returns 0.
+/// - Every payout is capped by the remaining mining budget, strictly enforcing the 82M KVNC hard cap.
+pub fn calculate_block_reward_no_stake_82m(
+    rewarded_block_index: u64,
+    current_cumulative_issued: u64,
+    terminal_payout_done: bool,
+) -> (u64, bool) {
+    let remaining_budget = kovanica_params::MINING_SUBSIDY_BUDGET_NO_STAKE_82M
+        .saturating_sub(current_cumulative_issued);
+
+    let scheduled = block_reward_no_stake_82m(rewarded_block_index);
+    if scheduled > 0 {
+        let payout = scheduled.min(remaining_budget);
+        (payout, terminal_payout_done)
+    } else if !terminal_payout_done && remaining_budget > 0 {
+        // Pay the exact remaining mining budget ONCE to the next eligible rewarded block.
+        let payout = remaining_budget;
+        (payout, true)
+    } else {
+        (0, terminal_payout_done)
+    }
+}
+
+/// Cumulative mining issuance under the 82M NO-stake policy up to (but not including)
+/// `rewarded_block_count` blocks.
+///
+/// After block index 598,600,000 receives the one-time terminal remainder payout, the cumulative issuance
+/// reaches exactly MINING_SUBSIDY_BUDGET_NO_STAKE_82M (82,000,000 KVNC).
+pub fn cumulative_mining_issuance_no_stake_82m(rewarded_block_count: u64) -> u64 {
+    let mut total = 0u64;
+    let mut reward = INITIAL_BLOCK_REWARD;
+    let mut remaining = rewarded_block_count;
+
+    while remaining > 0 && reward > 0 {
+        let blocks_in_this_era = remaining.min(kovanica_params::SUBSIDY_ERA_BLOCKS_NO_STAKE_82M);
+        total = total.saturating_add(reward.saturating_mul(blocks_in_this_era));
+        remaining -= blocks_in_this_era;
+        reward = reward.saturating_mul(DECAY_NUM) / DECAY_DEN;
+    }
+
+    if remaining > 0 {
+        // We have passed block index 598_600_000 which received the terminal remainder.
+        total = kovanica_params::MINING_SUBSIDY_BUDGET_NO_STAKE_82M;
+    }
+
+    total.min(kovanica_params::MINING_SUBSIDY_BUDGET_NO_STAKE_82M)
 }
 
 /// Deterministically split [`GENESIS_VALIDATOR_ALLOCATION`] across `n` genesis
@@ -1113,15 +1211,28 @@ impl StakingState {
         outcome
     }
 
-    /// Current circulating supply approximation (premine + genesis validator
-    /// allocation + mining issued + vested treasury).
-    pub fn circulating_supply(&self) -> u64 {
+    /// Circulating supply calculated under a specific [EmissionPolicy].
+    ///
+    /// Under [EmissionPolicy::Legacy81M], includes the 1,000,000 KVNC genesis validator allocation.
+    /// Under [EmissionPolicy::NoStake82M], genesis validator allocation is 0; circulating supply
+    /// is premine + total_mining_issued + vested_treasury.
+    pub fn circulating_supply_with_policy(&self, policy: EmissionPolicy) -> u64 {
         let treasury_vested = self.treasury.as_ref().map(|t| t.vested).unwrap_or(0);
+        let validator_alloc = match policy {
+            EmissionPolicy::Legacy81M => GENESIS_VALIDATOR_ALLOCATION,
+            EmissionPolicy::NoStake82M => GENESIS_VALIDATOR_ALLOCATION_NO_STAKE,
+        };
         FOUNDER_PREMINE
-            .saturating_add(GENESIS_VALIDATOR_ALLOCATION)
+            .saturating_add(validator_alloc)
             .saturating_add(self.total_mining_issued)
             .saturating_add(treasury_vested)
             .min(TOTAL_SUPPLY)
+    }
+
+    /// Current circulating supply approximation (premine + genesis validator
+    /// allocation + mining issued + vested treasury) under the legacy policy.
+    pub fn circulating_supply(&self) -> u64 {
+        self.circulating_supply_with_policy(EmissionPolicy::Legacy81M)
     }
 
     /// Claim available treasury funds.
@@ -3337,5 +3448,157 @@ mod tests {
         assert!(decoded.validators[0].slashed);
         assert!(!decoded.validators[0].active);
         assert_eq!(decoded.validators[0].jailed_until_height, 500 + JAIL_ROUNDS);
+    }
+
+    #[test]
+    fn no_stake_82m_reward_schedule_and_boundaries() {
+        // First reward: index 0
+        assert_eq!(block_reward_no_stake_82m(0), 2_500_000_000);
+        // Both sides of era 0 / era 1 boundary (8,200,000 blocks per era)
+        assert_eq!(
+            block_reward_no_stake_82m(SUBSIDY_ERA_BLOCKS_NO_STAKE_82M - 1),
+            2_500_000_000
+        );
+        assert_eq!(
+            block_reward_no_stake_82m(SUBSIDY_ERA_BLOCKS_NO_STAKE_82M),
+            1_875_000_000
+        );
+        // Era 2 boundary
+        assert_eq!(
+            block_reward_no_stake_82m(2 * SUBSIDY_ERA_BLOCKS_NO_STAKE_82M - 1),
+            1_875_000_000
+        );
+        assert_eq!(
+            block_reward_no_stake_82m(2 * SUBSIDY_ERA_BLOCKS_NO_STAKE_82M),
+            1_406_250_000
+        );
+        // Integer rounding check: 2_500_000_000 * 3 / 4 = 1_875_000_000
+        // 1_875_000_000 * 3 / 4 = 1_406_250_000
+        // 1_406_250_000 * 3 / 4 = 1_054_687_500
+        assert_eq!(
+            block_reward_no_stake_82m(3 * SUBSIDY_ERA_BLOCKS_NO_STAKE_82M),
+            1_054_687_500
+        );
+
+        // Final era with non-zero scheduled reward: Era 72
+        let era_72_start = 72 * SUBSIDY_ERA_BLOCKS_NO_STAKE_82M;
+        let era_72_end = 73 * SUBSIDY_ERA_BLOCKS_NO_STAKE_82M - 1;
+        assert_eq!(block_reward_no_stake_82m(era_72_start), 1);
+        assert_eq!(block_reward_no_stake_82m(era_72_end), 1);
+
+        // Era 73: scheduled reward reaches 0
+        let era_73_start = 73 * SUBSIDY_ERA_BLOCKS_NO_STAKE_82M;
+        assert_eq!(era_73_start, 598_600_000);
+        assert_eq!(block_reward_no_stake_82m(era_73_start), 0);
+        assert_eq!(block_reward_no_stake_82m(era_73_start + 1_000), 0);
+    }
+
+    #[test]
+    fn no_stake_82m_exact_issuance_and_terminal_remainder() {
+        let (scheduled_total, terminal_remainder) = recompute_terminal_remainder_82m();
+        // Exact scheduled total: 81,999,999.1472 KVNC
+        assert_eq!(scheduled_total, 81_999_999_147_200_000);
+        // Exact terminal remainder: 0.8528 KVNC
+        assert_eq!(terminal_remainder, 852_800_000);
+        // Sum equals exact 82M budget
+        assert_eq!(
+            scheduled_total + terminal_remainder,
+            MINING_SUBSIDY_BUDGET_NO_STAKE_82M
+        );
+        assert_eq!(MINING_SUBSIDY_BUDGET_NO_STAKE_82M, 82_000_000 * ONE_KUNA);
+    }
+
+    #[test]
+    fn no_stake_82m_terminal_payout_once_and_subsequent_zero() {
+        let terminal_block_idx = 598_600_000;
+        let scheduled_total = 81_999_999_147_200_000;
+
+        // Block 598_600_000: scheduled reward is 0, pays exact remainder
+        let (payout1, done1) =
+            calculate_block_reward_no_stake_82m(terminal_block_idx, scheduled_total, false);
+        assert_eq!(payout1, 852_800_000);
+        assert!(done1);
+
+        let cumulative_after_terminal = scheduled_total + payout1;
+        assert_eq!(
+            cumulative_after_terminal,
+            MINING_SUBSIDY_BUDGET_NO_STAKE_82M
+        );
+
+        // Next block: terminal_payout_done is true and budget is exhausted -> pays 0
+        let (payout2, done2) = calculate_block_reward_no_stake_82m(
+            terminal_block_idx + 1,
+            cumulative_after_terminal,
+            done1,
+        );
+        assert_eq!(payout2, 0);
+        assert!(done2);
+
+        // Subsequent block: still pays 0
+        let (payout3, done3) = calculate_block_reward_no_stake_82m(
+            terminal_block_idx + 2,
+            cumulative_after_terminal,
+            done2,
+        );
+        assert_eq!(payout3, 0);
+        assert!(done3);
+    }
+
+    #[test]
+    fn no_stake_82m_budget_clipping_and_no_overshoot() {
+        // Scheduled reward is 2.5 KVNC, but remaining budget is only 1,000 base units
+        let current_issued = MINING_SUBSIDY_BUDGET_NO_STAKE_82M - 1_000;
+        let (payout, _) = calculate_block_reward_no_stake_82m(0, current_issued, false);
+        assert_eq!(payout, 1_000);
+
+        // Budget completely exhausted
+        let (payout_exhausted, _) =
+            calculate_block_reward_no_stake_82m(0, MINING_SUBSIDY_BUDGET_NO_STAKE_82M, false);
+        assert_eq!(payout_exhausted, 0);
+    }
+
+    #[test]
+    fn no_stake_82m_cumulative_issuance_function() {
+        assert_eq!(cumulative_mining_issuance_no_stake_82m(0), 0);
+        assert_eq!(cumulative_mining_issuance_no_stake_82m(1), 2_500_000_000);
+        assert_eq!(
+            cumulative_mining_issuance_no_stake_82m(SUBSIDY_ERA_BLOCKS_NO_STAKE_82M),
+            20_500_000_000_000_000
+        );
+        assert_eq!(
+            cumulative_mining_issuance_no_stake_82m(598_600_000),
+            81_999_999_147_200_000
+        );
+        assert_eq!(
+            cumulative_mining_issuance_no_stake_82m(598_600_001),
+            82_000_000_000_000_000
+        );
+        assert_eq!(
+            cumulative_mining_issuance_no_stake_82m(600_000_000),
+            82_000_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn no_stake_circulating_supply_policy() {
+        let mut state = StakingState::new();
+        // At genesis:
+        // Under legacy: premine (200k) + validator alloc (1M) = 1.2M KVNC
+        assert_eq!(
+            state.circulating_supply_with_policy(EmissionPolicy::Legacy81M),
+            1_200_000 * ONE_KUNA
+        );
+        // Under no-stake: premine (200k) + 0 validator alloc = 200k KVNC
+        assert_eq!(
+            state.circulating_supply_with_policy(EmissionPolicy::NoStake82M),
+            200_000 * ONE_KUNA
+        );
+
+        // With mining issuance:
+        state.total_mining_issued = 50_000_000 * ONE_KUNA;
+        assert_eq!(
+            state.circulating_supply_with_policy(EmissionPolicy::NoStake82M),
+            50_200_000 * ONE_KUNA
+        );
     }
 }

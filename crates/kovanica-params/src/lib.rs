@@ -85,6 +85,12 @@ pub const SUBSIDY_ERA_BLOCKS: u64 = 8_100_000;
 pub const DECAY_NUM: u64 = 3;
 pub const DECAY_DEN: u64 = 4;
 
+// NEW NO-stake policy tokenomics constants (Approved 2026-11-06)
+pub const GENESIS_VALIDATOR_ALLOCATION_NO_STAKE: u64 = 0;
+pub const MINING_SUBSIDY_BUDGET_NO_STAKE_82M: u64 =
+    TOTAL_SUPPLY - FOUNDER_PREMINE - TREASURY_TOTAL - GENESIS_VALIDATOR_ALLOCATION_NO_STAKE;
+pub const SUBSIDY_ERA_BLOCKS_NO_STAKE_82M: u64 = 8_200_000;
+
 // ============================================================
 // Staking
 // ============================================================
@@ -176,6 +182,19 @@ mod tests {
     fn gates_inert() {
         assert_eq!(GAS_HARDENING_ACTIVE_FROM_ROUND, u64::MAX);
         assert_eq!(CONTRACT_HARDENING_ACTIVE_FROM_ROUND, u64::MAX);
+    }
+
+    #[test]
+    fn no_stake_supply_decomposition() {
+        assert_eq!(
+            FOUNDER_PREMINE
+                + GENESIS_VALIDATOR_ALLOCATION_NO_STAKE
+                + TREASURY_TOTAL
+                + MINING_SUBSIDY_BUDGET_NO_STAKE_82M,
+            TOTAL_SUPPLY
+        );
+        assert_eq!(MINING_SUBSIDY_BUDGET_NO_STAKE_82M, 82_000_000 * ONE_KUNA);
+        assert_eq!(SUBSIDY_ERA_BLOCKS_NO_STAKE_82M, 8_200_000);
     }
 
     #[test]

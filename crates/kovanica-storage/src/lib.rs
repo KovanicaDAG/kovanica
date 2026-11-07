@@ -37,7 +37,8 @@ pub use block_store::{BlockStore, BlockStoreError};
 pub use consensus_store::{ConsensusStore, ConsensusStoreError};
 pub use state_store::{StateStore, StateStoreError};
 pub use tables::{
-    ACCOUNTS, CONTRACT_CODE, CONTRACT_STORAGE, GENESIS_DIGEST, STAKING_STATE, STATE_ROOT,
+    ACCOUNTS, CONTRACT_CODE, CONTRACT_STORAGE, EMISSION_POLICY, GENESIS_DIGEST,
+    MINING_REWARD_STATE, STAKING_STATE, STATE_ROOT,
 };
 
 /// Main storage handle combining all stores.
@@ -182,6 +183,12 @@ pub mod tables {
     /// explicitly overridden. Key: `"genesis"`.
     pub const GENESIS_DIGEST: TableDefinition<&'static str, [u8; 32]> =
         TableDefinition::new("genesis_digest");
+    /// Persisted emission and genesis policy: "legacy-81m" or "no-stake-82m".
+    pub const EMISSION_POLICY: TableDefinition<&'static str, Vec<u8>> =
+        TableDefinition::new("emission_policy");
+    /// Persisted deterministic mining reward execution state for NO-stake networks.
+    pub const MINING_REWARD_STATE: TableDefinition<&'static str, Vec<u8>> =
+        TableDefinition::new("mining_reward_state");
 
     // Consensus store tables
     pub const DAG_BLOCKS: TableDefinition<[u8; 32], Vec<u8>> = TableDefinition::new("dag_blocks"); // StatementBlock serialized

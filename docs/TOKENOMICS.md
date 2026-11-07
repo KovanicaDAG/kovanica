@@ -1,52 +1,71 @@
-# KUNA Tokenomics Specification
+# KVNC Tokenomics Specification
 
 Canonical constants: `crates/kovanica-params`.
 
-**Version:** 0.2.0  
-**Status:** Locked for implementation (revised 2026-10-13)
+**Version:** 0.3.0  
+**Status:** Approved by Toni (2026-11-06)
 
 ---
 
 ## 1. Supply Overview
 
-| Allocation                  | Amount (KUNA)   | % of Total | Notes                                      |
-|-----------------------------|-----------------|------------|--------------------------------------------|
-| Mining subsidy              | 81 000 000      | 89.80 %    | Emitted via block rewards                  |
-| Treasury                    | 8 000 000       | 8.87 %     | 1 M / year × 8 years, linear vesting       |
-| Genesis validator allocation| 1 000 000       | 1.11 %     | Split evenly across genesis validators     |
-| Founder premine             | 200 000         | 0.22 %     | Unlocked at genesis                        |
-| **Total supply**            | **90 200 000**  | 100 %      | Hard cap                                   |
+Kovanica defines two genesis supply allocations depending on the network's consensus model:
+1. **Legacy Networks (with validator stake):** Mainnet (Chain 1) and legacy testnets (Chains 2, 4) allocate 1,000,000 KVNC to genesis validators.
+2. **New NO-Stake Networks (NoStake82M):** For new networks operating without consensus stake (such as Hybrid PoW Testnet, Chain 5), the 1,000,000 KVNC validator allocation is returned to capped mining emissions, setting the mining subsidy budget to 82,000,000 KVNC.
 
-Decimals: **9** (1 KUNA = 1 000 000 000 base units).
+| Allocation                  | Legacy (with stake) | New NO-Stake (82M) | % of Total         | Notes                                      |
+|-----------------------------|---------------------|--------------------|--------------------|--------------------------------------------|
+| Mining subsidy              | 81 000 000 KVNC     | 82 000 000 KVNC    | 89.80 % / 90.91 %  | Emitted via block rewards                  |
+| Treasury                    | 8 000 000 KVNC      | 8 000 000 KVNC     | 8.87 %             | 1 M / year × 8 years, linear vesting       |
+| Genesis validator allocation| 1 000 000 KVNC      | 0 KVNC             | 1.11 % / 0 %       | Omitted on new NO-stake networks           |
+| Founder premine             | 200 000 KVNC        | 200 000 KVNC       | 0.22 %             | Unlocked at genesis                        |
+| **Total supply**            | **90 200 000 KVNC** | **90 200 000 KVNC**| 100 %              | Hard cap                                   |
 
-The genesis validator allocation is minted **once** at genesis: 1 000 000 KUNA are
+Decimals: **9** (1 KVNC = 1 000 000 000 base units).
+
+For legacy networks, the genesis validator allocation is minted **once** at genesis: 1 000 000 KVNC are
 split evenly across the genesis validator set. Each validator's share backs its
-`MIN_VALIDATOR_STAKE` (50 000 KUNA) self-stake; the remainder is liquid balance.
+`MIN_VALIDATOR_STAKE` (50 000 KVNC) self-stake; the remainder is liquid balance.
 See §7.2 for the deterministic split rule.
+
+For new NO-stake networks (`NoStake82M`), zero tokens are minted for validators at genesis (`GENESIS_VALIDATOR_ALLOCATION_NO_STAKE = 0`).
+All 82,000,000 KVNC are emitted solely through block rewards according to the 82M subsidy schedule.
 
 ---
 
 ## 2. Block Reward Schedule
 
-- **Initial reward:** 2.5 KUNA  
+### 2.1 Legacy 81M Policy (Existing networks)
+
+- **Initial reward:** 2.5 KVNC  
 - **Decay:** × ¾ every **8 100 000** committed leader blocks (one era)  
 - Reward is paid **only** to the author of a **committed leader block** in the DAG.
 - Round length is **4 s**; with a wave of 3, one leader commits every **12 s**
   (`LEADER_INTERVAL_SECS = 12`). One era is therefore ≈ **3.08 years**.
+- The geometric series sums to `s₀ × era × 1/(1 − ¾) = 2.5 × 8 100 000 × 4 = 81 M`.
 
-### Approximate issuance per era
+### 2.2 Approved NoStake82M Policy (New NO-stake networks, Toni 2026-11-06)
 
-| Era | Reward       | Era issuance | Cumulative mining |
-|-----|--------------|--------------|-------------------|
-| 0   | 2.5 KUNA     | 20.25 M      | 20.25 M           |
-| 1   | 1.875 KUNA   | 15.1875 M    | 35.4375 M         |
-| 2   | 1.40625 KUNA | 11.390625 M  | 46.828125 M       |
-| 3   | 1.0546875    | 8.54296875 M | 55.37109375 M     |
-| …   | …            | …            | → 81 M            |
-
-The geometric series sums exactly to `s₀ × era × 1/(1 − ¾) = 2.5 × 8 100 000 × 4 = 81 M`.
-After ~40 eras the remaining emission becomes negligible and the mining subsidy
-is effectively exhausted (≈ 12.3 years for ~99 %).
+- **Scope & Gating:** Applies exclusively to new NO-stake genesis networks (e.g. Hybrid PoW Testnet, Chain 5). Strictly prohibited on Mainnet (Chain 1). Legacy chains and existing databases remain 100% unchanged.
+- **Initial reward:** 2.5 KVNC (`2_500_000_000` base units).
+- **Era length:** **8 200 000** rewarded blocks (`SUBSIDY_ERA_BLOCKS_NO_STAKE_82M`).
+  The first rewarded block is defined as index 0: indices `0..8_199_999` use the initial reward, index `8_200_000` starts era 1.
+- **Decay:** × ¾ every 8,200,000 rewarded blocks, evaluated using exact integer arithmetic:
+  `reward = reward * 3 / 4` (no floating point).
+- **Terminal Remainder Payout:**
+  Integer division rounding causes scheduled block rewards to reach zero at era 73 (rewarded block index 598,600,000).
+  At that exact block, total scheduled issuance across eras 0..72 equals `81_999_999_147_200_000` base units.
+  The exact remaining mining budget of **852 800 000 base units** (0.8528 KVNC) is paid out ONCE to the next eligible rewarded block.
+  Thereafter, block rewards mint exactly zero.
+  - Scheduled issuance (eras 0..72): `81_999_999_147_200_000` base units
+  - Terminal remainder (era 73, once): `852_800_000` base units
+  - Hard mining cap: `82_000_000_000_000_000` base units = **82 000 000 KVNC** exactly.
+- **Sub-DAG Multi-Block Counting:**
+  In GHOSTDAG hybrid PoW, each committed sub-DAG can contain multiple blocks. Every block in a committed sub-DAG is rewarded in canonical consensus topological order. The persistent rewarded block counter (`rewarded_block_count`) increments per block, not per leader height.
+- **Activation & Safe Migration:**
+  - Persisted in storage tables `EMISSION_POLICY` and `MINING_REWARD_STATE`.
+  - Configured via `genesis_validators.toml` (`[genesis] policy = "no-stake-82m"`), CLI (`--emission-policy no-stake-82m`), or environment variable (`KOVANICA_EMISSION_POLICY=no-stake-82m`).
+  - Existing databases without an explicit policy table automatically default to `Legacy81M`, preventing any accidental reinterpretation or balance modification.
 
 ---
 
@@ -72,8 +91,8 @@ registers becomes active in the next light-set epoch (at most ≈ 8 h later).
 
 ## 4. Treasury Vesting
 
-- Total: **8 000 000 KUNA**
-- Schedule: **1 000 000 KUNA per year** for 8 years
+- Total: **8 000 000 KVNC**
+- Schedule: **1 000 000 KVNC per year** for 8 years
 - Conversion: `BLOCKS_PER_YEAR = 2 628 000` (≈ 1 committed leader / 12 s)
 - Vesting is advanced automatically on every committed leader.
 - The treasury address can `claim()` only the already-vested portion.
@@ -81,7 +100,7 @@ registers becomes active in the next light-set epoch (at most ≈ 8 h later).
 ```text
 year 0          year 1          year 2          …          year 8
 |---------------|---------------|---------------|-----------|
-0 KUNA          1 M             2 M             …          8 M (capped)
+0 KVNC          1 M             2 M             …          8 M (capped)
 ```
 
 ---
@@ -91,7 +110,7 @@ year 0          year 1          year 2          …          year 8
 | Parameter                | Value                  |
 |--------------------------|------------------------|
 | Active validators        | 15 – 21                |
-| Min stake to join        | 50 000 KUNA            |
+| Min stake to join        | 50 000 KVNC            |
 | Unbonding period         | 100 000 committed leader blocks (~13.9 days at 12 s/leader) |
 | Commission               | set by validator (bps) |
 | Commission change cooldown | 7 200 committed leader blocks (≈ 1 day = 3 epochs of 8 h) |
@@ -110,8 +129,7 @@ circulating ≈ FOUNDER_PREMINE
             + treasury.vested
 ```
 
-Capped at `TOTAL_SUPPLY`. The genesis set circulating supply is therefore
-1 200 000 KUNA (premine + genesis allocation); treasury vests over time.
+Capped at `TOTAL_SUPPLY`. For legacy chains, genesis circulating supply is 1 200 000 KVNC (premine + genesis allocation). For new NO-stake chains, genesis circulating supply is 200 000 KVNC (founder premine only). Treasury vests over time.
 
 ---
 
@@ -119,41 +137,37 @@ Capped at `TOTAL_SUPPLY`. The genesis set circulating supply is therefore
 
 | Component                    | Crate / Module                          |
 |-----------------------------|-----------------------------------------|
-| Constants & emission math   | `kovanica-staking`                          |
-| TreasuryState               | `kovanica-staking`                          |
-| `on_leader_committed`       | `kovanica-staking`                          |
-| Reward application on commit| `kovanica-execution::ExecutionContext`      |
-| CommittedSubDag             | `kovanica-consensus`                        |
+| Constants & emission math   | `kovanica-params`, `kovanica-staking`   |
+| Types & Policy Definitions  | `kovanica-types::emission`              |
+| Storage & Persistence       | `kovanica-storage::StateStore`          |
+| Execution & Sub-DAG Rewards | `kovanica-execution::ExecutionContext`  |
+| Node Config & Genesis Init  | `kovanica-node`                         |
+| Consensus & CommittedSubDag | `kovanica-consensus`                    |
 
-### 7.1 Canonical constants (`crates/kovanica-staking/src/lib.rs`)
+### 7.1 Canonical constants (`crates/kovanica-params/src/lib.rs`)
 
 | Constant | Canonical value |
 |----------|-----------------|
-| `DECIMALS` / `ONE_KUNA` | 9 decimals, 1 KUNA = 1 000 000 000 base units |
-| `TOTAL_SUPPLY` | 90 200 000 KUNA (hard cap) |
-| `FOUNDER_PREMINE` | 200 000 KUNA |
-| `GENESIS_VALIDATOR_ALLOCATION` | 1 000 000 KUNA |
-| `TREASURY_TOTAL` / `TREASURY_ANNUAL` / `TREASURY_YEARS` | 8 000 000 KUNA / 1 000 000 KUNA per year / 8 years (linear) |
-| `MINING_SUBSIDY_BUDGET` | 81 000 000 KUNA |
-| `INITIAL_BLOCK_REWARD` (s₀) | 2.5 KUNA per committed leader |
-| `SUBSIDY_ERA_BLOCKS` | 8 100 000 committed leaders per era |
+| `DECIMALS` / `ONE_KUNA` | 9 decimals, 1 KVNC = 1 000 000 000 base units |
+| `TOTAL_SUPPLY` | 90 200 000 KVNC (hard cap) |
+| `FOUNDER_PREMINE` | 200 000 KVNC |
+| `GENESIS_VALIDATOR_ALLOCATION` | 1 000 000 KVNC (legacy) |
+| `GENESIS_VALIDATOR_ALLOCATION_NO_STAKE` | 0 KVNC (new NO-stake) |
+| `TREASURY_TOTAL` / `TREASURY_ANNUAL` / `TREASURY_YEARS` | 8 000 000 KVNC / 1 000 000 KVNC per year / 8 years (linear) |
+| `MINING_SUBSIDY_BUDGET` | 81 000 000 KVNC (legacy) |
+| `MINING_SUBSIDY_BUDGET_NO_STAKE_82M` | 82 000 000 KVNC (new NO-stake) |
+| `INITIAL_BLOCK_REWARD` (s₀) | 2.5 KVNC per block |
+| `SUBSIDY_ERA_BLOCKS` | 8 100 000 blocks per era (legacy) |
+| `SUBSIDY_ERA_BLOCKS_NO_STAKE_82M` | 8 200 000 blocks per era (new NO-stake) |
 | `DECAY_NUM` / `DECAY_DEN` | × ¾ per era |
 | `LEADER_INTERVAL_SECS` | 12 (4 s round × wave 3) |
 | `BLOCKS_PER_YEAR` | 2 628 000 (treasury vesting conversion only) |
-| `EPOCH_ROUNDS` | epoch = 8 h = 7200 DAG rounds = 2400 leader heights (validator rotation, decoupled from the era) |
-| `MIN_VALIDATOR_STAKE` | 50 000 KUNA |
+| `EPOCH_ROUNDS` | epoch = 8 h = 7200 DAG rounds = 2400 leader heights |
+| `MIN_VALIDATOR_STAKE` | 50 000 KVNC |
 | `MIN_ACTIVE_VALIDATORS` / `MAX_ACTIVE_VALIDATORS` | 15 / 21 |
 | `UNBONDING_ROUNDS` | 100 000 committed leader blocks (~13.9 days at 12 s/leader) |
 
-`MINING_SUBSIDY_BUDGET` is derived, not hard-coded:
-
-```
-MINING_SUBSIDY_BUDGET = TOTAL_SUPPLY − FOUNDER_PREMINE − TREASURY_TOTAL
-                        − GENESIS_VALIDATOR_ALLOCATION
-                      = 90 200 000 − 200 000 − 8 000 000 − 1 000 000 = 81 000 000
-```
-
-### 7.2 Genesis validator allocation split
+### 7.2 Genesis validator allocation split (Legacy Networks)
 
 `genesis_validator_shares(n)` splits `GENESIS_VALIDATOR_ALLOCATION` across `n`
 genesis validators as evenly as integer atoms allow:
@@ -162,28 +176,12 @@ genesis validators as evenly as integer atoms allow:
 - the first `remainder` validators (sorted ascending by address) receive `base + 1`
 - the shares sum to **exactly** `GENESIS_VALIDATOR_ALLOCATION`
 
-Because each share must back a `MIN_VALIDATOR_STAKE` (50 000 KUNA) self-stake,
-an even 1 000 000 KUNA split supports **at most 20 genesis validators**.
-The minimum viable set is **5 validators** (each receives 200 000 KUNA, leaving
-150 000 KUNA liquid after the 50 000 KUNA self-stake).
-
-**Genesis validator count.** Testnet: **5 recommended**; the code enforces
-only the maximum of 20 (a larger set cannot be funded from
-`GENESIS_VALIDATOR_ALLOCATION` at `MIN_VALIDATOR_STAKE`, so `init_genesis`
-bails), and smaller sets are accepted (local and test clusters use 1–4 nodes).
-Mainnet (chain 1): **15–20 enforced** by `ensure_mainnet_genesis_validator_count`
-in `init_genesis` and `--check-config`; the lower bound is
-`MIN_ACTIVE_VALIDATORS` (15). The 5-validator genesis is for the chain 4
-testnet (Toni, 2026-10-23). Raise `GENESIS_VALIDATOR_ALLOCATION` to support
-more than 20.
-
-These values are cross-checked by the unit tests in `kovanica-staking`
-(`canonical_values_match_skeleton`, `genesis_validator_shares_sum_exactly_and_are_even`).
+Under the `NoStake82M` policy, this allocation is zero and no validator shares are created.
 
 ---
 
 ## 8. Future Governance Hooks
 
 - Change `BLOCKS_PER_YEAR` (affects vesting speed)
-- Adjust min stake / max validators
-- Activate residual fee-burn or fee-to-stakers mechanisms once mining subsidy is low
+- Adjust min stake / max validators (on legacy/staking chains)
+- Activate residual fee-burn or fee-to-miners mechanisms once mining subsidy is exhausted
