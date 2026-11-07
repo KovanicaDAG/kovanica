@@ -913,6 +913,9 @@ where
         }
     });
 
+    let (local_block_tx, local_block_rx) =
+        tokio::sync::mpsc::channel(kovanica_rpc::LOCAL_BLOCK_SUBMISSION_CAPACITY);
+
     let rpc_state = RpcState {
         tx_gossip: Some(rpc_tx_gossip),
         health: node_health.clone(),
@@ -927,6 +930,7 @@ where
         auth_config: Arc::new(auth_config.clone()),
         sync_status: Some(sync_status_source),
         block_gossip: Some(rpc_block_gossip_tx),
+        block_submission: Some(local_block_tx),
         mining_enabled: config.mining.enabled,
         mining_threads: config.mining.threads,
     };
@@ -1055,6 +1059,7 @@ where
     let network_task = tokio::spawn(run_network(network, network_cmd_rx, shutdown_rx.clone()));
     let event_task = tokio::spawn(run_event_handler(
         network_events,
+        local_block_rx,
         dag_store.clone(),
         mempool.clone(),
         engine.clone(),
@@ -2405,6 +2410,7 @@ async fn run_network(
 #[allow(clippy::too_many_arguments)]
 async fn run_event_handler(
     mut network_events: mpsc::UnboundedReceiver<NetworkEvent>,
+    mut local_block_rx: mpsc::Receiver<kovanica_rpc::LocalBlockSubmission>,
     dag_store: Arc<DagStore>,
     mempool: Arc<Mempool>,
     engine: Arc<ConsensusEngine<NodeDagStore, NodeBlockManager>>,
@@ -2422,6 +2428,32 @@ async fn run_event_handler(
     let mut vote_sync = VoteSync::new();
     loop {
         tokio::select! {
+            maybe_local = local_block_rx.recv() => match maybe_local {
+                Some(submission) => {
+                    let io = BlockIngest {
+                        dag_store: &dag_store,
+                        network_cmd_tx: &network_cmd_tx,
+                        events: &events,
+                        chain_id,
+                        ghostdag: Some(ghostdag.clone()),
+                        exec_tx: Some(exec_tx.clone()),
+                    };
+                    let local_peer = PeerId::random();
+                    let outcome = ingest_block(
+                        submission.block.clone(),
+                        local_peer,
+                        &engine,
+                        &io,
+                        &mut orphans,
+                    );
+                    let is_admitted = matches!(outcome, Ok(kovanica_rpc::LocalBlockAdmissionOutcome::Admitted { .. }));
+                    let _ = submission.respond_to.send(outcome);
+                    if is_admitted {
+                        let _ = network_cmd_tx.send(NetworkCommand::BroadcastBlock(submission.block));
+                    }
+                }
+                None => break,
+            },
             maybe = network_events.recv() => match maybe {
                 Some(event) => {
                     // The catch-up tracker is shared with the read-only
@@ -2478,15 +2510,38 @@ fn ingest_block(
     engine: &ConsensusEngine<NodeDagStore, NodeBlockManager>,
     io: &BlockIngest<'_>,
     orphans: &mut orphans::OrphanBuffer,
-) {
+) -> Result<kovanica_rpc::LocalBlockAdmissionOutcome, kovanica_rpc::LocalBlockAdmissionError> {
+    let initial_digest = block.digest;
+    let mut is_first = true;
+    let mut initial_outcome: Option<
+        Result<kovanica_rpc::LocalBlockAdmissionOutcome, kovanica_rpc::LocalBlockAdmissionError>,
+    > = None;
     let mut work = std::collections::VecDeque::from([(block, peer)]);
     while let Some((block, peer)) = work.pop_front() {
+        let current_is_initial = is_first;
+        is_first = false;
+
+        // Idempotency check: if the block is already accepted in dag_store, no need to re-admit.
+        if io.dag_store.has_block(&block.digest).unwrap_or(false) {
+            if current_is_initial {
+                return Ok(kovanica_rpc::LocalBlockAdmissionOutcome::Admitted {
+                    digest: block.digest,
+                });
+            }
+            continue;
+        }
+
         if io.chain_id == kovanica_types::signing::chain_id::HYBRID_TESTNET {
             // 1. Extract PoW header
             let header = match block.extract_pow_header(io.chain_id) {
                 Ok(h) => h,
                 Err(e) => {
                     warn!(digest = %block.digest, error = %e, "rejected hybrid block: missing/bad PoW header");
+                    if current_is_initial {
+                        return Err(kovanica_rpc::LocalBlockAdmissionError::BadPow(
+                            e.to_string(),
+                        ));
+                    }
                     continue;
                 }
             };
@@ -2498,36 +2553,66 @@ fn ingest_block(
                 .unwrap_or(0);
             if let Err(e) = header.verify_pow_with_clock(Some(now_ms)) {
                 warn!(digest = %block.digest, error = %e, "rejected hybrid block: failed verify_pow_with_clock");
+                if current_is_initial {
+                    return Err(match e {
+                        kovanica_types::HeaderError::TargetNotMet { .. } => {
+                            kovanica_rpc::LocalBlockAdmissionError::TargetNotMet
+                        }
+                        kovanica_types::HeaderError::TimestampDrift { .. } => {
+                            kovanica_rpc::LocalBlockAdmissionError::TimestampDrift(e.to_string())
+                        }
+                        other => kovanica_rpc::LocalBlockAdmissionError::BadPow(other.to_string()),
+                    });
+                }
                 continue;
             }
 
             // 3. Structural validation of parent references
             if header.parents.len() > kovanica_params::GHOSTDAG_K as usize {
                 warn!(digest = %block.digest, count = header.parents.len(), "rejected hybrid block: too many parents");
+                if current_is_initial {
+                    return Err(kovanica_rpc::LocalBlockAdmissionError::MalformedParents(
+                        format!(
+                            "too many parents: {} (max {})",
+                            header.parents.len(),
+                            kovanica_params::GHOSTDAG_K
+                        ),
+                    ));
+                }
                 continue;
             }
             let mut malformed_parents = false;
+            let mut malformed_reason = "";
             let mut parent_set = std::collections::HashSet::new();
             for p in &header.parents {
                 if !parent_set.insert(p.digest) {
                     malformed_parents = true;
+                    malformed_reason = "duplicate parent reference";
                     break;
                 }
                 if p.digest == block.digest {
                     malformed_parents = true;
+                    malformed_reason = "self-referential parent";
                     break;
                 }
                 if p.round >= block.round {
                     malformed_parents = true;
+                    malformed_reason = "parent round >= block round";
                     break;
                 }
                 if block.round - p.round > kovanica_types::MAX_PARENT_ROUND_GAP {
                     malformed_parents = true;
+                    malformed_reason = "parent round gap exceeds limit";
                     break;
                 }
             }
             if malformed_parents {
-                warn!(digest = %block.digest, "rejected hybrid block: malformed parent references");
+                warn!(digest = %block.digest, reason = malformed_reason, "rejected hybrid block: malformed parent references");
+                if current_is_initial {
+                    return Err(kovanica_rpc::LocalBlockAdmissionError::MalformedParents(
+                        malformed_reason.into(),
+                    ));
+                }
                 continue;
             }
 
@@ -2558,12 +2643,18 @@ fn ingest_block(
                             debug!(error = %e, "failed to queue missing-parent request for hybrid block");
                         }
                     }
+                    if current_is_initial {
+                        return Ok(kovanica_rpc::LocalBlockAdmissionOutcome::BufferedOrphan {
+                            digest,
+                        });
+                    }
                     continue;
                 }
             }
 
             // 5. Full parent verification and monotonic timestamp check against loaded parents
             let mut parent_valid = true;
+            let mut parent_err: Option<kovanica_rpc::LocalBlockAdmissionError> = None;
             for p in &header.parents {
                 match io.dag_store.get_block(&p.digest) {
                     Ok(parent_block) => {
@@ -2574,6 +2665,9 @@ fn ingest_block(
                                 "rejected hybrid block: parent reference metadata mismatch"
                             );
                             parent_valid = false;
+                            parent_err = Some(
+                                kovanica_rpc::LocalBlockAdmissionError::ParentMetadataMismatch,
+                            );
                             break;
                         }
                         if let Ok(parent_hdr) = parent_block.extract_pow_header(io.chain_id) {
@@ -2585,17 +2679,32 @@ fn ingest_block(
                                     "rejected hybrid block: timestamp not strictly monotonic"
                                 );
                                 parent_valid = false;
+                                parent_err = Some(
+                                    kovanica_rpc::LocalBlockAdmissionError::TimestampNotMonotonic {
+                                        header_ts: header.timestamp,
+                                        parent_ts: parent_hdr.timestamp,
+                                    },
+                                );
                                 break;
                             }
                         }
                     }
                     Err(_) => {
                         parent_valid = false;
+                        parent_err =
+                            Some(kovanica_rpc::LocalBlockAdmissionError::MalformedParents(
+                                format!("parent block {} unreadable", p.digest),
+                            ));
                         break;
                     }
                 }
             }
             if !parent_valid {
+                if current_is_initial {
+                    return Err(parent_err.unwrap_or(
+                        kovanica_rpc::LocalBlockAdmissionError::ParentMetadataMismatch,
+                    ));
+                }
                 continue;
             }
 
@@ -2614,6 +2723,12 @@ fn ingest_block(
                     required_bits = format_args!("0x{:08x}", required_bits),
                     "rejected hybrid PoW block: target bits mismatch"
                 );
+                if current_is_initial {
+                    return Err(kovanica_rpc::LocalBlockAdmissionError::TargetMismatch {
+                        declared: header.target_bits,
+                        required: required_bits,
+                    });
+                }
                 continue;
             }
             if !kovanica_types::check_pow_hash_meets_target(
@@ -2624,22 +2739,38 @@ fn ingest_block(
                     digest = %block.digest,
                     "rejected hybrid PoW block: pow hash does not meet required target"
                 );
+                if current_is_initial {
+                    return Err(kovanica_rpc::LocalBlockAdmissionError::TargetNotMet);
+                }
                 continue;
             }
 
             // 7. Validate transactions & Merkle root
             if block.transactions.len() > kovanica_types::MAX_TXS_PER_BLOCK {
                 warn!(digest = %block.digest, "rejected hybrid block: too many transactions");
+                if current_is_initial {
+                    return Err(kovanica_rpc::LocalBlockAdmissionError::TooManyTransactions(
+                        block.transactions.len(),
+                    ));
+                }
                 continue;
             }
             if StatementBlock::compute_merkle_root(&block.transactions) != block.merkle_root {
                 warn!(digest = %block.digest, "rejected hybrid block: Merkle root mismatch");
+                if current_is_initial {
+                    return Err(kovanica_rpc::LocalBlockAdmissionError::MerkleRootMismatch);
+                }
                 continue;
             }
 
             // 8. ADMIT TO ACCEPTED CONSENSUS STATE
             if let Err(e) = io.dag_store.put_block(&block) {
                 error!(digest = %block.digest, error = %e, "failed to persist accepted hybrid block to dag_store");
+                if current_is_initial {
+                    return Err(kovanica_rpc::LocalBlockAdmissionError::Storage(
+                        e.to_string(),
+                    ));
+                }
                 continue;
             }
             io.events.publish_new_head(&block);
@@ -2652,6 +2783,12 @@ fn ingest_block(
                 for subdag in subdags {
                     let _ = exec_tx.send(subdag);
                 }
+            }
+
+            if current_is_initial {
+                initial_outcome = Some(Ok(kovanica_rpc::LocalBlockAdmissionOutcome::Admitted {
+                    digest: block.digest,
+                }));
             }
 
             // 9. Release buffered orphans waiting on this block
@@ -2672,6 +2809,12 @@ fn ingest_block(
                     debug!(parent = %block.digest, count = released.len(), "re-processing orphans");
                 }
                 work.extend(released);
+                if current_is_initial {
+                    initial_outcome =
+                        Some(Ok(kovanica_rpc::LocalBlockAdmissionOutcome::Admitted {
+                            digest: block.digest,
+                        }));
+                }
             }
             Err(e) => {
                 let missing: Vec<Hash> = block
@@ -2682,6 +2825,11 @@ fn ingest_block(
                     .collect();
                 if missing.is_empty() {
                     warn!(digest = %block.digest, error = %e, "rejected received consensus block");
+                    if current_is_initial {
+                        return Err(kovanica_rpc::LocalBlockAdmissionError::BadPow(
+                            e.to_string(),
+                        ));
+                    }
                     continue;
                 }
                 let digest = block.digest;
@@ -2700,9 +2848,16 @@ fn ingest_block(
                         debug!(error = %e, "failed to queue missing-parent request");
                     }
                 }
+                if current_is_initial {
+                    return Ok(kovanica_rpc::LocalBlockAdmissionOutcome::BufferedOrphan { digest });
+                }
             }
         }
     }
+
+    initial_outcome.unwrap_or(Ok(kovanica_rpc::LocalBlockAdmissionOutcome::Admitted {
+        digest: initial_digest,
+    }))
 }
 
 /// Inactivity timeout after which an idle catch-up session is dropped.
@@ -4076,7 +4231,7 @@ fn handle_network_event(
                 warn!(digest = %block.digest, error = %e, "rejected invalid PoW block in main hot path");
                 return;
             }
-            ingest_block(block, peer, engine, io, orphans);
+            let _ = ingest_block(block, peer, engine, io, orphans);
         }
         NetworkEvent::TransactionReceived(tx) => {
             // The network layer already admitted this transaction into the
@@ -4182,7 +4337,7 @@ fn handle_network_event(
                     let leader_round = block.round;
                     let is_leader =
                         engine.scheduled_leader_for_round(leader_round) == Some(block.author);
-                    ingest_block(block, peer, engine, io, orphans);
+                    let _ = ingest_block(block, peer, engine, io, orphans);
                     if is_leader {
                         // The votes that decided this leader were cast before
                         // we connected, so they have to be fetched explicitly
@@ -11724,7 +11879,7 @@ mod b1_epoch_restart_repro {
         let block_easy = mined_easy.to_statement_block(vec![]);
         let easy_digest = block_easy.digest;
 
-        ingest_block(block_easy, peer, &engine, &io, &mut orphans);
+        let _ = ingest_block(block_easy, peer, &engine, &io, &mut orphans);
 
         assert!(
             !dag.has_block(&easy_digest).unwrap(),
@@ -11750,7 +11905,7 @@ mod b1_epoch_restart_repro {
         let block_valid = mined_valid.to_statement_block(vec![]);
         let valid_digest = block_valid.digest;
 
-        ingest_block(block_valid, peer, &engine, &io, &mut orphans);
+        let _ = ingest_block(block_valid, peer, &engine, &io, &mut orphans);
 
         assert!(
             dag.has_block(&valid_digest).unwrap(),
@@ -11812,7 +11967,7 @@ mod b1_epoch_restart_repro {
         let digest2 = block2.digest;
 
         // 1. Ingest child block2 FIRST before its parent block1 is known
-        ingest_block(block2, peer, &engine, &io, &mut orphans);
+        let _ = ingest_block(block2, peer, &engine, &io, &mut orphans);
 
         // Child must NOT be admitted to consensus state or rewarded early
         assert!(
@@ -11829,7 +11984,7 @@ mod b1_epoch_restart_repro {
         );
 
         // 2. Now ingest parent block1
-        ingest_block(block1, peer, &engine, &io, &mut orphans);
+        let _ = ingest_block(block1, peer, &engine, &io, &mut orphans);
 
         // Both parent block1 and released child block2 must now be in dag_store!
         assert!(
@@ -11896,7 +12051,7 @@ mod b1_epoch_restart_repro {
         let block_dup = mined_dup.to_statement_block(vec![]);
         let dup_digest = block_dup.digest;
 
-        ingest_block(block_dup, peer, &engine, &io, &mut orphans);
+        let _ = ingest_block(block_dup, peer, &engine, &io, &mut orphans);
         assert!(!dag.has_block(&dup_digest).unwrap());
         assert!(
             !orphans.contains(&dup_digest),
@@ -11918,7 +12073,7 @@ mod b1_epoch_restart_repro {
         let block_round = mined_round.to_statement_block(vec![]);
         let round_digest = block_round.digest;
 
-        ingest_block(block_round, peer, &engine, &io, &mut orphans);
+        let _ = ingest_block(block_round, peer, &engine, &io, &mut orphans);
         assert!(!dag.has_block(&round_digest).unwrap());
         assert!(
             !orphans.contains(&round_digest),
@@ -12075,6 +12230,618 @@ mod b1_epoch_restart_repro {
         assert_eq!(
             res3.circulating_supply, initial_supply,
             "circulating supply after restart must match original"
+        );
+    }
+
+    fn sample_test_committee() -> CommitteeInfo {
+        let auth = AuthorityInfo {
+            index: 0,
+            stake: kovanica_staking::MIN_VALIDATOR_STAKE,
+            public_key: PublicKey([1; 32]),
+            vrf_public_key: None,
+            address: Address([1; 32]),
+            network_address: "127.0.0.1:9000".to_string(),
+        };
+        CommitteeInfo::try_new(0, vec![auth]).expect("valid test committee")
+    }
+
+    #[tokio::test]
+    async fn test_submitwork_regression_1_2_local_admission_commitment_execution_no_peer() {
+        use kovanica_consensus::ghostdag::GhostdagCommitter;
+        use kovanica_consensus::mining::MiningWorker;
+        use kovanica_rpc::LOCAL_BLOCK_SUBMISSION_CAPACITY;
+        use kovanica_types::EmissionPolicy;
+        use serde_json::json;
+        use std::sync::atomic::AtomicUsize;
+
+        const EXECUTED_SUBDAGS: redb::TableDefinition<[u8; 32], u8> =
+            redb::TableDefinition::new("execution_committed_subdags");
+
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let state_storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
+        {
+            let w_txn = state_storage.begin_write().unwrap();
+            state_storage
+                .state()
+                .save_emission_policy(&w_txn, &EmissionPolicy::NoStake82M)
+                .unwrap();
+            w_txn.commit().unwrap();
+        }
+
+        let (engine, dag_store, _key) = crate::tests::vote_sync_test_engine(&dir);
+        let engine = Arc::new(engine);
+        let mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            state_storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::HYBRID_TESTNET),
+        ));
+        let ghostdag = Arc::new(parking_lot::Mutex::new(GhostdagCommitter::new(5)));
+
+        let (net_cmd_tx, mut net_cmd_rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let (net_event_tx, net_event_rx) = mpsc::unbounded_channel::<NetworkEvent>();
+        let (local_block_tx, local_block_rx) = mpsc::channel(LOCAL_BLOCK_SUBMISSION_CAPACITY);
+        let (exec_tx, exec_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let events = EventBus::new();
+        let catch_up = Arc::new(parking_lot::Mutex::new(CatchUpTracker::new()));
+
+        let h_handler = tokio::spawn(run_event_handler(
+            net_event_rx,
+            local_block_rx,
+            dag_store.clone(),
+            mempool.clone(),
+            engine.clone(),
+            net_cmd_tx.clone(),
+            events.clone(),
+            state_storage.clone(),
+            catch_up.clone(),
+            shutdown_rx.clone(),
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            exec_tx.clone(),
+            ghostdag.clone(),
+        ));
+
+        let h_exec = tokio::spawn(run_execution(
+            exec_rx,
+            state_storage.clone(),
+            events.clone(),
+            None,
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::HYBRID_TESTNET),
+            shutdown_rx.clone(),
+            NodeHealth::new(),
+            None,
+            Arc::new(tokio::sync::RwLock::new(sample_test_committee())),
+            "127.0.0.1:0".into(),
+            Address([1; 32]),
+            PublicKey([1; 32]),
+            0,
+            false,
+        ));
+
+        let rpc_state = RpcState {
+            health: NodeHealth::new(),
+            storage: state_storage.clone(),
+            consensus_store: dag_store.clone(),
+            mempool: mempool.clone(),
+            staking: Arc::new(tokio::sync::RwLock::new(
+                kovanica_staking::StakingState::new(),
+            )),
+            committee: Arc::new(tokio::sync::RwLock::new(sample_test_committee())),
+            peer_count: Arc::new(AtomicUsize::new(0)),
+            events: events.clone(),
+            rate_limiter: Arc::new(kovanica_rpc::RateLimiterState::new(
+                kovanica_rpc::RateLimitConfig::default(),
+            )),
+            auth_config: Arc::new(kovanica_rpc::AuthConfig::default()),
+            tx_gossip: None,
+            sync_status: None,
+            block_gossip: None,
+            block_submission: Some(local_block_tx),
+            mining_enabled: false,
+            mining_threads: 0,
+        };
+
+        // 1. Mine and submit round 0 block (genesis)
+        let mut worker = MiningWorker::new();
+        let header0 = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            0,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined0 = worker.mine_header(header0, 10_000).unwrap();
+        let block0 = mined0.to_statement_block(vec![]);
+        let digest0 = block0.digest;
+
+        let res0 = kovanica_rpc::handle_submit_work(json!({ "header": mined0 }), rpc_state.clone())
+            .await
+            .unwrap();
+        assert_eq!(res0["accepted"], true);
+
+        // 2. Mine and submit round 1 block referencing round 0
+        let header1 = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![block0.reference()],
+            kovanica_types::Hash::zero(),
+            1_700_000_004_000,
+            0x207fffff,
+            0,
+        );
+        let mined1 = worker.mine_header(header1, 10_000).unwrap();
+        let block1 = mined1.to_statement_block(vec![]);
+        let digest1 = block1.digest;
+
+        let res1 = kovanica_rpc::handle_submit_work(json!({ "header": mined1 }), rpc_state.clone())
+            .await
+            .unwrap();
+        assert_eq!(res1["accepted"], true);
+
+        // Allow execution task to process committed sub-DAGs
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // VERIFY REGRESSION 1:
+        // A. Local Admission
+        assert!(
+            dag_store.has_block(&digest0).unwrap(),
+            "round 0 must be in dag_store"
+        );
+        assert!(
+            dag_store.has_block(&digest1).unwrap(),
+            "round 1 must be in dag_store"
+        );
+
+        // B. Actual Commitment & Execution
+        let r_txn = state_storage.begin_read().unwrap();
+        let committed_h = state_storage
+            .consensus()
+            .get_committed_leader_height(&r_txn)
+            .unwrap();
+        assert!(
+            committed_h >= 1,
+            "committed_leader_height must advance past 0"
+        );
+
+        let executed_table = r_txn.open_table(EXECUTED_SUBDAGS).unwrap();
+        assert_eq!(
+            executed_table.get(digest1.0).unwrap().map(|g| g.value()),
+            Some(1),
+            "executed subdag marker must be persisted in EXECUTED_SUBDAGS table"
+        );
+
+        // C. Emission Reward (Round 0 + Round 1 committed subdag = 2 blocks * 2.5 KVNC = 5.0 KVNC)
+        let mining_state = state_storage
+            .state()
+            .load_mining_reward_state(&r_txn)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            mining_state.cumulative_mining_issued, 5_000_000_000,
+            "cumulative_mining_issued must be credited with 5.0 KVNC for 2 committed blocks"
+        );
+        let author_account = state_storage
+            .state()
+            .get_account_or_default(&r_txn, &Address::default())
+            .unwrap();
+        assert_eq!(
+            author_account.balance, 5_000_000_000,
+            "miner address must receive 5.0 KVNC total reward for both committed blocks"
+        );
+        drop(r_txn);
+
+        // D. Evidence of broadcast without gossip echo
+        let broadcast_cmd = net_cmd_rx.try_recv().unwrap();
+        assert!(matches!(broadcast_cmd, NetworkCommand::BroadcastBlock(_)));
+
+        // REGRESSION 2: Duplicate submission and subsequent gossip of the same block cannot double-execute or double-reward
+        let res1_dup =
+            kovanica_rpc::handle_submit_work(json!({ "header": mined1 }), rpc_state.clone())
+                .await
+                .unwrap();
+        assert_eq!(res1_dup["accepted"], true);
+
+        // Inbound gossip of the same block
+        net_event_tx
+            .send(NetworkEvent::BlockReceived {
+                peer: PeerId::random(),
+                block: block1.clone(),
+            })
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let r_txn2 = state_storage.begin_read().unwrap();
+        let committed_h2 = state_storage
+            .consensus()
+            .get_committed_leader_height(&r_txn2)
+            .unwrap();
+        assert_eq!(
+            committed_h2, committed_h,
+            "committed height must not change on duplicate submission"
+        );
+        let mining_state2 = state_storage
+            .state()
+            .load_mining_reward_state(&r_txn2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            mining_state2.cumulative_mining_issued, 5_000_000_000,
+            "cumulative_mining_issued must not increase on duplicate/gossip"
+        );
+        let author_account2 = state_storage
+            .state()
+            .get_account_or_default(&r_txn2, &Address::default())
+            .unwrap();
+        assert_eq!(
+            author_account2.balance, 5_000_000_000,
+            "miner balance must not increase on duplicate/gossip"
+        );
+        drop(r_txn2);
+
+        // Cleanup
+        let _ = shutdown_tx.send(true);
+        let _ = tokio::join!(h_handler, h_exec);
+    }
+
+    #[tokio::test]
+    async fn test_submitwork_regression_3_reopen_stores_and_replay_consistent() {
+        use kovanica_consensus::mining::MiningWorker;
+        use kovanica_types::EmissionPolicy;
+
+        const EXECUTED_SUBDAGS: redb::TableDefinition<[u8; 32], u8> =
+            redb::TableDefinition::new("execution_committed_subdags");
+
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let subdag = {
+            let state_storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
+            {
+                let w_txn = state_storage.begin_write().unwrap();
+                state_storage
+                    .state()
+                    .save_emission_policy(&w_txn, &EmissionPolicy::NoStake82M)
+                    .unwrap();
+                w_txn.commit().unwrap();
+            }
+
+            let mut exec =
+                ExecutionContext::with_signing_context(kovanica_types::SigningContext::new(
+                    kovanica_types::signing::chain_id::HYBRID_TESTNET,
+                ));
+            exec.emission_policy = Some(EmissionPolicy::NoStake82M);
+
+            let mut worker = MiningWorker::new();
+            let header = kovanica_types::BlockHeader::new(
+                kovanica_types::signing::chain_id::HYBRID_TESTNET,
+                1,
+                0,
+                vec![],
+                kovanica_types::Hash::zero(),
+                1_700_000_000_000,
+                0x207fffff,
+                0,
+            );
+            let mined = worker.mine_header(header, 10_000).unwrap();
+            let block = mined.to_statement_block(vec![]);
+            let subdag = kovanica_types::CommittedSubDag {
+                leader: block.clone(),
+                blocks: vec![block],
+                leader_round: 1,
+                leader_author: 0,
+                non_blue: vec![],
+            };
+            let res = exec
+                .execute_committed_subdag(&subdag, &state_storage)
+                .unwrap();
+            assert!(res.reward.is_some());
+            subdag
+        };
+
+        // Reopen storage from the exact same disk path
+        let reopened_storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
+        let r_txn = reopened_storage.begin_read().unwrap();
+        let committed_h = reopened_storage
+            .consensus()
+            .get_committed_leader_height(&r_txn)
+            .unwrap();
+        assert_eq!(committed_h, 1);
+        let executed_table = r_txn.open_table(EXECUTED_SUBDAGS).unwrap();
+        assert_eq!(
+            executed_table
+                .get(subdag.leader.digest.0)
+                .unwrap()
+                .map(|g| g.value()),
+            Some(1)
+        );
+        let mining_state = reopened_storage
+            .state()
+            .load_mining_reward_state(&r_txn)
+            .unwrap()
+            .unwrap();
+        assert_eq!(mining_state.cumulative_mining_issued, 2_500_000_000);
+        drop(r_txn);
+
+        // Replay through a fresh ExecutionContext
+        let mut exec_replay = ExecutionContext::with_signing_context(
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::HYBRID_TESTNET),
+        );
+        let replay_res = exec_replay
+            .execute_committed_subdag(&subdag, &reopened_storage)
+            .unwrap();
+        assert!(
+            replay_res.reward.is_none(),
+            "replayed subdag must return None reward"
+        );
+        assert_eq!(replay_res.txs_applied, 0);
+
+        let r_txn2 = reopened_storage.begin_read().unwrap();
+        let mining_state2 = reopened_storage
+            .state()
+            .load_mining_reward_state(&r_txn2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            mining_state2.cumulative_mining_issued, 2_500_000_000,
+            "cumulative_mining_issued must not increase on replay"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submitwork_regression_4_invalid_target_malformed_unknown_parents_legacy_rejection(
+    ) {
+        use kovanica_consensus::ghostdag::GhostdagCommitter;
+        use kovanica_consensus::mining::MiningWorker;
+        use kovanica_rpc::LOCAL_BLOCK_SUBMISSION_CAPACITY;
+        use serde_json::json;
+        use std::sync::atomic::AtomicUsize;
+
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let state_storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
+        let (engine, dag_store, _key) = crate::tests::vote_sync_test_engine(&dir);
+        let engine = Arc::new(engine);
+        let mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            state_storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::HYBRID_TESTNET),
+        ));
+        let ghostdag = Arc::new(parking_lot::Mutex::new(GhostdagCommitter::new(5)));
+        let (net_cmd_tx, _net_cmd_rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        let (_net_event_tx, net_event_rx) = mpsc::unbounded_channel::<NetworkEvent>();
+        let (local_block_tx, local_block_rx) = mpsc::channel(LOCAL_BLOCK_SUBMISSION_CAPACITY);
+        let (exec_tx, _exec_rx) = mpsc::unbounded_channel();
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let events = EventBus::new();
+        let catch_up = Arc::new(parking_lot::Mutex::new(CatchUpTracker::new()));
+
+        tokio::spawn(run_event_handler(
+            net_event_rx,
+            local_block_rx,
+            dag_store.clone(),
+            mempool.clone(),
+            engine.clone(),
+            net_cmd_tx.clone(),
+            events.clone(),
+            state_storage.clone(),
+            catch_up.clone(),
+            shutdown_rx.clone(),
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            exec_tx.clone(),
+            ghostdag.clone(),
+        ));
+
+        let rpc_state = RpcState {
+            health: NodeHealth::new(),
+            storage: state_storage.clone(),
+            consensus_store: dag_store.clone(),
+            mempool: mempool.clone(),
+            staking: Arc::new(tokio::sync::RwLock::new(
+                kovanica_staking::StakingState::new(),
+            )),
+            committee: Arc::new(tokio::sync::RwLock::new(sample_test_committee())),
+            peer_count: Arc::new(AtomicUsize::new(0)),
+            events: events.clone(),
+            rate_limiter: Arc::new(kovanica_rpc::RateLimiterState::new(
+                kovanica_rpc::RateLimitConfig::default(),
+            )),
+            auth_config: Arc::new(kovanica_rpc::AuthConfig::default()),
+            tx_gossip: None,
+            sync_status: None,
+            block_gossip: None,
+            block_submission: Some(local_block_tx),
+            mining_enabled: false,
+            mining_threads: 0,
+        };
+
+        let mut worker = MiningWorker::new();
+
+        // 1. Invalid target: easier target bits (0x2100ffff vs required 0x207fffff)
+        let header_bad_target = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x2100ffff,
+            0,
+        );
+        let mined_bad_target = worker.mine_header(header_bad_target, 10_000).unwrap();
+        let err_target = kovanica_rpc::handle_submit_work(
+            json!({ "header": mined_bad_target }),
+            rpc_state.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err_target.to_string().contains("target bits")
+                || err_target.to_string().contains("TargetMismatch")
+        );
+        assert!(!dag_store
+            .has_block(&mined_bad_target.to_statement_block(vec![]).digest)
+            .unwrap());
+
+        // 2. Malformed block: 10 parents (exceeding GHOSTDAG_K = 5)
+        let fake_parents: Vec<kovanica_types::block::BlockReference> = (0..10)
+            .map(|i| kovanica_types::block::BlockReference {
+                author: i as u16,
+                round: 1,
+                digest: Hash([i as u8 + 1; 32]),
+            })
+            .collect();
+        let header_malformed = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            2,
+            0,
+            fake_parents,
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined_malformed = worker.mine_header(header_malformed, 10_000).unwrap();
+        let err_malformed = kovanica_rpc::handle_submit_work(
+            json!({ "header": mined_malformed }),
+            rpc_state.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err_malformed.to_string().contains("too many parents")
+                || err_malformed.to_string().contains("MalformedParents")
+        );
+
+        // 3. Unknown parents: block round > 0 referencing unknown parent hash
+        let unknown_parent = kovanica_types::block::BlockReference {
+            author: 1,
+            round: 1,
+            digest: Hash([0x99; 32]),
+        };
+        let header_unknown_parent = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            2,
+            0,
+            vec![unknown_parent],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined_unknown = worker.mine_header(header_unknown_parent, 10_000).unwrap();
+        let unknown_digest = mined_unknown.to_statement_block(vec![]).digest;
+        let res_unknown =
+            kovanica_rpc::handle_submit_work(json!({ "header": mined_unknown }), rpc_state.clone())
+                .await
+                .unwrap();
+        // Buffered as orphan: accepted by RPC queue, but NOT admitted to consensus DAG state
+        assert_eq!(res_unknown["accepted"], true);
+        assert!(
+            !dag_store.has_block(&unknown_digest).unwrap(),
+            "orphan block must not be admitted to dag_store"
+        );
+
+        // 4. Legacy submitWork: reject before writes on non-hybrid chain
+        let mut legacy_state = rpc_state.clone();
+        legacy_state.mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            state_storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::MAINNET),
+        ));
+        let err_legacy =
+            kovanica_rpc::handle_submit_work(json!({ "header": mined_bad_target }), legacy_state)
+                .await
+                .unwrap_err();
+        assert!(err_legacy.to_string().contains("only available on hybrid"));
+    }
+
+    #[tokio::test]
+    async fn test_submitwork_regression_5_queue_saturation_shutdown_failure_outcomes() {
+        use kovanica_consensus::mining::MiningWorker;
+        use serde_json::json;
+        use std::sync::atomic::AtomicUsize;
+
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
+        let (_engine, dag_store, _key) = crate::tests::vote_sync_test_engine(&dir);
+        let mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            storage.clone(),
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::HYBRID_TESTNET),
+        ));
+
+        let mut worker = MiningWorker::new();
+        let header = kovanica_types::BlockHeader::new(
+            kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            0,
+            0,
+            vec![],
+            kovanica_types::Hash::zero(),
+            1_700_000_000_000,
+            0x207fffff,
+            0,
+        );
+        let mined = worker.mine_header(header, 10_000).unwrap();
+
+        // 1. Queue saturation: channel capacity 1, saturated
+        let (sat_tx, _sat_rx) = mpsc::channel(1);
+        let (dummy_resp, _) = tokio::sync::oneshot::channel();
+        sat_tx
+            .try_send(kovanica_rpc::LocalBlockSubmission {
+                block: mined.to_statement_block(vec![]),
+                respond_to: dummy_resp,
+            })
+            .unwrap();
+
+        let mut sat_state = RpcState {
+            health: NodeHealth::new(),
+            storage: storage.clone(),
+            consensus_store: dag_store.clone(),
+            mempool: mempool.clone(),
+            staking: Arc::new(tokio::sync::RwLock::new(
+                kovanica_staking::StakingState::new(),
+            )),
+            committee: Arc::new(tokio::sync::RwLock::new(sample_test_committee())),
+            peer_count: Arc::new(AtomicUsize::new(0)),
+            events: EventBus::new(),
+            rate_limiter: Arc::new(kovanica_rpc::RateLimiterState::new(
+                kovanica_rpc::RateLimitConfig::default(),
+            )),
+            auth_config: Arc::new(kovanica_rpc::AuthConfig::default()),
+            tx_gossip: None,
+            sync_status: None,
+            block_gossip: None,
+            block_submission: Some(sat_tx),
+            mining_enabled: false,
+            mining_threads: 0,
+        };
+
+        let err_sat =
+            kovanica_rpc::handle_submit_work(json!({ "header": mined }), sat_state.clone())
+                .await
+                .unwrap_err();
+        assert!(
+            err_sat.to_string().contains("queue is full"),
+            "saturation must produce queue full error"
+        );
+
+        // 2. Shutdown: receiver dropped
+        let (shut_tx, shut_rx) = mpsc::channel(10);
+        drop(shut_rx);
+        sat_state.block_submission = Some(shut_tx);
+        let err_shut = kovanica_rpc::handle_submit_work(json!({ "header": mined }), sat_state)
+            .await
+            .unwrap_err();
+        assert!(
+            err_shut.to_string().contains("shutting down")
+                || err_shut.to_string().contains("closed"),
+            "shutdown must return shutdown error"
         );
     }
 }

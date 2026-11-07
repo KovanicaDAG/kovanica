@@ -2094,94 +2094,126 @@ pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value,
         )));
     }
 
-    header
-        .verify_pow()
-        .map_err(|e| RpcError::ExecutionError(format!("PoW verification failed: {e}")))?;
-
-    // Structural parent validation
-    if header.parents.len() > kovanica_params::GHOSTDAG_K as usize {
-        return Err(RpcError::InvalidParams(format!(
-            "too many parents: {} (max {})",
-            header.parents.len(),
-            kovanica_params::GHOSTDAG_K
-        )));
-    }
-    let mut parent_set = std::collections::HashSet::new();
-    for p in &header.parents {
-        if !parent_set.insert(p.digest) {
-            return Err(RpcError::InvalidParams("duplicate parent reference".into()));
-        }
-        if p.round >= header.round {
-            return Err(RpcError::InvalidParams(format!(
-                "parent round {} is not before header round {}",
-                p.round, header.round
-            )));
-        }
-        if header.round - p.round > kovanica_types::MAX_PARENT_ROUND_GAP {
-            return Err(RpcError::InvalidParams(format!(
-                "parent round {} is too far behind header round {}",
-                p.round, header.round
-            )));
-        }
-    }
-
-    // Missing parent check and parent metadata validation
-    if header.round > 0 {
-        for p in &header.parents {
-            let parent_blk = state.consensus_store.get_block(&p.digest).map_err(|_| {
-                RpcError::InvalidParams(format!("parent block {} not found", p.digest))
-            })?;
-            if parent_blk.author != p.author || parent_blk.round != p.round {
-                return Err(RpcError::InvalidParams(format!(
-                    "parent reference metadata mismatch for {}",
-                    p.digest
-                )));
-            }
-            if let Ok(parent_hdr) = parent_blk.extract_pow_header(chain_id) {
-                if header.timestamp <= parent_hdr.timestamp {
-                    return Err(RpcError::InvalidParams(format!(
-                        "timestamp {} not strictly greater than parent timestamp {}",
-                        header.timestamp, parent_hdr.timestamp
-                    )));
-                }
-            }
-        }
-    }
-
-    // Enforce required DAA target from deterministic block-bound ancestry
-    let daa_config = kovanica_consensus::DaaConfig::chain5_default();
-    let required_bits = kovanica_consensus::required_target_bits(
-        &state.consensus_store,
-        &header.parents,
-        chain_id,
-        &daa_config,
-    );
-    if header.target_bits != required_bits {
-        return Err(RpcError::ExecutionError(format!(
-            "target bits 0x{:08x} does not match required DAA target 0x{:08x}",
-            header.target_bits, required_bits
-        )));
-    }
-    if !kovanica_types::check_pow_hash_meets_target(
-        &header.pow_hash.unwrap_or_default(),
-        required_bits,
-    ) {
-        return Err(RpcError::ExecutionError(
-            "PoW hash does not meet required DAA target".into(),
-        ));
-    }
-
     let block = header.to_statement_block(Vec::new());
     let digest = block.digest;
     let pow_hash = header.pow_hash.unwrap_or_default();
 
-    state
-        .consensus_store
-        .put_block(&block)
-        .map_err(|e| RpcError::InternalError(format!("store block failed: {e}")))?;
+    if let Some(ref submission_tx) = state.block_submission {
+        let (respond_to, resp_rx) = tokio::sync::oneshot::channel();
+        let submission = crate::LocalBlockSubmission {
+            block: block.clone(),
+            respond_to,
+        };
+        match submission_tx.try_send(submission) {
+            Ok(()) => match resp_rx.await {
+                Ok(Ok(_outcome)) => {
+                    // Block successfully admitted or buffered as an orphan in consensus pipeline
+                }
+                Ok(Err(err)) => {
+                    return Err(RpcError::ExecutionError(err.to_string()));
+                }
+                Err(_) => {
+                    return Err(RpcError::InternalError(
+                        "node admission channel closed during processing".into(),
+                    ));
+                }
+            },
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                return Err(RpcError::InternalError(
+                    "local block admission queue is full".into(),
+                ));
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                return Err(RpcError::InternalError("node is shutting down".into()));
+            }
+        }
+    } else {
+        // Fallback for isolated RPC tests without a running node event loop:
+        header
+            .verify_pow()
+            .map_err(|e| RpcError::ExecutionError(format!("PoW verification failed: {e}")))?;
 
-    if let Some(ref tx) = state.block_gossip {
-        let _ = tx.send(block);
+        // Structural parent validation
+        if header.parents.len() > kovanica_params::GHOSTDAG_K as usize {
+            return Err(RpcError::InvalidParams(format!(
+                "too many parents: {} (max {})",
+                header.parents.len(),
+                kovanica_params::GHOSTDAG_K
+            )));
+        }
+        let mut parent_set = std::collections::HashSet::new();
+        for p in &header.parents {
+            if !parent_set.insert(p.digest) {
+                return Err(RpcError::InvalidParams("duplicate parent reference".into()));
+            }
+            if p.round >= header.round {
+                return Err(RpcError::InvalidParams(format!(
+                    "parent round {} is not before header round {}",
+                    p.round, header.round
+                )));
+            }
+            if header.round - p.round > kovanica_types::MAX_PARENT_ROUND_GAP {
+                return Err(RpcError::InvalidParams(format!(
+                    "parent round {} is too far behind header round {}",
+                    p.round, header.round
+                )));
+            }
+        }
+
+        // Missing parent check and parent metadata validation
+        if header.round > 0 {
+            for p in &header.parents {
+                let parent_blk = state.consensus_store.get_block(&p.digest).map_err(|_| {
+                    RpcError::InvalidParams(format!("parent block {} not found", p.digest))
+                })?;
+                if parent_blk.author != p.author || parent_blk.round != p.round {
+                    return Err(RpcError::InvalidParams(format!(
+                        "parent reference metadata mismatch for {}",
+                        p.digest
+                    )));
+                }
+                if let Ok(parent_hdr) = parent_blk.extract_pow_header(chain_id) {
+                    if header.timestamp <= parent_hdr.timestamp {
+                        return Err(RpcError::InvalidParams(format!(
+                            "timestamp {} not strictly greater than parent timestamp {}",
+                            header.timestamp, parent_hdr.timestamp
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Enforce required DAA target from deterministic block-bound ancestry
+        let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+        let required_bits = kovanica_consensus::required_target_bits(
+            &state.consensus_store,
+            &header.parents,
+            chain_id,
+            &daa_config,
+        );
+        if header.target_bits != required_bits {
+            return Err(RpcError::ExecutionError(format!(
+                "target bits 0x{:08x} does not match required DAA target 0x{:08x}",
+                header.target_bits, required_bits
+            )));
+        }
+        if !kovanica_types::check_pow_hash_meets_target(
+            &header.pow_hash.unwrap_or_default(),
+            required_bits,
+        ) {
+            return Err(RpcError::ExecutionError(
+                "PoW hash does not meet required DAA target".into(),
+            ));
+        }
+
+        state
+            .consensus_store
+            .put_block(&block)
+            .map_err(|e| RpcError::InternalError(format!("store block failed: {e}")))?;
+
+        if let Some(ref tx) = state.block_gossip {
+            let _ = tx.send(block);
+        }
     }
 
     Ok(serde_json::json!({
@@ -2325,6 +2357,7 @@ mod tests {
             tx_gossip: None,
             sync_status: None,
             block_gossip: None,
+            block_submission: None,
             mining_enabled: false,
             mining_threads: 0,
         }
@@ -4219,7 +4252,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repro_submit_work_does_not_commit_or_execute_locally() {
+    async fn test_submit_work_routes_through_block_submission_channel() {
         std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
@@ -4229,6 +4262,10 @@ mod tests {
             storage.clone(),
             kovanica_types::SigningContext::new(kovanica_params::CHAIN_ID_HYBRID_TESTNET),
         ));
+
+        let (sub_tx, mut sub_rx) =
+            tokio::sync::mpsc::channel(crate::LOCAL_BLOCK_SUBMISSION_CAPACITY);
+        state.block_submission = Some(sub_tx);
 
         let header = kovanica_types::BlockHeader::new(
             kovanica_params::CHAIN_ID_HYBRID_TESTNET,
@@ -4241,26 +4278,30 @@ mod tests {
             0,
         );
         let mined = kovanica_consensus::mine_header(header, 10_000).unwrap();
-        let block = mined.to_statement_block(vec![]);
-        let digest = block.digest;
+        let expected_digest = mined.to_statement_block(vec![]).digest;
+
+        // Spawn mock handler for block_submission queue to verify routing
+        tokio::spawn(async move {
+            if let Some(sub) = sub_rx.recv().await {
+                assert_eq!(sub.block.digest, expected_digest);
+                let _ = sub
+                    .respond_to
+                    .send(Ok(crate::LocalBlockAdmissionOutcome::Admitted {
+                        digest: expected_digest,
+                    }));
+            }
+        });
 
         let res = handle_submit_work(json!({ "header": mined }), state.clone()).await;
-        assert!(res.is_ok());
-
-        // Block exists in dag_store (consensus_store)
-        assert!(state.consensus_store.has_block(&digest).unwrap());
-
-        // REPRODUCTION EVIDENCE:
-        // Local node's state_storage was never updated: committed_leader_height remains 0.
-        // The block was never fed to GhostdagCommitter or exec_tx.
-        let read_txn = storage.begin_read().unwrap();
-        let committed_h = storage
-            .consensus()
-            .get_committed_leader_height(&read_txn)
-            .unwrap_or(0);
+        assert!(
+            res.is_ok(),
+            "submitWork successfully routes through block_submission"
+        );
+        let val = res.unwrap();
+        assert_eq!(val["accepted"], true);
         assert_eq!(
-            committed_h, 0,
-            "submitWork does not commit or execute the block on the local node"
+            val["digest"],
+            format!("0x{}", hex::encode(expected_digest.0))
         );
     }
 }
