@@ -17,9 +17,11 @@ interface CollectionDetailResponse {
 }
 
 export const Route = createFileRoute("/wallet/collection/$collectionId")({
-  loader: async ({ params }) => {
+  loader: async ({ params, location }) => {
     try {
-      const data = await api<CollectionDetailResponse>(`/api/collection/${encodeURIComponent(params.collectionId)}`);
+      const searchSource = (location.search as Record<string, unknown>)?.source;
+      const queryParam = typeof searchSource === "string" ? `?source=${encodeURIComponent(searchSource)}` : "";
+      const data = await api<CollectionDetailResponse>(`/api/collection/${encodeURIComponent(params.collectionId)}${queryParam}`);
       if (!data || !data.collection_id) {
         throw notFound();
       }

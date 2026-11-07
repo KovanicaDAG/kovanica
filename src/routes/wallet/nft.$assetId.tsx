@@ -21,9 +21,11 @@ interface NftDetailResponse {
 }
 
 export const Route = createFileRoute("/wallet/nft/$assetId")({
-  loader: async ({ params }) => {
+  loader: async ({ params, location }) => {
     try {
-      const data = await api<NftDetailResponse>(`/api/nft/${encodeURIComponent(params.assetId)}`);
+      const searchSource = (location.search as Record<string, unknown>)?.source;
+      const queryParam = typeof searchSource === "string" ? `?source=${encodeURIComponent(searchSource)}` : "";
+      const data = await api<NftDetailResponse>(`/api/nft/${encodeURIComponent(params.assetId)}${queryParam}`);
       if (!data || !data.asset_id) {
         throw notFound();
       }

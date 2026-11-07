@@ -1,4 +1,4 @@
-import { createFileRoute, lazyRouteComponent } from "@tanstack/react-router";
+import { createFileRoute, lazyRouteComponent, Outlet, useMatches } from "@tanstack/react-router";
 import { Shell } from "@/components/layout/shell";
 import { RouteLoading } from "@/components/layout/route-loading";
 import { RouteError } from "@/components/layout/route-error";
@@ -23,6 +23,11 @@ export const Route = createFileRoute("/explorer")({
 });
 
 function ExplorerPage() {
+  const matches = useMatches();
+  const isExact = matches[matches.length - 1]?.routeId === Route.id;
+  if (!isExact) {
+    return <Outlet />;
+  }
   return (
     <Shell>
       <LazyExplorerView />

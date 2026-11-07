@@ -28,24 +28,34 @@ export function DocsView() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setBoot(null);
+    setErr(null);
     if (source === "mainnet") {
-      setBoot(null);
-      setErr(null);
       setLoading(false);
       return;
     }
+    let cancelled = false;
     setLoading(true);
-    setErr(null);
     void api<ApiBootstrap>(`/api/bootstrap?source=${source}`)
       .then((b) => {
+        if (cancelled) return;
+        if (!b || typeof b !== "object" || Array.isArray(b)) {
+          throw new Error("Malformed bootstrap response");
+        }
         setBoot(b);
         setErr(null);
       })
       .catch((e: unknown) => {
+        if (cancelled) return;
         setBoot(null);
         setErr(e instanceof Error ? e.message : "offline");
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [source]);
 
   const up = boot?.upstream;

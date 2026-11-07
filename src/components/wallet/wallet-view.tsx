@@ -528,6 +528,26 @@ export function WalletView() {
   if (!wallet) {
     return (
       <div className="mx-auto flex w-full max-w-lg flex-col gap-6 px-4 py-8 md:px-6">
+        {source === "mainnet" && (
+          <div
+            role="status"
+            className="rounded-xl border border-gold/30 bg-gold/10 p-4 text-sm text-fg"
+          >
+            <p className="font-semibold text-gold">Mainnet Prelaunch · Launch Scheduled 1.1.2027</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted">
+              The Kovanica mainnet has not launched yet. Public genesis is scheduled for 1.1.2027 following the hybrid testnet and KovanicaHash audit. Wallet transfers, faucet claims, and transaction signing are strictly disabled on mainnet until launch. Please switch to Testnet to test wallet functions and transactions.
+            </p>
+          </div>
+        )}
+        {handoffNotice && (
+          <div
+            role="alert"
+            className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200"
+          >
+            <p className="font-semibold text-amber-400">Capability Gap Notice</p>
+            <p className="mt-1 text-xs leading-relaxed text-amber-200/90">{handoffNotice}</p>
+          </div>
+        )}
         <header>
           <p className="font-mono text-xs uppercase tracking-wider text-muted">KVNC</p>
           <h1 className="font-display text-3xl tracking-tight text-fg">Wallet</h1>
@@ -742,6 +762,26 @@ export function WalletView() {
   if (isLocked(wallet)) {
     return (
       <div className="mx-auto flex w-full max-w-lg flex-col gap-6 px-4 py-8 md:px-6">
+        {source === "mainnet" && (
+          <div
+            role="status"
+            className="rounded-xl border border-gold/30 bg-gold/10 p-4 text-sm text-fg"
+          >
+            <p className="font-semibold text-gold">Mainnet Prelaunch · Launch Scheduled 1.1.2027</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted">
+              The Kovanica mainnet has not launched yet. Public genesis is scheduled for 1.1.2027 following the hybrid testnet and KovanicaHash audit. Wallet transfers, faucet claims, and transaction signing are strictly disabled on mainnet until launch. Please switch to Testnet to test wallet functions and transactions.
+            </p>
+          </div>
+        )}
+        {handoffNotice && (
+          <div
+            role="alert"
+            className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200"
+          >
+            <p className="font-semibold text-amber-400">Capability Gap Notice</p>
+            <p className="mt-1 text-xs leading-relaxed text-amber-200/90">{handoffNotice}</p>
+          </div>
+        )}
         <header>
           <p className="font-mono text-xs uppercase tracking-wider text-muted">KVNC</p>
           <h1 className="font-display text-3xl tracking-tight text-fg">Wallet locked</h1>
