@@ -1991,15 +1991,17 @@ pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, Rp
         &parent_hashes,
         chain_id,
         kovanica_params::DAA_WINDOW_BLOCKS as usize,
-    );
+    )
+    .map_err(|e| RpcError::ExecutionError(format!("ancestor timestamp extraction failed: {e}")))?;
 
     let daa_config = kovanica_consensus::DaaConfig::chain5_default();
-    let target_bits = kovanica_consensus::required_target_bits(
+    let target_bits = kovanica_consensus::try_required_target_bits(
         &state.consensus_store,
         &parent_refs,
         chain_id,
         &daa_config,
-    );
+    )
+    .map_err(|e| RpcError::ExecutionError(format!("DAA target derivation failed: {e}")))?;
 
     let txs = state.mempool.get_next_transactions(128);
     let merkle_root = kovanica_types::StatementBlock::compute_merkle_root(&txs);
@@ -2201,12 +2203,13 @@ pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value,
 
         // Enforce required DAA target from deterministic block-bound ancestry
         let daa_config = kovanica_consensus::DaaConfig::chain5_default();
-        let required_bits = kovanica_consensus::required_target_bits(
+        let required_bits = kovanica_consensus::try_required_target_bits(
             &state.consensus_store,
             &header.parents,
             chain_id,
             &daa_config,
-        );
+        )
+        .map_err(|e| RpcError::ExecutionError(format!("DAA target derivation failed: {e}")))?;
         if header.target_bits != required_bits {
             return Err(RpcError::ExecutionError(format!(
                 "target bits 0x{:08x} does not match required DAA target 0x{:08x}",
@@ -2267,12 +2270,13 @@ pub async fn handle_get_mining_info(_params: Value, state: RpcState) -> Result<V
         .collect();
 
     let daa_config = kovanica_consensus::DaaConfig::chain5_default();
-    let target_bits = kovanica_consensus::required_target_bits(
+    let target_bits = kovanica_consensus::try_required_target_bits(
         &state.consensus_store,
         &parent_refs,
         chain_id,
         &daa_config,
-    );
+    )
+    .map_err(|e| RpcError::ExecutionError(format!("DAA target derivation failed: {e}")))?;
 
     let work = kovanica_consensus::calculate_work_from_target(target_bits);
     let target_sec = kovanica_params::TARGET_BLOCK_MS as u128 / 1000;
@@ -4068,7 +4072,6 @@ mod tests {
 
     #[tokio::test]
     async fn mining_and_dag_rpc_methods_work() {
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let (_dir, storage) = open_storage();
         let mut state = test_state(storage.clone());
         state.mempool = Arc::new(Mempool::new(
@@ -4116,7 +4119,7 @@ mod tests {
         // 4. submit_work with a mined block
         let header: kovanica_types::BlockHeader =
             serde_json::from_value(work["header"].clone()).expect("valid header from template");
-        let mined = kovanica_consensus::mine_header(header, 10_000).expect("should mine block");
+        let mined = kovanica_consensus::mine_header(header, 500_000).expect("should mine block");
         let submit_res = handle_submit_work(json!({ "header": mined }), state.clone())
             .await
             .expect("submit work");
@@ -4177,7 +4180,6 @@ mod tests {
 
     #[tokio::test]
     async fn submit_work_easier_target_and_missing_parents_rejected() {
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let (_dir, storage) = open_storage();
         let mut state = test_state(storage.clone());
         state.mempool = Arc::new(Mempool::new(
@@ -4234,7 +4236,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_submit_work_rejects_far_future_timestamp_with_clock_drift_check() {
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
         let mut state = test_state(storage.clone());
@@ -4271,7 +4272,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_submit_work_routes_through_block_submission_channel() {
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
         let mut state = test_state(storage.clone());

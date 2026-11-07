@@ -60,6 +60,36 @@ impl NodeMiner {
     ) -> Option<BlockHeader> {
         mine_header_async(header, max_iterations).await
     }
+
+    /// Asynchronously mine `header` up to `iterations_per_thread` across `threads` worker tasks.
+    pub async fn mine_async_with_threads(
+        &self,
+        header: BlockHeader,
+        iterations_per_thread: u64,
+        threads: usize,
+    ) -> Option<BlockHeader> {
+        let threads = threads.max(1);
+        if threads == 1 {
+            return mine_header_async(header, iterations_per_thread).await;
+        }
+
+        let mut set = tokio::task::JoinSet::new();
+        for i in 0..threads {
+            let mut h = header.clone();
+            h.nonce = (i as u64).wrapping_mul(iterations_per_thread);
+            set.spawn_blocking(move || kovanica_consensus::mine_header(h, iterations_per_thread));
+        }
+
+        let mut result = None;
+        while let Some(res) = set.join_next().await {
+            if let Ok(Some(mined)) = res {
+                result = Some(mined);
+                set.abort_all();
+                break;
+            }
+        }
+        result
+    }
 }
 
 pub use kovanica_consensus::daa::select_parents_from_tips;
@@ -88,21 +118,7 @@ pub async fn run_mining_loop(
         "Chain 5 PoW mining worker loop started"
     );
 
-    let mut miner = NodeMiner::new();
-    let initial_target = std::env::var("KOVANICA_TEST_TARGET_BITS")
-        .ok()
-        .and_then(|v| {
-            let s = v.trim();
-            let stripped = s
-                .strip_prefix("0x")
-                .or_else(|| s.strip_prefix("0X"))
-                .unwrap_or(s);
-            u32::from_str_radix(stripped, 16).ok()
-        })
-        .unwrap_or(kovanica_params::MAX_TARGET_BITS);
-    if initial_target != kovanica_params::MAX_TARGET_BITS {
-        miner.daa_config.max_target_bits = initial_target;
-    }
+    let miner = NodeMiner::new();
 
     loop {
         if *shutdown_rx.borrow() {
@@ -138,12 +154,19 @@ pub async fn run_mining_loop(
             })
             .collect();
 
-        let target_bits = kovanica_consensus::required_target_bits(
+        let target_bits = match kovanica_consensus::try_required_target_bits(
             &dag_store,
             &parent_refs,
             chain_id,
             &miner.daa_config,
-        );
+        ) {
+            Ok(bits) => bits,
+            Err(e) => {
+                warn!(error = %e, "skipping block generation: failed to derive required DAA target");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         kovanica_consensus::metrics::set_pow_target_bits(target_bits);
 
         let txs = mempool.get_next_transactions(kovanica_types::MAX_TXS_PER_BLOCK);
@@ -166,7 +189,10 @@ pub async fn run_mining_loop(
 
         // Mine with bounded iterations so loop cooperates with tokio and shutdown
         const CHUNK_ITERATIONS: u64 = 50_000;
-        if let Some(mined_header) = miner.mine_async(header, CHUNK_ITERATIONS).await {
+        if let Some(mined_header) = miner
+            .mine_async_with_threads(header, CHUNK_ITERATIONS, mining_config.threads)
+            .await
+        {
             info!(
                 round = mined_header.round,
                 pow_hash = ?mined_header.pow_hash,
@@ -249,7 +275,7 @@ mod tests {
         let tips = select_parents_from_tips(&dag, 5);
         assert_eq!(tips, vec![digest]);
 
-        let timestamps = extract_ancestor_timestamps(&dag, &tips, 5, 10);
+        let timestamps = extract_ancestor_timestamps(&dag, &tips, 5, 10).unwrap();
         assert_eq!(timestamps, vec![10_000]);
     }
 }

@@ -30,8 +30,8 @@ const NODES: usize = 3;
 const CHAIN_ID: u64 = chain_id::HYBRID_TESTNET;
 const RPC_READY_TIMEOUT_SECS: u64 = 60;
 const PEER_TIMEOUT_SECS: u64 = 90;
-const MINING_TIMEOUT_SECS: u64 = 90;
-const TX_TIMEOUT_SECS: u64 = 90;
+const MINING_TIMEOUT_SECS: u64 = 180;
+const TX_TIMEOUT_SECS: u64 = 180;
 const POLL_INTERVAL_MS: u64 = 500;
 const PORT_ATTEMPTS: usize = 32;
 
@@ -93,7 +93,6 @@ impl NodeProc {
             .env("KOVANICA_MINING_ENABLED", "true")
             .env("KOVANICA_MINING_THREADS", "1")
             .env("KOVANICA_MINING_AUTHOR", index.to_string())
-            .env("KOVANICA_TEST_TARGET_BITS", "0x207fffff")
             .env("KOVANICA_RPC_AUTH", "disable")
             .env("KOVANICA_RPC_RATE_LIMIT_PER_MIN", "0")
             .env("KOVANICA_VALIDATOR_KEY", key_path.as_os_str())

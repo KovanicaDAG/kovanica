@@ -14,7 +14,34 @@
 //! - Target cannot exceed [`kovanica_params::MAX_TARGET_BITS`] (easiest difficulty ceiling).
 //! - Target cannot fall below [`kovanica_params::MIN_TARGET_BITS`] (hardest difficulty floor).
 
-use kovanica_types::block::{compact_to_target, target_to_compact};
+use kovanica_dag::DagStore;
+use kovanica_types::block::{compact_to_target, target_to_compact, BlockReference};
+use kovanica_types::hash::Hash;
+use std::collections::{HashSet, VecDeque};
+use thiserror::Error;
+
+/// Errors arising during required DAA target derivation.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum DaaError {
+    /// Referenced parent block could not be read from storage.
+    #[error("parent block {0} could not be read from consensus DAG storage: {1}")]
+    ParentBlockUnreadable(Hash, String),
+    /// Primary parent or ancestor block has invalid, missing, or corrupted PoW header.
+    #[error("parent or ancestor block {0} at round {1} has invalid or missing PoW header: {2}")]
+    InvalidParentHeader(Hash, u64, String),
+}
+
+/// Canonical genesis digest for round 0.
+#[must_use]
+pub fn canonical_genesis_digest() -> Hash {
+    kovanica_types::block::StatementBlock::compute_digest(0, 0, &[], &[])
+}
+
+/// Check if a block reference identifies the canonical genesis block.
+#[must_use]
+pub fn is_canonical_genesis(round: u64, digest: &Hash) -> bool {
+    round == 0 && *digest == canonical_genesis_digest()
+}
 
 /// Configuration parameters for difficulty adjustment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,23 +66,22 @@ impl Default for DaaConfig {
 
 impl DaaConfig {
     /// Standard consensus parameters for Chain ID 5 (Hybrid PoW testnet).
+    ///
+    /// Pure protocol configuration strictly bound to canonical parameters:
+    /// - Max target ceiling: [`kovanica_params::MAX_TARGET_BITS`] (`0x1f00_ffff`).
+    /// - Min target floor: [`kovanica_params::MIN_TARGET_BITS`].
+    /// - Target block time: [`kovanica_params::TARGET_BLOCK_MS`] (4,000 ms).
+    /// - Adjustment window: [`kovanica_params::DAA_WINDOW_BLOCKS`] (60 blocks).
+    /// - Max factor: 4x.
+    ///
+    /// Runtime process environment variables (e.g. `KOVANICA_TEST_TARGET_BITS`) are
+    /// strictly ignored to ensure consensus determinism across all nodes.
     #[must_use]
-    pub fn chain5_default() -> Self {
-        let max_target_bits = std::env::var("KOVANICA_TEST_TARGET_BITS")
-            .ok()
-            .and_then(|v| {
-                let s = v.trim();
-                let stripped = s
-                    .strip_prefix("0x")
-                    .or_else(|| s.strip_prefix("0X"))
-                    .unwrap_or(s);
-                u32::from_str_radix(stripped, 16).ok()
-            })
-            .unwrap_or(kovanica_params::MAX_TARGET_BITS);
+    pub const fn chain5_default() -> Self {
         Self {
             target_block_time_ms: kovanica_params::TARGET_BLOCK_MS,
             window_size: kovanica_params::DAA_WINDOW_BLOCKS,
-            max_target_bits,
+            max_target_bits: kovanica_params::MAX_TARGET_BITS,
             min_target_bits: kovanica_params::MIN_TARGET_BITS,
             max_adjustment_factor: 4,
         }
@@ -189,11 +215,6 @@ pub fn calculate_next_target_bits(
     target_to_compact(&new_target)
 }
 
-use kovanica_dag::DagStore;
-use kovanica_types::block::BlockReference;
-use kovanica_types::hash::Hash;
-use std::collections::{HashSet, VecDeque};
-
 /// Select parent hashes from recent DAG tips for block authoring on Chain 5.
 #[must_use]
 pub fn select_parents_from_tips(dag_store: &DagStore, max_parents: usize) -> Vec<Hash> {
@@ -240,34 +261,73 @@ pub fn select_parents_from_tips(dag_store: &DagStore, max_parents: usize) -> Vec
 ///   affect the required target.
 /// - Bootstrap:
 ///   * Empty parents (round 0 canonical genesis): returns `config.max_target_bits`.
+///   * Primary parent without PoW header (e.g. canonical round 0 genesis with no PoW statements):
+///     returns `config.max_target_bits`.
 ///   * Fewer than 2 timestamps (e.g. round 1, whose only parent is round 0 genesis with no PoW timestamp):
 ///     returns `current_target_bits` which defaults to `config.max_target_bits`.
 ///   * For non-empty parents, `current_target_bits` is derived from the primary parent (`parents[0]`).
-/// - Missing history: Callers must verify all referenced parents exist in accepted consensus storage
-///   before calling this function.
-#[must_use]
+/// - Strict storage validation: If a parent or ancestor in the window is missing or unreadable from storage,
+///   or contains a malformed PoW header, returns `Err(DaaError)`. Never falls back to a permissive target.
 pub fn required_target_bits(
     dag_store: &DagStore,
     parents: &[BlockReference],
     chain_id: u64,
     config: &DaaConfig,
-) -> u32 {
+) -> Result<u32, DaaError> {
     if parents.is_empty() {
-        return config.max_target_bits;
+        return Ok(config.max_target_bits);
+    }
+
+    // Verify all referenced direct parents exist in storage and round > 0 blocks have valid headers
+    for p in parents {
+        let block = dag_store
+            .get_block(&p.digest)
+            .map_err(|e| DaaError::ParentBlockUnreadable(p.digest, e.to_string()))?;
+        if block.round == 0 {
+            if !is_canonical_genesis(block.round, &p.digest) {
+                if let Err(e) = block.extract_pow_header(chain_id) {
+                    return Err(DaaError::InvalidParentHeader(
+                        p.digest,
+                        0,
+                        format!("non-canonical round-0 parent is not valid genesis: {e}"),
+                    ));
+                }
+            }
+        } else if let Err(e) = block.extract_pow_header(chain_id) {
+            return Err(DaaError::InvalidParentHeader(
+                p.digest,
+                block.round,
+                e.to_string(),
+            ));
+        }
     }
 
     let parent_hashes: Vec<Hash> = parents.iter().map(|p| p.digest).collect();
 
-    let current_target_bits = if let Some(first_parent) = parent_hashes.first() {
-        if let Ok(b) = dag_store.get_block(first_parent) {
-            b.extract_pow_header(chain_id)
-                .map(|h| h.target_bits)
-                .unwrap_or(config.max_target_bits)
-        } else {
+    // The primary parent's target_bits defines current_target_bits
+    let first_parent = parent_hashes[0];
+    let parent_block = dag_store
+        .get_block(&first_parent)
+        .map_err(|e| DaaError::ParentBlockUnreadable(first_parent, e.to_string()))?;
+
+    let current_target_bits = match parent_block.extract_pow_header(chain_id) {
+        Ok(header) => header.target_bits,
+        Err(_) if is_canonical_genesis(parent_block.round, &first_parent) => {
+            // Canonical round-0 genesis block has no PoW header
             config.max_target_bits
         }
-    } else {
-        config.max_target_bits
+        Err(e) => {
+            return Err(DaaError::InvalidParentHeader(
+                first_parent,
+                parent_block.round,
+                if parent_block.round == 0 {
+                    "non-canonical round-0 block without PoW header is not valid genesis"
+                        .to_string()
+                } else {
+                    e.to_string()
+                },
+            ));
+        }
     };
 
     let timestamps = extract_ancestor_timestamps(
@@ -275,19 +335,36 @@ pub fn required_target_bits(
         &parent_hashes,
         chain_id,
         config.window_size as usize,
-    );
+    )?;
 
-    calculate_next_target_bits(current_target_bits, &timestamps, config)
+    Ok(calculate_next_target_bits(
+        current_target_bits,
+        &timestamps,
+        config,
+    ))
+}
+
+/// Alias for [`required_target_bits`], returning an explicit [`Result`].
+#[inline]
+pub fn try_required_target_bits(
+    dag_store: &DagStore,
+    parents: &[BlockReference],
+    chain_id: u64,
+    config: &DaaConfig,
+) -> Result<u32, DaaError> {
+    required_target_bits(dag_store, parents, chain_id, config)
 }
 
 /// Extract timestamps in ascending order from ancestor blocks for DAA.
-#[must_use]
+///
+/// Fails closed with [`DaaError`] if any ancestor in the window cannot be read from
+/// storage or contains an invalid/corrupted PoW header.
 pub fn extract_ancestor_timestamps(
     dag_store: &DagStore,
     parent_hashes: &[Hash],
     chain_id: u64,
     limit: usize,
-) -> Vec<u64> {
+) -> Result<Vec<u64>, DaaError> {
     let mut timestamps = Vec::new();
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
@@ -299,23 +376,41 @@ pub fn extract_ancestor_timestamps(
     }
 
     while let Some(h) = queue.pop_front() {
-        if let Ok(block) = dag_store.get_block(&h) {
-            if let Ok(header) = block.extract_pow_header(chain_id) {
+        let block = dag_store
+            .get_block(&h)
+            .map_err(|e| DaaError::ParentBlockUnreadable(h, e.to_string()))?;
+
+        if is_canonical_genesis(block.round, &h) {
+            // Canonical genesis has no PoW header and no parents; terminal
+            continue;
+        }
+
+        match block.extract_pow_header(chain_id) {
+            Ok(header) => {
                 timestamps.push(header.timestamp);
             }
-            if timestamps.len() >= limit {
-                break;
+            Err(e) => {
+                return Err(DaaError::InvalidParentHeader(
+                    h,
+                    block.round,
+                    format!("ancestor block PoW header invalid or unreadable: {e}"),
+                ));
             }
-            for p in &block.parents {
-                if visited.insert(p.digest) {
-                    queue.push_back(p.digest);
-                }
+        }
+
+        if timestamps.len() >= limit {
+            break;
+        }
+
+        for p in &block.parents {
+            if visited.insert(p.digest) {
+                queue.push_back(p.digest);
             }
         }
     }
 
     timestamps.sort_unstable();
-    timestamps
+    Ok(timestamps)
 }
 
 #[cfg(test)]
