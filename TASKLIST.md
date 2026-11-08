@@ -31,7 +31,7 @@ Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full p
 - [ ] External security review (template: `docs/AUDIT_REPORT.template.md`).
 - [ ] Mainnet launch + monitoring runbook.
 - [ ] Governance: parameter proposals, stake-weighted voting, treasury spend, upgrade signaling (`propose`/`vote` still `not_implemented`).
-- [~] Staking user-facing guide (archive/plan docs exist; no end-user guide).
+- [x] Staking user-facing guide — [`docs/STAKING-GUIDE.md`](docs/STAKING-GUIDE.md) covers delegator & validator onboarding, CLI staking/delegation/unbonding/rewards, and FAQ.
 - [~] Explorer docs; mainnet freeze checklist draft not fully verified on live testnet.
 - [~] CLI node ops `sync`/`peers` missing; live_vote harness flaky/infra.
 
