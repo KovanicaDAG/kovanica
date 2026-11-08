@@ -1073,7 +1073,7 @@ where
         ghostdag_committer.clone(),
     ));
 
-    let _mining_task = if config.chain_id == kovanica_types::signing::chain_id::HYBRID_TESTNET
+    let _mining_task = if kovanica_types::signing::chain_id::is_hybrid(config.chain_id)
         && config.mining.enabled
     {
         let m_config = config.mining.clone();
@@ -2531,7 +2531,7 @@ fn ingest_block(
             continue;
         }
 
-        if io.chain_id == kovanica_types::signing::chain_id::HYBRID_TESTNET {
+        if kovanica_types::signing::chain_id::is_hybrid(io.chain_id) {
             // 1. Extract PoW header
             let header = match block.extract_pow_header(io.chain_id) {
                 Ok(h) => h,
@@ -4272,9 +4272,10 @@ fn handle_network_event(
     state_sync_sessions.expire(now);
     match event {
         NetworkEvent::BlockReceived { peer, block } => {
-            let is_chain5 = mempool.signing_context().chain_id
-                == kovanica_types::signing::chain_id::HYBRID_TESTNET;
-            if !is_chain5 {
+            let is_hybrid = kovanica_types::signing::chain_id::is_hybrid(
+                mempool.signing_context().chain_id,
+            );
+            if !is_hybrid {
                 // Hot-path validation (audit 3.1): verify signature before engine.process_block
                 if let Err(e) = kovanica_crypto::verify_batch(
                     mempool.signing_context().chain_id,

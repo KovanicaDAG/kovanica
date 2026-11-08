@@ -28,9 +28,9 @@ pub mod chain_id {
     /// Canonical network tag for chain 5 hybrid testnet.
     pub const NETWORK_TAG_HYBRID_TESTNET: &str = "hybrid-testnet";
 
-    /// Whether `id` is a hybrid PoW + GHOSTDAG chain (Chain ID 5).
+    /// Whether `id` is a hybrid PoW + GHOSTDAG chain (Chain ID 2 or Chain ID 5).
     pub fn is_hybrid(id: u64) -> bool {
-        id == HYBRID_TESTNET
+        matches!(id, TESTNET | HYBRID_TESTNET)
     }
 
     /// Whether `id` is in the registry.
@@ -140,6 +140,17 @@ mod tests {
             assert!(chain_id::is_registered(id));
         }
         assert!(!chain_id::is_registered(0));
+    }
+
+    #[test]
+    fn hybrid_chain_id_predicate_and_address_policy() {
+        assert!(chain_id::is_hybrid(chain_id::TESTNET));
+        assert!(chain_id::is_hybrid(chain_id::HYBRID_TESTNET));
+        assert!(!chain_id::is_hybrid(chain_id::MAINNET));
+        assert!(!chain_id::is_hybrid(chain_id::DEVNET));
+        assert!(!chain_id::is_hybrid(chain_id::LOCAL));
+        assert!(!chain_id::is_hybrid(chain_id::TESTNET_V2));
+        assert!(!crate::address::legacy_address_allowed(chain_id::TESTNET));
     }
 
     /// Only devnet and local may vary consensus parameters per node; every

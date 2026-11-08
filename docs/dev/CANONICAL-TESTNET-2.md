@@ -1,6 +1,6 @@
 # Canonical Testnet 2 (Hybrid PoW + GHOSTDAG) Migration Design
 
-- **Status:** Proposal / Design Document (Documentation Only)
+- **Status:** Implemented (Option A)
 - **Target Branch:** `docs/canonical-testnet-2-plan`
 - **Reference Main:** `ee5db899e8b5e2f2d922fbe5034fc2dc1e7fab12`
 - **Related ADR / PRs:** [ADR 0003: Hybrid PoW + GHOSTDAG Consensus](../adr/0003-hybrid-pow-ghostdag.md), PR #182, PR #183, PR #184, PR #186, PR #188, PR #189, PR #190, PR #191
