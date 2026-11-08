@@ -12,4 +12,6 @@ pub enum WalletError {
     Keystore(String),
     #[error("sdk error: {0}")]
     Sdk(String),
+    #[error("derivation error: {0}")]
+    Derivation(String),
 }
