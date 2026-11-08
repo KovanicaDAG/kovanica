@@ -1670,7 +1670,8 @@ mod wallet_cli_security_tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&mnemonic_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+            std::fs::set_permissions(&mnemonic_file, std::fs::Permissions::from_mode(0o600))
+                .unwrap();
         }
 
         let args_hd = AddressArgs {
@@ -1684,7 +1685,15 @@ mod wallet_cli_security_tests {
 
         // 5. Test CLI argument parser accepts --hd, --account, --index on import-key and address
         let cli_import = Cli::try_parse_from([
-            "kovanica", "import-key", "--format", "mnemonic", "--hd", "--account", "1", "--index", "5",
+            "kovanica",
+            "import-key",
+            "--format",
+            "mnemonic",
+            "--hd",
+            "--account",
+            "1",
+            "--index",
+            "5",
         ])
         .unwrap();
         if let Commands::ImportKey(args) = cli_import.command {
@@ -1696,7 +1705,14 @@ mod wallet_cli_security_tests {
         }
 
         let cli_address = Cli::try_parse_from([
-            "kovanica", "address", "--key-file", "key.pem", "--allow-raw-hex", "--hd", "--account", "2",
+            "kovanica",
+            "address",
+            "--key-file",
+            "key.pem",
+            "--allow-raw-hex",
+            "--hd",
+            "--account",
+            "2",
         ])
         .unwrap();
         if let Commands::Address(args) = cli_address.command {

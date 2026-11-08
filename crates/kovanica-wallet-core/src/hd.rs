@@ -149,12 +149,7 @@ impl Slip10Node {
     }
 
     /// Derive standard Kovanica BIP-44 path `m/44'/3007'/<account>'/<change>'/<index>'`.
-    pub fn derive_bip44(
-        &self,
-        account: u32,
-        change: u32,
-        index: u32,
-    ) -> Result<Self, WalletError> {
+    pub fn derive_bip44(&self, account: u32, change: u32, index: u32) -> Result<Self, WalletError> {
         if account >= HARDENED_OFFSET || change >= HARDENED_OFFSET || index >= HARDENED_OFFSET {
             return Err(WalletError::Derivation(
                 "account, change, and index must be unhardened indices (< 0x8000_0000)".into(),
