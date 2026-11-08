@@ -16,6 +16,15 @@ export interface ExplorerBlock {
   transactions: ExplorerTransaction[];
   author: number;
   timestamp: number;
+  nonce?: number | string;
+  pow_hash?: string;
+  target_bits?: number | string;
+  blue_score?: number | string;
+  blue_work?: string;
+  selected_parent?: string | null;
+  mergeset_blues?: string[];
+  mergeset_reds?: string[];
+  is_blue?: boolean;
 }
 
 export interface ExplorerTransaction {
