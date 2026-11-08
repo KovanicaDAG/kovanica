@@ -6,11 +6,13 @@
 docker build -t kovanica-node:local .
 ```
 
-The image contains only the `kovanica-node` binary and a minimal `debian:bookworm-slim`
-runtime. It runs as the unprivileged `kovanica` user (uid/gid 10001), stores chain data
-under `/var/lib/kovanica` (declared `VOLUME`), and exposes P2P `8000` / JSON-RPC `8545`.
+The image contains the `kovanica-node` full node, `kovanica-faucet` service, and
+`kovanica` CLI binary on top of a minimal `debian:bookworm-slim` runtime. It runs
+as the unprivileged `kovanica` user (uid/gid 10001), stores chain data under
+`/var/lib/kovanica` (declared `VOLUME`), and exposes P2P `8000` / JSON-RPC `8545`.
 A plain `docker run kovanica-node:local` prints `--help`; it never boots a node by
-default.
+default. Persistent P2P identity can be supplied via `KOVANICA_P2P_KEY` to keep
+bootnode peer IDs deterministic across container recreation.
 
 ## Run the local multi-node testnet / devnet
 
