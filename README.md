@@ -368,6 +368,7 @@ Detailed architectural specifications and operational runbooks:
 - **Gas & Metering Schedule:** [`docs/GAS_SCHEDULE.md`](docs/GAS_SCHEDULE.md)
 - **Signature & Domain Format:** [`docs/SIGNATURE_FORMAT.md`](docs/SIGNATURE_FORMAT.md)
 - **Validator Onboarding Guide:** [`docs/VALIDATOR-ONBOARDING.md`](docs/VALIDATOR-ONBOARDING.md)
+- **Staking & Delegation Guide:** [`docs/STAKING-GUIDE.md`](docs/STAKING-GUIDE.md)
 - **Governance Specification:** [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md)
 - **Audit Scope & Threat Model:** [`docs/AUDIT-SCOPE.md`](docs/AUDIT-SCOPE.md)
 - **Documentation Archive Index:** [`docs/archive/README.md`](docs/archive/README.md)
