@@ -32,7 +32,7 @@ Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full p
 - [x] Mainnet launch + monitoring runbook (`docs/MAINNET-RUNBOOK.md`).
 - [x] Governance: parameter proposals, stake-weighted voting, treasury spend (`propose`/`vote` in `kovanica-cli`, state tracking in `kovanica-staking`).
 - [x] Staking user-facing guide — [`docs/STAKING-GUIDE.md`](docs/STAKING-GUIDE.md) covers delegator & validator onboarding, CLI staking/delegation/unbonding/rewards, and FAQ.
-- [~] Explorer docs; mainnet freeze checklist draft not fully verified on live testnet.
+- [x] Explorer docs ([`docs/EXPLORER.md`](docs/EXPLORER.md)) and mainnet freeze checklist ([`docs/MAINNET-FREEZE-CHECKLIST.md`](docs/MAINNET-FREEZE-CHECKLIST.md)).
 - [x] CLI node ops `sync`/`peers` implemented via `kovanica_syncStatus`.
 
 ## Corrected false opens
