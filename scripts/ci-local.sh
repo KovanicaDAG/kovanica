@@ -81,7 +81,8 @@ function gate_test() {
         --skip live_transaction_commit \
         --skip live_two_node_vote_commit_execute \
         --skip three_validators_rotate_leaders_and_sustain_commits \
-        --skip four_validators_sustain_commits_past_pruning_boundary
+        --skip four_validators_sustain_commits_past_pruning_boundary \
+        --skip hybrid_pow_testnet_cluster_e2e
 }
 
 function gate_cluster() {
@@ -89,10 +90,11 @@ function gate_cluster() {
     # The tests `gate_test` excludes. They start real nodes on localhost and
     # need the machine to themselves: run them with one test thread, so two
     # clusters never share the cores.
-    echo "== cluster: live_vote_integration + sustained_liveness_integration"
+    echo "== cluster: live_vote_integration + sustained_liveness_integration + hybrid_node_cluster_integration"
     "$CARGO" test --locked -p kovanica-node \
         --test live_vote_integration \
         --test sustained_liveness_integration \
+        --test hybrid_node_cluster_integration \
         -- --test-threads=1
 }
 

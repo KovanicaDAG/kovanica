@@ -480,9 +480,42 @@ async fn hybrid_pow_testnet_cluster_e2e() -> Result<()> {
     let cluster = Cluster::start("hybrid-m8", 26_000, 30_000)?;
 
     cluster.wait_ready().await?;
+
+    // 1. Submit transfer early to all cluster nodes so it is admitted into
+    // mempool before early PoW blocks are sealed, matching isolated_hybrid_acceptance.
+    let (_sk_recip, pk_recip) = generate_keypair();
+    let recipient_addr = Address::from_public_key(&pk_recip);
+
+    let sender = cluster.nodes[0].address;
+    let sender_sk = &cluster.nodes[0].signing_key;
+
+    // Send transfer from Node 0 to recipient
+    let tx = create_transfer(
+        sender,
+        recipient_addr,
+        TRANSFER_AMOUNT,
+        TRANSFER_FEE,
+        0, // nonce 0
+        sender_sk,
+    );
+
+    let tx_bytes = bincode::serialize(&tx).context("serialize transaction")?;
+    let raw_hex = format!("0x{}", hex::encode(tx_bytes));
+
+    for node in &cluster.nodes {
+        let _ = rpc_call(
+            &cluster.client,
+            node.rpc_port,
+            "kovanica_sendRawTransaction",
+            json!([raw_hex.clone()]),
+        )
+        .await;
+    }
+    info!("submitted transfer transaction to cluster mempools");
+
     cluster.wait_for_peers().await?;
 
-    // 1. Verify kovanica_getMiningInfo on all nodes
+    // 2. Verify kovanica_getMiningInfo on all nodes
     for node in &cluster.nodes {
         let mining_info = rpc_call(
             &cluster.client,
@@ -508,7 +541,7 @@ async fn hybrid_pow_testnet_cluster_e2e() -> Result<()> {
         assert!(res.get("target_bits").is_some());
     }
 
-    // 2. Verify kovanica_getDagTips on node 0
+    // 3. Verify kovanica_getDagTips on node 0
     let dag_tips = rpc_call(
         &cluster.client,
         cluster.nodes[0].rpc_port,
@@ -524,41 +557,6 @@ async fn hybrid_pow_testnet_cluster_e2e() -> Result<()> {
         .and_then(Value::as_array)
         .context("tips array")?;
     assert!(!tips.is_empty(), "DAG must have at least genesis tip");
-
-    // 3. Submit transaction from node 0 early so it is admitted into
-    // mempool before early PoW blocks are sealed, matching isolated_hybrid_acceptance.
-    let (_sk_recip, pk_recip) = generate_keypair();
-    let recipient_addr = Address::from_public_key(&pk_recip);
-
-    let sender = cluster.nodes[0].address;
-    let sender_sk = &cluster.nodes[0].signing_key;
-
-    // Send transfer from Node 0 to recipient
-    let tx = create_transfer(
-        sender,
-        recipient_addr,
-        TRANSFER_AMOUNT,
-        TRANSFER_FEE,
-        0, // nonce 0
-        sender_sk,
-    );
-
-    let tx_bytes = bincode::serialize(&tx).context("serialize transaction")?;
-    let raw_hex = format!("0x{}", hex::encode(tx_bytes));
-
-    let tx_resp = rpc_call(
-        &cluster.client,
-        cluster.nodes[0].rpc_port,
-        "kovanica_sendRawTransaction",
-        json!([raw_hex]),
-    )
-    .await?;
-
-    let tx_hash = tx_resp
-        .get("result")
-        .and_then(Value::as_str)
-        .context("tx hash result")?;
-    info!(%tx_hash, "submitted transfer transaction to mempool");
 
     // 4. Wait for mining to produce blocks and advance committed height
     let height = cluster.wait_for_height_above(0).await?;
