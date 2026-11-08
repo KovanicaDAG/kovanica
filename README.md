@@ -373,6 +373,8 @@ Detailed architectural specifications and operational runbooks:
 - **Documentation Archive Index:** [`docs/archive/README.md`](docs/archive/README.md)
 - **JSON-RPC Reference:** [`docs/RPC.md`](docs/RPC.md)
 - **Comprehensive 2026 Audit Report:** [`docs/AUDIT_REPORT_2026.md`](docs/AUDIT_REPORT_2026.md)
+- **Mainnet Launch & Monitoring Runbook:** [`docs/MAINNET-RUNBOOK.md`](docs/MAINNET-RUNBOOK.md)
+- **Genesis Key Ceremony Protocol:** [`docs/KEY-CEREMONY.md`](docs/KEY-CEREMONY.md)
 
 ---
 
