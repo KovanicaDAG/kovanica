@@ -401,22 +401,47 @@ struct ClaimTreasuryArgs {
 }
 
 /// Arguments for `kovanica propose`.
-#[derive(Args)]
+#[derive(Args, Debug, Clone)]
 struct ProposeArgs {
     /// Proposal title
     #[arg(long)]
     title: String,
+
+    /// Keystore file for signing the proposal
+    #[arg(long, short, default_value = "keystore.json")]
+    keystore: PathBuf,
+
+    /// Proposal type: "parameter_change" or "treasury_spend"
+    #[arg(long = "type", default_value = "parameter_change")]
+    proposal_type: String,
+
+    /// Target parameter key (e.g. MIN_VALIDATOR_STAKE) or recipient address for treasury spend
+    #[arg(long)]
+    target: Option<String>,
+
+    /// New parameter value or treasury spend amount (e.g. 1000KUNA)
+    #[arg(long)]
+    value: Option<String>,
+
+    /// Justification or rationale description for the proposal
+    #[arg(long, default_value = "")]
+    justification: String,
 }
 
 /// Arguments for `kovanica vote`.
-#[derive(Args)]
+#[derive(Args, Debug, Clone)]
 struct VoteArgs {
     /// Proposal id
     #[arg(long = "proposal-id")]
     proposal_id: u64,
+
     /// Vote in favour (omit for against)
     #[arg(long)]
     approve: bool,
+
+    /// Keystore file for signing the vote
+    #[arg(long, short, default_value = "keystore.json")]
+    keystore: PathBuf,
 }
 
 /// Arguments for `kovanica deploy` — deploy a WASM contract.
@@ -523,18 +548,8 @@ async fn main() -> Result<()> {
         Commands::ClaimRewards(args) => cmd_claim_rewards(&client, chain_id, args, json).await,
         Commands::SetCommission(args) => cmd_set_commission(&client, chain_id, args, json).await,
         Commands::ClaimTreasury(args) => cmd_claim_treasury(&client, chain_id, args, json).await,
-        Commands::Propose(args) => node::not_implemented(
-            "propose",
-            "kovanica_propose",
-            json!({ "title": args.title }),
-            json,
-        ),
-        Commands::Vote(args) => node::not_implemented(
-            "vote",
-            "kovanica_vote",
-            json!({ "proposal_id": args.proposal_id, "approve": args.approve }),
-            json,
-        ),
+        Commands::Propose(args) => cmd_propose(&client, chain_id, args, json).await,
+        Commands::Vote(args) => cmd_vote(&client, chain_id, args, json).await,
         Commands::Deploy(args) => cmd_deploy(&client, chain_id, args, json).await,
         Commands::Call(args) => cmd_call(&client, chain_id, args, json).await,
         Commands::Htlc { command } => {
@@ -1067,6 +1082,158 @@ async fn cmd_claim_treasury(
     println!("  amount:  {}", format_kuna_fixed(args.amount));
     println!("  fee:     {} atoms", args.fee);
     println!("  nonce:   {nonce}");
+    Ok(())
+}
+
+async fn cmd_propose(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: ProposeArgs,
+    json_output: bool,
+) -> Result<()> {
+    if let Some(cid) = chain_id {
+        node::ensure_node_chain_matches(client, Some(cid)).await?;
+    }
+    let keystore = wallet::load(&args.keystore)?;
+    let password = wallet::prompt_keystore_password(&keystore)?;
+    let _signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
+    let proposer = wallet::address(&keystore)?;
+
+    let kind = match args.proposal_type.to_lowercase().as_str() {
+        "treasury_spend" | "treasury" => {
+            let recipient_str = args
+                .target
+                .as_deref()
+                .context("treasury spend proposal requires --target <RECIPIENT_ADDRESS>")?;
+            let recipient = wallet::parse_address(recipient_str, "target", chain_id.unwrap_or(0))?;
+            let val_str = args
+                .value
+                .as_deref()
+                .context("treasury spend proposal requires --value <AMOUNT_KUNA>")?;
+            let amount_atoms = parse_cli_amount(val_str)?;
+            kovanica_types::ProposalKind::TreasurySpend {
+                amount_atoms,
+                recipient,
+            }
+        }
+        _ => {
+            let target_key = args
+                .target
+                .clone()
+                .context("parameter change proposal requires --target <PARAM_KEY>")?;
+            let val_str = args
+                .value
+                .as_deref()
+                .context("parameter change proposal requires --value <NUMERIC_VALUE>")?;
+            let new_value: u64 = val_str
+                .parse()
+                .context("parameter new value must be an unsigned integer")?;
+            kovanica_types::ProposalKind::ParameterChange {
+                target_key,
+                new_value,
+            }
+        }
+    };
+
+    let justification_hash = kovanica_types::Hash::new(args.justification.as_bytes()).0;
+    let current_round = match client.call("kovanica_syncStatus", json!([])).await {
+        Ok(val) => val
+            .get("localTipRound")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        Err(_) => 0,
+    };
+
+    let proposal = kovanica_types::Proposal {
+        id: 0,
+        proposer,
+        title: args.title.clone(),
+        kind,
+        justification_hash,
+        start_round: current_round,
+        voting_end_round: current_round.saturating_add(kovanica_types::EPOCH_ROUNDS),
+        stake_voted_for: 0,
+        stake_voted_against: 0,
+        status: kovanica_types::ProposalStatus::Voting,
+    };
+
+    let rpc_res = client
+        .call("kovanica_propose", json!({ "proposal": &proposal }))
+        .await;
+
+    if json_output {
+        let mut obj = serde_json::to_value(&proposal)?;
+        if let Ok(res) = rpc_res {
+            obj["rpc_response"] = res;
+        }
+        return output::print_json(&obj);
+    }
+
+    println!("Submitted governance proposal:");
+    println!("  Title:       {}", proposal.title);
+    println!("  Proposer:    {}", proposal.proposer);
+    println!("  Start round: {}", proposal.start_round);
+    println!("  End round:   {}", proposal.voting_end_round);
+    match &proposal.kind {
+        kovanica_types::ProposalKind::ParameterChange {
+            target_key,
+            new_value,
+        } => {
+            println!("  Type:        parameter_change");
+            println!("  Parameter:   {target_key} -> {new_value}");
+        }
+        kovanica_types::ProposalKind::TreasurySpend {
+            amount_atoms,
+            recipient,
+        } => {
+            println!("  Type:        treasury_spend");
+            println!("  Amount:      {}", format_kuna_fixed(*amount_atoms));
+            println!("  Recipient:   {recipient}");
+        }
+    }
+    if let Ok(res) = rpc_res {
+        println!("  Node result: {res}");
+    }
+    Ok(())
+}
+
+async fn cmd_vote(
+    client: &RpcClient,
+    chain_id: Option<u64>,
+    args: VoteArgs,
+    json_output: bool,
+) -> Result<()> {
+    if let Some(cid) = chain_id {
+        node::ensure_node_chain_matches(client, Some(cid)).await?;
+    }
+    let keystore = wallet::load(&args.keystore)?;
+    let password = wallet::prompt_keystore_password(&keystore)?;
+    let signing_key = wallet::signing_key(&keystore, password.as_ref().map(|p| p.as_str()))?;
+    let voter = wallet::address(&keystore)?;
+
+    let vote =
+        kovanica_types::GovernanceVote::new(voter, args.proposal_id, args.approve, &signing_key);
+
+    let rpc_res = client.call("kovanica_vote", json!({ "vote": &vote })).await;
+
+    if json_output {
+        return output::print_json(&json!({
+            "voter": voter.to_string(),
+            "proposal_id": args.proposal_id,
+            "approve": args.approve,
+            "signature": hex::encode(vote.signature.as_bytes()),
+            "rpc_result": rpc_res.ok(),
+        }));
+    }
+
+    println!("Cast governance vote:");
+    println!("  Voter:       {}", voter);
+    println!("  Proposal ID: {}", args.proposal_id);
+    println!("  Approve:     {}", args.approve);
+    println!("  Signature:   {}", hex::encode(vote.signature.as_bytes()));
+    if let Ok(res) = rpc_res {
+        println!("  Node result: {res}");
+    }
     Ok(())
 }
 
@@ -2039,5 +2206,60 @@ mod wallet_cli_security_tests {
 
         // 4. Missing required --address fails parsing
         assert!(Cli::try_parse_from(["kovanica", "miner", "run"]).is_err());
+    }
+
+    #[test]
+    fn governance_propose_and_vote_args_parse() {
+        // Propose parameter change
+        let cli = Cli::try_parse_from([
+            "kovanica",
+            "propose",
+            "--title",
+            "Update Min Stake",
+            "--type",
+            "parameter_change",
+            "--target",
+            "MIN_VALIDATOR_STAKE",
+            "--value",
+            "60000000000000",
+            "--justification",
+            "Network security expansion",
+            "--keystore",
+            "val-keystore.json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Propose(args) => {
+                assert_eq!(args.title, "Update Min Stake");
+                assert_eq!(args.proposal_type, "parameter_change");
+                assert_eq!(args.target.as_deref(), Some("MIN_VALIDATOR_STAKE"));
+                assert_eq!(args.value.as_deref(), Some("60000000000000"));
+                assert_eq!(args.justification, "Network security expansion");
+                assert_eq!(args.keystore, PathBuf::from("val-keystore.json"));
+            }
+            _ => panic!("expected propose command"),
+        }
+
+        // Vote on proposal
+        let cli = Cli::try_parse_from([
+            "kovanica",
+            "vote",
+            "--proposal-id",
+            "42",
+            "--approve",
+            "--keystore",
+            "voter.json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Vote(args) => {
+                assert_eq!(args.proposal_id, 42);
+                assert!(args.approve);
+                assert_eq!(args.keystore, PathBuf::from("voter.json"));
+            }
+            _ => panic!("expected vote command"),
+        }
     }
 }
