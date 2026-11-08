@@ -76,6 +76,15 @@ enum Commands {
     Status,
     /// Show chain info (alias of `status`)
     Info,
+    /// Dedicated node inspection subcommands
+    Node {
+        #[command(subcommand)]
+        command: NodeCommand,
+    },
+    /// Inspect node sync state (alias of `kovanica node sync`)
+    Sync,
+    /// Inspect connected peers (alias of `kovanica node peers`)
+    Peers,
     /// Query an account balance
     Balance {
         /// Kovanica address
@@ -150,6 +159,14 @@ enum Commands {
         #[command(subcommand)]
         command: DagCommand,
     },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum NodeCommand {
+    /// Inspect node sync state
+    Sync,
+    /// Inspect connected peers
+    Peers,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -499,6 +516,12 @@ async fn main() -> Result<()> {
         }
         Commands::Transfer(args) => cmd_transfer(&client, chain_id, args, json).await,
         Commands::Status | Commands::Info => node::status(&client, chain_id, json).await,
+        Commands::Node { command } => match command {
+            NodeCommand::Sync => node::sync(&client, chain_id, json).await,
+            NodeCommand::Peers => node::peers(&client, chain_id, json).await,
+        },
+        Commands::Sync => node::sync(&client, chain_id, json).await,
+        Commands::Peers => node::peers(&client, chain_id, json).await,
         Commands::Balance { address } => node::balance(&client, &address, chain_id, json).await,
         Commands::Staking { address } => node::staking(&client, &address, chain_id, json).await,
         Commands::History(args) => {
@@ -2039,5 +2062,36 @@ mod wallet_cli_security_tests {
 
         // 4. Missing required --address fails parsing
         assert!(Cli::try_parse_from(["kovanica", "miner", "run"]).is_err());
+    }
+
+    #[test]
+    fn node_sync_and_peers_subcommands_and_aliases_parse() {
+        let cli = Cli::try_parse_from(["kovanica", "node", "sync"]).unwrap();
+        match cli.command {
+            Commands::Node {
+                command: NodeCommand::Sync,
+            } => {}
+            _ => panic!("expected node sync"),
+        }
+
+        let cli = Cli::try_parse_from(["kovanica", "sync"]).unwrap();
+        match cli.command {
+            Commands::Sync => {}
+            _ => panic!("expected sync alias"),
+        }
+
+        let cli = Cli::try_parse_from(["kovanica", "node", "peers"]).unwrap();
+        match cli.command {
+            Commands::Node {
+                command: NodeCommand::Peers,
+            } => {}
+            _ => panic!("expected node peers"),
+        }
+
+        let cli = Cli::try_parse_from(["kovanica", "peers"]).unwrap();
+        match cli.command {
+            Commands::Peers => {}
+            _ => panic!("expected peers alias"),
+        }
     }
 }
