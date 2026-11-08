@@ -9,13 +9,14 @@
 # baked in. See ops/docker/README.md for the local devnet.
 # ---------------------------------------------------------------------------
 
-FROM rust:1.90-bookworm AS builder
+FROM rust:1.91-bookworm AS builder
 
 WORKDIR /src
 
 # Copy the workspace manifests first so dependency resolution stays cached
 # across source-only changes. Every workspace member's manifest is required.
 COPY Cargo.toml Cargo.lock ./
+COPY contracts/ ./contracts/
 COPY crates/ ./crates/
 
 # Build the node from the committed lockfile. Cargo's registry/git caches use
@@ -23,8 +24,8 @@ COPY crates/ ./crates/
 # target/ is kept (we copy the binary out below).
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    cargo build --release --locked -p kovanica-node -p kovanica-faucet \
-    && strip target/release/kovanica-node target/release/kovanica-faucet
+    cargo build --release --locked -p kovanica-node -p kovanica-faucet -p kovanica-cli \
+    && strip target/release/kovanica-node target/release/kovanica-faucet target/release/kovanica
 
 # ---------------------------------------------------------------------------
 
@@ -42,6 +43,7 @@ RUN apt-get update \
 
 COPY --from=builder /src/target/release/kovanica-node /usr/local/bin/kovanica-node
 COPY --from=builder /src/target/release/kovanica-faucet /usr/local/bin/kovanica-faucet
+COPY --from=builder /src/target/release/kovanica /usr/local/bin/kovanica
 COPY ops/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
