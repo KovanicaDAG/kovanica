@@ -555,6 +555,14 @@ pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; 32]>> {
     Ok(seed)
 }
 
+/// Generate standard 64-byte BIP-39 seed using PBKDF2-HMAC-SHA512 (2048 iterations, salt "mnemonic" + passphrase).
+pub fn bip39_seed_from_mnemonic(phrase: &str, passphrase: &str) -> Result<Zeroizing<[u8; 64]>> {
+    let mnemonic =
+        Mnemonic::parse_in(Language::English, phrase).context("invalid English BIP-39 mnemonic")?;
+    let seed_64 = mnemonic.to_seed(passphrase);
+    Ok(Zeroizing::new(seed_64))
+}
+
 pub fn seed_to_mnemonic(seed: &[u8; 32]) -> Result<String> {
     Ok(Mnemonic::from_entropy_in(Language::English, seed)
         .context("encoding BIP-39 mnemonic")?

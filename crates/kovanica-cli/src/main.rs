@@ -232,6 +232,15 @@ struct ImportKeyArgs {
     /// Overwrite only after explicit interactive confirmation
     #[arg(long)]
     force: bool,
+    /// Enable opt-in BIP32/BIP44 SLIP-0010 HD derivation
+    #[arg(long, default_value_t = false)]
+    hd: bool,
+    /// BIP44 account index for HD derivation (default: 0)
+    #[arg(long)]
+    account: Option<u32>,
+    /// BIP44 address index for HD derivation (default: 0)
+    #[arg(long)]
+    index: Option<u32>,
 }
 
 #[derive(Args)]
@@ -256,6 +265,15 @@ struct AddressArgs {
     /// Allow raw hex seed import (disabled by default for security; enable with caution)
     #[arg(long, default_value_t = false)]
     allow_raw_hex: bool,
+    /// Enable opt-in BIP32/BIP44 SLIP-0010 HD derivation
+    #[arg(long, default_value_t = false)]
+    hd: bool,
+    /// BIP44 account index for HD derivation (default: 0)
+    #[arg(long)]
+    account: Option<u32>,
+    /// BIP44 address index for HD derivation (default: 0)
+    #[arg(long)]
+    index: Option<u32>,
 }
 
 /// Arguments for `kovanica sign`.
@@ -1158,6 +1176,37 @@ async fn cmd_call(
     Ok(())
 }
 
+pub(crate) fn import_key_from_input(
+    format: SecretFormat,
+    input: &str,
+    is_hd: bool,
+    account: Option<u32>,
+    index: Option<u32>,
+) -> Result<(Zeroizing<[u8; 32]>, Option<String>)> {
+    match format {
+        SecretFormat::Raw => {
+            if is_hd {
+                anyhow::bail!("--hd, --account, and --index require --format mnemonic");
+            }
+            Ok((wallet::seed_from_raw_hex(input)?, None))
+        }
+        SecretFormat::Mnemonic => {
+            if is_hd {
+                let acc = account.unwrap_or(0);
+                let idx = index.unwrap_or(0);
+                let path = kovanica_wallet_core::hd::format_bip44_path(acc, 0, idx);
+                let seed_64 = kovanica_keystore::bip39_seed_from_mnemonic(input, "")?;
+                let master = kovanica_wallet_core::hd::Slip10Node::master(&seed_64[..])?;
+                let child = master.derive_bip44(acc, 0, idx)?;
+                Ok((child.secret_key.clone(), Some(path)))
+            } else {
+                eprintln!("Mnemonic import uses its exact entropy as the Ed25519 seed; no BIP-39 passphrase or HD derivation is used.");
+                Ok((wallet::seed_from_mnemonic(input)?, None))
+            }
+        }
+    }
+}
+
 fn cmd_import_key(args: ImportKeyArgs, json_output: bool) -> Result<()> {
     if json_output {
         anyhow::bail!("secret import is disabled in JSON mode");
@@ -1166,13 +1215,10 @@ fn cmd_import_key(args: ImportKeyArgs, json_output: bool) -> Result<()> {
         SecretFormat::Raw => "Raw 32-byte seed hex (hidden): ",
         SecretFormat::Mnemonic => "24 English BIP-39 words (hidden): ",
     })?);
-    let seed = match args.format {
-        SecretFormat::Raw => wallet::seed_from_raw_hex(&input)?,
-        SecretFormat::Mnemonic => wallet::seed_from_mnemonic(&input)?,
-    };
-    if matches!(args.format, SecretFormat::Mnemonic) {
-        eprintln!("Mnemonic import uses its exact entropy as the Ed25519 seed; no BIP-39 passphrase or HD derivation is used.");
-    }
+    let is_hd = args.hd || args.account.is_some() || args.index.is_some();
+    let (seed, derivation_path) =
+        import_key_from_input(args.format, &input, is_hd, args.account, args.index)?;
+
     if args.force {
         confirm_typed(&format!("OVERWRITE {}", args.out.display()))?;
     }
@@ -1185,6 +1231,9 @@ fn cmd_import_key(args: ImportKeyArgs, json_output: bool) -> Result<()> {
     }
     println!("Encrypted keystore written to {}", args.out.display());
     println!("Address: {}", wallet::address(&keystore)?);
+    if let Some(ref path) = derivation_path {
+        println!("Derivation path: {path}");
+    }
     Ok(())
 }
 
@@ -1245,21 +1294,59 @@ fn cmd_address(args: AddressArgs, json_output: bool) -> Result<()> {
 
     let raw = std::fs::read_to_string(&args.key_file)
         .with_context(|| format!("reading key file {}", args.key_file.display()))?;
-    let seed = wallet::seed_from_raw_hex(&raw)?;
+    let trimmed = raw.trim();
+
+    let is_hd = args.hd || args.account.is_some() || args.index.is_some();
+    let (seed, derivation_path) = if is_hd {
+        let account = args.account.unwrap_or(0);
+        let index = args.index.unwrap_or(0);
+        let path = kovanica_wallet_core::hd::format_bip44_path(account, 0, index);
+        let seed_64 = if trimmed.split_whitespace().count() >= 12 {
+            kovanica_keystore::bip39_seed_from_mnemonic(trimmed, "")?
+        } else {
+            let hex_bytes = hex::decode(trimmed)
+                .map_err(|e| anyhow::anyhow!("invalid hex in key file: {e}"))?;
+            if hex_bytes.len() == 64 {
+                let mut s64 = zeroize::Zeroizing::new([0u8; 64]);
+                s64.copy_from_slice(&hex_bytes);
+                s64
+            } else if hex_bytes.len() == 32 {
+                let mut s64 = zeroize::Zeroizing::new([0u8; 64]);
+                s64[0..32].copy_from_slice(&hex_bytes);
+                s64
+            } else {
+                anyhow::bail!("key file must contain a 12-24 word mnemonic or 32/64-byte hex seed");
+            }
+        };
+        let master = kovanica_wallet_core::hd::Slip10Node::master(&seed_64[..])?;
+        let child = master.derive_bip44(account, 0, index)?;
+        (child.secret_key.clone(), Some(path))
+    } else {
+        (wallet::seed_from_raw_hex(&raw)?, None)
+    };
+
     let signing_key = SigningKey::from_bytes(&seed);
     let public_key = PublicKey::from(signing_key.verifying_key());
     let address = Address::from_public_key(&public_key);
     let public_key_hex = hex::encode(public_key.as_bytes());
 
     if json_output {
-        return output::print_json(&json!({
+        let mut obj = json!({
             "address": address.to_string(),
             "publicKey": public_key_hex,
-        }));
+        });
+        if let Some(ref path) = derivation_path {
+            obj["derivation_path"] = serde_json::Value::String(path.clone());
+            obj["derivationPath"] = serde_json::Value::String(path.clone());
+        }
+        return output::print_json(&obj);
     }
 
     println!("Address:    {address}");
     println!("Public key: {public_key_hex}");
+    if let Some(ref path) = derivation_path {
+        println!("Derivation path: {path}");
+    }
     Ok(())
 }
 
@@ -1489,6 +1576,9 @@ mod wallet_cli_security_tests {
             AddressArgs {
                 key_file: key_path.clone(),
                 allow_raw_hex: true,
+                hd: false,
+                account: None,
+                index: None,
             },
             false
         )
@@ -1497,7 +1587,10 @@ mod wallet_cli_security_tests {
         assert!(cmd_address(
             AddressArgs {
                 key_file: key_path,
-                allow_raw_hex: true
+                allow_raw_hex: true,
+                hd: false,
+                account: None,
+                index: None,
             },
             false
         )
@@ -1517,12 +1610,118 @@ mod wallet_cli_security_tests {
             AddressArgs {
                 key_file: key_path,
                 allow_raw_hex: true,
+                hd: false,
+                account: None,
+                index: None,
             },
             false,
         )
         .unwrap_err()
         .to_string();
         assert!(error.contains("other users"), "{error}");
+    }
+
+    #[test]
+    fn test_raw_entropy_default_vs_opt_in_slip0010_hd_derivation() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+
+        // 1. Raw-entropy default (neither --hd, --account, nor --index passed)
+        let (raw_seed, path_default) =
+            import_key_from_input(SecretFormat::Mnemonic, phrase, false, None, None).unwrap();
+        assert!(path_default.is_none());
+
+        let sk_raw = SigningKey::from_bytes(&raw_seed);
+        let pk_raw = PublicKey::from(sk_raw.verifying_key());
+        let addr_raw = Address::from_public_key(&pk_raw);
+
+        // Verify raw entropy matches Mnemonic::to_entropy directly
+        let expected_raw = kovanica_keystore::seed_from_mnemonic(phrase).unwrap();
+        assert_eq!(*raw_seed, *expected_raw);
+
+        // 2. Opt-in HD derivation with --hd flag (default account 0, index 0)
+        let (hd_seed_0, path_hd_0) =
+            import_key_from_input(SecretFormat::Mnemonic, phrase, true, None, None).unwrap();
+        assert_eq!(path_hd_0.as_deref(), Some("m/44'/3007'/0'/0'/0'"));
+
+        let sk_hd_0 = SigningKey::from_bytes(&hd_seed_0);
+        let pk_hd_0 = PublicKey::from(sk_hd_0.verifying_key());
+        let addr_hd_0 = Address::from_public_key(&pk_hd_0);
+
+        // Backward compatibility assertion: HD address MUST be distinct from legacy raw entropy
+        assert_ne!(addr_raw, addr_hd_0);
+        assert_ne!(*raw_seed, *hd_seed_0);
+
+        // 3. Opt-in HD derivation with explicit --account and --index
+        let (hd_seed_acc1, path_hd_acc1) =
+            import_key_from_input(SecretFormat::Mnemonic, phrase, true, Some(1), Some(2)).unwrap();
+        assert_eq!(path_hd_acc1.as_deref(), Some("m/44'/3007'/1'/0'/2'"));
+
+        let sk_hd_acc1 = SigningKey::from_bytes(&hd_seed_acc1);
+        let pk_hd_acc1 = PublicKey::from(sk_hd_acc1.verifying_key());
+        let addr_hd_acc1 = Address::from_public_key(&pk_hd_acc1);
+
+        assert_ne!(addr_hd_0, addr_hd_acc1);
+        assert_ne!(*hd_seed_0, *hd_seed_acc1);
+
+        // 4. Test address command with key_file and --hd flag
+        let dir = tempfile::tempdir().unwrap();
+        let mnemonic_file = dir.path().join("phrase.txt");
+        std::fs::write(&mnemonic_file, phrase).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&mnemonic_file, std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+
+        let args_hd = AddressArgs {
+            key_file: mnemonic_file.clone(),
+            allow_raw_hex: true,
+            hd: true,
+            account: Some(0),
+            index: Some(0),
+        };
+        assert!(cmd_address(args_hd, false).is_ok());
+
+        // 5. Test CLI argument parser accepts --hd, --account, --index on import-key and address
+        let cli_import = Cli::try_parse_from([
+            "kovanica",
+            "import-key",
+            "--format",
+            "mnemonic",
+            "--hd",
+            "--account",
+            "1",
+            "--index",
+            "5",
+        ])
+        .unwrap();
+        if let Commands::ImportKey(args) = cli_import.command {
+            assert!(args.hd);
+            assert_eq!(args.account, Some(1));
+            assert_eq!(args.index, Some(5));
+        } else {
+            panic!("expected ImportKey command");
+        }
+
+        let cli_address = Cli::try_parse_from([
+            "kovanica",
+            "address",
+            "--key-file",
+            "key.pem",
+            "--allow-raw-hex",
+            "--hd",
+            "--account",
+            "2",
+        ])
+        .unwrap();
+        if let Commands::Address(args) = cli_address.command {
+            assert!(args.hd);
+            assert_eq!(args.account, Some(2));
+            assert_eq!(args.index, None);
+        } else {
+            panic!("expected Address command");
+        }
     }
 
     #[test]

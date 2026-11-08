@@ -25,7 +25,7 @@ Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full p
 
 ## Product / apps / governance
 
-- [ ] BIP32-style HD derivation (mnemonic import exists; no HD path).
+- [x] BIP32-style HD derivation (SLIP-0010 Ed25519; coin type 3007; opt-in via --hd/--account/--index).
 - [ ] Kubernetes manifests (plan doc only).
 - [ ] Key distribution ceremony.
 - [ ] External security review (template: `docs/AUDIT_REPORT.template.md`).

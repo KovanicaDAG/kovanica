@@ -6,6 +6,8 @@ use kovanica_types::transaction::{Transaction, TransactionKind};
 use kovanica_types::{Address, PublicKey};
 use std::collections::HashMap;
 
+use crate::error::WalletError;
+
 #[derive(Clone)]
 pub struct WalletAccount {
     pub address: Address,
@@ -37,6 +39,33 @@ impl WalletAccount {
             public_key: pk,
             signing_key: sk,
         }
+    }
+
+    /// Derive a child account from a 64-byte BIP-39 binary seed using SLIP-0010 Ed25519 HD derivation
+    /// at standard path `m/44'/3007'/<account>'/<change>'/<index>'`.
+    pub fn from_bip39_seed_hd(
+        seed_64: &[u8; 64],
+        account: u32,
+        change: u32,
+        index: u32,
+    ) -> Result<Self, WalletError> {
+        let master = crate::hd::Slip10Node::master(seed_64)?;
+        let child = master.derive_bip44(account, change, index)?;
+        Ok(Self::from_seed(&child.secret_key))
+    }
+
+    /// Derive a child account from a BIP-39 mnemonic phrase and optional passphrase using
+    /// SLIP-0010 Ed25519 HD derivation at standard path `m/44'/3007'/<account>'/<change>'/<index>'`.
+    pub fn from_mnemonic_hd(
+        phrase: &str,
+        passphrase: &str,
+        account: u32,
+        change: u32,
+        index: u32,
+    ) -> Result<Self, WalletError> {
+        let seed_64 = kovanica_keystore::bip39_seed_from_mnemonic(phrase, passphrase)
+            .map_err(|e| WalletError::Keystore(e.to_string()))?;
+        Self::from_bip39_seed_hd(&seed_64, account, change, index)
     }
 
     pub fn sign_transfer(
@@ -96,6 +125,24 @@ impl Wallet {
         self.balances.insert(addr, 0);
         self.nonces.insert(addr, 0);
         addr
+    }
+
+    /// Derive and register an HD account from a BIP-39 mnemonic phrase and optional passphrase
+    /// at standard path `m/44'/3007'/<account>'/<change>'/<index>'`.
+    pub fn derive_hd_account(
+        &mut self,
+        phrase: &str,
+        passphrase: &str,
+        account: u32,
+        change: u32,
+        index: u32,
+    ) -> Result<Address, WalletError> {
+        let acc = WalletAccount::from_mnemonic_hd(phrase, passphrase, account, change, index)?;
+        let addr = acc.address;
+        self.accounts.push(acc);
+        self.balances.entry(addr).or_insert(0);
+        self.nonces.entry(addr).or_insert(0);
+        Ok(addr)
     }
 
     pub fn list_accounts(&self) -> Vec<Address> {
@@ -162,5 +209,21 @@ mod tests {
         let mut w2 = Wallet::new();
         let b = w2.import_seed(&seed);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn hd_account_derivation_deterministic() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+        let mut w1 = Wallet::new();
+        let addr1 = w1.derive_hd_account(phrase, "", 0, 0, 0).unwrap();
+        let addr2 = w1.derive_hd_account(phrase, "", 0, 0, 1).unwrap();
+        assert_ne!(addr1, addr2);
+
+        let mut w2 = Wallet::new();
+        let addr1_repeat = w2.derive_hd_account(phrase, "", 0, 0, 0).unwrap();
+        assert_eq!(addr1, addr1_repeat);
+
+        let acc = WalletAccount::from_mnemonic_hd(phrase, "", 0, 0, 0).unwrap();
+        assert_eq!(acc.address, addr1);
     }
 }
