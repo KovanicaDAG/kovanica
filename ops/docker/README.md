@@ -106,8 +106,16 @@ A standalone 1-command Docker Compose testnet cluster for **Chain 5** (`HYBRID_T
 Supported external miners connect via JSON-RPC `kovanica_getWork` / `kovanica_submitWork`:
 
 ```bash
-# Run standalone solo miner against node1
+# 1. Run standalone solo miner via CLI
 kovanica miner run --address kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag --threads 2
+
+# 2. Run standalone solo miner in a lightweight Docker container
+docker run --rm --network host kovanica-node:local \
+  kovanica miner run --rpc-url http://127.0.0.1:8545 --address kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag --threads 2
+
+# 3. Or launch the dedicated solo-miner container via Docker Compose profile
+KOVANICA_MINER_ADDRESS=kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag KOVANICA_MINER_THREADS=2 \
+  docker compose -f ops/docker/docker-compose.chain5.yml --profile miner up -d miner
 ```
 
 ### Apps Supervisor Observer Node

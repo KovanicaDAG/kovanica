@@ -160,6 +160,36 @@ services:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
 
+  miner:
+    <<: *node
+    container_name: kovanica-chain5-miner
+    profiles:
+      - miner
+    depends_on:
+      node1:
+        condition: service_healthy
+    command:
+      - kovanica
+      - miner
+      - run
+      - --rpc-url
+      - http://node1:8545
+      - --address
+      - "${KOVANICA_MINER_ADDRESS:-kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag}"
+      - --threads
+      - "${KOVANICA_MINER_THREADS:-2}"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 256M
+    environment:
+      RUST_LOG: "info"
+    healthcheck:
+      disable: true
+
   prometheus:
     image: prom/prometheus:v2.49.1
     container_name: kovanica-chain5-prometheus
