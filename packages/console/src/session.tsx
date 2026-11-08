@@ -6,7 +6,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { KovanicaRpcClient, subscribeNewHeads } from "@kovanica/api-client";
+import {
+  KovanicaRpcClient,
+  subscribeNewHeads,
+  type DagTipsResponse,
+  type MiningInfo,
+} from "@kovanica/api-client";
 import {
   generateKey,
   keyFromHexSeed,
@@ -16,6 +21,7 @@ import {
 } from "@kovanica/signer";
 
 import {
+  HYBRID_TESTNET,
   LOCAL,
   MAINNET,
   NETWORK_STORAGE_KEY,
@@ -40,6 +46,8 @@ interface Session {
   online: boolean;
   headTick: number;
   client: KovanicaRpcClient;
+  miningInfo: MiningInfo | null;
+  dagTips: DagTipsResponse | null;
 }
 
 const SessionContext = createContext<Session | null>(null);
@@ -50,7 +58,7 @@ function readQueryNetwork(): string | null {
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const networks = useMemo(() => {
-    const list = [TESTNET, MAINNET];
+    const list = [TESTNET, MAINNET, HYBRID_TESTNET];
     // `import.meta.env.DEV` is false in production, so the local node is
     // dropped from the bundle.
     if (import.meta.env.DEV) list.push(LOCAL);
@@ -66,8 +74,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [height, setHeight] = useState<bigint | null>(null);
   const [online, setOnline] = useState(false);
   const [headTick, setHeadTick] = useState(0);
+  const [miningInfo, setMiningInfo] = useState<MiningInfo | null>(null);
+  const [dagTips, setDagTips] = useState<DagTipsResponse | null>(null);
 
-  const client = useMemo(() => new KovanicaRpcClient(network.rpcUrl), [network.rpcUrl]);
+  const client = useMemo(() => {
+    const url = network.rpcUrl.endsWith("/rpc")
+      ? network.rpcUrl
+      : `${network.rpcUrl.replace(/\/+$/, "")}/rpc`;
+    return new KovanicaRpcClient(url);
+  }, [network.rpcUrl]);
 
   useEffect(() => {
     setKey((current) => {
@@ -76,7 +91,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     });
     setHeight(null);
     setOnline(false);
+    setMiningInfo(null);
+    setDagTips(null);
   }, [network.id]);
+
+  useEffect(() => {
+    let cancel = false;
+    async function fetchHybrid() {
+      try {
+        const [mInfoRes, dagTipsRes] = await Promise.allSettled([
+          client.getMiningInfo(),
+          client.getDagTips(),
+        ]);
+        if (cancel) return;
+        setMiningInfo(mInfoRes.status === "fulfilled" ? mInfoRes.value : null);
+        setDagTips(dagTipsRes.status === "fulfilled" ? dagTipsRes.value : null);
+      } catch {
+        if (!cancel) {
+          setMiningInfo(null);
+          setDagTips(null);
+        }
+      }
+    }
+    void fetchHybrid();
+    return () => {
+      cancel = true;
+    };
+  }, [client, headTick, network.id]);
 
   useEffect(() => {
     if (typeof WebSocket === "undefined") return;
@@ -152,6 +193,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     online,
     headTick,
     client,
+    miningInfo,
+    dagTips,
   };
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

@@ -251,8 +251,8 @@ pub fn verify_block_with_clock(
         return Err(Rejection::MerkleMismatch);
     }
 
-    if chain_id == kovanica_types::signing::chain_id::HYBRID_TESTNET {
-        // Chain 5 (Hybrid PoW + GHOSTDAG):
+    if kovanica_types::signing::chain_id::is_hybrid(chain_id) {
+        // Hybrid PoW + GHOSTDAG (Chain 2 & Chain 5):
         // NO stake in consensus path per ADR 0003. Committee keys and Ed25519 signatures
         // are NOT checked. Anti-DoS is enforced strictly by PoW verification:
         // missing PoW, timestamp drift, malformed parents, or hash not meeting target

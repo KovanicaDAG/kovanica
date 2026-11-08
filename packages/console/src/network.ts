@@ -1,4 +1,4 @@
-export type NetworkId = "testnet" | "mainnet" | "local";
+export type NetworkId = "testnet" | "mainnet" | "local" | "hybrid-testnet";
 
 export interface Network {
   id: NetworkId;
@@ -63,9 +63,29 @@ export const LOCAL: Network = {
   enabled: true,
 };
 
+export const HYBRID_TESTNET: Network = {
+  id: "hybrid-testnet",
+  label: "Hybrid Testnet (Chain 5)",
+  chainId: 5,
+  rpcUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_HYBRID_TESTNET_RPC_URL) ||
+    "http://127.0.0.1:8545",
+  wsUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_HYBRID_TESTNET_WS_URL) ||
+    "ws://127.0.0.1:8545",
+  indexerHttpUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_HTTP_URL) || null,
+  indexerWsUrl:
+    ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_INDEXER_WS_URL) || null,
+  faucetUrl: null,
+  enabled: true,
+};
+
 /** Production builds omit the local node. Mainnet stays listed and disabled. */
 export function networksFor(production: boolean): Network[] {
-  return production ? [TESTNET, MAINNET] : [TESTNET, MAINNET, LOCAL];
+  return production
+    ? [TESTNET, MAINNET, HYBRID_TESTNET]
+    : [TESTNET, MAINNET, HYBRID_TESTNET, LOCAL];
 }
 
 export function resolveNetwork(

@@ -16,6 +16,25 @@
  * this client.
  */
 
+export const ChainId = {
+  MAINNET: 1,
+  TESTNET: 2,
+  DEVNET: 3,
+  TESTNET_V2: 4,
+  HYBRID_TESTNET: 5,
+  LOCAL: 1337,
+  Mainnet: 1,
+  Testnet: 2,
+  Devnet: 3,
+  TestnetV2: 4,
+  HybridTestnet: 5,
+  Local: 1337,
+} as const;
+
+export type ChainId = (typeof ChainId)[keyof typeof ChainId];
+
+export const HYBRID_TESTNET_CHAIN_ID = 5;
+
 export const ENTRY_POINTS = [
   "htlc_create",
   "htlc_claim",
@@ -45,6 +64,75 @@ export interface BlockResponse {
   round: number;
   parent_hashes: string[];
   transactions: Array<{ hash: string; raw: string } | string>;
+  nonce?: number | string;
+  pow_hash?: string;
+  target_bits?: number;
+  blue_score?: number | string;
+  blue_work?: string;
+  selected_parent?: string | null;
+  mergeset_blues?: string[];
+  mergeset_reds?: string[];
+}
+
+export interface MiningInfo {
+  chain_id: number;
+  mining_enabled: boolean;
+  mining_threads: number;
+  target_bits: string;
+  target: string;
+  difficulty: string;
+  target_block_time_ms: number;
+  ghostdag_k: number;
+  network_hashrate_estimate: number;
+  dag_tips_count: number;
+  blue_score?: number | string;
+}
+
+export interface DagTipsResponse {
+  chain_id: number;
+  tips: string[];
+  count: number;
+  max_round: number;
+  ghostdag_k: number;
+  blue_score?: number | string;
+}
+
+export interface WorkTemplate {
+  chain_id: number;
+  round: number;
+  author: number;
+  parents: string[];
+  parent_refs: Array<{ author: number; round: number; digest: unknown }>;
+  merkle_root: string;
+  timestamp: number;
+  target_bits: string;
+  target: string;
+  preimage: string;
+  transactions_count: number;
+  header: unknown;
+}
+
+export type BlockHeaderSubmission =
+  | string
+  | {
+      chain_id: number;
+      round: number;
+      author: number;
+      parents: Array<{ author: number; round: number; digest: unknown }>;
+      merkle_root: unknown;
+      timestamp: number;
+      target_bits: number;
+      nonce: number;
+      pow_hash?: unknown;
+      [key: string]: unknown;
+    }
+  | { header: unknown }
+  | Record<string, unknown>;
+
+export interface SubmitWorkResponse {
+  accepted: boolean;
+  digest: string;
+  pow_hash: string;
 }
 
 export interface ValidatorInfo {
@@ -121,6 +209,25 @@ export class KovanicaRpcClient {
 
   getBlockByHash(hash: string, fullTransactions = false): Promise<BlockResponse | null> {
     return this.call<BlockResponse | null>("kovanica_getBlockByHash", [hash, fullTransactions]);
+  }
+
+  getMiningInfo(): Promise<MiningInfo> {
+    return this.call<MiningInfo>("kovanica_getMiningInfo");
+  }
+
+  getDagTips(): Promise<DagTipsResponse> {
+    return this.call<DagTipsResponse>("kovanica_getDagTips");
+  }
+
+  getWork(minerAddress: string): Promise<WorkTemplate> {
+    return this.call<WorkTemplate>("kovanica_getWork", [minerAddress]);
+  }
+
+  submitWork(header: BlockHeaderSubmission): Promise<SubmitWorkResponse> {
+    return this.call<SubmitWorkResponse>(
+      "kovanica_submitWork",
+      typeof header === "string" ? [header] : header,
+    );
   }
 
   async getBalance(address: string): Promise<bigint> {
