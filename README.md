@@ -376,6 +376,8 @@ Detailed architectural specifications and operational runbooks:
 - **Comprehensive 2026 Audit Report:** [`docs/AUDIT_REPORT_2026.md`](docs/AUDIT_REPORT_2026.md)
 - **Mainnet Launch & Monitoring Runbook:** [`docs/MAINNET-RUNBOOK.md`](docs/MAINNET-RUNBOOK.md)
 - **Genesis Key Ceremony Protocol:** [`docs/KEY-CEREMONY.md`](docs/KEY-CEREMONY.md)
+- **Mainnet Launch Freeze Checklist:** [`docs/MAINNET-FREEZE-CHECKLIST.md`](docs/MAINNET-FREEZE-CHECKLIST.md)
+- **Explorer & Console Deployment Guide:** [`docs/EXPLORER.md`](docs/EXPLORER.md)
 
 ---
 
