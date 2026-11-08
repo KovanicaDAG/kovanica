@@ -1,0 +1,17 @@
+# Pre-funded accounts for Kovanica Soak Test Cluster (Chain ID 5 / Hybrid PoW)
+# Each account is allocated 100,000 KUNA (100,000,000,000,000 atoms, 9 decimals)
+
+[[account]]
+# Faucet account
+address = "kvnck2559l6vnpcchmtkuf2eslmdtxc6wtfm9nf9zqqructs4336nla58y78mdag"
+balance = 100000000000000
+
+[[account]]
+# Default soak test funder (seed: 1111111111111111111111111111111111111111111111111111111111111111)
+address = "kvnc6p9tyvn59w62kwsndz75v90yumgzyj4hrgqkhtu9yz3n9jthsum557y80dag"
+balance = 100000000000000
+
+[[account]]
+# Secondary soak funder / miner address
+address = "kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag"
+balance = 100000000000000

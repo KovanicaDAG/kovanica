@@ -1,0 +1,125 @@
+# Kovanica Automated Long-Running Soak & Resource Budget Test Harness
+# 3 validator nodes peered over P2P with strict cgroup limits + Prometheus observability.
+name: kovanica-soak
+
+x-node: &node
+  image: kovanica-node:local
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  init: true
+  cpus: '1.5'
+  mem_limit: 2048m
+  deploy:
+    resources:
+      limits:
+        cpus: '1.5'
+        memory: 2048m
+      reservations:
+        memory: 512m
+  environment: &node-env
+    KOVANICA_CHAIN_ID: "5"
+    KOVANICA_RPC_ADDR: "0.0.0.0"
+    KOVANICA_RPC_PORT: "9100"
+    KOVANICA_LISTEN_ADDR: "0.0.0.0:8000"
+    KOVANICA_DATA_DIR: "/var/lib/kovanica"
+    KOVANICA_MAX_PEERS: "20"
+    KOVANICA_RUN_VALIDATOR: "true"
+    KOVANICA_MINING_ENABLED: "true"
+    KOVANICA_MINING_THREADS: "1"
+    KOVANICA_RPC_RATE_LIMIT_PER_MIN: "0"
+    KOVANICA_RPC_AUTH: "disable"
+    KOVANICA_MEMPOOL_REBROADCAST_INTERVAL_SECS: "5"
+    KOVANICA_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "30"
+    KOVANICA_MEMPOOL_MIN_FEE_RATE: "0"
+    RUST_LOG: "info"
+
+x-healthcheck: &healthcheck
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 10s
+
+services:
+  node1:
+    <<: *node
+    container_name: kovanica-soak-node1
+    environment:
+      <<: *node-env
+      KOVANICA_BOOTNODES: ""
+      KOVANICA_MINING_AUTHOR: "0"
+    ports:
+      - "127.0.0.1:8545:9100"
+      - "127.0.0.1:9100:9100"
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - node1-data:/var/lib/kovanica
+      - ./funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9100/health"]
+
+  node2:
+    <<: *node
+    container_name: kovanica-soak-node2
+    depends_on:
+      node1:
+        condition: service_healthy
+    environment:
+      <<: *node-env
+      KOVANICA_BOOTNODES: "node1:8000"
+      KOVANICA_MINING_AUTHOR: "1"
+    ports:
+      - "127.0.0.1:8546:9100"
+      - "127.0.0.1:9101:9100"
+    volumes:
+      - node2-data:/var/lib/kovanica
+      - ./funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9100/health"]
+
+  node3:
+    <<: *node
+    container_name: kovanica-soak-node3
+    depends_on:
+      node1:
+        condition: service_healthy
+    environment:
+      <<: *node-env
+      KOVANICA_BOOTNODES: "node1:8000"
+      KOVANICA_MINING_AUTHOR: "2"
+    ports:
+      - "127.0.0.1:8547:9100"
+      - "127.0.0.1:9102:9100"
+    volumes:
+      - node3-data:/var/lib/kovanica
+      - ./funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9100/health"]
+
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    container_name: kovanica-soak-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus.soak.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      node1:
+        condition: service_healthy
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  prometheus-data:

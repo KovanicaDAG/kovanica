@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: "kovanica-soak"
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "node1:9100"
+          - "node2:9100"
+          - "node3:9100"
+        labels:
+          cluster: "kovanica-soak"
+          chain_id: "5"
