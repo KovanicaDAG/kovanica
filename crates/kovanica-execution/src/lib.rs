@@ -392,7 +392,7 @@ impl ExecutionContext {
         // this very sub-DAG (unbond, slash, liveness eviction) and must never
         // be used to decide who gets paid or who missed a leader slot.
         let leader_epoch = epoch_for_round(subdag.leader_round);
-        let epoch_committee = if self.signing_ctx.chain_id == chain_id::HYBRID_TESTNET {
+        let epoch_committee = if chain_id::is_hybrid(self.signing_ctx.chain_id) {
             Vec::new()
         } else {
             ensure_epoch_committee(storage, &self.staking, leader_epoch)?
@@ -452,10 +452,10 @@ impl ExecutionContext {
             .unwrap_or(EmissionPolicy::Legacy81M);
 
         // 3. Pay the mining reward to the blocks/leader of this sub-DAG.
-        // Under Hybrid PoW + GHOSTDAG (Chain 5, ADR 0003), mining rewards are minted directly
+        // Under Hybrid PoW + GHOSTDAG (ADR 0003), mining rewards are minted directly
         // to the miner/author of each confirmed block without stake commission.
         let (reward, candidate_staking, candidate_mining_state, escrow_part) =
-            if self.signing_ctx.chain_id == chain_id::HYBRID_TESTNET {
+            if chain_id::is_hybrid(self.signing_ctx.chain_id) {
                 if emission_policy == EmissionPolicy::NoStake82M {
                     let mut candidate_staking = snapshot_staking(&self.staking);
                     let mut mining_state = storage
@@ -610,7 +610,7 @@ impl ExecutionContext {
                 (reward, candidate_staking, None, escrow_part)
             };
 
-        if self.signing_ctx.chain_id != chain_id::HYBRID_TESTNET {
+        if !chain_id::is_hybrid(self.signing_ctx.chain_id) {
             self.pay_light_escrow(
                 &mut txn,
                 storage,

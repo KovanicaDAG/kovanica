@@ -25,7 +25,12 @@ pub fn calculate_work_from_target(target_bits: u32) -> u128 {
     }
 }
 
-/// GHOSTDAG committer for sequencing PoW blocks on Chain 5.
+/// Whether `chain_id` is a hybrid PoW + GHOSTDAG network.
+pub fn is_hybrid_chain(chain_id: u64) -> bool {
+    kovanica_types::signing::chain_id::is_hybrid(chain_id)
+}
+
+/// GHOSTDAG committer for sequencing PoW blocks on hybrid chains.
 #[derive(Debug, Clone)]
 pub struct GhostdagCommitter {
     /// GHOSTDAG cluster parameter k (default 5 for Chain 5).
@@ -84,7 +89,11 @@ impl GhostdagCommitter {
             return;
         }
 
-        let work = if let Ok(header) =
+        let work = if let Some((_, target_bits, _, _)) =
+            kovanica_types::decode_pow_statement(&block.statements)
+        {
+            calculate_work_from_target(target_bits)
+        } else if let Ok(header) =
             block.extract_pow_header(kovanica_params::CHAIN_ID_HYBRID_TESTNET)
         {
             calculate_work_from_target(header.target_bits)

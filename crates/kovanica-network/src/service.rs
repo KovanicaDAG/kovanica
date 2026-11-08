@@ -1522,7 +1522,7 @@ impl NetworkService {
                 }
             }
         };
-        if self.config.network_id.chain_id != kovanica_types::signing::chain_id::HYBRID_TESTNET
+        if !kovanica_types::signing::chain_id::is_hybrid(self.config.network_id.chain_id)
             && !self.validator.is_configured()
         {
             debug!("committee keys not set; block gossip dropped unforwarded");
