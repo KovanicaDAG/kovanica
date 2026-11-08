@@ -51,6 +51,7 @@ services:
       KOVANICA_RPC_PORT: "8545"
       KOVANICA_BOOTNODES: ""
       KOVANICA_MINING_AUTHOR: "0"
+      KOVANICA_P2P_KEY: "/etc/kovanica/node1_p2p.key"
     ports:
       - "127.0.0.1:8545:8545"
       - "127.0.0.1:8000:8000"
@@ -58,6 +59,7 @@ services:
     volumes:
       - node1-data:/var/lib/kovanica
       - ./chain5/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+      - ./chain5/node1_p2p.key:/etc/kovanica/node1_p2p.key:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8545/health"]
