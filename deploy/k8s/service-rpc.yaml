@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kovanica-rpc
+  labels:
+    app.kubernetes.io/name: kovanica
+    app.kubernetes.io/component: rpc
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kovanica
+    app.kubernetes.io/component: node
+  ports:
+    - name: rpc
+      port: 8545
+      targetPort: 8545
+      protocol: TCP
+    - name: ws
+      port: 8546
+      targetPort: 8546
+      protocol: TCP
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+      protocol: TCP
