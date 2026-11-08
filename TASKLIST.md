@@ -26,14 +26,14 @@ Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full p
 ## Product / apps / governance
 
 - [x] BIP32-style HD derivation (SLIP-0010 Ed25519; coin type 3007; opt-in via --hd/--account/--index).
-- [ ] Kubernetes manifests (plan doc only).
+- [x] Kubernetes manifests (`deploy/k8s/`, `deploy/helm/kovanica/`).
 - [x] Key distribution ceremony (`docs/KEY-CEREMONY.md`).
 - [ ] External security review (template: `docs/AUDIT_REPORT.template.md`).
 - [x] Mainnet launch + monitoring runbook (`docs/MAINNET-RUNBOOK.md`).
-- [ ] Governance: parameter proposals, stake-weighted voting, treasury spend, upgrade signaling (`propose`/`vote` still `not_implemented`).
-- [~] Staking user-facing guide (archive/plan docs exist; no end-user guide).
+- [x] Governance: parameter proposals, stake-weighted voting, treasury spend (`propose`/`vote` in `kovanica-cli`, state tracking in `kovanica-staking`).
+- [x] Staking user-facing guide — [`docs/STAKING-GUIDE.md`](docs/STAKING-GUIDE.md) covers delegator & validator onboarding, CLI staking/delegation/unbonding/rewards, and FAQ.
 - [~] Explorer docs; mainnet freeze checklist draft not fully verified on live testnet.
-- [~] CLI node ops `sync`/`peers` missing; live_vote harness flaky/infra.
+- [x] CLI node ops `sync`/`peers` implemented via `kovanica_syncStatus`.
 
 ## Corrected false opens
 

@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kovanica.fullname" . }}-config
+  labels:
+    {{- include "kovanica.labels" . | nindent 4 }}
+data:
+  config.toml: |
+    # Kovanica Node Helm Configuration
+    chain_id = {{ .Values.node.chainId }}
+    data_dir = "/var/lib/kovanica/data"
+    listen_addr = "0.0.0.0:{{ .Values.service.p2p.port }}"
+    rpc_addr = "0.0.0.0"
+    rpc_port = {{ .Values.service.rpc.port }}
+    ws_port = {{ .Values.service.ws.port }}
+    metrics_addr = "0.0.0.0"
+    metrics_port = {{ .Values.service.metrics.port }}
+    max_peers = {{ .Values.node.maxPeers }}
+    target_block_ms = {{ .Values.node.targetBlockMs }}
+    bootnodes = {{ .Values.node.bootnodes | toJson }}
+
+    [logging]
+    level = {{ .Values.node.logLevel | quote }}
+
+    [mining]
+    enabled = {{ .Values.mining.enabled }}
+    threads = {{ .Values.mining.threads }}
+    author = {{ .Values.mining.author }}

@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kovanica.fullname" . }}-p2p-headless
+  labels:
+    {{- include "kovanica.labels" . | nindent 4 }}
+    app.kubernetes.io/component: p2p
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "kovanica.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: p2p
+      port: {{ .Values.service.p2p.port }}
+      targetPort: p2p
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kovanica.fullname" . }}-p2p
+  labels:
+    {{- include "kovanica.labels" . | nindent 4 }}
+    app.kubernetes.io/component: p2p
+spec:
+  type: {{ .Values.service.p2p.type }}
+  selector:
+    {{- include "kovanica.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: p2p
+      port: {{ .Values.service.p2p.port }}
+      targetPort: p2p
+      {{- if and (eq .Values.service.p2p.type "NodePort") .Values.service.p2p.nodePort }}
+      nodePort: {{ .Values.service.p2p.nodePort }}
+      {{- end }}
+      protocol: TCP
