@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kovanica.fullname" . }}
+  labels:
+    {{- include "kovanica.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node
+spec:
+  serviceName: {{ include "kovanica.fullname" . }}-p2p-headless
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kovanica.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: node
+  template:
+    metadata:
+      labels:
+        {{- include "kovanica.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: node
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - kovanica-node
+          args:
+            - "--config"
+            - "/etc/kovanica/config.toml"
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.node.logLevel | quote }}
+          ports:
+            - name: p2p
+              containerPort: {{ .Values.service.p2p.port }}
+              protocol: TCP
+            - name: rpc
+              containerPort: {{ .Values.service.rpc.port }}
+              protocol: TCP
+            - name: ws
+              containerPort: {{ .Values.service.ws.port }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.service.metrics.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            tcpSocket:
+              port: rpc
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: rpc
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kovanica/data
+            - name: config
+              mountPath: /etc/kovanica
+            {{- if .Values.secret.enabled }}
+            - name: keystore
+              mountPath: /var/lib/kovanica/keystore
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kovanica.fullname" . }}-config
+        {{- if .Values.secret.enabled }}
+        - name: keystore
+          secret:
+            secretName: {{ include "kovanica.fullname" . }}-keystore
+            optional: true
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode | quote }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}

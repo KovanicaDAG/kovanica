@@ -1,0 +1,14 @@
+apiVersion: v2
+name: kovanica
+description: Production Helm chart for deploying Kovanica (KUNA) blockchain nodes
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+keywords:
+  - blockchain
+  - layer-1
+  - kovanica
+  - kuna
+maintainers:
+  - name: Kovanica Core Team
+    url: https://github.com/KovanicaDAG

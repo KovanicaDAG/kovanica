@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kovanica-node
+  labels:
+    app.kubernetes.io/name: kovanica
+    app.kubernetes.io/component: node
+spec:
+  serviceName: kovanica-p2p-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kovanica
+      app.kubernetes.io/component: node
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kovanica
+        app.kubernetes.io/component: node
+    spec:
+      containers:
+        - name: kovanica-node
+          image: kovanica/kovanica-node:v0.2.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - kovanica-node
+          args:
+            - "--config"
+            - "/etc/kovanica/config.toml"
+          env:
+            - name: RUST_LOG
+              value: "info"
+          ports:
+            - name: p2p
+              containerPort: 8000
+              protocol: TCP
+            - name: rpc
+              containerPort: 8545
+              protocol: TCP
+            - name: ws
+              containerPort: 8546
+              protocol: TCP
+            - name: metrics
+              containerPort: 9100
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 2Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          livenessProbe:
+            tcpSocket:
+              port: 8545
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: 8545
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kovanica/data
+            - name: config
+              mountPath: /etc/kovanica
+            - name: keystore
+              mountPath: /var/lib/kovanica/keystore
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: kovanica-config
+        - name: keystore
+          secret:
+            secretName: kovanica-keystore
+            optional: true
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 50Gi

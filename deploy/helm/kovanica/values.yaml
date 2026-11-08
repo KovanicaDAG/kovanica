@@ -1,0 +1,77 @@
+replicaCount: 1
+
+image:
+  repository: kovanica/kovanica-node
+  pullPolicy: IfNotPresent
+  tag: "v0.2.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+node:
+  # 1 for Mainnet, 2 for Canonical Testnet, 5 for Hybrid Testnet
+  chainId: 1
+  # Role: validator, seed, rpc
+  role: validator
+  targetBlockMs: 4000
+  logLevel: "info"
+  maxPeers: 50
+  bootnodes: []
+
+mining:
+  enabled: false
+  threads: 2
+  author: 0
+
+service:
+  p2p:
+    type: NodePort
+    port: 8000
+    nodePort: 30800
+  rpc:
+    type: ClusterIP
+    port: 8545
+  ws:
+    port: 8546
+  metrics:
+    port: 9100
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: rpc.kovanica.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 1000m
+    memory: 2Gi
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 50Gi
+
+secret:
+  enabled: false
+  keystoreJson: ""
+
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  scrapeTimeout: 10s
+  labels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
