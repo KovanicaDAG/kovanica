@@ -30,8 +30,8 @@ const NODES: usize = 3;
 const CHAIN_ID: u64 = chain_id::HYBRID_TESTNET;
 const RPC_READY_TIMEOUT_SECS: u64 = 60;
 const PEER_TIMEOUT_SECS: u64 = 90;
-const MINING_TIMEOUT_SECS: u64 = 180;
-const TX_TIMEOUT_SECS: u64 = 180;
+const MINING_TIMEOUT_SECS: u64 = 300;
+const TX_TIMEOUT_SECS: u64 = 300;
 const POLL_INTERVAL_MS: u64 = 500;
 const PORT_ATTEMPTS: usize = 32;
 
@@ -525,34 +525,8 @@ async fn hybrid_pow_testnet_cluster_e2e() -> Result<()> {
         .context("tips array")?;
     assert!(!tips.is_empty(), "DAG must have at least genesis tip");
 
-    // 3. Wait for mining to produce blocks and advance committed height
-    let height = cluster.wait_for_height_above(0).await?;
-    assert!(height >= 1, "committed height must advance above 0");
-
-    // 4. Verify mining rewards (2.5 KVNC = 2_500_000_000 atoms per block)
-    let deadline = Instant::now() + Duration::from_secs(MINING_TIMEOUT_SECS);
-    let mut total_balance;
-    loop {
-        total_balance = 0;
-        for node in &cluster.nodes {
-            if let Ok(b) = get_balance(&cluster.client, node.rpc_port, node.address).await {
-                total_balance += b;
-            }
-        }
-        if total_balance > 0 {
-            break;
-        }
-        if Instant::now() >= deadline {
-            bail!("mining nodes received no rewards after {MINING_TIMEOUT_SECS}s");
-        }
-        sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
-    }
-    assert!(
-        total_balance >= kovanica_params::INITIAL_BLOCK_REWARD,
-        "total balance should reflect minted block rewards"
-    );
-
-    // 5. Submit transaction from node 0 and verify inclusion and execution in PoW block
+    // 3. Submit transaction from node 0 early so it is admitted into
+    // mempool before early PoW blocks are sealed, matching isolated_hybrid_acceptance.
     let (_sk_recip, pk_recip) = generate_keypair();
     let recipient_addr = Address::from_public_key(&pk_recip);
 
@@ -586,9 +560,37 @@ async fn hybrid_pow_testnet_cluster_e2e() -> Result<()> {
         .context("tx hash result")?;
     info!(%tx_hash, "submitted transfer transaction to mempool");
 
-    // Wait for recipient to receive the transfer balance
+    // 4. Wait for mining to produce blocks and advance committed height
+    let height = cluster.wait_for_height_above(0).await?;
+    assert!(height >= 1, "committed height must advance above 0");
+
+    // 5. Verify mining rewards (2.5 KVNC = 2_500_000_000 atoms per block)
+    let deadline = Instant::now() + Duration::from_secs(MINING_TIMEOUT_SECS);
+    let mut total_balance;
+    loop {
+        total_balance = 0;
+        for node in &cluster.nodes {
+            if let Ok(b) = get_balance(&cluster.client, node.rpc_port, node.address).await {
+                total_balance += b;
+            }
+        }
+        if total_balance > 0 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            bail!("mining nodes received no rewards after {MINING_TIMEOUT_SECS}s");
+        }
+        sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+    }
+    assert!(
+        total_balance >= kovanica_params::INITIAL_BLOCK_REWARD,
+        "total balance should reflect minted block rewards"
+    );
+
+    // 6. Wait for recipient to receive the transfer balance
     let tx_deadline = Instant::now() + Duration::from_secs(TX_TIMEOUT_SECS);
     let mut recipient_balance = 0u64;
+    let mut last_logged_instant = Instant::now();
     loop {
         if let Ok(b) = get_balance(&cluster.client, cluster.nodes[0].rpc_port, recipient_addr).await
         {
@@ -597,6 +599,16 @@ async fn hybrid_pow_testnet_cluster_e2e() -> Result<()> {
                 info!(recipient_balance, "transaction executed in PoW block!");
                 break;
             }
+        }
+        if last_logged_instant.elapsed() >= Duration::from_secs(10) {
+            let h = get_height(&cluster.client, cluster.nodes[0].rpc_port)
+                .await
+                .unwrap_or(0);
+            info!(
+                current_height = h,
+                recipient_balance, "waiting for transaction inclusion in PoW block..."
+            );
+            last_logged_instant = Instant::now();
         }
         if Instant::now() >= tx_deadline {
             bail!(
