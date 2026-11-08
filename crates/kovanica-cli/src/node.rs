@@ -28,6 +28,14 @@ pub struct PeerView {
     pub peer_id: String,
     /// Last DAG tip round the peer advertised.
     pub reported_tip_round: Option<u64>,
+    /// Network address (IP:port), if reported.
+    pub address: Option<String>,
+    /// Connection direction (Inbound / Outbound), if reported.
+    pub direction: Option<String>,
+    /// Protocol version string, if reported.
+    pub protocol_version: Option<String>,
+    /// Ping / round-trip latency in milliseconds, if reported.
+    pub latency_ms: Option<u64>,
 }
 
 /// Fields read from `kovanica_syncStatus`.
@@ -95,15 +103,63 @@ pub fn parse_sync_status(value: &Value) -> Result<SyncSnapshot> {
             items
                 .iter()
                 .filter_map(|item| {
-                    let peer_id = item.get("peerId")?.as_str()?.trim();
+                    let peer_id = item
+                        .get("peerId")
+                        .or_else(|| item.get("peer_id"))
+                        .or_else(|| item.get("nodeId"))
+                        .or_else(|| item.get("node_id"))?
+                        .as_str()?
+                        .trim();
                     if peer_id.is_empty() {
                         return None;
                     }
-                    let reported_tip_round =
-                        optional_quantity(item.get("reportedTipRound")).unwrap_or(None);
+                    let reported_tip_round = optional_quantity(
+                        item.get("reportedTipRound")
+                            .or_else(|| item.get("reported_tip_round")),
+                    )
+                    .unwrap_or(None);
+                    let address = item
+                        .get("address")
+                        .or_else(|| item.get("addr"))
+                        .or_else(|| item.get("listenAddr"))
+                        .or_else(|| item.get("listen_addr"))
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string);
+                    let direction = item
+                        .get("direction")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                        .or_else(|| {
+                            item.get("inbound").and_then(Value::as_bool).map(|inbound| {
+                                if inbound {
+                                    "Inbound".to_string()
+                                } else {
+                                    "Outbound".to_string()
+                                }
+                            })
+                        });
+                    let protocol_version = item
+                        .get("protocolVersion")
+                        .or_else(|| item.get("protocol_version"))
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string);
+                    let latency_ms = optional_quantity(
+                        item.get("latencyMs")
+                            .or_else(|| item.get("latency_ms"))
+                            .or_else(|| item.get("latency"))
+                            .or_else(|| item.get("ping"))
+                            .or_else(|| item.get("pingMs"))
+                            .or_else(|| item.get("ping_ms")),
+                    )
+                    .unwrap_or(None);
+
                     Some(PeerView {
                         peer_id: peer_id.to_string(),
                         reported_tip_round,
+                        address,
+                        direction,
+                        protocol_version,
+                        latency_ms,
                     })
                 })
                 .collect()
@@ -440,6 +496,140 @@ pub async fn status(
             })
             .collect();
         print_table(&["PEER", "TIP ROUND"], &rows);
+    }
+    Ok(())
+}
+
+pub const SYNC_TABLE_HEADERS: [&str; 6] = [
+    "SYNC STATE",
+    "CURRENT HEIGHT",
+    "ROUND",
+    "TARGET HEIGHT",
+    "BLOCKS BEHIND",
+    "CONNECTED PEER COUNT",
+];
+
+pub fn format_sync_row(sync: &SyncSnapshot) -> Vec<String> {
+    let sync_state = match sync.catching_up {
+        Some(true) => "catching up",
+        Some(false) => "in sync",
+        None => "unknown",
+    };
+    vec![
+        sync_state.to_string(),
+        sync.height
+            .map(|h| h.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        sync.round
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        sync.target
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        sync.behind_by
+            .map(|b| b.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        sync.peer_count.unwrap_or(sync.peers.len()).to_string(),
+    ]
+}
+
+pub fn format_sync_json(sync: &SyncSnapshot) -> Value {
+    let sync_state = match sync.catching_up {
+        Some(true) => "catching_up",
+        Some(false) => "in_sync",
+        None => "unknown",
+    };
+    json!({
+        "sync_state": sync_state,
+        "height": sync.height.unwrap_or(0),
+        "round": sync.round.unwrap_or(0),
+        "target": sync.target,
+        "behind_by": sync.behind_by,
+        "peer_count": sync.peer_count.unwrap_or(sync.peers.len()),
+    })
+}
+
+/// `kovanica node sync` (or `kovanica sync`) — inspect sync state.
+pub async fn sync(client: &RpcClient, signing_chain_id: Option<u64>, json: bool) -> Result<()> {
+    let sync_val = client
+        .call("kovanica_syncStatus", json!([]))
+        .await
+        .context("calling kovanica_syncStatus")?;
+    let sync_snapshot = parse_sync_status(&sync_val)?;
+    if let (Some(signing), Some(reported)) = (signing_chain_id, sync_snapshot.node_chain_id) {
+        if signing != reported {
+            bail!("node reported chain {reported}, but --chain-id {signing} was requested");
+        }
+    }
+    if json {
+        print_json(&format_sync_json(&sync_snapshot))?;
+    } else {
+        let row = format_sync_row(&sync_snapshot);
+        print_table(&SYNC_TABLE_HEADERS, &[row]);
+    }
+    Ok(())
+}
+
+pub const PEERS_TABLE_HEADERS: [&str; 5] = [
+    "PEER ID / NODE ID",
+    "ADDRESS",
+    "DIRECTION",
+    "PROTOCOL VERSION",
+    "LATENCY",
+];
+
+pub fn format_peer_rows(peers: &[PeerView]) -> Vec<Vec<String>> {
+    peers
+        .iter()
+        .map(|peer| {
+            vec![
+                peer.peer_id.clone(),
+                peer.address.clone().unwrap_or_else(|| "-".to_string()),
+                peer.direction.clone().unwrap_or_else(|| "-".to_string()),
+                peer.protocol_version
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string()),
+                peer.latency_ms
+                    .map(|l| format!("{l} ms"))
+                    .unwrap_or_else(|| "-".to_string()),
+            ]
+        })
+        .collect()
+}
+
+pub fn format_peers_json(peers: &[PeerView]) -> Value {
+    let list: Vec<Value> = peers
+        .iter()
+        .map(|peer| {
+            json!({
+                "peer_id": peer.peer_id,
+                "address": peer.address,
+                "direction": peer.direction,
+                "protocol_version": peer.protocol_version,
+                "latency_ms": peer.latency_ms,
+            })
+        })
+        .collect();
+    Value::Array(list)
+}
+
+/// `kovanica node peers` (or `kovanica peers`) — inspect connected peers.
+pub async fn peers(client: &RpcClient, signing_chain_id: Option<u64>, json: bool) -> Result<()> {
+    let sync_val = client
+        .call("kovanica_syncStatus", json!([]))
+        .await
+        .context("calling kovanica_syncStatus")?;
+    let sync_snapshot = parse_sync_status(&sync_val)?;
+    if let (Some(signing), Some(reported)) = (signing_chain_id, sync_snapshot.node_chain_id) {
+        if signing != reported {
+            bail!("node reported chain {reported}, but --chain-id {signing} was requested");
+        }
+    }
+    if json {
+        print_json(&format_peers_json(&sync_snapshot.peers))?;
+    } else {
+        let rows = format_peer_rows(&sync_snapshot.peers);
+        print_table(&PEERS_TABLE_HEADERS, &rows);
     }
     Ok(())
 }
@@ -1279,5 +1469,185 @@ mod tests {
             "next_cursor": null
         }))
         .is_err());
+    }
+
+    #[test]
+    fn test_sync_output_formatting_synced_scenario() {
+        let raw = json!({
+            "committedHeight": 120,
+            "localTipRound": 450,
+            "catchingUp": false,
+            "peerCount": 5,
+            "peers": []
+        });
+        let snapshot = parse_sync_status(&raw).unwrap();
+        assert_eq!(snapshot.height, Some(120));
+        assert_eq!(snapshot.round, Some(450));
+        assert_eq!(snapshot.catching_up, Some(false));
+        assert_eq!(snapshot.target, None);
+        assert_eq!(snapshot.behind_by, None);
+        assert_eq!(snapshot.peer_count, Some(5));
+
+        let json_val = format_sync_json(&snapshot);
+        assert_eq!(json_val["sync_state"], "in_sync");
+        assert_eq!(json_val["height"], 120);
+        assert_eq!(json_val["round"], 450);
+        assert_eq!(json_val["target"], Value::Null);
+        assert_eq!(json_val["behind_by"], Value::Null);
+        assert_eq!(json_val["peer_count"], 5);
+
+        let row = format_sync_row(&snapshot);
+        assert_eq!(row, vec!["in sync", "120", "450", "-", "-", "5"]);
+    }
+
+    #[test]
+    fn test_sync_output_formatting_catching_up_scenario() {
+        let raw = json!({
+            "committedHeight": 100,
+            "localTipRound": 380,
+            "catchingUp": true,
+            "catchUpTarget": 500,
+            "behindBy": 120,
+            "peerCount": 3,
+            "peers": []
+        });
+        let snapshot = parse_sync_status(&raw).unwrap();
+        assert_eq!(snapshot.height, Some(100));
+        assert_eq!(snapshot.round, Some(380));
+        assert_eq!(snapshot.catching_up, Some(true));
+        assert_eq!(snapshot.target, Some(500));
+        assert_eq!(snapshot.behind_by, Some(120));
+        assert_eq!(snapshot.peer_count, Some(3));
+
+        let json_val = format_sync_json(&snapshot);
+        assert_eq!(json_val["sync_state"], "catching_up");
+        assert_eq!(json_val["height"], 100);
+        assert_eq!(json_val["round"], 380);
+        assert_eq!(json_val["target"], 500);
+        assert_eq!(json_val["behind_by"], 120);
+        assert_eq!(json_val["peer_count"], 3);
+
+        let row = format_sync_row(&snapshot);
+        assert_eq!(row, vec!["catching up", "100", "380", "500", "120", "3"]);
+    }
+
+    #[test]
+    fn test_sync_output_formatting_unknown_scenario() {
+        let raw = json!({});
+        let snapshot = parse_sync_status(&raw).unwrap();
+        assert_eq!(snapshot.catching_up, None);
+
+        let json_val = format_sync_json(&snapshot);
+        assert_eq!(json_val["sync_state"], "unknown");
+        assert_eq!(json_val["height"], 0);
+        assert_eq!(json_val["round"], 0);
+        assert_eq!(json_val["target"], Value::Null);
+        assert_eq!(json_val["behind_by"], Value::Null);
+        assert_eq!(json_val["peer_count"], 0);
+
+        let row = format_sync_row(&snapshot);
+        assert_eq!(row, vec!["unknown", "-", "-", "-", "-", "0"]);
+    }
+
+    #[test]
+    fn test_peers_empty_scenario() {
+        let raw = json!({
+            "committedHeight": 10,
+            "catchingUp": false,
+            "peerCount": 0,
+            "peers": []
+        });
+        let snapshot = parse_sync_status(&raw).unwrap();
+        assert!(snapshot.peers.is_empty());
+
+        let peers_json = format_peers_json(&snapshot.peers);
+        assert_eq!(peers_json, json!([]));
+
+        let rows = format_peer_rows(&snapshot.peers);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_peers_populated_scenario() {
+        let raw = json!({
+            "committedHeight": 10,
+            "catchingUp": false,
+            "peerCount": 2,
+            "peers": [
+                {
+                    "peerId": "12D3KooWtest1",
+                    "address": "192.168.1.10:8000",
+                    "direction": "Inbound",
+                    "protocolVersion": "/kovanica/1.0.0",
+                    "latencyMs": 42,
+                    "reportedTipRound": 100
+                },
+                {
+                    "node_id": "12D3KooWtest2",
+                    "addr": "10.0.0.5:8000",
+                    "inbound": false,
+                    "protocol_version": "/kovanica/1.0.0",
+                    "ping": 18
+                }
+            ]
+        });
+        let snapshot = parse_sync_status(&raw).unwrap();
+        assert_eq!(snapshot.peers.len(), 2);
+        assert_eq!(snapshot.peers[0].peer_id, "12D3KooWtest1");
+        assert_eq!(
+            snapshot.peers[0].address.as_deref(),
+            Some("192.168.1.10:8000")
+        );
+        assert_eq!(snapshot.peers[0].direction.as_deref(), Some("Inbound"));
+        assert_eq!(
+            snapshot.peers[0].protocol_version.as_deref(),
+            Some("/kovanica/1.0.0")
+        );
+        assert_eq!(snapshot.peers[0].latency_ms, Some(42));
+        assert_eq!(snapshot.peers[0].reported_tip_round, Some(100));
+
+        assert_eq!(snapshot.peers[1].peer_id, "12D3KooWtest2");
+        assert_eq!(snapshot.peers[1].address.as_deref(), Some("10.0.0.5:8000"));
+        assert_eq!(snapshot.peers[1].direction.as_deref(), Some("Outbound"));
+        assert_eq!(
+            snapshot.peers[1].protocol_version.as_deref(),
+            Some("/kovanica/1.0.0")
+        );
+        assert_eq!(snapshot.peers[1].latency_ms, Some(18));
+
+        let peers_json = format_peers_json(&snapshot.peers);
+        assert_eq!(peers_json[0]["peer_id"], "12D3KooWtest1");
+        assert_eq!(peers_json[0]["address"], "192.168.1.10:8000");
+        assert_eq!(peers_json[0]["direction"], "Inbound");
+        assert_eq!(peers_json[0]["protocol_version"], "/kovanica/1.0.0");
+        assert_eq!(peers_json[0]["latency_ms"], 42);
+
+        assert_eq!(peers_json[1]["peer_id"], "12D3KooWtest2");
+        assert_eq!(peers_json[1]["address"], "10.0.0.5:8000");
+        assert_eq!(peers_json[1]["direction"], "Outbound");
+        assert_eq!(peers_json[1]["latency_ms"], 18);
+
+        let rows = format_peer_rows(&snapshot.peers);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0],
+            vec![
+                "12D3KooWtest1",
+                "192.168.1.10:8000",
+                "Inbound",
+                "/kovanica/1.0.0",
+                "42 ms"
+            ]
+        );
+        assert_eq!(
+            rows[1],
+            vec![
+                "12D3KooWtest2",
+                "10.0.0.5:8000",
+                "Outbound",
+                "/kovanica/1.0.0",
+                "18 ms"
+            ]
+        );
     }
 }
