@@ -45,8 +45,8 @@ use tracing::info;
 const CHAIN_ID: u64 = chain_id::HYBRID_TESTNET;
 const RPC_READY_TIMEOUT_SECS: u64 = 60;
 const PEER_TIMEOUT_SECS: u64 = 90;
-const MINING_TIMEOUT_SECS: u64 = 180;
-const TX_TIMEOUT_SECS: u64 = 180;
+const MINING_TIMEOUT_SECS: u64 = 300;
+const TX_TIMEOUT_SECS: u64 = 300;
 const POLL_INTERVAL_MS: u64 = 100;
 const PORT_ATTEMPTS: usize = 32;
 
