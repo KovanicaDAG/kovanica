@@ -2642,12 +2642,34 @@ fn ingest_block(
             // 4. Missing parent check: Are all parents in accepted consensus state (dag_store)?
             // (Round 0 canonical genesis has no parents)
             if block.round > 0 {
-                let missing: Vec<Hash> = header
-                    .parents
-                    .iter()
-                    .map(|p| p.digest)
-                    .filter(|d| !io.dag_store.has_block(d).unwrap_or(false))
-                    .collect();
+                let mut missing = Vec::new();
+                let mut storage_err: Option<kovanica_rpc::LocalBlockAdmissionError> = None;
+                for p in &header.parents {
+                    match io.dag_store.has_block(&p.digest) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            missing.push(p.digest);
+                        }
+                        Err(e) => {
+                            warn!(
+                                digest = %block.digest,
+                                parent = %p.digest,
+                                error = %e,
+                                "rejected block: storage error checking parent presence"
+                            );
+                            storage_err = Some(kovanica_rpc::LocalBlockAdmissionError::Storage(
+                                format!("storage error checking parent {}: {e}", p.digest),
+                            ));
+                            break;
+                        }
+                    }
+                }
+                if let Some(err) = storage_err {
+                    if current_is_initial {
+                        return Err(err);
+                    }
+                    continue;
+                }
 
                 if !missing.is_empty() {
                     let digest = block.digest;
@@ -2712,12 +2734,11 @@ fn ingest_block(
                             }
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
                         parent_valid = false;
-                        parent_err =
-                            Some(kovanica_rpc::LocalBlockAdmissionError::MalformedParents(
-                                format!("parent block {} unreadable", p.digest),
-                            ));
+                        parent_err = Some(kovanica_rpc::LocalBlockAdmissionError::Storage(
+                            format!("parent block {} storage read failed: {e}", p.digest),
+                        ));
                         break;
                     }
                 }
@@ -2733,12 +2754,27 @@ fn ingest_block(
 
             // 6. Enforce required DAA target from deterministic block-bound ancestry
             let daa_config = kovanica_consensus::DaaConfig::chain5_default();
-            let required_bits = kovanica_consensus::required_target_bits(
+            let required_bits = match kovanica_consensus::try_required_target_bits(
                 io.dag_store,
                 &header.parents,
                 io.chain_id,
                 &daa_config,
-            );
+            ) {
+                Ok(bits) => bits,
+                Err(err) => {
+                    warn!(
+                        digest = %block.digest,
+                        error = %err,
+                        "rejected hybrid PoW block: ancestry target derivation failed"
+                    );
+                    if current_is_initial {
+                        return Err(kovanica_rpc::LocalBlockAdmissionError::Storage(
+                            err.to_string(),
+                        ));
+                    }
+                    continue;
+                }
+            };
             if header.target_bits != required_bits {
                 warn!(
                     digest = %block.digest,
@@ -11866,7 +11902,6 @@ mod b1_epoch_restart_repro {
 
     #[test]
     fn test_hybrid_admission_easier_target_rejected_valid_accepted() {
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let (engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
         let (net_tx, _net_rx) = mpsc::unbounded_channel();
@@ -11887,7 +11922,7 @@ mod b1_epoch_restart_repro {
         let peer = PeerId::random();
         let mut worker = kovanica_consensus::mining::MiningWorker::new();
 
-        // 1. Easier self-declared target (0x2100ffff vs required 0x207fffff)
+        // 1. Easier self-declared target (0x207fffff vs required MAX_TARGET_BITS 0x1f00ffff)
         let header_easy = kovanica_types::BlockHeader::new(
             kovanica_types::signing::chain_id::HYBRID_TESTNET,
             1,
@@ -11895,7 +11930,7 @@ mod b1_epoch_restart_repro {
             vec![],
             kovanica_types::Hash::zero(),
             1_700_000_000_000,
-            0x2100ffff,
+            0x207fffff,
             0,
         );
         let mined_easy = worker.mine_header(header_easy, 10_000).unwrap();
@@ -11913,7 +11948,7 @@ mod b1_epoch_restart_repro {
             "easier target must be rejected, not buffered"
         );
 
-        // 2. Valid target (0x207fffff)
+        // 2. Valid target (MAX_TARGET_BITS = 0x1f00ffff)
         let header_valid = kovanica_types::BlockHeader::new(
             kovanica_types::signing::chain_id::HYBRID_TESTNET,
             1,
@@ -11921,10 +11956,10 @@ mod b1_epoch_restart_repro {
             vec![],
             kovanica_types::Hash::zero(),
             1_700_000_000_000,
-            0x207fffff,
+            kovanica_params::MAX_TARGET_BITS,
             0,
         );
-        let mined_valid = worker.mine_header(header_valid, 10_000).unwrap();
+        let mined_valid = worker.mine_header(header_valid, 500_000).unwrap();
         let block_valid = mined_valid.to_statement_block(vec![]);
         let valid_digest = block_valid.digest;
 
@@ -11938,7 +11973,6 @@ mod b1_epoch_restart_repro {
 
     #[test]
     fn test_hybrid_admission_unknown_parent_buffered_and_revalidated() {
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let (engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
         let (net_tx, _net_rx) = mpsc::unbounded_channel();
@@ -11967,10 +12001,10 @@ mod b1_epoch_restart_repro {
             vec![],
             kovanica_types::Hash::zero(),
             1_700_000_000_000,
-            0x207fffff,
+            kovanica_params::MAX_TARGET_BITS,
             0,
         );
-        let mined1 = worker.mine_header(header1, 10_000).unwrap();
+        let mined1 = worker.mine_header(header1, 500_000).unwrap();
         let block1 = mined1.to_statement_block(vec![]);
         let digest1 = block1.digest;
 
@@ -11982,10 +12016,10 @@ mod b1_epoch_restart_repro {
             vec![block1.reference()],
             kovanica_types::Hash::zero(),
             1_700_000_004_000,
-            0x207fffff,
+            kovanica_params::MAX_TARGET_BITS,
             0,
         );
-        let mined2 = worker.mine_header(header2, 10_000).unwrap();
+        let mined2 = worker.mine_header(header2, 500_000).unwrap();
         let block2 = mined2.to_statement_block(vec![]);
         let digest2 = block2.digest;
 
@@ -12032,7 +12066,6 @@ mod b1_epoch_restart_repro {
 
     #[test]
     fn test_hybrid_admission_malformed_parents_rejected_not_buffered() {
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let (engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
         let (net_tx, _net_rx) = mpsc::unbounded_channel();
@@ -12108,7 +12141,6 @@ mod b1_epoch_restart_repro {
     fn test_cheap_checks_ordered_before_expensive_pow_with_instrumentation() {
         use kovanica_types::pow::get_pow_hash_evaluations;
 
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let (engine, dag, _key) = crate::tests::vote_sync_test_engine(&dir);
         let (net_tx, _net_rx) = mpsc::unbounded_channel();
@@ -12353,7 +12385,6 @@ mod b1_epoch_restart_repro {
         const EXECUTED_SUBDAGS: redb::TableDefinition<[u8; 32], u8> =
             redb::TableDefinition::new("execution_committed_subdags");
 
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let state_storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
         {
@@ -12447,10 +12478,10 @@ mod b1_epoch_restart_repro {
             vec![],
             kovanica_types::Hash::zero(),
             1_700_000_000_000,
-            0x207fffff,
+            kovanica_params::MAX_TARGET_BITS,
             0,
         );
-        let mined0 = worker.mine_header(header0, 10_000).unwrap();
+        let mined0 = worker.mine_header(header0, 500_000).unwrap();
         let block0 = mined0.to_statement_block(vec![]);
         let digest0 = block0.digest;
 
@@ -12467,10 +12498,10 @@ mod b1_epoch_restart_repro {
             vec![block0.reference()],
             kovanica_types::Hash::zero(),
             1_700_000_004_000,
-            0x207fffff,
+            kovanica_params::MAX_TARGET_BITS,
             0,
         );
-        let mined1 = worker.mine_header(header1, 10_000).unwrap();
+        let mined1 = worker.mine_header(header1, 500_000).unwrap();
         let block1 = mined1.to_statement_block(vec![]);
         let digest1 = block1.digest;
 
@@ -12593,7 +12624,6 @@ mod b1_epoch_restart_repro {
         const EXECUTED_SUBDAGS: redb::TableDefinition<[u8; 32], u8> =
             redb::TableDefinition::new("execution_committed_subdags");
 
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let subdag = {
             let state_storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
@@ -12620,10 +12650,10 @@ mod b1_epoch_restart_repro {
                 vec![],
                 kovanica_types::Hash::zero(),
                 1_700_000_000_000,
-                0x207fffff,
+                kovanica_params::MAX_TARGET_BITS,
                 0,
             );
-            let mined = worker.mine_header(header, 10_000).unwrap();
+            let mined = worker.mine_header(header, 500_000).unwrap();
             let block = mined.to_statement_block(vec![]);
             let subdag = kovanica_types::CommittedSubDag {
                 leader: block.clone(),
@@ -12697,7 +12727,6 @@ mod b1_epoch_restart_repro {
         use serde_json::json;
         use std::sync::atomic::AtomicUsize;
 
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let state_storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
         let (engine, dag_store, _key) = crate::tests::vote_sync_test_engine(&dir);
@@ -12862,7 +12891,6 @@ mod b1_epoch_restart_repro {
         use serde_json::json;
         use std::sync::atomic::AtomicUsize;
 
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let storage = Arc::new(Storage::new(dir.path().join("state.redb")).unwrap());
         let (_engine, dag_store, _key) = crate::tests::vote_sync_test_engine(&dir);
@@ -12947,7 +12975,6 @@ mod b1_epoch_restart_repro {
         use kovanica_network::validation::{verify_block, verify_block_with_clock, AuthorityKeys};
         use std::collections::HashMap;
 
-        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let dir = tempfile::tempdir().unwrap();
         let (engine, dag_store, _key) = crate::tests::vote_sync_test_engine(&dir);
         let (net_cmd_tx, mut net_cmd_rx) = mpsc::unbounded_channel();
@@ -13016,10 +13043,10 @@ mod b1_epoch_restart_repro {
             vec![],
             kovanica_types::Hash::zero(),
             now_ms,
-            0x207fffff,
+            kovanica_params::MAX_TARGET_BITS,
             0,
         );
-        let mined_valid = worker.mine_header(header_valid, 10_000).unwrap();
+        let mined_valid = worker.mine_header(header_valid, 500_000).unwrap();
         let block_valid = mined_valid.to_statement_block(vec![]);
         let valid_digest = block_valid.digest;
 
@@ -13080,10 +13107,10 @@ mod b1_epoch_restart_repro {
             }],
             kovanica_types::Hash::zero(),
             now_ms + 500,
-            0x207fffff,
+            kovanica_params::MAX_TARGET_BITS,
             0,
         );
-        let mined_parent = worker.mine_header(header_parent, 10_000).unwrap();
+        let mined_parent = worker.mine_header(header_parent, 500_000).unwrap();
         // Set parent digest to match child's reference
         let block_parent = mined_parent.to_statement_block(vec![]);
         let parent_digest = block_parent.digest;

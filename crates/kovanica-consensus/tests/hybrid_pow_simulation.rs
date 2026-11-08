@@ -393,8 +393,10 @@ fn test_same_dag_different_arrival_orders_yields_same_required_target() {
     let candidate_parents = vec![block_2.reference()];
     let config = DaaConfig::chain5_default();
 
-    let target1 = required_target_bits(&dag1, &candidate_parents, CHAIN_ID_HYBRID_TESTNET, &config);
-    let target2 = required_target_bits(&dag2, &candidate_parents, CHAIN_ID_HYBRID_TESTNET, &config);
+    let target1 =
+        required_target_bits(&dag1, &candidate_parents, CHAIN_ID_HYBRID_TESTNET, &config).unwrap();
+    let target2 =
+        required_target_bits(&dag2, &candidate_parents, CHAIN_ID_HYBRID_TESTNET, &config).unwrap();
 
     assert_eq!(
         target1, target2,
