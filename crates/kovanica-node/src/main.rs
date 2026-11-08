@@ -1073,34 +1073,33 @@ where
         ghostdag_committer.clone(),
     ));
 
-    let _mining_task = if kovanica_types::signing::chain_id::is_hybrid(config.chain_id)
-        && config.mining.enabled
-    {
-        let m_config = config.mining.clone();
-        let m_chain_id = config.chain_id;
-        let m_dag = dag_store.clone();
-        let m_mempool = mempool.clone();
-        let m_net_tx = network_cmd_tx.clone();
-        let m_exec_tx = exec_tx.clone();
-        let m_ghostdag = ghostdag_committer.clone();
-        let m_shutdown = shutdown_rx.clone();
-        let m_author = if let Some(a) = config.mining.author {
-            a
-        } else if our_authority != u16::MAX {
-            our_authority
+    let _mining_task =
+        if kovanica_types::signing::chain_id::is_hybrid(config.chain_id) && config.mining.enabled {
+            let m_config = config.mining.clone();
+            let m_chain_id = config.chain_id;
+            let m_dag = dag_store.clone();
+            let m_mempool = mempool.clone();
+            let m_net_tx = network_cmd_tx.clone();
+            let m_exec_tx = exec_tx.clone();
+            let m_ghostdag = ghostdag_committer.clone();
+            let m_shutdown = shutdown_rx.clone();
+            let m_author = if let Some(a) = config.mining.author {
+                a
+            } else if our_authority != u16::MAX {
+                our_authority
+            } else {
+                0
+            };
+            Some(tokio::spawn(async move {
+                miner::run_mining_loop(
+                    m_config, m_chain_id, m_author, m_dag, m_mempool, m_net_tx, m_exec_tx,
+                    m_ghostdag, m_shutdown,
+                )
+                .await;
+            }))
         } else {
-            0
+            None
         };
-        Some(tokio::spawn(async move {
-            miner::run_mining_loop(
-                m_config, m_chain_id, m_author, m_dag, m_mempool, m_net_tx, m_exec_tx, m_ghostdag,
-                m_shutdown,
-            )
-            .await;
-        }))
-    } else {
-        None
-    };
 
     // The consensus engine now handles block production internally with mempool transactions
     // No separate builder task needed
@@ -4272,9 +4271,8 @@ fn handle_network_event(
     state_sync_sessions.expire(now);
     match event {
         NetworkEvent::BlockReceived { peer, block } => {
-            let is_hybrid = kovanica_types::signing::chain_id::is_hybrid(
-                mempool.signing_context().chain_id,
-            );
+            let is_hybrid =
+                kovanica_types::signing::chain_id::is_hybrid(mempool.signing_context().chain_id);
             if !is_hybrid {
                 // Hot-path validation (audit 3.1): verify signature before engine.process_block
                 if let Err(e) = kovanica_crypto::verify_batch(
