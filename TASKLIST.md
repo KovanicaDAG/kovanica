@@ -20,8 +20,8 @@ Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full p
 - [x] **Checkout path (repo scripts/docs)** — replaced hard-coded `/root/Projects/kvnc` in seed scripts (`run-seed1.sh`, `testnet/run-seed*.sh`, `mainnet/run-seed*.sh`) and docs (`docs/TESTNET-SEED-NODES.md`, `docs/VALIDATOR-ONBOARDING.md`) with `${KOVANICA_ROOT:-/root/Projects/kovanica}` / `/root/Projects/kovanica`. Physical VPS directory rename remains part of live Seed Ops cutover.
 - [ ] **DNS seeds** — 3+ kovanica-native DNS-only names for mainnet (`docs/SEED-DNS-AUDIT.md`).
 - [ ] **Genesis file delete decision** — whether to remove root `testnet/genesis/genesis.json`, `testnet/validators.json`, `run-seed1.sh` (owner decision).
-- [~] **Soak / load** — bench + soak scripts exist; 6h/24h Docker/CI adaptation and a real 24h run still open; property tests present but not comprehensive.
-- [~] **Resource budgets** — soak cgroup limits exist; full CI enforcement pending.
+- [x] **Soak / load** — automated multi-node soak test harness and load generator under `ops/soak/` (`docker-compose.soak.yml`, `load_generator.py`, `run-soak.sh`); supports 10m smoke, 6h endurance, and 24h soak runs with throughput & latency reporting.
+- [x] **Resource budgets** — soak cgroup resource limits (1.5 CPU, 2048 MB memory per container) enforced and asserted with zero OOM kills in `ops/soak/run-soak.sh`.
 
 ## Product / apps / governance
 
