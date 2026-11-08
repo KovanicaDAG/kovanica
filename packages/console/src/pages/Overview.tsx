@@ -6,7 +6,7 @@ import { shortAddress } from "../components";
 import { useSession } from "../session";
 
 export function Overview() {
-  const { client, network, key, height, online, headTick } = useSession();
+  const { client, network, key, height, online, headTick, miningInfo, dagTips } = useSession();
   const [peers, setPeers] = useState<number | null>(null);
   const [validators, setValidators] = useState<number | null>(null);
   const [leaders, setLeaders] = useState<LeaderSlot[]>([]);
@@ -89,6 +89,46 @@ export function Overview() {
           </>
         ) : null}
       </div>
+      {miningInfo || dagTips ? (
+        <section aria-label="Hybrid PoW & GHOSTDAG Telemetry" style={{ marginTop: "24px" }}>
+          <h2>Hybrid PoW & GHOSTDAG Telemetry</h2>
+          <div className="stats">
+            <Stat label="Target Bits" value={miningInfo?.target_bits ?? "—"} />
+            <Stat
+              label="Blue Score"
+              value={
+                miningInfo?.blue_score !== undefined
+                  ? String(miningInfo.blue_score)
+                  : dagTips?.blue_score !== undefined
+                    ? String(dagTips.blue_score)
+                    : dagTips?.max_round !== undefined
+                      ? String(dagTips.max_round)
+                      : "—"
+              }
+            />
+            <Stat
+              label="DAG Tips"
+              value={
+                dagTips
+                  ? String(dagTips.count ?? dagTips.tips?.length ?? 0)
+                  : miningInfo?.dag_tips_count !== undefined
+                    ? String(miningInfo.dag_tips_count)
+                    : "—"
+              }
+            />
+            <Stat
+              label="Mining Status"
+              value={
+                miningInfo
+                  ? miningInfo.mining_enabled
+                    ? `Active (${miningInfo.mining_threads} threads)`
+                    : "Disabled"
+                  : "—"
+              }
+            />
+          </div>
+        </section>
+      ) : null}
       <h2>Next leaders</h2>
       {leaders.length === 0 ? (
         <p className="muted">No schedule yet.</p>

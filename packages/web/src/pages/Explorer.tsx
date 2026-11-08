@@ -16,6 +16,7 @@ export function Explorer() {
   const [indexerLive, setIndexerLive] = useState<IndexedEvent[]>([])
   const [indexerError, setIndexerError] = useState<string | null>(null)
   const [indexerAvailable, setIndexerAvailable] = useState<boolean | null>(null)
+  const [dagTips, setDagTips] = useState<{ tips: string[]; count: number; max_round?: number } | null>(null)
 
   useEffect(() => {
     fetchData()
@@ -88,6 +89,28 @@ export function Explorer() {
       const height = parseInt(data.result, 16)
       setLatestHeight(height)
 
+      // Query active DAG tips if node supports kovanica_getDagTips
+      try {
+        const tipsRes = await fetch(`${rpcUrl}/rpc`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'kovanica_getDagTips',
+            params: [],
+            id: 2,
+          }),
+        })
+        const tipsData = await tipsRes.json()
+        if (tipsData.result && Array.isArray(tipsData.result.tips)) {
+          setDagTips(tipsData.result)
+        } else {
+          setDagTips(null)
+        }
+      } catch {
+        setDagTips(null)
+      }
+
       // Fetch last 10 blocks
       const blockPromises: Promise<ExplorerBlock | null>[] = []
       for (let i = 0; i < 10; i++) {
@@ -132,11 +155,19 @@ export function Explorer() {
 
       return {
         hash: block.hash,
-        round: block.number ? parseInt(block.number, 16) : 0,
-        parent_hashes: block.parent_hashes || [],
+        round: block.number ? parseInt(block.number, 16) : (typeof block.round === 'number' ? block.round : 0),
+        parent_hashes: block.parent_hashes || block.parents || [],
         transactions: txs,
         author: block.author || 0,
-        timestamp: Date.now(),
+        timestamp: block.timestamp ? (typeof block.timestamp === 'number' ? block.timestamp : parseInt(block.timestamp, 16)) : Date.now(),
+        nonce: block.nonce,
+        pow_hash: block.pow_hash,
+        target_bits: block.target_bits,
+        blue_score: block.blue_score,
+        blue_work: block.blue_work,
+        selected_parent: block.selected_parent,
+        mergeset_blues: block.mergeset_blues,
+        mergeset_reds: block.mergeset_reds,
       }
     } catch {
       return null
@@ -180,6 +211,10 @@ export function Explorer() {
           <div className="stat-value monospace">{blocks[0] ? `#${blocks[0].round}` : '—'}</div>
         </div>
         <div className="stat-card">
+          <div className="stat-label">Active DAG Tips</div>
+          <div className="stat-value monospace">{dagTips ? dagTips.tips.length : '—'}</div>
+        </div>
+        <div className="stat-card">
           <div className="stat-label">Total TXs (last 10 blocks)</div>
           <div className="stat-value monospace">{blocks.reduce((sum, b) => sum + b.transactions.length, 0)}</div>
         </div>
@@ -192,6 +227,30 @@ export function Explorer() {
           </div>
         </div>
       </div>
+
+      {dagTips && dagTips.tips.length > 0 && (
+        <div className="card" style={{ marginBottom: '24px' }}>
+          <h3 style={{ marginBottom: '12px' }}>Active DAG Tips ({dagTips.tips.length})</h3>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {dagTips.tips.map((tip) => (
+              <span
+                key={tip}
+                className="monospace"
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '4px',
+                  background: 'rgba(56, 139, 253, 0.15)',
+                  border: '1px solid rgba(56, 139, 253, 0.4)',
+                }}
+              >
+                <Link to={`/block/${tip}`} style={{ color: 'inherit' }}>
+                  {formatAddress(tip)}
+                </Link>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="tabs">
         <button className="tab active">Blocks</button>
@@ -207,28 +266,80 @@ export function Explorer() {
               <tr>
                 <th>Round</th>
                 <th>Hash</th>
+                <th>GHOSTDAG</th>
+                <th>Blue Score</th>
+                <th>PoW Hash / Nonce</th>
+                <th>Target Bits</th>
                 <th>Author</th>
                 <th>TXs</th>
-                <th>Parent Hashes</th>
+                <th>Selected Parent</th>
+                <th>Parents</th>
                 <th>Time</th>
               </tr>
             </thead>
             <tbody>
               {loading && blocks.length === 0 ? (
-                <tr><td colSpan={6} className="loading"><div className="spinner"></div>Loading blocks...</td></tr>
+                <tr><td colSpan={11} className="loading"><div className="spinner"></div>Loading blocks...</td></tr>
               ) : blocks.length === 0 ? (
-                <tr><td colSpan={6} className="empty-state">No blocks found</td></tr>
+                <tr><td colSpan={11} className="empty-state">No blocks found</td></tr>
               ) : (
-                blocks.map(block => (
-                  <tr key={block.hash}>
-                    <td className="monospace">#{block.round}</td>
-                    <td className="address"><Link to={`/block/${block.hash}`}>{formatAddress(block.hash)}</Link></td>
-                    <td className="monospace">{block.author}</td>
-                    <td className="monospace">{block.transactions.length}</td>
-                    <td className="address monospace">{block.parent_hashes.slice(0, 2).map(formatAddress).join(', ') || '—'}</td>
-                    <td>{formatRelativeTime(block.timestamp)}</td>
-                  </tr>
-                ))
+                blocks.map(block => {
+                  const isRed = Boolean(block.mergeset_reds && block.mergeset_reds.includes(block.hash))
+                  return (
+                    <tr key={block.hash}>
+                      <td className="monospace">#{block.round}</td>
+                      <td className="address"><Link to={`/block/${block.hash}`}>{formatAddress(block.hash)}</Link></td>
+                      <td>
+                        <span
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            fontWeight: 600,
+                            fontSize: '0.85em',
+                            background: isRed ? 'rgba(248, 81, 73, 0.2)' : 'rgba(63, 185, 80, 0.2)',
+                            color: isRed ? '#f85149' : '#3fb950',
+                            border: isRed ? '1px solid #f85149' : '1px solid #3fb950',
+                          }}
+                        >
+                          {isRed ? 'RED' : 'BLUE'}
+                        </span>
+                      </td>
+                      <td className="monospace">{block.blue_score !== undefined ? String(block.blue_score) : '—'}</td>
+                      <td className="address monospace">
+                        {block.pow_hash ? (
+                          <span title={`Nonce: ${block.nonce ?? 0}`}>
+                            {formatAddress(block.pow_hash)} (n:{block.nonce ?? 0})
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="monospace">
+                        {block.target_bits !== undefined
+                          ? (typeof block.target_bits === 'number'
+                              ? `0x${block.target_bits.toString(16)}`
+                              : String(block.target_bits))
+                          : '—'}
+                      </td>
+                      <td className="monospace">{block.author}</td>
+                      <td className="monospace">{block.transactions.length}</td>
+                      <td className="address monospace">
+                        {block.selected_parent ? (
+                          <Link to={`/block/${block.selected_parent}`}>{formatAddress(block.selected_parent)}</Link>
+                        ) : (
+                          '—'
+                        )}
+                        {block.mergeset_blues ? (
+                          <span style={{ fontSize: '0.8em', color: 'var(--color-muted)' }}>
+                            {' '}(+{block.mergeset_blues.length}B/{block.mergeset_reds?.length ?? 0}R)
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="address monospace">{block.parent_hashes.slice(0, 2).map(formatAddress).join(', ') || '—'}</td>
+                      <td>{formatRelativeTime(block.timestamp)}</td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>
