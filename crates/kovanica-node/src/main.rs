@@ -44,8 +44,9 @@ pub use config::ALLOW_GENESIS_MISMATCH_ENV;
 
 use kovanica_consensus::engine::{BlockManagerTrait, DagStoreTrait};
 use kovanica_consensus::metrics::{
-    record_active_validators, record_connected_peers, record_mempool_size, record_peer_count,
-    record_rss_bytes, record_rss_proxy, record_sync_error, SyncErrorKind,
+    record_active_validators, record_block_height, record_connected_peers, record_current_round,
+    record_mempool_size, record_peer_count, record_rss_bytes, record_rss_proxy, record_sync_error,
+    SyncErrorKind,
 };
 use kovanica_consensus::{AuthorityInfo, CommitteeInfo, ConsensusConfig, ConsensusEngine, Vote};
 use kovanica_dag::{BlockManager, BlockManagerError, DagStore, DagStoreError};
@@ -4628,7 +4629,10 @@ async fn run_execution(
     match state_storage.begin_read() {
         Ok(txn) => {
             match state_storage.state().load_staking_state(&txn) {
-                Ok(state) => ctx.staking = state,
+                Ok(state) => {
+                    record_block_height(state.committed_leader_height as i64);
+                    ctx.staking = state;
+                }
                 Err(e) => warn!(error = %e, "could not load staking state for execution"),
             }
             if let Ok(Some(policy)) = state_storage.state().load_emission_policy(&txn) {
@@ -4659,6 +4663,8 @@ async fn run_execution(
                             txs = result.txs_applied,
                             "executed committed sub-DAG"
                         );
+                        record_block_height(ctx.staking.committed_leader_height as i64);
+                        record_current_round(subdag.leader_round as i64);
                         // E1: epoch is a pure function of the committed leader
                         // round. Compute it via the ONE shared unit and rebuild
                         // the RPC committee at the boundary so `getCommittee`

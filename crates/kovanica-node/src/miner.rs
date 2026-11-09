@@ -76,7 +76,9 @@ impl NodeMiner {
         let mut set = tokio::task::JoinSet::new();
         for i in 0..threads {
             let mut h = header.clone();
-            h.nonce = (i as u64).wrapping_mul(iterations_per_thread);
+            h.nonce = header
+                .nonce
+                .wrapping_add((i as u64).wrapping_mul(iterations_per_thread));
             set.spawn_blocking(move || kovanica_consensus::mine_header(h, iterations_per_thread));
         }
 
@@ -119,6 +121,7 @@ pub async fn run_mining_loop(
     );
 
     let miner = NodeMiner::new();
+    let mut current_nonce: u64 = (author as u64).wrapping_mul(10_000_000);
 
     loop {
         if *shutdown_rx.borrow() {
@@ -184,11 +187,13 @@ pub async fn run_mining_loop(
             merkle_root,
             now_ms,
             target_bits,
-            0,
+            current_nonce,
         );
 
         // Mine with bounded iterations so loop cooperates with tokio and shutdown
         const CHUNK_ITERATIONS: u64 = 50_000;
+        let chunk_span = CHUNK_ITERATIONS.saturating_mul(mining_config.threads.max(1) as u64);
+        current_nonce = current_nonce.wrapping_add(chunk_span);
         if let Some(mined_header) = miner
             .mine_async_with_threads(header, CHUNK_ITERATIONS, mining_config.threads)
             .await
