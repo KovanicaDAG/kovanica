@@ -114,11 +114,14 @@ impl Storage {
         let txn = self.begin_write()?;
         let pruned_blocks = self.block_store.prune_below(&txn, cutoff_round)?;
         let pruned_dag = if cutoff_round > 0 {
-            self.consensus_store.prune_dag_below(&txn, cutoff_round - 1)?
+            self.consensus_store
+                .prune_dag_below(&txn, cutoff_round - 1)?
         } else {
             0
         };
-        let _ = self.consensus_store.prune_votes_below(&txn, cutoff_round, 10_000)?;
+        let _ = self
+            .consensus_store
+            .prune_votes_below(&txn, cutoff_round, 10_000)?;
         txn.commit().map_err(StorageError::Commit)?;
         Ok((pruned_blocks, pruned_dag))
     }
@@ -416,7 +419,11 @@ mod tests {
             let read = storage.begin_read().unwrap();
             for round in 1..=10 {
                 let digest = StatementBlock::compute_digest(0, round, &[], &[]);
-                assert!(storage.blocks().get_block_by_height(&read, round).unwrap().is_some());
+                assert!(storage
+                    .blocks()
+                    .get_block_by_height(&read, round)
+                    .unwrap()
+                    .is_some());
                 assert!(storage.consensus().get_dag_block(&read, &digest).is_ok());
             }
         }
@@ -431,12 +438,20 @@ mod tests {
             let read = storage.begin_read().unwrap();
             for round in 1..6 {
                 let digest = StatementBlock::compute_digest(0, round, &[], &[]);
-                assert!(storage.blocks().get_block_by_height(&read, round).unwrap().is_none());
+                assert!(storage
+                    .blocks()
+                    .get_block_by_height(&read, round)
+                    .unwrap()
+                    .is_none());
                 assert!(storage.consensus().get_dag_block(&read, &digest).is_err());
             }
             for round in 6..=10 {
                 let digest = StatementBlock::compute_digest(0, round, &[], &[]);
-                assert!(storage.blocks().get_block_by_height(&read, round).unwrap().is_some());
+                assert!(storage
+                    .blocks()
+                    .get_block_by_height(&read, round)
+                    .unwrap()
+                    .is_some());
                 assert!(storage.consensus().get_dag_block(&read, &digest).is_ok());
             }
         }
