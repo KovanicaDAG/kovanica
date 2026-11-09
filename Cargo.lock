@@ -3107,7 +3107,6 @@ dependencies = [
  "kovanica-crypto",
  "kovanica-hw-signer",
  "kovanica-keystore",
- "kovanica-sdk",
  "kovanica-types",
  "rand 0.8.8",
  "serde",
