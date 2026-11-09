@@ -298,13 +298,11 @@ mod tests {
 
         // Verify each derived account key signs valid transactions
         for (i, sk) in keys.iter().enumerate() {
-            let tx = kovanica_sdk::tx::build(
-                sk,
+            let acc = crate::WalletAccount::from_seed(&sk.to_bytes());
+            let tx = acc.sign_transfer(
                 &ctx,
-                kovanica_types::transaction::TransactionKind::Transfer {
-                    to: Address([99u8; 32]),
-                    amount: (i as u64 + 1) * 1_000_000_000,
-                },
+                Address([99u8; 32]),
+                (i as u64 + 1) * 1_000_000_000,
                 0,
                 100,
             );
