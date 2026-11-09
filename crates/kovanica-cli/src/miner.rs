@@ -6,7 +6,7 @@
 //! and submits solved headers via `kovanica_submitWork`.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Barrier, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -41,11 +41,25 @@ pub struct MinerRunArgs {
     pub poll_interval_ms: u64,
 }
 
+/// Arguments for `kovanica miner bench`.
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct MinerBenchArgs {
+    /// Number of benchmarking worker threads (defaults to available logical CPU cores).
+    #[arg(long, short)]
+    pub threads: Option<usize>,
+
+    /// Duration in seconds to run the benchmark.
+    #[arg(long, short, default_value = "5")]
+    pub duration: u64,
+}
+
 /// Miner subcommands.
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum MinerCommand {
     /// Run the standalone multithreaded solo miner.
     Run(MinerRunArgs),
+    /// Benchmark local KovanicaHash PoW hashrate across CPU threads.
+    Bench(MinerBenchArgs),
 }
 
 /// Validate the payout address for the given chain ID.
@@ -596,6 +610,204 @@ pub async fn run_miner(
     miner.run().await
 }
 
+/// Summary metrics of a KovanicaHash PoW benchmark run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MinerBenchResult {
+    /// Name and specification of the PoW algorithm.
+    pub algorithm: String,
+    /// Number of worker threads utilized.
+    pub threads: usize,
+    /// Requested duration in seconds.
+    pub target_duration_secs: u64,
+    /// Actual measured elapsed time in seconds.
+    pub elapsed_secs: f64,
+    /// Total KovanicaHash evaluations computed across all threads.
+    pub total_hashes: u64,
+    /// Aggregate hashrate in hashes per second.
+    pub hashrate_hps: f64,
+    /// Human-readable formatted hashrate string.
+    pub hashrate_formatted: String,
+    /// Average hashrate per worker thread in hashes per second.
+    pub per_thread_hps: f64,
+    /// Hashes computed by each individual worker thread.
+    pub thread_hashes: Vec<u64>,
+}
+
+/// Execute a multithreaded KovanicaHash benchmark for the specified duration.
+///
+/// Each worker thread initializes an independent `KovanicaHasher` (allocating a 2 MiB scratchpad)
+/// and hashes preimages constructed from a realistic block header with unique nonces/strides.
+/// Timing begins after all threads have initialized and synchronized at a barrier.
+pub fn benchmark_kovanica_hash(threads: usize, duration: Duration) -> Result<MinerBenchResult> {
+    if duration.is_zero() {
+        anyhow::bail!("benchmark duration must be greater than zero");
+    }
+    let threads = if threads == 0 {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    } else {
+        threads
+    };
+    if threads > 256 {
+        anyhow::bail!("requested thread count ({threads}) exceeds maximum allowed (256)");
+    }
+
+    // Realistic canonical block header template (Chain ID 5, round 1, 1 parent)
+    let dummy_header = BlockHeader::new(
+        HYBRID_TESTNET,
+        1,
+        0,
+        vec![BlockReference {
+            author: 0,
+            round: 0,
+            digest: Hash([0x42; 32]),
+        }],
+        Hash([0x37; 32]),
+        1_700_000_000,
+        0x207fffff,
+        0,
+    );
+    let base_preimage = dummy_header.preimage();
+    if base_preimage.len() < 8 {
+        anyhow::bail!("block header preimage too short for nonce injection");
+    }
+
+    let barrier = Arc::new(Barrier::new(threads + 1));
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let total_hashes = Arc::new(AtomicU64::new(0));
+
+    let mut thread_counters = Vec::with_capacity(threads);
+    let mut handles = Vec::with_capacity(threads);
+
+    for thread_idx in 0..threads {
+        let thread_hashes = Arc::new(AtomicU64::new(0));
+        thread_counters.push(thread_hashes.clone());
+
+        let barrier_clone = barrier.clone();
+        let stop_clone = stop_flag.clone();
+        let total_hashes_clone = total_hashes.clone();
+        let mut preimage = base_preimage.clone();
+        let buf_len = preimage.len();
+        let stride = threads as u64;
+
+        let handle = std::thread::Builder::new()
+            .name(format!("kovanica-bench-{thread_idx}"))
+            .spawn(move || {
+                // Initialize hasher and allocate 2 MiB scratchpad BEFORE starting timer
+                let mut hasher = KovanicaHasher::new();
+                let mut nonce = thread_idx as u64;
+
+                // Synchronize with coordinator and other workers
+                barrier_clone.wait();
+
+                while !stop_clone.load(Ordering::Relaxed) {
+                    preimage[buf_len - 8..].copy_from_slice(&nonce.to_le_bytes());
+                    let hash = hasher.hash(&preimage);
+                    std::hint::black_box(hash);
+
+                    thread_hashes.fetch_add(1, Ordering::Relaxed);
+                    total_hashes_clone.fetch_add(1, Ordering::Relaxed);
+
+                    nonce = nonce.wrapping_add(stride);
+                }
+            })
+            .context("failed to spawn benchmarking worker thread")?;
+
+        handles.push(handle);
+    }
+
+    // Wait for all workers to complete scratchpad allocation and reach barrier
+    barrier.wait();
+    let start = Instant::now();
+
+    // Sleep for target benchmark duration
+    std::thread::sleep(duration);
+    stop_flag.store(true, Ordering::SeqCst);
+
+    // Wait for all workers to finish and join
+    for handle in handles {
+        handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("benchmarking worker thread panicked"))?;
+    }
+
+    let elapsed_secs = start.elapsed().as_secs_f64();
+    let total_h = total_hashes.load(Ordering::Relaxed);
+    let per_thread_counts: Vec<u64> = thread_counters
+        .iter()
+        .map(|c| c.load(Ordering::Relaxed))
+        .collect();
+
+    let hashrate_hps = if elapsed_secs > 0.0 {
+        (total_h as f64) / elapsed_secs
+    } else {
+        0.0
+    };
+    let per_thread_hps = if threads > 0 {
+        hashrate_hps / (threads as f64)
+    } else {
+        0.0
+    };
+    let hashrate_formatted = format_hashrate(total_h, elapsed_secs);
+
+    Ok(MinerBenchResult {
+        algorithm: "KovanicaHash (BLAKE3 + 2 MiB mix)".to_string(),
+        threads,
+        target_duration_secs: duration.as_secs(),
+        elapsed_secs,
+        total_hashes: total_h,
+        hashrate_hps,
+        hashrate_formatted,
+        per_thread_hps,
+        thread_hashes: per_thread_counts,
+    })
+}
+
+/// Entry point called by `kovanica miner bench`.
+///
+/// Benchmarks local CPU KovanicaHash throughput standalone and offline without requiring RPC.
+pub fn run_miner_bench(args: MinerBenchArgs, json: bool) -> Result<MinerBenchResult> {
+    if args.duration == 0 {
+        anyhow::bail!("benchmark duration must be at least 1 second");
+    }
+    let threads = args.threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    });
+    if threads == 0 {
+        anyhow::bail!("thread count must be at least 1");
+    }
+    if threads > 256 {
+        anyhow::bail!("requested thread count ({threads}) exceeds maximum allowed (256)");
+    }
+
+    let duration = Duration::from_secs(args.duration);
+    let result = benchmark_kovanica_hash(threads, duration)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("============================================================");
+        println!("            KovanicaHash PoW Benchmark Results             ");
+        println!("============================================================");
+        println!(" Algorithm:          {}", result.algorithm);
+        println!(" Worker Threads:     {}", result.threads);
+        println!(" Target Duration:    {} s", result.target_duration_secs);
+        println!(" Elapsed Time:       {:.3} s", result.elapsed_secs);
+        println!(" Total Hashes:       {}", result.total_hashes);
+        println!(
+            " Total Hashrate:     {} ({:.2} H/s)",
+            result.hashrate_formatted, result.hashrate_hps
+        );
+        println!(" Per-Thread Rate:    {:.2} H/s", result.per_thread_hps);
+        println!("============================================================");
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,5 +1094,76 @@ mod tests {
 
         shutdown.store(true, Ordering::SeqCst);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn miner_bench_args_parse_defaults_and_custom() {
+        use clap::Parser;
+        #[derive(Parser, Debug)]
+        struct BenchWrapper {
+            #[command(flatten)]
+            bench: MinerBenchArgs,
+        }
+
+        // Defaults
+        let wrapper = BenchWrapper::try_parse_from(["test"]).unwrap();
+        assert_eq!(wrapper.bench.threads, None);
+        assert_eq!(wrapper.bench.duration, 5);
+
+        // Custom threads and duration
+        let wrapper =
+            BenchWrapper::try_parse_from(["test", "--threads", "4", "--duration", "10"]).unwrap();
+        assert_eq!(wrapper.bench.threads, Some(4));
+        assert_eq!(wrapper.bench.duration, 10);
+
+        // Short flags
+        let wrapper = BenchWrapper::try_parse_from(["test", "-t", "8", "-d", "3"]).unwrap();
+        assert_eq!(wrapper.bench.threads, Some(8));
+        assert_eq!(wrapper.bench.duration, 3);
+    }
+
+    #[test]
+    fn miner_bench_rejects_zero_duration() {
+        let args = MinerBenchArgs {
+            threads: Some(1),
+            duration: 0,
+        };
+        let err = run_miner_bench(args, false).unwrap_err().to_string();
+        assert!(err.contains("at least 1 second"), "{err}");
+    }
+
+    #[test]
+    fn miner_bench_rejects_excessive_threads() {
+        let args = MinerBenchArgs {
+            threads: Some(512),
+            duration: 1,
+        };
+        let err = run_miner_bench(args, false).unwrap_err().to_string();
+        assert!(err.contains("exceeds maximum allowed"), "{err}");
+    }
+
+    #[test]
+    fn miner_bench_execution_short() {
+        let result = benchmark_kovanica_hash(1, Duration::from_millis(150))
+            .expect("benchmark should succeed");
+        assert_eq!(result.algorithm, "KovanicaHash (BLAKE3 + 2 MiB mix)");
+        assert_eq!(result.threads, 1);
+        assert!(result.total_hashes > 0);
+        assert!(result.elapsed_secs > 0.0);
+        assert!(result.hashrate_hps > 0.0);
+        assert_eq!(result.thread_hashes.len(), 1);
+        assert_eq!(result.thread_hashes[0], result.total_hashes);
+        assert!(!result.hashrate_formatted.is_empty());
+    }
+
+    #[test]
+    fn miner_bench_execution_multithreaded() {
+        let result = benchmark_kovanica_hash(2, Duration::from_millis(150))
+            .expect("benchmark should succeed");
+        assert_eq!(result.threads, 2);
+        assert!(result.total_hashes > 0);
+        assert_eq!(result.thread_hashes.len(), 2);
+        let sum: u64 = result.thread_hashes.iter().sum();
+        assert_eq!(sum, result.total_hashes);
     }
 }

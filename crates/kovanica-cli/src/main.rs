@@ -18,7 +18,7 @@ use kovanica_cli::amount::{format_kuna_fixed, parse_cli_amount};
 use kovanica_cli::contracts::{
     ContractCommand, HtlcCommand, MultisigCommand, TokenCommand, VaultCommand,
 };
-use kovanica_cli::miner::{run_miner, MinerCommand, MinerRunArgs};
+use kovanica_cli::miner::{run_miner, run_miner_bench, MinerBenchArgs, MinerCommand, MinerRunArgs};
 use kovanica_cli::rpc::RpcClient;
 use kovanica_cli::{comms, contracts, mining, node, output, tui, tx, wallet};
 use kovanica_types::transaction::TransactionKind;
@@ -177,6 +177,8 @@ enum MiningCommand {
     Status,
     /// Run standalone solo miner (alias of `kovanica miner run`)
     Run(MinerRunArgs),
+    /// Benchmark local KovanicaHash PoW hashrate (alias of `kovanica miner bench`)
+    Bench(MinerBenchArgs),
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -596,11 +598,19 @@ async fn main() -> Result<()> {
         Commands::Comms { command } => comms::run(command, json),
         Commands::Miner { command } => match command {
             MinerCommand::Run(args) => run_miner(&client, &rpc_url, args, chain_id).await,
+            MinerCommand::Bench(args) => {
+                run_miner_bench(args, json)?;
+                Ok(())
+            }
         },
         Commands::Mining { command } => match command {
             MiningCommand::Info => mining::info(&client, json).await,
             MiningCommand::Status => mining::status(&client, json).await,
             MiningCommand::Run(args) => run_miner(&client, &rpc_url, args, chain_id).await,
+            MiningCommand::Bench(args) => {
+                run_miner_bench(args, json)?;
+                Ok(())
+            }
         },
         Commands::Dag { command } => match command {
             DagCommand::Tips => mining::dag_tips(&client, json).await,
@@ -2229,6 +2239,72 @@ mod wallet_cli_security_tests {
 
         // 4. Missing required --address fails parsing
         assert!(Cli::try_parse_from(["kovanica", "miner", "run"]).is_err());
+    }
+
+    #[test]
+    fn miner_bench_subcommand_parses_defaults_and_custom_flags() {
+        // 1. kovanica miner bench defaults
+        let cli = Cli::try_parse_from(["kovanica", "miner", "bench"]).unwrap();
+        assert!(!cli.json);
+        match cli.command {
+            Commands::Miner {
+                command: MinerCommand::Bench(args),
+            } => {
+                assert_eq!(args.threads, None);
+                assert_eq!(args.duration, 5);
+            }
+            _ => panic!("expected miner bench"),
+        }
+
+        // 2. kovanica miner bench with custom threads, duration, and global --json
+        let cli = Cli::try_parse_from([
+            "kovanica",
+            "--json",
+            "miner",
+            "bench",
+            "--threads",
+            "4",
+            "--duration",
+            "10",
+        ])
+        .unwrap();
+        assert!(cli.json);
+        match cli.command {
+            Commands::Miner {
+                command: MinerCommand::Bench(args),
+            } => {
+                assert_eq!(args.threads, Some(4));
+                assert_eq!(args.duration, 10);
+            }
+            _ => panic!("expected miner bench"),
+        }
+
+        // 3. kovanica miner bench with short flags and trailing --json
+        let cli =
+            Cli::try_parse_from(["kovanica", "miner", "bench", "-t", "2", "-d", "3", "--json"])
+                .unwrap();
+        assert!(cli.json);
+        match cli.command {
+            Commands::Miner {
+                command: MinerCommand::Bench(args),
+            } => {
+                assert_eq!(args.threads, Some(2));
+                assert_eq!(args.duration, 3);
+            }
+            _ => panic!("expected miner bench"),
+        }
+
+        // 4. kovanica mining bench alias
+        let cli = Cli::try_parse_from(["kovanica", "mining", "bench"]).unwrap();
+        match cli.command {
+            Commands::Mining {
+                command: MiningCommand::Bench(args),
+            } => {
+                assert_eq!(args.threads, None);
+                assert_eq!(args.duration, 5);
+            }
+            _ => panic!("expected mining bench"),
+        }
     }
 
     #[test]

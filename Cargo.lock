@@ -2761,6 +2761,7 @@ dependencies = [
  "kovanica-light",
  "kovanica-name-registry",
  "kovanica-types",
+ "kovanica-wallet-core",
  "serde_json",
  "thiserror 1.0.69",
  "uniffi",
@@ -3097,7 +3098,10 @@ dependencies = [
 name = "kovanica-wallet-core"
 version = "0.2.0"
 dependencies = [
+ "argon2",
  "async-trait",
+ "bip39",
+ "chacha20poly1305",
  "hex",
  "hmac 0.12.1",
  "kovanica-crypto",
@@ -3105,6 +3109,7 @@ dependencies = [
  "kovanica-keystore",
  "kovanica-sdk",
  "kovanica-types",
+ "rand 0.8.8",
  "serde",
  "serde_json",
  "sha2 0.10.9",

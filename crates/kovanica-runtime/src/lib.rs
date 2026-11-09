@@ -1177,4 +1177,286 @@ mod tests {
             Err(RuntimeError::MissingExport(name)) if name == "kovanica_dealloc"
         ));
     }
+
+    #[test]
+    fn fuel_consumption_arithmetic_loop_is_strictly_deterministic_across_repeated_runs() {
+        let runtime = Runtime::new();
+
+        // Guest module: sum 1..=20 in a loop with arithmetic operations.
+        // Entry ABI: (i32, i32) -> i64
+        // Locals: [2: count (i32), 3: sum (i32)]
+        let mut loop_body = vec![1, 2, 0x7f]; // 1 local entry with 2 i32 locals
+        loop_body.extend([0x41, 20, 0x21, 2]); // i32.const 20, local.set 2 (count)
+        loop_body.extend([0x41, 0, 0x21, 3]); // i32.const 0, local.set 3 (sum)
+        loop_body.extend([0x03, 0x40]); // loop (void)
+        loop_body.extend([0x20, 3, 0x20, 2, 0x6a, 0x21, 3]); // sum += count
+        loop_body.extend([0x20, 2, 0x41, 1, 0x6b, 0x22, 2]); // count -= 1, tee count
+        loop_body.extend([0x0d, 0]); // br_if 0
+        loop_body.extend([0x0b]); // end loop
+        loop_body.extend([0x42, 0, 0x0b]); // i64.const 0, end function
+
+        let wasm = test_module(&loop_body, ModuleOptions::default());
+        let module = runtime
+            .compile(&wasm)
+            .expect("compile arithmetic loop module");
+        let config = generous_config();
+
+        let mut baseline_gas = 0u64;
+        let mut baseline_host = TestHost::default();
+        runtime
+            .execute_with_gas(
+                &module,
+                "entry",
+                &[],
+                &config,
+                &mut baseline_host,
+                &mut baseline_gas,
+            )
+            .expect("baseline run 0");
+        assert!(baseline_gas > 0, "gas consumed must be non-zero");
+
+        // Repeat >= 50 executions (testing 60 runs) under identical inputs and configs
+        for run in 1..=60 {
+            let mut gas = 0u64;
+            let mut host = TestHost::default();
+            runtime
+                .execute_with_gas(&module, "entry", &[], &config, &mut host, &mut gas)
+                .unwrap_or_else(|e| panic!("run {run} failed: {e:?}"));
+            assert_eq!(
+                gas, baseline_gas,
+                "Fuel drift detected on iteration {run}: expected {baseline_gas}, got {gas}"
+            );
+        }
+    }
+
+    #[test]
+    fn fuel_consumption_memory_growth_and_store_is_strictly_deterministic_across_repeated_runs() {
+        let runtime = Runtime::new();
+
+        // Guest module: store to memory, grow memory by 1 page, store to newly grown page,
+        // load and add values.
+        let mut body = vec![0]; // 0 additional locals
+                                // Store 42 at offset 0
+        body.extend([0x41, 0, 0x41, 42, 0x36, 0, 0]);
+        // Grow memory by 1 page
+        body.extend([0x41, 1, 0x40, 0, 0x1a]); // memory.grow 0, drop
+                                               // Store 99 at offset 65536 (page 1)
+        body.extend([0x41]);
+        append_i32(&mut body, 65536);
+        body.extend([0x41, 99, 0x36, 0, 0]);
+        // Load from 0 and 65536, add, drop
+        body.extend([0x41, 0, 0x28, 0, 0]);
+        body.extend([0x41]);
+        append_i32(&mut body, 65536);
+        body.extend([0x28, 0, 0, 0x6a, 0x1a]);
+        // Return 0
+        body.extend([0x42, 0, 0x0b]);
+
+        let wasm = test_module(&body, ModuleOptions::default());
+        let module = runtime.compile(&wasm).expect("compile memory module");
+        let config = ExecutionConfig {
+            gas_limit: 100_000,
+            memory_limit_pages: 3,
+            gas_hardening_active: false,
+        };
+
+        let mut baseline_gas = 0u64;
+        let mut baseline_host = TestHost::default();
+        runtime
+            .execute_with_gas(
+                &module,
+                "entry",
+                &[],
+                &config,
+                &mut baseline_host,
+                &mut baseline_gas,
+            )
+            .expect("baseline memory run");
+        assert!(baseline_gas > 0);
+
+        // Verify across 50 repeated runs on shared runtime
+        for run in 1..=50 {
+            let mut gas = 0u64;
+            let mut host = TestHost::default();
+            runtime
+                .execute_with_gas(&module, "entry", &[], &config, &mut host, &mut gas)
+                .unwrap_or_else(|e| panic!("run {run} failed: {e:?}"));
+            assert_eq!(
+                gas, baseline_gas,
+                "Memory fuel drift on iteration {run}: expected {baseline_gas}, got {gas}"
+            );
+        }
+
+        // Verify across 10 fresh Runtime instances to ensure no cross-instance fuel variance
+        for fresh_idx in 1..=10 {
+            let fresh_runtime = Runtime::new();
+            let fresh_module = fresh_runtime.compile(&wasm).expect("fresh compile");
+            let mut gas = 0u64;
+            let mut host = TestHost::default();
+            fresh_runtime
+                .execute_with_gas(&fresh_module, "entry", &[], &config, &mut host, &mut gas)
+                .unwrap_or_else(|e| panic!("fresh runtime run {fresh_idx} failed: {e:?}"));
+            assert_eq!(
+                gas, baseline_gas,
+                "Fresh runtime fuel drift on run {fresh_idx}: expected {baseline_gas}, got {gas}"
+            );
+        }
+    }
+
+    #[test]
+    fn fuel_consumption_host_call_metering_determinism() {
+        let runtime = Runtime::new();
+
+        // Calls kovanica_caller(128) then returns empty result
+        let mut body = vec![0, 0x41];
+        append_i32(&mut body, 128);
+        body.extend([0x10, 0]); // call host function 0 (kovanica_caller)
+        body.extend([0x42, 0, 0x0b]); // return 0, end
+
+        let options = ModuleOptions {
+            caller_import: true,
+            ..ModuleOptions::default()
+        };
+        let wasm = test_module(&body, options);
+        let module = runtime.compile(&wasm).expect("compile host call module");
+
+        // Mode 1: gas_hardening_active = false
+        let unhardened_config = ExecutionConfig {
+            gas_limit: 100_000,
+            memory_limit_pages: 2,
+            gas_hardening_active: false,
+        };
+        let mut unhardened_baseline = 0u64;
+        let mut host = TestHost { caller: [0x55; 32] };
+        runtime
+            .execute_with_gas(
+                &module,
+                "entry",
+                &[],
+                &unhardened_config,
+                &mut host,
+                &mut unhardened_baseline,
+            )
+            .expect("unhardened run 0");
+        assert!(unhardened_baseline > 0);
+
+        for run in 1..=50 {
+            let mut gas = 0u64;
+            let mut h = TestHost { caller: [0x55; 32] };
+            runtime
+                .execute_with_gas(&module, "entry", &[], &unhardened_config, &mut h, &mut gas)
+                .expect("unhardened execution");
+            assert_eq!(
+                gas, unhardened_baseline,
+                "Unhardened host call fuel drift at run {run}"
+            );
+        }
+
+        // Mode 2: gas_hardening_active = true
+        let hardened_config = ExecutionConfig {
+            gas_limit: 100_000,
+            memory_limit_pages: 2,
+            gas_hardening_active: true,
+        };
+        let mut hardened_baseline = 0u64;
+        let mut host2 = TestHost { caller: [0x55; 32] };
+        runtime
+            .execute_with_gas(
+                &module,
+                "entry",
+                &[],
+                &hardened_config,
+                &mut host2,
+                &mut hardened_baseline,
+            )
+            .expect("hardened run 0");
+
+        for run in 1..=50 {
+            let mut gas = 0u64;
+            let mut h = TestHost { caller: [0x55; 32] };
+            runtime
+                .execute_with_gas(&module, "entry", &[], &hardened_config, &mut h, &mut gas)
+                .expect("hardened execution");
+            assert_eq!(
+                gas, hardened_baseline,
+                "Hardened host call fuel drift at run {run}"
+            );
+        }
+
+        // Assert that the difference is EXACTLY kovanica_fee::GAS_KOVANICA_CALLER
+        assert_eq!(
+            hardened_baseline.saturating_sub(unhardened_baseline),
+            kovanica_fee::GAS_KOVANICA_CALLER,
+            "Hardened gas fee must exactly match kovanica_fee::GAS_KOVANICA_CALLER"
+        );
+    }
+
+    #[test]
+    fn fuel_consumption_error_rejection_and_out_of_gas_determinism() {
+        let runtime = Runtime::new();
+
+        // 1. Negative contract error rejection determinism across 50 runs for each error code
+        for err_ret in [-1i64, -3i64, -11i64] {
+            let mut body = vec![0, 0x42];
+            append_i64(&mut body, err_ret);
+            body.push(0x0b);
+            let wasm = test_module(&body, ModuleOptions::default());
+            let module = runtime.compile(&wasm).expect("compile error module");
+            let config = generous_config();
+
+            let expected_code = (-1 - err_ret) as i32;
+            let mut baseline_gas = 0u64;
+            let mut host = TestHost::default();
+            let err = runtime
+                .execute_with_gas(&module, "entry", &[], &config, &mut host, &mut baseline_gas)
+                .expect_err("must error");
+            assert!(
+                matches!(err, RuntimeError::Contract(code) if code == expected_code),
+                "Expected Contract({expected_code}), got {err:?}"
+            );
+            assert!(baseline_gas > 0);
+
+            for run in 1..=50 {
+                let mut gas = 0u64;
+                let mut h = TestHost::default();
+                let e = runtime
+                    .execute_with_gas(&module, "entry", &[], &config, &mut h, &mut gas)
+                    .expect_err("must error");
+                assert!(
+                    matches!(e, RuntimeError::Contract(code) if code == expected_code),
+                    "Expected Contract({expected_code}) on run {run}, got {e:?}"
+                );
+                assert_eq!(
+                    gas, baseline_gas,
+                    "Error return fuel drift for code {err_ret} at run {run}"
+                );
+            }
+        }
+
+        // 2. Out-of-gas determinism: infinite loop module always consumes full gas_limit
+        let loop_body = [0, 0x03, 0x40, 0x0c, 0, 0x0b, 0x42, 0, 0x0b];
+        let wasm = test_module(&loop_body, ModuleOptions::default());
+        let module = runtime.compile(&wasm).expect("compile infinite loop");
+
+        for gas_limit in [100u64, 500u64, 1_000u64] {
+            let config = ExecutionConfig {
+                gas_limit,
+                memory_limit_pages: 1,
+                gas_hardening_active: false,
+            };
+
+            for run in 1..=50 {
+                let mut gas_used = 0u64;
+                let mut host = TestHost::default();
+                let err = runtime
+                    .execute_with_gas(&module, "entry", &[], &config, &mut host, &mut gas_used)
+                    .expect_err("must run out of gas");
+                assert!(matches!(err, RuntimeError::OutOfGas));
+                assert_eq!(
+                    gas_used, gas_limit,
+                    "Out of gas must deterministically report exact full gas_limit on run {run}"
+                );
+            }
+        }
+    }
 }
