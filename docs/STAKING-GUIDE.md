@@ -12,15 +12,15 @@ Kovanica uses high-throughput, uncertified DAG consensus (Mysticeti-style wave c
 
 | Parameter | Value | Description |
 |---|---|---|
-| **Currency Ticker** | **KUNA** | Native token ticker (9 decimals: $1\text{ KUNA} = 10^9\text{ atoms}$) |
+| **Currency Ticker** | **KVNC** | Native token ticker (9 decimals: $1\text{ KVNC} = 10^9\text{ atoms}$, legacy alias `KUNA`) |
 | **Address Format** | **PRO-21 base32** | 64 characters: `kvnc` + 57 base32 chars + `dag` |
-| **Minimum Validator Stake** | **50,000 KUNA** | `MIN_VALIDATOR_STAKE` required to join the active committee |
-| **Minimum Delegation** | **50,000 KUNA** | `MIN_DELEGATION` minimum stake per delegation transaction |
-| **Epoch Duration** | **7,200 DAG rounds** | `EPOCH_ROUNDS` ($\approx 8\text{ hours}$ at 4 s/round = 2,400 leader heights) |
+| **Minimum Validator Stake** | **50,000 KVNC** | `MIN_VALIDATOR_STAKE` (legacy / non-consensus under hybrid) |
+| **Minimum Delegation** | **50,000 KVNC** | `MIN_DELEGATION` (legacy / non-consensus under hybrid) |
+| **Epoch Duration** | **7,200 DAG rounds** | `EPOCH_ROUNDS` ($\approx 8\text{ hours}$ at 4 s/round = 2,400 leader heights; legacy) |
 | **Unbonding Cooldown** | **100,000 rounds** | `UNBONDING_ROUNDS` committed leader blocks ($\approx 13.9\text{ days}$) |
 | **Slashing Penalty** | **500 bps (5%)** | `SLASH_PCT_BPS` slashed on verifiable equivocation evidence |
-| **Jail Duration** | **7,200 rounds** | `JAIL_ROUNDS` committed leader heights ($\approx 1\text{ day}$ = 3 epochs) |
-| **Initial Block Reward** | **2.5 KUNA** | `INITIAL_BLOCK_REWARD` minted per committed leader block |
+| **Jail Duration** | **7,200 rounds** | `JAIL_ROUNDS` committed leader heights ($\approx 1\text{ day}$ = 3 epochs; legacy) |
+| **Initial Block Reward** | **2.5 KVNC** | `INITIAL_BLOCK_REWARD` minted per committed leader block |
 
 ---
 

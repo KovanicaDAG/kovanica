@@ -1,7 +1,7 @@
 # Kovanica Mainnet Freeze Checklist & Genesis Sign-Off Gates
 
 > **Network ID:** `1` (`MAINNET`)  
-> **Native Ticker:** **KUNA** (9 decimals: $1\text{ KUNA} = 10^9\text{ atoms}$)  
+> **Native Ticker:** **KVNC** (9 decimals: $1\text{ KVNC} = 10^9\text{ atoms}$, legacy alias `KUNA`)  
 > **Canonical Address Format:** PRO-21 base32 (`kvnc<57 base32>dag`, exactly 64 characters)  
 > **Target Date:** Mainnet Genesis ($T_0$)  
 > **Status:** Normative Release Sign-Off Specification & Production Gate Verification  
@@ -18,7 +18,7 @@ This checklist establishes the mandatory sign-off gates required prior to execut
 | Gate | Domain | Objective | Required Sign-Offs |
 |---|---|---|---|
 | **Gate 1** | **Code Freeze & Reproducibility** | Immutable Git commit, clean CI run, passing cargo-deny and gitleaks, byte-for-byte reproducible binaries. | Lead Core Developer, Security Auditor |
-| **Gate 2** | **Parameter Invariants & Ledger Safety** | Chain ID `1`, 90.2M KUNA cap, 2.5 KUNA block reward, epoch/unbonding limits, no `funded_accounts.toml`. | Consensus Architect, Lead Tokenomics Auditor |
+| **Gate 2** | **Parameter Invariants & Ledger Safety** | Chain ID `1`, 90.2M KVNC cap, 2.5 KVNC block reward, epoch/unbonding limits, no `funded_accounts.toml`. | Consensus Architect, Lead Tokenomics Auditor |
 | **Gate 3** | **Genesis Ceremony & Key Distribution** | Ceremony execution per [`docs/KEY-CEREMONY.md`](KEY-CEREMONY.md), Treasury 3-of-5 SSS distribution, Founder key custody, 3–5 bootstrap seed nodes (1..=20 bound). | Master of Ceremonies, Treasury Custodians, Seed Operators |
 | **Gate 4** | **Infrastructure & Network Topology** | 3+ independent seed nodes per [`docs/MAINNET-RUNBOOK.md`](MAINNET-RUNBOOK.md), DNS resolution, firewall port hardening (8000, 8545, 8546, 9100). | Lead DevOps/Infra Engineer, Seed Node Operators |
 | **Gate 5** | **Monitoring, Alerting & Observability** | Prometheus alerts verified (`alerts.yml`), health probes, peer drop/stall alerts, equivocation detection. | Site Reliability Engineer (SRE), Ops Lead |
@@ -125,22 +125,22 @@ Verify that every parameter in the release binary matches the canonical mainnet 
 | Parameter | Mainnet Value | Invariant Expression | Source File | Status |
 |---|---|---|---|---|
 | **Chain ID** | `1` (`MAINNET`) | `CHAIN_ID == 1` | `crates/kovanica-params/src/lib.rs` | [ ] |
-| **Native Ticker** | **KUNA** | Decimals: `9` | `crates/kovanica-params/src/lib.rs` | [ ] |
+| **Native Ticker** | **KVNC** | Decimals: `9` | `crates/kovanica-params/src/lib.rs` | [ ] |
 | **Address Format** | PRO-21 base32 | `kvnc` + 57 base32 chars + `dag` (64 chars) | `crates/kovanica-types/src/address.rs` | [ ] |
-| **Total Supply Ceiling** | `90,200,000 KUNA` | `90_200_000 * 10^9` atoms | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Founder Premine** | `200,000 KUNA` | `200_000 * 10^9` atoms | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Treasury Allocation** | `8,000,000 KUNA` | Linear 8-year vesting (1M KUNA/yr) | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Total Supply Ceiling** | `90,200,000 KVNC` | `90_200_000 * 10^9` atoms | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Founder Premine** | `200,000 KVNC` | `200_000 * 10^9` atoms | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Treasury Allocation** | `8,000,000 KVNC` | Linear 8-year vesting (1M KVNC/yr) | `crates/kovanica-staking/src/lib.rs` | [ ] |
 | **Genesis Validator Pool**| `1,000,000 KVNC` | Split evenly across bootstrap seed nodes (1..=20) | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Mining Subsidy Budget**| `81,000,000 KUNA` | $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M}$ | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Initial Block Reward** | `2.5 KUNA` | $2.5 \times 10^9$ atoms ($5 \times 10^9 / 2$) | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Mining Subsidy Budget**| `81,000,000 KVNC` | $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M}$ | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Initial Block Reward** | `2.5 KVNC` | $2.5 \times 10^9$ atoms ($5 \times 10^9 / 2$) | `crates/kovanica-staking/src/lib.rs` | [ ] |
 | **Subsidy Era Length** | `8,100,000 blocks` | Multiplied by $3/4$ decay each era | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Target Round Duration**| `4,000 ms` (4 s) | Leader interval: `12 s` (`LEADER_INTERVAL_SECS = 12`) | `crates/kovanica-consensus/src/lib.rs` | [ ] |
-| **Epoch Duration** | `7,200 rounds` | `EPOCH_ROUNDS = 7_200` (~8 hours) | `crates/kovanica-consensus/src/lib.rs` | [ ] |
+| **Target Block Duration**| `4,000 ms` (4 s) | GHOSTDAG $K=5$, target block 4 s | `crates/kovanica-consensus/src/lib.rs` | [ ] |
+| **Epoch Duration** | `7,200 rounds` | `EPOCH_ROUNDS = 7_200` (~8 hours; legacy) | `crates/kovanica-consensus/src/lib.rs` | [ ] |
 | **Unbonding Period** | `100,000 blocks` | `UNBONDING_ROUNDS = 100_000` (~13.9 days) | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Minimum Validator Stake**| `50,000 KUNA` | `MIN_VALIDATOR_STAKE = 50_000 * 10^9` | `crates/kovanica-params/src/lib.rs` | [ ] |
-| **Minimum Delegation** | `50,000 KUNA` | `MIN_DELEGATION = 50_000 * 10^9` | `crates/kovanica-params/src/lib.rs` | [ ] |
+| **Minimum Validator Stake**| `50,000 KVNC` | `MIN_VALIDATOR_STAKE = 50_000 * 10^9` | `crates/kovanica-params/src/lib.rs` | [ ] |
+| **Minimum Delegation** | `50,000 KVNC` | `MIN_DELEGATION = 50_000 * 10^9` | `crates/kovanica-params/src/lib.rs` | [ ] |
 | **Slashing Penalty** | `500 bps` (5%) | Fixed equivocation penalty | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Jail Duration** | `7,200 blocks` | `JAIL_ROUNDS = 7_200` (~1 day = 3 epochs) | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Jail Duration** | `7,200 blocks` | `JAIL_ROUNDS = 7_200` (~1 day = 3 epochs; legacy) | `crates/kovanica-staking/src/lib.rs` | [ ] |
 | **Light-Node Share** | `20%` (2,000 bps) | Escrowed for 32 winning slots/epoch | `crates/kovanica-staking/src/lib.rs` | [ ] |
 
 ### 3.2 Pre-Flight Safety Invariants
@@ -179,11 +179,11 @@ The genesis ceremony establishes the cryptographic trust root of the network and
 
 - [ ] **Bootstrap Seed Set:** Between 1 and 20 bootstrap seed nodes confirmed (3–5 recommended for public launch).
 - [ ] **Genesis Validator Allocation:** Exactly 1,000,000 KVNC distributed among registered genesis bootstrap nodes (e.g. 5 nodes receive 200,000 KVNC each, locking the 50,000 KVNC minimum stake with dust deterministically assigned to index 0).
-- [ ] **Minimum Stake Met:** Every genesis validator self-stake satisfies `MIN_VALIDATOR_STAKE = 50_000 KUNA`.
+- [ ] **Minimum Stake Met:** Every genesis validator self-stake satisfies `MIN_VALIDATOR_STAKE = 50_000 KVNC`.
 
 ### 4.3 Treasury Custody (Shamir's Secret Sharing)
 
-- [ ] **Multi-Signature Vault:** 8,000,000 KUNA treasury configured with linear 8-year vesting smart contract.
+- [ ] **Multi-Signature Vault:** 8,000,000 KVNC treasury configured with linear 8-year vesting smart contract.
 - [ ] **Threshold Custody:** Master emergency key split into 3-of-5 Shamir's Secret Sharing shares.
 - [ ] **Physical Custody Plates:** Steel custody plates distributed to 5 geographically dispersed custodians with tamper-evident seals.
 

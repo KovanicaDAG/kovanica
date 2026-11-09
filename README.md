@@ -1,6 +1,6 @@
-# Kovanica (KUNA)
+# Kovanica (KVNC)
 
-> A clean, from-scratch Rust Layer-1 blockchain implementing Mysticeti-style uncertified DAG consensus, account-based state with staked validators, deterministic Wasmi WebAssembly smart contracts, and a native light-client and decentralized communications stack.
+> A clean, from-scratch Rust Layer-1 blockchain implementing Hybrid PoW + GHOSTDAG consensus, account-based state, deterministic Wasmi WebAssembly smart contracts, and a native light-client and decentralized communications stack.
 
 **Status: Pre-Alpha / Active Development.**  
 Not audited by an external security firm. Do not use with real value. Not for production.  
@@ -9,7 +9,7 @@ All tokenomics parameters and network protocols are binding per `AGENTS.md`.
 <a id="adresni-format-kanonski"></a>
 ### Project & Address Identity
 - **Network Name:** **Kovanica**
-- **Native Coin Ticker:** **KUNA** (9 decimals: `1 KUNA = 1_000_000_000 atoms`)
+- **Native Coin Ticker:** **KVNC** (9 decimals: `1 KVNC = 1_000_000_000 atoms`, legacy alias `KUNA`)
 - **Codebase / Namespace Prefix:** `kovanica` (`crates/kovanica-*`, `KOVANICA_*`, `@kovanica/*`)
 - **Canonical Address Format (PRO-21):** Exactly 64 characters:
   ```text
@@ -17,9 +17,9 @@ All tokenomics parameters and network protocols are binding per `AGENTS.md`.
   ```
   The 57 characters encode the 32-byte Ed25519 public key (256 bits) concatenated with the first 29 bits of its BLAKE3 hash MSB-first (`256 + 29 = 285 bits = 57 base32 chars` using the BIP-173 bech32 lowercase alphabet `qpzry9x8gf2tvdw0s3jn54khce6mua7l`, unpadded).
   - `FromStr for Address` strictly enforces the 64-character base32 form.
-  - Legacy hex formats (`kvnc<72hex>dag` and bare/`0x` 64-hex keys) are supported **only** on Devnet (`3`), Testnet v2 (`4`), and Local (`1337`).
+  - Legacy hex formats (`kvnc<72hex>dag` and bare/`0x` 64-hex keys) are supported **only** on Devnet (`3`), Testnet v2 (`4`), Hybrid PoW Testnet (`5`), and Local (`1337`).
   - Mainnet (`1`), Testnet (`2`), and all other chain IDs strictly reject legacy formats (`legacy_address_allowed = false`).
-  - **Rule:** The native coin ticker is **KVNC** (renamed from KUNA per Toni 2026-11-05 lock). Remaining KVNC crypto tags and address prefix kvnc…dag align with the KVNC ticker.
+  - **Rule:** The native coin ticker is **KVNC** (renamed from KUNA per Toni 2026-11-05 lock). Remaining KVNC crypto tags and address prefix `kvnc…dag` align with the KVNC ticker.
 
 ---
 
@@ -27,15 +27,15 @@ All tokenomics parameters and network protocols are binding per `AGENTS.md`.
 
 Kovanica is engineered from scratch in Rust for high throughput and predictable low latency, designed to run comfortably on standard 2–4 GB RAM virtual servers:
 
-1. **Mysticeti-Style Uncertified DAG Consensus:**
-   - Wave-based consensus progression with wave length `WAVE_LENGTH = 3` DAG rounds (Leader $\to$ Vote $\to$ Decide).
-   - Direct quorum commits ($2f+1$ stake threshold) and recursive indirect causal commit rules without intermediate certificate synchronization.
-   - Target consensus round duration: `4,000 ms` (4 s), yielding a committed leader block every `12 s` (`LEADER_INTERVAL_SECS = 12`).
-   - Leader election: stake-weighted verifiable random function via the `ecvrf` crate (Ristretto255 + SHA3-512, 96-byte proof; see `docs/archive/VRF-PROOF-LENGTH.md`), falling back to round-robin when VRF keys are unpopulated.
-   - **MysticGhost Hybrid Colouring:** Scoped GHOSTDAG ($k=3$) sub-DAG topological sort for transactions; uncoloured (non-blue) blocks are safely recycled back to the mempool without transaction loss.
+1. **Hybrid PoW + GHOSTDAG Consensus:**
+   - Pure **Hybrid PoW + GHOSTDAG** consensus architecture (per Toni 2026-11-05 lock; **NO stake for consensus**).
+   - Target block duration: `4,000 ms` (4 s) (`TARGET_BLOCK_MS = 4000`), GHOSTDAG parameter $K=5$ (`GHOSTDAG_K = 5`).
+   - Planned PoW algorithm: **KovanicaHash** (BLAKE3 + 2 MiB memory mix; formal external security audit required before mainnet activation).
+   - GHOSTDAG sub-DAG topological sort for transactions; uncoloured (non-blue) blocks are safely recycled back to the mempool without transaction loss.
+   - Legacy Mysticeti wave parameters (`WAVE_LENGTH = 3`, 12 s commit cycle) remain preserved in tree behind feature flags.
 2. **Account Model & Staking:**
-   - Account-based ledger tracking nonces, balances, contract storage, and validator stakes.
-   - Active validator set: **uncapped active set** with a minimum self-stake of **50,000 KUNA** (`MIN_VALIDATOR_STAKE`) and minimum delegation of **50,000 KUNA** (`MIN_DELEGATION`); genesis committee sizing testnet ~5, mainnet 15–20 (minimum active floor 15).
+   - Account-based ledger tracking nonces, balances, contract storage, and legacy staking state.
+   - Staking parameters (legacy / non-consensus under hybrid): minimum self-stake of **50,000 KVNC** (`MIN_VALIDATOR_STAKE`) and minimum delegation of **50,000 KVNC** (`MIN_DELEGATION`); genesis committee sizing testnet ~5, mainnet 15–20 (minimum active floor 15).
    - Deterministic committee epoch rotation every **8 hours** (`EPOCH_ROUNDS = 7,200` DAG rounds = `EPOCH_LEADER_HEIGHTS = 2,400` committed leader heights).
    - Stake unbonding cooldown: **100,000 committed leader blocks** ($\approx 13.9$ days at 12 s/leader).
    - Evidence-based slashing (RFC-010) with fixed 500 bps (5%) penalty and 7,200 committed leader heights jail (`JAIL_ROUNDS = 7,200`, $\approx 1$ day = 3 epochs).
@@ -58,24 +58,24 @@ Canonical parameters implemented in `crates/kovanica-staking/src/lib.rs` and doc
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| **Total Supply** | **90,200,000 KUNA** | Hard maximum supply ceiling (`90_200_000 * 10^9` atoms) |
-| **Decimals** | **9** | Smallest unit: 1 atom = $10^{-9}$ KUNA |
-| **Founder Premine** | **200,000 KUNA** | Allocated at genesis to the founder address |
-| **Genesis Validator Allocation** | **1,000,000 KUNA** | Split evenly across 5–20 genesis validators (dust distributed deterministically) |
-| **Treasury Allocation** | **8,000,000 KUNA** | Linear vesting over 8 years (1,000,000 KUNA/year) for development and grants |
-| **Mining Subsidy Budget** | **81,000,000 KUNA** | Derived subsidy pool: $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M} = 81\text{M}$ KUNA |
-| **Initial Block Reward** | **2.5 KUNA** | Minted exclusively on committed leader blocks ($5 \times 10^9 / 2$ atoms) |
+| **Total Supply** | **90,200,000 KVNC** | Hard maximum supply ceiling (`90_200_000 * 10^9` atoms) |
+| **Decimals** | **9** | Smallest unit: 1 atom = $10^{-9}$ KVNC |
+| **Founder Premine** | **200,000 KVNC** | Allocated at genesis to the founder address |
+| **Genesis Validator Allocation** | **1,000,000 KVNC** | Split evenly across 5–20 genesis validators (dust distributed deterministically) |
+| **Treasury Allocation** | **8,000,000 KVNC** | Linear vesting over 8 years (1,000,000 KVNC/year) for development and grants |
+| **Mining Subsidy Budget** | **81,000,000 KVNC** | Derived subsidy pool: $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M} = 81\text{M}$ KVNC |
+| **Initial Block Reward** | **2.5 KVNC** | Minted exclusively on committed leader blocks ($5 \times 10^9 / 2$ atoms) |
 | **Subsidy Era Length** | **8,100,000 blocks** | Committed leader blocks per era |
 | **Reward Decay Rate** | **$\times 3/4$** | Emission multiplies by $3/4$ (25% decay) at each era boundary |
-| **Minimum Validator Stake** | **50,000 KUNA** | Minimum self-bond required to enter the active validator committee (`MIN_VALIDATOR_STAKE`) |
-| **Minimum Delegation** | **50,000 KUNA** | Minimum stake required for validator delegation (`MIN_DELEGATION`) |
+| **Minimum Validator Stake** | **50,000 KVNC** | Minimum self-bond required to enter the active validator committee (`MIN_VALIDATOR_STAKE`; legacy) |
+| **Minimum Delegation** | **50,000 KVNC** | Minimum stake required for validator delegation (`MIN_DELEGATION`; legacy) |
 | **Active Validator Set** | **Uncapped** | Uncapped stake set (genesis: testnet ~5, mainnet 15–20; min active floor 15) |
 | **Unbonding Period** | **100,000 blocks** | Committed leader blocks ($\approx 13.9$ days at 12 s/leader) |
-| **Jail Duration** | **7,200 blocks** | Committed leader heights (`JAIL_ROUNDS`, $\approx 1$ day = 3 epochs) |
-| **Epoch Duration** | **8 hours** | 7,200 DAG rounds = 2,400 committed leader heights (independent of era) |
+| **Jail Duration** | **7,200 blocks** | Committed leader heights (`JAIL_ROUNDS`, $\approx 1$ day = 3 epochs; legacy) |
+| **Epoch Duration** | **8 hours** | 7,200 DAG rounds = 2,400 committed leader heights (independent of era; legacy) |
 | **Slashing Penalty** | **500 bps (5%)** | Penalty applied on verifiable equivocation evidence |
 | **Light-Node Reward Share** | **20% (2,000 bps)** | Escrowed for light-node witnesses across 32 winning slots per epoch |
-| **Target Round Duration** | **4,000 ms (4 s)** | Consensus round duration $\to$ 1 committed leader every 12 seconds |
+| **Target Block Duration** | **4,000 ms (4 s)** | Target block interval (`TARGET_BLOCK_MS = 4000`), GHOSTDAG parameter $K=5$ |
 
 ---
 
@@ -288,13 +288,13 @@ cargo run -p kovanica-cli --bin kovanica -- tui --keystore keystore.json
 # Query account balance
 cargo run -p kovanica-cli --bin kovanica -- balance <address>
 
-# Transfer KUNA (atoms: 1 KUNA = 1_000_000_000 atoms)
+# Transfer KVNC (atoms: 1 KVNC = 1_000_000_000 atoms)
 cargo run -p kovanica-cli --bin kovanica -- transfer \
   --to <recipient-address> \
   --amount 1000000000 \
   --keystore keystore.json
 
-# Stake as a validator (minimum 50,000 KUNA)
+# Stake as a validator (minimum 50,000 KVNC; legacy)
 cargo run -p kovanica-cli --bin kovanica -- stake \
   --amount 50000000000000 \
   --keystore keystore.json
@@ -350,10 +350,11 @@ Default network configuration parameters (`crates/kovanica-node/src/config.rs`):
 | `rpc_rate_limit_per_min` | `KOVANICA_RPC_RATE_LIMIT_PER_MIN` | `60` | Token-bucket rate limit per client IP |
 
 ### Chain ID Registry
-- **`1`**: **Mainnet** (`MAINNET`) — strictly enforces PRO-21 canonical base32 addresses; consensus parameters frozen. `funded_accounts.toml` strictly forbidden.
+- **`1`**: **Mainnet** (`MAINNET`) — strictly enforces PRO-21 canonical base32 addresses; consensus parameters frozen. `funded_accounts.toml` strictly forbidden. Release tag `v1.0.0-mainnet`.
 - **`2`**: **Testnet (legacy)** (`TESTNET`) — not the public testnet; enforces PRO-21 addresses.
 - **`3`**: **Devnet** (`DEVNET`) — lenient address parsing; allows parameter overrides.
-- **`4`**: **Internal Testnet** (`TESTNET_V2`) — internal testnet until public launch 25.11.2026; supports PRO-21 and legacy migration.
+- **`4`**: **Internal Testnet** (`TESTNET_V2`) — internal testnet; public launch gated on hybrid testnet M8 pass (delayed from unconditional 25.11.2026); supports PRO-21 and legacy migration.
+- **`5`**: **Hybrid PoW Testnet** (`HYBRID_TESTNET`) — planned hybrid PoW + GHOSTDAG chain (intent documented in ADR 0003; feature/flag `hybrid-pow`).
 - **`1337`**: **Local Devnet** (`LOCAL`) — single-node / local cluster testing.
 
 ---
@@ -383,9 +384,9 @@ Detailed architectural specifications and operational runbooks:
 
 ## 7. Status, Security & License
 
-- **Project Status:** Pre-Alpha. Active testnets are running with ongoing stress testing and performance tuning.
-- **Quality Gates & CI:** A minimal gate lives in `.github/workflows/ci.yml` (fmt, clippy with `-D warnings`, the workspace test suite minus the localhost cluster tests (those run via `bash scripts/ci-local.sh cluster`), cargo-deny license check, full-history gitleaks; `cargo audit` nightly). It runs `scripts/ci-local.sh`, so `bash scripts/ci-local.sh all` reproduces CI locally. The 2026-10-23 decommission still stands for the rest of the tooling: the long-term home for CI is the public `KovanicaDAG/kovanica-protocol` repo once the frozen code is there (PRO-14). If an Actions run fails within seconds with no runner, that is the account-level Actions billing block (PRO-14), not the workflow — run the gate locally in that case.
-- **Security Audit:** Automated security checks (`AUTOMATED_SECURITY_CHECKS.md`) and pre-audit vulnerability catalogues (`AUDIT_REPORT.md`) are maintained. Professional third-party security audits are planned prior to mainnet launch.
+- **Project Status:** Mainnet Release Candidate / Freeze (`v1.0.0-mainnet`). Consensus parameters frozen; external security audit scoped for KovanicaHash and Wasmi.
+- **Quality Gates & CI:** Automated gate in `.github/workflows/ci.yml` enforces `cargo fmt`, `cargo clippy -- -D warnings`, doc linting (`scripts/lint_docs.py`), `cargo deny` (licenses, advisories, bans, and sources), full-history `gitleaks 8.24.3`, and the complete workspace test suite. Local gate reproducibility is supported via `bash scripts/ci-local.sh all` and automated cluster soak testing via `ops/soak/run-soak.sh`.
+- **Security Audit:** External audit scoping and templates are maintained in [`docs/AUDIT-SCOPE.md`](docs/AUDIT-SCOPE.md) and [`docs/AUDITOR-INVITATION.md`](docs/AUDITOR-INVITATION.md). Formal independent audits are scheduled prior to mainnet launch.
 - **License:** The Kovanica codebase is distributed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)**.
 
 

@@ -1,7 +1,7 @@
 # Kovanica Block Explorer & Console Deployment Guide
 
 > **Network ID:** `1` (`MAINNET`) / `4` (`TESTNET`)  
-> **Native Ticker:** **KUNA** (9 decimals: $1\text{ KUNA} = 10^9\text{ atoms}$)  
+> **Native Ticker:** **KVNC** (9 decimals: $1\text{ KVNC} = 10^9\text{ atoms}$, legacy alias `KUNA`)  
 > **Canonical Address Format:** PRO-21 base32 (`kvnc<57 base32>dag`, exactly 64 characters)  
 > **Frontends Covered:** `packages/web` (Kovanica Block Explorer) and `packages/console` (Kovanica Node & Operator Console)  
 > **Status:** Production Deployment & Operations Guide

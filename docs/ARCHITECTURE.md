@@ -66,24 +66,17 @@ Storage (redb / pruning / snapshots)
 - Single-node validation via `ops/docker/` scripts.
 - Focus remains on P2P multi-node soak before K8s orchestration.
 
-### K8s / Helm (Deferred — Post-Testnet)
-**Status**: deferred (see A13.2)
-**Exit criteria**:
-- Helm chart skeleton (`helm/` or `deploy/helm/`) with `StatefulSet` + `ConfigMap` for `kovanica-node`
+### K8s / Helm
+**Status**: Implemented (`ops/k8s/` Kubernetes production manifests & Helm chart per PR #204).
+- Production Helm chart with `StatefulSet` + `ConfigMap` for `kovanica-node`
 - Persistent volume claim mapped to `KOVANICA_DATA`
-- Liveness/readiness probes against `/api/head`
+- Liveness/readiness probes against `/health`
 
 ### Soak Testing
-**6h / 3GB Memory Soak** (D15.5):
-- Script: `ops/soak/soak.sh` (duration 21600s, interval 30s)
-- Memory limit: `MEM_LIMIT=3G` via cgroup v2 `memory.max` (best-effort)
-- Sampling: `/proc/<pid>/status` VmRSS, alert threshold >3G (3,145,728 KB)
-- Expected RSS range (4-node devnet, transfer-only): 400–1200 MB
-- Safety: `set -euo pipefail`; does not modify node binary or crate code
-
-**24h Multi-node Soak** (E15.6):
-- Deferred; 6h soak covers baseline
-- Partition/recovery logic covered by deterministic in-process harness (`crates/kovanica-node/tests/multi_node_integration.rs`)
+**Automated Multi-Node Soak Test Harness** (`ops/soak/run-soak.sh`):
+- Script: `ops/soak/run-soak.sh` with automated load generator (`ops/soak/loadgen.py`)
+- Resource limits: strict cgroups `cpus: 1.5`, `mem_limit: 2048m` (2 GB VPS limit)
+- Verification: Monotonic block height advances, 0 container OOM kills (`oom_killed == false`), and Prometheus alert compliance.
 
 ---
 
@@ -193,10 +186,12 @@ Scrape `block_height`, `peer_count`, `commit_latency`, `mergeset_size` and
 - [ ] Node env never contains `KOVANICA_SEED` or `PRIVATE_KEY`
 
 ### Tokenomics (Locked — Never Edited Without Approval)
-- Total: 90.2M KUNA (`9_020_000_000_000_000` atoms)
-- Decimals: 9
-- Founder premine: 200k KUNA; Treasury: 8M KUNA (linear 8yr)
-- Subsidy: 2.5 KUNA / 8.1M blocks; decay ×3/4; reward only on committed leader
+- Ticker: KVNC (9 decimals, `ONE_KVNC = 10^9`, legacy alias `ONE_KUNA`)
+- Total: 90.2M KVNC (`90_200_000 * 10^9` atoms)
+- Founder premine: 200k KVNC; Treasury: 8M KVNC (linear 8yr)
+- Mining subsidy budget: 81M KVNC
+- Block reward: 2.5 KVNC / 8.1M blocks; decay ×3/4; minted to committed block author
+- Consensus: Hybrid PoW + GHOSTDAG (NO stake in consensus; target block 4 s, GHOSTDAG K=5; PoW: KovanicaHash)
 
 ---
 

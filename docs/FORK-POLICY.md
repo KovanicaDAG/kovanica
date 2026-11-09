@@ -17,7 +17,7 @@ Because DAG proposals are uncertified prior to commit, an adversarial or malfunc
 
 | Parameter | Value | Reference / Code Binding |
 |---|---|---|
-| **Currency Ticker** | **KUNA** | 9 decimals ($1\text{ KUNA} = 10^9\text{ atoms}$) |
+| **Currency Ticker** | **KVNC** | 9 decimals ($1\text{ KVNC} = 10^9\text{ atoms}$, legacy alias `KUNA`) |
 | **Address Format** | **PRO-21 base32** | 64 chars (`kvnc` + 57 base32 chars + `dag`) |
 | **Wave Length** | **3 rounds** | `WAVE_LENGTH = 3` (Round 0 = Leader, Round 1 = Votes, Round 2 = Cert/Anchor) |
 | **Commit Quorum** | **$2f + 1$ stake** | `CommitteeInfo::quorum_threshold` |
