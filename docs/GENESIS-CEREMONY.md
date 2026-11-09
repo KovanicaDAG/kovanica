@@ -69,7 +69,7 @@ address = "kvnc1..."
 balance = 1000000000000
 ```
 
-Pre-funding accounts from `funded_accounts.toml` is permitted only on test/dev networks (chains 2, 3, 4, 5, 1337). On **Chain 1 (Mainnet)**, this file is **strictly prohibited**; every KVNC must originate from the published emission allocations (founder premine, treasury vesting, genesis validator allocation, mining subsidy). The node aborts on startup if `funded_accounts.toml` is detected on Mainnet.
+Pre-funding accounts from `funded_accounts.toml` is permitted only on test/dev networks (chains 2, 3, 4, 5, 1337). On **Chain 1 (Mainnet)**, this file is **strictly prohibited**; every KVNC must originate from the published emission allocations (founder premine, treasury vesting, genesis validator allocation, mining subsidy). The node aborts on startup if `funded_accounts.toml` is detected on Mainnet. The mainnet `sha256sum` list therefore omits it (see [`docs/TESTNET-RESET.md`](TESTNET-RESET.md)).
 
 ---
 

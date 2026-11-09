@@ -1,14 +1,17 @@
 {
   "allocations": {
+    "emission_policy": "legacy-81m",
     "founder_address_bytes": "0000000000000000000000000000000000000000000000000000000000000020",
-    "founder_address_hex": "0000000000000000000000000000000000000000000000000000000000000020",
+    "founder_address_hex": "kvncqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsp3cjmndag",
     "founder_premine_atoms": 200000000000000,
-    "founder_premine_kuna": 200000,
     "founder_premine_kovanica": 200000,
+    "founder_premine_kuna": 200000,
     "genesis_validator_allocation_atoms": 1000000000000000,
     "genesis_validator_allocation_kuna": 1000000,
+    "mining_subsidy_budget_atoms": 81000000000000000,
+    "mining_subsidy_budget_kovanica": 81000000,
     "treasury_address_bytes": "0000000000000000000000000000000000000000000000000000000000000010",
-    "treasury_address_hex": "0000000000000000000000000000000000000000000000000000000000000010",
+    "treasury_address_hex": "kvncqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqgw9aq4rdag",
     "validators": [
       {
         "address_hex": "8ed00d91ac0e3aca35fdc374a043dc44a424a3bc4b4071011dfa8153501b9dde",
@@ -35,7 +38,7 @@
   },
   "genesis_block": {
     "author": 0,
-    "digest_hex": "db095f9db7ade0026299a516debc05812abfea84933b9a0e62bf5e28708df431",
+    "digest_hex": "492ae34598de7d9f0a1e213445d8f0d32be06a18887c764f30544933923d5199",
     "parents": [],
     "round": 0,
     "signature_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
@@ -45,6 +48,7 @@
   "staking_state": {
     "committed_leader_height": 0,
     "delegations": [],
+    "reward_totals": {},
     "total_mining_issued": 0,
     "total_staked": 150000000000000,
     "treasury": {
@@ -125,6 +129,7 @@
           222
         ],
         "commission_bps": 0,
+        "jailed_until_height": 0,
         "last_commission_change_height": 0,
         "last_online_height": 0,
         "missed_leader_count": 0,
@@ -196,6 +201,7 @@
           157,
           222
         ],
+        "slashed": false,
         "stake": 50000000000000,
         "vrf_public_key": null
       },
@@ -236,6 +242,7 @@
           34
         ],
         "commission_bps": 0,
+        "jailed_until_height": 0,
         "last_commission_change_height": 0,
         "last_online_height": 0,
         "missed_leader_count": 0,
@@ -307,6 +314,7 @@
           71,
           34
         ],
+        "slashed": false,
         "stake": 50000000000000,
         "vrf_public_key": null
       },
@@ -347,6 +355,7 @@
           152
         ],
         "commission_bps": 0,
+        "jailed_until_height": 0,
         "last_commission_change_height": 0,
         "last_online_height": 0,
         "missed_leader_count": 0,
@@ -418,29 +427,11 @@
           4,
           152
         ],
+        "slashed": false,
         "stake": 50000000000000,
         "vrf_public_key": null
       }
     ]
   },
-  "validator_keys": [
-    {
-      "address_hex": "8ed00d91ac0e3aca35fdc374a043dc44a424a3bc4b4071011dfa8153501b9dde",
-      "index": 0,
-      "key_file": "/root/Projects/kvnc/mainnet/validators/keys-out/validator1.key",
-      "public_key_hex": "3eaedd0a5f2ca99f1f7091ac7f3349f4e289834ba5392f2247a97eaa71a1dd98"
-    },
-    {
-      "address_hex": "ec9d457c37e21d206d1aaf2206284d1df38815cf25a9c2b46b15fea7018e4722",
-      "index": 1,
-      "key_file": "/root/Projects/kvnc/mainnet/validators/keys-out/validator2.key",
-      "public_key_hex": "6fda51715ef16d9c54bfa5909b8ae12e1cd4cccb31754f23fafa01a5caa20435"
-    },
-    {
-      "address_hex": "5f62d5e97f0b90a8ceff02462649b0c51c21ca5c0b0616c775c869f914550498",
-      "index": 2,
-      "key_file": "/root/Projects/kvnc/mainnet/validators/keys-out/validator3.key",
-      "public_key_hex": "8ca438cebf2e2b4d912cd061a6b83f926779981b873daaea480497048e9cd7e2"
-    }
-  ]
+  "validator_keys": []
 }
