@@ -28,7 +28,7 @@ Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full p
 - [x] BIP32-style HD derivation (SLIP-0010 Ed25519; coin type 3007; opt-in via --hd/--account/--index).
 - [x] Kubernetes manifests (`deploy/k8s/`, `deploy/helm/kovanica/`).
 - [x] Key distribution ceremony (`docs/KEY-CEREMONY.md`).
-- [ ] External security review (template: `docs/AUDIT_REPORT.template.md`).
+- [x] External security review scope — finalized comprehensive scope document (`docs/AUDIT-SCOPE.md`), checklist (`docs/AUDIT-CHECKLIST.md`), and auditor invitation (`docs/AUDITOR-INVITATION.md`) covering KovanicaHash (BLAKE3 + 2 MiB scratchpad), GHOSTDAG K=5, DAA, Wasmi fuel sandboxing, PRO-21 addresses, and KVNC tokenomics (engagement pending external auditor assignment).
 - [x] Mainnet launch + monitoring runbook (`docs/MAINNET-RUNBOOK.md`).
 - [x] Governance: parameter proposals, stake-weighted voting, treasury spend (`propose`/`vote` in `kovanica-cli`, state tracking in `kovanica-staking`).
 - [x] Staking user-facing guide — [`docs/STAKING-GUIDE.md`](docs/STAKING-GUIDE.md) covers delegator & validator onboarding, CLI staking/delegation/unbonding/rewards, and FAQ.
