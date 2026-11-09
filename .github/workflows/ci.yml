@@ -71,17 +71,17 @@ jobs:
         run: bash scripts/ci-local.sh test
 
   licenses:
-    name: cargo deny (licenses)
+    name: cargo deny (advisories, bans, licenses, sources)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
 
-      - name: License check (cargo deny)
+      - name: Dependency and policy audit (cargo deny)
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-          command-arguments: licenses
+          command-arguments: advisories bans licenses sources
 
   secrets:
     name: gitleaks (full history)
