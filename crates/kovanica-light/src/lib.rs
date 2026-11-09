@@ -9,9 +9,10 @@
 use kovanica_crypto::CommitSealError;
 use kovanica_types::crypto::Signature;
 use kovanica_types::{
-    committee_seal_hash, merkle, verify_colouring, Address, Authority, AuthorityIndex,
-    ColouringCertificate, CommitSeal, Committee, Hash, LeaderHeader, MerkleProof, PublicKey,
-    SealAnnouncement, SigningContext, SigningKey, Stake, StateProof, Transaction, TransactionKind,
+    committee_seal_hash, compact_to_target, merkle, verify_colouring, Address, Authority,
+    AuthorityIndex, BlockHeader, ColouringCertificate, CommitSeal, Committee, Hash, HeaderError,
+    LeaderHeader, MerkleProof, PublicKey, SealAnnouncement, SigningContext, SigningKey, Stake,
+    StateProof, Transaction, TransactionKind, GHOSTDAG_K,
 };
 
 /// Why a light client rejected a header or a proof.
@@ -23,7 +24,7 @@ pub enum LightError {
     /// The header's committee hash is not the configured committee.
     #[error("leader header committee hash does not match")]
     Committee,
-    /// The header does not follow the previous sealed leader.
+    /// The header does not follow the previous sealed leader or selected PoW parent.
     #[error("leader header does not follow the previous sealed leader")]
     Parent,
     /// Commit seals failed signature or quorum checks.
@@ -38,6 +39,136 @@ pub enum LightError {
     /// A sender address string could not be parsed.
     #[error("invalid sender address: {0}")]
     InvalidAddress(String),
+    /// The PoW header `chain_id` does not match the client's configured network.
+    #[error("header chain_id {found} does not match expected {expected}")]
+    ChainId {
+        /// Configured chain ID expected by the light client.
+        expected: u64,
+        /// Chain ID declared inside the header preimage.
+        found: u64,
+    },
+    /// Hybrid PoW + GHOSTDAG header failed KovanicaHash or difficulty verification.
+    #[error("pow header verification failed: {0}")]
+    PowHeader(#[from] HeaderError),
+}
+
+/// Scalar PoW work estimate from compact difficulty target bits (`nBits`).
+///
+/// Matches `kovanica_consensus::ghostdag::calculate_work_from_target` so a
+/// mobile light/pruned node computes the exact same cumulative `blue_work`
+/// as a full validator/miner node on Hybrid PoW + GHOSTDAG (Chain 5).
+#[must_use]
+pub fn calculate_work_from_target(target_bits: u32) -> u128 {
+    let target = compact_to_target(target_bits);
+    if target == [0u8; 32] {
+        return 0;
+    }
+    let high = u128::from_be_bytes(target[0..16].try_into().unwrap());
+    if high == 0 {
+        u128::MAX
+    } else {
+        (u128::MAX / high).max(1)
+    }
+}
+
+/// Verify one Hybrid PoW + GHOSTDAG [`BlockHeader`] (KovanicaHash + target + parent link)
+/// and return its scalar PoW work (`u128`).
+///
+/// - Verifies `header.chain_id == expected_chain_id`.
+/// - When `parent` is `Some(parent_hdr)`, checks `header.round > parent_hdr.round`,
+///   confirms `parent_hdr` is referenced in `header.parents`, and enforces strict
+///   timestamp monotonicity (`header.timestamp > parent_hdr.timestamp`).
+/// - Evaluates the 2 MiB memory-hard KovanicaHash and difficulty check via
+///   [`BlockHeader::verify_pow_full`] / [`BlockHeader::verify_pow_with_clock`].
+pub fn verify_pow_header(
+    expected_chain_id: u64,
+    header: &BlockHeader,
+    parent: Option<&BlockHeader>,
+    now_ms: Option<u64>,
+) -> Result<u128, LightError> {
+    if header.chain_id != expected_chain_id {
+        return Err(LightError::ChainId {
+            expected: expected_chain_id,
+            found: header.chain_id,
+        });
+    }
+    if let Some(parent_hdr) = parent {
+        if header.round <= parent_hdr.round {
+            return Err(LightError::Parent);
+        }
+        let parent_preimage_digest = parent_hdr.header_preimage_digest();
+        let parent_linked = header.parents.iter().any(|p| {
+            p.author == parent_hdr.author
+                && p.round == parent_hdr.round
+                && (p.digest == parent_preimage_digest || Some(p.digest) == parent_hdr.pow_hash)
+        });
+        if !parent_linked {
+            return Err(LightError::Parent);
+        }
+        header.verify_pow_full(&[parent_hdr.timestamp], now_ms)?;
+    } else {
+        header.verify_pow_with_clock(now_ms)?;
+    }
+    Ok(calculate_work_from_target(header.target_bits))
+}
+
+/// Verify an ordered chain of selected-parent Hybrid PoW + GHOSTDAG headers
+/// and return the total cumulative PoW work (`u128`).
+pub fn verify_pow_header_chain(
+    expected_chain_id: u64,
+    headers: &[BlockHeader],
+    now_ms: Option<u64>,
+) -> Result<u128, LightError> {
+    let mut cumulative_work = 0u128;
+    for (idx, header) in headers.iter().enumerate() {
+        let parent = if idx == 0 {
+            None
+        } else {
+            Some(&headers[idx - 1])
+        };
+        let work = verify_pow_header(expected_chain_id, header, parent, now_ms)?;
+        cumulative_work = cumulative_work.saturating_add(work);
+    }
+    Ok(cumulative_work)
+}
+
+/// Resource and pruning profile for an embedded mobile pruned full-node
+/// (`kovanica-mobile-node` running as an Android `arm64-v8a` ForegroundService).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MobileNodeConfig {
+    /// Network chain ID (e.g. `5` for `HYBRID_TESTNET`, `1` for `MAINNET`).
+    pub chain_id: u64,
+    /// GHOSTDAG anticone parameter K (`5`).
+    pub ghostdag_k: u32,
+    /// Target block interval in milliseconds (`4000` ms = 4 s).
+    pub target_block_ms: u64,
+    /// Rolling DAG block retention window in rounds (`14_400` = 2 epochs ≈ 16 h).
+    pub pruning_window_rounds: u64,
+    /// Maximum `redb` / LRU page cache budget in MiB (`64` MiB keeps RSS < 250 MiB).
+    pub max_redb_cache_mb: u32,
+    /// Maximum concurrent libp2p peers on mobile (`12`).
+    pub max_peers: u16,
+    /// Run background P2P sync only when on unmetered Wi-Fi and charging.
+    pub wifi_and_charging_only: bool,
+    /// Loopback JSON-RPC bind address for the on-device wallet UI.
+    pub local_rpc_bind: String,
+}
+
+impl MobileNodeConfig {
+    /// Default pruned full-node profile for `chain_id` on mobile ARM64 devices.
+    #[must_use]
+    pub fn for_chain(chain_id: u64) -> Self {
+        Self {
+            chain_id,
+            ghostdag_k: GHOSTDAG_K,
+            target_block_ms: 4_000,
+            pruning_window_rounds: 14_400,
+            max_redb_cache_mb: 64,
+            max_peers: 12,
+            wifi_and_charging_only: true,
+            local_rpc_bind: "127.0.0.1:8545".to_string(),
+        }
+    }
 }
 
 /// Check one sealed header against the configured committee.
@@ -716,5 +847,74 @@ mod tests {
             .unwrap_err(),
             LightError::InvalidAddress(_)
         ));
+    }
+
+    #[test]
+    fn pow_header_chain_verifies_and_accumulates_work() {
+        let chain = chain_id::HYBRID_TESTNET;
+        let easy_bits = 0x217f_ffff;
+        let mut h0 = BlockHeader::new(
+            chain,
+            1,
+            0,
+            vec![],
+            Hash::zero(),
+            1_700_000_000_000,
+            easy_bits,
+            1,
+        );
+        h0.pow_hash = Some(h0.compute_pow_hash());
+
+        let mut h1 = BlockHeader::new(
+            chain,
+            2,
+            0,
+            vec![h0.reference()],
+            Hash::zero(),
+            1_700_000_004_000,
+            easy_bits,
+            2,
+        );
+        h1.pow_hash = Some(h1.compute_pow_hash());
+
+        let w0 = verify_pow_header(chain, &h0, None, Some(1_700_000_005_000)).unwrap();
+        assert!(w0 > 0);
+        let w1 = verify_pow_header(chain, &h1, Some(&h0), Some(1_700_000_005_000)).unwrap();
+        assert_eq!(w0, w1);
+
+        let total =
+            verify_pow_header_chain(chain, &[h0.clone(), h1.clone()], Some(1_700_000_005_000))
+                .unwrap();
+        assert_eq!(total, w0 + w1);
+
+        // Wrong chain_id fails closed
+        assert!(matches!(
+            verify_pow_header(chain_id::MAINNET, &h0, None, None).unwrap_err(),
+            LightError::ChainId {
+                expected: 1,
+                found: 5
+            }
+        ));
+
+        // Broken parent link fails closed
+        let mut unlinked = h1.clone();
+        unlinked.parents.clear();
+        assert_eq!(
+            verify_pow_header(chain, &unlinked, Some(&h0), None).unwrap_err(),
+            LightError::Parent
+        );
+    }
+
+    #[test]
+    fn mobile_node_config_defaults_match_hybrid_params() {
+        let cfg = MobileNodeConfig::for_chain(chain_id::HYBRID_TESTNET);
+        assert_eq!(cfg.chain_id, 5);
+        assert_eq!(cfg.ghostdag_k, 5);
+        assert_eq!(cfg.target_block_ms, 4_000);
+        assert_eq!(cfg.pruning_window_rounds, 14_400);
+        assert_eq!(cfg.max_redb_cache_mb, 64);
+        assert_eq!(cfg.max_peers, 12);
+        assert!(cfg.wifi_and_charging_only);
+        assert_eq!(cfg.local_rpc_bind, "127.0.0.1:8545");
     }
 }

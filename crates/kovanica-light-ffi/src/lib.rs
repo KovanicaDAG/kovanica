@@ -17,10 +17,11 @@ use kovanica_keystore::{parse, to_json};
 use kovanica_light::{
     change_passphrase, contract_address_for, reveal_mnemonic, sign_call, sign_deploy,
     sign_exit_light_node, sign_light_witness, sign_register_light_node, sign_transfer,
-    verify_account, verify_sealed_header,
+    verify_account, verify_pow_header, verify_pow_header_chain, verify_sealed_header,
+    MobileNodeConfig,
 };
 use kovanica_types::signing::chain_id;
-use kovanica_types::{Address, Hash, SigningKey, Transaction};
+use kovanica_types::{Address, BlockHeader, Hash, SigningKey, Transaction};
 use zeroize::Zeroize;
 
 uniffi::setup_scaffolding!("kovanica_light");
@@ -86,6 +87,42 @@ pub struct AccountSnapshot {
     pub nonce: u64,
     /// True when the proof matched the sealed state root.
     pub verified: bool,
+}
+
+/// Verified Hybrid PoW + GHOSTDAG header metadata returned to mobile clients.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedPowHeader {
+    /// Network chain ID.
+    pub chain_id: u64,
+    /// DAG round / height.
+    pub round: u64,
+    /// Preimage digest (`0x` hex).
+    pub preimage_digest: String,
+    /// Verified KovanicaHash PoW digest (`0x` hex).
+    pub pow_hash: String,
+    /// Scalar PoW work (`u128` formatted as decimal string).
+    pub work: String,
+}
+
+/// Canonical resource and pruning configuration for an embedded mobile pruned full-node.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct MobileNodeProfile {
+    /// Network chain ID (`5` for `HYBRID_TESTNET`, `1` for `MAINNET`).
+    pub chain_id: u64,
+    /// GHOSTDAG parameter K (`5`).
+    pub ghostdag_k: u32,
+    /// Target block interval in milliseconds (`4000`).
+    pub target_block_ms: u64,
+    /// Rolling DAG block retention window in rounds (`14_400`).
+    pub pruning_window_rounds: u64,
+    /// Maximum `redb` / LRU page cache budget in MiB (`64`).
+    pub max_redb_cache_mb: u32,
+    /// Maximum concurrent libp2p peers (`12`).
+    pub max_peers: u16,
+    /// Run background P2P sync only when on unmetered Wi-Fi and charging.
+    pub wifi_and_charging_only: bool,
+    /// Loopback JSON-RPC bind address (`"127.0.0.1:8545"`).
+    pub local_rpc_bind: String,
 }
 
 fn failed(err: impl std::fmt::Display) -> LightFfiError {
@@ -376,6 +413,62 @@ pub fn verify_header(
         state_root: hex_hash(&header.state_root),
         epoch: header.epoch,
     })
+}
+
+/// Verify one Hybrid PoW + GHOSTDAG `BlockHeader` JSON (KovanicaHash + target + optional parent).
+#[uniffi::export]
+pub fn verify_pow_header_json(
+    expected_chain_id: u64,
+    header_json: String,
+    parent_json: String,
+    now_ms: Option<u64>,
+) -> Result<VerifiedPowHeader, LightFfiError> {
+    let header: BlockHeader = serde_json::from_str(&header_json).map_err(failed)?;
+    let parent: Option<BlockHeader> = if parent_json.trim().is_empty() {
+        None
+    } else {
+        Some(serde_json::from_str(&parent_json).map_err(failed)?)
+    };
+    let work =
+        verify_pow_header(expected_chain_id, &header, parent.as_ref(), now_ms).map_err(failed)?;
+    let pow_hash = header.pow_hash.unwrap_or_else(Hash::zero);
+    Ok(VerifiedPowHeader {
+        chain_id: header.chain_id,
+        round: header.round,
+        preimage_digest: hex_hash(&header.header_preimage_digest()),
+        pow_hash: hex_hash(&pow_hash),
+        work: work.to_string(),
+    })
+}
+
+/// Verify an ordered JSON array of Hybrid PoW + GHOSTDAG selected-parent headers
+/// and return cumulative PoW work as a decimal string (`u128`).
+#[uniffi::export]
+pub fn verify_pow_header_chain_json(
+    expected_chain_id: u64,
+    headers_json: String,
+    now_ms: Option<u64>,
+) -> Result<String, LightFfiError> {
+    let headers: Vec<BlockHeader> = serde_json::from_str(&headers_json).map_err(failed)?;
+    let total_work =
+        verify_pow_header_chain(expected_chain_id, &headers, now_ms).map_err(failed)?;
+    Ok(total_work.to_string())
+}
+
+/// Return the canonical pruned full-node configuration profile for `chain_id` on mobile.
+#[uniffi::export]
+pub fn default_mobile_node_config(chain_id: u64) -> MobileNodeProfile {
+    let cfg = MobileNodeConfig::for_chain(chain_id);
+    MobileNodeProfile {
+        chain_id: cfg.chain_id,
+        ghostdag_k: cfg.ghostdag_k,
+        target_block_ms: cfg.target_block_ms,
+        pruning_window_rounds: cfg.pruning_window_rounds,
+        max_redb_cache_mb: cfg.max_redb_cache_mb,
+        max_peers: cfg.max_peers,
+        wifi_and_charging_only: cfg.wifi_and_charging_only,
+        local_rpc_bind: cfg.local_rpc_bind,
+    }
 }
 
 /// Check an account proof against a header this client already accepted.
@@ -1642,5 +1735,64 @@ mod tests {
         let imported =
             import_hd_wallet(created24.mnemonic.clone(), "test-pw-24".to_string()).unwrap();
         assert_eq!(imported.address, created24.address);
+    }
+
+    #[test]
+    fn mobile_pow_header_verification_and_profile_ffi_round_trip() {
+        let profile = default_mobile_node_config(chain_id::HYBRID_TESTNET);
+        assert_eq!(profile.chain_id, 5);
+        assert_eq!(profile.ghostdag_k, 5);
+        assert_eq!(profile.target_block_ms, 4_000);
+        assert_eq!(profile.pruning_window_rounds, 14_400);
+        assert_eq!(profile.max_redb_cache_mb, 64);
+
+        let easy_bits = 0x217f_ffff;
+        let mut h0 = BlockHeader::new(
+            chain_id::HYBRID_TESTNET,
+            1,
+            0,
+            vec![],
+            Hash::zero(),
+            1_700_000_000_000,
+            easy_bits,
+            1,
+        );
+        h0.pow_hash = Some(h0.compute_pow_hash());
+        let mut h1 = BlockHeader::new(
+            chain_id::HYBRID_TESTNET,
+            2,
+            0,
+            vec![h0.reference()],
+            Hash::zero(),
+            1_700_000_004_000,
+            easy_bits,
+            2,
+        );
+        h1.pow_hash = Some(h1.compute_pow_hash());
+
+        let h0_json = serde_json::to_string(&h0).unwrap();
+        let h1_json = serde_json::to_string(&h1).unwrap();
+
+        let v0 = verify_pow_header_json(
+            chain_id::HYBRID_TESTNET,
+            h0_json,
+            String::new(),
+            Some(1_700_000_010_000),
+        )
+        .unwrap();
+        assert_eq!(v0.chain_id, 5);
+        assert_eq!(v0.round, 1);
+
+        let chain_json = serde_json::to_string(&vec![h0, h1]).unwrap();
+        let total_work = verify_pow_header_chain_json(
+            chain_id::HYBRID_TESTNET,
+            chain_json,
+            Some(1_700_000_010_000),
+        )
+        .unwrap();
+        let w0: u128 = v0.work.parse().unwrap();
+        let w_total: u128 = total_work.parse().unwrap();
+        assert_eq!(w_total, w0 * 2);
+        let _ = h1_json;
     }
 }
