@@ -260,6 +260,60 @@ pub fn sign_transfer_hd(
     Ok(raw_hex)
 }
 
+/// Sign a contract call using an HD-derived account key.
+/// Uses sighash tag `4` and wire index `6` (`TransactionKind::Call`).
+/// Returns broadcast hex with no `0x` prefix.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn sign_call_hd(
+    keystore_json: String,
+    passphrase: String,
+    bip39_passphrase: String,
+    account_index: u32,
+    contract_address: String,
+    method: String,
+    args_hex: String,
+    value: u64,
+    gas_limit: u64,
+    fee: u64,
+    nonce: u64,
+    chain_id: u64,
+) -> Result<String, LightFfiError> {
+    if method.trim().is_empty() {
+        return Err(failed("method must not be empty"));
+    }
+    let passphrase = SecretString::new(passphrase);
+    let bip39_passphrase = SecretString::new(bip39_passphrase);
+    let keystore = parse(keystore_json.as_bytes()).map_err(failed)?;
+    let vault =
+        kovanica_wallet_core::keystore_vault::VaultPayload::decrypt(&keystore, passphrase.as_str())
+            .map_err(failed)?;
+    let account = vault
+        .to_account(bip39_passphrase.as_str(), account_index)
+        .map_err(failed)?;
+
+    let contract = parse_address(&contract_address, chain_id)?;
+    let args = if args_hex.trim().is_empty() {
+        Vec::new()
+    } else {
+        parse_hex_bytes(&args_hex, "args")?
+    };
+    let tx = sign_call(
+        chain_id,
+        &account.signing_key,
+        account.address,
+        nonce,
+        fee,
+        contract,
+        value,
+        method.trim().to_string(),
+        args,
+        gas_limit,
+    );
+    let raw = bincode::serialize(&tx).map_err(failed)?;
+    Ok(hex::encode(raw))
+}
+
 /// Lock the session (memory clearing barrier).
 #[uniffi::export]
 pub fn lock() {

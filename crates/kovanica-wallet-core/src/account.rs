@@ -87,6 +87,37 @@ impl WalletAccount {
         tx.signature = sign(&self.signing_key, &tx.hash.0);
         tx
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_call(
+        &self,
+        ctx: &SigningContext,
+        contract: Address,
+        value: u64,
+        method: String,
+        args: Vec<u8>,
+        gas_limit: u64,
+        nonce: u64,
+        fee: u64,
+    ) -> Transaction {
+        let mut tx = Transaction {
+            sender: self.address,
+            nonce,
+            kind: TransactionKind::Call {
+                contract,
+                value,
+                method,
+                args,
+                gas_limit,
+            },
+            fee,
+            signature: Signature([0u8; 64]),
+            hash: Hash([0u8; 32]),
+        };
+        tx.hash = tx.signing_hash(ctx);
+        tx.signature = sign(&self.signing_key, &tx.hash.0);
+        tx
+    }
 }
 
 pub struct Wallet {
