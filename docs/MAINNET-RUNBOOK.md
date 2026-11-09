@@ -36,13 +36,13 @@ Verify that the binary under execution enforces the frozen parameters defined in
 | **Decimals** | `9` (1 atom = $10^{-9}$ KUNA) | `ONE_KUNA = 1_000_000_000` |
 | **Founder Premine** | `200,000 KUNA` | `FOUNDER_PREMINE = 200_000 * 10^9` |
 | **Treasury Allocation** | `8,000,000 KUNA` | Linear 8-year vesting (1M KUNA/year) |
-| **Genesis Validator Pool** | `1,000,000 KUNA` | Split evenly across 15–20 genesis validators |
-| **Mining Subsidy Budget** | `81,000,000 KUNA` | $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M}$ |
-| **Initial Block Reward** | `2.5 KUNA` | $2.5 \times 10^9$ atoms per committed leader |
+| **Genesis Validator Pool** | `1,000,000 KVNC` | Split evenly across bootstrap seed nodes (1..=20) |
+| **Mining Subsidy Budget** | `81,000,000 KVNC` | $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M}$ |
+| **Initial Block Reward** | `2.5 KVNC` | $2.5 \times 10^9$ atoms per committed block |
 | **Subsidy Era Length** | `8,100,000 blocks` | Multiplied by $3/4$ decay each era |
-| **Minimum Validator Stake** | `50,000 KUNA` | `MIN_VALIDATOR_STAKE = 50_000 * 10^9` |
-| **Minimum Delegation** | `50,000 KUNA` | `MIN_DELEGATION = 50_000 * 10^9` |
-| **Genesis Committee Size** | `15` to `20` validators | `MIN_ACTIVE_VALIDATORS = 15` |
+| **Minimum Validator Stake** | `50,000 KVNC` | `MIN_VALIDATOR_STAKE = 50_000 * 10^9` |
+| **Minimum Delegation** | `50,000 KVNC` | `MIN_DELEGATION = 50_000 * 10^9` |
+| **Genesis Bootstrap Seeds** | `1` to `20` nodes | `3–5` seeds recommended for public launch |
 | **Epoch Duration** | `7,200` rounds (~8 hours) | `EPOCH_ROUNDS = 7_200` |
 | **Unbonding Cooldown** | `100,000` leader blocks | ~13.9 days at 12 s/leader |
 | **Slashing Penalty** | `500 bps (5%)` | Equivocation evidence verification |
@@ -161,7 +161,7 @@ For Mainnet, the tag is formatted as `1-<16 hex chars>`. Nodes with mismatched n
 
 1. **Target Time:** Agree on a precise UTC timestamp $T_0$ (e.g. `2026-11-25 12:00:00 UTC`).
 2. **Seed Startup ($T_0 - 15\text{m}$):** Boot seeds 1, 2, and 3 with clean data directories.
-3. **Validator Startup ($T_0$):** All 15–20 validators start `kovanica-node` simultaneously via systemd:
+3. **Node & Miner Startup ($T_0$):** Bootstrap seed nodes and mining nodes start `kovanica-node` simultaneously via systemd:
    ```bash
    systemctl start kovanica-node
    journalctl -u kovanica-node -f
@@ -333,8 +333,8 @@ In the event of catastrophic data corruption on a single validator:
 
 ## 8. Post-Launch Operational Checklist
 
-- [ ] All 15–20 genesis validators online and committing leaders.
-- [ ] Block height steadily increasing with ~12 s interval.
+- [ ] Bootstrap seed nodes online and discovery mesh established.
+- [ ] Block height steadily increasing with 4 s target block interval (Hybrid PoW + GHOSTDAG).
 - [ ] Network tag matching across all nodes (`1-<16 hex chars>`).
 - [ ] Zero unhandled errors in Prometheus alerts (`ops/prometheus/alerts.yml`).
 - [ ] JSON-RPC rate limits active and CORS headers restricted on public endpoints.
