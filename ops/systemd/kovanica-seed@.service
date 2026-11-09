@@ -1,0 +1,44 @@
+[Unit]
+Description=Kovanica Seed Node (seed%i)
+Documentation=https://github.com/KovanicaDAG/kovanica
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kovanica
+Group=kovanica
+WorkingDirectory=/var/lib/kovanica-seed%i
+
+# Specific seed instance environment file
+EnvironmentFile=-/etc/kovanica/seed%i.env
+
+ExecStart=/usr/local/bin/kovanica-node
+
+Restart=always
+RestartSec=15
+LimitNOFILE=65536
+
+# Resource budget conforming to 2-4 GB VPS footprint
+MemoryMax=3G
+MemoryAccounting=yes
+
+# Sandboxing and security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/kovanica-seed%i
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
