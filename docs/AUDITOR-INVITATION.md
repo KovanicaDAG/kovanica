@@ -1,72 +1,58 @@
-# Poziv za eksternu reviziju — kovanica (f2b05bf / 025ee12)
+# Poziv za eksternu reviziju — kovanica
 
-Status: **interne verifikacija završena** (`AUDIT_REPORT.md`, `docs/AUDIT-CHECKLIST.md`); eksterni audit **nije izvršen** — potreban za bilo kakvu glavnu mrežu (mainnet) ili izdanje.
+Status: **Interna verifikacija i specifikacija završena** (`docs/AUDIT-SCOPE.md`, `docs/AUDIT-CHECKLIST.md`); eksterni audit **nije izvršen** — obavezan prije mainnet $T_0$ lansiranja.
 
 Identitet projekta: **kovanica** (nezavisni Rust Layer-1, od-scratch; NE kovanica-protocol, NE stariji Kovanica repo).
-Koordinat: `main` branch (`025ee12`, `4f3100f`, `76e52db`, `319427e`).
-Datum poziva: 2026-10-09.
+Repozitorij: `https://github.com/KovanicaDAG/kovanica` (`main` branch).
+Datum poziva: 2026-11-09.
 
 ---
 
-## Što je već provjereno (interno — PASS s napomenama)
+## 1. Arhitektonske osnove (zaključano Toni 2026-11-05)
 
-Referiraj `AUDIT_REPORT.md` (§2, §3, §4) i `docs/AUDIT-CHECKLIST.md`.
-
-| Područje | Status | Ključni dokaz (file / redak) |
-|---|---|---|
-| Tokenomics / cap | PASS | `docs/GOVERNANCE.md`; `crates/kovanica-staking/src/lib.rs:68` (`MIN_VALIDATOR_STAKE`); `engine.rs` (`leader_timeout_ms: 3000`, era 8 100 000, s₀ 2,5 KUNA) |
-| Konsenzus (Mysticeti, uncertified, wave=3, k=3) | PASS (struktura) | `crates/kovanica-consensus/src/engine.rs`; `crates/kovanica-dag/src/dag_store.rs` |
-| Izvođenje (Wasmi, determinističko) | PASS (kostur) | `docs/EXECUTION-GAS-SKELETON.md`; `crates/kovanica-execution/src/lib.rs` — **potrebna dublja revizija plin/metrike** |
-| Staking / valjani skup | PASS | `docs/A8.2-DELEGATION-SKELETON.md`; `crates/kovanica-staking/src/lib.rs` (`bond`/`unbond`/`commission_bps`/`UNBONDING_ROUNDS`) |
-| Kripto (Ed25519, 64-byte sig, 128 hex) | PASS | `kovanica-crypto` — **potreban formalni audit kripto korektnosti** |
-| P2P / mreža (libp2p TCP+Noise+Yamux, gossip) | PASS (struktura) | `crates/kovanica-network/src/behaviour.rs` + `service.rs` — **potrebna revizija otpornosti na Sybil/eclipse** |
-| CLI / novčanik / HTLC | PASS (kostur) | `crates/kovanica-cli/src/main.rs`; `docs/A8.2-DELEGATION-SKELETON.md` — delegate deferred Phase 18 |
-| Env / sigurnost | PASS | `AGENTS.md` (§ Hard Safety & Process Rules); `docs/AUDIT-CHECKLIST.md` (§3); `ALLOW_RESET=0`, `MINE=0`, `OPERATOR=0` |
-| Seed / DNS | **GAP — otvoren** | `docs/SEED-DNS-AUDIT.md`; kod **nema** hardkodiranih seedova (`bootstrap_nodes: Vec::new()`); 3+ kovanica-native DNS imena još nisu registrirana |
-| Live endpoint | **N/A (jos nema javnog endpointa)** | `/api/bootstrap` se verificira protiv vlastitog kovanica nodea; tuđi endpointi se ne koriste |
+- **Konsenzus:** Hibridni PoW + GHOSTDAG (`TARGET_BLOCK_MS = 4000`, `GHOSTDAG_K = 5`). **BEZ uloga (stake) u konsenzusnom putu.**
+- **PoW algoritam:** **KovanicaHash** (BLAKE3 + 2 MiB memorijski mix scratchpad; memorijski zahtjevan, otporan na ASIC ubrzanja, deterministička verifikacija).
+- **Izvršavanje:** Wasmi deterministički WebAssembly engine s mjerenjem goriva (fuel/gas metering) i memorijskim limitom od 16 stranica (1 MiB).
+- **Tokenomika:** Nativni coin **KVNC** (9 decimala, tvrdi limit **90 200 000 KVNC**, početna nagrada bloka 2,5 KVNC s decay-om $\times \frac{3}{4}$ svakih 8 100 000 visina).
+- **Adrese:** PRO-21 kanonski format: `kvnc` + 57 base32 znakova (bech32 abeceda) + `dag` = 64 znaka. Hex adrese strogo zabranjene na mainnetu (`chain_id = 1`).
 
 ---
 
-## Što eksterni auditor mora provjeriti (prioriteti)
+## 2. Što eksterni auditor mora provjeriti (prioriteti)
 
-### P0 — konsenzus i sigurnost (blokira glavnu mrežu)
-1. **Uncertified DAG (Mysticeti, wave=3)**: provjeriti `kovanica-consensus/src/engine.rs` i `kovanica-dag/src/block_manager.rs` za ispravnost `CommittedSubDag` pravila i odsutnost certifikata; potvrditi da nema regresije na `k=3`.
-2. **WASMI deterministički izvršavanje**: `kovanica-execution/src/lib.rs` + `kovanica-runtime` — potvrditi da svaki ugovor (HTLC, Vault, Multisig, Token) daje identičan rezultat na istom ulazu; provjeriti plin (gas) metering (`docs/EXECUTION-GAS-SKELETON.md`).
-3. **Tokenomics invarijante**: tvrdi cap 90 200 000 KUNA (`9_020_000_000_000_000` atoma); `subsidy / 500_000` fee floor; 75% burn / 25% producer; maturity 100 blokova (`docs/AUDIT-CHECKLIST.md` §2).
-4. **Ed25519 kripto**: `kovanica-crypto` — formalni pregled (key derivation, address format, replay protection, signature verification). Ključevi moraju ostati isključivo klijentski (`node` ne prima `seed` ili `private_key`).
+### P0 — Konsenzus, PoW i otpornost na DoS (blokira Mainnet $T_0$)
+1. **KovanicaHash PoW algoritam**: `crates/kovanica-crypto/src/pow.rs` — determinizam na svim arhitekturama (x86_64, aarch64), otpornost na kolizije, 2 MiB memory scratchpad profil.
+2. **GHOSTDAG K=5 committer**: `crates/kovanica-consensus/` i `crates/kovanica-dag/` — deterministički linearni poredak blokova, blue set kalkulacija, mergeset evaluacija.
+3. **DAA (Difficulty Adjustment Algorithm)**: stabilnost prilagodbe težine za ciljano vrijeme bloka od 4 s, otpornost na manipulaciju vremenskim oznakama (timestamp warping).
+4. **Edge Anti-DoS ulazna validacija**: `validate_pow_target` — provjera ciljne težine (target) prije propagacije kroz gossip i prije zapisa u bazu (DAG store).
+5. **Wasmi determinističko izvršavanje**: `crates/kovanica-execution/` + `crates/kovanica-runtime/` — determinističko oduzimanje goriva, limit od 16 stranica memorije (1 MiB), sigurno rukovanje trap-ovima i zaštita od reentrancy napada.
 
-### P1 — P2P, mreža, otpornost (blokira testnet stabilnost)
-5. **P2P (libp2p: TCP + Noise + Yamux)**: `kovanica-network/src/behaviour.rs` + `service.rs`; provjeriti `bootstrap_nodes` (bez hardkodiranih tuđih hostova), PeerId podudaranje, gossip scoring/ban pravila i `3+` DNS redundanciju za vlastiti kovanica testnet.
-6. **P2P port**: kovanica koristi **8000** (vlastita odluka, potvrđeno u `config.rs`/`network/src/lib.rs`); uskladiti `docs/`, `env` i `ops/deploy/`. Tuđi endpointi se ne koriste.
-7. **Eclipse / Sybil otpornost**: provjeriti `peer` ograničenja, `ping` timeout, `ban` pravila (`service.rs` linije 33–40); preporuka: dodati eksplicitnu `Sybil` / `eclipse` simulaciju.
+### P1 — Tokenomika, kriptografija i adrese (blokira Mainnet $T_0$)
+6. **Tokenomics invarijante**: tvrdi cap 90 200 000 KVNC; 2,5 KVNC nagrada po potvrđenom bloku; raspodjela proračuna (81M rudarenje, 8M riznica, 1M genesis validatori, 0,2M premine). Zabrana `funded_accounts.toml` na mainnetu (`chain_id = 1`).
+7. **Ed25519 kripto & PRO-21 adrese**: `crates/kovanica-crypto/` — striktna verifikacija potpisa (`dalek v2.1`), provjera kanonskog $S$, odbijanje slabih ključeva. Kanonski PRO-21 64-znakovni format (`kvnc...dag`) s 29-bitnim BLAKE3 kontrolnim zbrojem.
+8. **Keystore v2**: `crates/kovanica-keystore/` — Argon2id enkripcija, radna memorija se čisti (`zeroize`), sigurne dozvole datoteka (`0600`).
 
-### P2 — staking, upravljanje, operacija (blokira Phase 18 / 25)
-8. **Staking ekonomija**: `crates/kovanica-staking/src/lib.rs` — `bond`/`unbond`/`commission`/`slash` pravila; potvrditi da `MIN_VALIDATOR_STAKE = 50_000 KUNA` i `UNBONDING_ROUNDS` ne dozvoljavaju napade na aktivni skup (15–21).
-9. **Governance (Phase 25)**: `docs/GOVERNANCE.md` + `docs/archive/B-TREASURY-PROPOSAL.md` — provjeriti da `TreasuryProposal` i `vote_on_proposal()` ne mijenjaju konsenzus pravila (trenutno `docs-only` / `client-only`); aktivacija tek nakon Phase 18.
-10. **CLI delegate / claim**: `kovanica-cli/src/main.rs` (`delegate_skeleton`, `claim_rewards_skeleton`); potvrditi da `HTLC` claim (`A8.2-DELEGATION-SKELETON.md`) ne uvodi neodređenost.
-
----
-
-## Što auditor treba dostaviti (izlaz)
-
-- Pismeni izvještaj s klasifikacijom nalaza: `BLOCKER` / `CRITICAL` / `WARNING` / `PASS`.
-- Za svaki `BLOCKER` / `CRITICAL`: konkretan redak (`file:line`), opis, predložena popravka, verifikacija popravka.
-- Potvrda da `tokenomics` (90.2 M cap, decay, maturity, fee split) ne može biti narušena kodom ili konfiguracijom.
-- Potvrda da `Wasmi` izvršavanje je determinističko za sve ugovore (`HTLC`, `Vault`, `Multisig`, `Token`).
-- Potvrda da `P2P` ne sadrži `libp2p` ovisnost koja bi mogla uvesti nepredvidljivo ponašanje; ako postoji — dokumentirati i opravdati.
-- Potvrda `DNS` / `seed` redundancije (`3+` kovanica-native imena) i kanonskog P2P porta **8000**.
-- Potpis i datum; preporuka za `mainnet readiness` (da / ne / uvjetno s popisom uvjeta).
+### P2 — P2P mreža i otpornost na napade (blokira mrežnu stabilnost)
+9. **P2P transport & Gossipsub**: `crates/kovanica-network/` — kanonski port **8000**, TCP + Noise + Yamux; ocjenjivanje peer-ova (peer scoring), otpornost na Sybil i eclipse napade.
+10. **DNS seed redundantnost**: grey-cloud razrješenje (bez Cloudflare proxyja) za `testnet.kovanica.online` i `seed1/2/3.kovanica.online`.
+11. **Sistemska izolacija (Systemd sandboxing)**: `ops/systemd/kovanica-node.service` (`MemoryMax=3G`, `ProtectSystem=strict`, sistemski filtri) za siguran rad unutar 2–4 GB RAM budžeta.
 
 ---
 
-## Rok i kontakt
+## 3. Što auditor treba dostaviti (izlaz)
 
-- Preporučeni rok revizije: **2 tjedna** nakon primanja ovog poziva.
-- Materijal za pregled: ovaj repo (`kovanica`), `docs/AUDIT-CHECKLIST.md`, `AUDIT_REPORT.md`, `docs/GOVERNANCE.md`, `docs/archive/B-TREASURY-PROPOSAL.md`, `docs/GAS_SCHEDULE.md`, `crates/kovanica-staking/src/lib.rs`, `crates/kovanica-consensus/src/engine.rs`, `crates/kovanica-execution/src/lib.rs`.
-- Koordinacija: `kovanica-specialist` (interne); eksterni auditor mora biti neovisan (nema veze s `kovanica-protocol` ili starijim Kovanica repo-ima).
+- Pismeni izvještaj s klasifikacijom nalaza: `CRITICAL` / `HIGH` / `MEDIUM` / `LOW` / `INFORMATIONAL`.
+- Za svaki nalaz: točna lokacija (`file:line`), opis prijetnje, predloženi popravak, verifikacija.
+- Potvrda da tvrdi cap tokenomike (90.2M KVNC) i raspodjela nagrada ne mogu biti narušeni.
+- Potvrda da je Wasmi izvršavanje determinističko i memorijski izolirano.
+- Potvrda da je KovanicaHash determinističan i memorijski zahtjevan.
+- Preporuka za spremnost za mainnet (`Mainnet Readiness`: DA / NE / UVJETNO).
 
 ---
 
-## Izjava (interno)
+## 4. Kontakt i koordinacija
 
-Ovaj poziv ne predstavlja angažman — samo poziv za reviziju. Eksterni auditor mora potpisati vlastiti izvještaj; `kovanica` projekt ne preuzima odgovornost za nalaze eksternog auditora dok isti nije formalno prihvaćen. Svi kodni i dizajn odluke ostaju unutar `kovanica` i konzistentni su s `AGENTS.md`.
+- Repozitorij: `https://github.com/KovanicaDAG/kovanica`
+- Dokumentacija opsega revizije: [`docs/AUDIT-SCOPE.md`](AUDIT-SCOPE.md)
+- Kontrolna lista: [`docs/AUDIT-CHECKLIST.md`](AUDIT-CHECKLIST.md)
+- Eksterni auditor mora biti neovisan i potpisati vlastiti izvještaj.
