@@ -104,6 +104,24 @@ impl Storage {
     pub fn begin_write(&self) -> Result<WriteTransaction, StorageError> {
         self.db.begin_write().map_err(StorageError::Transaction)
     }
+
+    /// Prune both block store and consensus DAG tables strictly below `cutoff_round`
+    /// for mobile / resource-constrained nodes.
+    ///
+    /// Preserves the state store, genesis digest, policy, and accounts, but drops
+    /// older DAG links, parent-child edges, and block bodies to keep disk footprint bounded.
+    pub fn prune_history_below(&self, cutoff_round: u64) -> Result<(u64, u64), StorageError> {
+        let txn = self.begin_write()?;
+        let pruned_blocks = self.block_store.prune_below(&txn, cutoff_round)?;
+        let pruned_dag = if cutoff_round > 0 {
+            self.consensus_store.prune_dag_below(&txn, cutoff_round - 1)?
+        } else {
+            0
+        };
+        let _ = self.consensus_store.prune_votes_below(&txn, cutoff_round, 10_000)?;
+        txn.commit().map_err(StorageError::Commit)?;
+        Ok((pruned_blocks, pruned_dag))
+    }
 }
 
 /// Errors that can occur in storage operations.
@@ -359,6 +377,68 @@ mod tests {
             let restored = state.get_account(&txn, &addr).unwrap();
             assert_eq!(restored.balance, 1000);
             assert_eq!(restored.nonce, 3);
+        }
+    }
+
+    #[test]
+    fn test_mobile_prune_history_below() {
+        use kovanica_types::block::StatementBlock;
+        use kovanica_types::crypto::Signature;
+        use kovanica_types::hash::Hash;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("mobile_prune.db");
+        let storage = Storage::new(&db_path).unwrap();
+
+        // Populate blocks and DAG from round 1 to 10
+        {
+            let txn = storage.begin_write().unwrap();
+            for round in 1..=10 {
+                let digest = StatementBlock::compute_digest(0, round, &[], &[]);
+                let block = StatementBlock {
+                    author: 0,
+                    round,
+                    parents: vec![],
+                    transactions: vec![],
+                    statements: vec![],
+                    signature: Signature([0; 64]),
+                    digest,
+                    merkle_root: Hash::zero(),
+                };
+                storage.blocks().put_block(&txn, &block, &[]).unwrap();
+                storage.consensus().put_dag_block(&txn, &block).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+
+        // Verify all 10 blocks are present
+        {
+            let read = storage.begin_read().unwrap();
+            for round in 1..=10 {
+                let digest = StatementBlock::compute_digest(0, round, &[], &[]);
+                assert!(storage.blocks().get_block_by_height(&read, round).unwrap().is_some());
+                assert!(storage.consensus().get_dag_block(&read, &digest).is_ok());
+            }
+        }
+
+        // Prune history below round 6 (keeps rounds 6..=10)
+        let (pruned_blocks, pruned_dag) = storage.prune_history_below(6).unwrap();
+        assert_eq!(pruned_blocks, 5);
+        assert_eq!(pruned_dag, 5);
+
+        // Verify rounds 1..5 are gone, 6..10 remain
+        {
+            let read = storage.begin_read().unwrap();
+            for round in 1..6 {
+                let digest = StatementBlock::compute_digest(0, round, &[], &[]);
+                assert!(storage.blocks().get_block_by_height(&read, round).unwrap().is_none());
+                assert!(storage.consensus().get_dag_block(&read, &digest).is_err());
+            }
+            for round in 6..=10 {
+                let digest = StatementBlock::compute_digest(0, round, &[], &[]);
+                assert!(storage.blocks().get_block_by_height(&read, round).unwrap().is_some());
+                assert!(storage.consensus().get_dag_block(&read, &digest).is_ok());
+            }
         }
     }
 }
