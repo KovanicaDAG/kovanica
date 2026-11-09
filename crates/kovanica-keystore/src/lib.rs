@@ -412,7 +412,13 @@ fn validate_metadata(ks: &Keystore) -> Result<()> {
                 bail!("v2 identity fields must use canonical `kvnc…dag` or lowercase hex");
             }
             let ciphertext = decode_secret(&ks.secret_key)?;
-            if ciphertext.len() != CIPHERTEXT_LEN {
+            // Legacy 32-byte seed + 16-byte Poly1305 tag = 48 bytes.
+            // HD v2 12-word entropy envelope (1 + 1 + 16) + 16-byte tag = 34 bytes.
+            // HD v2 24-word entropy envelope (1 + 1 + 32) + 16-byte tag = 50 bytes.
+            if ciphertext.len() != CIPHERTEXT_LEN
+                && ciphertext.len() != 18 + 16
+                && ciphertext.len() != 34 + 16
+            {
                 bail!("malformed v2 ciphertext length");
             }
             let _ = (salt, nonce);

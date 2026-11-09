@@ -3,12 +3,17 @@ Description=Kovanica Node Daemon
 Documentation=https://github.com/KovanicaDAG/kovanica
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=kovanica
 Group=kovanica
+UMask=0027
 WorkingDirectory=/var/lib/kovanica
+StateDirectory=kovanica
+ConfigurationDirectory=kovanica
 
 # Load environment configuration overrides
 EnvironmentFile=-/etc/kovanica/kovanica.env
@@ -27,16 +32,24 @@ MemoryAccounting=yes
 # Sandboxing and security hardening
 NoNewPrivileges=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/kovanica
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
+ProtectKernelLogs=yes
 ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
 LockPersonality=yes
+MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM

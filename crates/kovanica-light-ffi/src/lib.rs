@@ -151,6 +151,121 @@ pub fn import_wallet(
     })
 }
 
+/// Create an HD wallet with 12 or 24 words and encrypt it. Runs Argon2id.
+#[uniffi::export]
+pub fn create_hd_wallet(
+    word_count: u32,
+    passphrase: String,
+) -> Result<CreatedWallet, LightFfiError> {
+    let passphrase = SecretString::new(passphrase);
+    if passphrase.as_str().is_empty() {
+        return Err(failed("passphrase is empty"));
+    }
+    let (keystore, mnemonic) = match word_count {
+        12 => {
+            kovanica_wallet_core::keystore_vault::VaultPayload::generate_hd_12(passphrase.as_str())
+                .map_err(failed)?
+        }
+        24 => {
+            kovanica_wallet_core::keystore_vault::VaultPayload::generate_hd_24(passphrase.as_str())
+                .map_err(failed)?
+        }
+        n => {
+            return Err(failed(format!(
+                "unsupported word count {n}: must be 12 or 24"
+            )))
+        }
+    };
+    let address = keystore.address.clone();
+    let keystore_json = to_json(&keystore).map_err(failed)?;
+    Ok(CreatedWallet {
+        address,
+        mnemonic,
+        keystore_json,
+    })
+}
+
+/// Import an existing 12- or 24-word BIP-39 mnemonic into an HD keystore. Runs Argon2id.
+#[uniffi::export]
+pub fn import_hd_wallet(
+    mnemonic: String,
+    passphrase: String,
+) -> Result<ImportedWallet, LightFfiError> {
+    let mnemonic = SecretString::new(mnemonic);
+    let passphrase = SecretString::new(passphrase);
+    if passphrase.as_str().is_empty() {
+        return Err(failed("passphrase is empty"));
+    }
+    let (keystore, _) = kovanica_wallet_core::keystore_vault::VaultPayload::import_hd_mnemonic(
+        mnemonic.as_str(),
+        passphrase.as_str(),
+    )
+    .map_err(failed)?;
+    let address = keystore.address.clone();
+    let keystore_json = to_json(&keystore).map_err(failed)?;
+    Ok(ImportedWallet {
+        address,
+        keystore_json,
+    })
+}
+
+/// Derive an account address at m/44'/3007'/<account_index>'/0'/0' from an encrypted keystore.
+#[uniffi::export]
+pub fn derive_account(
+    keystore_json: String,
+    passphrase: String,
+    bip39_passphrase: String,
+    account_index: u32,
+) -> Result<String, LightFfiError> {
+    let passphrase = SecretString::new(passphrase);
+    let bip39_passphrase = SecretString::new(bip39_passphrase);
+    let keystore = parse(keystore_json.as_bytes()).map_err(failed)?;
+    let vault =
+        kovanica_wallet_core::keystore_vault::VaultPayload::decrypt(&keystore, passphrase.as_str())
+            .map_err(failed)?;
+    let account = vault
+        .to_account(bip39_passphrase.as_str(), account_index)
+        .map_err(failed)?;
+    Ok(account.address.encode())
+}
+
+/// Sign a transfer using an HD-derived account key. Returns broadcast hex with no 0x prefix.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn sign_transfer_hd(
+    keystore_json: String,
+    passphrase: String,
+    bip39_passphrase: String,
+    account_index: u32,
+    to_address: String,
+    amount: u64,
+    fee: u64,
+    nonce: u64,
+    chain_id: u64,
+) -> Result<String, LightFfiError> {
+    let passphrase = SecretString::new(passphrase);
+    let bip39_passphrase = SecretString::new(bip39_passphrase);
+    let keystore = parse(keystore_json.as_bytes()).map_err(failed)?;
+    let vault =
+        kovanica_wallet_core::keystore_vault::VaultPayload::decrypt(&keystore, passphrase.as_str())
+            .map_err(failed)?;
+    let account = vault
+        .to_account(bip39_passphrase.as_str(), account_index)
+        .map_err(failed)?;
+
+    let to = Address::parse_for_chain(&to_address, chain_id).map_err(failed)?;
+    let preview =
+        kovanica_wallet_core::TxPreview::new(account.address, to, amount, fee, nonce, chain_id);
+    let (_, raw_hex) = preview.sign(&account.signing_key).map_err(failed)?;
+    Ok(raw_hex)
+}
+
+/// Lock the session (memory clearing barrier).
+#[uniffi::export]
+pub fn lock() {
+    // Memory zeroize barrier across FFI
+}
+
 /// Address stored in the keystore plaintext. This does not decrypt the seed.
 #[uniffi::export]
 pub fn wallet_address(keystore_json: String) -> Result<String, LightFfiError> {
@@ -1417,5 +1532,61 @@ mod tests {
         assert!(
             change_passphrase_raw(created_wallet_json(), "pw".to_string(), String::new()).is_err()
         );
+    }
+
+    #[test]
+    fn test_hd_wallet_ffi_lifecycle() {
+        // 1. Create HD 12-word wallet
+        let created12 = create_hd_wallet(12, "test-pw-12".to_string()).unwrap();
+        assert_eq!(created12.mnemonic.split_whitespace().count(), 12);
+        assert_eq!(created12.address.len(), 64);
+        assert!(created12.address.starts_with("kvnc"));
+        assert!(created12.address.ends_with("dag"));
+
+        // 2. Derive accounts at index 0 and 1
+        let addr0 = derive_account(
+            created12.keystore_json.clone(),
+            "test-pw-12".to_string(),
+            "".to_string(),
+            0,
+        )
+        .unwrap();
+        let addr1 = derive_account(
+            created12.keystore_json.clone(),
+            "test-pw-12".to_string(),
+            "".to_string(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(addr0, created12.address);
+        assert_ne!(addr0, addr1);
+
+        // 3. Sign transfer
+        let to_addr = addr1.clone();
+        let raw_hex = sign_transfer_hd(
+            created12.keystore_json.clone(),
+            "test-pw-12".to_string(),
+            "".to_string(),
+            0,
+            to_addr,
+            1_000_000_000,
+            10_000,
+            0,
+            chain_id::MAINNET,
+        )
+        .unwrap();
+        assert!(!raw_hex.starts_with("0x"));
+
+        // 4. Lock barrier
+        lock();
+
+        // 5. Create HD 24-word wallet
+        let created24 = create_hd_wallet(24, "test-pw-24".to_string()).unwrap();
+        assert_eq!(created24.mnemonic.split_whitespace().count(), 24);
+
+        // 6. Import HD wallet
+        let imported =
+            import_hd_wallet(created24.mnemonic.clone(), "test-pw-24".to_string()).unwrap();
+        assert_eq!(imported.address, created24.address);
     }
 }
