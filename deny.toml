@@ -40,3 +40,11 @@ allow = [
 allow = ["GPL-3.0-or-later"]
 name = "ecvrf"
 version = "0.4.3"
+
+[advisories]
+unmaintained = "none"
+unsound = "none"
+ignore = [
+    # RUSTSEC-2024-0344: timing variability in curve25519-dalek 3.2.0 via ecvrf 0.4.3
+    "RUSTSEC-2024-0344",
+]

@@ -14,7 +14,7 @@ Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full p
 
 ## Build / CI / ops
 
-- [ ] **CI move** — fmt/clippy/test + pinned gitleaks into `KovanicaDAG/kovanica-protocol` when frozen code lives there.
+- [x] **CI move** — automated CI pipeline established in `.github/workflows/ci.yml` and `scripts/ci-local.sh` (`fmt`, `lint_docs`, `clippy -D warnings`, `test`, `cargo deny` [licenses, bans, sources, advisories], `gitleaks` 8.24.3, `cargo audit`).
 - [x] **Escrow E0433** — `kovanica-escrow` wired into `kovanica-execution` (`contracts.rs`), merged in #163.
 - [ ] **VPS unit rename (live cutover)** — deployed VPS units still `kvnc-*` exporting `KVNC_*`; repo scripts/docs use `KOVANICA_*` and `${KOVANICA_ROOT:-/root/Projects/kovanica}`. Coordinate live unit+script+binary cutover with Seed Ops.
 - [x] **Checkout path (repo scripts/docs)** — replaced hard-coded `/root/Projects/kvnc` in seed scripts (`run-seed1.sh`, `testnet/run-seed*.sh`, `mainnet/run-seed*.sh`) and docs (`docs/TESTNET-SEED-NODES.md`, `docs/VALIDATOR-ONBOARDING.md`) with `${KOVANICA_ROOT:-/root/Projects/kovanica}` / `/root/Projects/kovanica`. Physical VPS directory rename remains part of live Seed Ops cutover.

@@ -47,6 +47,8 @@ function gate_fmt() {
     need "$CARGO"
     echo "== fmt: cargo fmt --all -- --check"
     "$CARGO" fmt --all -- --check
+    echo "== docs: python3 scripts/lint_docs.py"
+    python3 scripts/lint_docs.py
 }
 
 function gate_clippy() {
@@ -116,8 +118,8 @@ function gate_licenses() {
         echo "ERROR: cargo-deny not installed (cargo install cargo-deny --locked)" >&2
         exit 1
     fi
-    echo "== licenses: cargo deny check licenses (deny.toml)"
-    "$CARGO" deny check licenses
+    echo "== licenses & security: cargo deny check (deny.toml)"
+    "$CARGO" deny check
 }
 
 function gate_secrets() {

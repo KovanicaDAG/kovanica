@@ -41,11 +41,13 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 
 ## Open product gaps (not archived noise)
 
-1. CI move into `KovanicaDAG/kovanica-protocol` (fmt/clippy/test + pinned gitleaks).
-2. Ops drift (live fleet): VPS systemd units still `kvnc-*` / `KVNC_*`; DNS seed names for mainnet (`docs/SEED-DNS-AUDIT.md`).
-3. Governance (Phase 25), BIP32 HD, external audit, mainnet launch runbook — see root `TASKLIST.md`.
+1. Ops drift (live fleet cutover): VPS systemd units still `kvnc-*` / `KVNC_*` (cutover pending with Seed Ops per `TASKLIST.md`).
+2. External security review (formal audit of KovanicaHash and Wasmi sandbox; template: `docs/AUDIT_REPORT.template.md`, `docs/AUDIT-SCOPE.md`).
+3. Mainnet launch freeze sign-off and key distribution ceremony (15–20 genesis validators per `docs/KEY-CEREMONY.md` and `docs/MAINNET-FREEZE-CHECKLIST.md`).
 
 **Done / frozen, do not re-open as missing:**
+- Automated CI pipeline: fmt, clippy, doc lint, workspace tests, cargo-deny (licenses/advisories/bans/sources), gitleaks 8.24.3 (`.github/workflows/ci.yml`, `scripts/ci-local.sh`).
+- Governance (proposals and stake-weighted voting via `kovanica-cli` and `kovanica-staking`), BIP32 HD derivation (`kovanica-wallet-core`), soak harness (`ops/soak/`), DNS audit probe (`scripts/check-dns-seeds.sh`), and mainnet runbook (`docs/MAINNET-RUNBOOK.md`).
 - PRO-7 (Mysticeti VRF leader set + pin): **FROZEN** for hybrid.
 - Hybrid PoW + GHOSTDAG P1–P8 & Milestone M8 (PoW header primitives, preimages, target conversion, Chain ID 5 wiring, KovanicaHash BLAKE3+2MiB algorithm, header verification, CPU mining worker, DAA, P2P network anti-DoS ingress, GHOSTDAG k=5 committer, 2.5 KVNC reward minting, node miner loop, JSON-RPC getWork/submitWork/miningInfo/dagTips, CLI mining/dag commands, Prometheus metrics, live 3-node cluster integration test suite, faucet alignment, ops templates). Milestone M8 PASSED.
 - Contract SDK (`crates/kovanica-contract-sdk`) and Indexer (`crates/kovanica-indexer`).
