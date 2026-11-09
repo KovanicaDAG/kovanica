@@ -1602,25 +1602,26 @@ mod rss_metric_tests {
 
 /// A *genesis* set is bounded by money: every genesis validator locks
 /// `MIN_VALIDATOR_STAKE` out of `GENESIS_VALIDATOR_ALLOCATION`, so at most 20
-/// can be funded at genesis. There is no maximum number of active validators
-/// in steady state; anyone meeting `MIN_VALIDATOR_STAKE` may join.
+/// can be funded at genesis. Under Hybrid PoW + GHOSTDAG, consensus requires
+/// NO stake: blocks are mined via Proof-of-Work (KovanicaHash) and ordered
+/// via GHOSTDAG (K=5). Genesis validators serve as initial bootstrap seed nodes
+/// and stake holders, requiring at least 1 seed node and at most 20.
 ///
 /// Returns `(min, max)` for a mainnet genesis set.
+pub const MAINNET_GENESIS_VALIDATOR_MIN: usize = 1;
+pub const MAINNET_GENESIS_VALIDATOR_MAX: usize = (kovanica_staking::GENESIS_VALIDATOR_ALLOCATION
+    / kovanica_staking::MIN_VALIDATOR_STAKE)
+    as usize;
+
 fn mainnet_genesis_validator_bounds() -> (usize, usize) {
-    (
-        kovanica_staking::MIN_ACTIVE_VALIDATORS as usize,
-        (kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::MIN_VALIDATOR_STAKE)
-            as usize,
-    )
+    (MAINNET_GENESIS_VALIDATOR_MIN, MAINNET_GENESIS_VALIDATOR_MAX)
 }
 
-/// Mainnet genesis must start with a committee that can actually reach quorum.
+/// Mainnet genesis must start with at least one viable bootstrap validator,
+/// and cannot exceed what GENESIS_VALIDATOR_ALLOCATION can fund.
 ///
-/// Below `MIN_ACTIVE_VALIDATORS` the chain launches with a committee smaller
-/// than the protocol's own floor, and above the allocation-bound maximum the
-/// genesis split cannot fund every stake. Both are ceremony mistakes that are
-/// irreversible once genesis is written, so they are refused up front. Other
-/// chains are unaffected: testnet and local runs legitimately use 1–4 nodes.
+/// Under Hybrid PoW + GHOSTDAG, consensus requires NO stake, so the legacy
+/// 15-validator BFT quorum floor is retired in favor of a lean bootstrap set.
 fn ensure_mainnet_genesis_validator_count(chain_id: u64, count: usize) -> Result<()> {
     if chain_id != kovanica_types::signing::chain_id::MAINNET {
         return Ok(());
@@ -1628,10 +1629,10 @@ fn ensure_mainnet_genesis_validator_count(chain_id: u64, count: usize) -> Result
     let (min, max) = mainnet_genesis_validator_bounds();
     if count < min || count > max {
         anyhow::bail!(
-            "mainnet genesis has {count} validators but must have {min}..={max}: the active \
-             committee floor is {min}, and {max} is the most that GENESIS_VALIDATOR_ALLOCATION \
-             can fund at the {}-KUNA minimum stake. Fix the genesis validator set before writing \
-             genesis",
+            "mainnet genesis has {count} validators but must have {min}..={max}: under Hybrid \
+             PoW + GHOSTDAG at least {min} bootstrap seed node is required, and {max} is the \
+             most that GENESIS_VALIDATOR_ALLOCATION can fund at the {}-KVNC minimum stake. \
+             Fix the genesis validator set before writing genesis",
             kovanica_staking::MIN_VALIDATOR_STAKE / kovanica_staking::ONE_KUNA,
         );
     }
@@ -9852,18 +9853,17 @@ mod tests {
             Address(raw).encode()
         };
 
-        // Mainnet, 3 canonical addresses: refused for the count. Hex would be
-        // refused earlier, which would hide this check.
+        // Mainnet, 21 canonical addresses: refused for exceeding the allocation capacity (max 20).
         let dir = tempfile::tempdir().unwrap();
-        let mainnet_set: Vec<String> = (1..=3).map(indexed_canonical).collect();
+        let mainnet_set: Vec<String> = (1..=21).map(indexed_canonical).collect();
         write_set(dir.path(), chain_id::MAINNET, &mainnet_set);
         let config = chain_id_config(dir.path(), chain_id::MAINNET);
         let dag = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
         let state = Storage::new(dir.path().join("state.redb")).unwrap();
         let err =
-            init_genesis(&config, &dag, &state).expect_err("mainnet must refuse 3 validators");
+            init_genesis(&config, &dag, &state).expect_err("mainnet must refuse 21 validators");
         assert!(
-            err.to_string().contains("has 3 validators"),
+            err.to_string().contains("has 21 validators"),
             "unexpected error: {err}"
         );
         // Nothing was persisted: genesis was refused, not partially applied.
@@ -9873,7 +9873,7 @@ mod tests {
             "a refused genesis must not write staking state"
         );
 
-        // Chain 4, same count in legacy hex: accepted, and the validators are staked.
+        // Chain 4, 3 validators in legacy hex: accepted, and the validators are staked.
         let dir = tempfile::tempdir().unwrap();
         let testnet_set: Vec<String> = (1..=3).map(indexed_hex).collect();
         write_set(dir.path(), chain_id::TESTNET_V2, &testnet_set);
@@ -9890,31 +9890,28 @@ mod tests {
         );
     }
 
-    /// Mainnet genesis must start with a committee the protocol can actually
-    /// run: at least `MIN_ACTIVE_VALIDATORS`, and no more than the genesis
-    /// allocation can fund at the minimum stake. Testnets are exempt because
-    /// they legitimately run on one to four nodes.
+    /// Mainnet genesis bounds under Hybrid PoW + GHOSTDAG: at least 1 bootstrap
+    /// seed node, and at most 20 (capped by the 1M allocation funding 50k stake).
     #[test]
     fn mainnet_genesis_validator_count_is_bounded() {
         use kovanica_types::signing::chain_id;
 
         let (min, max) = mainnet_genesis_validator_bounds();
-        assert_eq!(min, kovanica_staking::MIN_ACTIVE_VALIDATORS as usize);
+        assert_eq!(min, MAINNET_GENESIS_VALIDATOR_MIN);
         assert_eq!(
             max,
             (kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::MIN_VALIDATOR_STAKE)
                 as usize,
             "the genesis set is capped by the allocation"
         );
-        // At genesis the 1M allocation can only back 20 staking the 50k minimum.
         assert_eq!(max, 20);
 
         // Mainnet: bounds are enforced at both ends.
-        for count in [min, 16, max] {
+        for count in [min, 3, 5, 16, max] {
             ensure_mainnet_genesis_validator_count(chain_id::MAINNET, count)
                 .unwrap_or_else(|e| panic!("{count} validators must be accepted: {e}"));
         }
-        for count in [0, 1, min - 1, max + 1] {
+        for count in [0, max + 1, 100] {
             let err = ensure_mainnet_genesis_validator_count(chain_id::MAINNET, count)
                 .expect_err("out-of-range mainnet set must be refused");
             assert!(
