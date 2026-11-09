@@ -41,7 +41,7 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 
 ## Open product gaps (not archived noise)
 
-1. Ops drift (live fleet cutover): VPS systemd units still `kvnc-*` / `KVNC_*` (cutover pending with Seed Ops per `TASKLIST.md`).
+1. Ops drift (live fleet cutover): VPS systemd units & migration script prepared in `ops/systemd/` and `scripts/cutover-vps-systemd.sh` (live cutover execution pending VPS Seed Ops deploy); DNS seed audit probe automated in `scripts/check-dns-seeds.sh` (`docs/SEED-DNS-AUDIT.md`).
 2. External security review (formal audit of KovanicaHash and Wasmi sandbox; template: `docs/AUDIT_REPORT.template.md`, `docs/AUDIT-SCOPE.md`).
 3. Mainnet launch freeze sign-off and key distribution ceremony (15–20 genesis validators per `docs/KEY-CEREMONY.md` and `docs/MAINNET-FREEZE-CHECKLIST.md`).
 
@@ -51,8 +51,3 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 - PRO-7 (Mysticeti VRF leader set + pin): **FROZEN** for hybrid.
 - Hybrid PoW + GHOSTDAG P1–P8 & Milestone M8 (PoW header primitives, preimages, target conversion, Chain ID 5 wiring, KovanicaHash BLAKE3+2MiB algorithm, header verification, CPU mining worker, DAA, P2P network anti-DoS ingress, GHOSTDAG k=5 committer, 2.5 KVNC reward minting, node miner loop, JSON-RPC getWork/submitWork/miningInfo/dagTips, CLI mining/dag commands, Prometheus metrics, live 3-node cluster integration test suite, faucet alignment, ops templates). Milestone M8 PASSED.
 - Contract SDK (`crates/kovanica-contract-sdk`) and Indexer (`crates/kovanica-indexer`).
-- Escrow E0433 (`kovanica-escrow` wired into `kovanica-execution/src/contracts.rs`, merged in #163).
-- PRO-20 / PRO-36 merged code (kept).
-- Vote signature **v2** (`KUNA/vote/v2` + `genesis_hash` in 106 B preimage; 74 B v1 retired).
-- Light-client checkpoint (`kovanica_lightClientCheckpoint` state-backed lookup in `kovanica-rpc`).
-- PRO-40 late-leader rule: union-quorum commit with non-overlapping timeout stake above the skip-complement floor.
