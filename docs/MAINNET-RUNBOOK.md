@@ -1,7 +1,7 @@
 # Kovanica Mainnet Launch & Operations Runbook
 
 > **Network ID:** `1` (`MAINNET`)  
-> **Native Ticker:** **KUNA** (9 decimals: $1\text{ KUNA} = 10^9\text{ atoms}$)  
+> **Native Ticker:** **KVNC** (9 decimals: $1\text{ KVNC} = 10^9\text{ atoms}$, legacy alias `KUNA`)  
 > **Canonical Address Format:** PRO-21 base32 (`kvnc<57 base32>dag`, exactly 64 characters)  
 > **Status:** Normative Operational Runbook for Mainnet Genesis & Node Operations  
 > **Consensus Impact:** Client and Operational only; strictly conforms to frozen consensus and tokenomics specifications.
@@ -13,8 +13,8 @@
 This runbook defines the end-to-end operational protocol for launching, validating, monitoring, and maintaining the **Kovanica Mainnet** (Chain ID `1`). 
 
 ### Core Architectural Targets
-- **Consensus Engine:** Mysticeti-style uncertified DAG with wave length `WAVE_LENGTH = 3` DAG rounds (Leader $\to$ Vote $\to$ Decide) and direct $2f+1$ quorum threshold.
-- **Block Timing:** Target consensus round duration `4,000 ms` (4 s), committing a leader block every `12 s` (`LEADER_INTERVAL_SECS = 12`).
+- **Consensus Engine:** Hybrid PoW + GHOSTDAG (target block duration 4 s (`TARGET_BLOCK_MS = 4000`), GHOSTDAG parameter $K=5$, PoW Hash: KovanicaHash; NO stake in consensus path; legacy Mysticeti-C wave length `WAVE_LENGTH = 3` and 12 s leader commitment remain preserved in codebase).
+- **Block Timing:** Target block time `4,000 ms` (4 s), with GHOSTDAG $K=5$ topological transaction ordering.
 - **Resource Footprint:** Standard commodity hardware and VPS instances: 2–4 GB RAM, 2 vCPU cores, 50 GB NVMe SSD.
 - **P2P Networking:** Plaintext TCP on port **8000** over `libp2p` with Noise encryption and Yamux multiplexing.
 - **RPC & Metrics:** JSON-RPC / WebSocket on ports **8545** / **8546**, Prometheus metrics on port **9100**.
@@ -32,10 +32,10 @@ Verify that the binary under execution enforces the frozen parameters defined in
 | Parameter | Mainnet Invariant | Code Source / Check |
 |---|---|---|
 | **Chain ID** | `1` (`MAINNET`) | `crates/kovanica-params/src/lib.rs` |
-| **Total Supply Ceiling** | `90,200,000 KUNA` | `TOTAL_SUPPLY = 90_200_000 * 10^9` |
-| **Decimals** | `9` (1 atom = $10^{-9}$ KUNA) | `ONE_KUNA = 1_000_000_000` |
-| **Founder Premine** | `200,000 KUNA` | `FOUNDER_PREMINE = 200_000 * 10^9` |
-| **Treasury Allocation** | `8,000,000 KUNA` | Linear 8-year vesting (1M KUNA/year) |
+| **Total Supply Ceiling** | `90,200,000 KVNC` | `TOTAL_SUPPLY = 90_200_000 * 10^9` |
+| **Decimals** | `9` (1 atom = $10^{-9}$ KVNC) | `ONE_KVNC = 1_000_000_000` (`ONE_KUNA`) |
+| **Founder Premine** | `200,000 KVNC` | `FOUNDER_PREMINE = 200_000 * 10^9` |
+| **Treasury Allocation** | `8,000,000 KVNC` | Linear 8-year vesting (1M KVNC/year) |
 | **Genesis Validator Pool** | `1,000,000 KVNC` | Split evenly across bootstrap seed nodes (1..=20) |
 | **Mining Subsidy Budget** | `81,000,000 KVNC` | $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M}$ |
 | **Initial Block Reward** | `2.5 KVNC` | $2.5 \times 10^9$ atoms per committed block |
@@ -119,10 +119,10 @@ Mainnet genesis requires simultaneous multi-validator consensus setup governed b
 
 ### 4.1 Committee Size & Stake Allocation
 
-- **Total Genesis Validators:** Exactly 15 to 20 validators.
-- **Genesis Pool Distribution:** 1,000,000 KUNA total.
-  - If 15 validators: each receives $\approx 66,666.666666666$ KUNA ($66,666,666,666,666$ atoms), with remainder atoms deterministically assigned to the first validator.
-  - If 20 validators: each receives exactly $50,000.000000000$ KUNA ($50,000,000,000,000$ atoms).
+- **Total Genesis Validators:** Exactly 15 to 20 validators (or lean bootstrap configuration 1..=20).
+- **Genesis Pool Distribution:** 1,000,000 KVNC total.
+  - If 15 validators: each receives $\approx 66,666.666666666$ KVNC ($66,666,666,666,666$ atoms), with remainder atoms deterministically assigned to the first validator.
+  - If 20 validators: each receives exactly $50,000.000000000$ KVNC ($50,000,000,000,000$ atoms).
 - Each genesis validator locks their stake into the initial committee.
 
 ### 4.2 Genesis Generation Procedure

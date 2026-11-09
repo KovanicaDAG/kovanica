@@ -1,6 +1,6 @@
 # STATE — living source of truth
 
-**Tip:** `89394a2da7d9fb119072aacd1ff7997f0e3225c4` (feat/hybrid-p1-p2-pow-header bases here; merge of docs/hybrid-p0-spec #177 on 2026-11-05; prior living tip `559cc2014592e1c621da2df78d9671e7476972d1`).
+**Tip:** `d0b129639150e114d88d6d97336cb82546ae4f76` (Release `v1.0.0-mainnet`, merge of `fix/ci-genesis-ceremony-and-mainnet-freeze` #214 on 2026-11-09; prior living tips `89394a2da7d9fb119072aacd1ff7997f0e3225c4`, `559cc2014592e1c621da2df78d9671e7476972d1`).
 Update this file when frozen params or open product gaps change. Point-in-time dumps live under `docs/archive/`; they are not SoT.
 
 ## Active Priority: Hybrid PoW + GHOSTDAG (P0–P8)
@@ -42,10 +42,11 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 ## Open product gaps (not archived noise)
 
 1. Ops drift (live fleet cutover): VPS systemd units & migration script prepared in `ops/systemd/` and `scripts/cutover-vps-systemd.sh` (live cutover execution pending VPS Seed Ops deploy); DNS seed audit probe automated in `scripts/check-dns-seeds.sh` (`docs/SEED-DNS-AUDIT.md`).
-2. External security review (formal audit of KovanicaHash and Wasmi sandbox; template: `docs/AUDIT_REPORT.template.md`, `docs/AUDIT-SCOPE.md`).
-3. Mainnet launch freeze sign-off and key distribution ceremony (15–20 genesis validators per `docs/KEY-CEREMONY.md` and `docs/MAINNET-FREEZE-CHECKLIST.md`).
+2. External security review (formal audit dispatch of `v1.0.0-mainnet` covering KovanicaHash and Wasmi sandbox; template: `docs/AUDIT_REPORT.template.md`, `docs/AUDIT-SCOPE.md`, `docs/AUDITOR-INVITATION.md`).
+3. Production Key Ceremony & Launch ($T_0 - 48\text{h}$): Live key collection and final distribution for 15–20 mainnet bootstrap operators via `ops/genesis/ceremony.sh` per `docs/KEY-CEREMONY.md` and `docs/MAINNET-RUNBOOK.md`.
 
 **Done / frozen, do not re-open as missing:**
+- Mainnet Freeze & Gate Sign-Off (Phases C1–C3): Audit scoping updated (`docs/AUDIT-SCOPE.md`), genesis key ceremony streamlined (`ops/genesis/ceremony.sh`), validator bounds relaxed to `1..=20`, byte-for-byte deterministic genesis validated (`2f46c80940dc5226f8f25aad6eff428c3cd58c7fb505cf9861ad63db4cdbabc9`), soak pre-flight verification passed (monotonic height growth, 0 OOM kills under 2 GB limit), Gates 1–6 signed off in `docs/MAINNET-FREEZE-CHECKLIST.md`, and release tag `v1.0.0-mainnet` tagged on `main`.
 - Automated CI pipeline: fmt, clippy, doc lint, workspace tests, cargo-deny (licenses/advisories/bans/sources), gitleaks 8.24.3 (`.github/workflows/ci.yml`, `scripts/ci-local.sh`).
 - Governance (proposals and stake-weighted voting via `kovanica-cli` and `kovanica-staking`), BIP32 HD derivation (`kovanica-wallet-core`), soak harness (`ops/soak/`), DNS audit probe (`scripts/check-dns-seeds.sh`), and mainnet runbook (`docs/MAINNET-RUNBOOK.md`).
 - PRO-7 (Mysticeti VRF leader set + pin): **FROZEN** for hybrid.
