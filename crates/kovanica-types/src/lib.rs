@@ -16,7 +16,6 @@ pub mod crypto;
 pub mod emission;
 pub mod error;
 pub mod evidence;
-pub mod governance;
 pub mod hash;
 pub mod light_client;
 pub mod merkle;
@@ -47,7 +46,6 @@ pub use error::TypesError;
 pub use evidence::{
     EquivocationEvidence, EvidenceError, SignedBlockHeader, EVIDENCE_MAX_AGE_ROUNDS,
 };
-pub use governance::{GovernanceVote, Proposal, ProposalKind, ProposalStatus};
 pub use hash::Hash;
 pub use light_client::{
     committee_seal_hash, decode_with_version, encode_with_version, executed_tx_hashes,

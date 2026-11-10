@@ -1,9 +1,9 @@
 # Kovanica Mainnet Launch & Operations Runbook
 
 > **Network ID:** `1` (`MAINNET`)  
-> **Native Ticker:** **KVNC** (9 decimals: $1\text{ KVNC} = 10^9\text{ atoms}$, legacy alias `KUNA`)  
+> **Native Ticker:** **KVNC** (9 decimals: $1\text{ KVNC} = 10^9\text{ atoms}$)  
 > **Canonical Address Format:** PRO-21 base32 (`kvnc<57 base32>dag`, exactly 64 characters)  
-> **Status:** Normative Operational Runbook for Mainnet Genesis & Node Operations  
+> **Status:** DRAFT, not normative, being rewritten for PoW + GHOSTDAG no-stake  
 > **Consensus Impact:** Client and Operational only; strictly conforms to frozen consensus and tokenomics specifications.
 
 ---
@@ -33,26 +33,22 @@ Verify that the binary under execution enforces the frozen parameters defined in
 |---|---|---|
 | **Chain ID** | `1` (`MAINNET`) | `crates/kovanica-params/src/lib.rs` |
 | **Total Supply Ceiling** | `90,200,000 KVNC` | `TOTAL_SUPPLY = 90_200_000 * 10^9` |
-| **Decimals** | `9` (1 atom = $10^{-9}$ KVNC) | `ONE_KVNC = 1_000_000_000` (`ONE_KUNA`) |
+| **Decimals** | `9` (1 atom = $10^{-9}$ KVNC) | `ONE_KVNC = 1_000_000_000` |
 | **Founder Premine** | `200,000 KVNC` | `FOUNDER_PREMINE = 200_000 * 10^9` |
 | **Treasury Allocation** | `8,000,000 KVNC` | Linear 8-year vesting (1M KVNC/year) |
-| **Genesis Validator Pool** | `1,000,000 KVNC` | Split evenly across bootstrap seed nodes (1..=20) |
-| **Mining Subsidy Budget** | `81,000,000 KVNC` | $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M}$ |
+| **Mining Subsidy Budget** | `82,000,000 KVNC` | $90.2\text{M} - 0.2\text{M} - 8\text{M}$ |
 | **Initial Block Reward** | `2.5 KVNC` | $2.5 \times 10^9$ atoms per committed block |
 | **Subsidy Era Length** | `8,100,000 blocks` | Multiplied by $3/4$ decay each era |
-| **Minimum Validator Stake** | `50,000 KVNC` | `MIN_VALIDATOR_STAKE = 50_000 * 10^9` |
-| **Minimum Delegation** | `50,000 KVNC` | `MIN_DELEGATION = 50_000 * 10^9` |
 | **Genesis Bootstrap Seeds** | `1` to `20` nodes | `3–5` seeds recommended for public launch |
 | **Epoch Duration** | `7,200` rounds (~8 hours) | `EPOCH_ROUNDS = 7_200` |
 | **Unbonding Cooldown** | `100,000` leader blocks | ~13.9 days at 12 s/leader |
-| **Slashing Penalty** | `500 bps (5%)` | Equivocation evidence verification |
 
 ### 2.2 Mainnet Pre-Flight Configuration Guards
 
 Mainnet nodes strictly enforce security configurations at startup. The node binary **fails immediately** if any of the following constraints are violated:
 
 1. **`funded_accounts.toml` is Forbidden:**
-   On Chain ID `1`, `funded_accounts.toml` must **NOT** exist in `KOVANICA_DATA_DIR`. All genesis funds must originate strictly from the founder premine, treasury vesting, or genesis validator pool.
+   On Chain ID `1`, `funded_accounts.toml` must **NOT** exist in `KOVANICA_DATA_DIR`. All genesis funds must originate strictly from the founder premine or treasury vesting.
 2. **Address Format Enforcement:**
    Only canonical PRO-21 base32 addresses (`kvnc` + 57 base32 chars + `dag`) are permitted. Hexadecimal or legacy addresses trigger parse rejection.
 3. **No Reset Switch / No Public Faucet:**
@@ -117,13 +113,9 @@ Each seed node generates a persistent libp2p identity key (`p2p.key`). The resul
 
 Mainnet genesis requires simultaneous multi-validator consensus setup governed by `ops/genesis/ceremony.sh` and [`docs/KEY-CEREMONY.md`](KEY-CEREMONY.md).
 
-### 4.1 Committee Size & Stake Allocation
+### 4.1 Committee Size & Allocation
 
-- **Total Genesis Validators:** Exactly 15 to 20 validators (or lean bootstrap configuration 1..=20).
-- **Genesis Pool Distribution:** 1,000,000 KVNC total.
-  - If 15 validators: each receives $\approx 66,666.666666666$ KVNC ($66,666,666,666,666$ atoms), with remainder atoms deterministically assigned to the first validator.
-  - If 20 validators: each receives exactly $50,000.000000000$ KVNC ($50,000,000,000,000$ atoms).
-- Each genesis validator locks their stake into the initial committee.
+TODO: rewrite for PoW + GHOSTDAG
 
 ### 4.2 Genesis Generation Procedure
 
@@ -255,7 +247,7 @@ Nodes expose Prometheus metrics on port `9100` (or configured metrics port). Obs
      done
      ```
   2. If local: restart the local node (`systemctl restart kovanica-node`). Check storage errors in `consensus.redb`.
-  3. If global: DAG wave consensus quorum ($2f+1$) is broken. Check if $> 1/3$ of validator stake is offline. Coordinate with validator operators in the emergency coordination channel.
+  3. If global: TODO: rewrite for PoW + GHOSTDAG
 
 #### Alert: `KovanicaBlockHeightDrift`
 - **Condition:** `max(block_height) - min(block_height) > 10` across cluster for 2 minutes.
@@ -293,30 +285,17 @@ Nodes expose Prometheus metrics on port `9100` (or configured metrics port). Obs
 
 ## 7. Phase 5: Incident Response & Emergency Procedures
 
-### 7.1 Equivocation & Slashing Triage
+### 7.1 Equivocation Triage
 
-When a validator equivocates (signs two conflicting blocks at the same DAG round), any node can submit an equivocation proof:
-
-1. **Evidence Verification:**
-   The consensus engine validates conflicting signatures for the same author and round.
-2. **Automated Slashing Execution:**
-   - 500 bps (5%) of total validator stake (self-stake + delegations) is slashed.
-   - Slashed funds are burned or routed to the unbonding pool per protocol rules.
-   - The validator is jailed for `JAIL_ROUNDS = 7,200` committed leader blocks (~1 day).
-3. **Validator Action:**
-   - Immediately decommission the duplicate instance (e.g. failover misconfiguration running dual signers).
-   - Once the jail period elapses, submit an unjail transaction:
-     ```bash
-     kovanica unjail --keystore /etc/kovanica/validator.keystore
-     ```
+TODO: rewrite for PoW + GHOSTDAG
 
 ### 7.2 Network Partition Recovery
 
-If a network split occurs where neither partition can achieve $2f+1$ stake quorum:
+If a network split occurs:
 1. **Never reset or wipe single nodes** — this risks unrecoverable fork splits.
 2. Verify all validators have intact `consensus.redb` and `state.redb` storage.
 3. Restore inter-partition network connectivity (BGP routing / cloud provider interconnect).
-4. As soon as $2f+1$ active validator stake can communicate, Mysticeti DAG consensus will resolve uncommitted waves and resume leader commits automatically.
+4. TODO: rewrite for PoW + GHOSTDAG
 
 ### 7.3 Disaster Recovery / State Restoration
 
