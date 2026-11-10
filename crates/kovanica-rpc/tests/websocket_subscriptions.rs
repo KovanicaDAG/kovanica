@@ -266,12 +266,15 @@ async fn websocket_receives_logs_notification() {
         events: Vec::new(),
         error: None,
     };
-    events.publish_logs(&[receipt.clone()]);
+    events.publish_logs(std::slice::from_ref(&receipt));
 
     let notification = next_json(&mut ws).await;
     assert_eq!(notification["params"]["subscription"], json!("0x1"));
     assert_eq!(notification["params"]["result"][0]["success"], json!(true));
-    assert_eq!(notification["params"]["result"][0]["gas_used"], json!(21_000));
+    assert_eq!(
+        notification["params"]["result"][0]["gas_used"],
+        json!(21_000)
+    );
 
     handle.abort();
 }

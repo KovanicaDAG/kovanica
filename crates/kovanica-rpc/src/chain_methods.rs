@@ -2349,7 +2349,8 @@ pub async fn handle_request_airdrop(params: Value, state: RpcState) -> Result<Va
             })?,
             Value::String(s) => {
                 let s_clean = s.strip_prefix("0x").unwrap_or(s.as_str());
-                u64::from_str_radix(s_clean, 10)
+                s_clean
+                    .parse::<u64>()
                     .or_else(|_| u64::from_str_radix(s_clean, 16))
                     .map_err(|e| RpcError::InvalidParams(format!("invalid amount string: {e}")))?
             }
@@ -2685,10 +2686,7 @@ mod tests {
         let sender_bal = handle_get_balance(json!([sender.to_string()]), state.clone())
             .await
             .unwrap();
-        assert_eq!(
-            sender_bal,
-            quantity(10_000_000_000u64 - send_amount - fee)
-        );
+        assert_eq!(sender_bal, quantity(10_000_000_000u64 - send_amount - fee));
 
         let recipient_bal = handle_get_balance(json!([recipient.to_string()]), state.clone())
             .await
