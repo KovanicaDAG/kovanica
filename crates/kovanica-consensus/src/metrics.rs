@@ -748,8 +748,10 @@ mod tests {
     use super::*;
 
     /// The registry is process-global, but tests run on parallel threads: the
-    /// tests that assert on a concrete gauge value must not overlap, or one
-    /// test overwrites another's value between the write and the scrape.
+    /// tests that write many series take this lock so two scrapes do not read a
+    /// half-updated registry. Exact-value assertions on a gauge do **not** belong
+    /// here — `engine` tests write the same gauges concurrently — and live in
+    /// `tests/metrics_export.rs`, which runs in its own process.
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serial() -> std::sync::MutexGuard<'static, ()> {
@@ -767,26 +769,6 @@ mod tests {
         record_colouring_duration_ms(5.2, "fallback");
         record_pruned_blocks(50);
         record_pruned_waves(2);
-    }
-
-    /// `block_height` and `current_round` must be separate series. They used to
-    /// be the same gauge, fed the local round by the ticker and the committed
-    /// leader round by the commit path.
-    #[test]
-    fn block_height_and_current_round_are_independent() {
-        let _guard = serial();
-        record_current_round(41);
-        record_block_height(13);
-
-        let text = metrics_text();
-        assert!(
-            text.contains("block_height 13"),
-            "block_height should be the committed height, got:\n{text}"
-        );
-        assert!(
-            text.contains("current_round 41"),
-            "current_round should be the local round, got:\n{text}"
-        );
     }
 
     /// Pull the `expr:` values out of the alert rules (including `expr: |`
@@ -1042,26 +1024,5 @@ mod tests {
         assert_eq!(SyncErrorKind::StateRequest.as_str(), "state_request");
         assert_eq!(SyncErrorKind::NotFound.as_str(), "not_found");
         assert_eq!(SyncErrorKind::InvalidRequest.as_str(), "invalid_request");
-    }
-
-    /// The alert rules read `rss_proxy` and `commit_latency`; a recorder that is
-    /// never called leaves the series at 0 and the alert can never fire.
-    #[test]
-    fn alert_backed_metrics_are_exported() {
-        let _guard = serial();
-        record_rss_proxy(1234);
-        record_commit_latency(321.0);
-        record_peer_count(4);
-        record_mempool_size(7);
-
-        let text = metrics_text();
-        for expected in [
-            "rss_proxy 1234",
-            "commit_latency 321",
-            "peer_count 4",
-            "mempool_size 7",
-        ] {
-            assert!(text.contains(expected), "missing {expected} in:\n{text}");
-        }
     }
 }
