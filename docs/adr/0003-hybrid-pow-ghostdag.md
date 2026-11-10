@@ -55,7 +55,7 @@ On 2026-11-05, project owner Toni locked a strategic change in product consensus
 - **PRO-7 Frozen:** PRO-7 (Mysticeti VRF leader schedule pinning) is frozen. No further VRF leader schedule or committee timeout work will be merged for consensus.
 - **Code Preservation for Follow-up Phases:** Algorithms for colouring, mergeset computation, non-blue block tracking, and the redb store are preserved as foundation for the GHOSTDAG engine in subsequent phases (P1–P8).
 - **Hard-Lock Lifted:** GHOSTDAG colouring accepts `k = 5` as well as legacy `k = 3`.
-- **Lint & Rules Inversion:** Automated documentation lint (`scripts/lint_docs.py`), `README.md`, and `AUDIT_REPORT_2026.md` are updated to permit and require `KVNC` as the product ticker instead of forbidding it.
+- **Lint & Rules Inversion:** Automated documentation lint (`scripts/lint_docs.py`), `README.md`, and the (now archived) `docs/archive/AUDIT_REPORT_2026.md` are updated to permit and require `KVNC` as the product ticker instead of forbidding it.
 
 ### Explicit Non-Goals for P0 (Spec Phase):
 - **No PoW Mining Loop:** No mining workers, nonce search, or difficulty adjustment algorithms are implemented in this PR.

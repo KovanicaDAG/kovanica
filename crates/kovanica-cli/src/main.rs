@@ -35,7 +35,7 @@ struct Cli {
     #[arg(long, global = true, default_value = "http://127.0.0.1:8545")]
     rpc_url: String,
 
-    /// Network `chain_id` committed to by every transaction signature (1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 5 hybrid testnet, 1337 local); falls back to the `KOVANICA_CHAIN_ID` environment variable.
+    /// Network `chain_id` committed to by every transaction signature (1 mainnet, 2 testnet, 3 devnet, 1337 local); falls back to the `KOVANICA_CHAIN_ID` environment variable.
     /// Required by commands that sign transactions; there is deliberately no default.
     #[arg(long, global = true)]
     chain_id: Option<u64>,
@@ -1891,7 +1891,7 @@ mod wallet_cli_security_tests {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut buf = [0u8; 4096];
                 let _ = stream.read(&mut buf).await.unwrap();
-                let body = r#"{"jsonrpc":"2.0","id":1,"result":{"committedHeight":1,"catchingUp":false,"networkTag":"4-0123456789abcdef"}}"#;
+                let body = r#"{"jsonrpc":"2.0","id":1,"result":{"committedHeight":1,"catchingUp":false,"networkTag":"3-0123456789abcdef"}}"#;
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
@@ -1919,7 +1919,7 @@ mod wallet_cli_security_tests {
         .unwrap_err()
         .to_string();
         assert!(transfer_err.contains("--chain-id 1"), "{transfer_err}");
-        assert!(transfer_err.contains("node's chain 4"), "{transfer_err}");
+        assert!(transfer_err.contains("node's chain 3"), "{transfer_err}");
 
         let stake_err = cmd_stake(
             &client,
@@ -1935,7 +1935,7 @@ mod wallet_cli_security_tests {
         .unwrap_err()
         .to_string();
         assert!(stake_err.contains("--chain-id 1"), "{stake_err}");
-        assert!(stake_err.contains("node's chain 4"), "{stake_err}");
+        assert!(stake_err.contains("node's chain 3"), "{stake_err}");
 
         server.await.unwrap();
     }

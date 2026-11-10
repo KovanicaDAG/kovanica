@@ -295,15 +295,15 @@ mod block_sig_tests {
         // Verification on Mainnet succeeds
         assert!(verify_block_signature(chain_id::MAINNET, &pk, &digest, &sig).is_ok());
 
-        // Replay on Testnet v2 (chain 4) fails
-        assert!(verify_block_signature(chain_id::TESTNET_V2, &pk, &digest, &sig).is_err());
+        // Replay on devnet (chain 3) fails
+        assert!(verify_block_signature(chain_id::DEVNET, &pk, &digest, &sig).is_err());
 
-        // Author signs for Testnet v2 (chain 4)
-        let testnet4_msg = block_signature_data(chain_id::TESTNET_V2, &digest);
-        let sig4 = sign(&sk, &testnet4_msg);
+        // Author signs for devnet (chain 3)
+        let devnet_msg = block_signature_data(chain_id::DEVNET, &digest);
+        let sig4 = sign(&sk, &devnet_msg);
 
-        // Verification on Testnet v2 succeeds
-        assert!(verify_block_signature(chain_id::TESTNET_V2, &pk, &digest, &sig4).is_ok());
+        // Verification on devnet succeeds
+        assert!(verify_block_signature(chain_id::DEVNET, &pk, &digest, &sig4).is_ok());
 
         // Replay on Mainnet fails
         assert!(verify_block_signature(chain_id::MAINNET, &pk, &digest, &sig4).is_err());
@@ -311,14 +311,14 @@ mod block_sig_tests {
         // Old legacy signature over raw digest only must fail on any v2 chain
         let raw_sig = sign(&sk, digest.as_ref());
         assert!(verify_block_signature(chain_id::MAINNET, &pk, &digest, &raw_sig).is_err());
-        assert!(verify_block_signature(chain_id::TESTNET_V2, &pk, &digest, &raw_sig).is_err());
+        assert!(verify_block_signature(chain_id::DEVNET, &pk, &digest, &raw_sig).is_err());
     }
 
     #[test]
     fn block_signature_tampering_rejected() {
         let (sk, pk) = generate_keypair();
         let digest = StatementBlock::compute_digest(0, 1, &[], &[]);
-        let chain = chain_id::TESTNET_V2;
+        let chain = chain_id::DEVNET;
         let sig = sign(&sk, &block_signature_data(chain, &digest));
 
         // Wrong digest

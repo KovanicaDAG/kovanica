@@ -5894,7 +5894,7 @@ mod tests {
         );
     }
 
-    /// Chain 1 refuses legacy hex. Devnet, chain 4, and local still accept it.
+    /// Chain 1 refuses legacy hex. Devnet and local still accept it.
     #[test]
     fn parse_address_hex_follows_the_chain_policy() {
         use kovanica_types::signing::chain_id;
@@ -5911,7 +5911,7 @@ mod tests {
                 format!("{err:#}").contains("not accepted"),
                 "{form} on chain 1: {err:#}"
             );
-            for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+            for chain in [chain_id::DEVNET, chain_id::LOCAL] {
                 let parsed = parse_address_hex(Some(form), chain)
                     .unwrap_or_else(|e| panic!("{form} on chain {chain}: {e:#}"));
                 assert_eq!(parsed, address);
@@ -6110,7 +6110,7 @@ mod tests {
         verify_persisted_genesis_digest(&storage, &fresh, true, 1337).expect("dev override allows");
         verify_persisted_genesis_digest(&storage, &fresh, true, 3).expect("devnet override allows");
         // ...and does nothing on a non-dev chain. Those errors never name the override.
-        for chain_id in [1, 2, 4] {
+        for chain_id in [1, 2] {
             let err = verify_persisted_genesis_digest(&storage, &fresh, true, chain_id)
                 .expect_err("non-dev chain must ignore the override");
             let msg = err.to_string();
@@ -6140,8 +6140,8 @@ mod tests {
     /// and only available on dev chains (3 and 1337).
     #[test]
     fn genesis_mismatch_override_is_forbidden_on_mainnet_and_testnet() {
-        use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET_V2};
-        for chain in [MAINNET, 2, TESTNET_V2] {
+        use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET};
+        for chain in [MAINNET, TESTNET] {
             let err = genesis_mismatch_override(chain, true).unwrap_err();
             assert!(err.to_string().contains("not allowed"), "{err:#}");
             assert!(!genesis_mismatch_override(chain, false).unwrap());
@@ -6174,7 +6174,7 @@ mod tests {
     /// create a directory from `validate` itself.
     #[tokio::test]
     async fn non_dev_chains_refuse_genesis_mismatch_override_before_data_dir_exists() {
-        for chain_id in [1, 2, 4] {
+        for chain_id in [1, 2] {
             let parent = tempfile::tempdir().unwrap();
             let data_dir = parent.path().join("data");
             assert!(!data_dir.exists());
@@ -6243,7 +6243,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_dev_startup_mismatch_does_not_mention_the_override() {
-        for chain_id in [1, 2, 4] {
+        for chain_id in [1, 2] {
             let dir = tempfile::tempdir().unwrap();
             write_genesis_chain_id(dir.path(), chain_id);
             {
@@ -6404,7 +6404,7 @@ mod tests {
             "dev genesis.json mismatch may name the override: {msg}"
         );
         // Non-dev chains ignore the override and do not mention it.
-        for chain_id in [1, 2, 4] {
+        for chain_id in [1, 2] {
             let err = verify_genesis_json(&chain_id_config(dir.path(), chain_id), &canonical, true)
                 .expect_err("non-dev chain must ignore the override");
             let msg = err.to_string();
@@ -6541,12 +6541,12 @@ mod tests {
     #[test]
     fn startup_logs_the_network_tag_that_scopes_the_protocols() {
         let dir = tempfile::tempdir().unwrap();
-        let config = chain_id_config(dir.path(), 4);
+        let config = chain_id_config(dir.path(), 3);
         let net = build_network_config(&config).unwrap();
         let tag = log_network_identity(&net);
         assert_eq!(tag, net.network_id.tag());
-        assert!(tag.starts_with("4-"), "{tag}");
-        assert_eq!(tag.len(), "4-".len() + 16);
+        assert!(tag.starts_with("3-"), "{tag}");
+        assert_eq!(tag.len(), "3-".len() + 16);
         assert!(net
             .network_id
             .identify_version()
@@ -6575,7 +6575,7 @@ mod tests {
         std::fs::write(
             dir.join("genesis_validators.toml"),
             format!(
-                "chain_id = 4\n[[validator]]\naddress = \"{}\"\nstake = 50000000000000\n",
+                "chain_id = 3\n[[validator]]\naddress = \"{}\"\nstake = 50000000000000\n",
                 "33".repeat(32)
             ),
         )
@@ -6585,7 +6585,7 @@ mod tests {
     fn bundle_config(dir: &std::path::Path, treasury: Option<String>) -> NodeConfig {
         NodeConfig {
             treasury_address: treasury,
-            ..chain_id_config(dir, 4)
+            ..chain_id_config(dir, 3)
         }
     }
 
@@ -6601,9 +6601,9 @@ mod tests {
         let logged = log_network_identity(&net);
         let offline = network_tag_from_config(&config).unwrap();
         assert_eq!(offline, logged);
-        // Known answer for this fixture (chain 4, treasury 0x55.., the four
+        // Known answer for this fixture (devnet 3, treasury 0x55.., the four
         // bundle files). The offline CLI test locks the same string.
-        assert_eq!(logged, "4-2bd89b0649c4ecbd");
+        assert_eq!(logged, "3-3de28e32a6991d94");
         assert_eq!(offline, net.network_id.tag());
 
         let status = SyncStatus {
@@ -9752,7 +9752,7 @@ mod tests {
     }
 
     /// `founder_premine.hex` is parsed with the chain policy: chain 1 refuses
-    /// legacy hex, and devnet, local, and chain 4 accept it. Canonical still
+    /// legacy hex, and devnet and local accept it. Canonical still
     /// parses on mainnet.
     #[test]
     fn genesis_file_addresses_follow_the_chain_policy() {
@@ -9771,7 +9771,7 @@ mod tests {
             format!("{err:#}").contains("not accepted"),
             "chain 1 must refuse hex: {err:#}"
         );
-        for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+        for chain in [chain_id::DEVNET, chain_id::LOCAL] {
             digest_with(chain, &hex)
                 .unwrap_or_else(|e| panic!("chain {chain} must accept hex: {e:#}"));
         }
@@ -9786,12 +9786,7 @@ mod tests {
         use kovanica_types::signing::chain_id;
 
         assert!(!funded_accounts_allowed(chain_id::MAINNET));
-        for allowed in [
-            chain_id::TESTNET,
-            chain_id::DEVNET,
-            chain_id::TESTNET_V2,
-            chain_id::LOCAL,
-        ] {
+        for allowed in [chain_id::TESTNET, chain_id::DEVNET, chain_id::LOCAL] {
             assert!(
                 funded_accounts_allowed(allowed),
                 "chain {allowed} must accept funded_accounts.toml"
@@ -9821,10 +9816,10 @@ mod tests {
             "the digest must not be computable over a forbidden file"
         );
 
-        // Testnet/dev: accepted, and the allocations are covered by the digest.
-        let testnet = chain_id_config(dir.path(), chain_id::TESTNET_V2);
-        ensure_funded_accounts_allowed(&testnet).expect("chain 4 accepts funded accounts");
-        assert!(genesis_config_digest(&testnet).is_ok());
+        // Devnet: accepted, and the allocations are covered by the digest.
+        let devnet = chain_id_config(dir.path(), chain_id::DEVNET);
+        ensure_funded_accounts_allowed(&devnet).expect("devnet accepts funded accounts");
+        assert!(genesis_config_digest(&devnet).is_ok());
     }
 
     /// The published checksum example must not tell a mainnet operator to hash
@@ -9925,14 +9920,14 @@ mod tests {
             "a refused genesis must not write staking state"
         );
 
-        // Chain 4, 3 validators in legacy hex: accepted, and the validators are staked.
+        // Devnet, 3 validators in legacy hex: accepted, and the validators are staked.
         let dir = tempfile::tempdir().unwrap();
         let testnet_set: Vec<String> = (1..=3).map(indexed_hex).collect();
-        write_set(dir.path(), chain_id::TESTNET_V2, &testnet_set);
-        let config = chain_id_config(dir.path(), chain_id::TESTNET_V2);
+        write_set(dir.path(), chain_id::DEVNET, &testnet_set);
+        let config = chain_id_config(dir.path(), chain_id::DEVNET);
         let dag = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
         let state = Storage::new(dir.path().join("state.redb")).unwrap();
-        init_genesis(&config, &dag, &state).expect("chain 4 accepts a 3-validator genesis");
+        init_genesis(&config, &dag, &state).expect("devnet accepts a 3-validator genesis");
         let read = state.begin_read().unwrap();
         let staking = state.state().load_staking_state(&read).unwrap();
         assert_eq!(
@@ -9973,12 +9968,7 @@ mod tests {
         }
 
         // Every other chain is exempt: a 1-node local or 3-node testnet is fine.
-        for other in [
-            chain_id::TESTNET,
-            chain_id::TESTNET_V2,
-            chain_id::DEVNET,
-            chain_id::LOCAL,
-        ] {
+        for other in [chain_id::TESTNET, chain_id::DEVNET, chain_id::LOCAL] {
             for count in [0, 3, 100] {
                 ensure_mainnet_genesis_validator_count(other, count)
                     .unwrap_or_else(|e| panic!("chain {other} must be exempt: {e}"));

@@ -2,7 +2,7 @@
 //! overrides on a shared chain, and accept them on a development chain.
 //!
 //! This is the operator-facing contract from PRO-23's acceptance criteria: a
-//! node on chain 1 or chain 4 that is started with, say,
+//! node on chain 1 or chain 2 that is started with, say,
 //! `KOVANICA_ROUND_DURATION_MS=250` must fail at config check time instead of
 //! booting and voting on rules its peers do not run.
 
@@ -52,18 +52,18 @@ fn stderr(output: &std::process::Output) -> String {
 
 #[test]
 fn check_config_accepts_a_plain_public_chain_config() {
-    let (_dir, path) = config_file(4);
+    let (_dir, path) = config_file(2);
     let out = check_config(&path, &[]);
     assert!(
         out.status.success(),
-        "chain 4 without overrides must pass, stderr: {}",
+        "chain 2 without overrides must pass, stderr: {}",
         stderr(&out)
     );
 }
 
 #[test]
-fn check_config_rejects_overrides_on_chain_4() {
-    let (_dir, path) = config_file(4);
+fn check_config_rejects_overrides_on_chain_2() {
+    let (_dir, path) = config_file(2);
     for (var, value) in [
         ("KOVANICA_ROUND_DURATION_MS", "250"),
         ("KOVANICA_MYSTICGHOST", "false"),
@@ -72,12 +72,12 @@ fn check_config_rejects_overrides_on_chain_4() {
         let out = check_config(&path, &[(var, value)]);
         assert!(
             !out.status.success(),
-            "{var} on chain 4 must fail the config check"
+            "{var} on chain 2 must fail the config check"
         );
         let err = stderr(&out);
         assert!(err.contains(var), "the error must name {var}, got: {err}");
         assert!(
-            err.contains("chain_id 4"),
+            err.contains("chain_id 2"),
             "the error must name the chain, got: {err}"
         );
     }
@@ -166,10 +166,10 @@ fn check_config_rejects_funded_accounts_on_mainnet() {
     );
 }
 
-/// The same file is fine on a testnet.
+/// The same file is fine on a devnet.
 #[test]
-fn check_config_accepts_funded_accounts_on_testnet() {
-    let (dir, path) = config_file(4);
+fn check_config_accepts_funded_accounts_on_devnet() {
+    let (dir, path) = config_file(3);
     std::fs::create_dir_all(dir.path().join("data")).expect("create data dir");
     std::fs::write(
         dir.path().join("data").join("funded_accounts.toml"),
@@ -180,7 +180,7 @@ fn check_config_accepts_funded_accounts_on_testnet() {
     let out = check_config(&path, &[]);
     assert!(
         out.status.success(),
-        "chain 4 must accept funded_accounts.toml, stderr: {}",
+        "devnet must accept funded_accounts.toml, stderr: {}",
         stderr(&out)
     );
 }
@@ -220,16 +220,16 @@ fn check_config_rejects_out_of_bounds_genesis_validators_on_mainnet() {
     );
 }
 
-/// The same set is fine on a testnet, which runs on a handful of nodes.
+/// The same set is fine on a devnet, which runs on a handful of nodes.
 #[test]
-fn check_config_accepts_few_genesis_validators_on_testnet() {
-    let (dir, path) = config_file(4);
+fn check_config_accepts_few_genesis_validators_on_devnet() {
+    let (dir, path) = config_file(3);
     let data = dir.path().join("data");
     std::fs::create_dir_all(&data).expect("create data dir");
     std::fs::write(
         data.join("genesis_validators.toml"),
         format!(
-            "chain_id = 4\n\n{}",
+            "chain_id = 3\n\n{}",
             (1..=3)
                 .map(|i| format!(
                     "[[validator]]\naddress = \"{i:02x}{}\"\nstake = 50000000000000\n\n",
@@ -243,7 +243,7 @@ fn check_config_accepts_few_genesis_validators_on_testnet() {
     let out = check_config(&path, &[]);
     assert!(
         out.status.success(),
-        "chain 4 must accept a 3-validator genesis, stderr: {}",
+        "devnet must accept a 3-validator genesis, stderr: {}",
         stderr(&out)
     );
 }

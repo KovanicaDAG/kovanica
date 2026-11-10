@@ -28,8 +28,8 @@ uniffi::setup_scaffolding!("kovanica_light");
 
 /// Local development chain id.
 pub const LOCAL_CHAIN_ID: u64 = chain_id::LOCAL;
-/// Testnet chain id (chain 4, TESTNET_V2). Internal network until 25.11.2026.
-pub const TESTNET_CHAIN_ID: u64 = chain_id::TESTNET_V2;
+/// Public hybrid testnet chain id (chain 2).
+pub const TESTNET_CHAIN_ID: u64 = chain_id::HYBRID_TESTNET;
 
 /// Domain separation prefix for comms message signing.
 /// Matches `COMMS_MSG_DOMAIN` in the comms stack.
@@ -379,12 +379,12 @@ pub fn wallet_address(keystore_json: String) -> Result<String, LightFfiError> {
 
 /// True when the app may show the testnet faucet.
 ///
-/// Allowed exclusively on testnet (chain 4, [`TESTNET_CHAIN_ID`]), which remains
-/// an internal network until 25.11.2026. Mainnet (1), legacy testnet (2),
-/// devnet (3), and local (1337) are refused.
+/// Allowed exclusively on the public hybrid testnet (chain 2,
+/// [`TESTNET_CHAIN_ID`]). Mainnet (1), devnet (3), and local (1337) are
+/// refused.
 #[uniffi::export]
 pub fn faucet_allowed(chain_id: u64) -> bool {
-    chain_id == chain_id::TESTNET_V2
+    chain_id == chain_id::HYBRID_TESTNET
 }
 
 /// Verify one sealed header.
@@ -2109,7 +2109,7 @@ pub fn change_passphrase_raw(
 /// Derive the address a `Deploy` transaction will create on-chain, off-node.
 ///
 /// `sender_hex` is the `kvnc…dag` address, or a legacy hex form where
-/// `chain_id` allows it (devnet 3, chain 4, local 1337). `nonce` is the
+/// `chain_id` allows it (devnet 3, local 1337). `nonce` is the
 /// sender's account nonce **as it stands while the `Deploy` tx is being
 /// signed** (i.e. the `tx.nonce`); the `+1` the node bakes into the address is
 /// applied inside. Returns the bare 64-hex contract address.
@@ -2385,19 +2385,16 @@ mod tests {
         use kovanica_types::signing::chain_id;
         use kovanica_types::Address;
         let sender = Address([0x11; 32]);
-        let on_chain4 =
-            contract_address_for_raw(sender.to_hex(), 41, chain_id::TESTNET_V2).unwrap();
+        let on_devnet = contract_address_for_raw(sender.to_hex(), 41, chain_id::DEVNET).unwrap();
         assert_eq!(
-            on_chain4,
+            on_devnet,
             contract_address_for(&sender.encode(), 41, chain_id::MAINNET).unwrap()
         );
         assert!(contract_address_for_raw(sender.to_hex(), 41, chain_id::MAINNET).is_err());
-        assert!(contract_address_for_raw(
-            format!("0X{}", sender.to_hex()),
-            41,
-            chain_id::TESTNET_V2
-        )
-        .is_err());
+        assert!(
+            contract_address_for_raw(format!("0X{}", sender.to_hex()), 41, chain_id::DEVNET)
+                .is_err()
+        );
     }
 
     use kovanica_types::{
@@ -2499,13 +2496,11 @@ mod tests {
 
     #[test]
     fn three_seals_verify_and_the_faucet_follows_chain_id() {
-        assert!(faucet_allowed(4));
-        assert!(faucet_allowed(chain_id::TESTNET_V2));
+        assert!(faucet_allowed(2));
+        assert!(faucet_allowed(chain_id::HYBRID_TESTNET));
         assert!(faucet_allowed(TESTNET_CHAIN_ID));
         assert!(!faucet_allowed(1));
         assert!(!faucet_allowed(chain_id::MAINNET));
-        assert!(!faucet_allowed(2));
-        assert!(!faucet_allowed(chain_id::TESTNET));
         assert!(!faucet_allowed(3));
         assert!(!faucet_allowed(chain_id::DEVNET));
         assert!(!faucet_allowed(1337));
@@ -2866,7 +2861,7 @@ mod tests {
     }
 
     /// `sign_transfer_raw` and `sign_call_raw` pass `chain_id` into `parse_address`.
-    /// Legacy hex is accepted only on chains 3, 4, and 1337.
+    /// Legacy hex is accepted only on chains 3 and 1337.
     #[test]
     fn transfer_and_call_addresses_follow_the_chain_policy() {
         let key = Address([0x33; 32]);
@@ -2875,7 +2870,7 @@ mod tests {
         let bare = key.to_hex();
         let prefixed = format!("0x{bare}");
         let forms = [legacy.as_str(), bare.as_str(), prefixed.as_str()];
-        let allowed = [chain_id::DEVNET, chain_id::TESTNET_V2, chain_id::LOCAL];
+        let allowed = [chain_id::DEVNET, chain_id::LOCAL];
         let refused = [chain_id::MAINNET, chain_id::TESTNET, 0, 42];
 
         for chain in allowed {
@@ -2902,7 +2897,7 @@ mod tests {
         let transfer = sign_transfer_raw(
             created.keystore_json.clone(),
             "pw".to_string(),
-            chain_id::TESTNET_V2,
+            chain_id::DEVNET,
             legacy.clone(),
             1,
             0,

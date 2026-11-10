@@ -739,8 +739,8 @@ mod tests {
     fn block_signature_data_binds_chain_id() {
         let digest = Hash([0x11; 32]);
         let mainnet_data = block_signature_data(crate::signing::chain_id::MAINNET, &digest);
-        let testnet4_data = block_signature_data(crate::signing::chain_id::TESTNET_V2, &digest);
-        assert_ne!(mainnet_data, testnet4_data);
+        let devnet_data = block_signature_data(crate::signing::chain_id::DEVNET, &digest);
+        assert_ne!(mainnet_data, devnet_data);
     }
 
     #[test]
@@ -766,9 +766,9 @@ mod tests {
         // Verify strict passes on matching chain
         assert!(sig.verify_strict(&data, &pk));
 
-        // Verify fails on chain 4 (Testnet v2)
-        let data_chain4 = block_signature_data(4, &digest);
-        assert!(!sig.verify_strict(&data_chain4, &pk));
+        // Verify fails on chain 3 (devnet)
+        let data_devnet = block_signature_data(3, &digest);
+        assert!(!sig.verify_strict(&data_devnet, &pk));
 
         // Verify fails on raw digest
         assert!(!sig.verify_strict(digest.as_ref(), &pk));

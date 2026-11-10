@@ -17,6 +17,7 @@ In accordance with requirement **R2** ("Archive obsolete material"), no files ar
 | [`A8.2-DELEGATION-FULL.md`](./A8.2-DELEGATION-FULL.md) | Phase 18 Sprint | Implemented | Early sprint scratchpad and implementation checklist for Phase 18 delegation lifecycle tasks. All tasks (delegation, unbonding, slashing evidence, deterministic epoch committee rotation) are completed and tested in code. | `crates/kovanica-staking/`, `docs/GOVERNANCE.md` |
 | [`B-TREASURY-PROPOSAL.md`](./B-TREASURY-PROPOSAL.md) | Phase 25 Early Draft | Superseded | Preliminary 38-line skeleton outlining treasury spend proposal fields. Completely replaced and expanded by the comprehensive Phase 25 Governance Specification. | `docs/GOVERNANCE.md` |
 | [`CANONICAL-TESTNET-2.md`](./CANONICAL-TESTNET-2.md) | 2026-11 (M8 → canonical testnet) | Implemented | Point-in-time migration design that promoted Chain 2 to the canonical Hybrid PoW + GHOSTDAG testnet and retired the isolated Chain 5 design. Fully implemented; later commits removed the remaining Chain 5 / Chain 4 code paths. | `crates/kovanica-types/src/signing.rs`, `docs/dev/HYBRID-TESTNET-M8.md` |
+| [`AUDIT_REPORT_2026.md`](./AUDIT_REPORT_2026.md) | 2026-10-24 (base `dd3aff9`) | Historical | Point-in-time documentation/config audit of the corpus at commit `dd3aff9`. Its registry and address tables describe the pre-cleanup chain set (including chain 4), which no longer matches the code. | `docs/AUDIT-SCOPE.md`, `README.md` |
 
 ---
 
@@ -49,3 +50,7 @@ In accordance with requirement **R2** ("Archive obsolete material"), no files ar
 ### 7. `CANONICAL-TESTNET-2.md`
 - **Context**: Migration design (status "Implemented — Option A") that proposed promoting Chain 2 to the canonical Hybrid PoW + GHOSTDAG testnet, introducing the isolated Chain 5 testnet track, and inventorying every chain-id-dependent code path at a fixed commit.
 - **Archival Rationale**: The migration is complete and the design has since been superseded: Chain 2 is the canonical hybrid testnet, and the Chain 5 and Chain 4 code paths were removed entirely. The document is a point-in-time snapshot (it cites line numbers and code snippets that no longer exist), so it is preserved here for historical context rather than kept as active guidance. Current hybrid behaviour is described in `docs/dev/HYBRID-TESTNET-M8.md` and `docs/MINING.md`.
+
+### 8. `AUDIT_REPORT_2026.md`
+- **Context**: A 2026-10-24 audit of the documentation corpus, example configs, and repository identity, recorded against base commit `dd3aff9`.
+- **Archival Rationale**: The report is a point-in-time snapshot: it cites commit `dd3aff9`, line ranges, and a chain registry that predates the canonical cleanup (it still lists chain 4 as active). The findings were acted on at the time; the roster is now authoritative in `AGENTS.md`, `README.md`, and the code. Preserved here for forensic auditability rather than as live guidance.

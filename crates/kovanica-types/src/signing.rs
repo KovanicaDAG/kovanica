@@ -18,8 +18,6 @@ pub mod chain_id {
     pub const DEVNET: u64 = 3;
     /// Local development network [deprecated].
     pub const LOCAL: u64 = 1337;
-    /// Legacy public testnet v2 [deprecated].
-    pub const TESTNET_V2: u64 = 4;
     /// Alias for testnet chain_id 2.
     pub const HYBRID_TESTNET: u64 = TESTNET;
     /// Explicit alias conforming to prompt naming.
@@ -35,7 +33,7 @@ pub mod chain_id {
 
     /// Whether `id` is in the registry.
     pub fn is_registered(id: u64) -> bool {
-        matches!(id, MAINNET | TESTNET | DEVNET | LOCAL | TESTNET_V2)
+        matches!(id, MAINNET | TESTNET | DEVNET | LOCAL)
     }
 
     /// Whether `id` is a local development chain (devnet or local).
@@ -147,7 +145,6 @@ mod tests {
         assert!(!chain_id::is_hybrid(chain_id::MAINNET));
         assert!(!chain_id::is_hybrid(chain_id::DEVNET));
         assert!(!chain_id::is_hybrid(chain_id::LOCAL));
-        assert!(!chain_id::is_hybrid(chain_id::TESTNET_V2));
         assert!(!crate::address::legacy_address_allowed(chain_id::TESTNET));
     }
 
@@ -159,7 +156,6 @@ mod tests {
         assert!(chain_id::is_dev(chain_id::LOCAL));
         assert!(!chain_id::is_dev(chain_id::MAINNET));
         assert!(!chain_id::is_dev(chain_id::TESTNET));
-        assert!(!chain_id::is_dev(chain_id::TESTNET_V2));
         assert!(!chain_id::is_dev(chain_id::HYBRID_TESTNET));
         // Fail closed: an unregistered id is not a dev chain either.
         assert!(!chain_id::is_dev(0));

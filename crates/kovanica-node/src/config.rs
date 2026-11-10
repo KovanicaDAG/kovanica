@@ -588,7 +588,7 @@ impl NodeConfig {
             .map_err(|e| anyhow::anyhow!("peer_scoring: {e}"))?;
         if !kovanica_types::signing::chain_id::is_registered(self.chain_id) {
             anyhow::bail!(
-                "chain_id {} is not registered (expected 1 mainnet, 2 testnet, 3 devnet, 4 testnet v2 or 1337 local)",
+                "chain_id {} is not registered (expected 1 mainnet, 2 testnet, 3 devnet or 1337 local)",
                 self.chain_id
             );
         }
@@ -806,7 +806,7 @@ treasury_address = "treasury-address-placeholder"
         std::env::remove_var(ALLOW_GENESIS_MISMATCH_ENV);
         assert!(config.allow_genesis_mismatch);
 
-        for chain_id in [1, 2, 4] {
+        for chain_id in [1, 2] {
             config.chain_id = chain_id;
             let err = config
                 .validate()
@@ -844,7 +844,7 @@ treasury_address = "treasury-address-placeholder"
             ..NodeConfig::default()
         };
         assert_eq!(base.chain_id, 1337, "default is the local chain");
-        for id in [1, 2, 3, 4, 1337] {
+        for id in [1, 2, 3, 1337] {
             let c = NodeConfig {
                 chain_id: id,
                 ..base.clone()
@@ -1011,16 +1011,16 @@ treasury_address = "treasury-address-placeholder"
 
         let mut public = NodeConfig {
             run_validator: false,
-            chain_id: kovanica_types::signing::chain_id::TESTNET_V2,
+            chain_id: kovanica_types::signing::chain_id::TESTNET,
             ..NodeConfig::default()
         };
         public.apply_env_overrides();
         let err = public
             .validate()
-            .expect_err("chain 4 must reject a round-duration override");
+            .expect_err("chain 2 must reject a round-duration override");
         let msg = err.to_string();
         assert!(
-            msg.contains("KOVANICA_ROUND_DURATION_MS") && msg.contains("chain_id 4"),
+            msg.contains("KOVANICA_ROUND_DURATION_MS") && msg.contains("chain_id 2"),
             "error must name the variable and the chain, got: {msg}"
         );
 
@@ -1074,7 +1074,7 @@ treasury_address = "treasury-address-placeholder"
             );
             let mut config = NodeConfig {
                 run_validator: false,
-                chain_id: kovanica_types::signing::chain_id::TESTNET_V2,
+                chain_id: kovanica_types::signing::chain_id::TESTNET,
                 ..NodeConfig::default()
             };
             config.apply_env_overrides();

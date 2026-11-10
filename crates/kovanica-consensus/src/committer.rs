@@ -1653,7 +1653,7 @@ mod tests {
         CommitteeInfo::try_new(0, authorities).expect("valid committee")
     }
 
-    /// The chain-4 shape in miniature: five equal validators, three votes
+    /// The legacy 5-validator testnet shape in miniature: five equal validators, three votes
     /// (3/5) and two timeouts (2/5). The votes alone are short of the quorum,
     /// the union is not, and the voters are the strict majority -> commit.
     #[test]

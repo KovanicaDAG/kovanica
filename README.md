@@ -351,10 +351,8 @@ Default network configuration parameters (`crates/kovanica-node/src/config.rs`):
 
 ### Chain ID Registry
 - **`1`**: **Mainnet** (`MAINNET`) — strictly enforces PRO-21 canonical base32 addresses; consensus parameters frozen. `funded_accounts.toml` strictly forbidden. Release tag `v1.0.0-mainnet`.
-- **`2`**: **Testnet (legacy)** (`TESTNET`) — not the public testnet; enforces PRO-21 addresses.
+- **`2`**: **Testnet** (`TESTNET` / `HYBRID_TESTNET`) — canonical Hybrid PoW + GHOSTDAG public testnet; enforces PRO-21 base32 addresses (legacy hex rejected).
 - **`3`**: **Devnet** (`DEVNET`) — lenient address parsing; allows parameter overrides.
-- **`4`**: **Internal Testnet** (`TESTNET_V2`) — internal testnet; public launch gated on hybrid testnet M8 pass (delayed from unconditional 25.11.2026); supports PRO-21 and legacy migration.
-- **`5`**: **Hybrid PoW Testnet** (`HYBRID_TESTNET`) — planned hybrid PoW + GHOSTDAG chain (intent documented in ADR 0003; feature/flag `hybrid-pow`).
 - **`1337`**: **Local Devnet** (`LOCAL`) — single-node / local cluster testing.
 
 ---
@@ -373,7 +371,7 @@ Detailed architectural specifications and operational runbooks:
 - **Audit Scope & Threat Model:** [`docs/AUDIT-SCOPE.md`](docs/AUDIT-SCOPE.md)
 - **Documentation Archive Index:** [`docs/archive/README.md`](docs/archive/README.md)
 - **JSON-RPC Reference:** [`docs/RPC.md`](docs/RPC.md)
-- **Comprehensive 2026 Audit Report:** [`docs/AUDIT_REPORT_2026.md`](docs/AUDIT_REPORT_2026.md)
+- **Comprehensive 2026 Audit Report (archived, point-in-time):** [`docs/archive/AUDIT_REPORT_2026.md`](docs/archive/AUDIT_REPORT_2026.md)
 - **Mainnet Launch & Monitoring Runbook (draft, not normative):** [`docs/MAINNET-RUNBOOK.md`](docs/MAINNET-RUNBOOK.md)
 - **Genesis Key Ceremony Protocol (draft, not normative):** [`docs/KEY-CEREMONY.md`](docs/KEY-CEREMONY.md)
 - **Mainnet Launch Freeze Checklist:** [`docs/MAINNET-FREEZE-CHECKLIST.md`](docs/MAINNET-FREEZE-CHECKLIST.md)

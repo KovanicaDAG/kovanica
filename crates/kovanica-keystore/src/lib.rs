@@ -514,12 +514,12 @@ pub fn address(keystore: &Keystore) -> Result<Address> {
 /// Parse the address label stored in a keystore file.
 ///
 /// The file is not bound to a chain (migration). [`Address::from_str`] is
-/// base32 only, so this calls [`Address::parse_for_chain`] on chain 4, which
+/// base32 only, so this calls [`Address::parse_for_chain`] on devnet (3), which
 /// accepts the canonical form and the legacy hex forms. That does not assign
-/// the key to chain 4. An address typed for a chain goes through
+/// the key to devnet. An address typed for a chain goes through
 /// [`parse_address`].
 fn parse_stored_address(value: &str, what: &str) -> Result<Address> {
-    Address::parse_for_chain(value, kovanica_types::signing::chain_id::TESTNET_V2)
+    Address::parse_for_chain(value, kovanica_types::signing::chain_id::DEVNET)
         .map_err(|e| anyhow!("{what}: {e}"))
 }
 
@@ -527,7 +527,7 @@ fn parse_stored_address(value: &str, what: &str) -> Result<Address> {
 ///
 /// The canonical 64-character form is accepted on every chain. Legacy hex is
 /// accepted only where [`kovanica_types::address::legacy_address_allowed`] is
-/// true (devnet 3, chain 4, local 1337), so chain 1 refuses it.
+/// true (devnet 3 and local 1337), so chain 1 refuses it.
 pub fn parse_address(value: &str, what: &str, chain_id: u64) -> Result<Address> {
     Address::parse_for_chain(value, chain_id).map_err(|e| anyhow!("{what}: {e}"))
 }
@@ -676,7 +676,7 @@ mod tests {
         assert_eq!(parsed.encode().parse::<Address>().unwrap(), parsed);
     }
 
-    /// Chain 1 refuses a legacy hex string. Devnet, local, and chain 4 accept it.
+    /// Chain 1 refuses a legacy hex string. Devnet and local accept it.
     #[test]
     fn parse_address_follows_the_chain_policy() {
         use kovanica_types::signing::chain_id;
@@ -693,7 +693,7 @@ mod tests {
                 err.to_string().contains("not accepted"),
                 "{form} on chain 1: {err}"
             );
-            for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+            for chain in [chain_id::DEVNET, chain_id::LOCAL] {
                 assert_eq!(
                     parse_address(form, "address", chain).unwrap(),
                     address,

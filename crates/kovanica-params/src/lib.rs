@@ -23,8 +23,6 @@ pub const CHAIN_ID_TESTNET: u64 = 2;
 pub const CHAIN_ID_DEVNET: u64 = 3;
 /// Alias for testnet chain id (`2`) for backward compatibility during transition.
 pub const CHAIN_ID_HYBRID_TESTNET: u64 = CHAIN_ID_TESTNET;
-/// Legacy internal testnet v2 chain id (`4`) [deprecated].
-pub const CHAIN_ID_TESTNET_V2: u64 = 4;
 /// Local development network chain id (`1337`) [deprecated].
 pub const CHAIN_ID_LOCAL: u64 = 1337;
 
