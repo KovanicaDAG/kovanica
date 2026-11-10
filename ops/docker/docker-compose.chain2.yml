@@ -22,6 +22,8 @@ x-node: &node
         memory: 512M
   environment: &node-env
     KOVANICA_CHAIN_ID: "2"
+    # Chain 2 is a no-stake hybrid chain: no-stake-82m is the only permitted policy.
+    KOVANICA_EMISSION_POLICY: "no-stake-82m"
     KOVANICA_RPC_ADDR: "0.0.0.0"
     KOVANICA_LISTEN_ADDR: "0.0.0.0:8000"
     KOVANICA_DATA_DIR: "/var/lib/kovanica"

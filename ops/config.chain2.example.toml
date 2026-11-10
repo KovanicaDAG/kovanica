@@ -8,6 +8,11 @@
 # Chain ID 2 designates HYBRID_TESTNET
 chain_id = 2
 
+# Chain 2 is a no-stake hybrid chain: the only permitted emission policy is
+# no-stake-82m (82M mining budget, no genesis validator allocation).
+# Overridable with KOVANICA_EMISSION_POLICY.
+emission_policy = "no-stake-82m"
+
 # Directory where chain data is stored (consensus.redb + state.redb)
 data_dir = "./data/chain2"
 

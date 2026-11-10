@@ -283,11 +283,7 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
         .emission_policy
         .parse()
         .map_err(|e: kovanica_types::emission::ParseEmissionPolicyError| anyhow::anyhow!("{e}"))?;
-    if policy == kovanica_types::emission::EmissionPolicy::NoStake82M
-        && args.chain_id == kovanica_types::signing::chain_id::MAINNET
-    {
-        anyhow::bail!("NoStake82M emission policy is not permitted on mainnet (chain 1)");
-    }
+    ensure_emission_policy_matches_chain(args.chain_id, policy)?;
 
     // Build treasury
     let treasury = parse_address_hex(Some(&args.treasury_address), args.chain_id)?;
@@ -298,7 +294,12 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
     // Founder premine (200,000 KUNA) - included in genesis allocations output
     // Actual balance set when genesis block is executed on first run
 
-    // Join each validator
+    // Genesis validators. On a legacy (stake-based) genesis each one joins the
+    // staking set and locks `MIN_VALIDATOR_STAKE` out of the 1M allocation. On a
+    // hybrid PoW + GHOSTDAG genesis (no-stake-82m) there is no stake in the
+    // consensus path and no genesis allocation: the declared entries are
+    // bootstrap seed nodes only, so nothing is joined or locked.
+    let mut declared_validators: Vec<(Address, u64, Option<PublicKey>)> = Vec::new();
     for v in validators_input {
         let address = parse_address_hex(Some(&v.address), args.chain_id)?;
         let pk = v
@@ -306,17 +307,22 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
             .as_ref()
             .map(|s| parse_public_key_hex(s))
             .transpose()?;
+        if policy == kovanica_types::emission::EmissionPolicy::NoStake82M {
+            declared_validators.push((address, 0, pk));
+            continue;
+        }
         let stake = v.stake.unwrap_or(MIN_VALIDATOR_STAKE);
         staking
             .join_validator(address, stake, 0, Some(address), pk, None)
             .with_context(|| format!("joining validator {}", v.address))?;
+        declared_validators.push((address, stake, pk));
     }
 
     // Generate validator keys if output directory specified
     let mut validator_keys = Vec::new();
     if let Some(keys_dir) = &args.validator_keys_out {
         create_private_dir(std::path::Path::new(keys_dir))?;
-        for (i, v) in staking.validators.iter().enumerate() {
+        for (i, (address, _, _)) in declared_validators.iter().enumerate() {
             let (sk, pk) = kovanica_crypto::generate_keypair();
             // The raw Ed25519 seed is secret material: keep the in-memory copy
             // zeroized on drop and write the file `0600` below.
@@ -328,7 +334,7 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
             )?;
             validator_keys.push(serde_json::json!({
                 "index": i,
-                "address_hex": hex::encode(v.address.0),
+                "address_hex": hex::encode(address.0),
                 "public_key_hex": hex::encode(pk.0),
                 "key_file": key_file,
             }));
@@ -336,7 +342,7 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
         }
     }
 
-    info!(validators = staking.validators.len(), treasury = %treasury, founder = %founder, "genesis allocations computed");
+    info!(validators = declared_validators.len(), treasury = %treasury, founder = %founder, allocators = staking.validators.len(), "genesis allocations computed");
 
     // Build genesis StatementBlock
     let digest = StatementBlock::compute_digest(0, 0, &[], &[]);
@@ -354,14 +360,18 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
     // Genesis validator allocation: shares are computed over the deduplicated,
     // address-sorted validator set (same deterministic order the node uses at
     // first run), so the JSON is a faithful preview of the minted balances.
-    let mut alloc_entries: Vec<(Address, u64)> = staking
-        .validators
+    // A no-stake-82m genesis mints nothing, so every share is zero.
+    let mut alloc_entries: Vec<(Address, u64)> = declared_validators
         .iter()
-        .map(|v| (v.address, v.stake))
+        .map(|(address, stake, _)| (*address, *stake))
         .collect();
     alloc_entries.sort_by_key(|a| a.0 .0);
     alloc_entries.dedup_by(|a, b| a.0 .0 == b.0 .0);
-    let alloc_shares = kovanica_staking::genesis_validator_shares(alloc_entries.len());
+    let alloc_shares: Vec<u64> = if policy == kovanica_types::emission::EmissionPolicy::NoStake82M {
+        vec![0; alloc_entries.len()]
+    } else {
+        kovanica_staking::genesis_validator_shares(alloc_entries.len())
+    };
 
     // Serialize output JSON
     let output = serde_json::json!({
@@ -388,18 +398,18 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
             "mining_subsidy_budget_kovanica": policy.mining_budget() / ONE_KUNA,
             "genesis_validator_allocation_atoms": policy.genesis_validator_allocation(),
             "genesis_validator_allocation_kuna": policy.genesis_validator_allocation() / ONE_KUNA,
-            "validators": staking.validators.iter().map(|v| {
+            "validators": declared_validators.iter().map(|(address, stake, pk)| {
                 let share = alloc_entries
                     .iter()
-                    .position(|(a, _)| a.0 == v.address.0)
+                    .position(|(a, _)| a.0 == address.0)
                     .map(|i| alloc_shares[i])
                     .unwrap_or(0);
                 serde_json::json!({
-                    "address_hex": hex::encode(v.address.0),
-                    "stake": v.stake,
+                    "address_hex": hex::encode(address.0),
+                    "stake": stake,
                     "genesis_share_atoms": share,
-                    "genesis_liquid_atoms": share.saturating_sub(v.stake),
-                    "public_key_hex": v.public_key.as_ref().map(|pk| hex::encode(pk.0)),
+                    "genesis_liquid_atoms": share.saturating_sub(*stake),
+                    "public_key_hex": pk.as_ref().map(|pk| hex::encode(pk.0)),
                 })
             }).collect::<Vec<_>>(),
         },
@@ -1625,25 +1635,23 @@ mod rss_metric_tests {
     }
 }
 
-/// A *genesis* set is bounded by money: every genesis validator locks
-/// `MIN_VALIDATOR_STAKE` out of `GENESIS_VALIDATOR_ALLOCATION`, so at most 20
-/// can be funded at genesis. Under Hybrid PoW + GHOSTDAG, consensus requires
-/// NO stake: blocks are mined via Proof-of-Work (KovanicaHash) and ordered
-/// via GHOSTDAG (K=5). Genesis validators serve as initial bootstrap seed nodes
-/// and stake holders, requiring at least 1 seed node and at most 20.
+/// A *genesis* set is bounded by the operator-facing bootstrap policy: at
+/// least one seed node and at most 20. Under Hybrid PoW + GHOSTDAG, consensus
+/// requires NO stake: blocks are mined via Proof-of-Work (KovanicaHash) and
+/// ordered via GHOSTDAG (K=5). Genesis validators are bootstrap seed nodes
+/// only; they no longer lock `MIN_VALIDATOR_STAKE` out of a 1M allocation,
+/// which is instead folded into the 82M mining emission.
 ///
 /// Returns `(min, max)` for a mainnet genesis set.
 pub const MAINNET_GENESIS_VALIDATOR_MIN: usize = 1;
-pub const MAINNET_GENESIS_VALIDATOR_MAX: usize = (kovanica_staking::GENESIS_VALIDATOR_ALLOCATION
-    / kovanica_staking::MIN_VALIDATOR_STAKE)
-    as usize;
+pub const MAINNET_GENESIS_VALIDATOR_MAX: usize = 20;
 
 fn mainnet_genesis_validator_bounds() -> (usize, usize) {
     (MAINNET_GENESIS_VALIDATOR_MIN, MAINNET_GENESIS_VALIDATOR_MAX)
 }
 
 /// Mainnet genesis must start with at least one viable bootstrap validator,
-/// and cannot exceed what GENESIS_VALIDATOR_ALLOCATION can fund.
+/// and no more than 20.
 ///
 /// Under Hybrid PoW + GHOSTDAG, consensus requires NO stake, so the legacy
 /// 15-validator BFT quorum floor is retired in favor of a lean bootstrap set.
@@ -1655,10 +1663,8 @@ fn ensure_mainnet_genesis_validator_count(chain_id: u64, count: usize) -> Result
     if count < min || count > max {
         anyhow::bail!(
             "mainnet genesis has {count} validators but must have {min}..={max}: under Hybrid \
-             PoW + GHOSTDAG at least {min} bootstrap seed node is required, and {max} is the \
-             most that GENESIS_VALIDATOR_ALLOCATION can fund at the {}-KVNC minimum stake. \
-             Fix the genesis validator set before writing genesis",
-            kovanica_staking::MIN_VALIDATOR_STAKE / kovanica_staking::ONE_KUNA,
+             PoW + GHOSTDAG at least {min} bootstrap seed node is required and at most {max} \
+             are permitted. Fix the genesis validator set before writing genesis",
         );
     }
     Ok(())
@@ -1725,7 +1731,7 @@ fn ensure_funded_accounts_allowed(config: &NodeConfig) -> Result<()> {
         anyhow::bail!(
             "{} exists but funded_accounts.toml is not allowed on chain_id {} (mainnet): \
              every KUNA on mainnet must come from the published allocation, not from a file. \
-             Remove the file, or run a testnet (4) / devnet (3) / local (1337) chain",
+             Remove the file, or run a testnet (2) / devnet (3) / local (1337) chain",
             path.display(),
             config.chain_id
         );
@@ -1754,21 +1760,21 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     }
 
     let policy = resolve_emission_policy(config)?;
-    if policy == kovanica_types::emission::EmissionPolicy::NoStake82M
-        && config.chain_id == kovanica_types::signing::chain_id::MAINNET
-    {
-        anyhow::bail!("NoStake82M emission policy is not permitted on mainnet (chain 1)");
-    }
 
     info!(policy = %policy, "initialising genesis state");
     let treasury = parse_address_hex(config.treasury_address.as_deref(), config.chain_id)?;
     let mut staking = StakingState::new();
     staking.init_treasury(treasury);
 
-    // Genesis validator allocation: the set admitted here receives
-    // GENESIS_VALIDATOR_ALLOCATION, split evenly, and locks MIN_VALIDATOR_STAKE
-    // from that share. Collected while loading the genesis files below.
+    // Genesis validators. A legacy (stake-based) genesis admits the declared
+    // set into the staking state: each one receives a share of the 1M
+    // GENESIS_VALIDATOR_ALLOCATION and locks MIN_VALIDATOR_STAKE from it. A
+    // no-stake-82m genesis (every hybrid chain) mints no allocation and puts no
+    // stake in the consensus path, so the declared entries are bootstrap seed
+    // nodes only and are never joined. Collected while loading the files below.
+    let no_stake = policy == kovanica_types::emission::EmissionPolicy::NoStake82M;
     let mut genesis_stakes: Vec<(Address, u64)> = Vec::new();
+    let mut genesis_addresses: Vec<Address> = Vec::new();
 
     // Load full validator set from validators.json (Phase 14 ceremony) if present.
     let validators_json_path = config.data_dir.join("validators.json");
@@ -1784,9 +1790,12 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
                 .as_ref()
                 .map(|s| parse_public_key_hex(s))
                 .transpose()?;
-            let stake = v.stake.unwrap_or(kovanica_staking::MIN_VALIDATOR_STAKE);
-            staking.join_validator(address, stake, 0, Some(address), pk, None)?;
-            genesis_stakes.push((address, stake));
+            genesis_addresses.push(address);
+            if !no_stake {
+                let stake = v.stake.unwrap_or(kovanica_staking::MIN_VALIDATOR_STAKE);
+                staking.join_validator(address, stake, 0, Some(address), pk, None)?;
+                genesis_stakes.push((address, stake));
+            }
         }
         info!(count = validators_input.len(), "loaded validators.json");
     }
@@ -1866,19 +1875,21 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
             } else {
                 None
             };
-            staking.join_validator(address, v.stake, 0, Some(address), pk, vrf_pk)?;
-            genesis_stakes.push((address, v.stake));
+            genesis_addresses.push(address);
+            if !no_stake {
+                staking.join_validator(address, v.stake, 0, Some(address), pk, vrf_pk)?;
+                genesis_stakes.push((address, v.stake));
+            }
         }
         info!(count = count, "loaded genesis validator set");
     }
 
-    // Mainnet must launch with a viable committee. Checked on the deduplicated
-    // set, and before the allocation block below so an empty mainnet genesis
-    // is refused too rather than silently starting with no validators.
-    let mut genesis_addresses: Vec<[u8; 32]> = genesis_stakes
-        .iter()
-        .map(|(address, _)| address.0)
-        .collect();
+    // Mainnet must launch with a viable bootstrap set. Checked on the
+    // deduplicated set, and before the allocation block below so an empty
+    // mainnet genesis is refused too rather than silently starting with no
+    // validators. Under no-stake-82m the set is not staked, so it is counted
+    // from the declared addresses rather than from `genesis_stakes`.
+    let mut genesis_addresses: Vec<[u8; 32]> = genesis_addresses.iter().map(|a| a.0).collect();
     genesis_addresses.sort_unstable();
     genesis_addresses.dedup();
     ensure_mainnet_genesis_validator_count(config.chain_id, genesis_addresses.len())?;
@@ -5549,9 +5560,13 @@ fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
 }
 
 /// Genesis validator entry for Phase 16.6 4-node quorum.
+/// A declared genesis validator. `stake` may be omitted on a no-stake-82m
+/// hybrid genesis, where the entry is a bootstrap seed node and nothing is
+/// locked.
 #[derive(Debug, Deserialize)]
 struct GenesisValidatorEntry {
     address: String,
+    #[serde(default)]
     stake: u64,
     public_key: Option<String>,
     vrf_public_key: Option<String>,
@@ -5585,6 +5600,31 @@ struct GenesisValidatorsFile {
     validator: Vec<GenesisValidatorEntry>,
 }
 
+/// Refuse an emission policy that cannot coexist with the chain's consensus.
+///
+/// A hybrid PoW + GHOSTDAG chain (mainnet 1, testnet 2) has no stake in its
+/// consensus path and no genesis validator allocation: the whole 90.2M supply is
+/// founder premine (200k) + treasury (8M) + the 82M mining budget. A
+/// `legacy-81m` genesis would mint the retired 1M validator allocation on top,
+/// so it is refused with a clear error instead of silently inflating supply.
+fn ensure_emission_policy_matches_chain(
+    chain_id: u64,
+    policy: kovanica_types::emission::EmissionPolicy,
+) -> Result<()> {
+    if kovanica_types::signing::chain_id::is_hybrid(chain_id)
+        && policy != kovanica_types::emission::EmissionPolicy::NoStake82M
+    {
+        anyhow::bail!(
+            "chain {chain_id} is a hybrid PoW + GHOSTDAG chain and requires the no-stake-82m \
+             emission policy, not {}; set emission_policy = \"no-stake-82m\" in \
+             genesis_validators.toml, pass --emission-policy no-stake-82m, or set \
+             KOVANICA_EMISSION_POLICY=no-stake-82m",
+            policy.as_str()
+        );
+    }
+    Ok(())
+}
+
 /// Resolve the configured or genesis emission policy for this node.
 fn resolve_emission_policy(
     config: &NodeConfig,
@@ -5595,6 +5635,7 @@ fn resolve_emission_policy(
                 .map_err(|e: kovanica_types::emission::ParseEmissionPolicyError| {
                     anyhow::anyhow!("{e}")
                 })?;
+        ensure_emission_policy_matches_chain(config.chain_id, policy)?;
         return Ok(policy);
     }
     let genesis_validators_path = config.data_dir.join("genesis_validators.toml");
@@ -5607,12 +5648,15 @@ fn resolve_emission_policy(
                             anyhow::anyhow!("{e}")
                         },
                     )?;
+                    ensure_emission_policy_matches_chain(config.chain_id, policy)?;
                     return Ok(policy);
                 }
             }
         }
     }
-    Ok(kovanica_types::emission::EmissionPolicy::Legacy81M)
+    let policy = kovanica_types::emission::EmissionPolicy::Legacy81M;
+    ensure_emission_policy_matches_chain(config.chain_id, policy)?;
+    Ok(policy)
 }
 
 /// Pre-funded account entry for genesis.
@@ -5938,10 +5982,18 @@ mod tests {
         }
     }
 
+    /// Write a `genesis_validators.toml` for `chain_id`. A hybrid chain must
+    /// declare the no-stake-82m policy: legacy-81m is refused there because it
+    /// would mint the retired 1M genesis validator allocation.
     fn write_genesis_chain_id(dir: &std::path::Path, chain_id: u64) {
+        let policy = if kovanica_types::signing::chain_id::is_hybrid(chain_id) {
+            "emission_policy = \"no-stake-82m\"\n"
+        } else {
+            ""
+        };
         std::fs::write(
             dir.join("genesis_validators.toml"),
-            format!("chain_id = {chain_id}\nvalidator = []\n"),
+            format!("chain_id = {chain_id}\n{policy}validator = []\n"),
         )
         .unwrap();
     }
@@ -9763,7 +9815,13 @@ mod tests {
         let digest_with = |chain: u64, body: &str| {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(dir.path().join("founder_premine.hex"), body).unwrap();
-            genesis_config_digest(&chain_id_config(dir.path(), chain))
+            let mut config = chain_id_config(dir.path(), chain);
+            if chain == chain_id::MAINNET {
+                // Mainnet is hybrid: no-stake-82m is the only permitted policy,
+                // so the address policy is exercised after that gate.
+                config.emission_policy = Some("no-stake-82m".to_string());
+            }
+            genesis_config_digest(&config)
         };
 
         let err = digest_with(chain_id::MAINNET, &hex).unwrap_err();
@@ -9900,11 +9958,13 @@ mod tests {
             Address(raw).encode()
         };
 
-        // Mainnet, 21 canonical addresses: refused for exceeding the allocation capacity (max 20).
+        // Mainnet, 21 canonical addresses: refused for exceeding the bootstrap
+        // cap (max 20). no-stake-82m is the required mainnet policy.
         let dir = tempfile::tempdir().unwrap();
         let mainnet_set: Vec<String> = (1..=21).map(indexed_canonical).collect();
         write_set(dir.path(), chain_id::MAINNET, &mainnet_set);
-        let config = chain_id_config(dir.path(), chain_id::MAINNET);
+        let mut config = chain_id_config(dir.path(), chain_id::MAINNET);
+        config.emission_policy = Some("no-stake-82m".to_string());
         let dag = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
         let state = Storage::new(dir.path().join("state.redb")).unwrap();
         let err =
@@ -9938,19 +9998,14 @@ mod tests {
     }
 
     /// Mainnet genesis bounds under Hybrid PoW + GHOSTDAG: at least 1 bootstrap
-    /// seed node, and at most 20 (capped by the 1M allocation funding 50k stake).
+    /// seed node, and at most 20.
     #[test]
     fn mainnet_genesis_validator_count_is_bounded() {
         use kovanica_types::signing::chain_id;
 
         let (min, max) = mainnet_genesis_validator_bounds();
         assert_eq!(min, MAINNET_GENESIS_VALIDATOR_MIN);
-        assert_eq!(
-            max,
-            (kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::MIN_VALIDATOR_STAKE)
-                as usize,
-            "the genesis set is capped by the allocation"
-        );
+        assert_eq!(max, MAINNET_GENESIS_VALIDATOR_MAX);
         assert_eq!(max, 20);
 
         // Mainnet: bounds are enforced at both ends.
@@ -11904,30 +11959,103 @@ mod b1_epoch_restart_repro {
     }
 
     #[test]
-    fn test_init_genesis_no_stake_82m_refused_on_mainnet() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("state.redb");
-        let storage = Storage::new(&db_path).unwrap();
-        let dag_dir = dir.path().join("dag.redb");
-        let dag_store = DagStore::new(Storage::new(&dag_dir).unwrap()).unwrap();
+    fn test_init_genesis_hybrid_chain_requires_no_stake_policy() {
+        use kovanica_types::signing::chain_id;
 
-        let config = NodeConfig {
-            data_dir: dir.path().to_path_buf(),
-            chain_id: kovanica_types::signing::chain_id::MAINNET,
-            emission_policy: Some("no-stake-82m".to_string()),
-            ..Default::default()
-        };
+        // Chain 1 (mainnet) and chain 2 (testnet) are both hybrid now. A
+        // legacy-81m genesis would mint the retired 1M validator allocation,
+        // so genesis fails closed before writing anything.
+        for chain in [chain_id::MAINNET, chain_id::TESTNET] {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+            let dag_store =
+                DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
 
-        let err = init_genesis(&config, &dag_store, &storage).unwrap_err();
-        assert!(err.to_string().contains("not permitted on mainnet"));
+            let config = NodeConfig {
+                data_dir: dir.path().to_path_buf(),
+                chain_id: chain,
+                ..Default::default()
+            };
+
+            let err = init_genesis(&config, &dag_store, &storage).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("requires the no-stake-82m emission policy"),
+                "chain {chain}: {msg}"
+            );
+            assert!(msg.contains("legacy-81m"), "chain {chain}: {msg}");
+            let read = storage.begin_read().unwrap();
+            assert!(
+                storage.state().load_staking_state(&read).is_err(),
+                "chain {chain}: a refused genesis must not write staking state"
+            );
+        }
+    }
+
+    #[test]
+    fn test_init_genesis_no_stake_82m_supply_on_hybrid_chains() {
+        use kovanica_params::TOTAL_SUPPLY;
+        use kovanica_types::emission::EmissionPolicy;
+        use kovanica_types::signing::chain_id;
+
+        // 90.2M = founder premine (200k) + treasury (8M) + mining budget (82M),
+        // with no genesis validator allocation, on both hybrid chains.
+        for chain in [chain_id::MAINNET, chain_id::TESTNET] {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = Storage::new(dir.path().join("state.redb")).unwrap();
+            let dag_store =
+                DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
+            // Mainnet bounds want at least one declared bootstrap validator.
+            std::fs::write(
+                dir.path().join("genesis_validators.toml"),
+                format!(
+                    "chain_id = {chain}\nemission_policy = \"no-stake-82m\"\n\n\
+                     [[validator]]\naddress = \"{}\"\n",
+                    Address([0x33; 32])
+                ),
+            )
+            .unwrap();
+
+            let config = NodeConfig {
+                data_dir: dir.path().to_path_buf(),
+                chain_id: chain,
+                ..Default::default()
+            };
+            init_genesis(&config, &dag_store, &storage).unwrap();
+
+            let read = storage.begin_read().unwrap();
+            assert_eq!(
+                storage.state().load_emission_policy(&read).unwrap(),
+                Some(EmissionPolicy::NoStake82M)
+            );
+            let staking = storage.state().load_staking_state(&read).unwrap();
+            assert!(
+                staking.validators.is_empty(),
+                "chain {chain}: a no-stake genesis must not join validators"
+            );
+            assert_eq!(
+                staking.circulating_supply_with_policy(EmissionPolicy::NoStake82M),
+                kovanica_staking::FOUNDER_PREMINE,
+                "chain {chain}"
+            );
+            assert_eq!(
+                kovanica_staking::FOUNDER_PREMINE
+                    + kovanica_params::TREASURY_TOTAL
+                    + kovanica_params::MINING_SUBSIDY_BUDGET_NO_STAKE_82M,
+                TOTAL_SUPPLY,
+                "chain {chain}"
+            );
+        }
     }
 
     #[test]
     fn test_genesis_config_digest_binds_no_stake_policy() {
         let dir = tempfile::tempdir().unwrap();
+        // Devnet may run either policy, so the digest can be compared without
+        // tripping the hybrid-chain requirement.
         let config_legacy = NodeConfig {
             data_dir: dir.path().to_path_buf(),
-            chain_id: kovanica_types::signing::chain_id::HYBRID_TESTNET,
+            chain_id: kovanica_types::signing::chain_id::DEVNET,
             ..Default::default()
         };
 
@@ -12914,12 +13042,13 @@ mod b1_epoch_restart_repro {
             "orphan block must not be admitted to dag_store"
         );
 
-        // 4. Legacy submitWork: reject before writes on non-hybrid chain
+        // 4. Legacy submitWork: reject before writes on non-hybrid chain. Mainnet
+        // and testnet are both hybrid now, so a dev chain is the non-hybrid case.
         let mut legacy_state = rpc_state.clone();
         legacy_state.mempool = Arc::new(Mempool::new(
             MempoolConfig::default(),
             state_storage.clone(),
-            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::MAINNET),
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::DEVNET),
         ));
         let err_legacy =
             kovanica_rpc::handle_submit_work(json!({ "header": mined_bad_target }), legacy_state)
