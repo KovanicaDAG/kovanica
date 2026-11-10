@@ -4634,7 +4634,10 @@ mod tests {
         let work_by_addr = handle_get_work(serde_json::json!([addr.encode()]), state.clone())
             .await
             .expect("get work by address");
-        assert_eq!(work_by_addr["chain_id"], kovanica_params::CHAIN_ID_HYBRID_TESTNET);
+        assert_eq!(
+            work_by_addr["chain_id"],
+            kovanica_params::CHAIN_ID_HYBRID_TESTNET
+        );
         assert!(work_by_addr["header"].is_object());
 
         // 4. submit_work with a mined block
