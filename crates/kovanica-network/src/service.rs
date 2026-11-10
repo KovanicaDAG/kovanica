@@ -23,10 +23,11 @@ use kovanica_mempool::{Mempool, MempoolError};
 use kovanica_p2p_identity::{IdentityError, PeerIdentityClaim, PeerIdentityRegistry};
 use kovanica_types::{epoch_for_round, SealAnnouncement, StatementBlock, Transaction, Vote};
 use libp2p::{
+    autonat,
     gossipsub::{self, MessageAcceptance},
     identify, kad, request_response,
     swarm::{dial_opts::DialOpts, ConnectionId, NetworkBehaviour, SwarmEvent},
-    Multiaddr, PeerId, Swarm,
+    upnp, Multiaddr, PeerId, Swarm,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -872,6 +873,18 @@ impl NetworkService {
                 warn!(%error, "listener error");
                 Ok(())
             }
+            SwarmEvent::NewExternalAddrCandidate { address } => {
+                debug!(%address, "observed new external address candidate");
+                Ok(())
+            }
+            SwarmEvent::ExternalAddrConfirmed { address } => {
+                info!(%address, "external address confirmed by network");
+                Ok(())
+            }
+            SwarmEvent::ExternalAddrExpired { address } => {
+                debug!(%address, "external address expired");
+                Ok(())
+            }
             SwarmEvent::Behaviour(event) => self.handle_behaviour_event(event),
             _ => Ok(()),
         }
@@ -886,7 +899,50 @@ impl NetworkService {
             BehaviourEvent::Identify(event) => self.handle_identify_event(event),
             BehaviourEvent::BlockSync(event) => self.handle_request_response_event(event),
             BehaviourEvent::StateSync(event) => self.handle_state_sync_event(event),
+            BehaviourEvent::Autonat(event) => self.handle_autonat_event(event),
+            BehaviourEvent::Upnp(event) => self.handle_upnp_event(event),
         }
+    }
+
+    /// Handle AutoNAT status and probe events.
+    fn handle_autonat_event(&self, event: autonat::Event) -> Result<(), NetworkError> {
+        match event {
+            autonat::Event::StatusChanged { old, new } => {
+                info!(?old, ?new, "AutoNAT status changed (public reachability)");
+            }
+            autonat::Event::InboundProbe(probe) => {
+                debug!(?probe, "AutoNAT inbound probe");
+            }
+            autonat::Event::OutboundProbe(probe) => {
+                debug!(?probe, "AutoNAT outbound probe");
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle UPnP port mapping events.
+    fn handle_upnp_event(&self, event: upnp::Event) -> Result<(), NetworkError> {
+        match event {
+            upnp::Event::NewExternalAddr {
+                local_addr,
+                external_addr,
+            } => {
+                info!(%local_addr, %external_addr, "UPnP mapped new external address");
+            }
+            upnp::Event::GatewayNotFound => {
+                debug!("UPnP: no gateway found on local network");
+            }
+            upnp::Event::NonRoutableGateway => {
+                debug!("UPnP: gateway is non-routable");
+            }
+            upnp::Event::ExpiredExternalAddr {
+                local_addr,
+                external_addr,
+            } => {
+                debug!(%local_addr, %external_addr, "UPnP external address expired");
+            }
+        }
+        Ok(())
     }
 
     /// Handle gossipsub traffic: route payloads by topic.

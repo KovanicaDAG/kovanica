@@ -14,7 +14,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
-libp2p = { version = "0.57", features = ["tokio", "tcp", "noise", "yamux", "dns", "gossipsub", "kad", "ping", "identify", "macros", "request-response", "ed25519"] }
+libp2p = { version = "0.57", features = ["tokio", "tcp", "noise", "yamux", "dns", "gossipsub", "kad", "ping", "identify", "macros", "request-response", "ed25519", "autonat", "upnp"] }
 multiaddr = "0.12"
 futures = { workspace = true }
 async-trait = { workspace = true }

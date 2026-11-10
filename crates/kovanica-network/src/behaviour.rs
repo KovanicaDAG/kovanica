@@ -2,9 +2,9 @@
 
 use crate::{block_sync, error::NetworkError, state_sync, topics, NetworkConfig};
 use libp2p::{
-    gossipsub, identify, kad, kad::store::MemoryStore, noise, ping, request_response,
-    request_response::ProtocolSupport, swarm::NetworkBehaviour, tcp, yamux, Multiaddr, PeerId,
-    Swarm, SwarmBuilder,
+    autonat, gossipsub, identify, kad, kad::store::MemoryStore, noise, ping, request_response,
+    request_response::ProtocolSupport, swarm::behaviour::toggle::Toggle, swarm::NetworkBehaviour,
+    tcp, upnp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
 use std::{error::Error, time::Duration};
 
@@ -27,6 +27,10 @@ pub(crate) struct Behaviour {
     pub(crate) block_sync: request_response::Behaviour<block_sync::BlockSyncCodec>,
     /// Request-response for state sync (fast sync).
     pub(crate) state_sync: request_response::Behaviour<state_sync::StateSyncCodec>,
+    /// AutoNAT client for public IP detection and NAT status traversal.
+    pub(crate) autonat: autonat::Behaviour,
+    /// UPnP port mapping for automatic port forwarding through routers (active within Tokio runtime).
+    pub(crate) upnp: Toggle<upnp::tokio::Behaviour>,
 }
 
 /// Deterministic message id: BLAKE3 of the payload.
@@ -164,6 +168,16 @@ pub(crate) fn build_swarm(config: &NetworkConfig) -> Result<Swarm<Behaviour>, Ne
                 state_sync::state_sync_protocol(),
             );
 
+            // AutoNAT: detect public reachability and NAT traversal.
+            let autonat = autonat::Behaviour::new(local_peer_id, autonat::Config::default());
+
+            // UPnP: automatically map ports on IGD routers if running in an active Tokio reactor.
+            let upnp = if tokio::runtime::Handle::try_current().is_ok() {
+                Toggle::from(Some(upnp::tokio::Behaviour::default()))
+            } else {
+                Toggle::from(None)
+            };
+
             Ok(Behaviour {
                 gossipsub,
                 kad,
@@ -171,6 +185,8 @@ pub(crate) fn build_swarm(config: &NetworkConfig) -> Result<Swarm<Behaviour>, Ne
                 identify,
                 block_sync,
                 state_sync,
+                autonat,
+                upnp,
             })
         })
         .map_err(|err| NetworkError::Swarm(err.to_string()))?

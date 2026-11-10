@@ -3181,6 +3181,7 @@ dependencies = [
  "futures-timer",
  "getrandom 0.4.3",
  "libp2p-allow-block-list 0.7.0",
+ "libp2p-autonat",
  "libp2p-connection-limits 0.7.0",
  "libp2p-core 0.44.0",
  "libp2p-dns",
@@ -3225,6 +3226,30 @@ dependencies = [
  "libp2p-core 0.44.0",
  "libp2p-identity 0.3.0",
  "libp2p-swarm 0.48.0",
+]
+
+[[package]]
+name = "libp2p-autonat"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "651fcbe0470d52db88ace805e94fd074aa18537312d43cbb531f761fa6916b43"
+dependencies = [
+ "asynchronous-codec",
+ "either",
+ "futures",
+ "futures-bounded 0.3.0",
+ "futures-timer",
+ "libp2p-core 0.44.0",
+ "libp2p-identity 0.3.0",
+ "libp2p-request-response",
+ "libp2p-swarm 0.48.0",
+ "prost",
+ "prost-codec",
+ "rand 0.10.3",
+ "rand_core 0.10.1",
+ "thiserror 2.0.21",
+ "tracing",
+ "web-time",
 ]
 
 [[package]]
