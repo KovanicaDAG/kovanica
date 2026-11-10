@@ -29,13 +29,13 @@ describe("console addresses follow the chain", () => {
     }
   });
 
-  it("accepts the wire.json legacy recipient only on chains 3, 4, and 1337", () => {
-    for (const chainId of [3, 4, 1337]) {
+  it("accepts the wire.json legacy recipient only on chains 3 and 1337", () => {
+    for (const chainId of [3, 1337]) {
       expect(bytesToHex(transferRecipient(fixture.recipientAddressLegacy, chainId))).toBe(
         recipientKey,
       );
     }
-    for (const chainId of [1, 2, 0, 42]) {
+    for (const chainId of [1, 2, 4, 0, 42]) {
       expect(() => transferRecipient(fixture.recipientAddressLegacy, chainId)).toThrow(
         /legacy hex addresses are not accepted/,
       );
@@ -62,7 +62,7 @@ describe("console addresses follow the chain", () => {
     expect(() => buildKind("delegate", "1", fixture.recipientAddressLegacy, 2)).toThrow(
       /legacy hex addresses are not accepted/,
     );
-    const legacyDelegate = buildKind("delegate", "1", fixture.recipientAddressLegacy, 4);
+    const legacyDelegate = buildKind("delegate", "1", fixture.recipientAddressLegacy, 3);
     if (legacyDelegate.type === "delegate") {
       expect(bytesToHex(legacyDelegate.validator)).toBe(recipientKey);
     }

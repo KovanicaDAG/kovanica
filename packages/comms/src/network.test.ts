@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_RPC_URL, NETWORK_PRESETS, TESTNET_RPC_URL } from "./index.js";
 
 describe("comms network presets", () => {
-  it("lists the live chain-4 testnet first", () => {
+  it("lists the live chain-2 testnet first", () => {
     expect(NETWORK_PRESETS[0]).toEqual({
       id: "testnet",
-      label: "Testnet (chain 4)",
-      chainId: 4,
+      label: "Testnet (Chain 2)",
+      chainId: 2,
       rpcUrl: TESTNET_RPC_URL,
     });
     expect(TESTNET_RPC_URL).toBe("https://rpc-testnet.kovanica.online/rpc");
@@ -20,6 +20,6 @@ describe("comms network presets", () => {
   });
 
   it("uses chain ids the node accepts", () => {
-    expect(NETWORK_PRESETS.map((preset) => preset.chainId)).toEqual([4, 1337]);
+    expect(NETWORK_PRESETS.map((preset) => preset.chainId)).toEqual([2, 1337]);
   });
 });

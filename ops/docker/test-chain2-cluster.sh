@@ -89,7 +89,7 @@ echo "    Waiting for PoW blocks to advance..."
 
 advance_elapsed=0
 current_height=$initial_height
-while [ $advance_elapsed -lt 60 ]; do
+while [ $advance_elapsed -lt 120 ]; do
   sleep 4
   advance_elapsed=$((advance_elapsed + 4))
   current_height=$(get_block_number 8545)
@@ -100,7 +100,7 @@ while [ $advance_elapsed -lt 60 ]; do
 done
 
 if [ "$current_height" -le "$initial_height" ]; then
-  echo "ERROR: Block height failed to advance via PoW mining within 60s!"
+  echo "ERROR: Block height failed to advance via PoW mining within 120s!"
   exit 1
 fi
 

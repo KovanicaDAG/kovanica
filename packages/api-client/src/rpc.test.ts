@@ -28,9 +28,9 @@ describe("ChainId and HYBRID_TESTNET_CHAIN_ID constants", () => {
     expect(ChainId.TESTNET).toBe(2);
     expect(ChainId.DEVNET).toBe(3);
     expect(ChainId.TESTNET_V2).toBe(4);
-    expect(ChainId.HYBRID_TESTNET).toBe(5);
+    expect(ChainId.HYBRID_TESTNET).toBe(2);
     expect(ChainId.LOCAL).toBe(1337);
-    expect(HYBRID_TESTNET_CHAIN_ID).toBe(5);
+    expect(HYBRID_TESTNET_CHAIN_ID).toBe(2);
   });
 });
 
@@ -38,7 +38,7 @@ describe("KovanicaRpcClient hybrid PoW and GHOSTDAG RPC methods", () => {
   it("calls kovanica_getMiningInfo", async () => {
     const bodies: unknown[] = [];
     const mockMiningInfo: MiningInfo = {
-      chain_id: 5,
+      chain_id: 2,
       mining_enabled: true,
       mining_threads: 4,
       target_bits: "0x1e00ffff",
@@ -70,7 +70,7 @@ describe("KovanicaRpcClient hybrid PoW and GHOSTDAG RPC methods", () => {
   it("calls kovanica_getDagTips", async () => {
     const bodies: unknown[] = [];
     const mockDagTips: DagTipsResponse = {
-      chain_id: 5,
+      chain_id: 2,
       tips: [
         "0x1111111111111111111111111111111111111111111111111111111111111111",
         "0x2222222222222222222222222222222222222222222222222222222222222222",
@@ -100,7 +100,7 @@ describe("KovanicaRpcClient hybrid PoW and GHOSTDAG RPC methods", () => {
   it("calls kovanica_getWork with miner address", async () => {
     const bodies: unknown[] = [];
     const mockWorkTemplate: WorkTemplate = {
-      chain_id: 5,
+      chain_id: 2,
       round: 43,
       author: 1,
       parents: ["0x1111111111111111111111111111111111111111111111111111111111111111"],
@@ -150,7 +150,7 @@ describe("KovanicaRpcClient hybrid PoW and GHOSTDAG RPC methods", () => {
     );
 
     const submission: BlockHeaderSubmission = {
-      chain_id: 5,
+      chain_id: 2,
       round: 43,
       author: 1,
       parents: [],

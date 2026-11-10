@@ -21,21 +21,21 @@ describe("network selection", () => {
     ]);
     expect(networks.find((network) => network.id === "local")).toBeUndefined();
     expect(TESTNET.enabled).toBe(true);
-    expect(TESTNET.chainId).toBe(4);
+    expect(TESTNET.chainId).toBe(2);
     expect(MAINNET.enabled).toBe(false);
     expect(MAINNET.chainId).toBe(1);
     expect(MAINNET.faucetUrl).toBeNull();
     expect(TESTNET.rpcUrl).toBe("https://rpc-testnet.kovanica.online/rpc");
     expect(HYBRID_TESTNET.id).toBe("hybrid-testnet");
-    expect(HYBRID_TESTNET.label).toBe("Hybrid Testnet (Chain 5)");
-    expect(HYBRID_TESTNET.chainId).toBe(5);
+    expect(HYBRID_TESTNET.label).toBe("Hybrid Testnet (Chain 2)");
+    expect(HYBRID_TESTNET.chainId).toBe(2);
     expect(HYBRID_TESTNET.enabled).toBe(true);
     expect(HYBRID_TESTNET.rpcUrl).toBe("http://127.0.0.1:8545");
   });
 
   it("resolves hybrid-testnet when requested", () => {
     expect(resolveNetwork("hybrid-testnet", null, networks).id).toBe("hybrid-testnet");
-    expect(resolveNetwork("hybrid-testnet", null, networks).chainId).toBe(5);
+    expect(resolveNetwork("hybrid-testnet", null, networks).chainId).toBe(2);
     expect(rejectionMessage("hybrid-testnet", networks)).toBeNull();
   });
 
@@ -52,7 +52,7 @@ describe("network selection", () => {
 
   it("ignores mainnet from the query string and from storage", () => {
     expect(resolveNetwork("mainnet", "mainnet", networks).id).toBe("testnet");
-    expect(resolveNetwork("mainnet", "mainnet", networks).chainId).toBe(4);
+    expect(resolveNetwork("mainnet", "mainnet", networks).chainId).toBe(2);
     expect(rejectionMessage("mainnet", networks)).toMatch(/not open yet/i);
     expect(rejectionMessage("testnet", networks)).toBeNull();
   });
