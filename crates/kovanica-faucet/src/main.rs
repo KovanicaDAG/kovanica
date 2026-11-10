@@ -724,7 +724,6 @@ mod guard_tests {
             chain_id::TESTNET,
             chain_id::DEVNET,
             chain_id::TESTNET_V2,
-            chain_id::HYBRID_TESTNET,
             chain_id::LOCAL,
         ] {
             ensure_chain_allowed(id, false).expect("non-mainnet chain is allowed");
@@ -791,7 +790,6 @@ mod guard_tests {
                 chain_id::DEVNET,
                 chain_id::LOCAL,
                 chain_id::TESTNET_V2,
-                chain_id::HYBRID_TESTNET,
             ] {
                 let parsed = parse_address(form, chain)
                     .unwrap_or_else(|e| panic!("{form} on chain {chain}: {e:#}"));

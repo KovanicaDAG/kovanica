@@ -827,28 +827,30 @@ mod tests {
     }
 
     #[test]
-    fn validate_payout_address_accepts_legacy_hex_on_chain5() {
+    fn validate_payout_address_accepts_legacy_hex_on_devnet() {
         let raw = Address([0x22; 32]);
         let hex_bare = raw.to_hex();
         let hex_0x = format!("0x{}", hex_bare);
 
-        let res1 = validate_payout_address(&hex_bare, chain_id::HYBRID_TESTNET);
+        let res1 = validate_payout_address(&hex_bare, chain_id::DEVNET);
         assert!(res1.is_ok());
         assert_eq!(res1.unwrap(), raw);
 
-        let res2 = validate_payout_address(&hex_0x, chain_id::HYBRID_TESTNET);
+        let res2 = validate_payout_address(&hex_0x, chain_id::DEVNET);
         assert!(res2.is_ok());
         assert_eq!(res2.unwrap(), raw);
     }
 
     #[test]
-    fn validate_payout_address_rejects_legacy_hex_on_mainnet() {
+    fn validate_payout_address_rejects_legacy_hex_on_mainnet_and_testnet() {
         let raw = Address([0x33; 32]);
         let hex_bare = raw.to_hex();
 
-        // Chain 1 (MAINNET) strictly rejects legacy hex addresses
-        let res = validate_payout_address(&hex_bare, chain_id::MAINNET);
-        assert!(res.is_err());
+        // Chain 1 (MAINNET) and Chain 2 (TESTNET) strictly reject legacy hex addresses
+        let res_main = validate_payout_address(&hex_bare, chain_id::MAINNET);
+        assert!(res_main.is_err());
+        let res_test = validate_payout_address(&hex_bare, chain_id::TESTNET);
+        assert!(res_test.is_err());
     }
 
     #[test]

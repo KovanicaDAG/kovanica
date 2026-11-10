@@ -38,7 +38,6 @@ pub fn legacy_address_allowed(chain_id: u64) -> bool {
         crate::signing::chain_id::DEVNET
             | crate::signing::chain_id::LOCAL
             | crate::signing::chain_id::TESTNET_V2
-            | crate::signing::chain_id::HYBRID_TESTNET
     )
 }
 
@@ -403,7 +402,6 @@ mod tests {
         let allowed = [
             chain_id::DEVNET,
             chain_id::TESTNET_V2,
-            chain_id::HYBRID_TESTNET,
             chain_id::LOCAL,
         ];
         let refused = [chain_id::MAINNET, chain_id::TESTNET, 0, 42];

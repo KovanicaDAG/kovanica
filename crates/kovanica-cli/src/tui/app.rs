@@ -1542,7 +1542,6 @@ pub(crate) fn chain_name(id: u64) -> &'static str {
         chain_id::DEVNET => "devnet",
         chain_id::TESTNET => "testnet",
         chain_id::TESTNET_V2 => "testnet v2",
-        chain_id::HYBRID_TESTNET => "hybrid testnet",
         chain_id::MAINNET => "mainnet",
         _ => "unregistered",
     }

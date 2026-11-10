@@ -5633,7 +5633,7 @@ fn check_chain_id(config: &NodeConfig) -> Result<()> {
     let configured = config.chain_id;
     let genesis_required = matches!(
         configured,
-        kovanica_types::signing::chain_id::MAINNET | kovanica_types::signing::chain_id::TESTNET
+        kovanica_types::signing::chain_id::MAINNET
     );
     let genesis_path = config.data_dir.join("genesis_validators.toml");
     if genesis_required && !genesis_path.exists() {
@@ -5949,8 +5949,8 @@ mod tests {
     }
 
     #[test]
-    fn genesis_chain_id_optional_only_for_devnet_and_local() {
-        for id in [3, 1337] {
+    fn genesis_chain_id_optional_for_testnet_and_devnet() {
+        for id in [2, 3, 1337] {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(
                 dir.path().join("genesis_validators.toml"),
@@ -5966,29 +5966,28 @@ mod tests {
     }
 
     #[test]
-    fn mainnet_and_testnet_require_genesis_chain_id() {
-        for id in [1, 2] {
-            let dir = tempfile::tempdir().unwrap();
-            std::fs::write(
-                dir.path().join("genesis_validators.toml"),
-                "validator = []\n",
-            )
-            .unwrap();
-            let err = check_chain_id(&chain_id_config(dir.path(), id)).unwrap_err();
-            assert!(
-                err.to_string().contains("requires an explicit chain_id"),
-                "{err:#}"
-            );
-            assert!(!dir.path().join(CHAIN_ID_MARKER).exists());
+    fn mainnet_requires_genesis_chain_id() {
+        let id = 1;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("genesis_validators.toml"),
+            "validator = []\n",
+        )
+        .unwrap();
+        let err = check_chain_id(&chain_id_config(dir.path(), id)).unwrap_err();
+        assert!(
+            err.to_string().contains("requires an explicit chain_id"),
+            "{err:#}"
+        );
+        assert!(!dir.path().join(CHAIN_ID_MARKER).exists());
 
-            let dir = tempfile::tempdir().unwrap();
-            let err = check_chain_id(&chain_id_config(dir.path(), id)).unwrap_err();
-            assert!(err.to_string().contains("requires"), "{err:#}");
+        let dir = tempfile::tempdir().unwrap();
+        let err = check_chain_id(&chain_id_config(dir.path(), id)).unwrap_err();
+        assert!(err.to_string().contains("requires"), "{err:#}");
 
-            let dir = tempfile::tempdir().unwrap();
-            write_genesis_chain_id(dir.path(), id);
-            check_chain_id(&chain_id_config(dir.path(), id)).expect("explicit chain_id");
-        }
+        let dir = tempfile::tempdir().unwrap();
+        write_genesis_chain_id(dir.path(), id);
+        check_chain_id(&chain_id_config(dir.path(), id)).expect("explicit chain_id");
     }
 
     #[tokio::test]
@@ -9769,7 +9768,6 @@ mod tests {
             chain_id::TESTNET,
             chain_id::DEVNET,
             chain_id::TESTNET_V2,
-            chain_id::HYBRID_TESTNET,
             chain_id::LOCAL,
         ] {
             assert!(
@@ -9956,7 +9954,6 @@ mod tests {
         for other in [
             chain_id::TESTNET,
             chain_id::TESTNET_V2,
-            chain_id::HYBRID_TESTNET,
             chain_id::DEVNET,
             chain_id::LOCAL,
         ] {
@@ -11852,15 +11849,15 @@ mod b1_epoch_restart_repro {
         let dag_store = DagStore::new(Storage::new(&dag_dir).unwrap()).unwrap();
 
         let founder_addr = Address([0xAA; 32]);
-        let founder_hex = hex::encode(founder_addr.0);
-        std::fs::write(dir.path().join("founder_premine.hex"), &founder_hex).unwrap();
+        let founder_str = founder_addr.to_string();
+        std::fs::write(dir.path().join("founder_premine.hex"), &founder_str).unwrap();
 
         let treasury_addr = Address([0x7E; 32]);
         let config = NodeConfig {
             data_dir: dir.path().to_path_buf(),
             chain_id: kovanica_types::signing::chain_id::HYBRID_TESTNET,
             emission_policy: Some("no-stake-82m".to_string()),
-            treasury_address: Some(hex::encode(treasury_addr.0)),
+            treasury_address: Some(treasury_addr.to_string()),
             ..Default::default()
         };
 

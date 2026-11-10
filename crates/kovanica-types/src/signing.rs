@@ -12,32 +12,32 @@ use serde::{Deserialize, Serialize};
 pub mod chain_id {
     /// Mainnet.
     pub const MAINNET: u64 = 1;
-    /// Public testnet (legacy chain_id 2).
+    /// Public testnet (chain_id 2; Hybrid PoW + GHOSTDAG).
     pub const TESTNET: u64 = 2;
     /// Devnet.
     pub const DEVNET: u64 = 3;
-    /// Local development network.
+    /// Local development network [deprecated].
     pub const LOCAL: u64 = 1337;
-    /// Public testnet (new chain_id 4).
+    /// Legacy public testnet v2 [deprecated].
     pub const TESTNET_V2: u64 = 4;
-    /// Planned hybrid PoW + GHOSTDAG testnet (chain_id 5; ADR 0003; feature/flag `hybrid-pow`).
-    pub const HYBRID_TESTNET: u64 = 5;
+    /// Alias for testnet chain_id 2.
+    pub const HYBRID_TESTNET: u64 = TESTNET;
     /// Explicit alias conforming to prompt naming.
-    pub const CHAIN_ID_HYBRID_TESTNET: u64 = 5;
+    pub const CHAIN_ID_HYBRID_TESTNET: u64 = TESTNET;
 
-    /// Canonical network tag for chain 5 hybrid testnet.
-    pub const NETWORK_TAG_HYBRID_TESTNET: &str = "hybrid-testnet";
+    /// Canonical network tag for testnet.
+    pub const NETWORK_TAG_HYBRID_TESTNET: &str = "kovanica-testnet";
 
-    /// Whether `id` is a hybrid PoW + GHOSTDAG chain (Chain ID 2 or Chain ID 5).
+    /// Whether `id` is a hybrid PoW + GHOSTDAG chain (Chain ID 2).
     pub fn is_hybrid(id: u64) -> bool {
-        matches!(id, TESTNET | HYBRID_TESTNET)
+        matches!(id, TESTNET)
     }
 
     /// Whether `id` is in the registry.
     pub fn is_registered(id: u64) -> bool {
         matches!(
             id,
-            MAINNET | TESTNET | DEVNET | LOCAL | TESTNET_V2 | HYBRID_TESTNET
+            MAINNET | TESTNET | DEVNET | LOCAL | TESTNET_V2
         )
     }
 
@@ -136,10 +136,11 @@ mod tests {
 
     #[test]
     fn registry() {
-        for id in [1, 2, 3, 4, 5, 1337] {
+        for id in [chain_id::MAINNET, chain_id::TESTNET, chain_id::DEVNET] {
             assert!(chain_id::is_registered(id));
         }
         assert!(!chain_id::is_registered(0));
+        assert!(!chain_id::is_registered(42));
     }
 
     #[test]
