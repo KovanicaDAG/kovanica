@@ -31,7 +31,7 @@ Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full p
 - [x] External security review scope — finalized comprehensive scope document (`docs/AUDIT-SCOPE.md`), checklist (`docs/AUDIT-CHECKLIST.md`), and auditor invitation (`docs/AUDITOR-INVITATION.md`) covering KovanicaHash (BLAKE3 + 2 MiB scratchpad), GHOSTDAG K=5, DAA, Wasmi fuel sandboxing, PRO-21 addresses, and KVNC tokenomics (engagement pending external auditor assignment).
 - [ ] Mainnet launch + monitoring runbook (`docs/MAINNET-RUNBOOK.md`) — **draft, not normative**; being rewritten for PoW + GHOSTDAG no-stake.
 - [x] ~~Governance: parameter proposals, stake-weighted voting, treasury spend (`propose`/`vote` in `kovanica-cli`, state tracking in `kovanica-staking`).~~ **Removed** — stale stake-weighted governance deleted; consensus is PoW + GHOSTDAG, no stake. Governance model pending decision.
-- [x] ~~Staking user-facing guide — [`docs/STAKING-GUIDE.md`](docs/STAKING-GUIDE.md) covers delegator & validator onboarding, CLI staking/delegation/unbonding/rewards, and FAQ.~~ **Removed** — superseded by the no-stake decision.
+- [x] ~~Staking user-facing guide~~ (was `docs/STAKING-GUIDE.md`) — covered delegator & validator onboarding, CLI staking/delegation/unbonding/rewards, and FAQ. **Removed** — superseded by the no-stake decision; the file no longer exists.
 - [x] Explorer docs ([`docs/EXPLORER.md`](docs/EXPLORER.md)) and mainnet freeze checklist ([`docs/MAINNET-FREEZE-CHECKLIST.md`](docs/MAINNET-FREEZE-CHECKLIST.md)).
 - [x] CLI node ops `sync`/`peers` implemented via `kovanica_syncStatus`.
 

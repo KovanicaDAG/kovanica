@@ -194,10 +194,10 @@ Implemented in `crates/kovanica-consensus` and `crates/kovanica-execution`:
   - Stake Isolation: Consensus operates completely free of stake weighting, vote quorums, committee signatures, or VRF tickets.
 - **Mining Subsidy & Reward Minting:**
   - In `kovanica-execution::execute_committed_subdag_inner`:
-    - Chain 2 (`is_hybrid`) detects the hybrid network and bypasses epoch committee lookups.
+    - Chains 1 and 2 (`is_hybrid`) are detected as hybrid networks and bypass epoch committee lookups.
     - Each committed block in the linearized sequence mints `kovanica_params::INITIAL_BLOCK_REWARD` (2.5 KVNC = 2,500,000,000 atoms) to the block author address derived from `header.author`.
     - No validator commission, delegator cuts, or light-client escrow deductions (`escrow_part = 0`).
-    - Total mining subsidy is tracked against the 81,000,000 KVNC mining budget.
+    - Total mining subsidy is tracked against the 82,000,000 KVNC mining budget (`NoStake82M`).
 
 ---
 

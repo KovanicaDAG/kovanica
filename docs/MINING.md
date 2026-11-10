@@ -27,7 +27,7 @@ Kovanica utilizes a **Hybrid PoW + GHOSTDAG** consensus architecture for decentr
 - **Target Block Time:** 4 seconds (`TARGET_BLOCK_MS = 4000`).
 - **GHOSTDAG Parameter $K$:** $K = 5$ (`GHOSTDAG_K = 5`).
 - **Block Reward:** **2.5 KVNC** per committed block author, credited directly to the miner's payout address.
-- **Subsidy Halving / Decay:** Initial subsidy era of 8,100,000 blocks with $\times 3/4$ decay each subsequent era, drawing from an 81,000,000 KVNC mining subsidy budget.
+- **Subsidy Halving / Decay:** Initial subsidy era of 8,200,000 rewarded blocks with $\times 3/4$ decay each subsequent era, drawing from an 82,000,000 KVNC mining subsidy budget (`NoStake82M`; there is no genesis validator allocation).
 - **Payout Address Format:** Canonical PRO-21 base32 address (`kvnc` + 57 base32 chars + `dag` = 64 characters). Legacy hex addresses (`0x...` or 64 hex characters) are rejected on the hybrid networks (Chain IDs 1 and 2); use the canonical form.
 
 For further architectural context, see the [Hybrid PoW + GHOSTDAG ADR](adr/0003-hybrid-pow-ghostdag.md), the [Block Header Specification](dev/POW-HEADER-SPEC.md), and the [Tokenomics Specification](TOKENOMICS.md).

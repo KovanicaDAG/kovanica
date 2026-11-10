@@ -44,7 +44,7 @@ codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-no
 
 ## Tokenomics (zaključano)
 
-> Revidirano 2026-10-13 / Ažurirano 2026-11-05: ticker KVNC, s₀=2,5 KVNC, era=8 100 000, budget=81M, +1M genesis validatorska alokacija, target block 4 s (`TARGET_BLOCK_MS = 4000`), GHOSTDAG K=5. Sve potvrđeno od strane vlasnika projekta.
+> Revidirano 2026-10-13 / Ažurirano 2026-11-05 / no-stake 2026-11-06: ticker KVNC, s₀=2,5 KVNC, era=8 200 000 rewarded blokova, budget=82M, genesis validatorska alokacija 0 (1M vraćen u mining emission), target block 4 s (`TARGET_BLOCK_MS = 4000`), GHOSTDAG K=5. Sve potvrđeno od strane vlasnika projekta. Chain 1 (mainnet) i chain 2 (testnet) su oba hybrid (`NoStake82M`); legacy `Legacy81M` konstante ostaju u kodu samo za postojeće baze i dev chainove.
 
 | Parameter                  | Value                                          |
 |---------------------------|------------------------------------------------|
@@ -52,10 +52,10 @@ codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-no
 | Decimals                  | 9                                              |
 | Founder premine           | 200 000 KVNC                                   |
 | Treasury                  | 8 000 000 KVNC (1 M/year × 8 years, linear)    |
-| Genesis validator alloc.  | 1 000 000 KVNC (ravnomjerno na genesis validatore, **testnet: preporučeno 5, najviše 20; mainnet: 15–20 (provjereno u kodu)**; legacy staking) |
-| Mining subsidy budget     | **81 000 000 KVNC** (= 90.2M − 0.2M − 8M − 1M) |
+| Genesis validator alloc.  | **0 KVNC** (ukinuto — nema stakea u konsenzusu; **genesis bootstrap seeds 1..=20**, bez stakea i bez alokacije; bivši 1M vraćen u mining emission) |
+| Mining subsidy budget     | **82 000 000 KVNC** (= 90.2M − 0.2M − 8M) |
 | Initial block reward      | **2,5 KVNC** (paid to committed block author)  |
-| Subsidy era length        | **8 100 000** committed leader/block heights   |
+| Subsidy era length        | **8 200 000** rewarded blocks (`SUBSIDY_ERA_BLOCKS_NO_STAKE_82M`, legacy 8.1M ostaje za `Legacy81M`) |
 | Decay                     | **× 3/4** each era                             |
 | Target block time         | 4 s (`TARGET_BLOCK_MS = 4000`)                 |
 | GHOSTDAG parameter K      | 5 (`GHOSTDAG_K = 5`)                           |

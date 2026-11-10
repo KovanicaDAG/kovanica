@@ -61,11 +61,11 @@ Canonical parameters implemented in `crates/kovanica-staking/src/lib.rs` and doc
 | **Total Supply** | **90,200,000 KVNC** | Hard maximum supply ceiling (`90_200_000 * 10^9` atoms) |
 | **Decimals** | **9** | Smallest unit: 1 atom = $10^{-9}$ KVNC |
 | **Founder Premine** | **200,000 KVNC** | Allocated at genesis to the founder address |
-| **Genesis Validator Allocation** | **1,000,000 KVNC** | Split evenly across 5–20 genesis validators (dust distributed deterministically) |
+| **Genesis Validator Allocation** | **0 KVNC** | Retired with the PoA/hybrid decision: there is no stake in the consensus path, and the former 1,000,000 KVNC is folded into the mining budget |
 | **Treasury Allocation** | **8,000,000 KVNC** | Linear vesting over 8 years (1,000,000 KVNC/year) for development and grants |
-| **Mining Subsidy Budget** | **81,000,000 KVNC** | Derived subsidy pool: $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M} = 81\text{M}$ KVNC |
+| **Mining Subsidy Budget** | **82,000,000 KVNC** | Derived subsidy pool: $90.2\text{M} - 0.2\text{M} - 8\text{M} = 82\text{M}$ KVNC (`NoStake82M`) |
 | **Initial Block Reward** | **2.5 KVNC** | Minted exclusively on committed leader blocks ($5 \times 10^9 / 2$ atoms) |
-| **Subsidy Era Length** | **8,100,000 blocks** | Committed leader blocks per era |
+| **Subsidy Era Length** | **8,200,000 blocks** | Rewarded blocks per era (`SUBSIDY_ERA_BLOCKS_NO_STAKE_82M`) |
 | **Reward Decay Rate** | **$\times 3/4$** | Emission multiplies by $3/4$ (25% decay) at each era boundary |
 | **Minimum Validator Stake** | **50,000 KVNC** | Minimum self-bond required to enter the active validator committee (`MIN_VALIDATOR_STAKE`; legacy) |
 | **Minimum Delegation** | **50,000 KVNC** | Minimum stake required for validator delegation (`MIN_DELEGATION`; legacy) |

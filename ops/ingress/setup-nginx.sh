@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Kovanica Testnet (Chain 4) — Ingress & Reverse Proxy Setup (Nginx + Certbot)
+# Kovanica Testnet (Chain 2) — Ingress & Reverse Proxy Setup (Nginx + Certbot)
 # Usage:
 #   sudo bash setup-nginx.sh seed1 [email]
 #   sudo bash setup-nginx.sh seed3 [email]

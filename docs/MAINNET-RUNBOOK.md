@@ -38,7 +38,7 @@ Verify that the binary under execution enforces the frozen parameters defined in
 | **Treasury Allocation** | `8,000,000 KVNC` | Linear 8-year vesting (1M KVNC/year) |
 | **Mining Subsidy Budget** | `82,000,000 KVNC` | $90.2\text{M} - 0.2\text{M} - 8\text{M}$ |
 | **Initial Block Reward** | `2.5 KVNC` | $2.5 \times 10^9$ atoms per committed block |
-| **Subsidy Era Length** | `8,100,000 blocks` | Multiplied by $3/4$ decay each era |
+| **Subsidy Era Length** | `8,200,000 blocks` | Rewarded blocks per era; multiplied by $3/4$ decay each era |
 | **Genesis Bootstrap Seeds** | `1` to `20` nodes | `3–5` seeds recommended for public launch |
 | **Epoch Duration** | `7,200` rounds (~8 hours) | `EPOCH_ROUNDS = 7_200` |
 | **Unbonding Cooldown** | `100,000` leader blocks | ~13.9 days at 12 s/leader |

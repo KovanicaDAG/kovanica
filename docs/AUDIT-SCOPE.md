@@ -72,10 +72,10 @@ This scope document specifies the components, invariants, threat models, and pri
 |---|---|---|
 | Hard Cap & Total Supply | **Critical** | Total supply is strictly capped at **90 200 000 KVNC** (`90_200_000 * 10^9` base units). |
 | Mining Subsidy Emission | **Critical** | Initial block reward $s_0 = \mathbf{2,5\text{ KVNC}}$ per committed block, minted to the block's `author` address. |
-| Subsidy Decay Curve | **Critical** | Decay factor $\times \frac{3}{4}$ applied every **8 100 000** committed heights; total mining subsidy budget is exactly **81 000 000 KVNC**. |
+| Subsidy Decay Curve | **Critical** | Decay factor $\times \frac{3}{4}$ applied every **8 200 000** rewarded blocks; total mining subsidy budget is exactly **82 000 000 KVNC** (`NoStake82M`). |
 | Treasury Allocation | **High** | **8 000 000 KVNC** vested linearly over 8 years (1 000 000 KVNC/year), claimed via `claim_treasury_vesting(committed_height)`. |
 | Founder Premine | **High** | **200 000 KVNC** allocated at genesis. |
-| Genesis Validator Allocation | **High** | **1 000 000 KVNC** allocated across genesis validators (15–20 validators for mainnet ceremony; dust deterministically assigned to first). |
+| Genesis Validator Allocation | **High** | **0 KVNC** on chains 1 and 2 (`NoStake82M`); genesis bootstrap seeds (1..=20) hold no stake, and the former 1 000 000 KVNC is folded into the mining budget. |
 | Mainnet `funded_accounts.toml` Prohibition | **Critical** | Arbitrary pre-funding via `funded_accounts.toml` is **strictly prohibited on Mainnet (`chain_id = 1`)**. Code rejects node boot if `funded_accounts.toml` is present on Chain 1. |
 
 **Key Supply Invariant:**

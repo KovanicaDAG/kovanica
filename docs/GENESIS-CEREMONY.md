@@ -57,7 +57,7 @@ public_key = "4a7b..."
 Under **Hybrid PoW + GHOSTDAG**, consensus requires **NO stake in the consensus path**: blocks are mined via Proof-of-Work (KovanicaHash) and ordered via GHOSTDAG ($K=5$). 
 
 - The legacy 15-validator BFT committee quorum floor is retired.
-- Mainnet genesis requires at least **1** bootstrap seed node and at most **20** (the ceiling of the 1,000,000 KVNC allocation split across the 50,000 KVNC minimum stake).
+- Mainnet genesis requires at least **1** bootstrap seed node and at most **20** (bootstrap policy; under `NoStake82M` the genesis set holds no stake and receives no allocation).
 - A lean deployment of **3–5 bootstrap seed nodes** (`seed1`, `seed3.kovanica.online`) is recommended for public discovery.
 - `kovanica-node --check-config` enforces this bound on Mainnet when ceremony files are present.
 
@@ -69,7 +69,7 @@ address = "kvnc1..."
 balance = 1000000000000
 ```
 
-Pre-funding accounts from `funded_accounts.toml` is permitted only on test/dev networks (chains 2, 3, 4, 5, 1337). On **Chain 1 (Mainnet)**, this file is **strictly prohibited**; every KVNC must originate from the published emission allocations (founder premine, treasury vesting, genesis validator allocation, mining subsidy). The node aborts on startup if `funded_accounts.toml` is detected on Mainnet. The mainnet `sha256sum` list therefore omits it (see [`docs/TESTNET-RESET.md`](TESTNET-RESET.md)).
+Pre-funding accounts from `funded_accounts.toml` is permitted only on test/dev networks (chains 2, 3, 1337). On **Chain 1 (Mainnet)**, this file is **strictly prohibited**; every KVNC must originate from the published emission allocations (founder premine, treasury vesting, genesis validator allocation, mining subsidy). The node aborts on startup if `funded_accounts.toml` is detected on Mainnet. The mainnet `sha256sum` list therefore omits it (see [`docs/TESTNET-RESET.md`](TESTNET-RESET.md)).
 
 ---
 

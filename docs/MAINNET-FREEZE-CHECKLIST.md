@@ -130,10 +130,10 @@ Verify that every parameter in the release binary matches the canonical mainnet 
 | **Total Supply Ceiling** | `90,200,000 KVNC` | `90_200_000 * 10^9` atoms | `crates/kovanica-staking/src/lib.rs` | [ ] |
 | **Founder Premine** | `200,000 KVNC` | `200_000 * 10^9` atoms | `crates/kovanica-staking/src/lib.rs` | [ ] |
 | **Treasury Allocation** | `8,000,000 KVNC` | Linear 8-year vesting (1M KVNC/yr) | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Genesis Validator Pool**| `1,000,000 KVNC` | Split evenly across bootstrap seed nodes (1..=20) | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Mining Subsidy Budget**| `81,000,000 KVNC` | $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M}$ | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Genesis Validator Pool**| `0 KVNC` | No allocation: hybrid consensus has no stake (former 1M folded into mining) | `crates/kovanica-params/src/lib.rs` | [ ] |
+| **Mining Subsidy Budget**| `82,000,000 KVNC` | $90.2\text{M} - 0.2\text{M} - 8\text{M}$ (`NoStake82M`) | `crates/kovanica-params/src/lib.rs` | [ ] |
 | **Initial Block Reward** | `2.5 KVNC` | $2.5 \times 10^9$ atoms ($5 \times 10^9 / 2$) | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Subsidy Era Length** | `8,100,000 blocks` | Multiplied by $3/4$ decay each era | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Subsidy Era Length** | `8,200,000 blocks` | Rewarded blocks per era; multiplied by $3/4$ decay each era | `crates/kovanica-params/src/lib.rs` | [ ] |
 | **Target Block Duration**| `4,000 ms` (4 s) | GHOSTDAG $K=5$, target block 4 s | `crates/kovanica-consensus/src/lib.rs` | [ ] |
 | **Epoch Duration** | `7,200 rounds` | `EPOCH_ROUNDS = 7_200` (~8 hours; legacy) | `crates/kovanica-consensus/src/lib.rs` | [ ] |
 | **Unbonding Period** | `100,000 blocks` | `UNBONDING_ROUNDS = 100_000` (~13.9 days) | `crates/kovanica-staking/src/lib.rs` | [ ] |
@@ -178,7 +178,7 @@ The genesis ceremony establishes the cryptographic trust root of the network and
 ### 4.2 Committee Sizing & Stake Allocation
 
 - [ ] **Bootstrap Seed Set:** Between 1 and 20 bootstrap seed nodes confirmed (3–5 recommended for public launch).
-- [ ] **Genesis Validator Allocation:** Exactly 1,000,000 KVNC distributed among registered genesis bootstrap nodes (e.g. 5 nodes receive 200,000 KVNC each, locking the 50,000 KVNC minimum stake with dust deterministically assigned to index 0).
+- [ ] **Genesis Validator Allocation:** Exactly 0 KVNC. Chains 1 and 2 run the `NoStake82M` policy: the former 1,000,000 KVNC allocation is folded into the 82,000,000 KVNC mining budget and the genesis bootstrap seeds (1..=20) hold no stake.
 - [ ] **Minimum Stake Met:** Every genesis validator self-stake satisfies `MIN_VALIDATOR_STAKE = 50_000 KVNC`.
 
 ### 4.3 Treasury Custody (Shamir's Secret Sharing)

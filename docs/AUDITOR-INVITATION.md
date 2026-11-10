@@ -28,7 +28,7 @@ Datum poziva: 2026-11-09.
 5. **Wasmi determinističko izvršavanje**: `crates/kovanica-execution/` + `crates/kovanica-runtime/` — determinističko oduzimanje goriva, limit od 16 stranica memorije (1 MiB), sigurno rukovanje trap-ovima i zaštita od reentrancy napada.
 
 ### P1 — Tokenomika, kriptografija i adrese (blokira Mainnet $T_0$)
-6. **Tokenomics invarijante**: tvrdi cap 90 200 000 KVNC; 2,5 KVNC nagrada po potvrđenom bloku; raspodjela proračuna (81M rudarenje, 8M riznica, 1M genesis validatori, 0,2M premine). Zabrana `funded_accounts.toml` na mainnetu (`chain_id = 1`).
+6. **Tokenomics invarijante**: tvrdi cap 90 200 000 KVNC; 2,5 KVNC nagrada po potvrđenom bloku; raspodjela proračuna (82M rudarenje, 8M riznica, 0 genesis validatori, 0,2M premine). Zabrana `funded_accounts.toml` na mainnetu (`chain_id = 1`).
 7. **Ed25519 kripto & PRO-21 adrese**: `crates/kovanica-crypto/` — striktna verifikacija potpisa (`dalek v2.1`), provjera kanonskog $S$, odbijanje slabih ključeva. Kanonski PRO-21 64-znakovni format (`kvnc...dag`) s 29-bitnim BLAKE3 kontrolnim zbrojem.
 8. **Keystore v2**: `crates/kovanica-keystore/` — Argon2id enkripcija, radna memorija se čisti (`zeroize`), sigurne dozvole datoteka (`0600`).
 

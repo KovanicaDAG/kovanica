@@ -127,7 +127,7 @@ GATES:
   python scripts/lint_docs.py
 
 ANTI:
-- Ne dirati niti mijenjati konfiguracije za postojeće mainnet / chain 4 servise.
+- Ne dirati niti mijenjati konfiguracije za postojeće mainnet / chain 2 servise.
 - Bez ikakvih hardcoded tajni ili privatnih ključeva s produkcijskih čvorova.
 - Bez force-push, bez merge, čekati Gate / Toni review.
 ```

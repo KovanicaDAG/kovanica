@@ -10,8 +10,8 @@ Canonical constants: `crates/kovanica-params`.
 ## 1. Supply Overview
 
 Kovanica defines two genesis supply allocations depending on the network's consensus model:
-1. **Legacy Networks (with validator stake):** Mainnet (Chain 1) and legacy testnets (Chains 2, 4) allocate 1,000,000 KVNC to genesis validators.
-2. **New NO-Stake Networks (NoStake82M):** For new networks operating without consensus stake (such as Hybrid PoW Testnet, Chain 2), the 1,000,000 KVNC validator allocation is returned to capped mining emissions, setting the mining subsidy budget to 82,000,000 KVNC.
+1. **No-Stake Hybrid Networks (NoStake82M):** Mainnet (Chain 1) and Testnet (Chain 2) both run Hybrid PoW + GHOSTDAG with no stake in the consensus path. The 1,000,000 KVNC genesis validator allocation is retired and returned to capped mining emissions, setting the mining subsidy budget to 82,000,000 KVNC.
+2. **Legacy (with validator stake, `Legacy81M`):** The former mining budget with a 1,000,000 KVNC genesis validator split survives only for existing databases and the dev/local chains (3, 1337). No new network uses it.
 
 | Allocation                  | Legacy (with stake) | New NO-Stake (82M) | % of Total         | Notes                                      |
 |-----------------------------|---------------------|--------------------|--------------------|--------------------------------------------|
@@ -28,14 +28,14 @@ split evenly across the genesis validator set. Each validator's share backs its
 `MIN_VALIDATOR_STAKE` (50 000 KVNC) self-stake; the remainder is liquid balance.
 See §7.2 for the deterministic split rule.
 
-For new NO-stake networks (`NoStake82M`), zero tokens are minted for validators at genesis (`GENESIS_VALIDATOR_ALLOCATION_NO_STAKE = 0`).
-All 82,000,000 KVNC are emitted solely through block rewards according to the 82M subsidy schedule.
+For the NO-stake hybrid networks (`NoStake82M`, chains 1 and 2), zero tokens are minted for validators at genesis (`GENESIS_VALIDATOR_ALLOCATION_NO_STAKE = 0`).
+All 82,000,000 KVNC are emitted solely through block rewards according to the 82M subsidy schedule. The genesis bootstrap seeds hold no stake and receive no allocation.
 
 ---
 
 ## 2. Block Reward Schedule
 
-### 2.1 Legacy 81M Policy (Existing networks)
+### 2.1 Legacy policy (existing networks)
 
 - **Initial reward:** 2.5 KVNC  
 - **Decay:** × ¾ every **8 100 000** committed leader blocks (one era)  
@@ -44,9 +44,9 @@ All 82,000,000 KVNC are emitted solely through block rewards according to the 82
   (`LEADER_INTERVAL_SECS = 12`). One era is therefore ≈ **3.08 years**.
 - The geometric series sums to `s₀ × era × 1/(1 − ¾) = 2.5 × 8 100 000 × 4 = 81 M`.
 
-### 2.2 Approved NoStake82M Policy (New NO-stake networks, Toni 2026-11-06)
+### 2.2 Approved NoStake82M Policy (NO-stake hybrid networks, Toni 2026-11-06)
 
-- **Scope & Gating:** Applies exclusively to new NO-stake genesis networks (e.g. Hybrid PoW Testnet, Chain 2). Strictly prohibited on Mainnet (Chain 1). Legacy chains and existing databases remain 100% unchanged.
+- **Scope & Gating:** Required on both NO-stake hybrid chains — Mainnet (Chain 1) and Testnet (Chain 2). The node refuses to start a hybrid chain with any other emission policy. Legacy chains (3, 1337) and existing databases may still use `Legacy81M` and remain unchanged.
 - **Initial reward:** 2.5 KVNC (`2_500_000_000` base units).
 - **Era length:** **8 200 000** rewarded blocks (`SUBSIDY_ERA_BLOCKS_NO_STAKE_82M`).
   The first rewarded block is defined as index 0: indices `0..8_199_999` use the initial reward, index `8_200_000` starts era 1.
@@ -129,7 +129,7 @@ circulating ≈ FOUNDER_PREMINE
             + treasury.vested
 ```
 
-Capped at `TOTAL_SUPPLY`. For legacy chains, genesis circulating supply is 1 200 000 KVNC (premine + genesis allocation). For new NO-stake chains, genesis circulating supply is 200 000 KVNC (founder premine only). Treasury vests over time.
+Capped at `TOTAL_SUPPLY`. For the NO-stake hybrid chains (1, 2), `GENESIS_VALIDATOR_ALLOCATION = 0`, so genesis circulating supply is 200 000 KVNC (founder premine only). For legacy chains (3, 1337), genesis circulating supply is 1 200 000 KVNC (premine + genesis allocation). Treasury vests over time.
 
 ---
 

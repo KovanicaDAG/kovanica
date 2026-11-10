@@ -18,6 +18,8 @@ In accordance with requirement **R2** ("Archive obsolete material"), no files ar
 | [`B-TREASURY-PROPOSAL.md`](./B-TREASURY-PROPOSAL.md) | Phase 25 Early Draft | Superseded | Preliminary 38-line skeleton outlining treasury spend proposal fields. Completely replaced and expanded by the comprehensive Phase 25 Governance Specification. | `docs/GOVERNANCE.md` |
 | [`CANONICAL-TESTNET-2.md`](./CANONICAL-TESTNET-2.md) | 2026-11 (M8 → canonical testnet) | Implemented | Point-in-time migration design that promoted Chain 2 to the canonical Hybrid PoW + GHOSTDAG testnet and retired the isolated Chain 5 design. Fully implemented; later commits removed the remaining Chain 5 / Chain 4 code paths. | `crates/kovanica-types/src/signing.rs`, `docs/dev/HYBRID-TESTNET-M8.md` |
 | [`AUDIT_REPORT_2026.md`](./AUDIT_REPORT_2026.md) | 2026-10-24 (base `dd3aff9`) | Historical | Point-in-time documentation/config audit of the corpus at commit `dd3aff9`. Its registry and address tables describe the pre-cleanup chain set (including chain 4), which no longer matches the code. | `docs/AUDIT-SCOPE.md`, `README.md` |
+| [`MARKETING-CHAIN4-TESTNET.md`](./MARKETING-CHAIN4-TESTNET.md) | 2026-10-28 | Superseded | Social launch kit for the retired Chain 4 testnet. Chain 4 was removed from the canonical registry; the card assets remain in `docs/marketing/`. | `docs/COMMS-APP-PLAN.md`, current chain registry in `crates/kovanica-types/src/signing.rs` |
+| [`NOTED-chain4-launch.md`](./NOTED-chain4-launch.md) | 2026-10-26 | Superseded | Point-in-time chain-4 launch snapshot (topology, genesis invariants, deploy fixes). Chain 4 no longer exists in the registry. | `docs/TESTNET-SEED-NODES.md`, `docs/TESTNET-RESET.md` |
 
 ---
 
@@ -50,6 +52,14 @@ In accordance with requirement **R2** ("Archive obsolete material"), no files ar
 ### 7. `CANONICAL-TESTNET-2.md`
 - **Context**: Migration design (status "Implemented — Option A") that proposed promoting Chain 2 to the canonical Hybrid PoW + GHOSTDAG testnet, introducing the isolated Chain 5 testnet track, and inventorying every chain-id-dependent code path at a fixed commit.
 - **Archival Rationale**: The migration is complete and the design has since been superseded: Chain 2 is the canonical hybrid testnet, and the Chain 5 and Chain 4 code paths were removed entirely. The document is a point-in-time snapshot (it cites line numbers and code snippets that no longer exist), so it is preserved here for historical context rather than kept as active guidance. Current hybrid behaviour is described in `docs/dev/HYBRID-TESTNET-M8.md` and `docs/MINING.md`.
+
+### 9. `MARKETING-CHAIN4-TESTNET.md`
+- **Context**: Social-media launch kit (X thread, Discord/Instagram copy, card dimensions) written for the Chain 4 testnet in late October 2026.
+- **Archival Rationale**: Chain 4 was removed from the canonical chain registry (1, 2, 3, 1337). The marketing copy and card captions reference a network that no longer exists, so keeping them as active guidance would mislead. The rendered card assets stay in `docs/marketing/` for the record.
+
+### 10. `NOTED-chain4-launch.md`
+- **Context**: Distilled snapshot of the Chain 4 testnet launch state at the 2026-10-26 sync (validators, network tag `4-0eacd5699210b145`, genesis tokenomics, deploy fixes).
+- **Archival Rationale**: It documents a retired network with the pre-cleanup tokenomics (81M mining budget, 1M genesis allocation). Current testnet topology and genesis invariants live in `docs/TESTNET-SEED-NODES.md` and `docs/TESTNET-RESET.md`.
 
 ### 8. `AUDIT_REPORT_2026.md`
 - **Context**: A 2026-10-24 audit of the documentation corpus, example configs, and repository identity, recorded against base commit `dd3aff9`.

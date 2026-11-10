@@ -24,9 +24,9 @@ Updated to reflect canonical Hybrid PoW + GHOSTDAG consensus, KovanicaHash, KVNC
 - [ ] **Tokenomics & Emissions:**
   - [ ] Verify hard cap: 90 200 000 KVNC total supply
   - [ ] Verify block reward: 2.5 KVNC minted to committed block author (`block_reward(height)`)
-  - [ ] Verify subsidy decay curve: ×3/4 every 8 100 000 committed heights; total subsidy budget 81 000 000 KVNC
+  - [ ] Verify subsidy decay curve: ×3/4 every 8 200 000 rewarded blocks; total subsidy budget 82 000 000 KVNC (`NoStake82M`)
   - [ ] Verify treasury vesting: 8 000 000 KVNC over 8 years (1M/year linear)
-  - [ ] Verify genesis validator allocation: 1 000 000 KVNC (mainnet ceremony: 15–20 validators)
+  - [ ] Verify genesis validator allocation is 0 KVNC on chains 1 and 2 (`NoStake82M`); genesis bootstrap seeds 1..=20 hold no stake
 - [ ] **Cryptography & Address Format:**
   - [ ] Verify Ed25519 signatures (strict dalek v2.1: canonical S check, small-order rejection)
   - [ ] Verify PRO-21 addresses: `kvnc` + 57 base32 chars + `dag` (64 chars; 32B Ed25519 ‖ 29-bit BLAKE3 checksum)
