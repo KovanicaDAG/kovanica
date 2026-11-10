@@ -23,10 +23,14 @@ RPC_PORT_NODE2=28546
 RPC_PORT_NODE3=28547
 
 DRY_RUN=0
+NO_BUILD=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run)
       DRY_RUN=1
+      ;;
+    --no-build)
+      NO_BUILD=1
       ;;
     *)
       ;;
@@ -64,8 +68,13 @@ get_tip_round() {
   echo "$res" | grep -o '"tipRound":[0-9]*' | cut -d':' -f2 || echo "0"
 }
 
+BUILD_FLAG="--build"
+if [ "$NO_BUILD" -eq 1 ]; then
+  BUILD_FLAG=""
+fi
+
 echo "==> Step 1: Starting isolated Chain 5 chaos cluster..."
-docker compose -p "$PROJECT_NAME" -f "$COMPOSE_BASE" -f "$COMPOSE_CHAOS" up -d --build
+docker compose -p "$PROJECT_NAME" -f "$COMPOSE_BASE" -f "$COMPOSE_CHAOS" up -d $BUILD_FLAG
 
 echo "==> Step 2: Waiting for nodes to mine initial blocks..."
 sleep 15
