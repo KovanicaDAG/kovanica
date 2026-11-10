@@ -1037,6 +1037,184 @@ pub async fn handle_estimate_fee(_params: Value, state: RpcState) -> Result<Valu
     Ok(quantity(rate))
 }
 
+/// Helper to simulate a call or estimate gas consumption.
+fn simulate_call_internal(call_obj: &Value, state: &RpcState) -> Result<(u64, Vec<u8>), RpcError> {
+    let chain_id = served_chain_id(state);
+
+    // Parse "from" (optional, default to Address([0; 32]))
+    let caller = if let Some(from_val) = call_obj.get("from") {
+        if !from_val.is_null() {
+            parse_address(from_val, "from", chain_id)?
+        } else {
+            Address([0u8; 32])
+        }
+    } else {
+        Address([0u8; 32])
+    };
+
+    // Parse "to" (optional)
+    let contract_addr = if let Some(to_val) = call_obj.get("to") {
+        if !to_val.is_null() {
+            Some(parse_address(to_val, "to", chain_id)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Parse "value" (optional)
+    let value = if let Some(val) = call_obj.get("value") {
+        if !val.is_null() {
+            parse_u64(val, "value")?
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    // Parse "data" or "input"
+    let raw_data = call_obj
+        .get("data")
+        .or_else(|| call_obj.get("input"))
+        .and_then(|d| d.as_str());
+
+    let data_bytes = if let Some(hex_str) = raw_data {
+        let clean = hex_str
+            .strip_prefix("0x")
+            .or_else(|| hex_str.strip_prefix("0X"))
+            .unwrap_or(hex_str);
+        hex::decode(clean)
+            .map_err(|e| RpcError::InvalidParams(format!("data: invalid hex: {e}")))?
+    } else {
+        Vec::new()
+    };
+
+    // Parse "gas" / gas_limit
+    let gas_limit = if let Some(gas_val) = call_obj.get("gas") {
+        if !gas_val.is_null() {
+            parse_u64(gas_val, "gas")?
+        } else {
+            kovanica_execution::MAX_TX_GAS_LIMIT
+        }
+    } else {
+        kovanica_execution::MAX_TX_GAS_LIMIT
+    };
+
+    let Some(target) = contract_addr else {
+        // No target -> contract creation or dummy transfer
+        return Ok((21_000, Vec::new()));
+    };
+
+    let txn = state.storage.begin_read().map_err(internal)?;
+    let account = state
+        .storage
+        .state()
+        .get_account_or_default(&txn, &target)
+        .map_err(internal)?;
+
+    if account.code_hash == [0u8; 32] {
+        // Plain account transfer
+        let base_gas = 21_000u64;
+        return Ok((base_gas, Vec::new()));
+    }
+
+    let code = state
+        .storage
+        .state()
+        .get_contract_code(&txn, &account.code_hash)
+        .map_err(internal)?
+        .unwrap_or_default();
+
+    if code.is_empty() {
+        return Ok((21_000, Vec::new()));
+    }
+
+    // Determine entry point:
+    let explicit_entry = call_obj
+        .get("entry")
+        .or_else(|| call_obj.get("method"))
+        .and_then(|m| m.as_str());
+
+    let (entry, args): (&str, &[u8]) = if let Some(entry_name) = explicit_entry {
+        (entry_name, &data_bytes)
+    } else if let Some((matched_entry, remaining_args)) = detect_entry_point(&data_bytes) {
+        (matched_entry, remaining_args)
+    } else {
+        ("call", &data_bytes)
+    };
+
+    let latest_height = state
+        .consensus_store
+        .get_committed_leader_height()
+        .unwrap_or(0);
+
+    let config = kovanica_execution::ExecutionConfig {
+        gas_limit,
+        memory_limit_pages: kovanica_execution::DEFAULT_CONTRACT_MEMORY_PAGES,
+        gas_hardening_active: false,
+    };
+
+    let mut runner = kovanica_execution::ContractRunner::new();
+    let wasm_call = kovanica_execution::WasmCall {
+        wasm: &code,
+        entry,
+        contract: target,
+        caller,
+        height: latest_height,
+        timestamp: kovanica_common::contract_time_from_height(latest_height),
+        args,
+        storage: &state.storage,
+        txn: None,
+        value,
+        config: &config,
+    };
+
+    let mut gas_used = 0u64;
+    match runner.simulate_wasm_call(wasm_call, &mut gas_used) {
+        Ok(out) => {
+            let total_gas = 21_000u64.saturating_add(gas_used);
+            Ok((total_gas, out))
+        }
+        Err(e) => Err(RpcError::ExecutionError(format!(
+            "Execution reverted or failed: {e}"
+        ))),
+    }
+}
+
+fn detect_entry_point(data: &[u8]) -> Option<(&'static str, &[u8])> {
+    for &entry in kovanica_execution::ENTRY_POINTS {
+        let entry_bytes = entry.as_bytes();
+        if data.starts_with(entry_bytes) {
+            let rest = &data[entry_bytes.len()..];
+            let rest = rest.strip_prefix(&[0u8]).unwrap_or(rest);
+            return Some((entry, rest));
+        }
+    }
+    None
+}
+
+/// `kovanica_estimateGas` and `eth_estimateGas`
+pub async fn handle_estimate_gas(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let call_obj = args
+        .first()
+        .ok_or_else(|| RpcError::InvalidParams("estimateGas: missing call object".into()))?;
+    let (gas_estimate, _) = simulate_call_internal(call_obj, &state)?;
+    Ok(quantity(gas_estimate))
+}
+
+/// `kovanica_call` and `eth_call`
+pub async fn handle_call(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let call_obj = args
+        .first()
+        .ok_or_else(|| RpcError::InvalidParams("call: missing call object".into()))?;
+    let (_, output) = simulate_call_internal(call_obj, &state)?;
+    Ok(json!(format!("0x{}", hex::encode(output))))
+}
+
 // ============================================================================
 // Consensus methods
 // ============================================================================
@@ -4622,5 +4800,44 @@ mod tests {
             val["digest"],
             format!("0x{}", hex::encode(expected_digest.0))
         );
+    }
+
+    #[tokio::test]
+    async fn estimate_gas_and_call_work_for_transfers_and_plain_accounts() {
+        let (_dir, storage) = open_storage();
+        let state = test_state(storage);
+
+        // Missing params -> error
+        let err = handle_estimate_gas(json!([]), state.clone()).await;
+        assert!(err.is_err());
+
+        let err = handle_call(json!([]), state.clone()).await;
+        assert!(err.is_err());
+
+        // Estimate gas for plain transfer: 21,000 gas = 0x5208
+        let target = Address([0x44; 32]);
+        let estimate = handle_estimate_gas(
+            json!([{
+                "from": format!("0x{}", hex::encode([0x11; 32])),
+                "to": format!("0x{}", hex::encode(target.0)),
+                "value": "0x100"
+            }]),
+            state.clone(),
+        )
+        .await
+        .expect("estimateGas ok");
+        assert_eq!(estimate, json!("0x5208"));
+
+        // Call on plain address returns 0x
+        let call_res = handle_call(
+            json!([{
+                "to": format!("0x{}", hex::encode(target.0)),
+                "data": "0x1234"
+            }]),
+            state.clone(),
+        )
+        .await
+        .expect("call ok");
+        assert_eq!(call_res, json!("0x"));
     }
 }

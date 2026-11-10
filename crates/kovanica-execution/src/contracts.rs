@@ -1206,6 +1206,41 @@ impl ContractRunner {
         log_events(&events);
         Ok((out, events))
     }
+
+    /// Same as [`ContractRunner::execute_wasm_call`], but dry-runs the call
+    /// without committing the host's write overlay.
+    ///
+    /// Reports the fuel actually consumed into `gas_used` and returns the output bytes.
+    pub fn simulate_wasm_call(
+        &mut self,
+        call: WasmCall<'_>,
+        gas_used: &mut u64,
+    ) -> Result<Vec<u8>, ExecutionError> {
+        let key = kovanica_common::hash(call.wasm);
+        if !self.modules.contains_key(&key) {
+            let module = self.runtime.compile(call.wasm)?;
+            self.modules.insert(key, module);
+        }
+        let module = &self.modules[&key];
+
+        let mut host = ContractHost::new(
+            call.storage,
+            call.contract,
+            call.caller,
+            call.height,
+            call.timestamp,
+        )?;
+        let out = self.runtime.execute_with_gas(
+            module,
+            call.entry,
+            call.args,
+            call.config,
+            &mut host,
+            gas_used,
+        )?;
+        // Do NOT commit host to storage - dry run only!
+        Ok(out)
+    }
 }
 
 impl Default for ContractRunner {

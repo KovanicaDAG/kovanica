@@ -22,7 +22,6 @@
 
 use kovanica_consensus::CommittedSubDag;
 use kovanica_crypto::{vrf_verify, VRFOutput};
-use kovanica_runtime::{ExecutionConfig, DEFAULT_CONTRACT_MEMORY_PAGES};
 use kovanica_staking::{LightSet, LightSetError, RewardOutcome, StakingError, StakingState};
 use kovanica_storage::{
     address_to_bytes, state_store::Account, tables, BincodeSerialize, StateStoreError, Storage,
@@ -50,6 +49,7 @@ pub use contracts::{
     execute_contract_call, execute_contract_call_in_txn, is_entry_point, ContractEvent,
     ContractHost, ContractRunner, WasmCall, ENTRY_POINTS,
 };
+pub use kovanica_runtime::{ExecutionConfig, DEFAULT_CONTRACT_MEMORY_PAGES, MAX_TX_GAS_LIMIT};
 
 /// Table tracking executed sub-DAG leaders (idempotency).
 const EXECUTED_SUBDAGS: TableDefinition<[u8; 32], u8> =

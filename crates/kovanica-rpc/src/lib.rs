@@ -342,6 +342,12 @@ impl RpcServer {
         .await;
         self.register_stateful("kovanica_estimateFee", handle_estimate_fee)
             .await;
+        self.register_stateful("kovanica_estimateGas", handle_estimate_gas)
+            .await;
+        self.register_stateful("eth_estimateGas", handle_estimate_gas)
+            .await;
+        self.register_stateful("kovanica_call", handle_call).await;
+        self.register_stateful("eth_call", handle_call).await;
 
         // Consensus methods.
         self.register_stateful("kovanica_getLeaderSchedule", handle_get_leader_schedule)
