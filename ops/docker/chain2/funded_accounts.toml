@@ -1,0 +1,6 @@
+# Pre-funded accounts for Chain 2 Hybrid Testnet
+
+[[account]]
+# Faucet account (100,000 KVNC)
+address = "kvnck2559l6vnpcchmtkuf2eslmdtxc6wtfm9nf9zqqructs4336nla58y78mdag"
+balance = 100000000000000

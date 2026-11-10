@@ -1,0 +1,230 @@
+# Kovanica Hybrid PoW Testnet (Chain ID 2) - 3-Node Cluster + Faucet + Observability
+#
+# Consensus: Hybrid PoW + GHOSTDAG (NO stake for consensus per ADR 0003 / Toni 2026-11-05).
+# Mining: KovanicaHash (BLAKE3 + 2 MiB memory mix)
+# Parameters: TARGET_BLOCK_MS = 4000 (4 s), GHOSTDAG_K = 5
+# Native token: KVNC (9 decimals), initial block reward = 2.5 KVNC
+name: kovanica-chain2-cluster
+
+x-node: &node
+  image: kovanica-node:local
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  init: true
+  deploy:
+    resources:
+      limits:
+        memory: 2G
+        cpus: '2.0'
+      reservations:
+        memory: 512M
+  environment: &node-env
+    KOVANICA_CHAIN_ID: "2"
+    KOVANICA_RPC_ADDR: "0.0.0.0"
+    KOVANICA_LISTEN_ADDR: "0.0.0.0:8000"
+    KOVANICA_DATA_DIR: "/var/lib/kovanica"
+    KOVANICA_MAX_PEERS: "20"
+    KOVANICA_RUN_VALIDATOR: "true"
+    KOVANICA_MINING_ENABLED: "true"
+    KOVANICA_MINING_THREADS: "1"
+    KOVANICA_RPC_RATE_LIMIT_PER_MIN: "0"
+    KOVANICA_RPC_AUTH: "disable"
+    KOVANICA_MEMPOOL_REBROADCAST_INTERVAL_SECS: "5"
+    KOVANICA_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "30"
+    KOVANICA_MEMPOOL_MIN_FEE_RATE: "0"
+    RUST_LOG: "info"
+
+x-healthcheck: &healthcheck
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 10s
+
+services:
+  node1:
+    <<: *node
+    container_name: kovanica-chain2-node1
+    environment:
+      <<: *node-env
+      KOVANICA_RPC_PORT: "8545"
+      KOVANICA_BOOTNODES: ""
+      KOVANICA_MINING_AUTHOR: "0"
+      KOVANICA_P2P_KEY: "/etc/kovanica/node1_p2p.key"
+    ports:
+      - "127.0.0.1:8545:8545"
+      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:9100:8545"
+    volumes:
+      - node1-data:/var/lib/kovanica
+      - ./chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+      - ./chain2/node1_p2p.key:/etc/kovanica/node1_p2p.key:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8545/health"]
+
+  node2:
+    <<: *node
+    container_name: kovanica-chain2-node2
+    depends_on:
+      node1:
+        condition: service_healthy
+    environment:
+      <<: *node-env
+      KOVANICA_RPC_PORT: "8546"
+      KOVANICA_BOOTNODES: "node1:8000"
+      KOVANICA_MINING_AUTHOR: "1"
+    ports:
+      - "127.0.0.1:8546:8546"
+    volumes:
+      - node2-data:/var/lib/kovanica
+      - ./chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8546/health"]
+
+  node3:
+    <<: *node
+    container_name: kovanica-chain2-node3
+    depends_on:
+      node1:
+        condition: service_healthy
+    environment:
+      <<: *node-env
+      KOVANICA_RPC_PORT: "8547"
+      KOVANICA_BOOTNODES: "node1:8000"
+      KOVANICA_MINING_AUTHOR: "2"
+    ports:
+      - "127.0.0.1:8547:8547"
+    volumes:
+      - node3-data:/var/lib/kovanica
+      - ./chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8547/health"]
+
+  observer:
+    <<: *node
+    container_name: kovanica-chain2-observer
+    depends_on:
+      node1:
+        condition: service_healthy
+    environment:
+      <<: *node-env
+      KOVANICA_RPC_PORT: "8548"
+      KOVANICA_BOOTNODES: "node1:8000"
+      KOVANICA_MINING_ENABLED: "false"
+      KOVANICA_RUN_VALIDATOR: "false"
+      KOVANICA_MINING_AUTHOR: ""
+    ports:
+      - "127.0.0.1:8548:8548"
+    volumes:
+      - observer-data:/var/lib/kovanica
+      - ./chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8548/health"]
+
+  faucet:
+    <<: *node
+    container_name: kovanica-chain2-faucet
+    depends_on:
+      node1:
+        condition: service_healthy
+    command:
+      - kovanica-faucet
+      - --chain-id
+      - "2"
+      - --rpc-url
+      - http://node1:8545
+      - --keystore
+      - /var/lib/kovanica/faucet.keystore
+      - --listen
+      - 0.0.0.0:3000
+      - --dispense-kovanica
+      - "10"
+      - --rate-limit-window
+      - "60"
+      - --max-requests
+      - "100"
+    environment:
+      KOVANICA_FAUCET_PASSPHRASE: "faucet-testnet-chain5"
+      RUST_LOG: "info"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./chain2/faucet.keystore:/var/lib/kovanica/faucet.keystore:ro
+      - ./chain2/faucet_passphrase:/var/lib/kovanica/faucet_passphrase:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+
+  miner:
+    <<: *node
+    container_name: kovanica-chain2-miner
+    profiles:
+      - miner
+    depends_on:
+      node1:
+        condition: service_healthy
+    command:
+      - kovanica
+      - miner
+      - run
+      - --rpc-url
+      - http://node1:8545
+      - --address
+      - "${KOVANICA_MINER_ADDRESS:-kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag}"
+      - --threads
+      - "${KOVANICA_MINER_THREADS:-2}"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 256M
+    environment:
+      RUST_LOG: "info"
+    healthcheck:
+      disable: true
+
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    container_name: kovanica-chain2-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus/prometheus.chain2.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:10.3.3
+    container_name: kovanica-chain2-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  observer-data:
+  prometheus-data:
+  grafana-data:
