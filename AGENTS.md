@@ -6,14 +6,12 @@
 
 **Naming (zaključano):** chain = **Kovanica**, native coin ticker = **KVNC** (9 decimals; preimenovano natrag iz KUNA per Toni 2026-11-05),
 codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-node`, `KOVANICA_*`). Adresa je
-`kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3, 4, 5 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Adresni prefiks `kvnc`...`dag` je usklađen s KVNC tickerom.
+`kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Adresni prefiks `kvnc`...`dag` je usklađen s KVNC tickerom.
 
-**Chain ID Registry (Toni 1A):**
+**Chain ID Registry (3 Canonical Chains):**
 - `1` = **Mainnet** (`MAINNET`) — canonical PRO-21 base32 address, frozen consensus parameters. `funded_accounts.toml` strictly forbidden.
-- `2` = **Testnet (legacy ID)** (`TESTNET`) — not public testnet; enforces PRO-21 addresses.
+- `2` = **Testnet** (`TESTNET`) — official Hybrid PoW + GHOSTDAG testnet (KovanicaHash, target block 4 s, GHOSTDAG K=5, NO stake for consensus; canonical PRO-21 base32 addresses strictly enforced; `funded_accounts.toml` and faucet allowed; legacy alias HYBRID_TESTNET=2).
 - `3` = **Devnet** (`DEVNET`) — devnet; legacy hex addresses allowed, dev parameter overrides.
-- `4` = **Internal testnet** (`TESTNET_V2`) — internal testnet; public launch gated on hybrid testnet M8 pass (delayed from unconditional 25.11.2026); supports PRO-21 and legacy migration.
-- `5` = **Hybrid PoW Testnet** (`HYBRID_TESTNET`) — planned hybrid PoW + GHOSTDAG chain (intent documented in ADR 0003; feature/flag `hybrid-pow`).
 - `1337` = **Local devnet** (`LOCAL`) — single-node / local cluster testing (legacy hex allowed).
 
 *Params SoT:* `kovanica-params`. `funded_accounts.toml` allowed on every chain except mainnet (1).
