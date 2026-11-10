@@ -2535,6 +2535,172 @@ mod tests {
         assert_eq!(balance_res2, quantity(15_000_000_000u64));
     }
 
+    #[tokio::test]
+    async fn airdrop_funded_account_can_immediately_transact_and_execute() {
+        use kovanica_consensus::CommittedSubDag;
+        use kovanica_types::crypto::Signature;
+
+        let (_dir, storage) = open_storage();
+        let state = test_state(storage.clone());
+
+        // 1. Fresh keypair / address
+        let (sk, pk) = kovanica_crypto::generate_keypair();
+        let sender = Address::from_public_key(&pk);
+        let recipient = Address([0x55; 32]);
+
+        // Initially 0 balance
+        let initial_balance = handle_get_balance(json!([sender.to_string()]), state.clone())
+            .await
+            .expect("get balance succeeds");
+        assert_eq!(initial_balance, quantity(0));
+
+        // 2. Request airdrop of 10 KVNC
+        let airdrop_res = handle_request_airdrop(
+            json!([sender.to_string(), 10_000_000_000u64]),
+            state.clone(),
+        )
+        .await
+        .expect("airdrop succeeds");
+        assert_eq!(airdrop_res["success"], true);
+        assert_eq!(airdrop_res["balance"], 10_000_000_000u64);
+
+        // 3. Construct and sign a transfer transaction
+        let send_amount = 2_000_000_000u64; // 2 KVNC
+        let fee = 10_000u64;
+        let mut tx = Transaction {
+            sender,
+            nonce: 0,
+            kind: TransactionKind::Transfer {
+                to: recipient,
+                amount: send_amount,
+            },
+            fee,
+            signature: Signature([0; 64]),
+            hash: Hash::zero(),
+        };
+        let signing_hash = tx.signing_hash(&state.mempool.signing_context());
+        tx.signature = kovanica_crypto::sign(&sk, signing_hash.as_ref());
+        tx.hash = signing_hash;
+
+        // 4. Send raw transaction via RPC
+        let raw_hex = format!("0x{}", hex::encode(bincode::serialize(&tx).unwrap()));
+        let send_res = handle_send_raw_transaction(json!([raw_hex]), state.clone())
+            .await
+            .expect("send_raw_transaction accepted into mempool");
+        assert_eq!(send_res, json!(format!("0x{}", hex::encode(tx.hash.0))));
+
+        // 5. Verify transaction is in mempool
+        assert!(state.mempool.contains(&tx.hash));
+        let pulled = state.mempool.get_next_transactions(10);
+        assert_eq!(pulled.len(), 1);
+        assert_eq!(pulled[0].hash, tx.hash);
+
+        // 6. Before execution: status pending, no receipt
+        let hash_param = json!([format!("0x{}", hex::encode(tx.hash.0))]);
+        let pending_tx = handle_get_transaction_by_hash(hash_param.clone(), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(pending_tx["status"], json!("pending"));
+        let receipt_pre = handle_get_transaction_receipt(hash_param.clone(), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(receipt_pre, Value::Null);
+
+        // 7. Execute the transaction inside a committed block
+        let block = StatementBlock {
+            author: 0,
+            round: 1,
+            parents: Vec::new(),
+            transactions: vec![tx.clone()],
+            statements: Vec::new(),
+            signature: Signature([0; 64]),
+            digest: StatementBlock::compute_digest(0, 1, &[], &[tx.clone()]),
+            merkle_root: StatementBlock::compute_merkle_root(&[tx.clone()]),
+        };
+        {
+            let txn = storage.begin_write().unwrap();
+            storage
+                .blocks()
+                .put_block(&txn, &block, &block.transactions)
+                .unwrap();
+            txn.commit().unwrap();
+        }
+
+        let mut ctx = kovanica_execution::ExecutionContext::new();
+        ctx.staking
+            .join_validator(
+                Address([9u8; 32]),
+                MIN_VALIDATOR_STAKE,
+                0,
+                Some(Address([8u8; 32])),
+                None,
+                None,
+            )
+            .expect("join validator");
+        let leader = StatementBlock {
+            author: 0,
+            round: 1,
+            parents: Vec::new(),
+            transactions: Vec::new(),
+            statements: Vec::new(),
+            signature: Signature([0; 64]),
+            digest: StatementBlock::compute_digest(0, 1, &[], &[]),
+            merkle_root: Default::default(),
+        };
+        let subdag = CommittedSubDag {
+            leader,
+            blocks: vec![block.clone()],
+            leader_round: 1,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        let executed = ctx
+            .execute_committed_subdag(&subdag, &storage)
+            .expect("execute committed subdag");
+        assert_eq!(executed.receipts.len(), 1);
+        assert!(executed.receipts[0].success);
+
+        // 8. Verify receipt via RPC
+        let receipt_post = handle_get_transaction_receipt(hash_param.clone(), state.clone())
+            .await
+            .unwrap();
+        assert_ne!(receipt_post, Value::Null);
+        assert_eq!(receipt_post["status"], json!("0x1"));
+        assert_eq!(receipt_post["success"], json!(true));
+        assert_eq!(
+            receipt_post["transactionHash"],
+            json!(format!("0x{}", hex::encode(tx.hash.0)))
+        );
+
+        let confirmed_tx = handle_get_transaction_by_hash(hash_param.clone(), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(confirmed_tx["sender"], json!(sender.to_string()));
+        assert_eq!(confirmed_tx["kind"]["type"], json!("transfer"));
+        assert_eq!(confirmed_tx["kind"]["to"], json!(recipient.to_string()));
+        assert_ne!(confirmed_tx["blockHash"], Value::Null);
+        assert_eq!(confirmed_tx["blockNumber"], quantity(1));
+
+        // 9. Verify balances and sender nonce
+        let sender_bal = handle_get_balance(json!([sender.to_string()]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            sender_bal,
+            quantity(10_000_000_000u64 - send_amount - fee)
+        );
+
+        let recipient_bal = handle_get_balance(json!([recipient.to_string()]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(recipient_bal, quantity(send_amount));
+
+        let sender_nonce = handle_get_nonce(json!([sender.to_string()]), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(sender_nonce, quantity(1));
+    }
+
     #[test]
     fn parses_canonical_and_hex_addresses() {
         let address = Address([0x2a; 32]);
