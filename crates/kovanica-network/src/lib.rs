@@ -39,7 +39,9 @@ pub const IDENTIFY_VERSION: &str = "1.0.0";
 pub const KAD_PROTOCOL: &str = "kad/1.0.0";
 pub use error::NetworkError;
 pub use scoring::PeerScoringConfig;
-pub use seeder::{filter_healthy_seeds, generate_zone_file, DnsSeedEntry};
+pub use seeder::{
+    filter_healthy_seeds, generate_zone_file, DnsSeedCrawler, DnsSeedCrawlerConfig, DnsSeedEntry,
+};
 pub use service::{NetworkService, PeerStatus};
 pub use state_sync::{
     ExportedSnapshot, SnapshotChunk, StateSnapshotSource, StateSyncCodec, StateSyncRequest,

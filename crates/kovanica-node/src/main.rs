@@ -1102,6 +1102,31 @@ where
             None
         };
 
+    let _seeder_task = if config.seeder.enabled {
+        let crawler_cfg = kovanica_network::DnsSeedCrawlerConfig {
+            target_chain_id: config.chain_id,
+            domain: config.seeder.domain.clone(),
+            crawl_interval_secs: config.seeder.crawler_interval_secs,
+            probe_timeout_ms: 2000,
+            max_age_secs: 300,
+            zone_ttl_secs: config.seeder.ttl_secs,
+            zone_file_path: config.seeder.zone_file.clone(),
+            bootnodes: config.bootnodes.clone(),
+        };
+        let crawler = std::sync::Arc::new(kovanica_network::DnsSeedCrawler::new(crawler_cfg));
+        let crawler_shutdown = shutdown_rx.clone();
+        info!(
+            domain = %config.seeder.domain,
+            chain_id = config.chain_id,
+            "starting background DNS seeder daemon"
+        );
+        Some(tokio::spawn(async move {
+            crawler.run_loop(crawler_shutdown).await;
+        }))
+    } else {
+        None
+    };
+
     // The consensus engine now handles block production internally with mempool transactions
     // No separate builder task needed
     let _builder_task = tokio::spawn(async {});
