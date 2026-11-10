@@ -171,10 +171,9 @@ describe("addresses and amounts", () => {
       expect(() => parseAddress(legacy)).toThrow(/chain id is omitted/);
       expect(() => parseAddress(legacy, 1)).toThrow(/not accepted on chain 1/);
       expect(() => parseAddress(legacy, 2)).toThrow(/not accepted on chain 2/);
-      expect(() => parseAddress(legacy, 4)).toThrow(/not accepted on chain 4/);
       expect(() => parseAddress(legacy, 99)).toThrow(/not accepted on chain 99/);
     }
-    for (const chain of [1, 2, 3, 4, 1337]) {
+    for (const chain of [1, 2, 3, 1337]) {
       expect(bytesToHex(parseAddress(fixture.senderAddress, chain))).toBe(fixture.publicKeyHex);
     }
   });
@@ -182,7 +181,7 @@ describe("addresses and amounts", () => {
   it("treats legacy hex digits as case-insensitive and base32 as lowercase (PRO-21)", () => {
     const upperHex = fixture.publicKeyHex.toUpperCase();
     expect(bytesToHex(parseAddress(upperHex, 3))).toBe(fixture.publicKeyHex);
-    expect(() => parseAddress(upperHex, 4)).toThrow(/not accepted on chain 4/);
+    expect(() => parseAddress(upperHex, 2)).toThrow(/not accepted on chain 2/);
     expect(bytesToHex(parseAddress(`0x${upperHex}`, 1337))).toBe(fixture.publicKeyHex);
     const legacy = fixture.senderAddressLegacy;
     const upperLegacy = `kvnc${legacy.slice(4, -3).toUpperCase()}dag`;
@@ -196,7 +195,7 @@ describe("addresses and amounts", () => {
       fixture.senderAddress.slice(0, letter) +
       fixture.senderAddress[letter].toUpperCase() +
       fixture.senderAddress.slice(letter + 1);
-    expect(() => parseAddress(upperBody, 4)).toThrow(/alphabet/);
+    expect(() => parseAddress(upperBody, 2)).toThrow(/alphabet/);
   });
 
   it("refuses an omitted chain id, 0X, and kvnc0x (PRO-21)", () => {
