@@ -2757,6 +2757,7 @@ dependencies = [
  "kovanica-comms-crypto",
  "kovanica-comms-relay",
  "kovanica-crypto",
+ "kovanica-execution",
  "kovanica-keystore",
  "kovanica-light",
  "kovanica-name-registry",

@@ -1067,6 +1067,277 @@ pub fn sync_mobile_node_peer(
     })
 }
 
+/// Individual transaction receipt returned from on-device execution.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct LocalExecutionReceipt {
+    pub tx_hash: String,
+    pub success: bool,
+    pub gas_used: u64,
+    pub error: Option<String>,
+}
+
+/// Summary result of executing all transactions in a block on-device.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct BlockExecutionSummary {
+    pub round: u64,
+    pub txs_executed: u64,
+    pub txs_succeeded: u64,
+    pub txs_failed: u64,
+    pub state_root: String,
+    pub receipts: Vec<LocalExecutionReceipt>,
+}
+
+/// Result of dry-running/simulating a contract call or transfer on-device.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct LocalSimulationResult {
+    pub success: bool,
+    pub gas_used: u64,
+    pub return_data_hex: String,
+    pub error: Option<String>,
+}
+
+/// Deterministically execute all transactions in a block using the on-device Wasmi engine,
+/// applying state transitions (transfers, contracts) to the local RedB storage.
+#[uniffi::export]
+pub fn execute_block_transactions(
+    db_path: String,
+    block_json: String,
+    chain_id: u64,
+) -> Result<BlockExecutionSummary, LightFfiError> {
+    let path = std::path::Path::new(&db_path);
+    let trimmed = block_json.trim().trim_matches('"');
+    let clean_hex = trimmed.trim_start_matches("0x");
+
+    let block: kovanica_types::block::StatementBlock = if let Ok(bytes) = hex::decode(clean_hex) {
+        if let Ok(b) = bincode::deserialize::<kovanica_types::block::StatementBlock>(&bytes) {
+            b
+        } else if let Ok(h) = serde_json::from_str::<BlockHeader>(&block_json) {
+            h.to_statement_block(vec![])
+        } else {
+            return Err(failed("Failed to decode block from hex or json"));
+        }
+    } else if let Ok(h) = serde_json::from_str::<BlockHeader>(&block_json) {
+        h.to_statement_block(vec![])
+    } else {
+        serde_json::from_str(&block_json).map_err(failed)?
+    };
+
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+    let signing_ctx = kovanica_types::signing::SigningContext::new(chain_id);
+    let mut exec_ctx = kovanica_execution::ExecutionContext::with_signing_context(signing_ctx);
+
+    let subdag = kovanica_types::commit::CommittedSubDag {
+        leader: block.clone(),
+        blocks: vec![block.clone()],
+        leader_round: block.round,
+        leader_author: block.author,
+        non_blue: vec![],
+    };
+
+    let res = exec_ctx
+        .execute_committed_subdag(&subdag, &storage)
+        .map_err(failed)?;
+
+    let mut txs_succeeded = 0u64;
+    let mut txs_failed = 0u64;
+    let receipts = res
+        .receipts
+        .into_iter()
+        .map(|r| {
+            if r.success {
+                txs_succeeded += 1;
+            } else {
+                txs_failed += 1;
+            }
+            LocalExecutionReceipt {
+                tx_hash: hex_hash(&r.tx_hash),
+                success: r.success,
+                gas_used: r.gas_used,
+                error: r.error,
+            }
+        })
+        .collect();
+
+    let state_root = res
+        .state_root
+        .map(|r| hex_hash(&r))
+        .unwrap_or_else(|| hex_hash(&Hash::zero()));
+
+    Ok(BlockExecutionSummary {
+        round: block.round,
+        txs_executed: res.txs_applied as u64,
+        txs_succeeded,
+        txs_failed,
+        state_root,
+        receipts,
+    })
+}
+
+/// Simulate a contract call or transfer directly on the mobile device (dry-run with Wasmi)
+/// without broadcasting or paying gas.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_local_call(
+    db_path: String,
+    caller_address: String,
+    contract_address: String,
+    method: String,
+    args_hex: String,
+    value: u64,
+    gas_limit: u64,
+    chain_id: u64,
+) -> Result<LocalSimulationResult, LightFfiError> {
+    let path = std::path::Path::new(&db_path);
+    if !path.exists() {
+        return Ok(LocalSimulationResult {
+            success: false,
+            gas_used: 0,
+            return_data_hex: String::new(),
+            error: Some("Local storage database does not exist".to_string()),
+        });
+    }
+
+    let caller = Address::parse_for_chain(&caller_address, chain_id).map_err(failed)?;
+    let target = Address::parse_for_chain(&contract_address, chain_id).map_err(failed)?;
+    let args_clean = args_hex.trim().trim_start_matches("0x");
+    let args_bytes = if args_clean.is_empty() {
+        Vec::new()
+    } else {
+        hex::decode(args_clean).map_err(failed)?
+    };
+
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+    let txn = storage.begin_read().map_err(failed)?;
+
+    let code_res = storage.state().get_contract_code(&txn, &target.0);
+    let latest_height = storage
+        .consensus()
+        .get_committed_leader_height(&txn)
+        .unwrap_or(0);
+
+    match code_res {
+        Ok(Some(code)) => {
+            drop(txn);
+            let config = kovanica_execution::ExecutionConfig {
+                gas_limit,
+                memory_limit_pages: kovanica_execution::DEFAULT_CONTRACT_MEMORY_PAGES,
+                gas_hardening_active: false,
+            };
+
+            let entry = if method.trim().is_empty() {
+                "call"
+            } else {
+                method.as_str()
+            };
+
+            let mut runner = kovanica_execution::ContractRunner::new();
+            let wasm_call = kovanica_execution::WasmCall {
+                wasm: &code,
+                entry,
+                contract: target,
+                caller,
+                height: latest_height,
+                timestamp: kovanica_common::contract_time_from_height(latest_height),
+                args: &args_bytes,
+                storage: &storage,
+                txn: None,
+                value,
+                config: &config,
+            };
+
+            let mut gas_used = 0u64;
+            match runner.simulate_wasm_call(wasm_call, &mut gas_used) {
+                Ok(out) => Ok(LocalSimulationResult {
+                    success: true,
+                    gas_used: 21_000u64.saturating_add(gas_used),
+                    return_data_hex: hex::encode(out),
+                    error: None,
+                }),
+                Err(e) => Ok(LocalSimulationResult {
+                    success: false,
+                    gas_used: 21_000u64.saturating_add(gas_used),
+                    return_data_hex: String::new(),
+                    error: Some(format!("Execution failed or reverted: {e}")),
+                }),
+            }
+        }
+        _ => {
+            // Target is a plain account (transfer simulation)
+            let base_gas = 21_000u64;
+            let caller_acc = storage
+                .state()
+                .get_account(&txn, &caller)
+                .unwrap_or_default();
+            if caller_acc.balance < value {
+                return Ok(LocalSimulationResult {
+                    success: false,
+                    gas_used: base_gas,
+                    return_data_hex: String::new(),
+                    error: Some("Insufficient balance for transfer".to_string()),
+                });
+            }
+            Ok(LocalSimulationResult {
+                success: true,
+                gas_used: base_gas,
+                return_data_hex: String::new(),
+                error: None,
+            })
+        }
+    }
+}
+
+/// Read a raw contract storage key from local storage on device.
+#[uniffi::export]
+pub fn get_local_contract_storage(
+    db_path: String,
+    contract_address: String,
+    key_hex: String,
+    chain_id: u64,
+) -> Result<Option<String>, LightFfiError> {
+    let path = std::path::Path::new(&db_path);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let target = Address::parse_for_chain(&contract_address, chain_id).map_err(failed)?;
+    let clean_key = key_hex.trim().trim_start_matches("0x");
+    let key_bytes = hex::decode(clean_key).map_err(failed)?;
+    let mut slot = [0u8; 32];
+    if key_bytes.len() <= 32 {
+        slot[..key_bytes.len()].copy_from_slice(&key_bytes);
+    } else {
+        return Err(failed("Storage key exceeds 32 bytes"));
+    }
+
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+    let txn = storage.begin_read().map_err(failed)?;
+
+    match storage.state().get_storage(&txn, &target, &slot) {
+        Ok(Some(val)) => Ok(Some(hex::encode(val))),
+        Ok(None) => Ok(None),
+        Err(kovanica_storage::StateStoreError::NotFound(_)) => Ok(None),
+        Err(e) => Err(failed(e)),
+    }
+}
+
+/// Query the latest account state root hash from local embedded node storage.
+#[uniffi::export]
+pub fn get_local_state_root(db_path: String) -> Result<Option<String>, LightFfiError> {
+    let path = std::path::Path::new(&db_path);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+    let txn = storage.begin_read().map_err(failed)?;
+
+    match storage.state().get_latest_state_root(&txn) {
+        Ok(Some((_height, root))) => Ok(Some(hex_hash(&root))),
+        Ok(None) => Ok(None),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Check an account proof against a header this client already accepted.
 #[uniffi::export]
 pub fn confirm_account(
@@ -2525,8 +2796,54 @@ mod tests {
         assert!(!offline_status.is_connected);
         assert_eq!(offline_status.tip_round, 0);
 
-        let sync_offline = sync_mobile_node_peer(db_str, "127.0.0.1:59999".into(), 5, 10).unwrap();
+        let sync_offline =
+            sync_mobile_node_peer(db_str.clone(), "127.0.0.1:59999".into(), 5, 10).unwrap();
         assert!(!sync_offline.success);
         assert!(sync_offline.error.is_some());
+
+        // 8. Phase M4: Local transaction simulation on-device
+        let sim_res = simulate_local_call(
+            db_str.clone(),
+            Address([1; 32]).to_string(),
+            Address([2; 32]).to_string(),
+            "".into(),
+            "".into(),
+            100,
+            50_000,
+            chain_id::HYBRID_TESTNET,
+        )
+        .unwrap();
+        assert!(!sim_res.success); // Insufficient balance
+        assert!(sim_res.error.is_some());
+
+        // 9. Local state root & storage query
+        let state_root = get_local_state_root(db_str.clone()).unwrap();
+        assert!(state_root.is_none());
+
+        let storage_val = get_local_contract_storage(
+            db_str.clone(),
+            Address([2; 32]).to_string(),
+            "0000000000000000000000000000000000000000000000000000000000000001".into(),
+            chain_id::HYBRID_TESTNET,
+        )
+        .unwrap();
+        assert!(storage_val.is_none());
+
+        // 10. Execute block transactions on-device
+        let header = BlockHeader::new(
+            chain_id::HYBRID_TESTNET,
+            9,
+            0,
+            vec![],
+            Hash::zero(),
+            1_700_000_032_000,
+            easy_bits,
+            30,
+        );
+        let block_json = serde_json::to_string(&header).unwrap();
+        let exec_summary =
+            execute_block_transactions(db_str, block_json, chain_id::HYBRID_TESTNET).unwrap();
+        assert_eq!(exec_summary.round, 9);
+        assert_eq!(exec_summary.txs_executed, 0);
     }
 }

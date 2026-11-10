@@ -25,6 +25,7 @@ kovanica-common = { path = "../kovanica-common" }
 kovanica-name-registry = { path = "../kovanica-name-registry" }
 kovanica-wallet-core = { path = "../kovanica-wallet-core" }
 kovanica-storage = { path = "../kovanica-storage" }
+kovanica-execution = { path = "../kovanica-execution" }
 redb = { workspace = true }
 uniffi = { version = "=0.32.0" }
 serde_json = { workspace = true }
