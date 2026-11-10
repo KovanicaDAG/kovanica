@@ -156,10 +156,7 @@ impl Address {
     /// [`legacy_address_allowed`] says so (devnet 3 and local 1337).
     pub fn parse_for_chain(value: &str, chain_id: u64) -> Result<Self, AddressError> {
         let value = value.trim();
-        if value.len() == ADDRESS_LEN
-            && value.starts_with(ADDRESS_PREFIX)
-            && value.ends_with(ADDRESS_SUFFIX)
-        {
+        if Self::is_canonical_shape(value) {
             return Self::decode(value);
         }
         let legacy = Self::parse_legacy(value)?;
@@ -167,6 +164,37 @@ impl Address {
             return Err(AddressError::LegacyNotAllowed(chain_id));
         }
         Ok(legacy)
+    }
+
+    /// Parse an address label that is already stored on disk, in a keystore or
+    /// wallet file.
+    ///
+    /// Chain-independent: it accepts the canonical `kvnc…dag` form and the
+    /// legacy hex forms (`kvnc<hex>dag` with its 4-byte checksum, bare or `0x`
+    /// hex), with the same length and checksum checks as
+    /// [`Self::parse_for_chain`].
+    ///
+    /// **Only for reading labels this codebase already wrote** into keystore or
+    /// wallet files, which older builds could store as legacy hex. It is never
+    /// the parser for user input, RPC input or network input: those must go
+    /// through [`Self::parse_for_chain`] so that legacy hex stays refused on
+    /// mainnet (1) and the public testnet (2). A stored label does not bind the
+    /// key to any chain, so this takes no chain id.
+    pub fn parse_stored_label(value: &str) -> Result<Self, AddressError> {
+        let value = value.trim();
+        if Self::is_canonical_shape(value) {
+            return Self::decode(value);
+        }
+        Self::parse_legacy(value)
+    }
+
+    /// Whether `value` has the canonical shape: [`ADDRESS_LEN`] characters with
+    /// the `kvnc` and `dag` affixes. Shape only; [`Self::decode`] validates the
+    /// body alphabet, length and checksum.
+    fn is_canonical_shape(value: &str) -> bool {
+        value.len() == ADDRESS_LEN
+            && value.starts_with(ADDRESS_PREFIX)
+            && value.ends_with(ADDRESS_SUFFIX)
     }
 
     /// The legacy hex forms. Chain-independent; callers decide whether they
@@ -525,6 +553,129 @@ mod tests {
             Address::parse_for_chain(&legacy.to_ascii_uppercase(), chain_id::DEVNET),
             Err(AddressError::InvalidHex)
         );
+    }
+
+    /// `parse_stored_label` is the chain-independent reader for labels that are
+    /// already in a keystore/wallet file: canonical and every legacy hex form
+    /// parse, and no chain id is involved.
+    #[test]
+    fn stored_label_accepts_canonical_and_every_legacy_form() {
+        let address = sample();
+        let forms = [
+            address.encode(),
+            address.encode_legacy_hex(),
+            address.to_hex(),
+            format!("0x{}", address.to_hex()),
+        ];
+        for form in &forms {
+            assert_eq!(
+                Address::parse_stored_label(form).unwrap(),
+                address,
+                "{form}"
+            );
+            // Surrounding whitespace from a file is tolerated.
+            assert_eq!(
+                Address::parse_stored_label(&format!("  {form}\n")).unwrap(),
+                address,
+                "{form}"
+            );
+        }
+    }
+
+    #[test]
+    fn stored_label_rejects_bad_checksum_and_wrong_length() {
+        let address = sample();
+
+        // Canonical form with one body character changed: checksum mismatch.
+        let mut bad_canonical = address.encode();
+        let pos = ADDRESS_LEN - ADDRESS_SUFFIX.len() - 1;
+        let cur = BASE32_ALPHABET
+            .iter()
+            .position(|&a| a == bad_canonical.as_bytes()[pos])
+            .unwrap();
+        bad_canonical.replace_range(
+            pos..pos + 1,
+            &(BASE32_ALPHABET[(cur + 1) % 32] as char).to_string(),
+        );
+        assert_eq!(
+            Address::parse_stored_label(&bad_canonical),
+            Err(AddressError::ChecksumMismatch)
+        );
+
+        // Legacy form with one checksum hex digit changed.
+        let mut bad_legacy = address.encode_legacy_hex();
+        let flip_at = bad_legacy.len() - ADDRESS_SUFFIX.len() - 1;
+        let replacement = if &bad_legacy[flip_at..flip_at + 1] == "0" {
+            "1"
+        } else {
+            "0"
+        };
+        bad_legacy.replace_range(flip_at..flip_at + 1, replacement);
+        assert_eq!(
+            Address::parse_stored_label(&bad_legacy),
+            Err(AddressError::ChecksumMismatch)
+        );
+
+        // Wrong lengths are reported, not silently accepted.
+        assert_eq!(
+            Address::parse_stored_label(&format!("kvnc{}dag", "z".repeat(56))),
+            Err(AddressError::InvalidStringLength(63))
+        );
+        assert!(matches!(
+            Address::parse_stored_label("kvnc00dag"),
+            Err(AddressError::InvalidLength(_))
+        ));
+        assert!(matches!(
+            Address::parse_stored_label("0x1234"),
+            Err(AddressError::InvalidLength(_))
+        ));
+        assert_eq!(
+            Address::parse_stored_label("not an address"),
+            Err(AddressError::InvalidHex)
+        );
+    }
+
+    /// The stored-label reader does not loosen the typed/RPC policy:
+    /// `parse_for_chain` still refuses legacy hex on chains 1 and 2 and accepts
+    /// it on 3 and 1337.
+    #[test]
+    fn typed_address_policy_is_unchanged_by_the_stored_label_reader() {
+        let address = sample();
+        let legacy = [
+            address.encode_legacy_hex(),
+            address.to_hex(),
+            format!("0x{}", address.to_hex()),
+        ];
+        for form in &legacy {
+            for chain in [chain_id::MAINNET, chain_id::TESTNET] {
+                assert_eq!(
+                    Address::parse_for_chain(form, chain),
+                    Err(AddressError::LegacyNotAllowed(chain)),
+                    "{form} on chain {chain}"
+                );
+            }
+            for chain in [chain_id::DEVNET, chain_id::LOCAL] {
+                assert_eq!(
+                    Address::parse_for_chain(form, chain).unwrap(),
+                    address,
+                    "{form} on chain {chain}"
+                );
+            }
+        }
+        let canonical = address.encode();
+        for chain in [
+            chain_id::MAINNET,
+            chain_id::TESTNET,
+            chain_id::DEVNET,
+            chain_id::LOCAL,
+            0,
+        ] {
+            assert_eq!(
+                Address::parse_for_chain(&canonical, chain).unwrap(),
+                address,
+                "chain {chain}"
+            );
+        }
     }
 
     #[test]

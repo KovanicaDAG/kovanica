@@ -513,14 +513,14 @@ pub fn address(keystore: &Keystore) -> Result<Address> {
 
 /// Parse the address label stored in a keystore file.
 ///
-/// The file is not bound to a chain (migration). [`Address::from_str`] is
-/// base32 only, so this calls [`Address::parse_for_chain`] on devnet (3), which
-/// accepts the canonical form and the legacy hex forms. That does not assign
-/// the key to devnet. An address typed for a chain goes through
-/// [`parse_address`].
+/// The file is not bound to a chain (a keystore can be migrated between
+/// networks). [`Address::from_str`] is base32 only, so this uses
+/// [`Address::parse_stored_label`], the chain-independent reader for labels
+/// already on disk: it accepts the canonical form and the legacy hex forms
+/// without naming a chain. That does not assign the key to any network. An
+/// address typed for a chain goes through [`parse_address`].
 fn parse_stored_address(value: &str, what: &str) -> Result<Address> {
-    Address::parse_for_chain(value, kovanica_types::signing::chain_id::DEVNET)
-        .map_err(|e| anyhow!("{what}: {e}"))
+    Address::parse_stored_label(value).map_err(|e| anyhow!("{what}: {e}"))
 }
 
 /// Parse an address string for `chain_id`.
@@ -674,6 +674,110 @@ mod tests {
         assert!(parsed.to_hex().parse::<Address>().is_err());
         assert!(parsed.encode_legacy_hex().parse::<Address>().is_err());
         assert_eq!(parsed.encode().parse::<Address>().unwrap(), parsed);
+    }
+
+    /// A keystore file written by an older build can store the address label in
+    /// the legacy hex forms. Reading the file must yield the canonical
+    /// `Address`, and the label must be interpreted without naming a chain.
+    #[test]
+    fn stored_legacy_hex_label_fixture_loads_as_canonical_address() {
+        const SEED: [u8; 32] = [0x5a; 32];
+        const PASS: &str = "fixture-passphrase";
+
+        let ks = from_seed(&SEED, PASS).unwrap();
+        let canonical = address(&ks).unwrap();
+        assert_eq!(canonical.encode(), ks.address);
+
+        let labels = [canonical.to_hex(), canonical.encode_legacy_hex()];
+        for label in labels {
+            let mut fixture = serde_json::to_value(&ks).unwrap();
+            fixture["address"] = serde_json::Value::String(label.clone());
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("legacy-label.json");
+            fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
+
+            let loaded = load(&path).unwrap();
+            assert_eq!(loaded.address, label, "{label}");
+            // The label form is not the identity: `address()` normalises it.
+            assert_eq!(address(&loaded).unwrap(), canonical, "{label}");
+            // The ciphertext is authenticated over the parsed address bytes,
+            // not over the label string, so the seed still decrypts.
+            assert_eq!(
+                &*secret_seed(&loaded, Some(PASS)).unwrap(),
+                &SEED,
+                "{label}"
+            );
+        }
+    }
+
+    /// The same fixture with the canonical `kvnc…dag` label loads unchanged.
+    #[test]
+    fn stored_canonical_label_fixture_loads_as_canonical_address() {
+        const SEED: [u8; 32] = [0x5a; 32];
+        const PASS: &str = "fixture-passphrase";
+
+        let ks = from_seed(&SEED, PASS).unwrap();
+        let canonical = address(&ks).unwrap();
+        let fixture = serde_json::to_value(&ks).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("canonical-label.json");
+        fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
+
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.address.len(), 64);
+        assert_eq!(loaded.address, canonical.encode());
+        assert_eq!(address(&loaded).unwrap(), canonical);
+        assert_eq!(&*secret_seed(&loaded, Some(PASS)).unwrap(), &SEED);
+    }
+
+    /// A malformed stored label (bad checksum, wrong length) is an error, both
+    /// at the parser and at the file reader, so a damaged label never loads.
+    #[test]
+    fn stored_label_with_bad_checksum_or_length_is_rejected() {
+        let ks = from_seed(&[0x6b; 32], "pw").unwrap();
+        let canonical = address(&ks).unwrap();
+
+        // Canonical body with one checksum character changed.
+        let mut bad_checksum = canonical.encode();
+        let pos = bad_checksum.len() - 4; // last body character, before `dag`
+        let replacement = if &bad_checksum[pos - 1..pos] == "q" {
+            "p"
+        } else {
+            "q"
+        };
+        bad_checksum.replace_range(pos - 1..pos, replacement);
+        let error = parse_stored_address(&bad_checksum, "keystore address")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("checksum mismatch"), "{error}");
+
+        let mut fixture = serde_json::to_value(&ks).unwrap();
+        fixture["address"] = serde_json::Value::String(bad_checksum);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad-checksum.json");
+        fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
+        assert!(load(&path).is_err());
+
+        // Legacy `kvnc<hex>dag` form with one checksum hex digit changed.
+        let mut legacy_checksum = canonical.encode_legacy_hex();
+        let flip_at = legacy_checksum.len() - 4;
+        let replacement = if &legacy_checksum[flip_at - 1..flip_at] == "0" {
+            "1"
+        } else {
+            "0"
+        };
+        legacy_checksum.replace_range(flip_at - 1..flip_at, replacement);
+        assert!(parse_stored_address(&legacy_checksum, "keystore address").is_err());
+
+        // Wrong lengths are rejected too.
+        let error = parse_stored_address(&format!("kvnc{}dag", "z".repeat(56)), "keystore address")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("64 characters"), "{error}");
+        let error = parse_stored_address("kvnc00dag", "keystore address")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("32 bytes"), "{error}");
     }
 
     /// Chain 1 refuses a legacy hex string. Devnet and local accept it.

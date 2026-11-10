@@ -84,7 +84,6 @@ function gate_test() {
         --skip live_two_node_vote_commit_execute \
         --skip three_validators_rotate_leaders_and_sustain_commits \
         --skip four_validators_sustain_commits_past_pruning_boundary \
-        --skip hybrid_pow_testnet_cluster_e2e \
         --skip isolated_hybrid_acceptance_execution_and_recovery
 }
 

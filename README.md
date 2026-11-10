@@ -371,7 +371,7 @@ Detailed architectural specifications and operational runbooks:
 - **Audit Scope & Threat Model:** [`docs/AUDIT-SCOPE.md`](docs/AUDIT-SCOPE.md)
 - **Documentation Archive Index:** [`docs/archive/README.md`](docs/archive/README.md)
 - **JSON-RPC Reference:** [`docs/RPC.md`](docs/RPC.md)
-- **Comprehensive 2026 Audit Report (archived, point-in-time):** [`docs/archive/AUDIT_REPORT_2026.md`](docs/archive/AUDIT_REPORT_2026.md)
+- **Comprehensive 2026 Audit Report (point-in-time):** [`docs/AUDIT_REPORT_2026.md`](docs/AUDIT_REPORT_2026.md)
 - **Mainnet Launch & Monitoring Runbook (draft, not normative):** [`docs/MAINNET-RUNBOOK.md`](docs/MAINNET-RUNBOOK.md)
 - **Genesis Key Ceremony Protocol (draft, not normative):** [`docs/KEY-CEREMONY.md`](docs/KEY-CEREMONY.md)
 - **Mainnet Launch Freeze Checklist:** [`docs/MAINNET-FREEZE-CHECKLIST.md`](docs/MAINNET-FREEZE-CHECKLIST.md)
