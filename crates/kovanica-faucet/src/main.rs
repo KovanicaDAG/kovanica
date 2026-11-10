@@ -786,11 +786,7 @@ mod guard_tests {
                 format!("{err:#}").contains("not accepted"),
                 "{form} on chain 1: {err:#}"
             );
-            for chain in [
-                chain_id::DEVNET,
-                chain_id::LOCAL,
-                chain_id::TESTNET_V2,
-            ] {
+            for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
                 let parsed = parse_address(form, chain)
                     .unwrap_or_else(|e| panic!("{form} on chain {chain}: {e:#}"));
                 assert_eq!(parsed, address);
