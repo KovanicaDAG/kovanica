@@ -59,10 +59,6 @@ struct RateLimiter {
 }
 
 impl RateLimiter {
-    fn check_and_record(&self, ip: &str, window_secs: u64, max_requests: usize) -> bool {
-        self.check_and_record_ip(ip, window_secs, max_requests)
-    }
-
     fn check_and_record_ip(&self, ip: &str, window_secs: u64, max_requests: usize) -> bool {
         Self::check_and_record_map(&self.requests, ip, window_secs, max_requests)
     }
