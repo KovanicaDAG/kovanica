@@ -13,7 +13,6 @@ Scope: the public web/API/P2P surface. Chain parameters and tokenomics live in
 | Host | Address | Role | Runs |
 |------|---------|------|------|
 | `srv1745734` (VPS#1) | `seed1.kovanica.online` | **web / nginx** + testnet **seed1** | nginx :80/:443, pm2 `kovanica-web` on `127.0.0.1:3010`, docker node exposing JSON-RPC via `docker-proxy` on `127.0.0.1:8545`, `kovanica-prometheus@1.service` on `127.0.0.1:9091`, `kovanica-soak-collect.timer`, active `cloudflared` tunnel |
-| `srv1991525` (VPS#2) | `seed2.kovanica.online` | testnet **seed2** | node |
 | `srv2013143` (VPS#3) | `seed3.kovanica.online` | testnet **seed3** + dev workstation | `/root/kvnc` (main repo, `main`), `/root/Projects/kvnc` (worktree on `fix/leader-rotation-and-liveness`) |
 
 Notes:

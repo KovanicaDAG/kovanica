@@ -1,15 +1,20 @@
-# Kovanica Hybrid PoW Testnet (Chain ID 5) Node Configuration
+# Kovanica Hybrid PoW Testnet (Chain ID 2) Node Configuration
 #
 # Consensus: Hybrid PoW + GHOSTDAG (NO stake for consensus per ADR 0003 / Toni 2026-11-05).
 # Mining: KovanicaHash (BLAKE3 + 2 MiB memory mix)
 # Parameters: TARGET_BLOCK_MS = 4000 (4 s), GHOSTDAG_K = 5
 # Native token: KVNC (9 decimals), initial block reward = 2.5 KVNC
 
-# Chain ID 5 designates HYBRID_TESTNET
-chain_id = 5
+# Chain ID 2 designates HYBRID_TESTNET
+chain_id = 2
+
+# Chain 2 is a no-stake hybrid chain: the only permitted emission policy is
+# no-stake-82m (82M mining budget, no genesis validator allocation).
+# Overridable with KOVANICA_EMISSION_POLICY.
+emission_policy = "no-stake-82m"
 
 # Directory where chain data is stored (consensus.redb + state.redb)
-data_dir = "./data/chain5"
+data_dir = "./data/chain2"
 
 # P2P listen address: either host:port or full libp2p multiaddr
 listen_addr = "0.0.0.0:8000"

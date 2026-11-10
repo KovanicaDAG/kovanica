@@ -189,8 +189,8 @@ Scrape `block_height`, `peer_count`, `commit_latency`, `mergeset_size` and
 - Ticker: KVNC (9 decimals, `ONE_KVNC = 10^9`, legacy alias `ONE_KUNA`)
 - Total: 90.2M KVNC (`90_200_000 * 10^9` atoms)
 - Founder premine: 200k KVNC; Treasury: 8M KVNC (linear 8yr)
-- Mining subsidy budget: 81M KVNC
-- Block reward: 2.5 KVNC / 8.1M blocks; decay ×3/4; minted to committed block author
+- Mining subsidy budget: 82M KVNC (no genesis validator allocation on chains 1 and 2)
+- Block reward: 2.5 KVNC / 8.2M rewarded blocks; decay ×3/4; minted to committed block author
 - Consensus: Hybrid PoW + GHOSTDAG (NO stake in consensus; target block 4 s, GHOSTDAG K=5; PoW: KovanicaHash)
 
 ---

@@ -141,7 +141,6 @@ impl EquivocationEvidence {
             crate::signing::chain_id::MAINNET,
             crate::signing::chain_id::TESTNET,
             crate::signing::chain_id::DEVNET,
-            crate::signing::chain_id::TESTNET_V2,
             crate::signing::chain_id::LOCAL,
         ] {
             if a.verify_chain(chain_id) && b.verify_chain(chain_id) {
@@ -341,15 +340,15 @@ mod tests {
         assert_eq!(ev_chain1.offender_for_chain(1), Ok(author));
         assert_eq!(ev_chain1.offender(), Ok(author));
 
-        // Rejected on chain 4 (cross-chain replay)
+        // Rejected on chain 3 (cross-chain replay)
         assert_eq!(
-            ev_chain1.offender_for_chain(4),
+            ev_chain1.offender_for_chain(3),
             Err(EvidenceError::BadSignature)
         );
 
-        // Split-chain headers (header_a on chain 1, header_b on chain 4) rejected
-        let sig2_chain4 = Signature(
-            ed25519_dalek::Signer::sign(&k, &crate::block::block_signature_data(4, &d2)).to_bytes(),
+        // Split-chain headers (header_a on chain 1, header_b on chain 3) rejected
+        let sig2_devnet = Signature(
+            ed25519_dalek::Signer::sign(&k, &crate::block::block_signature_data(3, &d2)).to_bytes(),
         );
         let ev_split = EquivocationEvidence {
             header_a: SignedBlockHeader {
@@ -362,7 +361,7 @@ mod tests {
                 author,
                 round,
                 digest: d2,
-                signature: sig2_chain4,
+                signature: sig2_devnet,
             },
         };
         assert_eq!(ev_split.offender(), Err(EvidenceError::BadSignature));
@@ -371,7 +370,7 @@ mod tests {
             Err(EvidenceError::BadSignature)
         );
         assert_eq!(
-            ev_split.offender_for_chain(4),
+            ev_split.offender_for_chain(3),
             Err(EvidenceError::BadSignature)
         );
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env rust
-//! Generate 5 validator keystores and genesis_validators.toml for Chain 4 testnet
+//! Generate 5 validator keystores and genesis_validators.toml for the devnet
 
 use std::fs;
 use std::path::Path;
@@ -7,7 +7,7 @@ use std::path::Path;
 use kovanica_cli::wallet;
 
 const PASSPHRASE: &str = "devnet-phase16.6";
-const OUTDIR: &str = "genesis/chain4";
+const OUTDIR: &str = "genesis/devnet";
 
 fn main() -> anyhow::Result<()> {
     fs::create_dir_all(OUTDIR)?;
@@ -40,10 +40,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Generate genesis_validators.toml with [[validator]] array-of-tables format
-    let mut toml = String::from("# Chain 4 — 5-node validator set for genesis\n");
+    let mut toml = String::from("# Devnet — 5-node validator set for genesis\n");
     toml.push_str("# Stakes = 100_000 KUNA (100_000_000_000_000 atoms)\n");
     toml.push_str("# Generated from keystores\n");
-    toml.push_str("chain_id = 4\n\n");
+    toml.push_str("chain_id = 3\n\n");
 
     for (address, public_key_hex, _seed) in &validators {
         toml.push_str("[[validator]]\n");
@@ -71,7 +71,7 @@ fn main() -> anyhow::Result<()> {
     println!("  Faucet Address: {}", faucet_address);
     println!("  Faucet Seed: {}", hex::encode(&faucet_seed));
 
-    let mut funded_toml = String::from("# Chain 4 — Funded Accounts for Testnet\n");
+    let mut funded_toml = String::from("# Devnet — Funded Accounts\n");
     funded_toml.push_str("# Pre-funded 1,000,000 KUNA for Faucet\n\n");
     funded_toml.push_str("[[account]]\n");
     funded_toml.push_str(&format!("address = \"{faucet_address}\"\n"));

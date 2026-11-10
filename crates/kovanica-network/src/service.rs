@@ -1567,7 +1567,7 @@ impl NetworkService {
         let block: StatementBlock = match bincode::deserialize(payload) {
             Ok(block) => block,
             Err(err) => {
-                // If it's a raw BlockHeader for Chain 5, adapt it into StatementBlock
+                // If it's a raw BlockHeader for Chain 2, adapt it into StatementBlock
                 if let Ok(header) =
                     bincode::deserialize::<kovanica_types::block::BlockHeader>(payload)
                 {

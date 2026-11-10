@@ -1,7 +1,7 @@
 //! KovanicaHash Proof-of-Work algorithm (ADR 0003).
 //!
 //! KovanicaHash is a memory-hard proof-of-work algorithm designed for Kovanica
-//! (KVNC) hybrid PoW + GHOSTDAG consensus (Chain ID 5 / testnet track).
+//! (KVNC) hybrid PoW + GHOSTDAG consensus (Chain ID 2 / canonical testnet).
 //!
 //! # Architecture & Phases
 //!

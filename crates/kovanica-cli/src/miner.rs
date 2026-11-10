@@ -1,4 +1,4 @@
-//! Standalone multithreaded solo miner for Kovanica PoW (Chain 5).
+//! Standalone multithreaded solo miner for Kovanica PoW (Chain 2).
 //!
 //! Connects to any Kovanica node JSON-RPC endpoint, polls candidate block templates
 //! via `kovanica_getWork`, partitions the nonce space across CPU worker threads using
@@ -28,7 +28,7 @@ use crate::rpc::RpcClient;
 /// Arguments for `kovanica miner run`.
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct MinerRunArgs {
-    /// Payout address for mining rewards (Chain 5 canonical base32 or legacy hex).
+    /// Payout address for mining rewards (Chain 2 canonical base32 or legacy hex).
     #[arg(long, short)]
     pub address: String,
 
@@ -64,7 +64,7 @@ pub enum MinerCommand {
 
 /// Validate the payout address for the given chain ID.
 ///
-/// On Chain 5 (`HYBRID_TESTNET`), both canonical base32 (`kvnc...dag`)
+/// On Chain 2 (`HYBRID_TESTNET`), both canonical base32 (`kvnc...dag`)
 /// and valid legacy hex forms are accepted.
 pub fn validate_payout_address(address_str: &str, chain_id: u64) -> Result<Address> {
     Address::parse_for_chain(address_str.trim(), chain_id)
@@ -388,7 +388,7 @@ impl SoloMiner {
         }
 
         println!("============================================================");
-        println!("       Kovanica Standalone Solo CPU Miner (Chain 5)         ");
+        println!("       Kovanica Standalone Solo CPU Miner (Chain 2)         ");
         println!("============================================================");
         println!(" Chain ID:        {}", self.chain_id);
         println!(" RPC Endpoint:    {}", self.client.url());
@@ -653,7 +653,7 @@ pub fn benchmark_kovanica_hash(threads: usize, duration: Duration) -> Result<Min
         anyhow::bail!("requested thread count ({threads}) exceeds maximum allowed (256)");
     }
 
-    // Realistic canonical block header template (Chain ID 5, round 1, 1 parent)
+    // Realistic canonical block header template (Chain ID 2, round 1, 1 parent)
     let dummy_header = BlockHeader::new(
         HYBRID_TESTNET,
         1,
@@ -871,7 +871,7 @@ mod tests {
     #[test]
     fn work_template_parses_and_converts_to_candidate_header() {
         let template = WorkTemplate {
-            chain_id: 5,
+            chain_id: chain_id::HYBRID_TESTNET,
             round: 10,
             author: 3,
             parents: vec![format!("0x{}", hex::encode([0xaa; 32]))],
@@ -885,7 +885,7 @@ mod tests {
         };
 
         let header = template.to_candidate_header().expect("should build header");
-        assert_eq!(header.chain_id, 5);
+        assert_eq!(header.chain_id, chain_id::HYBRID_TESTNET);
         assert_eq!(header.round, 10);
         assert_eq!(header.author, 3);
         assert_eq!(header.target_bits, 0x207fffff);

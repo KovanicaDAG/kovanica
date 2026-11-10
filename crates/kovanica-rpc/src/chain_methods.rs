@@ -2138,7 +2138,7 @@ pub async fn handle_sync_status(_params: Value, state: RpcState) -> Result<Value
     serde_json::to_value(&status).map_err(internal)
 }
 
-/// Generate a PoW mining work template for Chain 5.
+/// Generate a PoW mining work template for Chain 2.
 pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let chain_id = state.mempool.signing_context().chain_id;
     if !kovanica_types::signing::chain_id::is_hybrid(chain_id) {
@@ -2217,7 +2217,7 @@ pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, Rp
     )
     .map_err(|e| RpcError::ExecutionError(format!("ancestor timestamp extraction failed: {e}")))?;
 
-    let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+    let daa_config = kovanica_consensus::DaaConfig::hybrid_default();
     let target_bits = kovanica_consensus::try_required_target_bits(
         &state.consensus_store,
         &parent_refs,
@@ -2425,7 +2425,7 @@ pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value,
         }
 
         // Enforce required DAA target from deterministic block-bound ancestry
-        let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+        let daa_config = kovanica_consensus::DaaConfig::hybrid_default();
         let required_bits = kovanica_consensus::try_required_target_bits(
             &state.consensus_store,
             &header.parents,
@@ -2492,7 +2492,7 @@ pub async fn handle_get_mining_info(_params: Value, state: RpcState) -> Result<V
         })
         .collect();
 
-    let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+    let daa_config = kovanica_consensus::DaaConfig::hybrid_default();
     let target_bits = kovanica_consensus::try_required_target_bits(
         &state.consensus_store,
         &parent_refs,
@@ -2638,7 +2638,7 @@ mod tests {
     use kovanica_staking::{StakingState, MIN_VALIDATOR_STAKE};
     use kovanica_storage::Storage;
     use kovanica_types::crypto::PublicKey;
-    use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET, TESTNET_V2};
+    use kovanica_types::signing::chain_id::{DEVNET, LOCAL, MAINNET, TESTNET};
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -2699,7 +2699,7 @@ mod tests {
         let value = Value::String(hex32(0xab));
         assert_eq!(parse_hash(&value, "hash").unwrap(), Hash([0xab; 32]));
         assert_eq!(
-            parse_address(&value, "address", TESTNET_V2).unwrap(),
+            parse_address(&value, "address", DEVNET).unwrap(),
             Address([0xab; 32])
         );
 
@@ -2927,15 +2927,15 @@ mod tests {
         let address = Address([0x2a; 32]);
         assert_eq!(address.to_string(), address.encode());
         assert_eq!(address.to_string().len(), 64);
-        for chain in [MAINNET, TESTNET_V2, LOCAL] {
+        for chain in [MAINNET, TESTNET, LOCAL] {
             assert_eq!(
                 parse_address(&json!(address.to_string()), "address", chain).unwrap(),
                 address
             );
         }
-        // Legacy hex: devnet, chain 4, and local. Refused on mainnet and testnet.
+        // Legacy hex: devnet and local. Refused on mainnet and testnet.
         for legacy in [hex32(0x2a), address.encode_legacy_hex()] {
-            for chain in [DEVNET, TESTNET_V2, LOCAL] {
+            for chain in [DEVNET, LOCAL] {
                 assert_eq!(
                     parse_address(&json!(legacy), "address", chain).unwrap(),
                     address,
@@ -2953,7 +2953,7 @@ mod tests {
         bad.replace_range(10..11, if &bad[10..11] == "q" { "p" } else { "q" });
         assert!(parse_address(&json!(bad), "address", MAINNET).is_err());
         let bad_legacy = json!(format!("kvnc{}dag", "00".repeat(36)));
-        assert!(parse_address(&bad_legacy, "address", TESTNET_V2).is_err());
+        assert!(parse_address(&bad_legacy, "address", DEVNET).is_err());
     }
 
     #[test]
@@ -2994,21 +2994,21 @@ mod tests {
         assert!(parse_block_ref(&json!("nope"), 0, "b").is_err());
 
         // Address filter: single, list, absent, invalid.
-        assert!(parse_address_filter(None, TESTNET_V2).unwrap().is_none());
+        assert!(parse_address_filter(None, DEVNET).unwrap().is_none());
         assert_eq!(
-            parse_address_filter(Some(&json!(hex32(0x11))), TESTNET_V2)
+            parse_address_filter(Some(&json!(hex32(0x11))), DEVNET)
                 .unwrap()
                 .unwrap(),
             vec![Address([0x11; 32])]
         );
         assert_eq!(
-            parse_address_filter(Some(&json!([hex32(0x11), hex32(0x22)])), TESTNET_V2)
+            parse_address_filter(Some(&json!([hex32(0x11), hex32(0x22)])), DEVNET)
                 .unwrap()
                 .unwrap()
                 .len(),
             2
         );
-        assert!(parse_address_filter(Some(&json!(5)), TESTNET_V2).is_err());
+        assert!(parse_address_filter(Some(&json!(5)), DEVNET).is_err());
 
         // Topic matching: empty/None wildcard, exact, and out-of-range position.
         assert!(topics_match(&[], events::TOKEN_TRANSFER));
@@ -3810,7 +3810,7 @@ mod tests {
                     reported_tip_round: None,
                 },
             ],
-            network_tag: Some("4-0123456789abcdef".to_string()),
+            network_tag: Some("3-0123456789abcdef".to_string()),
         }));
 
         let got = handle_sync_status(Value::Null, state).await.unwrap();
@@ -3823,7 +3823,7 @@ mod tests {
         assert_eq!(got["peerCount"], json!(2));
         assert_eq!(got["peers"][0]["peerId"], json!("12D3KooWpeer-a"));
         assert_eq!(got["peers"][0]["reportedTipRound"], json!(200));
-        assert_eq!(got["networkTag"], json!("4-0123456789abcdef"));
+        assert_eq!(got["networkTag"], json!("3-0123456789abcdef"));
         // Peer b has no tip: those fields are omitted.
         assert!(got["peers"][1].get("reportedTipRound").is_none());
         // listenAddr should not be present
@@ -4668,15 +4668,15 @@ mod tests {
     async fn legacy_submit_work_rejected_without_writes() {
         let (_dir, storage) = open_storage();
         let mut state = test_state(storage.clone());
-        // Node running on legacy Chain 4 (TESTNET_V2)
+        // Node running on devnet (3), a non-hybrid legacy chain
         state.mempool = Arc::new(Mempool::new(
             MempoolConfig::default(),
             storage.clone(),
-            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::TESTNET_V2),
+            kovanica_types::SigningContext::new(kovanica_types::signing::chain_id::DEVNET),
         ));
 
         let header = kovanica_types::BlockHeader::new(
-            kovanica_types::signing::chain_id::TESTNET_V2,
+            kovanica_types::signing::chain_id::DEVNET,
             1,
             0,
             vec![],
@@ -4687,7 +4687,7 @@ mod tests {
         );
         let mined = kovanica_consensus::mine_header(header, 10_000).expect("mined header");
 
-        // submitWork must be rejected because Chain 4 is not hybrid
+        // submitWork must be rejected because devnet is not a hybrid network
         let res = handle_submit_work(json!({ "header": mined }), state.clone()).await;
         assert!(res.is_err());
         let err_msg = res.unwrap_err().to_string();

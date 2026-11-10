@@ -1,4 +1,4 @@
-//! Proof-of-work mining primitives for Hybrid PoW + GHOSTDAG (Chain ID 5).
+//! Proof-of-work mining primitives for Hybrid PoW + GHOSTDAG (Chain ID 2).
 //!
 //! Provides synchronous and asynchronous mining functions that iterate over nonces
 //! until a candidate [`BlockHeader`] satisfies its declared [`BlockHeader::target_bits`].

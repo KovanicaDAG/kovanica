@@ -4,9 +4,9 @@
 62f487532da42ada4cd656ea3de1d89db0bb8ea0:apps/console-desktop/src-tauri/src/wallet.rs:generic-api-key:735
 apps/console-desktop/src-tauri/tests/fixtures/cross-keystore.json:generic-api-key:1
 529490a465591ae391a39dae3bd15a4c2f47c116:ops/docker/chain5/faucet.keystore:generic-api-key:6
-ops/docker/chain5/faucet.keystore:generic-api-key:6
+ops/docker/chain2/faucet.keystore:generic-api-key:6
 9990732ae22de6221a06de4c14b85ed1c14bf03f:ops/docker/chain5/node1_p2p.key:kovanica-raw-ed25519-secret:1
-ops/docker/chain5/node1_p2p.key:kovanica-raw-ed25519-secret:1
+ops/docker/chain2/node1_p2p.key:kovanica-raw-ed25519-secret:1
 
 # PRO-28: Linear/Notion tokens committed in opencode.json at e48b7530 and since
 # removed (the file now uses ${env:...} placeholders). They are revoked; the

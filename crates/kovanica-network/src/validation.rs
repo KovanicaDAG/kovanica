@@ -50,9 +50,9 @@ pub enum Rejection {
     /// A skip certificate is empty, oversized, mixes rounds or repeats a
     /// signer.
     MalformedCertificate,
-    /// PoW header verification failed (Chain 5).
+    /// PoW header verification failed (Chain 2).
     BadPow(kovanica_types::block::HeaderError),
-    /// Missing PoW header on Chain 5 block.
+    /// Missing PoW header on Chain 2 block.
     MissingPow,
 }
 
@@ -220,7 +220,7 @@ pub fn verify_block(
     verify_block_with_clock(keys, chain_id, block, now_ms)
 }
 
-/// Verify a block's digest, merkle root, and either PoW header (Chain 5) or author signature (legacy).
+/// Verify a block's digest, merkle root, and either PoW header (Chain 2) or author signature (legacy).
 ///
 /// When `now_ms` is `Some`, enforces the local wall-clock future drift admission limit
 /// (`MAX_FUTURE_TIMESTAMP_DRIFT_MS`). When `None` (such as during deterministic historical replay),
@@ -252,7 +252,7 @@ pub fn verify_block_with_clock(
     }
 
     if kovanica_types::signing::chain_id::is_hybrid(chain_id) {
-        // Hybrid PoW + GHOSTDAG (Chain 2 & Chain 5):
+        // Hybrid PoW + GHOSTDAG (Chain 2):
         // NO stake in consensus path per ADR 0003. Committee keys and Ed25519 signatures
         // are NOT checked. Anti-DoS is enforced strictly by PoW verification:
         // missing PoW, timestamp drift, malformed parents, or hash not meeting target
@@ -982,7 +982,7 @@ mod tests {
         );
     }
     #[test]
-    fn chain_5_pow_block_validation_and_anti_dos() {
+    fn chain_2_pow_block_validation_and_anti_dos() {
         use kovanica_types::block::{BlockHeader, HeaderError};
         use std::collections::HashMap;
 

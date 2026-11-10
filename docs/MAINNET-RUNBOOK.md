@@ -38,7 +38,7 @@ Verify that the binary under execution enforces the frozen parameters defined in
 | **Treasury Allocation** | `8,000,000 KVNC` | Linear 8-year vesting (1M KVNC/year) |
 | **Mining Subsidy Budget** | `82,000,000 KVNC` | $90.2\text{M} - 0.2\text{M} - 8\text{M}$ |
 | **Initial Block Reward** | `2.5 KVNC` | $2.5 \times 10^9$ atoms per committed block |
-| **Subsidy Era Length** | `8,100,000 blocks` | Multiplied by $3/4$ decay each era |
+| **Subsidy Era Length** | `8,200,000 blocks` | Rewarded blocks per era; multiplied by $3/4$ decay each era |
 | **Genesis Bootstrap Seeds** | `1` to `20` nodes | `3–5` seeds recommended for public launch |
 | **Epoch Duration** | `7,200` rounds (~8 hours) | `EPOCH_ROUNDS = 7_200` |
 | **Unbonding Cooldown** | `100,000` leader blocks | ~13.9 days at 12 s/leader |
@@ -78,7 +78,6 @@ P2P communication runs over plaintext TCP on port `8000`. **Cloudflare HTTP prox
 |---|---|---|---|---|
 | `mainnet.kovanica.online` | A | `<Seed-1-IP>` | **DNS-only (grey-cloud)** | Primary mainnet seed |
 | `seed1.kovanica.online` | A | `<Seed-1-IP>` (EU Central) | **DNS-only (grey-cloud)** | Independent Seed 1 |
-| `seed2.kovanica.online` | A | `<Seed-2-IP>` (US East) | **DNS-only (grey-cloud)** | Independent Seed 2 |
 | `seed3.kovanica.online` | A | `<Seed-3-IP>` (AP Southeast) | **DNS-only (grey-cloud)** | Independent Seed 3 |
 | `rpc.kovanica.online` | A | `<RPC-LoadBalancer-IP>` | **DNS-only (grey-cloud)** | Public JSON-RPC (port 8545) |
 
@@ -89,13 +88,11 @@ Run network diagnostics across all seed targets:
 ```bash
 # Verify DNS resolution
 dig +short seed1.kovanica.online
-dig +short seed2.kovanica.online
 dig +short seed3.kovanica.online
 dig +short mainnet.kovanica.online
 
 # Verify TCP 8000 ingress
 nc -zvw3 seed1.kovanica.online 8000
-nc -zvw3 seed2.kovanica.online 8000
 nc -zvw3 seed3.kovanica.online 8000
 ```
 
@@ -104,7 +101,7 @@ nc -zvw3 seed3.kovanica.online 8000
 Each seed node generates a persistent libp2p identity key (`p2p.key`). The resulting Multiaddrs populate `KOVANICA_BOOTNODES`:
 
 ```text
-/dns4/seed1.kovanica.online/tcp/8000/p2p/12D3KooW...,/dns4/seed2.kovanica.online/tcp/8000/p2p/12D3KooW...,/dns4/seed3.kovanica.online/tcp/8000/p2p/12D3KooW...
+/dns4/seed1.kovanica.online/tcp/8000/p2p/12D3KooW...,/dns4/seed3.kovanica.online/tcp/8000/p2p/12D3KooW...
 ```
 
 ---
@@ -242,7 +239,7 @@ Nodes expose Prometheus metrics on port `9100` (or configured metrics port). Obs
 - **Triage Steps:**
   1. Determine if stall is local or global across all validators:
      ```bash
-     for s in seed1 seed2 seed3; do
+     for s in seed1 seed3; do
        curl -s https://$s.kovanica.online/health | jq .block_height
      done
      ```

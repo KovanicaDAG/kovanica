@@ -454,7 +454,6 @@ rpc_rate_limit_per_min = 3600
 # Canonical mainnet seed multiaddrs
 bootnodes = [
     "/dns4/seed1.kovanica.online/tcp/8000/p2p/12D3KooW...",
-    "/dns4/seed2.kovanica.online/tcp/8000/p2p/12D3KooW...",
     "/dns4/seed3.kovanica.online/tcp/8000/p2p/12D3KooW..."
 ]
 ```

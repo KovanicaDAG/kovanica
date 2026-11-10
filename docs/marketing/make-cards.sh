@@ -1,5 +1,7 @@
 #!/bin/bash
 # Renders the chain 4 testnet social cards into docs/marketing/.
+# Archived 2026-11-10: chain 4 was removed from the canonical registry; kept for
+# historical reference with the pre-change cards.
 # Requires ImageMagick 7 (magick) and the DejaVu fonts.
 #
 #   bash docs/marketing/make-cards.sh

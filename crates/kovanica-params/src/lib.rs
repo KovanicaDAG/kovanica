@@ -23,8 +23,6 @@ pub const CHAIN_ID_TESTNET: u64 = 2;
 pub const CHAIN_ID_DEVNET: u64 = 3;
 /// Alias for testnet chain id (`2`) for backward compatibility during transition.
 pub const CHAIN_ID_HYBRID_TESTNET: u64 = CHAIN_ID_TESTNET;
-/// Legacy internal testnet v2 chain id (`4`) [deprecated].
-pub const CHAIN_ID_TESTNET_V2: u64 = 4;
 /// Local development network chain id (`1337`) [deprecated].
 pub const CHAIN_ID_LOCAL: u64 = 1337;
 
@@ -42,9 +40,9 @@ pub const TARGET_BLOCK_MS: u64 = 4_000;
 /// Hybrid PoW + GHOSTDAG default parameter k (Toni 2026-11-05).
 pub const GHOSTDAG_K: u32 = 5;
 
-/// Initial/maximum target bits for hybrid PoW testnet (Chain 5).
+/// Initial/maximum target bits for hybrid PoW testnet (Chain 2).
 /// Compact representation `0x1f00ffff` (exponent 31, mantissa 0x00ffff).
-pub const INITIAL_TARGET_BITS_CHAIN5: u32 = 0x1f00_ffff;
+pub const INITIAL_TARGET_BITS_HYBRID: u32 = 0x1f00_ffff;
 /// Minimum difficulty target bits (ceiling on target, easiest difficulty).
 pub const MAX_TARGET_BITS: u32 = 0x1f00_ffff;
 /// Maximum difficulty target bits (floor on target, hardest difficulty).

@@ -562,7 +562,7 @@
   "refresh": "5s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["kovanica", "chain5", "hybrid-pow", "ghostdag"],
+  "tags": ["kovanica", "chain2", "hybrid-pow", "ghostdag"],
   "templating": {
     "list": []
   },
@@ -572,7 +572,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Kovanica Hybrid Testnet (Chain 5) Overview",
+  "title": "Kovanica Hybrid Testnet (Chain 2) Overview",
   "uid": "kovanica-chain5-overview",
   "version": 1,
   "weekStart": ""

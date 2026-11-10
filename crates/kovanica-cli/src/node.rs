@@ -1162,16 +1162,16 @@ mod tests {
         let tagged = parse_sync_status(&json!({
             "committedHeight": 1,
             "catchingUp": false,
-            "networkTag": "4-0123456789abcdef",
+            "networkTag": "3-0123456789abcdef",
         }))
         .unwrap();
-        assert_eq!(tagged.node_chain_id, Some(4));
-        assert!(refuse_chain_mismatch(Some(4), tagged.node_chain_id).is_ok());
+        assert_eq!(tagged.node_chain_id, Some(3));
+        assert!(refuse_chain_mismatch(Some(3), tagged.node_chain_id).is_ok());
         let mismatch = refuse_chain_mismatch(Some(1), tagged.node_chain_id)
             .unwrap_err()
             .to_string();
         assert!(mismatch.contains("--chain-id 1"), "{mismatch}");
-        assert!(mismatch.contains("node's chain 4"), "{mismatch}");
+        assert!(mismatch.contains("node's chain 3"), "{mismatch}");
         let numeric = parse_sync_status(&json!({
             "committedHeight": 1,
             "chainId": 1,
@@ -1181,24 +1181,24 @@ mod tests {
         assert!(refuse_chain_mismatch(Some(4), numeric.node_chain_id).is_err());
         let snake = parse_sync_status(&json!({
             "committedHeight": 1,
-            "chain_id": "0x4",
+            "chain_id": "0x3",
         }))
         .unwrap();
-        assert_eq!(snake.node_chain_id, Some(4));
+        assert_eq!(snake.node_chain_id, Some(3));
         assert!(parse_sync_status(&json!({"networkTag": "nope-abcd"})).is_err());
         assert_eq!(sync.node_chain_id, None);
         assert!(refuse_chain_mismatch(Some(4), None).is_ok());
         assert!(refuse_chain_mismatch(None, Some(4)).is_ok());
         let matched = assemble_status(
             "http://127.0.0.1:8545/rpc",
-            Some(4),
+            Some(3),
             None,
             Some(&tagged),
             None,
             Vec::new(),
             None,
         );
-        assert_eq!(matched.node_chain_id, Some(4));
+        assert_eq!(matched.node_chain_id, Some(3));
         assert_eq!(status_json(&matched)["chainIdReportedByNode"], json!(true));
         assert!(row(&status_rows(&matched), "Signing chain id").contains("matches the node"));
         assert_eq!(row(&rows, "Epoch"), "unknown");

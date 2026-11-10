@@ -22,10 +22,8 @@
 | Record | Type | Value | Notes |
 |--------|------|-------|-------|
 | `seed1.kovanica.online` | CNAME | `testnet.kovanica.online` | Deprecated alias |
-| `seed2.kovanica.online` | CNAME | `testnet.kovanica.online` | Deprecated alias |
 | `seed3.kovanica.online` | CNAME | `testnet.kovanica.online` | Deprecated alias |
 | `seed1.kovanica.io` | CNAME | `mainnet.kovanica.online` | Future mainnet branding |
-| `seed2.kovanica.io` | CNAME | `mainnet.kovanica.online` | |
 | `seed3.kovanica.io` | CNAME | `mainnet.kovanica.online` | |
 
 All validator and regular nodes should configure their `bootnodes` / `KOVANICA_BOOTNODES` to point to:
@@ -194,7 +192,7 @@ services:
     environment:
       KOVANICA_RUN_VALIDATOR: "false"
       KOVANICA_LISTEN_ADDR: "0.0.0.0:8000"
-      KOVANICA_BOOTNODES: "seed2.kovanica.online:8000,seed3.kovanica.online:8000"
+      KOVANICA_BOOTNODES: "seed3.kovanica.online:8000"
       KOVANICA_MAX_PEERS: "50"
       KOVANICA_RPC_AUTH: "disable"
       KOVANICA_RPC_RATE_LIMIT_PER_MIN: "0"

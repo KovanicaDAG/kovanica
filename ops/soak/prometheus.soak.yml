@@ -12,4 +12,4 @@ scrape_configs:
           - "node3:9100"
         labels:
           cluster: "kovanica-soak"
-          chain_id: "5"
+          chain_id: "2"

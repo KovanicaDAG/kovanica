@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Kovanica Testnet (Chain 4) — Ingress & Reverse Proxy Setup (Nginx + Certbot)
+# Kovanica Testnet (Chain 2) — Ingress & Reverse Proxy Setup (Nginx + Certbot)
 # Usage:
 #   sudo bash setup-nginx.sh seed1 [email]
-#   sudo bash setup-nginx.sh seed2 [email]
 #   sudo bash setup-nginx.sh seed3 [email]
 # ==============================================================================
 set -euo pipefail
@@ -11,8 +10,8 @@ set -euo pipefail
 NODE_ID="${1:-}"
 EMAIL="${2:-kovanicaprotokol@gmail.com}"
 
-if [[ -z "$NODE_ID" || ! "$NODE_ID" =~ ^(seed1|seed2|seed3)$ ]]; then
-    echo "Usage: sudo bash $0 <seed1|seed2|seed3> [certbot_email]"
+if [[ -z "$NODE_ID" || ! "$NODE_ID" =~ ^(seed1|seed3)$ ]]; then
+    echo "Usage: sudo bash $0 <seed1|seed3> [certbot_email]"
     exit 1
 fi
 
@@ -52,9 +51,6 @@ DOMAINS=""
 case "$NODE_ID" in
     seed1)
         DOMAINS="-d seed1.kovanica.online"
-        ;;
-    seed2)
-        DOMAINS="-d seed2.kovanica.online"
         ;;
     seed3)
         DOMAINS="-d seed3.kovanica.online"

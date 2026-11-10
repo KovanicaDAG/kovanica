@@ -85,9 +85,9 @@ The compose healthchecks monitor `/health` and report when nodes are running and
 
 ---
 
-## Chain 5 Hybrid PoW Testnet Cluster (`docker-compose.chain5.yml`)
+## Chain 2 Hybrid PoW Testnet Cluster (`docker-compose.chain2.yml`)
 
-A standalone 1-command Docker Compose testnet cluster for **Chain 5** (`HYBRID_TESTNET`) featuring 3 peered hybrid testnet nodes with active KovanicaHash PoW mining, GHOSTDAG $k=5$ ordering, a dedicated faucet service, and pre-configured Prometheus + Grafana dashboards.
+A standalone 1-command Docker Compose testnet cluster for **Chain 2** (`HYBRID_TESTNET`) featuring 3 peered hybrid testnet nodes with active KovanicaHash PoW mining, GHOSTDAG $k=5$ ordering, a dedicated faucet service, and pre-configured Prometheus + Grafana dashboards.
 
 ### Topology
 
@@ -97,7 +97,7 @@ A standalone 1-command Docker Compose testnet cluster for **Chain 5** (`HYBRID_T
 | `node2` | Peered Node & Miner (author 1) | `8546` (RPC) | `127.0.0.1:8546` |
 | `node3` | Peered Node & Miner (author 2) | `8547` (RPC) | `127.0.0.1:8547` |
 | `observer` | Non-Mining Observer (Apps supervisor) | `8548` (RPC) | `127.0.0.1:8548` |
-| `faucet` | Chain 5 KVNC Dispenser | `3000` | `127.0.0.1:3000` |
+| `faucet` | Chain 2 KVNC Dispenser | `3000` | `127.0.0.1:3000` |
 | `prometheus` | Prometheus Metrics Scraper | `9090` | `127.0.0.1:9090` |
 | `grafana` | Grafana Dashboards | `3000` | `127.0.0.1:3001` (admin/admin) |
 
@@ -115,12 +115,12 @@ docker run --rm --network host kovanica-node:local \
 
 # 3. Or launch the dedicated solo-miner container via Docker Compose profile
 KOVANICA_MINER_ADDRESS=kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag KOVANICA_MINER_THREADS=2 \
-  docker compose -f ops/docker/docker-compose.chain5.yml --profile miner up -d miner
+  docker compose -f ops/docker/docker-compose.chain2.yml --profile miner up -d miner
 ```
 
 ### Apps Supervisor Observer Node
 
-The non-mining observer node (`kovanica-chain5-observer`) provides dedicated, unburdened RPC access for explorers and wallets (such as `kovanica-web`):
+The non-mining observer node (`kovanica-chain2-observer`) provides dedicated, unburdened RPC access for explorers and wallets (such as `kovanica-web`):
 - Endpoint: `http://127.0.0.1:8548`
 - Healthcheck: `http://127.0.0.1:8548/health`
 - Mining disabled (`KOVANICA_MINING_ENABLED=false`) and validator disabled (`KOVANICA_RUN_VALIDATOR=false`).
@@ -130,16 +130,16 @@ The non-mining observer node (`kovanica-chain5-observer`) provides dedicated, un
 
 ```bash
 # Start all 6 services in the background
-docker compose -f ops/docker/docker-compose.chain5.yml up -d --build
+docker compose -f ops/docker/docker-compose.chain2.yml up -d --build
 
 # Run automated smoke test
-./ops/docker/test-chain5-cluster.sh
+./ops/docker/test-chain2-cluster.sh
 
 # View container status
-docker compose -f ops/docker/docker-compose.chain5.yml ps
+docker compose -f ops/docker/docker-compose.chain2.yml ps
 
 # Follow logs from node1
-docker compose -f ops/docker/docker-compose.chain5.yml logs -f node1
+docker compose -f ops/docker/docker-compose.chain2.yml logs -f node1
 
 # Dispense tokens from faucet
 curl -X POST http://127.0.0.1:3000/faucet \
@@ -147,13 +147,13 @@ curl -X POST http://127.0.0.1:3000/faucet \
   -d '{"address": "kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag"}'
 
 # Stop the cluster and wipe volumes
-docker compose -f ops/docker/docker-compose.chain5.yml down -v
+docker compose -f ops/docker/docker-compose.chain2.yml down -v
 ```
 
 ### Observability
 
 - **Prometheus**: Accessible at `http://localhost:9090`. Scrapes `/metrics` from all three nodes every 2s.
-- **Grafana**: Accessible at `http://localhost:3001` (credentials `admin` / `admin`). The `Kovanica Hybrid Testnet (Chain 5) Overview` dashboard visualizes:
+- **Grafana**: Accessible at `http://localhost:3001` (credentials `admin` / `admin`). The `Kovanica Hybrid Testnet (Chain 2) Overview` dashboard visualizes:
   - Total PoW Blocks Mined (`pow_blocks_mined_total`) and mining rate
   - GHOSTDAG Blue vs Red blocks breakdown (`ghostdag_blue_blocks_total`, `ghostdag_red_blocks_total`, `ghostdag_tips_count`)
   - Estimated network hashrate (`pow_hashrate_estimate`) and target difficulty (`pow_target_bits`)

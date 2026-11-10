@@ -13,7 +13,6 @@ import time
 
 ENDPOINTS = [
     {"name": "seed1", "url": "https://seed1.kovanica.online"},
-    {"name": "seed2", "url": "https://seed2.kovanica.online"},
     {"name": "seed3", "url": "https://seed3.kovanica.online"},
     {"name": "rpc-testnet", "url": "https://rpc-testnet.kovanica.online"},
 ]

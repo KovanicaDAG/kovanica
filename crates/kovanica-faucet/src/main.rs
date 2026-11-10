@@ -138,7 +138,7 @@ struct Cli {
     #[arg(long, default_value = "3")]
     max_requests: usize,
     /// Network chain_id committed to by every transaction signature
-    /// (1 mainnet, 2 testnet, 3 devnet, 4 testnet v2, 5 hybrid testnet, 1337 local). No default on purpose.
+    /// (1 mainnet, 2 testnet, 3 devnet, 1337 local). No default on purpose.
     #[arg(long)]
     chain_id: u64,
     /// Loud override required to run the faucet on MAINNET (chain_id 1).
@@ -283,7 +283,7 @@ fn env_truthy(name: &str) -> bool {
 fn ensure_chain_allowed(chain_id: u64, allow_mainnet: bool) -> Result<()> {
     if !kovanica_types::signing::chain_id::is_registered(chain_id) {
         bail!(
-            "unknown chain id {}: expected 1 (mainnet), 2 (testnet), 3 (devnet), 4 (testnet v2), 5 (hybrid testnet) or 1337 (local)",
+            "unknown chain id {}: expected 1 (mainnet), 2 (testnet), 3 (devnet) or 1337 (local)",
             chain_id
         );
     }
@@ -761,12 +761,7 @@ mod guard_tests {
 
     #[test]
     fn non_mainnet_networks_do_not_need_the_override() {
-        for id in [
-            chain_id::TESTNET,
-            chain_id::DEVNET,
-            chain_id::TESTNET_V2,
-            chain_id::LOCAL,
-        ] {
+        for id in [chain_id::TESTNET, chain_id::DEVNET, chain_id::LOCAL] {
             ensure_chain_allowed(id, false).expect("non-mainnet chain is allowed");
         }
     }
@@ -811,7 +806,7 @@ mod guard_tests {
         );
     }
 
-    /// Chain 1 refuses legacy hex. Devnet, chain 4, and local still accept it.
+    /// Chain 1 refuses legacy hex. Devnet and local still accept it.
     #[test]
     fn parse_address_follows_the_chain_policy() {
         let pk_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -827,7 +822,7 @@ mod guard_tests {
                 format!("{err:#}").contains("not accepted"),
                 "{form} on chain 1: {err:#}"
             );
-            for chain in [chain_id::DEVNET, chain_id::LOCAL, chain_id::TESTNET_V2] {
+            for chain in [chain_id::DEVNET, chain_id::LOCAL] {
                 let parsed = parse_address(form, chain)
                     .unwrap_or_else(|e| panic!("{form} on chain {chain}: {e:#}"));
                 assert_eq!(parsed, address);

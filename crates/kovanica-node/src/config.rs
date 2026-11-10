@@ -15,7 +15,7 @@ fn default_enabled() -> bool {
     true
 }
 
-/// Mining configuration for Chain 5 (Hybrid PoW testnet).
+/// Mining configuration for Chain 2 (Hybrid PoW testnet).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct MiningConfig {
@@ -138,7 +138,7 @@ pub struct NodeConfig {
     /// Gossipsub peer scoring (`[peer_scoring]` table). Defaults are safe for
     /// a small validator network; see `kovanica_network::PeerScoringConfig`.
     pub peer_scoring: kovanica_network::PeerScoringConfig,
-    /// Mining configuration for Chain 5 (`[mining]` table).
+    /// Mining configuration for Chain 2 (`[mining]` table).
     #[serde(default)]
     pub mining: MiningConfig,
     /// DNS seeder crawler daemon configuration (`[seeder]` table).
@@ -588,7 +588,7 @@ impl NodeConfig {
             .map_err(|e| anyhow::anyhow!("peer_scoring: {e}"))?;
         if !kovanica_types::signing::chain_id::is_registered(self.chain_id) {
             anyhow::bail!(
-                "chain_id {} is not registered (expected 1 mainnet, 2 testnet, 3 devnet, 4 testnet v2 or 1337 local)",
+                "chain_id {} is not registered (expected 1 mainnet, 2 testnet, 3 devnet or 1337 local)",
                 self.chain_id
             );
         }
@@ -675,7 +675,7 @@ data_dir = "/tmp/kovanica-test-data"
 listen_addr = "127.0.0.1:7000"
 rpc_addr = "0.0.0.0"
 rpc_port = 9999
-bootnodes = ["seed1.kovanica.invalid:8000", "seed2.kovanica.invalid:8000", "127.0.0.1:7001"]
+bootnodes = ["seed1.kovanica.invalid:8000", "seed9.kovanica.invalid:8000", "127.0.0.1:7001"]
 round_duration_ms = 500
 max_peers = 7
 treasury_address = "treasury-address-placeholder"
@@ -806,7 +806,7 @@ treasury_address = "treasury-address-placeholder"
         std::env::remove_var(ALLOW_GENESIS_MISMATCH_ENV);
         assert!(config.allow_genesis_mismatch);
 
-        for chain_id in [1, 2, 4] {
+        for chain_id in [1, 2] {
             config.chain_id = chain_id;
             let err = config
                 .validate()
@@ -844,7 +844,7 @@ treasury_address = "treasury-address-placeholder"
             ..NodeConfig::default()
         };
         assert_eq!(base.chain_id, 1337, "default is the local chain");
-        for id in [1, 2, 3, 4, 1337] {
+        for id in [1, 2, 3, 1337] {
             let c = NodeConfig {
                 chain_id: id,
                 ..base.clone()
@@ -1011,16 +1011,16 @@ treasury_address = "treasury-address-placeholder"
 
         let mut public = NodeConfig {
             run_validator: false,
-            chain_id: kovanica_types::signing::chain_id::TESTNET_V2,
+            chain_id: kovanica_types::signing::chain_id::TESTNET,
             ..NodeConfig::default()
         };
         public.apply_env_overrides();
         let err = public
             .validate()
-            .expect_err("chain 4 must reject a round-duration override");
+            .expect_err("chain 2 must reject a round-duration override");
         let msg = err.to_string();
         assert!(
-            msg.contains("KOVANICA_ROUND_DURATION_MS") && msg.contains("chain_id 4"),
+            msg.contains("KOVANICA_ROUND_DURATION_MS") && msg.contains("chain_id 2"),
             "error must name the variable and the chain, got: {msg}"
         );
 
@@ -1074,7 +1074,7 @@ treasury_address = "treasury-address-placeholder"
             );
             let mut config = NodeConfig {
                 run_validator: false,
-                chain_id: kovanica_types::signing::chain_id::TESTNET_V2,
+                chain_id: kovanica_types::signing::chain_id::TESTNET,
                 ..NodeConfig::default()
             };
             config.apply_env_overrides();
@@ -1110,7 +1110,7 @@ treasury_address = "treasury-address-placeholder"
     #[test]
     fn test_dns_seeds_toml_and_env() {
         let toml_str = r#"
-            dns_seeds = ["seed1.kovanica.io:8000", "seed2.kovanica.io:8000"]
+            dns_seeds = ["seed1.kovanica.io:8000", "seed9.kovanica.io:8000"]
         "#;
         let config = NodeConfig::from_toml_str(toml_str).unwrap();
         assert_eq!(config.dns_seeds.len(), 2);

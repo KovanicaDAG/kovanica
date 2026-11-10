@@ -58,7 +58,7 @@ TAG_CHECK=1
 UNINSTALL=0
 DRY_RUN=0
 
-BOOTNODES="${KOVANICA_BOOTNODES:-seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000}"
+BOOTNODES="${KOVANICA_BOOTNODES:-seed1.kovanica.online:8000,seed3.kovanica.online:8000}"
 
 die() {
     printf 'install: error: %s\n' "$*" >&2

@@ -13,12 +13,13 @@ Update this file when frozen params or open product gaps change. Point-in-time d
 - **Consensus Defaults:** `TARGET_BLOCK_MS = 4000`, `GHOSTDAG_K = 5`.
 - **Product Ticker:** **KVNC** (renamed back from KUNA per Toni 2026-11-05).
 
-## Chain 4 & Chain 5 (Testnet tracks)
+## Canonical chains (Hybrid PoW + GHOSTDAG)
 
-- `chain_id = 4`. Network tag form: `<chain_id>-<16 hex genesis digest>` (see `docs/TESTNET-SEED-NODES.md` for topology). Internal testnet track until public launch (gated on hybrid testnet M8 pass).
-- `chain_id = 5`. Planned Hybrid PoW + GHOSTDAG testnet track under feature/flag `hybrid-pow` (ADR 0003; `CHAIN_ID_HYBRID_TESTNET = 5`, network tag `hybrid-testnet`). Legacy hex allowed on chains 3, 4, 5, 1337.
+- `chain_id = 1` (Mainnet) and `chain_id = 2` (Testnet) are both Hybrid PoW + GHOSTDAG (`NoStake82M`). `chain_id = 3` (Devnet) and `chain_id = 1337` (Local) are dev chains. The former `chain_id = 4` (Testnet v2) was removed from the registry.
+- `chain_id = 2`. Canonical Hybrid PoW + GHOSTDAG public testnet (`NETWORK_TAG_HYBRID_TESTNET = "kovanica-testnet"`, network tag `hybrid-testnet`). Canonical PRO-21 base32 addresses only; legacy hex rejected.
+- Network tag form: `<chain_id>-<16 hex genesis digest>` (see `docs/TESTNET-SEED-NODES.md` for topology).
 - Launch gating: public launch delayed from unconditional 2026-11-25 until hybrid testnet M8 passes.
-- Genesis for testnet: **5** validators (legacy). Mainnet genesis requires **≥15** (15–20 in ceremony).
+- Genesis bootstrap seeds: **1..=20** on mainnet and testnet; they hold no stake (`NoStake82M`).
 - Ordering default: GHOSTDAG (lifted k=3 hard-lock in P0 to allow `GHOSTDAG_K = 5`).
 - Topology, seeds, and ops runbooks: `docs/TESTNET-SEED-NODES.md`, `docs/TESTNET-RESET.md`, `docs/VALIDATOR-ONBOARDING.md`. Do not treat archived `sync-*.md` tables as live inventory.
 
@@ -28,8 +29,8 @@ Update this file when frozen params or open product gaps change. Point-in-time d
 | --- | --- |
 | Coin | KVNC, **9** decimals (`ONE_KVNC = 10^9`, legacy alias `ONE_KUNA`) |
 | Consensus | Hybrid PoW + GHOSTDAG (NO stake in consensus path; `TARGET_BLOCK_MS = 4000`, `GHOSTDAG_K = 5`; PoW: KovanicaHash) |
-| Cap / subsidy sketch | 90.2M total; mining budget 81M; treasury 8M; genesis validators 1M; founder premine 200k |
-| Address | `kvnc` + 57 bech32-alphabet base32 + `dag` (**64** chars); 32 B Ed25519 ‖ 29-bit blake3 checksum. Legacy hex only on chains **3, 4, 5, 1337** |
+| Cap / subsidy sketch | 90.2M total; mining budget 82M; treasury 8M; genesis validators 0 (1M folded into mining); founder premine 200k |
+| Address | `kvnc` + 57 bech32-alphabet base32 + `dag` (**64** chars); 32 B Ed25519 ‖ 29-bit blake3 checksum. Legacy hex only on chains **3, 1337** |
 | Epoch (legacy) | **7200** DAG rounds ≈ 8 h ≈ **2400** leader heights (legacy Mysticeti constant still in tree until hybrid flag) |
 | Jail (legacy) | `JAIL_ROUNDS = 7200` committed leaders (legacy / non-consensus under hybrid) |
 | Min validator stake (legacy) | `50_000` KVNC (`MIN_VALIDATOR_STAKE = 50_000 * ONE_KUNA`; legacy / non-consensus) |
@@ -50,5 +51,5 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 - Automated CI pipeline: fmt, clippy, doc lint, workspace tests, cargo-deny (licenses/advisories/bans/sources), gitleaks 8.24.3 (`.github/workflows/ci.yml`, `scripts/ci-local.sh`).
 - Governance (proposals and stake-weighted voting via `kovanica-cli` and `kovanica-staking`), BIP32 HD derivation (`kovanica-wallet-core`), soak harness (`ops/soak/`), DNS audit probe (`scripts/check-dns-seeds.sh`), and mainnet runbook (`docs/MAINNET-RUNBOOK.md`).
 - PRO-7 (Mysticeti VRF leader set + pin): **FROZEN** for hybrid.
-- Hybrid PoW + GHOSTDAG P1–P8 & Milestone M8 (PoW header primitives, preimages, target conversion, Chain ID 5 wiring, KovanicaHash BLAKE3+2MiB algorithm, header verification, CPU mining worker, DAA, P2P network anti-DoS ingress, GHOSTDAG k=5 committer, 2.5 KVNC reward minting, node miner loop, JSON-RPC getWork/submitWork/miningInfo/dagTips, CLI mining/dag commands, Prometheus metrics, live 3-node cluster integration test suite, faucet alignment, ops templates). Milestone M8 PASSED.
+- Hybrid PoW + GHOSTDAG P1–P8 & Milestone M8 (PoW header primitives, preimages, target conversion, Chain ID 2 wiring, KovanicaHash BLAKE3+2MiB algorithm, header verification, CPU mining worker, DAA, P2P network anti-DoS ingress, GHOSTDAG k=5 committer, 2.5 KVNC reward minting, node miner loop, JSON-RPC getWork/submitWork/miningInfo/dagTips, CLI mining/dag commands, Prometheus metrics, live 3-node cluster integration test suite, faucet alignment, ops templates). Milestone M8 PASSED.
 - Contract SDK (`crates/kovanica-contract-sdk`) and Indexer (`crates/kovanica-indexer`).

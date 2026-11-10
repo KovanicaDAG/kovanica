@@ -1,17 +1,17 @@
 # PoW Block Header & Mining Specification (P1–P8)
 
 - **Status:** Implemented (P1–P8, Toni 2026-11-05, ADR 0003, Milestone M8 Ready)
-- **Scope:** Block header primitives, preimage serialization, compact difficulty target conversion, KovanicaHash PoW algorithm, header verification wiring, mining worker, difficulty adjustment algorithm (DAA), P2P anti-DoS network ingress, GHOSTDAG committer with reward minting, and node mining authoring loop for Chain ID 5.
+- **Scope:** Block header primitives, preimage serialization, compact difficulty target conversion, KovanicaHash PoW algorithm, header verification wiring, mining worker, difficulty adjustment algorithm (DAA), P2P anti-DoS network ingress, GHOSTDAG committer with reward minting, and node mining authoring loop for Chain ID 2.
 
 ---
 
-## 1. Chain ID 5 Registry Wiring
+## 1. Chain ID 2 Registry Wiring
 
-Chain ID 5 is registered for the planned Hybrid PoW + GHOSTDAG testnet:
-- Constant: `CHAIN_ID_HYBRID_TESTNET: u64 = 5` in `kovanica-params` and `kovanica-types::signing::chain_id`.
+Chain ID 2 is the canonical Hybrid PoW + GHOSTDAG testnet:
+- Constant: `CHAIN_ID_HYBRID_TESTNET: u64 = 2` (`= CHAIN_ID_TESTNET`) in `kovanica-params` and `kovanica-types::signing::chain_id`.
 - Network tag: `hybrid-testnet` (`kovanica_params::NETWORK_TAG_HYBRID_TESTNET`).
 - Activation intent: Gated under feature flag `hybrid-pow`. Under hybrid consensus, block authoring uses PoW mining (KovanicaHash) and block ordering uses GHOSTDAG (k=5, 4 s block time) without stake weighting.
-- Address acceptance: Canonical PRO-21 (`kvnc...dag`, 64 characters) is standard. Legacy hex addresses are permitted for testnet development convenience (`legacy_address_allowed(5) == true`).
+- Address acceptance: Canonical PRO-21 (`kvnc...dag`, 64 characters) only. Chain 2 is a hybrid network, so legacy hex addresses are rejected (`legacy_address_allowed(2) == false`).
 
 ---
 
@@ -134,14 +134,14 @@ Implemented in `kovanica-consensus`:
 
 ### Consensus Derivation & Admission Hardening Rules
 1. **Ancestry & Window Rules:**
-   - For every block $B$ on Chain 5 (`HYBRID_TESTNET`), the required DAA target difficulty is derived strictly from its declared parent DAG past cone ($B.\text{parents}$).
+   - For every block $B$ on Chain 2 (`TESTNET` / `HYBRID_TESTNET`), the required DAA target difficulty is derived strictly from its declared parent DAG past cone ($B.\text{parents}$).
    - Traversal evaluates up to $N = 60$ ancestor PoW blocks (`DAA_WINDOW_BLOCKS`).
    - Ancestors are traversed deterministically from $B.\text{parents}$ back up to 60 ancestor blocks.
 2. **Ordering Rules:**
    - Ancestor timestamps are collected deterministically and sorted in strictly ascending chronological order ($t_0 \le t_1 \le \dots \le t_{k-1}$).
    - Because $B$'s ancestry graph is immutable and uniquely identified by block references within $B$'s signed header, the resulting sorted timestamp sequence is completely identical across all nodes regardless of local block arrival order or current node DAG tips.
 3. **Bootstrap Rules:**
-   - For round 0 (canonical genesis, $B.\text{parents} = \emptyset$), the required target is `MAX_TARGET_BITS` (`0x1f00_ffff`, or `KOVANICA_TEST_TARGET_BITS` when configured for test environments).
+   - For round 0 (canonical genesis, $B.\text{parents} = \emptyset$), the required target is `MAX_TARGET_BITS` (`0x1f00_ffff`). The DAA intentionally ignores process-environment overrides (e.g. `KOVANICA_TEST_TARGET_BITS`) so the bootstrap target is deterministic across all nodes.
    - If the ancestry window contains fewer than 2 timestamps ($k < 2$, e.g. round 1 blocks whose only parent is round 0 genesis with no PoW header), the target defaults to `current_target_bits` which is `MAX_TARGET_BITS`.
    - For $k \ge 2$, `current_target_bits` is derived from the primary parent ($B.\text{parents}[0]$).
    - The new target is scaled by:
@@ -166,11 +166,11 @@ Implemented in `kovanica-consensus`:
 ## 7. P2P Network Ingress & PoW Anti-DoS Boundary (P5)
 
 Implemented in `crates/kovanica-network`:
-- **Validation Pipeline:** In `validate_block` / `verify_block`, incoming blocks on Chain 5 (`HYBRID_TESTNET`) are validated against PoW requirements before being accepted or forwarded:
+- **Validation Pipeline:** In `validate_block` / `verify_block`, incoming blocks on Chain 2 (`TESTNET` / `HYBRID_TESTNET`) are validated against PoW requirements before being accepted or forwarded:
   1. Merkle root integrity and block digest verification.
   2. Header extraction via `StatementBlock::extract_pow_header(chain_id)`. If missing or malformed, the block is rejected with `Rejection::MissingPow` or `Rejection::BadPow`.
   3. Header PoW verification via `header.verify_pow()` (enforcing valid `pow_hash`, target requirement check against `target_bits`, and timestamp sanity).
-  4. Skip committee authority checks: Chain 5 operates without validator signatures or committee authority lookups (NO stake in consensus path per ADR 0003).
+  4. Skip committee authority checks: Chain 2 operates without validator signatures or committee authority lookups (NO stake in consensus path per ADR 0003).
 - **Anti-DoS Protection:**
   - Blocks failing PoW verification are rejected immediately at the network ingress boundary.
   - Invalid blocks are neither propagated to gossipsub peers nor stored in the DAG memory/disk stores.
@@ -194,10 +194,10 @@ Implemented in `crates/kovanica-consensus` and `crates/kovanica-execution`:
   - Stake Isolation: Consensus operates completely free of stake weighting, vote quorums, committee signatures, or VRF tickets.
 - **Mining Subsidy & Reward Minting:**
   - In `kovanica-execution::execute_committed_subdag_inner`:
-    - Chain 5 detects `chain_id::HYBRID_TESTNET` and bypasses epoch committee lookups.
+    - Chains 1 and 2 (`is_hybrid`) are detected as hybrid networks and bypass epoch committee lookups.
     - Each committed block in the linearized sequence mints `kovanica_params::INITIAL_BLOCK_REWARD` (2.5 KVNC = 2,500,000,000 atoms) to the block author address derived from `header.author`.
     - No validator commission, delegator cuts, or light-client escrow deductions (`escrow_part = 0`).
-    - Total mining subsidy is tracked against the 81,000,000 KVNC mining budget.
+    - Total mining subsidy is tracked against the 82,000,000 KVNC mining budget (`NoStake82M`).
 
 ---
 

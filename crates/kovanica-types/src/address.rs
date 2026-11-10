@@ -27,17 +27,15 @@ const BASE32_ALPHABET: &[u8; 32] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 /// Whether the legacy hex forms (`kvnc<72 hex>dag` and a bare or
 /// `0x`-prefixed 64-hex key) are accepted on `chain_id`.
 ///
-/// Toni, 2026-10-23: dev chains stay lenient, and chain 4 stays lenient so
-/// existing tooling keeps working. Accepted on devnet (`3`), chain `4`, and
-/// local (`1337`). Refused on mainnet (`1`), on the other public testnet
-/// (`2`), and on every chain id that is not one of those three.
+/// Toni, 2026-10-23: dev chains stay lenient so existing tooling keeps
+/// working. Accepted on devnet (`3`) and local (`1337`). Refused on mainnet
+/// (`1`), on the public testnet (`2`), and on every chain id that is not one
+/// of those two.
 #[must_use]
 pub fn legacy_address_allowed(chain_id: u64) -> bool {
     matches!(
         chain_id,
-        crate::signing::chain_id::DEVNET
-            | crate::signing::chain_id::LOCAL
-            | crate::signing::chain_id::TESTNET_V2
+        crate::signing::chain_id::DEVNET | crate::signing::chain_id::LOCAL
     )
 }
 
@@ -155,7 +153,7 @@ impl Address {
     /// Parse an address typed or sent for `chain_id`: the canonical base32
     /// form on every chain; the legacy hex forms (`kvnc<hex>dag` with its
     /// 4-byte checksum, bare or `0x` hex) only where
-    /// [`legacy_address_allowed`] says so (devnet 3, chain 4, local 1337).
+    /// [`legacy_address_allowed`] says so (devnet 3 and local 1337).
     pub fn parse_for_chain(value: &str, chain_id: u64) -> Result<Self, AddressError> {
         let value = value.trim();
         if value.len() == ADDRESS_LEN
@@ -276,7 +274,7 @@ impl FromStr for Address {
     ///
     /// Legacy hex is not accepted here. Callers that know a chain use
     /// [`Address::parse_for_chain`]. That is lenient (legacy hex allowed) on
-    /// devnet 3, chain 4, and local 1337, and base32-only on mainnet 1 and
+    /// devnet 3 and local 1337, and base32-only on mainnet 1, testnet 2, and
     /// every other chain id.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::decode(value.trim())
@@ -326,7 +324,7 @@ mod tests {
             let encoded = address.encode();
             assert_eq!(Address::decode(&encoded).unwrap(), address);
             assert_eq!(encoded.parse::<Address>().unwrap(), address);
-            for chain in [chain_id::MAINNET, chain_id::TESTNET_V2, chain_id::LOCAL] {
+            for chain in [chain_id::MAINNET, chain_id::DEVNET, chain_id::LOCAL] {
                 assert_eq!(Address::parse_for_chain(&encoded, chain).unwrap(), address);
             }
         }
@@ -388,8 +386,8 @@ mod tests {
     }
 
     /// Legacy hex forms follow [`legacy_address_allowed`]: accepted on devnet
-    /// (3), chain 4, and local (1337); refused on mainnet (1), testnet (2),
-    /// and any other chain id. [`FromStr`] is base32 only, on every chain.
+    /// (3) and local (1337); refused on mainnet (1), testnet (2), and any
+    /// other chain id. [`FromStr`] is base32 only, on every chain.
     #[test]
     fn legacy_hex_policy_covers_known_and_unknown_chains() {
         let address = sample();
@@ -399,7 +397,7 @@ mod tests {
             format!("0x{}", address.to_hex()),
         ];
         assert_eq!(legacy[0].len(), 4 + 72 + 3);
-        let allowed = [chain_id::DEVNET, chain_id::TESTNET_V2, chain_id::LOCAL];
+        let allowed = [chain_id::DEVNET, chain_id::LOCAL];
         let refused = [chain_id::MAINNET, chain_id::TESTNET, 0, 42];
         for chain in allowed {
             assert!(legacy_address_allowed(chain), "chain {chain}");
@@ -446,17 +444,17 @@ mod tests {
         };
         legacy.replace_range(flip_at..flip_at + 1, replacement);
         assert_eq!(
-            Address::parse_for_chain(&legacy, chain_id::TESTNET_V2),
+            Address::parse_for_chain(&legacy, chain_id::DEVNET),
             Err(AddressError::ChecksumMismatch)
         );
         // Short legacy strings still report a length error on a lenient chain.
         // `FromStr` never reaches that parser: it only decodes base32.
         assert!(matches!(
-            Address::parse_for_chain("kvnc00dag", chain_id::TESTNET_V2),
+            Address::parse_for_chain("kvnc00dag", chain_id::DEVNET),
             Err(AddressError::InvalidLength(_))
         ));
         assert!(matches!(
-            Address::parse_for_chain("0x1234", chain_id::TESTNET_V2),
+            Address::parse_for_chain("0x1234", chain_id::DEVNET),
             Err(AddressError::InvalidLength(_))
         ));
         assert!(matches!(
@@ -493,7 +491,7 @@ mod tests {
             "{ADDRESS_PREFIX}{}{ADDRESS_SUFFIX}",
             body.to_ascii_uppercase()
         );
-        for chain in [chain_id::DEVNET, chain_id::TESTNET_V2, chain_id::LOCAL] {
+        for chain in [chain_id::DEVNET, chain_id::LOCAL] {
             assert_eq!(
                 Address::parse_for_chain(&upper_legacy, chain).unwrap(),
                 address,
@@ -512,19 +510,19 @@ mod tests {
 
         let upper_bare = address.to_hex().to_ascii_uppercase();
         assert_eq!(
-            Address::parse_for_chain(&upper_bare, chain_id::TESTNET_V2).unwrap(),
+            Address::parse_for_chain(&upper_bare, chain_id::DEVNET).unwrap(),
             address
         );
         assert_eq!(
-            Address::parse_for_chain(&format!("0x{upper_bare}"), chain_id::TESTNET_V2).unwrap(),
+            Address::parse_for_chain(&format!("0x{upper_bare}"), chain_id::DEVNET).unwrap(),
             address
         );
         assert_eq!(
-            Address::parse_for_chain(&format!("0X{upper_bare}"), chain_id::TESTNET_V2),
+            Address::parse_for_chain(&format!("0X{upper_bare}"), chain_id::DEVNET),
             Err(AddressError::InvalidHex)
         );
         assert_eq!(
-            Address::parse_for_chain(&legacy.to_ascii_uppercase(), chain_id::TESTNET_V2),
+            Address::parse_for_chain(&legacy.to_ascii_uppercase(), chain_id::DEVNET),
             Err(AddressError::InvalidHex)
         );
     }

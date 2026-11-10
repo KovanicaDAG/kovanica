@@ -20,13 +20,11 @@ export const ChainId = {
   MAINNET: 1,
   TESTNET: 2,
   DEVNET: 3,
-  TESTNET_V2: 4,
   HYBRID_TESTNET: 2,
   LOCAL: 1337,
   Mainnet: 1,
   Testnet: 2,
   Devnet: 3,
-  TestnetV2: 4,
   HybridTestnet: 2,
   Local: 1337,
 } as const;

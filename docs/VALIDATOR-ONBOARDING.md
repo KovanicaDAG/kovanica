@@ -122,7 +122,6 @@ listen_addr = "0.0.0.0:8000"          # P2P port (must be publicly reachable)
 rpc_addr = "127.0.0.1:8545"           # JSON-RPC (bind to localhost only!)
 bootnodes = [
     "seed1.kovanica.online:8000",           # testnet seed 1
-    "seed2.kovanica.online:8000",              # testnet seed 2
     "seed3.kovanica.online:8000"               # testnet seed 3
 ]
 
@@ -144,7 +143,7 @@ data_dir = "/var/lib/kovanica"
 export KOVANICA_LISTEN_ADDR=0.0.0.0:8000
 export KOVANICA_RPC_ADDR=127.0.0.1
 export KOVANICA_RPC_PORT=8545
-export KOVANICA_BOOTNODES="seed1.kovanica.online:8000,seed2.kovanica.online:8000,seed3.kovanica.online:8000"
+export KOVANICA_BOOTNODES="seed1.kovanica.online:8000,seed3.kovanica.online:8000"
 export KOVANICA_DATA_DIR="/var/lib/kovanica"
 export KOVANICA_VALIDATOR_KEY="/path/to/validator.key"
 export KOVANICA_RUN_VALIDATOR=true
@@ -350,7 +349,7 @@ Thresholds match `ops/prometheus/alerts.yml`.
 | **RPC endpoint** | `http://<your-ip>:8545` (local) / `https://rpc-testnet.kovanica.online/rpc` (public) |
 | **Explorer** | `https://explorer.kovanica.online` |
 | **Faucet** | `https://faucet.kovanica.online` (UI) / `https://seed3.kovanica.online/faucet` (JSON API), 10 KUNA lifetime cap |
-| **Seed nodes** | `seed1.kovanica.online:8000`, `seed2.kovanica.online:8000`, `seed3.kovanica.online:8000` (for mainnet DNS seed requirements, see `docs/SEED-DNS-AUDIT.md`) |
+| **Seed nodes** | `seed1.kovanica.online:8000`, `seed3.kovanica.online:8000` (for mainnet DNS seed requirements, see `docs/SEED-DNS-AUDIT.md`) |
 | **Genesis file** | Distributed by coordinators |
 
 ### 8.1 Get Test KUNA

@@ -204,12 +204,12 @@
 |-----------|---------|----------|
 | Max supply | 90,200,000 KUNA = 90,200,000 × 10⁹ atoms | [ ] |
 | Founder premine | 200,000 KUNA | [ ] |
-| Genesis validator allocation | 1,000,000 KUNA (split evenly, dust to first) | [ ] |
+| Genesis validator allocation | 0 KUNA (`NoStake82M`; no stake in the consensus path) | [ ] |
 | Treasury | 8,000,000 KUNA (1M/year × 8) | [ ] |
-| Mining subsidy budget | 81,000,000 KUNA | [ ] |
+| Mining subsidy budget | 82,000,000 KUNA (`NoStake82M`) | [ ] |
 | Initial block reward | 2.5 KUNA | [ ] |
-| Decay | ×3/4 every 8,100,000 committed leaders | [ ] |
-| Cumulative issuance cap | `cumulative_mining_issuance(h) ≤ 81M` | [ ] |
+| Decay | ×3/4 every 8,200,000 rewarded blocks | [ ] |
+| Cumulative issuance cap | `cumulative_mining_issuance(h) ≤ 82M` | [ ] |
 | Min validator stake | 50,000 KUNA | [ ] |
 | Active validator range | 15–21 | [ ] |
 | Slashing | 500 bps (5%) | [ ] |

@@ -1,7 +1,7 @@
 //! PRO-40 (b) Chaos & Resilience Multi-Node Integration Tests.
 //!
 //! Validates stability, fault tolerance, and recovery of a 5-validator cluster
-//! (Chain 4 public testnet: 5 validators, quorum threshold 4/5).
+//! (Devnet (3): 5 validators, quorum threshold 4/5).
 //!
 //! # Scenarios Covered:
 //!
@@ -45,7 +45,7 @@ use kovanica_types::{
 };
 use tokio::sync::mpsc;
 
-/// Cluster size matching Chain 4 testnet specification.
+/// Cluster size matching the 5-validator devnet specification.
 const NODES: usize = 5;
 
 /// Genesis hash for testing.
@@ -169,7 +169,7 @@ fn signed_vote(
     };
     vote.signature = kovanica_crypto::sign(
         &common::validator_signing_key(voter),
-        &vote.signature_data(&SigningContext::new(chain_id::TESTNET_V2)),
+        &vote.signature_data(&SigningContext::new(chain_id::DEVNET)),
     );
     vote
 }
@@ -275,7 +275,7 @@ fn test_scenario1_one_of_five_offline_quorum_and_progress() {
     );
 
     let chain = canonical_chain(15);
-    let mut nodes = cluster(TEST_GENESIS_HASH, chain_id::TESTNET_V2);
+    let mut nodes = cluster(TEST_GENESIS_HASH, chain_id::DEVNET);
 
     // Node 4 is offline. Only nodes 0, 1, 2, 3 receive blocks.
     let online_targets: Vec<usize> = vec![0, 1, 2, 3];
@@ -340,7 +340,7 @@ fn test_scenario1_one_of_five_offline_quorum_and_progress() {
     // The 4 online nodes time out round 12
     let timeouts_12: Vec<Timeout> = online_voters
         .iter()
-        .map(|&voter| signed_timeout(12, voter, chain_id::TESTNET_V2, &TEST_GENESIS_HASH))
+        .map(|&voter| signed_timeout(12, voter, chain_id::DEVNET, &TEST_GENESIS_HASH))
         .collect();
 
     for timeout in &timeouts_12 {
@@ -403,7 +403,7 @@ fn test_scenario1_one_of_five_offline_quorum_and_progress() {
 #[test]
 fn test_scenario2_two_of_five_offline_liveness_halt_and_cascade_unblock() {
     let chain = canonical_chain(12);
-    let mut nodes = cluster(TEST_GENESIS_HASH, chain_id::TESTNET_V2);
+    let mut nodes = cluster(TEST_GENESIS_HASH, chain_id::DEVNET);
 
     // Deliver all blocks to nodes 0, 1, 2, 3
     for block in &chain {
@@ -448,7 +448,7 @@ fn test_scenario2_two_of_five_offline_liveness_halt_and_cascade_unblock() {
         round: 3,
         timeouts: active_voters
             .iter()
-            .map(|&v| signed_timeout(3, v, chain_id::TESTNET_V2, &TEST_GENESIS_HASH))
+            .map(|&v| signed_timeout(3, v, chain_id::DEVNET, &TEST_GENESIS_HASH))
             .collect(),
     };
     for &idx in &active_targets {
@@ -539,7 +539,7 @@ fn test_scenario2_two_of_five_offline_liveness_halt_and_cascade_unblock() {
 fn test_scenario3_skip_cert_domain_preimage_and_validation() {
     let members = committee(NODES as u16);
     let genesis = TEST_GENESIS_HASH;
-    let target_chain_id = chain_id::TESTNET_V2; // Chain 4
+    let target_chain_id = chain_id::DEVNET; // Devnet (3)
 
     // 1. Domain tag check
     assert_eq!(
@@ -595,7 +595,7 @@ fn test_scenario3_skip_cert_domain_preimage_and_validation() {
         "valid 4/5 skip cert must pass verification"
     );
 
-    // 4. Cross-chain replay rejection (e.g. timeout signed for Chain 2 on Chain 4)
+    // 4. Cross-chain replay rejection (e.g. timeout signed for Chain 2 on Devnet)
     let cross_chain_timeout = signed_timeout(3, 1, chain_id::TESTNET, &genesis); // chain 2
     let cross_chain_err = verify_timeout(&members, target_chain_id, &genesis, &cross_chain_timeout);
     assert_eq!(
@@ -702,10 +702,10 @@ fn test_scenario3_skip_cert_domain_preimage_and_validation() {
 
 #[test]
 fn test_scenario3_engine_enforces_domain_and_rejects_replays() {
-    let node = Node::new(0, TEST_GENESIS_HASH, chain_id::TESTNET_V2);
+    let node = Node::new(0, TEST_GENESIS_HASH, chain_id::DEVNET);
 
     // 1. Cross-chain timeout sent to engine is rejected
-    let cross_chain_timeout = signed_timeout(3, 1, chain_id::MAINNET, &TEST_GENESIS_HASH); // Chain 1 on Chain 4 node
+    let cross_chain_timeout = signed_timeout(3, 1, chain_id::MAINNET, &TEST_GENESIS_HASH); // Chain 1 on Devnet node
     let err = node.engine.process_timeout(&cross_chain_timeout);
     assert!(
         matches!(err, Err(ConsensusError::TimeoutRejected(_))),
@@ -714,7 +714,7 @@ fn test_scenario3_engine_enforces_domain_and_rejects_replays() {
 
     // 2. Genesis mismatch timeout sent to engine is rejected
     let wrong_genesis = Hash([0xee; 32]);
-    let wrong_genesis_timeout = signed_timeout(3, 1, chain_id::TESTNET_V2, &wrong_genesis);
+    let wrong_genesis_timeout = signed_timeout(3, 1, chain_id::DEVNET, &wrong_genesis);
     let err2 = node.engine.process_timeout(&wrong_genesis_timeout);
     assert!(
         matches!(err2, Err(ConsensusError::TimeoutRejected(_))),
@@ -725,9 +725,9 @@ fn test_scenario3_engine_enforces_domain_and_rejects_replays() {
     let under_quorum_cert = SkipCert {
         round: 3,
         timeouts: vec![
-            signed_timeout(3, 1, chain_id::TESTNET_V2, &TEST_GENESIS_HASH),
-            signed_timeout(3, 2, chain_id::TESTNET_V2, &TEST_GENESIS_HASH),
-            signed_timeout(3, 3, chain_id::TESTNET_V2, &TEST_GENESIS_HASH),
+            signed_timeout(3, 1, chain_id::DEVNET, &TEST_GENESIS_HASH),
+            signed_timeout(3, 2, chain_id::DEVNET, &TEST_GENESIS_HASH),
+            signed_timeout(3, 3, chain_id::DEVNET, &TEST_GENESIS_HASH),
         ],
     };
     let err3 = node.engine.process_skip_cert(&under_quorum_cert);
@@ -740,10 +740,10 @@ fn test_scenario3_engine_enforces_domain_and_rejects_replays() {
     let valid_cert = SkipCert {
         round: 3,
         timeouts: vec![
-            signed_timeout(3, 0, chain_id::TESTNET_V2, &TEST_GENESIS_HASH),
-            signed_timeout(3, 1, chain_id::TESTNET_V2, &TEST_GENESIS_HASH),
-            signed_timeout(3, 2, chain_id::TESTNET_V2, &TEST_GENESIS_HASH),
-            signed_timeout(3, 3, chain_id::TESTNET_V2, &TEST_GENESIS_HASH),
+            signed_timeout(3, 0, chain_id::DEVNET, &TEST_GENESIS_HASH),
+            signed_timeout(3, 1, chain_id::DEVNET, &TEST_GENESIS_HASH),
+            signed_timeout(3, 2, chain_id::DEVNET, &TEST_GENESIS_HASH),
+            signed_timeout(3, 3, chain_id::DEVNET, &TEST_GENESIS_HASH),
         ],
     };
     let ok = node.engine.process_skip_cert(&valid_cert);

@@ -1,8 +1,8 @@
-//! Difficulty Adjustment Algorithm (DAA) for Hybrid PoW + GHOSTDAG (Chain ID 5).
+//! Difficulty Adjustment Algorithm (DAA) for Hybrid PoW + GHOSTDAG (Chain ID 2).
 //!
 //! # Specification
 //!
-//! Chain ID 5 targets a block interval of [`kovanica_params::TARGET_BLOCK_MS`] (4,000 ms).
+//! Chain ID 2 targets a block interval of [`kovanica_params::TARGET_BLOCK_MS`] (4,000 ms).
 //! The difficulty adjustment algorithm monitors a sliding window of recent block timestamps,
 //! compares the actual elapsed duration against the target duration, and dynamically scales
 //! the 256-bit target difficulty:
@@ -60,12 +60,12 @@ pub struct DaaConfig {
 
 impl Default for DaaConfig {
     fn default() -> Self {
-        Self::chain5_default()
+        Self::hybrid_default()
     }
 }
 
 impl DaaConfig {
-    /// Standard consensus parameters for Chain ID 5 (Hybrid PoW testnet).
+    /// Standard consensus parameters for Chain ID 2 (Hybrid PoW testnet).
     ///
     /// Pure protocol configuration strictly bound to canonical parameters:
     /// - Max target ceiling: [`kovanica_params::MAX_TARGET_BITS`] (`0x1f00_ffff`).
@@ -77,7 +77,7 @@ impl DaaConfig {
     /// Runtime process environment variables (e.g. `KOVANICA_TEST_TARGET_BITS`) are
     /// strictly ignored to ensure consensus determinism across all nodes.
     #[must_use]
-    pub const fn chain5_default() -> Self {
+    pub const fn hybrid_default() -> Self {
         Self {
             target_block_time_ms: kovanica_params::TARGET_BLOCK_MS,
             window_size: kovanica_params::DAA_WINDOW_BLOCKS,
@@ -215,7 +215,7 @@ pub fn calculate_next_target_bits(
     target_to_compact(&new_target)
 }
 
-/// Select parent hashes from recent DAG tips for block authoring on Chain 5.
+/// Select parent hashes from recent DAG tips for block authoring on Chain 2.
 #[must_use]
 pub fn select_parents_from_tips(dag_store: &DagStore, max_parents: usize) -> Vec<Hash> {
     let max_round = match dag_store.max_dag_round() {
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn daa_target_stable_when_blocks_on_time() {
-        let config = DaaConfig::chain5_default();
+        let config = DaaConfig::hybrid_default();
         let target_bits = 0x1d00ffff;
 
         // 10 blocks spaced exactly 4,000 ms apart
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn daa_difficulty_increases_when_blocks_too_fast() {
-        let config = DaaConfig::chain5_default();
+        let config = DaaConfig::hybrid_default();
         let target_bits = 0x1d00ffff;
 
         // 10 blocks spaced 2,000 ms apart (half the target time -> difficulty doubles, target halves)
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn daa_difficulty_decreases_when_blocks_too_slow() {
-        let config = DaaConfig::chain5_default();
+        let config = DaaConfig::hybrid_default();
         let target_bits = 0x1d00ffff;
 
         // 10 blocks spaced 8,000 ms apart (twice the target time -> difficulty halves, target doubles)
@@ -493,7 +493,7 @@ mod tests {
     fn daa_clamps_to_max_adjustment_factor() {
         let config = DaaConfig {
             max_adjustment_factor: 4,
-            ..DaaConfig::chain5_default()
+            ..DaaConfig::hybrid_default()
         };
         let target_bits = 0x1d00ffff;
 

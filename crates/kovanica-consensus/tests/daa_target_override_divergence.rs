@@ -2,10 +2,10 @@
 //! identical across differing environment variables, and unreadable ancestry is rejected.
 //!
 //! Validates:
-//! 1. Empty ancestry (round 0 genesis bootstrap) yields canonical network-bound target (INITIAL_TARGET_BITS_CHAIN5).
+//! 1. Empty ancestry (round 0 genesis bootstrap) yields canonical network-bound target (INITIAL_TARGET_BITS_HYBRID).
 //! 2. Unreadable / missing ancestry returns DaaError rather than silently falling back to a permissive target.
 //! 3. Insufficient history (< 2 ancestor timestamps) yields canonical network-bound target.
-//! 4. Identical multi-block DAG history yields identical required target under DaaConfig::chain5_default()
+//! 4. Identical multi-block DAG history yields identical required target under DaaConfig::hybrid_default()
 //!    regardless of any ambient process environment variables.
 //! 5. Explicit test configuration in test harnesses can specify custom max_target_bits.
 
@@ -53,7 +53,7 @@ fn test_empty_ancestry_bootstrap_returns_canonical_network_bound_target() {
     let storage = Storage::new(dir.path().join("dag.redb")).unwrap();
     let dag = DagStore::new(storage).unwrap();
 
-    let config_default = DaaConfig::chain5_default();
+    let config_default = DaaConfig::hybrid_default();
     let empty_parents: Vec<BlockReference> = vec![];
 
     let target = required_target_bits(
@@ -65,7 +65,7 @@ fn test_empty_ancestry_bootstrap_returns_canonical_network_bound_target() {
     .unwrap();
     assert_eq!(
         target, PRODUCTION_DEFAULT,
-        "Empty ancestry must return canonical INITIAL_TARGET_BITS_CHAIN5"
+        "Empty ancestry must return canonical INITIAL_TARGET_BITS_HYBRID"
     );
 
     let try_target = try_required_target_bits(
@@ -84,7 +84,7 @@ fn test_unreadable_missing_ancestry_returns_error_instead_of_permissive_fallback
     let storage = Storage::new(dir.path().join("dag.redb")).unwrap();
     let dag = DagStore::new(storage).unwrap();
 
-    let config = DaaConfig::chain5_default();
+    let config = DaaConfig::hybrid_default();
 
     // Parent reference pointing to a non-existent block hash in DAG storage
     let missing_parent = BlockReference {
@@ -107,7 +107,7 @@ fn test_invalid_parent_header_at_round_ge_1_fails_closed() {
     let storage = Storage::new(dir.path().join("dag.redb")).unwrap();
     let dag = DagStore::new(storage).unwrap();
 
-    let config = DaaConfig::chain5_default();
+    let config = DaaConfig::hybrid_default();
 
     // Non-genesis block at round 1 without PoW statements (corrupted / legacy block)
     let non_pow_parent = StatementBlock {
@@ -136,7 +136,7 @@ fn test_insufficient_timestamps_fallback_returns_canonical_target() {
     let storage = Storage::new(dir.path().join("dag.redb")).unwrap();
     let dag = DagStore::new(storage).unwrap();
 
-    let config = DaaConfig::chain5_default();
+    let config = DaaConfig::hybrid_default();
 
     // Canonical round 0 genesis block (no PoW statements) as created by init_genesis
     let canonical_genesis = StatementBlock {
@@ -157,7 +157,7 @@ fn test_insufficient_timestamps_fallback_returns_canonical_target() {
     let target = required_target_bits(&dag, &parents, CHAIN_ID_HYBRID_TESTNET, &config).unwrap();
     assert_eq!(
         target, PRODUCTION_DEFAULT,
-        "Canonical genesis without PoW header must yield canonical INITIAL_TARGET_BITS_CHAIN5"
+        "Canonical genesis without PoW header must yield canonical INITIAL_TARGET_BITS_HYBRID"
     );
 
     let try_target =
@@ -201,7 +201,7 @@ fn test_identical_dag_produces_identical_target_regardless_of_ambient_env() {
 
     // 1. Evaluate with env unset
     std::env::remove_var("KOVANICA_TEST_TARGET_BITS");
-    let config_unset = DaaConfig::chain5_default();
+    let config_unset = DaaConfig::hybrid_default();
     let target_unset = required_target_bits(
         &dag,
         &candidate_parents,
@@ -211,7 +211,7 @@ fn test_identical_dag_produces_identical_target_regardless_of_ambient_env() {
 
     // 2. Evaluate with env set to easy override "0x207fffff"
     std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
-    let config_with_env = DaaConfig::chain5_default();
+    let config_with_env = DaaConfig::hybrid_default();
     let target_with_env = required_target_bits(
         &dag,
         &candidate_parents,
@@ -221,7 +221,7 @@ fn test_identical_dag_produces_identical_target_regardless_of_ambient_env() {
 
     // 3. Evaluate with env set to another override "0x12345678"
     std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x12345678");
-    let config_another = DaaConfig::chain5_default();
+    let config_another = DaaConfig::hybrid_default();
     let target_another = required_target_bits(
         &dag,
         &candidate_parents,
@@ -231,11 +231,11 @@ fn test_identical_dag_produces_identical_target_regardless_of_ambient_env() {
 
     assert_eq!(
         target_unset, target_with_env,
-        "DaaConfig::chain5_default() must produce identical target regardless of KOVANICA_TEST_TARGET_BITS"
+        "DaaConfig::hybrid_default() must produce identical target regardless of KOVANICA_TEST_TARGET_BITS"
     );
     assert_eq!(
         target_unset, target_another,
-        "DaaConfig::chain5_default() must be completely immune to ambient process environment variables"
+        "DaaConfig::hybrid_default() must be completely immune to ambient process environment variables"
     );
 
     // Restore env
@@ -253,7 +253,7 @@ fn test_explicit_test_overrides_still_work_where_explicitly_constructed() {
 
     let config_easy = DaaConfig {
         max_target_bits: TEST_OVERRIDE_EASY,
-        ..DaaConfig::chain5_default()
+        ..DaaConfig::hybrid_default()
     };
     assert_eq!(config_easy.max_target_bits, TEST_OVERRIDE_EASY);
 
@@ -273,7 +273,7 @@ fn test_unreadable_deeper_ancestor_fails_closed() {
     let dag = DagStore::new(storage).unwrap();
 
     let mut worker = MiningWorker::new();
-    let config = DaaConfig::chain5_default();
+    let config = DaaConfig::hybrid_default();
 
     // Canonical genesis at round 0
     let genesis = StatementBlock {
@@ -328,7 +328,7 @@ fn test_corrupted_deeper_ancestor_header_fails_closed() {
     let dag = DagStore::new(storage).unwrap();
 
     let mut worker = MiningWorker::new();
-    let config = DaaConfig::chain5_default();
+    let config = DaaConfig::hybrid_default();
 
     let genesis = StatementBlock {
         author: 0,
@@ -383,7 +383,7 @@ fn test_non_canonical_round_zero_parent_fails_closed() {
     let storage = Storage::new(dir.path().join("dag.redb")).unwrap();
     let dag = DagStore::new(storage).unwrap();
 
-    let config = DaaConfig::chain5_default();
+    let config = DaaConfig::hybrid_default();
 
     // Bogus non-canonical round 0 block (e.g. author 99 or with statements/txs)
     let bogus_round_zero = StatementBlock {
@@ -413,7 +413,7 @@ fn test_non_canonical_round_zero_deeper_ancestor_fails_closed() {
     let dag = DagStore::new(storage).unwrap();
 
     let mut worker = MiningWorker::new();
-    let config = DaaConfig::chain5_default();
+    let config = DaaConfig::hybrid_default();
 
     // Bogus non-canonical round 0 block
     let bogus_round_zero = StatementBlock {

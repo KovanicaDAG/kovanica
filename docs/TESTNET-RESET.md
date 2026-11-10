@@ -163,7 +163,7 @@ step 3 — not the override.
 The note this document replaced described a live mesh where the running
 process was still an older `/usr/local/bin/kovanica-node` while
 `consensus.redb` and `state.redb` had already been deleted from disk, and
-where `seed2` / `seed3` were still on the older build. It correctly observed
+where `seed3` was still on the older build. It correctly observed
 that `KOVANICA_ALLOW_RESET=0` does nothing — there is no such switch in this
 codebase. The correct remedy was, and remains, the manual procedure above:
 stop all nodes, wipe the data directories, deploy one build everywhere, start

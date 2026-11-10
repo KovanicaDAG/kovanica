@@ -61,11 +61,11 @@ Canonical parameters implemented in `crates/kovanica-staking/src/lib.rs` and doc
 | **Total Supply** | **90,200,000 KVNC** | Hard maximum supply ceiling (`90_200_000 * 10^9` atoms) |
 | **Decimals** | **9** | Smallest unit: 1 atom = $10^{-9}$ KVNC |
 | **Founder Premine** | **200,000 KVNC** | Allocated at genesis to the founder address |
-| **Genesis Validator Allocation** | **1,000,000 KVNC** | Split evenly across 5–20 genesis validators (dust distributed deterministically) |
+| **Genesis Validator Allocation** | **0 KVNC** | Retired with the PoA/hybrid decision: there is no stake in the consensus path, and the former 1,000,000 KVNC is folded into the mining budget |
 | **Treasury Allocation** | **8,000,000 KVNC** | Linear vesting over 8 years (1,000,000 KVNC/year) for development and grants |
-| **Mining Subsidy Budget** | **81,000,000 KVNC** | Derived subsidy pool: $90.2\text{M} - 0.2\text{M} - 8\text{M} - 1\text{M} = 81\text{M}$ KVNC |
+| **Mining Subsidy Budget** | **82,000,000 KVNC** | Derived subsidy pool: $90.2\text{M} - 0.2\text{M} - 8\text{M} = 82\text{M}$ KVNC (`NoStake82M`) |
 | **Initial Block Reward** | **2.5 KVNC** | Minted exclusively on committed leader blocks ($5 \times 10^9 / 2$ atoms) |
-| **Subsidy Era Length** | **8,100,000 blocks** | Committed leader blocks per era |
+| **Subsidy Era Length** | **8,200,000 blocks** | Rewarded blocks per era (`SUBSIDY_ERA_BLOCKS_NO_STAKE_82M`) |
 | **Reward Decay Rate** | **$\times 3/4$** | Emission multiplies by $3/4$ (25% decay) at each era boundary |
 | **Minimum Validator Stake** | **50,000 KVNC** | Minimum self-bond required to enter the active validator committee (`MIN_VALIDATOR_STAKE`; legacy) |
 | **Minimum Delegation** | **50,000 KVNC** | Minimum stake required for validator delegation (`MIN_DELEGATION`; legacy) |
@@ -351,10 +351,8 @@ Default network configuration parameters (`crates/kovanica-node/src/config.rs`):
 
 ### Chain ID Registry
 - **`1`**: **Mainnet** (`MAINNET`) — strictly enforces PRO-21 canonical base32 addresses; consensus parameters frozen. `funded_accounts.toml` strictly forbidden. Release tag `v1.0.0-mainnet`.
-- **`2`**: **Testnet (legacy)** (`TESTNET`) — not the public testnet; enforces PRO-21 addresses.
+- **`2`**: **Testnet** (`TESTNET` / `HYBRID_TESTNET`) — canonical Hybrid PoW + GHOSTDAG public testnet; enforces PRO-21 base32 addresses (legacy hex rejected).
 - **`3`**: **Devnet** (`DEVNET`) — lenient address parsing; allows parameter overrides.
-- **`4`**: **Internal Testnet** (`TESTNET_V2`) — internal testnet; public launch gated on hybrid testnet M8 pass (delayed from unconditional 25.11.2026); supports PRO-21 and legacy migration.
-- **`5`**: **Hybrid PoW Testnet** (`HYBRID_TESTNET`) — planned hybrid PoW + GHOSTDAG chain (intent documented in ADR 0003; feature/flag `hybrid-pow`).
 - **`1337`**: **Local Devnet** (`LOCAL`) — single-node / local cluster testing.
 
 ---
@@ -373,7 +371,7 @@ Detailed architectural specifications and operational runbooks:
 - **Audit Scope & Threat Model:** [`docs/AUDIT-SCOPE.md`](docs/AUDIT-SCOPE.md)
 - **Documentation Archive Index:** [`docs/archive/README.md`](docs/archive/README.md)
 - **JSON-RPC Reference:** [`docs/RPC.md`](docs/RPC.md)
-- **Comprehensive 2026 Audit Report:** [`docs/AUDIT_REPORT_2026.md`](docs/AUDIT_REPORT_2026.md)
+- **Comprehensive 2026 Audit Report (archived, point-in-time):** [`docs/archive/AUDIT_REPORT_2026.md`](docs/archive/AUDIT_REPORT_2026.md)
 - **Mainnet Launch & Monitoring Runbook (draft, not normative):** [`docs/MAINNET-RUNBOOK.md`](docs/MAINNET-RUNBOOK.md)
 - **Genesis Key Ceremony Protocol (draft, not normative):** [`docs/KEY-CEREMONY.md`](docs/KEY-CEREMONY.md)
 - **Mainnet Launch Freeze Checklist:** [`docs/MAINNET-FREEZE-CHECKLIST.md`](docs/MAINNET-FREEZE-CHECKLIST.md)

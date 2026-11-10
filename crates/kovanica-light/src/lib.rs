@@ -56,7 +56,7 @@ pub enum LightError {
 ///
 /// Matches `kovanica_consensus::ghostdag::calculate_work_from_target` so a
 /// mobile light/pruned node computes the exact same cumulative `blue_work`
-/// as a full validator/miner node on Hybrid PoW + GHOSTDAG (Chain 5).
+/// as a full validator/miner node on Hybrid PoW + GHOSTDAG (Chain 2).
 #[must_use]
 pub fn calculate_work_from_target(target_bits: u32) -> u128 {
     let target = compact_to_target(target_bits);
@@ -469,7 +469,7 @@ fn keystore_failure(err: impl std::fmt::Display) -> LightError {
 /// `sender` accepts the canonical 64-character base32 form on every chain.
 /// Legacy hex (bare, lowercase `0x`, or `kvnc<hex>dag`) is accepted only where
 /// [`kovanica_types::address::legacy_address_allowed`] is true for `chain_id`
-/// (devnet 3, chain 4, local 1337). Returns the bare 64-hex contract address.
+/// (devnet 3, local 1337). Returns the bare 64-hex contract address.
 pub fn contract_address_for(sender: &str, nonce: u64, chain_id: u64) -> Result<String, LightError> {
     let sender = Address::parse_for_chain(sender, chain_id)
         .map_err(|e| LightError::InvalidAddress(e.to_string()))?;
@@ -785,13 +785,13 @@ mod tests {
             let expected = Address(*blake3::hash(&material).as_bytes()).to_hex();
 
             // Bare hex form and canonical kvnc…dag form must both agree.
-            // Chain 4 still accepts legacy hex.
+            // Devnet still accepts legacy hex.
             assert_eq!(
-                contract_address_for(&sender.to_hex(), nonce, chain_id::TESTNET_V2).unwrap(),
+                contract_address_for(&sender.to_hex(), nonce, chain_id::DEVNET).unwrap(),
                 expected
             );
             assert_eq!(
-                contract_address_for(&sender.encode(), nonce, chain_id::TESTNET_V2).unwrap(),
+                contract_address_for(&sender.encode(), nonce, chain_id::DEVNET).unwrap(),
                 expected
             );
             // Canonical base32 does not need a lenient chain.
@@ -803,9 +803,8 @@ mod tests {
 
         // 0x-prefixed input is accepted on a lenient chain, not on mainnet.
         assert_eq!(
-            contract_address_for(&format!("0x{}", sender.to_hex()), 41, chain_id::TESTNET_V2)
-                .unwrap(),
-            contract_address_for(&sender.to_hex(), 41, chain_id::TESTNET_V2).unwrap()
+            contract_address_for(&format!("0x{}", sender.to_hex()), 41, chain_id::DEVNET).unwrap(),
+            contract_address_for(&sender.to_hex(), 41, chain_id::DEVNET).unwrap()
         );
         assert!(matches!(
             contract_address_for(&format!("0x{}", sender.to_hex()), 41, chain_id::MAINNET)
@@ -813,14 +812,14 @@ mod tests {
             LightError::InvalidAddress(_)
         ));
         assert!(matches!(
-            contract_address_for(&format!("0X{}", sender.to_hex()), 41, chain_id::TESTNET_V2)
+            contract_address_for(&format!("0X{}", sender.to_hex()), 41, chain_id::DEVNET)
                 .unwrap_err(),
             LightError::InvalidAddress(_)
         ));
 
         // A malformed sender is rejected, never a panic.
         assert!(matches!(
-            contract_address_for("not-an-address", 0, chain_id::TESTNET_V2).unwrap_err(),
+            contract_address_for("not-an-address", 0, chain_id::DEVNET).unwrap_err(),
             LightError::InvalidAddress(_)
         ));
 
@@ -832,7 +831,7 @@ mod tests {
             contract_address_for(
                 "1111111111111111111111111111111111111111111111111111111111111111",
                 41,
-                chain_id::TESTNET_V2
+                chain_id::DEVNET
             )
             .unwrap(),
             "806eaf0311f32e976df64184802ea7df85afa268c28978964ed1e3f120cc55bc"

@@ -25,7 +25,7 @@ fn write_bundle(dir: &Path) {
     std::fs::write(
         dir.join("genesis_validators.toml"),
         format!(
-            "chain_id = 4\n[[validator]]\naddress = \"{}\"\nstake = 50000000000000\n",
+            "chain_id = 3\n[[validator]]\naddress = \"{}\"\nstake = 50000000000000\n",
             "33".repeat(32)
         ),
     )
@@ -36,7 +36,7 @@ fn write_config(dir: &Path, data_dir: &Path, treasury: &str) -> String {
     let path = dir.join("config.toml");
     let data_str = data_dir.display().to_string().replace('\\', "/");
     let body = format!(
-        "chain_id = 4\nrun_validator = false\ndata_dir = \"{data_str}\"\ntreasury_address = \"{treasury}\"\nlisten_addr = \"127.0.0.1:0\"\n"
+        "chain_id = 3\nrun_validator = false\ndata_dir = \"{data_str}\"\ntreasury_address = \"{treasury}\"\nlisten_addr = \"127.0.0.1:0\"\n"
     );
     std::fs::write(&path, &body).unwrap();
     path.to_string_lossy().into_owned()
@@ -80,7 +80,7 @@ fn network_tag_cli_matches_the_node_and_changes_when_a_bundle_file_changes() {
     let tag = network_tag(&config);
     // Same fixture and treasury as `sync_status_network_tag_equals_the_startup_log`,
     // which locks this string to the startup log and `kovanica_syncStatus`.
-    assert_eq!(tag, "4-2bd89b0649c4ecbd");
+    assert_eq!(tag, "3-3de28e32a6991d94");
 
     std::fs::write(data.join("founder_premine.hex"), "66".repeat(32)).unwrap();
     let changed = network_tag(&config);
