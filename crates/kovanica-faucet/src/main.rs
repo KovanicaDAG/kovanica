@@ -51,19 +51,38 @@ struct FaucetConfig {
     min_balance_atoms: u64,
 }
 
-/// Rate limiter state
+/// Rate limiter state supporting rate limiting by IP and by destination address
 #[derive(Default)]
 struct RateLimiter {
     requests: Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>,
+    address_requests: Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>,
 }
 
 impl RateLimiter {
-    fn check_and_record(&self, ip: &str, window_secs: u64, max_requests: usize) -> bool {
-        let mut requests = self.requests.lock();
+    fn check_and_record_ip(&self, ip: &str, window_secs: u64, max_requests: usize) -> bool {
+        Self::check_and_record_map(&self.requests, ip, window_secs, max_requests)
+    }
+
+    fn check_and_record_address(
+        &self,
+        address: &str,
+        window_secs: u64,
+        max_requests: usize,
+    ) -> bool {
+        Self::check_and_record_map(&self.address_requests, address, window_secs, max_requests)
+    }
+
+    fn check_and_record_map(
+        map: &Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>,
+        key: &str,
+        window_secs: u64,
+        max_requests: usize,
+    ) -> bool {
+        let mut requests = map.lock();
         let now = std::time::Instant::now();
         let window_start = now - Duration::from_secs(window_secs);
 
-        let entry = requests.entry(ip.to_string()).or_default();
+        let entry = requests.entry(key.to_string()).or_default();
         entry.retain(|t| *t > window_start);
 
         if entry.len() >= max_requests {
@@ -293,19 +312,19 @@ async fn faucet_handler(
     let ip = proxy::client_ip(peer.ip(), forwarded_for, &state.config.trusted_proxies);
     let ip_str = ip.to_string();
 
-    // Check rate limit
-    if !state.rate_limiter.check_and_record(
+    // Check IP rate limit
+    if !state.rate_limiter.check_and_record_ip(
         &ip_str,
         state.config.rate_limit_window,
         state.config.max_requests_per_window,
     ) {
-        warn!(ip = %ip_str, "rate limit exceeded");
+        warn!(ip = %ip_str, "rate limit exceeded for IP");
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(FaucetResponse {
                 success: false,
                 message: format!(
-                    "Rate limit exceeded. Max {} requests per {} seconds.",
+                    "Rate limit exceeded for IP. Max {} requests per {} seconds.",
                     state.config.max_requests_per_window, state.config.rate_limit_window
                 ),
                 tx_hash: None,
@@ -329,6 +348,28 @@ async fn faucet_handler(
                 .into_response();
         }
     };
+
+    // Check PRO-21 destination address rate limit
+    let to_address_str = to_address.to_string();
+    if !state.rate_limiter.check_and_record_address(
+        &to_address_str,
+        state.config.rate_limit_window,
+        state.config.max_requests_per_window,
+    ) {
+        warn!(address = %to_address_str, "rate limit exceeded for address");
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(FaucetResponse {
+                success: false,
+                message: format!(
+                    "Rate limit exceeded for address. Max {} requests per {} seconds.",
+                    state.config.max_requests_per_window, state.config.rate_limit_window
+                ),
+                tx_hash: None,
+            }),
+        )
+            .into_response();
+    }
 
     // Prevent faucet from sending to itself
     if to_address == state.faucet_address {
@@ -792,5 +833,61 @@ mod guard_tests {
                 assert_eq!(parsed, address);
             }
         }
+    }
+
+    #[test]
+    fn chain2_strictly_enforces_canonical_pro21_and_rejects_legacy() {
+        let pk_hex = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let address = Address(hex::decode(pk_hex).unwrap().try_into().unwrap());
+        let canonical = address.encode();
+
+        // Canonical PRO-21 format must succeed on Chain 2 (Testnet)
+        let parsed = parse_address(&canonical, chain_id::TESTNET)
+            .expect("canonical PRO-21 parses on chain 2");
+        assert_eq!(parsed, address);
+
+        // Legacy hex forms must be refused on Chain 2
+        let legacy_forms = [
+            pk_hex.to_string(),
+            format!("0x{pk_hex}"),
+            address.encode_legacy_hex(),
+        ];
+        for form in &legacy_forms {
+            let err = parse_address(form, chain_id::TESTNET).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("not accepted"),
+                "expected legacy address {form} to be refused on Chain 2, got: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn rate_limiter_dual_check_ip_and_pro21_address() {
+        let limiter = RateLimiter::default();
+        let ip1 = "192.0.2.1";
+        let ip2 = "192.0.2.2";
+        let addr1 = "kvnc000000000000000000000000000000000000000000000000000000000000dag";
+        let addr2 = "kvnc111111111111111111111111111111111111111111111111111111111111dag";
+
+        let window = 60;
+        let max_req = 2;
+
+        // IP rate limiting test
+        assert!(limiter.check_and_record_ip(ip1, window, max_req));
+        assert!(limiter.check_and_record_ip(ip1, window, max_req));
+        // 3rd request from same IP is throttled
+        assert!(!limiter.check_and_record_ip(ip1, window, max_req));
+
+        // Different IP is allowed
+        assert!(limiter.check_and_record_ip(ip2, window, max_req));
+
+        // Address rate limiting test (even across different IPs)
+        assert!(limiter.check_and_record_address(addr1, window, max_req));
+        assert!(limiter.check_and_record_address(addr1, window, max_req));
+        // 3rd request to same PRO-21 address is throttled
+        assert!(!limiter.check_and_record_address(addr1, window, max_req));
+
+        // Different address is allowed
+        assert!(limiter.check_and_record_address(addr2, window, max_req));
     }
 }

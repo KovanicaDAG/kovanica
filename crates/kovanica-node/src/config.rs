@@ -37,6 +37,34 @@ impl Default for MiningConfig {
     }
 }
 
+/// DNS seeder crawler daemon configuration (`[seeder]` table).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SeederConfig {
+    /// Enable background DNS seeder crawler daemon.
+    pub enabled: bool,
+    /// Interval between crawler probe cycles in seconds.
+    pub crawler_interval_secs: u64,
+    /// Domain name for RFC 1035 zone file generation.
+    pub domain: String,
+    /// Optional path to export RFC 1035 zone file.
+    pub zone_file: Option<PathBuf>,
+    /// DNS TTL in seconds for zone records.
+    pub ttl_secs: u32,
+}
+
+impl Default for SeederConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            crawler_interval_secs: 30,
+            domain: "seed.kovanica.online".to_string(),
+            zone_file: None,
+            ttl_secs: 60,
+        }
+    }
+}
+
 /// Runtime configuration for a Kovanica node.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -113,6 +141,9 @@ pub struct NodeConfig {
     /// Mining configuration for Chain 5 (`[mining]` table).
     #[serde(default)]
     pub mining: MiningConfig,
+    /// DNS seeder crawler daemon configuration (`[seeder]` table).
+    #[serde(default)]
+    pub seeder: SeederConfig,
     /// Explicit emission policy override ("legacy-81m" or "no-stake-82m").
     /// Overridable with `KOVANICA_EMISSION_POLICY`.
     pub emission_policy: Option<String>,
@@ -219,6 +250,7 @@ impl Default for NodeConfig {
             health_commit_stall_secs: kovanica_rpc::health::DEFAULT_COMMIT_STALL_SECS,
             peer_scoring: kovanica_network::PeerScoringConfig::default(),
             mining: MiningConfig::default(),
+            seeder: SeederConfig::default(),
             emission_policy: None,
             chain_id: kovanica_types::signing::chain_id::LOCAL,
             // Pruning is opt-in: every retention window defaults to "keep
@@ -396,6 +428,39 @@ impl NodeConfig {
             match v.trim().parse() {
                 Ok(a) => self.mining.author = Some(a),
                 Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_MINING_AUTHOR"),
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_SEEDER_ENABLED") {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.seeder.enabled = true,
+                "0" | "false" | "no" | "off" => self.seeder.enabled = false,
+                _ => tracing::warn!(value = %v, "ignoring invalid KOVANICA_SEEDER_ENABLED"),
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_SEEDER_INTERVAL_SECS") {
+            match v.trim().parse() {
+                Ok(s) => self.seeder.crawler_interval_secs = s,
+                Err(_) => {
+                    tracing::warn!(value = %v, "ignoring invalid KOVANICA_SEEDER_INTERVAL_SECS")
+                }
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_SEEDER_DOMAIN") {
+            let v = v.trim();
+            if !v.is_empty() {
+                self.seeder.domain = v.to_string();
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_SEEDER_ZONE_FILE") {
+            let v = v.trim();
+            if !v.is_empty() {
+                self.seeder.zone_file = Some(PathBuf::from(v));
+            }
+        }
+        if let Ok(v) = std::env::var("KOVANICA_SEEDER_TTL_SECS") {
+            match v.trim().parse() {
+                Ok(t) => self.seeder.ttl_secs = t,
+                Err(_) => tracing::warn!(value = %v, "ignoring invalid KOVANICA_SEEDER_TTL_SECS"),
             }
         }
         if let Ok(v) = std::env::var("KOVANICA_EMISSION_POLICY") {
@@ -1063,5 +1128,54 @@ treasury_address = "treasury-address-placeholder"
         assert_eq!(config_default.dns_seeds[0], "seed3.kovanica.io:8000");
         assert_eq!(config_default.dns_seeds[1], "seed4.kovanica.io:8000");
         std::env::remove_var("KOVANICA_DNS_SEEDS");
+    }
+
+    #[test]
+    fn test_seeder_config_toml_and_env() {
+        let toml_str = r#"
+            [seeder]
+            enabled = true
+            crawler_interval_secs = 45
+            domain = "seed.kovanica.online"
+            zone_file = "/var/lib/kovanica/seed.zone"
+            ttl_secs = 120
+        "#;
+        let config = NodeConfig::from_toml_str(toml_str).unwrap();
+        assert!(config.seeder.enabled);
+        assert_eq!(config.seeder.crawler_interval_secs, 45);
+        assert_eq!(config.seeder.domain, "seed.kovanica.online");
+        assert_eq!(
+            config.seeder.zone_file,
+            Some(PathBuf::from("/var/lib/kovanica/seed.zone"))
+        );
+        assert_eq!(config.seeder.ttl_secs, 120);
+
+        let mut config_default = NodeConfig::default();
+        assert!(!config_default.seeder.enabled);
+        assert_eq!(config_default.seeder.crawler_interval_secs, 30);
+        assert_eq!(config_default.seeder.domain, "seed.kovanica.online");
+        assert!(config_default.seeder.zone_file.is_none());
+
+        std::env::set_var("KOVANICA_SEEDER_ENABLED", "true");
+        std::env::set_var("KOVANICA_SEEDER_INTERVAL_SECS", "15");
+        std::env::set_var("KOVANICA_SEEDER_DOMAIN", "seed.kovanica.online");
+        std::env::set_var("KOVANICA_SEEDER_ZONE_FILE", "/tmp/seed.zone");
+        std::env::set_var("KOVANICA_SEEDER_TTL_SECS", "30");
+
+        config_default.apply_env_overrides();
+        assert!(config_default.seeder.enabled);
+        assert_eq!(config_default.seeder.crawler_interval_secs, 15);
+        assert_eq!(config_default.seeder.domain, "seed.kovanica.online");
+        assert_eq!(
+            config_default.seeder.zone_file,
+            Some(PathBuf::from("/tmp/seed.zone"))
+        );
+        assert_eq!(config_default.seeder.ttl_secs, 30);
+
+        std::env::remove_var("KOVANICA_SEEDER_ENABLED");
+        std::env::remove_var("KOVANICA_SEEDER_INTERVAL_SECS");
+        std::env::remove_var("KOVANICA_SEEDER_DOMAIN");
+        std::env::remove_var("KOVANICA_SEEDER_ZONE_FILE");
+        std::env::remove_var("KOVANICA_SEEDER_TTL_SECS");
     }
 }

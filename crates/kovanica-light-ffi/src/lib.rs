@@ -886,6 +886,29 @@ pub fn sync_block_headers_batch(
     })
 }
 
+/// Resolve DNS seed hostname into a list of socket address strings (e.g. "1.2.3.4:8000").
+/// Enables Android and mobile light clients to discover live seed nodes dynamically.
+#[uniffi::export]
+pub fn resolve_dns_seed_peers(
+    dns_seed_host: String,
+    default_port: u16,
+) -> Result<Vec<String>, LightFfiError> {
+    use std::net::ToSocketAddrs;
+    let host = dns_seed_host.trim().trim_end_matches('.');
+    let query = format!("{host}:{default_port}");
+    let addrs = query
+        .to_socket_addrs()
+        .map_err(|e| failed(format!("DNS seed resolution failed for {query}: {e}")))?;
+
+    let mut peers = Vec::new();
+    for saddr in addrs {
+        peers.push(saddr.to_string());
+    }
+    peers.sort();
+    peers.dedup();
+    Ok(peers)
+}
+
 /// Query peer connection status and advertised tip round.
 #[uniffi::export]
 pub fn check_p2p_peer_status(
@@ -3376,5 +3399,15 @@ mod tests {
         assert_eq!(hard_res.hashes_computed, 3);
         assert_eq!(hard_res.nonce, 13);
         assert!(hard_res.block_header_json.is_none());
+
+        // 13. DNS seed resolution test
+        let resolved = resolve_dns_seed_peers("127.0.0.1".to_string(), 8000).unwrap();
+        assert!(!resolved.is_empty());
+        assert_eq!(resolved[0], "127.0.0.1:8000");
+
+        // Invalid hostname returns LightFfiError
+        let invalid =
+            resolve_dns_seed_peers("invalid.domain.that.does.not.exist.local".to_string(), 8000);
+        assert!(invalid.is_err());
     }
 }
