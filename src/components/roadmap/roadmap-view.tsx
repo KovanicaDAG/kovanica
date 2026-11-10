@@ -132,10 +132,10 @@ const SDK: Item[] = [
 const NEXT: Item[] = [
   {
     id: "hybrid-testnet-m8",
-    title: "Chain 5 Hybrid Testnet & KovanicaHash Audit",
+    title: "Chain 2 Hybrid Testnet & KovanicaHash Audit",
     status: "active",
     blurb:
-      "Deployment and hardening of Chain 5 hybrid PoW + GHOSTDAG testnet, KovanicaHash audit sign-off, and solo miner tooling.",
+      "Deployment and hardening of Chain 2 hybrid PoW + GHOSTDAG testnet, KovanicaHash audit sign-off, and solo miner tooling.",
   },
   {
     id: "node-hardening",

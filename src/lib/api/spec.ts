@@ -15,7 +15,7 @@ import {
 
 export const SPEC_TEXT = `# ${NETWORK_ID}
 
-BlockDAG testnet. Native token **${TOKEN}** (9 decimals). Canonical chain IDs: mainnet=1, testnet=2, devnet=3, testnet_v2=4, hybrid_testnet=5, local=1337.
+BlockDAG testnet. Native token **${TOKEN}** (9 decimals). Canonical chain IDs: mainnet=1, testnet=2, devnet=3, testnet_v2=4, hybrid_testnet=2, local=1337.
 Engine is the Rust node; this app speaks the same HTTP contract.
 
 || | |
@@ -115,7 +115,7 @@ POST /api/origin?iso3=HRV
 
 ## Wallet
 
-Address: PRO-21 canonical format = kvnc + 57 bech32-alphabet chars + dag (64 total), 29-bit BLAKE3 checksum. Legacy hex only where chain allows (chains 3, 4, 1337).
+Address: PRO-21 canonical format = kvnc + 57 bech32-alphabet chars + dag (64 total), 29-bit BLAKE3 checksum. Legacy hex only where chain allows (devnet: chain 3, local: 1337).
 Derivation: ADR-0002 — 24-word BIP-39 entropy IS the 32-byte Ed25519 seed; no PBKDF2 passphrase, no HD derivation, one phrase = one wallet address.
 Browser signs prepare's sighash; submit never receives the mnemonic.
 Hardware: Ledger (WebHID) + Trezor (WebUSB).

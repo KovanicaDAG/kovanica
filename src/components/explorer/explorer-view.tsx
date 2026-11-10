@@ -91,7 +91,7 @@ export function ExplorerView() {
           <div className="flex items-center gap-2">
             <AlertCircle className="size-4 shrink-0" />
             <span>
-              Connected endpoint reports &ldquo;{state.network}&rdquo;. Hybrid Chain 5 data unavailable / endpoint not yet verified.
+              Connected endpoint reports &ldquo;{state.network}&rdquo;. Hybrid Chain 2 data unavailable / endpoint not yet verified.
             </span>
           </div>
           <Button

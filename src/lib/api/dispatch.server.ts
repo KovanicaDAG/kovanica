@@ -125,7 +125,7 @@ function signingHash(
   to: Uint8Array,
   amount: bigint | number,
   fee: bigint | number,
-  chainId = 4,
+  chainId = 2,
 ): Uint8Array {
   const kindBytes = concat([Uint8Array.of(0), to, u64le(amount)]);
   return signingHashForKind(sender, nonce, kindBytes, fee, chainId);
@@ -140,7 +140,7 @@ function signingHashForKind(
   nonce: bigint | number,
   kindBytes: Uint8Array,
   fee: bigint | number,
-  chainId = 4,
+  chainId = 2,
 ): Uint8Array {
   const preimage = concat([
     TX_DOMAIN,
