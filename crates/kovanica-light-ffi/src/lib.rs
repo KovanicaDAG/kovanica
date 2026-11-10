@@ -511,6 +511,159 @@ pub fn prune_local_node_storage(
     })
 }
 
+/// Statistics and size metrics for local mobile pruned node storage.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct LocalStorageStats {
+    /// Committed leader / DAG tip round stored locally.
+    pub tip_round: u64,
+    /// Number of statement blocks currently held in local storage.
+    pub total_blocks: u64,
+    /// Number of DAG consensus blocks currently held in local storage.
+    pub total_dag_blocks: u64,
+    /// Local file size in bytes.
+    pub size_bytes: u64,
+}
+
+/// Return current storage metrics for a local node database.
+#[uniffi::export]
+pub fn get_local_storage_stats(db_path: String) -> Result<LocalStorageStats, LightFfiError> {
+    use redb::ReadableTableMetadata;
+
+    let path = std::path::Path::new(&db_path);
+    if !path.exists() {
+        return Ok(LocalStorageStats {
+            tip_round: 0,
+            total_blocks: 0,
+            total_dag_blocks: 0,
+            size_bytes: 0,
+        });
+    }
+
+    let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+    let txn = storage.begin_read().map_err(failed)?;
+
+    let tip_round = storage
+        .consensus()
+        .get_committed_leader_height(&txn)
+        .unwrap_or(0);
+
+    let total_blocks = match txn.open_table(kovanica_storage::tables::BLOCKS) {
+        Ok(t) => t.len().unwrap_or(0),
+        Err(_) => 0,
+    };
+
+    let total_dag_blocks = match txn.open_table(kovanica_storage::tables::DAG_BLOCKS) {
+        Ok(t) => t.len().unwrap_or(0),
+        Err(_) => 0,
+    };
+
+    Ok(LocalStorageStats {
+        tip_round,
+        total_blocks,
+        total_dag_blocks,
+        size_bytes,
+    })
+}
+
+/// Ingest and store a verified hybrid block header into local storage.
+#[uniffi::export]
+pub fn store_verified_block_header(
+    db_path: String,
+    header_json: String,
+) -> Result<bool, LightFfiError> {
+    let path = std::path::Path::new(&db_path);
+    let header: kovanica_types::BlockHeader = serde_json::from_str(&header_json).map_err(failed)?;
+
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+    let read_txn = storage.begin_read().map_err(failed)?;
+    let current_tip = storage
+        .consensus()
+        .get_committed_leader_height(&read_txn)
+        .unwrap_or(0);
+    drop(read_txn);
+
+    let txn = storage.begin_write().map_err(failed)?;
+
+    let digest = kovanica_types::block::StatementBlock::compute_digest(
+        header.author,
+        header.round,
+        &header.parents,
+        &[],
+    );
+    let block = kovanica_types::block::StatementBlock {
+        author: header.author,
+        round: header.round,
+        parents: header.parents.clone(),
+        transactions: vec![],
+        statements: vec![],
+        signature: kovanica_types::crypto::Signature([0u8; 64]),
+        digest,
+        merkle_root: header.merkle_root,
+    };
+
+    storage
+        .blocks()
+        .put_block(&txn, &block, &[])
+        .map_err(failed)?;
+    storage
+        .consensus()
+        .put_dag_block(&txn, &block)
+        .map_err(failed)?;
+    if header.round > current_tip {
+        storage
+            .consensus()
+            .set_committed_leader_height(&txn, header.round)
+            .map_err(failed)?;
+    }
+
+    txn.commit().map_err(failed)?;
+    Ok(true)
+}
+
+/// Account details held in local node storage.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct LocalAccountInfo {
+    pub balance: u64,
+    pub nonce: u64,
+    pub found: bool,
+}
+
+/// Query an account's state directly from local node storage without network access.
+#[uniffi::export]
+pub fn get_local_account(
+    db_path: String,
+    address: String,
+    chain_id: u64,
+) -> Result<LocalAccountInfo, LightFfiError> {
+    let path = std::path::Path::new(&db_path);
+    if !path.exists() {
+        return Ok(LocalAccountInfo {
+            balance: 0,
+            nonce: 0,
+            found: false,
+        });
+    }
+
+    let addr = Address::parse_for_chain(&address, chain_id).map_err(failed)?;
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+    let txn = storage.begin_read().map_err(failed)?;
+
+    match storage.state().get_account(&txn, &addr) {
+        Ok(acc) => Ok(LocalAccountInfo {
+            balance: acc.balance,
+            nonce: acc.nonce,
+            found: true,
+        }),
+        Err(kovanica_storage::StateStoreError::NotFound(_)) => Ok(LocalAccountInfo {
+            balance: 0,
+            nonce: 0,
+            found: false,
+        }),
+        Err(e) => Err(failed(e)),
+    }
+}
+
 /// Check an account proof against a header this client already accepted.
 #[uniffi::export]
 pub fn confirm_account(
@@ -1874,9 +2027,43 @@ mod tests {
         }
         drop(storage);
 
-        let res = prune_local_node_storage(db_str, 4).unwrap();
+        let res = prune_local_node_storage(db_str.clone(), 4).unwrap();
         assert!(res.pruned);
         assert_eq!(res.pruned_blocks, 3);
         assert_eq!(res.pruned_dag_blocks, 3);
+
+        // 3. Check stats
+        let stats = get_local_storage_stats(db_str.clone()).unwrap();
+        assert_eq!(stats.total_blocks, 2);
+        assert_eq!(stats.total_dag_blocks, 2);
+        assert!(stats.size_bytes > 0);
+
+        // 4. Store a new verified header
+        let header = BlockHeader::new(
+            chain_id::HYBRID_TESTNET,
+            6,
+            0,
+            vec![],
+            Hash::zero(),
+            1_700_000_020_000,
+            0x217f_ffff,
+            1,
+        );
+        let header_json = serde_json::to_string(&header).unwrap();
+        let stored = store_verified_block_header(db_str.clone(), header_json).unwrap();
+        assert!(stored);
+
+        let updated_stats = get_local_storage_stats(db_str.clone()).unwrap();
+        assert_eq!(updated_stats.tip_round, 6);
+        assert_eq!(updated_stats.total_blocks, 3);
+
+        // 5. Account query
+        let acc_info = get_local_account(
+            db_str,
+            Address([1; 32]).to_string(),
+            chain_id::HYBRID_TESTNET,
+        )
+        .unwrap();
+        assert!(!acc_info.found);
     }
 }

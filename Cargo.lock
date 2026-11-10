@@ -2763,6 +2763,7 @@ dependencies = [
  "kovanica-storage",
  "kovanica-types",
  "kovanica-wallet-core",
+ "redb",
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
