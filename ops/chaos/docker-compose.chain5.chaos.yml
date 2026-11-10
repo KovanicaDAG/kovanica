@@ -1,0 +1,37 @@
+# ops/chaos/docker-compose.chain5.chaos.yml
+#
+# Isolated chaos overlay for Chain 5 (Hybrid PoW + GHOSTDAG) testnet cluster.
+# Pairs with ops/docker/docker-compose.chain5.yml:
+# - Unique container names (chaos-chain5-*)
+# - Dedicated non-colliding published RPC ports (28545-28548)
+# - Isolated project volume prefixes
+# - Fully internal mesh (node2, node3, observer point only to node1)
+
+services:
+  node1:
+    container_name: chaos-chain5-node1
+    environment:
+      KOVANICA_BOOTNODES: ""
+    ports: !override
+      - "127.0.0.1:28545:8545"
+
+  node2:
+    container_name: chaos-chain5-node2
+    environment:
+      KOVANICA_BOOTNODES: "node1:8000"
+    ports: !override
+      - "127.0.0.1:28546:8545"
+
+  node3:
+    container_name: chaos-chain5-node3
+    environment:
+      KOVANICA_BOOTNODES: "node1:8000"
+    ports: !override
+      - "127.0.0.1:28547:8545"
+
+  observer:
+    container_name: chaos-chain5-observer
+    environment:
+      KOVANICA_BOOTNODES: "node1:8000"
+    ports: !override
+      - "127.0.0.1:28548:8545"
