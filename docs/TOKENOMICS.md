@@ -11,7 +11,7 @@ Canonical constants: `crates/kovanica-params`.
 
 Kovanica defines two genesis supply allocations depending on the network's consensus model:
 1. **Legacy Networks (with validator stake):** Mainnet (Chain 1) and legacy testnets (Chains 2, 4) allocate 1,000,000 KVNC to genesis validators.
-2. **New NO-Stake Networks (NoStake82M):** For new networks operating without consensus stake (such as Hybrid PoW Testnet, Chain 5), the 1,000,000 KVNC validator allocation is returned to capped mining emissions, setting the mining subsidy budget to 82,000,000 KVNC.
+2. **New NO-Stake Networks (NoStake82M):** For new networks operating without consensus stake (such as Hybrid PoW Testnet, Chain 2), the 1,000,000 KVNC validator allocation is returned to capped mining emissions, setting the mining subsidy budget to 82,000,000 KVNC.
 
 | Allocation                  | Legacy (with stake) | New NO-Stake (82M) | % of Total         | Notes                                      |
 |-----------------------------|---------------------|--------------------|--------------------|--------------------------------------------|
@@ -46,7 +46,7 @@ All 82,000,000 KVNC are emitted solely through block rewards according to the 82
 
 ### 2.2 Approved NoStake82M Policy (New NO-stake networks, Toni 2026-11-06)
 
-- **Scope & Gating:** Applies exclusively to new NO-stake genesis networks (e.g. Hybrid PoW Testnet, Chain 5). Strictly prohibited on Mainnet (Chain 1). Legacy chains and existing databases remain 100% unchanged.
+- **Scope & Gating:** Applies exclusively to new NO-stake genesis networks (e.g. Hybrid PoW Testnet, Chain 2). Strictly prohibited on Mainnet (Chain 1). Legacy chains and existing databases remain 100% unchanged.
 - **Initial reward:** 2.5 KVNC (`2_500_000_000` base units).
 - **Era length:** **8 200 000** rewarded blocks (`SUBSIDY_ERA_BLOCKS_NO_STAKE_82M`).
   The first rewarded block is defined as index 0: indices `0..8_199_999` use the initial reward, index `8_200_000` starts era 1.

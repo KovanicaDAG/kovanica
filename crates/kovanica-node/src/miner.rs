@@ -1,4 +1,4 @@
-//! Node mining worker and difficulty calculation for Chain 5 (Hybrid PoW testnet).
+//! Node mining worker and difficulty calculation for Chain 2 (Hybrid PoW testnet).
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -32,12 +32,12 @@ impl Default for NodeMiner {
 
 #[allow(dead_code)]
 impl NodeMiner {
-    /// Create a new node miner with default Chain 5 parameters.
+    /// Create a new node miner with default Chain 2 parameters.
     #[must_use]
     pub fn new() -> Self {
         Self {
             worker: MiningWorker::new(),
-            daa_config: DaaConfig::chain5_default(),
+            daa_config: DaaConfig::hybrid_default(),
         }
     }
 
@@ -96,7 +96,7 @@ impl NodeMiner {
 
 pub use kovanica_consensus::daa::select_parents_from_tips;
 
-/// Run the background PoW mining loop for Chain 5.
+/// Run the background PoW mining loop for Chain 2.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_mining_loop(
     mining_config: MiningConfig,
@@ -117,7 +117,7 @@ pub async fn run_mining_loop(
         chain_id,
         author,
         threads = mining_config.threads,
-        "Chain 5 PoW mining worker loop started"
+        "Chain 2 PoW mining worker loop started"
     );
 
     let miner = NodeMiner::new();
@@ -202,7 +202,7 @@ pub async fn run_mining_loop(
                 round = mined_header.round,
                 pow_hash = ?mined_header.pow_hash,
                 nonce = mined_header.nonce,
-                "successfully mined new PoW block on Chain 5"
+                "successfully mined new PoW block on Chain 2"
             );
 
             let statement_block = mined_header.to_statement_block(txs);

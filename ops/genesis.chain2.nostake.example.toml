@@ -1,7 +1,7 @@
-# Genesis configuration for NEW Hybrid PoW Testnet with NO-stake 82M mining emission policy (Chain ID 5)
+# Genesis configuration for the Hybrid PoW Testnet with NO-stake 82M mining emission policy (Chain ID 2)
 # Approved by Toni 2026-11-06:
 # - Mining budget: 82,000,000 KVNC
 # - Genesis validator allocation: 0 KVNC (NO stake)
 # - Total supply: 90,200,000 KVNC (8M treasury, 200k founder premine, 82M mining subsidy)
-chain_id = 5
+chain_id = 2
 emission_policy = "no-stake-82m"

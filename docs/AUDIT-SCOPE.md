@@ -38,7 +38,7 @@ This scope document specifies the components, invariants, threat models, and pri
 | `daa.rs` (Difficulty Adjustment) | **Critical** | Difficulty adjustment algorithm targeting 4 s block time (`TARGET_BLOCK_MS = 4000`). Adjustment dampening, min/max target clamping, timestamp median calculations, and resistance against timestamp warping / selfish mining manipulation. |
 | `block_manager.rs` (DAG Store) | **Critical** | Ingestion pipeline, parent validation, duplicate detection, topological commit cursor advancement, and pruning bounds. |
 | Anti-DoS Edge Ingress | **Critical** | Header PoW verification before gossip relay (`validate_pow_target`). Ensures un-mined or low-difficulty blocks cannot flood the P2P mesh or exhaust memory before verification. |
-| Legacy Mysticeti Transition | **High** | Note that PRO-7 (Mysticeti VRF leader selection) is **FROZEN** under Hybrid PoW + GHOSTDAG. Verify that legacy leader/stake logic does not interfere with the PoW + GHOSTDAG execution path under `hybrid-pow` and Chain 5/1. |
+| Legacy Mysticeti Transition | **High** | Note that PRO-7 (Mysticeti VRF leader selection) is **FROZEN** under Hybrid PoW + GHOSTDAG. Verify that legacy leader/stake logic does not interfere with the PoW + GHOSTDAG execution path on the hybrid networks (Chain 1 and Chain 2). |
 
 **Key Consensus Invariants to Verify:**
 1. **Deterministic DAG Ordering:** All honest nodes processing the same set of DAG blocks derive an identical GHOSTDAG linear sequence and identical state root.

@@ -2138,7 +2138,7 @@ pub async fn handle_sync_status(_params: Value, state: RpcState) -> Result<Value
     serde_json::to_value(&status).map_err(internal)
 }
 
-/// Generate a PoW mining work template for Chain 5.
+/// Generate a PoW mining work template for Chain 2.
 pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let chain_id = state.mempool.signing_context().chain_id;
     if !kovanica_types::signing::chain_id::is_hybrid(chain_id) {
@@ -2217,7 +2217,7 @@ pub async fn handle_get_work(params: Value, state: RpcState) -> Result<Value, Rp
     )
     .map_err(|e| RpcError::ExecutionError(format!("ancestor timestamp extraction failed: {e}")))?;
 
-    let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+    let daa_config = kovanica_consensus::DaaConfig::hybrid_default();
     let target_bits = kovanica_consensus::try_required_target_bits(
         &state.consensus_store,
         &parent_refs,
@@ -2425,7 +2425,7 @@ pub async fn handle_submit_work(params: Value, state: RpcState) -> Result<Value,
         }
 
         // Enforce required DAA target from deterministic block-bound ancestry
-        let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+        let daa_config = kovanica_consensus::DaaConfig::hybrid_default();
         let required_bits = kovanica_consensus::try_required_target_bits(
             &state.consensus_store,
             &header.parents,
@@ -2492,7 +2492,7 @@ pub async fn handle_get_mining_info(_params: Value, state: RpcState) -> Result<V
         })
         .collect();
 
-    let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+    let daa_config = kovanica_consensus::DaaConfig::hybrid_default();
     let target_bits = kovanica_consensus::try_required_target_bits(
         &state.consensus_store,
         &parent_refs,

@@ -2016,7 +2016,7 @@ fn ensure_epoch_committee(
     Ok(frozen)
 }
 
-/// Resolve a miner payout address from author index under Hybrid PoW (Chain 5).
+/// Resolve a miner payout address from author index under Hybrid PoW (Chain 2).
 fn resolve_miner_address(author: u16, staking: &StakingState) -> Address {
     if let Some(val) = staking.authority_validator(author) {
         val.address
@@ -6252,9 +6252,9 @@ mod tests {
         }
     }
     #[test]
-    fn chain_5_hybrid_pow_block_reward_minting_without_commission() {
+    fn chain_2_hybrid_pow_block_reward_minting_without_commission() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let storage = Storage::new(temp_dir.path().join("chain5_test.redb")).unwrap();
+        let storage = Storage::new(temp_dir.path().join("chain2_test.redb")).unwrap();
         let mut ctx =
             ExecutionContext::with_signing_context(SigningContext::new(chain_id::HYBRID_TESTNET));
 
@@ -6293,11 +6293,11 @@ mod tests {
     }
 
     #[test]
-    fn chain_5_no_stake_82m_reward_schedule_boundaries_and_multiple_blocks() {
+    fn chain_2_no_stake_82m_reward_schedule_boundaries_and_multiple_blocks() {
         use kovanica_types::emission::EmissionPolicy;
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let storage = Storage::new(temp_dir.path().join("chain5_nostake.redb")).unwrap();
+        let storage = Storage::new(temp_dir.path().join("chain2_nostake.redb")).unwrap();
 
         // Persist NoStake82M policy in storage
         {
@@ -6403,11 +6403,11 @@ mod tests {
     }
 
     #[test]
-    fn chain_5_no_stake_82m_terminal_remainder_once_then_zero() {
+    fn chain_2_no_stake_82m_terminal_remainder_once_then_zero() {
         use kovanica_types::emission::EmissionPolicy;
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let storage = Storage::new(temp_dir.path().join("chain5_term.redb")).unwrap();
+        let storage = Storage::new(temp_dir.path().join("chain2_term.redb")).unwrap();
 
         let (total_scheduled, terminal_remainder) =
             kovanica_staking::recompute_terminal_remainder_82m();
@@ -6502,11 +6502,11 @@ mod tests {
     }
 
     #[test]
-    fn chain_5_no_stake_82m_replay_and_idempotency() {
+    fn chain_2_no_stake_82m_replay_and_idempotency() {
         use kovanica_types::emission::EmissionPolicy;
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let storage = Storage::new(temp_dir.path().join("chain5_replay.redb")).unwrap();
+        let storage = Storage::new(temp_dir.path().join("chain2_replay.redb")).unwrap();
 
         {
             let txn = storage.begin_write().unwrap();

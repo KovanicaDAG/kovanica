@@ -275,7 +275,7 @@ if [[ "$SKIP_LOAD" == "0" ]]; then
   log "Starting continuous load generator (${LOAD_RATE} tx/s to http://127.0.0.1:8545)..."
   python3 "$SCRIPT_DIR/load_generator.py" \
     --rpc-url "http://127.0.0.1:8545" \
-    --chain-id 5 \
+    --chain-id 2 \
     --duration "$SOAK_SECS" \
     --rate "$LOAD_RATE" \
     --out-json "$LOAD_STATS_JSON" > "$LOAD_LOG" 2>&1 &

@@ -14,6 +14,6 @@ path = '''(\.dat|\.key)$'''
 description = "encrypted keystore test fixtures"
 paths = [
     '''(^|/)apps/console-desktop/src-tauri/tests/fixtures/cross-keystore\.json$''',
-    '''(^|/)ops/docker/chain5/faucet\.keystore$''',
-    '''(^|/)ops/docker/chain5/node1_p2p\.key$''', 
+    '''(^|/)ops/docker/chain2/faucet\.keystore$''',
+    '''(^|/)ops/docker/chain2/node1_p2p\.key$''', 
 ]

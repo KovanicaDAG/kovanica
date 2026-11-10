@@ -1131,7 +1131,7 @@ pub struct MinedPowResult {
 }
 
 /// Run a bounded Proof-of-Work search (KovanicaHash) on the mobile device.
-/// Designed for thermal-gated micro-mining bursts on Chain 5 (Hybrid Testnet).
+/// Designed for thermal-gated micro-mining bursts on Chain 2 (Hybrid Testnet).
 #[uniffi::export]
 pub fn mine_pow_block_header(
     header_json: String,

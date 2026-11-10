@@ -109,7 +109,7 @@ You can also run the load generator against an already running node or cluster:
 ```bash
 python3 ops/soak/load_generator.py \
   --rpc-url http://127.0.0.1:8545 \
-  --chain-id 5 \
+  --chain-id 2 \
   --duration 300 \
   --rate 10.0 \
   --out-json /tmp/load_stats.json

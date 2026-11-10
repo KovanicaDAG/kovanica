@@ -16,6 +16,7 @@ In accordance with requirement **R2** ("Archive obsolete material"), no files ar
 | [`VRF-PROOF-LENGTH.md`](./VRF-PROOF-LENGTH.md) | 2026-10-21 | Finalized Analysis | Technical investigation report resolving TASKLIST item 15 regarding ECVRF proof length (96 B ristretto255 + SHA3 vs 80 B RFC 9381 Edwards25519). The analysis concluded that 96 B is genuine and correct for the `ecvrf` crate. | `crates/kovanica-crypto/src/vrf.rs`, `docs/AUDIT-SCOPE.md` |
 | [`A8.2-DELEGATION-FULL.md`](./A8.2-DELEGATION-FULL.md) | Phase 18 Sprint | Implemented | Early sprint scratchpad and implementation checklist for Phase 18 delegation lifecycle tasks. All tasks (delegation, unbonding, slashing evidence, deterministic epoch committee rotation) are completed and tested in code. | `crates/kovanica-staking/`, `docs/GOVERNANCE.md` |
 | [`B-TREASURY-PROPOSAL.md`](./B-TREASURY-PROPOSAL.md) | Phase 25 Early Draft | Superseded | Preliminary 38-line skeleton outlining treasury spend proposal fields. Completely replaced and expanded by the comprehensive Phase 25 Governance Specification. | `docs/GOVERNANCE.md` |
+| [`CANONICAL-TESTNET-2.md`](./CANONICAL-TESTNET-2.md) | 2026-11 (M8 → canonical testnet) | Implemented | Point-in-time migration design that promoted Chain 2 to the canonical Hybrid PoW + GHOSTDAG testnet and retired the isolated Chain 5 design. Fully implemented; later commits removed the remaining Chain 5 / Chain 4 code paths. | `crates/kovanica-types/src/signing.rs`, `docs/dev/HYBRID-TESTNET-M8.md` |
 
 ---
 
@@ -44,3 +45,7 @@ In accordance with requirement **R2** ("Archive obsolete material"), no files ar
 ### 6. `B-TREASURY-PROPOSAL.md`
 - **Context**: Initial 38-line draft skeleton exploring the structure of on-chain treasury proposals.
 - **Archival Rationale**: Replaced in full by `docs/GOVERNANCE.md`, which defines the complete governance lifecycle, stake-weighted voting thresholds, and execution mechanisms.
+
+### 7. `CANONICAL-TESTNET-2.md`
+- **Context**: Migration design (status "Implemented — Option A") that proposed promoting Chain 2 to the canonical Hybrid PoW + GHOSTDAG testnet, introducing the isolated Chain 5 testnet track, and inventorying every chain-id-dependent code path at a fixed commit.
+- **Archival Rationale**: The migration is complete and the design has since been superseded: Chain 2 is the canonical hybrid testnet, and the Chain 5 and Chain 4 code paths were removed entirely. The document is a point-in-time snapshot (it cites line numbers and code snippets that no longer exist), so it is preserved here for historical context rather than kept as active guidance. Current hybrid behaviour is described in `docs/dev/HYBRID-TESTNET-M8.md` and `docs/MINING.md`.

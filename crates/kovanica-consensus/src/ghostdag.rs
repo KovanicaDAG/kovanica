@@ -1,4 +1,4 @@
-//! GHOSTDAG committer with k=5 for Chain 5 (Hybrid PoW + GHOSTDAG).
+//! GHOSTDAG committer with k=5 for Chain 2 (Hybrid PoW + GHOSTDAG).
 //!
 //! Implements GHOSTDAG block sequencing without stake weighting,
 //! committee votes, or certificates (ADR 0003).
@@ -33,7 +33,7 @@ pub fn is_hybrid_chain(chain_id: u64) -> bool {
 /// GHOSTDAG committer for sequencing PoW blocks on hybrid chains.
 #[derive(Debug, Clone)]
 pub struct GhostdagCommitter {
-    /// GHOSTDAG cluster parameter k (default 5 for Chain 5).
+    /// GHOSTDAG cluster parameter k (default 5 for Chain 2).
     pub k: usize,
     /// In-memory cache of blocks indexed by digest.
     pub blocks: HashMap<Hash, StatementBlock>,

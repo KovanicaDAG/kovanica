@@ -1,4 +1,4 @@
-//! Isolated Hybrid PoW + GHOSTDAG acceptance test suite (Chain 5).
+//! Isolated Hybrid PoW + GHOSTDAG acceptance test suite (Chain 2).
 //!
 //! Validates:
 //! 1. Isolated topology: Producer node + Non-mining Observer node, loopback only,

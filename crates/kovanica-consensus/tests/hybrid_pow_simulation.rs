@@ -1,4 +1,4 @@
-//! Multi-node PoW & GHOSTDAG simulation test suite for Chain ID 5 (Hybrid PoW + GHOSTDAG).
+//! Multi-node PoW & GHOSTDAG simulation test suite for Chain ID 2 (Hybrid PoW + GHOSTDAG).
 //!
 //! Validates:
 //! 1. Concurrent multi-miner DAG convergence with GHOSTDAG k=5
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 /// High target bits for fast, deterministic unit test mining (top byte <= 0x7f, ~50% hit chance).
 const EASY_TEST_TARGET_BITS: u32 = 0x207f_ffff;
 
-/// Helper to author and mine a valid block header for Chain 5 using an in-memory worker.
+/// Helper to author and mine a valid block header for Chain 2 using an in-memory worker.
 fn make_mined_block(
     worker: &mut MiningWorker,
     round: u64,
@@ -234,7 +234,7 @@ fn test_ghostdag_k5_blue_red_categorization() {
 
 #[test]
 fn test_daa_difficulty_adaptation() {
-    let config = DaaConfig::chain5_default();
+    let config = DaaConfig::hybrid_default();
     let start_ts = 1_700_000_000_000u64;
     let initial_bits = 0x1d00_ffff;
     let initial_target = compact_to_target(initial_bits);
@@ -325,7 +325,7 @@ fn test_pow_anti_dos_rejection() {
         legacy_block
             .extract_pow_header(CHAIN_ID_HYBRID_TESTNET)
             .is_err(),
-        "block without PoW statements must be rejected on Chain 5 ingress"
+        "block without PoW statements must be rejected on Chain 2 ingress"
     );
 }
 
@@ -391,7 +391,7 @@ fn test_same_dag_different_arrival_orders_yields_same_required_target() {
 
     // Now evaluate candidate block at round 3 referencing block 2
     let candidate_parents = vec![block_2.reference()];
-    let config = DaaConfig::chain5_default();
+    let config = DaaConfig::hybrid_default();
 
     let target1 =
         required_target_bits(&dag1, &candidate_parents, CHAIN_ID_HYBRID_TESTNET, &config).unwrap();

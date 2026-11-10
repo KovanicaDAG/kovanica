@@ -1,6 +1,6 @@
-//! Live 3-node Hybrid PoW + GHOSTDAG cluster integration test for Chain 5 (Milestone M8).
+//! Live 3-node Hybrid PoW + GHOSTDAG cluster integration test for Chain 2 (Milestone M8).
 //!
-//! Spawns a 3-node live cluster running on Chain 5 (`HYBRID_TESTNET`) with mining
+//! Spawns a 3-node live cluster running on Chain 2 (`HYBRID_TESTNET`) with mining
 //! enabled, verifies P2P discovery, KovanicaHash PoW mining, GHOSTDAG k=5 DAG tips
 //! and blue set sequencing, 2.5 KVNC mining reward distribution, and end-to-end
 //! transaction inclusion and execution.

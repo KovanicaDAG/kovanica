@@ -381,7 +381,7 @@ impl RpcServer {
         self.register_stateful("kovanica_syncStatus", handle_sync_status)
             .await;
 
-        // Mining & DAG methods (Hybrid PoW / Chain 5).
+        // Mining & DAG methods (Hybrid PoW / Chain 2).
         self.register_stateful("kovanica_getWork", handle_get_work)
             .await;
         self.register_stateful("kovanica_submitWork", handle_submit_work)

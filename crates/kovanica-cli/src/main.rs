@@ -149,7 +149,7 @@ enum Commands {
         #[command(subcommand)]
         command: MinerCommand,
     },
-    /// Mining subcommands (PoW / Chain 5)
+    /// Mining subcommands (PoW / Chain 2)
     Mining {
         #[command(subcommand)]
         command: MiningCommand,

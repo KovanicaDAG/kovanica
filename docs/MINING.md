@@ -1,6 +1,6 @@
 # Kovanica Proof-of-Work Mining Manual
 
-This document is the authoritative operator and developer guide for mining on the **Kovanica** Layer-1 blockchain (native ticker **KVNC**). It details the consensus invariants for the Hybrid PoW + GHOSTDAG network (Chain ID 5), the memory-hard **KovanicaHash** algorithm, local benchmarking via `kovanica miner bench`, solo mining operations, mining pool and Stratum protocol integration, JSON-RPC APIs, and VPS sizing guidelines.
+This document is the authoritative operator and developer guide for mining on the **Kovanica** Layer-1 blockchain (native ticker **KVNC**). It details the consensus invariants for the Hybrid PoW + GHOSTDAG network (Chain ID 2), the memory-hard **KovanicaHash** algorithm, local benchmarking via `kovanica miner bench`, solo mining operations, mining pool and Stratum protocol integration, JSON-RPC APIs, and VPS sizing guidelines.
 
 ---
 
@@ -21,14 +21,14 @@ This document is the authoritative operator and developer guide for mining on th
 
 Kovanica utilizes a **Hybrid PoW + GHOSTDAG** consensus architecture for decentralized block production and transaction ordering.
 
-- **Chain ID:** `5` (`HYBRID_TESTNET` / `hybrid-testnet`).
+- **Chain ID:** `2` (`TESTNET` / `hybrid-testnet`).
 - **Consensus Model:** Hybrid Proof-of-Work block authoring combined with GHOSTDAG DAG ordering. **There is strictly NO stake required or weighted for consensus** (architectural decision confirmed 2026-11-05).
 - **PoW Algorithm:** **KovanicaHash** (BLAKE3 + 2 MiB pseudo-random memory mix scratchpad).
 - **Target Block Time:** 4 seconds (`TARGET_BLOCK_MS = 4000`).
 - **GHOSTDAG Parameter $K$:** $K = 5$ (`GHOSTDAG_K = 5`).
 - **Block Reward:** **2.5 KVNC** per committed block author, credited directly to the miner's payout address.
 - **Subsidy Halving / Decay:** Initial subsidy era of 8,100,000 blocks with $\times 3/4$ decay each subsequent era, drawing from an 81,000,000 KVNC mining subsidy budget.
-- **Payout Address Format:** Canonical PRO-21 base32 address (`kvnc` + 57 base32 chars + `dag` = 64 characters). Legacy hex addresses (`0x...` or 64 hex characters) are also supported on Chain ID 5 for testnet tooling compatibility.
+- **Payout Address Format:** Canonical PRO-21 base32 address (`kvnc` + 57 base32 chars + `dag` = 64 characters). Legacy hex addresses (`0x...` or 64 hex characters) are rejected on the hybrid networks (Chain IDs 1 and 2); use the canonical form.
 
 For further architectural context, see the [Hybrid PoW + GHOSTDAG ADR](adr/0003-hybrid-pow-ghostdag.md), the [Block Header Specification](dev/POW-HEADER-SPEC.md), and the [Tokenomics Specification](TOKENOMICS.md).
 
@@ -196,7 +196,7 @@ Example payout address:
 
 #### Mode A: Standalone CLI Solo Miner (`kovanica miner run`)
 
-The standalone CLI solo miner connects to any local or remote Kovanica node running Chain ID 5:
+The standalone CLI solo miner connects to any local or remote Kovanica node running Chain ID 2:
 
 ```bash
 kovanica miner run \
@@ -210,9 +210,9 @@ Terminal Output:
 
 ```text
 ============================================================
-       Kovanica Standalone Solo CPU Miner (Chain 5)         
+       Kovanica Standalone Solo CPU Miner (Chain 2)         
 ============================================================
- Chain ID:        5
+ Chain ID:        2
  RPC Endpoint:    http://127.0.0.1:8545
  Payout Address:  kvnca0b1c2d3e4f5a0b1c2d3e4f5a0b1c2d3e4f5a0b1c2d3e4f5a0b1c2d3e4f5dag
  Worker Threads:  4
@@ -229,11 +229,11 @@ Press `Ctrl-C` at any time to shut down the worker gracefully; aggregate hash co
 
 #### Mode B: In-Node Built-in Miner
 
-Nodes can author blocks natively by enabling internal mining in their configuration file (`config.chain5.toml`):
+Nodes can author blocks natively by enabling internal mining in their configuration file (`config.chain2.toml`):
 
 ```toml
 [network]
-chain_id = 5
+chain_id = 2
 
 [mining]
 enabled = true
@@ -245,7 +245,7 @@ payout_address = "kvnca0b1c2d3e4f5a0b1c2d3e4f5a0b1c2d3e4f5a0b1c2d3e4f5a0b1c2d3e4
 Or passing flags to the node binary:
 
 ```bash
-kovanica-node --config config.chain5.toml --mining.enabled --mining.threads 4
+kovanica-node --config config.chain2.toml --mining.enabled --mining.threads 4
 ```
 
 ---
@@ -274,7 +274,7 @@ Mining pools aggregate hashrate across multiple mining rigs and distribute block
                           v
              +--------------------------+
              |   Kovanica Node (RPC)    |
-             |   (Chain ID 5 / Testnet) |
+             |   (Chain ID 2 / Testnet) |
              +--------------------------+
 ```
 
@@ -455,7 +455,7 @@ With a 4-second block time:
 
 | Symptom / Error | Root Cause | Remediation |
 |---|---|---|
-| `invalid payout address for chain 5` | Payout address is corrupted or invalid checksum. | Verify address was generated via `kovanica keygen` and starts with `kvnc` and ends with `dag`. |
+| `invalid payout address for chain 2` | Payout address is corrupted or invalid checksum. | Verify address was generated via `kovanica keygen` and starts with `kvnc` and ends with `dag`. |
 | `stale block header / parent not in DAG` | Work template was solved after a new round committed. | Lower `--poll-interval-ms` (e.g. 500 ms) and optimize node P2P connectivity. |
 | `pow hash does not meet target` | Nonce or preimage mismatch between miner and node. | Ensure miner uses `KovanicaHasher` and does not mutate preimage bytes other than the tail 8-byte nonce. |
 | `requested thread count exceeds maximum` | `--threads` exceeds 256. | Reduce thread allocation below 256. |

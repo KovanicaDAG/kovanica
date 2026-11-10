@@ -2779,7 +2779,7 @@ fn ingest_block(
             }
 
             // 6. Enforce required DAA target from deterministic block-bound ancestry
-            let daa_config = kovanica_consensus::DaaConfig::chain5_default();
+            let daa_config = kovanica_consensus::DaaConfig::hybrid_default();
             let required_bits = match kovanica_consensus::try_required_target_bits(
                 io.dag_store,
                 &header.parents,

@@ -32,7 +32,7 @@ if [[ -z "$CHAIN_ID" ]]; then
         testnet) CHAIN_ID=2 ;;
         devnet) CHAIN_ID=3 ;;
         testnet-v2|testnet_v2) CHAIN_ID=4 ;;
-        hybrid-testnet|hybrid_testnet) CHAIN_ID=5 ;;
+        hybrid-testnet|hybrid_testnet) CHAIN_ID=2 ;;
         local) CHAIN_ID=1337 ;;
         *) CHAIN_ID=1 ;;
     esac

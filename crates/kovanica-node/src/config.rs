@@ -15,7 +15,7 @@ fn default_enabled() -> bool {
     true
 }
 
-/// Mining configuration for Chain 5 (Hybrid PoW testnet).
+/// Mining configuration for Chain 2 (Hybrid PoW testnet).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct MiningConfig {
@@ -138,7 +138,7 @@ pub struct NodeConfig {
     /// Gossipsub peer scoring (`[peer_scoring]` table). Defaults are safe for
     /// a small validator network; see `kovanica_network::PeerScoringConfig`.
     pub peer_scoring: kovanica_network::PeerScoringConfig,
-    /// Mining configuration for Chain 5 (`[mining]` table).
+    /// Mining configuration for Chain 2 (`[mining]` table).
     #[serde(default)]
     pub mining: MiningConfig,
     /// DNS seeder crawler daemon configuration (`[seeder]` table).

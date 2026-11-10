@@ -41,8 +41,8 @@ build/
 *.key
 keystore/
 *.keystore
-!ops/docker/chain5/faucet.keystore
-!ops/docker/chain5/node1_p2p.key
+!ops/docker/chain2/faucet.keystore
+!ops/docker/chain2/node1_p2p.key
 
 # Deepwork progress (local only)
 .slim/deepwork/

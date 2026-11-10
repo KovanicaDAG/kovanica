@@ -153,7 +153,7 @@ impl DnsSeedCrawler {
 
     /// Record a discovered/probed peer entry.
     ///
-    /// Validates chain ID: entries from other chains (e.g. Chain 1 mainnet or Chain 5)
+    /// Validates chain ID: entries from other chains (e.g. Chain 1 mainnet or Chain 2)
     /// are rejected and will not be exported to the zone file.
     pub fn record_peer(&self, entry: DnsSeedEntry) -> bool {
         if entry.chain_id != self.config.target_chain_id {
@@ -345,6 +345,7 @@ impl DnsSeedCrawler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kovanica_types::signing::chain_id;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[test]
@@ -355,25 +356,25 @@ mod tests {
             port: 8000,
             last_seen_utc: now - 30, // 30s ago
             latency_ms: 15,
-            chain_id: 5,
+            chain_id: chain_id::HYBRID_TESTNET,
         };
         let stale_peer = DnsSeedEntry {
             ip: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)),
             port: 8000,
             last_seen_utc: now - 7200, // 2h ago
             latency_ms: 25,
-            chain_id: 5,
+            chain_id: chain_id::HYBRID_TESTNET,
         };
         let other_chain_peer = DnsSeedEntry {
             ip: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 3)),
             port: 8000,
             last_seen_utc: now - 10,
             latency_ms: 10,
-            chain_id: 1, // Mainnet instead of 5
+            chain_id: 1, // Mainnet instead of 2
         };
 
         let list = vec![fresh_peer.clone(), stale_peer, other_chain_peer];
-        let healthy = filter_healthy_seeds(&list, 5, now, 300);
+        let healthy = filter_healthy_seeds(&list, chain_id::HYBRID_TESTNET, now, 300);
 
         assert_eq!(healthy.len(), 1);
         assert_eq!(healthy[0].ip, fresh_peer.ip);
@@ -430,12 +431,13 @@ mod tests {
         let crawler = DnsSeedCrawler::new(config);
 
         let mainnet_peer = DnsSeedEntry::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 8000, 10, 1);
-        let chain5_peer = DnsSeedEntry::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 8000, 12, 5);
+        let unregistered_peer =
+            DnsSeedEntry::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 8000, 12, 99);
         let testnet_peer = DnsSeedEntry::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)), 8000, 8, 2);
 
-        // Chain 1 and 5 must be rejected
+        // Chain 1 and an unregistered chain id must be rejected
         assert!(!crawler.record_peer(mainnet_peer));
-        assert!(!crawler.record_peer(chain5_peer));
+        assert!(!crawler.record_peer(unregistered_peer));
         // Chain 2 must be accepted
         assert!(crawler.record_peer(testnet_peer.clone()));
 

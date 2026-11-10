@@ -56,7 +56,7 @@ pub enum LightError {
 ///
 /// Matches `kovanica_consensus::ghostdag::calculate_work_from_target` so a
 /// mobile light/pruned node computes the exact same cumulative `blue_work`
-/// as a full validator/miner node on Hybrid PoW + GHOSTDAG (Chain 5).
+/// as a full validator/miner node on Hybrid PoW + GHOSTDAG (Chain 2).
 #[must_use]
 pub fn calculate_work_from_target(target_bits: u32) -> u128 {
     let target = compact_to_target(target_bits);

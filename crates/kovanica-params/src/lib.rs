@@ -42,9 +42,9 @@ pub const TARGET_BLOCK_MS: u64 = 4_000;
 /// Hybrid PoW + GHOSTDAG default parameter k (Toni 2026-11-05).
 pub const GHOSTDAG_K: u32 = 5;
 
-/// Initial/maximum target bits for hybrid PoW testnet (Chain 5).
+/// Initial/maximum target bits for hybrid PoW testnet (Chain 2).
 /// Compact representation `0x1f00ffff` (exponent 31, mantissa 0x00ffff).
-pub const INITIAL_TARGET_BITS_CHAIN5: u32 = 0x1f00_ffff;
+pub const INITIAL_TARGET_BITS_HYBRID: u32 = 0x1f00_ffff;
 /// Minimum difficulty target bits (ceiling on target, easiest difficulty).
 pub const MAX_TARGET_BITS: u32 = 0x1f00_ffff;
 /// Maximum difficulty target bits (floor on target, hardest difficulty).

@@ -100,10 +100,10 @@ helm install kovanica-testnet deploy/helm/kovanica \
   --set image.tag="v0.2.0"
 ```
 
-#### Hybrid PoW Testnet (Chain ID 5 with Mining Enabled)
+#### Hybrid PoW Testnet (Chain ID 2 with Mining Enabled)
 ```bash
 helm install kovanica-hybrid deploy/helm/kovanica \
-  --set node.chainId=5 \
+  --set node.chainId=2 \
   --set mining.enabled=true \
   --set mining.threads=2
 ```

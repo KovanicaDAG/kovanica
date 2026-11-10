@@ -2,9 +2,9 @@
 #
 # ops/chaos/hybrid-chaos-suite.sh
 #
-# Automated Chaos & Partition Verification Suite for Chain 5 (Hybrid PoW + GHOSTDAG).
+# Automated Chaos & Partition Verification Suite for Chain 2 (Hybrid PoW + GHOSTDAG).
 # Milestone M8 gating suite:
-# 1. Starts isolated 3-miner + 1-observer Chain 5 cluster with chaos override.
+# 1. Starts isolated 3-miner + 1-observer Chain 2 cluster with chaos override.
 # 2. Partitions one miner (netem or temporary pause/disconnect) for 30 seconds.
 # 3. Verifies that surviving miners continue producing and sequencing GHOSTDAG blue blocks.
 # 4. Heals partition and verifies DAG convergence: the partitioned node catches up,
@@ -14,9 +14,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-COMPOSE_BASE="${REPO_ROOT}/ops/docker/docker-compose.chain5.yml"
-COMPOSE_CHAOS="${SCRIPT_DIR}/docker-compose.chain5.chaos.yml"
-PROJECT_NAME="kovanica-chain5-chaos"
+COMPOSE_BASE="${REPO_ROOT}/ops/docker/docker-compose.chain2.yml"
+COMPOSE_CHAOS="${SCRIPT_DIR}/docker-compose.chain2.chaos.yml"
+PROJECT_NAME="kovanica-chain2-chaos"
 
 RPC_PORT_NODE1=28545
 RPC_PORT_NODE2=28546
@@ -73,7 +73,7 @@ if [ "$NO_BUILD" -eq 1 ]; then
   BUILD_FLAG=""
 fi
 
-echo "==> Step 1: Starting isolated Chain 5 chaos cluster..."
+echo "==> Step 1: Starting isolated Chain 2 chaos cluster..."
 docker compose -p "$PROJECT_NAME" -f "$COMPOSE_BASE" -f "$COMPOSE_CHAOS" up -d $BUILD_FLAG
 
 echo "==> Step 2: Waiting for nodes to mine initial blocks..."
@@ -83,7 +83,7 @@ round1=$(get_tip_round "$RPC_PORT_NODE1")
 echo "    Node1 initial tip round: ${round1:-0}"
 
 echo "==> Step 3: Injecting network fault (pausing node3 to simulate severe network partition)..."
-docker pause chaos-chain5-node3
+docker pause chaos-chain2-node3
 
 echo "    Waiting 20 seconds while node1 and node2 continue GHOSTDAG block sequencing..."
 sleep 20
@@ -93,7 +93,7 @@ echo "    Node1 tip round during partition: ${round1_post:-0}"
 test "${round1_post:-0}" -ge "${round1:-0}" || echo "Warning: round did not advance during partition"
 
 echo "==> Step 4: Healing partition (unpausing node3)..."
-docker unpause chaos-chain5-node3
+docker unpause chaos-chain2-node3
 
 echo "    Waiting 15 seconds for DAG synchronization and tip convergence..."
 sleep 15
@@ -102,5 +102,5 @@ round3_healed=$(get_tip_round "$RPC_PORT_NODE3")
 echo "    Node3 recovered tip round: ${round3_healed:-0}"
 
 echo "======================================================================"
-echo "M8 CHAOS PASS: Chain 5 survived partition and converged successfully!"
+echo "M8 CHAOS PASS: Chain 2 survived partition and converged successfully!"
 echo "======================================================================"
