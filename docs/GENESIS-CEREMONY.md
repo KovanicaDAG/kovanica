@@ -58,7 +58,7 @@ Under **Hybrid PoW + GHOSTDAG**, consensus requires **NO stake in the consensus 
 
 - The legacy 15-validator BFT committee quorum floor is retired.
 - Mainnet genesis requires at least **1** bootstrap seed node and at most **20** (the ceiling of the 1,000,000 KVNC allocation split across the 50,000 KVNC minimum stake).
-- A lean deployment of **3–5 bootstrap seed nodes** (`seed1`, `seed2`, `seed3.kovanica.online`) is recommended for public discovery.
+- A lean deployment of **3–5 bootstrap seed nodes** (`seed1`, `seed3.kovanica.online`) is recommended for public discovery.
 - `kovanica-node --check-config` enforces this bound on Mainnet when ceremony files are present.
 
 ### 3.3 Prohibition of `funded_accounts.toml` on Mainnet

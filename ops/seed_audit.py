@@ -9,7 +9,7 @@ def resolve(host):
         return f"FAIL: {e}"
 
 def main():
-    seeds = sys.argv[1:] or ["seed1.kovanica.example", "seed2.kovanica.example"]
+    seeds = sys.argv[1:] or ["seed1.kovanica.example", "seed3.kovanica.example"]
     ok = 0
     for s in seeds:
         ip = resolve(s)

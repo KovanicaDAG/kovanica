@@ -76,7 +76,6 @@ rpc_port = 8545
 # Testnet (chain_id 4) — all three seeds are grey-cloud DNS-only:
 # bootnodes = [
 #     "seed1.kovanica.online:8000",
-#     "seed2.kovanica.online:8000",
 #     "seed3.kovanica.online:8000",
 # ]
 #

@@ -675,7 +675,7 @@ data_dir = "/tmp/kovanica-test-data"
 listen_addr = "127.0.0.1:7000"
 rpc_addr = "0.0.0.0"
 rpc_port = 9999
-bootnodes = ["seed1.kovanica.invalid:8000", "seed2.kovanica.invalid:8000", "127.0.0.1:7001"]
+bootnodes = ["seed1.kovanica.invalid:8000", "seed9.kovanica.invalid:8000", "127.0.0.1:7001"]
 round_duration_ms = 500
 max_peers = 7
 treasury_address = "treasury-address-placeholder"
@@ -1110,7 +1110,7 @@ treasury_address = "treasury-address-placeholder"
     #[test]
     fn test_dns_seeds_toml_and_env() {
         let toml_str = r#"
-            dns_seeds = ["seed1.kovanica.io:8000", "seed2.kovanica.io:8000"]
+            dns_seeds = ["seed1.kovanica.io:8000", "seed9.kovanica.io:8000"]
         "#;
         let config = NodeConfig::from_toml_str(toml_str).unwrap();
         assert_eq!(config.dns_seeds.len(), 2);

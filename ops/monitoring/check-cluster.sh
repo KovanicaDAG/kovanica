@@ -6,7 +6,6 @@ set -euo pipefail
 
 ENDPOINTS=(
   "seed1:https://seed1.kovanica.online"
-  "seed2:https://seed2.kovanica.online"
   "seed3:https://seed3.kovanica.online"
   "rpc-testnet:https://rpc-testnet.kovanica.online"
 )

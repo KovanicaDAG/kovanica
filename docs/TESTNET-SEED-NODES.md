@@ -11,7 +11,6 @@
 |---|---|---|---|---|---|
 | 0 | `testnet.kovanica.online` | `145.223.116.178` | VPS#1 (canonical bootstrap entry) | `kovanica.env` | 3 |
 | 1 | `seed1.kovanica.online` | `145.223.116.178` | VPS#1 (seed instance 1) | `val1.pem` | 3 |
-| 2 | `seed2.kovanica.online` | `76.13.250.65` | VPS#2 (seed instance 2) | `val2.pem` | 3 |
 | 3 | `seed3.kovanica.online` | `187.7.27.139` | VPS#3 (seed instance 3) | `val3.pem` | 3 |
 
 **All seed nodes run with `mine=0 faucet=0 operator=0 allow_reset=0`.**
@@ -20,7 +19,6 @@
 
 ```
 seed1: peer_count 2, height ~294, exec_subdags=24, healthy
-seed2: peer_count 2, height ~290, exec_subdags 13, healthy
 seed3: peer_count 2, height ~294, exec_subdags 14, healthy
 ```
 
@@ -88,7 +86,6 @@ curl -s -X POST http://127.0.0.1:8545/rpc \
 ### DNS
 - `testnet.kovanica.online` → `145.223.116.178` (A record, grey cloud)
 - `seed1.kovanica.online` → `145.223.116.178` (A record, grey cloud)
-- `seed2.kovanica.online` → `76.13.250.65` (A record, grey cloud)
 - `seed3.kovanica.online` → `187.7.27.139` (A record, grey cloud)
 - For mainnet DNS seed requirements (3+ kovanica-native DNS-only seed records), see [docs/SEED-DNS-AUDIT.md](SEED-DNS-AUDIT.md).
 

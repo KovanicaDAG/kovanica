@@ -215,14 +215,12 @@ Operational infrastructure must conform strictly to [`docs/MAINNET-RUNBOOK.md`](
 
 - [ ] **Independent Seed Nodes:** At least 3 dedicated seed nodes deployed across diverse geographic regions and cloud providers:
   - `seed1.kovanica.online` (EU Central - Frankfurt)
-  - `seed2.kovanica.online` (US East - N. Virginia)
   - `seed3.kovanica.online` (AP Southeast - Singapore)
   - `mainnet.kovanica.online` (Primary round-robin / anycast alias)
 - [ ] **Cloudflare DNS-Only (Grey-Cloud):** DNS records for seeds must be **DNS-only** (grey-cloud in Cloudflare). Orange-cloud proxying of P2P TCP port 8000 is strictly prohibited.
 - [ ] **DNS Resolution Verification:**
   ```bash
   dig +short seed1.kovanica.online
-  dig +short seed2.kovanica.online
   dig +short seed3.kovanica.online
   dig +short mainnet.kovanica.online
   ```
@@ -245,7 +243,6 @@ Verify that iptables/ufw/cloud security group policies enforce the following por
   ```bash
   # P2P port 8000 MUST be reachable on all seeds and public nodes
   nc -zvw3 seed1.kovanica.online 8000
-  nc -zvw3 seed2.kovanica.online 8000
   nc -zvw3 seed3.kovanica.online 8000
 
   # RPC and metrics ports MUST NOT be accessible on public IPs of validator nodes

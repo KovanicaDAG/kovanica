@@ -29,7 +29,7 @@ Consequently:
 | **Master of Ceremonies (MC)** | 1 | Coordinates timing, distributes challenge strings, compiles public artifacts, executes `ops/genesis/ceremony.sh`. |
 | **Treasury Custodians** | 5 | Participate in the Shamir's Secret Sharing (3-of-5) ceremony for Treasury vaults; accept physical metal custody plates. |
 | **Founder** | 1 | Generates the 200,000 KVNC cold storage key on an air-gapped machine. |
-| **Bootstrap Seed Node Operators** | **3–5** | Generate Ed25519 node identities and PRO-21 addresses for initial P2P seed nodes (`seed1`, `seed2`, `seed3.kovanica.online`). |
+| **Bootstrap Seed Node Operators** | **3–5** | Generate Ed25519 node identities and PRO-21 addresses for initial P2P seed nodes (`seed1`, `seed3.kovanica.online`). |
 | **Independent Witnesses** | 2–3 | Verify air-gap physical integrity, oversee entropy mixing, co-sign public ceremony audit report. |
 
 ---
