@@ -4607,7 +4607,7 @@ mod tests {
         let info = handle_get_mining_info(json!([]), state.clone())
             .await
             .expect("mining info");
-        assert_eq!(info["chain_id"], 5);
+        assert_eq!(info["chain_id"], kovanica_params::CHAIN_ID_HYBRID_TESTNET);
         assert_eq!(info["mining_enabled"], true);
         assert_eq!(info["mining_threads"], 4);
         assert_eq!(info["target_block_time_ms"], 4000);
@@ -4617,14 +4617,14 @@ mod tests {
         let tips = handle_get_dag_tips(json!([]), state.clone())
             .await
             .expect("dag tips");
-        assert_eq!(tips["chain_id"], 5);
+        assert_eq!(tips["chain_id"], kovanica_params::CHAIN_ID_HYBRID_TESTNET);
         assert_eq!(tips["count"], 0);
 
         // 3. get_work
         let work = handle_get_work(json!({ "author": 7 }), state.clone())
             .await
             .expect("get work");
-        assert_eq!(work["chain_id"], 5);
+        assert_eq!(work["chain_id"], kovanica_params::CHAIN_ID_HYBRID_TESTNET);
         assert_eq!(work["author"], 7);
         assert_eq!(work["round"], 1);
         assert!(work["header"].is_object());
@@ -4634,7 +4634,7 @@ mod tests {
         let work_by_addr = handle_get_work(serde_json::json!([addr.encode()]), state.clone())
             .await
             .expect("get work by address");
-        assert_eq!(work_by_addr["chain_id"], 5);
+        assert_eq!(work_by_addr["chain_id"], kovanica_params::CHAIN_ID_HYBRID_TESTNET);
         assert!(work_by_addr["header"].is_object());
 
         // 4. submit_work with a mined block
