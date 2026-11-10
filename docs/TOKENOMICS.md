@@ -46,7 +46,7 @@ All 82,000,000 KVNC are emitted solely through block rewards according to the 82
 
 ### 2.2 Approved NoStake82M Policy (NO-stake hybrid networks, Toni 2026-11-06)
 
-- **Scope & Gating:** Required on both NO-stake hybrid chains — Mainnet (Chain 1) and Testnet (Chain 2). The node refuses to start a hybrid chain with any other emission policy. Legacy chains (3, 1337) and existing databases may still use `Legacy81M` and remain unchanged.
+- **Scope & Gating:** Required on both NO-stake hybrid chains — Mainnet (Chain 1) and Testnet (Chain 2). The node refuses to start a hybrid chain with any other emission policy (fail closed). Non-hybrid dev chains (3, 1337) may still use `Legacy81M`.
 - **Initial reward:** 2.5 KVNC (`2_500_000_000` base units).
 - **Era length:** **8 200 000** rewarded blocks (`SUBSIDY_ERA_BLOCKS_NO_STAKE_82M`).
   The first rewarded block is defined as index 0: indices `0..8_199_999` use the initial reward, index `8_200_000` starts era 1.
@@ -65,7 +65,7 @@ All 82,000,000 KVNC are emitted solely through block rewards according to the 82
 - **Activation & Safe Migration:**
   - Persisted in storage tables `EMISSION_POLICY` and `MINING_REWARD_STATE`.
   - Configured via `genesis_validators.toml` (`[genesis] policy = "no-stake-82m"`), CLI (`--emission-policy no-stake-82m`), or environment variable (`KOVANICA_EMISSION_POLICY=no-stake-82m`).
-  - Existing databases without an explicit policy table automatically default to `Legacy81M`, preventing any accidental reinterpretation or balance modification.
+  - Existing databases without an explicit policy table default to `Legacy81M`. On a hybrid chain (1, 2) that default fails closed at startup, so the policy must be set explicitly; on dev chains (3, 1337) the legacy default is kept, preventing any accidental reinterpretation of existing balances.
 
 ---
 
