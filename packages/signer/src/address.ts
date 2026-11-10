@@ -12,8 +12,8 @@ const CHECKSUM_BITS = 29;
 const BODY_CHARS = 57;
 /** `kvnc` + 57 + `dag`. */
 export const ADDRESS_LENGTH = PREFIX.length + BODY_CHARS + SUFFIX.length;
-/** Chains that still accept the legacy hex forms: devnet, chain 4, local. */
-const LEGACY_HEX_CHAIN_IDS = new Set([3, 4, 1337]);
+/** Chains that still accept the legacy hex forms: devnet, local. */
+const LEGACY_HEX_CHAIN_IDS = new Set([3, 1337]);
 
 function checksum29(publicKey: Uint8Array): bigint {
   const d = blake3(publicKey);
@@ -70,7 +70,7 @@ export function decodeAddress(value: string): Uint8Array {
   return payload;
 }
 
-/** Legacy `kvnc` + hex(key || 4-byte BLAKE3 checksum) + `dag` (chains 3, 4, 1337). */
+/** Legacy `kvnc` + hex(key || 4-byte BLAKE3 checksum) + `dag` (chains 3, 1337). */
 export function encodeLegacyAddress(publicKey: Uint8Array): string {
   if (publicKey.length !== 32) {
     throw new Error("address payload must be 32 bytes");
@@ -112,7 +112,7 @@ function decodeLegacy(trimmed: string): Uint8Array {
 /**
  * Parse an address. The canonical form is accepted everywhere, including when
  * `chainId` is omitted. The legacy hex forms (`kvnc<hex>dag`, bare or lowercase
- * `0x` hex) are accepted only when `chainId` is 3, 4, or 1337. Omitting
+ * `0x` hex) are accepted only when `chainId` is 3 or 1337. Omitting
  * `chainId` refuses legacy hex. `0X` and `kvnc0x…dag` are refused on every
  * chain, matching Rust. The base32 body is strictly lowercase. Legacy hex
  * digits accept `A-F`; `kvnc`, `dag`, and `0x` do not.

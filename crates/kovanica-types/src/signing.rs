@@ -35,10 +35,7 @@ pub mod chain_id {
 
     /// Whether `id` is in the registry.
     pub fn is_registered(id: u64) -> bool {
-        matches!(
-            id,
-            MAINNET | TESTNET | DEVNET | LOCAL | TESTNET_V2
-        )
+        matches!(id, MAINNET | TESTNET | DEVNET | LOCAL | TESTNET_V2)
     }
 
     /// Whether `id` is a local development chain (devnet or local).

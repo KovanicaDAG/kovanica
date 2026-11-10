@@ -3069,7 +3069,7 @@ mod tests {
     #[test]
     fn mobile_pow_header_verification_and_profile_ffi_round_trip() {
         let profile = default_mobile_node_config(chain_id::HYBRID_TESTNET);
-        assert_eq!(profile.chain_id, 5);
+        assert_eq!(profile.chain_id, chain_id::HYBRID_TESTNET);
         assert_eq!(profile.ghostdag_k, 5);
         assert_eq!(profile.target_block_ms, 4_000);
         assert_eq!(profile.pruning_window_rounds, 14_400);
@@ -3109,7 +3109,7 @@ mod tests {
             Some(1_700_000_010_000),
         )
         .unwrap();
-        assert_eq!(v0.chain_id, 5);
+        assert_eq!(v0.chain_id, chain_id::HYBRID_TESTNET);
         assert_eq!(v0.round, 1);
 
         let chain_json = serde_json::to_string(&vec![h0, h1]).unwrap();
@@ -3331,7 +3331,10 @@ mod tests {
         assert_eq!(status_res["local_node"], true);
 
         let chain_res = http_json_rpc(&server_url, "net_version", serde_json::json!([])).unwrap();
-        assert_eq!(chain_res.as_str().unwrap(), "5");
+        assert_eq!(
+            chain_res.as_str().unwrap(),
+            chain_id::HYBRID_TESTNET.to_string()
+        );
 
         // Stop local RPC server
         let stopped = stop_local_rpc_server().unwrap();

@@ -5631,10 +5631,7 @@ const CHAIN_ID_MARKER: &str = "chain_id";
 /// produce votes/transactions no other node accepts (or replayable ones).
 fn check_chain_id(config: &NodeConfig) -> Result<()> {
     let configured = config.chain_id;
-    let genesis_required = matches!(
-        configured,
-        kovanica_types::signing::chain_id::MAINNET
-    );
+    let genesis_required = matches!(configured, kovanica_types::signing::chain_id::MAINNET);
     let genesis_path = config.data_dir.join("genesis_validators.toml");
     if genesis_required && !genesis_path.exists() {
         anyhow::bail!(

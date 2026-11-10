@@ -20,8 +20,8 @@ export interface Network {
 export const TESTNET: Network = {
   id: "testnet",
   label: "Testnet",
-  // Chain ids: mainnet 1, public testnet 4, devnet 3, local 1337.
-  chainId: 4,
+  // Chain ids: mainnet 1, testnet 2, devnet 3, local 1337.
+  chainId: 2,
   rpcUrl: "https://rpc-testnet.kovanica.online/rpc",
   wsUrl: "wss://rpc-testnet.kovanica.online/ws",
   indexerHttpUrl:
@@ -65,8 +65,8 @@ export const LOCAL: Network = {
 
 export const HYBRID_TESTNET: Network = {
   id: "hybrid-testnet",
-  label: "Hybrid Testnet (Chain 5)",
-  chainId: 5,
+  label: "Hybrid Testnet (Chain 2)",
+  chainId: 2,
   rpcUrl:
     ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_HYBRID_TESTNET_RPC_URL) ||
     "http://127.0.0.1:8545",
