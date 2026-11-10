@@ -30,8 +30,17 @@ const NODES: usize = 3;
 const CHAIN_ID: u64 = chain_id::HYBRID_TESTNET;
 const RPC_READY_TIMEOUT_SECS: u64 = 60;
 const PEER_TIMEOUT_SECS: u64 = 90;
-const MINING_TIMEOUT_SECS: u64 = 300;
-const TX_TIMEOUT_SECS: u64 = 300;
+/// Budget for the cluster to reach the height that can carry the transfer.
+///
+/// The three nodes mine the same rounds in parallel, so round 2 can arrive with
+/// three or four parents whose timestamps are seconds apart. The DAA clamps that
+/// to `max_adjustment_factor` (4x) tighter, and at this cluster's ~590 H/s per
+/// node a block then costs ~260k hashes instead of ~65k — a minute of wall clock
+/// even when the fastest of three nodes finds it. Passing runs land at 25-250 s;
+/// the budget has to cover the clamped round without turning a spike into a red
+/// CI run on a slower runner.
+const MINING_TIMEOUT_SECS: u64 = 900;
+const TX_TIMEOUT_SECS: u64 = 900;
 const POLL_INTERVAL_MS: u64 = 500;
 const PORT_ATTEMPTS: usize = 32;
 
