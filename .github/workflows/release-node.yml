@@ -7,9 +7,11 @@ name: Release node
 # FOLLOW-UP (2026-11-10): chain 4 is retired and chain 2 is the canonical
 # testnet. This workflow still packages testnet/chain4/ because no chain-2
 # genesis bundle has been published yet. Re-point it (source dir, bundle asset
-# name, EXPECTED_NETWORK_TAG, and an expected-tag file in the bundle) once ops
-# cuts that bundle from the live chain-2 genesis set. Until then install.sh
-# targets chain 2 and fails closed because the chain-2 asset does not exist.
+# name, EXPECTED_NETWORK_TAG) once ops cuts that bundle from the live chain-2
+# genesis set — `kovanica-node genesis-bundle --chain-id 2 --source <dir>`
+# writes the archive, its SHA256SUMS and the expected-tag file, so the tar step
+# below can be replaced by that call. Until then install.sh targets chain 2 and
+# fails closed because the chain-2 asset does not exist.
 #
 #   git tag v0.1.0-node && git push origin v0.1.0-node
 #

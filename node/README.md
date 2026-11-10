@@ -64,6 +64,24 @@ If neither exists it **fails closed** — an unpinned install cannot tell a
 forked or wrong-network bundle from the right one. `--skip-tag-check` is the
 explicit opt-out; the node still prints its tag.
 
+## Cutting a genesis bundle
+
+Do not build the bundle by hand. The node binary writes the archive, the
+checksums and the expected tag in one step:
+
+```sh
+kovanica-node genesis-bundle --chain-id 2 --source <genesis-dir>
+```
+
+`--source` may only contain genesis files (`genesis_validators.toml`,
+`founder_premine.hex`, `funded_accounts.toml`, `validators.json`); anything
+else — a signing key, a keystore, a config — is refused, so it cannot be
+published by accident. The output
+`kovanica-chain<chain-id>-genesis.tar.gz` (`--out` to change it) carries a
+`SHA256SUMS` over the genesis files and an `expected-tag`, and is
+byte-identical across rebuilds. Attach it to the `v<version>-node` release
+next to the binaries. Details and the refusal rules: `docs/TESTNET-RESET.md`.
+
 ## State sync: full-state commitment is activated at round 500 000
 
 A node installed by this script starts at height 0 with the network's genesis
