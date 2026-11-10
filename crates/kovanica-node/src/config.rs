@@ -51,6 +51,10 @@ pub struct NodeConfig {
     pub rpc_port: u16,
     /// Bootstrap peers, each `host:port` or a libp2p multiaddr.
     pub bootnodes: Vec<String>,
+    /// DNS seed hostnames queried on startup to discover dynamic bootstrap peers.
+    /// Overridable with `KOVANICA_DNS_SEEDS`.
+    #[serde(default)]
+    pub dns_seeds: Vec<String>,
     /// Path to a validator signing key file (32-byte hex seed).
     pub validator_key: Option<String>,
     /// Target consensus round duration in milliseconds.
@@ -201,6 +205,7 @@ impl Default for NodeConfig {
             // No hard-coded seeds: kovanica must never dial another project's
             // infrastructure. Populate via `KOVANICA_BOOTNODES` or `[node] bootnodes`.
             bootnodes: Vec::new(),
+            dns_seeds: Vec::new(),
             validator_key: None,
             // 4 s round → 12 s per committed leader (wave = 3 rounds).
             round_duration_ms: 4000,
@@ -323,6 +328,13 @@ impl NodeConfig {
         }
         if let Ok(v) = std::env::var("KOVANICA_BOOTNODES") {
             self.bootnodes = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        if let Ok(v) = std::env::var("KOVANICA_DNS_SEEDS") {
+            self.dns_seeds = v
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
@@ -1028,5 +1040,28 @@ treasury_address = "treasury-address-placeholder"
         assert_eq!(config_default.mining.threads, 8);
         std::env::remove_var("KOVANICA_MINING_ENABLED");
         std::env::remove_var("KOVANICA_MINING_THREADS");
+    }
+
+    #[test]
+    fn test_dns_seeds_toml_and_env() {
+        let toml_str = r#"
+            dns_seeds = ["seed1.kovanica.io:8000", "seed2.kovanica.io:8000"]
+        "#;
+        let config = NodeConfig::from_toml_str(toml_str).unwrap();
+        assert_eq!(config.dns_seeds.len(), 2);
+        assert_eq!(config.dns_seeds[0], "seed1.kovanica.io:8000");
+
+        let mut config_default = NodeConfig::default();
+        assert!(config_default.dns_seeds.is_empty());
+
+        std::env::set_var(
+            "KOVANICA_DNS_SEEDS",
+            "seed3.kovanica.io:8000, seed4.kovanica.io:8000",
+        );
+        config_default.apply_env_overrides();
+        assert_eq!(config_default.dns_seeds.len(), 2);
+        assert_eq!(config_default.dns_seeds[0], "seed3.kovanica.io:8000");
+        assert_eq!(config_default.dns_seeds[1], "seed4.kovanica.io:8000");
+        std::env::remove_var("KOVANICA_DNS_SEEDS");
     }
 }

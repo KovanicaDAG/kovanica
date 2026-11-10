@@ -5475,6 +5475,38 @@ fn build_network_config(config: &NodeConfig) -> Result<NetworkConfig> {
         }
     }
 
+    // Dynamic DNS seed resolution for bootstrap peer discovery
+    for seed in &config.dns_seeds {
+        use std::net::ToSocketAddrs;
+        let seed = seed.trim();
+        if seed.is_empty() {
+            continue;
+        }
+        let (host, default_port) = match seed.split_once(':') {
+            Some((h, p)) => (h, p.parse::<u16>().unwrap_or(8000)),
+            None => (seed, 8000),
+        };
+        match format!("{host}:{default_port}").to_socket_addrs() {
+            Ok(addrs) => {
+                for saddr in addrs {
+                    let maddr_str = match saddr {
+                        std::net::SocketAddr::V4(v4) => format!("{}:{}", v4.ip(), v4.port()),
+                        std::net::SocketAddr::V6(v6) => format!("[{}]:{}", v6.ip(), v6.port()),
+                    };
+                    if let Ok(maddr) = to_multiaddr(&maddr_str) {
+                        if !bootstrap_nodes.contains(&maddr) {
+                            info!(%maddr, seed = %seed, "discovered bootstrap peer via DNS seed");
+                            bootstrap_nodes.push(maddr);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(seed = %seed, error = %e, "DNS seed resolution failed or host unreachable");
+            }
+        }
+    }
+
     Ok(NetworkConfig {
         listen_addrs: vec![listen],
         bootstrap_nodes,
