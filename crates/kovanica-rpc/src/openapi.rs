@@ -499,6 +499,34 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
             }),
         ),
         (
+            "kovanica_requestAirdrop",
+            "Request testnet tokens (airdrop). Strictly forbidden on mainnet (chain 1).",
+            "Accounts",
+            json!({
+                "type": "array",
+                "items": [
+                    { "$ref": "#/components/schemas/Address" },
+                    { "type": "integer", "description": "Optional amount in atoms (default 10 KVNC, max 100 KVNC)" }
+                ],
+                "minItems": 1,
+                "maxItems": 2
+            }),
+            json!({
+                "type": "object",
+                "properties": {
+                    "success": { "type": "boolean" },
+                    "address": { "type": "string" },
+                    "amount": { "type": "integer" },
+                    "amount_atoms": { "type": "integer" },
+                    "balance": { "type": "integer" },
+                    "balance_atoms": { "type": "integer" },
+                    "chain_id": { "type": "integer" },
+                    "message": { "type": "string" }
+                },
+                "required": ["success", "address", "amount", "balance", "chain_id"]
+            }),
+        ),
+        (
             "kovanica_getNonce",
             "Get account nonce",
             "Accounts",
@@ -854,6 +882,10 @@ mod tests {
         assert!(
             json.contains("\"kovanica_getTransactionHistory\""),
             "Missing kovanica_getTransactionHistory"
+        );
+        assert!(
+            json.contains("\"kovanica_requestAirdrop\""),
+            "Missing kovanica_requestAirdrop"
         );
     }
 }
