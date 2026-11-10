@@ -1338,6 +1338,404 @@ pub fn get_local_state_root(db_path: String) -> Result<Option<String>, LightFfiE
     }
 }
 
+static LOCAL_RPC_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOCAL_RPC_SERVER: std::sync::Mutex<Option<LocalRpcHandle>> = std::sync::Mutex::new(None);
+
+struct LocalRpcHandle {
+    bind_addr: String,
+    join_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Check if the local embedded mobile RPC server is currently running.
+#[uniffi::export]
+pub fn is_local_rpc_server_running() -> bool {
+    LOCAL_RPC_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Stop the local embedded mobile RPC server if active.
+#[uniffi::export]
+pub fn stop_local_rpc_server() -> Result<bool, LightFfiError> {
+    let mut guard = LOCAL_RPC_SERVER.lock().map_err(|e| failed(e.to_string()))?;
+    if let Some(mut handle) = guard.take() {
+        LOCAL_RPC_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = std::net::TcpStream::connect(&handle.bind_addr);
+        if let Some(join) = handle.join_handle.take() {
+            let _ = join.join();
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Start an embedded HTTP JSON-RPC server on the mobile device (default: 127.0.0.1:8545),
+/// serving verified state directly from local storage.
+#[uniffi::export]
+pub fn start_local_rpc_server(
+    db_path: String,
+    bind_addr: String,
+    chain_id: u64,
+) -> Result<String, LightFfiError> {
+    let mut guard = LOCAL_RPC_SERVER.lock().map_err(|e| failed(e.to_string()))?;
+    if LOCAL_RPC_RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
+        if let Some(ref h) = *guard {
+            return Ok(format!("http://{}", h.bind_addr));
+        }
+    }
+
+    let bind_target = if bind_addr.trim().is_empty() {
+        "127.0.0.1:8545".to_string()
+    } else {
+        bind_addr.trim().trim_start_matches("http://").to_string()
+    };
+
+    let listener = std::net::TcpListener::bind(&bind_target).map_err(failed)?;
+    let actual_addr = listener.local_addr().map_err(failed)?.to_string();
+
+    LOCAL_RPC_RUNNING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let srv_db_path = db_path;
+    let srv_actual_addr = actual_addr.clone();
+
+    let join_handle = std::thread::spawn(move || {
+        while LOCAL_RPC_RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    if !LOCAL_RPC_RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    let db_clone = srv_db_path.clone();
+                    std::thread::spawn(move || {
+                        handle_local_rpc_connection(stream, &db_clone, chain_id);
+                    });
+                }
+                Err(_) => {
+                    if !LOCAL_RPC_RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    *guard = Some(LocalRpcHandle {
+        bind_addr: srv_actual_addr.clone(),
+        join_handle: Some(join_handle),
+    });
+
+    Ok(format!("http://{}", srv_actual_addr))
+}
+
+fn handle_local_rpc_connection(mut stream: std::net::TcpStream, db_path: &str, chain_id: u64) {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let mut header_end = None;
+    let mut content_length = 0usize;
+
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if header_end.is_none() {
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        header_end = Some(pos + 4);
+                        let headers_str = String::from_utf8_lossy(&buf[..pos]);
+                        for line in headers_str.lines() {
+                            if line.to_ascii_lowercase().starts_with("content-length:") {
+                                if let Some(val) = line.split(':').nth(1) {
+                                    content_length = val.trim().parse().unwrap_or(0);
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(hdr_len) = header_end {
+                    if buf.len() >= hdr_len + content_length {
+                        break;
+                    }
+                }
+                if buf.len() > 1024 * 1024 {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    if buf.is_empty() {
+        return;
+    }
+
+    let request_str = String::from_utf8_lossy(&buf);
+
+    if request_str.starts_with("OPTIONS ") {
+        let resp = "HTTP/1.1 204 No Content\r\n\
+                    Access-Control-Allow-Origin: *\r\n\
+                    Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n\
+                    Access-Control-Allow-Headers: Content-Type\r\n\
+                    Content-Length: 0\r\n\
+                    Connection: close\r\n\r\n";
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
+
+    let body = if let Some(hdr_pos) = header_end {
+        &buf[hdr_pos..]
+    } else {
+        &[]
+    };
+
+    let req_val: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => {
+            let err_body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": serde_json::Value::Null,
+                "error": { "code": -32700, "message": "Parse error" }
+            })
+            .to_string();
+            let resp = format!(
+                "HTTP/1.1 400 Bad Request\r\n\
+                 Content-Type: application/json\r\n\
+                 Access-Control-Allow-Origin: *\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n{}",
+                err_body.len(),
+                err_body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            return;
+        }
+    };
+
+    let id = req_val
+        .get("id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let method = req_val.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    let params = req_val
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(vec![]));
+
+    let rpc_result = dispatch_local_rpc(db_path, chain_id, method, params);
+
+    let resp_obj = match rpc_result {
+        Ok(res) => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": res
+        }),
+        Err(err_msg) => serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": -32000, "message": err_msg }
+        }),
+    };
+
+    let resp_body = resp_obj.to_string();
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: application/json\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n{}",
+        resp_body.len(),
+        resp_body
+    );
+    let _ = stream.write_all(resp.as_bytes());
+}
+
+fn dispatch_local_rpc(
+    db_path: &str,
+    chain_id: u64,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = std::path::Path::new(db_path);
+    let storage = if path.exists() {
+        kovanica_storage::Storage::new(path).map_err(|e| e.to_string())?
+    } else {
+        return Err("Local mobile node storage not initialized".to_string());
+    };
+
+    match method {
+        "kovanica_blockNumber" | "eth_blockNumber" => {
+            let txn = storage.begin_read().map_err(|e| e.to_string())?;
+            let tip = storage
+                .consensus()
+                .get_committed_leader_height(&txn)
+                .unwrap_or(0);
+            Ok(serde_json::json!(format!("0x{:x}", tip)))
+        }
+        "kovanica_getBalance" | "eth_getBalance" => {
+            let addr_str = params
+                .get(0)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing address param".to_string())?;
+            let addr = Address::parse_for_chain(addr_str, chain_id).map_err(|e| e.to_string())?;
+            let txn = storage.begin_read().map_err(|e| e.to_string())?;
+            let balance = storage
+                .state()
+                .get_account(&txn, &addr)
+                .map(|a| a.balance)
+                .unwrap_or(0);
+            Ok(serde_json::json!(format!("0x{:x}", balance)))
+        }
+        "kovanica_getNonce" | "eth_getTransactionCount" => {
+            let addr_str = params
+                .get(0)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing address param".to_string())?;
+            let addr = Address::parse_for_chain(addr_str, chain_id).map_err(|e| e.to_string())?;
+            let txn = storage.begin_read().map_err(|e| e.to_string())?;
+            let nonce = storage
+                .state()
+                .get_account(&txn, &addr)
+                .map(|a| a.nonce)
+                .unwrap_or(0);
+            Ok(serde_json::json!(format!("0x{:x}", nonce)))
+        }
+        "kovanica_getBlockByNumber" | "eth_getBlockByNumber" => {
+            let num = params
+                .get(0)
+                .and_then(parse_quantity_json)
+                .ok_or_else(|| "missing block number".to_string())?;
+            let txn = storage.begin_read().map_err(|e| e.to_string())?;
+            match storage.blocks().get_block_by_height(&txn, num) {
+                Ok(Some(block)) => {
+                    let mut val = serde_json::json!({
+                        "round": format!("0x{:x}", block.round),
+                        "number": format!("0x{:x}", block.round),
+                        "hash": format!("0x{}", hex::encode(block.digest.0)),
+                        "author": block.author,
+                        "parents": block.parents.iter().map(|p| format!("0x{}", hex::encode(p.digest.0))).collect::<Vec<_>>(),
+                        "transactions_count": block.transactions.len(),
+                    });
+                    if let Some((timestamp, target_bits, nonce, pow_hash)) =
+                        kovanica_types::decode_pow_statement(&block.statements)
+                    {
+                        if let Some(map) = val.as_object_mut() {
+                            map.insert("timestamp".to_string(), serde_json::json!(timestamp));
+                            map.insert(
+                                "target_bits".to_string(),
+                                serde_json::json!(format!("0x{:08x}", target_bits)),
+                            );
+                            map.insert("nonce".to_string(), serde_json::json!(nonce));
+                            if let Some(h) = pow_hash {
+                                map.insert(
+                                    "pow_hash".to_string(),
+                                    serde_json::json!(format!("0x{}", hex::encode(h.0))),
+                                );
+                            }
+                        }
+                    }
+                    Ok(val)
+                }
+                _ => Ok(serde_json::Value::Null),
+            }
+        }
+        "kovanica_getBlockHeaderByNumber" => {
+            let num = params
+                .get(0)
+                .and_then(parse_quantity_json)
+                .ok_or_else(|| "missing block number".to_string())?;
+            let txn = storage.begin_read().map_err(|e| e.to_string())?;
+            match storage.blocks().get_block_by_height(&txn, num) {
+                Ok(Some(block)) => {
+                    let header = block
+                        .extract_pow_header(chain_id)
+                        .unwrap_or_else(|_| block.pow_header(chain_id));
+                    Ok(serde_json::to_value(&header).map_err(|e| e.to_string())?)
+                }
+                _ => Ok(serde_json::Value::Null),
+            }
+        }
+        "kovanica_estimateGas" | "eth_estimateGas" => {
+            let call_obj = params
+                .get(0)
+                .ok_or_else(|| "missing call object".to_string())?;
+            let from = call_obj.get("from").and_then(|v| v.as_str()).unwrap_or("");
+            let to = call_obj.get("to").and_then(|v| v.as_str()).unwrap_or("");
+            let data = call_obj.get("data").and_then(|v| v.as_str()).unwrap_or("");
+            let value = call_obj
+                .get("value")
+                .and_then(parse_quantity_json)
+                .unwrap_or(0);
+            let sim = simulate_local_call(
+                db_path.to_string(),
+                from.to_string(),
+                to.to_string(),
+                "".to_string(),
+                data.to_string(),
+                value,
+                500_000,
+                chain_id,
+            )
+            .map_err(|e| format!("{:?}", e))?;
+            Ok(serde_json::json!(format!("0x{:x}", sim.gas_used)))
+        }
+        "kovanica_call" | "eth_call" => {
+            let call_obj = params
+                .get(0)
+                .ok_or_else(|| "missing call object".to_string())?;
+            let from = call_obj.get("from").and_then(|v| v.as_str()).unwrap_or("");
+            let to = call_obj.get("to").and_then(|v| v.as_str()).unwrap_or("");
+            let data = call_obj.get("data").and_then(|v| v.as_str()).unwrap_or("");
+            let value = call_obj
+                .get("value")
+                .and_then(parse_quantity_json)
+                .unwrap_or(0);
+            let sim = simulate_local_call(
+                db_path.to_string(),
+                from.to_string(),
+                to.to_string(),
+                "".to_string(),
+                data.to_string(),
+                value,
+                500_000,
+                chain_id,
+            )
+            .map_err(|e| format!("{:?}", e))?;
+            if sim.success {
+                let clean = sim.return_data_hex.trim_start_matches("0x");
+                Ok(serde_json::json!(format!("0x{}", clean)))
+            } else {
+                Err(sim.error.unwrap_or_else(|| "Call reverted".to_string()))
+            }
+        }
+        "kovanica_syncStatus" => {
+            let txn = storage.begin_read().map_err(|e| e.to_string())?;
+            let tip = storage
+                .consensus()
+                .get_committed_leader_height(&txn)
+                .unwrap_or(0);
+            Ok(serde_json::json!({
+                "syncing": false,
+                "current_round": tip,
+                "highest_round": tip,
+                "local_node": true,
+                "engine": "Wasmi-v0.40"
+            }))
+        }
+        "eth_chainId" => Ok(serde_json::json!(format!("0x{:x}", chain_id))),
+        "net_version" => Ok(serde_json::json!(chain_id.to_string())),
+        "web3_clientVersion" => Ok(serde_json::json!(
+            "KovanicaMobileNode/0.2.0 (Android; Wasmi-v0.40)"
+        )),
+        _ => Err(format!(
+            "Method `{}` not supported on local mobile node",
+            method
+        )),
+    }
+}
+
 /// Check an account proof against a header this client already accepted.
 #[uniffi::export]
 pub fn confirm_account(
@@ -2842,8 +3240,38 @@ mod tests {
         );
         let block_json = serde_json::to_string(&header).unwrap();
         let exec_summary =
-            execute_block_transactions(db_str, block_json, chain_id::HYBRID_TESTNET).unwrap();
+            execute_block_transactions(db_str.clone(), block_json, chain_id::HYBRID_TESTNET)
+                .unwrap();
         assert_eq!(exec_summary.round, 9);
         assert_eq!(exec_summary.txs_executed, 0);
+
+        // 11. Phase M5: Start embedded local RPC server on mobile
+        assert!(!is_local_rpc_server_running());
+        let server_url = start_local_rpc_server(
+            db_str,
+            "127.0.0.1:0".into(), // bind to random available port
+            chain_id::HYBRID_TESTNET,
+        )
+        .unwrap();
+        assert!(is_local_rpc_server_running());
+        assert!(server_url.starts_with("http://127.0.0.1:"));
+
+        // Query local RPC server via http_json_rpc
+        let tip_res =
+            http_json_rpc(&server_url, "kovanica_blockNumber", serde_json::json!([])).unwrap();
+        let tip_qty = parse_quantity_json(&tip_res).unwrap();
+        assert_eq!(tip_qty, 9); // Round 9 executed in step 10
+
+        let status_res =
+            http_json_rpc(&server_url, "kovanica_syncStatus", serde_json::json!([])).unwrap();
+        assert_eq!(status_res["local_node"], true);
+
+        let chain_res = http_json_rpc(&server_url, "net_version", serde_json::json!([])).unwrap();
+        assert_eq!(chain_res.as_str().unwrap(), "5");
+
+        // Stop local RPC server
+        let stopped = stop_local_rpc_server().unwrap();
+        assert!(stopped);
+        assert!(!is_local_rpc_server_running());
     }
 }
