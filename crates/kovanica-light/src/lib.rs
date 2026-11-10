@@ -892,7 +892,7 @@ mod tests {
             verify_pow_header(chain_id::MAINNET, &h0, None, None).unwrap_err(),
             LightError::ChainId {
                 expected: 1,
-                found: 5
+                found: chain_id::HYBRID_TESTNET
             }
         ));
 
@@ -908,7 +908,7 @@ mod tests {
     #[test]
     fn mobile_node_config_defaults_match_hybrid_params() {
         let cfg = MobileNodeConfig::for_chain(chain_id::HYBRID_TESTNET);
-        assert_eq!(cfg.chain_id, 5);
+        assert_eq!(cfg.chain_id, chain_id::HYBRID_TESTNET);
         assert_eq!(cfg.ghostdag_k, 5);
         assert_eq!(cfg.target_block_ms, 4_000);
         assert_eq!(cfg.pruning_window_rounds, 14_400);
