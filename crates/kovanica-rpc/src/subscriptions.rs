@@ -55,7 +55,9 @@ use tokio::sync::broadcast;
 use crate::chain_methods::{block_to_json, transaction_to_json};
 use crate::{JsonRpcErrorObject, JsonRpcRequest, JsonRpcResponse, RpcError};
 use kovanica_execution::TransactionReceipt;
-use kovanica_types::{CommitSeal, CommittedSubDag, LeaderHeader, StatementBlock, Transaction};
+use kovanica_types::{
+    Address, CommitSeal, CommittedSubDag, LeaderHeader, StatementBlock, Transaction,
+};
 
 /// Capacity of each broadcast channel. Slow consumers that fall further than
 /// this behind simply drop missed notifications (a `Lagged` receive error is
@@ -192,15 +194,39 @@ impl EventBus {
     }
 }
 
+/// Optional filter for `logs` subscriptions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogFilter {
+    /// Addresses to filter by (or None for any address).
+    pub addresses: Option<Vec<Address>>,
+    /// Topics to filter by (per-position alternatives, per Ethereum / kovanica spec).
+    pub topics: Vec<Option<Vec<Vec<u8>>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActiveSubscription {
+    kind: SubscriptionKind,
+    is_eth: bool,
+    log_filter: Option<LogFilter>,
+}
+
 /// Per-connection subscription registry.
 struct Connection {
+    chain_id: u64,
     next_id: u64,
-    subscriptions: HashMap<u64, SubscriptionKind>,
+    subscriptions: HashMap<u64, ActiveSubscription>,
+}
+
+impl Default for Connection {
+    fn default() -> Self {
+        Self::new(1337)
+    }
 }
 
 impl Connection {
-    fn new() -> Self {
+    fn new(chain_id: u64) -> Self {
         Self {
+            chain_id,
             next_id: 1,
             subscriptions: HashMap::new(),
         }
@@ -223,31 +249,63 @@ impl Connection {
         let id = request.id.clone().unwrap_or(Value::Null);
 
         match request.method.as_str() {
-            "subscribe" | "kovanica_subscribe" => match self.subscribe(request.params) {
+            "subscribe" | "kovanica_subscribe" => match self.subscribe(request.params, false) {
                 Ok(subscription_id) => success_response(id, Value::String(subscription_id)),
                 Err(e) => error_response(id, e),
             },
-            "unsubscribe" | "kovanica_unsubscribe" => match self.unsubscribe(request.params) {
-                Ok(removed) => success_response(id, Value::Bool(removed)),
+            "eth_subscribe" => match self.subscribe(request.params, true) {
+                Ok(subscription_id) => success_response(id, Value::String(subscription_id)),
                 Err(e) => error_response(id, e),
             },
+            "unsubscribe" | "kovanica_unsubscribe" | "eth_unsubscribe" => {
+                match self.unsubscribe(request.params) {
+                    Ok(removed) => success_response(id, Value::Bool(removed)),
+                    Err(e) => error_response(id, e),
+                }
+            }
             other => error_response(id, RpcError::MethodNotFound(other.to_string())),
         }
     }
 
-    fn subscribe(&mut self, params: Option<Value>) -> Result<String, RpcError> {
-        let name = first_param(params)
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .ok_or_else(|| {
-                RpcError::InvalidParams("subscribe: expected a subscription name".into())
-            })?;
+    fn subscribe(&mut self, params: Option<Value>, is_eth: bool) -> Result<String, RpcError> {
+        let (name, filter_obj) = parse_subscribe_params(params)?;
 
         let kind = SubscriptionKind::parse(&name)
             .map_err(|e| RpcError::InvalidParams(format!("subscribe: {e}")))?;
 
+        let log_filter = if kind == SubscriptionKind::Logs {
+            if let Some(ref obj) = filter_obj {
+                if !obj.is_null() && obj.is_object() {
+                    let addresses = crate::chain_methods::parse_address_filter(
+                        obj.get("address"),
+                        self.chain_id,
+                    )?;
+                    let topics = crate::chain_methods::parse_topics_filter(obj.get("topics"))?;
+                    Some(LogFilter { addresses, topics })
+                } else if !obj.is_null() {
+                    return Err(RpcError::InvalidParams(
+                        "subscribe: logs filter must be an object".into(),
+                    ));
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let subscription_id = self.next_id;
         self.next_id += 1;
-        self.subscriptions.insert(subscription_id, kind);
+        self.subscriptions.insert(
+            subscription_id,
+            ActiveSubscription {
+                kind,
+                is_eth,
+                log_filter,
+            },
+        );
 
         Ok(format!("0x{subscription_id:x}"))
     }
@@ -260,6 +318,31 @@ impl Connection {
             })?;
 
         Ok(self.subscriptions.remove(&subscription_id).is_some())
+    }
+}
+
+fn parse_subscribe_params(params: Option<Value>) -> Result<(String, Option<Value>), RpcError> {
+    match params {
+        Some(Value::Array(mut values)) => {
+            if values.is_empty() {
+                return Err(RpcError::InvalidParams(
+                    "subscribe: expected a subscription name".into(),
+                ));
+            }
+            let name_val = values.remove(0);
+            let name = name_val
+                .as_str()
+                .ok_or_else(|| {
+                    RpcError::InvalidParams("subscribe: expected a subscription name string".into())
+                })?
+                .to_string();
+            let filter = values.into_iter().next();
+            Ok((name, filter))
+        }
+        Some(Value::String(name)) => Ok((name, None)),
+        _ => Err(RpcError::InvalidParams(
+            "subscribe: expected a subscription name".into(),
+        )),
     }
 }
 
@@ -311,25 +394,84 @@ fn error_response(id: Value, error: RpcError) -> String {
     serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Build the notification for one subscription id, if the connection still
-/// holds that subscription.
-fn notification_for(
-    connection: &Connection,
-    kind: SubscriptionKind,
-    subscription_id: u64,
-    event: &Value,
-) -> Option<Value> {
-    if connection.subscriptions.get(&subscription_id) != Some(&kind) {
-        return None;
-    }
-    Some(json!({
-        "jsonrpc": "2.0",
-        "method": "kovanica_subscription",
-        "params": {
-            "subscription": format!("0x{subscription_id:x}"),
-            "result": event,
+/// Filter a logs event (array of TransactionReceipts) according to a LogFilter.
+/// Returns None if no receipts match.
+fn filter_logs_event(event: &Value, filter: &LogFilter, chain_id: u64) -> Option<Value> {
+    let receipts = event.as_array()?;
+    let mut matching_receipts = Vec::new();
+
+    for receipt in receipts {
+        let events = receipt.get("events").and_then(|e| e.as_array());
+        let mut matched = false;
+
+        if let Some(events_arr) = events {
+            for ev in events_arr {
+                // Address filter
+                if let Some(ref addrs) = filter.addresses {
+                    let ev_addr = if let Some(arr) = ev.get("address").and_then(|a| a.as_array()) {
+                        if arr.len() == 32 {
+                            let mut bytes = [0u8; 32];
+                            for (i, b) in arr.iter().enumerate() {
+                                bytes[i] = b.as_u64().unwrap_or(0) as u8;
+                            }
+                            Some(Address(bytes))
+                        } else {
+                            None
+                        }
+                    } else if let Some(a_str) = ev.get("address").and_then(|a| a.as_str()) {
+                        Address::parse_for_chain(a_str, chain_id).ok().or_else(|| {
+                            addrs
+                                .iter()
+                                .find(|a| {
+                                    a.to_string() == a_str
+                                        || a.encode() == a_str
+                                        || a.to_hex() == a_str
+                                })
+                                .copied()
+                        })
+                    } else {
+                        None
+                    };
+
+                    match ev_addr {
+                        Some(addr) if addrs.contains(&addr) => {}
+                        _ => continue,
+                    }
+                }
+
+                // Topic filter
+                let topic_bytes: Vec<u8> =
+                    if let Some(arr) = ev.get("topic").and_then(|t| t.as_array()) {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|b| b as u8))
+                            .collect()
+                    } else if let Some(s) = ev.get("topic").and_then(|t| t.as_str()) {
+                        let clean = s
+                            .strip_prefix("0x")
+                            .or_else(|| s.strip_prefix("0X"))
+                            .unwrap_or(s);
+                        hex::decode(clean).unwrap_or_else(|_| s.as_bytes().to_vec())
+                    } else {
+                        Vec::new()
+                    };
+
+                if crate::chain_methods::topics_match(&filter.topics, &topic_bytes) {
+                    matched = true;
+                    break;
+                }
+            }
         }
-    }))
+
+        if matched {
+            matching_receipts.push(receipt.clone());
+        }
+    }
+
+    if matching_receipts.is_empty() {
+        None
+    } else {
+        Some(Value::Array(matching_receipts))
+    }
 }
 
 /// All notification frames owed to `connection` for an event of `kind`.
@@ -348,13 +490,39 @@ fn notifications_for(
     let mut ids: Vec<u64> = connection
         .subscriptions
         .iter()
-        .filter(|(_, subscribed)| **subscribed == kind)
+        .filter(|(_, sub)| sub.kind == kind)
         .map(|(id, _)| *id)
         .collect();
     ids.sort_unstable();
 
     ids.into_iter()
-        .filter_map(|id| notification_for(connection, kind, id, &event))
+        .filter_map(|id| {
+            let sub = connection.subscriptions.get(&id)?;
+            let method = if sub.is_eth {
+                "eth_subscription"
+            } else {
+                "kovanica_subscription"
+            };
+
+            let payload = if kind == SubscriptionKind::Logs {
+                if let Some(ref filter) = sub.log_filter {
+                    filter_logs_event(&event, filter, connection.chain_id)?
+                } else {
+                    event.clone()
+                }
+            } else {
+                event.clone()
+            };
+
+            Some(json!({
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": {
+                    "subscription": format!("0x{id:x}"),
+                    "result": payload,
+                }
+            }))
+        })
         .collect()
 }
 
@@ -363,7 +531,8 @@ pub async fn serve_connection(socket: axum::extract::ws::WebSocket, state: crate
     use axum::extract::ws::Message;
     use futures::{SinkExt, StreamExt};
 
-    let mut connection = Connection::new();
+    let chain_id = state.mempool.signing_context().chain_id;
+    let mut connection = Connection::new(chain_id);
     let mut new_heads = state.events.subscribe_receiver(SubscriptionKind::NewHeads);
     let mut committed_leaders = state
         .events
@@ -492,7 +661,7 @@ mod tests {
 
     #[test]
     fn subscribe_returns_hex_id_and_unsubscribe_removes_it() {
-        let mut connection = Connection::new();
+        let mut connection = Connection::default();
         let response = request(
             &mut connection,
             json!({"jsonrpc":"2.0","id":1,"method":"subscribe","params":["newHeads"]}),
@@ -515,7 +684,7 @@ mod tests {
 
     #[test]
     fn subscribe_accepts_bare_string_param_variant() {
-        let mut connection = Connection::new();
+        let mut connection = Connection::default();
         let response = request(
             &mut connection,
             json!({"jsonrpc":"2.0","id":1,"method":"subscribe","params":"newCommittedLeader"}),
@@ -525,7 +694,7 @@ mod tests {
 
     #[test]
     fn unknown_subscription_is_an_invalid_params_error() {
-        let mut connection = Connection::new();
+        let mut connection = Connection::default();
         let response = request(
             &mut connection,
             json!({"jsonrpc":"2.0","id":1,"method":"subscribe","params":["nope"]}),
@@ -535,7 +704,7 @@ mod tests {
 
     #[test]
     fn notifications_only_reach_matching_subscriptions() {
-        let mut connection = Connection::new();
+        let mut connection = Connection::default();
         request(
             &mut connection,
             json!({"jsonrpc":"2.0","id":1,"method":"subscribe","params":["newHeads"]}),
@@ -548,6 +717,7 @@ mod tests {
         let event = json!({"hash": "0xabc"});
         let frames = notifications_for(&connection, SubscriptionKind::NewHeads, Ok(event.clone()));
         assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["method"], json!("kovanica_subscription"));
         assert_eq!(frames[0]["params"]["subscription"], json!("0x1"));
         assert_eq!(frames[0]["params"]["result"], event);
 
@@ -558,5 +728,67 @@ mod tests {
             Err(broadcast::error::RecvError::Lagged(3)),
         );
         assert!(frames.is_empty());
+    }
+
+    #[test]
+    fn eth_subscribe_and_unsubscribe_with_filter() {
+        let mut connection = Connection::new(1337);
+        let response = request(
+            &mut connection,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_subscribe",
+                "params": ["logs", {
+                    "topics": ["transfer"]
+                }]
+            }),
+        );
+        assert_eq!(response["result"], json!("0x1"));
+
+        // Event matching topic "transfer"
+        let matching_event = json!([{
+            "tx_hash": "0x1111",
+            "success": true,
+            "gas_used": 21000,
+            "error": null,
+            "events": [{
+                "address": "kvnc1111111111111111111111111111111111111111111111111111111111dag",
+                "topic": b"transfer".to_vec(),
+                "data": [1, 2, 3]
+            }]
+        }]);
+
+        let frames = notifications_for(&connection, SubscriptionKind::Logs, Ok(matching_event));
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["method"], json!("eth_subscription"));
+        assert_eq!(frames[0]["params"]["subscription"], json!("0x1"));
+        assert_eq!(frames[0]["params"]["result"][0]["gas_used"], json!(21000));
+
+        // Event with non-matching topic "approval"
+        let non_matching_event = json!([{
+            "tx_hash": "0x2222",
+            "success": true,
+            "gas_used": 21000,
+            "error": null,
+            "events": [{
+                "address": "kvnc1111111111111111111111111111111111111111111111111111111111dag",
+                "topic": b"approval".to_vec(),
+                "data": [1, 2, 3]
+            }]
+        }]);
+
+        let frames = notifications_for(&connection, SubscriptionKind::Logs, Ok(non_matching_event));
+        assert!(
+            frames.is_empty(),
+            "filtered subscriber should not receive non-matching event"
+        );
+
+        // eth_unsubscribe
+        let response = request(
+            &mut connection,
+            json!({"jsonrpc": "2.0", "id": 2, "method": "eth_unsubscribe", "params": ["0x1"]}),
+        );
+        assert_eq!(response["result"], json!(true));
     }
 }

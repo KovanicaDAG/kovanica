@@ -279,6 +279,115 @@ async fn websocket_receives_logs_notification() {
     handle.abort();
 }
 
+#[tokio::test]
+async fn websocket_eth_subscribe_logs_with_filter() {
+    use kovanica_execution::{ContractEvent, TransactionReceipt};
+
+    let (handle, addr, events, _dir) = start_server().await;
+    let mut ws = connect(&format!("ws://{addr}/ws")).await;
+
+    let target_contract = Address([0x77; 32]);
+    let other_contract = Address([0x88; 32]);
+    let topic_transfer = b"Transfer".to_vec();
+    let topic_approval = b"Approval".to_vec();
+
+    // eth_subscribe with address filter and topic filter
+    send_json(
+        &mut ws,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_subscribe",
+            "params": [
+                "logs",
+                {
+                    "address": format!("0x{}", hex::encode(target_contract.0)),
+                    "topics": [format!("0x{}", hex::encode(&topic_transfer))]
+                }
+            ]
+        }),
+    )
+    .await;
+    let response = next_json(&mut ws).await;
+    assert_eq!(response["result"], json!("0x1"));
+
+    // 1. Publish receipt from other contract (should NOT be received)
+    let non_matching_receipt_1 = TransactionReceipt {
+        tx_hash: Hash([0x01; 32]),
+        success: true,
+        gas_used: 25_000,
+        events: vec![ContractEvent {
+            address: other_contract,
+            topic: topic_transfer.clone(),
+            data: vec![1, 2, 3],
+        }],
+        error: None,
+    };
+    events.publish_logs(std::slice::from_ref(&non_matching_receipt_1));
+
+    // 2. Publish receipt from target contract but wrong topic (should NOT be received)
+    let non_matching_receipt_2 = TransactionReceipt {
+        tx_hash: Hash([0x02; 32]),
+        success: true,
+        gas_used: 25_000,
+        events: vec![ContractEvent {
+            address: target_contract,
+            topic: topic_approval,
+            data: vec![4, 5, 6],
+        }],
+        error: None,
+    };
+    events.publish_logs(std::slice::from_ref(&non_matching_receipt_2));
+
+    // Verify no frame arrived for non-matching receipts
+    let quiet = tokio::time::timeout(Duration::from_millis(300), ws.next()).await;
+    assert!(
+        quiet.is_err(),
+        "received unexpected frame for non-matching receipts"
+    );
+
+    // 3. Publish matching receipt
+    let matching_receipt = TransactionReceipt {
+        tx_hash: Hash([0x03; 32]),
+        success: true,
+        gas_used: 30_000,
+        events: vec![ContractEvent {
+            address: target_contract,
+            topic: topic_transfer.clone(),
+            data: vec![7, 8, 9],
+        }],
+        error: None,
+    };
+    events.publish_logs(std::slice::from_ref(&matching_receipt));
+
+    let notification = next_json(&mut ws).await;
+    assert_eq!(notification["method"], json!("eth_subscription"));
+    assert_eq!(notification["params"]["subscription"], json!("0x1"));
+    assert_eq!(notification["params"]["result"][0]["success"], json!(true));
+    assert_eq!(
+        notification["params"]["result"][0]["gas_used"],
+        json!(30_000)
+    );
+
+    // Unsubscribe with eth_unsubscribe
+    send_json(
+        &mut ws,
+        json!({"jsonrpc": "2.0", "id": 2, "method": "eth_unsubscribe", "params": ["0x1"]}),
+    )
+    .await;
+    let response = next_json(&mut ws).await;
+    assert_eq!(response["result"], json!(true));
+
+    events.publish_logs(std::slice::from_ref(&matching_receipt));
+    let quiet_after_unsub = tokio::time::timeout(Duration::from_millis(300), ws.next()).await;
+    assert!(
+        quiet_after_unsub.is_err(),
+        "received unexpected frame after eth_unsubscribe"
+    );
+
+    handle.abort();
+}
+
 fn sample_transaction() -> kovanica_types::Transaction {
     use kovanica_types::{Transaction, TransactionKind};
 

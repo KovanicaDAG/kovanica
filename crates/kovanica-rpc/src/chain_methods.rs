@@ -781,7 +781,7 @@ fn parse_topic(value: &Value, what: &str) -> Result<Option<Vec<u8>>, RpcError> {
 
 /// Parse the `address` filter: a single address, an array of addresses, or
 /// absent/null for "no address constraint".
-fn parse_address_filter(
+pub(crate) fn parse_address_filter(
     value: Option<&Value>,
     chain_id: u64,
 ) -> Result<Option<Vec<Address>>, RpcError> {
@@ -803,7 +803,9 @@ fn parse_address_filter(
 }
 
 /// Parse the `topics` filter into per-position alternatives.
-fn parse_topics_filter(value: Option<&Value>) -> Result<Vec<Option<Vec<Vec<u8>>>>, RpcError> {
+pub(crate) fn parse_topics_filter(
+    value: Option<&Value>,
+) -> Result<Vec<Option<Vec<Vec<u8>>>>, RpcError> {
     match value {
         None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Array(items)) => items.iter().map(parse_topic_position).collect(),
@@ -840,7 +842,7 @@ fn parse_topic_position(value: &Value) -> Result<Option<Vec<Vec<u8>>>, RpcError>
 ///
 /// An event carries exactly one topic, so a non-wildcard filter at any
 /// position beyond the first can never match.
-fn topics_match(filter: &[Option<Vec<Vec<u8>>>], topic: &[u8]) -> bool {
+pub(crate) fn topics_match(filter: &[Option<Vec<Vec<u8>>>], topic: &[u8]) -> bool {
     if filter.is_empty() {
         return true;
     }
