@@ -244,6 +244,38 @@ async fn websocket_receives_committed_leader_notification() {
     handle.abort();
 }
 
+#[tokio::test]
+async fn websocket_receives_logs_notification() {
+    use kovanica_execution::TransactionReceipt;
+
+    let (handle, addr, events, _dir) = start_server().await;
+    let mut ws = connect(&format!("ws://{addr}/ws")).await;
+
+    send_json(
+        &mut ws,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "subscribe", "params": ["logs"]}),
+    )
+    .await;
+    let response = next_json(&mut ws).await;
+    assert_eq!(response["result"], json!("0x1"));
+
+    let receipt = TransactionReceipt {
+        tx_hash: Hash([0x33; 32]),
+        success: true,
+        gas_used: 21_000,
+        events: Vec::new(),
+        error: None,
+    };
+    events.publish_logs(&[receipt.clone()]);
+
+    let notification = next_json(&mut ws).await;
+    assert_eq!(notification["params"]["subscription"], json!("0x1"));
+    assert_eq!(notification["params"]["result"][0]["success"], json!(true));
+    assert_eq!(notification["params"]["result"][0]["gas_used"], json!(21_000));
+
+    handle.abort();
+}
+
 fn sample_transaction() -> kovanica_types::Transaction {
     use kovanica_types::{Transaction, TransactionKind};
 
