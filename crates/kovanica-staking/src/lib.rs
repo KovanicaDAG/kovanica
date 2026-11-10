@@ -16,9 +16,7 @@
 
 #![deny(unsafe_code)]
 
-pub mod governance;
 pub mod light;
-pub use governance::{GovernanceError, GovernanceState};
 pub use light::{
     distribute_escrow, split_block_reward, LightNode, LightSet, LightSetError, LightWitness,
     SettleOutcome, LIGHT_REWARD_BPS, LIGHT_WITNESS_SLOTS, MAX_LIGHT_NODES, MIN_LIGHT_BOND,

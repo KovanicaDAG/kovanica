@@ -3,7 +3,7 @@
 > **Network ID:** `1` (`MAINNET`)  
 > **Native Ticker:** **KVNC** (9 decimals: $1\text{ KVNC} = 10^9\text{ base units / atoms}$)  
 > **Consensus:** **Hybrid PoW + GHOSTDAG** (NO stake for consensus; target block 4 s, GHOSTDAG $K=5$; PoW Hash: KovanicaHash)  
-> **Status:** Normative Cryptographic & Operational Security Protocol  
+> **Status:** DRAFT, not normative, being rewritten for PoW + GHOSTDAG no-stake  
 
 ---
 
@@ -18,7 +18,7 @@ Consequently:
 4. **Ceremony Focus:** The Genesis Key Ceremony is strictly focused on securing:
    - **The Treasury Multisig:** 8,000,000 KVNC linear 8-year vesting allocation partitioned via a 3-of-5 threshold scheme.
    - **The Founder Premine:** 200,000 KVNC cold storage allocation.
-   - **Bootstrap Seed Nodes:** 3–5 initial public seed node identities and operational stakes (1,000,000 KVNC genesis allocation) to bootstrap initial P2P mesh discovery.
+   - **Bootstrap Seed Nodes:** 3–5 initial public seed node identities to bootstrap initial P2P mesh discovery.
 
 ---
 
@@ -127,66 +127,22 @@ The 8,000,000 KVNC Treasury allocation (governed by linear 8-year vesting) is se
 
 ---
 
-## 6. Proof of Possession (PoP) & Public Submission
-
-To prevent rogue-key and key-substitution attacks, each bootstrap seed node operator submits a cryptographic Proof of Possession.
-
-### 6.1 Challenge Specification
-```text
-Domain: KVNC/genesis/ceremony/v1
-Chain ID: 1
-Timestamp: 1764072000
-Nonce: <random-32-byte-hex>
-P2P Ingress: <public-ipv4>:8000
-```
-
-### 6.2 Signing the Challenge
-```bash
-kovanica sign-message \
-  --keystore seed_node.keystore \
-  --message "KVNC/genesis/ceremony/v1:chain_id=1:ts=1764072000:nonce=${NONCE}:p2p=${IP}:8000" \
-  --output pop_signature.sig
-```
-
-### 6.3 Public Artifact Bundle
-Exported via unidirectional air-gap USB drive:
-```json
-{
-  "node_address": "kvnc1...",
-  "ed25519_public_key": "4a7b...",
-  "p2p_endpoint": "seed1.kovanica.online:8000",
-  "challenge_nonce": "c3a8...",
-  "pop_signature": "7d91..."
-}
-```
+## 6. TODO: rewrite for PoW + GHOSTDAG
 
 ---
 
 ## 7. Verification & Genesis Compilation
 
 ### 7.1 Automated Ingestion
-The Master of Ceremonies aggregates submissions into `validators.json` (3–5 seed nodes) and compiles the genesis bundle:
-```bash
-# Verify PoP signatures
-kovanica key verify-ceremony --validators validators.json
 
-# Compile Genesis bundle
-./ops/genesis/ceremony.sh \
-  --network mainnet \
-  --validators validators.json \
-  --treasury-address kvnc1...dag \
-  --founder-address kvnc1...dag \
-  --output ./genesis-artifacts
-```
+TODO: rewrite for PoW + GHOSTDAG
 
 ### 7.2 Cryptographic Hashes & Attestation
 ```bash
 sha256sum genesis-artifacts/genesis.json \
-          genesis-artifacts/genesis_validators.toml \
           genesis-artifacts/bootnodes.toml > SHA256SUMS
 
 b3sum genesis-artifacts/genesis.json \
-      genesis-artifacts/genesis_validators.toml \
       genesis-artifacts/bootnodes.toml > B3SUMS
 ```
 
@@ -210,7 +166,6 @@ All participants sign `SHA256SUMS` with their detached GPG keys for publication 
 - [ ] Node identity keys generated on an air-gapped live boot.
 - [ ] Keystore secured with high-entropy passphrase (minimum 16 characters).
 - [ ] Address matches canonical PRO-21 format (`kvnc`...`dag`, 64 characters).
-- [ ] Proof of Possession verified by the Master of Ceremonies.
 - [ ] Treasury 3-of-5 Shamir shares engraved onto metal plates and distributed.
 - [ ] Genesis bundle checksums match published `SHA256SUMS` and `B3SUMS`.
 - [ ] `funded_accounts.toml` is absent from data directory (strictly prohibited on Mainnet).
