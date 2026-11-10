@@ -1096,6 +1096,70 @@ pub struct LocalSimulationResult {
     pub error: Option<String>,
 }
 
+/// Result of bounded Proof-of-Work micro-mining on mobile device.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct MinedPowResult {
+    pub found: bool,
+    pub nonce: u64,
+    pub pow_hash_hex: String,
+    pub hashes_computed: u64,
+    pub elapsed_millis: u64,
+    pub block_header_json: Option<String>,
+}
+
+/// Run a bounded Proof-of-Work search (KovanicaHash) on the mobile device.
+/// Designed for thermal-gated micro-mining bursts on Chain 5 (Hybrid Testnet).
+#[uniffi::export]
+pub fn mine_pow_block_header(
+    header_json: String,
+    max_hashes: u64,
+    nonce_start: u64,
+) -> Result<MinedPowResult, LightFfiError> {
+    use kovanica_crypto::KovanicaHasher;
+    use kovanica_types::block::{check_pow_hash_meets_target, compact_to_target, BlockHeader};
+    use std::time::Instant;
+
+    let mut header: BlockHeader = serde_json::from_str(&header_json).map_err(failed)?;
+    let target = compact_to_target(header.target_bits);
+    if target == [0u8; 32] {
+        return Err(failed("Target bits yield zero target (invalid difficulty)"));
+    }
+
+    header.nonce = nonce_start;
+    let mut hasher = KovanicaHasher::new();
+    let start_time = Instant::now();
+    let mut computed = 0u64;
+
+    for _ in 0..max_hashes {
+        let hash = hasher.hash(&header.preimage());
+        computed += 1;
+        if check_pow_hash_meets_target(&hash, header.target_bits) {
+            header.pow_hash = Some(hash);
+            let elapsed = start_time.elapsed().as_millis() as u64;
+            let header_str = serde_json::to_string(&header).map_err(failed)?;
+            return Ok(MinedPowResult {
+                found: true,
+                nonce: header.nonce,
+                pow_hash_hex: format!("0x{}", hex::encode(hash.0)),
+                hashes_computed: computed,
+                elapsed_millis: elapsed,
+                block_header_json: Some(header_str),
+            });
+        }
+        header.nonce = header.nonce.wrapping_add(1);
+    }
+
+    let elapsed = start_time.elapsed().as_millis() as u64;
+    Ok(MinedPowResult {
+        found: false,
+        nonce: header.nonce,
+        pow_hash_hex: String::new(),
+        hashes_computed: computed,
+        elapsed_millis: elapsed,
+        block_header_json: None,
+    })
+}
+
 /// Deterministically execute all transactions in a block using the on-device Wasmi engine,
 /// applying state transitions (transfers, contracts) to the local RedB storage.
 #[uniffi::export]
@@ -3273,5 +3337,41 @@ mod tests {
         let stopped = stop_local_rpc_server().unwrap();
         assert!(stopped);
         assert!(!is_local_rpc_server_running());
+
+        // 12. Phase M6: Thermal-gated mobile micro-mining
+        let easy_header = BlockHeader::new(
+            chain_id::HYBRID_TESTNET,
+            10,
+            0,
+            vec![],
+            Hash::zero(),
+            1_700_000_000_000,
+            0x207f_ffff, // Very easy difficulty (~50% chance per nonce)
+            0,
+        );
+        let easy_json = serde_json::to_string(&easy_header).unwrap();
+        let mined_res = mine_pow_block_header(easy_json, 100, 0).unwrap();
+        assert!(mined_res.found);
+        assert!(mined_res.hashes_computed > 0);
+        assert!(mined_res.block_header_json.is_some());
+        assert!(!mined_res.pow_hash_hex.is_empty());
+
+        // Low target / bounded hashes
+        let hard_header = BlockHeader::new(
+            chain_id::HYBRID_TESTNET,
+            11,
+            0,
+            vec![],
+            Hash::zero(),
+            1_700_000_000_000,
+            0x1a01_ffff, // Hard difficulty
+            0,
+        );
+        let hard_json = serde_json::to_string(&hard_header).unwrap();
+        let hard_res = mine_pow_block_header(hard_json, 3, 10).unwrap();
+        assert!(!hard_res.found);
+        assert_eq!(hard_res.hashes_computed, 3);
+        assert_eq!(hard_res.nonce, 13);
+        assert!(hard_res.block_header_json.is_none());
     }
 }
