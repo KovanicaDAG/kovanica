@@ -6,10 +6,11 @@
 #   bash scripts/ci-local.sh test     # cargo test --workspace --locked, minus the
 #                                     # multi-process cluster tests (see gate_test)
 #   bash scripts/ci-local.sh cluster  # the cluster tests the gate leaves out
+#   bash scripts/ci-local.sh scripts  # node/scripts/install.test.sh (installer)
 #   bash scripts/ci-local.sh audit    # cargo audit against .cargo/audit.toml
 #   bash scripts/ci-local.sh licenses # cargo deny check licenses against deny.toml
 #   bash scripts/ci-local.sh secrets  # gitleaks over the whole git history
-#   bash scripts/ci-local.sh all      # fmt, clippy, test, licenses, secrets
+#   bash scripts/ci-local.sh all      # fmt, scripts, clippy, test, licenses, secrets
 #
 # .github/workflows/ci.yml runs these exact subcommands, so a green local run
 # means a green CI run (same toolchain from rust-toolchain.toml, same flags).
@@ -92,11 +93,16 @@ function gate_cluster() {
     # The tests `gate_test` excludes. They start real nodes on localhost and
     # need the machine to themselves: run them with one test thread, so two
     # clusters never share the cores.
-    echo "== cluster: live_vote_integration + sustained_liveness_integration + hybrid_node_cluster_integration + isolated_hybrid_acceptance"
+    #
+    # `hybrid_node_cluster_integration` is deliberately absent: its only test
+    # (`hybrid_pow_testnet_cluster_e2e`) is not excluded by `gate_test`, so it
+    # already ran there. Run it on its own with:
+    #   cargo test -p kovanica-node --test hybrid_node_cluster_integration \
+    #       -- --test-threads=1
+    echo "== cluster: live_vote_integration + sustained_liveness_integration + isolated_hybrid_acceptance"
     "$CARGO" test --locked -p kovanica-node \
         --test live_vote_integration \
         --test sustained_liveness_integration \
-        --test hybrid_node_cluster_integration \
         --test isolated_hybrid_acceptance \
         -- --test-threads=1
 }
@@ -145,6 +151,14 @@ function gate_secrets() {
     gitleaks git --config .gitleaks.toml --log-opts=--all --redact --no-banner --exit-code 1
 }
 
+function gate_scripts() {
+    need bash
+    # The installer is served to strangers and decides which network a node
+    # joins; its tests run against a fake release and need no network or root.
+    echo "== scripts: bash node/scripts/install.test.sh"
+    bash node/scripts/install.test.sh
+}
+
 case "${1:-all}" in
     fmt) gate_fmt ;;
     clippy) gate_clippy ;;
@@ -153,8 +167,10 @@ case "${1:-all}" in
     audit) gate_audit ;;
     licenses) gate_licenses ;;
     secrets) gate_secrets ;;
+    scripts) gate_scripts ;;
     all)
         gate_fmt
+        gate_scripts
         gate_clippy
         gate_test
         gate_licenses
@@ -162,7 +178,7 @@ case "${1:-all}" in
         echo "== gate passed"
         ;;
     *)
-        echo "usage: bash scripts/ci-local.sh [fmt|clippy|test|cluster|audit|licenses|secrets|all]" >&2
+        echo "usage: bash scripts/ci-local.sh [fmt|clippy|test|cluster|audit|licenses|secrets|scripts|all]" >&2
         exit 2
         ;;
 esac
