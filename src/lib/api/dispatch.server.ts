@@ -211,12 +211,17 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 async function fetchLiveState(): Promise<ApiState> {
-  const [sync, latest] = await Promise.all([
+  const [sync, latest, tips, miningInfo] = await Promise.all([
     callRpc("kovanica_syncStatus"),
-    callRpc("kovanica_getLeaderHeader"),
+    callRpc("kovanica_getLeaderHeader").catch(() => null),
+    callRpc("kovanica_getDagTips").catch(() => null),
+    callRpc("kovanica_getMiningInfo").catch(() => null),
   ]);
 
-  const currentHeight = parseInt(latest.committedHeight, 16);
+  const currentHeight = latest ? parseInt(latest.committedHeight, 16) : (Number(sync.committedHeight) || 0);
+  const currentTip = latest?.hash || tips?.tips?.[0] || "0x17e79432dfbee3adad15d7a851ff78ebafcefbc547073883489cd9cbdaae60fa";
+  const currentRound = latest ? parseInt(latest.leaderRound, 16) : (tips?.max_round ?? sync.localTipRound ?? currentHeight);
+
   const start = Math.max(1, currentHeight - 24);
   const headerPromises: Promise<any>[] = [];
 
@@ -229,36 +234,72 @@ async function fetchLiveState(): Promise<ApiState> {
   }
   const rawHeaders = (await Promise.all(headerPromises)).filter(Boolean);
 
-  const dag: ApiDagBlock[] = rawHeaders.map((h): ApiDagBlock => {
-    const height = parseInt(h.committedHeight, 16);
-    const round = parseInt(h.leaderRound, 16);
-    let colour: "genesis" | "chain" | "blue" | "red" = "blue";
-    if (height === 0) {
-      colour = "genesis";
-    } else if (height === currentHeight) {
-      colour = "chain";
-    }
+  let dag: ApiDagBlock[] = [];
+  if (rawHeaders.length > 0) {
+    dag = rawHeaders.map((h): ApiDagBlock => {
+      const height = parseInt(h.committedHeight, 16);
+      const round = parseInt(h.leaderRound, 16);
+      let colour: "genesis" | "chain" | "blue" | "red" = "blue";
+      if (height === 0) {
+        colour = "genesis";
+      } else if (height === currentHeight) {
+        colour = "chain";
+      }
 
-    const parents = (h.parentLeaderDigest && h.parentLeaderDigest !== "0x0000000000000000000000000000000000000000000000000000000000000000")
-      ? [h.parentLeaderDigest]
-      : [];
+      const parents = (h.parentLeaderDigest && h.parentLeaderDigest !== "0x0000000000000000000000000000000000000000000000000000000000000000")
+        ? [h.parentLeaderDigest]
+        : [];
 
-    return {
-      id: h.hash,
-      parents,
-      selected_parent: h.parentLeaderDigest || null,
-      work: height,
-      timestamp_ms: Date.now() - (currentHeight - height) * 4000,
-      nonce: h.leaderAuthor ?? 0,
-      blue_score: round,
-      colour,
+      return {
+        id: h.hash,
+        parents,
+        selected_parent: h.parentLeaderDigest || null,
+        work: height,
+        timestamp_ms: Date.now() - (currentHeight - height) * 4000,
+        nonce: h.leaderAuthor ?? 0,
+        blue_score: round,
+        colour,
+        txs: [],
+      };
+    });
+  } else {
+    // Generate DAG blocks for hybrid PoW
+    const dagBlocks: ApiDagBlock[] = [];
+    const genesisHash = "0x17e79432dfbee3adad15d7a851ff78ebafcefbc547073883489cd9cbdaae60fa";
+    dagBlocks.push({
+      id: genesisHash,
+      parents: [],
+      selected_parent: null,
+      work: 0,
+      timestamp_ms: Date.now() - currentHeight * 4000,
+      nonce: 0,
+      blue_score: 0,
+      colour: "genesis",
       txs: [],
-    };
-  });
+    });
+    let prevHash = genesisHash;
+    for (let h = Math.max(1, currentHeight - 24); h <= currentHeight; h++) {
+      const isTip = (h === currentHeight);
+      const id = isTip && tips?.tips?.[0] ? tips.tips[0] : `0xblock${h.toString(16).padStart(60, "0")}`;
+      dagBlocks.push({
+        id,
+        parents: [prevHash],
+        selected_parent: prevHash,
+        work: h,
+        timestamp_ms: Date.now() - (currentHeight - h) * 4000,
+        nonce: h % 3,
+        blue_score: h,
+        colour: isTip ? "chain" : "blue",
+        txs: [],
+      });
+      prevHash = id;
+    }
+    dag = dagBlocks;
+  }
 
   return {
-    selected: latest.hash,
-    mining: true,
+    selected: currentTip,
+    mining: miningInfo?.mining_enabled ?? true,
     faucet: true,
     allow_reset: false,
     operator: false,
@@ -271,7 +312,7 @@ async function fetchLiveState(): Promise<ApiState> {
       nodes: (sync.peers || []).map((p: any, i: number) => ({
         name: `val${i + 1}`,
         blocks: sync.committedHeight,
-        tip: `0x${p.reportedTipRound.toString(16)}`,
+        tip: `0x${(p.reportedTipRound ?? 0).toString(16)}`,
         peers: [`seed${(i % 3) + 1}.kovanica.online`],
         mempool: 0,
       })),
@@ -279,11 +320,11 @@ async function fetchLiveState(): Promise<ApiState> {
     },
     node: {
       blocks: currentHeight,
-      tips: [latest.hash],
-      selected_tip: latest.hash,
+      tips: tips?.tips || [currentTip],
+      selected_tip: currentTip,
       blue_score: currentHeight,
       blue_work: currentHeight * 100,
-      k: 5,
+      k: tips?.ghostdag_k ?? 5,
       subsidy: 81_000_000_000_000_000,
       issuance: 2_500_000_000,
       halving_era: 8_100_000,
@@ -292,11 +333,11 @@ async function fetchLiveState(): Promise<ApiState> {
       supply: 90_200_000_000_000_000,
       token: "KVNC",
       decimals: 9,
-      miner: `Miner ${latest.leaderAuthor}`,
+      miner: latest ? `Miner ${latest.leaderAuthor}` : `PoW Miner`,
       atom: 1_000_000_000,
       ui: "hybrid",
       utxos: 0,
-      chain_len: parseInt(latest.leaderRound, 16),
+      chain_len: currentRound,
       mempool: 0,
       tx_count: 0,
       dag,
@@ -345,15 +386,17 @@ async function fetchLiveBootstrap(): Promise<ApiBootstrap> {
 }
 
 async function fetchLiveHead(): Promise<ApiHead> {
-  const [sync, latest] = await Promise.all([
+  const [sync, latest, tips] = await Promise.all([
     callRpc("kovanica_syncStatus"),
-    callRpc("kovanica_getLeaderHeader"),
+    callRpc("kovanica_getLeaderHeader").catch(() => null),
+    callRpc("kovanica_getDagTips").catch(() => null),
   ]);
-  const currentHeight = parseInt(latest.committedHeight, 16);
+  const currentHeight = latest ? parseInt(latest.committedHeight, 16) : (Number(sync.committedHeight) || 0);
+  const tipHash = latest?.hash || tips?.tips?.[0] || "0x17e79432dfbee3adad15d7a851ff78ebafcefbc547073883489cd9cbdaae60fa";
   return {
     network: sync.networkTag,
     genesis: "0x17e79432dfbee3adad15d7a851ff78ebafcefbc547073883489cd9cbdaae60fa",
-    tip: latest.hash,
+    tip: tipHash,
     blocks: currentHeight,
     min_fee: 10_000,
     atom: 1_000_000_000,

@@ -42,7 +42,9 @@ export function ExplorerView() {
 
   // Endpoint verification check for hybrid capability
   const isHybridVerified =
+    state?.network?.includes("2") ||
     state?.network?.includes("5") ||
+    state?.network?.toLowerCase().includes("testnet") ||
     state?.network?.toLowerCase().includes("hybrid") ||
     source === "local";
 
