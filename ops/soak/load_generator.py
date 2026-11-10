@@ -326,7 +326,7 @@ def main():
     parser.add_argument("--keystore", default="", help="Path to keystore.json")
     parser.add_argument("--password", default="", help="Keystore passphrase (or KOVANICA_KEYSTORE_PASSWORD)")
     parser.add_argument("--amount", type=int, default=1, help="Transfer amount in atoms (default 1)")
-    parser.add_argument("--fee", type=int, default=1000000, help="Fee in atoms (default 1,000,000 = 0.001 KUNA)")
+    parser.add_argument("--fee", type=int, default=1000000, help="Fee in atoms (default 1,000,000 = 0.001 KVNC)")
     parser.add_argument("--recipient", default="", help="Recipient address (default: alternating soak sink)")
     parser.add_argument("--report-interval", type=float, default=5.0, help="Stats reporting interval in seconds")
     parser.add_argument("--out-json", default="", help="Optional JSON file to save final run statistics")

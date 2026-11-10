@@ -8,7 +8,7 @@ Automated multi-node containerized soak testing orchestration with strict cgroup
 flowchart TD
     subgraph Host["Host Machine / CI Runner"]
         Runner["run-soak.sh\n(Orchestrator & Assertions)"]
-        LoadGen["load_generator.py\n(Continuous KUNA Tx Load)"]
+        LoadGen["load_generator.py\n(Continuous KVNC Tx Load)"]
     end
 
     subgraph Docker["Docker Compose Cluster (kovanica-soak)"]
@@ -44,10 +44,10 @@ flowchart TD
 | Component | Path | Description |
 |-----------|------|-------------|
 | **Orchestrator** | `ops/soak/run-soak.sh` | Main test runner; brings up stack, runs warmup, monitors cgroup & height metrics, runs assertions, collects diagnostics. |
-| **Load Generator** | `ops/soak/load_generator.py` | Python load generator; signs and submits valid KUNA transfers via JSON-RPC, reports TPS and latency statistics. |
+| **Load Generator** | `ops/soak/load_generator.py` | Python load generator; signs and submits valid KVNC transfers via JSON-RPC, reports TPS and latency statistics. |
 | **Compose Stack** | `ops/soak/docker-compose.soak.yml` | 3 validator nodes with strict cgroup limits (`cpus: 1.5`, `mem_limit: 2048m`) and Prometheus scraper. |
 | **Scraper Config** | `ops/soak/prometheus.soak.yml` | Prometheus configuration scraping all 3 nodes on port 9100. |
-| **Funded Accounts** | `ops/soak/funded_accounts.toml` | Pre-funded genesis accounts for soak load generation (100,000 KUNA each). |
+| **Funded Accounts** | `ops/soak/funded_accounts.toml` | Pre-funded genesis accounts for soak load generation (100,000 KVNC each). |
 
 ---
 
@@ -62,7 +62,7 @@ In compliance with `AGENTS.md`:
   * P2P: `8000`
   * JSON-RPC: `8545` (node1), `8546` (node2), `8547` (node3)
   * Prometheus Metrics: `9100` (node1), `9101` (node2), `9102` (node3)
-* **Currency & Address**: Native token is **KUNA** (9 decimals, 1 KUNA = $10^9$ atoms). Address format is canonical PRO-21 base32 (`kvnc...dag`, 64 characters).
+* **Currency & Address**: Native token is **KVNC** (9 decimals, 1 KVNC = $10^9$ atoms). Address format is canonical PRO-21 base32 (`kvnc...dag`, 64 characters).
 
 ---
 
