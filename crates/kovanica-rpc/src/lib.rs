@@ -323,6 +323,8 @@ impl RpcServer {
             .await;
         self.register_stateful("kovanica_getStorageAt", handle_get_storage_at)
             .await;
+        self.register_stateful("kovanica_requestAirdrop", handle_request_airdrop)
+            .await;
 
         // Staking methods.
         self.register_stateful("kovanica_getValidators", handle_get_validators)

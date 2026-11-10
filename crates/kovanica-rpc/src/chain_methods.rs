@@ -2324,6 +2324,87 @@ pub async fn handle_get_dag_tips(_params: Value, state: RpcState) -> Result<Valu
     }))
 }
 
+/// Request testnet tokens (airdrop).
+///
+/// Strictly forbidden on mainnet (chain_id 1).
+/// Allowed on devnet (3), testnet (4), hybrid testnet (5), and local (1337).
+pub async fn handle_request_airdrop(params: Value, state: RpcState) -> Result<Value, RpcError> {
+    let chain_id = served_chain_id(&state);
+    if chain_id == kovanica_types::signing::chain_id::MAINNET {
+        return Err(RpcError::InvalidRequest(
+            "kovanica_requestAirdrop is strictly forbidden on mainnet (chain 1)".into(),
+        ));
+    }
+
+    let args = params_vec(&params);
+    let addr_val = required(&args, 0, "address")?;
+    let address = parse_address(addr_val, "address", chain_id)?;
+
+    // Amount in atoms. Default: 10 KVNC (10_000_000_000 atoms).
+    // Maximum single dispense: 100 KVNC (100_000_000_000 atoms).
+    let amount = if let Some(amt_val) = args.get(1) {
+        match amt_val {
+            Value::Number(n) => n.as_u64().ok_or_else(|| {
+                RpcError::InvalidParams("amount must be an integer (in atoms)".into())
+            })?,
+            Value::String(s) => {
+                let s_clean = s.strip_prefix("0x").unwrap_or(s.as_str());
+                u64::from_str_radix(s_clean, 10)
+                    .or_else(|_| u64::from_str_radix(s_clean, 16))
+                    .map_err(|e| RpcError::InvalidParams(format!("invalid amount string: {e}")))?
+            }
+            _ => {
+                return Err(RpcError::InvalidParams(
+                    "amount must be an integer (atoms) or decimal/hex string".into(),
+                ))
+            }
+        }
+    } else {
+        10_000_000_000 // 10 KVNC default
+    };
+
+    if amount == 0 {
+        return Err(RpcError::InvalidParams(
+            "amount must be greater than zero".into(),
+        ));
+    }
+    const MAX_AIRDROP_ATOMS: u64 = 100_000_000_000; // 100 KVNC
+    let amount = amount.min(MAX_AIRDROP_ATOMS);
+
+    let txn = state
+        .storage
+        .begin_write()
+        .map_err(|e| RpcError::InternalError(format!("storage begin_write: {e}")))?;
+
+    let new_balance = state
+        .storage
+        .state()
+        .add_balance(&txn, &address, amount)
+        .map_err(|e| RpcError::InternalError(format!("add_balance: {e}")))?;
+
+    txn.commit()
+        .map_err(|e| RpcError::InternalError(format!("storage commit: {e}")))?;
+
+    tracing::info!(
+        chain_id,
+        to = %address,
+        amount_atoms = amount,
+        new_balance_atoms = new_balance,
+        "kovanica_requestAirdrop credited account"
+    );
+
+    Ok(serde_json::json!({
+        "success": true,
+        "address": address.to_string(),
+        "amount": amount,
+        "amount_atoms": amount,
+        "balance": new_balance,
+        "balance_atoms": new_balance,
+        "chain_id": chain_id,
+        "message": format!("Dispensed {} KVNC", amount / 1_000_000_000)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2400,6 +2481,58 @@ mod tests {
 
         assert!(parse_hash(&Value::String("0x1234".into()), "hash").is_err());
         assert!(parse_hash(&Value::String("not-hex".into()), "hash").is_err());
+    }
+
+    #[tokio::test]
+    async fn request_airdrop_rejects_mainnet_and_credits_testnet() {
+        let (_dir, storage) = open_storage();
+
+        // 1. Mainnet state: must reject request_airdrop
+        let mut mainnet_state = test_state(storage.clone());
+        mainnet_state.mempool = Arc::new(Mempool::new(
+            MempoolConfig::default(),
+            storage.clone(),
+            kovanica_types::SigningContext::new(MAINNET),
+        ));
+        let recipient = addr32(0x42);
+        let params = json!([recipient]);
+        let err = handle_request_airdrop(params.clone(), mainnet_state)
+            .await
+            .expect_err("mainnet must reject request_airdrop");
+        match err {
+            RpcError::InvalidRequest(msg) => {
+                assert!(msg.contains("strictly forbidden on mainnet"));
+            }
+            other => panic!("unexpected error type: {other:?}"),
+        }
+
+        // 2. Local/Testnet state: credits balance
+        let testnet_state = test_state(storage.clone());
+        let res = handle_request_airdrop(params, testnet_state.clone())
+            .await
+            .expect("local/testnet must accept request_airdrop");
+        assert_eq!(res["success"], true);
+        assert_eq!(res["amount"], 10_000_000_000u64); // 10 KVNC default
+        assert_eq!(res["balance"], 10_000_000_000u64);
+
+        // Check via getBalance
+        let balance_res = handle_get_balance(json!([recipient]), testnet_state.clone())
+            .await
+            .expect("get_balance succeeds");
+        assert_eq!(balance_res, quantity(10_000_000_000u64));
+
+        // Custom amount airdrop
+        let custom_params = json!([recipient, 5_000_000_000u64]);
+        let res2 = handle_request_airdrop(custom_params, testnet_state.clone())
+            .await
+            .expect("custom amount accepted");
+        assert_eq!(res2["amount"], 5_000_000_000u64);
+        assert_eq!(res2["balance"], 15_000_000_000u64);
+
+        let balance_res2 = handle_get_balance(json!([recipient]), testnet_state.clone())
+            .await
+            .expect("get_balance succeeds");
+        assert_eq!(balance_res2, quantity(15_000_000_000u64));
     }
 
     #[test]
@@ -4072,6 +4205,7 @@ mod tests {
 
     #[tokio::test]
     async fn mining_and_dag_rpc_methods_work() {
+        std::env::set_var("KOVANICA_TEST_TARGET_BITS", "0x207fffff");
         let (_dir, storage) = open_storage();
         let mut state = test_state(storage.clone());
         state.mempool = Arc::new(Mempool::new(
@@ -4137,6 +4271,7 @@ mod tests {
         assert!(handle_submit_work(json!({ "header": bad_header }), state)
             .await
             .is_err());
+        std::env::remove_var("KOVANICA_TEST_TARGET_BITS");
     }
 
     #[tokio::test]

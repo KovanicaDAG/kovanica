@@ -24,6 +24,7 @@ kovanica-comms-relay = { path = "../kovanica-comms-relay", default-features = fa
 kovanica-common = { path = "../kovanica-common" }
 kovanica-name-registry = { path = "../kovanica-name-registry" }
 kovanica-wallet-core = { path = "../kovanica-wallet-core" }
+kovanica-storage = { path = "../kovanica-storage" }
 uniffi = { version = "=0.32.0" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -31,6 +32,9 @@ anyhow = { workspace = true }
 bincode = { workspace = true }
 hex = { workspace = true }
 zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3.8"
 
 [features]
 bindgen = ["uniffi/cli"]

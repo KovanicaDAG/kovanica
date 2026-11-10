@@ -125,6 +125,17 @@ pub struct MobileNodeProfile {
     pub local_rpc_bind: String,
 }
 
+/// Summary of records pruned from local embedded storage.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct PrunedStorageSummary {
+    /// Number of blocks pruned from the block store.
+    pub pruned_blocks: u64,
+    /// Number of DAG blocks pruned from the consensus store.
+    pub pruned_dag_blocks: u64,
+    /// True if the database existed and pruning succeeded.
+    pub pruned: bool,
+}
+
 fn failed(err: impl std::fmt::Display) -> LightFfiError {
     LightFfiError::Failed {
         reason: err.to_string(),
@@ -469,6 +480,35 @@ pub fn default_mobile_node_config(chain_id: u64) -> MobileNodeProfile {
         wifi_and_charging_only: cfg.wifi_and_charging_only,
         local_rpc_bind: cfg.local_rpc_bind,
     }
+}
+
+/// Prune local node storage below the cutoff round.
+///
+/// Keeps account states, staking, and contract code while dropping DAG blocks,
+/// block bodies, and votes older than `cutoff_round`.
+#[uniffi::export]
+pub fn prune_local_node_storage(
+    db_path: String,
+    cutoff_round: u64,
+) -> Result<PrunedStorageSummary, LightFfiError> {
+    let path = std::path::Path::new(&db_path);
+    if !path.exists() {
+        return Ok(PrunedStorageSummary {
+            pruned_blocks: 0,
+            pruned_dag_blocks: 0,
+            pruned: false,
+        });
+    }
+
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+    let (pruned_blocks, pruned_dag_blocks) =
+        storage.prune_history_below(cutoff_round).map_err(failed)?;
+
+    Ok(PrunedStorageSummary {
+        pruned_blocks,
+        pruned_dag_blocks,
+        pruned: true,
+    })
 }
 
 /// Check an account proof against a header this client already accepted.
@@ -1794,5 +1834,49 @@ mod tests {
         let w_total: u128 = total_work.parse().unwrap();
         assert_eq!(w_total, w0 * 2);
         let _ = h1_json;
+    }
+
+    #[test]
+    fn mobile_prune_local_node_storage_ffi() {
+        use kovanica_storage::Storage;
+        use kovanica_types::block::StatementBlock;
+        use kovanica_types::crypto::Signature;
+        use kovanica_types::hash::Hash;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("local_node.db");
+        let db_str = db_path.to_str().unwrap().to_string();
+
+        // 1. Non-existent path returns pruned=false
+        let res = prune_local_node_storage("nonexistent.db".into(), 100).unwrap();
+        assert!(!res.pruned);
+
+        // 2. Populate and prune
+        let storage = Storage::new(&db_path).unwrap();
+        {
+            let txn = storage.begin_write().unwrap();
+            for round in 1..=5 {
+                let digest = StatementBlock::compute_digest(0, round, &[], &[]);
+                let block = StatementBlock {
+                    author: 0,
+                    round,
+                    parents: vec![],
+                    transactions: vec![],
+                    statements: vec![],
+                    signature: Signature([0; 64]),
+                    digest,
+                    merkle_root: Hash::zero(),
+                };
+                storage.blocks().put_block(&txn, &block, &[]).unwrap();
+                storage.consensus().put_dag_block(&txn, &block).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        drop(storage);
+
+        let res = prune_local_node_storage(db_str, 4).unwrap();
+        assert!(res.pruned);
+        assert_eq!(res.pruned_blocks, 3);
+        assert_eq!(res.pruned_dag_blocks, 3);
     }
 }
