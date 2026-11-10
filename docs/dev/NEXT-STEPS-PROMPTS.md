@@ -4,9 +4,9 @@ This document contains formatted, ready-to-paste prompts for the next phases of 
 
 Choose any prompt below and paste it directly into an OpenCode / Antigravity pair-programming session.
 
-> **Status (2026-11-10):** Prompt 1 and Prompt 2 are **implemented and merged** —
-> the prompts are kept as the record of what shipped. Prompt 3 and Prompt 4 are
-> still open.
+> **Status (2026-11-10):** all four prompts are **implemented and merged**. They
+> are kept as the record of what shipped, not as pending work; check the code
+> before pasting one.
 
 ---
 
@@ -149,6 +149,13 @@ ANTI:
 
 ## Prompt 3: TypeScript API Client & Explorer UI Alignment (`packages/`)
 
+**Implemented**: `packages/api-client` exports `ChainId.TESTNET = 2` with
+`HYBRID_TESTNET` as an alias (the prompt's `HYBRID_TESTNET = 5` predates the
+registry change), plus the typed `getMiningInfo`, `getDagTips`, `getWork` and
+`submitWork` methods and their result types; `packages/console` shows the
+mining panel and `packages/web` renders the PoW header fields (`nonce`,
+`pow_hash`, `target_bits`) and GHOSTDAG blue score.
+
 Use this prompt to align the TypeScript SDK and Explorer / Console frontend with Chain 2 and PoW GHOSTDAG structures.
 
 ```markdown
@@ -211,6 +218,9 @@ ANTI:
 ---
 
 ## Prompt 4: BIP32 / BIP44 Hierarchical Deterministic (HD) Wallet Derivation
+
+**Implemented**: `crates/kovanica-wallet-core/src/hd.rs` (SLIP-0010 Ed25519),
+with `--account` / `--index` on the CLI signing paths.
 
 Use this prompt to implement standard BIP32/BIP44 derivation paths for multi-account management from a single seed phrase.
 
