@@ -292,6 +292,11 @@ impl RpcServer {
             .await;
         self.register_stateful("kovanica_getBlockByNumber", handle_get_block_by_number)
             .await;
+        self.register_stateful(
+            "kovanica_getBlockHeaderByNumber",
+            handle_get_block_header_by_number,
+        )
+        .await;
 
         // Transaction methods.
         self.register_stateful("kovanica_sendRawTransaction", handle_send_raw_transaction)
@@ -494,6 +499,7 @@ const KNOWN_RPC_METHODS: &[&str] = &[
     "kovanica_blockNumber",
     "kovanica_getBlockByHash",
     "kovanica_getBlockByNumber",
+    "kovanica_getBlockHeaderByNumber",
     "kovanica_sendRawTransaction",
     "kovanica_getTransactionReceipt",
     "kovanica_getTransactionByHash",

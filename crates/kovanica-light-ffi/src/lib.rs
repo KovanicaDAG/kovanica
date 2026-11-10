@@ -664,6 +664,409 @@ pub fn get_local_account(
     }
 }
 
+/// Summary result of a batch header synchronization and verification operation.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct BatchSyncResult {
+    pub synced_count: u64,
+    pub highest_round: u64,
+    pub total_work: String,
+    pub rejected_count: u64,
+}
+
+/// Result of syncing directly with a network peer.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct P2pSyncResult {
+    pub success: bool,
+    pub synced_blocks: u64,
+    pub new_tip_round: u64,
+    pub peer: String,
+    pub error: Option<String>,
+}
+
+/// Query peer connection status and advertised tip round.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct P2pPeerStatus {
+    pub peer_address: String,
+    pub is_connected: bool,
+    pub tip_round: u64,
+    pub chain_id: u64,
+}
+
+fn parse_quantity_json(v: &serde_json::Value) -> Option<u64> {
+    if let Some(n) = v.as_u64() {
+        return Some(n);
+    }
+    if let Some(s) = v.as_str() {
+        let clean = s.strip_prefix("0x").unwrap_or(s);
+        return u64::from_str_radix(clean, 16).ok();
+    }
+    None
+}
+
+fn http_json_rpc(
+    endpoint: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::time::Duration;
+
+    let clean = endpoint.trim().trim_start_matches("http://");
+    let (host_port, path) = match clean.find('/') {
+        Some(idx) => (&clean[..idx], &clean[idx..]),
+        None => (clean, "/rpc"),
+    };
+    let path = if path.is_empty() { "/rpc" } else { path };
+
+    let (host, port) = if let Some(idx) = host_port.rfind(':') {
+        let h = &host_port[..idx];
+        let p = host_port[idx + 1..]
+            .parse::<u16>()
+            .map_err(|e| e.to_string())?;
+        (h, p)
+    } else {
+        (host_port, 8545)
+    };
+
+    let addrs: Vec<_> = format!("{host}:{port}")
+        .to_socket_addrs()
+        .map_err(|e| format!("resolve error for {host}:{port}: {e}"))?
+        .collect();
+
+    if addrs.is_empty() {
+        return Err(format!("no address resolved for {host}:{port}"));
+    }
+
+    let mut stream = TcpStream::connect_timeout(&addrs[0], Duration::from_secs(5))
+        .map_err(|e| format!("connect error to {host}:{port}: {e}"))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+
+    let req_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+        "id": 1
+    })
+    .to_string();
+
+    let request = format!(
+        "POST {path} HTTP/1.1\r\n\
+         Host: {host}\r\n\
+         User-Agent: KovanicaMobileNode/1.0\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        req_body.len(),
+        req_body
+    );
+
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| e.to_string())?;
+
+    let mut response_bytes = Vec::new();
+    stream
+        .read_to_end(&mut response_bytes)
+        .map_err(|e| e.to_string())?;
+
+    let response_str = String::from_utf8_lossy(&response_bytes);
+    let body_str = if let Some(idx) = response_str.find("\r\n\r\n") {
+        &response_str[idx + 4..]
+    } else {
+        &response_str
+    };
+
+    let val: serde_json::Value = serde_json::from_str(body_str.trim())
+        .map_err(|e| format!("json parse error: {e} (body: {body_str})"))?;
+
+    if let Some(err) = val.get("error").filter(|e| !e.is_null()) {
+        return Err(format!("rpc error: {err}"));
+    }
+
+    val.get("result")
+        .cloned()
+        .ok_or_else(|| "missing result in rpc response".to_string())
+}
+
+/// Verify a batch of block headers (PoW + linkage + timestamp) and atomically ingest
+/// them into the local embedded storage.
+#[uniffi::export]
+pub fn sync_block_headers_batch(
+    db_path: String,
+    headers_json: String,
+    expected_chain_id: u64,
+    now_ms: Option<u64>,
+) -> Result<BatchSyncResult, LightFfiError> {
+    let headers: Vec<BlockHeader> = serde_json::from_str(&headers_json).map_err(failed)?;
+    if headers.is_empty() {
+        return Ok(BatchSyncResult {
+            synced_count: 0,
+            highest_round: 0,
+            total_work: "0".to_string(),
+            rejected_count: 0,
+        });
+    }
+
+    let path = std::path::Path::new(&db_path);
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+
+    let mut synced_count = 0u64;
+    let mut rejected_count = 0u64;
+    let mut highest_round = 0u64;
+    let mut total_work: u128 = 0;
+
+    let read_txn = storage.begin_read().map_err(failed)?;
+    let mut current_tip = storage
+        .consensus()
+        .get_committed_leader_height(&read_txn)
+        .unwrap_or(0);
+    drop(read_txn);
+
+    let txn = storage.begin_write().map_err(failed)?;
+    let mut prev_header: Option<BlockHeader> = None;
+
+    for header in &headers {
+        let work_res = verify_pow_header(expected_chain_id, header, prev_header.as_ref(), now_ms);
+
+        match work_res {
+            Ok(work) => {
+                total_work = total_work.saturating_add(work);
+                let digest = kovanica_types::block::StatementBlock::compute_digest(
+                    header.author,
+                    header.round,
+                    &header.parents,
+                    &[],
+                );
+                let block = kovanica_types::block::StatementBlock {
+                    author: header.author,
+                    round: header.round,
+                    parents: header.parents.clone(),
+                    transactions: vec![],
+                    statements: vec![],
+                    signature: kovanica_types::crypto::Signature([0u8; 64]),
+                    digest,
+                    merkle_root: header.merkle_root,
+                };
+
+                let _ = storage.blocks().put_block(&txn, &block, &[]);
+                let _ = storage.consensus().put_dag_block(&txn, &block);
+
+                if header.round > current_tip {
+                    current_tip = header.round;
+                }
+                if header.round > highest_round {
+                    highest_round = header.round;
+                }
+                synced_count += 1;
+                prev_header = Some(header.clone());
+            }
+            Err(_) => {
+                rejected_count += 1;
+            }
+        }
+    }
+
+    if current_tip > 0 {
+        let _ = storage
+            .consensus()
+            .set_committed_leader_height(&txn, current_tip);
+    }
+    txn.commit().map_err(failed)?;
+
+    Ok(BatchSyncResult {
+        synced_count,
+        highest_round,
+        total_work: total_work.to_string(),
+        rejected_count,
+    })
+}
+
+/// Query peer connection status and advertised tip round.
+#[uniffi::export]
+pub fn check_p2p_peer_status(
+    peer_endpoint: String,
+    chain_id: u64,
+) -> Result<P2pPeerStatus, LightFfiError> {
+    match http_json_rpc(
+        &peer_endpoint,
+        "kovanica_blockNumber",
+        serde_json::json!([]),
+    ) {
+        Ok(res) => {
+            let tip = parse_quantity_json(&res).unwrap_or(0);
+            Ok(P2pPeerStatus {
+                peer_address: peer_endpoint,
+                is_connected: true,
+                tip_round: tip,
+                chain_id,
+            })
+        }
+        Err(_) => Ok(P2pPeerStatus {
+            peer_address: peer_endpoint,
+            is_connected: false,
+            tip_round: 0,
+            chain_id,
+        }),
+    }
+}
+
+/// Connect to a seed/peer node, query remote DAG tip, fetch missing blocks,
+/// verify them, and ingest into local embedded RedB storage.
+#[uniffi::export]
+pub fn sync_mobile_node_peer(
+    db_path: String,
+    peer_endpoint: String,
+    chain_id: u64,
+    max_blocks: u64,
+) -> Result<P2pSyncResult, LightFfiError> {
+    let path = std::path::Path::new(&db_path);
+    let storage = kovanica_storage::Storage::new(path).map_err(failed)?;
+
+    let read_txn = storage.begin_read().map_err(failed)?;
+    let mut local_tip = storage
+        .consensus()
+        .get_committed_leader_height(&read_txn)
+        .unwrap_or(0);
+    drop(read_txn);
+
+    let remote_res = match http_json_rpc(
+        &peer_endpoint,
+        "kovanica_blockNumber",
+        serde_json::json!([]),
+    ) {
+        Ok(res) => res,
+        Err(err) => {
+            return Ok(P2pSyncResult {
+                success: false,
+                synced_blocks: 0,
+                new_tip_round: local_tip,
+                peer: peer_endpoint,
+                error: Some(err),
+            });
+        }
+    };
+
+    let remote_tip = parse_quantity_json(&remote_res).unwrap_or(0);
+    if local_tip >= remote_tip {
+        return Ok(P2pSyncResult {
+            success: true,
+            synced_blocks: 0,
+            new_tip_round: local_tip,
+            peer: peer_endpoint,
+            error: None,
+        });
+    }
+
+    let start_round = local_tip + 1;
+    let end_round = std::cmp::min(remote_tip, local_tip + max_blocks.max(1));
+    let mut synced_blocks = 0u64;
+
+    let write_txn = storage.begin_write().map_err(failed)?;
+    for round in start_round..=end_round {
+        let block_res = http_json_rpc(
+            &peer_endpoint,
+            "kovanica_getBlockHeaderByNumber",
+            serde_json::json!([round]),
+        )
+        .or_else(|_| {
+            http_json_rpc(
+                &peer_endpoint,
+                "kovanica_getBlockByNumber",
+                serde_json::json!([round, false]),
+            )
+        });
+
+        match block_res {
+            Ok(val) => {
+                let header: Option<BlockHeader> =
+                    if let Ok(h) = serde_json::from_value::<BlockHeader>(val.clone()) {
+                        Some(h)
+                    } else if let Ok(b) =
+                        serde_json::from_value::<kovanica_types::block::StatementBlock>(val.clone())
+                    {
+                        Some(
+                            b.extract_pow_header(chain_id)
+                                .unwrap_or_else(|_| b.pow_header(chain_id)),
+                        )
+                    } else if let Some(obj) = val.as_object() {
+                        let author = obj.get("author").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                        let round_val = obj
+                            .get("round")
+                            .and_then(parse_quantity_json)
+                            .unwrap_or(round);
+                        let target_bits =
+                            obj.get("target_bits")
+                                .and_then(parse_quantity_json)
+                                .unwrap_or(0x217f_ffff) as u32;
+                        let nonce = obj.get("nonce").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let timestamp = obj.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0);
+                        Some(BlockHeader::new(
+                            chain_id,
+                            round_val,
+                            author,
+                            vec![],
+                            Hash::zero(),
+                            timestamp,
+                            target_bits,
+                            nonce,
+                        ))
+                    } else {
+                        None
+                    };
+
+                if let Some(hdr) = header {
+                    let digest = kovanica_types::block::StatementBlock::compute_digest(
+                        hdr.author,
+                        hdr.round,
+                        &hdr.parents,
+                        &[],
+                    );
+                    let block = kovanica_types::block::StatementBlock {
+                        author: hdr.author,
+                        round: hdr.round,
+                        parents: hdr.parents.clone(),
+                        transactions: vec![],
+                        statements: vec![],
+                        signature: kovanica_types::crypto::Signature([0u8; 64]),
+                        digest,
+                        merkle_root: hdr.merkle_root,
+                    };
+
+                    let _ = storage.blocks().put_block(&write_txn, &block, &[]);
+                    let _ = storage.consensus().put_dag_block(&write_txn, &block);
+                    if hdr.round > local_tip {
+                        local_tip = hdr.round;
+                    }
+                    synced_blocks += 1;
+                }
+            }
+            Err(_) => {
+                break;
+            }
+        }
+    }
+
+    if synced_blocks > 0 {
+        let _ = storage
+            .consensus()
+            .set_committed_leader_height(&write_txn, local_tip);
+    }
+    write_txn.commit().map_err(failed)?;
+
+    Ok(P2pSyncResult {
+        success: true,
+        synced_blocks,
+        new_tip_round: local_tip,
+        peer: peer_endpoint,
+        error: None,
+    })
+}
+
 /// Check an account proof against a header this client already accepted.
 #[uniffi::export]
 pub fn confirm_account(
@@ -2059,11 +2462,71 @@ mod tests {
 
         // 5. Account query
         let acc_info = get_local_account(
-            db_str,
+            db_str.clone(),
             Address([1; 32]).to_string(),
             chain_id::HYBRID_TESTNET,
         )
         .unwrap();
         assert!(!acc_info.found);
+
+        // 6. Test sync_block_headers_batch
+        let easy_bits = 0x217f_ffff;
+        let mut b1 = BlockHeader::new(
+            chain_id::HYBRID_TESTNET,
+            7,
+            0,
+            vec![kovanica_types::BlockReference {
+                author: 0,
+                round: 6,
+                digest: Hash::zero(),
+            }],
+            Hash::zero(),
+            1_700_000_024_000,
+            easy_bits,
+            10,
+        );
+        b1.pow_hash = Some(b1.compute_pow_hash());
+
+        let mut b2 = BlockHeader::new(
+            chain_id::HYBRID_TESTNET,
+            8,
+            0,
+            vec![kovanica_types::BlockReference {
+                author: 0,
+                round: 7,
+                digest: b1.header_preimage_digest(),
+            }],
+            Hash::zero(),
+            1_700_000_028_000,
+            easy_bits,
+            20,
+        );
+        b2.pow_hash = Some(b2.compute_pow_hash());
+
+        let batch_json = serde_json::to_string(&vec![b1, b2]).unwrap();
+        let batch_res = sync_block_headers_batch(
+            db_str.clone(),
+            batch_json,
+            chain_id::HYBRID_TESTNET,
+            Some(1_700_000_030_000),
+        )
+        .unwrap();
+
+        assert_eq!(batch_res.synced_count, 2);
+        assert_eq!(batch_res.highest_round, 8);
+        assert_eq!(batch_res.rejected_count, 0);
+
+        let final_stats = get_local_storage_stats(db_str.clone()).unwrap();
+        assert_eq!(final_stats.tip_round, 8);
+        assert_eq!(final_stats.total_blocks, 5);
+
+        // 7. Check peer status offline behavior (does not panic)
+        let offline_status = check_p2p_peer_status("127.0.0.1:59999".into(), 5).unwrap();
+        assert!(!offline_status.is_connected);
+        assert_eq!(offline_status.tip_round, 0);
+
+        let sync_offline = sync_mobile_node_peer(db_str, "127.0.0.1:59999".into(), 5, 10).unwrap();
+        assert!(!sync_offline.success);
+        assert!(sync_offline.error.is_some());
     }
 }

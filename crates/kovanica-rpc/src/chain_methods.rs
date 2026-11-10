@@ -263,7 +263,7 @@ pub(crate) fn transaction_to_json(tx: &Transaction) -> Value {
 
 /// Serialise a block into JSON.
 pub(crate) fn block_to_json(block: &StatementBlock) -> Value {
-    json!({
+    let mut val = json!({
         "hash": to_hex(&block.digest.0),
         "digest": to_hex(&block.digest.0),
         "author": block.author,
@@ -281,7 +281,23 @@ pub(crate) fn block_to_json(block: &StatementBlock) -> Value {
             .collect::<Vec<_>>(),
         "statements": to_hex(&block.statements),
         "signature": to_hex(&block.signature.0),
-    })
+    });
+    if let Some((timestamp, target_bits, nonce, pow_hash)) =
+        kovanica_types::decode_pow_statement(&block.statements)
+    {
+        if let Some(map) = val.as_object_mut() {
+            map.insert("timestamp".to_string(), json!(timestamp));
+            map.insert(
+                "target_bits".to_string(),
+                json!(quantity(target_bits as u64)),
+            );
+            map.insert("nonce".to_string(), json!(nonce));
+            if let Some(h) = pow_hash {
+                map.insert("pow_hash".to_string(), json!(to_hex(&h.0)));
+            }
+        }
+    }
+    val
 }
 
 // ============================================================================
@@ -336,6 +352,33 @@ pub async fn handle_get_block_by_number(params: Value, state: RpcState) -> Resul
         .map_err(internal)?
     {
         Some(block) => Ok(block_to_json(&block)),
+        None => Ok(Value::Null),
+    }
+}
+
+/// `kovanica_getBlockHeaderByNumber(number)` — typed BlockHeader JSON for mobile/light nodes.
+pub async fn handle_get_block_header_by_number(
+    params: Value,
+    state: RpcState,
+) -> Result<Value, RpcError> {
+    let args = params_vec(&params);
+    let number = parse_u64(required(&args, 0, "block number")?, "block number")?;
+    let chain_id = state.mempool.signing_context().chain_id;
+
+    let txn = state.storage.begin_read().map_err(internal)?;
+    match state
+        .storage
+        .blocks()
+        .get_block_by_height(&txn, number)
+        .map_err(internal)?
+    {
+        Some(block) => {
+            let header = match block.extract_pow_header(chain_id) {
+                Ok(h) => h,
+                Err(_) => block.pow_header(chain_id),
+            };
+            Ok(serde_json::to_value(&header).map_err(internal)?)
+        }
         None => Ok(Value::Null),
     }
 }
