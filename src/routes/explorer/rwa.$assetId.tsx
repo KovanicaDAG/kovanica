@@ -38,11 +38,23 @@ export const Route = createFileRoute("/explorer/rwa/$assetId")({
       }
       return data;
     } catch (err: unknown) {
+      const status =
+        err instanceof ApiError || err instanceof HttpError
+          ? err.status
+          : typeof err === "object" && err !== null && "status" in err && typeof (err as { status: unknown }).status === "number"
+            ? (err as { status: number }).status
+            : undefined;
+
+      if (status === 404) {
+        throw notFound();
+      }
+      if (status !== undefined) {
+        throw err;
+      }
       if (
-        (err instanceof ApiError && err.status === 404) ||
-        (err instanceof HttpError && err.status === 404) ||
-        (typeof err === "object" && err !== null && "status" in err && (err as { status: unknown }).status === 404) ||
-        (err instanceof Error && err.message.toLowerCase().includes("not found"))
+        err instanceof Error &&
+        err.message.toLowerCase().includes("not found") &&
+        !err.message.toLowerCase().includes("method not found")
       ) {
         throw notFound();
       }
