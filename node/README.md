@@ -1,10 +1,24 @@
 # Running a Kovanica node
 
-Prebuilt `kovanica-node` binaries for Linux (x86_64, aarch64) and the chain-4
-genesis bundle are published as GitHub releases by
+Prebuilt `kovanica-node` binaries for Linux (x86_64, aarch64) and a genesis
+bundle per network are published as GitHub releases by
 `.github/workflows/release-node.yml`. Tag naming: `v<version>-node`.
 
-## Install (public testnet, chain 4)
+One binary serves every network; a network is chosen by its `chain_id` and its
+genesis bundle, not by a separate build.
+
+| `--chain-id` | Network                     | Registry name       |
+|--------------|-----------------------------|---------------------|
+| `1`          | mainnet                     | `MAINNET`           |
+| `2`          | hybrid public testnet       | `TESTNET` (default) |
+| `3`          | devnet                      | `DEVNET`            |
+| `1337`       | local devnet (single node)  | `LOCAL`             |
+
+Chain 4 (`TESTNET_V2`) is **retired** and no longer registered: a binary built
+from current `main` refuses to start on it. See
+`docs/dev/CANONICAL-TESTNET-2.md`.
+
+## Install (public testnet, chain 2)
 
 ```sh
 curl -fsSL https://kovanica.online/download/install.sh | sh
@@ -13,41 +27,52 @@ curl -fsSL https://kovanica.online/download/install.sh | sh
 The installer:
 
 1. detects the architecture and downloads
-   `kovanica-node-<arch>-linux.tar.gz` plus `kovanica-chain4-genesis.tar.gz`
-   from the release, verifying both against the published `SHA256SUMS`;
+   `kovanica-node-<arch>-linux.tar.gz` plus the network's genesis bundle
+   (`kovanica-chain<chain-id>-genesis.tar.gz` by default), verifying both
+   against the published `SHA256SUMS`;
 2. installs the binary (default `/usr/local/bin/kovanica-node`);
 3. copies the genesis bundle into the data directory (default
-   `/var/lib/kovanica`);
+   `/var/lib/kovanica`), refusing a data directory that already holds chain
+   data;
 4. writes a non-validating config (`/etc/kovanica/kovanica.toml`) with the
-   three seed nodes as bootnodes and RPC bound to loopback;
-5. runs `kovanica-node --check-config` and `kovanica-node network-tag`, and
-   **refuses to continue** unless the tag equals the published
-   `4-0eacd5699210b145`;
+   current seed nodes as bootnodes and RPC bound to loopback;
+5. runs `kovanica-node --check-config` and `kovanica-node network-tag` against
+   that candidate config and **refuses to continue** on a mismatch, before the
+   config is moved into place;
 6. on systemd hosts, installs and starts `kovanica-node.service` as the
    `kovanica` system user.
 
-Useful options: `--no-service`, `--data-dir <dir>`, `--prefix <dir>`,
+Useful options: `--chain-id <id>`, `--bundle-asset <name>`,
+`--expected-tag <tag>`, `--no-service`, `--data-dir <dir>`, `--prefix <dir>`,
 `--version <v>`, `--skip-tag-check`, `--uninstall`, `--help`.
 Without root it installs under `$HOME/.local` and `$HOME/.kovanica` and does
 not touch systemd.
 
 ## Why the tag check matters
 
-Every chain-4 node must share the same chain id, binary and genesis file set;
-the network tag (`<chain_id>-<16 hex of the genesis config digest>`) is mixed
-into all libp2p protocol ids and gossip topics. A node with a different tag
-silently has no peers. See `docs/TESTNET-RESET.md`.
+Every node on a network must share the same chain id and genesis file set; the
+network tag (`<chain_id>-<16 hex of the genesis config digest>`) is mixed into
+all libp2p protocol ids and gossip topics. A node with a different tag silently
+has no peers. See `docs/TESTNET-RESET.md`.
 
-## State sync on chain 4: full-state commitment is being activated
+The installer takes the expected tag from, in order:
 
-A node installed by this script starts at height 0 with the chain-4 genesis
+1. `--expected-tag` (or `KOVANICA_EXPECTED_TAG`);
+2. an `expected-tag` file inside the checksum-verified bundle.
+
+If neither exists it **fails closed** — an unpinned install cannot tell a
+forked or wrong-network bundle from the right one. `--skip-tag-check` is the
+explicit opt-out; the node still prints its tag.
+
+## State sync: full-state commitment is activated at round 500 000
+
+A node installed by this script starts at height 0 with the network's genesis
 file set and bootstraps from the chunked state snapshot served by its peers.
-Sealed header roots on chain 4 are still **account-only**, because
-`STATE_COMMITMENT_ACTIVE_FROM_ROUND` was `u64::MAX`
-(`crates/kovanica-types/src/lib.rs`) when those blocks were produced, while
-`snapshot_committed_root()` always recomputes the full-state root that
-includes the reserved `AUX_STATE_LEAF_ADDRESS` leaf. The two can never be
-equal, so `import_verified_snapshot()` fails closed with:
+Sealed headers produced **below** `STATE_COMMITMENT_ACTIVE_FROM_ROUND` are
+account-only, because the constant was `u64::MAX` when those blocks were
+produced, while `snapshot_committed_root()` always recomputes the full-state
+root that includes the reserved `AUX_STATE_LEAF_ADDRESS` leaf. The two can
+never be equal, so `import_verified_snapshot()` fails closed with:
 
 ```
 rejected state snapshot ... sealed header state_root ... != full-state
@@ -58,12 +83,12 @@ That check must not be weakened: without it a peer could forge staking and
 contract rows while every signature still verifies. Instead it is replaced by
 an explicit activation and a clear refusal reason:
 
-- `STATE_COMMITMENT_ACTIVE_FROM_ROUND` is now **500 000** (about five days of
+- `STATE_COMMITMENT_ACTIVE_FROM_ROUND` is **500 000** (about five days of
   committed leaders at 12 s each). Every sealed header produced at or above
   that leader round commits to the full state, so snapshots from those heights
   import normally.
 - Below it, the importer refuses the snapshot up front with
-  `... predates the full-state commitment (active from round 500000, chain 4)`
+  `... predates the full-state commitment (active from round 500000, chain <id>)`
   instead of a root mismatch. Nothing is applied.
 
 **Before round 500 000 every validator must run a build that contains the
@@ -94,7 +119,14 @@ git tag v0.2.0-node
 git push origin v0.2.0-node
 ```
 
-The workflow builds both architectures, runs the tag check against
-`testnet/chain4/`, and publishes the tarballs, the bundle and `SHA256SUMS`.
-Bump the default `VERSION` in `node/scripts/install.sh` when the download
-should move to the new release.
+The workflow builds both architectures, runs the tag check against the bundle
+source, and publishes the tarballs, the bundle and `SHA256SUMS`. The bundle is
+expected to contain an `expected-tag` file (the installer reads it when no
+`--expected-tag` is given). Bump the default `VERSION` in
+`node/scripts/install.sh` when the download should move to the new release.
+
+> **Known follow-up:** `.github/workflows/release-node.yml` still packages the
+> retired chain-4 bundle (`testnet/chain4/`, tag `4-0eacd5699210b145`). It must
+> be re-pointed at a chain-2 bundle cut from the live chain-2 genesis set
+> before a release can serve chain 2; that needs the deployed validator keys,
+> so it is an ops step, not an in-repo edit.

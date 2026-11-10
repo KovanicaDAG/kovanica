@@ -4,9 +4,17 @@ This document contains formatted, ready-to-paste prompts for the next phases of 
 
 Choose any prompt below and paste it directly into an OpenCode / Antigravity pair-programming session.
 
+> **Status (2026-11-10):** Prompt 1 and Prompt 2 are **implemented and merged** —
+> the prompts are kept as the record of what shipped. Prompt 3 and Prompt 4 are
+> still open.
+
 ---
 
 ## Prompt 1: Standalone Solo Miner CLI Tooling (`kovanica miner run`)
+
+**Implemented** in `crates/kovanica-cli/src/miner.rs` (`kovanica miner run`,
+`kovanica miner bench`, and the `kovanica mining run|bench` aliases) on top of
+`kovanica_getWork` / `kovanica_submitWork`.
 
 Use this prompt to build a standalone, multithreaded CPU mining tool directly in `kovanica-cli` that utilizes the `kovanica_getWork` and `kovanica_submitWork` RPC methods.
 
@@ -71,6 +79,11 @@ ANTI:
 ---
 
 ## Prompt 2: Live Multi-Node Docker Compose Cluster & Observability
+
+**Implemented**: `ops/docker/docker-compose.chain2.yml` (3 nodes + faucet +
+Prometheus + Grafana), `ops/docker/grafana/dashboards/hybrid-testnet.json`,
+`ops/docker/test-chain2-cluster.sh`, documented in `docs/dev/HYBRID-TESTNET-M8.md`
+§6 and `ops/docker/README.md`.
 
 Use this prompt to build containerized multi-node testnet orchestration with Prometheus and Grafana monitoring.
 

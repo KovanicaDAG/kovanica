@@ -98,7 +98,7 @@ are not in the history.
 The table is not created at startup. A database from before this index
 opens normally. A history query before the first commit that contains a
 transaction returns an empty page. There is no backfill and no migration.
-After a chain-4 reset the table starts empty with the new chain. An
+After a genesis reset the table starts empty with the new chain. An
 in-place upgrade records history from the first commit after the upgrade.
 
 Rows are not removed when DAG blocks are pruned.
