@@ -20,6 +20,7 @@
 #![allow(clippy::large_enum_variant)]
 
 mod config;
+mod genesis_bundle;
 mod miner;
 mod non_blue;
 mod orphans;
@@ -108,6 +109,18 @@ struct Args {
 enum Commands {
     /// Genesis ceremony: build genesis block + staking state from validator keys
     Genesis(GenesisArgs),
+    /// Write the genesis bundle a network publishes, from a directory of
+    /// genesis files.
+    ///
+    /// The archive is deterministic: sorted entries, fixed tar metadata and an
+    /// uncompressed deflate stream, so the same files always give the same
+    /// bytes. It contains the genesis files, a `SHA256SUMS` for them and an
+    /// `expected-tag` naming the network tag they produce — the first two are
+    /// what operators verify with, the last is what
+    /// `node/scripts/install.sh` compares a joining node against. Nothing is
+    /// uploaded; publishing the asset is a separate ops step.
+    #[command(name = "genesis-bundle")]
+    GenesisBundle(GenesisBundleArgs),
     /// Print the network tag for this config and genesis bundle, then exit.
     ///
     /// Does not open the database or listen on the network. The printed tag
@@ -116,6 +129,28 @@ enum Commands {
     /// a normal start.
     #[command(name = "network-tag")]
     NetworkTag,
+}
+
+#[derive(clap::Args, Debug)]
+struct GenesisBundleArgs {
+    /// Chain the bundle is for: 1 mainnet, 2 testnet, 3 devnet, 1337 local
+    #[arg(long)]
+    chain_id: u64,
+
+    /// Directory holding the genesis files (`genesis_validators.toml` at
+    /// least). Anything else in it is refused, so keys and configs cannot be
+    /// published by accident.
+    #[arg(long, value_name = "DIR")]
+    source: std::path::PathBuf,
+
+    /// Output archive (default `kovanica-chain<chain-id>-genesis.tar.gz` in
+    /// the current directory). Must be outside `--source`.
+    #[arg(long, value_name = "FILE")]
+    out: Option<std::path::PathBuf>,
+
+    /// Overwrite an existing output archive
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -132,8 +167,8 @@ struct GenesisArgs {
     #[arg(long, value_name = "HEX")]
     founder_address: String,
 
-    /// Chain this genesis is for (1 mainnet, 2 testnet, 3 devnet, 4 testnet
-    /// v2, 1337 local). Legacy hex addresses are accepted on 3, 4, and 1337.
+    /// Chain this genesis is for (1 mainnet, 2 testnet, 3 devnet, 1337 local).
+    /// Legacy hex addresses are accepted on 3 and 1337.
     #[arg(long)]
     chain_id: u64,
 
@@ -209,6 +244,9 @@ async fn main() -> Result<()> {
         Some(Commands::Genesis(g)) => {
             return run_genesis(g);
         }
+        Some(Commands::GenesisBundle(b)) => {
+            return run_genesis_bundle(b);
+        }
         Some(Commands::NetworkTag) => {
             return run_network_tag(&args.config);
         }
@@ -225,6 +263,152 @@ fn run_network_tag(config_path: &str) -> Result<()> {
     let config = NodeConfig::load(config_path)?;
     let tag = network_tag_from_config(&config)?;
     println!("{tag}");
+    Ok(())
+}
+
+/// Build the deterministic genesis bundle a network publishes.
+///
+/// Everything a node checks at startup is checked here first, so a bundle that
+/// could not start is never written: the chain id must be registered, the
+/// genesis file set must be one the node accepts, and the network tag is
+/// computed the way a joining node computes it.
+///
+/// The tag comes from `NodeConfig::default()` plus `--chain-id` and `--source`
+/// only. It deliberately does not read the environment: a bundle must be
+/// reproducible from its files alone, so `KOVANICA_*` overrides (treasury,
+/// emission policy, bootnodes) are ignored — and a node that does set them
+/// computes a different tag, which is exactly what the published
+/// `expected-tag` catches.
+fn run_genesis_bundle(args: GenesisBundleArgs) -> Result<()> {
+    use std::path::PathBuf;
+
+    let chain_id = args.chain_id;
+    if !kovanica_types::signing::chain_id::is_registered(chain_id) {
+        anyhow::bail!(
+            "--chain-id {chain_id} is not a registered chain; use 1 (mainnet), 2 (testnet), \
+             3 (devnet) or 1337 (local)"
+        );
+    }
+
+    let source = args.source;
+    let config = genesis_bundle_config(chain_id, &source);
+
+    // Startup rules that depend only on the genesis file set. Reporting them
+    // here makes "cut a bundle" fail where "start a node" would fail.
+    ensure_funded_accounts_allowed(&config)?;
+    ensure_bundle_genesis_chain_id(&config)?;
+    if chain_id == kovanica_types::signing::chain_id::MAINNET {
+        if let Some(count) = declared_genesis_validator_count(&config)? {
+            ensure_mainnet_genesis_validator_count(chain_id, count)?;
+        }
+    }
+
+    // Computes the digest, which parses every address, key and balance in the
+    // file set and resolves the emission policy.
+    let tag = network_tag_from_config(&config)?;
+
+    let out = args
+        .out
+        .unwrap_or_else(|| PathBuf::from(format!("kovanica-chain{chain_id}-genesis.tar.gz")));
+    refuse_output_inside_source(&source, &out)?;
+    if out.exists() && !args.force {
+        anyhow::bail!(
+            "{} already exists; pass --force to overwrite it",
+            out.display()
+        );
+    }
+
+    let bundle = genesis_bundle::build(&source, chain_id, &tag)?;
+
+    // Write beside the destination and rename, so an interrupted write never
+    // leaves a truncated archive that already looks published.
+    let mut tmp = out.clone().into_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, &bundle.archive).with_context(|| format!("writing {}", tmp.display()))?;
+    if let Err(err) = std::fs::rename(&tmp, &out) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err).with_context(|| format!("moving {} into place", out.display()));
+    }
+
+    println!("genesis bundle for chain {chain_id}: {}", out.display());
+    println!("  source       {}", source.display());
+    println!(
+        "  files        {}",
+        bundle
+            .genesis_files
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!("  archive      {} bytes", bundle.archive.len());
+    println!(
+        "  sha256       {}",
+        genesis_bundle::sha256_hex(&bundle.archive)
+    );
+    println!("  network tag  {tag}");
+    Ok(())
+}
+
+/// The configuration a bundle is judged by: node defaults plus the chain and
+/// the source directory. Nothing is read from disk and no `KOVANICA_*`
+/// override is applied.
+fn genesis_bundle_config(chain_id: u64, source: &std::path::Path) -> NodeConfig {
+    NodeConfig {
+        chain_id,
+        data_dir: source.to_path_buf(),
+        ..NodeConfig::default()
+    }
+}
+
+/// `genesis_validators.toml` must declare the chain the bundle is for.
+///
+/// The genesis digest binds the *configured* chain id, not the one written in
+/// the file, so a mismatch would produce a bundle whose tag no node can match:
+/// every node using it would refuse to start in `check_chain_id` while the
+/// bundle itself looked fine.
+fn ensure_bundle_genesis_chain_id(config: &NodeConfig) -> Result<()> {
+    let path = config.data_dir.join("genesis_validators.toml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let genesis: GenesisValidatorsFile =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    match genesis.chain_id {
+        Some(declared) if declared != config.chain_id => anyhow::bail!(
+            "{} declares chain_id {declared} but --chain-id is {}; a node would refuse to start \
+             with this bundle",
+            path.display(),
+            config.chain_id
+        ),
+        None if config.chain_id == kovanica_types::signing::chain_id::MAINNET => anyhow::bail!(
+            "chain 1 (mainnet) requires an explicit chain_id in {}",
+            path.display()
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Refuse an output archive that would land inside the directory it is built
+/// from: the next run would reject that file as a non-genesis file, and a
+/// half-written archive beside the sources is a trap either way.
+fn refuse_output_inside_source(source: &std::path::Path, out: &std::path::Path) -> Result<()> {
+    let source =
+        std::fs::canonicalize(source).with_context(|| format!("resolving {}", source.display()))?;
+    let parent = match out.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => std::path::Path::new("."),
+    };
+    let parent = std::fs::canonicalize(parent)
+        .with_context(|| format!("resolving the output directory {}", parent.display()))?;
+    if parent == source {
+        anyhow::bail!(
+            "{} is inside --source {}; write the archive elsewhere so the bundle directory \
+             keeps only genesis files",
+            out.display(),
+            source.display()
+        );
+    }
     Ok(())
 }
 
@@ -9880,8 +10064,10 @@ mod tests {
         assert!(genesis_config_digest(&devnet).is_ok());
     }
 
-    /// The published checksum example must not tell a mainnet operator to hash
-    /// `funded_accounts.toml`. That file is refused on chain 1.
+    /// The published checksum guidance must not tell a mainnet operator to hash
+    /// `funded_accounts.toml`. That file is refused on chain 1. The bundle is
+    /// now cut by `genesis-bundle`, which writes `SHA256SUMS` itself; the docs
+    /// must keep the mainnet omission and the off-mainnet inclusion in prose.
     #[test]
     fn mainnet_sha256sum_example_omits_funded_accounts() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -9890,37 +10076,39 @@ mod tests {
             std::fs::read_to_string(root.join("docs/VALIDATOR-ONBOARDING.md")).unwrap();
         let ceremony = std::fs::read_to_string(root.join("docs/GENESIS-CEREMONY.md")).unwrap();
 
-        let mut saw_mainnet = false;
-        let mut saw_off_mainnet = false;
-        let mut mainnet_command = false;
+        assert!(
+            reset.contains("kovanica-node genesis-bundle"),
+            "TESTNET-RESET.md must tell operators to cut the bundle with genesis-bundle"
+        );
+        assert!(
+            reset.contains("`funded_accounts.toml` on mainnet (chain 1)")
+                && reset.contains("must not appear in the checksum list"),
+            "TESTNET-RESET.md must say genesis-bundle refuses funded_accounts.toml on chain 1"
+        );
+        assert!(
+            reset.contains("`funded_accounts.toml` and `validators.json` are")
+                && reset.contains("included when present"),
+            "TESTNET-RESET.md must still say off-mainnet bundles can include funded_accounts.toml"
+        );
+        // A leftover hand-rolled recipe must not tell a mainnet operator to
+        // hash funded_accounts.toml.
+        let mut after_mainnet_marker = false;
         for line in reset.lines() {
             let trimmed = line.trim();
             if trimmed == "# chain 1 (mainnet)" {
-                mainnet_command = true;
+                after_mainnet_marker = true;
                 continue;
             }
-            if !trimmed.starts_with("sha256sum ") {
-                continue;
-            }
-            if mainnet_command {
+            if trimmed.starts_with("sha256sum ") && trimmed.contains("funded_accounts.toml") {
                 assert!(
-                    !trimmed.contains("funded_accounts.toml"),
+                    !after_mainnet_marker,
                     "mainnet checksum must omit funded_accounts.toml: {trimmed}"
                 );
-                assert!(trimmed.contains("validators.json"));
-                assert!(trimmed.contains("founder_premine.hex"));
-                assert!(trimmed.contains("genesis_validators.toml"));
-                saw_mainnet = true;
-                mainnet_command = false;
-            } else if trimmed.contains("funded_accounts.toml") {
-                saw_off_mainnet = true;
+            }
+            if after_mainnet_marker && trimmed.starts_with("sha256sum ") {
+                after_mainnet_marker = false;
             }
         }
-        assert!(saw_mainnet, "missing the chain 1 sha256sum example");
-        assert!(
-            saw_off_mainnet,
-            "off-mainnet bundles still hash funded_accounts.toml"
-        );
         assert!(
             onboarding.contains("On mainnet (chain 1)") && onboarding.contains("must not name it"),
             "onboarding must say the mainnet checksum omits funded_accounts.toml"

@@ -95,23 +95,45 @@ retired chain-4 bundle.
 
 Do not invent another host for it, and do not re-generate the files.
 
-From the directory that holds the bundle files.
+### Cut the bundle with the node binary
 
-Off mainnet, `funded_accounts.toml` may be part of the bundle (every chain
-except chain 1 allows it):
-
-```sh
-# off mainnet
-sha256sum validators.json founder_premine.hex funded_accounts.toml genesis_validators.toml > SHA256SUMS
-```
-
-On mainnet (chain 1) that file is forbidden. It must not be in the data
-directory, and the checksum list must not name it:
+Never assemble the archive by hand: cut it from the directory that holds the
+genesis files, with the same binary the network runs.
 
 ```sh
-# chain 1 (mainnet)
-sha256sum validators.json founder_premine.hex genesis_validators.toml > SHA256SUMS
+kovanica-node genesis-bundle --chain-id 2 --source <genesis-dir>
 ```
+
+`--source` must hold only genesis files: `genesis_validators.toml` is required,
+`founder_premine.hex`, `funded_accounts.toml` and `validators.json` are
+included when present. The command refuses every other entry, so a key, a
+keystore or `config.toml` in that directory is an error instead of a silent
+omission — a bundle is published, and nothing else from an operator directory
+may end up in it. It also refuses an unregistered chain id, a
+`genesis_validators.toml` whose `chain_id` disagrees with `--chain-id`, and
+`funded_accounts.toml` on mainnet (chain 1), where that file is forbidden and
+must not appear in the checksum list either.
+
+The output is `kovanica-chain<chain-id>-genesis.tar.gz` (`--out <file>` to
+choose another path). It contains the genesis files, a `SHA256SUMS` over
+exactly those files, and an `expected-tag` file that `node/scripts/install.sh`
+compares a joining node against. The archive is deterministic: sorted entries,
+fixed tar metadata (mode 0644, uid/gid 0, mtime 0) and an uncompressed deflate
+stream, so the same files produce the same bytes on every machine regardless
+of the host's zlib. Rebuilding a published bundle is therefore a valid check —
+a difference means the input files differ.
+
+The tag is computed from the files and `--chain-id` only. `KOVANICA_*`
+overrides are ignored, so the command cannot certify a tag that exists only in
+one operator's environment; a node that does set them computes a different
+tag, which is exactly what the published `expected-tag` catches.
+
+`--force` overwrites an existing archive. The archive is written to a
+temporary file and renamed into place, so an interrupted run never leaves a
+truncated file that already looks published.
+
+Attaching `kovanica-chain<chain-id>-genesis.tar.gz` to the `v<version>-node`
+release is a separate ops step.
 
 On each node, after the files are copied into the data directory and before
 the first start:

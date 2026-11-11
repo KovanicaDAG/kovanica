@@ -34,6 +34,7 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 toml = "0.8"
 hex = { workspace = true }
 zeroize = "1"
