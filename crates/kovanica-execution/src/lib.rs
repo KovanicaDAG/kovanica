@@ -92,6 +92,20 @@ fn reward_key(delegator: &Address, validator: &Address) -> [u8; 64] {
     k
 }
 
+/// Exact KVNC amount for logs and messages.
+///
+/// Base units are never rounded for display either: dividing by `ONE_KUNA` alone
+/// drops the fraction, so the initial 2.5 KVNC reward would log as `2`, and the
+/// decayed 0.79 KVNC of era 4 would log as `0` while the chain still mints it.
+fn kvnc_amount(base_units: u64) -> String {
+    format!(
+        "{}.{:0width$}",
+        base_units / kovanica_staking::ONE_KUNA,
+        base_units % kovanica_staking::ONE_KUNA,
+        width = kovanica_staking::DECIMALS as usize
+    )
+}
+
 #[derive(Error, Debug)]
 pub enum ExecutionError {
     #[error("Staking error: {0}")]
@@ -707,7 +721,8 @@ impl ExecutionContext {
             target: "kovanica-execution",
             round = subdag.leader_round,
             author = subdag.leader_author,
-            reward_kuna = reward.amount / kovanica_staking::ONE_KUNA,
+            reward_kvnc = kvnc_amount(reward.amount),
+            reward_base_units = reward.amount,
             ticker = kovanica_staking::TICKER,
             // The committed-leader height the reward formula was evaluated at,
             // *before* this commit is numbered (height N is paid for the block
@@ -1446,7 +1461,7 @@ impl ExecutionContext {
         info!(
             target: "kovanica-execution",
             "Treasury claim: {} {} credited to {:?}",
-            claimed / kovanica_staking::ONE_KUNA,
+            kvnc_amount(claimed),
             kovanica_staking::TICKER,
             treasury_address
         );
@@ -2115,6 +2130,20 @@ mod tests {
 
     /// Tests sign for the dev/test network `ExecutionContext::new` uses.
     const TEST_CTX: SigningContext = SigningContext::new(chain_id::LOCAL);
+
+    #[test]
+    fn kvnc_amount_keeps_the_fraction() {
+        // The initial reward is 2.5 KVNC, not 2.
+        assert_eq!(kvnc_amount(2_500_000_000), "2.500000000");
+        // Era 1 is 1.875 KVNC, and era 4 (0.79 KVNC) is still minted.
+        assert_eq!(kvnc_amount(1_875_000_000), "1.875000000");
+        assert_eq!(kvnc_amount(790_000_000), "0.790000000");
+        // Whole amounts keep all nine decimals so log lines stay aligned.
+        assert_eq!(kvnc_amount(1_000_000_000), "1.000000000");
+        assert_eq!(kvnc_amount(0), "0.000000000");
+        // The smallest base unit is not lost either.
+        assert_eq!(kvnc_amount(1), "0.000000001");
+    }
 
     fn sample_block(author: u16) -> StatementBlock {
         sample_block_at(author, 1)
