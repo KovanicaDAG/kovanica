@@ -9,6 +9,7 @@ use kovanica_consensus::mining::{mine_header_async, MiningWorker};
 use kovanica_dag::DagStore;
 use kovanica_mempool::Mempool;
 use kovanica_types::block::{BlockHeader, BlockReference, StatementBlock};
+use kovanica_types::hash::Hash;
 use kovanica_types::CommittedSubDag;
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
@@ -130,17 +131,7 @@ pub async fn run_mining_loop(
         }
 
         let parents = select_parents_from_tips(&dag_store, kovanica_params::GHOSTDAG_K as usize);
-        let round = if parents.is_empty() {
-            0
-        } else {
-            let mut max_r = 0u64;
-            for p in &parents {
-                if let Ok(b) = dag_store.get_block(p) {
-                    max_r = max_r.max(b.round);
-                }
-            }
-            max_r.saturating_add(1)
-        };
+        let round = next_round(&dag_store, &parents);
 
         let parent_refs: Vec<BlockReference> = parents
             .iter()
@@ -172,63 +163,118 @@ pub async fn run_mining_loop(
         };
         kovanica_consensus::metrics::set_pow_target_bits(target_bits);
 
+        // The transaction set of a round is chosen once. `get_next_transactions`
+        // moves what it returns out of the fee queues and into the in-flight
+        // set, so asking again while the same round is still being mined would
+        // rebuild the next chunk without those transactions.
         let txs = mempool.get_next_transactions(kovanica_types::MAX_TXS_PER_BLOCK);
         let merkle_root = StatementBlock::compute_merkle_root(&txs);
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
 
-        let header = BlockHeader::new(
-            chain_id,
-            round,
-            author,
-            parent_refs,
-            merkle_root,
-            now_ms,
-            target_bits,
-            current_nonce,
+        // Mine the round in bounded chunks so the loop cooperates with tokio,
+        // reacts to shutdown, and abandons a header as soon as a peer settles the
+        // round it belongs to.
+        //
+        // A chunk has to be short in wall clock, not only in iterations: a hash
+        // costs the same everywhere, but the hashrate does not, and a fixed 50k
+        // chunk is ~85 s on this repository's 3-node test cluster. Spending that
+        // long on a stale header makes the loser publish a block after the round
+        // was already won, and the extra same-round parent brings timestamps that
+        // are seconds apart — which the DAA clamps to 4x tighter difficulty.
+        // 5k keeps the re-check near ten seconds at test hashrates; the check is
+        // a tips read, microseconds next to the hashing it interrupts.
+        const CHUNK_ITERATIONS: u64 = 5_000;
+        let chunk_span = CHUNK_ITERATIONS.saturating_mul(mining_config.threads.max(1) as u64);
+
+        let mined = loop {
+            if *shutdown_rx.borrow() {
+                info!("PoW miner loop received shutdown signal; stopping");
+                break None;
+            }
+
+            // A fresh timestamp per chunk, so a block that took several minutes
+            // to find does not enter the DAA window with a stale one.
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let header = BlockHeader::new(
+                chain_id,
+                round,
+                author,
+                parent_refs.clone(),
+                merkle_root,
+                now_ms,
+                target_bits,
+                current_nonce,
+            );
+            current_nonce = current_nonce.wrapping_add(chunk_span);
+
+            if let Some(mined_header) = miner
+                .mine_async_with_threads(header, CHUNK_ITERATIONS, mining_config.threads)
+                .await
+            {
+                break Some(mined_header);
+            }
+
+            let tips = select_parents_from_tips(&dag_store, kovanica_params::GHOSTDAG_K as usize);
+            if next_round(&dag_store, &tips) > round {
+                info!(
+                    round,
+                    "abandoning header: a peer already settled this round"
+                );
+                break None;
+            }
+        };
+
+        let Some(mined_header) = mined else {
+            // Shutting down, or the round moved on under us: rebuild the header
+            // from the new tips on the next iteration.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            continue;
+        };
+
+        info!(
+            round = mined_header.round,
+            pow_hash = ?mined_header.pow_hash,
+            nonce = mined_header.nonce,
+            "successfully mined new PoW block on Chain 2"
         );
 
-        // Mine with bounded iterations so loop cooperates with tokio and shutdown
-        const CHUNK_ITERATIONS: u64 = 50_000;
-        let chunk_span = CHUNK_ITERATIONS.saturating_mul(mining_config.threads.max(1) as u64);
-        current_nonce = current_nonce.wrapping_add(chunk_span);
-        if let Some(mined_header) = miner
-            .mine_async_with_threads(header, CHUNK_ITERATIONS, mining_config.threads)
-            .await
-        {
-            info!(
-                round = mined_header.round,
-                pow_hash = ?mined_header.pow_hash,
-                nonce = mined_header.nonce,
-                "successfully mined new PoW block on Chain 2"
-            );
+        let statement_block = mined_header.to_statement_block(txs);
+        if let Err(e) = dag_store.put_block(&statement_block) {
+            error!(error = %e, "failed to persist mined block in dag_store");
+            continue;
+        }
 
-            let statement_block = mined_header.to_statement_block(txs);
-            if let Err(e) = dag_store.put_block(&statement_block) {
-                error!(error = %e, "failed to persist mined block in dag_store");
-                continue;
-            }
+        let subdags = {
+            let mut gd = ghostdag.lock();
+            gd.add_block(statement_block.clone());
+            gd.commit_uncommitted_selected_chain()
+        };
 
-            let subdags = {
-                let mut gd = ghostdag.lock();
-                gd.add_block(statement_block.clone());
-                gd.commit_uncommitted_selected_chain()
-            };
+        for subdag in subdags {
+            let _ = exec_tx.send(subdag);
+        }
 
-            for subdag in subdags {
-                let _ = exec_tx.send(subdag);
-            }
-
-            if let Err(e) = network_cmd_tx.send(NetworkCommand::BroadcastBlock(statement_block)) {
-                warn!(error = %e, "failed to broadcast mined block to P2P network");
-            }
-        } else {
-            // Yield briefly to let other tasks run
-            tokio::time::sleep(Duration::from_millis(50)).await;
+        if let Err(e) = network_cmd_tx.send(NetworkCommand::BroadcastBlock(statement_block)) {
+            warn!(error = %e, "failed to broadcast mined block to P2P network");
         }
     }
+}
+
+/// Round a candidate block built on `parents` would carry: one past the highest
+/// round among them. Zero when there is no parent to build on yet.
+fn next_round(dag_store: &DagStore, parents: &[Hash]) -> u64 {
+    if parents.is_empty() {
+        return 0;
+    }
+    let mut max_round = 0u64;
+    for parent in parents {
+        if let Ok(block) = dag_store.get_block(parent) {
+            max_round = max_round.max(block.round);
+        }
+    }
+    max_round.saturating_add(1)
 }
 
 #[cfg(test)]
@@ -259,6 +305,30 @@ mod tests {
             .await
             .expect("should mine block async");
         assert!(mined_async.verify_pow().is_ok());
+    }
+
+    #[test]
+    fn next_round_is_one_past_the_highest_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::new(dir.path().join("dag.redb")).unwrap();
+        let dag = DagStore::new(storage).unwrap();
+
+        // Nothing to build on yet.
+        assert_eq!(next_round(&dag, &[]), 0);
+
+        // A parent the store does not know is treated as round 0, the same way
+        // the header used to be built when `get_block` failed.
+        assert_eq!(next_round(&dag, &[Hash::zero()]), 1);
+
+        let header = BlockHeader::new(5, 1, 0, vec![], Hash::zero(), 10_000, 0x207fffff, 0);
+        let block = header.to_statement_block(vec![]);
+        let digest = block.digest;
+        dag.put_block(&block).unwrap();
+
+        // The stored block is round 1, so a child of it is round 2, whether or
+        // not an unknown parent is mixed in.
+        assert_eq!(next_round(&dag, &[digest]), 2);
+        assert_eq!(next_round(&dag, &[digest, Hash::zero()]), 2);
     }
 
     #[test]
