@@ -60,6 +60,9 @@ jobs:
       - name: Formatting
         run: bash scripts/ci-local.sh fmt
 
+      - name: Node installer tests
+        run: bash scripts/ci-local.sh scripts
+
       - name: Clippy (deny warnings)
         run: bash scripts/ci-local.sh clippy
 

@@ -3,7 +3,7 @@
 ## 1. Overview & Consensus Invariants
 
 Per **ADR 0003** and the locked architectural decisions (Toni 2026-11-05):
-- **Chain ID:** `5` (`HYBRID_TESTNET`)
+- **Chain ID:** `2` (`TESTNET`, legacy alias `HYBRID_TESTNET`)
 - **Consensus Model:** Hybrid PoW + GHOSTDAG
 - **Stake Role:** **NO stake in consensus path** (no committee voting, no VRF leader tickets, no certificate quorums)
 - **PoW Algorithm:** **KovanicaHash** (BLAKE3 + 2 MiB memory mix)
@@ -35,7 +35,7 @@ author = 0
 ### Environment Variable Overrides
 Alternatively, configure via standard environment variables:
 ```bash
-export KOVANICA_CHAIN_ID=5
+export KOVANICA_CHAIN_ID=2
 export KOVANICA_MINING_ENABLED=true
 export KOVANICA_MINING_THREADS=2
 export KOVANICA_LISTEN_ADDR="0.0.0.0:8000"
@@ -63,7 +63,7 @@ kovanica dag tips --rpc-url http://127.0.0.1:8545
 ### Faucet Dispensing
 The testnet faucet operates directly with Chain 2:
 ```bash
-kovanica-faucet --chain-id 5 --rpc-url http://127.0.0.1:8545 --port 3000
+kovanica-faucet --chain-id 2 --rpc-url http://127.0.0.1:8545 --port 3000
 ```
 
 ---

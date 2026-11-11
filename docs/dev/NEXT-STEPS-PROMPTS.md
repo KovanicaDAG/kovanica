@@ -4,9 +4,17 @@ This document contains formatted, ready-to-paste prompts for the next phases of 
 
 Choose any prompt below and paste it directly into an OpenCode / Antigravity pair-programming session.
 
+> **Status (2026-11-10):** all four prompts are **implemented and merged**. They
+> are kept as the record of what shipped, not as pending work; check the code
+> before pasting one.
+
 ---
 
 ## Prompt 1: Standalone Solo Miner CLI Tooling (`kovanica miner run`)
+
+**Implemented** in `crates/kovanica-cli/src/miner.rs` (`kovanica miner run`,
+`kovanica miner bench`, and the `kovanica mining run|bench` aliases) on top of
+`kovanica_getWork` / `kovanica_submitWork`.
 
 Use this prompt to build a standalone, multithreaded CPU mining tool directly in `kovanica-cli` that utilizes the `kovanica_getWork` and `kovanica_submitWork` RPC methods.
 
@@ -72,6 +80,11 @@ ANTI:
 
 ## Prompt 2: Live Multi-Node Docker Compose Cluster & Observability
 
+**Implemented**: `ops/docker/docker-compose.chain2.yml` (3 nodes + faucet +
+Prometheus + Grafana), `ops/docker/grafana/dashboards/hybrid-testnet.json`,
+`ops/docker/test-chain2-cluster.sh`, documented in `docs/dev/HYBRID-TESTNET-M8.md`
+§6 and `ops/docker/README.md`.
+
 Use this prompt to build containerized multi-node testnet orchestration with Prometheus and Grafana monitoring.
 
 ```markdown
@@ -136,6 +149,13 @@ ANTI:
 
 ## Prompt 3: TypeScript API Client & Explorer UI Alignment (`packages/`)
 
+**Implemented**: `packages/api-client` exports `ChainId.TESTNET = 2` with
+`HYBRID_TESTNET` as an alias (the prompt's `HYBRID_TESTNET = 5` predates the
+registry change), plus the typed `getMiningInfo`, `getDagTips`, `getWork` and
+`submitWork` methods and their result types; `packages/console` shows the
+mining panel and `packages/web` renders the PoW header fields (`nonce`,
+`pow_hash`, `target_bits`) and GHOSTDAG blue score.
+
 Use this prompt to align the TypeScript SDK and Explorer / Console frontend with Chain 2 and PoW GHOSTDAG structures.
 
 ```markdown
@@ -198,6 +218,9 @@ ANTI:
 ---
 
 ## Prompt 4: BIP32 / BIP44 Hierarchical Deterministic (HD) Wallet Derivation
+
+**Implemented**: `crates/kovanica-wallet-core/src/hd.rs` (SLIP-0010 Ed25519),
+with `--account` / `--index` on the CLI signing paths.
 
 Use this prompt to implement standard BIP32/BIP44 derivation paths for multi-account management from a single seed phrase.
 

@@ -1,6 +1,6 @@
 # STATE — living source of truth
 
-**Tip:** `d0b129639150e114d88d6d97336cb82546ae4f76` (Release `v1.0.0-mainnet`, merge of `fix/ci-genesis-ceremony-and-mainnet-freeze` #214 on 2026-11-09; prior living tips `89394a2da7d9fb119072aacd1ff7997f0e3225c4`, `559cc2014592e1c621da2df78d9671e7476972d1`).
+**Tip:** `9029514b448fd825cd9f19f6d72885974bc3340a` (merge of `chore/canonical-cleanup-chain1-hybrid` #224 on 2026-11-10: chain 1 declared canonical hybrid, chain 4 removed from the registry, chain-independent stored-address parsing; prior #223 `feat(hybrid)` merge `7b5b5a7`, prior living tips `d0b129639150e114d88d6d97336cb82546ae4f76`, `89394a2da7d9fb119072aacd1ff7997f0e3225c4`, `559cc2014592e1c621da2df78d9671e7476972d1`).
 Update this file when frozen params or open product gaps change. Point-in-time dumps live under `docs/archive/`; they are not SoT.
 
 ## Active Priority: Hybrid PoW + GHOSTDAG (P0–P8)
@@ -45,6 +45,7 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 1. Ops drift (live fleet cutover): VPS systemd units & migration script prepared in `ops/systemd/` and `scripts/cutover-vps-systemd.sh` (live cutover execution pending VPS Seed Ops deploy); DNS seed audit probe automated in `scripts/check-dns-seeds.sh` (`docs/SEED-DNS-AUDIT.md`).
 2. External security review (formal audit dispatch of `v1.0.0-mainnet` covering KovanicaHash and Wasmi sandbox; template: `docs/AUDIT_REPORT.template.md`, `docs/AUDIT-SCOPE.md`, `docs/AUDITOR-INVITATION.md`).
 3. Production Key Ceremony & Launch ($T_0 - 48\text{h}$): Live key collection and final distribution for 15–20 mainnet bootstrap operators via `ops/genesis/ceremony.sh` per `docs/KEY-CEREMONY.md` and `docs/MAINNET-RUNBOOK.md`.
+4. Chain-2 genesis bundle publication (ops): no `kovanica-chain2-genesis.tar.gz` exists on any `v<version>-node` release, so `node/scripts/install.sh` (chain 2 by default, fail-closed on a missing tag) cannot complete an install until ops cuts the bundle from the live chain-2 genesis set with an `expected-tag` file. `.github/workflows/release-node.yml` still packages the retired `testnet/chain4/` bundle and must be re-pointed in the same step.
 
 **Done / frozen, do not re-open as missing:**
 - Mainnet Freeze & Gate Sign-Off (Phases C1–C3): Audit scoping updated (`docs/AUDIT-SCOPE.md`), genesis key ceremony streamlined (`ops/genesis/ceremony.sh`), validator bounds relaxed to `1..=20`, byte-for-byte deterministic genesis validated (`2f46c80940dc5226f8f25aad6eff428c3cd58c7fb505cf9861ad63db4cdbabc9`), soak pre-flight verification passed (monotonic height growth, 0 OOM kills under 2 GB limit), Gates 1–6 signed off in `docs/MAINNET-FREEZE-CHECKLIST.md`, and release tag `v1.0.0-mainnet` tagged on `main`.
@@ -53,3 +54,4 @@ Gated hardening still inert on live chain until a genesis reset flips `*_ACTIVE_
 - PRO-7 (Mysticeti VRF leader set + pin): **FROZEN** for hybrid.
 - Hybrid PoW + GHOSTDAG P1–P8 & Milestone M8 (PoW header primitives, preimages, target conversion, Chain ID 2 wiring, KovanicaHash BLAKE3+2MiB algorithm, header verification, CPU mining worker, DAA, P2P network anti-DoS ingress, GHOSTDAG k=5 committer, 2.5 KVNC reward minting, node miner loop, JSON-RPC getWork/submitWork/miningInfo/dagTips, CLI mining/dag commands, Prometheus metrics, live 3-node cluster integration test suite, faucet alignment, ops templates). Milestone M8 PASSED.
 - Contract SDK (`crates/kovanica-contract-sdk`) and Indexer (`crates/kovanica-indexer`).
+- Node installer (`node/scripts/install.sh`) is chain-agnostic (#225): `--chain-id` (default 2), bundle asset derived from the chain id, expected tag from `--expected-tag`/`KOVANICA_EXPECTED_TAG` or an `expected-tag` file inside the checksum-verified bundle, fail-closed when unpinned, `--skip-tag-check` as the explicit opt-out, chain-1 `funded_accounts.toml` refusal, and no legacy Mysticeti knobs in the generated config.

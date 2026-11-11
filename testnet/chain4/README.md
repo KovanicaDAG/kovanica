@@ -1,4 +1,12 @@
-# Chain-4 genesis bundle
+# Chain-4 genesis bundle — **RETIRED**
+
+> **Retired 2026-11-10.** Chain 4 (`TESTNET_V2`) was removed from the chain-id
+> registry; the canonical public testnet is chain 2 (`TESTNET`), see
+> `docs/dev/CANONICAL-TESTNET-2.md`. A binary built from current `main` refuses
+> to start with `chain_id = 4`, and `node/scripts/install.sh` targets chain 2 by
+> default. These files are kept only because
+> `.github/workflows/release-node.yml` still packages them until an ops-published
+> chain-2 bundle exists; do not point a new node at this directory.
 
 These three files are the **exact** bytes the live public testnet (chain 4)
 nodes hold in their data directory. They are hashed into the genesis config

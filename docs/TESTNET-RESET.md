@@ -15,10 +15,10 @@ the mesh.
 
 - Chain height, balances, and the mempool are gone — the new chain starts at
   genesis.
-- Consensus follows the running binary's rules. Under MysticGhost, commit
-  colouring is scoped GHOSTDAG, and each committed leader mints the block
-  reward. If no light nodes are bonded, the light escrow share returns to the
-  contributing leaders.
+- Consensus follows the running binary's rules. Ordering is scoped GHOSTDAG
+  (`GHOSTDAG_K = 5`), and each committed block mints the block reward to its
+  author. If no light nodes are bonded, the light escrow share returns to the
+  contributing miners.
 
 ## Procedure
 
@@ -41,7 +41,7 @@ the mesh.
    below) and then head height / digest across all nodes before re-opening
    the mesh to public traffic.
 
-## Chain 4: one byte-identical genesis bundle for every node
+## One byte-identical genesis bundle per network for every node
 
 Since #87, every libp2p protocol id and gossip topic carries the node's
 **network tag**: `<chain_id>-<first 16 hex chars of the genesis config
@@ -69,7 +69,7 @@ If neither is set, the **all-zero address** is what enters the digest. Two
 nodes that disagree about the treasury, including one of them leaving it
 unset, get different tags.
 
-**Every** chain-4 node needs the **same chain id, the same binary and the
+**Every** node on a network needs the **same chain id, the same binary and the
 same file set**, byte for byte: validators, seeds, RPC nodes, the explorer
 backend and the faucet. A file that is missing on one node and present on
 another changes the tag, even when the operator treats that file as optional.
@@ -78,12 +78,20 @@ Do not let each operator re-type or regenerate files.
 ### Check the bundle before the first start
 
 Coordinators publish two things with the bundle: a `SHA256SUMS` file and the
-expected network tag. For chain 4 the bundle is cut from
-`testnet/chain4/` in this repository and shipped twice:
+expected network tag. Each network's bundle is cut from its canonical source in
+this repository and shipped twice:
 
 - in the repository (the canonical bytes, with the expected sha256 sums),
-- as `kovanica-chain4-genesis.tar.gz` on the `v<version>-node` GitHub release,
-  next to the prebuilt binaries and the same `SHA256SUMS`.
+- as `kovanica-chain<chain-id>-genesis.tar.gz` on the `v<version>-node` GitHub
+  release, next to the prebuilt binaries and the same `SHA256SUMS`. The bundle
+  also carries an `expected-tag` file, which is what
+  `node/scripts/install.sh` compares against.
+
+Chain 2 (the canonical hybrid public testnet) is the target network; chain 4
+(`testnet/chain4/`) is retired and its bundle is no longer a valid install
+target. Until a chain-2 bundle is published for the `v<version>-node` release,
+the installer fails closed and names the missing asset — do not point it at the
+retired chain-4 bundle.
 
 Do not invent another host for it, and do not re-generate the files.
 
@@ -128,7 +136,7 @@ A running node also returns the tag on the read-only `kovanica_syncStatus`
 method as `networkTag`, and logs it at `info` on startup:
 
 ```
-network identity: peers must share this tag  chain_id=4 network_tag=4-<16 hex>
+network identity: peers must share this tag  chain_id=<id> network_tag=<id>-<16 hex>
 ```
 
 Before opening the mesh, compare that line (or `networkTag`, or
@@ -152,7 +160,7 @@ the persisted value:
   deliberate single-node migration;
 - **no persisted digest but chain state present** — startup **refuses**, with
   or without the override. Genesis writes the digest together with the state,
-  so such a data directory predates the chain-4 format change (#81) and cannot
+  so such a data directory predates the #81 format change and cannot
   be migrated. Wipe it (step 3).
 
 If you see the mismatch error after a legitimate reset, the fix is the wipe in
@@ -172,6 +180,12 @@ together.
 ---
 
 # Testnet-reset activation plan (gated hardening flags)
+
+> **Superseded in part (ADR 0003, 2026-11-05).** This plan was written before
+> the hybrid PoW migration. Consensus is now Hybrid PoW + GHOSTDAG with **no
+> stake and no VRF leader election**, so the VRF items below no longer apply;
+> the `*_ACTIVE_FROM_ROUND` gates are still inert and unchanged. The reset
+> procedure itself is still valid.
 
 This section is an operator runbook for the **next testnet genesis reset**.
 It activates the currently inert hardening gates by resetting them to `0` on a
@@ -197,8 +211,9 @@ change any numeric tokenomics.
 1. Pick the frozen commit; record `sha256sum kovanica-node`.
 2. Rotate validator keys only if planned; otherwise reuse. Ensure each
    validator's `vrf_public_key` is populated in `genesis_validators.toml`
-   (required for VRF C1 to be live from genesis).
-3. Set `chain_id` (testnet = 4) and treasury address consistently.
+   (pre-hybrid requirement for a VRF leader schedule; **not applicable under
+   ADR 0003**).
+3. Set `chain_id` (testnet = 2) and treasury address consistently.
 4. Wipe every data dir, deploy the bundle (`validators.json`,
    `founder_premine.hex`, `funded_accounts.toml`, `genesis_validators.toml`),
    verify `sha256sum -c SHA256SUMS` and `kovanica-node network-tag`.
@@ -218,7 +233,7 @@ change any numeric tokenomics.
 | `CONTRACT_HARDENING_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Invalid deploy / non-entry WASM calls rejected; contract hardening checks |
 | `SIZE_LIMITS_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Block/tx size limits enforced |
 | `SLASHING_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Slashing evidence path live |
-| VRF keys in `genesis_validators.toml` | optional/null | populated | VRF leader schedule live from genesis |
+| VRF keys in `genesis_validators.toml` | optional/null | n/a under ADR 0003 | *(was: VRF leader schedule live from genesis)* |
 
 ## 4. Verification
 
@@ -228,9 +243,9 @@ change any numeric tokenomics.
   expect rejection.
 - Size limits: submit an oversized tx/block; expect rejection at the gate.
 - Slashing: submit evidence tx; confirm validator jailed and not paid.
-- VRF leader schedule: restart a validator; confirm `scheduled_leader_for_round`
-  and committed leader sequence identical before/after restart; compare
-  across nodes.
+- VRF leader schedule *(pre-hybrid; skip under ADR 0003)*: restart a validator;
+  confirm `scheduled_leader_for_round` and committed leader sequence identical
+  before/after restart; compare across nodes.
 
 ## 5. Rollback / failure
 
