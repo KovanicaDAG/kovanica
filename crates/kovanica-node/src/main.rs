@@ -10064,8 +10064,10 @@ mod tests {
         assert!(genesis_config_digest(&devnet).is_ok());
     }
 
-    /// The published checksum example must not tell a mainnet operator to hash
-    /// `funded_accounts.toml`. That file is refused on chain 1.
+    /// The published checksum guidance must not tell a mainnet operator to hash
+    /// `funded_accounts.toml`. That file is refused on chain 1. The bundle is
+    /// now cut by `genesis-bundle`, which writes `SHA256SUMS` itself; the docs
+    /// must keep the mainnet omission and the off-mainnet inclusion in prose.
     #[test]
     fn mainnet_sha256sum_example_omits_funded_accounts() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -10074,37 +10076,39 @@ mod tests {
             std::fs::read_to_string(root.join("docs/VALIDATOR-ONBOARDING.md")).unwrap();
         let ceremony = std::fs::read_to_string(root.join("docs/GENESIS-CEREMONY.md")).unwrap();
 
-        let mut saw_mainnet = false;
-        let mut saw_off_mainnet = false;
-        let mut mainnet_command = false;
+        assert!(
+            reset.contains("kovanica-node genesis-bundle"),
+            "TESTNET-RESET.md must tell operators to cut the bundle with genesis-bundle"
+        );
+        assert!(
+            reset.contains("`funded_accounts.toml` on mainnet (chain 1)")
+                && reset.contains("must not appear in the checksum list"),
+            "TESTNET-RESET.md must say genesis-bundle refuses funded_accounts.toml on chain 1"
+        );
+        assert!(
+            reset.contains("`funded_accounts.toml` and `validators.json` are")
+                && reset.contains("included when present"),
+            "TESTNET-RESET.md must still say off-mainnet bundles can include funded_accounts.toml"
+        );
+        // A leftover hand-rolled recipe must not tell a mainnet operator to
+        // hash funded_accounts.toml.
+        let mut after_mainnet_marker = false;
         for line in reset.lines() {
             let trimmed = line.trim();
             if trimmed == "# chain 1 (mainnet)" {
-                mainnet_command = true;
+                after_mainnet_marker = true;
                 continue;
             }
-            if !trimmed.starts_with("sha256sum ") {
-                continue;
-            }
-            if mainnet_command {
+            if trimmed.starts_with("sha256sum ") && trimmed.contains("funded_accounts.toml") {
                 assert!(
-                    !trimmed.contains("funded_accounts.toml"),
+                    !after_mainnet_marker,
                     "mainnet checksum must omit funded_accounts.toml: {trimmed}"
                 );
-                assert!(trimmed.contains("validators.json"));
-                assert!(trimmed.contains("founder_premine.hex"));
-                assert!(trimmed.contains("genesis_validators.toml"));
-                saw_mainnet = true;
-                mainnet_command = false;
-            } else if trimmed.contains("funded_accounts.toml") {
-                saw_off_mainnet = true;
+            }
+            if after_mainnet_marker && trimmed.starts_with("sha256sum ") {
+                after_mainnet_marker = false;
             }
         }
-        assert!(saw_mainnet, "missing the chain 1 sha256sum example");
-        assert!(
-            saw_off_mainnet,
-            "off-mainnet bundles still hash funded_accounts.toml"
-        );
         assert!(
             onboarding.contains("On mainnet (chain 1)") && onboarding.contains("must not name it"),
             "onboarding must say the mainnet checksum omits funded_accounts.toml"
