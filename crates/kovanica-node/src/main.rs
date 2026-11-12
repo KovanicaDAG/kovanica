@@ -5758,14 +5758,15 @@ struct GenesisValidatorEntry {
 
 /// Top-level shape of `genesis_validators.toml` (`[[validator]]` array of tables).
 ///
-/// Example:
+/// Example (hybrid chain 2, the shape `ops/genesis/ceremony.sh` writes):
 ///
 /// ```toml
-/// chain_id = 2            # mandatory for 1 (mainnet) and 2 (testnet)
+/// chain_id = 2
+/// emission_policy = "no-stake-82m"
+/// treasury_address = "kvnc...dag"
 ///
 /// [[validator]]
-/// address = "<32-byte hex>"
-/// stake = 50000000000000
+/// address = "kvnc...dag"
 /// public_key = "<32-byte hex>"
 /// ```
 #[derive(Debug, Deserialize)]
@@ -5780,6 +5781,17 @@ struct GenesisValidatorsFile {
     emission_policy: Option<String>,
     #[serde(default)]
     policy: Option<String>,
+    /// Treasury address recorded by `ops/genesis/ceremony.sh` for the operator
+    /// and any later ops step that sets `KOVANICA_TREASURY_ADDRESS` on every
+    /// node. The node never derives, accepts or rejects the treasury from it:
+    /// the digest, the state and `init_treasury` read the configured address
+    /// only. Deserialization would ignore the key even without this field; it
+    /// stays so reading the file shows the address the ops step must export.
+    #[serde(default)]
+    #[allow(dead_code)]
+    treasury_address: Option<String>,
+    /// Bootstrap seed nodes. Under `no-stake-82m` no entry is staked and no
+    /// allocation is minted; on a legacy genesis `stake` decides the lock.
     #[serde(default)]
     validator: Vec<GenesisValidatorEntry>,
 }

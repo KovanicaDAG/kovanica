@@ -94,6 +94,11 @@ apps/android-comms/local.properties
 .env.*
 genesis/chain4/
 
+# Ceremony output (ops/genesis/ceremony.sh default). It holds throwaway keys
+# from --generate-keys and must never be committed; the published bundle is cut
+# from a directory that contains genesis files only.
+/genesis-out/
+
 # Agent internals & scratch files
 scratch/
 .agents/

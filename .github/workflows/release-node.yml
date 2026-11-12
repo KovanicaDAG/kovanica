@@ -1,17 +1,20 @@
 name: Release node
 
 # Builds the prebuilt Linux node binaries that node/scripts/install.sh serves,
-# plus a genesis bundle. Every build is checked against a pinned network tag, so
-# a binary that cannot peer with its mesh fails here instead of after download.
+# plus the chain-2 genesis bundle. Every build is checked against the tag a node
+# computes for the same genesis file set, so a binary or bundle that cannot peer
+# with its mesh fails here instead of after download.
 #
-# FOLLOW-UP (2026-11-10): chain 4 is retired and chain 2 is the canonical
-# testnet. This workflow still packages testnet/chain4/ because no chain-2
-# genesis bundle has been published yet. Re-point it (source dir, bundle asset
-# name, EXPECTED_NETWORK_TAG) once ops cuts that bundle from the live chain-2
-# genesis set — `kovanica-node genesis-bundle --chain-id 2 --source <dir>`
-# writes the archive, its SHA256SUMS and the expected-tag file, so the tar step
-# below can be replaced by that call. Until then install.sh targets chain 2 and
-# fails closed because the chain-2 asset does not exist.
+# Chain 2 is the canonical hybrid testnet (PoW + GHOSTDAG, no-stake-82m). The
+# bundle is cut with `kovanica-node genesis-bundle --chain-id 2` from
+# `testnet/chain2/`, which must hold only the genesis files produced by
+# `ops/genesis/ceremony.sh` (genesis_validators.toml, founder_premine.hex,
+# optionally funded_accounts.toml / validators.json) and no keys.
+#
+# No official chain-2 genesis has been cut yet: that waits on the owner's
+# PRO-21 founder, treasury and validator addresses. Until ops commits
+# `testnet/chain2/`, both the tag check and the bundle job fail closed with an
+# explicit message, and there is no published chain-2 bundle to install.
 #
 #   git tag v0.1.0-node && git push origin v0.1.0-node
 #
@@ -28,9 +31,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Live public testnet (chain 4). Every published binary and the genesis
-  # bundle must reproduce this tag; see docs/TESTNET-RESET.md.
-  EXPECTED_NETWORK_TAG: "4-0eacd5699210b145"
+  # The chain-2 genesis file set. Cut it with ops/genesis/ceremony.sh and commit
+  # only its outputs here; genesis-bundle refuses every other entry.
+  GENESIS_SOURCE: testnet/chain2
+  GENESIS_CHAIN_ID: "2"
 
 jobs:
   build:
@@ -47,6 +51,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check the chain-2 genesis source exists
+        run: |
+          set -eu
+          if [ ! -f "$GENESIS_SOURCE/genesis_validators.toml" ]; then
+            echo "::error::$GENESIS_SOURCE/genesis_validators.toml is missing. No official chain-2 genesis has been cut yet; run ops/genesis/ceremony.sh with the owner's PRO-21 founder, treasury and validator addresses and commit its output there. Refusing to package the retired chain-4 bundle."
+            exit 1
+          fi
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -60,17 +72,23 @@ jobs:
       - name: Build kovanica-node
         run: cargo build --release --locked -p kovanica-node
 
-      - name: Check the network tag against the published chain-4 bundle
+      - name: Check the network tag against the chain-2 genesis set
         run: |
           set -eu
+          src="$GENESIS_SOURCE"
           work="$RUNNER_TEMP/tagcheck"
           rm -rf "$work"
           mkdir -p "$work/data"
-          cp testnet/chain4/genesis_validators.toml \
-             testnet/chain4/founder_premine.hex \
-             testnet/chain4/funded_accounts.toml "$work/data/"
+          # The archive name and the exact bytes are asserted here; bundle
+          # output lands outside $src because a genesis directory may hold only
+          # genesis files.
+          target/release/kovanica-node genesis-bundle \
+            --chain-id "$GENESIS_CHAIN_ID" \
+            --source "$src" \
+            --out "$work/kovanica-chain2-genesis.tar.gz"
+          tar -xzf "$work/kovanica-chain2-genesis.tar.gz" -C "$work/data"
           cat >"$work/kovanica.toml" <<EOF
-          chain_id = 4
+          chain_id = 2
           data_dir = "$work/data"
           run_validator = false
           rpc_addr = "127.0.0.1"
@@ -79,11 +97,13 @@ jobs:
           round_duration_ms = 4000
           EOF
           tag="$(target/release/kovanica-node network-tag --config "$work/kovanica.toml")"
-          echo "network tag: $tag (expected $EXPECTED_NETWORK_TAG)"
-          if [ "$tag" != "$EXPECTED_NETWORK_TAG" ]; then
-            echo "::error::network tag $tag does not match the live testnet; this binary or bundle would fork off the mesh"
+          expected="$(cat "$work/data/expected-tag")"
+          echo "network tag: $tag (bundle expected-tag: $expected)"
+          if [ "$tag" != "$expected" ]; then
+            echo "::error::network tag $tag does not match the bundle's expected-tag $expected; a node installing this bundle would be isolated from the mesh"
             exit 1
           fi
+          ( cd "$work/data" && sha256sum -c SHA256SUMS )
 
       - name: Package
         run: |
@@ -102,25 +122,44 @@ jobs:
           if-no-files-found: error
 
   bundle:
-    name: chain-4 genesis bundle
+    name: chain-2 genesis bundle
+    needs: [build]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Package the bundle
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-x86_64
+          path: node-dist
+
+      - name: Cut the chain-2 genesis bundle
         run: |
           set -eu
+          src="$GENESIS_SOURCE"
+          if [ ! -f "$src/genesis_validators.toml" ]; then
+            echo "::error::$src/genesis_validators.toml is missing. No official chain-2 genesis has been cut yet; run ops/genesis/ceremony.sh with the owner's PRO-21 founder, treasury and validator addresses and commit its output there."
+            exit 1
+          fi
+          tar -xzf node-dist/kovanica-node-x86_64-linux.tar.gz -C node-dist
           mkdir -p dist
-          cp testnet/chain4/genesis_validators.toml \
-             testnet/chain4/founder_premine.hex \
-             testnet/chain4/funded_accounts.toml dist/
-          tar -C dist -czf kovanica-chain4-genesis.tar.gz .
-          ls -l kovanica-chain4-genesis.tar.gz
+          node-dist/kovanica-node genesis-bundle \
+            --chain-id "$GENESIS_CHAIN_ID" \
+            --source "$src" \
+            --out dist/kovanica-chain2-genesis.tar.gz
+          # The installer verifies SHA256SUMS from the extracted bundle; do the
+          # same check here so a broken archive never reaches a release.
+          verify="$RUNNER_TEMP/bundle-verify"
+          rm -rf "$verify"
+          mkdir -p "$verify"
+          tar -xzf dist/kovanica-chain2-genesis.tar.gz -C "$verify"
+          ( cd "$verify" && sha256sum -c SHA256SUMS )
+          ls -l dist/kovanica-chain2-genesis.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:
           name: genesis-bundle
-          path: kovanica-chain4-genesis.tar.gz
+          path: dist/kovanica-chain2-genesis.tar.gz
           if-no-files-found: error
 
   release:
@@ -152,15 +191,15 @@ jobs:
           set -eu
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Kovanica node ${GITHUB_REF_NAME%-node} - Linux (testnet, chain 4)" \
+            --title "Kovanica node ${GITHUB_REF_NAME%-node} - Linux (testnet, chain 2)" \
             --notes "$(cat <<'EOF'
-          Prebuilt `kovanica-node` for the public Kovanica testnet (chain 4).
+          Prebuilt `kovanica-node` for the public Kovanica testnet (chain 2).
 
           | Asset | Target |
           |---|---|
           | `kovanica-node-x86_64-linux.tar.gz` | Linux x86_64 (glibc) |
           | `kovanica-node-aarch64-linux.tar.gz` | Linux aarch64/arm64 (glibc) |
-          | `kovanica-chain4-genesis.tar.gz` | genesis bundle every chain-4 node must share |
+          | `kovanica-chain2-genesis.tar.gz` | genesis bundle every chain-2 node must share |
           | `SHA256SUMS` | checksums for all assets above |
 
           Install (non-validating full node, RPC on loopback):
@@ -176,12 +215,13 @@ jobs:
           KOVANICA_RELEASE_BASE="$(pwd)" sh install.sh --no-service
           ```
 
-          The installer verifies the checksums, installs the chain-4 genesis
-          bundle and refuses to start if the local network tag is not
-          `4-0eacd5699210b145`.
+          The installer verifies the checksums, installs the chain-2 genesis
+          bundle and refuses to start unless the node's network tag equals the
+          `expected-tag` file inside that bundle.
 
-          Each asset is built from the tagged commit, and the build fails
-          unless `kovanica-node network-tag` reproduces the live testnet tag.
+          Each asset is built from the tagged commit; the build fails unless the
+          genesis bundle cut from `testnet/chain2/` reproduces its own
+          `expected-tag` and `SHA256SUMS`.
           Docs: https://docs.kovanica.online
           EOF
           )"
