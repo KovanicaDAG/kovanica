@@ -143,8 +143,9 @@ expected to contain an `expected-tag` file (the installer reads it when no
 `--expected-tag` is given). Bump the default `VERSION` in
 `node/scripts/install.sh` when the download should move to the new release.
 
-> **Known follow-up:** `.github/workflows/release-node.yml` still packages the
-> retired chain-4 bundle (`testnet/chain4/`, tag `4-0eacd5699210b145`). It must
-> be re-pointed at a chain-2 bundle cut from the live chain-2 genesis set
-> before a release can serve chain 2; that needs the deployed validator keys,
-> so it is an ops step, not an in-repo edit.
+> **Known follow-up:** `.github/workflows/release-node.yml` now cuts the chain-2
+> bundle from `testnet/chain2/` with `kovanica-node genesis-bundle --chain-id 2`
+> and verifies it against a node's network tag. That directory does not exist
+> yet, so the workflow fails closed: an official chain-2 bundle needs the
+> ceremony output cut from the owner-supplied PRO-21 founder, treasury and
+> validator addresses, so it is an ops step, not an in-repo edit.

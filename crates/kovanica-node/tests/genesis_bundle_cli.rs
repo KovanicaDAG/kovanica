@@ -270,3 +270,109 @@ fn an_unregistered_chain_id_is_refused() {
         stderr(&output)
     );
 }
+
+/// The workflow publishes exactly one archive name, and the default `--out`
+/// must produce it: the release job never passes `--out`.
+#[test]
+fn the_default_archive_name_is_the_published_chain2_asset() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let source = chain2_fixture(root.path());
+    let workdir = root.path().join("work");
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+
+    let bundle = Command::new(NODE_BIN)
+        .args([
+            "genesis-bundle",
+            "--chain-id",
+            "2",
+            "--source",
+            source.to_str().unwrap(),
+        ])
+        .current_dir(&workdir)
+        .output()
+        .expect("running kovanica-node");
+    assert!(bundle.status.success(), "failed:\n{}", stderr(&bundle));
+
+    let archive = workdir.join("kovanica-chain2-genesis.tar.gz");
+    assert!(
+        archive.exists(),
+        "default output must be kovanica-chain2-genesis.tar.gz, got: {:?}",
+        std::fs::read_dir(&workdir)
+            .expect("read workdir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect::<Vec<_>>()
+    );
+
+    let extracted = root.path().join("extracted");
+    std::fs::create_dir_all(&extracted).expect("create extracted dir");
+    match Command::new("tar")
+        .args(["-xzf", archive.to_str().unwrap(), "-C"])
+        .arg(&extracted)
+        .status()
+    {
+        Ok(status) if status.success() => {
+            let expected = std::fs::read_to_string(extracted.join("expected-tag"))
+                .expect("expected-tag in the bundle");
+            assert_eq!(expected.trim(), printed_tag(&bundle));
+
+            let sums = std::fs::read_to_string(extracted.join("SHA256SUMS"))
+                .expect("SHA256SUMS in the bundle");
+            let listed: Vec<&str> = sums
+                .lines()
+                .map(|line| {
+                    line.split_once("  ")
+                        .unwrap_or_else(|| panic!("bad SHA256SUMS line: {line}"))
+                        .1
+                })
+                .collect();
+            assert_eq!(
+                listed,
+                [
+                    "founder_premine.hex",
+                    "funded_accounts.toml",
+                    "genesis_validators.toml"
+                ],
+                "SHA256SUMS must cover the genesis files only"
+            );
+        }
+        _ => eprintln!("skipping archive extraction check: tar is not available"),
+    }
+}
+
+/// The release workflow must package the chain-2 bundle the ceremony produces,
+/// not the retired chain-4 files. This is a text-level guard: it fails a PR that
+/// re-points the workflow back without touching this test.
+#[test]
+fn the_release_workflow_packages_the_chain2_bundle() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crates/kovanica-node sits under the workspace root");
+    let workflow = std::fs::read_to_string(repo.join(".github/workflows/release-node.yml"))
+        .expect("read release-node.yml");
+
+    for needle in [
+        "genesis-bundle",
+        "--chain-id \"$GENESIS_CHAIN_ID\"",
+        "kovanica-chain2-genesis.tar.gz",
+        "testnet/chain2",
+        "expected-tag",
+        "SHA256SUMS",
+    ] {
+        assert!(
+            workflow.contains(needle),
+            "release-node.yml must contain {needle:?}"
+        );
+    }
+    for forbidden in [
+        "testnet/chain4",
+        "kovanica-chain4-genesis.tar.gz",
+        "4-0eacd5699210b145",
+    ] {
+        assert!(
+            !workflow.contains(forbidden),
+            "release-node.yml still references the retired chain-4 bundle: {forbidden:?}"
+        );
+    }
+}
