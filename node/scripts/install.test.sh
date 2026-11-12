@@ -25,6 +25,11 @@ sha256() {
     fi
 }
 
+# A throwaway PRO-21 address, never the official treasury: chains 1 and 2 now
+# require the recorded treasury because it is part of the network tag.
+TREASURY="kvncqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqdag"
+OTHER_TREASURY="kvncpppppppppppppppppppppppppppppppppppppppppppppppppppppppppdag"
+
 # build_release <dir> <bundle asset> <tag file content> <binary tag printed> [extra bundle file]
 build_release() {
     dir="$TMP/$1"; asset="$2"; tag_file="$3"; bin_tag="$4"; extra="${5:-}"
@@ -39,10 +44,22 @@ exit 0
 EOF
     chmod +x "$dir/node/kovanica-node"
     tar -C "$dir/node" -czf "$dir/kovanica-node-x86_64-linux.tar.gz" kovanica-node
-    printf 'chain_id = 2\n' >"$dir/bundle/genesis_validators.toml"
+    printf 'chain_id = 2\ntreasury_address = "%s"\n' "$TREASURY" >"$dir/bundle/genesis_validators.toml"
     printf 'aa\n' >"$dir/bundle/founder_premine.hex"
     [ -n "$extra" ] && printf 'address = "x"\n' >"$dir/bundle/$extra"
     [ -n "$tag_file" ] && printf '%s\n' "$tag_file" >"$dir/bundle/expected-tag"
+    tar -C "$dir/bundle" -czf "$dir/$asset" .
+    {
+        printf '%s  %s\n' "$(sha256 "$dir/kovanica-node-x86_64-linux.tar.gz")" kovanica-node-x86_64-linux.tar.gz
+        printf '%s  %s\n' "$(sha256 "$dir/$asset")" "$asset"
+    } >"$dir/SHA256SUMS"
+}
+
+# reseal_bundle <dir> <bundle asset> <genesis_validators.toml content>
+# Rebuilds the archive and checksums after a test rewrites the bundle's file.
+reseal_bundle() {
+    dir="$TMP/$1"; asset="$2"; content="$3"
+    printf '%s\n' "$content" >"$dir/bundle/genesis_validators.toml"
     tar -C "$dir/bundle" -czf "$dir/$asset" .
     {
         printf '%s  %s\n' "$(sha256 "$dir/kovanica-node-x86_64-linux.tar.gz")" kovanica-node-x86_64-linux.tar.gz
@@ -85,8 +102,9 @@ fi
 
 conf="$TMP/run-ok/home/kovanica.toml"
 if grep -q '^chain_id = 2$' "$conf" \
+   && grep -q "^treasury_address = \"$TREASURY\"\$" "$conf" \
    && grep -q '^bootnodes = \["seed1.kovanica.online:8000", "seed3.kovanica.online:8000"\]$' "$conf"; then
-    pass "config targets chain 2 with the current seeds"
+    pass "config targets chain 2 with the recorded treasury and the current seeds"
 else
     fail "config targets chain 2 with the current seeds"
     sed 's/^/    | /' "$conf"
@@ -108,6 +126,16 @@ fi
 # --- the tag is not optional ---------------------------------------------------
 run chain2 skip --skip-tag-check
 expect "--skip-tag-check is an explicit opt-out" "tag check skipped"
+
+build_release untreasured kovanica-chain2-genesis.tar.gz 2-0123456789abcdef 2-0123456789abcdef
+reseal_bundle untreasured kovanica-chain2-genesis.tar.gz 'chain_id = 2'
+run untreasured no-treasury
+expect "a chain-2 bundle without a treasury is refused" "records no treasury_address"
+if [ "$status" -ne 0 ] && [ ! -f "$TMP/run-no-treasury/home/kovanica.toml" ]; then
+    pass "a refused treasury leaves no config behind"
+else
+    fail "a refused treasury leaves no config behind (status $status)"
+fi
 
 build_release untagged kovanica-chain2-genesis.tar.gz "" 2-0123456789abcdef
 run untagged no-tag
@@ -139,6 +167,26 @@ expect "a binary on the wrong set is refused" "does not match the published test
 build_release mainnet kovanica-chain1-genesis.tar.gz 1-0123456789abcdef 1-0123456789abcdef funded_accounts.toml
 run mainnet funded --chain-id 1
 expect "mainnet refuses a bundle with funded_accounts.toml" "chain 1 (mainnet) forbids"
+
+# --- an existing config is never rewritten ------------------------------------
+build_release chain2c kovanica-chain2-genesis.tar.gz 2-0123456789abcdef 2-0123456789abcdef
+mkdir -p "$TMP/run-treasury-mismatch/home"
+printf 'chain_id = 2\ntreasury_address = "%s"\n' "$OTHER_TREASURY" >"$TMP/run-treasury-mismatch/home/kovanica.toml"
+run chain2c treasury-mismatch
+expect "an existing config with another treasury is refused" "but the bundle binds"
+if [ "$status" -ne 0 ] \
+   && grep -q "^treasury_address = \"$OTHER_TREASURY\"\$" "$TMP/run-treasury-mismatch/home/kovanica.toml"; then
+    pass "the refused existing config is left untouched"
+else
+    fail "the refused existing config is left untouched (status $status)"
+    sed 's/^/    | /' "$TMP/run-treasury-mismatch/home/kovanica.toml"
+fi
+
+build_release chain2d kovanica-chain2-genesis.tar.gz 2-0123456789abcdef 2-0123456789abcdef
+mkdir -p "$TMP/run-treasury-match/home"
+printf 'chain_id = 2\ntreasury_address = "%s"\n' "$TREASURY" >"$TMP/run-treasury-match/home/kovanica.toml"
+run chain2d treasury-match
+expect "an existing config with the bundle treasury is kept" "existing config treasury matches the bundle"
 
 # --- an existing data dir is never overwritten --------------------------------
 build_release chain2b kovanica-chain2-genesis.tar.gz 2-0123456789abcdef 2-0123456789abcdef
