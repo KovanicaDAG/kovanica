@@ -87,9 +87,15 @@ jobs:
             --source "$src" \
             --out "$work/kovanica-chain2-genesis.tar.gz"
           tar -xzf "$work/kovanica-chain2-genesis.tar.gz" -C "$work/data"
+          # The bundle tag binds the treasury recorded in
+          # genesis_validators.toml. Give this node the same address the way
+          # install.sh does, otherwise the comparison below would use the zero
+          # treasury and reject a correct bundle.
+          treasury="$(sed -n 's/^[[:space:]]*treasury_address[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$work/data/genesis_validators.toml" | head -n 1)"
           cat >"$work/kovanica.toml" <<EOF
           chain_id = 2
           data_dir = "$work/data"
+          treasury_address = "$treasury"
           run_validator = false
           rpc_addr = "127.0.0.1"
           rpc_port = 8545

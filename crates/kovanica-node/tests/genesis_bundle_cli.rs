@@ -530,6 +530,9 @@ fn the_release_workflow_packages_the_chain2_bundle() {
         "testnet/chain2",
         "expected-tag",
         "SHA256SUMS",
+        // The bundle tag binds the recorded treasury, so the workflow's own
+        // tag check must configure the same address or it would use zero.
+        "treasury_address = \"$treasury\"",
     ] {
         assert!(
             workflow.contains(needle),
