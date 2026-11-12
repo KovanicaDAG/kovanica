@@ -273,12 +273,13 @@ fn run_network_tag(config_path: &str) -> Result<()> {
 /// genesis file set must be one the node accepts, and the network tag is
 /// computed the way a joining node computes it.
 ///
-/// The tag comes from `NodeConfig::default()` plus `--chain-id` and `--source`
-/// only. It deliberately does not read the environment: a bundle must be
-/// reproducible from its files alone, so `KOVANICA_*` overrides (treasury,
-/// emission policy, bootnodes) are ignored — and a node that does set them
-/// computes a different tag, which is exactly what the published
-/// `expected-tag` catches.
+/// The tag comes from `genesis_bundle_config`: node defaults plus `--chain-id`,
+/// `--source` and the treasury recorded in `genesis_validators.toml`. It
+/// deliberately does not read the environment: a bundle must be reproducible
+/// from its files alone, so `KOVANICA_*` overrides (treasury, emission policy,
+/// bootnodes) are ignored — and a node whose configured treasury differs from
+/// the recorded one computes a different tag, which is exactly what the
+/// published `expected-tag` catches.
 fn run_genesis_bundle(args: GenesisBundleArgs) -> Result<()> {
     use std::path::PathBuf;
 
@@ -291,7 +292,7 @@ fn run_genesis_bundle(args: GenesisBundleArgs) -> Result<()> {
     }
 
     let source = args.source;
-    let config = genesis_bundle_config(chain_id, &source);
+    let config = genesis_bundle_config(chain_id, &source)?;
 
     // Startup rules that depend only on the genesis file set. Reporting them
     // here makes "cut a bundle" fail where "start a node" would fail.
@@ -351,15 +352,52 @@ fn run_genesis_bundle(args: GenesisBundleArgs) -> Result<()> {
     Ok(())
 }
 
-/// The configuration a bundle is judged by: node defaults plus the chain and
-/// the source directory. Nothing is read from disk and no `KOVANICA_*`
-/// override is applied.
-fn genesis_bundle_config(chain_id: u64, source: &std::path::Path) -> NodeConfig {
-    NodeConfig {
+/// The configuration a bundle is judged by: node defaults plus the chain, the
+/// source directory and the treasury recorded in `genesis_validators.toml`.
+/// No `KOVANICA_*` override is applied: a bundle must be reproducible from its
+/// files alone.
+///
+/// The treasury is part of the digest, so it cannot be left to whichever
+/// machine cuts the bundle. Binding the ceremony's recorded address here is
+/// what makes `expected-tag` match a node that sets `KOVANICA_TREASURY_ADDRESS`
+/// to the same address, instead of only matching a node running the zero
+/// treasury. Chains 1 and 2 fail closed: a missing, empty or non-PRO-21 value
+/// refuses the bundle before any archive is written. On chains 3 and 1337 an
+/// absent field keeps the zero-treasury default, and a present one is used.
+fn genesis_bundle_config(chain_id: u64, source: &std::path::Path) -> Result<NodeConfig> {
+    let mut config = NodeConfig {
         chain_id,
         data_dir: source.to_path_buf(),
         ..NodeConfig::default()
+    };
+
+    let path = source.join("genesis_validators.toml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let genesis: GenesisValidatorsFile =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+
+    match genesis.treasury_address.as_deref().map(str::trim) {
+        Some(value) if !value.is_empty() => {
+            Address::parse_for_chain(value, chain_id).with_context(|| {
+                format!(
+                    "{} records treasury_address `{value}`, which is not a canonical PRO-21 \
+                     `kvnc...dag` address for chain {chain_id}",
+                    path.display()
+                )
+            })?;
+            config.treasury_address = Some(value.to_string());
+        }
+        _ if kovanica_types::signing::chain_id::is_hybrid(chain_id) => anyhow::bail!(
+            "chain {chain_id} requires `treasury_address` in {}; the network tag binds the \
+             treasury, so a bundle cut without it would only match nodes running the zero \
+             treasury",
+            path.display()
+        ),
+        _ => {}
     }
+
+    Ok(config)
 }
 
 /// `genesis_validators.toml` must declare the chain the bundle is for.
@@ -5781,14 +5819,12 @@ struct GenesisValidatorsFile {
     emission_policy: Option<String>,
     #[serde(default)]
     policy: Option<String>,
-    /// Treasury address recorded by `ops/genesis/ceremony.sh` for the operator
-    /// and any later ops step that sets `KOVANICA_TREASURY_ADDRESS` on every
-    /// node. The node never derives, accepts or rejects the treasury from it:
-    /// the digest, the state and `init_treasury` read the configured address
-    /// only. Deserialization would ignore the key even without this field; it
-    /// stays so reading the file shows the address the ops step must export.
+    /// Treasury address recorded by `ops/genesis/ceremony.sh`. The node itself
+    /// never derives, accepts or rejects the treasury from it: the digest, the
+    /// state and `init_treasury` read the configured address only. It is read
+    /// by `genesis-bundle`, which binds it into `expected-tag`, and by
+    /// `node/scripts/install.sh`, which writes it into a new node config.
     #[serde(default)]
-    #[allow(dead_code)]
     treasury_address: Option<String>,
     /// Bootstrap seed nodes. Under `no-stake-82m` no entry is staked and no
     /// allocation is minted; on a legacy genesis `stake` decides the lock.

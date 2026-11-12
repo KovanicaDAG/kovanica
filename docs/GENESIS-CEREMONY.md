@@ -126,10 +126,11 @@ public_key = "<32-byte hex>"
 - `emission_policy` must be `no-stake-82m` on chains 1 and 2.
 - There is **no `stake` field**. Under `no-stake-82m` no stake is locked at
   genesis; a legacy genesis applies `MIN_VALIDATOR_STAKE` itself.
-- `treasury_address` is recorded for the operator and for the ops step that
-  sets the same `KOVANICA_TREASURY_ADDRESS` on every node. The node does **not**
-  read it: the digest, the state and `init_treasury` use only the configured
-  address, never a genesis file.
+- `treasury_address` is recorded so the bundle and the installer can bind the
+  same value a node uses. `genesis-bundle` computes `expected-tag` with it and
+  `node/scripts/install.sh` writes it into a new node config. The node itself
+  reads only the configured address (`KOVANICA_TREASURY_ADDRESS` or
+  `treasury_address` in the config), never this file.
 
 ### 4.2 `founder_premine.hex`
 
@@ -209,19 +210,23 @@ carries `SHA256SUMS` and `expected-tag`, which is what
 The source directory for chain 2 must be the output of the ceremony above
 (including `founder_premine.hex`), with `chain_id = 2` in
 `genesis_validators.toml`. `.github/workflows/release-node.yml` is pointed at
-`testnet/chain2/` and fails closed while that directory does not exist: no
-official chain-2 bundle is published until the owner runs the real ceremony and
-ops attaches the asset to a `v<version>-node` release.
+`testnet/chain2/`, cuts `kovanica-chain2-genesis.tar.gz` from it and fails
+closed if that directory is missing. Publishing the archive still needs a
+`v<version>-node` release created by ops; this repository only carries the
+source file set.
 
-**Known limitation (follow-up, not fixed here).** `genesis-bundle` computes
-`expected-tag` from the genesis file set alone and deliberately ignores
-`KOVANICA_*` overrides, while `genesis_config_digest` binds the treasury
-address from the node configuration. A bundle cut today therefore cannot bind
-the treasury the ceremony recorded: a node that sets the real
-`KOVANICA_TREASURY_ADDRESS` computes a different tag and the installer refuses
-it, and a node that leaves it unset runs with the zero treasury the bundle
-binds. Publishing the official chain-2 bundle needs a follow-up that carries
-the treasury through `genesis-bundle` and `node/scripts/install.sh`.
+**Treasury binding.** `genesis-bundle` computes `expected-tag` from the chain
+id, the genesis file set and the `treasury_address` recorded in
+`genesis_validators.toml`. It still ignores `KOVANICA_*` overrides, so a bundle
+is reproducible from its files alone. On chains 1 and 2 a source that does not
+record a canonical PRO-21 treasury is refused before an archive is written; on
+chains 3 and 1337 an absent field keeps the zero-treasury default.
+`node/scripts/install.sh` writes the recorded address into a new node config,
+and refuses to keep an existing config whose effective treasury (the config
+file, or `KOVANICA_TREASURY_ADDRESS`, which wins) differs from the bundle. A
+node started without the installer must set the same
+`KOVANICA_TREASURY_ADDRESS` or the same `treasury_address` in its config;
+otherwise its digest, and therefore its tag, differs and it cannot join.
 
 ---
 
