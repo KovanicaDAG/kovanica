@@ -388,12 +388,6 @@ the seed has served its blocks).
 
 ## Live explorer downloads
 
-GET /download/kovanica-wallet-apk
-  Android APK (debug-signed, v0.1)
-
-GET /download/kovanica-wallet-ios-ipa
-  iOS IPA (sideload, v0.1)
-
 GET /download/kovanica-node-linux-x64
 GET /download/kovanica-node-linux-arm64
 GET /download/install.sh
