@@ -77,7 +77,7 @@ pub enum NetworkEvent {
     /// A new block was received.
     ///
     /// Only emitted after the block passed edge validation (digest, merkle
-    /// root, committee author, signature; see [`validation::verify_block`]).
+    /// root, author key, signature; see [`validation::verify_block`]).
     /// `peer` is the gossip propagation source (used to fetch missing
     /// parents from the peer that delivered the block).
     BlockReceived { peer: PeerId, block: StatementBlock },

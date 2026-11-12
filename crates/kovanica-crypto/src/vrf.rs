@@ -2,7 +2,8 @@
 //!
 //! Implements a Ristretto + SHA3 ECVRF via the `ecvrf` crate (NOT an RFC 9381
 //! suite; 96-byte proof). See `docs/VRF-PROOF-LENGTH.md`.
-//! Used for stake-weighted, unpredictable leader selection in consensus.
+//! Used by the legacy stake-weighted leader election. Chains 1 and 2 run
+//! Hybrid PoW + GHOSTDAG and do not use a VRF.
 //!
 //! The VRF output is a pair (hash, proof):
 //! - `hash` = 32-byte VRF hash output (DETERMINISTIC, used as randomness source)

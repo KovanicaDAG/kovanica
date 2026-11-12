@@ -1,6 +1,9 @@
-//! Mysticeti-style DAG consensus for Kovanica.
+//! Consensus for Kovanica.
 //!
-//! Implements wave-based uncertified DAG with direct/indirect commit rules.
+//! Chains 1 and 2 order PoW blocks with GHOSTDAG (`ghostdag`, `daa`, `mining`)
+//! and commit per block. The Mysticeti-style wave/leader engine (`engine`,
+//! `committer`, `mysticghost`, leader selection) is the legacy path: kept in
+//! tree, but not used for chains 1 and 2.
 
 #![deny(unsafe_code)]
 #![allow(missing_docs)]

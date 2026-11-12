@@ -575,7 +575,7 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
         ),
         (
             "kovanica_getValidators",
-            "Get active validators",
+            "List recorded staking validators (legacy; chains 1/2 select block authors by PoW)",
             "Staking",
             json!({
                 "type": "array",
@@ -588,7 +588,7 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
         ),
         (
             "kovanica_getStake",
-            "Get total stake for address",
+            "Get total recorded stake for an address (legacy ledger value)",
             "Staking",
             json!({
                 "type": "array",
@@ -602,7 +602,7 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
         ),
         (
             "kovanica_getRewards",
-            "Get cumulative rewards",
+            "Get cumulative recorded staking rewards (legacy)",
             "Staking",
             json!({
                 "type": "array",
@@ -641,7 +641,7 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
         ),
         (
             "kovanica_getLeaderSchedule",
-            "Get upcoming leader schedule",
+            "Get the provisional legacy leader schedule (chains 1/2 author blocks by PoW)",
             "Consensus",
             json!({
                 "type": "array",
@@ -662,7 +662,7 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
         ),
         (
             "kovanica_getCommittee",
-            "Get current committee",
+            "Get the legacy committee snapshot (chains 1/2 have no validator committee)",
             "Consensus",
             json!({
                 "type": "array",

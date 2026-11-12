@@ -350,7 +350,10 @@ fn status_rows(status: &ChainStatus) -> Vec<(&'static str, String)> {
             "Peers",
             optional_number(status.peer_count.map(|count| count as u64)),
         ),
-        ("Committee size", status.committee.len().to_string()),
+        (
+            "Committee size (legacy)",
+            status.committee.len().to_string(),
+        ),
     ]
 }
 

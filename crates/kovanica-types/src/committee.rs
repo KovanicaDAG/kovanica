@@ -7,18 +7,18 @@ use serde::{Deserialize, Serialize};
 /// Stake amount (in smallest units of KUNA).
 pub type Stake = u64;
 
-/// Single authority (validator).
+/// Single authority (legacy committee member).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Authority {
     /// Index of this authority in the committee.
     pub index: u16,
     /// Ed25519 public key for block signing.
     pub public_key: PublicKey,
-    /// VRF public key for verifiable leader selection.
+    /// VRF public key for legacy verifiable leader selection (unused on chains 1/2).
     pub vrf_public_key: Option<PublicKey>,
     /// Account address (derived from public key).
     pub address: Address,
-    /// Stake amount in base units.
+    /// Stake amount in base units (legacy; chains 1/2 have no stake in consensus).
     pub stake: Stake,
     /// Network address (multiaddr or host:port) for P2P.
     pub network_address: String,

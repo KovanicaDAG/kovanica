@@ -98,7 +98,10 @@ pub struct NodeConfig {
     /// blocks a commit executes.
     #[serde(default = "default_enabled")]
     pub use_mysticghost: bool,
-    /// Stake-weighted VRF leader election.
+    /// Stake-weighted VRF leader election (legacy Mysticeti path).
+    ///
+    /// Not used for block production on chains 1 and 2, which run Hybrid PoW +
+    /// GHOSTDAG.
     ///
     /// Default on. The leader of round R is the VRF winner over verified
     /// outputs from the previous decide round, and only when every authority
@@ -106,10 +109,16 @@ pub struct NodeConfig {
     /// round-robin. `KOVANICA_VRF_LEADER=false` forces round-robin.
     #[serde(default = "default_enabled")]
     pub use_vrf_leader: bool,
-    /// Run as a validator (produce blocks, participate in consensus).
-    /// When false, the node runs as an RPC/read-only node without consensus participation.
+    /// Run the legacy validator signing path (Mysticeti wave/leader engine).
+    ///
+    /// Chains 1 and 2 have no validator committee: their blocks come from
+    /// Hybrid PoW + GHOSTDAG mining (`[mining]`), and this flag does not gate
+    /// it. When false, the node runs as an RPC/read-only node.
     pub run_validator: bool,
     /// Enforce MIN_ACTIVE_VALIDATORS (15) as a hard floor for committee size.
+    ///
+    /// Legacy committee path: chains 1 and 2 have no validator committee, so
+    /// this floor does not gate block production there.
     ///
     /// Default OFF. When enabled, `build_committee` will fail if fewer than
     /// 15 active validators with sufficient stake exist. It will NOT
@@ -288,12 +297,14 @@ fn env_retention_window(var: &str) -> Option<u64> {
 /// Environment variables that change consensus behavior and therefore may
 /// only be set on a local development chain.
 ///
-/// Round duration sets how often a validator proposes; VRF leader election and
-/// MysticGhost change which block counts as the leader and how history is
-/// ordered. Two nodes that disagree on any of them cannot commit together, so a
-/// per-node override on a shared chain is a fork waiting to happen rather than a
-/// tuning knob. `KOVANICA_CHAIN_ID` is deliberately not on this list: it selects
-/// the network, and the genesis/config pin rejects a mismatch separately.
+/// Round duration sets how often a legacy validator proposes; VRF leader
+/// election and MysticGhost change which block counts as the leader and how
+/// history is ordered on the retired Mysticeti path (chains 1 and 2 commit by
+/// PoW + GHOSTDAG). Two nodes that disagree on any of them cannot commit
+/// together, so a per-node override on a shared chain is a fork waiting to
+/// happen rather than a tuning knob. `KOVANICA_CHAIN_ID` is deliberately not
+/// on this list: it selects the network, and the genesis/config pin rejects a
+/// mismatch separately.
 pub const FROZEN_CONSENSUS_ENV_VARS: [&str; 3] = [
     "KOVANICA_ROUND_DURATION_MS",
     "KOVANICA_MYSTICGHOST",
@@ -611,7 +622,8 @@ impl NodeConfig {
         if let Some(var) = self.forbidden_override {
             anyhow::bail!(
                 "{var} must not be set on chain_id {}: round duration, VRF leader election and \
-                 MysticGhost mode are consensus parameters and must match every node. Unset \
+                 MysticGhost mode are consensus parameters of the legacy Mysticeti path and must \
+                 match every node. Unset \
                  {var}, or use chain_id 3 (devnet) or 1337 (local) for an experimental build",
                 self.chain_id
             );

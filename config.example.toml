@@ -37,9 +37,10 @@
 #   KOVANICA_MEMPOOL_MIN_FEE_RATE              (default 0; atoms per byte)
 #   KOVANICA_MEMPOOL_MAX_TXS_PER_SENDER        (default 64)
 #
-# MysticGhost colouring and VRF leader election default on. A live mesh has
-# to take both together. With no validator VRF keys, leader election stays
-# round-robin. KOVANICA_MYSTICGHOST=false or KOVANICA_VRF_LEADER=false turns one off.
+# MysticGhost colouring and VRF leader election default on for the legacy
+# Mysticeti path. Chains 1 and 2 produce blocks with Hybrid PoW + GHOSTDAG
+# (see [mining]) and do not use a validator committee or VRF leader election.
+# With no validator VRF keys, the legacy leader election stays round-robin.
 #
 # FROZEN ENV OVERRIDES ON SHARED CHAINS: KOVANICA_ROUND_DURATION_MS,
 # KOVANICA_MYSTICGHOST and KOVANICA_VRF_LEADER may only be set on chain_id 3
@@ -83,8 +84,9 @@ rpc_port = 8545
 # bootnodes = ["mainnet.kovanica.online:8000"]
 bootnodes = []
 
-# Run as an active consensus validator (participate in block proposal and voting).
-# Defaults to true in code. When run_validator is true, validator_key is REQUIRED
+# Run the legacy validator signing path (Mysticeti block proposal and voting).
+# Chains 1 and 2 do not use it: their blocks come from [mining]. Defaults to
+# true in code. When run_validator is true, validator_key is REQUIRED
 # (pointing to a 0600 seed file).
 #
 # To run as a non-validating read-only / RPC node without generating keys:

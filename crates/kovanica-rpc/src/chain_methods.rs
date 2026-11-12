@@ -4,8 +4,10 @@
 //! These handlers are backed by the real node state carried in [`RpcState`]:
 //! the redb [`Storage`](kovanica_storage::Storage) for blocks/accounts/consensus,
 //! the [`Mempool`](kovanica_mempool::Mempool) for pending transactions, the shared
-//! [`StakingState`](kovanica_staking::StakingState) for validator queries and the
-//! [`CommitteeInfo`](kovanica_consensus::CommitteeInfo) for leader selection.
+//! [`StakingState`](kovanica_staking::StakingState) for legacy staking rows and the
+//! [`CommitteeInfo`](kovanica_consensus::CommitteeInfo) for the legacy leader
+//! schedule. Chains 1 and 2 produce blocks with PoW + GHOSTDAG and have no
+//! consensus committee.
 //!
 //! Response shapes follow the Ethereum JSON-RPC conventions where a Kovanica
 //! equivalent exists: 32-byte values and byte blobs are `0x`-prefixed hex
@@ -1289,7 +1291,7 @@ pub fn leader_schedule_rounds(anchor_round: u64, count: usize) -> Vec<u64> {
 /// The schedule is the **round-robin** leader, i.e. [`CommitteeInfo::leader`],
 /// and is therefore **provisional**: it is *not* the canonical leader
 /// assignment and must not be treated as authoritative. Under VRF leader
-/// election (tracked as PRO-7) the real leader of round `L` is only
+/// election (PRO-7, retired) the real leader of round `L` is only
 /// determined from committed data at round `L-6`, so this method can never be
 /// exact for future rounds.
 ///
@@ -1652,7 +1654,10 @@ async fn committee_from_state(
     state.committee.read().await
 }
 
-/// `kovanica_getCommittee(epoch?)` — current consensus committee.
+/// `kovanica_getCommittee(epoch?)` — current legacy committee snapshot.
+///
+/// Chains 1 and 2 have no consensus committee; this reflects the stored
+/// staking/seal committee and must not be read as the block-producer set.
 ///
 /// Returns a bare JSON array of member rows; the Android client parses the
 /// no-param response directly as a `JSONArray`, so that shape is preserved.

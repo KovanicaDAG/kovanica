@@ -49,7 +49,7 @@ pub(crate) fn build_committee_for_seal_epoch(
     // same ordering.
     let committee = staking_state.committee_order();
     if committee.is_empty() {
-        anyhow::bail!("no active validators in staking state; committee cannot be empty");
+        anyhow::bail!("no active validators in staking state; legacy committee cannot be empty");
     }
 
     let mut authorities = Vec::with_capacity(committee.len());
@@ -75,7 +75,9 @@ pub(crate) fn build_committee_for_seal_epoch(
     }
 
     if authorities.is_empty() {
-        anyhow::bail!("no validators with registered public keys; committee cannot be empty");
+        anyhow::bail!(
+            "no validators with registered public keys; legacy committee cannot be empty"
+        );
     }
 
     Ok(CommitteeInfo::try_new(seal_epoch, authorities)?)

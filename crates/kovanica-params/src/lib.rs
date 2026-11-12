@@ -34,8 +34,8 @@ pub const NETWORK_TAG_HYBRID_TESTNET: &str = NETWORK_TAG_TESTNET;
 // ============================================================
 // Consensus
 // ============================================================
-/// Hybrid PoW + GHOSTDAG default target block time in milliseconds (Toni 2026-11-05).
-/// Inactive until hybrid-pow consensus path is wired.
+/// Hybrid PoW + GHOSTDAG target block time in milliseconds (Toni 2026-11-05).
+/// Used by chains 1 and 2.
 pub const TARGET_BLOCK_MS: u64 = 4_000;
 /// Hybrid PoW + GHOSTDAG default parameter k (Toni 2026-11-05).
 pub const GHOSTDAG_K: u32 = 5;
