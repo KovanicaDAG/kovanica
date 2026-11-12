@@ -1,90 +1,234 @@
 # Genesis Ceremony Protocol
 
-Status: Active procedure for multi-party genesis generation and bootstrap coordination.
+**Status: DRAFT.** The ceremony tooling in `ops/genesis/ceremony.sh` is
+implemented and tested; no official public-testnet or mainnet genesis has been
+produced with it. The official ceremony waits on the owner-supplied founder,
+treasury and bootstrap-seed `kvnc...dag` addresses (addresses only, never
+private keys). Do not treat any example address in this document as canonical.
+
 Consensus Impact: Ledger initialization; executed once before chain start.
-Architecture: **Hybrid PoW + GHOSTDAG** (NO stake for consensus; target block 4 s, GHOSTDAG $K=5$; PoW Hash: KovanicaHash).
+Architecture: **Hybrid PoW + GHOSTDAG** on chains 1 and 2 (NO stake for
+consensus; target block 4 s, GHOSTDAG $K=5$; PoW hash: KovanicaHash). Chains 3
+(devnet) and 1337 (local) keep the legacy policy for development.
 
-Purpose: Coordinate the genesis initialization so that all bootstrap seed nodes (recommended: 3–5 seeds, bounded 1..=20) agree on initial state, staking allocations, treasury address, founder premine, and chain ID.
-
----
-
-## 1. Inputs
-
-- **`validators.json`** — JSON array of initial bootstrap seed nodes:
-  `{ "address": "<canonical PRO-21 address>", "public_key": "<32-byte hex>", "stake": <atoms> }`
-- **Treasury Address** and **Founder Address** — Canonical PRO-21 addresses (`kvnc...dag`, 64 characters).
-  - Treasury: 8,000,000 KVNC (3-of-5 multisig custody; 8-year linear vesting).
-  - Founder: 200,000 KVNC premine.
-- **Chain ID** — `1` Mainnet, `2` Testnet (legacy), `3` Devnet, `4` Testnet v2, `5` Hybrid Testnet, `1337` Local.
+Purpose: produce, from the owner's addresses, the genesis file set every node
+on a network must hold byte for byte: initial state, treasury address, founder
+premine and chain ID.
 
 ---
 
-## 2. Procedure (`ops/genesis/ceremony.sh`)
+## 1. Canonical chains
 
-Usage:
+| Chain ID | Network | Emission policy | Addresses |
+|---|---|---|---|
+| `1` | Mainnet | `no-stake-82m` (forced) | PRO-21 `kvnc...dag` only |
+| `2` | Testnet | `no-stake-82m` (forced) | PRO-21 `kvnc...dag` only |
+| `3` | Devnet | node default (`legacy-81m`) | PRO-21 or legacy hex |
+| `1337` | Local | node default (`legacy-81m`) | PRO-21 or legacy hex |
+
+There is no chain 4 or chain 5. `testnet/chain4/` stays in the tree as history
+and is not an input to the ceremony, an install target or a bundle source.
+
+---
+
+## 2. Inputs
+
+- **`validators.json`** — JSON array of bootstrap seed nodes:
+  `{ "address": "<canonical PRO-21 address>", "public_key": "<32-byte hex>" }`.
+  The legacy `stake` field is not used: on chains 1 and 2 nothing is staked.
+- **Treasury address** (`--treasury-address`, mandatory) — the address the
+  treasury is initialized for.
+- **Founder address** (`--founder-address`, mandatory) — receives the 200,000
+  KVNC premine.
+- **Chain ID** — inferred from `--network` (`mainnet` 1, `testnet` 2, `devnet`
+  3, `local` 1337) or set explicitly with `--chain-id`.
+
+On chains 1 and 2 every validator, founder and treasury address must already be
+a canonical PRO-21 `kvnc...dag` address. Legacy hex is **refused**, not
+converted: the ceremony never rewrites an address, derives a key from one, or
+invents keys to repair a committed file.
+
+### Tokenomics written by the ceremony
+
+| Item | Amount | Where it lives |
+|---|---|---|
+| Founder premine | 200,000 KVNC | minted at first start from `founder_premine.hex` |
+| Treasury allocation | 8,000,000 KVNC | allocation with 1M/year linear vesting, starting at `vested = 0` |
+| Mining subsidy budget | 82,000,000 KVNC | emitted block by block by the node |
+| Genesis validator allocation | 0 KVNC | nothing is minted or staked at genesis |
+| **Total** | **90,200,000 KVNC** | |
+
+The treasury is an 8M **allocation**, not an 8M genesis balance: the treasury
+account holds nothing until vesting releases the first tranche. The ceremony
+does not change emission or vesting math. `funded_accounts.toml` pre-funding
+(on chains other than 1) is extra and is not part of this arithmetic.
+
+---
+
+## 3. Procedure (`ops/genesis/ceremony.sh`)
+
 ```bash
-./ops/genesis/ceremony.sh --network mainnet --validators validators.json \
-    --treasury-address <treasury-address> \
-    --founder-address <founder-address> \
-    --output ./genesis [--force]
+./ops/genesis/ceremony.sh --network testnet \
+    --validators <validators.json> \
+    --treasury-address <treasury-kvnc...dag> \
+    --founder-address <founder-kvnc...dag> \
+    --output ./genesis-out
 ```
 
-Steps executed:
-1. **Generate Genesis:** Calls `kovanica-node genesis` to generate deterministic `genesis.json`.
-2. **Generate Node Keys:** Generates bootstrap seed node credentials in `--validator-keys-out <output>/keys`.
-3. **Emit `genesis_validators.toml`:** Populates bootstrap seed node addresses and allocations.
-4. **Emit `bootnodes.toml`:** Configures initial DNS seed addresses (`testnet.kovanica.online:8000` or `mainnet.kovanica.online:8000`).
+Add `--chain-id <id>` to override the network default, `--force` to overwrite
+files inside `--output`, and `--generate-keys` to write throwaway validator
+keys under `<output>/keys` (never commit them).
 
-Outputs placed in `--output`: `genesis.json`, `genesis_validators.toml`, `bootnodes.toml`, and `keys/`.
+Steps:
+
+1. **Validate and write the file set.** Every address is checked before the
+   node runs, so a refused input leaves no output behind. Writes
+   `genesis_validators.toml` (see §4) and `founder_premine.hex`.
+2. **Generate `genesis.json`.** Runs `kovanica-node genesis` with the same
+   addresses and computes the staking/tokenomics preview. On chains 1 and 2 the
+   script always passes `--emission-policy no-stake-82m`; the node fails closed
+   without it.
+3. **Key generation.** Reports the throwaway keys when `--generate-keys` was
+   given; otherwise the input key configuration is untouched.
+4. **Write `bootnodes.toml`** with the network seed
+   (`testnet.kovanica.online:8000` or `mainnet.kovanica.online:8000`).
+
+The default `--output` is `./genesis-out/`, which is gitignored. The script
+refuses an output that would land on a committed artefact
+(`testnet/genesis.json`, `testnet/node-data/genesis.json`,
+`mainnet/genesis.json`, `ops/docker/validators/genesis.json`) or inside a
+committed genesis/key directory (`testnet/chain4/`, `testnet/validators/`,
+`ops/docker/chain2/`, `ops/docker/validators/`, `mainnet/`, `testnet/node-data/`),
+even with `--force`.
 
 ---
 
-## 3. Configuration Formats
+## 4. Configuration formats
 
-### 3.1 `genesis_validators.toml`
+### 4.1 `genesis_validators.toml`
+
+The ceremony writes chain 2 as:
 
 ```toml
-chain_id = 1
+# Kovanica testnet genesis validators (generated by ops/genesis/ceremony.sh)
+# Network: testnet (chain_id = 2)
+chain_id = 2
+emission_policy = "no-stake-82m"
+treasury_address = "kvnc...dag"
 
 [[validator]]
-address = "kvnc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqdag"
-stake = 50000000000000
-public_key = "4a7b..."
+address = "kvnc...dag"
+public_key = "<32-byte hex>"
 ```
 
-### 3.2 Mainnet Bootstrap Seed Node Bounds (1..=20)
+- `chain_id` is mandatory on chains 1 and 2 and must equal the node's
+  configured chain.
+- `emission_policy` must be `no-stake-82m` on chains 1 and 2.
+- There is **no `stake` field**. Under `no-stake-82m` no stake is locked at
+  genesis; a legacy genesis applies `MIN_VALIDATOR_STAKE` itself.
+- `treasury_address` is recorded so every node sets the same
+  `KOVANICA_TREASURY_ADDRESS`. The node refuses to start when the configured
+  treasury differs from the recorded one.
 
-Under **Hybrid PoW + GHOSTDAG**, consensus requires **NO stake in the consensus path**: blocks are mined via Proof-of-Work (KovanicaHash) and ordered via GHOSTDAG ($K=5$). 
+### 4.2 `founder_premine.hex`
 
-- The legacy 15-validator BFT committee quorum floor is retired.
-- Mainnet genesis requires at least **1** bootstrap seed node and at most **20** (bootstrap policy; under `NoStake82M` the genesis set holds no stake and receives no allocation).
-- A lean deployment of **3–5 bootstrap seed nodes** (`seed1`, `seed3.kovanica.online`) is recommended for public discovery.
-- `kovanica-node --check-config` enforces this bound on Mainnet when ceremony files are present.
+One line: the founder address (`kvnc...dag` on chains 1 and 2). `init_genesis`
+mints the 200,000 KVNC premine only when this file is present in
+`KOVANICA_DATA_DIR`, and `genesis_config_digest` binds the address inside it.
 
-### 3.3 Prohibition of `funded_accounts.toml` on Mainnet
+### 4.3 Why `genesis.json` is not state
+
+`kovanica-node genesis` writes a preview of the staking state and allocations.
+A running node does not take balances from it: `init_genesis` derives genesis
+state from `genesis_validators.toml`, `founder_premine.hex`,
+`funded_accounts.toml` and `KOVANICA_TREASURY_ADDRESS`. Do not distribute
+`genesis.json` as if it were the state.
+
+---
+
+## 5. Bootstrap seed node bounds (chains 1 and 2)
+
+- No stake is required in the consensus path: blocks are mined with
+  Proof-of-Work (KovanicaHash) and ordered with GHOSTDAG ($K=5$).
+- Chain 1 requires **1..=20** declared bootstrap seed nodes; the same bound is
+  enforced as a maximum on chain 2. The retired 15-validator BFT quorum floor
+  does not apply.
+- A lean deployment of **3–5 bootstrap seed nodes** is recommended for public
+  discovery.
+- `kovanica-node --check-config` enforces the mainnet bound when a ceremony
+  file is present.
+
+### 5.1 Prohibition of `funded_accounts.toml` on Mainnet
 
 ```toml
 [[account]]
-address = "kvnc1..."
+address = "kvnc..."
 balance = 1000000000000
 ```
 
-Pre-funding accounts from `funded_accounts.toml` is permitted only on test/dev networks (chains 2, 3, 1337). On **Chain 1 (Mainnet)**, this file is **strictly prohibited**; every KVNC must originate from the published emission allocations (founder premine, treasury vesting, genesis validator allocation, mining subsidy). The node aborts on startup if `funded_accounts.toml` is detected on Mainnet. The mainnet `sha256sum` list therefore omits it (see [`docs/TESTNET-RESET.md`](TESTNET-RESET.md)).
+Pre-funding accounts from `funded_accounts.toml` is permitted only on chains 2,
+3 and 1337. On **chain 1 (Mainnet)** the file is **strictly prohibited**: every
+KVNC must originate from the published allocation (founder premine, treasury
+vesting, mining subsidy), so the node aborts at startup and `genesis-bundle`
+refuses to package it. The mainnet `sha256sum` list therefore omits it (see
+[`docs/TESTNET-RESET.md`](TESTNET-RESET.md)).
 
 ---
 
-## 4. Genesis Digest Guard (Startup Behaviour)
+## 6. Genesis digest guard (startup behaviour)
 
-On initial startup, the node computes and persists a cryptographic digest of the genesis state:
-- **Match:** Startup proceeds immediately.
-- **Mismatch:** Startup aborts with an explicit configuration error to prevent accidental chain forks.
-- **Chain State without Digest:** Refuses startup (requires wiping legacy state).
+On first startup the node computes a cryptographic digest over the genesis
+inputs (canonical block digest, chain ID, treasury address and the genesis files
+in the data directory) and persists it:
+- **Match:** startup proceeds.
+- **Mismatch:** startup aborts with an explicit configuration error.
+- **Existing chain state without a digest:** startup is refused.
+
+Every node must therefore use the same chain ID, the same binary and the same
+genesis file set, byte for byte, plus the same `KOVANICA_TREASURY_ADDRESS`.
 
 ---
 
-## 5. Network Safety Rules
+## 7. Publishing a bundle
+
+Cut the published archive with the node binary; never assemble it by hand:
+
+```bash
+kovanica-node genesis-bundle --chain-id 2 --source <genesis-dir> \
+    --out kovanica-chain2-genesis.tar.gz
+```
+
+`--source` must contain only genesis files (`genesis_validators.toml` is
+required; `founder_premine.hex`, `funded_accounts.toml` and `validators.json`
+are included when present). Any other entry — a key, a keystore, a
+`config.toml` — is refused. The archive is byte-for-byte deterministic and
+carries `SHA256SUMS` and `expected-tag`, which is what
+`node/scripts/install.sh` verifies.
+
+The source directory for chain 2 must be the output of the ceremony above
+(including `founder_premine.hex`), with `chain_id = 2` in
+`genesis_validators.toml`. `.github/workflows/release-node.yml` is pointed at
+`testnet/chain2/` and fails closed while that directory does not exist: no
+official chain-2 bundle is published until the owner runs the real ceremony and
+ops attaches the asset to a `v<version>-node` release.
+
+**Known limitation (follow-up, not fixed here).** `genesis-bundle` computes
+`expected-tag` from the genesis file set alone and deliberately ignores
+`KOVANICA_*` overrides, while `genesis_config_digest` binds the treasury
+address from the node configuration. A bundle cut today therefore cannot bind
+the treasury the ceremony recorded: a node that sets the real
+`KOVANICA_TREASURY_ADDRESS` computes a different tag and the installer refuses
+it, and a node that leaves it unset is refused by `init_genesis` because
+`genesis_validators.toml` declares a treasury it is not configured with.
+Publishing the official chain-2 bundle needs a follow-up that carries the
+treasury through `genesis-bundle` and `node/scripts/install.sh`.
+
+---
+
+## 8. Network safety rules
 
 - Keep seed DNS records strictly **grey-cloud** (no Cloudflare proxying or CDN).
 - P2P transport operates on port **8000** (TCP + Noise + Yamux).
 - Faucets are disabled on seed nodes (`FAUCET=0`).
-- Mining nodes operate permissionlessly with standard PRO-21 addresses via `KOVANICA_MINING_AUTHOR`.
+- Mining nodes operate permissionlessly with standard PRO-21 addresses via
+  `KOVANICA_MINING_AUTHOR`.
