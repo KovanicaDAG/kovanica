@@ -246,6 +246,43 @@ impl Transaction {
     }
 }
 
+impl TransactionKind {
+    /// Whether this kind is a validator-staking operation.
+    ///
+    /// The five staking kinds (`Stake`, `Unstake`, `Delegate`, `ClaimRewards`,
+    /// `SetCommission`) are the ones that mutate validator stake, delegation,
+    /// commission or move funds into unbonding. They are all refused on hybrid
+    /// PoW + GHOSTDAG chains — see [`hybrid_refuses_stake_kind`].
+    ///
+    /// [`TransactionKind::RegisterLightNode`] / `ExitLightNode` are a separate
+    /// light-node bond and are deliberately *not* included here.
+    pub fn is_stake_kind(&self) -> bool {
+        matches!(
+            self,
+            TransactionKind::Stake { .. }
+                | TransactionKind::Unstake { .. }
+                | TransactionKind::Delegate { .. }
+                | TransactionKind::ClaimRewards { .. }
+                | TransactionKind::SetCommission { .. }
+        )
+    }
+}
+
+/// Why a staking transaction was refused on a hybrid chain.
+pub const HYBRID_STAKE_REFUSAL: &str =
+    "Staking transactions are not supported on hybrid PoW + GHOSTDAG chains";
+
+/// Whether `kind` must be refused on the chain `chain_id`.
+///
+/// Hybrid chains (mainnet `1` and the public testnet `2`) order blocks with
+/// GHOSTDAG and mine them with KovanicaHash PoW. Stake is not part of their
+/// consensus, so the five staking kinds fail closed there rather than
+/// half-applying. Non-hybrid chains (`3`, `1337`) keep their existing staking
+/// behaviour.
+pub fn hybrid_refuses_stake_kind(chain_id: u64, kind: &TransactionKind) -> bool {
+    crate::signing::chain_id::is_hybrid(chain_id) && kind.is_stake_kind()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +466,54 @@ mod tests {
             crate::signing::TX_DOMAIN_TAG,
             crate::signing::VOTE_DOMAIN_TAG
         );
+    }
+
+    #[test]
+    fn stake_kinds_are_refused_only_on_hybrid_chains() {
+        use crate::signing::chain_id;
+
+        let kinds = [
+            TransactionKind::Stake { amount: 1 },
+            TransactionKind::Unstake { amount: 1 },
+            TransactionKind::Delegate {
+                validator: Address([1u8; 32]),
+                amount: 1,
+            },
+            TransactionKind::ClaimRewards { validator: None },
+            TransactionKind::SetCommission {
+                validator: Address([1u8; 32]),
+                commission_bps: 1,
+            },
+        ];
+        for kind in &kinds {
+            assert!(kind.is_stake_kind());
+            for hybrid in [chain_id::MAINNET, chain_id::TESTNET] {
+                assert!(hybrid_refuses_stake_kind(hybrid, kind));
+            }
+            for non_hybrid in [chain_id::DEVNET, chain_id::LOCAL] {
+                assert!(!hybrid_refuses_stake_kind(non_hybrid, kind));
+            }
+        }
+
+        // Non-staking kinds are never refused, and the light-node bond is a
+        // separate product, not validator stake.
+        let others = [
+            TransactionKind::Transfer {
+                to: Address([1u8; 32]),
+                amount: 1,
+            },
+            TransactionKind::RegisterLightNode {
+                vrf_public_key: PublicKey([2u8; 32]),
+                stake: 1,
+            },
+            TransactionKind::ExitLightNode,
+            TransactionKind::ClaimTreasury { amount: 1 },
+        ];
+        for kind in &others {
+            assert!(!kind.is_stake_kind());
+            for chain in [chain_id::MAINNET, chain_id::TESTNET] {
+                assert!(!hybrid_refuses_stake_kind(chain, kind));
+            }
+        }
     }
 }

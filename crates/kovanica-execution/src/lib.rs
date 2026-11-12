@@ -468,7 +468,7 @@ impl ExecutionContext {
         // 3. Pay the mining reward to the blocks/leader of this sub-DAG.
         // Under Hybrid PoW + GHOSTDAG (ADR 0003), mining rewards are minted directly
         // to the miner/author of each confirmed block without stake commission.
-        let (reward, candidate_staking, candidate_mining_state, escrow_part) =
+        let (reward, mut candidate_staking, candidate_mining_state, escrow_part) =
             if chain_id::is_hybrid(self.signing_ctx.chain_id) {
                 if emission_policy == EmissionPolicy::NoStake82M {
                     let mut candidate_staking = snapshot_staking(&self.staking);
@@ -611,18 +611,14 @@ impl ExecutionContext {
                 }
                 let (_, escrow_part) =
                     kovanica_staking::split_block_reward(reward.amount, self.light_reward_bps);
-                let mut ready: Vec<(Address, Address)> = candidate_staking
-                    .unbonding_ready()
-                    .iter()
-                    .map(|e| (e.delegator, e.validator))
-                    .collect();
-                ready.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-                for (delegator, validator) in ready {
-                    let amount = candidate_staking.withdraw_unbonded(delegator, validator)?;
-                    storage.state().add_balance(&txn, &delegator, amount)?;
-                }
                 (reward, candidate_staking, None, escrow_part)
             };
+
+        // Pay out every matured unbonding entry. Shared by hybrid and
+        // non-hybrid chains: an Unstake that entered the queue before a chain
+        // became hybrid (or in fixtures/older state) must still find a payout
+        // path — hybrid consensus itself stays PoW + GHOSTDAG.
+        pay_matured_unbonding(&mut candidate_staking, storage, &mut txn)?;
 
         if !chain_id::is_hybrid(self.signing_ctx.chain_id) {
             self.pay_light_escrow(
@@ -777,6 +773,23 @@ impl ExecutionContext {
                 success: false,
                 gas_used: 0,
                 error: Some("Invalid signature".to_string()),
+                events: Vec::new(),
+            });
+        }
+
+        // Hybrid chains (1, 2) are PoW + GHOSTDAG with no stake product.
+        // Refuse the five staking kinds before the fee/nonce are charged and
+        // before any body state is touched, so a refused transaction leaves
+        // balances, unbonding, delegation and commission exactly as they were.
+        if kovanica_types::transaction::hybrid_refuses_stake_kind(
+            self.signing_ctx.chain_id,
+            &tx.kind,
+        ) {
+            return Ok(TransactionReceipt {
+                tx_hash: tx.hash,
+                success: false,
+                gas_used: 0,
+                error: Some(kovanica_types::transaction::HYBRID_STAKE_REFUSAL.to_string()),
                 events: Vec::new(),
             });
         }
@@ -1022,6 +1035,17 @@ impl ExecutionContext {
         from: &Address,
         amount: u64,
     ) -> Result<Vec<ContractEvent>, ExecutionError> {
+        // Defence in depth: `execute_transaction` refuses staking kinds on
+        // hybrid chains before charging the fee. Keep the direct path closed
+        // too so no internal caller can stake on a PoW + GHOSTDAG chain.
+        if kovanica_types::transaction::hybrid_refuses_stake_kind(
+            self.signing_ctx.chain_id,
+            &TransactionKind::Stake { amount },
+        ) {
+            return Err(ExecutionError::Validation(
+                kovanica_types::transaction::HYBRID_STAKE_REFUSAL.to_string(),
+            ));
+        }
         let account = storage.state().get_account_or_default_write(txn, from)?;
         if account.balance < amount {
             return Err(ExecutionError::Validation(
@@ -1994,6 +2018,31 @@ fn snapshot_staking(s: &StakingState) -> StakingState {
         treasury: s.treasury.clone(),
         unbonding_queue: s.unbonding_queue.clone(),
     }
+}
+
+/// Return every matured unbonding entry in `staking` to its owner.
+///
+/// Maturity is the existing [`StakingState::unbonding_ready`] rule
+/// (`committed_leader_height >= release_height`); the payout uses the existing
+/// [`StakingState::withdraw_unbonded`] logic. Called from the reward path on
+/// every chain so hybrid chains have the same payout path they had before
+/// staking was refused, without running the non-hybrid epoch/committee code.
+fn pay_matured_unbonding(
+    staking: &mut StakingState,
+    storage: &Storage,
+    txn: &mut WriteTransaction,
+) -> Result<(), ExecutionError> {
+    let mut ready: Vec<(Address, Address)> = staking
+        .unbonding_ready()
+        .iter()
+        .map(|e| (e.delegator, e.validator))
+        .collect();
+    ready.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    for (delegator, validator) in ready {
+        let amount = staking.withdraw_unbonded(delegator, validator)?;
+        storage.state().add_balance(txn, &delegator, amount)?;
+    }
+    Ok(())
 }
 
 /// Return the epoch committee snapshot for `epoch`, freezing it from the
@@ -3276,6 +3325,30 @@ mod tests {
             leader: sample_block(0),
             blocks: vec![sample_block_with_txs(0, vec![tx])],
             leader_round: 1,
+            leader_author: 0,
+            non_blue: Vec::new(),
+        };
+        ctx.execute_committed_subdag(&subdag, storage)
+            .expect("execute")
+    }
+
+    /// Like [`execute_single_tx`], but with a caller-chosen round so repeated
+    /// calls in one test are distinct sub-DAGs (the replay guard keys on the
+    /// leader digest).
+    fn execute_tx_in_round(
+        ctx: &mut ExecutionContext,
+        storage: &Storage,
+        tx: Transaction,
+        round: u64,
+    ) -> ExecutionResult {
+        let leader = sample_block_at(0, round);
+        let mut block = sample_block_with_txs(0, vec![tx]);
+        block.round = round;
+        block.digest = StatementBlock::compute_digest(0, round, &[], &block.transactions);
+        let subdag = CommittedSubDag {
+            leader,
+            blocks: vec![block],
+            leader_round: round,
             leader_author: 0,
             non_blue: Vec::new(),
         };
@@ -6591,6 +6664,396 @@ mod tests {
         assert_eq!(
             state2.cumulative_mining_issued,
             state1.cumulative_mining_issued
+        );
+    }
+
+    // ---- bucket D: staking is fail-closed on hybrid chains --------------
+
+    /// The five staking kinds, with a label for assertion messages.
+    fn stake_kinds_for_test() -> Vec<(&'static str, TransactionKind)> {
+        vec![
+            ("Stake", TransactionKind::Stake { amount: K }),
+            ("Unstake", TransactionKind::Unstake { amount: K }),
+            (
+                "Delegate",
+                TransactionKind::Delegate {
+                    validator: Address([3u8; 32]),
+                    amount: K,
+                },
+            ),
+            (
+                "ClaimRewards",
+                TransactionKind::ClaimRewards {
+                    validator: Some(Address([3u8; 32])),
+                },
+            ),
+            (
+                "SetCommission",
+                TransactionKind::SetCommission {
+                    validator: Address([3u8; 32]),
+                    commission_bps: 100,
+                },
+            ),
+        ]
+    }
+
+    /// Validator identities/stakes in a comparable shape (`ValidatorInfo`
+    /// itself does not derive `PartialEq`).
+    fn validator_snapshot(state: &StakingState) -> Vec<(Address, u64, u16, bool)> {
+        state
+            .validators
+            .iter()
+            .map(|v| (v.address, v.stake, v.commission_bps, v.active))
+            .collect()
+    }
+
+    /// Build a storage + context funded for `key` and switch the context to
+    /// `chain`'s signing domain.
+    fn funded_ctx_on_chain(
+        storage: &Storage,
+        key: &SigningKey,
+        chain: u64,
+        balance: u64,
+    ) -> ExecutionContext {
+        let mut ctx = setup_funded_sender(storage, &address_of(key), balance);
+        ctx.signing_ctx = SigningContext::new(chain);
+        ctx
+    }
+
+    #[test]
+    fn hybrid_refuses_all_stake_kinds_without_state_change() {
+        for chain in [chain_id::MAINNET, chain_id::TESTNET] {
+            for (label, kind) in stake_kinds_for_test() {
+                let dir = tempfile::tempdir().expect("tempdir");
+                let storage = Storage::new(dir.path().join(format!("h_{chain}_{label}.redb")))
+                    .expect("storage");
+                let key = test_keypair(0x21);
+                let sender = address_of(&key);
+                let mut ctx = funded_ctx_on_chain(&storage, &key, chain, 1_000 * K);
+
+                // `setup_funded_sender` registers Address([3u8; 32]); record
+                // the state the refused transaction must not touch.
+                let validators_before = validator_snapshot(&ctx.staking);
+                let delegations_before = ctx.staking.delegations.clone();
+                let total_staked_before = ctx.staking.total_staked;
+                let balance_before = read_balance(&storage, &sender);
+                let nonce_before = read_nonce(&storage, &sender);
+                assert!(ctx.staking.unbonding_queue.is_empty());
+
+                let tx = signed_tx_for(&key, kind, 0, 5_000, &SigningContext::new(chain));
+                let result = execute_single_tx(&mut ctx, &storage, tx);
+                let receipt = &result.receipts[0];
+
+                assert!(
+                    !receipt.success,
+                    "{label} must be refused on hybrid chain {chain}"
+                );
+                assert_eq!(
+                    receipt.error.as_deref(),
+                    Some(kovanica_types::transaction::HYBRID_STAKE_REFUSAL),
+                    "{label} on chain {chain}"
+                );
+                assert_eq!(receipt.gas_used, 0, "{label} must not burn gas");
+
+                // No fee, no nonce bump: the refusal happens before both.
+                assert_eq!(read_balance(&storage, &sender), balance_before);
+                assert_eq!(read_nonce(&storage, &sender), nonce_before);
+
+                // No staking mutation of any kind.
+                assert_eq!(validator_snapshot(&ctx.staking), validators_before);
+                assert_eq!(ctx.staking.delegations, delegations_before);
+                assert_eq!(ctx.staking.total_staked, total_staked_before);
+                assert!(ctx.staking.unbonding_queue.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn hybrid_unstake_is_refused_and_creates_no_unbonding() {
+        // A sender that *is* an active validator, so on a non-hybrid chain
+        // this Unstake would have entered the unbonding queue and moved stake.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("h_unstake.redb")).expect("storage");
+        let key = test_keypair(0x31);
+        let sender = address_of(&key);
+        let mut ctx = funded_ctx_on_chain(&storage, &key, chain_id::TESTNET, 1_000 * K);
+        ctx.staking
+            .join_validator(
+                sender,
+                kovanica_params::MIN_VALIDATOR_STAKE,
+                0,
+                None,
+                None,
+                None,
+            )
+            .expect("join validator");
+        let total_staked_before = ctx.staking.total_staked;
+        let balance_before = read_balance(&storage, &sender);
+
+        let tx = signed_tx_for(
+            &key,
+            TransactionKind::Unstake { amount: K },
+            0,
+            5_000,
+            &SigningContext::new(chain_id::TESTNET),
+        );
+        let result = execute_single_tx(&mut ctx, &storage, tx);
+
+        assert!(!result.receipts[0].success);
+        assert_eq!(
+            result.receipts[0].error.as_deref(),
+            Some(kovanica_types::transaction::HYBRID_STAKE_REFUSAL)
+        );
+        assert!(
+            ctx.staking.unbonding_queue.is_empty(),
+            "a refused Unstake must not create unbonding"
+        );
+        assert_eq!(ctx.staking.total_staked, total_staked_before);
+        assert_eq!(read_balance(&storage, &sender), balance_before);
+    }
+
+    #[test]
+    fn hybrid_pays_matured_unbonding_and_does_not_re_enable_stake() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("h_unbond_payout.redb")).expect("storage");
+        let key = test_keypair(0x41);
+        let mut ctx = funded_ctx_on_chain(&storage, &key, chain_id::TESTNET, 10 * K);
+
+        // Pre-existing hybrid unbonding state: one entry matures at the next
+        // committed leader height (1), one is far from maturity.
+        let owner = Address([0x5Au8; 32]);
+        let validator = Address([3u8; 32]);
+        ctx.staking
+            .unbonding_queue
+            .push(kovanica_staking::UnbondingEntry {
+                delegator: owner,
+                validator,
+                amount: 500,
+                release_height: 1,
+            });
+        ctx.staking
+            .unbonding_queue
+            .push(kovanica_staking::UnbondingEntry {
+                delegator: owner,
+                validator,
+                amount: 300,
+                release_height: 50_000,
+            });
+        let owner_balance_before = read_balance(&storage, &owner);
+
+        // A normal transfer keeps the sub-DAG non-empty; the payout happens in
+        // the same reward path that used to be non-hybrid only.
+        let tx = signed_tx_for(
+            &key,
+            TransactionKind::Transfer {
+                to: Address([0x77u8; 32]),
+                amount: K,
+            },
+            0,
+            1_000,
+            &SigningContext::new(chain_id::TESTNET),
+        );
+        let result = execute_tx_in_round(&mut ctx, &storage, tx, 1);
+        assert!(result.receipts[0].success, "{:?}", result.receipts[0].error);
+
+        assert_eq!(
+            read_balance(&storage, &owner),
+            owner_balance_before + 500,
+            "matured unbonding must be paid to its owner"
+        );
+        assert_eq!(ctx.staking.unbonding_queue.len(), 1);
+        assert_eq!(ctx.staking.unbonding_queue[0].amount, 300);
+        assert_eq!(ctx.staking.unbonding_queue[0].release_height, 50_000);
+
+        // Paying out an old queue entry must not turn staking back on.
+        let stake = signed_tx_for(
+            &key,
+            TransactionKind::Stake { amount: K },
+            1,
+            1_000,
+            &SigningContext::new(chain_id::TESTNET),
+        );
+        let result = execute_tx_in_round(&mut ctx, &storage, stake, 2);
+        assert!(!result.receipts[0].success);
+        assert_eq!(
+            result.receipts[0].error.as_deref(),
+            Some(kovanica_types::transaction::HYBRID_STAKE_REFUSAL)
+        );
+    }
+
+    #[test]
+    fn non_hybrid_chain_keeps_all_stake_behaviour() {
+        // Chain 3 is a normal (non-hybrid) chain: every staking kind keeps
+        // working exactly as on the base commit.
+        use kovanica_storage::state_store::Account;
+
+        fn fund_account(storage: &Storage, address: &Address, balance: u64) {
+            let txn = storage.begin_write().expect("write txn");
+            storage
+                .state()
+                .set_account(
+                    &txn,
+                    address,
+                    &Account {
+                        balance,
+                        nonce: 0,
+                        code_hash: [0u8; 32],
+                        code: Vec::new(),
+                    },
+                )
+                .expect("set_account");
+            txn.commit().expect("commit");
+        }
+
+        fn exec_on_devnet(
+            ctx: &mut ExecutionContext,
+            storage: &Storage,
+            key: &SigningKey,
+            kind: TransactionKind,
+            nonce: u64,
+            round: u64,
+        ) {
+            let tx = signed_tx_for(
+                key,
+                kind,
+                nonce,
+                1_000,
+                &SigningContext::new(chain_id::DEVNET),
+            );
+            let result = execute_tx_in_round(ctx, storage, tx, round);
+            let receipt = &result.receipts[0];
+            assert!(receipt.success, "expected success, got {:?}", receipt.error);
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = Storage::new(dir.path().join("devnet_stake.redb")).expect("storage");
+        let validator_key = test_keypair(0x51);
+        let validator = address_of(&validator_key);
+        let delegator_key = test_keypair(0x52);
+        let delegator = address_of(&delegator_key);
+
+        fund_account(&storage, &validator, 200_000 * K);
+        fund_account(&storage, &delegator, 100_000 * K);
+
+        let mut ctx = ExecutionContext::with_signing_context(SigningContext::new(chain_id::DEVNET));
+        // Seed a pending reward so ClaimRewards has something to claim (the
+        // base behaviour: zero rewards is a body failure, not a refusal).
+        {
+            let txn = storage.begin_write().expect("write txn");
+            txn.open_table(PENDING_REWARDS)
+                .expect("pending table")
+                .insert(reward_key(&delegator, &validator), 5_000u64)
+                .expect("seed pending reward");
+            txn.commit().expect("commit");
+        }
+
+        // 1. Stake: registers the validator.
+        exec_on_devnet(
+            &mut ctx,
+            &storage,
+            &validator_key,
+            TransactionKind::Stake {
+                amount: kovanica_params::MIN_VALIDATOR_STAKE,
+            },
+            0,
+            1,
+        );
+        assert!(ctx
+            .staking
+            .validators
+            .iter()
+            .any(|v| v.address == validator));
+
+        // 2. SetCommission: the validator changes its own commission.
+        exec_on_devnet(
+            &mut ctx,
+            &storage,
+            &validator_key,
+            TransactionKind::SetCommission {
+                validator,
+                commission_bps: 250,
+            },
+            1,
+            2,
+        );
+        assert_eq!(
+            ctx.staking
+                .validators
+                .iter()
+                .find(|v| v.address == validator)
+                .unwrap()
+                .commission_bps,
+            250
+        );
+
+        // 3. Delegate.
+        exec_on_devnet(
+            &mut ctx,
+            &storage,
+            &delegator_key,
+            TransactionKind::Delegate {
+                validator,
+                amount: kovanica_params::MIN_DELEGATION,
+            },
+            0,
+            3,
+        );
+        assert_eq!(
+            ctx.staking.delegated_to(validator),
+            kovanica_params::MIN_DELEGATION
+        );
+
+        // 4. Unstake the delegation: enters the unbonding queue as on base.
+        exec_on_devnet(
+            &mut ctx,
+            &storage,
+            &delegator_key,
+            TransactionKind::Unstake {
+                amount: kovanica_params::MIN_DELEGATION,
+            },
+            1,
+            4,
+        );
+        assert_eq!(ctx.staking.unbonding_queue.len(), 1);
+        assert_eq!(
+            ctx.staking.unbonding_queue[0].amount,
+            kovanica_params::MIN_DELEGATION
+        );
+
+        // 5. ClaimRewards.
+        let balance_before = read_balance(&storage, &delegator);
+        exec_on_devnet(
+            &mut ctx,
+            &storage,
+            &delegator_key,
+            TransactionKind::ClaimRewards {
+                validator: Some(validator),
+            },
+            2,
+            5,
+        );
+        assert!(read_balance(&storage, &delegator) > balance_before);
+
+        // And the non-hybrid payout path still returns matured unbonding.
+        let release = ctx.staking.unbonding_queue[0].release_height;
+        ctx.staking.committed_leader_height = release;
+        let before = read_balance(&storage, &delegator);
+        let tx = signed_tx_for(
+            &delegator_key,
+            TransactionKind::Transfer {
+                to: Address([0x77u8; 32]),
+                amount: 1,
+            },
+            3,
+            1_000,
+            &SigningContext::new(chain_id::DEVNET),
+        );
+        let result = execute_tx_in_round(&mut ctx, &storage, tx, 6);
+        assert!(result.receipts[0].success, "{:?}", result.receipts[0].error);
+        assert!(ctx.staking.unbonding_queue.is_empty());
+        assert_eq!(
+            read_balance(&storage, &delegator),
+            before + kovanica_params::MIN_DELEGATION - 1 - 1_000
         );
     }
 }

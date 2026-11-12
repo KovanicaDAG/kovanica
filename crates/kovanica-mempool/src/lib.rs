@@ -6,7 +6,8 @@
 //! expensive ones last, so junk is turned away before we pay for a signature
 //! check or a storage read:
 //!
-//! 1. size, gas limit, zero fee, minimum fee rate;
+//! 1. size, gas limit, hybrid staking refusal (chains 1 and 2 have no stake),
+//!    zero fee, minimum fee rate;
 //! 2. `tx.hash` must equal `tx.signing_hash()` (the hash is the pool key and
 //!    the dedup key, so it must be bound to the signed content);
 //! 3. duplicate hash;
@@ -409,6 +410,15 @@ impl Mempool {
             if *gas_limit > self.config.max_gas_limit {
                 return Err(MempoolError::GasLimitTooHigh);
             }
+        }
+        // Hybrid chains (1, 2) have no stake product: refuse the five staking
+        // kinds at admission so they never enter the pool or a block. Checked
+        // before the fee rules, which are left untouched for non-hybrid chains.
+        if kovanica_types::transaction::hybrid_refuses_stake_kind(
+            self.signing_ctx.chain_id,
+            &tx.kind,
+        ) {
+            return Err(MempoolError::StakeKindNotSupportedOnHybrid);
         }
         let fee_rate = tx.fee / size.max(1) as u64;
         if requires_fee(&tx.kind) && !self.evidence_is_free(&tx) {
@@ -891,6 +901,8 @@ pub enum MempoolError {
     NonceInFlight { nonce: u64 },
     #[error("Too many pending transactions from sender (limit {limit})")]
     TooManyFromSender { limit: usize },
+    #[error("{}", kovanica_types::transaction::HYBRID_STAKE_REFUSAL)]
+    StakeKindNotSupportedOnHybrid,
     #[error("Crypto error: {0}")]
     Crypto(#[from] kovanica_crypto::CryptoError),
     #[error("Storage error: {0}")]
@@ -1739,5 +1751,138 @@ mod tests {
         assert!(report
             .iter()
             .any(|r| matches!(&r.outcome, ReinsertOutcome::Invalid(m) if m.contains("full"))));
+    }
+
+    // ---- bucket D: hybrid chains refuse staking at admission -----------
+
+    /// Sign `tx` under an arbitrary chain context (the default helper is
+    /// hard-wired to `TEST_CTX`/LOCAL).
+    fn build_signed_tx_with_ctx(
+        sender: Address,
+        nonce: u64,
+        kind: TransactionKind,
+        fee: u64,
+        signing_key: &SigningKey,
+        ctx: &kovanica_types::SigningContext,
+    ) -> Transaction {
+        let mut tx = Transaction {
+            sender,
+            nonce,
+            kind,
+            fee,
+            signature: Signature([0; 64]),
+            hash: Hash::zero(),
+        };
+        tx.hash = tx.signing_hash(ctx);
+        tx.signature = kovanica_crypto::sign(signing_key, tx.hash.as_ref());
+        tx
+    }
+
+    fn stake_kinds_for_mempool() -> Vec<(&'static str, TransactionKind)> {
+        vec![
+            ("Stake", TransactionKind::Stake { amount: 1 }),
+            ("Unstake", TransactionKind::Unstake { amount: 1 }),
+            (
+                "Delegate",
+                TransactionKind::Delegate {
+                    validator: Address([3u8; 32]),
+                    amount: 1,
+                },
+            ),
+            (
+                "ClaimRewards",
+                TransactionKind::ClaimRewards {
+                    validator: Some(Address([3u8; 32])),
+                },
+            ),
+            (
+                "SetCommission",
+                TransactionKind::SetCommission {
+                    validator: Address([3u8; 32]),
+                    commission_bps: 100,
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn hybrid_chains_refuse_stake_kinds_at_admission() {
+        use kovanica_types::signing::chain_id;
+
+        for chain in [chain_id::MAINNET, chain_id::TESTNET] {
+            for (label, kind) in stake_kinds_for_mempool() {
+                let fx = Fixture::new();
+                let (sk, sender) = fx.funded(1_000_000, 0);
+                let ctx = kovanica_types::SigningContext::new(chain);
+                let pool = Mempool::new(MempoolConfig::default(), fx.storage.clone(), ctx);
+
+                // Zero fee on purpose: the hybrid refusal must fire before the
+                // fee rules, so the error is the refusal, not `ZeroFee`.
+                let tx = build_signed_tx_with_ctx(sender, 0, kind, 0, &sk, &ctx);
+                let err = pool
+                    .add_transaction(tx)
+                    .expect_err("hybrid must refuse staking at admission");
+                assert!(
+                    matches!(err, MempoolError::StakeKindNotSupportedOnHybrid),
+                    "{label} on chain {chain}: {err:?}"
+                );
+                assert_eq!(
+                    err.to_string(),
+                    kovanica_types::transaction::HYBRID_STAKE_REFUSAL
+                );
+                assert!(pool.is_empty(), "refused {label} must not enter the pool");
+            }
+        }
+    }
+
+    #[test]
+    fn non_hybrid_chains_keep_stake_admission_and_fee_rules() {
+        use kovanica_types::signing::chain_id;
+
+        for chain in [chain_id::DEVNET, chain_id::LOCAL] {
+            let fx = Fixture::new();
+            let (sk, sender) = fx.funded(1_000_000, 0);
+            let ctx = kovanica_types::SigningContext::new(chain);
+            let pool = Mempool::new(MempoolConfig::default(), fx.storage.clone(), ctx);
+
+            // Stake and Delegate stay fee-free and admitted, as on the base.
+            let stake = build_signed_tx_with_ctx(
+                sender,
+                0,
+                TransactionKind::Stake { amount: 1 },
+                0,
+                &sk,
+                &ctx,
+            );
+            pool.add_transaction(stake)
+                .expect("zero-fee stake admitted on a non-hybrid chain");
+            let delegate = build_signed_tx_with_ctx(
+                sender,
+                1,
+                TransactionKind::Delegate {
+                    validator: Address([3u8; 32]),
+                    amount: 1,
+                },
+                0,
+                &sk,
+                &ctx,
+            );
+            pool.add_transaction(delegate)
+                .expect("zero-fee delegate admitted on a non-hybrid chain");
+
+            // Fee-paying staking kinds keep the ordinary fee rule.
+            let unstake = build_signed_tx_with_ctx(
+                sender,
+                2,
+                TransactionKind::Unstake { amount: 1 },
+                0,
+                &sk,
+                &ctx,
+            );
+            assert!(matches!(
+                pool.add_transaction(unstake),
+                Err(MempoolError::ZeroFee)
+            ));
+        }
     }
 }
