@@ -292,6 +292,15 @@ if [ "$CHAIN_ID" = "1" ] && [ -f "${BUNDLE_DIR}/funded_accounts.toml" ]; then
     die "${BUNDLE_ASSET} ships funded_accounts.toml, which chain 1 (mainnet) forbids; refusing it"
 fi
 
+# The treasury is part of the network tag: `genesis-bundle` binds the address
+# recorded in genesis_validators.toml. The config written below carries the same
+# value, so the tag check compares like with like instead of installing a node
+# whose configured treasury differs from the one the bundle published.
+RECORDED_TREASURY="$(sed -n 's/^[[:space:]]*treasury_address[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${BUNDLE_DIR}/genesis_validators.toml" | head -n 1)"
+if [ "$CHAIN_ID" = "1" ] || [ "$CHAIN_ID" = "2" ]; then
+    [ -n "$RECORDED_TREASURY" ] || die "${BUNDLE_DIR}/genesis_validators.toml records no treasury_address; chain ${CHAIN_ID} requires one so the network tag binds the treasury"
+fi
+
 # The expected tag comes from the command line, the environment, or a file
 # inside the bundle - in that order. A bundle that names its own tag is what
 # lets a release add a network without touching this script.
@@ -336,6 +345,18 @@ say "genesis bundle installed in ${DATA_DIR}"
 CONF_CHECK=""
 if [ -e "$CONF_PATH" ]; then
     say "keeping existing ${CONF_PATH}"
+    # An existing config is not rewritten. The node reads the treasury from
+    # KOVANICA_TREASURY_ADDRESS (which wins) or from the config file, so the
+    # effective value must already be the one the bundle bound.
+    if [ -n "$RECORDED_TREASURY" ]; then
+        conf_treasury="$(sed -n 's/^[[:space:]]*treasury_address[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$CONF_PATH" | head -n 1)"
+        if [ -n "${KOVANICA_TREASURY_ADDRESS:-}" ]; then
+            conf_treasury="$KOVANICA_TREASURY_ADDRESS"
+        fi
+        [ "$conf_treasury" = "$RECORDED_TREASURY" ] \
+            || die "existing ${CONF_PATH} would use treasury '${conf_treasury:-<none>}' but the bundle binds '${RECORDED_TREASURY}'; set the same treasury_address in that config or unset KOVANICA_TREASURY_ADDRESS (an existing config is never rewritten)"
+        say "existing config treasury matches the bundle"
+    fi
     CONF_CHECK="$CONF_PATH"
 else
     boot_list=""
@@ -347,6 +368,11 @@ else
         boot_list="${boot_list}\"${b}\""
     done
     IFS="$old_ifs"
+
+    treasury_block=""
+    if [ -n "$RECORDED_TREASURY" ]; then
+        treasury_block="treasury_address = \"${RECORDED_TREASURY}\""
+    fi
 
     run mkdir -p "$CONF_DIR"
     if [ "$DRY_RUN" = "1" ]; then
@@ -366,6 +392,10 @@ data_dir = "${DATA_DIR}"
 listen_addr = "0.0.0.0:8000"
 rpc_addr = "127.0.0.1"
 rpc_port = 8545
+
+# Treasury recorded by the genesis ceremony. It is bound into the network tag;
+# keep it equal to the installed bundle's genesis_validators.toml.
+${treasury_block}
 
 # Non-validating full node: no signing key, no votes, RPC on loopback only.
 run_validator = false

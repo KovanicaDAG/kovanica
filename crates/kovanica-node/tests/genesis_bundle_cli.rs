@@ -15,6 +15,17 @@ const NODE_BIN: &str = env!("CARGO_BIN_EXE_kovanica-node");
 const FAUCET_ADDRESS: &str = "kvnck2559l6vnpcchmtkuf2eslmdtxc6wtfm9nf9zqqructs4336nla58y78mdag";
 const FAUCET_PUBLIC_KEY: &str = "b2a942ff4c98718bed76e255987f6d59b1a72d3b2cd2510003e6170ac63a9ffb";
 
+/// A canonical PRO-21 address. `seed` selects a distinct throwaway key; none of
+/// these are the owner's official addresses.
+fn pro21(seed: u8) -> String {
+    kovanica_types::Address([seed; 32]).encode()
+}
+
+/// The treasury a fixture records, distinct from the faucet address.
+fn fixture_treasury() -> String {
+    pro21(0x31)
+}
+
 fn run(args: &[&str]) -> Output {
     Command::new(NODE_BIN)
         .args(args)
@@ -32,6 +43,13 @@ fn stdout(output: &Output) -> String {
 
 /// Write a minimal chain-2 genesis file set and return its directory.
 fn chain2_fixture(root: &Path) -> PathBuf {
+    let treasury = format!("treasury_address = \"{}\"\n", fixture_treasury());
+    chain2_fixture_with_treasury_line(root, &treasury)
+}
+
+/// Same fixture, with the `treasury_address` line under test (or `""` to omit
+/// it). The rest of the file set is a chain-2 no-stake-82m genesis.
+fn chain2_fixture_with_treasury_line(root: &Path, treasury_line: &str) -> PathBuf {
     let source = root.join("genesis");
     std::fs::create_dir_all(&source).expect("create fixture dir");
     std::fs::write(
@@ -40,6 +58,7 @@ fn chain2_fixture(root: &Path) -> PathBuf {
             "# chain 2 fixture\n\
              chain_id = 2\n\
              emission_policy = \"no-stake-82m\"\n\
+             {treasury_line}\
              \n\
              [[validator]]\n\
              address = \"{FAUCET_ADDRESS}\"\n\
@@ -58,6 +77,45 @@ fn chain2_fixture(root: &Path) -> PathBuf {
     )
     .expect("write funded accounts");
     source
+}
+
+/// Install the fixture file set into a fresh data dir and return the tag the
+/// node computes for it. `treasury_line` mirrors what `node/scripts/install.sh`
+/// writes into a new config for this chain.
+fn node_tag_for(
+    chain_id: u64,
+    source: &Path,
+    root: &Path,
+    name: &str,
+    treasury_line: &str,
+) -> String {
+    let data = root.join(format!("data-{name}"));
+    std::fs::create_dir_all(&data).expect("create data dir");
+    let config = root.join(format!("kovanica-{name}.toml"));
+    std::fs::write(
+        &config,
+        format!(
+            "chain_id = {chain_id}\ndata_dir = \"{}\"\n{treasury_line}",
+            data.display()
+        ),
+    )
+    .expect("write config");
+    for file in [
+        "genesis_validators.toml",
+        "founder_premine.hex",
+        "funded_accounts.toml",
+    ] {
+        if source.join(file).exists() {
+            std::fs::copy(source.join(file), data.join(file)).expect("copy genesis file");
+        }
+    }
+    let output = run(&["network-tag", "--config", config.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "network-tag failed:\n{}",
+        stderr(&output)
+    );
+    stdout(&output).trim().to_string()
 }
 
 /// The tag printed by `genesis-bundle`, which is the last line's value.
@@ -97,24 +155,25 @@ fn bundle_tag_is_the_tag_a_node_computes_for_the_same_files() {
 
     // The tag a node computes from the installed file set must be the one the
     // bundle advertises, otherwise every node that installs it is isolated.
-    let data = root.path().join("data");
-    std::fs::create_dir_all(&data).expect("create data dir");
-    let config = root.path().join("kovanica.toml");
-    std::fs::write(
-        &config,
-        format!("chain_id = 2\ndata_dir = \"{}\"\n", data.display()),
-    )
-    .expect("write config");
-    for name in [
-        "genesis_validators.toml",
-        "founder_premine.hex",
-        "funded_accounts.toml",
-    ] {
-        std::fs::copy(source.join(name), data.join(name)).expect("copy genesis file");
-    }
-    let node_tag = run(&["network-tag", "--config", config.to_str().unwrap()]);
-    assert!(node_tag.status.success(), "failed:\n{}", stderr(&node_tag));
-    assert_eq!(stdout(&node_tag).trim(), tag, "bundle tag vs node tag");
+    // `install.sh` writes the bundle's recorded treasury into the new config,
+    // so this is the path a joining node actually takes.
+    let treasury_line = format!("treasury_address = \"{}\"\n", fixture_treasury());
+    let node_tag = node_tag_for(2, &source, root.path(), "matching", &treasury_line);
+    assert_eq!(node_tag, tag, "bundle tag vs node tag");
+
+    // A node that leaves the treasury unset, or points at another address,
+    // computes a different digest: the published tag must not match it.
+    let unset_tag = node_tag_for(2, &source, root.path(), "unset", "");
+    assert_ne!(
+        unset_tag, tag,
+        "an unset treasury must not match the bundle"
+    );
+    let other_line = format!("treasury_address = \"{}\"\n", pro21(0x41));
+    let other_tag = node_tag_for(2, &source, root.path(), "other", &other_line);
+    assert_ne!(
+        other_tag, tag,
+        "a different treasury must not match the bundle"
+    );
 
     // `expected-tag` inside the archive is what install.sh compares against.
     let extracted = root.path().join("extracted");
@@ -157,6 +216,118 @@ fn bundle_tag_is_the_tag_a_node_computes_for_the_same_files() {
         }
         _ => eprintln!("skipping archive extraction check: tar is not available"),
     }
+}
+
+/// A bundle must bind the treasury the ceremony recorded. A chain-2 source
+/// that does not record one cannot produce a tag a configured node can match,
+/// so it is refused before anything is written.
+#[test]
+fn a_chain2_source_without_a_recorded_treasury_is_refused() {
+    for (name, treasury_line) in [("missing", ""), ("empty", "treasury_address = \"\"\n")] {
+        let root = tempfile::tempdir().expect("tempdir");
+        let source = chain2_fixture_with_treasury_line(root.path(), treasury_line);
+        let out = root.path().join("bundle.tar.gz");
+
+        let output = run(&[
+            "genesis-bundle",
+            "--chain-id",
+            "2",
+            "--source",
+            source.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ]);
+        assert!(
+            !output.status.success(),
+            "{name} treasury was accepted on chain 2"
+        );
+        assert!(
+            stderr(&output).contains("requires `treasury_address`"),
+            "{name} treasury error should name the field:\n{}",
+            stderr(&output)
+        );
+        assert!(
+            !out.exists(),
+            "{name} treasury: no archive may be written when the source is refused"
+        );
+    }
+}
+
+/// Chain 2 is canonical-only: a legacy hex treasury cannot be bound into a tag
+/// a live chain-2 node would accept, so the bundle is refused.
+#[test]
+fn a_non_pro21_recorded_treasury_is_refused() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let legacy = "ab".repeat(32);
+    let source = chain2_fixture_with_treasury_line(
+        root.path(),
+        &format!("treasury_address = \"{legacy}\"\n"),
+    );
+    let out = root.path().join("bundle.tar.gz");
+
+    let output = run(&[
+        "genesis-bundle",
+        "--chain-id",
+        "2",
+        "--source",
+        source.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "a legacy hex treasury was accepted"
+    );
+    assert!(
+        stderr(&output).contains("PRO-21"),
+        "error should say the address must be PRO-21:\n{}",
+        stderr(&output)
+    );
+    assert!(
+        !out.exists(),
+        "no archive may be written when the source is refused"
+    );
+}
+
+/// Chains 3 and 1337 keep the zero-treasury default when the file records no
+/// treasury; the fail-closed rule is for the canonical hybrid chains only.
+#[test]
+fn a_chain3_source_may_omit_the_recorded_treasury() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let source = root.path().join("genesis");
+    std::fs::create_dir_all(&source).expect("create fixture dir");
+    std::fs::write(
+        source.join("genesis_validators.toml"),
+        format!(
+            "chain_id = 3\n\n[[validator]]\naddress = \"{FAUCET_ADDRESS}\"\n\
+             public_key = \"{FAUCET_PUBLIC_KEY}\"\n"
+        ),
+    )
+    .expect("write genesis validators");
+    let out = root.path().join("bundle.tar.gz");
+
+    let output = run(&[
+        "genesis-bundle",
+        "--chain-id",
+        "3",
+        "--source",
+        source.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "failed:\n{}", stderr(&output));
+    let tag = printed_tag(&output);
+    assert!(
+        tag.starts_with("3-"),
+        "chain-3 bundle must print a chain-3 tag, got {tag}"
+    );
+
+    let treasury_line = format!("treasury_address = \"{}\"\n", fixture_treasury());
+    let node_tag = node_tag_for(3, &source, root.path(), "chain3", &treasury_line);
+    assert_ne!(
+        node_tag, tag,
+        "a chain-3 node that sets a treasury must not match the zero-treasury bundle"
+    );
 }
 
 #[test]
@@ -359,6 +530,9 @@ fn the_release_workflow_packages_the_chain2_bundle() {
         "testnet/chain2",
         "expected-tag",
         "SHA256SUMS",
+        // The bundle tag binds the recorded treasury, so the workflow's own
+        // tag check must configure the same address or it would use zero.
+        "treasury_address = \"$treasury\"",
     ] {
         assert!(
             workflow.contains(needle),
