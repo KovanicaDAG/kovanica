@@ -5785,8 +5785,9 @@ struct GenesisValidatorsFile {
     /// and any later ops step that sets `KOVANICA_TREASURY_ADDRESS` on every
     /// node. The node never derives, accepts or rejects the treasury from it:
     /// the digest, the state and `init_treasury` read the configured address
-    /// only.
+    /// only. Kept so ceremony output deserializes with the field it written.
     #[serde(default)]
+    #[allow(dead_code)]
     treasury_address: Option<String>,
     /// Bootstrap seed nodes. Under `no-stake-82m` no entry is staked and no
     /// allocation is minted; on a legacy genesis `stake` decides the lock.
