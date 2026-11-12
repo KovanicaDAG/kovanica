@@ -254,8 +254,8 @@ if hybrid:
     # validator allocation. The entry list is bootstrap seed nodes only.
     lines.append('emission_policy = "no-stake-82m"')
 # The treasury is bound into the genesis digest by KOVANICA_TREASURY_ADDRESS.
-# Recording it here is what lets every node set the same value; the node
-# refuses to start when the configured address differs from this one.
+# Recording it here is what lets the ops step set the same value on every node;
+# the node reads the configured address only, never this file.
 lines.append(f'treasury_address = "{treasury}"')
 lines.append("")
 

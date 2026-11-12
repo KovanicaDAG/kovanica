@@ -2045,24 +2045,6 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
                 genesis_validators_path.display()
             )
         })?;
-        // The treasury is part of the genesis digest via the configured
-        // `treasury_address` (KOVANICA_TREASURY_ADDRESS), not via this file.
-        // A ceremony records the real treasury here, so a node that starts
-        // without the environment value would silently initialize the zero
-        // address while its bundle advertises a real one. Refuse that instead.
-        if let Some(declared) = validators.treasury_address.as_deref() {
-            let declared = parse_address_hex(Some(declared), config.chain_id)?;
-            if declared != treasury {
-                anyhow::bail!(
-                    "{} declares treasury address {} but this node is configured with {}; \
-                     set KOVANICA_TREASURY_ADDRESS to the address recorded in the genesis, \
-                     the same value on every node",
-                    genesis_validators_path.display(),
-                    declared,
-                    treasury
-                );
-            }
-        }
         let validators = validators.validator;
         let count = validators.len();
         for v in validators {
@@ -5799,11 +5781,11 @@ struct GenesisValidatorsFile {
     emission_policy: Option<String>,
     #[serde(default)]
     policy: Option<String>,
-    /// Treasury address recorded by the ceremony. The treasury is bound into
-    /// the genesis digest through `KOVANICA_TREASURY_ADDRESS`, not through this
-    /// file, so a node that does not set the same environment value would
-    /// initialize a different treasury than the published genesis declares.
-    /// When present, the configured address must match it.
+    /// Treasury address recorded by `ops/genesis/ceremony.sh` for the operator
+    /// and any later ops step that sets `KOVANICA_TREASURY_ADDRESS` on every
+    /// node. The node never derives, accepts or rejects the treasury from it:
+    /// the digest, the state and `init_treasury` read the configured address
+    /// only.
     #[serde(default)]
     treasury_address: Option<String>,
     /// Bootstrap seed nodes. Under `no-stake-82m` no entry is staked and no
@@ -12206,72 +12188,6 @@ mod b1_epoch_restart_repro {
                 "chain {chain}: a refused genesis must not write staking state"
             );
         }
-    }
-
-    #[test]
-    fn test_init_genesis_refuses_a_recorded_treasury_that_differs_from_config() {
-        use kovanica_types::signing::chain_id;
-
-        let recorded = Address([0x51; 32]);
-        let configured = Address([0x52; 32]);
-
-        // A ceremony records the real treasury in genesis_validators.toml. The
-        // digest binds KOVANICA_TREASURY_ADDRESS instead, so a node that leaves
-        // it unset would silently initialise the zero address while its bundle
-        // advertises a real one: refuse the mismatch.
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::new(dir.path().join("state.redb")).unwrap();
-        let dag_store = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
-        std::fs::write(
-            dir.path().join("genesis_validators.toml"),
-            format!(
-                "chain_id = {}\nemission_policy = \"no-stake-82m\"\n\
-                 treasury_address = \"{recorded}\"\n\n\
-                 [[validator]]\naddress = \"{}\"\n",
-                chain_id::TESTNET,
-                Address([0x33; 32])
-            ),
-        )
-        .unwrap();
-
-        let config = NodeConfig {
-            data_dir: dir.path().to_path_buf(),
-            chain_id: chain_id::TESTNET,
-            treasury_address: Some(configured.to_string()),
-            ..Default::default()
-        };
-        let err = init_genesis(&config, &dag_store, &storage).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("declares treasury address"), "got: {msg}");
-        assert!(msg.contains("KOVANICA_TREASURY_ADDRESS"), "got: {msg}");
-        let read = storage.begin_read().unwrap();
-        assert!(
-            storage.state().load_staking_state(&read).is_err(),
-            "a refused genesis must not write staking state"
-        );
-
-        // The same file set with the configured address matching is accepted.
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::new(dir.path().join("state.redb")).unwrap();
-        let dag_store = DagStore::new(Storage::new(dir.path().join("dag.redb")).unwrap()).unwrap();
-        std::fs::write(
-            dir.path().join("genesis_validators.toml"),
-            format!(
-                "chain_id = {}\nemission_policy = \"no-stake-82m\"\n\
-                 treasury_address = \"{recorded}\"\n\n\
-                 [[validator]]\naddress = \"{}\"\n",
-                chain_id::TESTNET,
-                Address([0x33; 32])
-            ),
-        )
-        .unwrap();
-        let config = NodeConfig {
-            data_dir: dir.path().to_path_buf(),
-            chain_id: chain_id::TESTNET,
-            treasury_address: Some(recorded.to_string()),
-            ..Default::default()
-        };
-        init_genesis(&config, &dag_store, &storage).expect("matching treasury is accepted");
     }
 
     #[test]

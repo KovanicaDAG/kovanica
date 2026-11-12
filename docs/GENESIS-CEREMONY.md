@@ -126,9 +126,10 @@ public_key = "<32-byte hex>"
 - `emission_policy` must be `no-stake-82m` on chains 1 and 2.
 - There is **no `stake` field**. Under `no-stake-82m` no stake is locked at
   genesis; a legacy genesis applies `MIN_VALIDATOR_STAKE` itself.
-- `treasury_address` is recorded so every node sets the same
-  `KOVANICA_TREASURY_ADDRESS`. The node refuses to start when the configured
-  treasury differs from the recorded one.
+- `treasury_address` is recorded for the operator and for the ops step that
+  sets the same `KOVANICA_TREASURY_ADDRESS` on every node. The node does **not**
+  read it: the digest, the state and `init_treasury` use only the configured
+  address, never a genesis file.
 
 ### 4.2 `founder_premine.hex`
 
@@ -218,10 +219,9 @@ ops attaches the asset to a `v<version>-node` release.
 address from the node configuration. A bundle cut today therefore cannot bind
 the treasury the ceremony recorded: a node that sets the real
 `KOVANICA_TREASURY_ADDRESS` computes a different tag and the installer refuses
-it, and a node that leaves it unset is refused by `init_genesis` because
-`genesis_validators.toml` declares a treasury it is not configured with.
-Publishing the official chain-2 bundle needs a follow-up that carries the
-treasury through `genesis-bundle` and `node/scripts/install.sh`.
+it, and a node that leaves it unset runs with the zero treasury the bundle
+binds. Publishing the official chain-2 bundle needs a follow-up that carries
+the treasury through `genesis-bundle` and `node/scripts/install.sh`.
 
 ---
 
