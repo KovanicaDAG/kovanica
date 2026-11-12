@@ -109,12 +109,12 @@ an explicit activation and a clear refusal reason:
   `... predates the full-state commitment (active from round 500000, chain <id>)`
   instead of a root mismatch. Nothing is applied.
 
-**Before round 500 000 every validator must run a build that contains the
-activation constant** (v0.2.0-node or later). Validators that sign a header at
-or above the activation round with an older build would seal an account-only
-root that newer nodes reject; a mixed fleet would therefore stall state sync
-again. Roll the binary out with the usual canary-first procedure in
-`docs/VALIDATOR-ONBOARDING.md`; each node logs the activation round at startup
+**Before round 500 000 every block-authoring node must run a build that
+contains the activation constant** (v0.2.0-node or later). A node that signs a
+header at or above the activation round with an older build would seal an
+account-only root that newer nodes reject; a mixed fleet would therefore stall
+state sync again. Roll the binary out with the usual canary-first procedure;
+each node logs the activation round at startup
 (`state_commitment_active_from_round=...`), so check that line on every node
 before the round arrives.
 
@@ -124,11 +124,14 @@ before the activation keeps producing blocks. A brand-new node can join once a
 sealed header at or above the activation round exists (and the serving peer's
 snapshot is at least that new).
 
-## Validators
+## Validator / block-author identities
 
-The installer never generates or handles validator keys — it produces a
-read-only full node. Validator setup (keystore, stake, `run_validator = true`,
-`validator_key`) is documented in `docs/VALIDATOR-ONBOARDING.md`.
+Chains 1 and 2 have no validator committee and no stake in consensus: blocks
+come from Hybrid PoW + GHOSTDAG mining. The installer never generates or
+handles validator keys — it produces a read-only full node. The legacy signing
+setup (keystore, `run_validator = true`, `validator_key`) is documented in
+`docs/VALIDATOR-ONBOARDING.md`, which is marked superseded; its stake steps do
+not apply on chains 1 and 2.
 
 ## Cutting a release
 

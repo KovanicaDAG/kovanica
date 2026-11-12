@@ -1,6 +1,8 @@
 # RFC-001 — Kovanica Architecture & System Overview
 
-- **Status:** Canonical / Active (Ground-Truth Specification)
+> **SUPERSEDED for Hybrid PoW + GHOSTDAG (2026-11-05):** this document describes the retired Mysticeti + Proof-of-Stake committee path. Chains 1 and 2 reach consensus with PoW + GHOSTDAG (K=5, 4000 ms, KovanicaHash) and use no validator committee, stake, VRF leader election or slashing. Current rules: [ADR 0003](../adr/0003-hybrid-pow-ghostdag.md) and [MINING.md](../MINING.md). The historical body is kept unchanged.
+
+- **Status:** Canonical for repository layout; consensus sections are legacy (chains 1 and 2 run Hybrid PoW + GHOSTDAG, ADR 0003)
 - **Crate Scope:** Entire Workspace (27 crates)
 - **Primary References:**
   - Workspace root: [`Cargo.toml`](file:///crates/../Cargo.toml)

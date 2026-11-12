@@ -1,8 +1,9 @@
-//! Main consensus engine for Kovanica.
+//! Legacy Mysticeti-style consensus engine for Kovanica.
 //!
 #![allow(missing_docs)]
 //! Coordinates round advancement, leader selection, block production,
-//! and commit decisions using Mysticeti-style DAG consensus.
+//! and commit decisions on the retired wave/leader path. Chains 1 and 2
+//! produce blocks with Hybrid PoW + GHOSTDAG instead.
 
 use crate::metrics::{
     observe_finality_latency, record_block_height, record_commit_latency, record_committed_leader,

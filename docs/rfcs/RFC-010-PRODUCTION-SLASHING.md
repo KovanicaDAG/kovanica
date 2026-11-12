@@ -1,6 +1,6 @@
 # RFC-010 — Production Slashing: Verifiable Evidence and Unbonding Coverage
 
-- **Status:** Accepted & Implemented (2026-10-22, gated behind `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`)
+- **Status:** Accepted & Implemented (2026-10-22, gated behind `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`); legacy under ADR 0003 — not part of chains 1/2 consensus
 - **Crate Scope:** `kovanica-staking`, `kovanica-types`, `kovanica-consensus`, `kovanica-execution`
 - **Tracks:** TASKLIST item 8, Linear PRO-12, PRO-19
 - **Primary References:**

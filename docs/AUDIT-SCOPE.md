@@ -79,7 +79,7 @@ This scope document specifies the components, invariants, threat models, and pri
 | Mainnet `funded_accounts.toml` Prohibition | **Critical** | Arbitrary pre-funding via `funded_accounts.toml` is **strictly prohibited on Mainnet (`chain_id = 1`)**. Code rejects node boot if `funded_accounts.toml` is present on Chain 1. |
 
 **Key Supply Invariant:**
-$$\text{TOTAL\_SUPPLY} = \text{PREMINE } (0.2\text{M}) + \text{TREASURY } (8\text{M}) + \text{GENESIS\_ALLOC } (1\text{M}) + \text{MINING\_BUDGET } (81\text{M}) = \mathbf{90\text{ }200\text{ }000\text{ KVNC}}$$
+$$\text{TOTAL\_SUPPLY} = \text{PREMINE } (0.2\text{M}) + \text{TREASURY } (8\text{M}) + \text{GENESIS\_ALLOC } (0) + \text{MINING\_BUDGET } (82\text{M}) = \mathbf{90\text{ }200\text{ }000\text{ KVNC}}$$
 
 ---
 

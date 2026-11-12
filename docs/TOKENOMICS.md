@@ -69,7 +69,11 @@ All 82,000,000 KVNC are emitted solely through block rewards according to the 82
 
 ---
 
-## 3. Reward Distribution (DAG binding)
+## 3. Reward Distribution (legacy Mysticeti binding)
+
+> **Legacy / non-consensus under hybrid.** Chains 1 and 2 mint rewards per committed
+> block to the block author (see §2). The leader-payout path below belongs to the
+> retired Mysticeti engine and does not run on chains 1 and 2.
 
 In the Mysticeti-style DAG:
 
@@ -105,7 +109,11 @@ year 0          year 1          year 2          …          year 8
 
 ---
 
-## 5. Staking Parameters
+## 5. Staking Parameters (legacy / non-consensus under hybrid)
+
+> There is no stake in the chains 1/2 consensus, so these values do not select block
+> producers. Stake, unstake, delegate, claim-rewards and set-commission transactions
+> still execute as ledger operations; that leftover surface is a known follow-up.
 
 | Parameter                | Value                  |
 |--------------------------|------------------------|

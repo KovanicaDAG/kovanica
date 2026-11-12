@@ -1,8 +1,13 @@
-# Kovanica Testnet Validator Onboarding Guide
+# Kovanica Testnet Bootstrap Identity & Legacy Validator Onboarding
+
+> **SUPERSEDED for Hybrid PoW + GHOSTDAG (2026-11-05):** this document describes the retired Mysticeti + Proof-of-Stake committee path. Chains 1 and 2 reach consensus with PoW + GHOSTDAG (K=5, 4000 ms, KovanicaHash) and use no validator committee, stake, VRF leader election or slashing. Current rules: [ADR 0003](adr/0003-hybrid-pow-ghostdag.md) and [MINING.md](MINING.md). The historical body is kept unchanged.
 
 This guide walks you through becoming a validator on the **Kovanica testnet** (chain ID: `2`).
 
-**Status:** Active — testnet onboarding guide (chain ID `2`).
+**Status:** SUPERSEDED for hybrid networks (chains 1 and 2). The steps below describe the
+retired Mysticeti committee path and are kept for reference only. Under Hybrid PoW + GHOSTDAG
+there is no validator committee, no VRF leader selection and no stake requirement; the
+`[[validator]]` entries in a genesis file are bootstrap identities. See [MINING.md](MINING.md).
 **Consensus impact:** none — client-only documentation; no consensus or ledger rule change.
 
 ---

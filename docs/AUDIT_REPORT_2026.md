@@ -1,5 +1,7 @@
 # Kovanica Documentation & Configuration Audit Report (2026)
 
+> **SUPERSEDED for Hybrid PoW + GHOSTDAG (2026-11-05):** this document describes the retired Mysticeti + Proof-of-Stake committee path. Chains 1 and 2 reach consensus with PoW + GHOSTDAG (K=5, 4000 ms, KovanicaHash) and use no validator committee, stake, VRF leader election or slashing. Current rules: [ADR 0003](adr/0003-hybrid-pow-ghostdag.md) and [MINING.md](MINING.md). The historical body is kept unchanged.
+
 **Audit Date:** 2026-10-24  
 **Auditor:** OpenCode Worker 1 (Documentation Overhaul Implementation Worker)  
 **Base Commit:** `dd3aff9` (`dd3aff9c50b394249eae4710e99b96c95e4c89a6`)  

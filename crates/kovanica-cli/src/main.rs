@@ -90,28 +90,28 @@ enum Commands {
         /// Kovanica address
         address: String,
     },
-    /// Show stake, delegations, and rewards for a Kovanica address
+    /// Show legacy stake, delegations, and rewards for a Kovanica address
     Staking {
         /// Kovanica address
         address: String,
     },
     /// List committed transactions for an address, newest first
     History(HistoryArgs),
-    /// Stake KUNA (builds and submits a signed Stake transaction)
+    /// Stake KUNA (legacy ledger operation; builds and submits a signed Stake transaction)
     Stake(AmountArgs),
-    /// Unstake KUNA (builds and submits a signed Unstake transaction)
+    /// Unstake KUNA (legacy ledger operation; builds and submits a signed Unstake transaction)
     Unstake(AmountArgs),
-    /// Register a light node (bond + VRF key)
+    /// Register a light node (legacy staking path: bond + VRF key)
     RegisterLightNode(RegisterLightNodeArgs),
-    /// Delegate stake to a validator
+    /// Delegate stake to a validator (legacy ledger operation; no validator committee on chains 1/2)
     Delegate(DelegateArgs),
-    /// Claim staking rewards
+    /// Claim staking rewards (legacy ledger operation)
     ClaimRewards(ClaimRewardsArgs),
     /// Submit a governance proposal (not available: no-stake consensus)
     Propose,
     /// Vote on a governance proposal (not available: no-stake consensus)
     Vote,
-    /// Set validator commission (basis points, 10000 = 100%)
+    /// Set validator commission (legacy ledger operation; basis points, 10000 = 100%)
     SetCommission(SetCommissionArgs),
     /// Claim vested treasury funds
     ClaimTreasury(ClaimTreasuryArgs),
@@ -360,7 +360,7 @@ struct RegisterLightNodeArgs {
 /// Arguments for `kovanica delegate`.
 #[derive(Args)]
 struct DelegateArgs {
-    /// Validator Kovanica address
+    /// Legacy validator Kovanica address
     #[arg(long)]
     validator: String,
     /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
@@ -377,7 +377,7 @@ struct DelegateArgs {
 /// Arguments for `kovanica claim-rewards`.
 #[derive(Args)]
 struct ClaimRewardsArgs {
-    /// Validator Kovanica address (optional — claims all if omitted)
+    /// Legacy validator Kovanica address (optional — claims all if omitted)
     #[arg(long)]
     validator: Option<String>,
     /// Keystore file path
@@ -391,7 +391,7 @@ struct ClaimRewardsArgs {
 /// Arguments for `kovanica set-commission`.
 #[derive(Args)]
 struct SetCommissionArgs {
-    /// Validator Kovanica address
+    /// Legacy validator Kovanica address
     #[arg(long)]
     validator: String,
     /// Commission in basis points (10000 = 100%)

@@ -69,10 +69,10 @@ pub use vote::Vote;
 /// Logical round number in the DAG.
 pub type Round = u64;
 
-/// Unique authority index within the current committee.
+/// Unique authority index within the current legacy committee.
 pub type AuthorityIndex = u16;
 
-/// Wave length used by the consensus (Mysticeti-style = 3).
+/// Wave length of the legacy Mysticeti engine (= 3; unused on chains 1/2).
 pub use kovanica_params::WAVE_LENGTH;
 
 /// The first leader slot strictly above `round`.

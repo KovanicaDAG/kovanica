@@ -83,9 +83,9 @@ kubectl logs -f kovanica-node-0
 
 ## Method 2: Deployment via Helm Chart
 
-The Helm chart in `deploy/helm/kovanica/` provides automated parameterization for different networks (Mainnet, Testnet, Hybrid Testnet) and node roles (Validator, RPC, Seed).
+The Helm chart in `deploy/helm/kovanica/` provides automated parameterization for different networks (Mainnet, Testnet, Hybrid Testnet) and node roles (block author, RPC, Seed). `validator` in the role value names a PoW block-authoring node on chains 1 and 2; there is no validator committee.
 
-### 1. Basic Installation (Default: Mainnet Validator)
+### 1. Basic Installation (Default: Mainnet Block Author)
 
 ```bash
 helm install kovanica deploy/helm/kovanica
@@ -126,7 +126,7 @@ helm install kovanica-rpc deploy/helm/kovanica \
 | `image.repository` | `kovanica/kovanica-node` | Docker image repository |
 | `image.tag` | `v0.2.0` | Node software version tag |
 | `node.chainId` | `1` | Chain ID: `1` (Mainnet), `2` (Testnet), `5` (Hybrid Testnet) |
-| `node.role` | `validator` | Node role: `validator`, `seed`, or `rpc` |
+| `node.role` | `validator` | Node role: `validator` (= PoW block author on chains 1/2), `seed`, or `rpc` |
 | `node.targetBlockMs` | `4000` | Target block time in milliseconds (4 s) |
 | `node.maxPeers` | `50` | Maximum connected libp2p peers |
 | `mining.enabled` | `false` | Enable KovanicaHash PoW miner |

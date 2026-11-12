@@ -7,6 +7,9 @@
 //! vote counts or a block is acceptable for the DAG is still decided by the
 //! consensus engine / block manager. Nothing here changes a consensus rule.
 //!
+//! Legacy path: chains 1 and 2 produce blocks with PoW + GHOSTDAG and do not
+//! gossip votes or committee-sealed blocks.
+//!
 //! * Votes: the voter must be a committee member and the Ed25519 signature
 //!   must verify over [`Vote::signature_data`] under that member's key.
 //! * Blocks: the digest is recomputed from the content, the merkle root must

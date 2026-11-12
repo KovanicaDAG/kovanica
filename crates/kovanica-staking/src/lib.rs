@@ -1,14 +1,23 @@
-//! Staking, delegation, validator set management, token emission and treasury for Kovanica (KUNA).
+//! Token emission, treasury, and legacy staking/validator state for Kovanica (KUNA).
 //!
-//! Tokenomics (locked):
+//! Live tokenomics (chains 1 and 2, `NoStake82M`):
 //! - Total supply: 90_200_000 KUNA
 //! - Founder premine: 200_000 KUNA
-//! - Genesis validator allocation: 1_000_000 KUNA (split evenly, minted once)
 //! - Treasury: 8_000_000 KUNA (1M/year × 8 years) with linear vesting
-//! - Mining subsidy: 81_000_000 KUNA
-//! - Initial block reward: 2.5 KUNA (paid to the author of a committed leader block)
+//! - Mining subsidy budget: 82_000_000 KUNA
+//! - Initial block reward: 2.5 KUNA (paid to the author of a committed block)
+//! - Decay: × 3/4 every 8_200_000 rewarded blocks
+//! - Staking: none in consensus — chains 1 and 2 have no validator committee
+//!
+//! Legacy `Legacy81M` constants, retained for existing databases and dev chains:
+//! - Genesis validator allocation: 1_000_000 KUNA (split evenly, minted once)
+//! - Mining subsidy budget: 81_000_000 KUNA
 //! - Decay: × 3/4 every 8_100_000 committed leaders
 //! - Active validators: no maximum (anyone meeting the minimum stake)
+//!
+//! The staking, delegation and validator-lifecycle state below is legacy ledger
+//! surface. Leftover stake transaction kinds still execute; that is a known
+//! follow-up and does not grant consensus rights on chains 1 and 2.
 //!
 //! All canonical numbers above are shared with the tokenomics skeleton
 //! (`kovanica-skeleton/staking/src/lib.rs`); this crate keeps them as `u64`
@@ -107,9 +116,10 @@ pub use kovanica_params::MIN_VALIDATOR_STAKE;
 /// Minimum delegation amount required per delegation (in base units).
 pub use kovanica_params::MIN_DELEGATION;
 
-/// Minimum number of active validators for the mainnet genesis floor.
+/// Minimum number of active validators for the legacy mainnet genesis floor.
 ///
-/// There is no maximum; anyone meeting `MIN_VALIDATOR_STAKE` may join.
+/// Legacy committee path: chains 1 and 2 have no validator set. There is no
+/// maximum; anyone meeting `MIN_VALIDATOR_STAKE` may join.
 pub use kovanica_params::MIN_ACTIVE_VALIDATORS;
 
 // MAX_ACTIVE_VALIDATORS removed: no cap on active validators; anyone meeting
@@ -920,7 +930,7 @@ impl StakingState {
         Ok(())
     }
 
-    /// Validators in consensus committee order: all active validators with
+    /// Validators in legacy committee order: all active validators with
     /// `stake >= MIN_VALIDATOR_STAKE`, sorted by stake desc (ties by address),
     /// then sorted by address. The position in this list is the authority
     /// index. Mirrors `kovanica-node::build_committee` exactly.
@@ -959,13 +969,14 @@ impl StakingState {
         self.validators.iter().find(|v| v.address == address)
     }
 
-    /// Committee member by identity address: active and above
+    /// Legacy committee member by identity address: active and above
     /// [`MIN_VALIDATOR_STAKE`], i.e. exactly the set [`Self::committee_order`]
     /// would include.
     ///
-    /// Leader rewards must be resolved through this predicate, never through a
-    /// positional authority index, because the live committee order can change
-    /// mid-epoch (unbond, slash, liveness eviction).
+    /// Leader rewards on the retired Mysticeti path must be resolved through
+    /// this predicate, never through a positional authority index, because the
+    /// committee order can change mid-epoch (unbond, slash, liveness eviction).
+    /// Chains 1 and 2 mint per committed block and do not use this path.
     pub fn active_validator(&self, address: Address) -> Option<&ValidatorInfo> {
         self.validators
             .iter()
@@ -1295,8 +1306,8 @@ impl StakingState {
         }
     }
 
-    /// Increment missed leader count for validators that didn't produce a block
-    /// at the given height. Returns the list of validators that went offline
+    /// Increment missed leader count for legacy validators that didn't produce
+    /// a block at the given height. Returns the list of validators that went offline
     /// (exceeded MAX_MISSED_LEADERS_BEFORE_OFFLINE).
     ///
     /// Should be called at each committed leader height after the leader reward

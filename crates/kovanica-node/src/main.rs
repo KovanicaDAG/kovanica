@@ -976,7 +976,7 @@ where
     info!(
         state_commitment_active_from_round = kovanica_types::STATE_COMMITMENT_ACTIVE_FROM_ROUND,
         "sealed headers commit to the full state from this leader round; \
-         run this build on every validator before the network reaches it"
+         run this build on every node before the network reaches it"
     );
 
     // Determine our authority index from the committee (match local public key)
@@ -988,11 +988,11 @@ where
             .map(|a| a.index)
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "local validator public key not found in committee; cannot run as validator"
+                    "local validator public key not found in committee; cannot run the legacy validator signing path"
                 )
             })?
     } else {
-        info!("run_validator=false; not participating in consensus");
+        info!("run_validator=false; legacy validator signing disabled (PoW mining is controlled by [mining])");
         u16::MAX // Invalid authority index
     };
 
@@ -5484,7 +5484,7 @@ fn build_committee(
                 MIN_VALIDATOR_STAKE / ONE_KUNA
             );
         }
-        info!("no active validators in staking state; falling back to local validator identity");
+        info!("no active validators in staking state; falling back to the local identity for the legacy committee path");
         let authority = AuthorityInfo {
             index: 0,
             stake: MIN_VALIDATOR_STAKE,
@@ -5524,7 +5524,9 @@ fn build_committee(
     top_validators.sort_by_key(|a| a.address.0);
 
     if top_validators.is_empty() {
-        anyhow::bail!("no active validators found in staking state; committee cannot be empty");
+        anyhow::bail!(
+            "no active validators found in staking state; legacy committee cannot be empty"
+        );
     }
 
     let mut authorities = Vec::with_capacity(top_validators.len());
@@ -5559,7 +5561,9 @@ fn build_committee(
     }
 
     if authorities.is_empty() {
-        anyhow::bail!("no validators with registered public keys; committee cannot be empty");
+        anyhow::bail!(
+            "no validators with registered public keys; legacy committee cannot be empty"
+        );
     }
 
     Ok(CommitteeInfo::try_new(epoch, authorities)?)

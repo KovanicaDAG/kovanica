@@ -9,16 +9,16 @@ Network (P2P)
 Mempool ──────────────────────────────────┐
     │                                     │
     ▼                                     │
-DAG Block Producer (per validator)        │
+DAG Block Producer (PoW miners)           │
     │                                     │
     ▼                                     │
-Consensus (Mysticeti-style DAG)           │
+Consensus (GHOSTDAG K=5 over PoW blocks)  │
     │  produces CommittedSubDag           │
     ▼                                     │
 Execution Layer ◄─────────────────────────┘
     │  - apply native txs
     │  - execute WASM contracts (Wasmi)
-    │  - pay leader block reward
+    │  - pay block reward to the block author
     │  - advance treasury vesting
     ▼
 State (accounts, staking, contracts)
@@ -28,6 +28,10 @@ Storage (redb / pruning / snapshots)
 ```
 
 ## Reward path (detail)
+
+> Legacy Mysticeti reward path. Under Hybrid PoW + GHOSTDAG (chains 1 and 2)
+> rewards are minted per committed block to the block author; there is no
+> leader payout and no validator committee. See [`TOKENOMICS.md`](TOKENOMICS.md) §2.
 
 1. `UniversalCommitter` decides a leader → `Linearizer` produces `CommittedSubDag`
 2. Node calls `ExecutionContext::execute_committed_subdag(&subdag)`
@@ -46,7 +50,7 @@ Storage (redb / pruning / snapshots)
 | kovanica-crypto      | Signatures, hashing                                 |
 | kovanica-dag         | Causal DAG store                                    |
 | kovanica-consensus   | Commit rules, linearizer                            |
-| kovanica-staking     | Emission, treasury, validator set                   |
+| kovanica-staking     | Emission, treasury (validator set is legacy / non-consensus) |
 | kovanica-runtime     | Wasmi WASM engine                                   |
 | kovanica-execution   | State transition + reward distribution              |
 | kovanica-node        | Binary that wires everything together               |
@@ -152,9 +156,9 @@ Scrape `block_height`, `peer_count`, `commit_latency`, `mergeset_size` and
 > Deterministic, auditable, no `kovanica-protocol` mix.
 
 ### Scope
-- Consensus: Mysticeti DAG, k=3, wave=3
+- Consensus: Hybrid PoW + GHOSTDAG (K=5); legacy Mysticeti DAG k=3, wave=3 removed from the chains 1/2 path
 - Execution: Wasmi, deterministic WASM
-- Staking / validator set: 15–21, min 50k KUNA
+- Staking / validator set (legacy, non-consensus): 15–21, min 50k KUNA
 - P2P: libp2p TCP + Noise + Yamux on :8000, DNS seeds only
 - Keystore: client-side only — node never receives seed
 
@@ -172,7 +176,7 @@ Scrape `block_height`, `peer_count`, `commit_latency`, `mergeset_size` and
 | 1 | Key exposure (client-side leak) | Encrypted keystore + client-only path |
 | 2 | Replay / nonce reuse | Strict sequential nonce in mempool + domain-separated hashes (`DOMAIN_TX`, `DOMAIN_BLOCK`) |
 | 3 | Consensus fork / equivocation | Default: first-valid digest wins, a second digest is rejected. `use_min_digest_fork` (default off) may swap via `DagStore::replace_block` only while the round is undecided and the old digest has no children. Timeout skip on missing leader. |
-| 4 | Double-sign / slash | `StakingState::slash` (fixed % evidence tx) |
+| 4 | Double-sign / slash | `StakingState::slash` (fixed % evidence tx; legacy path — slashing is not active under hybrid) |
 | 5 | P2P eclipse / Sybil | DNS-only kovanica-native seeds (TBD; no third-party hosts); no orange-cloud peers |
 
 ### Fuzz Targets (Future)

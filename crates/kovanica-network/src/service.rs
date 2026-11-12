@@ -576,14 +576,15 @@ impl NetworkService {
     }
 
     /// Install the committee public keys used to authenticate gossiped votes
-    /// and blocks (and block sync responses) at the network edge.
+    /// and blocks (and block sync responses) at the network edge. This is the
+    /// legacy Mysticeti path; chains 1 and 2 do not gossip votes.
     ///
     /// Until this is called, votes and blocks are dropped without being
     /// forwarded: nothing can be authenticated without the committee.
     pub fn set_authority_keys(&self, keys: AuthorityKeys) {
         info!(
             authorities = keys.len(),
-            "gossip validator committee keys set"
+            "gossip validator committee keys set (legacy path)"
         );
         self.validator.set_keys(keys);
     }

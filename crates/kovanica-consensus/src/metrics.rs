@@ -488,13 +488,13 @@ static KOVANICA_CONNECTED_PEERS: Lazy<Gauge> = Lazy::new(|| {
     gauge
 });
 
-/// Active validators in the current committee.
+/// Active validators in the legacy committee.
 static KOVANICA_ACTIVE_VALIDATORS: Lazy<Gauge> = Lazy::new(|| {
     let gauge = Gauge::default();
     let mut registry = REGISTRY.lock().unwrap();
     registry.register(
         "kovanica_active_validators",
-        "Number of active validators in the current committee",
+        "Number of active validators in the legacy committee (not the chains 1/2 block producers)",
         gauge.clone(),
     );
     gauge
@@ -615,7 +615,7 @@ pub fn record_connected_peers(count: i64) {
     KOVANICA_CONNECTED_PEERS.set(count);
 }
 
-/// Record the number of active validators in the current committee.
+/// Record the number of active validators in the legacy committee.
 pub fn record_active_validators(count: i64) {
     KOVANICA_ACTIVE_VALIDATORS.set(count);
 }

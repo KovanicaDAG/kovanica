@@ -13,13 +13,13 @@ flowchart TD
 
     subgraph Docker["Docker Compose Cluster (kovanica-soak)"]
         subgraph CGroup1["cgroups: 1.5 CPU, 2048MB RAM"]
-            Node1["node1 (Validator & Miner)\nP2P :8000 | RPC :8545 | Metrics :9100"]
+            Node1["node1 (Block Author & Miner)\nP2P :8000 | RPC :8545 | Metrics :9100"]
         end
         subgraph CGroup2["cgroups: 1.5 CPU, 2048MB RAM"]
-            Node2["node2 (Validator & Miner)\nP2P :8000 | RPC :8546 | Metrics :9101"]
+            Node2["node2 (Block Author & Miner)\nP2P :8000 | RPC :8546 | Metrics :9101"]
         end
         subgraph CGroup3["cgroups: 1.5 CPU, 2048MB RAM"]
-            Node3["node3 (Validator & Miner)\nP2P :8000 | RPC :8547 | Metrics :9102"]
+            Node3["node3 (Block Author & Miner)\nP2P :8000 | RPC :8547 | Metrics :9102"]
         end
         subgraph Obs["Observability"]
             Prom["Prometheus :9090\n(Scrapes :9100 on all nodes)"]
@@ -45,7 +45,7 @@ flowchart TD
 |-----------|------|-------------|
 | **Orchestrator** | `ops/soak/run-soak.sh` | Main test runner; brings up stack, runs warmup, monitors cgroup & height metrics, runs assertions, collects diagnostics. |
 | **Load Generator** | `ops/soak/load_generator.py` | Python load generator; signs and submits valid KVNC transfers via JSON-RPC, reports TPS and latency statistics. |
-| **Compose Stack** | `ops/soak/docker-compose.soak.yml` | 3 validator nodes with strict cgroup limits (`cpus: 1.5`, `mem_limit: 2048m`) and Prometheus scraper. |
+| **Compose Stack** | `ops/soak/docker-compose.soak.yml` | 3 block-authoring nodes with strict cgroup limits (`cpus: 1.5`, `mem_limit: 2048m`) and Prometheus scraper. |
 | **Scraper Config** | `ops/soak/prometheus.soak.yml` | Prometheus configuration scraping all 3 nodes on port 9100. |
 | **Funded Accounts** | `ops/soak/funded_accounts.toml` | Pre-funded genesis accounts for soak load generation (100,000 KVNC each). |
 
@@ -79,7 +79,7 @@ In compliance with `AGENTS.md`:
 
 ### 1. 10-Minute Smoke Soak (CI / Local Verification)
 
-Fast regression test verifying stack boot, quorum peering, transaction ingestion, and clean teardown:
+Fast regression test verifying stack boot, peer mesh formation, transaction ingestion, and clean teardown:
 
 ```bash
 ./ops/soak/run-soak.sh --duration 10m

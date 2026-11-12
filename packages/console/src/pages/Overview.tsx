@@ -80,12 +80,12 @@ export function Overview() {
       <div className="stats">
         <Stat label="Height" value={height === null ? "—" : height.toString()} />
         <Stat label="Peers" value={peers === null ? "—" : String(peers)} />
-        <Stat label="Committee" value={validators === null ? "—" : String(validators)} />
+        <Stat label="Legacy committee" value={validators === null ? "—" : String(validators)} />
         {key && account ? (
           <>
             <Stat label="Balance" value={`${formatKuna(account.balance)} KUNA`} />
             <Stat label="Nonce" value={account.nonce.toString()} />
-            <Stat label="Stake" value={`${formatKuna(account.stake)} KUNA`} />
+            <Stat label="Legacy stake" value={`${formatKuna(account.stake)} KUNA`} />
           </>
         ) : null}
       </div>
@@ -129,7 +129,7 @@ export function Overview() {
           </div>
         </section>
       ) : null}
-      <h2>Next leaders</h2>
+      <h2>Next leaders (legacy Mysticeti schedule)</h2>
       {leaders.length === 0 ? (
         <p className="muted">No schedule yet.</p>
       ) : (

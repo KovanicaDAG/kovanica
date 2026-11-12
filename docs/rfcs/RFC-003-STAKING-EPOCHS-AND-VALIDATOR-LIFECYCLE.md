@@ -1,6 +1,8 @@
 # RFC-003 — Staking, Epoch Transitions & Validator Lifecycle
 
-- **Status:** Canonical / Active (Ground-Truth Specification)
+> **SUPERSEDED for Hybrid PoW + GHOSTDAG (2026-11-05):** this document describes the retired Mysticeti + Proof-of-Stake committee path. Chains 1 and 2 reach consensus with PoW + GHOSTDAG (K=5, 4000 ms, KovanicaHash) and use no validator committee, stake, VRF leader election or slashing. Current rules: [ADR 0003](../adr/0003-hybrid-pow-ghostdag.md) and [MINING.md](../MINING.md). The historical body is kept unchanged.
+
+- **Status:** Legacy / non-consensus under ADR 0003 — chains 1 and 2 have no stake, validator set or slashing
 - **Crate Scope:** `kovanica-staking`, `kovanica-types`, `kovanica-crypto`
 - **Primary References:**
   - Staking engine: [`crates/kovanica-staking/src/lib.rs`](file:///crates/kovanica-staking/src/lib.rs)

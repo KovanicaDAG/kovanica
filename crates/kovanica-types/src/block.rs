@@ -107,7 +107,7 @@ pub struct BlockReference {
     pub digest: Hash,
 }
 
-/// Full block as used in the DAG (Mysticeti-style StatementBlock).
+/// Full block as used in the DAG (legacy Mysticeti-style StatementBlock).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub struct StatementBlock {
     /// Author of this block.

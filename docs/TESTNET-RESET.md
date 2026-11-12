@@ -216,7 +216,7 @@ change any numeric tokenomics.
 
 ## 1. Preconditions
 
-- Every validator runs a build that contains:
+- Every node runs a build that contains:
   - fee host-call charging (`GAS_HARDENING_ACTIVE_FROM_ROUND` path),
   - `kovanica-params` (single source of truth for constants),
   - VRF C1 leader determinism (this change),
@@ -254,7 +254,7 @@ change any numeric tokenomics.
 | `GAS_HARDENING_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Host-call gas charging on every call; block gas budget enforcement |
 | `CONTRACT_HARDENING_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Invalid deploy / non-entry WASM calls rejected; contract hardening checks |
 | `SIZE_LIMITS_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Block/tx size limits enforced |
-| `SLASHING_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Slashing evidence path live |
+| `SLASHING_ACTIVE_FROM_ROUND` | `u64::MAX` | `0` | Slashing evidence path (legacy committee path; not applicable to hybrid chains 1/2) |
 | VRF keys in `genesis_validators.toml` | optional/null | n/a under ADR 0003 | *(was: VRF leader schedule live from genesis)* |
 
 ## 4. Verification
@@ -264,7 +264,7 @@ change any numeric tokenomics.
 - Invalid deploy / non-entry: deploy malformed or call a non-entry function;
   expect rejection.
 - Size limits: submit an oversized tx/block; expect rejection at the gate.
-- Slashing: submit evidence tx; confirm validator jailed and not paid.
+- Slashing *(legacy committee path; not applicable under ADR 0003)*: submit evidence tx; confirm validator jailed and not paid.
 - VRF leader schedule *(pre-hybrid; skip under ADR 0003)*: restart a validator;
   confirm `scheduled_leader_for_round` and committed leader sequence identical
   before/after restart; compare across nodes.

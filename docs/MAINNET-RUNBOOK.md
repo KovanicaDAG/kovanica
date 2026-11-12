@@ -23,7 +23,7 @@ This runbook defines the end-to-end operational protocol for launching, validati
 
 ## 2. Phase 0: Pre-Launch Verification & Invariants
 
-Prior to deploying any genesis artifacts or coordinating node startups, the operations team and validator operators must independently verify all frozen protocol parameters.
+Prior to deploying any genesis artifacts or coordinating node startups, the operations team and bootstrap seed operators must independently verify all frozen protocol parameters.
 
 ### 2.1 Protocol & Tokenomics Parameter Matrix
 
@@ -40,8 +40,8 @@ Verify that the binary under execution enforces the frozen parameters defined in
 | **Initial Block Reward** | `2.5 KVNC` | $2.5 \times 10^9$ atoms per committed block |
 | **Subsidy Era Length** | `8,200,000 blocks` | Rewarded blocks per era; multiplied by $3/4$ decay each era |
 | **Genesis Bootstrap Seeds** | `1` to `20` nodes | `3–5` seeds recommended for public launch |
-| **Epoch Duration** | `7,200` rounds (~8 hours) | `EPOCH_ROUNDS = 7_200` |
-| **Unbonding Cooldown** | `100,000` leader blocks | ~13.9 days at 12 s/leader |
+| **Epoch Duration** | `7,200` rounds (~8 hours) | `EPOCH_ROUNDS = 7_200` (legacy, non-consensus) |
+| **Unbonding Cooldown** | `100,000` leader blocks | ~13.9 days at 12 s/leader (legacy, non-consensus) |
 
 ### 2.2 Mainnet Pre-Flight Configuration Guards
 
@@ -106,9 +106,9 @@ Each seed node generates a persistent libp2p identity key (`p2p.key`). The resul
 
 ---
 
-## 4. Phase 2: Genesis Validator Coordination & Bootstrap
+## 4. Phase 2: Genesis Bootstrap Coordination
 
-Mainnet genesis requires simultaneous multi-validator consensus setup governed by `ops/genesis/ceremony.sh` and [`docs/KEY-CEREMONY.md`](KEY-CEREMONY.md).
+Mainnet genesis coordinates PoW bootstrap **seeds** via `ops/genesis/ceremony.sh` and [`docs/KEY-CEREMONY.md`](KEY-CEREMONY.md). There is no validator committee and no VRF key material on chains 1 and 2; `[[validator]]` entries in `genesis_validators.toml` are bootstrap identities.
 
 ### 4.1 Committee Size & Allocation
 
@@ -128,8 +128,8 @@ The ceremony coordinator collects verified `validators.json` and executes:
 ```
 
 The resulting bundle produces:
-- `genesis.json`: Core state containing founder balance, treasury vesting vault, and initial validator accounts.
-- `genesis_validators.toml`: Validator committee definitions, Ed25519 addresses, and Ristretto255 VRF public keys.
+- `genesis.json`: Core state containing the founder balance and the treasury vesting vault (the 8M treasury is an allocation with `vested = 0`, not a genesis balance).
+- `genesis_validators.toml`: Bootstrap seed identities (Ed25519 addresses and public keys). The `[[validator]]` table name is leftover format; there are no VRF keys under hybrid.
 - `bootnodes.toml`: Canonical seed bootstrap entries.
 
 ### 4.3 Genesis Bundle Checksum & Network Tag Verification
@@ -212,9 +212,9 @@ curl -fsS -X POST http://127.0.0.1:8545 \
 ```
 
 Verify that:
-1. `peer_count` $\ge 14$ (for a 15–20 node committee).
-2. `seconds_since_last_commit` stays $< 20\text{ s}$ (nominal 12 s).
-3. `blockNumber` advances monotonically every 12 seconds.
+1. `peer_count` $\ge 14$ (for the 15–20 node bootstrap seed set; not a committee quorum).
+2. `seconds_since_last_commit` stays below a few target block intervals (nominal 4 s).
+3. `blockNumber` advances monotonically.
 
 ---
 

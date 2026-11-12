@@ -136,10 +136,10 @@ Verify that every parameter in the release binary matches the canonical mainnet 
 | **Subsidy Era Length** | `8,200,000 blocks` | Rewarded blocks per era; multiplied by $3/4$ decay each era | `crates/kovanica-params/src/lib.rs` | [ ] |
 | **Target Block Duration**| `4,000 ms` (4 s) | GHOSTDAG $K=5$, target block 4 s | `crates/kovanica-consensus/src/lib.rs` | [ ] |
 | **Epoch Duration** | `7,200 rounds` | `EPOCH_ROUNDS = 7_200` (~8 hours; legacy) | `crates/kovanica-consensus/src/lib.rs` | [ ] |
-| **Unbonding Period** | `100,000 blocks` | `UNBONDING_ROUNDS = 100_000` (~13.9 days) | `crates/kovanica-staking/src/lib.rs` | [ ] |
-| **Minimum Validator Stake**| `50,000 KVNC` | `MIN_VALIDATOR_STAKE = 50_000 * 10^9` | `crates/kovanica-params/src/lib.rs` | [ ] |
-| **Minimum Delegation** | `50,000 KVNC` | `MIN_DELEGATION = 50_000 * 10^9` | `crates/kovanica-params/src/lib.rs` | [ ] |
-| **Slashing Penalty** | `500 bps` (5%) | Fixed equivocation penalty | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Unbonding Period** | `100,000 blocks` | `UNBONDING_ROUNDS = 100_000` (~13.9 days; legacy, non-consensus) | `crates/kovanica-staking/src/lib.rs` | [ ] |
+| **Minimum Validator Stake**| `50,000 KVNC` | `MIN_VALIDATOR_STAKE = 50_000 * 10^9` (legacy, non-consensus) | `crates/kovanica-params/src/lib.rs` | [ ] |
+| **Minimum Delegation** | `50,000 KVNC` | `MIN_DELEGATION = 50_000 * 10^9` (legacy, non-consensus) | `crates/kovanica-params/src/lib.rs` | [ ] |
+| **Slashing Penalty** | `500 bps` (5%) | Fixed equivocation penalty (legacy; slashing not active, `SLASHING_ACTIVE_FROM_ROUND = u64::MAX`) | `crates/kovanica-staking/src/lib.rs` | [ ] |
 | **Jail Duration** | `7,200 blocks` | `JAIL_ROUNDS = 7_200` (~1 day = 3 epochs; legacy) | `crates/kovanica-staking/src/lib.rs` | [ ] |
 | **Light-Node Share** | `20%` (2,000 bps) | Escrowed for 32 winning slots/epoch | `crates/kovanica-staking/src/lib.rs` | [ ] |
 
@@ -179,7 +179,7 @@ The genesis ceremony establishes the cryptographic trust root of the network and
 
 - [ ] **Bootstrap Seed Set:** Between 1 and 20 bootstrap seed nodes confirmed (3–5 recommended for public launch).
 - [ ] **Genesis Validator Allocation:** Exactly 0 KVNC. Chains 1 and 2 run the `NoStake82M` policy: the former 1,000,000 KVNC allocation is folded into the 82,000,000 KVNC mining budget and the genesis bootstrap seeds (1..=20) hold no stake.
-- [ ] **Minimum Stake Met:** Every genesis validator self-stake satisfies `MIN_VALIDATOR_STAKE = 50_000 KVNC`.
+- [ ] **Minimum Stake:** Not applicable on chains 1 and 2 (`NoStake82M`); bootstrap seeds hold no stake, so there is no `MIN_VALIDATOR_STAKE` check at genesis.
 
 ### 4.3 Treasury Custody (Shamir's Secret Sharing)
 
@@ -198,7 +198,7 @@ The genesis ceremony establishes the cryptographic trust root of the network and
       --founder-address kvnc1...dag \
       --output ./mainnet-genesis
   ```
-- [ ] **Checksum Matching:** All validator operators download genesis artifacts and verify SHA-256 checksums:
+- [ ] **Checksum Matching:** All bootstrap seed operators download genesis artifacts and verify SHA-256 checksums:
   ```bash
   sha256sum -c SHA256SUMS
   ```
@@ -245,16 +245,16 @@ Verify that iptables/ufw/cloud security group policies enforce the following por
   nc -zvw3 seed1.kovanica.online 8000
   nc -zvw3 seed3.kovanica.online 8000
 
-  # RPC and metrics ports MUST NOT be accessible on public IPs of validator nodes
-  nc -zvw3 <validator-ip> 8545 && echo "CRITICAL: Port 8545 open to public!"
-  nc -zvw3 <validator-ip> 9100 && echo "CRITICAL: Port 9100 open to public!"
+  # RPC and metrics ports MUST NOT be accessible on public IPs of nodes
+  nc -zvw3 <node-ip> 8545 && echo "CRITICAL: Port 8545 open to public!"
+  nc -zvw3 <node-ip> 9100 && echo "CRITICAL: Port 9100 open to public!"
   ```
 
 ---
 
 ## 6. Gate 5: Monitoring, Alerting & Observability
 
-Full observability must be operational across all validator nodes and seed infrastructure before genesis activation.
+Full observability must be operational across all bootstrap nodes and seed infrastructure before genesis activation.
 
 ### 6.1 Prometheus Alerting Rules Deployment
 
@@ -272,7 +272,7 @@ Verify that Prometheus alerting rules defined in `ops/prometheus/alerts.yml` are
   - `KovanicaCommitLatencyHigh`: `commit_latency > 5000` ms for 3 minutes (Warning).
 - [ ] **Equivocation & Slashing Evidence Alerts:**
   - Automated alert on detection of conflicting block proposals at the same round.
-  - Alert on slash event (500 bps penalty deducted and validator jailed for 7,200 rounds).
+  - Slashing is not active under hybrid (`SLASHING_ACTIVE_FROM_ROUND = u64::MAX`); the 500 bps penalty and 7,200-round jail below belong to the legacy committee path and must not be expected to fire.
 - [ ] **Resource Limits & OOM Alerts:**
   - `KovanicaMemoryHigh`: RSS proxy $> 3000\text{ MB}$ for 5 minutes (Warning).
   - `KovanicaMemoryCritical`: RSS proxy $> 3500\text{ MB}$ for 1 minute (Critical, imminent OOM danger).
@@ -299,10 +299,10 @@ Pre-defined, unambiguous contingency criteria must be established to handle laun
 
 A rollback or launch abort is **mandatory** if any of the following conditions occur within 60 minutes of $T_0$:
 
-1. **Zero Block Progression:** No committed leader block achieved within 15 minutes of $T_0$.
-2. **Quorum Partition:** Fewer than $2f+1$ validator stake (less than 67% active stake) successfully connect to the P2P mesh within 30 minutes of $T_0$.
-3. **State Root Divergence:** Two or more validators produce differing state roots for the same committed block height.
-4. **Fatal Crash Loop:** Deterministic panic or invariant violation occurring on $\ge 33\%$ of validator nodes.
+1. **Zero Block Progression:** No committed block achieved within 15 minutes of $T_0$.
+2. **Mesh Partition:** Fewer than the planned bootstrap seed set successfully connects to the P2P mesh within 30 minutes of $T_0$. (The `2f+1` stake quorum below is legacy committee arithmetic and does not apply to chains 1 and 2.)
+3. **State Root Divergence:** Two or more nodes produce differing state roots for the same committed block height.
+4. **Fatal Crash Loop:** Deterministic panic or invariant violation occurring on $\ge 33\%$ of bootstrap nodes.
 
 ### 7.2 Rollback & Abort Procedure
 
@@ -332,9 +332,9 @@ If rollback criteria are triggered:
 
 Post-genesis emergency hard forks require coordinated execution:
 
-1. **Quorum Approval:** Requires $\ge 67\%$ active validator stake agreement.
+1. **Quorum Approval (legacy):** The `2f+1` active-stake agreement below the retired committee model does not apply on chains 1 and 2; a hard fork there is coordinated by published activation height and operator upgrade.
 2. **Activation Height Scheduling:** Hard fork activation block height scheduled at least 1,200 blocks (~4 hours) in advance (or immediately if consensus is halted).
-3. **Emergency Communication Channel:** Dedicated, end-to-end encrypted Matrix / Signal room restricted to genesis validator operators, core engineers, and the Master of Ceremonies.
+3. **Emergency Communication Channel:** Dedicated, end-to-end encrypted Matrix / Signal room restricted to genesis bootstrap-seed operators, core engineers, and the Master of Ceremonies.
 
 ### 7.4 Incident Escalation Directory
 
