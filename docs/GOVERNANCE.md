@@ -2,7 +2,10 @@
 
 Summary: Parameter-change, treasury-spend, upgrade-signaling, and stake-weighted voting specification for Kovanica (KUNA), derived from `crates/kovanica-staking/src/lib.rs`, `crates/kovanica-types/src/committee.rs`, `kovanica-cli/src/main.rs`, and the existing 38-line `docs/GOVERNANCE.md` skeleton; all on-chain proposal/voting mechanics are planned (Phase 25 `[ ]` NOT DONE), not implemented.
 
-Status: **Draft / Stage-3** (Phase 25 — not shipped; do not mark Shipped).
+Status: **Draft / Stage-3** (Phase 25 — not shipped; do not mark Shipped). Governance itself is still
+undecided. The stake-weighted mechanics below describe the legacy committee model; chains 1 and 2 run
+Hybrid PoW + GHOSTDAG and have no validator committee or stake in consensus, so none of this is live
+there. They are kept as design input only.
 Consensus impact: **client-only / ledger-safe** for proposal format and treasury flow; **consensus-safe** only once quorum thresholds and epoch-boundary execution rules are adopted by the committee (currently not active). No consensus rule changed by this document.
 
 Cross-links: `docs/archive/B-TREASURY-PROPOSAL.md` (treasury proposal skeleton), `docs/A8.2-DELEGATION-SKELETON.md` (Phase 18 deferred, delegation required for stake-weighted voting), `TASKLIST.md` Phase 25 (`[ ]` governance hooks; `kovanica-cli propose/vote → not_implemented` at `main.rs:366-374`), `crates/kovanica-staking/src/lib.rs` (`MIN_VALIDATOR_STAKE=50_000 KUNA`, `SLASH_PCT_BPS=500`, `EPOCH_ROUNDS=7_200`, `UNBONDING_ROUNDS=100_000`, `TREASURY_TOTAL=8_000_000 KUNA`), `crates/kovanica-types/src/committee.rs` (quorum `2f+1`, validity `f+1`), `crates/kovanica-cli/src/main.rs` (`ProposeArgs` / `VoteArgs` stubs).
@@ -64,7 +67,8 @@ Weight = validator's self-stake (after unbonding / delegation) + delegated amoun
 
 ### 3.3 Quorum and validity thresholds (from `kovanica-types/src/committee.rs`)
 
-- **Quorum (approval)**: `floor(2/3 * total_stake) + 1` = `total_stake * 2 / 3 + 1` (`Committee::new`, `committee.rs`). `MIN_ACTIVE_VALIDATORS=15` is the mainnet genesis floor; there is no maximum. This yields ~67% of total staked.
+- **Quorum (approval)**: `floor(2/3 * total_stake) + 1` = `total_stake * 2 / 3 + 1` (`Committee::new`, `committee.rs`). `MIN_ACTIVE_VALIDATORS=15` is a legacy constant from the committee model; chains 1 and 2 have no
+validator set, so it is not a live mainnet genesis floor. This yields ~67% of total staked.
 - **Validity (minimum turnout)**: `floor(total_stake / 3) + 1` (`committee.rs`). No proposal can execute unless at least ~33% of stake participates.
 - **Vote threshold for approval**: >50% of *voted* stakes must be `approve` (`B-TREASURY-PROPOSAL.md`). This is separate from quorum; both must pass.
 
@@ -153,7 +157,7 @@ From `crates/kovanica-cli/src/main.rs` (command match at `main.rs` ~340-380):
 - **Vote mechanism (§3)**: ledger-safe (uses existing `StakingState` / `Committee`; changes state only when executed at epoch boundary); becomes consensus-safe only after formal adoption by committee rules.
 - **Treasury flow (§4)**: ledger-safe (`TreasuryState` existing; proposal-to-release linkage is planned).
 - **Upgrade signaling (§5)**: client-only / ledger-safe (signal in `StatementBlock::statements`; no consensus rule change until adopted).
-- **Thresholds (§3.3)**: consensus-safe because they reuse `Committee::new` arithmetic (`2f+1`, `f+1`) already used for leader commitment; proposal adoption of the same thresholds is safe.
+- **Thresholds (§3.3)**: reuse `Committee::new` arithmetic (`2f+1`, `f+1`) retained for the legacy Mysticeti path; they are not part of the Hybrid PoW + GHOSTDAG commit path, so adopting them would not by itself be consensus-safe on chains 1 and 2.
 
 ---
 

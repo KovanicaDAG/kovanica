@@ -1,6 +1,8 @@
 # RFC-002 — Mysticeti-style Uncertified DAG Consensus & Skipped Leader Logic
 
-- **Status:** Canonical / Active (Ground-Truth Specification)
+> **SUPERSEDED for Hybrid PoW + GHOSTDAG (2026-11-05):** this document describes the retired Mysticeti + Proof-of-Stake committee path. Chains 1 and 2 reach consensus with PoW + GHOSTDAG (K=5, 4000 ms, KovanicaHash) and use no validator committee, stake, VRF leader election or slashing. Current rules: [ADR 0003](../adr/0003-hybrid-pow-ghostdag.md) and [MINING.md](../MINING.md). The historical body is kept unchanged.
+
+- **Status:** Legacy / Superseded for chains 1 and 2 by ADR 0003 (Hybrid PoW + GHOSTDAG)
 - **Crate Scope:** `kovanica-consensus`, `kovanica-dag`, `kovanica-types`
 - **Primary References:**
   - Committer core: [`crates/kovanica-consensus/src/committer.rs`](file:///crates/kovanica-consensus/src/committer.rs)

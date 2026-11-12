@@ -29,16 +29,17 @@ Kovanica is engineered from scratch in Rust for high throughput and predictable 
 
 1. **Hybrid PoW + GHOSTDAG Consensus:**
    - Pure **Hybrid PoW + GHOSTDAG** consensus architecture (per Toni 2026-11-05 lock; **NO stake for consensus**).
+   - There are **no validators and no validator committee** in the chains 1/2 consensus. The `[[validator]]` table in a genesis file lists **bootstrap identities** (seed node keys); the table name is leftover format, not a consensus role.
    - Target block duration: `4,000 ms` (4 s) (`TARGET_BLOCK_MS = 4000`), GHOSTDAG parameter $K=5$ (`GHOSTDAG_K = 5`).
    - Planned PoW algorithm: **KovanicaHash** (BLAKE3 + 2 MiB memory mix; formal external security audit required before mainnet activation).
    - GHOSTDAG sub-DAG topological sort for transactions; uncoloured (non-blue) blocks are safely recycled back to the mempool without transaction loss.
    - Legacy Mysticeti wave parameters (`WAVE_LENGTH = 3`, 12 s commit cycle) remain preserved in tree behind feature flags.
 2. **Account Model & Staking:**
    - Account-based ledger tracking nonces, balances, contract storage, and legacy staking state.
-   - Staking parameters (legacy / non-consensus under hybrid): minimum self-stake of **50,000 KVNC** (`MIN_VALIDATOR_STAKE`) and minimum delegation of **50,000 KVNC** (`MIN_DELEGATION`); genesis committee sizing testnet ~5, mainnet 15–20 (minimum active floor 15).
-   - Deterministic committee epoch rotation every **8 hours** (`EPOCH_ROUNDS = 7,200` DAG rounds = `EPOCH_LEADER_HEIGHTS = 2,400` committed leader heights).
-   - Stake unbonding cooldown: **100,000 committed leader blocks** ($\approx 13.9$ days at 12 s/leader).
-   - Evidence-based slashing (RFC-010) with fixed 500 bps (5%) penalty and 7,200 committed leader heights jail (`JAIL_ROUNDS = 7,200`, $\approx 1$ day = 3 epochs).
+   - Staking parameters (legacy / non-consensus under hybrid, retained for the retired Mysticeti path only): minimum self-stake of **50,000 KVNC** (`MIN_VALIDATOR_STAKE`), minimum delegation of **50,000 KVNC** (`MIN_DELEGATION`), and the old committee sizing (testnet ~5, mainnet 15–20, minimum active floor 15). None of these selects block producers on chains 1 and 2.
+   - Legacy: deterministic committee epoch rotation every **8 hours** (`EPOCH_ROUNDS = 7,200` DAG rounds = `EPOCH_LEADER_HEIGHTS = 2,400` committed leader heights).
+   - Legacy: stake unbonding cooldown of **100,000 committed leader blocks** ($\approx 13.9$ days at 12 s/leader).
+   - Legacy: evidence-based slashing (RFC-010) with a fixed 500 bps (5%) penalty and 7,200 committed leader heights jail (`JAIL_ROUNDS = 7,200`, $\approx 1$ day = 3 epochs). Slashing is not active (`SLASHING_ACTIVE_FROM_ROUND = u64::MAX`).
 3. **Execution & WebAssembly Runtime:**
    - Deterministic smart contract sandbox powered by **Wasmi** (v0.40) with instruction-level fuel metering, strict memory paging limits (16 pages = 1 MiB), and isolated host call ABI (`Host` trait).
    - Native built-in contracts with shared execution semantics: **HTLC** (hash time-locked swaps), **Vault** (linear/cliff vesting), **Multisig** ($M$-of-$N$ threshold multi-signature), **Token** (fungible token standard), and **Name Registry** (RFC-008 decentralized comms naming).
@@ -64,16 +65,16 @@ Canonical parameters implemented in `crates/kovanica-staking/src/lib.rs` and doc
 | **Genesis Validator Allocation** | **0 KVNC** | Retired with the PoA/hybrid decision: there is no stake in the consensus path, and the former 1,000,000 KVNC is folded into the mining budget |
 | **Treasury Allocation** | **8,000,000 KVNC** | Linear vesting over 8 years (1,000,000 KVNC/year) for development and grants |
 | **Mining Subsidy Budget** | **82,000,000 KVNC** | Derived subsidy pool: $90.2\text{M} - 0.2\text{M} - 8\text{M} = 82\text{M}$ KVNC (`NoStake82M`) |
-| **Initial Block Reward** | **2.5 KVNC** | Minted exclusively on committed leader blocks ($5 \times 10^9 / 2$ atoms) |
+| **Initial Block Reward** | **2.5 KVNC** | Minted on committed blocks to the block author ($5 \times 10^9 / 2$ atoms) |
 | **Subsidy Era Length** | **8,200,000 blocks** | Rewarded blocks per era (`SUBSIDY_ERA_BLOCKS_NO_STAKE_82M`) |
 | **Reward Decay Rate** | **$\times 3/4$** | Emission multiplies by $3/4$ (25% decay) at each era boundary |
-| **Minimum Validator Stake** | **50,000 KVNC** | Minimum self-bond required to enter the active validator committee (`MIN_VALIDATOR_STAKE`; legacy) |
-| **Minimum Delegation** | **50,000 KVNC** | Minimum stake required for validator delegation (`MIN_DELEGATION`; legacy) |
-| **Active Validator Set** | **Uncapped** | Uncapped stake set (genesis: testnet ~5, mainnet 15–20; min active floor 15) |
-| **Unbonding Period** | **100,000 blocks** | Committed leader blocks ($\approx 13.9$ days at 12 s/leader) |
+| **Minimum Validator Stake** | **50,000 KVNC** | `MIN_VALIDATOR_STAKE`; legacy / non-consensus — chains 1 and 2 have no validator committee |
+| **Minimum Delegation** | **50,000 KVNC** | `MIN_DELEGATION`; legacy / non-consensus |
+| **Active Validator Set** | **None on chains 1–2** | Legacy field: uncapped stake set (testnet ~5, mainnet 15–20; minimum active floor 15) |
+| **Unbonding Period** | **100,000 blocks** | Legacy / non-consensus: committed leader blocks ($\approx 13.9$ days at 12 s/leader) |
 | **Jail Duration** | **7,200 blocks** | Committed leader heights (`JAIL_ROUNDS`, $\approx 1$ day = 3 epochs; legacy) |
 | **Epoch Duration** | **8 hours** | 7,200 DAG rounds = 2,400 committed leader heights (independent of era; legacy) |
-| **Slashing Penalty** | **500 bps (5%)** | Penalty applied on verifiable equivocation evidence |
+| **Slashing Penalty** | **500 bps (5%)** | Legacy / non-consensus: slashing is not active (`SLASHING_ACTIVE_FROM_ROUND = u64::MAX`) |
 | **Light-Node Reward Share** | **20% (2,000 bps)** | Escrowed for light-node witnesses across 32 winning slots per epoch |
 | **Target Block Duration** | **4,000 ms (4 s)** | Target block interval (`TARGET_BLOCK_MS = 4000`), GHOSTDAG parameter $K=5$ |
 
@@ -90,14 +91,14 @@ The monorepo is organized into 27 workspace crates, 5 TypeScript packages, 6 app
 │   ├── kovanica-keystore      # Encrypted keystore v2 (Argon2id + XChaCha20-Poly1305)
 │   ├── kovanica-storage       # redb embedded storage engines, state trees, and pruning
 │   ├── kovanica-dag           # Causal history DAG, block manager, and mergesets
-│   ├── kovanica-consensus     # Mysticeti wave consensus, committer, MysticGhost, leader election
+│   ├── kovanica-consensus     # GHOSTDAG ordering + committer (legacy Mysticeti wave/leader code retained)
 │   ├── kovanica-mempool       # Nonce-tracking fee-priority transaction pool
 │   ├── kovanica-network       # libp2p swarm (TCP, Noise, Yamux, Gossipsub, peer scoring)
 │   ├── kovanica-runtime       # Wasmi WebAssembly engine and gas metering
 │   ├── kovanica-execution     # State transitions, GHOSTDAG execution ordering, rewards
-│   ├── kovanica-staking       # Staking state, emission curves, validator lifecycle, slashing
+│   ├── kovanica-staking       # Emission curves (live) + legacy staking/validator/slashing state
 │   ├── kovanica-node          # Full-node daemon binary (kovanica-node) and genesis tooling
-│   ├── kovanica-cli           # CLI client (kovanica), benchmark runner, validator generators, TUI
+│   ├── kovanica-cli           # CLI client (kovanica), benchmark runner, key generators, TUI
 │   ├── kovanica-rpc           # JSON-RPC 2.0 & WebSocket server, metrics, OpenAPI generator
 │   ├── kovanica-common        # Shared contract types, Host trait, and WASM bindings
 │   ├── kovanica-htlc          # Hash Time-Locked Contract (atomic swaps)
@@ -126,9 +127,9 @@ The monorepo is organized into 27 workspace crates, 5 TypeScript packages, 6 app
 │   ├── desktop                # Desktop comms client (Tauri v2 + React)
 │   └── ios                    # iOS light client app (SwiftUI)
 ├── docs/                      # Technical specifications, RFCs, ADRs, and guides
-│   ├── adr/                   # Architecture Decision Records (0001 Weighted Consensus, 0002 Keystore)
+│   ├── adr/                   # Architecture Decision Records (0001 Weighted Consensus [superseded], 0002 Keystore, 0003 Hybrid PoW + GHOSTDAG)
 │   ├── design/                # In-depth designs (epoch rotation, multi-proposer DAG)
-│   ├── rfcs/                  # Wire protocol RFCs (RFC-009 Vote Sync, RFC-010 Slashing, RFC-011 Skips)
+│   ├── rfcs/                  # Wire protocol RFCs (RFC-009 Vote Sync, RFC-010 Slashing [legacy/gated], RFC-011 Skips)
 │   └── archive/               # Historical plans, runbooks, and superseded drafts (README indexed)
 ├── ops/                       # Docker compose, genesis ceremony, benchmark, and monitoring configs
 └── scripts/                   # Validation, hook installation, and build helper scripts
@@ -204,11 +205,11 @@ curl -fsS http://127.0.0.1:8545/health
 
 ---
 
-### 4.3 Running a Local Validator Node
+### 4.3 Running a Local Block-Authoring (Mining) Node
 
-To run an active validating node that participates in consensus block proposals:
+On chains 1 and 2 blocks come from Hybrid PoW + GHOSTDAG mining, not from a validator committee. `run_validator` and `validator_key` below only gate the legacy Mysticeti signing path; mining is configured in the `[mining]` section (see [`docs/MINING.md`](docs/MINING.md)).
 
-1. **Generate a validator signing key:**
+1. **Generate a signing key:**
    ```bash
    # Generate a 32-byte hex seed (mode 0600)
    python -c "import secrets; print(secrets.token_hex(32))" > validator.key
@@ -227,7 +228,7 @@ To run an active validating node that participates in consensus block proposals:
    ```bash
    cargo run -p kovanica-node -- --config config.toml --check-config
    ```
-4. **Boot the validator node:**
+4. **Boot the node:**
    ```bash
    cargo run -p kovanica-node -- --config config.toml
    ```
@@ -310,7 +311,7 @@ cargo run -p kovanica-cli --bin kovanica -- delegate \
 
 ### 4.6 Multi-Node Devnet via Docker Compose
 
-To run a complete 4-node local testnet (1 seed node + 3 active consensus validators):
+To run a complete 4-node local testnet (1 seed node + 3 block-authoring nodes):
 
 ```bash
 # 1. Build CLI binary for devnet key generation
@@ -346,7 +347,7 @@ Default network configuration parameters (`crates/kovanica-node/src/config.rs`):
 | `bootnodes` | `KOVANICA_BOOTNODES` | `[]` (empty) | Comma-separated bootstrap peer multiaddrs |
 | `max_peers` | `KOVANICA_MAX_PEERS` | `50` | Maximum active P2P peers |
 | `round_duration_ms` | `KOVANICA_ROUND_DURATION_MS` | `4000` | Consensus round target duration in ms |
-| `run_validator` | `KOVANICA_RUN_VALIDATOR` | `true` | Participate in block authoring and consensus |
+| `run_validator` | `KOVANICA_RUN_VALIDATOR` | `true` | Legacy Mysticeti signing path; on chains 1 and 2 mining is driven by `[mining]` |
 | `rpc_rate_limit_per_min` | `KOVANICA_RPC_RATE_LIMIT_PER_MIN` | `60` | Token-bucket rate limit per client IP |
 
 ### Chain ID Registry

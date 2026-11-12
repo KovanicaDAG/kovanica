@@ -1,5 +1,7 @@
 # Chaos / Fault-Injection Harness
 
+> **SUPERSEDED for Hybrid PoW + GHOSTDAG (2026-11-05):** this document describes the retired Mysticeti + Proof-of-Stake committee path. Chains 1 and 2 reach consensus with PoW + GHOSTDAG (K=5, 4000 ms, KovanicaHash) and use no validator committee, stake, VRF leader election or slashing. Current rules: [ADR 0003](adr/0003-hybrid-pow-ghostdag.md) and [MINING.md](MINING.md). The historical body is kept unchanged.
+
 This document describes the real fault-injection harness for Kovanica validators.
 It complements the existing in-process partition tests (`multi_node_integration`)
 and the graceful `SIGTERM` restart test with **real process kills** and **real

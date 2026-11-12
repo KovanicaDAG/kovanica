@@ -14,12 +14,12 @@ Kovanica ships with two dedicated TypeScript web applications designed for clust
 
 1. **Kovanica Block Explorer (`packages/web`):**
    - Public-facing block explorer for the Kovanica network.
-   - Visualizes the MysticGhost DAG structure, committed leader blocks, transactions, validator committee stakes, contract execution logs, and account balances.
+   - Visualizes the GHOSTDAG structure, committed blocks, transactions, legacy staking rows, contract execution logs, and account balances. Chains 1 and 2 have no validator committee; any validator/stake data shown is legacy ledger state.
    - Hosted typically at `https://explorer.kovanica.online`.
 
 2. **Kovanica Node Console (`packages/console`):**
    - Web application for node operators, developers, and power users.
-   - Interfaces directly with local or remote Kovanica nodes for keystore management, offline transaction signing via `@kovanica/signer`, validator staking/delegation/unbonding operations, network sync inspection, and smart contract invocation.
+   - Interfaces directly with local or remote Kovanica nodes for keystore management, offline transaction signing via `@kovanica/signer`, legacy staking/delegation/unbonding operations (ledger-only; they do not affect block production), network sync inspection, and smart contract invocation.
    - Hosted typically at `https://console.kovanica.online`.
 
 ### 1.1 Ingress & Proxy Topology
@@ -431,7 +431,7 @@ Exposing a public blockchain RPC endpoint requires robust rate limiting to guard
 
 ## 6. Dedicated Query Node Setup
 
-For production explorer hosting, run a dedicated query node separated from the consensus validator committee:
+For production explorer hosting, run a dedicated query node separated from block-authoring nodes:
 
 ### 6.1 Query Node Configuration (`/etc/kovanica/config-query.toml`)
 

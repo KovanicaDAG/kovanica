@@ -1,5 +1,7 @@
 # KUNA Signature Format v1 (SPEC — FINAL)
 
+> **SUPERSEDED for Hybrid PoW + GHOSTDAG (2026-11-05):** this document describes the retired Mysticeti + Proof-of-Stake committee path. Chains 1 and 2 reach consensus with PoW + GHOSTDAG (K=5, 4000 ms, KovanicaHash) and use no validator committee, stake, VRF leader election or slashing. Current rules: [ADR 0003](adr/0003-hybrid-pow-ghostdag.md) and [MINING.md](MINING.md). The historical body is kept unchanged.
+
 Status: **FINAL, implemented and merged on `main`** at `8170a82` as one release:
 #31 Foundation (`1a172cd`), #36 Execution (`6b18aef`), #37 Network (`a3ab81d`), #34 Consensus (`8170a82`),
 and PRO-20 (Block signature chain binding).

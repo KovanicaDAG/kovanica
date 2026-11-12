@@ -64,7 +64,7 @@ codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-no
 | Min delegation            | 50 000 KVNC (`MIN_DELEGATION`; legacy / non-consensus)      |
 | Jail duration             | 7 200 heights (`JAIL_ROUNDS`; legacy / non-consensus)       |
 
-Reward se mint-a na committed blokove. Genesis validatorima se alocira 1M KVNC (ravnomjerni split, dust deterministički).
+Reward se mint-a na committed blokove, autoru bloka. Genesis bootstrap seeds (1..=20) ne drže stake i ne dobivaju alokaciju; `[[validator]]` u genesis datoteci je samo zapis bootstrap identiteta (zaostali naziv tablice).
 
 ## Workspace structure (poštuj postojeće)
 
@@ -106,7 +106,7 @@ Contracts (već implementirani): HTLC, Vault, Multisig, Token + Host trait.
 - TypeScript packages: 5 (`api-client`, `comms`, `console`, `signer`, `web`)
 - Default P2P listen: `0.0.0.0:8000`
 - Default RPC bind: `127.0.0.1:8545`
-- Default round duration: 4000 ms (=> 12 s per committed leader)
+- Target block time: 4000 ms (`TARGET_BLOCK_MS`); legacy 12 s leader cadence is retired
 - Max peers: 50 (`config.example.toml`)
 - Workspace tests: 1,101+ tests passing (100% pass in verified crate suites)
 

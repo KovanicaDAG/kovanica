@@ -1,5 +1,7 @@
 # Committee epoch and light-client header verification
 
+> **SUPERSEDED for Hybrid PoW + GHOSTDAG (2026-11-05):** this document describes the retired Mysticeti + Proof-of-Stake committee path. Chains 1 and 2 reach consensus with PoW + GHOSTDAG (K=5, 4000 ms, KovanicaHash) and use no validator committee, stake, VRF leader election or slashing. Current rules: [ADR 0003](adr/0003-hybrid-pow-ghostdag.md) and [MINING.md](MINING.md). The historical body is kept unchanged.
+
 Status: fixed in the working tree (uncommitted). Scope: a client-side defect plus an
 additive node RPC surface — no consensus, execution, or storage change.
 
