@@ -1,33 +1,5 @@
-import { Download, Smartphone, Cpu, MessageSquare, Shield } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Smartphone, Cpu, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-export const APP_DOWNLOADS = {
-  wallet: {
-    name: "Kovanica Wallet",
-    description: "Non-custodial mobile wallet with PRO-21 addresses, deterministic key derivation, and instant KVNC transfers.",
-    androidApk: "/download/kovanica-wallet-0.3.7.apk",
-    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.3.7-wallet",
-    repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-wallet",
-    tag: "v0.3.7 · Android",
-  },
-  lightnode: {
-    name: "Kovanica Lightnode",
-    description: "Embedded DAG light client. Tracks DAG headers, checks account balances locally, and connects trustlessly.",
-    androidApk: "/download/kovanica-lightnode-0.8.8.apk",
-    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.8.8-android",
-    repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-chain",
-    tag: "v0.8.8 · Android",
-  },
-  comms: {
-    name: "Kovanica Comms",
-    description: "Decentralized P2P messaging and encrypted peer communication powered by Kovanica DAG transport and cryptographic identity.",
-    androidApk: "/download/kovanica-comms-0.2.0.apk",
-    releases: "https://github.com/KovanicaDAG/kovanica/releases/tag/v0.2.0-comms",
-    repo: "https://github.com/KovanicaDAG/kovanica/tree/main/apps/android-comms",
-    tag: "v0.2.0 · Android",
-  },
-} as const;
 
 type Props = {
   className?: string;
@@ -46,31 +18,11 @@ export function WalletDownloads({ className, variant = "card" }: Props) {
         )}
         aria-label="Download native applications"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Smartphone className="size-4 text-gold" aria-hidden />
-            <span className="text-xs font-medium text-fg">Native Apps (APK):</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button asChild size="sm" variant="outline" className="h-7 text-xs">
-              <a href={APP_DOWNLOADS.wallet.androidApk} download>
-                <Download className="mr-1.5 size-3.5 text-gold" />
-                Wallet APK
-              </a>
-            </Button>
-            <Button asChild size="sm" variant="outline" className="h-7 text-xs">
-              <a href={APP_DOWNLOADS.lightnode.androidApk} download>
-                <Download className="mr-1.5 size-3.5 text-teal" />
-                Lightnode APK
-              </a>
-            </Button>
-            <Button asChild size="sm" variant="outline" className="h-7 text-xs">
-              <a href={APP_DOWNLOADS.comms.androidApk} download>
-                <Download className="mr-1.5 size-3.5 text-blue" />
-                Comms APK
-              </a>
-            </Button>
-          </div>
+        <div className="flex items-center gap-2">
+          <Smartphone className="size-4 text-gold" aria-hidden />
+          <span className="text-xs font-medium text-fg">
+            Native Android builds are not currently published.
+          </span>
         </div>
       </section>
     );
@@ -84,14 +36,11 @@ export function WalletDownloads({ className, variant = "card" }: Props) {
       <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-fg">
-            Native Client Suite
+            Native Clients
           </h2>
           <p className="text-xs text-muted">
-            Direct sideload builds for Android & iOS — connected to Chain 4 Testnet.
-          </p>
-          <p className="mt-1 text-xs text-gold/80">
-            Wallet 0.3.7 and Lightnode 0.8.8 are signed with a new certificate:
-            uninstall the previous build before installing.
+            Android builds of the Wallet, Lightnode, and Comms apps are not
+            currently published.
           </p>
         </div>
       </div>
@@ -105,38 +54,21 @@ export function WalletDownloads({ className, variant = "card" }: Props) {
                 <Smartphone className="size-4" aria-hidden />
               </div>
               <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted">
-                {APP_DOWNLOADS.wallet.tag}
+                Not published
               </span>
             </div>
             <h3 className="mt-3 font-medium text-fg text-sm">
-              {APP_DOWNLOADS.wallet.name}
+              Kovanica Wallet
             </h3>
             <p className="mt-1 text-xs text-muted leading-relaxed">
-              {APP_DOWNLOADS.wallet.description}
+              Non-custodial mobile wallet with PRO-21 addresses, deterministic
+              key derivation, and instant KVNC transfers.
             </p>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-border/50 space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
-                <a href={APP_DOWNLOADS.wallet.androidApk} download>
-                  <Download className="mr-1 size-3 text-gold" />
-                  Android APK
-                </a>
-              </Button>
-              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
-                <a
-                  href={APP_DOWNLOADS.wallet.releases}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Shield className="mr-1 size-3 text-gold/80" />
-                  Release notes
-                </a>
-              </Button>
-            </div>
-            <p className="text-[10px] text-subtle text-center">
-              Signed with the Kovanica release key · arm64-v8a
+          <div className="mt-4 pt-3 border-t border-border/50">
+            <p className="text-[10px] text-subtle">
+              The previously published Android APK was withdrawn.
             </p>
           </div>
         </div>
@@ -149,38 +81,21 @@ export function WalletDownloads({ className, variant = "card" }: Props) {
                 <Cpu className="size-4" aria-hidden />
               </div>
               <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted">
-                {APP_DOWNLOADS.lightnode.tag}
+                Not published
               </span>
             </div>
             <h3 className="mt-3 font-medium text-fg text-sm">
-              {APP_DOWNLOADS.lightnode.name}
+              Kovanica Lightnode
             </h3>
             <p className="mt-1 text-xs text-muted leading-relaxed">
-              {APP_DOWNLOADS.lightnode.description}
+              Embedded DAG light client. Tracks DAG headers, checks account
+              balances locally, and connects trustlessly.
             </p>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-border/50 space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
-                <a href={APP_DOWNLOADS.lightnode.androidApk} download>
-                  <Download className="mr-1 size-3 text-teal" />
-                  Android APK
-                </a>
-              </Button>
-              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
-                <a
-                  href={APP_DOWNLOADS.lightnode.releases}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Shield className="mr-1 size-3 text-teal" />
-                  Release notes
-                </a>
-              </Button>
-            </div>
-            <p className="text-[10px] text-subtle text-center">
-              Embedded P2P light client for mobile & desktop
+          <div className="mt-4 pt-3 border-t border-border/50">
+            <p className="text-[10px] text-subtle">
+              The previously published Android APK was withdrawn.
             </p>
           </div>
         </div>
@@ -193,38 +108,22 @@ export function WalletDownloads({ className, variant = "card" }: Props) {
                 <MessageSquare className="size-4" aria-hidden />
               </div>
               <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted">
-                {APP_DOWNLOADS.comms.tag}
+                Not published
               </span>
             </div>
             <h3 className="mt-3 font-medium text-fg text-sm">
-              {APP_DOWNLOADS.comms.name}
+              Kovanica Comms
             </h3>
             <p className="mt-1 text-xs text-muted leading-relaxed">
-              {APP_DOWNLOADS.comms.description}
+              Decentralized P2P messaging and encrypted peer communication
+              powered by Kovanica DAG transport and cryptographic identity.
             </p>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-border/50 space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
-                <a href={APP_DOWNLOADS.comms.androidApk} download>
-                  <Download className="mr-1 size-3 text-blue" />
-                  Android APK
-                </a>
-              </Button>
-              <Button asChild size="sm" variant="outline" className="h-8 text-xs font-normal justify-center">
-                <a
-                  href={APP_DOWNLOADS.comms.repo}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Shield className="mr-1 size-3 text-blue" />
-                  Source
-                </a>
-              </Button>
-            </div>
-            <p className="text-[10px] text-subtle text-center">
-              P2P encrypted messaging over DAG transport
+          <div className="mt-4 pt-3 border-t border-border/50">
+            <p className="text-[10px] text-subtle">
+              The previously published Android APK was withdrawn; it is not
+              being rebuilt right now.
             </p>
           </div>
         </div>
