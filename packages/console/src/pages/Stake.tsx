@@ -92,7 +92,9 @@ export function Stake() {
     <section>
       <h1>Stake</h1>
       <p className="lede">
-        A validator needs at least 50 000 KUNA staked. The node enforces that minimum.
+        Legacy staking: a validator entry needs at least 50 000 KUNA staked. Chains 1 and 2 run
+        Hybrid PoW + GHOSTDAG, so stake does not select block producers. These actions still
+        submit ledger transactions.
       </p>
       <p className="muted">
         Reward balances are not accounted per address yet. The node reports{" "}

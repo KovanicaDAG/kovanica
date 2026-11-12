@@ -113,7 +113,7 @@ export function StatusPage() {
           <div className="stat-value monospace">{status?.mempool_size || 0}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Active Validators</div>
+          <div className="stat-label">Recorded Validators (legacy)</div>
           <div className="stat-value monospace">{status?.validators_active || 0} / {status?.validators_total || 0}</div>
         </div>
       </div>
@@ -126,7 +126,7 @@ export function StatusPage() {
       </div>
 
       <div className="card">
-        <h3 style={{ marginBottom: '16px' }}>Active Validators</h3>
+        <h3 style={{ marginBottom: '16px' }}>Recorded Validators (legacy committee; not the block producers)</h3>
         <div className="table-container">
           <table>
             <thead>
