@@ -4,7 +4,7 @@
 # Mining: KovanicaHash (BLAKE3 + 2 MiB memory mix)
 # Parameters: TARGET_BLOCK_MS = 4000 (4 s), GHOSTDAG_K = 5
 # Native token: KVNC (9 decimals), initial block reward = 2.5 KVNC
-name: kovanica-chain2-cluster
+name: kovanica-chain2-official
 
 x-node: &node
   image: kovanica-node:local
@@ -24,6 +24,9 @@ x-node: &node
     KOVANICA_CHAIN_ID: "2"
     # Chain 2 is a no-stake hybrid chain: no-stake-82m is the only permitted policy.
     KOVANICA_EMISSION_POLICY: "no-stake-82m"
+    # Official ceremony treasury (testnet/chain2/genesis_validators.toml). The
+    # network tag binds it, so all four nodes must use this exact value.
+    KOVANICA_TREASURY_ADDRESS: "kvncqctcedn03kfascq6rcfrrqsdfu23nn83pr00hmvukvku82u2cgz0r5jkddag"
     KOVANICA_RPC_ADDR: "0.0.0.0"
     KOVANICA_LISTEN_ADDR: "0.0.0.0:8000"
     KOVANICA_DATA_DIR: "/var/lib/kovanica"
@@ -60,7 +63,9 @@ services:
       - "127.0.0.1:9100:8545"
     volumes:
       - node1-data:/var/lib/kovanica
-      - ./chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+      - ../../testnet/chain2/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ../../testnet/chain2/founder_premine.hex:/var/lib/kovanica/founder_premine.hex:ro
+      - ../../testnet/chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
       - ./chain2/node1_p2p.key:/etc/kovanica/node1_p2p.key:ro
     healthcheck:
       <<: *healthcheck
@@ -81,7 +86,9 @@ services:
       - "127.0.0.1:8546:8546"
     volumes:
       - node2-data:/var/lib/kovanica
-      - ./chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+      - ../../testnet/chain2/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ../../testnet/chain2/founder_premine.hex:/var/lib/kovanica/founder_premine.hex:ro
+      - ../../testnet/chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8546/health"]
@@ -101,7 +108,9 @@ services:
       - "127.0.0.1:8547:8547"
     volumes:
       - node3-data:/var/lib/kovanica
-      - ./chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+      - ../../testnet/chain2/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ../../testnet/chain2/founder_premine.hex:/var/lib/kovanica/founder_premine.hex:ro
+      - ../../testnet/chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8547/health"]
@@ -123,7 +132,9 @@ services:
       - "127.0.0.1:8548:8548"
     volumes:
       - observer-data:/var/lib/kovanica
-      - ./chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
+      - ../../testnet/chain2/genesis_validators.toml:/var/lib/kovanica/genesis_validators.toml:ro
+      - ../../testnet/chain2/founder_premine.hex:/var/lib/kovanica/founder_premine.hex:ro
+      - ../../testnet/chain2/funded_accounts.toml:/var/lib/kovanica/funded_accounts.toml:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8548/health"]

@@ -101,6 +101,17 @@ A standalone 1-command Docker Compose testnet cluster for **Chain 2** (`HYBRID_T
 | `prometheus` | Prometheus Metrics Scraper | `9090` | `127.0.0.1:9090` |
 | `grafana` | Grafana Dashboards | `3000` | `127.0.0.1:3001` (admin/admin) |
 
+### Genesis
+
+`node1`, `node2`, `node3` and `observer` mount the official chain-2 NoStake82M
+ceremony output from `testnet/chain2/` read-only
+(`genesis_validators.toml`, `founder_premine.hex`, `funded_accounts.toml`) and
+export its recorded treasury as `KOVANICA_TREASURY_ADDRESS`. The network tag is
+therefore the published bundle's `expected-tag`, not a locally generated one.
+The faucet account in `funded_accounts.toml` is pre-funded with 100,000 KVNC.
+The compose project is `kovanica-chain2-official`, so its volumes are separate
+from older DEV runs that built a different genesis.
+
 ### External Producers (Solo Mining)
 
 Supported external miners connect via JSON-RPC `kovanica_getWork` / `kovanica_submitWork`:
