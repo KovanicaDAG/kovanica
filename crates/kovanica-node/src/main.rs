@@ -5785,7 +5785,8 @@ struct GenesisValidatorsFile {
     /// and any later ops step that sets `KOVANICA_TREASURY_ADDRESS` on every
     /// node. The node never derives, accepts or rejects the treasury from it:
     /// the digest, the state and `init_treasury` read the configured address
-    /// only. Kept so ceremony output deserializes with the field it written.
+    /// only. Deserialization would ignore the key even without this field; it
+    /// stays so reading the file shows the address the ops step must export.
     #[serde(default)]
     #[allow(dead_code)]
     treasury_address: Option<String>,
