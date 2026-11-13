@@ -84,14 +84,12 @@ fn write_token_from_env() -> Option<String> {
     if singular.is_some() {
         return singular;
     }
-    std::env::var(RPC_WRITE_TOKENS_ENV)
-        .ok()
-        .and_then(|list| {
-            list.split(',')
-                .map(str::trim)
-                .find(|t| !t.is_empty())
-                .map(str::to_string)
-        })
+    std::env::var(RPC_WRITE_TOKENS_ENV).ok().and_then(|list| {
+        list.split(',')
+            .map(str::trim)
+            .find(|t| !t.is_empty())
+            .map(str::to_string)
+    })
 }
 
 /// Parse a JSON-RPC quantity (decimal number or `0x`-prefixed hex string).

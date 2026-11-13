@@ -564,14 +564,12 @@ fn resolve_rpc_token() -> Option<String> {
     if singular.is_some() {
         return singular;
     }
-    std::env::var(RPC_WRITE_TOKENS_ENV)
-        .ok()
-        .and_then(|list| {
-            list.split(',')
-                .map(str::trim)
-                .find(|t| !t.is_empty())
-                .map(str::to_string)
-        })
+    std::env::var(RPC_WRITE_TOKENS_ENV).ok().and_then(|list| {
+        list.split(',')
+            .map(str::trim)
+            .find(|t| !t.is_empty())
+            .map(str::to_string)
+    })
 }
 
 /// Attach a bearer token when one is configured.
