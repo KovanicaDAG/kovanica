@@ -493,6 +493,65 @@ async function setupIsolatedPage(
 }
 
 // -----------------------------------------------------------------------------
+// Deterministic wait helpers
+//
+// These tests run against a server-rendered app whose interactive state only
+// exists after React hydrates. Fixed sleeps race hydration on slower machines
+// and CI runners, so every assertion waits for the observable state it needs.
+// -----------------------------------------------------------------------------
+const HYDRATION_TIMEOUT = 30_000;
+
+/** Wait until React has hydrated the app shell (fiber/props attached to the DOM). */
+async function waitForHydration(page: Page) {
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('button[title="Mainnet"]') ?? document.body;
+      if (!el) return false;
+      return Object.keys(el).some(
+        (key) => key.startsWith("__reactFiber$") || key.startsWith("__reactProps$"),
+      );
+    },
+    undefined,
+    { timeout: HYDRATION_TIMEOUT },
+  );
+}
+
+/** Wait until the rendered body text contains `needle`. */
+async function waitForBodyText(page: Page, needle: string, timeout = HYDRATION_TIMEOUT) {
+  await page.waitForFunction(
+    (text: string) => document.body.innerText.includes(text),
+    needle,
+    { timeout, polling: 100 },
+  );
+}
+
+/** Wait until the rendered body text contains any of `needles`. */
+async function waitForBodyTextAny(page: Page, needles: string[], timeout = HYDRATION_TIMEOUT) {
+  await page.waitForFunction(
+    (texts: string[]) => texts.some((text) => document.body.innerText.includes(text)),
+    needles,
+    { timeout, polling: 100 },
+  );
+}
+
+/** Wait until the wallet header balance equals `expected` (e.g. "5 KVNC"). */
+async function waitForHeaderBalance(page: Page, expected: string, timeout = HYDRATION_TIMEOUT) {
+  await page.waitForFunction(
+    (value: string) =>
+      document.querySelector("header p.text-4xl")?.textContent?.trim() === value,
+    expected,
+    { timeout, polling: 100 },
+  );
+}
+
+/** Navigate, wait for hydration, then optionally wait for a route-specific marker. */
+async function gotoAndSettle(page: Page, url: string, marker?: string) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
+  if (marker) await waitForBodyText(page, marker);
+}
+
+// -----------------------------------------------------------------------------
 // SECTION A: Multi-surface, direct navigation/reload, and viewports
 // -----------------------------------------------------------------------------
 test("Section A: desktop viewport renders home, explorer, wallet, pool, and docs with meaningful assertions", async () => {
@@ -514,8 +573,7 @@ test("Section A: desktop viewport renders home, explorer, wallet, pool, and docs
     assert.ok((await page.title()).includes("Kovanica"), "Home page reload must preserve title");
 
     // 2. Explorer (/explorer)
-    await page.goto(`${baseUrl}/explorer`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/explorer`, "BlockDAG Explorer");
     const expText = await page.locator("body").innerText();
     assert.ok(expText.includes("BlockDAG Explorer"), "Explorer must render 'BlockDAG Explorer'");
     assert.ok(
@@ -527,8 +585,7 @@ test("Section A: desktop viewport renders home, explorer, wallet, pool, and docs
     assert.ok((await page.locator("body").innerText()).includes("BlockDAG Explorer"));
 
     // 3. Wallet (/wallet)
-    await page.goto(`${baseUrl}/wallet`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/wallet`, "PRO-21");
     const walletText = await page.locator("body").innerText();
     assert.ok(walletText.includes("Wallet"), "Wallet route must render Wallet heading");
     assert.ok(
@@ -540,8 +597,7 @@ test("Section A: desktop viewport renders home, explorer, wallet, pool, and docs
     assert.ok((await page.locator("body").innerText()).includes("Wallet"));
 
     // 4. Pool (/pool)
-    await page.goto(`${baseUrl}/pool`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/pool`, "TEST / KVNC");
     const poolText = await page.locator("body").innerText();
     assert.ok(poolText.includes("Liquidity pools"), "Pool route must render 'Liquidity pools'");
     assert.ok(poolText.includes("TEST / KVNC"), "Pool route must render deterministic TEST / KVNC pool");
@@ -554,8 +610,7 @@ test("Section A: desktop viewport renders home, explorer, wallet, pool, and docs
     assert.ok((await page.locator("body").innerText()).includes("Liquidity pools"));
 
     // 5. Docs (/docs)
-    await page.goto(`${baseUrl}/docs`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/docs`, "Getting started");
     const docsText = await page.locator("body").innerText();
     assert.ok(docsText.includes("Documentation"), "Docs route must render Documentation heading");
     assert.ok(docsText.includes("Getting started"), "Docs route must include Getting started section");
@@ -574,10 +629,15 @@ test("Section A: mobile viewport (390x844) renders without horizontal scroll ove
   const { context, page } = await setupIsolatedPage({ viewport: { width: 390, height: 844 } });
 
   try {
-    const routes = ["/", "/explorer", "/wallet", "/pool", "/docs"];
-    for (const route of routes) {
-      await page.goto(`${baseUrl}${route}`, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(500);
+    const routes: Array<[string, string]> = [
+      ["/", "Kovanica"],
+      ["/explorer", "BlockDAG Explorer"],
+      ["/wallet", "PRO-21"],
+      ["/pool", "Liquidity pools"],
+      ["/docs", "Getting started"],
+    ];
+    for (const [route, marker] of routes) {
+      await gotoAndSettle(page, `${baseUrl}${route}`, marker);
 
       const hasOverflow = await page.evaluate(() => {
         const el = document.documentElement;
@@ -609,13 +669,12 @@ test("Section B: mainnet-prelaunch does not fall back to testnet data in API and
     assert.equal(stateRes.status, 503, "Mainnet state must return 503");
 
     // 2. Browser UI check: Explorer on mainnet shows dedicated prelaunch placeholder
-    await page.goto(`${baseUrl}/explorer`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/explorer`, "BlockDAG Explorer");
 
     // Switch to Mainnet via header button
     const mainnetBtn = page.locator("button[title=\"Mainnet\"], button:text(\"Mainnet\")").first();
     await mainnetBtn.click();
-    await page.waitForTimeout(600);
+    await waitForBodyText(page, "Mainnet Explorer Unavailable");
 
     const explorerMainnetText = await page.locator("body").innerText();
     assert.ok(
@@ -632,8 +691,11 @@ test("Section B: mainnet-prelaunch does not fall back to testnet data in API and
     );
 
     // 3. Browser UI check: Wallet on mainnet shows prelaunch notice and disables actions
-    await page.goto(`${baseUrl}/wallet`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(
+      page,
+      `${baseUrl}/wallet`,
+      "Mainnet Prelaunch · Launch Scheduled 1.1.2027",
+    );
     const walletMainnetText = await page.locator("body").innerText();
     assert.ok(
       walletMainnetText.includes("Mainnet Prelaunch · Launch Scheduled 1.1.2027"),
@@ -664,8 +726,7 @@ test("Section B: missing entities (404) vs backend failure (502) render distinct
 
   try {
     // 1. Missing Entity (404): RWA on local source (entity does not exist on in-memory mock node)
-    await page.goto(`${baseUrl}/explorer/rwa/missing-asset-404?source=local`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/explorer/rwa/missing-asset-404?source=local`, "RWA Asset Not Found");
     const missingRwaText = await page.locator("body").innerText();
     assert.ok(
       missingRwaText.includes("RWA Asset Not Found"),
@@ -677,16 +738,14 @@ test("Section B: missing entities (404) vs backend failure (502) render distinct
     );
 
     // 2. Missing Entity (404): NFT & Collection
-    await page.goto(`${baseUrl}/wallet/nft/missing-nft-404?source=local`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/wallet/nft/missing-nft-404?source=local`, "NFT Not Found");
     const missingNftText = await page.locator("body").innerText();
     assert.ok(
       missingNftText.includes("NFT Not Found"),
       "Missing NFT entity must render NftNotFoundPage ('NFT Not Found')",
     );
 
-    await page.goto(`${baseUrl}/wallet/collection/missing-coll-404?source=local`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/wallet/collection/missing-coll-404?source=local`, "Collection Not Found");
     const missingCollText = await page.locator("body").innerText();
     assert.ok(
       missingCollText.includes("Collection Not Found"),
@@ -695,8 +754,7 @@ test("Section B: missing entities (404) vs backend failure (502) render distinct
 
     // 3. Backend Failure (502): RWA, NFT, and Collection on public testnet when node is unreachable
     // dispatchApi returns 502 'testnet node error' because no live RPC is active locally
-    await page.goto(`${baseUrl}/explorer/rwa/failing-service-asset?source=testnet`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/explorer/rwa/failing-service-asset?source=testnet`, "RWA Endpoint Unavailable");
     const errorRwaText = await page.locator("body").innerText();
     assert.ok(
       errorRwaText.includes("RWA Endpoint Unavailable"),
@@ -711,16 +769,14 @@ test("Section B: missing entities (404) vs backend failure (502) render distinct
       "Error page must provide 'Try again' retry button",
     );
 
-    await page.goto(`${baseUrl}/wallet/nft/failing-nft-asset?source=testnet`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/wallet/nft/failing-nft-asset?source=testnet`, "NFT Endpoint Unavailable");
     const errorNftText = await page.locator("body").innerText();
     assert.ok(
       errorNftText.includes("NFT Endpoint Unavailable"),
       "NFT backend failure must render RouteError ('NFT Endpoint Unavailable'), NOT 404",
     );
 
-    await page.goto(`${baseUrl}/wallet/collection/failing-coll-asset?source=testnet`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/wallet/collection/failing-coll-asset?source=testnet`, "Collection Endpoint Unavailable");
     const errorCollText = await page.locator("body").innerText();
     assert.ok(
       errorCollText.includes("Collection Endpoint Unavailable"),
@@ -771,8 +827,7 @@ test("Section B: unreachable services, malformed responses, and unknown statisti
 
   try {
     // 1. Malformed /api/pools response renders explicit error instead of crashing
-    await page.goto(`${baseUrl}/pool`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/pool`, "Malformed pools response");
     const poolText = await page.locator("body").innerText();
     assert.ok(
       poolText.includes("Malformed pools response"),
@@ -780,8 +835,7 @@ test("Section B: unreachable services, malformed responses, and unknown statisti
     );
 
     // 2. Unreachable /api/bootstrap on /docs renders explicit 'Telemetry unavailable · Node offline'
-    await page.goto(`${baseUrl}/docs`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/docs`, "Telemetry unavailable · Node offline");
     const docsText = await page.locator("body").innerText();
     assert.ok(
       docsText.includes("Telemetry unavailable · Node offline"),
@@ -789,8 +843,7 @@ test("Section B: unreachable services, malformed responses, and unknown statisti
     );
 
     // 3. Malformed /api/state on /explorer keeps unknown statistics explicit ('—') and shows error
-    await page.goto(`${baseUrl}/explorer`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/explorer`, "BlockDAG Explorer");
     const expText = await page.locator("body").innerText();
     assert.ok(
       expText.includes("—"),
@@ -813,8 +866,11 @@ test("Section B: NO-stake messaging is preserved across documentation, network, 
 
   try {
     // 1. Docs consensus section
-    await page.goto(`${baseUrl}/docs#consensus`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/docs#consensus`);
+    await waitForBodyTextAny(page, [
+      "There is no validator staking, bonding, committee rotation, or slashing in consensus",
+      "None (pure PoW + GHOSTDAG)",
+    ]);
     const docsText = await page.locator("body").innerText();
     assert.ok(
       docsText.includes("There is no validator staking, bonding, committee rotation, or slashing in consensus") ||
@@ -823,12 +879,11 @@ test("Section B: NO-stake messaging is preserved across documentation, network, 
     );
 
     // 2. Network view
-    await page.goto(`${baseUrl}/network`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/network`);
     // Switch to mainnet network view
     const mainnetBtn = page.locator("button[title=\"Mainnet\"], button:text(\"Mainnet\")").first();
     await mainnetBtn.click();
-    await page.waitForTimeout(600);
+    await waitForBodyText(page, "None (Zero-stake PoW consensus)");
     const networkText = await page.locator("body").innerText();
     assert.ok(
       networkText.includes("None (Zero-stake PoW consensus)"),
@@ -876,13 +931,16 @@ test("Section C: delayed old-network response and late errors do not cause cross
   });
 
   try {
-    await page.goto(`${baseUrl}/wallet`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(500);
+    await gotoAndSettle(
+      page,
+      `${baseUrl}/wallet`,
+      "kvncuz4r5q80973x44386rx9xkwudjn9yykmth22rsl3cpy9arkv3u29hmu5mdag",
+    );
 
     // Switch to mainnet while testnet utxos request for watch wallet is delayed in-flight
     const mainnetBtn = page.locator("button[title=\"Mainnet\"], button:text(\"Mainnet\")").first();
     await mainnetBtn.click();
-    await page.waitForTimeout(500);
+    await waitForBodyText(page, "Mainnet Prelaunch · Launch Scheduled 1.1.2027");
 
     // Verify mainnet prelaunch state
     let walletText = await page.locator("body").innerText();
@@ -893,7 +951,7 @@ test("Section C: delayed old-network response and late errors do not cause cross
 
     // Release late testnet response (which returns 5 KVNC)
     releaseDelayedUtxos();
-    await page.waitForTimeout(600);
+    await waitForHeaderBalance(page, "0 KVNC");
 
     // State on mainnet must NOT be polluted by stale testnet 5 KVNC response
     walletText = await page.locator("body").innerText();
@@ -911,19 +969,18 @@ test("Section C: delayed old-network response and late errors do not cause cross
     // Now test late error on /pool across network switch + overlapping refreshes + unmount
     const testnetBtn = page.locator("button[title=\"Testnet\"], button:text(\"Testnet\")").first();
     await testnetBtn.click();
-    await page.waitForTimeout(400);
+    await waitForHeaderBalance(page, "5 KVNC");
 
     triggerLatePoolError = true;
-    await page.goto(`${baseUrl}/pool`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(300);
+    await gotoAndSettle(page, `${baseUrl}/pool`);
 
     // Switch to mainnet while testnet /api/pools error is delayed in-flight
     await mainnetBtn.click();
-    await page.waitForTimeout(300);
+    await waitForBodyText(page, "No pools initialized yet");
 
     // Release the late error from testnet
     releaseDelayedLateError();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(750);
 
     const poolText = await page.locator("body").innerText();
     assert.ok(
@@ -932,8 +989,7 @@ test("Section C: delayed old-network response and late errors do not cause cross
     );
 
     // Navigate away (unmount) while on route
-    await page.goto(`${baseUrl}/docs`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(400);
+    await gotoAndSettle(page, `${baseUrl}/docs`, "Documentation");
     assert.ok((await page.locator("body").innerText()).includes("Documentation"));
   } catch (err) {
     await saveFailureArtifact(page, "section-c-delayed-race", err);
@@ -969,8 +1025,12 @@ test("Section C: wallet visibility/freshness, hidden-tab pause, visible resume, 
   });
 
   try {
-    await page.goto(`${baseUrl}/wallet`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(700);
+    await gotoAndSettle(
+      page,
+      `${baseUrl}/wallet`,
+      "kvncuz4r5q80973x44386rx9xkwudjn9yykmth22rsl3cpy9arkv3u29hmu5mdag",
+    );
+    await waitForHeaderBalance(page, "5 KVNC");
 
     // Verify canonical address and initial fresh balance (5 KVNC)
     let walletText = await page.locator("body").innerText();
@@ -1000,9 +1060,15 @@ test("Section C: wallet visibility/freshness, hidden-tab pause, visible resume, 
       Object.defineProperty(document, "visibilityState", { value: "visible", writable: true });
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    await page.waitForTimeout(700);
+
+    // Deterministic wait for the immediate visible-resume refresh to fire
+    const resumeDeadline = Date.now() + 15_000;
+    while (utxoFetchCount <= countBeforeHide && Date.now() < resumeDeadline) {
+      await page.waitForTimeout(100);
+    }
 
     assert.ok(utxoFetchCount > countBeforeHide, "Visible resume must trigger immediate wallet refresh");
+    await waitForBodyText(page, "Stale");
     walletText = await page.locator("body").innerText();
     assert.ok(
       walletText.includes("5 KVNC"),
@@ -1027,8 +1093,7 @@ test("Section D: quote-only pool calculator calculates exact quotes without fina
   const { context, page } = await setupIsolatedPage({ viewport: { width: 1280, height: 800 } });
 
   try {
-    await page.goto(`${baseUrl}/pool`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, `${baseUrl}/pool`, "Liquidity pools");
 
     const input = page.locator("input[placeholder=\"0\"]");
     await assert.doesNotReject(input.waitFor({ timeout: 5000 }));
@@ -1080,14 +1145,12 @@ test("Section D: pool handoff to wallet renders capability gap blocker, rejects 
 
   try {
     // 1. Start at pool
-    await page.goto(`${baseUrl}/pool`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(500);
+    await gotoAndSettle(page, `${baseUrl}/pool`, "Liquidity pools");
 
     // 2. Navigate to wallet with valid handoff query
     const tokenHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const handoffUrl = `${baseUrl}/wallet?action=swap&token=${tokenHex}&direction=buy&amount=10&network=testnet`;
-    await page.goto(handoffUrl, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(600);
+    await gotoAndSettle(page, handoffUrl, "Capability Gap Notice");
 
     let walletText = await page.locator("body").innerText();
     assert.ok(
@@ -1105,28 +1168,28 @@ test("Section D: pool handoff to wallet renders capability gap blocker, rejects 
 
     // 3. Navigate back to /pool
     await page.goBack();
-    await page.waitForTimeout(600);
+    await waitForBodyText(page, "Liquidity pools");
     assert.ok(page.url().includes("/pool"), "Back navigation must return to /pool");
     const backPoolText = await page.locator("body").innerText();
     assert.ok(backPoolText.includes("Liquidity pools"), "Pool page must remain intact after back navigation");
 
     // 4. Test invalid handoff: network mismatch and forbidden secret parameter
-    await page.goto(
+    await gotoAndSettle(
+      page,
       `${baseUrl}/wallet?action=swap&token=${tokenHex}&direction=buy&amount=10&network=mainnet`,
-      { waitUntil: "domcontentloaded" },
+      "Network mismatch",
     );
-    await page.waitForTimeout(500);
     walletText = await page.locator("body").innerText();
     assert.ok(
       walletText.includes("Handoff rejected:") && walletText.includes("Network mismatch"),
       "Mismatched network handoff must be explicitly rejected",
     );
 
-    await page.goto(
+    await gotoAndSettle(
+      page,
       `${baseUrl}/wallet?action=swap&token=${tokenHex}&direction=buy&amount=10&network=testnet&seed=forbidden`,
-      { waitUntil: "domcontentloaded" },
+      "Handoff rejected: Forbidden parameter 'seed'",
     );
-    await page.waitForTimeout(500);
     walletText = await page.locator("body").innerText();
     assert.ok(
       walletText.includes("Handoff rejected: Forbidden parameter 'seed'"),
