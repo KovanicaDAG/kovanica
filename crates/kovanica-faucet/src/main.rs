@@ -40,6 +40,11 @@ struct FaucetConfig {
     max_requests_per_window: usize,
     /// RPC endpoint of the node
     rpc_url: String,
+    /// Optional bearer token for authenticated write RPC methods
+    /// (`KOVANICA_RPC_WRITE_TOKEN`, or the first entry of
+    /// `KOVANICA_RPC_WRITE_TOKENS`). `None` means the node accepted auth is
+    /// disabled, or writes will be rejected (fail-closed).
+    rpc_token: Option<String>,
     /// Network signing context (signature format v1): every dispensed
     /// transaction commits to this `chain_id`.
     signing_ctx: kovanica_types::SigningContext,
@@ -226,10 +231,17 @@ async fn main() -> Result<()> {
         rate_limit_window: cli.rate_limit_window,
         max_requests_per_window: cli.max_requests,
         rpc_url: normalize_rpc_url(&cli.rpc_url),
+        rpc_token: resolve_rpc_token(),
         signing_ctx: kovanica_types::SigningContext::new(cli.chain_id),
         trusted_proxies,
         min_balance_atoms: cli.min_balance_ku * 1_000_000_000, // KUNA to atoms
     };
+    if config.rpc_token.is_none() {
+        warn!(
+            "no {RPC_WRITE_TOKEN_ENV} / {RPC_WRITE_TOKENS_ENV} configured: \
+             node write calls will be rejected when RPC auth is enabled"
+        );
+    }
 
     let state = Arc::new(FaucetState {
         config,
@@ -387,7 +399,14 @@ async fn faucet_handler(
     // Low-balance guard: refuse early when the faucet is running dry, so callers
     // get a clear error instead of a transaction that fails on-chain.
     if state.config.min_balance_atoms > 0 {
-        match get_balance(&state.client, &state.config.rpc_url, &state.faucet_address).await {
+        match get_balance(
+            &state.client,
+            &state.config.rpc_url,
+            state.config.rpc_token.as_deref(),
+            &state.faucet_address,
+        )
+        .await
+        {
             Ok(balance) if balance < state.config.min_balance_atoms => {
                 warn!(
                     balance,
@@ -416,7 +435,14 @@ async fn faucet_handler(
     }
 
     // Get faucet nonce from RPC
-    let nonce = match get_nonce(&state.client, &state.config.rpc_url, &state.faucet_address).await {
+    let nonce = match get_nonce(
+        &state.client,
+        &state.config.rpc_url,
+        state.config.rpc_token.as_deref(),
+        &state.faucet_address,
+    )
+    .await
+    {
         Ok(n) => n,
         Err(e) => {
             warn!("Failed to get faucet nonce: {}", e);
@@ -463,7 +489,14 @@ async fn faucet_handler(
     };
 
     // Submit transaction
-    match submit_transaction(&state.client, &state.config.rpc_url, &signed_tx).await {
+    match submit_transaction(
+        &state.client,
+        &state.config.rpc_url,
+        state.config.rpc_token.as_deref(),
+        &signed_tx,
+    )
+    .await
+    {
         Ok(tx_hash) => {
             info!(to = %to_address, amount = state.config.dispense_amount, tx_hash = %tx_hash, "faucet dispensed");
             (
@@ -512,14 +545,60 @@ fn normalize_rpc_url(url: &str) -> String {
     }
 }
 
-async fn get_nonce(client: &reqwest::Client, rpc_url: &str, address: &Address) -> Result<u64> {
+/// Bearer token for node write RPC methods (singular, preferred).
+const RPC_WRITE_TOKEN_ENV: &str = "KOVANICA_RPC_WRITE_TOKEN";
+
+/// Comma-separated token list accepted by the node.
+const RPC_WRITE_TOKENS_ENV: &str = "KOVANICA_RPC_WRITE_TOKENS";
+
+/// Resolve the bearer token the faucet uses for node write calls.
+///
+/// Prefers `KOVANICA_RPC_WRITE_TOKEN`; otherwise the first non-empty entry of the
+/// node's `KOVANICA_RPC_WRITE_TOKENS` list. `None` is valid: reads still work,
+/// but write calls are rejected by a node running with auth enabled.
+fn resolve_rpc_token() -> Option<String> {
+    let singular = std::env::var(RPC_WRITE_TOKEN_ENV)
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    if singular.is_some() {
+        return singular;
+    }
+    std::env::var(RPC_WRITE_TOKENS_ENV)
+        .ok()
+        .and_then(|list| {
+            list.split(',')
+                .map(str::trim)
+                .find(|t| !t.is_empty())
+                .map(str::to_string)
+        })
+}
+
+/// Attach a bearer token when one is configured.
+fn with_auth(req: reqwest::RequestBuilder, token: Option<&str>) -> reqwest::RequestBuilder {
+    match token {
+        Some(token) => req.bearer_auth(token),
+        None => req,
+    }
+}
+
+async fn get_nonce(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    token: Option<&str>,
+    address: &Address,
+) -> Result<u64> {
     let req = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "kovanica_getNonce",
         "params": [address.to_string()],
         "id": 1
     });
-    let resp: serde_json::Value = client.post(rpc_url).json(&req).send().await?.json().await?;
+    let resp: serde_json::Value = with_auth(client.post(rpc_url).json(&req), token)
+        .send()
+        .await?
+        .json()
+        .await?;
     if let Some(err) = resp.get("error") {
         anyhow::bail!("rpc error: {err}");
     }
@@ -531,14 +610,23 @@ async fn get_nonce(client: &reqwest::Client, rpc_url: &str, address: &Address) -
     Ok(nonce)
 }
 
-async fn get_balance(client: &reqwest::Client, rpc_url: &str, address: &Address) -> Result<u64> {
+async fn get_balance(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    token: Option<&str>,
+    address: &Address,
+) -> Result<u64> {
     let req = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "kovanica_getBalance",
         "params": [address.to_string()],
         "id": 1
     });
-    let resp: serde_json::Value = client.post(rpc_url).json(&req).send().await?.json().await?;
+    let resp: serde_json::Value = with_auth(client.post(rpc_url).json(&req), token)
+        .send()
+        .await?
+        .json()
+        .await?;
     if let Some(err) = resp.get("error") {
         anyhow::bail!("rpc error: {err}");
     }
@@ -565,6 +653,7 @@ fn sign_transaction(
 async fn submit_transaction(
     client: &reqwest::Client,
     rpc_url: &str,
+    token: Option<&str>,
     tx: &Transaction,
 ) -> Result<String> {
     let raw = bincode::serialize(tx)?;
@@ -574,7 +663,11 @@ async fn submit_transaction(
         "params": [hex::encode(raw)],
         "id": 1
     });
-    let resp: serde_json::Value = client.post(rpc_url).json(&req).send().await?.json().await?;
+    let resp: serde_json::Value = with_auth(client.post(rpc_url).json(&req), token)
+        .send()
+        .await?
+        .json()
+        .await?;
     if let Some(err) = resp.get("error") {
         anyhow::bail!("rpc error: {err}");
     }

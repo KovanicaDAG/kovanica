@@ -27,7 +27,10 @@ impl RpcClient {
         if !url.ends_with("/rpc") {
             url = format!("{}/rpc", url.trim_end_matches('/'));
         }
-        let inner = kovanica_sdk::RpcClient::new(url.clone());
+        let mut inner = kovanica_sdk::RpcClient::new(url.clone());
+        if let Some(token) = write_token_from_env() {
+            inner = inner.with_auth_token(token);
+        }
         Self { url, inner }
     }
 
@@ -60,6 +63,35 @@ pub fn parse_health_peer_count(value: &Value) -> Option<usize> {
         return None;
     }
     usize::try_from(value.get("peer_count")?.as_u64()?).ok()
+}
+
+/// Bearer token for node write RPC methods (singular, preferred).
+const RPC_WRITE_TOKEN_ENV: &str = "KOVANICA_RPC_WRITE_TOKEN";
+
+/// Comma-separated token list accepted by the node.
+const RPC_WRITE_TOKENS_ENV: &str = "KOVANICA_RPC_WRITE_TOKENS";
+
+/// Resolve the bearer token used for node write RPC calls.
+///
+/// Prefers `KOVANICA_RPC_WRITE_TOKEN`; otherwise the first non-empty entry of
+/// the node's `KOVANICA_RPC_WRITE_TOKENS` list. `None` keeps the historical
+/// unauthenticated behaviour (nodes with auth disabled, tests, local dev).
+fn write_token_from_env() -> Option<String> {
+    let singular = std::env::var(RPC_WRITE_TOKEN_ENV)
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    if singular.is_some() {
+        return singular;
+    }
+    std::env::var(RPC_WRITE_TOKENS_ENV)
+        .ok()
+        .and_then(|list| {
+            list.split(',')
+                .map(str::trim)
+                .find(|t| !t.is_empty())
+                .map(str::to_string)
+        })
 }
 
 /// Parse a JSON-RPC quantity (decimal number or `0x`-prefixed hex string).

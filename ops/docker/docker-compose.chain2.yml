@@ -35,7 +35,11 @@ x-node: &node
     KOVANICA_MINING_ENABLED: "true"
     KOVANICA_MINING_THREADS: "1"
     KOVANICA_RPC_RATE_LIMIT_PER_MIN: "0"
-    KOVANICA_RPC_AUTH: "disable"
+    # Write methods require `Authorization: Bearer <token>`. Tokens come from the
+    # host environment; never commit a real value. With no token configured the
+    # node rejects writes (fail-closed) instead of accepting anonymous ones.
+    KOVANICA_RPC_AUTH: "enable"
+    KOVANICA_RPC_WRITE_TOKENS: "${KOVANICA_RPC_WRITE_TOKENS:-}"
     KOVANICA_MEMPOOL_REBROADCAST_INTERVAL_SECS: "5"
     KOVANICA_MEMPOOL_IN_FLIGHT_TIMEOUT_SECS: "30"
     KOVANICA_MEMPOOL_MIN_FEE_RATE: "0"
@@ -163,6 +167,8 @@ services:
       - "100"
     environment:
       KOVANICA_FAUCET_PASSPHRASE: "faucet-testnet-chain5"
+      # Same token the nodes accept, so the faucet keeps working with auth on.
+      KOVANICA_RPC_WRITE_TOKENS: "${KOVANICA_RPC_WRITE_TOKENS:-}"
       RUST_LOG: "info"
     ports:
       - "127.0.0.1:3000:3000"

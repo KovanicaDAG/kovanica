@@ -112,6 +112,37 @@ The faucet account in `funded_accounts.toml` is pre-funded with 100,000 KVNC.
 The compose project is `kovanica-chain2-official`, so its volumes are separate
 from older DEV runs that built a different genesis.
 
+### RPC write authentication
+
+Write JSON-RPC methods (`kovanica_sendRawTransaction`, HTLC, vault, multisig and
+token writes) require a bearer token when the node runs with RPC auth enabled.
+This stack enables it by default (`KOVANICA_RPC_AUTH: "enable"`) and reads the
+accepted tokens from the host environment; no token is stored in the repository.
+
+```bash
+export KOVANICA_RPC_WRITE_TOKENS="$(openssl rand -hex 32)"   # keep this secret
+docker compose -f ops/docker/docker-compose.chain2.yml up -d
+```
+
+The node accepts the comma-separated list in `KOVANICA_RPC_WRITE_TOKENS`
+(useful for rotation: add the new token, roll clients, then remove the old one).
+The faucet and `kovanica` CLI read `KOVANICA_RPC_WRITE_TOKEN` first, then the
+first entry of `KOVANICA_RPC_WRITE_TOKENS`, so a single token covers both.
+
+Clients send the header on every write call:
+
+```bash
+curl -s -X POST http://127.0.0.1:8545/rpc \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $KOVANICA_RPC_WRITE_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"kovanica_sendRawTransaction","params":["0x…"]}'
+```
+
+Read methods (`/health`, `kovanica_blockNumber`, balances, receipts) remain
+unauthenticated. If no token is configured the nodes reject writes rather than
+silently accepting anonymous ones; the faucet logs a warning and its `/health`
+stays up until a token is provided.
+
 ### External Producers (Solo Mining)
 
 Supported external miners connect via JSON-RPC `kovanica_getWork` / `kovanica_submitWork`:

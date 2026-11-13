@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 pub struct RpcClient {
     url: String,
     client: Client,
+    auth_token: Option<String>,
 }
 
 #[cfg(feature = "http")]
@@ -22,7 +23,20 @@ impl RpcClient {
         Self {
             url: url.into(),
             client: Client::new(),
+            auth_token: None,
         }
+    }
+
+    /// Attach a bearer token for nodes running with RPC write auth enabled.
+    #[must_use]
+    pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
+        let token = token.into();
+        self.auth_token = if token.trim().is_empty() {
+            None
+        } else {
+            Some(token.trim().to_string())
+        };
+        self
     }
 
     pub async fn call<T: DeserializeOwned>(
@@ -36,10 +50,11 @@ impl RpcClient {
             "method": method,
             "params": params,
         });
-        let resp = self
-            .client
-            .post(&self.url)
-            .json(&body)
+        let mut request = self.client.post(&self.url).json(&body);
+        if let Some(token) = self.auth_token.as_deref() {
+            request = request.bearer_auth(token);
+        }
+        let resp = request
             .send()
             .await
             .map_err(|e| SdkError::Rpc(e.to_string()))?;
