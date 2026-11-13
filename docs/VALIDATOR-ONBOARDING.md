@@ -66,7 +66,7 @@ Before the genesis ceremony, submit to the testnet coordinators:
 1. **Validator Ed25519 public key** (from keystore)
 2. **VRF public key** (from keystore)
 3. **P2P address** (your public IP:8000)
-4. **Desired stake amount** (≥ 50,000 KUNA)
+4. **Desired stake amount** (≥ 50,000 KVNC)
 
 ### 3.2 Genesis Ceremony
 
@@ -162,8 +162,8 @@ export KOVANICA_RUN_VALIDATOR=true
 
 | Parameter | Value |
 |-----------|-------|
-| **Min stake** | 50,000 KUNA (50,000,000,000,000 atoms) |
-| **Min delegation** | 50,000 KUNA (50,000,000,000,000 atoms) |
+| **Min stake** | 50,000 KVNC (50,000,000,000,000 atoms) |
+| **Min delegation** | 50,000 KVNC (50,000,000,000,000 atoms) |
 | **Active validators** | 15–21 |
 | **Epoch** | 7,200 DAG rounds = 2,400 committed leader blocks (~8 h) |
 | **Unbonding** | 100 000 committed leader blocks (~13.9 days at 12 s/leader) — **not** 1 epoch |
@@ -171,7 +171,7 @@ export KOVANICA_RUN_VALIDATOR=true
 ### 5.2 Stake via CLI
 
 ```bash
-# Get testnet KUNA from faucet first
+# Get testnet KVNC from faucet first
 curl -X POST https://seed3.kovanica.online/faucet \
   -H "Content-Type: application/json" \
   -d '{"address": "kvnc<your-address>dag"}'
@@ -187,7 +187,7 @@ kovanica-cli stake \
 ### 5.3 Delegate (Optional)
 
 ```bash
-# Delegate to another validator (min 50,000 KUNA = 50000000000000 atoms)
+# Delegate to another validator (min 50,000 KVNC = 50000000000000 atoms)
 kovanica-cli delegate \
   --keystore /path/to/delegator.keystore \
   --validator <validator-address> \
@@ -353,11 +353,11 @@ Thresholds match `ops/prometheus/alerts.yml`.
 | **Chain ID** | `4` |
 | **RPC endpoint** | `http://<your-ip>:8545` (local) / `https://rpc-testnet.kovanica.online/rpc` (public) |
 | **Explorer** | `https://explorer.kovanica.online` |
-| **Faucet** | `https://faucet.kovanica.online` (UI) / `https://seed3.kovanica.online/faucet` (JSON API), 10 KUNA lifetime cap |
+| **Faucet** | `https://faucet.kovanica.online` (UI) / `https://seed3.kovanica.online/faucet` (JSON API), 10 KVNC lifetime cap |
 | **Seed nodes** | `seed1.kovanica.online:8000`, `seed3.kovanica.online:8000` (for mainnet DNS seed requirements, see `docs/SEED-DNS-AUDIT.md`) |
 | **Genesis file** | Distributed by coordinators |
 
-### 8.1 Get Test KUNA
+### 8.1 Get Test KVNC
 
 ```bash
 # Via CLI
@@ -387,7 +387,7 @@ curl -X POST https://seed3.kovanica.online/faucet \
 |---------|-------|-----|
 | Height not increasing | Non-blue blocks, fork | Check logs for `non_blue` / `fork` messages; restart node |
 | `round` not advancing | No quorum | Verify ≥ 3 peers; check seed nodes are up |
-| `mempool_size` growing | Transactions not committing | Check if you're leader; verify stake ≥ 50K KUNA |
+| `mempool_size` growing | Transactions not committing | Check if you're leader; verify stake ≥ 50K KVNC |
 
 ### 9.3 RPC Errors
 

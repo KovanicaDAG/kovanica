@@ -36,7 +36,7 @@ import {
 } from "./payments.js";
 import type { RetryPolicy, TopupProvider } from "./topup/provider.js";
 
-export type TopupCurrency = "KUNA";
+export type TopupCurrency = "KVNC";
 
 export type TopupStatus =
   | "quoted"
@@ -90,7 +90,7 @@ export interface TopupQuote {
   quoteId: string;
   providerId: string;
   sku: string;
-  currency: "KUNA";
+  currency: "KVNC";
   amountAtoms: bigint;
   claimerAddr: string;
   htlcExpiryMs: bigint;
@@ -103,7 +103,7 @@ export interface TopupOrder {
   quoteId: string;
   providerId: string;
   status: TopupStatus;
-  currency: "KUNA";
+  currency: "KVNC";
   amountAtoms: bigint;
   claimerAddr: string;
   htlcId?: string;
@@ -228,7 +228,7 @@ function isTerminal(status: TopupStatus): boolean {
  * (`bad_request` / `expired`) on any violation. Never echoes secret material.
  */
 export function validateQuote(quote: TopupQuote, now: number, policy: ResolvedPolicy): TopupQuote {
-  if (quote.currency !== "KUNA") {
+  if (quote.currency !== "KVNC") {
     throw new TopupClientError(400, "bad_request", "unsupported quote currency");
   }
   if (quote.amountAtoms <= 0n) {

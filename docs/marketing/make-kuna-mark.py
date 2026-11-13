@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Renders the Android apps' KUNA mark and launcher icon from the brand file.
+"""Renders the Android apps' KVNC mark and launcher icon from the brand file.
 
     pip install pillow
     python docs/marketing/make-kuna-mark.py

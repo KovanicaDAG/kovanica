@@ -208,7 +208,7 @@ describe("addresses and amounts", () => {
     expect(() => parseAddress(`kvnc0x${body}dag`, 1)).toThrow(/invalid hex/);
   });
 
-  it("parses KUNA with 9 decimal places", () => {
+  it("parses KVNC with 9 decimal places", () => {
     expect(parseKuna("1.5")).toBe(1_500_000_000n);
     expect(parseKuna("0")).toBe(0n);
     expect(parseKuna("50000")).toBe(50_000_000_000_000n);

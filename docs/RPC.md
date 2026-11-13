@@ -62,7 +62,7 @@ counterparty are the same address is one row and appears in both filters.
 | `timestamp` | Leader-header producer time, hex quantity, when that header exists and its timestamp is non-zero. `null` when the header is missing or the timestamp is still the consensus placeholder `0`. |
 | `from` | Sender, canonical address. |
 | `to` | Counterparty, canonical address, or `null` when the kind names none. |
-| `amount` | Atoms moved by the kind, hex quantity. `0x0` when the kind has no KUNA amount. `SetCommission`'s basis points are not an amount. |
+| `amount` | Atoms moved by the kind, hex quantity. `0x0` when the kind has no KVNC amount. `SetCommission`'s basis points are not an amount. |
 | `fee` | Fee in atoms, hex quantity. |
 | `kind` | `transfer`, `stake`, `unstake`, `delegate`, `claim_rewards`, `deploy`, `call`, `register_light_node`, `exit_light_node`, `submit_light_witness`, `set_commission`, `claim_treasury`, or `evidence`. |
 | `status` | `success` or `failed`. Failed receipts are indexed. |

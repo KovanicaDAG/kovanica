@@ -162,7 +162,7 @@ When an evidence transaction is executed in a committed block (`kovanica_executi
    - Exactly $5\%$ (`SLASH_PCT_BPS = 500` / 10,000) is deducted from the validator's self-stake.
    - Exactly $5\%$ is deducted from all active delegators delegated to this validator.
    - Exactly $5\%$ is deducted from all pending unbonding entries associated with this validator in `unbonding_queue`.
-   - All slashed KUNA funds are credited directly to the protocol treasury address (`TREASURY`).
+   - All slashed KVNC funds are credited directly to the protocol treasury address (`TREASURY`).
 4. **Immediate Deactivation & Jailing**:
    - The validator is immediately deactivated and removed from the active committee.
    - The validator is placed in jail until:

@@ -553,7 +553,7 @@ pub async fn handle_get_transaction_by_hash(
 /// Block rewards are not transactions and are not in the history.
 /// `timestamp` is the leader-header producer time when it is non-zero, and
 /// `null` when the header is missing or still carries the consensus
-/// placeholder `0`. `amount` is atoms (`0` when the kind has no KUNA amount).
+/// placeholder `0`. `amount` is atoms (`0` when the kind has no KVNC amount).
 /// `status` is `success` or `failed`.
 pub async fn handle_get_transaction_history(
     params: Value,
@@ -904,7 +904,7 @@ pub(crate) fn topics_match(filter: &[Option<Vec<Vec<u8>>>], topic: &[u8]) -> boo
 // Account methods
 // ============================================================================
 
-/// `kovanica_getBalance(address)` — native KUNA balance in atoms.
+/// `kovanica_getBalance(address)` — native KVNC balance in atoms.
 pub async fn handle_get_balance(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let args = params_vec(&params);
     let address = parse_address(

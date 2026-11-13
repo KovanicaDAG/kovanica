@@ -86,7 +86,7 @@ magick -size 1080x1080 "xc:$BG" \
   -fill "$GOLD" -draw "rectangle 80,800 100,803" \
   -font "$FONT_M" -pointsize 26 -fill "$FG" -annotate +130+822 "4s rounds $DOT 12s committed leader" \
   -fill "$BLUE" -draw "rectangle 80,880 100,883" \
-  -font "$FONT_M" -pointsize 26 -fill "$FG" -annotate +130+902 "KUNA, 9 decimals $DOT 15${EM}21 validators" \
+  -font "$FONT_M" -pointsize 26 -fill "$FG" -annotate +130+902 "KVNC, 9 decimals $DOT 15${EM}21 validators" \
   -font "$FONT_M" -pointsize 26 -fill "$GOLD" -annotate +80+1010 "kovanica.online" \
   "$OUT/chain4-square-1080x1080.png"
 

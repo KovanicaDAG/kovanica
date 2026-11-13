@@ -959,7 +959,7 @@ impl ExecutionContext {
         })
     }
 
-    /// Execute a native KUNA transfer.
+    /// Execute a native KVNC transfer.
     fn execute_transfer(
         &self,
         txn: &mut WriteTransaction,
@@ -2847,11 +2847,11 @@ mod tests {
             treasury.vested = 2 * kovanica_staking::TREASURY_ANNUAL;
         }
 
-        // Treasury should have 2M KUNA vested and claimable
+        // Treasury should have 2M KVNC vested and claimable
         let claimable = ctx.staking.treasury_claimable();
         assert_eq!(claimable, 2 * kovanica_staking::TREASURY_ANNUAL);
 
-        // Claim 1M KUNA
+        // Claim 1M KVNC
         let claimed = ctx
             .claim_treasury(kovanica_staking::TREASURY_ANNUAL, &storage)
             .expect("claim treasury");
@@ -2951,7 +2951,7 @@ mod tests {
         let validator = Address([3u8; 32]);
         let payout = Address([4u8; 32]);
 
-        // Fund sender with 1000 KUNA
+        // Fund sender with 1000 KVNC
         let txn = storage.begin_write().expect("write txn");
         storage
             .state()
@@ -3215,7 +3215,7 @@ mod tests {
         let validator = Address([3u8; 32]);
         let payout = Address([4u8; 32]);
 
-        // Fund sender with 1000 KUNA
+        // Fund sender with 1000 KVNC
         let txn = storage.begin_write().expect("write txn");
         storage
             .state()
@@ -4799,7 +4799,7 @@ mod tests {
             )],
         );
         assert!(r[0].success);
-        // Reward of round 1 (2.5 KUNA) with 20% escrow: leader side 2.0 KUNA split 50/50 (commission 0).
+        // Reward of round 1 (2.5 KVNC) with 20% escrow: leader side 2.0 KVNC split 50/50 (commission 0).
         assert_eq!(pending_reward(&storage, &me, &validator), K); // 2.0 / 2
         assert_eq!(read_balance(&storage, &payout), K);
         let before = read_balance(&storage, &me);
@@ -4823,7 +4823,7 @@ mod tests {
             .set_commission(validator, 2_000)
             .expect("commission");
         run(&mut ctx, &storage, 3, vec![]);
-        // With 20% escrow: leader side 2.0 KUNA, commission 20% to validator, 80% pool split 50/50.
+        // With 20% escrow: leader side 2.0 KVNC, commission 20% to validator, 80% pool split 50/50.
         // First two rounds: each gave 1.0 to payout, 1.0 to delegator (pending). Commission round 3: leader side 2.0, commission 20% of 2.0 = 0.4 to validator from pool? Wait - reward_share takes commission_bps of reward_amount (leader side). Commission 2000 bps on 2.0K = 0.4K to validator cut; pool is 1.6K split 50/50 between validator (self) and delegator = 0.8K each. So validator total from this round = commission cut (0.4K) + their own pool share (0.8K) = 1.2K added to payout? Also delegator gets 0.8K added to pending.
         // Previous state: payout had 1.0 (round1) + 1.0 (round2, claimed from delegator side? no wait - look up: after round1, delegator pending was 1.0K, payout had 1.0K. After claim in round2, delegator was paid 1.0K, and then round2 executed again? Let us look up the test flow.
         // "Round-2 reward accrued again after the claim tx" - so after claiming at height 2, they executed another block? Or maybe the claim tx itself doesn't generate reward; but in the test setup, they do run() which executes a subdag. Also the reward is paid when executing committed subdag. So at round 1 (height 1), reward paid. At round 2, they first claim (tx), so when executing that subdag with claim tx, rewards are paid for that round too? Let us look up how run works.

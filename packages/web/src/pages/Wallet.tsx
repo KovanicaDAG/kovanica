@@ -96,7 +96,7 @@ export function Wallet() {
             </div>
             <div className="stat-card">
               <div className="stat-label">Balance</div>
-              <div className="stat-value monospace">{formatAmount(balance)} KUNA</div>
+              <div className="stat-value monospace">{formatAmount(balance)} KVNC</div>
             </div>
             <div className="stat-card">
               <div className="stat-label">Nonce</div>
@@ -110,7 +110,7 @@ export function Wallet() {
         <h3 style={{ marginBottom: '16px' }}>Actions</h3>
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <Link to="/wallet/transfer" className="btn-primary">
-            Transfer KUNA
+            Transfer KVNC
           </Link>
           <Link to="/wallet/stake" className="btn-secondary">
             Stake

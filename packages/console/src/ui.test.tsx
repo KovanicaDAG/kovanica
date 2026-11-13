@@ -74,7 +74,7 @@ describe("review sheet", () => {
     expect(dialog).toContain("2");
     expect(dialog).toContain("rpc-testnet.kovanica.online");
     expect(dialog).toContain("Transfer");
-    expect(dialog).toContain("1.5 KUNA");
+    expect(dialog).toContain("1.5 KVNC");
     expect(dialog).toContain("Nonce");
     expect(dialog).toContain("7");
   });

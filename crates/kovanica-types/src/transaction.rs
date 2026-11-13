@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// Kind of native transaction.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum TransactionKind {
-    /// Simple transfer of KUNA.
+    /// Simple transfer of KVNC.
     Transfer {
         /// Recipient address.
         to: Address,
@@ -49,7 +49,7 @@ pub enum TransactionKind {
     Call {
         /// Contract address.
         contract: Address,
-        /// Native KUNA (base units) transferred to the contract with the call
+        /// Native KVNC (base units) transferred to the contract with the call
         /// (`0` when unused). Part of signature format v1.
         value: u64,
         /// Method name to call.
@@ -59,7 +59,7 @@ pub enum TransactionKind {
         /// Gas limit for execution.
         gas_limit: u64,
     },
-    /// Bond KUNA and register a light-node VRF key.
+    /// Bond KVNC and register a light-node VRF key.
     ///
     /// This is not validator stake. It does not enter the committee.
     /// The registration becomes active at the next epoch.

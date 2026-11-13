@@ -6,7 +6,7 @@ Base tip: `d951da451c9982fc8924c4c7f2ec08e06f549d64` (main @ merge #165). Full p
 
 ## Protocol / consensus
 
-- [x] **MIN_DELEGATION** — **50_000 KUNA** (`MIN_DELEGATION = 50_000 * ONE_KUNA`) wired in `kovanica-params`, enforced in `kovanica-staking::StakingState::delegate` and `kovanica-execution`.
+- [x] **MIN_DELEGATION** — **50_000 KVNC** (`MIN_DELEGATION = 50_000 * ONE_KUNA`) wired in `kovanica-params`, enforced in `kovanica-staking::StakingState::delegate` and `kovanica-execution`.
 - [x] **Vote signature v2** — `KUNA/vote/v2` + `genesis_hash` in preimage (106 B; retired 74 B v1) across `kovanica-types`, `kovanica-crypto`, `kovanica-consensus`, `kovanica-network`, and `kovanica-node`.
 - [x] **PRO-40 follow-up** — deterministic late leader past `T_skip`: skip-cert quorum or union-quorum with non-overlapping timeout stake above the skip-complement floor (`votes > total_stake - quorum_threshold`); cluster green (`docs/dev/NOTED-pro-40-late-vote.md`).
 - [x] **Fork handling** — documented in docs/FORK-POLICY.md with adversarial test pack.

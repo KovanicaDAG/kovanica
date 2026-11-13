@@ -77,7 +77,7 @@ export function Stake() {
         key,
         kind,
         nonce: review.nonce,
-        summary: review.amount ? `${review.action} ${review.amount} KUNA` : review.action,
+        summary: review.amount ? `${review.action} ${review.amount} KVNC` : review.action,
       });
       setHash(sent.hash);
       setReview(null);
@@ -92,13 +92,13 @@ export function Stake() {
     <section>
       <h1>Stake</h1>
       <p className="lede">
-        Legacy staking: a validator entry needs at least 50 000 KUNA staked. Chains 1 and 2 run
+        Legacy staking: a validator entry needs at least 50 000 KVNC staked. Chains 1 and 2 run
         Hybrid PoW + GHOSTDAG, so stake does not select block producers. These actions still
         submit ledger transactions.
       </p>
       <p className="muted">
         Reward balances are not accounted per address yet. The node reports{" "}
-        {figures.rewards === null ? "—" : formatKuna(figures.rewards)} KUNA. Claim still submits a
+        {figures.rewards === null ? "—" : formatKuna(figures.rewards)} KVNC. Claim still submits a
         ClaimRewards transaction.
       </p>
       {!key ? <p className="muted">Unlock a key on the Account page to stake.</p> : null}
@@ -114,7 +114,7 @@ export function Stake() {
         </label>
         {action !== "claim" ? (
           <label>
-            Amount (KUNA)
+            Amount (KVNC)
             <input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="50000" />
           </label>
         ) : null}
@@ -125,7 +125,7 @@ export function Stake() {
               <option value="">{action === "claim" ? "All validators" : "Choose a validator"}</option>
               {validators.map((row) => (
                 <option key={row.address} value={row.address}>
-                  {row.address} · {formatKuna(row.stake)} KUNA
+                  {row.address} · {formatKuna(row.stake)} KVNC
                   {row.active ? "" : " · inactive"}
                 </option>
               ))}

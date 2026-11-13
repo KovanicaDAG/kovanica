@@ -21,7 +21,7 @@ use crate::UNBONDING_ROUNDS;
 /// scheduled reward, and dust from the division stays with the leader.
 pub use kovanica_params::LIGHT_REWARD_BPS;
 
-/// Minimum light-node bond: 100 KUNA.
+/// Minimum light-node bond: 100 KVNC.
 pub use kovanica_params::MIN_LIGHT_BOND;
 
 /// Cap on light identities stored by a full node.

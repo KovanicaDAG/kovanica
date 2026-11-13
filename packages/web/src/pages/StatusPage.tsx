@@ -147,7 +147,7 @@ export function StatusPage() {
                 validators.map(v => (
                   <tr key={v.address}>
                     <td className="address"><code>{formatAddress(v.address)}</code></td>
-                    <td className="monospace">{formatAmount(v.stake)} KUNA</td>
+                    <td className="monospace">{formatAmount(v.stake)} KVNC</td>
                     <td className="monospace">{(v.commission_bps / 100).toFixed(2)}%</td>
                     <td>
                       <span className={`badge ${v.active ? 'badge-success' : 'badge-neutral'}`}>

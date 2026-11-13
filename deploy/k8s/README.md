@@ -1,6 +1,6 @@
 # Kovanica Kubernetes & Helm Deployment Guide
 
-Production-ready Kubernetes manifests and Helm chart for operating Kovanica (KUNA) blockchain nodes.
+Production-ready Kubernetes manifests and Helm chart for operating Kovanica (KVNC) blockchain nodes.
 
 ---
 

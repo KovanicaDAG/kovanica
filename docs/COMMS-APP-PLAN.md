@@ -1,7 +1,7 @@
 # COMMS-APP-PLAN — Decentralized calls / video / messaging on Kovanica
 
 > Status: DRAFT (scaffold) · Scope owner: Kovanica project owner · Repo: `kovanica` · Target branch: `VPS3`
-> Chain: Kovanica · Native token: KUNA · Crate prefix: `kovanica-*`
+> Chain: Kovanica · Native token: KVNC · Crate prefix: `kovanica-*`
 > **Decisions locked (§8.1–8.2):** first client = **Tauri desktop** (Rust core); messaging transport =
 > **minimal store-and-forward relay + OpenMLS (RFC 9420)**.
 
@@ -248,7 +248,7 @@ MVP cut line = **M0 + M1 + minimal M2** (§7). Everything from M3 up is post-MVP
 ### Locked (continued)
 3. **§8.3 Launch relay model → self-hosted first.** Only our relays in phase 1; open incentivized
    third-party relays at M5.
-4. **§8.4 Plan/entitlement model → native KUNA only for MVP.** Add a KVP-102 token later only if needed.
+4. **§8.4 Plan/entitlement model → native KVNC only for MVP.** Add a KVP-102 token later only if needed.
 5. **§8.5 Name resolution → on-chain ledger-safe contract** (`kovanica-name-registry`): name → pubkey /
    relay endpoints.
 6. **§8.6 Anti-spam / fee model → prepaid balance + free tier between mutual contacts.** HTLC-funded

@@ -52,7 +52,7 @@ function quoteWire(over: Record<string, unknown> = {}): Record<string, unknown> 
     quoteId: "q1",
     providerId: "p1",
     sku: "s",
-    currency: "KUNA",
+    currency: "KVNC",
     amountAtoms: "5000000000",
     claimerAddr: CLAIMER,
     htlcExpiryMs: "4600000",
@@ -255,7 +255,7 @@ describe("topup — quote rejections", () => {
     quoteId: "q",
     providerId: "p",
     sku: "s",
-    currency: "KUNA",
+    currency: "KVNC",
     amountAtoms: 1000n,
     claimerAddr: CLAIMER,
     htlcExpiryMs: BigInt(NOW + 3_600_000),
@@ -264,7 +264,7 @@ describe("topup — quote rejections", () => {
   };
 
   it("rejects malformed quotes", () => {
-    expect(() => validateQuote({ ...base, currency: "USD" as unknown as "KUNA" }, NOW, policy)).toThrow(/currency/);
+    expect(() => validateQuote({ ...base, currency: "USD" as unknown as "KVNC" }, NOW, policy)).toThrow(/currency/);
     expect(() => validateQuote({ ...base, amountAtoms: 0n }, NOW, policy)).toThrow(/positive/);
     expect(() => validateQuote({ ...base, amountAtoms: 20_000n }, NOW, policy)).toThrow(/limit/);
     expect(() => validateQuote({ ...base, quoteExpiresAt: NOW - 1 }, NOW, policy)).toThrow(/expired/);

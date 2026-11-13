@@ -4,7 +4,7 @@
 covers Linux (`kovanica`) and Windows (`kovanica.exe`). The crate version
 is **0.1.0**, still before 1.0. Version 1.0.0 is reserved for testnet launch.
 
-The native coin is **KUNA** (9 decimals). 1 KUNA = 1_000_000_000 atoms.
+The native coin is **KVNC** (9 decimals). 1 KVNC = 1_000_000_000 atoms.
 Addresses are parsed and printed by `kovanica_types::Address`. Pass a
 Kovanica address; this console does not define its own address spelling.
 
@@ -60,15 +60,15 @@ The release profile enables LTO, so a release build is slow.
 
 ## Amounts
 
-Native amounts must name a unit. A decimal point or a trailing `KUNA`
-(any case, optional space) selects KUNA. An `atoms` or `atom` suffix
+Native amounts must name a unit. A decimal point or a trailing `KVNC`
+(any case, optional space) selects KVNC. An `atoms` or `atom` suffix
 selects atoms. A bare integer such as `5` is rejected, so it is neither
-five KUNA nor five atoms.
+five KVNC nor five atoms.
 
 ```text
---amount 1.5       # 1.500000000 KUNA
+--amount 1.5       # 1.500000000 KVNC
 --amount 1.5KUNA   # same
---amount 1 KUNA    # same
+--amount 1 KVNC    # same
 --amount 5atoms    # 5 atoms
 --amount 5         # rejected
 ```
@@ -78,7 +78,7 @@ exponent, or a value that does not fit in `u64` is rejected. Fees stay
 whole atoms (`--fee 1`). Token `--amount` is a whole number of that token's
 base units.
 
-`balance` and `staking` print KUNA with 9 decimal places. JSON keeps the
+`balance` and `staking` print KVNC with 9 decimal places. JSON keeps the
 atom count and adds a decimal string (`balanceKuna`, `totalKuna`, …).
 
 ## Usage
@@ -116,7 +116,7 @@ returns one total, so the command cannot list each delegation. `stake`,
 `unstake`, `delegate`, and `claim-rewards` still submit signed transactions.
 
 `register-light-node --stake` uses the same amount parser. The minimum bond
-is 100 KUNA, written `100KUNA` or `100.0`.
+is 100 KVNC, written `100KUNA` or `100.0`.
 
 ## Transaction history
 

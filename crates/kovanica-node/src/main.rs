@@ -85,7 +85,7 @@ use kovanica_types::{
 /// Command line arguments.
 #[derive(Parser, Debug)]
 #[command(name = "kovanica-node")]
-#[command(about = "Kovanica (KUNA) full node", long_about = None)]
+#[command(about = "Kovanica (KVNC) full node", long_about = None)]
 #[command(subcommand_required = false, arg_required_else_help = false)]
 struct Args {
     #[command(subcommand)]
@@ -163,7 +163,7 @@ struct GenesisArgs {
     #[arg(long, value_name = "HEX")]
     treasury_address: String,
 
-    /// Founder premine address (32-byte hex, receives 200,000 KUNA)
+    /// Founder premine address (32-byte hex, receives 200,000 KVNC)
     #[arg(long, value_name = "HEX")]
     founder_address: String,
 
@@ -513,7 +513,7 @@ fn run_genesis(args: GenesisArgs) -> Result<()> {
     let mut staking = StakingState::new();
     staking.init_treasury(treasury);
 
-    // Founder premine (200,000 KUNA) - included in genesis allocations output
+    // Founder premine (200,000 KVNC) - included in genesis allocations output
     // Actual balance set when genesis block is executed on first run
 
     // Genesis validators. On a legacy (stake-based) genesis each one joins the
@@ -1931,7 +1931,7 @@ fn declared_genesis_validator_count(config: &NodeConfig) -> Result<Option<usize>
 ///
 /// Pre-funding accounts from a file is a convenience for testnets, dev chains
 /// and local runs, where the balances are play money. Mainnet is different:
-/// every KUNA there must come from the published allocation (founder premine,
+/// every KVNC there must come from the published allocation (founder premine,
 /// treasury vesting, genesis validator allocation). A loose file that can mint
 /// arbitrary balances must therefore never enter mainnet genesis — a stray
 /// mount in a deployment is enough to create them otherwise.
@@ -1952,7 +1952,7 @@ fn ensure_funded_accounts_allowed(config: &NodeConfig) -> Result<()> {
     if path.exists() {
         anyhow::bail!(
             "{} exists but funded_accounts.toml is not allowed on chain_id {} (mainnet): \
-             every KUNA on mainnet must come from the published allocation, not from a file. \
+             every KVNC on mainnet must come from the published allocation, not from a file. \
              Remove the file, or run a testnet (2) / devnet (3) / local (1337) chain",
             path.display(),
             config.chain_id
@@ -2025,7 +2025,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
     // Begin write transaction early (needed for premine + staking save)
     let txn = state_storage.begin_write()?;
 
-    // Founder premine (200_000 KUNA) — write to state store if founder file present.
+    // Founder premine (200_000 KVNC) — write to state store if founder file present.
     let premine_path = config.data_dir.join("founder_premine.hex");
     if premine_path.exists() {
         let hex = std::fs::read_to_string(&premine_path)?.trim().to_string();
@@ -2142,7 +2142,7 @@ fn init_genesis(config: &NodeConfig, dag_store: &DagStore, state_storage: &Stora
         for ((address, stake), share) in entries.iter().zip(shares.iter()) {
             if *share < *stake {
                 anyhow::bail!(
-                    "genesis validator allocation ({} KUNA) cannot back a {} KUNA stake \
+                    "genesis validator allocation ({} KVNC) cannot back a {} KVNC stake \
                      split across {} validators; at MIN_VALIDATOR_STAKE the allocation \
                      supports at most {} validators",
                     kovanica_staking::GENESIS_VALIDATOR_ALLOCATION / kovanica_staking::ONE_KUNA,
@@ -5479,7 +5479,7 @@ fn build_committee(
     if active_validators.is_empty() {
         if enforce_min_active {
             anyhow::bail!(
-                "enforce_min_active_validators=true requires at least {} active validators with stake >= {} KUNA, found 0; refusing the single-node genesis fallback",
+                "enforce_min_active_validators=true requires at least {} active validators with stake >= {} KVNC, found 0; refusing the single-node genesis fallback",
                 MIN_ACTIVE_VALIDATORS,
                 MIN_VALIDATOR_STAKE / ONE_KUNA
             );
@@ -5500,7 +5500,7 @@ fn build_committee(
     // active validators with sufficient stake. Do NOT auto-fill from offline/spare.
     if enforce_min_active && active_validators.len() < MIN_ACTIVE_VALIDATORS as usize {
         anyhow::bail!(
-            "enforce_min_active_validators=true requires at least {} active validators with stake >= {} KUNA, found {}",
+            "enforce_min_active_validators=true requires at least {} active validators with stake >= {} KVNC, found {}",
             MIN_ACTIVE_VALIDATORS,
             MIN_VALIDATOR_STAKE / ONE_KUNA,
             active_validators.len()
@@ -7781,7 +7781,7 @@ mod tests {
         let mut staking = StakingState::new();
         staking.init_treasury(Address([0xaa; 32]));
 
-        // Validator stakes: 100K, 80K, 120K, 60K KUNA (all above MIN_VALIDATOR_STAKE = 50K)
+        // Validator stakes: 100K, 80K, 120K, 60K KVNC (all above MIN_VALIDATOR_STAKE = 50K)
         staking
             .join_validator(addr1, 100_000 * ONE_KUNA, 0, Some(addr1), Some(pk1), None)
             .unwrap();

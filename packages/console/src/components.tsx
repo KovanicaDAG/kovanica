@@ -125,7 +125,7 @@ export function ReviewSheet({
           {details.amount ? (
             <div>
               <dt>Amount</dt>
-              <dd>{details.amount} KUNA</dd>
+              <dd>{details.amount} KVNC</dd>
             </div>
           ) : null}
           {details.detail ? (
@@ -136,7 +136,7 @@ export function ReviewSheet({
           ) : null}
           <div>
             <dt>Fee</dt>
-            <dd>{formatKuna(details.feeAtoms)} KUNA</dd>
+            <dd>{formatKuna(details.feeAtoms)} KVNC</dd>
           </div>
           <div>
             <dt>Nonce</dt>

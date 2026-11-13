@@ -233,7 +233,7 @@ fn form_lines(
         lines.push(field_value(validator, focus == FormFocus::Validator));
     }
     if kind != FormKind::Claim {
-        lines.push(field_label("amount (KUNA)", focus == FormFocus::Amount));
+        lines.push(field_label("amount (KVNC)", focus == FormFocus::Amount));
         lines.push(field_value(amount, focus == FormFocus::Amount));
     }
     lines.push(field_label("fee (atoms)", focus == FormFocus::Fee));
@@ -337,10 +337,10 @@ fn hints(screen: &ViewScreen) -> &'static str {
 
 fn form_title(kind: FormKind) -> &'static str {
     match kind {
-        FormKind::Transfer => "Send KUNA",
-        FormKind::Stake => "Stake KUNA",
-        FormKind::Unstake => "Unstake KUNA",
-        FormKind::Delegate => "Delegate KUNA",
+        FormKind::Transfer => "Send KVNC",
+        FormKind::Stake => "Stake KVNC",
+        FormKind::Unstake => "Unstake KVNC",
+        FormKind::Delegate => "Delegate KVNC",
         FormKind::Claim => "Claim rewards",
     }
 }
@@ -458,7 +458,7 @@ mod tests {
         app.show_mainnet_transfer_review();
         let text = rendered(&app, 100, 36);
         assert!(text.contains("MAINNET"));
-        assert!(text.contains("2.5 KUNA"));
+        assert!(text.contains("2.5 KVNC"));
         assert!(text.contains("This signs a mainnet transaction."));
         assert!(text.contains("Nothing is signed until you press y."));
     }

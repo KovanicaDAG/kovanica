@@ -1,4 +1,4 @@
-# KUNA Gas Cost Schedule
+# KVNC Gas Cost Schedule
 
 > Deterministic WASM metering via wasmi fuel (`1 fuel = 1 gas unit`).
 > This document is reconciled against the current code. Anything that is not

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: kovanica
-description: Production Helm chart for deploying Kovanica (KUNA) blockchain nodes
+description: Production Helm chart for deploying Kovanica (KVNC) blockchain nodes
 type: application
 version: 0.2.0
 appVersion: "0.2.0"

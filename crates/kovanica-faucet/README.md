@@ -11,7 +11,7 @@ kovanica-faucet --chain-id 2 --keystore faucet.keystore --rpc-url http://127.0.0
 
 ## Mainnet guard
 
-`--chain-id 1` (mainnet) is **refused by default**: the faucet would dispense real KUNA. To run it on
+`--chain-id 1` (mainnet) is **refused by default**: the faucet would dispense real KVNC. To run it on
 mainnet anyway you must pass the explicit, loudly-named `--allow-mainnet` flag or set
 `KOVANICA_FAUCET_ALLOW_MAINNET=1`. Both print a startup warning; without one the process exits with a
 clear error before loading the keystore.
@@ -33,7 +33,7 @@ skipping trusted hops; the first untrusted address is the real client. A malform
 ## Low-balance guard (optional)
 
 `--min-balance-ku <n>` makes the faucet return HTTP 503 instead of attempting a transfer when its own
-balance drops below `n` KUNA. The default `0` disables the check.
+balance drops below `n` KVNC. The default `0` disables the check.
 
 ## Keystore passphrase
 

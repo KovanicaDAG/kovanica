@@ -43,7 +43,7 @@ pub struct Transaction {
 
 | Vrsta transakcije | Opis i semantika | Naknada (Fee) |
 |---|---|---|
-| `Transfer { to, amount }` | Izravni prijenos nativnih KUNA u baznim jedinicama (atomima). | Obavezna |
+| `Transfer { to, amount }` | Izravni prijenos nativnih KVNC u baznim jedinicama (atomima). | Obavezna |
 | `Stake { amount }` | Povećanje vlastitog uloga validatora. | Besplatno (0 fee po dizajnu) |
 | `Unstake { amount }` | Pokretanje unbonding procesa ($100\,000$ blokova lidera). | Obavezna |
 | `Delegate { validator, amount }` | Delegiranje uloga registriranom validatoru. | Besplatno (0 fee po dizajnu) |
@@ -58,7 +58,7 @@ pub struct Transaction {
 | `Evidence { evidence }` | Predaja dokaza o dvostrukom potpisivanju za rezanje uloga. | Obavezna |
 
 ### 2.2 Priložena vrijednost (`Call.value`)
-Sukladno formatu potpisa v1 (`SIGNATURE_FORMAT.md`), polje `value` u `Call` transakciji omogućuje atomski prijenos KUNA s pošiljatelja na ugovor prije ulaska u metodu ugovora. Ako ugovor odbije transakciju, vraća se i priložena vrijednost.
+Sukladno formatu potpisa v1 (`SIGNATURE_FORMAT.md`), polje `value` u `Call` transakciji omogućuje atomski prijenos KVNC s pošiljatelja na ugovor prije ulaska u metodu ugovora. Ako ugovor odbije transakciju, vraća se i priložena vrijednost.
 
 ---
 

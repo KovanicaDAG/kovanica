@@ -466,7 +466,7 @@ impl App {
         self.screen = Screen::Home;
         if ensure_chain(self.chain_id).is_err() {
             self.error(
-                "No registered signing network is selected. Lock, then use left and right, before sending KUNA.",
+                "No registered signing network is selected. Lock, then use left and right, before sending KVNC.",
             );
         }
         self.queue_refresh(true);
@@ -1686,10 +1686,10 @@ fn kind_of(action: TxAction) -> FormKind {
 
 fn form_hint(kind: FormKind) -> &'static str {
     match kind {
-        FormKind::Transfer => "Send KUNA. Amounts use 9 decimal places. The fee is in atoms.",
-        FormKind::Stake => "Self-stake KUNA. Amounts use 9 decimal places. The fee is in atoms.",
-        FormKind::Unstake => "Begin unbonding staked KUNA. The fee is in atoms.",
-        FormKind::Delegate => "Delegate KUNA to a validator. The fee is in atoms.",
+        FormKind::Transfer => "Send KVNC. Amounts use 9 decimal places. The fee is in atoms.",
+        FormKind::Stake => "Self-stake KVNC. Amounts use 9 decimal places. The fee is in atoms.",
+        FormKind::Unstake => "Begin unbonding staked KVNC. The fee is in atoms.",
+        FormKind::Delegate => "Delegate KVNC to a validator. The fee is in atoms.",
         FormKind::Claim => {
             "Claim rewards. Leave the validator empty to claim every delegation. The fee is in atoms."
         }

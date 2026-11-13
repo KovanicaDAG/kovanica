@@ -66,7 +66,7 @@ export function Transfer() {
         network,
         key,
         nonce: review.nonce,
-        summary: `Transfer ${review.amount} KUNA`,
+        summary: `Transfer ${review.amount} KVNC`,
         kind: { type: "transfer", to: kindTo, amount: atoms },
       });
       setHash(sent.hash);
@@ -81,7 +81,7 @@ export function Transfer() {
   return (
     <section>
       <h1>Transfer</h1>
-      <p className="lede">Send KUNA on {network.label}. The key signs in this browser.</p>
+      <p className="lede">Send KVNC on {network.label}. The key signs in this browser.</p>
       {!key ? <p className="muted">Unlock a key on the Account page to send.</p> : null}
       <div className="card">
         <label>
@@ -89,7 +89,7 @@ export function Transfer() {
           <input value={to} onChange={(event) => setTo(event.target.value)} placeholder="kvnc…dag" />
         </label>
         <label>
-          Amount (KUNA)
+          Amount (KVNC)
           <input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="1.5" />
         </label>
         <button type="button" className="btn primary" onClick={() => void openReview()} disabled={!key}>

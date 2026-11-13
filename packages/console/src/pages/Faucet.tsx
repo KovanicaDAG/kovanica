@@ -49,11 +49,11 @@ export function Faucet() {
   return (
     <section>
       <h1>Faucet</h1>
-      <p className="lede">Testnet KUNA for the unlocked address. Mainnet has no faucet.</p>
+      <p className="lede">Testnet KVNC for the unlocked address. Mainnet has no faucet.</p>
       {!key ? <p className="muted">Unlock a key on the Account page first.</p> : null}
       {key ? <p className="mono address">{key.address}</p> : null}
       <button type="button" className="btn primary" disabled={!key || busy} onClick={() => void dispense()}>
-        {busy ? "Requesting…" : "Request testnet KUNA"}
+        {busy ? "Requesting…" : "Request testnet KVNC"}
       </button>
       {message ? <p>{message}</p> : null}
       {error ? <p className="error">{error}</p> : null}

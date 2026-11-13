@@ -103,7 +103,7 @@ export function Account() {
       <div className="stats">
         <div className="stat">
           <div className="stat-label">Balance</div>
-          <div className="stat-value">{figures.balance === null ? "—" : `${formatKuna(figures.balance)} KUNA`}</div>
+          <div className="stat-value">{figures.balance === null ? "—" : `${formatKuna(figures.balance)} KVNC`}</div>
         </div>
         <div className="stat">
           <div className="stat-label">Nonce</div>
@@ -111,7 +111,7 @@ export function Account() {
         </div>
         <div className="stat">
           <div className="stat-label">Stake</div>
-          <div className="stat-value">{figures.stake === null ? "—" : `${formatKuna(figures.stake)} KUNA`}</div>
+          <div className="stat-value">{figures.stake === null ? "—" : `${formatKuna(figures.stake)} KVNC`}</div>
         </div>
       </div>
       {phrase ? (

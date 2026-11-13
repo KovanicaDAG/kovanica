@@ -1,4 +1,4 @@
-//! Kovanica (KUNA) command-line interface.
+//! Kovanica (KVNC) command-line interface.
 //!
 //! Wallet operations (keygen/import/export/sign/tui), node operations
 //! (status/balance/history/staking/governance) and contract subcommands
@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 const UNSAFE_SIGN_WARNING: &str = "WARNING: arbitrary message signing is unsafe and cross-context; signatures may be replayed or misinterpreted by other protocols.";
 
 #[derive(Parser)]
-#[command(name = "kovanica", version, about = "Kovanica (KUNA) CLI", long_about = None)]
+#[command(name = "kovanica", version, about = "Kovanica (KVNC) CLI", long_about = None)]
 struct Cli {
     /// JSON-RPC endpoint of the node
     #[arg(long, global = true, default_value = "http://127.0.0.1:8545")]
@@ -70,7 +70,7 @@ enum Commands {
         #[arg(long, short, default_value = "keystore.json")]
         keystore: PathBuf,
     },
-    /// Submit a native KUNA transfer
+    /// Submit a native KVNC transfer
     Transfer(TransferArgs),
     /// Show chain/node status
     Status,
@@ -97,9 +97,9 @@ enum Commands {
     },
     /// List committed transactions for an address, newest first
     History(HistoryArgs),
-    /// Stake KUNA (legacy ledger operation; builds and submits a signed Stake transaction)
+    /// Stake KVNC (legacy ledger operation; builds and submits a signed Stake transaction)
     Stake(AmountArgs),
-    /// Unstake KUNA (legacy ledger operation; builds and submits a signed Unstake transaction)
+    /// Unstake KVNC (legacy ledger operation; builds and submits a signed Unstake transaction)
     Unstake(AmountArgs),
     /// Register a light node (legacy staking path: bond + VRF key)
     RegisterLightNode(RegisterLightNodeArgs),
@@ -315,7 +315,7 @@ struct TransferArgs {
     /// Recipient Kovanica address
     #[arg(long)]
     to: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -329,7 +329,7 @@ struct TransferArgs {
 /// Arguments carrying a single amount plus the signing keystore.
 #[derive(Args)]
 struct AmountArgs {
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -346,7 +346,7 @@ struct RegisterLightNodeArgs {
     /// VRF public key (32-byte hex)
     #[arg(long)]
     vrf_public_key: String,
-    /// Bond of at least 100 KUNA (`100KUNA` or `100.0`). Atoms need a suffix (`5atoms`). A bare integer is rejected.
+    /// Bond of at least 100 KVNC (`100KUNA` or `100.0`). Atoms need a suffix (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     stake: u64,
     /// Keystore file path
@@ -363,7 +363,7 @@ struct DelegateArgs {
     /// Legacy validator Kovanica address
     #[arg(long)]
     validator: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -408,7 +408,7 @@ struct SetCommissionArgs {
 /// Arguments for `kovanica claim-treasury`.
 #[derive(Args)]
 struct ClaimTreasuryArgs {
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -450,7 +450,7 @@ struct CallArgs {
     /// Arguments as JSON array (will be bincode encoded)
     #[arg(long)]
     args: String,
-    /// Native KUNA to attach (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Native KVNC to attach (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, default_value = "0atoms", value_parser = parse_cli_amount)]
     value: u64,
     /// Gas limit for execution
@@ -1431,7 +1431,7 @@ mod wallet_cli_security_tests {
         };
         assert_eq!(args.amount, 42);
 
-        // `5` does not say KUNA or atoms.
+        // `5` does not say KVNC or atoms.
         let bare = Cli::try_parse_from(["kovanica", "transfer", "--to", to, "--amount", "5"]);
         assert!(bare.is_err(), "a bare integer must be rejected");
 
@@ -1448,7 +1448,7 @@ mod wallet_cli_security_tests {
 
     #[test]
     fn token_sell_min_out_takes_a_kuna_amount() {
-        // `token sell --min-out` is a KUNA amount, so the documented
+        // `token sell --min-out` is a KVNC amount, so the documented
         // `0.4KUNA` form must parse (it used to be a bare-integer `Amount`).
         let contract = "kvncd7aa7xv4kq7zz4mfqu6fd9vuuu9wvwlx6c24t6794zhq6339jlqjynnsjdag";
 
@@ -1501,7 +1501,7 @@ mod wallet_cli_security_tests {
         };
         assert_eq!(args.min_out, 0);
 
-        // A bare integer still does not say KUNA or atoms, same as `--kuna`.
+        // A bare integer still does not say KVNC or atoms, same as `--kuna`.
         assert!(parse("400000000").is_err());
 
         // `token buy --min-out` is token base units and stays a bare integer.

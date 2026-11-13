@@ -13,9 +13,9 @@ FUNDER_KEYS=${FUNDER_KEYS:-}                # space-separated funder key files
 SENDERS=${SENDERS:-8}                       # number of derived bench senders
 TXS_PER_SENDER=${TXS_PER_SENDER:-16}        # transactions per sender (clamped to 64)
 CONCURRENCY=${CONCURRENCY:-64}              # max concurrent submissions
-FUND_AMOUNT=${FUND_AMOUNT:-10000000000}     # atoms per funding tx (10 KUNA = 1e10 atoms)
+FUND_AMOUNT=${FUND_AMOUNT:-10000000000}     # atoms per funding tx (10 KVNC = 1e10 atoms)
 TX_AMOUNT=${TX_AMOUNT:-1}                   # transfer amount per tx (atoms)
-TX_FEE=${TX_FEE:-1000000}                   # fee per tx (atoms, ~0.001 KUNA for non-zero fee_rate)
+TX_FEE=${TX_FEE:-1000000}                   # fee per tx (atoms, ~0.001 KVNC for non-zero fee_rate)
 WAIT_SECS=${WAIT_SECS:-240}                 # wait for commits (seconds, must exceed commit latency)
 QUORUM_WAIT_SECS=${QUORUM_WAIT_SECS:-60}    # wait for quorum formation before bench
 BENCH_BIN=${BENCH_BIN:-./target/release/kovanica-bench}

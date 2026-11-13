@@ -1,4 +1,4 @@
-# KUNA Signature Format v1 (SPEC — FINAL)
+# KVNC Signature Format v1 (SPEC — FINAL)
 
 > **SUPERSEDED for Hybrid PoW + GHOSTDAG (2026-11-05):** this document describes the retired Mysticeti + Proof-of-Stake committee path. Chains 1 and 2 reach consensus with PoW + GHOSTDAG (K=5, 4000 ms, KovanicaHash) and use no validator committee, stake, VRF leader election or slashing. Current rules: [ADR 0003](adr/0003-hybrid-pow-ghostdag.md) and [MINING.md](MINING.md). The historical body is kept unchanged.
 
@@ -7,7 +7,7 @@ Status: **FINAL, implemented and merged on `main`** at `8170a82` as one release:
 and PRO-20 (Block signature chain binding).
 All crates use the v1 API; the golden vectors in §5 are unit tests in `kovanica-types`. CI on `8170a82` is green.
 Owner: Exec-Foundation (kovanica-types / kovanica-crypto). Format decisions: Main.
-Address format (`kvnc…dag`) and `docs/TOKENOMICS.md` are not affected. Domain tags use the ticker **KUNA**. Crate and binary names are `kovanica-*`; the address prefix stays `kvnc`.
+Address format (`kvnc…dag`) and `docs/TOKENOMICS.md` are not affected. Domain tags use the ticker **KVNC**. Crate and binary names are `kovanica-*`; the address prefix stays `kvnc`.
 
 ## Goals
 
@@ -124,7 +124,7 @@ Former (pre-PRO-20) format: `Ed25519.sign(sk_author, digest)` (32 raw bytes, wit
 
 ## 4. `value: u64` in `TransactionKind::Call` (decided: IN v1)
 
-Requested by Exec-Execution and decided by Main. `Call` carries a signed `value: u64`, the native KUNA
+Requested by Exec-Execution and decided by Main. `Call` carries a signed `value: u64`, the native KVNC
 transferred to the contract. Position: right after `contract`, before `method`, 8 bytes u64 LE, **always present**
 (`0` when unused). There is no optional flag, so the encoding has a fixed shape. Adding the field to
 `TransactionKind::Call` is part of the v1 migration.

@@ -24,7 +24,7 @@
 //!  36..68   sender
 //!  68       has counterparty (1 or 0)
 //!  69..101  counterparty (zeros when has counterparty is 0)
-//!  101..109 amount in atoms (0 when the kind has no KUNA amount)
+//!  101..109 amount in atoms (0 when the kind has no KVNC amount)
 //!  109..117 fee in atoms
 //! ```
 //!
@@ -109,7 +109,7 @@ pub struct TxHistoryEntry {
     pub from: Address,
     /// Counterparty, when the kind has one.
     pub to: Option<Address>,
-    /// KUNA amount in atoms. `0` when the kind has no amount field.
+    /// KVNC amount in atoms. `0` when the kind has no amount field.
     pub amount: u64,
     /// Fee in atoms.
     pub fee: u64,

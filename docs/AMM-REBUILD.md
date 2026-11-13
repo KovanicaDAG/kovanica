@@ -1,4 +1,4 @@
-# AMM (KUNA ↔ token pool) — what must be rebuilt
+# AMM (KVNC ↔ token pool) — what must be rebuilt
 
 The pool shipped in #134/#135 (#61eab76…c10980d) is **contract calls, not RPC
 methods**: `token_init_pool`, `token_buy`, `token_sell` live in

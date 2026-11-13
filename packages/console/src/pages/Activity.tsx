@@ -94,7 +94,7 @@ export function Activity() {
                 <td>{new Date(item.submittedAt).toLocaleString()}</td>
                 <td>
                   {item.summary}
-                  <div className="muted">fee {item.fee} KUNA</div>
+                  <div className="muted">fee {item.fee} KVNC</div>
                 </td>
                 <td>{item.status === "committed" ? "In a block" : "Pending"}</td>
                 <td className="mono">{item.hash}</td>

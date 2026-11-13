@@ -1,17 +1,17 @@
-//! Token emission, treasury, and legacy staking/validator state for Kovanica (KUNA).
+//! Token emission, treasury, and legacy staking/validator state for Kovanica (KVNC).
 //!
 //! Live tokenomics (chains 1 and 2, `NoStake82M`):
-//! - Total supply: 90_200_000 KUNA
-//! - Founder premine: 200_000 KUNA
-//! - Treasury: 8_000_000 KUNA (1M/year × 8 years) with linear vesting
-//! - Mining subsidy budget: 82_000_000 KUNA
-//! - Initial block reward: 2.5 KUNA (paid to the author of a committed block)
+//! - Total supply: 90_200_000 KVNC
+//! - Founder premine: 200_000 KVNC
+//! - Treasury: 8_000_000 KVNC (1M/year × 8 years) with linear vesting
+//! - Mining subsidy budget: 82_000_000 KVNC
+//! - Initial block reward: 2.5 KVNC (paid to the author of a committed block)
 //! - Decay: × 3/4 every 8_200_000 rewarded blocks
 //! - Staking: none in consensus — chains 1 and 2 have no validator committee
 //!
 //! Legacy `Legacy81M` constants, retained for existing databases and dev chains:
-//! - Genesis validator allocation: 1_000_000 KUNA (split evenly, minted once)
-//! - Mining subsidy budget: 81_000_000 KUNA
+//! - Genesis validator allocation: 1_000_000 KVNC (split evenly, minted once)
+//! - Mining subsidy budget: 81_000_000 KVNC
 //! - Decay: × 3/4 every 8_100_000 committed leaders
 //! - Active validators: no maximum (anyone meeting the minimum stake)
 //!
@@ -49,17 +49,17 @@ use tracing::info;
 /// persisted, not part of any hash or signature domain).
 pub use kovanica_params::TICKER;
 
-/// Number of base units in 1 KUNA.
+/// Number of base units in 1 KVNC.
 pub use kovanica_params::DECIMALS;
 pub use kovanica_params::ONE_KUNA;
 
-/// Total maximum supply: 90.2 million KUNA.
+/// Total maximum supply: 90.2 million KVNC.
 pub use kovanica_params::TOTAL_SUPPLY;
 
-/// Founder premine: 200_000 KUNA.
+/// Founder premine: 200_000 KVNC.
 pub use kovanica_params::FOUNDER_PREMINE;
 
-/// Genesis validator allocation: 1_000_000 KUNA.
+/// Genesis validator allocation: 1_000_000 KVNC.
 ///
 /// Split evenly across the genesis validator set (see
 /// [`genesis_validator_shares`]) and minted exactly once, at genesis. Each
@@ -68,7 +68,7 @@ pub use kovanica_params::FOUNDER_PREMINE;
 pub use kovanica_params::GENESIS_VALIDATOR_ALLOCATION;
 
 pub use kovanica_params::TREASURY_ANNUAL;
-/// Treasury allocation: 8 × 1_000_000 KUNA over 8 years.
+/// Treasury allocation: 8 × 1_000_000 KVNC over 8 years.
 pub use kovanica_params::TREASURY_TOTAL;
 pub use kovanica_params::TREASURY_YEARS;
 
@@ -88,7 +88,7 @@ pub use kovanica_params::BLOCKS_PER_YEAR;
 /// allocation or treasury.
 pub use kovanica_params::MINING_SUBSIDY_BUDGET;
 
-/// Initial block reward: 2.5 KUNA.
+/// Initial block reward: 2.5 KVNC.
 ///
 /// (Skeleton name: `INITIAL_REWARD` — same value.)
 pub use kovanica_params::INITIAL_BLOCK_REWARD;
@@ -188,7 +188,7 @@ pub use kovanica_params::COMMISSION_CHANGE_COOLDOWN;
 /// Returns the block reward (in base units) for a given **committed leader height**.
 ///
 /// In the DAG model the “height” is the sequential number of committed leader
-/// blocks (not the raw round number). Reward starts at 2.5 KUNA and is
+/// blocks (not the raw round number). Reward starts at 2.5 KVNC and is
 /// multiplied by 3/4 every SUBSIDY_ERA_BLOCKS committed leaders.
 pub fn block_reward(committed_leader_height: u64) -> u64 {
     let era = committed_leader_height / SUBSIDY_ERA_BLOCKS;
@@ -318,7 +318,7 @@ pub fn cumulative_mining_issuance_no_stake_82m(rewarded_block_count: u64) -> u64
 /// Shares are equal except for the integer remainder, which is handed out one
 /// atom at a time to the first entries. The returned shares therefore sum to
 /// exactly `GENESIS_VALIDATOR_ALLOCATION`, which keeps the supply invariant
-/// exact even though `1_000_000 KUNA` is not divisible by `n` in atoms.
+/// exact even though `1_000_000 KVNC` is not divisible by `n` in atoms.
 /// Returns an empty vector when `n == 0`.
 pub fn genesis_validator_shares(n: usize) -> Vec<u64> {
     if n == 0 {
@@ -345,7 +345,7 @@ pub fn genesis_validator_shares(n: usize) -> Vec<u64> {
 
 /// Treasury vesting state.
 ///
-/// 8 000 000 KUNA are released linearly over 8 years (1 000 000 KUNA per year).
+/// 8 000 000 KVNC are released linearly over 8 years (1 000 000 KVNC per year).
 /// Vesting is driven by committed-leader height (using BLOCKS_PER_YEAR as the
 /// conversion factor). The treasury address is fixed at genesis.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1752,7 +1752,7 @@ mod tests {
     #[test]
     fn first_decay() {
         let r = block_reward(SUBSIDY_ERA_BLOCKS);
-        assert_eq!(r, 1_875_000_000); // 1.875 KUNA = 2.5 × 3/4
+        assert_eq!(r, 1_875_000_000); // 1.875 KVNC = 2.5 × 3/4
     }
 
     #[test]
@@ -1806,7 +1806,7 @@ mod tests {
     /// The canonical `block_reward` above is `u64`; they must agree.
     fn skeleton_block_reward(committed_leader_height: u64) -> u64 {
         let era = committed_leader_height / SUBSIDY_ERA_BLOCKS;
-        let mut reward: u128 = 2_500_000_000; // 2.5 KUNA
+        let mut reward: u128 = 2_500_000_000; // 2.5 KVNC
         for _ in 0..era {
             reward = reward.saturating_mul(3) / 4;
             if reward == 0 {
@@ -1937,8 +1937,8 @@ mod tests {
 
     #[test]
     fn reward_schedule_matches_skeleton() {
-        // Era 0 → 2.5 KUNA, boundary of era 0 → 2.5 KUNA,
-        // era 1 → 1.875 KUNA after the 3/4 decay, plus later eras.
+        // Era 0 → 2.5 KVNC, boundary of era 0 → 2.5 KVNC,
+        // era 1 → 1.875 KVNC after the 3/4 decay, plus later eras.
         let heights = [
             0u64,
             SUBSIDY_ERA_BLOCKS - 1,
@@ -1950,7 +1950,7 @@ mod tests {
             assert_eq!(block_reward(h), skeleton_block_reward(h), "height {h}");
         }
         assert_eq!(block_reward(0), 5 * ONE_KUNA / 2);
-        assert_eq!(block_reward(SUBSIDY_ERA_BLOCKS), 1_875_000_000); // 1.875 KUNA
+        assert_eq!(block_reward(SUBSIDY_ERA_BLOCKS), 1_875_000_000); // 1.875 KVNC
     }
 
     #[test]
@@ -1985,8 +1985,8 @@ mod tests {
         assert!(naive <= MINING_SUBSIDY_BUDGET);
 
         // Full schedule: sum each era's reward until it decays to zero.
-        // The geometric series 2.5 KUNA × 8_100_000 × 1/(1 − 3/4) equals
-        // exactly 81M KUNA; floor-truncation keeps the real sum just below.
+        // The geometric series 2.5 KVNC × 8_100_000 × 1/(1 − 3/4) equals
+        // exactly 81M KVNC; floor-truncation keeps the real sum just below.
         let mut naive_full = 0u64;
         let mut era = 0u64;
         loop {
@@ -2389,7 +2389,7 @@ mod tests {
 
     #[test]
     fn genesis_validator_shares_sum_exactly_and_are_even() {
-        // 1 KUNA = 10^9 atoms, so 1M KUNA almost never divides evenly by n;
+        // 1 KVNC = 10^9 atoms, so 1M KVNC almost never divides evenly by n;
         // the splitter must still conserve every atom.
         for n in [1usize, 2, 3, 15, 21, 100] {
             let shares = genesis_validator_shares(n);
