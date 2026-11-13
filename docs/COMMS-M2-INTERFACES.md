@@ -10,7 +10,7 @@ This document freezes the M2 anti-spam/prepaid design per the oracle decision (o
 
 M2 enforces spam resistance via a minimal combination:
 - **Stateless PoW (primary gate for unauthenticated sends):** Hashcash-style PoW bound to the envelope `id` (BLAKE3 over `nonce || envelope_id_bytes`). Cheap to verify, no identity/keys, prevents work reuse across envelopes.
-- **Prepaid credit (paid path):** In-memory per-`comms_id(to)` credit ledger (atoms of native KUNA) funded by presenting a valid HTLC payment proof on submission. 
+- **Prepaid credit (paid path):** In-memory per-`comms_id(to)` credit ledger (atoms of native KVNC) funded by presenting a valid HTLC payment proof on submission. 
 - **Per-IP rate limiting:** Defense-in-depth only (no per-IP limiting exists today; not primary). 
 - **Stake-to-send:** Deferred to M5.
 
@@ -38,7 +38,7 @@ Difficulty is fixed for MVP (default 20 bits), configurable via env.
 
 ## 3. HTLC funding (prepaid credit) — no node dependency
 
-For MVP, sender HTLCs KUNA to the **relay’s address** (i-style). The sender presents a payment proof on envelope submission:
+For MVP, sender HTLCs KVNC to the **relay’s address** (i-style). The sender presents a payment proof on envelope submission:
 ```json
 {
   "htlc_id": "hex32",
@@ -90,7 +90,7 @@ Flat env vars (no new config struct):
 KOVANICA_RELAY_BIND=127.0.0.1:8787
 KOVANICA_RELAY_POW_BITS=20                # u8, min leading zero bits
 KOVANICA_RELAY_MIN_FEE_ATOMS=1000          # u64
-KOVANICA_RELAY_CLAIMER_ADDR=hex32          # relay KUNA address (HTLC claimer)
+KOVANICA_RELAY_CLAIMER_ADDR=hex32          # relay KVNC address (HTLC claimer)
 KOVANICA_RELAY_CREDIT_TTL_MS=86400000      # 24h
 KOVANICA_RELAY_MAX_CREDIT_PER_ID=10000000  # cap per comms_id(to)
 KOVANICA_RELAY_ALLOW_UNPAID=true           # dev default; prod false for M2 exit

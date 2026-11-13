@@ -447,8 +447,8 @@ fn test_equivocation_min_digest_fork_convergence() {
     assert_eq!(node3.scheduled_leader_for_round(3), Some(1));
 
     // Adversarial leader 1 produces two competing blocks B1 and B2 with different transactions.
-    let tx_a = make_transfer_tx(&signing_keys[1], 1, 10_000_000_000); // 10 KUNA
-    let tx_b = make_transfer_tx(&signing_keys[1], 1, 20_000_000_000); // 20 KUNA
+    let tx_a = make_transfer_tx(&signing_keys[1], 1, 10_000_000_000); // 10 KVNC
+    let tx_b = make_transfer_tx(&signing_keys[1], 1, 20_000_000_000); // 20 KVNC
 
     let block_1 = make_test_block(&signing_keys[1], 1, 3, Vec::new(), vec![tx_a]);
     let block_2 = make_test_block(&signing_keys[1], 1, 3, Vec::new(), vec![tx_b]);
@@ -754,7 +754,7 @@ fn test_reorg_rejection_past_commit_certification() {
     // Round 3 leader is authority 1.
     assert_eq!(engine.scheduled_leader_for_round(3), Some(1));
 
-    let tx_canonical = make_transfer_tx(&signing_keys[1], 1, 50_000_000_000); // 50 KUNA
+    let tx_canonical = make_transfer_tx(&signing_keys[1], 1, 50_000_000_000); // 50 KVNC
     let canonical_block = make_test_block(&signing_keys[1], 1, 3, Vec::new(), vec![tx_canonical]);
 
     // Process canonical block.

@@ -41,7 +41,7 @@ fn main() -> anyhow::Result<()> {
 
     // Generate genesis_validators.toml with [[validator]] array-of-tables format
     let mut toml = String::from("# Devnet — 5-node validator set for genesis\n");
-    toml.push_str("# Stakes = 100_000 KUNA (100_000_000_000_000 atoms)\n");
+    toml.push_str("# Stakes = 100_000 KVNC (100_000_000_000_000 atoms)\n");
     toml.push_str("# Generated from keystores\n");
     toml.push_str("chain_id = 3\n\n");
 
@@ -72,7 +72,7 @@ fn main() -> anyhow::Result<()> {
     println!("  Faucet Seed: {}", hex::encode(&faucet_seed));
 
     let mut funded_toml = String::from("# Devnet — Funded Accounts\n");
-    funded_toml.push_str("# Pre-funded 1,000,000 KUNA for Faucet\n\n");
+    funded_toml.push_str("# Pre-funded 1,000,000 KVNC for Faucet\n\n");
     funded_toml.push_str("[[account]]\n");
     funded_toml.push_str(&format!("address = \"{faucet_address}\"\n"));
     funded_toml.push_str("balance = 1000000000000000\n");

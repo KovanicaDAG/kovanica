@@ -3,7 +3,7 @@
  *
  * The HTTP boundary is off-chain (`/v1`). Base URL and bearer token are
  * runtime-injected; amounts/expiries are decimal strings on the wire
- * (bigint-safe). Native KUNA only.
+ * (bigint-safe). Native KVNC only.
  *
  *   POST /v1/quote                 { sku }            -> TopupQuote
  *   POST /v1/orders                { quoteId, sku }   -> TopupOrder
@@ -416,7 +416,7 @@ function parseQuote(json: unknown): TopupQuote {
     quoteId: rec.quoteId,
     providerId: typeof rec.providerId === "string" ? rec.providerId : "",
     sku: typeof rec.sku === "string" ? rec.sku : "",
-    currency: "KUNA",
+    currency: "KVNC",
     amountAtoms: toBigInt(rec.amountAtoms, "quote amount"),
     claimerAddr: rec.claimerAddr,
     htlcExpiryMs: toBigInt(rec.htlcExpiryMs, "quote expiry"),
@@ -438,7 +438,7 @@ function parseOrder(json: unknown): TopupOrder {
     quoteId: rec.quoteId,
     providerId: typeof rec.providerId === "string" ? rec.providerId : "",
     status,
-    currency: "KUNA",
+    currency: "KVNC",
     amountAtoms: toBigInt(rec.amountAtoms, "order amount"),
     claimerAddr: typeof rec.claimerAddr === "string" ? rec.claimerAddr : "",
     createdAt: typeof rec.createdAt === "number" ? rec.createdAt : Number(rec.createdAt),

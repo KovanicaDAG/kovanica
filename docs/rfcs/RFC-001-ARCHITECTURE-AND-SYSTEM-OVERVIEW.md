@@ -108,7 +108,7 @@ graph TD
 | `kovanica-light` | Light Client | Klijentske strukture laganog čvora, verifikacija vrha i dokaza zaglavlja. |
 | `kovanica-lightnode` | Light Client | Izvršni demon laganog klijenta s niskim resursnim otiskom. |
 | `kovanica-light-ffi` | Light Client | C-FFI most za integraciju laganog čvora u mobilne i vanjske aplikacije. |
-| `kovanica-faucet` | Tools | Servis za automatsko dijeljenje testnih KUNA tokena developerima. |
+| `kovanica-faucet` | Tools | Servis za automatsko dijeljenje testnih KVNC tokena developerima. |
 | `kovanica-comms-core` | Comms | Protokol end-to-end šifriranih poruka preko Kovanica čvorova. |
 | `kovanica-comms-crypto`| Comms | X25519 razmjena ključeva i ChaCha20-Poly1305 omotnice za poruke. |
 | `kovanica-comms-relay` | Comms | Relejni poslužitelj za asinkronu dostavu šifriranih poruka. |

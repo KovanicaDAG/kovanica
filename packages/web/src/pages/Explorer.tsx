@@ -365,7 +365,7 @@ export function Explorer() {
                   <td className="address"><Link to={`/tx/${tx.hash}`}>{formatAddress(tx.hash)}</Link></td>
                   <td className="address">{formatAddress(tx.sender)}</td>
                   <td className="monospace">{tx.nonce}</td>
-                  <td className="monospace">{formatAmount(tx.fee)} KUNA</td>
+                  <td className="monospace">{formatAmount(tx.fee)} KVNC</td>
                   <td>{tx.kind.type}</td>
                 </tr>
               ))}

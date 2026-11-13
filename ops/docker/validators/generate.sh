@@ -14,7 +14,7 @@ set -euo pipefail
 
 BIN="${KOVANICA_BIN:-./target/release/kovanica}"
 OUTDIR="${OUTDIR:-ops/docker/validators}"
-# MIN_VALIDATOR_STAKE = 50_000 KUNA = 50_000_000_000_000 atoms.
+# MIN_VALIDATOR_STAKE = 50_000 KVNC = 50_000_000_000_000 atoms.
 STAKE="${STAKE:-50000000000000}"
 
 if [ ! -x "$BIN" ]; then
@@ -45,7 +45,7 @@ trap 'rm -f "$TMP"' EXIT
 {
   echo "# Chain 4 — 5-node validator set for genesis (generated $(date -u +%Y-%m-%dT%H:%M:%SZ))."
   echo "# DEVNET / TESTNET KEYS ONLY. Produced by ops/docker/validators/generate.sh; do not commit."
-  echo "# Stakes = MIN_VALIDATOR_STAKE = 50_000 KUNA = $STAKE atoms."
+  echo "# Stakes = MIN_VALIDATOR_STAKE = 50_000 KVNC = $STAKE atoms."
   echo "chain_id = 4"
   echo
 } > "$TMP"

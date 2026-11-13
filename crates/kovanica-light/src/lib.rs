@@ -345,7 +345,7 @@ pub fn sign_transfer(
 /// Sign a contract call. `chain_id` is the caller's configured network.
 ///
 /// `args` is the caller-encoded (bincode) calldata; `value` is the native
-/// KUNA (base units) sent to the contract, `0` when unused.
+/// KVNC (base units) sent to the contract, `0` when unused.
 #[allow(clippy::too_many_arguments)]
 pub fn sign_call(
     chain_id: u64,

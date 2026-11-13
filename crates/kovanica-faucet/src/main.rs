@@ -1,6 +1,6 @@
-//! Kovanica (KUNA) Faucet Service
+//! Kovanica (KVNC) Faucet Service
 //!
-//! Rate-limited faucet that dispenses test KUNA to addresses.
+//! Rate-limited faucet that dispenses test KVNC to addresses.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -124,7 +124,7 @@ struct FaucetResponse {
 
 #[derive(Parser)]
 #[command(name = "kovanica-faucet")]
-#[command(about = "Kovanica (KUNA) Faucet Service")]
+#[command(about = "Kovanica (KVNC) Faucet Service")]
 struct Cli {
     /// Faucet keystore path
     #[arg(long, default_value = "faucet.keystore")]
@@ -133,7 +133,7 @@ struct Cli {
     /// Alternatives: env KOVANICA_FAUCET_PASSPHRASE, or an interactive prompt on a TTY.
     #[arg(long)]
     passphrase_file: Option<PathBuf>,
-    /// Amount to dispense per request (in KUNA)
+    /// Amount to dispense per request (in KVNC)
     #[arg(long, default_value = "10")]
     dispense_kovanica: u64,
     /// Rate limit window (seconds)
@@ -160,7 +160,7 @@ struct Cli {
     /// `KOVANICA_FAUCET_TRUSTED_PROXIES`.
     #[arg(long)]
     trusted_proxies: Option<String>,
-    /// Refuse requests when the faucet balance (in KUNA) is below this floor.
+    /// Refuse requests when the faucet balance (in KVNC) is below this floor.
     /// `0` (default) disables the low-balance guard.
     #[arg(long, default_value = "0")]
     min_balance_ku: u64,
@@ -180,7 +180,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // MAINNET GUARD: never dispense real KUNA by accident. Running on chain_id 1
+    // MAINNET GUARD: never dispense real KVNC by accident. Running on chain_id 1
     // requires an explicit, loudly-named override.
     let allow_mainnet = cli.allow_mainnet || env_truthy(ALLOW_MAINNET_ENV);
     ensure_chain_allowed(cli.chain_id, allow_mainnet)?;
@@ -188,7 +188,7 @@ async fn main() -> Result<()> {
         warn!(
             chain_id = cli.chain_id,
             "running the faucet on MAINNET with the explicit --allow-mainnet override: \
-             it will dispense REAL KUNA"
+             it will dispense REAL KVNC"
         );
     }
 
@@ -227,14 +227,14 @@ async fn main() -> Result<()> {
     info!(faucet_address = %faucet_address, "faucet identity loaded");
 
     let config = FaucetConfig {
-        dispense_amount: cli.dispense_kovanica * 1_000_000_000, // KUNA to atoms
+        dispense_amount: cli.dispense_kovanica * 1_000_000_000, // KVNC to atoms
         rate_limit_window: cli.rate_limit_window,
         max_requests_per_window: cli.max_requests,
         rpc_url: normalize_rpc_url(&cli.rpc_url),
         rpc_token: resolve_rpc_token(),
         signing_ctx: kovanica_types::SigningContext::new(cli.chain_id),
         trusted_proxies,
-        min_balance_atoms: cli.min_balance_ku * 1_000_000_000, // KUNA to atoms
+        min_balance_atoms: cli.min_balance_ku * 1_000_000_000, // KVNC to atoms
     };
     if config.rpc_token.is_none() {
         warn!(
@@ -291,7 +291,7 @@ fn env_truthy(name: &str) -> bool {
 ///
 /// * unregistered ids are always refused;
 /// * `chain_id 1` (mainnet) is refused unless `allow_mainnet` was given
-///   explicitly — the faucet would otherwise dispense real KUNA.
+///   explicitly — the faucet would otherwise dispense real KVNC.
 fn ensure_chain_allowed(chain_id: u64, allow_mainnet: bool) -> Result<()> {
     if !kovanica_types::signing::chain_id::is_registered(chain_id) {
         bail!(
@@ -301,7 +301,7 @@ fn ensure_chain_allowed(chain_id: u64, allow_mainnet: bool) -> Result<()> {
     }
     if chain_id == chain_id::MAINNET && !allow_mainnet {
         bail!(
-            "refusing to run the faucet on MAINNET (chain_id 1): it would dispense REAL KUNA. \
+            "refusing to run the faucet on MAINNET (chain_id 1): it would dispense REAL KVNC. \
              If this is intentional, pass --allow-mainnet or set {ALLOW_MAINNET_ENV}=1."
         );
     }
@@ -462,7 +462,7 @@ async fn faucet_handler(
     let tx = Transaction {
         sender: state.faucet_address,
         nonce,
-        fee: 1_000_000, // 0.001 KUNA fee
+        fee: 1_000_000, // 0.001 KVNC fee
         kind: TransactionKind::Transfer {
             to: to_address,
             amount: state.config.dispense_amount,
@@ -504,7 +504,7 @@ async fn faucet_handler(
                 Json(FaucetResponse {
                     success: true,
                     message: format!(
-                        "Dispensed {} KUNA",
+                        "Dispensed {} KVNC",
                         state.config.dispense_amount / 1_000_000_000
                     ),
                     tx_hash: Some(tx_hash),

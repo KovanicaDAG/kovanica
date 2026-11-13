@@ -1,7 +1,7 @@
 # Kovanica Contract Examples
 
 Worked end-to-end flows for the contract crates. All amounts are in
-**atoms** (base units): `1 KUNA = 1_000_000_000 atoms` (9 decimals). Addresses use the canonical PRO-21 64-character base32 format (`kvnc...dag`).
+**atoms** (base units): `1 KVNC = 1_000_000_000 atoms` (9 decimals). Addresses use the canonical PRO-21 64-character base32 format (`kvnc...dag`).
 
 > **CLI status.** `kovanica-cli` provides native contract subcommands (`htlc`,
 > `vault`, `multisig`, `token`) implemented in `crates/kovanica-cli/src/contracts.rs`
@@ -12,11 +12,11 @@ Worked end-to-end flows for the contract crates. All amounts are in
 
 ## HTLC atomic swap (KVP-104)
 
-Alice locks KUNA for Bob; Bob claims with the preimage before expiry, or
+Alice locks KVNC for Bob; Bob claims with the preimage before expiry, or
 Alice refunds after expiry.
 
 ```bash
-# 1. Alice locks 100 KUNA for Bob.
+# 1. Alice locks 100 KVNC for Bob.
 #    hash-lock = BLAKE3-256(preimage) as hex; expiry = unix timestamp.
 kovanica htlc create \
   --claimer <Bob-address> \
@@ -106,10 +106,10 @@ kovanica token burn     --contract <kvnc…> --amount 1000000000
 kovanica token balance --contract <kvnc…> --address <address>
 ```
 
-## KUNA ↔ token pool (P0a)
+## KVNC ↔ token pool (P0a)
 
-A token contract can host **one** constant-product pool against native KUNA.
-Conversion is reserve-backed: no KUNA is minted or burned and the token supply
+A token contract can host **one** constant-product pool against native KVNC.
+Conversion is reserve-backed: no KVNC is minted or burned and the token supply
 never changes (see [`docs/CONTRACTS.md`](CONTRACTS.md) §7b).
 
 ```bash
@@ -119,10 +119,10 @@ kovanica token init-pool --contract <kvnc…> --kuna 1.5KUNA \
   --tokens 1000000 --fee-bps 30
 # → prints the LP shares minted, floor(sqrt(kuna_in * tokens_in))
 
-# 2. Buy tokens with KUNA. `--min-out` is the slippage floor in token base units.
+# 2. Buy tokens with KVNC. `--min-out` is the slippage floor in token base units.
 kovanica token buy --contract <kvnc…> --kuna 0.5KUNA --min-out 300000
 
-# 3. Sell tokens back for KUNA. `--min-out` is a KUNA amount here.
+# 3. Sell tokens back for KVNC. `--min-out` is a KVNC amount here.
 kovanica token sell --contract <kvnc…> --tokens 300000 --min-out 0.4KUNA
 
 # 4. Read-only: reserves plus locally computed quotes for both directions.

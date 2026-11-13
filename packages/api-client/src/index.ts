@@ -6,7 +6,7 @@
  * use that default: production builds only talk to the pinned networks.
  *
  * Quantities on the wire are `0x`-prefixed hex strings. Balances are
- * returned as `bigint` because KUNA amounts do not fit in a safe integer
+ * returned as `bigint` because KVNC amounts do not fit in a safe integer
  * (9 decimals).
  *
  * Signed contract calls are not built here. Argument bytes for

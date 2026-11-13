@@ -140,7 +140,7 @@ pub struct HtlcCreateArgs {
     /// Claimer Kovanica address
     #[arg(long)]
     pub claimer: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = crate::amount::parse_cli_amount)]
     pub amount: u64,
     /// BLAKE3-256 hash lock (64 hex chars)
@@ -231,7 +231,7 @@ pub struct VaultCreateArgs {
     /// Beneficiary Kovanica address
     #[arg(long)]
     pub beneficiary: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = crate::amount::parse_cli_amount)]
     pub amount: u64,
     /// Absolute unlock time in contract time = committed-leader HEIGHT
@@ -348,7 +348,7 @@ pub struct MultisigProposeArgs {
     /// Recipient Kovanica address
     #[arg(long)]
     pub to: String,
-    /// Amount of KUNA (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = crate::amount::parse_cli_amount)]
     pub amount: u64,
     /// Optional calldata (hex)
@@ -453,11 +453,11 @@ pub enum TokenCommand {
     Balance(TokenBalanceArgs),
     /// Approve an allowance
     Approve(TokenApproveArgs),
-    /// Seed the KUNA ↔ token pool (owner/minter only)
+    /// Seed the KVNC ↔ token pool (owner/minter only)
     InitPool(TokenInitPoolArgs),
-    /// Buy tokens with KUNA from the pool
+    /// Buy tokens with KVNC from the pool
     Buy(TokenBuyArgs),
-    /// Sell tokens for KUNA into the pool
+    /// Sell tokens for KVNC into the pool
     Sell(TokenSellArgs),
     /// Show pool reserves and local quotes (read-only)
     Reserves(TokenReservesArgs),
@@ -475,7 +475,7 @@ pub struct TokenCreateArgs {
     /// Decimals
     #[arg(long, default_value_t = 9)]
     pub decimals: u8,
-    /// Initial supply in token base units, not KUNA
+    /// Initial supply in token base units, not KVNC
     #[arg(long = "initial-supply")]
     pub initial_supply: Amount,
     /// Optional artwork: an https:// URL or a data:image/… URI (≤8 KiB)
@@ -507,7 +507,7 @@ pub struct TokenAmountToArgs {
     /// Recipient Kovanica address
     #[arg(long)]
     pub to: String,
-    /// Amount in token base units, not KUNA
+    /// Amount in token base units, not KVNC
     #[arg(long)]
     pub amount: Amount,
     /// Keystore file path
@@ -530,7 +530,7 @@ pub struct TokenBurnArgs {
     /// Token contract address
     #[arg(long)]
     pub contract: String,
-    /// Amount in token base units, not KUNA
+    /// Amount in token base units, not KVNC
     #[arg(long)]
     pub amount: Amount,
     /// Keystore file path
@@ -564,7 +564,7 @@ pub struct TokenInitPoolArgs {
     /// Token contract address
     #[arg(long)]
     pub contract: String,
-    /// KUNA to seed the pool with (`1.5` / `1.5KUNA` / `5atoms`; sent as Call.value)
+    /// KVNC to seed the pool with (`1.5` / `1.5KUNA` / `5atoms`; sent as Call.value)
     #[arg(long, value_parser = crate::amount::parse_cli_amount)]
     pub kuna: u64,
     /// Tokens to seed the pool with, in token base units
@@ -593,7 +593,7 @@ pub struct TokenBuyArgs {
     /// Token contract address
     #[arg(long)]
     pub contract: String,
-    /// KUNA to spend (`1.5` / `1.5KUNA` / `5atoms`; sent as Call.value)
+    /// KVNC to spend (`1.5` / `1.5KUNA` / `5atoms`; sent as Call.value)
     #[arg(long, value_parser = crate::amount::parse_cli_amount)]
     pub kuna: u64,
     /// Minimum tokens to receive, in token base units
@@ -613,7 +613,7 @@ pub struct TokenBuyArgs {
     pub timeout: u64,
 }
 
-/// Parse `token sell --min-out` as a KUNA amount (`0.4` / `0.4KUNA` /
+/// Parse `token sell --min-out` as a KVNC amount (`0.4` / `0.4KUNA` /
 /// `400000000atoms`), the same grammar as `--kuna`.
 ///
 /// The value is a `u128` like every other token amount, but the parser speaks
@@ -631,7 +631,7 @@ pub struct TokenSellArgs {
     /// Tokens to sell, in token base units
     #[arg(long)]
     pub tokens: Amount,
-    /// Minimum KUNA to receive (`0.4` / `0.4KUNA` / `400000000atoms`)
+    /// Minimum KVNC to receive (`0.4` / `0.4KUNA` / `400000000atoms`)
     #[arg(long = "min-out", default_value = "0atoms", value_parser = parse_kuna_atoms)]
     pub min_out: Amount,
     /// Keystore file path
@@ -665,7 +665,7 @@ pub struct TokenApproveArgs {
     /// Spender Kovanica address
     #[arg(long)]
     pub spender: String,
-    /// Amount in token base units, not KUNA
+    /// Amount in token base units, not KVNC
     #[arg(long)]
     pub amount: Amount,
     /// Keystore file path
@@ -805,7 +805,7 @@ async fn read_token(
     Ok(kovanica_token::decode_state(&bytes))
 }
 
-/// Decode the KUNA ↔ token pool stored at `contract`, `None` when absent.
+/// Decode the KVNC ↔ token pool stored at `contract`, `None` when absent.
 async fn read_pool(client: &RpcClient, contract: Address) -> Result<Option<kovanica_token::Pool>> {
     let slot = hex::encode(kovanica_token::pool_slot());
     let value = client
@@ -1343,7 +1343,7 @@ fn token_contract(chain_id: Option<u64>, text: &str) -> Result<Address> {
     parse_address(text, "contract", chain)
 }
 
-/// `token init-pool`: seed the pool with KUNA (as `Call.value`) and tokens.
+/// `token init-pool`: seed the pool with KVNC (as `Call.value`) and tokens.
 async fn token_init_pool(
     client: &RpcClient,
     chain_id: Option<u64>,
@@ -1433,7 +1433,7 @@ async fn token_init_pool(
     )
 }
 
-/// `token buy`: spend KUNA (`Call.value`) for tokens and verify the committed
+/// `token buy`: spend KVNC (`Call.value`) for tokens and verify the committed
 /// reserves moved as quoted locally.
 async fn token_buy(
     client: &RpcClient,
@@ -1528,7 +1528,7 @@ async fn token_buy(
     )
 }
 
-/// `token sell`: sell tokens for KUNA and verify the payout left the reserve.
+/// `token sell`: sell tokens for KVNC and verify the payout left the reserve.
 async fn token_sell(
     client: &RpcClient,
     chain_id: Option<u64>,
@@ -1670,7 +1670,7 @@ async fn token_reserves(
             ("lp_total", pool.lp_total.to_string()),
             ("invariant", invariant.to_string()),
             (
-                "1 KUNA buys",
+                "1 KVNC buys",
                 kuna_to_token
                     .map(|v| {
                         format!(
@@ -2281,7 +2281,7 @@ mod tests {
         let kuna_in = 10_000u128;
         let min_out = 1_000u128;
         // Our buy took 4_000 tokens; someone else bought 2_000 tokens for
-        // 5_000 KUNA in the same window, so neither reserve matches a
+        // 5_000 KVNC in the same window, so neither reserve matches a
         // single-trade quote any more.
         let delta = 4_000u128;
 

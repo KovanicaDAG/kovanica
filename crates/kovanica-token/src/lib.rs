@@ -15,29 +15,29 @@
 //! Token balances live in the contract's **own serialized state** (a
 //! `BTreeMap`), NOT in native host balances. `transfer` / `transfer_from` /
 //! `mint` / `burn` never call `Host::transfer` — only the contract's storage
-//! changes. Native KUNA and token balances are therefore fully independent.
+//! changes. Native KVNC and token balances are therefore fully independent.
 //!
 //! ## Storage keys (FIXED)
 //!
 //! - singleton state: `b"kvnc/v1/state"` (one token per contract address)
-//! - singleton pool: `b"kvnc/v1/pool"` (KUNA ↔ token AMM, optional)
+//! - singleton pool: `b"kvnc/v1/pool"` (KVNC ↔ token AMM, optional)
 //! - LP shares: `b"kvnc/v1/lp/" ++ address` (one `Amount` per provider)
 //!
 //! Runtime hosts are expected to namespace storage per contract address.
 //!
-//! ## KUNA ↔ token pool (P0a)
+//! ## KVNC ↔ token pool (P0a)
 //!
 //! `token_init_pool` / `token_buy` / `token_sell` add a constant-product spot
-//! market between the native KUNA account of the contract and this token. The
+//! market between the native KVNC account of the contract and this token. The
 //! native side is the contract's real account balance (`Host::balance_of`);
 //! the token side is `Token::balances[contract_address]`. There is no
-//! `msg.value` in the wasm ABI, so the KUNA input is passed in `args` and must
+//! `msg.value` in the wasm ABI, so the KVNC input is passed in `args` and must
 //! be **exactly equal** to the signed `Call.value` the host reports through
 //! [`Host::call_value`] (`kovanica_call_value()` in the wasm ABI). Anything
-//! else is `InvalidInput`. No KUNA is ever minted or burned here — the reserve
+//! else is `InvalidInput`. No KVNC is ever minted or burned here — the reserve
 //! covers every payout.
 //!
-//! Because the bound is the signed value, a KUNA donation *cannot* be claimed:
+//! Because the bound is the signed value, a KVNC donation *cannot* be claimed:
 //! an ordinary transfer into the pool raises `balance_of(contract)` without
 //! raising `call_value()`, and the next `token_buy` sweeps that surplus into
 //! `kuna_reserve` (LP yield) instead of letting the caller book it. Token
@@ -102,7 +102,7 @@ pub fn decode_state(bytes: &[u8]) -> Option<Token> {
         .or_else(|| bincode::deserialize::<TokenV1>(bytes).ok().map(Token::from))
 }
 
-/// Singleton KUNA ↔ token pool key (FIXED): one pool per contract address.
+/// Singleton KVNC ↔ token pool key (FIXED): one pool per contract address.
 ///
 /// Stored separately from [`STATE_KEY`] so a swap never rewrites the token
 /// blob (balances, allowances, icon).
@@ -130,14 +130,14 @@ pub fn decode_pool(bytes: &[u8]) -> Option<Pool> {
     bincode::deserialize::<Pool>(bytes).ok()
 }
 
-/// Constant-product pool between the contract's native KUNA balance and this
+/// Constant-product pool between the contract's native KVNC balance and this
 /// token's contract balance.
 ///
 /// Invariant after every successful operation:
 /// `token_reserve == Token::balances[contract_address]`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pool {
-    /// Native KUNA atoms backing the pool; always fits in the host's `u64`.
+    /// Native KVNC atoms backing the pool; always fits in the host's `u64`.
     pub kuna_reserve: Amount,
     /// Token base units held by the contract; the token balance is the source
     /// of truth and this field mirrors it.
@@ -420,11 +420,11 @@ impl Token {
         Ok(())
     }
 
-    // ---------- KUNA ↔ token pool (P0a) ----------
+    // ---------- KVNC ↔ token pool (P0a) ----------
 
-    /// Initialize the KUNA ↔ token pool and mint the first LP shares.
+    /// Initialize the KVNC ↔ token pool and mint the first LP shares.
     ///
-    /// Only `owner` / `minter` may seed it. The native KUNA side is funded by
+    /// Only `owner` / `minter` may seed it. The native KVNC side is funded by
     /// the signed `Call.value` that precedes this entry point: `kuna_in` must
     /// equal [`Host::call_value`] exactly, because the wasm ABI has no
     /// `msg.value` and the value is the only unforgeable statement of what the
@@ -480,7 +480,7 @@ impl Token {
         Ok(lp)
     }
 
-    /// Buy tokens with KUNA: `amount_in` must equal the signed `Call.value`,
+    /// Buy tokens with KVNC: `amount_in` must equal the signed `Call.value`,
     /// `min_out` the slippage floor. Returns the tokens received.
     pub fn buy(host: &mut impl Host, amount_in: Amount, min_out: Amount) -> ContractResult<Amount> {
         let mut token = Self::load(host)?;
@@ -532,8 +532,8 @@ impl Token {
         Ok(out)
     }
 
-    /// Sell tokens for KUNA: `amount_in` is taken from the caller's token
-    /// balance, `min_out` the slippage floor. Returns the KUNA paid out.
+    /// Sell tokens for KVNC: `amount_in` is taken from the caller's token
+    /// balance, `min_out` the slippage floor. Returns the KVNC paid out.
     pub fn sell(
         host: &mut impl Host,
         amount_in: Amount,
@@ -882,7 +882,7 @@ mod tests {
         Token::create(
             &mut host,
             String::from("Kovanica"),
-            String::from("KUNA"),
+            String::from("KVNC"),
             8,
             supply,
             String::new(),
@@ -896,7 +896,7 @@ mod tests {
         let host = new_token(addr(A), 1_000);
         let t = Token::load(&host).unwrap();
         assert_eq!(t.name, "Kovanica");
-        assert_eq!(t.symbol, "KUNA");
+        assert_eq!(t.symbol, "KVNC");
         assert_eq!(t.decimals, 8);
         assert_eq!(t.total_supply, 1_000);
         assert_eq!(t.owner, addr(A));
@@ -1020,7 +1020,7 @@ mod tests {
         // The same bytes decode off chain, which is what a wallet does with
         // `kovanica_getStorageAt`.
         let decoded = decode_state(&v1).expect("v1 decodes");
-        assert_eq!(decoded.symbol, "KUNA");
+        assert_eq!(decoded.symbol, "KVNC");
         assert_eq!(decoded.icon, "");
     }
 
@@ -1422,7 +1422,7 @@ mod tests {
         let before = Pool::load(&host).unwrap();
         let before_token = Token::load(&host).unwrap();
 
-        // KUNA arrives without a `token_buy` call: a plain transfer, or value
+        // KVNC arrives without a `token_buy` call: a plain transfer, or value
         // attached to some other entry point. `MemHost` has no attach, so the
         // balance is the whole story.
         host.set_balance(addr(CONTRACT), before.kuna_reserve + 500);

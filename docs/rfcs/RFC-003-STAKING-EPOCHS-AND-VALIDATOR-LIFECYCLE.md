@@ -16,9 +16,9 @@
 
 ## 1. Sažetak (Executive Summary)
 
-RFC-003 definira ekonomski i operativni model Proof-of-Stake konsenzusa na Kovanica blockchainu. Kovanica koristi fiksnu, nepromjenjivu tokenomiku s ukupnom ponudom od $90\,200\,000\text{ KUNA}$ (9 decimala) i modelom poticaja koji se mintaju **isključivo** autoru potvrđenog bloka lidera (`CommittedSubDag`).
+RFC-003 definira ekonomski i operativni model Proof-of-Stake konsenzusa na Kovanica blockchainu. Kovanica koristi fiksnu, nepromjenjivu tokenomiku s ukupnom ponudom od $90\,200\,000\text{ KVNC}$ (9 decimala) i modelom poticaja koji se mintaju **isključivo** autoru potvrđenog bloka lidera (`CommittedSubDag`).
 
-Aktivni validatorski set broji između 15 i 21 čvora s minimalnim ulogom od $50\,000\text{ KUNA}$. Sustav se rotira u epohama od $7\,200$ DAG rundi ($2\,400$ visina potvrđenih lidera $\approx 8\text{ sati}$). Validator koji napravi dokazano dvostruko potpisivanje (ekvivokaciju) biva deterministički kažnjen rezanjem od $5\%$ uloga (`SLASH_PCT_BPS = 500`), trenutnim uklanjanjem iz komiteta i zatvaranjem u zatvor (jail) na $7\,200$ liderskih visina ($\approx 24\text{ sata}$).
+Aktivni validatorski set broji između 15 i 21 čvora s minimalnim ulogom od $50\,000\text{ KVNC}$. Sustav se rotira u epohama od $7\,200$ DAG rundi ($2\,400$ visina potvrđenih lidera $\approx 8\text{ sati}$). Validator koji napravi dokazano dvostruko potpisivanje (ekvivokaciju) biva deterministički kažnjen rezanjem od $5\%$ uloga (`SLASH_PCT_BPS = 500`), trenutnim uklanjanjem iz komiteta i zatvaranjem u zatvor (jail) na $7\,200$ liderskih visina ($\approx 24\text{ sata}$).
 
 ---
 
@@ -28,14 +28,14 @@ Svi parametri monetarne politike definirani su u `crates/kovanica-staking/src/li
 
 | Parametar | Vrijednost u kodu | Numerička vrijednost (Atomi / Base Units) |
 |---|---|---|
-| Ticker valute | `KUNA` | — (9 decimala, $1\text{ KUNA} = 10^9\text{ atoma}$) |
+| Ticker valute | `KVNC` | — (9 decimala, $1\text{ KVNC} = 10^9\text{ atoma}$) |
 | Ukupna maksimalna ponuda | `TOTAL_SUPPLY` | $90\,200\,000 \times 10^9\text{ atoma}$ ($90.2\text{M}$) |
 | Premine osnivača | `FOUNDER_PREMINE` | $200\,000 \times 10^9\text{ atoma}$ ($0.2\text{M}$) |
 | Alokacija za genesis validatore | `GENESIS_VALIDATOR_ALLOCATION` | $1\,000\,000 \times 10^9\text{ atoma}$ ($1.0\text{M}$ podijeljeno jednako) |
 | Riznica (Treasury total) | `TREASURY_TOTAL` | $8\,000\,000 \times 10^9\text{ atoma}$ ($8.0\text{M}$) |
 | Godišnje otključavanje riznice | `TREASURY_ANNUAL` | $1\,000\,000 \times 10^9\text{ atoma}$ ($1\text{M/godina}$ kroz 8 godina) |
 | Rudarski budžet (Mining Subsidy) | `MINING_SUBSIDY_BUDGET` | $81\,000\,000 \times 10^9\text{ atoma}$ ($81.0\text{M}$) |
-| Početna nagrada po bloku | `INITIAL_BLOCK_REWARD` | $2.5 \times 10^9\text{ atoma}$ ($2.5\text{ KUNA}$) |
+| Početna nagrada po bloku | `INITIAL_BLOCK_REWARD` | $2.5 \times 10^9\text{ atoma}$ ($2.5\text{ KVNC}$) |
 | Duljina ere subvencije | `SUBSIDY_ERA_BLOCKS` | $8\,100\,000$ potvrđenih liderskih blokova |
 | Faktor opadanja (Decay) | `DECAY_NUM / DECAY_DEN` | $\times 3/4$ na kraju svake ere |
 | Interval potvrđenog lidera | `LEADER_INTERVAL_SECS` | $12\text{ sekundi}$ ($3 \text{ runde} \times 4\text{ s}$) |
@@ -44,8 +44,8 @@ Svi parametri monetarne politike definirani su u `crates/kovanica-staking/src/li
 ### 2.1 Formula raspodjele nagrada i opadanja
 Za danu visinu potvrđenog lidera $h$, era se računa kao $e = \lfloor h / 8\,100\,000 \rfloor$.
 Nagrada za visinu $h$ iznosi:
-$$R(h) = 2.5 \times \left(\frac{3}{4}\right)^e \text{ KUNA}$$
-Ako se dogodi preljev ili nagrada padne na 0, nagrada ostaje 0. Zbroj svih mintanih nagrada kroz povijest asimptotski teži prema $81\,000\,000\text{ KUNA}$, garantirajući očuvanje hard-capa od $90\,200\,000\text{ KUNA}$.
+$$R(h) = 2.5 \times \left(\frac{3}{4}\right)^e \text{ KVNC}$$
+Ako se dogodi preljev ili nagrada padne na 0, nagrada ostaje 0. Zbroj svih mintanih nagrada kroz povijest asimptotski teži prema $81\,000\,000\text{ KVNC}$, garantirajući očuvanje hard-capa od $90\,200\,000\text{ KVNC}$.
 
 ---
 
@@ -53,7 +53,7 @@ Ako se dogodi preljev ili nagrada padne na 0, nagrada ostaje 0. Zbroj svih minta
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Candidate: Stake >= 50,000 KUNA
+    [*] --> Candidate: Stake >= 50,000 KVNC
     Candidate --> Active: Top 15–21 po ulogu na granici epohe
     Active --> Active: Proizvodnja blokova i preuzimanje nagrada
     Active --> MissedLeader: Propušteni blokovi (< 100)
@@ -124,7 +124,7 @@ Kada se dokaz primijeni u stanju:
 1. **Financijska kazna:** Oduzima se $5\%$ (`SLASH_PCT_BPS = 500`) ukupnog uloga validatora i svih njegovih delegatora. Oduzeta sredstva automatski se prebacuju u saldo riznice (`TREASURY`).
 2. **Deaktivacija:** Validator se trenutačno uklanja iz aktivnog skupa komiteta (`active = false`, `slashed = true`).
 3. **Jail (Zatvor):** Postavlja se `jailed_until_height = current_height + JAIL_ROUNDS` ($7\,200$ blokova $\approx 24\text{ sata}$).
-4. Za vrijeme trajanja zatvora, sve transakcije ponovnog ulaganja ili reaktivacije bivaju automatski odbačene. Nakon isteka zatvora, validator mora poslati eksplicitnu novu transakciju ulaganja s ulogom $\ge 50\,000\text{ KUNA}$ kako bi se vratio na listu kandidata.
+4. Za vrijeme trajanja zatvora, sve transakcije ponovnog ulaganja ili reaktivacije bivaju automatski odbačene. Nakon isteka zatvora, validator mora poslati eksplicitnu novu transakciju ulaganja s ulogom $\ge 50\,000\text{ KVNC}$ kako bi se vratio na listu kandidata.
 
 ---
 
@@ -141,7 +141,7 @@ Prilikom svakog potvrđenog lidera (`CommittedSubDag`), izvršni sloj poziva:
    - Ostatak se proporcionalno pripisuje delegatorima u tablicu `staking_pending_rewards`.
 3. **Linearni vesting riznice:**
    - Sa svakim potvrđenim blokom otključava se:
-     $$\Delta_{\text{treasury}} = \frac{1\,000\,000 \times 10^9}{2\,628\,000} \approx 380\,517\text{ atoma KUNA}$$
+     $$\Delta_{\text{treasury}} = \frac{1\,000\,000 \times 10^9}{2\,628\,000} \approx 380\,517\text{ atoma KVNC}$$
    - Zaključana sredstva postaju dostupna adresi riznice putem transakcije `ClaimTreasury`.
 
 ---

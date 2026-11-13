@@ -2,7 +2,7 @@
 # The real file is generated locally and gitignored:
 #   ops/docker/validators/generate.sh
 # Canonical address format (PRO-21): kvnc + 57 base32 chars + dag = 64 chars.
-# Stakes = MIN_VALIDATOR_STAKE = 50_000 KUNA (50_000_000_000_000 atoms).
+# Stakes = MIN_VALIDATOR_STAKE = 50_000 KVNC (50_000_000_000_000 atoms).
 chain_id = 4
 
 [[validator]]

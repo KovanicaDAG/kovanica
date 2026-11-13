@@ -39,7 +39,7 @@ async function main() {
   const validators = await client.getValidators();
   console.log(`[2] Active validators count: ${validators.length}`);
   for (const v of validators) {
-    console.log(`    - Validator: ${v.address.slice(0, 16)}... | Stake: ${formatKuna(v.stake)} KUNA | Active: ${v.active}`);
+    console.log(`    - Validator: ${v.address.slice(0, 16)}... | Stake: ${formatKuna(v.stake)} KVNC | Active: ${v.active}`);
   }
 
   // 3. Generate test key
@@ -47,10 +47,10 @@ async function main() {
   console.log(`[3] Generated test sender address: ${senderKey.address}`);
 
   const initialBalance = await client.getBalance(senderKey.address);
-  console.log(`    Initial balance: ${formatKuna(initialBalance)} KUNA`);
+  console.log(`    Initial balance: ${formatKuna(initialBalance)} KVNC`);
 
   // 4. Request from faucet
-  console.log(`[4] Requesting 10 KUNA from faucet (${FAUCET_URL})...`);
+  console.log(`[4] Requesting 10 KVNC from faucet (${FAUCET_URL})...`);
   const faucetRes = await fetch(FAUCET_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -62,12 +62,12 @@ async function main() {
   // Poll for funded balance
   console.log("    Waiting for block inclusion across cluster...");
   const fundedBalance = await waitForBalance(client, senderKey.address, parseKuna("10.0"));
-  console.log(`[5] Funded balance: ${formatKuna(fundedBalance)} KUNA`);
+  console.log(`[5] Funded balance: ${formatKuna(fundedBalance)} KVNC`);
   if (fundedBalance < parseKuna("10.0")) {
-    throw new Error(`Expected at least 10 KUNA, got ${fundedBalance}`);
+    throw new Error(`Expected at least 10 KVNC, got ${fundedBalance}`);
   }
 
-  // 6. Generate recipient and send 1 KUNA
+  // 6. Generate recipient and send 1 KVNC
   const recipientKey = await generateKey();
   console.log(`[6] Generated recipient address: ${recipientKey.address}`);
 
@@ -95,16 +95,16 @@ async function main() {
 
   console.log("    Waiting for transaction inclusion in DAG...");
   const recipientBalance = await waitForBalance(client, recipientKey.address, parseKuna("1.0"));
-  console.log(`[8] Recipient final balance: ${formatKuna(recipientBalance)} KUNA`);
+  console.log(`[8] Recipient final balance: ${formatKuna(recipientBalance)} KVNC`);
   const senderFinalBalance = await client.getBalance(senderKey.address);
-  console.log(`    Sender final balance: ${formatKuna(senderFinalBalance)} KUNA`);
+  console.log(`    Sender final balance: ${formatKuna(senderFinalBalance)} KVNC`);
 
   if (recipientBalance >= parseKuna("1.0")) {
     console.log("=================================================");
     console.log("   ALL ECOSYSTEM TESTS PASSED 100%!");
     console.log("=================================================");
   } else {
-    throw new Error("Recipient balance did not receive 1.0 KUNA");
+    throw new Error("Recipient balance did not receive 1.0 KVNC");
   }
 }
 

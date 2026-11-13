@@ -158,7 +158,7 @@ Scrape `block_height`, `peer_count`, `commit_latency`, `mergeset_size` and
 ### Scope
 - Consensus: Hybrid PoW + GHOSTDAG (K=5); legacy Mysticeti DAG k=3, wave=3 removed from the chains 1/2 path
 - Execution: Wasmi, deterministic WASM
-- Staking / validator set (legacy, non-consensus): 15–21, min 50k KUNA
+- Staking / validator set (legacy, non-consensus): 15–21, min 50k KVNC
 - P2P: libp2p TCP + Noise + Yamux on :8000, DNS seeds only
 - Keystore: client-side only — node never receives seed
 

@@ -640,7 +640,7 @@ pub async fn peers(client: &RpcClient, signing_chain_id: Option<u64>, json: bool
 /// JSON and human rows for a native balance.
 ///
 /// `balance` stays the atom count. `balanceKuna` is the same value with exactly
-/// 9 decimal places, so a JSON number is never asked to hold a fractional KUNA.
+/// 9 decimal places, so a JSON number is never asked to hold a fractional KVNC.
 pub fn balance_report(address: &Address, atoms: u64) -> Value {
     json!({
         "address": address.to_string(),
@@ -833,7 +833,7 @@ pub async fn staking(
     Ok(())
 }
 
-/// `kovanica balance <address>` — native balance, displayed in KUNA.
+/// `kovanica balance <address>` — native balance, displayed in KVNC.
 pub async fn balance(
     client: &RpcClient,
     address: &str,
@@ -989,7 +989,7 @@ fn json_string(entry: &Value, field: &str) -> Result<String> {
 
 /// Rendered history page.
 pub struct HistoryView {
-    /// JSON object with atom counts and KUNA strings added to each entry.
+    /// JSON object with atom counts and KVNC strings added to each entry.
     pub json: Value,
     /// Human table cells: height, timestamp, kind, status, from, to, amount, fee, hash.
     pub rows: Vec<Vec<String>>,
@@ -1128,7 +1128,7 @@ mod tests {
         assert_eq!(row(&rows, "Sync"), "in sync");
         assert_eq!(row(&rows, "Peers"), "0");
         assert!(row(&rows, "Signing chain id").contains("local flag"));
-        assert_eq!(stake_cell(Some(&json!("0x3b9aca00"))), "1.000000000 KUNA");
+        assert_eq!(stake_cell(Some(&json!("0x3b9aca00"))), "1.000000000 KVNC");
     }
 
     #[test]
@@ -1251,8 +1251,8 @@ mod tests {
         assert_eq!(report["balanceKuna"], json!("1.500000000"));
         assert_eq!(report["address"], json!(address.to_string()));
         let rows = balance_rows(&address, 1);
-        assert_eq!(rows[1].1, "0.000000001 KUNA");
-        assert_eq!(balance_rows(&address, 0)[1].1, "0.000000000 KUNA");
+        assert_eq!(rows[1].1, "0.000000001 KVNC");
+        assert_eq!(balance_rows(&address, 0)[1].1, "0.000000000 KVNC");
     }
 
     fn validator_row(address: &Address, stake: &str, commission: u64, active: bool) -> Value {
@@ -1298,10 +1298,10 @@ mod tests {
         assert_eq!(body["delegationDetail"], json!("unavailable"));
 
         let rows = staking_rows(&report);
-        assert_eq!(row(&rows, "Total stake"), "1.500000000 KUNA");
-        assert_eq!(row(&rows, "Own stake"), "1.000000000 KUNA");
-        assert_eq!(row(&rows, "Delegated"), "0.500000000 KUNA");
-        assert_eq!(row(&rows, "Rewards"), "0.000000042 KUNA");
+        assert_eq!(row(&rows, "Total stake"), "1.500000000 KVNC");
+        assert_eq!(row(&rows, "Own stake"), "1.000000000 KVNC");
+        assert_eq!(row(&rows, "Delegated"), "0.500000000 KVNC");
+        assert_eq!(row(&rows, "Rewards"), "0.000000042 KVNC");
         assert_eq!(row(&rows, "Payout"), address.to_string());
     }
 
@@ -1438,29 +1438,29 @@ mod tests {
             view.json["entries"][0]["amountAtoms"],
             json!(1_000_000_000u64)
         );
-        assert_eq!(view.json["entries"][0]["amountKuna"], json!("1 KUNA"));
+        assert_eq!(view.json["entries"][0]["amountKuna"], json!("1 KVNC"));
         assert_eq!(view.json["entries"][0]["feeAtoms"], json!(1));
         assert_eq!(
             view.json["entries"][0]["feeKuna"],
-            json!("0.000000001 KUNA")
+            json!("0.000000001 KVNC")
         );
         assert_eq!(view.json["entries"][0]["amount"], json!("0x3b9aca00"));
-        assert_eq!(view.json["entries"][1]["amountKuna"], json!("0 KUNA"));
+        assert_eq!(view.json["entries"][1]["amountKuna"], json!("0 KVNC"));
         assert_eq!(view.json["entries"][1]["feeAtoms"], json!(100_000_000u64));
-        assert_eq!(view.json["entries"][1]["feeKuna"], json!("0.1 KUNA"));
+        assert_eq!(view.json["entries"][1]["feeKuna"], json!("0.1 KVNC"));
         assert_eq!(view.rows[0][0], "2");
         assert_eq!(view.rows[0][1], "-");
-        assert_eq!(view.rows[0][6], "1 KUNA");
-        assert_eq!(view.rows[0][7], "0.000000001 KUNA");
+        assert_eq!(view.rows[0][6], "1 KVNC");
+        assert_eq!(view.rows[0][7], "0.000000001 KVNC");
         assert_eq!(view.rows[1][1], "42");
         assert_eq!(view.rows[1][5], "-");
         assert_eq!(view.rows[1][2], "stake");
         assert_eq!(view.rows.len(), 2);
 
         let whole = format_kuna(1_500_000_000);
-        assert_eq!(whole, "1.5 KUNA");
+        assert_eq!(whole, "1.5 KVNC");
         let atom = format_kuna(1);
-        assert_eq!(atom, "0.000000001 KUNA");
+        assert_eq!(atom, "0.000000001 KVNC");
 
         let last = json!({"entries": [], "next_cursor": null});
         let empty = history_view(&last).unwrap();

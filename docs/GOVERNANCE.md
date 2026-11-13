@@ -1,6 +1,6 @@
 # Governance Spec (Phase 25 — Draft / Stage-3)
 
-Summary: Parameter-change, treasury-spend, upgrade-signaling, and stake-weighted voting specification for Kovanica (KUNA), derived from `crates/kovanica-staking/src/lib.rs`, `crates/kovanica-types/src/committee.rs`, `kovanica-cli/src/main.rs`, and the existing 38-line `docs/GOVERNANCE.md` skeleton; all on-chain proposal/voting mechanics are planned (Phase 25 `[ ]` NOT DONE), not implemented.
+Summary: Parameter-change, treasury-spend, upgrade-signaling, and stake-weighted voting specification for Kovanica (KVNC), derived from `crates/kovanica-staking/src/lib.rs`, `crates/kovanica-types/src/committee.rs`, `kovanica-cli/src/main.rs`, and the existing 38-line `docs/GOVERNANCE.md` skeleton; all on-chain proposal/voting mechanics are planned (Phase 25 `[ ]` NOT DONE), not implemented.
 
 Status: **Draft / Stage-3** (Phase 25 — not shipped; do not mark Shipped). Governance itself is still
 undecided. The stake-weighted mechanics below describe the legacy committee model; chains 1 and 2 run
@@ -8,7 +8,7 @@ Hybrid PoW + GHOSTDAG and have no validator committee or stake in consensus, so 
 there. They are kept as design input only.
 Consensus impact: **client-only / ledger-safe** for proposal format and treasury flow; **consensus-safe** only once quorum thresholds and epoch-boundary execution rules are adopted by the committee (currently not active). No consensus rule changed by this document.
 
-Cross-links: `docs/archive/B-TREASURY-PROPOSAL.md` (treasury proposal skeleton), `docs/A8.2-DELEGATION-SKELETON.md` (Phase 18 deferred, delegation required for stake-weighted voting), `TASKLIST.md` Phase 25 (`[ ]` governance hooks; `kovanica-cli propose/vote → not_implemented` at `main.rs:366-374`), `crates/kovanica-staking/src/lib.rs` (`MIN_VALIDATOR_STAKE=50_000 KUNA`, `SLASH_PCT_BPS=500`, `EPOCH_ROUNDS=7_200`, `UNBONDING_ROUNDS=100_000`, `TREASURY_TOTAL=8_000_000 KUNA`), `crates/kovanica-types/src/committee.rs` (quorum `2f+1`, validity `f+1`), `crates/kovanica-cli/src/main.rs` (`ProposeArgs` / `VoteArgs` stubs).
+Cross-links: `docs/archive/B-TREASURY-PROPOSAL.md` (treasury proposal skeleton), `docs/A8.2-DELEGATION-SKELETON.md` (Phase 18 deferred, delegation required for stake-weighted voting), `TASKLIST.md` Phase 25 (`[ ]` governance hooks; `kovanica-cli propose/vote → not_implemented` at `main.rs:366-374`), `crates/kovanica-staking/src/lib.rs` (`MIN_VALIDATOR_STAKE=50_000 KVNC`, `SLASH_PCT_BPS=500`, `EPOCH_ROUNDS=7_200`, `UNBONDING_ROUNDS=100_000`, `TREASURY_TOTAL=8_000_000 KVNC`), `crates/kovanica-types/src/committee.rs` (quorum `2f+1`, validity `f+1`), `crates/kovanica-cli/src/main.rs` (`ProposeArgs` / `VoteArgs` stubs).
 
 ---
 
@@ -72,13 +72,13 @@ validator set, so it is not a live mainnet genesis floor. This yields ~67% of to
 - **Validity (minimum turnout)**: `floor(total_stake / 3) + 1` (`committee.rs`). No proposal can execute unless at least ~33% of stake participates.
 - **Vote threshold for approval**: >50% of *voted* stakes must be `approve` (`B-TREASURY-PROPOSAL.md`). This is separate from quorum; both must pass.
 
-Canonical numbers preserved: `MIN_ACTIVE_VALIDATORS=15`, `MAX_ACTIVE_VALIDATORS=21`, `MIN_VALIDATOR_STAKE=50_000 KUNA`, `UNBONDING_ROUNDS=100_000`, `EPOCH_ROUNDS=7_200`, `SLASH_PCT_BPS=500`. Do not restate differently.
+Canonical numbers preserved: `MIN_ACTIVE_VALIDATORS=15`, `MAX_ACTIVE_VALIDATORS=21`, `MIN_VALIDATOR_STAKE=50_000 KVNC`, `UNBONDING_ROUNDS=100_000`, `EPOCH_ROUNDS=7_200`, `SLASH_PCT_BPS=500`. Do not restate differently.
 
 ---
 
 ## 4. Treasury spend proposal flow (planned — `B-TREASURY-PROPOSAL.md` skeleton)
 
-Treasury is 8 × 1 M KUNA = `TREASURY_TOTAL = 8_000_000 KUNA`, linear over `TREASURY_YEARS = 8`, `TREASURY_ANNUAL = 1_000_000 KUNA` (`kovanica-staking/src/lib.rs:58-60`, `BLOCKS_PER_YEAR = 2_628_000` at `lib.rs:72`). Vesting driven by `committed_leader_height`; claim via `TreasuryState::claim()` (`lib.rs:262-270`); address fixed at genesis (`lib.rs:778`).
+Treasury is 8 × 1 M KVNC = `TREASURY_TOTAL = 8_000_000 KVNC`, linear over `TREASURY_YEARS = 8`, `TREASURY_ANNUAL = 1_000_000 KVNC` (`kovanica-staking/src/lib.rs:58-60`, `BLOCKS_PER_YEAR = 2_628_000` at `lib.rs:72`). Vesting driven by `committed_leader_height`; claim via `TreasuryState::claim()` (`lib.rs:262-270`); address fixed at genesis (`lib.rs:778`).
 
 ### 4.1 Treasury proposal struct (`B-TREASURY-PROPOSAL.md` lines 7-17)
 
@@ -163,12 +163,12 @@ From `crates/kovanica-cli/src/main.rs` (command match at `main.rs` ~340-380):
 
 ## 8. Canonical constants (byte-identical to sources)
 
-Reproduced from `kovanica-staking/src/lib.rs`, `kovanica-types/src/committee.rs`, `AGENTS.md` / RFC-006 equivalents (adapted to KUNA / kovanica naming):
+Reproduced from `kovanica-staking/src/lib.rs`, `kovanica-types/src/committee.rs`, `AGENTS.md` / RFC-006 equivalents (adapted to KVNC / kovanica naming):
 
-- `TOTAL_SUPPLY = 90_200_000 * ONE_KUNA` (90.2 M KUNA; `lib.rs:44`)
-- `MIN_VALIDATOR_STAKE = 50_000 * ONE_KUNA` (50 000 KUNA; `lib.rs:98`)
+- `TOTAL_SUPPLY = 90_200_000 * ONE_KUNA` (90.2 M KVNC; `lib.rs:44`)
+- `MIN_VALIDATOR_STAKE = 50_000 * ONE_KUNA` (50 000 KVNC; `lib.rs:98`)
 - `MIN_ACTIVE_VALIDATORS = 15`, `MAX_ACTIVE_VALIDATORS = 21` (`lib.rs:104-107`)
-- `SUBSIDY_ERA_BLOCKS = 8_100_000`, `DECAY_NUM = 3`, `DECAY_DEN = 4`, `INITIAL_BLOCK_REWARD = 2.5 KUNA = 5*ONE_KUNA/2` (`lib.rs:82-91`)
+- `SUBSIDY_ERA_BLOCKS = 8_100_000`, `DECAY_NUM = 3`, `DECAY_DEN = 4`, `INITIAL_BLOCK_REWARD = 2.5 KVNC = 5*ONE_KUNA/2` (`lib.rs:82-91`)
 - `UNBONDING_ROUNDS = 100_000` (`lib.rs:112`)
 - `EPOCH_ROUNDS = 7_200` (`lib.rs:119`); `LEADER_INTERVAL_SECS = 12` (`lib.rs:66`); `BLOCKS_PER_YEAR = 2_628_000` (`lib.rs:72`)
 - `TREASURY_TOTAL = 8_000_000 * ONE_KUNA`; `TREASURY_ANNUAL = 1_000_000 * ONE_KUNA`; `TREASURY_YEARS = 8` (`lib.rs:58-60`)

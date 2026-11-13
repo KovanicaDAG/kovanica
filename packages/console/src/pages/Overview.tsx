@@ -83,9 +83,9 @@ export function Overview() {
         <Stat label="Legacy committee" value={validators === null ? "—" : String(validators)} />
         {key && account ? (
           <>
-            <Stat label="Balance" value={`${formatKuna(account.balance)} KUNA`} />
+            <Stat label="Balance" value={`${formatKuna(account.balance)} KVNC`} />
             <Stat label="Nonce" value={account.nonce.toString()} />
-            <Stat label="Legacy stake" value={`${formatKuna(account.stake)} KUNA`} />
+            <Stat label="Legacy stake" value={`${formatKuna(account.stake)} KVNC`} />
           </>
         ) : null}
       </div>

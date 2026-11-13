@@ -1422,7 +1422,7 @@ pub(crate) mod tests {
         bincode::deserialize(&raw).expect("token state deserializes")
     }
 
-    /// Read the KUNA ↔ token pool straight out of persistent storage.
+    /// Read the KVNC ↔ token pool straight out of persistent storage.
     fn pool_state(storage: &Storage, contract: &Address) -> kovanica_token::Pool {
         let txn = storage.begin_read().expect("read txn");
         let key = kovanica_common::hash(kovanica_token::POOL_KEY);
@@ -1436,7 +1436,7 @@ pub(crate) mod tests {
 
     fn token_create_args(supply: Amount) -> Vec<u8> {
         bincode::serialize(&(
-            "KUNA Test".to_string(),
+            "KVNC Test".to_string(),
             "TKT".to_string(),
             9u8,
             supply,
@@ -2052,7 +2052,7 @@ pub(crate) mod tests {
         assert_eq!(pool.lp_total, lp);
 
         // The value is booked before the entry point: the buy needs no other
-        // source of KUNA, and the contract balance grows by exactly the value.
+        // source of KVNC, and the contract balance grows by exactly the value.
         let buy = call_args::encode_token_buy(5_000, 0).expect("encode");
         let out_bytes = execute_contract_call_with_value(
             "token_buy",
@@ -2403,7 +2403,7 @@ pub(crate) mod tests {
     }
 
     // P0b: the pool entry points read the signed `Call.value` through the new
-    // `kovanica_call_value` import, so an unbooked KUNA donation can no longer
+    // `kovanica_call_value` import, so an unbooked KVNC donation can no longer
     // be declared as `amount_in`. Everything below runs through the real wasm
     // module and the real `ContractHost` value path.
     #[test]

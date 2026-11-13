@@ -69,16 +69,16 @@ enum Command {
         /// Recipient `kvnc…dag` address.
         #[arg(long)]
         to: String,
-        /// Amount in atoms (1 KUNA = 1_000_000_000 atoms).
+        /// Amount in atoms (1 KVNC = 1_000_000_000 atoms).
         #[arg(long)]
         amount: u64,
         /// Fee in atoms.
         #[arg(long, default_value_t = 1)]
         fee: u64,
     },
-    /// Bond KUNA and register this keystore's VRF key. Active next epoch.
+    /// Bond KVNC and register this keystore's VRF key. Active next epoch.
     Bond {
-        /// Bond in atoms. The default is 100 KUNA.
+        /// Bond in atoms. The default is 100 KVNC.
         #[arg(long, default_value_t = MIN_LIGHT_BOND)]
         stake: u64,
         /// Fee in atoms.

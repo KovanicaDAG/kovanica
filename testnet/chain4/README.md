@@ -41,5 +41,5 @@ kovanica-node network-tag --config kovanica.toml   # must print 4-0eacd5699210b1
 ```
 
 `founder_premine.hex` and `funded_accounts.toml` are testnet-only conveniences
-(founder premine address, 1 000 000 KUNA pre-funded for the faucet). Mainnet
+(founder premine address, 1 000 000 KVNC pre-funded for the faucet). Mainnet
 (chain 1) forbids `funded_accounts.toml` entirely.

@@ -1871,7 +1871,7 @@ pub fn sign_transfer_raw(
 
 /// Sign a contract call. `args_hex` is bincode-encoded calldata (`0x` optional).
 ///
-/// `value` is the native KUNA (atoms) sent to the contract, `0` when unused.
+/// `value` is the native KVNC (atoms) sent to the contract, `0` when unused.
 /// `fee_rate` is atoms per byte from `kovanica_estimateFee`.
 #[uniffi::export]
 #[allow(clippy::too_many_arguments)]

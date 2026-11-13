@@ -144,11 +144,11 @@ Singleton per contract address; the proposer auto-confirms; `execute` requires
 | `Token::burn` | `amount: Amount` | `()` |
 | `Token::init_pool` | `kuna_in: Amount, tokens_in: Amount, fee_bps: u16` | `Amount` (LP minted) |
 | `Token::buy` | `amount_in: Amount, min_out: Amount` | `Amount` (tokens out) |
-| `Token::sell` | `amount_in: Amount, min_out: Amount` | `Amount` (KUNA out) |
+| `Token::sell` | `amount_in: Amount, min_out: Amount` | `Amount` (KVNC out) |
 
 Singleton per contract address; caller becomes owner + minter. Token balances
 are internal to the token record — they do **not** touch native account
-balances, except for the optional KUNA pool (§7b), where the native side is the
+balances, except for the optional KVNC pool (§7b), where the native side is the
 contract's own account and the token side is `balances[contract_address]`.
 
 `icon` is optional artwork fixed **at creation** (there is no second entry point
@@ -184,7 +184,7 @@ dispatcher, the wasm exports, and this table must stay in sync (enforced by the
 | `token_burn` | `(Amount,)` | `()` |
 | `token_init_pool` | `(Amount kuna_in, Amount tokens_in, u16 fee_bps)` | `Amount` (LP) |
 | `token_buy` | `(Amount amount_in, Amount min_out)` | `Amount` (tokens out) |
-| `token_sell` | `(Amount amount_in, Amount min_out)` | `Amount` (KUNA out) |
+| `token_sell` | `(Amount amount_in, Amount min_out)` | `Amount` (KVNC out) |
 
 **Entry-point gating is activation-gated.** From
 `kovanica_types::CONTRACT_HARDENING_ACTIVE_FROM_ROUND` on (default `u64::MAX`,
@@ -284,7 +284,7 @@ when absent); a subsequent call with a sufficient `out_cap` returns the length,
 and a too-small `out_cap` returns `-2`.
 
 `kovanica_call_value` reports the `Call.value` the transaction signed — the
-native KUNA the caller actually paid, in atoms. It is read-only (a contract can
+native KVNC the caller actually paid, in atoms. It is read-only (a contract can
 observe it, never change it) and the guest maps a negative (overflow) result to
 `0`, which fails closed: a module that requires value cannot be satisfied by a
 host that cannot report it. The import is **additive** — modules that do not
@@ -376,10 +376,10 @@ The `token_*` **RPC** methods are deliberately not implemented: a server holds
 no keys, and token state only changes through an executed signed transaction.
 They answer `-32004` with a pointer to the CLI instead of reporting success.
 
-## 7b. KUNA ↔ token pool (P0a)
+## 7b. KVNC ↔ token pool (P0a)
 
-One token contract can host **one** constant-product pool against native KUNA.
-It is reserve-backed conversion only: no KUNA is minted or burned, the token
+One token contract can host **one** constant-product pool against native KVNC.
+It is reserve-backed conversion only: no KVNC is minted or burned, the token
 supply is untouched, and there are no cross-contract calls; the only host
 import beyond the base ABI is `kovanica_call_value` (§6), which the pool entry
 points use to read the value the call actually paid. State lives beside the
@@ -406,7 +406,7 @@ seeding is restricted to the owner/minter, i.e. the only LP at that point).
 `token_buy` likewise requires `amount_in` to be **exactly equal** to the signed
 `Call.value` (`kovanica_call_value()`), and `token_sell` requires the value to
 be zero — a sale takes nothing native and any value attached to it would be
-stranded. That closes the P0a hazard: a KUNA donation that arrives as an
+stranded. That closes the P0a hazard: a KVNC donation that arrives as an
 ordinary transfer (or as value attached to some other entry point) does not
 raise `call_value()`, so it cannot be declared as `amount_in`. The surplus is
 instead swept into `kuna_reserve` by the next `token_buy` — the donation
@@ -449,7 +449,7 @@ The inequality is one-sided because a plain `token_transfer` to the pool address
 raises only the ledger side — `token_reserve` is untouched and the difference
 stays forever (there is no sweep and no remove-liquidity path). Those tokens are
 a donation: **not claimable** by anyone, and they do not move the price. The
-native side behaves the other way: a KUNA donation is swept into `kuna_reserve`
+native side behaves the other way: a KVNC donation is swept into `kuna_reserve`
 by the next `token_buy`, so it is not claimable either, but it does accrue to
 the LPs.
 
@@ -460,11 +460,11 @@ donation. The CLI treats it as a hard failure (see below).
 ### CLI
 
 ```sh
-# Seed the pool: 1.5 KUNA (attached as Call.value) + 1 000 000 token base units.
+# Seed the pool: 1.5 KVNC (attached as Call.value) + 1 000 000 token base units.
 kovanica token init-pool --contract <kvnc…> --kuna 1.5KUNA \
   --tokens 1000000 --fee-bps 30
 
-# Swap with a slippage floor; the KUNA spent is the call's attached value.
+# Swap with a slippage floor; the KVNC spent is the call's attached value.
 kovanica token buy  --contract <kvnc…> --kuna 0.5KUNA --min-out 300000
 kovanica token sell --contract <kvnc…> --tokens 300000 --min-out 0.4KUNA
 
