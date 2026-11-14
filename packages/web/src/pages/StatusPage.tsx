@@ -172,11 +172,11 @@ export function StatusPage() {
           </div>
           <div className="card">
             <strong>Testnet (coming soon)</strong>
-            <code className="monospace" style={{ display: 'block', marginTop: '8px' }}>https://testnet.kovanica.online/rpc</code>
+            <code className="monospace" style={{ display: 'block', marginTop: '8px' }}>https://rpc-testnet.kovanica.online/rpc</code>
           </div>
           <div className="card">
             <strong>Mainnet (coming soon)</strong>
-            <code className="monospace" style={{ display: 'block', marginTop: '8px' }}>https://rpc.kovanica.online</code>
+            <code className="monospace" style={{ display: 'block', marginTop: '8px' }}>https://rpc.kovanica.online/rpc</code>
           </div>
         </div>
       </div>

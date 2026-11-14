@@ -217,7 +217,10 @@ impl TransferWorker {
             };
             let result = self
                 .client
-                .call::<serde_json::Value>("kovanica_sendRawTransaction", json!([raw]))
+                .call::<serde_json::Value>(
+                    "kovanica_sendRawTransaction",
+                    json!([hex::encode(&raw)]),
+                )
                 .await;
             let lat = started.elapsed().as_secs_f64() * 1000.0;
             match result {

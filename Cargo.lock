@@ -2346,6 +2346,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "clap",
+ "hex",
  "kovanica-crypto",
  "kovanica-sdk",
  "kovanica-types",

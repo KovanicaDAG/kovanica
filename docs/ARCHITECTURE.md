@@ -71,14 +71,14 @@ Storage (redb / pruning / snapshots)
 - Focus remains on P2P multi-node soak before K8s orchestration.
 
 ### K8s / Helm
-**Status**: Implemented (`ops/k8s/` Kubernetes production manifests & Helm chart per PR #204).
+**Status**: Implemented (`deploy/k8s/` and `deploy/helm/kovanica/` Kubernetes production manifests & Helm chart per PR #204).
 - Production Helm chart with `StatefulSet` + `ConfigMap` for `kovanica-node`
 - Persistent volume claim mapped to `KOVANICA_DATA`
 - Liveness/readiness probes against `/health`
 
 ### Soak Testing
 **Automated Multi-Node Soak Test Harness** (`ops/soak/run-soak.sh`):
-- Script: `ops/soak/run-soak.sh` with automated load generator (`ops/soak/loadgen.py`)
+- Script: `ops/soak/run-soak.sh` with automated load generator (`ops/soak/load_generator.py`)
 - Resource limits: strict cgroups `cpus: 1.5`, `mem_limit: 2048m` (2 GB VPS limit)
 - Verification: Monotonic block height advances, 0 container OOM kills (`oom_killed == false`), and Prometheus alert compliance.
 
@@ -219,11 +219,11 @@ Current agent config lives in root `AGENTS.md`, `.opencode/agents/kovanica.md`, 
 - Tokenomics locked (RFC-006 / `docs/TOKENOMICS.md`)
 - Repo cleanup: removed 17 obsolete/duplicate files and 4 private keys
 - All builds pass: `cargo check`, `clippy`, 394 unit tests
-## Latest code snapshot (2026-10-13)
+## Latest code snapshot
 
 - `main`: `98d88cc` (tui + console merged; local edits committed)
-- Workspace crates: 19 (`kovanica-*`); ~53k Rust LOC
-- TS packages: `packages/api-client`, `packages/console`, `packages/signer`, `packages/web`
+- Workspace crates: 47 (`kovanica-*`)
+- TS packages (5): `packages/api-client`, `packages/comms`, `packages/console`, `packages/signer`, `packages/web`
 - Default P2P port: 8000; RPC: 8545; max peers: 50
 - Workspace tests: 503+ passing (partial run stopped during sustained-liveness)
 - Quarantined temp dirs cleaned; no `bot/*` remote branches remain

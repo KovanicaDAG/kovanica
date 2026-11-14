@@ -64,7 +64,7 @@ All 82,000,000 KVNC are emitted solely through block rewards according to the 82
   In GHOSTDAG hybrid PoW, each committed sub-DAG can contain multiple blocks. Every block in a committed sub-DAG is rewarded in canonical consensus topological order. The persistent rewarded block counter (`rewarded_block_count`) increments per block, not per leader height.
 - **Activation & Safe Migration:**
   - Persisted in storage tables `EMISSION_POLICY` and `MINING_REWARD_STATE`.
-  - Configured via `genesis_validators.toml` (`[genesis] policy = "no-stake-82m"`), CLI (`--emission-policy no-stake-82m`), or environment variable (`KOVANICA_EMISSION_POLICY=no-stake-82m`).
+  - Configured via `genesis_validators.toml` (`emission_policy = "no-stake-82m"` at top level), CLI (`--emission-policy no-stake-82m`), or environment variable (`KOVANICA_EMISSION_POLICY=no-stake-82m`).
   - Existing databases without an explicit policy table default to `Legacy81M`. On a hybrid chain (1, 2) that default fails closed at startup, so the policy must be set explicitly; on dev chains (3, 1337) the legacy default is kept, preventing any accidental reinterpretation of existing balances.
 
 ---
@@ -112,8 +112,9 @@ year 0          year 1          year 2          …          year 8
 ## 5. Staking Parameters (legacy / non-consensus under hybrid)
 
 > There is no stake in the chains 1/2 consensus, so these values do not select block
-> producers. Stake, unstake, delegate, claim-rewards and set-commission transactions
-> still execute as ledger operations; that leftover surface is a known follow-up.
+> producers. Staking transactions (`Stake`, `Unstake`, `Delegate`, `ClaimRewards`, and
+> `SetCommission`) are explicitly refused on hybrid chains 1 and 2 (`HYBRID_STAKE_REFUSAL`
+> in `kovanica-execution`). They remain active only on legacy/dev chains (3, 1337).
 
 | Parameter                | Value                  |
 |--------------------------|------------------------|

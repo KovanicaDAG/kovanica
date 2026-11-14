@@ -54,14 +54,14 @@ This scope document specifies the components, invariants, threat models, and pri
 | Module / Component | Risk | Description |
 |---|---|---|
 | `Runtime::execute` (`kovanica-runtime`) | **Critical** | Wasmi bytecode engine: fuel deduction per opcode, deterministic trap handling, stack depth limits, linear memory isolation. |
-| Resource Ceilings | **Critical** | Maximum memory: 16 WASM pages (1 MiB per instance). Gas limit: default 10,000,000 gas. Fuel-to-gas ratio calibration. |
+| Resource Ceilings | **Critical** | Maximum memory: 256 WASM pages (16 MiB per instance, `DEFAULT_CONTRACT_MEMORY_PAGES = 256`). Gas limit: default 10,000,000 gas. Fuel-to-gas ratio calibration. |
 | Host ABI Imports (`wasm.rs`) | **Critical** | Host functions imported by WASM: `kovanica_caller`, `kovanica_contract_address`, `kovanica_block_height`, `kovanica_timestamp`, `kovanica_balance_of`, `kovanica_storage_get`, `kovanica_storage_set`, `kovanica_transfer`, `kovanica_emit_log`, `kovanica_alloc`, `kovanica_dealloc`. Verification of memory safety across host/guest boundary and protection against reentrancy. |
 | Native Contracts | **High** | Built-in smart contracts: HTLC, Vault, Multisig, Token. Packed error codes, state rollback on abort, host trait compliance. |
 | State Application & State Root | **Critical** | Application of committed block transactions to the account state tree, balance deduction, nonces increment, deterministic Merkle/Radix state root calculation. |
 
 **Key Execution Invariants to Verify:**
 1. **Determinism:** Identical input transactions executed against the same pre-state yield identical post-state, identical gas consumption, and identical state roots regardless of host OS or architecture.
-2. **Memory Sandboxing:** A WASM contract cannot read or write beyond its allocated 16 linear memory pages, cannot cause host panics, and cleans up completely on out-of-gas traps.
+2. **Memory Sandboxing:** A WASM contract cannot read or write beyond its allocated 256 linear memory pages (16 MiB), cannot cause host panics, and cleans up completely on out-of-gas traps.
 3. **Reentrancy Protection:** Host state transitions prevent reentrant exploitation during cross-contract or native contract invocations.
 
 ---
@@ -155,7 +155,7 @@ $$\text{TOTAL\_SUPPLY} = \text{PREMINE } (0.2\text{M}) + \text{TREASURY } (8\tex
    - KovanicaHash memory scratchpad and hashing algorithm.
    - GHOSTDAG K=5 ordering, DAG store traversal, and DAA difficulty adjustment.
 2. **Week 2: Execution Engine & Wasmi Runtime**
-   - WASM fuel metering, opcode gas accounting, 16-page memory boundary.
+   - WASM fuel metering, opcode gas accounting, 256-page (16 MiB) memory boundary.
    - Host function imports, native contracts, and transaction state application.
 3. **Week 3: Mempool, P2P & Anti-DoS Ingress**
    - Pre-gossip PoW validation and edge rate limiting.

@@ -114,8 +114,8 @@ fn parse_hash(value: &Value, what: &str) -> Result<Hash, RpcError> {
 ///
 /// The canonical 64-character `kvnc…dag` base32 form is accepted on every
 /// chain. The legacy hex forms (`kvnc<hex>dag`, bare or `0x` hex) only where
-/// `kovanica_types::address::legacy_address_allowed` is true (devnet 3, chain
-/// 4, local 1337).
+/// `kovanica_types::address::legacy_address_allowed` is true (devnet 3 and
+/// local 1337).
 fn parse_address(value: &Value, what: &str, chain_id: u64) -> Result<Address, RpcError> {
     let raw = value
         .as_str()
@@ -2555,7 +2555,7 @@ pub async fn handle_get_dag_tips(_params: Value, state: RpcState) -> Result<Valu
 /// Request testnet tokens (airdrop).
 ///
 /// Strictly forbidden on mainnet (chain_id 1).
-/// Allowed on devnet (3), testnet (4), hybrid testnet (5), and local (1337).
+/// Allowed on testnet (2), devnet (3), and local (1337).
 pub async fn handle_request_airdrop(params: Value, state: RpcState) -> Result<Value, RpcError> {
     let chain_id = served_chain_id(&state);
     if chain_id == kovanica_types::signing::chain_id::MAINNET {

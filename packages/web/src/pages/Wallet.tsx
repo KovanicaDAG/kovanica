@@ -67,7 +67,7 @@ export function Wallet() {
             type="text"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            placeholder="kovanica... or 0x... or bare hex"
+            placeholder="kvnc...dag"
             onKeyDown={(e) => e.key === 'Enter' && fetchAccount()}
           />
         </div>

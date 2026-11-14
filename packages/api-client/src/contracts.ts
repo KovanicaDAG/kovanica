@@ -12,13 +12,22 @@ export type ContractKind = (typeof ContractKind)[keyof typeof ContractKind];
 
 export const HtlcMethod = { CREATE: "create", CLAIM: "claim", REFUND: "refund" } as const;
 export const VaultMethod = { CREATE: "create", CLAIM: "claim", CANCEL: "cancel" } as const;
-export const MultisigMethod = { PROPOSE: "propose", CONFIRM: "confirm", EXECUTE: "execute" } as const;
+export const MultisigMethod = {
+  CREATE: "multisig_create",
+  PROPOSE: "propose",
+  CONFIRM: "confirm",
+  EXECUTE: "execute",
+} as const;
 export const TokenMethod = {
+  CREATE: "token_create",
   TRANSFER: "transfer",
   APPROVE: "approve",
   TRANSFER_FROM: "transfer_from",
   MINT: "mint",
   BURN: "burn",
+  INIT_POOL: "token_init_pool",
+  BUY: "token_buy",
+  SELL: "token_sell",
 } as const;
 
 export interface ContractCallSpec {
@@ -90,5 +99,5 @@ export function decodeContractEvent(event: {
   };
 }
 export function entryPoint(kind: ContractKind, method: string): string {
-  return `${kind}_${method}`;
+  return method.startsWith(`${kind}_`) ? method : `${kind}_${method}`;
 }

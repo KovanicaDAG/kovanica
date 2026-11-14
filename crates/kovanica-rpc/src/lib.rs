@@ -506,6 +506,7 @@ const KNOWN_RPC_METHODS: &[&str] = &[
     "kovanica_getTransactionHistory",
     "kovanica_getLogs",
     "kovanica_getBalance",
+    "kovanica_requestAirdrop",
     "kovanica_getNonce",
     "kovanica_getCode",
     "kovanica_getStorageAt",
@@ -514,6 +515,10 @@ const KNOWN_RPC_METHODS: &[&str] = &[
     "kovanica_getRewards",
     "kovanica_getPendingTransactions",
     "kovanica_estimateFee",
+    "kovanica_estimateGas",
+    "eth_estimateGas",
+    "kovanica_call",
+    "eth_call",
     "kovanica_getLeaderSchedule",
     "kovanica_getCommittee",
     "kovanica_getCommitteeInfo",
@@ -524,6 +529,10 @@ const KNOWN_RPC_METHODS: &[&str] = &[
     "kovanica_getLightSet",
     "kovanica_lightClientCheckpoint",
     "kovanica_syncStatus",
+    "kovanica_getWork",
+    "kovanica_submitWork",
+    "kovanica_getMiningInfo",
+    "kovanica_getDagTips",
 ];
 
 /// Map a caller-supplied method name to a bounded metric label.

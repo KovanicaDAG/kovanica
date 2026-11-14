@@ -4,6 +4,7 @@ import "./ed25519.js";
 
 import { blake3 } from "@noble/hashes/blake3";
 import {
+  encodeAddress,
   encodeRawTransaction,
   signTransaction,
   type SignedTx,
@@ -134,47 +135,61 @@ export function buildPaymentProof(
     hashLock,
     expiryMs: params.expiryMs,
   });
-  const senderAddr = params.senderAddr ?? bytesToHex(bytesToBytes32(params.sender));
+  const senderAddr = params.senderAddr ?? encodeAddress(bytesToBytes32(params.sender));
   return {
     htlcId: bytesToHex(id),
     preimage: bytesToBase64Local(preimageBytes),
     amountAtoms: params.amountAtoms,
     expiry: params.expiryMs,
     senderAddr,
-    claimerAddr: bytesToHex(bytesToBytes32(params.claimer)),
+    claimerAddr: encodeAddress(bytesToBytes32(params.claimer)),
   };
 }
 
 export interface CreateHtlcCallParams {
-  sender: Uint8Array;
+  sender?: Uint8Array;
   claimer: Uint8Array;
   hashLock: Uint8Array;
-  amountAtoms: bigint;
+  amountAtoms?: bigint;
   expiryMs: bigint;
 }
 
+export function buildHtlcCallArgs(
+  claimer: Uint8Array,
+  hashLock: Uint8Array,
+  expiryMs: bigint,
+): Uint8Array;
 export function buildHtlcCallArgs(
   sender: Uint8Array,
   claimer: Uint8Array,
   hashLock: Uint8Array,
   amountAtoms: bigint,
   expiryMs: bigint,
+): Uint8Array;
+export function buildHtlcCallArgs(
+  arg1: Uint8Array,
+  arg2: Uint8Array,
+  arg3: Uint8Array | bigint,
+  arg4?: bigint,
+  arg5?: bigint,
 ): Uint8Array {
-  const s = bytesToBytes32(sender);
-  const c = bytesToBytes32(claimer);
-  const h = bytesToBytes32(hashLock);
-  const out = new Uint8Array(32 + 32 + 32 + 8 + 8);
-  let off = 0;
-  out.set(s, off);
-  off += 32;
-  out.set(c, off);
-  off += 32;
-  out.set(h, off);
-  off += 32;
-  out.set(u64leBytes(amountAtoms), off);
-  off += 8;
-  out.set(u64leBytes(expiryMs), off);
-  off += 8;
+  let c: Uint8Array;
+  let h: Uint8Array;
+  let expiryMs: bigint;
+  if (typeof arg3 === "bigint") {
+    c = bytesToBytes32(arg1);
+    h = bytesToBytes32(arg2);
+    expiryMs = arg3;
+  } else {
+    bytesToBytes32(arg1);
+    c = bytesToBytes32(arg2);
+    h = bytesToBytes32(arg3);
+    expiryMs = arg5 as bigint;
+  }
+  const out = new Uint8Array(32 + 32 + 8);
+  out.set(c, 0);
+  out.set(h, 32);
+  out.set(u64leBytes(expiryMs), 64);
   return out;
 }
 
@@ -203,12 +218,10 @@ export async function createHtlcTx(
     type: "call",
     contract: bytesToBytes32(options.claimer),
     value: options.amountAtoms,
-    method: "create",
+    method: "htlc_create",
     args: buildHtlcCallArgs(
-      options.sender,
       options.claimer,
       hashLock,
-      options.amountAtoms,
       options.expiryMs,
     ),
     gasLimit: options.gasLimit ?? 100_000n,

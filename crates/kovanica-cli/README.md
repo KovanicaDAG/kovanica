@@ -2,7 +2,7 @@
 
 `kovanica` is the Kovanica terminal wallet and node console. One binary
 covers Linux (`kovanica`) and Windows (`kovanica.exe`). The crate version
-is **0.1.0**, still before 1.0. Version 1.0.0 is reserved for testnet launch.
+is **0.2.0**, still before 1.0. Version 1.0.0 is reserved for mainnet launch.
 
 The native coin is **KVNC** (9 decimals). 1 KVNC = 1_000_000_000 atoms.
 Addresses are parsed and printed by `kovanica_types::Address`. Pass a
@@ -67,7 +67,7 @@ five KVNC nor five atoms.
 
 ```text
 --amount 1.5       # 1.500000000 KVNC
---amount 1.5KUNA   # same
+--amount 1.5KVNC   # same
 --amount 1 KVNC    # same
 --amount 5atoms    # 5 atoms
 --amount 5         # rejected
@@ -116,7 +116,7 @@ returns one total, so the command cannot list each delegation. `stake`,
 `unstake`, `delegate`, and `claim-rewards` still submit signed transactions.
 
 `register-light-node --stake` uses the same amount parser. The minimum bond
-is 100 KVNC, written `100KUNA` or `100.0`.
+is 100 KVNC, written `100KVNC` or `100.0`.
 
 ## Transaction history
 

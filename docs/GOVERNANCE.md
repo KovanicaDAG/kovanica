@@ -1,4 +1,6 @@
-# Governance Spec (Phase 25 — Draft / Stage-3)
+# Governance Spec (Phase 25 — Historical / Superseded)
+
+> **HISTORICAL / SUPERSEDED BANNER:** Stake-weighted governance (`propose` / `vote`) was retired under the no-stake Hybrid PoW + GHOSTDAG consensus decision (`TASKLIST.md:33`). Chains 1 (Mainnet) and 2 (Testnet) have no stake in consensus and no validator committee. This document is retained solely as historical design reference while the no-stake governance model is pending decision.
 
 Summary: Parameter-change, treasury-spend, upgrade-signaling, and stake-weighted voting specification for Kovanica (KVNC), derived from `crates/kovanica-staking/src/lib.rs`, `crates/kovanica-types/src/committee.rs`, `kovanica-cli/src/main.rs`, and the existing 38-line `docs/GOVERNANCE.md` skeleton; all on-chain proposal/voting mechanics are planned (Phase 25 `[ ]` NOT DONE), not implemented.
 

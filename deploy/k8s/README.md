@@ -13,9 +13,7 @@ Kovanica nodes operate as containerized services optimized for standard VPS/clou
 | Port | Protocol | Purpose | Access Level |
 |---|---|---|---|
 | **8000** | TCP | Libp2p P2P Gossipsub & Block Sync | Public / NodePort / LoadBalancer |
-| **8545** | TCP | JSON-RPC API | Internal ClusterIP / Optional Ingress |
-| **8546** | TCP | WebSocket Event Subscriptions | Internal ClusterIP / Optional Ingress |
-| **9100** | TCP | Prometheus Metrics Endpoint | ClusterIP / ServiceMonitor |
+| **8545** | TCP | JSON-RPC API (`/rpc`), WebSocket (`/ws`), Health (`/health`), & Prometheus Metrics (`/metrics`) | Internal ClusterIP / Optional Ingress / ServiceMonitor |
 
 ---
 
@@ -125,7 +123,7 @@ helm install kovanica-rpc deploy/helm/kovanica \
 |---|---|---|
 | `image.repository` | `kovanica/kovanica-node` | Docker image repository |
 | `image.tag` | `v0.2.0` | Node software version tag |
-| `node.chainId` | `1` | Chain ID: `1` (Mainnet), `2` (Testnet), `5` (Hybrid Testnet) |
+| `node.chainId` | `1` | Chain ID: `1` (Mainnet), `2` (Testnet), `3` (Devnet), `1337` (Local) |
 | `node.role` | `validator` | Node role: `validator` (= PoW block author on chains 1/2), `seed`, or `rpc` |
 | `node.targetBlockMs` | `4000` | Target block time in milliseconds (4 s) |
 | `node.maxPeers` | `50` | Maximum connected libp2p peers |
@@ -160,6 +158,6 @@ kovanica node peers --rpc-url http://127.0.0.1:8545
 ### 3. Check Prometheus Metrics
 
 ```bash
-kubectl port-forward svc/kovanica-rpc 9100:9100 &
-curl -s http://127.0.0.1:9100/metrics | grep kovanica_
+kubectl port-forward svc/kovanica-rpc 8545:8545 &
+curl -s http://127.0.0.1:8545/metrics | grep kovanica_
 ```

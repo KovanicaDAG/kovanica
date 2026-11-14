@@ -107,7 +107,7 @@ pub struct VerifiedPowHeader {
 /// Canonical resource and pruning configuration for an embedded mobile pruned full-node.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
 pub struct MobileNodeProfile {
-    /// Network chain ID (`5` for `HYBRID_TESTNET`, `1` for `MAINNET`).
+    /// Network chain ID (`2` for `TESTNET` / `HYBRID_TESTNET`, `1` for `MAINNET`).
     pub chain_id: u64,
     /// GHOSTDAG parameter K (`5`).
     pub ghostdag_k: u32,
@@ -379,12 +379,14 @@ pub fn wallet_address(keystore_json: String) -> Result<String, LightFfiError> {
 
 /// True when the app may show the testnet faucet.
 ///
-/// Allowed exclusively on the public hybrid testnet (chain 2,
-/// [`TESTNET_CHAIN_ID`]). Mainnet (1), devnet (3), and local (1337) are
-/// refused.
+/// Allowed on public testnet (chain 2, [`TESTNET_CHAIN_ID`]), devnet (3), and
+/// local (1337). Strictly refused on mainnet (1) and unknown chains.
 #[uniffi::export]
 pub fn faucet_allowed(chain_id: u64) -> bool {
-    chain_id == chain_id::HYBRID_TESTNET
+    matches!(
+        chain_id,
+        chain_id::TESTNET | chain_id::DEVNET | chain_id::LOCAL
+    )
 }
 
 /// Verify one sealed header.
@@ -2497,15 +2499,18 @@ mod tests {
     #[test]
     fn three_seals_verify_and_the_faucet_follows_chain_id() {
         assert!(faucet_allowed(2));
+        assert!(faucet_allowed(chain_id::TESTNET));
         assert!(faucet_allowed(chain_id::HYBRID_TESTNET));
         assert!(faucet_allowed(TESTNET_CHAIN_ID));
         assert!(!faucet_allowed(1));
         assert!(!faucet_allowed(chain_id::MAINNET));
-        assert!(!faucet_allowed(3));
-        assert!(!faucet_allowed(chain_id::DEVNET));
-        assert!(!faucet_allowed(1337));
-        assert!(!faucet_allowed(chain_id::LOCAL));
-        assert!(!faucet_allowed(LOCAL_CHAIN_ID));
+        assert!(faucet_allowed(3));
+        assert!(faucet_allowed(chain_id::DEVNET));
+        assert!(faucet_allowed(1337));
+        assert!(faucet_allowed(chain_id::LOCAL));
+        assert!(faucet_allowed(LOCAL_CHAIN_ID));
+        assert!(!faucet_allowed(0));
+        assert!(!faucet_allowed(4));
         let (signers, committee) = keys(4);
         let (header_json, header) = header_json(0, Hash::zero(), Hash::new([4u8]), &committee);
         let seals = seals_json(&signers, &header, 3);

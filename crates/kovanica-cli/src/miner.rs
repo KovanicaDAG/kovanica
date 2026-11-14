@@ -28,7 +28,7 @@ use crate::rpc::RpcClient;
 /// Arguments for `kovanica miner run`.
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct MinerRunArgs {
-    /// Payout address for mining rewards (Chain 2 canonical base32 or legacy hex).
+    /// Payout address for mining rewards (canonical PRO-21 base32 `kvnc...dag` required on Chains 1 & 2; legacy hex accepted only on chains 3 & 1337).
     #[arg(long, short)]
     pub address: String,
 
@@ -64,8 +64,9 @@ pub enum MinerCommand {
 
 /// Validate the payout address for the given chain ID.
 ///
-/// On Chain 2 (`HYBRID_TESTNET`), both canonical base32 (`kvnc...dag`)
-/// and valid legacy hex forms are accepted.
+/// On Chains 1 (`MAINNET`) and 2 (`TESTNET` / `HYBRID_TESTNET`), canonical PRO-21
+/// base32 (`kvnc...dag`) is strictly required; legacy hex is only accepted on
+/// dev chains 3 (`DEVNET`) and 1337 (`LOCAL`).
 pub fn validate_payout_address(address_str: &str, chain_id: u64) -> Result<Address> {
     Address::parse_for_chain(address_str.trim(), chain_id)
         .with_context(|| format!("invalid payout address '{address_str}' for chain {chain_id}"))
@@ -388,7 +389,10 @@ impl SoloMiner {
         }
 
         println!("============================================================");
-        println!("       Kovanica Standalone Solo CPU Miner (Chain 2)         ");
+        println!(
+            "       Kovanica Standalone Solo CPU Miner (Chain {})         ",
+            self.chain_id
+        );
         println!("============================================================");
         println!(" Chain ID:        {}", self.chain_id);
         println!(" RPC Endpoint:    {}", self.client.url());
@@ -897,7 +901,7 @@ mod tests {
     #[test]
     fn preimage_buffer_last_8_bytes_matches_header_preimage_with_nonce() {
         let header = BlockHeader::new(
-            5,
+            2,
             1,
             0,
             vec![],
@@ -923,7 +927,7 @@ mod tests {
     #[test]
     fn worker_thread_finds_winning_nonce_on_easy_target() {
         let candidate = BlockHeader::new(
-            5,
+            2,
             1,
             0,
             vec![],
@@ -1001,7 +1005,7 @@ mod tests {
     #[test]
     fn worker_thread_lifecycle_detects_stale_work_and_switches() {
         let initial_header = BlockHeader::new(
-            5,
+            2,
             1,
             0,
             vec![],
@@ -1068,7 +1072,7 @@ mod tests {
 
         // Now advertise NEW template with round 2 and easy target
         let new_header = BlockHeader::new(
-            5,
+            2,
             2,
             0,
             vec![],

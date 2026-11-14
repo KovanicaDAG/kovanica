@@ -1,7 +1,16 @@
 import "./ed25519.js";
 
 export { encodeAddress, decodeAddress, parseAddress } from "./address.js";
-export { parseKuna, formatKuna } from "./amount.js";
+export {
+  KVNC_DECIMALS,
+  ATOMS_PER_KVNC,
+  KUNA_DECIMALS,
+  ATOMA_PER_KUNA,
+  parseKvnc,
+  formatKvnc,
+  parseKuna,
+  formatKuna,
+} from "./amount.js";
 export { bytesToHex, hexToBytes, bytes32 } from "./bytes.js";
 export {
   generateKey,

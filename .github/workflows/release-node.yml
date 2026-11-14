@@ -11,10 +11,11 @@ name: Release node
 # `ops/genesis/ceremony.sh` (genesis_validators.toml, founder_premine.hex,
 # optionally funded_accounts.toml / validators.json) and no keys.
 #
-# No official chain-2 genesis has been cut yet: that waits on the owner's
-# PRO-21 founder, treasury and validator addresses. Until ops commits
-# `testnet/chain2/`, both the tag check and the bundle job fail closed with an
-# explicit message, and there is no published chain-2 bundle to install.
+# `testnet/chain2/` holds the chain-2 genesis files produced by
+# `ops/genesis/ceremony.sh`. If `testnet/chain2/genesis_validators.toml` is
+# absent, both the tag check and the bundle job fail closed with an explicit
+# message. Official release bundle publication awaits the production PRO-21
+# founder, treasury and bootstrap validator ceremony addresses.
 #
 #   git tag v0.1.0-node && git push origin v0.1.0-node
 #

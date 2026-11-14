@@ -54,7 +54,7 @@ enum Command {
         /// Full-node RPC base URL.
         #[arg(long, default_value = "http://127.0.0.1:8545")]
         rpc: String,
-        /// Chain id this light node will trust. Local and the live testnet use 1337.
+        /// Chain id this light node will trust (1 mainnet, 2 live testnet, 3 devnet, 1337 local).
         #[arg(long, default_value_t = 1337)]
         chain_id: u64,
     },

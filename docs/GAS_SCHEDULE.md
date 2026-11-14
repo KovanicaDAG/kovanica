@@ -28,7 +28,7 @@ Canonical source: `crates/kovanica-params` (re-exported by `kovanica-types`).
 | `kovanica_runtime::min_gas_for_module(byte_len)` | `byte_len * GAS_PER_MODULE_BYTE` (saturating) | `crates/kovanica-runtime/src/lib.rs` | Implemented |
 | Per-block gas budget (`BLOCK_GAS_BUDGET`) | `MAX_TX_GAS_LIMIT * 8` = `80_000_000` | `crates/kovanica-dag/src/block_manager.rs` (private const) | Gated |
 | `ExecutionConfig::default().gas_limit` | `MAX_TX_GAS_LIMIT` (`10_000_000`) | `crates/kovanica-runtime/src/lib.rs` | Implemented |
-| `ExecutionConfig::default().memory_limit_pages` | `16` (64 KiB pages = 1 MiB) | `crates/kovanica-runtime/src/lib.rs` | Implemented |
+| `ExecutionConfig::default().memory_limit_pages` | `256` (64 KiB pages = 16 MiB, `DEFAULT_CONTRACT_MEMORY_PAGES = 256`) | `crates/kovanica-runtime/src/lib.rs` | Implemented |
 | `MempoolConfig::max_gas_limit` | `MAX_TX_GAS_LIMIT` (`10_000_000`) | `crates/kovanica-mempool/src/lib.rs` | Implemented |
 | `MempoolConfig::min_fee_rate` | `0` (operator policy) | `crates/kovanica-mempool/src/lib.rs` | Implemented |
 | `kovanica_types::GAS_HARDENING_ACTIVE_FROM_ROUND` | `u64::MAX` (inert) | `crates/kovanica-types/src/lib.rs` | Implemented |
@@ -93,7 +93,7 @@ exactly as before.
 
 - `memory_limit_pages` is enforced through `StoreLimitsBuilder::memory_size()`,
   which applies on both memory creation and `memory.grow`.
-- Default is 16 pages of 64 KiB = **1 MiB**.
+- Default is 256 pages of 64 KiB = **16 MiB** (`DEFAULT_CONTRACT_MEMORY_PAGES = 256`).
 - Guest argument/result buffers are additionally bounded by
   `MAX_BUFFER_BYTES` (64 MiB) in `kovanica-runtime`.
 
@@ -164,7 +164,7 @@ uses the `ExecutionConfig` defaults above. The commented values are:
 ```toml
 # [execution]
 # default_gas_limit = 10000000          # per-call fuel cap (kovanica_types::MAX_TX_GAS_LIMIT)
-# default_memory_limit_pages = 16       # 1 MiB linear-memory cap (ExecutionConfig::default)
+# default_memory_limit_pages = 256      # 16 MiB linear-memory cap (ExecutionConfig::default)
 # max_gas_limit = 10000000              # mempool admission cap (MempoolConfig::max_gas_limit)
 ```
 

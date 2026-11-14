@@ -12,7 +12,7 @@ Datum poziva: 2026-11-09.
 
 - **Konsenzus:** Hibridni PoW + GHOSTDAG (`TARGET_BLOCK_MS = 4000`, `GHOSTDAG_K = 5`). **BEZ uloga (stake) u konsenzusnom putu.**
 - **PoW algoritam:** **KovanicaHash** (BLAKE3 + 2 MiB memorijski mix scratchpad; memorijski zahtjevan, otporan na ASIC ubrzanja, deterministička verifikacija).
-- **Izvršavanje:** Wasmi deterministički WebAssembly engine s mjerenjem goriva (fuel/gas metering) i memorijskim limitom od 16 stranica (1 MiB).
+- **Izvršavanje:** Wasmi deterministički WebAssembly engine s mjerenjem goriva (fuel/gas metering) i memorijskim limitom od 256 stranica (16 MiB, `DEFAULT_CONTRACT_MEMORY_PAGES = 256`).
 - **Tokenomika:** Nativni coin **KVNC** (9 decimala, tvrdi limit **90 200 000 KVNC**, početna nagrada bloka 2,5 KVNC s decay-om $\times \frac{3}{4}$ svakih 8 100 000 visina).
 - **Adrese:** PRO-21 kanonski format: `kvnc` + 57 base32 znakova (bech32 abeceda) + `dag` = 64 znaka. Hex adrese strogo zabranjene na mainnetu (`chain_id = 1`).
 
@@ -25,7 +25,7 @@ Datum poziva: 2026-11-09.
 2. **GHOSTDAG K=5 committer**: `crates/kovanica-consensus/` i `crates/kovanica-dag/` — deterministički linearni poredak blokova, blue set kalkulacija, mergeset evaluacija.
 3. **DAA (Difficulty Adjustment Algorithm)**: stabilnost prilagodbe težine za ciljano vrijeme bloka od 4 s, otpornost na manipulaciju vremenskim oznakama (timestamp warping).
 4. **Edge Anti-DoS ulazna validacija**: `validate_pow_target` — provjera ciljne težine (target) prije propagacije kroz gossip i prije zapisa u bazu (DAG store).
-5. **Wasmi determinističko izvršavanje**: `crates/kovanica-execution/` + `crates/kovanica-runtime/` — determinističko oduzimanje goriva, limit od 16 stranica memorije (1 MiB), sigurno rukovanje trap-ovima i zaštita od reentrancy napada.
+5. **Wasmi determinističko izvršavanje**: `crates/kovanica-execution/` + `crates/kovanica-runtime/` — determinističko oduzimanje goriva, limit od 256 stranica memorije (16 MiB, `DEFAULT_CONTRACT_MEMORY_PAGES = 256`), sigurno rukovanje trap-ovima i zaštita od reentrancy napada.
 
 ### P1 — Tokenomika, kriptografija i adrese (blokira Mainnet $T_0$)
 6. **Tokenomics invarijante**: tvrdi cap 90 200 000 KVNC; 2,5 KVNC nagrada po potvrđenom bloku; raspodjela proračuna (82M rudarenje, 8M riznica, 0 genesis validatori, 0,2M premine). Zabrana `funded_accounts.toml` na mainnetu (`chain_id = 1`).

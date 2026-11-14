@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Kovanica Chain 4 Testnet Health & Consensus Monitor
+# Kovanica Chain 2 Testnet Health & Consensus Monitor
 # Usage: ops/monitoring/check-cluster.sh
 
 set -euo pipefail
@@ -15,7 +15,7 @@ MIN_PEERS=3
 EXIT_CODE=0
 
 echo "======================================================================"
-echo "KOVANICA CHAIN 4 TESTNET CLUSTER HEALTH MONITOR"
+echo "KOVANICA CHAIN 2 TESTNET CLUSTER HEALTH MONITOR"
 echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "======================================================================"
 

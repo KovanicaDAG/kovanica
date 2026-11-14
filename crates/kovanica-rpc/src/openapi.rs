@@ -75,7 +75,7 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
         openapi: "3.1.0".to_string(),
         info: OpenApiInfo {
             title: "Kovanica JSON-RPC API".to_string(),
-            version: "0.1.0".to_string(),
+            version: "0.2.0".to_string(),
             description: "JSON-RPC API for Kovanica (kovanica) node. All methods use JSON-RPC 2.0 over HTTP POST to /rpc endpoint.".to_string(),
         },
         servers: vec![
@@ -139,8 +139,8 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
         "Address".to_string(),
         json!({
             "type": "string",
-            "pattern": "^kvnc[a-f0-9]{64}dag$",
-            "description": "Canonical Kovanica address format (kvnc<hex>dag with blake3 checksum)"
+            "pattern": "^kvnc[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{57}dag$",
+            "description": "Canonical Kovanica PRO-21 base32 address format (kvnc + 57 base32 + dag = 64 chars)"
         }),
     );
 
@@ -185,7 +185,13 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
             { "type": "object", "properties": { "type": { "const": "delegate" }, "validator": { "$ref": "#/components/schemas/Address" }, "amount": { "$ref": "#/components/schemas/Quantity" } } },
             { "type": "object", "properties": { "type": { "const": "claim_rewards" }, "validator": { "type": ["string", "null"] } } },
             { "type": "object", "properties": { "type": { "const": "deploy" }, "code": { "type": "string", "pattern": "^0x[a-f0-9]+$" } } },
-            { "type": "object", "properties": { "type": { "const": "call" }, "contract": { "$ref": "#/components/schemas/Address" }, "method": { "type": "string" }, "args": { "type": "string", "pattern": "^0x[a-f0-9]*$" }, "gas_limit": { "$ref": "#/components/schemas/Quantity" } } }
+            { "type": "object", "properties": { "type": { "const": "call" }, "contract": { "$ref": "#/components/schemas/Address" }, "method": { "type": "string" }, "args": { "type": "string", "pattern": "^0x[a-f0-9]*$" }, "gas_limit": { "$ref": "#/components/schemas/Quantity" } } },
+            { "type": "object", "properties": { "type": { "const": "register_light_node" }, "vrf_public_key": { "$ref": "#/components/schemas/Hash" }, "stake": { "$ref": "#/components/schemas/Quantity" } } },
+            { "type": "object", "properties": { "type": { "const": "exit_light_node" } } },
+            { "type": "object", "properties": { "type": { "const": "submit_light_witness" }, "epoch": { "$ref": "#/components/schemas/Quantity" }, "vrf_output": { "$ref": "#/components/schemas/Hash" }, "vrf_proof": { "type": "string" } } },
+            { "type": "object", "properties": { "type": { "const": "set_commission" }, "validator": { "$ref": "#/components/schemas/Address" }, "commission_bps": { "type": "integer" } } },
+            { "type": "object", "properties": { "type": { "const": "claim_treasury" }, "amount": { "$ref": "#/components/schemas/Quantity" } } },
+            { "type": "object", "properties": { "type": { "const": "evidence" }, "evidence": { "type": "object" } } }
         ]
     }));
 
@@ -702,6 +708,228 @@ pub fn generate_openapi_spec() -> OpenApiSpec {
             json!({
                 "$ref": "#/components/schemas/SyncStatus"
             }),
+        ),
+        (
+            "kovanica_getBlockHeaderByNumber",
+            "Get block header by height/round",
+            "Chain",
+            json!({
+                "type": "array",
+                "items": [{ "$ref": "#/components/schemas/Quantity" }],
+                "minItems": 1,
+                "maxItems": 1
+            }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "kovanica_estimateGas",
+            "Estimate gas required for a transaction or contract call",
+            "Execution",
+            json!({ "type": "array", "items": { "type": "object" } }),
+            json!({ "$ref": "#/components/schemas/Quantity" }),
+        ),
+        (
+            "eth_estimateGas",
+            "EVM-compatible alias for kovanica_estimateGas",
+            "Execution",
+            json!({ "type": "array", "items": { "type": "object" } }),
+            json!({ "$ref": "#/components/schemas/Quantity" }),
+        ),
+        (
+            "kovanica_call",
+            "Simulate a read-only contract call against current state",
+            "Execution",
+            json!({ "type": "array", "items": { "type": "object" } }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "eth_call",
+            "EVM-compatible alias for kovanica_call",
+            "Execution",
+            json!({ "type": "array", "items": { "type": "object" } }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "kovanica_getCommitteeInfo",
+            "Get current committee epoch and metadata",
+            "Consensus",
+            json!({ "type": "array", "items": {} }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "kovanica_getLeaderHeader",
+            "Get sealed leader header by committed height",
+            "LightClient",
+            json!({ "type": "array", "items": [{ "$ref": "#/components/schemas/Quantity" }] }),
+            json!({ "type": ["object", "null"] }),
+        ),
+        (
+            "kovanica_getCommitSeals",
+            "Get commit seals for a committed leader height",
+            "LightClient",
+            json!({ "type": "array", "items": [{ "$ref": "#/components/schemas/Quantity" }] }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "kovanica_getTxProof",
+            "Get Merkle inclusion proof for a transaction",
+            "LightClient",
+            json!({ "type": "array", "items": [{ "$ref": "#/components/schemas/Hash" }] }),
+            json!({ "type": ["object", "null"] }),
+        ),
+        (
+            "kovanica_getAccountProof",
+            "Get state Merkle proof for an account",
+            "LightClient",
+            json!({ "type": "array", "items": [{ "$ref": "#/components/schemas/Address" }] }),
+            json!({ "type": ["object", "null"] }),
+        ),
+        (
+            "kovanica_getLightSet",
+            "Get registered light-node witness set",
+            "LightClient",
+            json!({ "type": "array", "items": {} }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "kovanica_lightClientCheckpoint",
+            "Get light-client verification checkpoint",
+            "LightClient",
+            json!({ "type": "array", "items": {} }),
+            json!({ "type": ["object", "null"] }),
+        ),
+        (
+            "kovanica_getWork",
+            "Get PoW candidate block work template",
+            "Mining",
+            json!({ "type": "array", "items": {} }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "kovanica_submitWork",
+            "Submit solved PoW block header",
+            "Mining",
+            json!({ "type": "array", "items": [{ "type": "object" }] }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "kovanica_getMiningInfo",
+            "Get PoW mining status and network difficulty metrics",
+            "Mining",
+            json!({ "type": "array", "items": {} }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "kovanica_getDagTips",
+            "Get current GHOSTDAG tips",
+            "Mining",
+            json!({ "type": "array", "items": {} }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "htlc_create",
+            "Built-in HTLC create helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "htlc_claim",
+            "Built-in HTLC claim helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "htlc_refund",
+            "Built-in HTLC refund helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "vault_create",
+            "Built-in Vault create helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "vault_claim",
+            "Built-in Vault claim helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "vault_cancel",
+            "Built-in Vault cancel helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "multisig_create",
+            "Built-in Multisig create helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "multisig_propose",
+            "Built-in Multisig propose helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "multisig_confirm",
+            "Built-in Multisig confirm helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "multisig_execute",
+            "Built-in Multisig execute helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "token_create",
+            "Built-in Token create helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "token_transfer",
+            "Built-in Token transfer helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "token_mint",
+            "Built-in Token mint helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "token_burn",
+            "Built-in Token burn helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
+        ),
+        (
+            "token_balance",
+            "Built-in Token balance helper",
+            "Contracts",
+            json!({ "type": "object" }),
+            json!({ "type": "object" }),
         ),
         // WebSocket subscription methods
         (

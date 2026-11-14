@@ -9,13 +9,14 @@ data:
   config.toml: |
     # Kovanica Node Production Configuration (Chain ID 1: Mainnet)
     chain_id = 1
+    emission_policy = "no-stake-82m"
     data_dir = "/var/lib/kovanica/data"
     listen_addr = "0.0.0.0:8000"
     rpc_addr = "0.0.0.0"
     rpc_port = 8545
-    ws_port = 8546
+    ws_port = 8545
     metrics_addr = "0.0.0.0"
-    metrics_port = 9100
+    metrics_port = 8545
     max_peers = 50
     target_block_ms = 4000
     bootnodes = []

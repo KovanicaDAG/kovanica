@@ -8,6 +8,7 @@ data:
   config.toml: |
     # Kovanica Node Helm Configuration
     chain_id = {{ .Values.node.chainId }}
+    emission_policy = "no-stake-82m"
     data_dir = "/var/lib/kovanica/data"
     listen_addr = "0.0.0.0:{{ .Values.service.p2p.port }}"
     rpc_addr = "0.0.0.0"

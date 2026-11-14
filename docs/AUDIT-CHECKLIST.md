@@ -19,7 +19,7 @@ Updated to reflect canonical Hybrid PoW + GHOSTDAG consensus, KovanicaHash, KVNC
   - [ ] Verify that consensus is strictly leaderless PoW + GHOSTDAG (NO stake in consensus path)
 - [ ] **Execution (Wasmi deterministic WASM engine):**
   - [ ] Verify deterministic fuel metering per instruction and host call
-  - [ ] Verify memory bounding (16 pages = 1 MiB limit) and trap cleanup on out-of-gas / stack exhaustion
+  - [ ] Verify memory bounding (256 pages = 16 MiB limit, `DEFAULT_CONTRACT_MEMORY_PAGES = 256`) and trap cleanup on out-of-gas / stack exhaustion
   - [ ] Verify native & WASM contract host dispatch (HTLC, Vault, Multisig, Token)
 - [ ] **Tokenomics & Emissions:**
   - [ ] Verify hard cap: 90 200 000 KVNC total supply

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Chain 4 — generate the five validator seed files + genesis_validators.toml.
+# Chain 2 — generate the five bootstrap validator seed files + genesis_validators.toml.
 #
 # Produces exactly the files docker-compose.yml mounts:
 #   ops/docker/validators/val1.pem .. val5.pem      (raw 32-byte hex seeds, gitignored)
@@ -43,10 +43,10 @@ TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
 {
-  echo "# Chain 4 — 5-node validator set for genesis (generated $(date -u +%Y-%m-%dT%H:%M:%SZ))."
+  echo "# Chain 2 — 5-node bootstrap validator set for genesis (generated $(date -u +%Y-%m-%dT%H:%M:%SZ))."
   echo "# DEVNET / TESTNET KEYS ONLY. Produced by ops/docker/validators/generate.sh; do not commit."
-  echo "# Stakes = MIN_VALIDATOR_STAKE = 50_000 KVNC = $STAKE atoms."
-  echo "chain_id = 4"
+  echo "chain_id = 2"
+  echo "emission_policy = \"no-stake-82m\""
   echo
 } > "$TMP"
 
