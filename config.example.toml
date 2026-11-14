@@ -22,7 +22,7 @@
 #   retention_batch                 -> KOVANICA_RETENTION_BATCH
 
 # Extra env-only overrides without a TOML equivalent:
-#   KOVANICA_CHAIN_ID                   (1 mainnet, 2 legacy testnet, 3 devnet, 4 public testnet, 1337 local)
+#   KOVANICA_CHAIN_ID                   (1 mainnet, 2 testnet, 3 devnet, 1337 local)
 #   KOVANICA_RPC_AUTH                   (disable|on, default on)
 #   KOVANICA_RPC_WRITE_TOKENS
 #   KOVANICA_HEALTH_COMMIT_STALL_SECS   (default 120; 0 disables the /health stall check)
@@ -74,10 +74,9 @@ rpc_port = 8545
 # a Cloudflare-proxied (orange-cloud) hostname for TCP. No hosts are hard-coded
 # in the node — supply kovanica-native seeds here or via KOVANICA_BOOTNODES.
 #
-# Testnet (chain_id 4) — all three seeds are grey-cloud DNS-only:
+# Testnet (chain_id 2) — grey-cloud DNS-only seed:
 # bootnodes = [
 #     "seed1.kovanica.online:8000",
-#     "seed3.kovanica.online:8000",
 # ]
 #
 # Mainnet (chain 1):
@@ -98,8 +97,8 @@ bootnodes = []
 # start without it. A read-only node (run_validator = false) may omit it.
 # validator_key = "/etc/kovanica/validator.key"
 
-# Target consensus round duration in milliseconds.
-# 4 s round → 12 s per committed leader (wave length 3).
+# Target consensus block / round duration in milliseconds.
+# Target block time is 4 s (`TARGET_BLOCK_MS = 4000`, `GHOSTDAG_K = 5`) on hybrid chains 1 & 2.
 round_duration_ms = 4000
 
 # Maximum number of connected peers.
@@ -110,9 +109,10 @@ max_peers = 50
 # limiting (e.g. for local tests or trusted tooling).
 rpc_rate_limit_per_min = 60
 
-# Genesis treasury address as 32 bytes of hex. When omitted, the zero address is
-# used. Only read the first time the database is created (fresh genesis).
-# treasury_address = "<64 hex characters>"
+# Genesis treasury address. Canonical PRO-21 `kvnc...dag` address is required on
+# chains 1 & 2 (32-byte hex is only accepted on dev chains 3 & 1337). When
+# omitted, the zero address is used. Only read on fresh genesis creation.
+# treasury_address = "kvnc..."
 
 # ---------------------------------------------------------------------------
 # Retention / pruning — OPT-IN, DEFAULT OFF.
@@ -156,7 +156,7 @@ graylist_threshold = -80.0
 ban_threshold = -100.0
 invalid_message_weight = -10.0
 
-# Proof-of-Work Mining (Chain 2 / Hybrid Testnet only).
+# Proof-of-Work Mining (Hybrid PoW Chains 1 & 2).
 # When enabled, the node mines blocks using KovanicaHash on top of recent DAG tips.
 #   enabled -> KOVANICA_MINING_ENABLED
 #   threads -> KOVANICA_MINING_THREADS
@@ -173,5 +173,5 @@ threads = 1
 #
 # [execution]
 # default_gas_limit = 10000000          # per-call fuel cap (kovanica_types::MAX_TX_GAS_LIMIT)
-# default_memory_limit_pages = 16       # 1 MiB linear-memory cap (ExecutionConfig::default)
+# default_memory_limit_pages = 256      # 16 MiB linear-memory cap (ExecutionConfig::default)
 # max_gas_limit = 10000000              # mempool admission cap (MempoolConfig::max_gas_limit)

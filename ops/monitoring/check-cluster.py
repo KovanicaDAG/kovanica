@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kovanica Chain 4 Testnet Health & Consensus Monitor.
+Kovanica Chain 2 Testnet Health & Consensus Monitor.
 Queries all seed endpoints for /health and JSON-RPC consensus status.
 Alerts if seconds_since_last_commit exceeds threshold or peer count drops below quorum.
 """
@@ -58,7 +58,7 @@ def check_rpc(base_url, timeout=5):
 
 def main():
     print("=" * 70)
-    print("KOVANICA CHAIN 4 TESTNET CLUSTER HEALTH MONITOR")
+    print("KOVANICA CHAIN 2 TESTNET CLUSTER HEALTH MONITOR")
     print(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
     print("=" * 70)
 

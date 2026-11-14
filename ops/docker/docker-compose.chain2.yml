@@ -166,7 +166,7 @@ services:
       - --max-requests
       - "100"
     environment:
-      KOVANICA_FAUCET_PASSPHRASE: "faucet-testnet-chain5"
+      KOVANICA_FAUCET_PASSPHRASE: "faucet-testnet-chain2"
       # Same token the nodes accept, so the faucet keeps working with auth on.
       KOVANICA_RPC_WRITE_TOKENS: "${KOVANICA_RPC_WRITE_TOKENS:-}"
       RUST_LOG: "info"

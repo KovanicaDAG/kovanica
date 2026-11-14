@@ -10,8 +10,9 @@ nameOverride: ""
 fullnameOverride: ""
 
 node:
-  # 1 for Mainnet, 2 for Canonical Testnet, 5 for Hybrid Testnet
+  # 1 for Mainnet, 2 for Testnet, 3 for Devnet, 1337 for Local
   chainId: 1
+  emissionPolicy: "no-stake-82m"
   # Role: validator, seed, rpc
   role: validator
   targetBlockMs: 4000
@@ -33,9 +34,9 @@ service:
     type: ClusterIP
     port: 8545
   ws:
-    port: 8546
+    port: 8545
   metrics:
-    port: 9100
+    port: 8545
 
 ingress:
   enabled: false

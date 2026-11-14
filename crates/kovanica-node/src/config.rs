@@ -15,7 +15,7 @@ fn default_enabled() -> bool {
     true
 }
 
-/// Mining configuration for Chain 2 (Hybrid PoW testnet).
+/// Mining configuration for Hybrid PoW chains (Chains 1 & 2).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct MiningConfig {
@@ -83,13 +83,13 @@ pub struct NodeConfig {
     /// Overridable with `KOVANICA_DNS_SEEDS`.
     #[serde(default)]
     pub dns_seeds: Vec<String>,
-    /// Path to a validator signing key file (32-byte hex seed).
+    /// Path to a validator / bootstrap signing key file (32-byte hex seed).
     pub validator_key: Option<String>,
-    /// Target consensus round duration in milliseconds.
+    /// Target consensus round / block duration in milliseconds (`4000` on Hybrid PoW chains 1 & 2).
     pub round_duration_ms: u64,
     /// Maximum number of connected peers.
     pub max_peers: usize,
-    /// Genesis treasury address (32-byte hex). Defaults to the zero address.
+    /// Genesis treasury address (canonical PRO-21 `kvnc...dag` required on Chains 1 & 2; 32-byte hex allowed only on dev chains 3 & 1337). Defaults to the zero address.
     pub treasury_address: Option<String>,
     /// Order committed waves with scoped GHOSTDAG.
     ///
@@ -139,15 +139,16 @@ pub struct NodeConfig {
     /// `KOVANICA_HEALTH_COMMIT_STALL_SECS`.
     pub health_commit_stall_secs: u64,
     /// Chain id bound into every v1 signature (see `docs/SIGNATURE_FORMAT.md`):
-    /// 1 mainnet, 2 testnet, 3 devnet, 1337 local. Must match the genesis
-    /// chain id; the node refuses to start otherwise. For mainnet and testnet
-    /// `genesis_validators.toml` must declare `chain_id` explicitly; for
-    /// devnet and local it is optional. Overridable with `KOVANICA_CHAIN_ID`.
+    /// 1 mainnet (Hybrid PoW), 2 testnet (Hybrid PoW), 3 devnet, 1337 local.
+    /// Must match the genesis chain id; the node refuses to start otherwise.
+    /// For mainnet and testnet `genesis_validators.toml` must declare `chain_id`
+    /// explicitly and use canonical PRO-21 `kvnc...dag` addresses; for devnet
+    /// and local `chain_id` is optional. Overridable with `KOVANICA_CHAIN_ID`.
     pub chain_id: u64,
     /// Gossipsub peer scoring (`[peer_scoring]` table). Defaults are safe for
     /// a small validator network; see `kovanica_network::PeerScoringConfig`.
     pub peer_scoring: kovanica_network::PeerScoringConfig,
-    /// Mining configuration for Chain 2 (`[mining]` table).
+    /// Mining configuration for Hybrid PoW chains 1 & 2 (`[mining]` table).
     #[serde(default)]
     pub mining: MiningConfig,
     /// DNS seeder crawler daemon configuration (`[seeder]` table).

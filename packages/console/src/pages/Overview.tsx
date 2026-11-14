@@ -21,7 +21,7 @@ export function Overview() {
   useEffect(() => {
     let cancel = false;
     const elapsed = Date.now() - lastLoad.current;
-    const wait = force.current || lastLoad.current === 0 ? 0 : Math.max(0, 12_000 - elapsed);
+    const wait = force.current || lastLoad.current === 0 ? 0 : Math.max(0, 4_000 - elapsed);
     const timer = window.setTimeout(() => {
       force.current = false;
       lastLoad.current = Date.now();

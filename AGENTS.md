@@ -8,7 +8,7 @@
 codebase/binary/env prefiks = **kovanica** (`kovanica-*` crate-ovi, `kovanica-node`, `KOVANICA_*`). Adresa je
 `kvnc` + 57 base32 znakova (bech32 abeceda, samo mala slova) + `dag` = 64 znaka (PRO-21: 32 B ključ ‖ prvih 29 bitova blake3(ključ)); `FromStr` je samo taj oblik. Legacy `kvnc<hex>dag` i hex (heks znamenke case-insensitive, affixi i `0x` mala slova) na chainovima 3 i 1337, odbijeni na chainu 1, 2 i svakom drugom id-u. Adresni prefiks `kvnc`...`dag` je usklađen s KVNC tickerom.
 
-**Chain ID Registry (3 Canonical Chains):**
+**Chain ID Registry (4 Registered Chains: 2 Canonical Public + 2 Dev):**
 - `1` = **Mainnet** (`MAINNET`) — canonical PRO-21 base32 address, Hybrid PoW + GHOSTDAG (NO stake for consensus, KovanicaHash, target block 4 s, GHOSTDAG K=5). `funded_accounts.toml` strictly forbidden.
 - `2` = **Testnet** (`TESTNET`) — official Hybrid PoW + GHOSTDAG testnet (KovanicaHash, target block 4 s, GHOSTDAG K=5, NO stake for consensus; canonical PRO-21 base32 addresses strictly enforced; `funded_accounts.toml` and faucet allowed; legacy alias HYBRID_TESTNET=2).
 - `3` = **Devnet** (`DEVNET`) — devnet; legacy hex addresses allowed, dev parameter overrides.
@@ -93,15 +93,16 @@ crates/
 
 Packages (TypeScript):
 - `packages/api-client`
+- `packages/comms`
 - `packages/console`
 - `packages/signer`
 - `packages/web`
 
 Contracts (već implementirani): HTLC, Vault, Multisig, Token + Host trait.
 
-## Snapshot (2026-10-24, main @ dd3aff9)
+## Snapshot (current workspace)
 
-- Workspace crates: 27
+- Workspace crates: 47 (27 in the 2026-10-24 @ dd3aff9 historical snapshot)
 - Rust source: ~90.5k LOC (crates) / ~95.5k LOC (repo) across 163 `.rs` files
 - TypeScript packages: 5 (`api-client`, `comms`, `console`, `signer`, `web`)
 - Default P2P listen: `0.0.0.0:8000`
@@ -123,7 +124,7 @@ Contracts (već implementirani): HTLC, Vault, Multisig, Token + Host trait.
 ## Preferred next focus areas (prioritet)
 
 A. Network & Node hardening (P2P, sync, snapshot/pruning, genesis)
-B. Staking & Validator lifecycle (bond/unbond, active set, commission)
+B. Hybrid PoW & GHOSTDAG consensus & mining operations (KovanicaHash, DAA, GHOSTDAG K=5)
 C. Execution & Contract UX (gas metering, ABI, deployment)
 D. Observability (logging, metrics, indexer hooks)
 E. Testnet readiness (multi-node, faucet, chaos)

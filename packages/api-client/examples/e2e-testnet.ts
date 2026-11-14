@@ -24,7 +24,7 @@ async function waitForBalance(client: KovanicaRpcClient, address: string, minBal
 
 async function main() {
   console.log("=================================================");
-  console.log("   KOVANICA CHAIN 4 TESTNET ECOSYSTEM TEST");
+  console.log("   KOVANICA CHAIN 2 TESTNET ECOSYSTEM TEST");
   console.log("=================================================");
   console.log(`RPC Endpoint: ${RPC_URL}`);
   console.log(`Faucet: ${FAUCET_URL}`);
@@ -85,7 +85,7 @@ async function main() {
     }
   };
 
-  const signed = await signTransaction(unsignedTx, 4, senderKey.seed);
+  const signed = await signTransaction(unsignedTx, 2, senderKey.seed);
   const rawTxHex = encodeRawTransaction(signed);
   console.log(`[7] Signed tx with hash: 0x${Buffer.from(signed.hash).toString("hex")}`);
 

@@ -17,7 +17,7 @@ All tokenomics parameters and network protocols are binding per `AGENTS.md`.
   ```
   The 57 characters encode the 32-byte Ed25519 public key (256 bits) concatenated with the first 29 bits of its BLAKE3 hash MSB-first (`256 + 29 = 285 bits = 57 base32 chars` using the BIP-173 bech32 lowercase alphabet `qpzry9x8gf2tvdw0s3jn54khce6mua7l`, unpadded).
   - `FromStr for Address` strictly enforces the 64-character base32 form.
-  - Legacy hex formats (`kvnc<72hex>dag` and bare/`0x` 64-hex keys) are supported **only** on Devnet (`3`), Testnet v2 (`4`), Hybrid PoW Testnet (`5`), and Local (`1337`).
+  - Legacy hex formats (`kvnc<72hex>dag` and bare/`0x` 64-hex keys) are supported **only** on Devnet (`3`) and Local (`1337`); strictly rejected on Mainnet (`1`) and Testnet (`2`).
   - Mainnet (`1`), Testnet (`2`), and all other chain IDs strictly reject legacy formats (`legacy_address_allowed = false`).
   - **Rule:** The native coin ticker is **KVNC** (renamed from KUNA per Toni 2026-11-05 lock). Remaining KVNC crypto tags and address prefix `kvnc…dag` align with the KVNC ticker.
 
@@ -31,7 +31,7 @@ Kovanica is engineered from scratch in Rust for high throughput and predictable 
    - Pure **Hybrid PoW + GHOSTDAG** consensus architecture (per Toni 2026-11-05 lock; **NO stake for consensus**).
    - There are **no validators and no validator committee** in the chains 1/2 consensus. The `[[validator]]` table in a genesis file lists **bootstrap identities** (seed node keys); the table name is leftover format, not a consensus role.
    - Target block duration: `4,000 ms` (4 s) (`TARGET_BLOCK_MS = 4000`), GHOSTDAG parameter $K=5$ (`GHOSTDAG_K = 5`).
-   - Planned PoW algorithm: **KovanicaHash** (BLAKE3 + 2 MiB memory mix; formal external security audit required before mainnet activation).
+   - PoW algorithm: **KovanicaHash** (BLAKE3 + 2 MiB memory mix; formal external security audit required before mainnet activation).
    - GHOSTDAG sub-DAG topological sort for transactions; uncoloured (non-blue) blocks are safely recycled back to the mempool without transaction loss.
    - Legacy Mysticeti wave parameters (`WAVE_LENGTH = 3`, 12 s commit cycle) remain preserved in tree behind feature flags.
 2. **Account Model & Staking:**
@@ -41,7 +41,7 @@ Kovanica is engineered from scratch in Rust for high throughput and predictable 
    - Legacy: stake unbonding cooldown of **100,000 committed leader blocks** ($\approx 13.9$ days at 12 s/leader).
    - Legacy: evidence-based slashing (RFC-010) with a fixed 500 bps (5%) penalty and 7,200 committed leader heights jail (`JAIL_ROUNDS = 7,200`, $\approx 1$ day = 3 epochs). Slashing is not active (`SLASHING_ACTIVE_FROM_ROUND = u64::MAX`).
 3. **Execution & WebAssembly Runtime:**
-   - Deterministic smart contract sandbox powered by **Wasmi** (v0.40) with instruction-level fuel metering, strict memory paging limits (16 pages = 1 MiB), and isolated host call ABI (`Host` trait).
+   - Deterministic smart contract sandbox powered by **Wasmi** (v0.40) with instruction-level fuel metering, strict memory paging limits (256 pages = 16 MiB, `DEFAULT_CONTRACT_MEMORY_PAGES = 256`), and isolated host call ABI (`Host` trait).
    - Native built-in contracts with shared execution semantics: **HTLC** (hash time-locked swaps), **Vault** (linear/cliff vesting), **Multisig** ($M$-of-$N$ threshold multi-signature), **Token** (fungible token standard), and **Name Registry** (RFC-008 decentralized comms naming).
 4. **P2P Networking & Storage:**
    - Built on `libp2p` with TCP, Noise transport encryption, Yamux multiplexing, Kademlia routing, and Gossipsub message propagation with peer scoring.
@@ -82,10 +82,10 @@ Canonical parameters implemented in `crates/kovanica-staking/src/lib.rs` and doc
 
 ## 3. Repository Layout
 
-The monorepo is organized into 27 workspace crates, 5 TypeScript packages, 6 applications, operational deployment scripts, and specifications:
+The monorepo is organized into 47 workspace crates, 5 TypeScript packages, operational deployment scripts, and specifications (client apps were extracted to `kovanica-apps`):
 
 ```text
-├── crates/                    # 27 workspace Rust crates
+├── crates/                    # 47 workspace Rust crates (key crates shown below)
 │   ├── kovanica-types         # Core primitives (Block, Transaction, Address, Committee, Proofs)
 │   ├── kovanica-crypto        # Ed25519, BLAKE3, and Ristretto255 ECVRF cryptographic primitives
 │   ├── kovanica-keystore      # Encrypted keystore v2 (Argon2id + XChaCha20-Poly1305)
@@ -119,13 +119,8 @@ The monorepo is organized into 27 workspace crates, 5 TypeScript packages, 6 app
 │   ├── console                # React 18 + Vite web console for node management
 │   ├── signer                 # Browser transaction signer (v1 signature format)
 │   └── web                    # React 18 + Vite block explorer application
-├── apps/                      # 6 client applications
-│   ├── android                # Android light client app (Kotlin + UniFFI)
-│   ├── android-comms          # Android decentralized comms app (Kotlin)
-│   ├── android-wallet         # Android wallet application (Kotlin)
-│   ├── console-desktop        # Desktop node console (Tauri v2 + React)
-│   ├── desktop                # Desktop comms client (Tauri v2 + React)
-│   └── ios                    # iOS light client app (SwiftUI)
+├── apps/                      # Pointer to KovanicaDAG/kovanica-apps (client apps extracted)
+│   └── README.md              # Links to Android, iOS, and Tauri desktop applications repo
 ├── docs/                      # Technical specifications, RFCs, ADRs, and guides
 │   ├── adr/                   # Architecture Decision Records (0001 Weighted Consensus [superseded], 0002 Keystore, 0003 Hybrid PoW + GHOSTDAG)
 │   ├── design/                # In-depth designs (epoch rotation, multi-proposer DAG)
@@ -156,8 +151,8 @@ cd kovanica
 cargo build --workspace
 
 # Run the test suite (excluding the tests that spawn real nodes; libtest
-# matches test-function names, so those four are named explicitly)
-cargo test --workspace -- --skip live_transaction_commit --skip live_two_node_vote_commit_execute --skip three_validators_rotate_leaders_and_sustain_commits --skip four_validators_sustain_commits_past_pruning_boundary
+# matches test-function names, so those five are named explicitly)
+cargo test --workspace -- --skip live_transaction_commit --skip live_two_node_vote_commit_execute --skip three_validators_rotate_leaders_and_sustain_commits --skip four_validators_sustain_commits_past_pruning_boundary --skip isolated_hybrid_acceptance_execution_and_recovery
 
 # ...and those four on their own, one test at a time (each starts a 2-4 node
 # cluster on localhost and expects to reach a committed height in time):
@@ -257,10 +252,11 @@ curl -s -X POST http://127.0.0.1:8545/rpc \
   -d '{"jsonrpc":"2.0","id":2,"method":"kovanica_syncStatus","params":[]}'
 ```
 
-**Supported JSON-RPC Methods (27 Core Methods):**
-- **Chain & Block:** `kovanica_blockNumber`, `kovanica_getBlockByHash`, `kovanica_getBlockByNumber`, `kovanica_syncStatus`
-- **Transactions & Accounts:** `kovanica_sendRawTransaction`, `kovanica_getTransactionReceipt`, `kovanica_getTransactionByHash`, `kovanica_getTransactionHistory`, `kovanica_getPendingTransactions`, `kovanica_estimateFee`, `kovanica_getBalance`, `kovanica_getNonce`, `kovanica_getCode`, `kovanica_getStorageAt`, `kovanica_getLogs`
-- **Consensus & Staking:** `kovanica_getValidators`, `kovanica_getStake`, `kovanica_getRewards`, `kovanica_getLeaderSchedule`, `kovanica_getCommittee`, `kovanica_getCommitteeInfo`
+**Supported JSON-RPC Methods (37 Core Methods):**
+- **Chain & Block:** `kovanica_blockNumber`, `kovanica_getBlockByHash`, `kovanica_getBlockByNumber`, `kovanica_getBlockHeaderByNumber`, `kovanica_syncStatus`
+- **Transactions, Accounts & Execution:** `kovanica_sendRawTransaction`, `kovanica_getTransactionReceipt`, `kovanica_getTransactionByHash`, `kovanica_getTransactionHistory`, `kovanica_getPendingTransactions`, `kovanica_requestAirdrop`, `kovanica_estimateFee`, `kovanica_estimateGas`, `eth_estimateGas`, `kovanica_call`, `eth_call`, `kovanica_getBalance`, `kovanica_getNonce`, `kovanica_getCode`, `kovanica_getStorageAt`, `kovanica_getLogs`
+- **Mining & GHOSTDAG:** `kovanica_getWork`, `kovanica_submitWork`, `kovanica_getMiningInfo`, `kovanica_getDagTips`
+- **Consensus & Staking (legacy):** `kovanica_getValidators`, `kovanica_getStake`, `kovanica_getRewards`, `kovanica_getLeaderSchedule`, `kovanica_getCommittee`, `kovanica_getCommitteeInfo`
 - **Light Client & Verification:** `kovanica_getLeaderHeader`, `kovanica_getCommitSeals`, `kovanica_getTxProof`, `kovanica_getAccountProof`, `kovanica_getLightSet`, `kovanica_lightClientCheckpoint`
 
 **WebSocket Subscription Topics (`GET /ws`):**
@@ -368,7 +364,7 @@ Detailed architectural specifications and operational runbooks:
 - **Gas & Metering Schedule:** [`docs/GAS_SCHEDULE.md`](docs/GAS_SCHEDULE.md)
 - **Signature & Domain Format:** [`docs/SIGNATURE_FORMAT.md`](docs/SIGNATURE_FORMAT.md)
 - **Validator Onboarding Guide:** [`docs/VALIDATOR-ONBOARDING.md`](docs/VALIDATOR-ONBOARDING.md)
-- **Governance Specification:** [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md)
+- **Governance Specification (historical/superseded under no-stake Hybrid PoW + GHOSTDAG):** [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md)
 - **Audit Scope & Threat Model:** [`docs/AUDIT-SCOPE.md`](docs/AUDIT-SCOPE.md)
 - **Documentation Archive Index:** [`docs/archive/README.md`](docs/archive/README.md)
 - **JSON-RPC Reference:** [`docs/RPC.md`](docs/RPC.md)

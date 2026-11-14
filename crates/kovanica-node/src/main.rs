@@ -159,12 +159,12 @@ struct GenesisArgs {
     #[arg(long, value_name = "FILE", default_value = "validators.json")]
     validators: String,
 
-    /// Treasury address (32-byte hex)
-    #[arg(long, value_name = "HEX")]
+    /// Treasury address (PRO-21 `kvnc...dag` on chains 1 & 2; 32-byte hex on dev chains 3 & 1337)
+    #[arg(long, value_name = "ADDR")]
     treasury_address: String,
 
-    /// Founder premine address (32-byte hex, receives 200,000 KVNC)
-    #[arg(long, value_name = "HEX")]
+    /// Founder premine address (PRO-21 `kvnc...dag` on chains 1 & 2; 32-byte hex on dev chains 3 & 1337; receives 200,000 KVNC)
+    #[arg(long, value_name = "ADDR")]
     founder_address: String,
 
     /// Chain this genesis is for (1 mainnet, 2 testnet, 3 devnet, 1337 local).

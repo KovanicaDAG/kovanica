@@ -1,8 +1,15 @@
-const DECIMALS = 9;
-const ATOM = 1_000_000_000n;
+export const KVNC_DECIMALS = 9;
+export const ATOMS_PER_KVNC = 1_000_000_000n;
+
+/** Legacy aliases retained for backward compatibility. */
+export const KUNA_DECIMALS = KVNC_DECIMALS;
+export const ATOMA_PER_KUNA = ATOMS_PER_KVNC;
+
+const DECIMALS = KVNC_DECIMALS;
+const ATOM = ATOMS_PER_KVNC;
 
 /** Parse a decimal KVNC string into base units (9 decimals). */
-export function parseKuna(input: string): bigint {
+export function parseKvnc(input: string): bigint {
   const text = input.trim();
   if (!/^\d+(\.\d+)?$/.test(text)) {
     throw new Error("enter a KVNC amount");
@@ -15,7 +22,7 @@ export function parseKuna(input: string): bigint {
 }
 
 /** Format base units as a KVNC decimal, trimming trailing zeros. */
-export function formatKuna(atoms: bigint): string {
+export function formatKvnc(atoms: bigint): string {
   if (atoms < 0n) {
     throw new Error("amount is negative");
   }
@@ -25,3 +32,9 @@ export function formatKuna(atoms: bigint): string {
   const fracText = frac.toString().padStart(DECIMALS, "0").replace(/0+$/, "");
   return `${whole}.${fracText}`;
 }
+
+/** Legacy alias for {@link parseKvnc}. */
+export const parseKuna = parseKvnc;
+
+/** Legacy alias for {@link formatKvnc}. */
+export const formatKuna = formatKvnc;

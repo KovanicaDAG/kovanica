@@ -149,7 +149,7 @@ enum Commands {
         #[command(subcommand)]
         command: MinerCommand,
     },
-    /// Mining subcommands (PoW / Chain 2)
+    /// Mining subcommands (PoW / Chains 1 & 2)
     Mining {
         #[command(subcommand)]
         command: MiningCommand,
@@ -315,7 +315,7 @@ struct TransferArgs {
     /// Recipient Kovanica address
     #[arg(long)]
     to: String,
-    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KVNC`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -329,7 +329,7 @@ struct TransferArgs {
 /// Arguments carrying a single amount plus the signing keystore.
 #[derive(Args)]
 struct AmountArgs {
-    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KVNC`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -346,7 +346,7 @@ struct RegisterLightNodeArgs {
     /// VRF public key (32-byte hex)
     #[arg(long)]
     vrf_public_key: String,
-    /// Bond of at least 100 KVNC (`100KUNA` or `100.0`). Atoms need a suffix (`5atoms`). A bare integer is rejected.
+    /// Bond of at least 100 KVNC (`100KVNC` or `100.0`). Atoms need a suffix (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     stake: u64,
     /// Keystore file path
@@ -363,7 +363,7 @@ struct DelegateArgs {
     /// Legacy validator Kovanica address
     #[arg(long)]
     validator: String,
-    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KVNC`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path
@@ -408,7 +408,7 @@ struct SetCommissionArgs {
 /// Arguments for `kovanica claim-treasury`.
 #[derive(Args)]
 struct ClaimTreasuryArgs {
-    /// Amount of KVNC (`1.5` or `1.5KUNA`) or atoms (`5atoms`). A bare integer is rejected.
+    /// Amount of KVNC (`1.5` or `1.5KVNC`) or atoms (`5atoms`). A bare integer is rejected.
     #[arg(long, value_parser = parse_cli_amount)]
     amount: u64,
     /// Keystore file path

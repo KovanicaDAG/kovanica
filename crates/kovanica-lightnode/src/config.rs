@@ -1,5 +1,5 @@
-//! Light-node config. The chain id is whatever the operator configured.
-//! The live testnet uses 1337. This file does not rewrite it.
+//! Light-node config. The chain id is whatever the operator configured
+//! (e.g. 2 for live testnet, 1337 for local). This file does not rewrite it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
